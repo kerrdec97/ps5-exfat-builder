@@ -17,7 +17,7 @@ Converts a PS5 game folder (containing `eboot.bin`) into an `.exfat` disk image 
 
 ## Requirements
 
-Your friends only need **one thing** installed:
+My friends we only need **one thing** installed:
 
 - **[OSFMount by PassMark](https://www.osforensics.com/tools/mount-disk-images.html)** — free, used to mount the disk image during building
 
