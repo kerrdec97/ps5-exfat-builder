@@ -1,6 +1,6 @@
 # PS5 exFAT Image Builder
 
-A Windows GUI tool for building exFAT disk images from PS5 game folders, designed for use with [etaHEN](https://github.com/LightningMods/etaHEN) / GoldHEN homebrew environments on jailbroken PS5 consoles.
+A Windows GUI tool for building exFAT disk images from PS5 game folders, designed for use with shadowmount plus and other exfat mounting payloads homebrew environments on jailbroken PS5 consoles.
 
 **Created by DecKerr97**
 
