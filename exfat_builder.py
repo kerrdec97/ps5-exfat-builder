@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, simpledialog
 import subprocess
 import threading
 import os
@@ -359,6 +359,14 @@ class ExFATBuilder(tk.Tk):
             value=self._settings.get('ftp_path', '/data/etaHEN/games/'))
         self._ftp_auto_var = tk.BooleanVar(
             value=self._settings.get('ftp_auto', False))
+        self._discord_var  = tk.StringVar(
+            value=self._settings.get('discord_webhook', ''))
+        self._sound_var    = tk.BooleanVar(
+            value=self._settings.get('notify_sound', True))
+        self._retry_var    = tk.IntVar(
+            value=self._settings.get('retry_count', 3))
+        self._auto_ip_var  = tk.BooleanVar(
+            value=self._settings.get('auto_ip', False))
         self._building       = False
         self._start_time     = None
         self._current_pct    = 0
@@ -383,8 +391,38 @@ class ExFATBuilder(tk.Tk):
         self._build_ui()
         self._render_queue()
         self._refresh_temp_size()
+        # Check for updates in background after 3 seconds
+        self.after(3000, self._check_for_updates)
+        # Check OSFMount after UI is ready
+        self.after(500, self._check_osfmount_banner)
+
+        # Restore saved window position and size
+        geo = self._settings.get('window_geometry')
+        if geo:
+            try:
+                self.geometry(geo)
+                # Make sure it's on screen (handles monitor changes)
+                self.update_idletasks()
+                x = self.winfo_x()
+                y = self.winfo_y()
+                w = self.winfo_width()
+                h = self.winfo_height()
+                sw = self.winfo_screenwidth()
+                sh = self.winfo_screenheight()
+                # Clamp to screen bounds
+                x = max(0, min(x, sw - 200))
+                y = max(0, min(y, sh - 200))
+                self.geometry('%dx%d+%d+%d' % (w, h, x, y))
+            except Exception:
+                pass
 
     def _on_close(self):
+        # Save window position and size before closing
+        try:
+            self._settings['window_geometry'] = self.geometry()
+            save_settings(self._settings)
+        except Exception:
+            pass
         cleanup_scripts()
         self.destroy()
 
@@ -400,19 +438,1281 @@ class ExFATBuilder(tk.Tk):
                  font=('Segoe UI', 9), bg=BG, fg='#555555').pack(side='right', anchor='s', pady=(6, 0))
         tk.Label(hdr, text='Build PS5 exFAT game images  \u2014  scripts bundled, game name auto-detected',
                  font=('Segoe UI', 10), bg=BG, fg=MUTED).pack(anchor='w')
+        tk.Label(hdr, text='Inspired by NookieAI \u2022 stonemodder (Porkfolio)',
+                 font=('Segoe UI', 8), bg=BG, fg='#3a3a3a').pack(anchor='w')
         tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
 
-        # ── Settings strip ──
-        self._settings_frame = tk.Frame(self, bg=SETTINGS_BG,
+        # ── Tab bar ──
+        tab_bar = tk.Frame(self, bg='#0a0a0a')
+        tab_bar.pack(fill='x')
+        self._active_tab = tk.StringVar(value='build')
+        self._tab_build_frame  = None
+        self._tab_extract_frame = None
+
+        def _make_tab(parent, text, key):
+            btn = tk.Label(parent, text=text,
+                           font=('Segoe UI', 10), bg='#0a0a0a', fg=MUTED,
+                           padx=20, pady=8, cursor='hand2')
+            btn.pack(side='left')
+            def _click(e, k=key, b=btn):
+                self._switch_tab(k)
+            btn.bind('<Button-1>', _click)
+            return btn
+
+        self._tab_build_btn   = _make_tab(tab_bar, '\U0001f528  Build',        'build')
+        self._tab_extract_btn = _make_tab(tab_bar, '\U0001f4e4  Extract',      'extract')
+        self._tab_files_btn   = _make_tab(tab_bar, '\U0001f5c2  File Manager', 'files')
+        self._tab_ftp_btn     = _make_tab(tab_bar, '\U0001f4e1  FTP Upload',   'ftp')
+        tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
+
+        # ── Content area ──
+        self._tab_build_frame   = tk.Frame(self, bg=BG)
+        self._tab_extract_frame = tk.Frame(self, bg=BG)
+        self._tab_files_frame   = tk.Frame(self, bg=BG)
+        self._tab_ftp_frame     = tk.Frame(self, bg=BG)
+
+        self._build_build_tab(self._tab_build_frame)
+        self._build_extract_tab(self._tab_extract_frame)
+        self._build_files_tab(self._tab_files_frame)
+        self._build_ftp_tab(self._tab_ftp_frame)
+
+        # Show build tab by default
+        self._switch_tab('build')
+
+    def _switch_tab(self, key):
+        self._active_tab.set(key)
+        all_frames = [self._tab_build_frame,
+                      self._tab_extract_frame,
+                      self._tab_files_frame,
+                      self._tab_ftp_frame]
+        all_btns   = [self._tab_build_btn,
+                      self._tab_extract_btn,
+                      self._tab_files_btn,
+                      self._tab_ftp_btn]
+        all_keys   = ['build', 'extract', 'files', 'ftp']
+        for frame, btn, k in zip(all_frames, all_btns, all_keys):
+            frame.pack_forget()
+            btn.config(fg=MUTED, bg='#0a0a0a')
+        idx = all_keys.index(key)
+        all_frames[idx].pack(fill='both', expand=True)
+        all_btns[idx].config(fg=TEXT, bg='#1a1a1a')
+
+    def _build_files_tab(self, parent):
+        self._fm_image_var   = tk.StringVar()
+        self._fm_drive       = None   # mounted drive letter e.g. 'E:'
+        self._fm_osf         = None   # path to osfmount.com
+        self._fm_current_dir = None   # current path on mounted drive
+
+        # ── Top bar ──
+        top = tk.Frame(parent, bg=BG)
+        top.pack(fill='x', padx=24, pady=(12, 6))
+        tk.Label(top, text='exFAT File Manager',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left', anchor='w')
+
+        # Mount / dismount controls
+        ctrl = tk.Frame(parent, bg=BG)
+        ctrl.pack(fill='x', padx=24, pady=(0, 8))
+
+        ef_outer = tk.Frame(ctrl, bg=FIELD_BG,
+                            highlightbackground=BORDER, highlightthickness=1)
+        ef_outer.pack(side='left', fill='x', expand=True)
+        tk.Entry(ef_outer, textvariable=self._fm_image_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=5, state='readonly').pack(fill='x')
+
+        tk.Button(ctrl, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=5,
+                  cursor='hand2',
+                  command=self._fm_browse).pack(side='left', padx=(6, 0))
+
+        self._fm_mount_btn = tk.Button(ctrl, text='\U0001f517 Mount',
+                  font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=5,
+                  cursor='hand2',
+                  command=self._fm_mount)
+        self._fm_mount_btn.pack(side='left', padx=(6, 0))
+
+        self._fm_dismount_btn = tk.Button(ctrl, text='\U0001f513 Dismount',
+                  font=('Segoe UI', 9, 'bold'), bg=DANGER, fg=TEXT,
+                  activebackground='#c0392b', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=5,
+                  cursor='hand2', state='disabled',
+                  command=self._fm_dismount)
+        self._fm_dismount_btn.pack(side='left', padx=(6, 0))
+
+        self._fm_status_var = tk.StringVar(value='No image mounted')
+        tk.Label(ctrl, textvariable=self._fm_status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left', padx=(12, 0))
+
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill='x', padx=24)
+
+        # ── Path bar ──
+        path_row = tk.Frame(parent, bg=BG)
+        path_row.pack(fill='x', padx=24, pady=(6, 4))
+        tk.Label(path_row, text='Path:', font=('Segoe UI', 9),
+                 bg=BG, fg=MUTED).pack(side='left')
+        self._fm_path_var = tk.StringVar(value='—')
+        tk.Label(path_row, textvariable=self._fm_path_var,
+                 font=('Consolas', 9), bg=BG, fg=INFO_FG,
+                 anchor='w').pack(side='left', padx=(6, 0))
+
+        # ── Toolbar ──
+        toolbar = tk.Frame(parent, bg=BG)
+        toolbar.pack(fill='x', padx=24, pady=(0, 4))
+
+        def tb_btn(text, cmd, fg=TEXT):
+            return tk.Button(toolbar, text=text,
+                             font=('Segoe UI', 9), bg=SURFACE2, fg=fg,
+                             activebackground=BORDER, activeforeground=TEXT,
+                             relief='flat', bd=0, padx=10, pady=4,
+                             cursor='hand2', command=cmd)
+
+        tb_btn('\u2191 Up',            self._fm_go_up).pack(side='left', padx=(0, 4))
+        tb_btn('\U0001f504 Refresh',   self._fm_refresh).pack(side='left', padx=(0, 4))
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=6)
+        tb_btn('\u2795 Add files',     self._fm_add_file).pack(side='left', padx=(0, 4))
+        tb_btn('\U0001f4c1 Add folder', self._fm_add_folder).pack(side='left', padx=(0, 4))
+        tb_btn('\U0001f4c2 New folder', self._fm_new_folder).pack(side='left', padx=(0, 4))
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=6)
+        tb_btn('\U0001f504 Replace',   self._fm_replace_file).pack(side='left', padx=(0, 4))
+        tb_btn('\U0001f5d1 Delete',    self._fm_delete, fg=DANGER).pack(side='left', padx=(0, 4))
+
+        # ── File list ──
+        list_outer = tk.Frame(parent, bg=SURFACE2,
+                              highlightbackground=BORDER, highlightthickness=1)
+        list_outer.pack(fill='both', expand=True, padx=24, pady=(0, 8))
+
+        self._fm_listbox = tk.Listbox(
+            list_outer, font=('Consolas', 9),
+            bg=SURFACE2, fg=TEXT,
+            selectbackground=ACCENT, selectforeground='#ffffff',
+            activestyle='none', relief='flat', bd=6,
+            selectmode='extended')
+        fm_sb = tk.Scrollbar(list_outer, command=self._fm_listbox.yview,
+                             bg=SURFACE2, troughcolor=BG)
+        self._fm_listbox.configure(yscrollcommand=fm_sb.set)
+        fm_sb.pack(side='right', fill='y')
+        self._fm_listbox.pack(fill='both', expand=True)
+        self._fm_listbox.bind('<Double-Button-1>', lambda e: self._fm_enter())
+        self._fm_listbox.bind('<Button-3>', self._fm_context_menu)
+
+        # Store file info for selections
+        self._fm_entries = []   # list of (name, is_dir, size)
+
+    # ── File Manager helpers ──────────────────────────────────────────────────
+    def _fm_find_osf(self):
+        candidates = [
+            r'C:\Program Files\OSFMount\osfmount.com',
+            r'C:\Program Files (x86)\OSFMount\osfmount.com',
+            r'C:\Program Files\PassMark\OSFMount\osfmount.com',
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        import shutil as _sh
+        return _sh.which('osfmount.com')
+
+    def _fm_browse(self):
+        p = filedialog.askopenfilename(
+            title='Select exFAT image',
+            filetypes=[('exFAT images', '*.exfat'), ('All files', '*.*')])
+        if p:
+            self._fm_image_var.set(p.replace('/', '\\'))
+
+    def _fm_mount(self):
+        img = self._fm_image_var.get().strip()
+        if not img:
+            messagebox.showwarning('No image', 'Please select an exFAT image first.')
+            return
+        if not os.path.isfile(img):
+            messagebox.showerror('Not found', 'Image file not found:\n' + img)
+            return
+        osf = self._fm_find_osf()
+        if not osf:
+            messagebox.showerror('OSFMount not found',
+                'Please install OSFMount from:\n'
+                'https://www.osforensics.com/tools/mount-disk-images.html')
+            return
+        self._fm_osf = osf
+
+        # Find free drive letter
+        try:
+            import ctypes as _ct
+            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            free = None
+            for i in range(25, 3, -1):
+                if not (bitmask & (1 << i)):
+                    free = chr(65 + i) + ':'
+                    break
+            if not free:
+                raise Exception('No free drive letters')
+        except Exception as e:
+            messagebox.showerror('Error', str(e))
+            return
+
+        self._fm_status_var.set('Mounting...')
+        self.update()
+
+        result = subprocess.run(
+            [osf, '-a', '-t', 'file', '-f', img,
+             '-m', free, '-o', 'rw,rem'],
+            capture_output=True, text=True)
+
+        if result.returncode != 0:
+            self._fm_status_var.set('Mount failed')
+            messagebox.showerror('Mount failed',
+                result.stderr or result.stdout or 'Unknown error')
+            return
+
+        # Wait for drive
+        import time as _t
+        for _ in range(20):
+            if os.path.exists(free + '\\'):
+                break
+            _t.sleep(0.3)
+        else:
+            self._fm_status_var.set('Drive did not appear')
+            return
+
+        self._fm_drive = free
+        self._fm_current_dir = free + '\\'
+        self._fm_status_var.set('Mounted: ' + free + '  (read-write)')
+        self._fm_mount_btn.config(state='disabled')
+        self._fm_dismount_btn.config(state='normal')
+        self._fm_refresh()
+
+    def _fm_dismount(self):
+        if not self._fm_drive or not self._fm_osf:
+            return
+        if not messagebox.askyesno('Dismount',
+                'Dismount the image?\n\nMake sure all file operations are complete.'):
+            return
+        result = subprocess.run(
+            [self._fm_osf, '-d', '-m', self._fm_drive],
+            capture_output=True, text=True)
+        self._fm_drive = None
+        self._fm_current_dir = None
+        self._fm_osf = None
+        self._fm_listbox.delete(0, 'end')
+        self._fm_entries = []
+        self._fm_path_var.set('—')
+        self._fm_status_var.set('Dismounted successfully')
+        self._fm_mount_btn.config(state='normal')
+        self._fm_dismount_btn.config(state='disabled')
+
+    def _fm_refresh(self):
+        if not self._fm_drive or not self._fm_current_dir:
+            return
+        self._fm_listbox.delete(0, 'end')
+        self._fm_entries = []
+        self._fm_path_var.set(self._fm_current_dir)
+        try:
+            entries = []
+            with os.scandir(self._fm_current_dir) as it:
+                for e in it:
+                    try:
+                        is_dir = e.is_dir()
+                        size   = 0 if is_dir else e.stat().st_size
+                        entries.append((e.name, is_dir, size))
+                    except Exception:
+                        pass
+            # Dirs first, then files, both alphabetical
+            entries.sort(key=lambda x: (not x[1], x[0].lower()))
+            # Add parent dir if not at root
+            if self._fm_current_dir.rstrip('\\') != self._fm_drive:
+                self._fm_entries.append(('..', True, 0))
+                self._fm_listbox.insert('end', '\U0001f4c2  ..')
+            for name, is_dir, size in entries:
+                self._fm_entries.append((name, is_dir, size))
+                if is_dir:
+                    self._fm_listbox.insert('end', '\U0001f4c1  ' + name)
+                else:
+                    if size >= 1024**3:
+                        sz = '%.2f GB' % (size / 1024**3)
+                    elif size >= 1024**2:
+                        sz = '%.1f MB' % (size / 1024**2)
+                    else:
+                        sz = '%d KB' % (size // 1024)
+                    self._fm_listbox.insert('end',
+                        '\U0001f4be  %-40s %s' % (name, sz))
+        except Exception as e:
+            messagebox.showerror('Error reading directory', str(e))
+
+    def _fm_enter(self):
+        sel = self._fm_listbox.curselection()
+        if not sel:
+            return
+        name, is_dir, _ = self._fm_entries[sel[0]]
+        if not is_dir:
+            return
+        if name == '..':
+            self._fm_go_up()
+        else:
+            self._fm_current_dir = os.path.join(self._fm_current_dir, name) + '\\'
+            self._fm_refresh()
+
+    def _fm_go_up(self):
+        if not self._fm_current_dir:
+            return
+        cur = self._fm_current_dir.rstrip('\\')
+        if cur == self._fm_drive:
+            return
+        parent = os.path.dirname(cur) + '\\'
+        self._fm_current_dir = parent
+        self._fm_refresh()
+
+    def _fm_selected_path(self):
+        sel = self._fm_listbox.curselection()
+        if not sel:
+            return None, None
+        name, is_dir, _ = self._fm_entries[sel[0]]
+        if name == '..':
+            return None, None
+        return os.path.join(self._fm_current_dir, name), is_dir
+
+    def _fm_add_file(self):
+        if not self._fm_drive:
+            messagebox.showwarning('Not mounted', 'Mount an image first.')
+            return
+        files = filedialog.askopenfilenames(title='Select file(s) to add')
+        if not files:
+            return
+        added = 0
+        skipped = 0
+        overwrite_all = [False]
+        skip_all      = [False]
+        for src in files:
+            dst = os.path.join(self._fm_current_dir, os.path.basename(src))
+            if os.path.exists(dst) and not overwrite_all[0]:
+                if skip_all[0]:
+                    skipped += 1
+                    continue
+                choice = self._fm_overwrite_dialog(os.path.basename(src),
+                                                    len(files) > 1)
+                if choice == 'skip':
+                    skipped += 1
+                    continue
+                elif choice == 'skip_all':
+                    skip_all[0] = True
+                    skipped += 1
+                    continue
+                elif choice == 'overwrite_all':
+                    overwrite_all[0] = True
+                # 'overwrite' or 'overwrite_all' — fall through to copy
+            try:
+                shutil.copy2(src, dst)
+                added += 1
+            except Exception as e:
+                messagebox.showerror('Copy failed',
+                    'Failed to copy ' + os.path.basename(src) + ':\n' + str(e))
+        self._fm_refresh()
+        parts = []
+        if added:   parts.append(str(added) + ' file(s) added')
+        if skipped: parts.append(str(skipped) + ' skipped')
+        self._fm_status_var.set('  •  '.join(parts) if parts else 'Done')
+
+    def _fm_add_folder(self):
+        if not self._fm_drive:
+            messagebox.showwarning('Not mounted', 'Mount an image first.')
+            return
+        src_folder = filedialog.askdirectory(title='Select folder to copy into image')
+        if not src_folder:
+            return
+        folder_name = os.path.basename(src_folder.rstrip('/\\'))
+        dst_root = os.path.join(self._fm_current_dir, folder_name)
+
+        # Collect all files to copy
+        all_files = []
+        for root, dirs, files in os.walk(src_folder):
+            for fn in files:
+                src_path = os.path.join(root, fn)
+                rel      = os.path.relpath(src_path, src_folder)
+                dst_path = os.path.join(dst_root, rel)
+                all_files.append((src_path, dst_path, fn))
+
+        if not all_files:
+            messagebox.showinfo('Empty folder', 'The selected folder contains no files.')
+            return
+
+        # Check for any conflicts upfront
+        conflicts = [(s, d, n) for s, d, n in all_files if os.path.exists(d)]
+        overwrite_all = False
+        if conflicts:
+            msg = (str(len(conflicts)) + ' file(s) already exist in the image.\n\n' +
+                   '\n'.join(os.path.basename(d) for _, d, _ in conflicts[:8]) +
+                   ('\n...' if len(conflicts) > 8 else '') +
+                   '\n\nOverwrite all existing files?')
+            ans = messagebox.askyesnocancel('Files exist', msg)
+            if ans is None:
+                return   # Cancel
+            overwrite_all = ans
+
+        added = 0
+        skipped = 0
+        errors = []
+        for src_path, dst_path, fn in all_files:
+            if os.path.exists(dst_path) and not overwrite_all:
+                skipped += 1
+                continue
+            try:
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+                added += 1
+            except Exception as e:
+                errors.append(fn + ': ' + str(e))
+
+        self._fm_refresh()
+        parts = []
+        if added:   parts.append(str(added) + ' file(s) copied')
+        if skipped: parts.append(str(skipped) + ' skipped')
+        self._fm_status_var.set('  •  '.join(parts) if parts else 'Done')
+        if errors:
+            messagebox.showerror('Some files failed',
+                str(len(errors)) + ' file(s) could not be copied:\n\n' +
+                '\n'.join(errors[:10]))
+
+    def _fm_overwrite_dialog(self, filename, show_all_options):
+        """Ask user what to do when a file already exists. Returns:
+        'overwrite', 'overwrite_all', 'skip', 'skip_all'"""
+        win = tk.Toplevel(self)
+        win.title('File exists')
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text='\u26a0  File already exists',
+                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=WARNING).pack(padx=24, pady=(16, 4))
+        tk.Label(win, text=filename,
+                 font=('Consolas', 9), bg=BG, fg=MUTED).pack(padx=24, pady=(0, 16))
+
+        result = [None]
+
+        btn_frame = tk.Frame(win, bg=BG)
+        btn_frame.pack(padx=24, pady=(0, 16))
+
+        def make_btn(text, val, fg=TEXT, bg=SURFACE2):
+            tk.Button(btn_frame, text=text, font=('Segoe UI', 9),
+                      bg=bg, fg=fg, activebackground=BORDER,
+                      activeforeground=TEXT, relief='flat', bd=0,
+                      padx=12, pady=6, cursor='hand2',
+                      command=lambda v=val: (result.__setitem__(0, v), win.destroy())
+                      ).pack(side='left', padx=4)
+
+        make_btn('Overwrite', 'overwrite', bg=WARNING, fg='#000000')
+        if show_all_options:
+            make_btn('Overwrite All', 'overwrite_all', bg=DANGER)
+        make_btn('Skip', 'skip')
+        if show_all_options:
+            make_btn('Skip All', 'skip_all')
+
+        win.update_idletasks()
+        # Centre over parent
+        x = self.winfo_x() + (self.winfo_width()  - win.winfo_width())  // 2
+        y = self.winfo_y() + (self.winfo_height() - win.winfo_height()) // 2
+        win.geometry('+%d+%d' % (x, y))
+        win.wait_window()
+        return result[0] or 'skip'
+
+    def _fm_new_folder(self):
+        if not self._fm_drive:
+            messagebox.showwarning('Not mounted', 'Mount an image first.')
+            return
+        name = tk.simpledialog.askstring('New folder', 'Folder name:',
+                                          parent=self)
+        if not name:
+            return
+        try:
+            os.makedirs(os.path.join(self._fm_current_dir, name), exist_ok=True)
+            self._fm_refresh()
+        except Exception as e:
+            messagebox.showerror('Error', str(e))
+
+    def _fm_replace_file(self):
+        path, is_dir = self._fm_selected_path()
+        if not path:
+            messagebox.showwarning('No selection', 'Select a file to replace.')
+            return
+        if is_dir:
+            messagebox.showwarning('Is a folder', 'Select a file, not a folder.')
+            return
+        src = filedialog.askopenfilename(
+            title='Select replacement file',
+            initialfile=os.path.basename(path))
+        if not src:
+            return
+        try:
+            shutil.copy2(src, path)
+            self._fm_refresh()
+            self._fm_status_var.set('Replaced: ' + os.path.basename(path))
+        except Exception as e:
+            messagebox.showerror('Replace failed', str(e))
+
+    def _fm_delete(self):
+        sels = self._fm_listbox.curselection()
+        if not sels:
+            messagebox.showwarning('No selection', 'Select file(s) or folder(s) to delete.')
+            return
+        names = [self._fm_entries[i][0] for i in sels if self._fm_entries[i][0] != '..']
+        if not names:
+            return
+        if not messagebox.askyesno('Delete',
+                'Delete ' + str(len(names)) + ' item(s)?\n\n' +
+                '\n'.join(names[:10]) +
+                ('\n...' if len(names) > 10 else '') +
+                '\n\nThis cannot be undone.'):
+            return
+        errors = []
+        for name in names:
+            p = os.path.join(self._fm_current_dir, name)
+            try:
+                if os.path.isdir(p):
+                    shutil.rmtree(p)
+                else:
+                    os.remove(p)
+            except Exception as e:
+                errors.append(name + ': ' + str(e))
+        self._fm_refresh()
+        if errors:
+            messagebox.showerror('Some deletions failed', '\n'.join(errors))
+        else:
+            self._fm_status_var.set('Deleted ' + str(len(names)) + ' item(s)')
+
+    def _fm_context_menu(self, event):
+        if not self._fm_drive:
+            return
+        sel = self._fm_listbox.nearest(event.y)
+        self._fm_listbox.selection_clear(0, 'end')
+        self._fm_listbox.selection_set(sel)
+        path, is_dir = self._fm_selected_path()
+        if not path:
+            return
+        menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
+                       activebackground=ACCENT, activeforeground=TEXT,
+                       font=('Segoe UI', 9))
+        if not is_dir:
+            menu.add_command(label='\U0001f504  Replace file',
+                             command=self._fm_replace_file)
+        menu.add_command(label='\u2795  Add files here',
+                         command=self._fm_add_file)
+        menu.add_command(label='\U0001f4c1  Add folder here',
+                         command=self._fm_add_folder)
+        if is_dir:
+            menu.add_command(label='\U0001f4c2  Open folder',
+                             command=self._fm_enter)
+        menu.add_separator()
+        menu.add_command(label='\U0001f5d1  Delete',
+                         command=self._fm_delete)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _build_ftp_tab(self, parent):
+        self._ftptab_local_var  = tk.StringVar()
+        self._ftptab_remote_var = tk.StringVar(
+            value=self._settings.get('ftp_path', '/data/etaHEN/games/'))
+        self._ftptab_is_folder  = tk.BooleanVar(value=False)
+        self._ftptab_uploading  = False
+
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill='both', expand=True, padx=24, pady=16)
+
+        tk.Label(body, text='FTP Upload to PS5',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(anchor='w')
+        tk.Label(body, text='Upload any file or folder directly to your PS5',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(2, 16))
+
+        # ── Type selector ──
+        type_row = tk.Frame(body, bg=BG)
+        type_row.pack(fill='x', pady=(0, 10))
+        tk.Label(type_row, text='Upload type:', font=('Segoe UI', 9),
+                 bg=BG, fg=MUTED).pack(side='left')
+        tk.Radiobutton(type_row, text='File', variable=self._ftptab_is_folder,
+                       value=False, font=('Segoe UI', 9),
+                       bg=BG, fg=TEXT, activebackground=BG,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._ftptab_update_browse).pack(side='left', padx=(12, 0))
+        tk.Radiobutton(type_row, text='Folder', variable=self._ftptab_is_folder,
+                       value=True, font=('Segoe UI', 9),
+                       bg=BG, fg=TEXT, activebackground=BG,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._ftptab_update_browse).pack(side='left', padx=(10, 0))
+
+        # ── Local path ──
+        local_lbl_row = tk.Frame(body, bg=BG)
+        local_lbl_row.pack(fill='x')
+        self._ftptab_local_lbl = tk.Label(local_lbl_row,
+                 text='Local file', font=('Segoe UI', 9), bg=BG, fg=MUTED, anchor='w')
+        self._ftptab_local_lbl.pack(side='left')
+        local_inner = tk.Frame(body, bg=BG)
+        local_inner.pack(fill='x', pady=(3, 8))
+        ef = tk.Frame(local_inner, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        ef.pack(side='left', fill='x', expand=True)
+        tk.Entry(ef, textvariable=self._ftptab_local_var,
+                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=6, state='readonly').pack(fill='x')
+        self._ftptab_browse_btn = tk.Button(
+                 local_inner, text='Browse', font=('Segoe UI', 9),
+                 bg=SURFACE2, fg=TEXT, activebackground=BORDER,
+                 activeforeground=TEXT, relief='flat', bd=0,
+                 padx=14, pady=6, cursor='hand2',
+                 command=self._ftptab_browse)
+        self._ftptab_browse_btn.pack(side='left', padx=(6, 0))
+
+        # ── Remote path ──
+        tk.Label(body, text='PS5 remote path',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED, anchor='w').pack(fill='x')
+        remote_inner = tk.Frame(body, bg=BG)
+        remote_inner.pack(fill='x', pady=(3, 8))
+        ref = tk.Frame(remote_inner, bg=FIELD_BG,
+                       highlightbackground=BORDER, highlightthickness=1)
+        ref.pack(side='left', fill='x', expand=True)
+        tk.Entry(ref, textvariable=self._ftptab_remote_var,
+                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=6).pack(fill='x')
+        tk.Button(remote_inner, text='etaHEN default',
+                  font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=8, pady=6,
+                  cursor='hand2',
+                  command=lambda: self._ftptab_remote_var.set(
+                      '/data/etaHEN/games/')).pack(side='left', padx=(6, 0))
+
+        # ── Upload button + cancel ──
+        btn_row = tk.Frame(body, bg=BG)
+        btn_row.pack(fill='x', pady=(4, 0))
+        self._ftptab_upload_btn = tk.Button(
+            btn_row, text='\U0001f4e1  Upload to PS5',
+            font=('Segoe UI', 11, 'bold'),
+            bg=ACCENT, fg=TEXT,
+            activebackground='#3a8eef', activeforeground=TEXT,
+            relief='flat', bd=0, padx=24, pady=9,
+            cursor='hand2', command=self._ftptab_start_upload)
+        self._ftptab_upload_btn.pack(side='left')
+        self._ftptab_cancel_btn = tk.Button(
+            btn_row, text='\u2715 Cancel',
+            font=('Segoe UI', 9),
+            bg=SURFACE2, fg=DANGER,
+            activebackground=BORDER, activeforeground=DANGER,
+            relief='flat', bd=0, padx=12, pady=9,
+            cursor='hand2', command=self._ftptab_cancel)
+        # Hidden until upload starts
+
+        # ── Progress ──
+        self._ftptab_status_var = tk.StringVar(value='')
+        tk.Label(body, textvariable=self._ftptab_status_var,
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', pady=(12, 0))
+
+        bar_frame = tk.Frame(body, bg=TRACK, height=18)
+        bar_frame.pack(fill='x', pady=(4, 0))
+        bar_frame.pack_propagate(False)
+        self._ftptab_canvas = tk.Canvas(bar_frame, height=18, bg=TRACK,
+                                         highlightthickness=0, bd=0)
+        self._ftptab_canvas.pack(fill='both', expand=True)
+        self._ftptab_bar = self._ftptab_canvas.create_rectangle(
+            0, 0, 0, 18, fill=ACCENT, outline='')
+        self._ftptab_canvas.bind('<Configure>',
+            lambda e: self._ftptab_set_bar(self._ftptab_pct))
+
+        self._ftptab_eta_var = tk.StringVar(value='')
+        tk.Label(body, textvariable=self._ftptab_eta_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', pady=(4, 0))
+        self._ftptab_pct    = 0
+        self._ftptab_cancel_flag = False
+
+        # ── Log ──
+        tk.Label(body, text='OUTPUT LOG', font=('Segoe UI', 8),
+                 bg=BG, fg=MUTED).pack(anchor='w', pady=(14, 0))
+        log_frame = tk.Frame(body, bg=SURFACE2,
+                             highlightbackground=BORDER, highlightthickness=1)
+        log_frame.pack(fill='both', expand=True, pady=(3, 0))
+        self._ftptab_log = tk.Text(log_frame, font=('Consolas', 9),
+                                    bg=SURFACE2, fg=TEXT, relief='flat',
+                                    bd=6, state='disabled', wrap='word',
+                                    height=6, insertbackground=TEXT)
+        ftp_sb = tk.Scrollbar(log_frame, command=self._ftptab_log.yview,
+                              bg=SURFACE2, troughcolor=BG)
+        self._ftptab_log.configure(yscrollcommand=ftp_sb.set)
+        ftp_sb.pack(side='right', fill='y')
+        self._ftptab_log.pack(fill='both', expand=True)
+
+    # ── FTP tab helpers ───────────────────────────────────────────────────────
+    def _ftptab_log_write(self, text):
+        self._ftptab_log.config(state='normal')
+        self._ftptab_log.insert('end', text)
+        self._ftptab_log.see('end')
+        self._ftptab_log.config(state='disabled')
+
+    def _ftptab_update_browse(self):
+        if self._ftptab_is_folder.get():
+            self._ftptab_local_lbl.config(text='Local folder')
+        else:
+            self._ftptab_local_lbl.config(text='Local file')
+
+    def _ftptab_browse(self):
+        if self._ftptab_is_folder.get():
+            p = filedialog.askdirectory(title='Select folder to upload')
+        else:
+            p = filedialog.askopenfilename(title='Select file to upload')
+        if p:
+            self._ftptab_local_var.set(p.replace('/', '\\'))
+
+    def _ftptab_set_bar(self, pct):
+        self._ftptab_pct = pct
+        try:
+            w = self._ftptab_canvas.winfo_width()
+            fill_w = int(w * pct / 100)
+            self._ftptab_canvas.coords(self._ftptab_bar, 0, 0, fill_w, 18)
+            self._ftptab_canvas.itemconfig(
+                self._ftptab_bar, fill=SUCCESS if pct >= 100 else ACCENT)
+        except Exception:
+            pass
+
+    def _ftptab_cancel(self):
+        self._ftptab_cancel_flag = True
+        self._ftptab_status_var.set('Cancelling...')
+
+    def _ftptab_start_upload(self):
+        local = self._ftptab_local_var.get().strip()
+        remote_dir = self._ftptab_remote_var.get().strip() or '/data/etaHEN/games/'
+        is_folder  = self._ftptab_is_folder.get()
+
+        if not local:
+            messagebox.showwarning('Missing', 'Please select a file or folder to upload.')
+            return
+        if not os.path.exists(local):
+            messagebox.showerror('Not found', 'Path not found:\n' + local)
+            return
+        ip = self._ftp_ip_var.get().strip()
+        if not ip:
+            messagebox.showwarning('No IP',
+                'Enter your PS5 IP in the Build tab Settings → PS5 FTP UPLOAD.')
+            return
+
+        self._ftptab_cancel_flag = False
+        self._ftptab_upload_btn.config(state='disabled', text='Uploading...')
+        self._ftptab_cancel_btn.pack(side='left', padx=(8, 0))
+        self._ftptab_status_var.set('Connecting...')
+        self._ftptab_set_bar(0)
+        self._ftptab_eta_var.set('')
+        self._ftptab_log.config(state='normal')
+        self._ftptab_log.delete('1.0', 'end')
+        self._ftptab_log.config(state='disabled')
+        self._ftptab_log_write('[FTP] ' + ('Folder' if is_folder else 'File') +
+                                ': ' + local + '\n')
+        self._ftptab_log_write('[FTP] Remote: ' + remote_dir + '\n\n')
+
+        def worker():
+            try:
+                import ftplib
+                ftp = self._ftp_connect()
+                self.after(0, self._ftptab_status_var.set, 'Connected')
+
+                def ensure_dir(ftp, path):
+                    parts = path.strip('/').split('/')
+                    cur = ''
+                    for part in parts:
+                        cur += '/' + part
+                        try:
+                            ftp.mkd(cur)
+                        except Exception:
+                            pass
+
+                if is_folder:
+                    # Count total files first
+                    all_files = []
+                    for root, dirs, files in os.walk(local):
+                        for fn in files:
+                            all_files.append(os.path.join(root, fn))
+                    total_files = len(all_files)
+                    total_bytes = sum(os.path.getsize(f) for f in all_files)
+                    sent_bytes  = [0]
+                    sent_files  = [0]
+                    start_t     = time.time()
+                    folder_name = os.path.basename(local.rstrip('\\/'))
+
+                    self.after(0, self._ftptab_log_write,
+                        '[FTP] %d files, %.2f GB total\n\n' % (
+                            total_files, total_bytes / 1024**3))
+
+                    for local_path in all_files:
+                        if self._ftptab_cancel_flag:
+                            raise Exception('Cancelled by user')
+                        rel = os.path.relpath(local_path, os.path.dirname(local))
+                        remote_path = (remote_dir.rstrip('/') + '/' +
+                                       folder_name + '/' +
+                                       rel.replace('\\', '/'))
+                        remote_parent = '/'.join(remote_path.split('/')[:-1])
+                        ensure_dir(ftp, remote_parent)
+                        sz = os.path.getsize(local_path)
+                        self.after(0, self._ftptab_log_write,
+                            'Uploading: ' + os.path.basename(local_path) + '\n')
+
+                        window = []
+                        def prog(block, _sz=sz, _lp=local_path):
+                            if self._ftptab_cancel_flag:
+                                raise Exception('Cancelled')
+                            sent_bytes[0] += len(block)
+                            now = time.time()
+                            window.append((now, sent_bytes[0]))
+                            cutoff = now - 5.0
+                            while len(window) > 1 and window[0][0] < cutoff:
+                                window.pop(0)
+                            dt = window[-1][0] - window[0][0]
+                            db = window[-1][1] - window[0][1]
+                            speed = (db / 1024 / 1024) / dt if dt > 0 else 0
+                            pct = min(100, int(sent_bytes[0] / total_bytes * 100)) if total_bytes else 0
+                            elapsed = now - start_t
+                            rem_gb  = max(0, (total_bytes - sent_bytes[0]) / 1024**3)
+                            eta_s   = (rem_gb * 1024 / speed) if speed > 0 else 0
+                            eta_str = ('Almost done' if eta_s < 5 else
+                                       'ETA: %dm %02ds' % (int(eta_s//60), int(eta_s%60)))
+                            el_str  = 'Elapsed: %dm %02ds' % (int(elapsed//60), int(elapsed%60))
+                            status  = ('%d/%d files  \u2022  %.2f GB sent  \u2022  '
+                                       '%.1f MB/s  \u2022  %s' % (
+                                           sent_files[0]+1, total_files,
+                                           sent_bytes[0]/1024**3, speed, eta_str))
+                            self.after(0, self._ftptab_status_var.set, status)
+                            self.after(0, self._ftptab_eta_var.set, el_str)
+                            self.after(0, self._ftptab_set_bar, pct)
+
+                        with open(local_path, 'rb') as f:
+                            ftp.storbinary('STOR ' + remote_path, f,
+                                           blocksize=65536, callback=prog)
+                        sent_files[0] += 1
+
+                else:
+                    # Single file upload
+                    filename = os.path.basename(local)
+                    remote_path = remote_dir.rstrip('/') + '/' + filename
+                    ensure_dir(ftp, remote_dir)
+                    file_size = os.path.getsize(local)
+                    file_size_gb = file_size / 1024**3
+                    self.after(0, self._ftptab_log_write,
+                        '[FTP] Size: %.2f GB\n\n' % file_size_gb)
+                    uploaded = [0]
+                    start_t  = [time.time()]
+                    window   = []
+                    def prog(block):
+                        if self._ftptab_cancel_flag:
+                            raise Exception('Cancelled')
+                        uploaded[0] += len(block)
+                        now = time.time()
+                        window.append((now, uploaded[0]))
+                        cutoff = now - 5.0
+                        while len(window) > 1 and window[0][0] < cutoff:
+                            window.pop(0)
+                        dt = window[-1][0] - window[0][0]
+                        db = window[-1][1] - window[0][1]
+                        speed = (db / 1024 / 1024) / dt if dt > 0 else 0
+                        pct   = min(100, int(uploaded[0] / file_size * 100)) if file_size else 0
+                        elapsed = now - start_t[0]
+                        rem_gb  = max(0, (file_size - uploaded[0]) / 1024**3)
+                        eta_s   = (rem_gb * 1024 / speed) if speed > 0 else 0
+                        eta_str = ('Almost done' if eta_s < 5 else
+                                   'ETA: %dm %02ds' % (int(eta_s//60), int(eta_s%60)))
+                        el_str  = 'Elapsed: %dm %02ds' % (int(elapsed//60), int(elapsed%60))
+                        status  = ('%.2f / %.2f GB  \u2022  %.1f MB/s  \u2022  %s' % (
+                            uploaded[0]/1024**3, file_size_gb, speed, eta_str))
+                        self.after(0, self._ftptab_status_var.set, status)
+                        self.after(0, self._ftptab_eta_var.set, el_str)
+                        self.after(0, self._ftptab_set_bar, pct)
+
+                    with open(local, 'rb') as f:
+                        ftp.storbinary('STOR ' + remote_path, f,
+                                       blocksize=65536, callback=prog)
+
+                ftp.quit()
+                self.after(0, self._ftptab_done, True, remote_dir)
+
+            except Exception as e:
+                self.after(0, self._ftptab_done, False, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ftptab_done(self, ok, info):
+        self._ftptab_upload_btn.config(state='normal', text='\U0001f4e1  Upload to PS5')
+        self._ftptab_cancel_btn.pack_forget()
+        if ok:
+            self._ftptab_set_bar(100)
+            self._ftptab_status_var.set('Upload complete \u2713')
+            self._ftptab_log_write('\n[OK] Upload complete: ' + info + '\n')
+            self._notify('FTP Upload complete', info)
+        else:
+            if 'Cancelled' in info:
+                self._ftptab_status_var.set('Upload cancelled')
+                self._ftptab_log_write('\n[CANCELLED] Upload cancelled by user\n')
+            else:
+                self._ftptab_status_var.set('Upload failed')
+                self._ftptab_log_write('\n[ERROR] ' + info + '\n')
+                messagebox.showerror('Upload failed', info)
+
+    def _build_extract_tab(self, parent):
+        # ── Extract tab UI ──
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill='both', expand=True, padx=24, pady=16)
+
+        tk.Label(body, text='Extract exFAT image to folder',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(anchor='w')
+        tk.Label(body, text='Mount an .exfat image and copy its contents back to a folder',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(2, 16))
+
+        # Source image
+        self._extract_file_var = tk.StringVar()
+        self._field_extract(body, 'exFAT image file (.exfat)',
+                            self._extract_file_var, self._browse_extract_file)
+
+        # Output directory
+        self._extract_outdir_var = tk.StringVar()
+        self._field_extract(body, 'Output directory',
+                            self._extract_outdir_var, self._browse_extract_outdir)
+
+        # Output folder name
+        fn_row = tk.Frame(body, bg=BG)
+        fn_row.pack(fill='x', pady=(0, 8))
+        fn_lbl_row = tk.Frame(fn_row, bg=BG)
+        fn_lbl_row.pack(fill='x')
+        tk.Label(fn_lbl_row, text='Output folder name',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED, anchor='w').pack(side='left')
+        self._extract_auto_lbl = tk.Label(fn_lbl_row,
+                                           text='  \u2022 auto from filename',
+                                           font=('Segoe UI', 8), bg=BG, fg=SUCCESS)
+        self._extract_auto_lbl.pack(side='left')
+        fn_ef = tk.Frame(fn_row, bg=FIELD_BG,
+                         highlightbackground=BORDER, highlightthickness=1)
+        fn_ef.pack(fill='x', pady=(3, 0))
+        self._extract_name_var = tk.StringVar(value='')
+        tk.Entry(fn_ef, textvariable=self._extract_name_var,
+                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=6).pack(fill='x')
+
+        # Extract button
+        btn_row = tk.Frame(body, bg=BG)
+        btn_row.pack(fill='x', pady=(8, 0))
+        self._extract_btn = tk.Button(
+            btn_row, text='\U0001f4e4  Extract Image',
+            font=('Segoe UI', 11, 'bold'),
+            bg=ACCENT, fg=TEXT,
+            activebackground='#3a8eef', activeforeground=TEXT,
+            relief='flat', bd=0, padx=24, pady=9,
+            cursor='hand2', command=self._run_extract)
+        self._extract_btn.pack(side='left')
+
+        # Progress
+        self._extract_status_var = tk.StringVar(value='')
+        tk.Label(body, textvariable=self._extract_status_var,
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', pady=(12, 0))
+
+        bar_frame = tk.Frame(body, bg=TRACK, height=18)
+        bar_frame.pack(fill='x', pady=(6, 0))
+        bar_frame.pack_propagate(False)
+        self._extract_canvas = tk.Canvas(bar_frame, height=18, bg=TRACK,
+                                          highlightthickness=0, bd=0)
+        self._extract_canvas.pack(fill='both', expand=True)
+        self._extract_bar = self._extract_canvas.create_rectangle(
+            0, 0, 0, 18, fill=ACCENT, outline='')
+        self._extract_canvas.bind('<Configure>',
+            lambda e: self._update_extract_bar(self._extract_pct))
+
+        self._extract_eta_var = tk.StringVar(value='')
+        tk.Label(body, textvariable=self._extract_eta_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', pady=(4, 0))
+
+        self._extract_pct = 0
+
+        # Log
+        tk.Label(body, text='OUTPUT LOG', font=('Segoe UI', 8),
+                 bg=BG, fg=MUTED).pack(anchor='w', pady=(16, 0))
+        log_frame = tk.Frame(body, bg=SURFACE2,
+                             highlightbackground=BORDER, highlightthickness=1)
+        log_frame.pack(fill='both', expand=True, pady=(3, 0))
+        self._extract_log = tk.Text(log_frame, font=('Consolas', 9),
+                                     bg=SURFACE2, fg=TEXT, relief='flat',
+                                     bd=6, state='disabled', wrap='word',
+                                     height=8, insertbackground=TEXT)
+        esb = tk.Scrollbar(log_frame, command=self._extract_log.yview,
+                           bg=SURFACE2, troughcolor=BG)
+        self._extract_log.configure(yscrollcommand=esb.set)
+        esb.pack(side='right', fill='y')
+        self._extract_log.pack(fill='both', expand=True)
+
+    def _field_extract(self, parent, label, var, browse_cmd):
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill='x', pady=(0, 8))
+        tk.Label(row, text=label, font=('Segoe UI', 9),
+                 bg=BG, fg=MUTED, anchor='w').pack(fill='x')
+        inner = tk.Frame(row, bg=BG)
+        inner.pack(fill='x', pady=(3, 0))
+        ef = tk.Frame(inner, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        ef.pack(side='left', fill='x', expand=True)
+        tk.Entry(ef, textvariable=var, font=('Consolas', 10),
+                 bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=6, state='readonly').pack(fill='x')
+        tk.Button(inner, text='Browse', font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=TEXT, activebackground=BORDER,
+                  activeforeground=TEXT, relief='flat', bd=0,
+                  padx=14, pady=6, cursor='hand2',
+                  command=browse_cmd).pack(side='left', padx=(6, 0))
+
+    def _browse_extract_file(self):
+        p = filedialog.askopenfilename(
+            title='Select exFAT image',
+            filetypes=[('exFAT images', '*.exfat'), ('All files', '*.*')])
+        if not p:
+            return
+        p = p.replace('/', '\\')
+        self._extract_file_var.set(p)
+        # Auto-fill folder name from filename (strip .exfat)
+        base = os.path.splitext(os.path.basename(p))[0]
+        self._extract_name_var.set(base)
+
+    def _browse_extract_outdir(self):
+        p = filedialog.askdirectory(title='Select output directory')
+        if p:
+            self._extract_outdir_var.set(p.replace('/', '\\'))
+
+    def _update_extract_bar(self, pct):
+        self._extract_pct = pct
+        try:
+            w = self._extract_canvas.winfo_width()
+            fill_w = int(w * pct / 100)
+            self._extract_canvas.coords(self._extract_bar, 0, 0, fill_w, 18)
+            self._extract_canvas.itemconfig(
+                self._extract_bar, fill=SUCCESS if pct >= 100 else ACCENT)
+        except Exception:
+            pass
+
+    def _elog(self, text):
+        self._extract_log.config(state='normal')
+        self._extract_log.insert('end', text)
+        self._extract_log.see('end')
+        self._extract_log.config(state='disabled')
+
+    def _elog_clear(self):
+        self._extract_log.config(state='normal')
+        self._extract_log.delete('1.0', 'end')
+        self._extract_log.config(state='disabled')
+
+    def _run_extract(self):
+        img_path = self._extract_file_var.get().strip()
+        out_dir  = self._extract_outdir_var.get().strip()
+        out_name = self._extract_name_var.get().strip()
+
+        if not img_path:
+            messagebox.showwarning('Missing', 'Please select an exFAT image file.')
+            return
+        if not os.path.isfile(img_path):
+            messagebox.showerror('Not found', 'Image file not found:\n' + img_path)
+            return
+        if not out_dir:
+            messagebox.showwarning('Missing', 'Please select an output directory.')
+            return
+        if not out_name:
+            out_name = os.path.splitext(os.path.basename(img_path))[0]
+            self._extract_name_var.set(out_name)
+
+        dest_folder = os.path.join(out_dir, out_name)
+        if os.path.exists(dest_folder):
+            if not messagebox.askyesno('Folder exists',
+                    'Output folder already exists:\n' + dest_folder +
+                    '\n\nFiles will be merged/overwritten. Continue?'):
+                return
+
+        self._extract_btn.config(state='disabled', text='Extracting...')
+        self._extract_status_var.set('Starting...')
+        self._update_extract_bar(0)
+        self._extract_eta_var.set('')
+        self._elog_clear()
+        self._elog('[EXTRACT] Image: ' + img_path + '\n')
+        self._elog('[EXTRACT] Destination: ' + dest_folder + '\n\n')
+
+        # Find OSFMount
+        osfmount_candidates = [
+            r'C:\Program Files\OSFMount\osfmount.com',
+            r'C:\Program Files (x86)\OSFMount\osfmount.com',
+            r'C:\Program Files\PassMark\OSFMount\osfmount.com',
+        ]
+        osf = None
+        for c in osfmount_candidates:
+            if os.path.isfile(c):
+                osf = c
+                break
+        if not osf:
+            # Try PATH
+            import shutil as _sh
+            osf = _sh.which('osfmount.com')
+        if not osf:
+            messagebox.showerror('OSFMount not found',
+                'Could not find osfmount.com.\n'
+                'Please install OSFMount from:\n'
+                'https://www.osforensics.com/tools/mount-disk-images.html')
+            self._extract_btn.config(state='normal', text='\U0001f4e4  Extract Image')
+            return
+
+        start_time = [time.time()]
+        mount_point = [None]
+
+        def worker():
+            try:
+                os.makedirs(dest_folder, exist_ok=True)
+
+                # Find free drive letter
+                import ctypes as _ct
+                drives_bitmask = _ct.windll.kernel32.GetLogicalDrives()
+                free_letter = None
+                for i in range(25, 3, -1):  # Z: down to D:
+                    if not (drives_bitmask & (1 << i)):
+                        free_letter = chr(65 + i) + ':'
+                        break
+                if not free_letter:
+                    raise Exception('No free drive letters available')
+
+                mount_point[0] = free_letter
+                self.after(0, self._elog,
+                    '[EXTRACT] Mounting image on ' + free_letter + '...\n')
+                self.after(0, self._extract_status_var.set, 'Mounting image...')
+
+                # Mount read-only
+                result = subprocess.run(
+                    [osf, '-a', '-t', 'file', '-f', img_path,
+                     '-m', free_letter, '-o', 'ro,rem'],
+                    capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise Exception('Mount failed: ' + result.stderr + result.stdout)
+
+                # Wait for drive to appear
+                import time as _t
+                for _ in range(20):
+                    if os.path.exists(free_letter + '\\'):
+                        break
+                    _t.sleep(0.5)
+                else:
+                    raise Exception('Mounted drive did not appear in time')
+
+                self.after(0, self._elog, '[EXTRACT] Mounted. Copying files...\n')
+                self.after(0, self._extract_status_var.set, 'Copying files...')
+
+                # Get total size for progress
+                total_bytes = [0]
+                for root, dirs, files in os.walk(free_letter + '\\'):
+                    for fn in files:
+                        try:
+                            total_bytes[0] += os.path.getsize(os.path.join(root, fn))
+                        except Exception:
+                            pass
+
+                self.after(0, self._elog,
+                    '[EXTRACT] Total: %.2f GB to copy\n' % (total_bytes[0] / 1024**3))
+
+                # Copy using robocopy for reliability
+                robo_cmd = [
+                    'robocopy.exe',
+                    free_letter + '\\', dest_folder,
+                    '/E', '/COPY:DAT', '/DCOPY:DAT',
+                    '/R:1', '/W:1', '/NP', '/ETA'
+                ]
+                proc = subprocess.Popen(
+                    robo_cmd,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding='utf-8', errors='replace')
+
+                copied_bytes = [0]
+                for line in proc.stdout:
+                    self.after(0, self._elog, line)
+                    # Parse robocopy progress
+                    m = re.search(r'(\d{1,3})%', line)
+                    if m:
+                        pct = int(m.group(1))
+                        elapsed = time.time() - start_time[0]
+                        remaining = max(0, (elapsed / (pct/100.0)) - elapsed) if pct > 0 else 0
+                        eta = ('ETA: %dm %02ds' % (int(remaining//60), int(remaining%60))
+                               if remaining > 5 else 'Almost done')
+                        elapsed_str = 'Elapsed: %dm %02ds' % (int(elapsed//60), int(elapsed%60))
+                        self.after(0, self._update_extract_bar, pct)
+                        self.after(0, self._extract_eta_var.set,
+                                   elapsed_str + '  \u2014  ' + eta)
+                proc.wait()
+
+                # Dismount
+                self.after(0, self._elog, '\n[EXTRACT] Dismounting...\n')
+                subprocess.run([osf, '-d', '-m', free_letter],
+                               capture_output=True)
+                mount_point[0] = None
+
+                elapsed = time.time() - start_time[0]
+                m, s = int(elapsed//60), int(elapsed%60)
+                self.after(0, self._extract_done, True, dest_folder, m, s)
+
+            except Exception as e:
+                # Try to dismount on error
+                if mount_point[0]:
+                    try:
+                        subprocess.run([osf, '-d', '-m', mount_point[0]],
+                                       capture_output=True)
+                    except Exception:
+                        pass
+                self.after(0, self._extract_done, False, str(e), 0, 0)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _extract_done(self, ok, info, m, s):
+        self._extract_btn.config(state='normal', text='\U0001f4e4  Extract Image')
+        if ok:
+            self._update_extract_bar(100)
+            self._extract_status_var.set('Complete! Extracted to: ' + info)
+            self._extract_eta_var.set('Finished in %dm %02ds' % (m, s))
+            self._elog('\n[OK] Extraction complete: ' + info + '\n')
+            if messagebox.askyesno('Extraction complete',
+                    'Image extracted successfully!\n\n' + info +
+                    '\n\nOpen output folder?'):
+                subprocess.Popen('explorer "' + info + '"', shell=True)
+        else:
+            self._extract_status_var.set('Extraction failed')
+            self._elog('\n[ERROR] ' + info + '\n')
+            messagebox.showerror('Extraction failed', info)
+
+    def _build_build_tab(self, parent):
+        # ── Settings strip — collapsible ──
+        settings_outer = tk.Frame(parent, bg=BG)
+        settings_outer.pack(fill='x', padx=24, pady=(8, 2))
+        settings_header = tk.Frame(settings_outer, bg=BG)
+        settings_header.pack(fill='x')
+        self._settings_toggle_lbl = tk.Label(
+            settings_header, text='\u25b6  SETTINGS',
+            font=('Segoe UI', 8), bg=BG, fg=MUTED,
+            cursor='hand2', anchor='w')
+        self._settings_toggle_lbl.pack(side='left')
+        self._settings_visible = tk.BooleanVar(value=False)
+        self._settings_toggle_lbl.bind('<Button-1>', lambda e: self._toggle_settings())
+        settings_header.bind('<Button-1>', lambda e: self._toggle_settings())
+
+        self._settings_body = tk.Frame(settings_outer, bg=BG)
+        self._settings_frame = tk.Frame(self._settings_body, bg=SETTINGS_BG,
                                          highlightbackground=BORDER,
                                          highlightthickness=1)
-        self._settings_frame.pack(fill='x', padx=24, pady=(8, 2))
+        self._settings_frame.pack(fill='x', pady=(4, 0))
         self._build_settings_strip()
 
-        tk.Frame(self, bg=BORDER, height=1).pack(fill='x', pady=(6, 0))
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill='x', pady=(6, 0))
 
         # ── Add to queue form ──
-        form = tk.Frame(self, bg=BG)
+        form = tk.Frame(parent, bg=BG)
         form.pack(fill='x', padx=24, pady=6)
         tk.Label(form, text='ADD TO QUEUE', font=('Segoe UI', 8),
                  bg=BG, fg=MUTED).pack(anchor='w', pady=(0, 4))
@@ -502,10 +1802,10 @@ class ExFATBuilder(tk.Tk):
         tk.Label(add_row, text='Add multiple games then click Build All',
                  font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left', padx=12)
 
-        tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill='x')
 
         # ── Queue ──
-        q_header = tk.Frame(self, bg=BG)
+        q_header = tk.Frame(parent, bg=BG)
         q_header.pack(fill='x', padx=24, pady=(6, 3))
         tk.Label(q_header, text='QUEUE', font=('Segoe UI', 8),
                  bg=BG, fg=MUTED).pack(side='left')
@@ -517,7 +1817,7 @@ class ExFATBuilder(tk.Tk):
                   activeforeground=DANGER, relief='flat', bd=0,
                   cursor='hand2', command=self._clear_queue).pack(side='right')
 
-        q_outer = tk.Frame(self, bg=SURFACE2,
+        q_outer = tk.Frame(parent, bg=SURFACE2,
                            highlightbackground=BORDER, highlightthickness=1)
         q_outer.pack(fill='x', padx=24)
         self._queue_canvas = tk.Canvas(q_outer, bg=SURFACE2,
@@ -537,8 +1837,15 @@ class ExFATBuilder(tk.Tk):
         self._queue_canvas.bind('<Configure>', lambda e:
             self._queue_canvas.itemconfig('qf', width=e.width))
 
+        # Drag and drop onto queue area
+        try:
+            self._queue_canvas.drop_target_register('DND_Files')
+            self._queue_canvas.dnd_bind('<<Drop>>', self._on_queue_drop)
+        except Exception:
+            pass
+
         # ── Bottom bar — packed FIRST = always visible at very bottom ──
-        bottom = tk.Frame(self, bg=BG)
+        bottom = tk.Frame(parent, bg=BG)
         bottom.pack(side='bottom', fill='x', padx=24, pady=6)
         self.status_lbl = tk.Label(bottom, textvariable=self.status_text,
                                     font=('Segoe UI', 9), bg=BG, fg=SUCCESS)
@@ -550,10 +1857,10 @@ class ExFATBuilder(tk.Tk):
             padx=24, pady=8, cursor='hand2', command=self._run_queue)
         self.build_btn.pack(side='right')
 
-        tk.Frame(self, bg=BORDER, height=1).pack(side='bottom', fill='x')
+        tk.Frame(parent, bg=BORDER, height=1).pack(side='bottom', fill='x')
 
         # ── Progress — packed second from bottom ──
-        prog_outer = tk.Frame(self, bg=BG)
+        prog_outer = tk.Frame(parent, bg=BG)
         prog_outer.pack(side='bottom', fill='x', padx=24, pady=(4, 2))
 
         dots_frame = tk.Frame(prog_outer, bg=BG)
@@ -594,11 +1901,11 @@ class ExFATBuilder(tk.Tk):
                  font=('Consolas', 10), bg=BG, fg=ACCENT,
                  anchor='e').pack(side='right')
 
-        tk.Frame(self, bg=BORDER, height=1).pack(side='bottom', fill='x')
+        tk.Frame(parent, bg=BORDER, height=1).pack(side='bottom', fill='x')
 
         # ── Collapsible log panel ──
         self._log_visible = tk.BooleanVar(value=False)
-        log_outer = tk.Frame(self, bg=BG)
+        log_outer = tk.Frame(parent, bg=BG)
         log_outer.pack(side='bottom', fill='x', padx=24, pady=(0, 2))
 
         # Toggle header row
@@ -795,6 +2102,12 @@ class ExFATBuilder(tk.Tk):
                   relief='flat', bd=0, padx=10, pady=4,
                   cursor='hand2',
                   command=self._show_ps5_browser).pack(side='left', padx=(6, 0))
+        tk.Button(ftp_status_row, text='\U0001f3ae Games on PS5',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=SUCCESS,
+                  activebackground=BORDER, activeforeground=SUCCESS,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._show_installed_games).pack(side='left', padx=(6, 0))
         self._cancel_btn = tk.Button(
                   ftp_status_row, text='\u2715 Cancel Upload',
                   font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
@@ -803,6 +2116,62 @@ class ExFATBuilder(tk.Tk):
                   cursor='hand2',
                   command=self._cancel_ftp_upload)
         # Hidden until upload starts
+
+        # ── Notifications & Discord ──
+        tk.Frame(f, bg=BORDER, height=1).pack(fill='x', padx=12, pady=(4, 0))
+        notif_title = tk.Frame(f, bg=SETTINGS_BG)
+        notif_title.pack(fill='x', padx=12, pady=(6, 4))
+        tk.Label(notif_title, text='NOTIFICATIONS', font=('Segoe UI', 8),
+                 bg=SETTINGS_BG, fg=MUTED).pack(side='left')
+
+        sound_row = tk.Frame(f, bg=SETTINGS_BG)
+        sound_row.pack(fill='x', padx=12, pady=(0, 8))
+        tk.Checkbutton(sound_row, text='Play sound when build / upload completes',
+                       variable=self._sound_var,
+                       font=('Segoe UI', 9), bg=SETTINGS_BG, fg=MUTED,
+                       activebackground=SETTINGS_BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._save_extra_settings).pack(side='left')
+
+        # ── Build options ──
+        tk.Frame(f, bg=BORDER, height=1).pack(fill='x', padx=12, pady=(4, 0))
+        build_title = tk.Frame(f, bg=SETTINGS_BG)
+        build_title.pack(fill='x', padx=12, pady=(6, 4))
+        tk.Label(build_title, text='BUILD OPTIONS', font=('Segoe UI', 8),
+                 bg=SETTINGS_BG, fg=MUTED).pack(side='left')
+
+        retry_row = tk.Frame(f, bg=SETTINGS_BG)
+        retry_row.pack(fill='x', padx=12, pady=(0, 4))
+        tk.Label(retry_row, text='Auto-retry failed builds',
+                 font=('Segoe UI', 9), bg=SETTINGS_BG, fg=MUTED,
+                 width=20, anchor='w').pack(side='left')
+        for n in [0, 1, 2, 3, 5]:
+            lbl = 'Off' if n == 0 else str(n) + 'x'
+            tk.Radiobutton(retry_row, text=lbl, variable=self._retry_var, value=n,
+                           font=('Segoe UI', 9), bg=SETTINGS_BG, fg=MUTED,
+                           activebackground=SETTINGS_BG, activeforeground=TEXT,
+                           selectcolor=SURFACE2, cursor='hand2',
+                           command=self._save_extra_settings).pack(side='left', padx=(0, 8))
+
+        # ── PS5 network extras ──
+        tk.Frame(f, bg=BORDER, height=1).pack(fill='x', padx=12, pady=(4, 0))
+        net_title = tk.Frame(f, bg=SETTINGS_BG)
+        net_title.pack(fill='x', padx=12, pady=(6, 4))
+        tk.Label(net_title, text='PS5 NETWORK', font=('Segoe UI', 8),
+                 bg=SETTINGS_BG, fg=MUTED).pack(side='left')
+
+        autoip_row = tk.Frame(f, bg=SETTINGS_BG)
+        autoip_row.pack(fill='x', padx=12, pady=(0, 8))
+        tk.Button(autoip_row, text='\U0001f50d Auto-detect PS5 IP',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=ACCENT,
+                  activebackground=BORDER, activeforeground=ACCENT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._auto_detect_ip).pack(side='left')
+        self._autoip_status = tk.Label(autoip_row, text='',
+                                        font=('Segoe UI', 8),
+                                        bg=SETTINGS_BG, fg=MUTED)
+        self._autoip_status.pack(side='left', padx=(10, 0))
 
     def _browse_temp(self):
         p = filedialog.askdirectory(title='Select temp folder for image building')
@@ -1212,6 +2581,21 @@ class ExFATBuilder(tk.Tk):
             self.build_btn.config(state='disabled', text='Building...')
             self._process_next([index], 0)
 
+    def _on_queue_drop(self, event):
+        paths = event.data.strip()
+        # tkinterdnd2 may wrap multiple paths in braces
+        import re as _re
+        items = _re.findall(r'\{([^}]+)\}|(\S+)', paths)
+        folders = [a or b for a, b in items]
+        if not folders:
+            folders = [paths.strip('{}')]
+        for folder in folders:
+            folder = folder.strip()
+            if os.path.isdir(folder):
+                self.game_folder.set(folder)
+                self._detect_game_info(folder)
+                self._add_to_queue()
+
     # ── Build history ──────────────────────────────────────────────────────────
     def _history_path(self):
         return os.path.join(os.path.expanduser('~'), '.exfat_builder_history.json')
@@ -1477,6 +2861,42 @@ class ExFATBuilder(tk.Tk):
             messagebox.showinfo('All done',
                 'All queued items have already been built.')
             return
+
+        # ── Pre-build checklist ──
+        issues = []
+        # 1. OSFMount installed?
+        osf = self._find_osfmount()
+        if not osf:
+            issues.append('OSFMount is not installed — required for building images.')
+        # 2. Per-item checks
+        for i in waiting:
+            item = self._queue[i]
+            label = item.game_title or os.path.basename(item.game_folder)
+            # eboot.bin present?
+            eboot = os.path.join(item.game_folder, 'eboot.bin')
+            if not os.path.isfile(eboot):
+                issues.append(label + ': eboot.bin not found in source folder')
+            # output drive space?
+            try:
+                free = shutil.disk_usage(item.output_dir).free
+                needed = self._get_folder_size(item.game_folder) * 1.05
+                if needed > 0 and free < needed:
+                    issues.append(label + ': output drive low on space '
+                        '(need %.1f GB, have %.1f GB)' % (needed/1024**3, free/1024**3))
+            except Exception:
+                pass
+            # image already exists?
+            out_path = os.path.join(item.output_dir, item.output_name)
+            if os.path.isfile(out_path):
+                issues.append(label + ': output file already exists — will be overwritten')
+
+        if issues:
+            msg = 'Pre-build checklist found the following:\n\n'
+            msg += '\n'.join('\u2022 ' + s for s in issues)
+            msg += '\n\nContinue anyway?'
+            if not messagebox.askyesno('Pre-build checklist', msg):
+                return
+
         self._building = True
         self.build_btn.config(state='disabled', text='Building...')
         self._process_next(waiting, 0)
@@ -1541,28 +2961,40 @@ class ExFATBuilder(tk.Tk):
             self._activate_dot(4)
             self._log('\n[OK] Done: ' + out_path + '\n')
             self._save_history(self._queue[idx], out_path, True)
-            # Auto-upload if enabled
-            if self._ftp_auto_var.get() and self._ftp_ip_var.get().strip():
-                if messagebox.askyesno('FTP Upload',
-                        'Build complete!\n\nUpload to PS5 now?\n' + out_path):
-                    self._ftp_upload_file(out_path,
-                        on_done=lambda: self._process_next(indices, pos + 1))
-                else:
-                    self._process_next(indices, pos + 1)
-            else:
-                self._process_next(indices, pos + 1)
+            # ── Verify image ──
+            self._set_status('Verifying image...', ACCENT)
+            self._log('[VERIFY] Checking image integrity...\n')
+            src_folder = self._queue[idx].game_folder
+            def do_verify():
+                ok, msg = self._verify_image(out_path, src_folder)
+                self.after(0, self._verify_done, ok, msg, idx, indices, pos, out_path)
+            threading.Thread(target=do_verify, daemon=True).start()
         else:
             self._update_queue_dot(idx, 'failed')
             self._set_progress(self._current_pct, 'Failed', '')
             self._set_status('Build failed (exit code ' + str(returncode) + ')', DANGER)
             self._save_history(self._queue[idx], out_path, False)
-            if messagebox.askyesno('Item failed',
-                    'Build failed for:\n' + out_path +
-                    '\n\nContinue with remaining items?'):
-                self._process_next(indices, pos + 1)
+            # ── Auto-retry ──
+            retry_max = self._retry_var.get()
+            item = self._queue[idx]
+            retry_count = getattr(item, '_retry_count', 0)
+            if retry_max > 0 and retry_count < retry_max:
+                item._retry_count = retry_count + 1
+                item.status = 'waiting'
+                self._log('\n[RETRY] Attempt %d/%d for %s\n' % (
+                    retry_count + 1, retry_max,
+                    item.game_title or os.path.basename(item.game_folder)))
+                self._set_status('Retrying (%d/%d)...' % (retry_count + 1, retry_max), WARNING)
+                self._render_queue()
+                self.after(2000, self._process_next, indices, pos)
             else:
-                self._building = False
-                self.build_btn.config(state='normal', text='Build All')
+                if messagebox.askyesno('Item failed',
+                        'Build failed for:\n' + out_path +
+                        '\n\nContinue with remaining items?'):
+                    self._process_next(indices, pos + 1)
+                else:
+                    self._building = False
+                    self.build_btn.config(state='normal', text='Build All')
 
     def _item_error(self, msg, idx, indices, pos):
         self._update_queue_dot(idx, 'failed')
@@ -1580,7 +3012,6 @@ class ExFATBuilder(tk.Tk):
         elapsed = time.time() - self._start_time if self._start_time else 0
 
         # ── Detect mounted drive letter from PS5 output ──
-        # PowerShell logs: "[1/4] ... as a logical volume on E: ..."
         if not self._mounted_drive:
             m = re.search(r'logical volume on ([A-Z]:)', line)
             if m:
@@ -1596,6 +3027,255 @@ class ExFATBuilder(tk.Tk):
             except Exception:
                 pass
             self._start_drive_poll()
+
+        if pct is not None:
+            if kind == 'step':
+                self._set_progress(pct, extra,
+                    self._format_eta(elapsed, pct) if pct > 0 else '')
+            elif kind == 'robo_eta':
+                es = 'Elapsed: %dm %02ds' % (int(elapsed // 60), int(elapsed % 60))
+                self._set_progress(pct, None,
+                    es + '  \u2014  ' + extra if extra
+                    else self._format_eta(elapsed, pct))
+            else:
+                self._set_progress(pct, None, self._format_eta(elapsed, pct))
+        elif self._current_pct > 0 and self._start_time:
+            self._eta_var.set(self._format_eta(elapsed, self._current_pct))
+    def _find_osfmount(self):
+        candidates = [
+            r'C:\Program Files\OSFMount\osfmount.com',
+            r'C:\Program Files (x86)\OSFMount\osfmount.com',
+            r'C:\Program Files\PassMark\OSFMount\osfmount.com',
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        import shutil as _sh
+        return _sh.which('osfmount.com')
+
+    def _check_osfmount_banner(self):
+        if self._find_osfmount():
+            return  # All good, no banner needed
+        # Show warning banner under header
+        banner = tk.Frame(self, bg='#3a1500',
+                          highlightbackground='#ff6600', highlightthickness=1)
+        banner.pack(fill='x', padx=24, pady=(4, 0))
+        inner = tk.Frame(banner, bg='#3a1500')
+        inner.pack(fill='x', padx=12, pady=8)
+        tk.Label(inner, text='\u26a0  OSFMount not detected',
+                 font=('Segoe UI', 9, 'bold'),
+                 bg='#3a1500', fg='#ff9944').pack(side='left')
+        tk.Label(inner,
+                 text='  \u2014  Required for building images.',
+                 font=('Segoe UI', 9), bg='#3a1500', fg='#ffbb88').pack(side='left')
+        def _open_download():
+            import webbrowser
+            webbrowser.open('https://www.osforensics.com/tools/mount-disk-images.html')
+        tk.Button(inner, text='Download OSFMount \u2197',
+                  font=('Segoe UI', 9, 'bold'),
+                  bg='#ff6600', fg='#ffffff',
+                  activebackground='#cc5500', activeforeground='#ffffff',
+                  relief='flat', bd=0, padx=10, pady=3,
+                  cursor='hand2',
+                  command=_open_download).pack(side='right')
+
+    # ── Verify image ───────────────────────────────────────────────────────────
+    def _verify_image(self, out_path, src_folder):
+        osf = self._find_osfmount()
+        if not osf:
+            return True, 'OSFMount not found — skipping verify'
+        if not os.path.isfile(out_path):
+            return False, 'Output file not found'
+
+        # Count source files
+        src_count = sum(len(files) for _, _, files in os.walk(src_folder))
+
+        # Find free drive letter
+        try:
+            import ctypes as _ct
+            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            free_letter = None
+            for i in range(25, 3, -1):
+                if not (bitmask & (1 << i)):
+                    free_letter = chr(65 + i) + ':'
+                    break
+            if not free_letter:
+                return True, 'No free drive letter — skipping verify'
+        except Exception as e:
+            return True, 'Could not find drive letter: ' + str(e)
+
+        try:
+            # Mount read-only
+            result = subprocess.run(
+                [osf, '-a', '-t', 'file', '-f', out_path,
+                 '-m', free_letter, '-o', 'ro,rem'],
+                capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return False, 'Could not mount image for verification'
+
+            # Wait for drive
+            import time as _t
+            for _ in range(20):
+                if os.path.exists(free_letter + '\\'):
+                    break
+                _t.sleep(0.3)
+            else:
+                subprocess.run([osf, '-d', '-m', free_letter], capture_output=True)
+                return False, 'Mounted drive did not appear'
+
+            # Check eboot.bin
+            eboot_found = False
+            img_count   = 0
+            for root, dirs, files in os.walk(free_letter + '\\'):
+                img_count += len(files)
+                for fn in files:
+                    if fn.lower() == 'eboot.bin':
+                        eboot_found = True
+
+            # Dismount
+            subprocess.run([osf, '-d', '-m', free_letter], capture_output=True)
+
+            if not eboot_found:
+                return False, 'eboot.bin not found in built image!'
+            if img_count < src_count:
+                return False, ('File count mismatch: source has %d files, '
+                               'image has %d' % (src_count, img_count))
+            return True, ('Verified \u2713  eboot.bin present, '
+                          '%d/%d files confirmed' % (img_count, src_count))
+
+        except Exception as e:
+            try:
+                subprocess.run([osf, '-d', '-m', free_letter], capture_output=True)
+            except Exception:
+                pass
+            return False, 'Verification error: ' + str(e)
+
+    def _verify_done(self, ok, msg, idx, indices, pos, out_path):
+        self._log('[VERIFY] ' + msg + '\n')
+        if ok:
+            self._set_status(msg, SUCCESS)
+        else:
+            self._set_status('Verify failed: ' + msg, DANGER)
+            messagebox.showwarning('Verification failed',
+                'Build completed but verification found an issue:\n\n' + msg +
+                '\n\nThe image may be incomplete.')
+
+        self._notify('Build complete', (self._queue[idx].game_title or '') + '\n' + out_path)
+        # Auto-upload if enabled
+        if self._ftp_auto_var.get() and self._ftp_ip_var.get().strip():
+            if messagebox.askyesno('FTP Upload',
+                    'Build complete!\n\nUpload to PS5 now?\n' + out_path):
+                self._ftp_upload_file(out_path,
+                    on_done=lambda: self._process_next(indices, pos + 1))
+            else:
+                self._process_next(indices, pos + 1)
+        else:
+            self._process_next(indices, pos + 1)
+
+    # ── Installed games list + PS5 storage ────────────────────────────────────
+    def _show_installed_games(self):
+        ip = self._ftp_ip_var.get().strip()
+        if not ip:
+            messagebox.showwarning('No IP', 'Enter your PS5 IP address in Settings first.')
+            return
+        remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
+
+        win = tk.Toplevel(self)
+        win.title('Installed Games on PS5 — ' + ip)
+        win.geometry('640x480')
+        win.configure(bg=BG)
+        win.transient(self)
+
+        hdr = tk.Frame(win, bg=BG)
+        hdr.pack(fill='x', padx=16, pady=(12, 4))
+        tk.Label(hdr, text='Installed Games',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        self._ps5_storage_var = tk.StringVar(value='')
+        tk.Label(hdr, textvariable=self._ps5_storage_var,
+                 font=('Segoe UI', 9), bg=BG, fg=INFO_FG).pack(side='right')
+
+        status_var = tk.StringVar(value='Connecting...')
+        tk.Label(win, textvariable=status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(anchor='w', padx=16)
+
+        list_frame = tk.Frame(win, bg=SURFACE2,
+                              highlightbackground=BORDER, highlightthickness=1)
+        list_frame.pack(fill='both', expand=True, padx=16, pady=(6, 8))
+        listbox = tk.Listbox(list_frame, font=('Consolas', 9),
+                             bg=SURFACE2, fg=TEXT,
+                             selectbackground=ACCENT, selectforeground='#ffffff',
+                             relief='flat', activestyle='none', bd=6)
+        sb = tk.Scrollbar(list_frame, command=listbox.yview,
+                          bg=SURFACE2, troughcolor=BG)
+        listbox.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
+        listbox.pack(fill='both', expand=True)
+
+        btn_row = tk.Frame(win, bg=BG)
+        btn_row.pack(fill='x', padx=16, pady=(0, 12))
+        tk.Button(btn_row, text='Refresh', font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
+                  padx=10, pady=5, cursor='hand2',
+                  command=lambda: _load()).pack(side='left')
+        tk.Button(btn_row, text='Close', font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=MUTED, relief='flat', bd=0,
+                  padx=10, pady=5, cursor='hand2',
+                  command=win.destroy).pack(side='right')
+
+        def _load():
+            status_var.set('Loading...')
+            listbox.delete(0, 'end')
+            def worker():
+                try:
+                    import ftplib
+                    ftp = self._ftp_connect()
+                    # Get storage free space
+                    try:
+                        lines = []
+                        ftp.retrlines('LIST ' + remote_dir, lines.append)
+                        # Parse .exfat files
+                        games = []
+                        for line in lines:
+                            parts = line.split()
+                            if len(parts) < 9:
+                                continue
+                            name = ' '.join(parts[8:])
+                            if not name.lower().endswith('.exfat'):
+                                continue
+                            try:
+                                sz = int(parts[4])
+                            except Exception:
+                                sz = 0
+                            games.append((name, sz))
+                        games.sort(key=lambda x: x[0].lower())
+                        ftp.quit()
+                        win.after(0, _show, games)
+                    except Exception as e:
+                        ftp.quit()
+                        win.after(0, status_var.set, 'Error: ' + str(e))
+                except Exception as e:
+                    win.after(0, status_var.set, 'Connection failed: ' + str(e))
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _show(games):
+            listbox.delete(0, 'end')
+            if not games:
+                listbox.insert('end', '  No .exfat files found in ' + remote_dir)
+                status_var.set('0 games found')
+                return
+            total_size = sum(sz for _, sz in games)
+            status_var.set('%d game(s)  —  %.1f GB total' % (
+                len(games), total_size / 1024**3))
+            for name, sz in games:
+                if sz >= 1024**3:
+                    sz_str = '%.2f GB' % (sz / 1024**3)
+                else:
+                    sz_str = '%.0f MB' % (sz / 1024**2)
+                listbox.insert('end', '\U0001f4be  %-50s %s' % (name, sz_str))
+
+        _load()
+
+
 
         if pct is not None:
             if kind == 'step':
@@ -1838,7 +3518,7 @@ class ExFATBuilder(tk.Tk):
     def _ftp_upload_done(self, ok, info, on_done):
         self._ftp_uploading = False
         self._ftp_cancel    = False
-        self._cancel_btn.pack_forget()  # hide cancel button
+        self._cancel_btn.pack_forget()
 
         if info == 'cancelled':
             self._ftp_status_var.set('Upload cancelled')
@@ -1853,6 +3533,7 @@ class ExFATBuilder(tk.Tk):
             self._set_progress(100, 'Upload complete!', '')
             self._set_status('Upload complete: ' + info, SUCCESS)
             self._log('[FTP] Upload complete: ' + info + '\n')
+            self._notify('Upload complete', info)
         else:
             self._ftp_status_var.set('Upload failed: ' + info)
             self._ftp_status_lbl.config(fg=DANGER)
@@ -1863,6 +3544,134 @@ class ExFATBuilder(tk.Tk):
                 '\n\nCheck your IP, port, and that the PS5 FTP server is running.')
         if on_done:
             on_done()
+
+    # ── Extra settings ────────────────────────────────────────────────────────
+    def _save_extra_settings(self):
+        self._settings['notify_sound']     = self._sound_var.get()
+        self._settings['discord_webhook']  = self._discord_var.get().strip()
+        self._settings['retry_count']      = self._retry_var.get()
+        save_settings(self._settings)
+
+    # ── Notification sound ────────────────────────────────────────────────────
+    def _notify(self, title, detail=''):
+        if self._sound_var.get():
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            except Exception:
+                pass
+        self._discord_notify(title, detail)
+
+    # ── Discord webhook ───────────────────────────────────────────────────────
+    def _discord_notify(self, title, detail=''):
+        url = self._discord_var.get().strip()
+        if not url:
+            return
+        def worker():
+            try:
+                import urllib.request, urllib.parse
+                colour = 0x4caf50  # green
+                payload = json.dumps({
+                    'embeds': [{
+                        'title': '\U0001f3ae ' + title,
+                        'description': detail,
+                        'color': colour,
+                        'footer': {'text': 'PS5 exFAT Image Builder by DecKerr97'},
+                        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                    }]
+                }).encode('utf-8')
+                req = urllib.request.Request(url, data=payload,
+                    headers={'Content-Type': 'application/json'})
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _test_discord(self):
+        url = self._discord_var.get().strip()
+        if not url:
+            messagebox.showwarning('No webhook', 'Enter a Discord webhook URL first.')
+            return
+        self._discord_notify('Test notification',
+                             'PS5 exFAT Image Builder is connected to Discord \u2713')
+        self._set_status('Discord test sent', SUCCESS)
+
+    # ── Auto-detect PS5 IP ────────────────────────────────────────────────────
+    def _auto_detect_ip(self):
+        self._autoip_status.config(text='Scanning network...', fg=ACCENT)
+        def worker():
+            import socket, concurrent.futures
+            found = []
+            # Get local subnet from default gateway
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(('8.8.8.8', 80))
+                local_ip = s.getsockname()[0]
+                s.close()
+                subnet = '.'.join(local_ip.split('.')[:3])
+            except Exception:
+                self.after(0, self._autoip_status.config,
+                           {'text': 'Could not determine subnet', 'fg': DANGER})
+                return
+
+            ports = [2121, 2122]
+
+            def check(ip):
+                for port in ports:
+                    try:
+                        s = socket.create_connection((ip, port), timeout=0.3)
+                        s.close()
+                        return ip, port
+                    except Exception:
+                        pass
+                return None
+
+            ips = [subnet + '.' + str(i) for i in range(1, 255)]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
+                results = list(ex.map(check, ips))
+
+            found = [r for r in results if r]
+            self.after(0, self._autoip_result, found)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _autoip_result(self, found):
+        if not found:
+            self._autoip_status.config(
+                text='No PS5 found on network', fg=DANGER)
+            return
+        ip, port = found[0]
+        self._ftp_ip_var.set(ip)
+        self._ftp_port_var.set(str(port))
+        self._save_ftp_settings()
+        self._autoip_status.config(
+            text='Found PS5 at ' + ip + ':' + str(port) + '  \u2713', fg=SUCCESS)
+
+    # ── Update checker ────────────────────────────────────────────────────────
+    def _check_for_updates(self):
+        def worker():
+            try:
+                import urllib.request
+                url = 'https://api.github.com/repos/kerrdec97/ps5-exfat-builder/releases/latest'
+                req = urllib.request.Request(url,
+                    headers={'User-Agent': 'ps5-exfat-builder'})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    data = json.loads(r.read().decode())
+                latest = data.get('tag_name', '').lstrip('v')
+                current = '1.0.0'
+                if latest and latest != current:
+                    self.after(0, self._show_update_notice, latest,
+                               data.get('html_url', ''))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_update_notice(self, version, url):
+        if messagebox.askyesno('Update available',
+                'Version ' + version + ' is available on GitHub.\n\n'
+                'Open the releases page now?'):
+            import webbrowser
+            webbrowser.open(url)
 
     def _set_status(self, text, color=MUTED):
         self.status_text.set(text)
@@ -1881,6 +3690,15 @@ class ExFATBuilder(tk.Tk):
         else:
             self._log_body.pack_forget()
             self._log_toggle_lbl.config(text='\u25b6  OUTPUT LOG', fg=MUTED)
+
+    def _toggle_settings(self):
+        self._settings_visible.set(not self._settings_visible.get())
+        if self._settings_visible.get():
+            self._settings_body.pack(fill='x', pady=(4, 0))
+            self._settings_toggle_lbl.config(text='\u25bc  SETTINGS', fg=TEXT)
+        else:
+            self._settings_body.pack_forget()
+            self._settings_toggle_lbl.config(text='\u25b6  SETTINGS', fg=MUTED)
 
     def _log(self, text):
         # Auto-expand log on first output
