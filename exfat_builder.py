@@ -13,6 +13,8 @@ import re
 import struct
 import json
 
+APP_VERSION = '1.3.0'
+
 _BAT_B64 = "QGVjaG8gb2ZmDQpzZXRsb2NhbCBFbmFibGVFeHRlbnNpb25zDQoNClJFTSBtYWtlX2ltYWdlLmJhdA0KUkVNIFVzYWdlOiBtYWtlX2ltYWdlLmJhdCAiQzpcaW1hZ2VzXGRhdGEuZXhmYXQiICJDOlxwYXlsb2FkIg0KDQppZiAiJX4xIj09IiIgZ290byA6dXNhZ2UNCmlmICIlfjIiPT0iIiBnb3RvIDp1c2FnZQ0KDQpzZXQgIklNQUdFPSV+MSINCnNldCAiU1JDRElSPSV+MiINCg0KUkVNIFNjcmlwdCBpcyBleHBlY3RlZCB0byBiZSBpbiB0aGUgc2FtZSBkaXJlY3RvcnkgYXMgdGhpcyBCQVQNCnNldCAiU0NSSVBUPSV+ZHAwTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIg0KDQppZiBub3QgZXhpc3QgIiVTQ1JJUFQlIiAoDQogIGVjaG8gW0VSUk9SXSBQb3dlclNoZWxsIHNjcmlwdCBub3QgZm91bmQ6ICIlU0NSSVBUJSINCiAgZWNobyBQdXQgTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIG5leHQgdG8gdGhpcyAuYmF0IGZpbGUuDQogIGV4aXQgL2IgMg0KKQ0KDQppZiBub3QgZXhpc3QgIiVTUkNESVIlIiAoDQogIGVjaG8gW0VSUk9SXSBTb3VyY2UgZGlyZWN0b3J5IG5vdCBmb3VuZDogIiVTUkNESVIlIg0KICBleGl0IC9iIDMNCikNCg0KaWYgbm90IGV4aXN0ICIlU1JDRElSJVxlYm9vdC5iaW4iICgNCiAgZWNobyBbRVJST1JdIGVib290LmJpbiBub3QgZm91bmQgaW4gc291cmNlIGRpcmVjdG9yeTogIiVTUkNESVIlIg0KICBleGl0IC9iIDQNCikNCg0KUkVNIFJ1biBlbGV2YXRlZD8gVGhpcyBCQVQgZG9lcyBub3QgYXV0by1lbGV2YXRlLg0KUkVNIFJpZ2h0LWNsaWNrIC0+IFJ1biBhcyBhZG1pbmlzdHJhdG9yLCBvciBzdGFydCBjbWQgYXMgYWRtaW4uDQoNCnBvd2Vyc2hlbGwuZXhlIC1Ob1Byb2ZpbGUgLUV4ZWN1dGlvblBvbGljeSBCeXBhc3MgLUZpbGUgIiVTQ1JJUFQlIiAtSW1hZ2VQYXRoICIlSU1BR0UlIiAtU291cmNlRGlyICIlU1JDRElSJSIgLUZvcmNlT3ZlcndyaXRlDQoNCnNldCAiUkM9JUVSUk9STEVWRUwlIg0KaWYgbm90ICIlUkMlIj09IjAiICgNCiAgZWNobyBbRVJST1JdIEZhaWxlZCB3aXRoIGV4aXQgY29kZSAlUkMlLg0KICBleGl0IC9iICVSQyUNCikNCg0KZWNobyBbT0tdIERvbmU6ICIlSU1BR0UlIg0KZXhpdCAvYiAwDQoNCjp1c2FnZQ0KZWNobyBVc2FnZToNCmVjaG8gICAlfm54MCAiQzpccGF0aFx0b1xpbWFnZS5pbWciICJDOlxwYXRoXHRvXGZvbGRlciINCmVjaG8uDQplY2hvIE5vdGVzOg0KZWNobyAgIC0gUnVuIHRoaXMgQkFUIGFzIEFkbWluaXN0cmF0b3IuDQplY2hvICAgLSBJbWFnZSB3aWxsIGJlIGF1dG8tc2l6ZWQuDQpleGl0IC9iIDENCg=="
 _PS1_B64 = "PCMgIE5ldy1Pc2ZFeGZhdEltYWdlLnBzMQoKICAgIFBVUlBPU0UKICAgIC0tLS0tLS0KICAgIENyZWF0ZSBhIFJBVyBpbWFnZSBmaWxlLCBtb3VudCBpdCB2aWEgT1NGTW91bnQgYXMgYSBsb2dpY2FsIHZvbHVtZSwKICAgIGZvcm1hdCBpdCBhcyBleEZBVCwgYW5kIGVpdGhlcjoKICAgICAgLSBmb3JtYXQgKyBjb3B5ICsgZGlzbW91bnQgKGRlZmF1bHQpLCBvcgogICAgICAtIGNyZWF0ZSArIG1vdW50IG9ubHkgZm9yIG1hbnVhbCBzdGVwcy4KCiAgICBVU0FHRSAocnVuIFBvd2VyU2hlbGwgYXMgQWRtaW5pc3RyYXRvcikKICAgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCiAgICAxKSBBdXRvLXNpemUgKHJlY29tbWVuZGVkKToKICAgICAgIHBvd2Vyc2hlbGwuZXhlIC1FeGVjdXRpb25Qb2xpY3kgQnlwYXNzIC1GaWxlIC5cTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIGAKICAgICAgICAgLUltYWdlUGF0aCAiQzpcaW1hZ2VzXGRhdGEuaW1nIiBgCiAgICAgICAgIC1Tb3VyY2VEaXIgIkM6XHBheWxvYWQiIGAKICAgICAgICAgLUxhYmVsICJEQVRBIiBgCiAgICAgICAgIC1Gb3JjZU92ZXJ3cml0ZQoKICAgIDIpIEZpeGVkIHNpemU6CiAgICAgICBwb3dlcnNoZWxsLmV4ZSAtRXhlY3V0aW9uUG9saWN5IEJ5cGFzcyAtRmlsZSAuXE5ldy1Pc2ZFeGZhdEltYWdlLnBzMSBgCiAgICAgICAgIC1JbWFnZVBhdGggIkM6XGltYWdlc1xkYXRhLmltZyIgYAogICAgICAgICAtU291cmNlRGlyICJDOlxwYXlsb2FkIiBgCiAgICAgICAgIC1TaXplIDhHIGAKICAgICAgICAgLUxhYmVsICJEQVRBIiBgCiAgICAgICAgIC1Gb3JjZU92ZXJ3cml0ZQoKICAgIDMpIENyZWF0ZSBlbXB0eSBpbWFnZSBhbmQga2VlcCBtb3VudGVkIChtYW51YWwgZm9ybWF0L2NvcHkpOgogICAgICAgcG93ZXJzaGVsbC5leGUgLUV4ZWN1dGlvblBvbGljeSBCeXBhc3MgLUZpbGUgLlxOZXctT3NmRXhmYXRJbWFnZS5wczEgYAogICAgICAgICAtSW1hZ2VQYXRoICJDOlxpbWFnZXNcZGF0YS5leGZhdCIgYAogICAgICAgICAtU291cmNlRGlyICJDOlxwYXlsb2FkXEFQUFhYWFgiIGAKICAgICAgICAgLUNyZWF0ZUVtcHR5QW5kTW91bnQgYAogICAgICAgICAtRm9yY2VPdmVyd3JpdGUKCiAgICBQQVJBTUVURVJTCiAgICAtLS0tLS0tLS0tCiAgICAtSW1hZ2VQYXRoICAgICAgIE91dHB1dCBpbWFnZSBmaWxlIHBhdGguCiAgICAtU291cmNlRGlyICAgICAgIEZvbGRlciB0byBjb3B5IGludG8gdGhlIG5ldyB2b2x1bWUuCiAgICAtU2l6ZSAgICAgICAgICAgIE9wdGlvbmFsLiBJZiBvbWl0dGVkLCBhbiBvcHRpbWFsIHNpemUgaXMgY29tcHV0ZWQgdG8gZml0IGFsbCBmaWxlcy4KICAgICAgICAgICAgICAgICAgICAgU3VmZml4ZXM6IEsvTS9HL1QgKDEwMjQpLCBrL20vZy90ICgxMDAwKSwgYiAoNTEyLWJ5dGUgYmxvY2tzKSwgb3IgYnl0ZXMuCiAgICAtTGFiZWwgICAgICAgICAgIFZvbHVtZSBsYWJlbC4KICAgIC1Gb3JjZU92ZXJ3cml0ZSAgUmVjcmVhdGUgaW1hZ2UgaWYgaXQgYWxyZWFkeSBleGlzdHMuCiAgICAtQ3JlYXRlRW1wdHlBbmRNb3VudAogICAgICAgICAgICAgICAgICAgICBDcmVhdGUgYW5kIG1vdW50IGltYWdlIG9ubHkuIFNraXAgZm9ybWF0L2NvcHkgYW5kIGxlYXZlIG1vdW50ZWQuCgogICAgTk9URVMKICAgIC0tLS0tCiAgICAtIFRoaXMgc2NyaXB0IGRvZXMgTk9UIGF1dG8tZWxldmF0ZS4gU3RhcnQgUG93ZXJTaGVsbCBhcyBBZG1pbmlzdHJhdG9yLgogICAgLSBGaWxlc3lzdGVtIGlzIGFsd2F5cyBleEZBVC4KICAgIC0gQ2x1c3RlciBzaXplIGlzIGF1dG8tc2VsZWN0ZWQ6CiAgICAgIC0gbGFyZ2UtZmlsZSBzZXRzOiA2NTUzNgogICAgICAtIHNtYWxsL21peGVkLWZpbGUgc2V0czogMzI3NjgKIz4KCltDbWRsZXRCaW5kaW5nKCldCnBhcmFtKAogIFtQYXJhbWV0ZXIoTWFuZGF0b3J5ID0gJHRydWUpXQogIFtzdHJpbmddJEltYWdlUGF0aCwKCiAgW1BhcmFtZXRlcihNYW5kYXRvcnkgPSAkdHJ1ZSldCiAgW3N0cmluZ10kU291cmNlRGlyLAoKICBbUGFyYW1ldGVyKE1hbmRhdG9yeSA9ICRmYWxzZSldCiAgW3N0cmluZ10kU2l6ZSwKCiAgW3N0cmluZ10kTGFiZWwgPSAiT1NGSU1HIiwKCiAgW3N3aXRjaF0kRm9yY2VPdmVyd3JpdGUsCgogIFtzd2l0Y2hdJENyZWF0ZUVtcHR5QW5kTW91bnQKKQoKU2V0LVN0cmljdE1vZGUgLVZlcnNpb24gTGF0ZXN0CiRFcnJvckFjdGlvblByZWZlcmVuY2UgPSAiU3RvcCIKJHNjcmlwdEN1bHR1cmUgPSBbU3lzdGVtLkdsb2JhbGl6YXRpb24uQ3VsdHVyZUluZm9dOjpHZXRDdWx0dXJlSW5mbygiZW4tVVMiKQpbU3lzdGVtLlRocmVhZGluZy5UaHJlYWRdOjpDdXJyZW50VGhyZWFkLkN1cnJlbnRDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5UaHJlYWRpbmcuVGhyZWFkXTo6Q3VycmVudFRocmVhZC5DdXJyZW50VUlDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5HbG9iYWxpemF0aW9uLkN1bHR1cmVJbmZvXTo6RGVmYXVsdFRocmVhZEN1cnJlbnRDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5HbG9iYWxpemF0aW9uLkN1bHR1cmVJbmZvXTo6RGVmYXVsdFRocmVhZEN1cnJlbnRVSUN1bHR1cmUgPSAkc2NyaXB0Q3VsdHVyZQoKZnVuY3Rpb24gVGVzdC1BZG1pbiB7CiAgJGlkID0gW1NlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzSWRlbnRpdHldOjpHZXRDdXJyZW50KCkKICAkcCAgPSBOZXctT2JqZWN0IFNlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzUHJpbmNpcGFsKCRpZCkKICByZXR1cm4gJHAuSXNJblJvbGUoW1NlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzQnVpbHRJblJvbGVdOjpBZG1pbmlzdHJhdG9yKQp9CgpmdW5jdGlvbiBGaW5kLU9TRk1vdW50Q29tIHsKICAkY21kID0gR2V0LUNvbW1hbmQgIm9zZm1vdW50LmNvbSIgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUKICBpZiAoJGNtZCkgeyByZXR1cm4gJGNtZC5Tb3VyY2UgfQoKICAkY2FuZGlkYXRlcyA9IEAoCiAgICAiJHtlbnY6UHJvZ3JhbUZpbGVzfVxPU0ZNb3VudFxvc2Ztb3VudC5jb20iLAogICAgIiR7ZW52OlByb2dyYW1GaWxlcyh4ODYpfVxPU0ZNb3VudFxvc2Ztb3VudC5jb20iLAogICAgIiR7ZW52OlByb2dyYW1GaWxlc31cUGFzc01hcmtcT1NGTW91bnRcb3NmbW91bnQuY29tIiwKICAgICIke2VudjpQcm9ncmFtRmlsZXMoeDg2KX1cUGFzc01hcmtcT1NGTW91bnRcb3NmbW91bnQuY29tIgogICkgfCBXaGVyZS1PYmplY3QgeyAkXyAtYW5kIChUZXN0LVBhdGggJF8pIH0KCiAgJGNhbmRpZGF0ZXMgPSBAKCRjYW5kaWRhdGVzKQogIGlmICgkY2FuZGlkYXRlcy5Db3VudCAtZ3QgMCkgeyByZXR1cm4gJGNhbmRpZGF0ZXNbMF0gfQoKICB0aHJvdyAib3NmbW91bnQuY29tIG5vdCBmb3VuZC4gQWRkIE9TRk1vdW50IHRvIFBBVEggb3IgaW5zdGFsbCBpdCB0byBhIHN0YW5kYXJkIGxvY2F0aW9uLiIKfQoKZnVuY3Rpb24gUGFyc2UtU2l6ZVRvQnl0ZXMoW3N0cmluZ10kcykgewogICRzID0gJHMuVHJpbSgpCiAgaWYgKCRzIC1tYXRjaCAnXlxzKihcZCspXHMqKFtiQmtLbU1nR3RUXT8pXHMqJCcpIHsKICAgICRudW0gPSBbSW50NjRdJG1hdGNoZXNbMV0KICAgICR1ICAgPSAkbWF0Y2hlc1syXQogICAgc3dpdGNoICgkdSkgewogICAgICAnJyAgeyByZXR1cm4gJG51bSB9CiAgICAgICdiJyB7IHJldHVybiAkbnVtICogNTEyIH0KICAgICAgJ0InIHsgcmV0dXJuICRudW0gKiA1MTIgfQogICAgICAnSycgeyByZXR1cm4gJG51bSAqIDEwMjQgfQogICAgICAnTScgeyByZXR1cm4gJG51bSAqIDEwMjQgKiAxMDI0IH0KICAgICAgJ0cnIHsgcmV0dXJuICRudW0gKiAxMDI0ICogMTAyNCAqIDEwMjQgfQogICAgICAnVCcgeyByZXR1cm4gJG51bSAqIDEwMjQgKiAxMDI0ICogMTAyNCAqIDEwMjQgfQogICAgICAnaycgeyByZXR1cm4gJG51bSAqIDEwMDAgfQogICAgICAnbScgeyByZXR1cm4gJG51bSAqIDEwMDAgKiAxMDAwIH0KICAgICAgJ2cnIHsgcmV0dXJuICRudW0gKiAxMDAwICogMTAwMCAqIDEwMDAgfQogICAgICAndCcgeyByZXR1cm4gJG51bSAqIDEwMDAgKiAxMDAwICogMTAwMCAqIDEwMDAgfQogICAgICBkZWZhdWx0IHsgdGhyb3cgIlVua25vd24gc2l6ZSBzdWZmaXg6ICckdSciIH0KICAgIH0KICB9CiAgdGhyb3cgIkZhaWxlZCB0byBwYXJzZSBzaXplIHN0cmluZzogJyRzJyIKfQoKZnVuY3Rpb24gRm9ybWF0LUJ5dGVzKFtJbnQ2NF0kYnl0ZXMpIHsKICBpZiAoJGJ5dGVzIC1nZSAxVEIpIHsgcmV0dXJuICJ7MDpOMn0gVEIiIC1mICgkYnl0ZXMvMVRCKSB9CiAgaWYgKCRieXRlcyAtZ2UgMUdCKSB7IHJldHVybiAiezA6TjJ9IEdCIiAtZiAoJGJ5dGVzLzFHQikgfQogIGlmICgkYnl0ZXMgLWdlIDFNQikgeyByZXR1cm4gInswOk4yfSBNQiIgLWYgKCRieXRlcy8xTUIpIH0KICBpZiAoJGJ5dGVzIC1nZSAxS0IpIHsgcmV0dXJuICJ7MDpOMn0gS0IiIC1mICgkYnl0ZXMvMUtCKSB9CiAgcmV0dXJuICIkYnl0ZXMgQiIKfQoKZnVuY3Rpb24gR2V0LUZyZWVEcml2ZUxldHRlciB7CiAgJHVzZWQgPSAoR2V0LVBTRHJpdmUgLVBTUHJvdmlkZXIgRmlsZVN5c3RlbSkuTmFtZQogIGZvcmVhY2ggKCRjb2RlIGluIDY4Li45MCkgewogICAgJGxldHRlciA9IFtjaGFyXSRjb2RlCiAgICBpZiAoJHVzZWQgLW5vdGNvbnRhaW5zIFtzdHJpbmddJGxldHRlcikgeyByZXR1cm4gW3N0cmluZ10kbGV0dGVyIH0KICB9CiAgdGhyb3cgIk5vIGZyZWUgZHJpdmUgbGV0dGVycyBhdmFpbGFibGUgKEQ6Li5aOikuIgp9CgpmdW5jdGlvbiBHZXQtT3B0aW1hbEltYWdlU2l6ZUJ5dGVzKFtzdHJpbmddJGRpciwgW2ludF0kY2x1c3RlckJ5dGVzKSB7CiAgJGNsdXN0ZXIgPSBbSW50NjRdJGNsdXN0ZXJCeXRlcwogIFtJbnQ2NF0kbWV0YUZpeGVkID0gMzJNQgogIFtJbnQ2NF0kbWluU2xhY2sgPSA2NE1CCiAgW0ludDY0XSRzcGFyZU1pbiA9IDY0TUIKICBbSW50NjRdJHNwYXJlTWF4ID0gNTEyTUIKICBbSW50NjRdJGVudHJ5TWV0YUJ5dGVzID0gMjU2CgogICRmaWxlcyA9IEAoR2V0LUNoaWxkSXRlbSAtTGl0ZXJhbFBhdGggJGRpciAtUmVjdXJzZSAtRmlsZSAtRm9yY2UpCiAgJGRpcnMgPSBAKEdldC1DaGlsZEl0ZW0gLUxpdGVyYWxQYXRoICRkaXIgLVJlY3Vyc2UgLURpcmVjdG9yeSAtRm9yY2UpCgogIFtJbnQ2NF0kcmF3RmlsZUJ5dGVzID0gMAogIFtJbnQ2NF0kZGF0YUJ5dGVzID0gMAogIGZvcmVhY2ggKCRmIGluICRmaWxlcykgewogICAgJGxlbiA9IFtJbnQ2NF0kZi5MZW5ndGgKICAgICRyYXdGaWxlQnl0ZXMgKz0gJGxlbgogICAgJGRhdGFCeXRlcyArPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkbGVuIC8gW2RvdWJsZV0kY2x1c3RlcikgKiAkY2x1c3RlcikKICB9CgogIFtJbnQ2NF0kZGF0YUNsdXN0ZXJzID0gW0ludDY0XShbTWF0aF06OkNlaWxpbmcoJGRhdGFCeXRlcyAvIFtkb3VibGVdJGNsdXN0ZXIpKQogIFtJbnQ2NF0kZmF0Qnl0ZXMgPSAkZGF0YUNsdXN0ZXJzICogNAogIFtJbnQ2NF0kYml0bWFwQnl0ZXMgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkZGF0YUNsdXN0ZXJzIC8gOC4wKSkKICBbSW50NjRdJGVudHJ5Qnl0ZXMgPQogICAgICAoKFtJbnQ2NF0kZmlsZXMuQ291bnQgKyBbSW50NjRdJGRpcnMuQ291bnQpICogJGVudHJ5TWV0YUJ5dGVzKQoKICBbSW50NjRdJGJhc2VUb3RhbCA9CiAgICAgICRkYXRhQnl0ZXMgKyAkZmF0Qnl0ZXMgKyAkYml0bWFwQnl0ZXMgKyAkZW50cnlCeXRlcyArICRtZXRhRml4ZWQKICBbSW50NjRdJHNwYXJlQnl0ZXMgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkYmFzZVRvdGFsIC8gMjAwLjApKQogIGlmICgkc3BhcmVCeXRlcyAtbHQgJHNwYXJlTWluKSB7ICRzcGFyZUJ5dGVzID0gJHNwYXJlTWluIH0KICBpZiAoJHNwYXJlQnl0ZXMgLWd0ICRzcGFyZU1heCkgeyAkc3BhcmVCeXRlcyA9ICRzcGFyZU1heCB9CiAgW0ludDY0XSR0b3RhbCA9ICRiYXNlVG90YWwgKyAkc3BhcmVCeXRlcwogIFtJbnQ2NF0kbWluVG90YWwgPSAkcmF3RmlsZUJ5dGVzICsgJG1pblNsYWNrCiAgaWYgKCR0b3RhbCAtbHQgJG1pblRvdGFsKSB7ICR0b3RhbCA9ICRtaW5Ub3RhbCB9CgogIFtJbnQ2NF0kYWxpZ24gPSAxTUIKICAkdG90YWwgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkdG90YWwgLyBbZG91YmxlXSRhbGlnbikgKiAkYWxpZ24pCiAgcmV0dXJuICR0b3RhbAp9CgpmdW5jdGlvbiBXYWl0LUZvckxvZ2ljYWxEcml2ZShbc3RyaW5nXSRkcml2ZUxldHRlciwgW2ludF0kdGltZW91dFNlY29uZHMgPSAyMCkgewogICR0YXJnZXQgPSAiJHtkcml2ZUxldHRlcn06IgogICRzdyA9IFtEaWFnbm9zdGljcy5TdG9wd2F0Y2hdOjpTdGFydE5ldygpCiAgd2hpbGUgKCRzdy5FbGFwc2VkLlRvdGFsU2Vjb25kcyAtbHQgJHRpbWVvdXRTZWNvbmRzKSB7CiAgICAkbG9naWNhbCA9IEdldC1DaW1JbnN0YW5jZSAtQ2xhc3NOYW1lIFdpbjMyX0xvZ2ljYWxEaXNrIC1GaWx0ZXIgIkRldmljZUlEPSckdGFyZ2V0JyIgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUKICAgIGlmICgkbG9naWNhbCkgeyByZXR1cm4gJHRydWUgfQogICAgU3RhcnQtU2xlZXAgLU1pbGxpc2Vjb25kcyAzMDAKICB9CiAgcmV0dXJuICRmYWxzZQp9CgpmdW5jdGlvbiBHZXQtTG9naWNhbERyaXZlRmlsZVN5c3RlbShbc3RyaW5nXSRkcml2ZUxldHRlcikgewogICR0YXJnZXQgPSAiJHtkcml2ZUxldHRlcn06IgogICRsb2dpY2FsID0gR2V0LUNpbUluc3RhbmNlIC1DbGFzc05hbWUgV2luMzJfTG9naWNhbERpc2sgLUZpbHRlciAiRGV2aWNlSUQ9JyR0YXJnZXQnIiAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQogIGlmICgkbG9naWNhbCkgeyByZXR1cm4gW3N0cmluZ10kbG9naWNhbC5GaWxlU3lzdGVtIH0KICByZXR1cm4gIiIKfQoKZnVuY3Rpb24gR2V0LU9wdGltYWxFeGZhdENsdXN0ZXJTaXplKFtzdHJpbmddJGRpcikgewogIFtJbnQ2NF0kbGFyZ2VGaWxlVGhyZXNob2xkID0gMU1CCgogICRmaWxlcyA9IEAoR2V0LUNoaWxkSXRlbSAtTGl0ZXJhbFBhdGggJGRpciAtUmVjdXJzZSAtRmlsZSAtRm9yY2UpCiAgaWYgKCRmaWxlcy5Db3VudCAtZXEgMCkgeyByZXR1cm4gMzI3NjggfQoKICBbSW50NjRdJHJhd0ZpbGVCeXRlcyA9IDAKICBmb3JlYWNoICgkZiBpbiAkZmlsZXMpIHsKICAgICRyYXdGaWxlQnl0ZXMgKz0gW0ludDY0XSRmLkxlbmd0aAogIH0KCiAgW0ludDY0XSRhdmdGaWxlQnl0ZXMgPSBbSW50NjRdKCRyYXdGaWxlQnl0ZXMgLyBbSW50NjRdJGZpbGVzLkNvdW50KQogIGlmICgkYXZnRmlsZUJ5dGVzIC1nZSAkbGFyZ2VGaWxlVGhyZXNob2xkKSB7IHJldHVybiA2NTUzNiB9CiAgcmV0dXJuIDMyNzY4Cn0KCmZ1bmN0aW9uIEZvcm1hdC1BbGxvY2F0aW9uVW5pdEFyZyhbaW50XSRjbHVzdGVyU2l6ZSkgewogIGlmICgkY2x1c3RlclNpemUgLWdlIDFNQiAtYW5kICgkY2x1c3RlclNpemUgJSAxTUIpIC1lcSAwKSB7CiAgICByZXR1cm4gInswfU0iIC1mICgkY2x1c3RlclNpemUgLyAxTUIpCiAgfQogIGlmICgkY2x1c3RlclNpemUgLWdlIDFLQiAtYW5kICgkY2x1c3RlclNpemUgJSAxS0IpIC1lcSAwKSB7CiAgICByZXR1cm4gInswfUsiIC1mICgkY2x1c3RlclNpemUgLyAxS0IpCiAgfQogIHJldHVybiAiJGNsdXN0ZXJTaXplIgp9CgpmdW5jdGlvbiBEaXNtb3VudC1Pc2ZWb2x1bWUoW3N0cmluZ10kb3NmUGF0aCwgW3N0cmluZ10kbW91bnRQb2ludCwgW2ludF0kbWF4QXR0ZW1wdHMgPSA2KSB7CiAgaWYgKFtzdHJpbmddOjpJc051bGxPcldoaXRlU3BhY2UoJG1vdW50UG9pbnQpKSB7IHJldHVybiAkZmFsc2UgfQoKICAkdGFyZ2V0cyA9IEAoJG1vdW50UG9pbnQpCiAgaWYgKC1ub3QgJG1vdW50UG9pbnQuRW5kc1dpdGgoIlwiKSkgeyAkdGFyZ2V0cyArPSAiJG1vdW50UG9pbnRcIiB9CgogIGZvciAoJGkgPSAxOyAkaSAtbGUgJG1heEF0dGVtcHRzOyAkaSsrKSB7CiAgICBmb3JlYWNoICgkdGFyZ2V0IGluICR0YXJnZXRzKSB7CiAgICAgIHRyeSB7CiAgICAgICAgJiAkb3NmUGF0aCAtZCAtbSAkdGFyZ2V0IDI+JjEgfCBPdXQtTnVsbAogICAgICAgIGlmICgkTEFTVEVYSVRDT0RFIC1lcSAwKSB7IHJldHVybiAkdHJ1ZSB9CiAgICAgIH0gY2F0Y2ggewogICAgICAgICMgUmV0cnk6IHZvbHVtZSBjYW4gcmVtYWluIGJ1c3kgZm9yIGEgc2hvcnQgdGltZSBhZnRlciBmb3JtYXQvY29weS4KICAgICAgfQogICAgfQogICAgU3RhcnQtU2xlZXAgLU1pbGxpc2Vjb25kcyA1MDAKICB9CgogIHJldHVybiAkZmFsc2UKfQoKZnVuY3Rpb24gSW52b2tlLUZvcm1hdFZvbHVtZShbc3RyaW5nXSRkcml2ZUxldHRlciwgW2ludF0kY2x1c3RlclNpemUsIFtzdHJpbmddJGxhYmVsKSB7CiAgJHRhcmdldCA9ICIke2RyaXZlTGV0dGVyfToiCiAgJGZpbGVTeXN0ZW0gPSAiZXhGQVQiCiAgJGNsdXN0ZXJBcmcgPSBGb3JtYXQtQWxsb2NhdGlvblVuaXRBcmcgLWNsdXN0ZXJTaXplICRjbHVzdGVyU2l6ZQogICRhdHRlbXB0cyA9IEAoCiAgICBAeyBOYW1lID0gIiRmaWxlU3lzdGVtIHF1aWNrIHdpdGggcmVxdWVzdGVkIGFsbG9jYXRpb24gdW5pdCI7IEFyZ3MgPSBAKCR0YXJnZXQsICIvRlM6JGZpbGVTeXN0ZW0iLCAiL0E6JGNsdXN0ZXJBcmciLCAiL1EiLCAiL1Y6JGxhYmVsIiwgIi9YIiwgIi9ZIikgfQogICkKCiAgJGxhc3RGb3JtYXRFeGl0Q29kZSA9IC0xCiAgZm9yZWFjaCAoJGF0dGVtcHQgaW4gJGF0dGVtcHRzKSB7CiAgICBXcml0ZS1Ib3N0ICJbSW5mb10gZm9ybWF0IGF0dGVtcHQ6ICQoJGF0dGVtcHQuTmFtZSkiCiAgICAkc3Rkb3V0UGF0aCA9IFtTeXN0ZW0uSU8uUGF0aF06OkdldFRlbXBGaWxlTmFtZSgpCiAgICAkc3RkZXJyUGF0aCA9IFtTeXN0ZW0uSU8uUGF0aF06OkdldFRlbXBGaWxlTmFtZSgpCiAgICB0cnkgewogICAgICAkcHJvYyA9IFN0YXJ0LVByb2Nlc3MgLUZpbGVQYXRoICJmb3JtYXQuY29tIiAtQXJndW1lbnRMaXN0ICRhdHRlbXB0LkFyZ3MgLVdhaXQgLVBhc3NUaHJ1IC1Ob05ld1dpbmRvdyBgCiAgICAgICAgLVJlZGlyZWN0U3RhbmRhcmRPdXRwdXQgJHN0ZG91dFBhdGggLVJlZGlyZWN0U3RhbmRhcmRFcnJvciAkc3RkZXJyUGF0aAogICAgICAkbGFzdEZvcm1hdEV4aXRDb2RlID0gW2ludF0kcHJvYy5FeGl0Q29kZQoKICAgICAgIyBTaG93IG5hdGl2ZSBmb3JtYXQuY29tIG91dHB1dCBpbiBjdXJyZW50IGNvbnNvbGUuCiAgICAgIGlmIChUZXN0LVBhdGggLUxpdGVyYWxQYXRoICRzdGRvdXRQYXRoKSB7CiAgICAgICAgR2V0LUNvbnRlbnQgLUxpdGVyYWxQYXRoICRzdGRvdXRQYXRoIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlIHwgRm9yRWFjaC1PYmplY3QgeyBXcml0ZS1Ib3N0ICRfIH0KICAgICAgfQogICAgICBpZiAoVGVzdC1QYXRoIC1MaXRlcmFsUGF0aCAkc3RkZXJyUGF0aCkgewogICAgICAgIEdldC1Db250ZW50IC1MaXRlcmFsUGF0aCAkc3RkZXJyUGF0aCAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZSB8IEZvckVhY2gtT2JqZWN0IHsgV3JpdGUtSG9zdCAkXyB9CiAgICAgIH0KICAgIH0gZmluYWxseSB7CiAgICAgIFJlbW92ZS1JdGVtIC1MaXRlcmFsUGF0aCAkc3Rkb3V0UGF0aCwgJHN0ZGVyclBhdGggLUZvcmNlIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlCiAgICB9CgogICAgIyBTb21lIGVudmlyb25tZW50cyBtYXkgcmVwb3J0IGEgbm9uLXplcm8gZXhpdCBjb2RlIGV2ZW4gd2hlbiBmb3JtYXR0aW5nIGNvbXBsZXRlZC4KICAgICMgVmFsaWRhdGUgcmVzdWx0aW5nIGZpbGVzeXN0ZW0gYXMgdGhlIHNvdXJjZSBvZiB0cnV0aC4KICAgIGlmIChXYWl0LUZvckxvZ2ljYWxEcml2ZSAtZHJpdmVMZXR0ZXIgJGRyaXZlTGV0dGVyIC10aW1lb3V0U2Vjb25kcyA1KSB7CiAgICAgICRhY3R1YWxGcyA9IEdldC1Mb2dpY2FsRHJpdmVGaWxlU3lzdGVtIC1kcml2ZUxldHRlciAkZHJpdmVMZXR0ZXIKICAgICAgaWYgKCRhY3R1YWxGcyAtYW5kICRhY3R1YWxGcy5Ub1VwcGVySW52YXJpYW50KCkgLWVxICRmaWxlU3lzdGVtLlRvVXBwZXJJbnZhcmlhbnQoKSkgewogICAgICAgIFdyaXRlLUhvc3QgIltJbmZvXSBmb3JtYXQgcmVzdWx0OiBkZXRlY3RlZCBmaWxlc3lzdGVtICckYWN0dWFsRnMnIG9uICR0YXJnZXQuIgogICAgICAgIHJldHVybgogICAgICB9CiAgICB9CgogICAgV3JpdGUtSG9zdCAiW0luZm9dIGZvcm1hdCBhdHRlbXB0IGZhaWxlZCAoZXhpdCBjb2RlICRsYXN0Rm9ybWF0RXhpdENvZGUpLCByZXRyeWluZy4uLiIKICB9CgogIHRocm93ICJmb3JtYXQuY29tIGZhaWxlZCBmb3IgJHRhcmdldCBhZnRlciBhbGwgcmV0cnkgc3RyYXRlZ2llcy4gTGFzdCBleGl0IGNvZGU6ICRsYXN0Rm9ybWF0RXhpdENvZGUiCn0KCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0gTWFpbiAtLS0tLS0tLS0tLS0tLS0tLS0tLQoKaWYgKC1ub3QgKFRlc3QtQWRtaW4pKSB7IHRocm93ICJQbGVhc2UgcnVuIFBvd2VyU2hlbGwgYXMgQWRtaW5pc3RyYXRvci4iIH0KaWYgKC1ub3QgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggJFNvdXJjZURpciAtUGF0aFR5cGUgQ29udGFpbmVyKSkgeyB0aHJvdyAiU291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6ICRTb3VyY2VEaXIiIH0KaWYgKC1ub3QgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggKEpvaW4tUGF0aCAkU291cmNlRGlyICJlYm9vdC5iaW4iKSAtUGF0aFR5cGUgTGVhZikpIHsgdGhyb3cgImVib290LmJpbiBub3QgZm91bmQgaW4gc291cmNlIGRpcmVjdG9yeTogJFNvdXJjZURpciIgfQoKIyBFbnN1cmUgb3V0cHV0IGRpcmVjdG9yeSBleGlzdHMKJG91dERpciA9IFNwbGl0LVBhdGggLVBhcmVudCAkSW1hZ2VQYXRoCmlmICgkb3V0RGlyIC1hbmQgLW5vdCAoVGVzdC1QYXRoIC1MaXRlcmFsUGF0aCAkb3V0RGlyKSkgewogIE5ldy1JdGVtIC1JdGVtVHlwZSBEaXJlY3RvcnkgLVBhdGggJG91dERpciB8IE91dC1OdWxsCn0KCmlmIChUZXN0LVBhdGggLUxpdGVyYWxQYXRoICRJbWFnZVBhdGgpIHsKICBpZiAoLW5vdCAkRm9yY2VPdmVyd3JpdGUpIHsgdGhyb3cgIkltYWdlIGZpbGUgYWxyZWFkeSBleGlzdHM6ICRJbWFnZVBhdGguIFVzZSAtRm9yY2VPdmVyd3JpdGUgdG8gcmVwbGFjZSBpdC4iIH0KICBSZW1vdmUtSXRlbSAtTGl0ZXJhbFBhdGggJEltYWdlUGF0aCAtRm9yY2UKfQoKW0ludDY0XSRleHBlY3RlZEJ5dGVzID0gMApbc3RyaW5nXSRvc2ZTaXplQXJnID0gJG51bGwKW2ludF0kRXhmYXRDbHVzdGVyU2l6ZSA9IEdldC1PcHRpbWFsRXhmYXRDbHVzdGVyU2l6ZSAtZGlyICRTb3VyY2VEaXIKW2Jvb2xdJHNpemVQcm92aWRlZCA9IC1ub3QgW3N0cmluZ106OklzTnVsbE9yV2hpdGVTcGFjZSgkU2l6ZSkKW2ludF0kVGFyZ2V0Q2x1c3RlclNpemUgPSAkRXhmYXRDbHVzdGVyU2l6ZQoKaWYgKC1ub3QgJHNpemVQcm92aWRlZCkgewogIFdyaXRlLUhvc3QgIltJbmZvXSBTaXplIG5vdCBwcm92aWRlZC4gQ29tcHV0aW5nIGFuIG9wdGltYWwgaW1hZ2Ugc2l6ZSBmcm9tICckU291cmNlRGlyJy4uLiIKICAkZXhwZWN0ZWRCeXRlcyA9IEdldC1PcHRpbWFsSW1hZ2VTaXplQnl0ZXMgLWRpciAkU291cmNlRGlyIC1jbHVzdGVyQnl0ZXMgJFRhcmdldENsdXN0ZXJTaXplCiAgJG9zZlNpemVBcmcgPSAiJGV4cGVjdGVkQnl0ZXMiCn0gZWxzZSB7CiAgJGV4cGVjdGVkQnl0ZXMgPSBQYXJzZS1TaXplVG9CeXRlcyAkU2l6ZQogICRvc2ZTaXplQXJnID0gJFNpemUKfQoKaWYgKC1ub3QgJHNpemVQcm92aWRlZCkgewogIFdyaXRlLUhvc3QgIltJbmZvXSBDb21wdXRlZCBpbWFnZSBzaXplOiAkKEZvcm1hdC1CeXRlcyAkZXhwZWN0ZWRCeXRlcykgKCRleHBlY3RlZEJ5dGVzIGJ5dGVzKS4iCn0KV3JpdGUtSG9zdCAiW0luZm9dIFNlbGVjdGVkIGZpbGVzeXN0ZW06IGV4RkFUIChjbHVzdGVyPSRUYXJnZXRDbHVzdGVyU2l6ZSkgZm9yIGltYWdlIHNpemUgJChGb3JtYXQtQnl0ZXMgJGV4cGVjdGVkQnl0ZXMpLiIKCiRvc2YgPSBGaW5kLU9TRk1vdW50Q29tCgpbc3RyaW5nXSREcml2ZUxldHRlciA9ICIiCltzdHJpbmddJE1vdW50UG9pbnQgPSAiIgpbYm9vbF0kTW91bnRlZCA9ICRmYWxzZQpbYm9vbF0kTGVhdmVNb3VudGVkID0gJENyZWF0ZUVtcHR5QW5kTW91bnQuSXNQcmVzZW50Cgp0cnkgewogICREcml2ZUxldHRlciA9IEdldC1GcmVlRHJpdmVMZXR0ZXIKICAkTW91bnRQb2ludCA9ICIke0RyaXZlTGV0dGVyfToiCgogIGlmICgkQ3JlYXRlRW1wdHlBbmRNb3VudCkgewogICAgV3JpdGUtSG9zdCAiWzEvMl0gQ3JlYXRpbmcgJiBtb3VudGluZyB0aGUgaW1hZ2UgdmlhIE9TRk1vdW50IGFzIGEgbG9naWNhbCB2b2x1bWUgb24gJE1vdW50UG9pbnQgLi4uIgogIH0gZWxzZSB7CiAgICBXcml0ZS1Ib3N0ICJbMS80XSBDcmVhdGluZyAmIG1vdW50aW5nIHRoZSBpbWFnZSB2aWEgT1NGTW91bnQgYXMgYSBsb2dpY2FsIHZvbHVtZSBvbiAkTW91bnRQb2ludCAuLi4iCiAgfQogICRvdXQgPSAmICRvc2YgLWEgLXQgZmlsZSAtZiAkSW1hZ2VQYXRoIC1zICRvc2ZTaXplQXJnIC1tICRNb3VudFBvaW50IC1vIHJ3LHJlbSAyPiYxCiAgV3JpdGUtSG9zdCAoJG91dCB8IE91dC1TdHJpbmcpLlRyaW0oKQogIGlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJvc2Ztb3VudC5jb20gZmFpbGVkIHdpdGggZXhpdCBjb2RlICRMQVNURVhJVENPREUuIiB9CiAgJE1vdW50ZWQgPSAkdHJ1ZQogIGlmICgtbm90IChXYWl0LUZvckxvZ2ljYWxEcml2ZSAtZHJpdmVMZXR0ZXIgJERyaXZlTGV0dGVyIC10aW1lb3V0U2Vjb25kcyAyMCkpIHsKICAgIHRocm93ICJNb3VudGVkIGRyaXZlICRNb3VudFBvaW50IGRpZCBub3QgYXBwZWFyIGluIHRpbWUuIgogIH0KCiAgJGRlc3QgPSAiJHtEcml2ZUxldHRlcn06XCIKICBpZiAoJENyZWF0ZUVtcHR5QW5kTW91bnQpIHsKICAgIFdyaXRlLUhvc3QgIlsyLzJdIERvbmUuIEVtcHR5IGltYWdlIGlzIG1vdW50ZWQgYXQgJGRlc3QuIgogICAgV3JpdGUtSG9zdCAiTWFudWFsIHN0ZXBzOiIKICAgIFdyaXRlLUhvc3QgIiAgMSkgRm9ybWF0ICRkZXN0IGFzIGV4RkFUIChyZWNvbW1lbmRlZCBjbHVzdGVyOiA2NEtCIGZvciBsYXJnZS1maWxlIHNldHMsIDMyS0IgZm9yIHNtYWxsL21peGVkIHNldHMpLiIKICAgIFdyaXRlLUhvc3QgIiAgMikgQ29weSBjb250ZW50cyBvZiAnJFNvdXJjZURpcicgdG8gJGRlc3QuIgogICAgV3JpdGUtSG9zdCAiICAzKSBEaXNtb3VudDogYCIkb3NmYCIgLWQgLW0gJE1vdW50UG9pbnQiCiAgICByZXR1cm4KICB9CgogIFdyaXRlLUhvc3QgIlsyLzRdIEZvcm1hdHRpbmcgJGRlc3QgYXMgZXhGQVQgKGNsdXN0ZXI9JFRhcmdldENsdXN0ZXJTaXplLCBsYWJlbD0nJExhYmVsJykgdmlhIGZvcm1hdC5jb20gLi4uIgogIEludm9rZS1Gb3JtYXRWb2x1bWUgLWRyaXZlTGV0dGVyICREcml2ZUxldHRlciAtY2x1c3RlclNpemUgJFRhcmdldENsdXN0ZXJTaXplIC1sYWJlbCAkTGFiZWwKCiAgaWYgKC1ub3QgKFRlc3QtUGF0aCAkZGVzdCkpIHsgdGhyb3cgIkRyaXZlICRkZXN0IGlzIG5vdCBhY2Nlc3NpYmxlIGFmdGVyIGZvcm1hdHRpbmcuIiB9CgogIFdyaXRlLUhvc3QgIlszLzRdIENvcHlpbmcgY29udGVudHMgb2YgJyRTb3VyY2VEaXInIC0+ICckZGVzdCcgLi4uIgogICRyb2JvQXJncyA9IEAoCiAgICAkU291cmNlRGlyLCAkZGVzdCwKICAgICIvRSIsICIvQ09QWTpEQVQiLCAiL0RDT1BZOkRBVCIsCiAgICAiL1I6MSIsICIvVzoxIiwKICAgICIvTkZMIiwgIi9OREwiLAogICAgIi9FVEEiCiAgKQogICYgcm9ib2NvcHkuZXhlIEByb2JvQXJncwogICRyb2JvY29weUV4aXRDb2RlID0gJExBU1RFWElUQ09ERQogIGlmICgkcm9ib2NvcHlFeGl0Q29kZSAtZ3QgNykgeyB0aHJvdyAicm9ib2NvcHkgZmFpbGVkLiBFeGl0IGNvZGU6ICRyb2JvY29weUV4aXRDb2RlIiB9CgogIFdyaXRlLUhvc3QgIls0LzRdIERvbmUuIERpc21vdW50aW5nIE9TRk1vdW50IHZvbHVtZS4uLiIKfQpmaW5hbGx5IHsKICBpZiAoJE1vdW50ZWQgLWFuZCAtbm90ICRMZWF2ZU1vdW50ZWQgLWFuZCAtbm90IFtzdHJpbmddOjpJc051bGxPcldoaXRlU3BhY2UoJE1vdW50UG9pbnQpKSB7CiAgICB0cnkgewogICAgICAkY3VycmVudFBhdGggPSAoR2V0LUxvY2F0aW9uKS5QYXRoCiAgICAgIGlmICgkY3VycmVudFBhdGggLWxpa2UgIiRNb3VudFBvaW50KiIpIHsKICAgICAgICBTZXQtTG9jYXRpb24gIiRlbnY6U3lzdGVtRHJpdmVcIgogICAgICB9CiAgICB9IGNhdGNoIHsKICAgICAgIyBCZXN0IGVmZm9ydCBvbmx5LgogICAgfQoKICAgIGlmICgtbm90IChEaXNtb3VudC1Pc2ZWb2x1bWUgLW9zZlBhdGggJG9zZiAtbW91bnRQb2ludCAkTW91bnRQb2ludCAtbWF4QXR0ZW1wdHMgNikpIHsKICAgICAgV3JpdGUtV2FybmluZyAiRmFpbGVkIHRvIGRpc21vdW50IE9TRk1vdW50IHZvbHVtZSAoJE1vdW50UG9pbnQpOiBhY2Nlc3MgZGVuaWVkIG9yIHZvbHVtZSBidXN5LiIKICAgIH0KICB9Cn0KCldyaXRlLUhvc3QgIk9LOiBJbWFnZSBjcmVhdGVkIGF0OiAkSW1hZ2VQYXRoIgo="
 _ICO_B64 = "AAABAAEAEBAAAAAAIADbAgAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAqJJREFUeJxdk81vlGUUxX/3+Xjnw3eYYtsxfEgCkY9CpEI0Nm6NrDRxS/gLdMvWNWtWrFgYojsSdEG6gDQkRGNiaq2JBggtSiHpWEtL52WYd573ea6LGSrx7u7NueecxTlivnqmTE2gCCjghxA9mAgIRMvuCCMMICaCDRjqHk1pdDURMRVIREQRGxAUEcAAVRyRCGgyaOVx2s4hjv+NJdEEgZSA5HdVzVYPjMdUBSlvoLUMksUxdopA7PWheAp7D+IALwmsUv3zguAchC4p62B6ffAWxOJ43kNQUqvBl9OLzO1foesP8/7xfXgCiFAG4eeHXaaKB/yk73B1/QNMWaFNizMTOfHZgNnaFhc/2sNOOcuBQjixfy/ORESE4mWg7O3QOXaGs6HP3fU17vsZrCrOOCEm5bMDBUVRUATHL0tLzM+v05maQFXZ2Nymmed8eu4TqmHg4yMD7m8IguLSdh/CC85OBqbe2sfTe4+4e+cWa2tPWP3rMdZa3j11EhHl9MwJ5s6cYq7a4cr6kJRlmFir0Zisc7Btyeo5335zjdWHK2SZZ3KizZvtPRiBx4/+5Lsb1xFXY9qX1GxJUnB4Sz0lOpNtVh78we2VHpuffw1SYbUJSVgNQ8yHyss7l/j9tyXanbepS6BUcCj0K4Oxnh8W5unOnkdOvwebUL3KF1C9Ad2/L7D44wLnzn9Bv7LgwFmBkiaXbi6z/OsGcvQQLC5jYoUGt5sRMQ7yQ3y/vM296ScEOYwFRC6rAuigB1mJDCxUEXFDkISGbMRgBImQIuBrGGvRvInDAAls3kJpoW6c9Vfe07hABtgssA2HZI60tQPe46TXR/MmqRoDZVw3fa1+AkTQRgZJ0RDRVg7G4BiUI1irOVJD/qsu/9trGbp7H3H/CzkmGpxJY8iIAAAAAElFTkSuQmCC"
@@ -384,9 +386,20 @@ class ExFATBuilder(tk.Tk):
         self._copy_start_free = None
         self._copy_start_time = None
         self._drive_poll_id   = None
+        self._source_file_count  = 0
+        self._current_build_idx  = 0
         # FTP upload cancel
         self._ftp_cancel      = False
         self._ftp_uploading   = False
+        # Library
+        self._lib_folders     = self._settings.get('lib_folders', [])
+        self._lib_games       = []   # list of dicts
+        self._lib_cards       = []   # tk widgets
+        self._lib_filter      = ''
+        # Recently used game folders (last 10)
+        self._recent_folders  = self._settings.get('recent_folders', [])
+        # Theme
+        self._theme_var = tk.StringVar(value=self._settings.get('theme', 'dark'))
 
         self._build_ui()
         self._render_queue()
@@ -434,6 +447,8 @@ class ExFATBuilder(tk.Tk):
         title_row.pack(fill='x')
         tk.Label(title_row, text='exFAT Image Builder',
                  font=('Segoe UI', 16, 'bold'), bg=BG, fg=TEXT).pack(side='left', anchor='w')
+        tk.Label(title_row, text='v' + APP_VERSION,
+                 font=('Segoe UI', 8), bg=BG, fg='#3a3a3a').pack(side='left', anchor='s', padx=(8,0), pady=(0,4))
         tk.Label(title_row, text='by DecKerr97',
                  font=('Segoe UI', 9), bg=BG, fg='#555555').pack(side='right', anchor='s', pady=(6, 0))
         tk.Label(hdr, text='Build PS5 exFAT game images  \u2014  scripts bundled, game name auto-detected',
@@ -459,43 +474,1870 @@ class ExFATBuilder(tk.Tk):
             btn.bind('<Button-1>', _click)
             return btn
 
-        self._tab_build_btn   = _make_tab(tab_bar, '\U0001f528  Build',        'build')
-        self._tab_extract_btn = _make_tab(tab_bar, '\U0001f4e4  Extract',      'extract')
-        self._tab_files_btn   = _make_tab(tab_bar, '\U0001f5c2  File Manager', 'files')
-        self._tab_ftp_btn     = _make_tab(tab_bar, '\U0001f4e1  FTP Upload',   'ftp')
+        self._tab_build_btn   = _make_tab(tab_bar, '\U0001f528  Build',         'build')
+        self._tab_library_btn = _make_tab(tab_bar, '\U0001f4da  Library',       'library')
+        self._tab_images_btn  = _make_tab(tab_bar, '\U0001f4be  My Images',     'images')
+        self._tab_ps5_btn     = _make_tab(tab_bar, '\U0001f3ae  PS5 Manager',   'ps5')
+        self._tab_extract_btn = _make_tab(tab_bar, '\U0001f4e4  Extract',       'extract')
+        self._tab_files_btn   = _make_tab(tab_bar, '\U0001f5c2  File Manager',  'files')
+        self._tab_ftp_btn     = _make_tab(tab_bar, '\U0001f4e1  FTP Upload',    'ftp')
+        self._tab_ftpbr_btn   = _make_tab(tab_bar, '\U0001f4e1  PS5 Browser',   'ftpbr')
+        self._tab_help_btn    = _make_tab(tab_bar, '\u2753  Help',              'help')
         tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
 
         # ── Content area ──
         self._tab_build_frame   = tk.Frame(self, bg=BG)
+        self._tab_library_frame = tk.Frame(self, bg=BG)
+        self._tab_images_frame  = tk.Frame(self, bg=BG)
+        self._tab_ps5_frame     = tk.Frame(self, bg=BG)
         self._tab_extract_frame = tk.Frame(self, bg=BG)
         self._tab_files_frame   = tk.Frame(self, bg=BG)
         self._tab_ftp_frame     = tk.Frame(self, bg=BG)
+        self._tab_ftpbr_frame   = tk.Frame(self, bg=BG)
+        self._tab_help_frame    = tk.Frame(self, bg=BG)
 
         self._build_build_tab(self._tab_build_frame)
+        self._build_library_tab(self._tab_library_frame)
+        self._build_images_tab(self._tab_images_frame)
+        self._build_ps5_tab(self._tab_ps5_frame)
         self._build_extract_tab(self._tab_extract_frame)
         self._build_files_tab(self._tab_files_frame)
         self._build_ftp_tab(self._tab_ftp_frame)
+        self._build_ftpbr_tab(self._tab_ftpbr_frame)
+        self._build_help_tab(self._tab_help_frame)
 
-        # Show build tab by default
         self._switch_tab('build')
 
     def _switch_tab(self, key):
         self._active_tab.set(key)
-        all_frames = [self._tab_build_frame,
-                      self._tab_extract_frame,
-                      self._tab_files_frame,
-                      self._tab_ftp_frame]
-        all_btns   = [self._tab_build_btn,
-                      self._tab_extract_btn,
-                      self._tab_files_btn,
-                      self._tab_ftp_btn]
-        all_keys   = ['build', 'extract', 'files', 'ftp']
+        all_frames = [self._tab_build_frame, self._tab_library_frame,
+                      self._tab_images_frame, self._tab_ps5_frame,
+                      self._tab_extract_frame, self._tab_files_frame,
+                      self._tab_ftp_frame, self._tab_ftpbr_frame,
+                      self._tab_help_frame]
+        all_btns   = [self._tab_build_btn, self._tab_library_btn,
+                      self._tab_images_btn, self._tab_ps5_btn,
+                      self._tab_extract_btn, self._tab_files_btn,
+                      self._tab_ftp_btn, self._tab_ftpbr_btn,
+                      self._tab_help_btn]
+        all_keys   = ['build','library','images','ps5','extract','files',
+                      'ftp','ftpbr','help']
         for frame, btn, k in zip(all_frames, all_btns, all_keys):
             frame.pack_forget()
             btn.config(fg=MUTED, bg='#0a0a0a')
         idx = all_keys.index(key)
         all_frames[idx].pack(fill='both', expand=True)
         all_btns[idx].config(fg=TEXT, bg='#1a1a1a')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MY IMAGES TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_images_tab(self, parent):
+        self._img_scan_dirs = self._settings.get('img_scan_dirs', [])
+
+        top = tk.Frame(parent, bg=BG)
+        top.pack(fill='x', padx=24, pady=(12, 6))
+        tk.Label(top, text='My Images',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        tk.Button(top, text='\U0001f504 Refresh',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, relief='flat', bd=0,
+                  padx=10, pady=4, cursor='hand2',
+                  command=self._img_scan).pack(side='right')
+        tk.Button(top, text='+ Add folder',
+                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', relief='flat', bd=0,
+                  padx=10, pady=4, cursor='hand2',
+                  command=self._img_add_dir).pack(side='right', padx=(0,6))
+
+        # Scan dirs strip
+        self._img_dirs_frame = tk.Frame(parent, bg=SURFACE2,
+                                         highlightbackground=BORDER,
+                                         highlightthickness=1)
+        self._img_dirs_frame.pack(fill='x', padx=24, pady=(0,6))
+        self._img_render_dirs()
+
+        # Status + search
+        ctrl = tk.Frame(parent, bg=BG)
+        ctrl.pack(fill='x', padx=24, pady=(0,6))
+        self._img_status_var = tk.StringVar(value='Add a folder containing .exfat files and click Refresh')
+        tk.Label(ctrl, textvariable=self._img_status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left')
+        self._img_search_var = tk.StringVar()
+        self._img_search_var.trace('w', lambda *a: self._img_apply_filter())
+        sf = tk.Frame(ctrl, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        sf.pack(side='right')
+        tk.Label(sf, text='\U0001f50d', font=('Segoe UI', 9),
+                 bg=FIELD_BG, fg=MUTED).pack(side='left', padx=(6,2))
+        tk.Entry(sf, textvariable=self._img_search_var,
+                 font=('Segoe UI', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4,
+                 width=22).pack(side='left')
+
+        # List
+        list_outer = tk.Frame(parent, bg=SURFACE2,
+                              highlightbackground=BORDER, highlightthickness=1)
+        list_outer.pack(fill='both', expand=True, padx=24, pady=(0,8))
+        self._img_listbox = tk.Listbox(list_outer, font=('Consolas', 9),
+                                        bg=SURFACE2, fg=TEXT,
+                                        selectbackground=ACCENT,
+                                        selectforeground='#ffffff',
+                                        activestyle='none', relief='flat',
+                                        bd=6, selectmode='extended')
+        img_sb = tk.Scrollbar(list_outer, command=self._img_listbox.yview,
+                              bg=SURFACE2, troughcolor=BG)
+        self._img_listbox.configure(yscrollcommand=img_sb.set)
+        img_sb.pack(side='right', fill='y')
+        self._img_listbox.pack(fill='both', expand=True)
+        self._img_listbox.bind('<Button-3>', self._img_context_menu)
+        self._img_listbox.bind('<Double-Button-1>', self._img_context_menu)
+        self._img_entries = []  # list of dicts
+
+        # Batch upload bar
+        batch_row = tk.Frame(parent, bg=BG)
+        batch_row.pack(fill='x', padx=24, pady=(4,8))
+        self._img_sel_var = tk.StringVar(value='')
+        tk.Label(batch_row, textvariable=self._img_sel_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left')
+        self._img_batch_btn = tk.Button(
+            batch_row, text='\u2191 Upload selected to PS5',
+            font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+            activebackground='#3a8eef', activeforeground=TEXT,
+            relief='flat', bd=0, padx=12, pady=4,
+            cursor='hand2', command=self._img_batch_upload)
+        self._img_batch_btn.pack(side='right')
+        self._img_listbox.bind('<<ListboxSelect>>', self._img_update_sel)
+
+    def _img_render_dirs(self):
+        for w in self._img_dirs_frame.winfo_children():
+            w.destroy()
+        if not self._img_scan_dirs:
+            tk.Label(self._img_dirs_frame,
+                     text='No folders added — click "+ Add folder"',
+                     font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                     pady=6).pack(anchor='w', padx=10)
+            return
+        for i, d in enumerate(self._img_scan_dirs):
+            row = tk.Frame(self._img_dirs_frame, bg=SURFACE2)
+            row.pack(fill='x')
+            tk.Label(row, text='\U0001f4be  ' + d,
+                     font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                     anchor='w').pack(side='left', padx=10, pady=4,
+                                      fill='x', expand=True)
+            tk.Button(row, text='\u2715', font=('Segoe UI', 8),
+                      bg=SURFACE2, fg=DANGER, activebackground=SURFACE2,
+                      relief='flat', bd=0, padx=8, cursor='hand2',
+                      command=lambda ix=i: self._img_remove_dir(ix)
+                      ).pack(side='right')
+
+    def _img_add_dir(self):
+        p = filedialog.askdirectory(title='Select folder containing .exfat images')
+        if not p:
+            return
+        p = os.path.normpath(p)
+        if p not in self._img_scan_dirs:
+            self._img_scan_dirs.append(p)
+            self._settings['img_scan_dirs'] = self._img_scan_dirs
+            save_settings(self._settings)
+        self._img_render_dirs()
+        self._img_scan()
+
+    def _img_remove_dir(self, idx):
+        if 0 <= idx < len(self._img_scan_dirs):
+            self._img_scan_dirs.pop(idx)
+            self._settings['img_scan_dirs'] = self._img_scan_dirs
+            save_settings(self._settings)
+            self._img_render_dirs()
+            self._img_apply_filter()
+
+    def _img_scan(self):
+        self._img_status_var.set('Scanning...')
+        self._img_entries = []
+        self._img_listbox.delete(0, 'end')
+        def worker():
+            entries = []
+            for d in self._img_scan_dirs:
+                if not os.path.isdir(d):
+                    continue
+                try:
+                    for fn in os.listdir(d):
+                        if not fn.lower().endswith('.exfat'):
+                            continue
+                        fp = os.path.join(d, fn)
+                        try:
+                            sz  = os.path.getsize(fp)
+                            mtime = os.path.getmtime(fp)
+                        except Exception:
+                            sz, mtime = 0, 0
+                        # Try to match against build history
+                        title = os.path.splitext(fn)[0]
+                        entries.append({
+                            'path':  fp,
+                            'name':  fn,
+                            'title': title,
+                            'size':  sz,
+                            'mtime': mtime,
+                            'dir':   d,
+                        })
+                except Exception:
+                    pass
+            entries.sort(key=lambda e: e['mtime'], reverse=True)
+            self.after(0, self._img_scan_done, entries)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _img_scan_done(self, entries):
+        self._img_entries = entries
+        total_gb = sum(e['size'] for e in entries) / 1024**3
+        self._img_status_var.set(
+            '%d image(s)  —  %.1f GB total' % (len(entries), total_gb))
+        self._img_apply_filter()
+
+    def _img_apply_filter(self):
+        q = self._img_search_var.get().lower().strip() \
+            if hasattr(self, '_img_search_var') else ''
+        filtered = [e for e in self._img_entries
+                    if q in e['title'].lower()] if q else self._img_entries
+        self._img_listbox.delete(0, 'end')
+        for e in filtered:
+            sz = ('%.2f GB' % (e['size']/1024**3)
+                  if e['size'] >= 1024**3 else '%d MB' % (e['size']//1024**2))
+            built = time.strftime('%Y-%m-%d', time.localtime(e['mtime']))
+            self._img_listbox.insert(
+                'end', '\U0001f4be  %-45s %8s   %s' % (e['name'], sz, built))
+
+    def _img_context_menu(self, event):
+        sel = self._img_listbox.nearest(event.y)
+        self._img_listbox.selection_clear(0, 'end')
+        self._img_listbox.selection_set(sel)
+        q = self._img_search_var.get().lower().strip() \
+            if hasattr(self, '_img_search_var') else ''
+        filtered = [e for e in self._img_entries
+                    if q in e['title'].lower()] if q else self._img_entries
+        if sel >= len(filtered):
+            return
+        entry = filtered[sel]
+        menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
+                       activebackground=ACCENT, activeforeground=TEXT,
+                       font=('Segoe UI', 9))
+        menu.add_command(label=entry['name'], state='disabled',
+                         font=('Segoe UI', 9, 'bold'))
+        menu.add_separator()
+        menu.add_command(label='\u2191  Upload to PS5',
+                         command=lambda: self._ftp_upload_file(entry['path']))
+        menu.add_command(label='\U0001f5c2  Open in File Manager',
+                         command=lambda: self._open_image_in_fm(entry['path']))
+        menu.add_command(label='\U0001f4c2  Open containing folder',
+                         command=lambda: subprocess.Popen(
+                             'explorer "' + entry['dir'] + '"', shell=True))
+        menu.add_separator()
+        menu.add_command(label='\U0001f5d1  Delete image',
+                         command=lambda: self._img_delete(entry))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _open_image_in_fm(self, path):
+        self._tab_files_frame  # ensure built
+        self._fm_image_var.set(path)
+        self._switch_tab('files')
+
+    def _img_delete(self, entry):
+        if not messagebox.askyesno('Delete image',
+                'Delete this image?\n\n' + entry['name'] +
+                '\n\nThis cannot be undone.'):
+            return
+        try:
+            os.remove(entry['path'])
+            self._img_scan()
+        except Exception as e:
+            messagebox.showerror('Delete failed', str(e))
+
+    def _img_update_sel(self, event=None):
+        sels = self._img_listbox.curselection()
+        q = self._img_search_var.get().lower().strip() \
+            if hasattr(self, '_img_search_var') else ''
+        filtered = [e for e in self._img_entries
+                    if q in e['title'].lower()] if q else self._img_entries
+        sel_entries = [filtered[i] for i in sels if i < len(filtered)]
+        if sel_entries:
+            total = sum(e['size'] for e in sel_entries)
+            self._img_sel_var.set(
+                '%d selected  —  %.2f GB' % (len(sel_entries), total/1024**3))
+        else:
+            self._img_sel_var.set('')
+
+    def _img_batch_upload(self):
+        sels = self._img_listbox.curselection()
+        q = self._img_search_var.get().lower().strip() \
+            if hasattr(self, '_img_search_var') else ''
+        filtered = [e for e in self._img_entries
+                    if q in e['title'].lower()] if q else self._img_entries
+        paths = [filtered[i]['path'] for i in sels if i < len(filtered)]
+        if not paths:
+            messagebox.showwarning('Nothing selected',
+                'Select one or more images to upload.\nUse Ctrl+Click for multiple.')
+            return
+        ip = self._ftp_ip_var.get().strip()
+        if not ip:
+            messagebox.showwarning('No PS5 IP',
+                'Enter your PS5 IP address in Settings first.')
+            return
+        if not messagebox.askyesno('Batch upload',
+                'Upload %d image(s) to PS5?\n\n%s' % (
+                    len(paths), '\n'.join(os.path.basename(p) for p in paths[:6]) +
+                    ('\n...' if len(paths) > 6 else ''))):
+            return
+        self._img_batch_queue = list(paths)
+        self._img_batch_total = len(paths)
+        self._img_batch_done  = 0
+        self._img_batch_next()
+
+    def _img_batch_next(self):
+        if not self._img_batch_queue:
+            self._set_status(
+                'Batch upload complete: %d image(s)' % self._img_batch_total,
+                SUCCESS)
+            messagebox.showinfo('Batch upload complete',
+                '%d image(s) uploaded to PS5 successfully!' % self._img_batch_total)
+            return
+        path = self._img_batch_queue.pop(0)
+        self._img_batch_done += 1
+        self._set_status(
+            'Uploading %d/%d: %s' % (
+                self._img_batch_done, self._img_batch_total,
+                os.path.basename(path)), ACCENT)
+        self._ftp_upload_file(path, on_done=lambda: self._img_batch_next())
+
+    # ── Recently used folders ─────────────────────────────────────────────────
+    def _update_recent_menu(self):
+        if hasattr(self, '_recent_menu'):
+            self._recent_menu['values'] = self._recent_folders
+            self._recent_menu.set('')
+
+    def _on_recent_select(self, event=None):
+        folder = self._recent_var.get()
+        if folder and os.path.isdir(folder):
+            self.game_folder.set(folder)
+            self._detect_game_info(folder)
+
+    def _add_to_recent(self, folder):
+        folder = os.path.normpath(folder)
+        if folder in self._recent_folders:
+            self._recent_folders.remove(folder)
+        self._recent_folders.insert(0, folder)
+        self._recent_folders = self._recent_folders[:10]
+        self._settings['recent_folders'] = self._recent_folders
+        save_settings(self._settings)
+        self._update_recent_menu()
+
+    # ── Queue save / load ─────────────────────────────────────────────────────
+    def _queue_save(self):
+        if not self._queue:
+            messagebox.showwarning('Empty queue', 'Nothing in queue to save.')
+            return
+        path = filedialog.asksaveasfilename(
+            title='Save queue',
+            defaultextension='.json',
+            filetypes=[('Queue files', '*.json'), ('All files', '*.*')],
+            initialfile='my_queue.json')
+        if not path:
+            return
+        data = [{'game_folder': i.game_folder,
+                  'output_dir':  i.output_dir,
+                  'output_name': i.output_name,
+                  'game_title':  i.game_title  or '',
+                  'title_id':    i.title_id    or '',
+                  'version':     i.version     or ''}
+                for i in self._queue]
+        try:
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+            self._set_status('Queue saved: ' + os.path.basename(path), SUCCESS)
+        except Exception as e:
+            messagebox.showerror('Save failed', str(e))
+
+    def _queue_load(self):
+        path = filedialog.askopenfilename(
+            title='Load queue',
+            filetypes=[('Queue files', '*.json'), ('All files', '*.*')])
+        if not path:
+            return
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            loaded = 0
+            for entry in data:
+                item = QueueItem(
+                    entry.get('game_folder', ''),
+                    entry.get('output_dir',  ''),
+                    entry.get('output_name', 'game.exfat'),
+                    entry.get('game_title',  None),
+                    entry.get('title_id',    None),
+                    entry.get('version',     None))
+                if os.path.isdir(item.game_folder):
+                    self._queue.append(item)
+                    loaded += 1
+            self._render_queue()
+            self._set_status('Loaded %d item(s) from queue file' % loaded, SUCCESS)
+            if loaded < len(data):
+                messagebox.showwarning('Some items skipped',
+                    '%d item(s) skipped because the game folder no longer exists.'
+                    % (len(data) - loaded))
+        except Exception as e:
+            messagebox.showerror('Load failed', str(e))
+
+    # ── Library Build All ─────────────────────────────────────────────────────
+    def _lib_build_all(self):
+        if not self._lib_games:
+            messagebox.showwarning('No games',
+                'Scan your library first — no games loaded yet.')
+            return
+        odir = self.output_dir.get().strip()
+        if not odir:
+            odir = filedialog.askdirectory(
+                title='Select output directory for all library games')
+            if not odir:
+                return
+            odir = odir.replace('/', '\\')
+            self.output_dir.set(odir)
+            self._settings['output_dir'] = odir
+            save_settings(self._settings)
+
+        added = 0
+        for game in self._lib_games:
+            name = build_exfat_name(
+                game['title'] or None,
+                game['title_id'] or None,
+                game['version'] or None)
+            # Skip if already in queue
+            already = any(os.path.normpath(q.game_folder) ==
+                          os.path.normpath(game['folder'])
+                          for q in self._queue)
+            if already:
+                continue
+            item = QueueItem(game['folder'], odir, name,
+                             game['title'], game['title_id'], game['version'])
+            self._queue.append(item)
+            added += 1
+
+        self._render_queue()
+        self._switch_tab('build')
+        self._set_status(
+            'Added %d game(s) from library to queue' % added, SUCCESS)
+        if added:
+            messagebox.showinfo('Added to queue',
+                '%d game(s) added to the Build queue.\n\n'
+                'Click Build All to start building.' % added)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PS5 MANAGER TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_ps5_tab(self, parent):
+        self._ps5mgr_local  = []  # local .exfat entries
+        self._ps5mgr_remote = []  # remote .exfat entries
+        self._ps5mgr_merged = []  # merged view
+
+        top = tk.Frame(parent, bg=BG)
+        top.pack(fill='x', padx=24, pady=(12,6))
+        tk.Label(top, text='PS5 Game Manager',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        tk.Button(top, text='\U0001f504 Refresh All',
+                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', relief='flat', bd=0,
+                  padx=10, pady=4, cursor='hand2',
+                  command=self._ps5mgr_refresh).pack(side='right')
+
+        # Legend
+        leg = tk.Frame(parent, bg=BG)
+        leg.pack(fill='x', padx=24, pady=(0,6))
+        for colour, label in [(SUCCESS, 'On PS5'), (WARNING, 'Built, not uploaded'),
+                               (MUTED, 'Not built yet')]:
+            dot = tk.Canvas(leg, width=10, height=10, bg=BG,
+                            highlightthickness=0)
+            dot.pack(side='left', padx=(0,4))
+            dot.create_oval(1,1,9,9, fill=colour, outline='')
+            tk.Label(leg, text=label, font=('Segoe UI', 8),
+                     bg=BG, fg=MUTED).pack(side='left', padx=(0,16))
+
+        self._ps5mgr_status_var = tk.StringVar(
+            value='Click "Refresh All" to load local images and PS5 games')
+        tk.Label(parent, textvariable=self._ps5mgr_status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', padx=24, pady=(0,4))
+
+        # List
+        list_outer = tk.Frame(parent, bg=SURFACE2,
+                              highlightbackground=BORDER, highlightthickness=1)
+        list_outer.pack(fill='both', expand=True, padx=24, pady=(0,8))
+
+        # Header row
+        hdr = tk.Frame(list_outer, bg='#0f0f0f')
+        hdr.pack(fill='x')
+        for text, w in [('Status', 8), ('Game', 40), ('Local size', 12),
+                         ('PS5 size', 12), ('Action', 14)]:
+            tk.Label(hdr, text=text, font=('Segoe UI', 8, 'bold'),
+                     bg='#0f0f0f', fg=MUTED, width=w, anchor='w'
+                     ).pack(side='left', padx=(8,0), pady=4)
+
+        self._ps5mgr_frame = tk.Frame(list_outer, bg=SURFACE2)
+        self._ps5mgr_canvas = tk.Canvas(self._ps5mgr_frame, bg=SURFACE2,
+                                         highlightthickness=0)
+        ps5_sb = tk.Scrollbar(self._ps5mgr_frame,
+                               command=self._ps5mgr_canvas.yview,
+                               bg=SURFACE2, troughcolor=BG)
+        self._ps5mgr_canvas.configure(yscrollcommand=ps5_sb.set)
+        ps5_sb.pack(side='right', fill='y')
+        self._ps5mgr_canvas.pack(side='left', fill='both', expand=True)
+        self._ps5mgr_frame.pack(fill='both', expand=True)
+
+        self._ps5mgr_rows = tk.Frame(self._ps5mgr_canvas, bg=SURFACE2)
+        self._ps5mgr_canvas.create_window(
+            (0,0), window=self._ps5mgr_rows, anchor='nw', tags='pmr')
+        self._ps5mgr_rows.bind('<Configure>', lambda e:
+            self._ps5mgr_canvas.configure(
+                scrollregion=self._ps5mgr_canvas.bbox('all')))
+        self._ps5mgr_canvas.bind('<Configure>', lambda e:
+            self._ps5mgr_canvas.itemconfig('pmr', width=e.width))
+        self._ps5mgr_canvas.bind('<MouseWheel>',
+            lambda e: self._ps5mgr_canvas.yview_scroll(
+                int(-1*(e.delta/120)), 'units'))
+
+    def _ps5mgr_refresh(self):
+        self._ps5mgr_status_var.set('Loading...')
+        for w in self._ps5mgr_rows.winfo_children():
+            w.destroy()
+
+        def worker():
+            # Local .exfat files from My Images scan dirs
+            local = {}
+            for d in self._settings.get('img_scan_dirs', []):
+                if not os.path.isdir(d):
+                    continue
+                for fn in os.listdir(d):
+                    if fn.lower().endswith('.exfat'):
+                        fp = os.path.join(d, fn)
+                        try:
+                            sz = os.path.getsize(fp)
+                        except Exception:
+                            sz = 0
+                        local[fn] = {'name': fn, 'path': fp,
+                                     'size': sz, 'dir': d}
+
+            # Remote files from PS5
+            remote = {}
+            ip = self._ftp_ip_var.get().strip()
+            if ip:
+                try:
+                    import ftplib
+                    ftp = self._ftp_connect()
+                    remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
+                    lines = []
+                    ftp.retrlines('LIST ' + remote_dir, lines.append)
+                    ftp.quit()
+                    for line in lines:
+                        parts = line.split()
+                        if len(parts) < 9:
+                            continue
+                        name = ' '.join(parts[8:])
+                        if not name.lower().endswith('.exfat'):
+                            continue
+                        try:
+                            sz = int(parts[4])
+                        except Exception:
+                            sz = 0
+                        remote[name] = {'name': name, 'size': sz}
+                except Exception:
+                    pass
+
+            # Merge
+            all_names = sorted(set(list(local.keys()) + list(remote.keys())),
+                                key=str.lower)
+            merged = []
+            for name in all_names:
+                l = local.get(name)
+                r = remote.get(name)
+                if l and r:
+                    status = 'on_ps5'
+                elif l:
+                    status = 'local_only'
+                else:
+                    status = 'remote_only'
+                merged.append({
+                    'name':        name,
+                    'status':      status,
+                    'local':       l,
+                    'remote':      r,
+                })
+            self.after(0, self._ps5mgr_render, merged,
+                       len(local), len(remote))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ps5mgr_render(self, merged, n_local, n_remote):
+        for w in self._ps5mgr_rows.winfo_children():
+            w.destroy()
+        self._ps5mgr_merged = merged
+        self._ps5mgr_status_var.set(
+            '%d local  •  %d on PS5  •  %d total unique games' % (
+                n_local, n_remote, len(merged)))
+
+        colour_map = {'on_ps5': SUCCESS, 'local_only': WARNING,
+                      'remote_only': MUTED}
+        label_map  = {'on_ps5': '\u2713 On PS5',
+                      'local_only': '\u2191 Not uploaded',
+                      'remote_only': '\u25cf PS5 only'}
+
+        for i, item in enumerate(merged):
+            row_bg = QUEUE_ODD if i % 2 == 0 else QUEUE_EVEN
+            row = tk.Frame(self._ps5mgr_rows, bg=row_bg)
+            row.pack(fill='x')
+
+            colour = colour_map[item['status']]
+
+            # Status dot + label
+            dot = tk.Canvas(row, width=10, height=10, bg=row_bg,
+                            highlightthickness=0)
+            dot.pack(side='left', padx=(10,4), pady=10)
+            dot.create_oval(1,1,9,9, fill=colour, outline='')
+            tk.Label(row, text=label_map[item['status']],
+                     font=('Segoe UI', 8), bg=row_bg,
+                     fg=colour, width=12, anchor='w').pack(side='left')
+
+            # Name
+            name_short = item['name']
+            if len(name_short) > 38:
+                name_short = name_short[:36] + '…'
+            tk.Label(row, text=name_short,
+                     font=('Segoe UI', 8, 'bold'), bg=row_bg,
+                     fg=TEXT, anchor='w').pack(side='left', fill='x', expand=True)
+
+            # Sizes
+            def fmt(sz):
+                if sz is None: return '—'
+                return ('%.1f GB' % (sz/1024**3) if sz >= 1024**3
+                        else '%d MB' % (sz//1024**2))
+
+            tk.Label(row, text=fmt(item['local']['size'] if item['local'] else None),
+                     font=('Segoe UI', 8), bg=row_bg, fg=MUTED,
+                     width=10, anchor='e').pack(side='left', padx=4)
+            tk.Label(row, text=fmt(item['remote']['size'] if item['remote'] else None),
+                     font=('Segoe UI', 8), bg=row_bg, fg=MUTED,
+                     width=10, anchor='e').pack(side='left', padx=(0,8))
+
+            # Action button
+            if item['status'] == 'local_only' and item['local']:
+                tk.Button(row, text='\u2191 Upload',
+                          font=('Segoe UI', 8), bg=ACCENT, fg=TEXT,
+                          activebackground='#3a8eef', relief='flat', bd=0,
+                          padx=8, pady=2, cursor='hand2',
+                          command=lambda p=item['local']['path']:
+                              self._ftp_upload_file(p)
+                          ).pack(side='right', padx=(0,8), pady=4)
+            elif item['status'] == 'on_ps5' and item['local']:
+                # Version check — parse version from filename
+                local_ver  = self._parse_ver_from_name(item['name'])
+                remote_ver = self._parse_ver_from_name(item.get('remote', {}).get('name', ''))
+                if local_ver and remote_ver and local_ver != remote_ver:
+                    lbl = '\u26a0 v%s local / v%s PS5' % (local_ver, remote_ver)
+                    clr = WARNING
+                else:
+                    lbl = 'In sync \u2713'
+                    clr = SUCCESS
+                tk.Label(row, text=lbl, font=('Segoe UI', 8),
+                         bg=row_bg, fg=clr).pack(side='right', padx=(0,12), pady=4)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # HELP TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_help_tab(self, parent):
+        # Scrollable canvas
+        outer = tk.Frame(parent, bg=BG)
+        outer.pack(fill='both', expand=True)
+        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(outer, command=canvas.yview,
+                          bg=SURFACE2, troughcolor=BG)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        body = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0,0), window=body, anchor='nw', tags='hb')
+        body.bind('<Configure>', lambda e:
+            canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e:
+            canvas.itemconfig('hb', width=e.width))
+        canvas.bind('<MouseWheel>',
+            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), 'units'))
+
+        def section(title):
+            tk.Label(body, text=title, font=('Segoe UI', 11, 'bold'),
+                     bg=BG, fg=ACCENT, anchor='w').pack(
+                         fill='x', padx=32, pady=(20,4))
+            tk.Frame(body, bg=BORDER, height=1).pack(fill='x', padx=32)
+
+        def qa(question, answer):
+            tk.Label(body, text=question, font=('Segoe UI', 9, 'bold'),
+                     bg=BG, fg=TEXT, anchor='w',
+                     wraplength=680, justify='left').pack(
+                         fill='x', padx=40, pady=(10,2))
+            tk.Label(body, text=answer, font=('Segoe UI', 9),
+                     bg=BG, fg=MUTED, anchor='w',
+                     wraplength=680, justify='left').pack(
+                         fill='x', padx=40, pady=(0,4))
+
+        # Header
+        tk.Label(body, text='Help & FAQ',
+                 font=('Segoe UI', 16, 'bold'), bg=BG, fg=TEXT).pack(
+                     anchor='w', padx=32, pady=(20,4))
+        tk.Label(body,
+                 text='exFAT Image Builder v' + APP_VERSION + '  —  by DecKerr97',
+                 font=('Segoe UI', 9), bg=BG, fg='#3a3a3a').pack(anchor='w', padx=32)
+
+        section('Getting Started')
+        qa('Do my friends need Python installed?',
+           'No. The .exe includes everything. The only requirement is OSFMount '
+           '(free download from osforensics.com). No Python, no command line, nothing else.')
+        qa('What is OSFMount and why do I need it?',
+           'OSFMount is a free tool by PassMark that mounts disk image files as '
+           'Windows drive letters. The app uses it to create, format and mount the '
+           'exFAT image during building. Without it, builds cannot run.')
+        qa('What does "must contain eboot.bin" mean?',
+           'eboot.bin is the main executable of a PS5 game. It lives in the root '
+           'of a properly extracted game folder. If it\'s missing the dump is '
+           'incomplete or incorrectly structured.')
+
+        section('Building')
+        qa('What is the temp folder for?',
+           'During a build the app creates a blank disk image the same size as your '
+           'game, mounts it, formats it as exFAT, copies all game files in, then '
+           'saves the finished image to your output directory. The temp folder is '
+           'where this happens. You need enough free space there to hold the full '
+           'game size — so if your C: drive is low, point it at an external drive.')
+        qa('Why is the version showing 01.000.000 for every game?',
+           'The version comes from pfs-version.dat inside sce_sys, which contains '
+           'the real installed patch version. If your dump is missing this file, '
+           'the app falls back to param.sfo\'s APP_VER field which is always the '
+           'base version (e.g. 01.00). This is normal for some extraction tools.')
+        qa('Does the game name come from the internet?',
+           'No. Everything comes from files inside the game folder itself — '
+           'param.sfo, pfs-version.dat, param.json, or nptitle.dat. The PPSA/CUSA '
+           'ID is exactly what Sony stored in the dump, not a web lookup.')
+        qa('Build failed — what do I check?',
+           '1. Make sure OSFMount is installed.\n'
+           '2. Make sure eboot.bin exists in the game folder root.\n'
+           '3. Check the output drive has enough free space (same size as the game).\n'
+           '4. Check the temp folder drive also has enough free space.\n'
+           '5. Make sure the app is running as Administrator (it should prompt automatically).')
+
+        section('FTP & PS5')
+        qa('How do I find my PS5\'s IP address?',
+           'On the PS5 go to Settings → Network → View Connection Status. '
+           'You can also use the "Auto-detect PS5 IP" button in Settings — it scans '
+           'your network for open FTP ports automatically.')
+        qa('What port should I use?',
+           'etaHEN typically uses port 2121. GoldHEN typically uses port 2122. '
+           'Check which homebrew you\'re running if unsure.')
+        qa('Where do images go on the PS5?',
+           'The default path is /data/etaHEN/games/ — this is where etaHEN looks '
+           'for exFAT images to load. If you\'re using a different homebrew, '
+           'change the PS5 path in Settings accordingly.')
+
+        section('File Manager')
+        qa('Can I edit files inside an .exfat image without rebuilding?',
+           'Yes — that\'s what the File Manager tab is for. Mount the image '
+           '(read-write), navigate the folder structure, add/replace/delete files, '
+           'then dismount. The image is updated immediately without needing a full rebuild.')
+        qa('Is it safe to dismount without doing anything special?',
+           'Yes, as long as you\'re not mid-copy. The app uses OSFMount\'s standard '
+           'dismount command which flushes any pending writes before unmounting.')
+
+        section('Common Errors')
+        qa('"Source directory not found" error',
+           'Your game folder name contains [ ] brackets which confuse PowerShell\'s '
+           'path handling. Rename the folder to remove the brackets and try again.')
+        qa('"No free drive letters" error',
+           'Windows has no available drive letters (D: through Z: are all in use). '
+           'Disconnect some external drives or network shares and try again.')
+        qa('The Build All button is not visible',
+           'Make the window taller, or collapse the Settings panel (click ▶ SETTINGS) '
+           'and the Output Log to free up vertical space.')
+
+        section('About')
+        qa('Who made this?',
+           'DecKerr97. Inspired by NookieAI and stonemodder\'s Porkfolio.')
+        qa('Where can I get the latest version?',
+           'github.com/kerrdec97/ps5-exfat-builder — check the Releases page. '
+           'The app also checks for updates automatically on launch.')
+        qa('How do I report a bug?',
+           'Open an issue on GitHub with a description of what happened and '
+           'the output from the Output Log if available.')
+
+        # Bottom padding
+        tk.Frame(body, bg=BG, height=8).pack()
+
+        # ── Changelog ──
+        section('Changelog')
+        self._changelog_var = tk.StringVar(value='Loading...')
+        changelog_lbl = tk.Label(body, textvariable=self._changelog_var,
+                                  font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                                  anchor='w', justify='left',
+                                  wraplength=680)
+        changelog_lbl.pack(fill='x', padx=40, pady=(8, 4))
+        tk.Button(body, text='\U0001f504 Refresh changelog',
+                  font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._fetch_changelog).pack(anchor='w', padx=40)
+        self.after(2000, self._fetch_changelog)
+
+        tk.Frame(body, bg=BG, height=32).pack()
+
+    def _build_library_tab(self, parent):
+        self._lib_view_mode = tk.StringVar(value='grid')
+
+        # ── Top bar ──
+        top = tk.Frame(parent, bg=BG)
+        top.pack(fill='x', padx=24, pady=(12, 6))
+        tk.Label(top, text='Game Library',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+
+        tk.Button(top, text='\U0001f504 Scan',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._lib_scan).pack(side='right')
+        tk.Button(top, text='\U0001f528 Build All',
+                  font=('Segoe UI', 9), bg=SUCCESS, fg=TEXT,
+                  activebackground='#3d9140', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._lib_build_all).pack(side='right', padx=(0,6))
+        tk.Button(top, text='+ Add folder',
+                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._lib_add_folder).pack(side='right', padx=(0, 6))
+
+        # ── View toggle ──
+        toggle_row = tk.Frame(parent, bg=BG)
+        toggle_row.pack(fill='x', padx=24, pady=(0, 4))
+
+        def _make_view_btn(text, mode):
+            btn = tk.Label(toggle_row, text=text,
+                           font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                           padx=12, pady=4, cursor='hand2',
+                           relief='flat')
+            btn.pack(side='left', padx=(0, 2))
+            def _click(e, m=mode, b=btn):
+                self._lib_view_mode.set(m)
+                for w in toggle_row.winfo_children():
+                    w.config(bg=SURFACE2, fg=MUTED)
+                b.config(bg=ACCENT, fg=TEXT)
+                self._lib_apply_filter()
+            btn.bind('<Button-1>', _click)
+            return btn
+
+        self._lib_grid_btn = _make_view_btn('\u22ee\u22ee Grid', 'grid')
+        self._lib_list_btn = _make_view_btn('\u2630  List',      'list')
+        self._lib_grid_btn.config(bg=ACCENT, fg=TEXT)  # default active
+
+        # ── Folder list ──
+        self._lib_folder_frame = tk.Frame(parent, bg=SURFACE2,
+                                           highlightbackground=BORDER,
+                                           highlightthickness=1)
+        self._lib_folder_frame.pack(fill='x', padx=24, pady=(0, 6))
+        self._lib_render_folders()
+
+        # ── Search + status bar ──
+        ctrl = tk.Frame(parent, bg=BG)
+        ctrl.pack(fill='x', padx=24, pady=(0, 6))
+        self._lib_status_var = tk.StringVar(
+            value='No games scanned yet — add a folder and click Scan')
+        tk.Label(ctrl, textvariable=self._lib_status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left')
+
+        self._lib_search_var = tk.StringVar()
+        self._lib_search_var.trace('w', lambda *a: self._lib_apply_filter())
+        sf = tk.Frame(ctrl, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        sf.pack(side='right')
+        tk.Label(sf, text='\U0001f50d', font=('Segoe UI', 9),
+                 bg=FIELD_BG, fg=MUTED).pack(side='left', padx=(6, 2))
+        tk.Entry(sf, textvariable=self._lib_search_var,
+                 font=('Segoe UI', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4,
+                 width=22).pack(side='left')
+
+        # ── Canvas ──
+        grid_outer = tk.Frame(parent, bg=BG)
+        grid_outer.pack(fill='both', expand=True, padx=24, pady=(0, 8))
+
+        self._lib_canvas = tk.Canvas(grid_outer, bg=BG, highlightthickness=0)
+        lib_sb = tk.Scrollbar(grid_outer, orient='vertical',
+                               command=self._lib_canvas.yview,
+                               bg=SURFACE2, troughcolor=BG)
+        self._lib_canvas.configure(yscrollcommand=lib_sb.set)
+        lib_sb.pack(side='right', fill='y')
+        self._lib_canvas.pack(side='left', fill='both', expand=True)
+
+        self._lib_grid_frame = tk.Frame(self._lib_canvas, bg=BG)
+        self._lib_canvas.create_window((0, 0), window=self._lib_grid_frame,
+                                        anchor='nw', tags='lgf')
+        self._lib_grid_frame.bind('<Configure>', lambda e:
+            self._lib_canvas.configure(
+                scrollregion=self._lib_canvas.bbox('all')))
+        self._lib_canvas.bind('<Configure>', lambda e: (
+            self._lib_canvas.itemconfig('lgf', width=e.width),
+            self._lib_apply_filter()))
+        self._lib_canvas.bind('<MouseWheel>',
+            lambda e: self._lib_canvas.yview_scroll(
+                int(-1*(e.delta/120)), 'units'))
+
+    # ── Library helpers ───────────────────────────────────────────────────────
+    def _lib_render_folders(self):
+        for w in self._lib_folder_frame.winfo_children():
+            w.destroy()
+        if not self._lib_folders:
+            tk.Label(self._lib_folder_frame,
+                     text='No scan folders added yet — click "+ Add folder"',
+                     font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                     pady=6).pack(anchor='w', padx=10)
+            return
+        for i, folder in enumerate(self._lib_folders):
+            row = tk.Frame(self._lib_folder_frame, bg=SURFACE2)
+            row.pack(fill='x')
+            tk.Label(row, text='\U0001f4c1  ' + folder,
+                     font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                     anchor='w').pack(side='left', padx=10, pady=4,
+                                      fill='x', expand=True)
+            idx = i
+            tk.Button(row, text='\u2715',
+                      font=('Segoe UI', 8), bg=SURFACE2, fg=DANGER,
+                      activebackground=SURFACE2, activeforeground=DANGER,
+                      relief='flat', bd=0, padx=8, cursor='hand2',
+                      command=lambda ix=idx: self._lib_remove_folder(ix)
+                      ).pack(side='right')
+
+    def _lib_add_folder(self):
+        p = filedialog.askdirectory(title='Select folder containing PS5 game dumps')
+        if not p:
+            return
+        p = os.path.normpath(p)
+        if p not in self._lib_folders:
+            self._lib_folders.append(p)
+            self._settings['lib_folders'] = self._lib_folders
+            save_settings(self._settings)
+        self._lib_render_folders()
+
+    def _lib_remove_folder(self, idx):
+        if 0 <= idx < len(self._lib_folders):
+            self._lib_folders.pop(idx)
+            self._settings['lib_folders'] = self._lib_folders
+            save_settings(self._settings)
+            self._lib_render_folders()
+            self._lib_apply_filter()
+
+    def _lib_scan(self):
+        if not self._lib_folders:
+            messagebox.showwarning('No folders',
+                'Add at least one scan folder first.')
+            return
+        self._lib_status_var.set('Scanning...')
+        self._lib_games = []
+        for w in self._lib_grid_frame.winfo_children():
+            w.destroy()
+
+        def worker():
+            games = []
+            for base in self._lib_folders:
+                if not os.path.isdir(base):
+                    continue
+                try:
+                    for entry in os.scandir(base):
+                        if not entry.is_dir():
+                            continue
+                        folder = entry.path
+                        # Quick check for eboot.bin anywhere in first 2 levels
+                        has_eboot = os.path.isfile(
+                            os.path.join(folder, 'eboot.bin'))
+                        if not has_eboot:
+                            # check one level down
+                            try:
+                                for sub in os.scandir(folder):
+                                    if sub.is_dir():
+                                        if os.path.isfile(
+                                                os.path.join(sub.path, 'eboot.bin')):
+                                            has_eboot = True
+                                            break
+                            except Exception:
+                                pass
+                        if not has_eboot:
+                            continue
+                        title, title_id, version = get_game_info(folder)
+                        if not title_id:
+                            m = re.search(
+                                r'((?:PPSA|CUSA|PPLH)\d{5})',
+                                os.path.basename(folder), re.IGNORECASE)
+                            if m:
+                                title_id = m.group(1).upper()
+                        cover = self._load_cover_art(folder)
+                        size  = self._get_folder_size(folder)
+                        games.append({
+                            'folder':   folder,
+                            'title':    title or title_id or os.path.basename(folder),
+                            'title_id': title_id or '',
+                            'version':  version or '',
+                            'cover':    cover,
+                            'size':     size,
+                        })
+                except Exception:
+                    pass
+            games.sort(key=lambda g: g['title'].lower())
+            self.after(0, self._lib_scan_done, games)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _lib_scan_done(self, games):
+        self._lib_games = games
+        self._lib_status_var.set(
+            str(len(games)) + ' game(s) found across ' +
+            str(len(self._lib_folders)) + ' folder(s)')
+        self._lib_apply_filter()
+
+    def _lib_apply_filter(self):
+        query = self._lib_search_var.get().lower().strip() \
+            if hasattr(self, '_lib_search_var') else ''
+        if query:
+            filtered = [g for g in self._lib_games
+                        if query in g['title'].lower()
+                        or query in g['title_id'].lower()]
+        else:
+            filtered = self._lib_games
+        if hasattr(self, '_lib_view_mode') and self._lib_view_mode.get() == 'list':
+            self._lib_render_list(filtered)
+        else:
+            self._lib_render_grid(filtered)
+
+    def _lib_render_list(self, games=None):
+        if games is None:
+            games = self._lib_games
+        for w in self._lib_grid_frame.winfo_children():
+            w.destroy()
+        if not games:
+            tk.Label(self._lib_grid_frame, text='No games found',
+                     font=('Segoe UI', 11), bg=BG, fg=MUTED,
+                     pady=40).pack()
+            return
+        for i, game in enumerate(games):
+            row_bg = QUEUE_ODD if i % 2 == 0 else QUEUE_EVEN
+            row = tk.Frame(self._lib_grid_frame, bg=row_bg, cursor='hand2')
+            row.pack(fill='x')
+
+            # Cover thumbnail (small)
+            thumb_lbl = tk.Label(row, bg=row_bg, text='\U0001f3ae',
+                                  font=('Segoe UI', 14), fg='#333333',
+                                  width=4, height=2)
+            thumb_lbl.pack(side='left', padx=(8, 6), pady=4)
+            if game.get('cover'):
+                def load_thumb(path=game['cover'], lbl=thumb_lbl, bg=row_bg):
+                    try:
+                        from PIL import Image, ImageTk
+                        img = Image.open(path).resize((40, 40), Image.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        lbl.config(image=photo, text='', width=40, height=40)
+                        lbl.image = photo
+                    except Exception:
+                        pass
+                threading.Thread(target=load_thumb, daemon=True).start()
+
+            # Title + meta
+            info_col = tk.Frame(row, bg=row_bg)
+            info_col.pack(side='left', fill='x', expand=True, pady=6)
+            tk.Label(info_col, text=game['title'],
+                     font=('Segoe UI', 9, 'bold'), bg=row_bg, fg=TEXT,
+                     anchor='w').pack(anchor='w')
+            meta = game['title_id']
+            if game['version']:
+                meta += '  v' + game['version']
+            tk.Label(info_col, text=meta,
+                     font=('Segoe UI', 8), bg=row_bg, fg=INFO_FG,
+                     anchor='w').pack(anchor='w')
+
+            # Size
+            if game['size'] > 0:
+                sz = ('%.1f GB' % (game['size'] / 1024**3)
+                      if game['size'] >= 1024**3
+                      else '%d MB' % (game['size'] // 1024**2))
+                tk.Label(row, text=sz,
+                         font=('Segoe UI', 8), bg=row_bg, fg='#444444',
+                         anchor='e').pack(side='right', padx=12)
+
+            # Bind click / right-click to context menu
+            def _bind_ctx(widgets, g=game):
+                for w in widgets:
+                    w.bind('<Button-1>',   lambda e, gg=g: self._lib_context_menu(e, gg))
+                    w.bind('<Button-3>',   lambda e, gg=g: self._lib_context_menu(e, gg))
+            _bind_ctx([row, thumb_lbl, info_col] + list(info_col.winfo_children()))
+
+    def _lib_render_grid(self, games=None):
+        if games is None:
+            games = self._lib_games
+        for w in self._lib_grid_frame.winfo_children():
+            w.destroy()
+        if not games:
+            tk.Label(self._lib_grid_frame,
+                     text='No games found',
+                     font=('Segoe UI', 11), bg=BG, fg=MUTED,
+                     pady=40).pack()
+            return
+        try:
+            canvas_w = self._lib_canvas.winfo_width()
+        except Exception:
+            canvas_w = 700
+        card_w = 160
+        cols   = max(1, canvas_w // (card_w + 12))
+        for i, game in enumerate(games):
+            row = i // cols
+            col = i % cols
+            self._lib_make_card(self._lib_grid_frame, game, row, col)
+
+    def _lib_make_card(self, parent, game, row, col):
+        card = tk.Frame(parent, bg='#141414',
+                        highlightbackground='#2a2a2a',
+                        highlightthickness=1,
+                        cursor='hand2')
+        card.grid(row=row, column=col, padx=6, pady=6, sticky='nsew')
+        parent.grid_columnconfigure(col, weight=1)
+
+        # Cover art
+        cover_frame = tk.Frame(card, bg='#0a0a0a',
+                               width=148, height=148)
+        cover_frame.pack(padx=6, pady=(6, 0))
+        cover_frame.pack_propagate(False)
+
+        cover_lbl = tk.Label(cover_frame, bg='#0a0a0a',
+                             text='\U0001f3ae',
+                             font=('Segoe UI', 28), fg='#2a2a2a')
+        cover_lbl.pack(expand=True)
+
+        # Load cover art async
+        if game.get('cover'):
+            def load_art(path=game['cover'], lbl=cover_lbl):
+                try:
+                    from PIL import Image, ImageTk
+                    img = Image.open(path).resize((148, 148), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    lbl.config(image=photo, text='')
+                    lbl.image = photo  # keep reference
+                except Exception:
+                    pass
+            threading.Thread(target=load_art, daemon=True).start()
+
+        # Title
+        title_text = game['title']
+        if len(title_text) > 22:
+            title_text = title_text[:20] + '…'
+        tk.Label(card, text=title_text,
+                 font=('Segoe UI', 8, 'bold'), bg='#141414', fg=TEXT,
+                 wraplength=148, justify='center').pack(padx=6, pady=(4, 0))
+
+        # Meta
+        meta = game['title_id']
+        if game['version']:
+            meta += '  v' + game['version']
+        tk.Label(card, text=meta,
+                 font=('Segoe UI', 7), bg='#141414', fg=INFO_FG).pack()
+
+        # Size
+        if game['size'] > 0:
+            sz = ('%.1f GB' % (game['size'] / 1024**3)
+                  if game['size'] >= 1024**3
+                  else '%d MB' % (game['size'] // 1024**2))
+            tk.Label(card, text=sz,
+                     font=('Segoe UI', 7), bg='#141414', fg='#444444').pack(pady=(0, 6))
+
+        # Click / right-click → context menu
+        def _bind_all(widgets, g=game):
+            for w in widgets:
+                w.bind('<Button-1>', lambda e, gg=g: self._lib_context_menu(e, gg))
+                w.bind('<Button-3>', lambda e, gg=g: self._lib_context_menu(e, gg))
+        _bind_all([card, cover_lbl, cover_frame] + list(card.winfo_children()))
+
+        # Hover highlight
+        def _enter(e):
+            card.config(highlightbackground=ACCENT)
+        def _leave(e):
+            card.config(highlightbackground='#2a2a2a')
+        card.bind('<Enter>', _enter)
+        card.bind('<Leave>', _leave)
+        for w in card.winfo_children():
+            w.bind('<Enter>', _enter)
+            w.bind('<Leave>', _leave)
+
+    def _lib_context_menu(self, event, game):
+        menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
+                       activebackground=ACCENT, activeforeground=TEXT,
+                       font=('Segoe UI', 9))
+        menu.add_command(label='\U0001f3ae  ' + game['title'],
+                         state='disabled', font=('Segoe UI', 9, 'bold'))
+        menu.add_separator()
+        menu.add_command(label='\u2795  Add to Build Queue',
+                         command=lambda: self._lib_quick_add(game))
+        menu.add_command(label='\U0001f4cb  View details',
+                         command=lambda: self._lib_show_detail(game))
+        menu.add_separator()
+        menu.add_command(label='\U0001f4c2  Open folder',
+                         command=lambda: subprocess.Popen(
+                             'explorer "' + game['folder'] + '"', shell=True))
+        menu.add_command(label='\U0001f5d1  Remove from library',
+                         command=lambda: self._lib_remove_game(game))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _lib_quick_add(self, game):
+        odir = self.output_dir.get().strip()
+        if not odir:
+            # Ask for output dir
+            odir = filedialog.askdirectory(title='Select output directory for ' + game['title'])
+            if not odir:
+                return
+            odir = odir.replace('/', '\\')
+            self.output_dir.set(odir)
+            self._settings['output_dir'] = odir
+            save_settings(self._settings)
+        title, title_id, version = game['title'], game['title_id'], game['version']
+        name = build_exfat_name(title or None, title_id or None, version or None)
+        item = QueueItem(game['folder'], odir, name, title, title_id, version)
+        self._queue.append(item)
+        self._render_queue()
+        self._switch_tab('build')
+        self._set_status('Added to queue: ' + (title or title_id), SUCCESS)
+
+    def _lib_remove_game(self, game):
+        self._lib_games = [g for g in self._lib_games if g['folder'] != game['folder']]
+        self._lib_apply_filter()
+        self._lib_status_var.set(str(len(self._lib_games)) + ' game(s)')
+
+    def _lib_show_detail(self, game):
+        win = tk.Toplevel(self)
+        win.title(game['title'])
+        win.geometry('500x380')
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self)
+
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill='both', expand=True, padx=24, pady=20)
+
+        # Cover + info side by side
+        top = tk.Frame(body, bg=BG)
+        top.pack(fill='x', pady=(0, 16))
+
+        # Cover
+        cover_frame = tk.Frame(top, bg='#0a0a0a',
+                               width=120, height=120)
+        cover_frame.pack(side='left', padx=(0, 20))
+        cover_frame.pack_propagate(False)
+        cover_lbl = tk.Label(cover_frame, bg='#0a0a0a',
+                             text='\U0001f3ae', font=('Segoe UI', 30),
+                             fg='#2a2a2a')
+        cover_lbl.pack(expand=True)
+
+        if game.get('cover'):
+            def load(path=game['cover'], lbl=cover_lbl):
+                try:
+                    from PIL import Image, ImageTk
+                    img = Image.open(path).resize((120, 120), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    lbl.config(image=photo, text='')
+                    lbl.image = photo
+                except Exception:
+                    pass
+            threading.Thread(target=load, daemon=True).start()
+
+        # Info
+        info = tk.Frame(top, bg=BG)
+        info.pack(side='left', fill='both', expand=True)
+
+        tk.Label(info, text=game['title'],
+                 font=('Segoe UI', 12, 'bold'), bg=BG, fg=TEXT,
+                 wraplength=300, justify='left', anchor='w').pack(anchor='w')
+        tk.Label(info, text=game['title_id'],
+                 font=('Consolas', 9), bg=BG, fg=INFO_FG,
+                 anchor='w').pack(anchor='w', pady=(4, 0))
+        if game['version']:
+            tk.Label(info, text='Version ' + game['version'],
+                     font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                     anchor='w').pack(anchor='w')
+        if game['size'] > 0:
+            sz = ('%.2f GB' % (game['size'] / 1024**3)
+                  if game['size'] >= 1024**3
+                  else '%d MB' % (game['size'] // 1024**2))
+            tk.Label(info, text=sz + ' estimated image size',
+                     font=('Segoe UI', 8), bg=BG, fg='#555555',
+                     anchor='w').pack(anchor='w', pady=(4, 0))
+
+        # Folder path
+        tk.Label(body, text=game['folder'],
+                 font=('Consolas', 8), bg=BG, fg='#3a3a3a',
+                 wraplength=440, justify='left', anchor='w').pack(anchor='w')
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill='x', pady=16)
+
+        # Output directory for queue
+        out_row = tk.Frame(body, bg=BG)
+        out_row.pack(fill='x', pady=(0, 12))
+        tk.Label(out_row, text='Output directory:',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left')
+        out_var = tk.StringVar(value=self.output_dir.get())
+        out_ef = tk.Frame(out_row, bg=FIELD_BG,
+                          highlightbackground=BORDER, highlightthickness=1)
+        out_ef.pack(side='left', fill='x', expand=True, padx=(8, 6))
+        tk.Entry(out_ef, textvariable=out_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4).pack(fill='x')
+        def _browse_out():
+            p = filedialog.askdirectory(title='Select output directory')
+            if p:
+                out_var.set(p.replace('/', '\\'))
+        tk.Button(out_row, text='…', font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
+                  padx=8, pady=3, cursor='hand2',
+                  command=_browse_out).pack(side='left')
+
+        # Action buttons
+        btn_row = tk.Frame(body, bg=BG)
+        btn_row.pack(fill='x')
+
+        def _add_to_queue():
+            odir = out_var.get().strip()
+            if not odir:
+                messagebox.showwarning('No output directory',
+                    'Please select an output directory.', parent=win)
+                return
+            title, title_id, version = get_game_info(game['folder'])
+            if not title_id:
+                m = re.search(r'((?:PPSA|CUSA|PPLH)\d{5})',
+                              os.path.basename(game['folder']), re.IGNORECASE)
+                if m:
+                    title_id = m.group(1).upper()
+            name = build_exfat_name(title, title_id, version)
+            item = QueueItem(game['folder'], odir, name, title, title_id, version)
+            self._queue.append(item)
+            self._render_queue()
+            self.output_dir.set(odir)
+            self._settings['output_dir'] = odir
+            save_settings(self._settings)
+            win.destroy()
+            self._switch_tab('build')
+            self._set_status('Added to queue: ' + (title or title_id or ''), SUCCESS)
+
+        tk.Button(btn_row, text='\u2795  Add to Build Queue',
+                  font=('Segoe UI', 10, 'bold'),
+                  bg=SUCCESS, fg=TEXT,
+                  activebackground='#3d9140', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=18, pady=8,
+                  cursor='hand2', command=_add_to_queue).pack(side='left')
+
+        tk.Button(btn_row, text='\U0001f4c2  Open folder',
+                  font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=8,
+                  cursor='hand2',
+                  command=lambda: subprocess.Popen(
+                      'explorer "' + game['folder'] + '"', shell=True)
+                  ).pack(side='left', padx=(8, 0))
+
+        tk.Button(btn_row, text='Close',
+                  font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=8,
+                  cursor='hand2', command=win.destroy).pack(side='right')
+
+    def _build_ftpbr_tab(self, parent):
+        """Full PS5 FTP file browser as an embedded tab."""
+        # State
+        self._br_path      = tk.StringVar(value=self._settings.get('ftp_path', '/data/etaHEN/games/'))
+        self._br_status    = tk.StringVar(value='Not connected — click Connect')
+        self._br_free      = tk.StringVar(value='')
+        self._br_sel_info  = tk.StringVar(value='')
+        self._br_ftp       = [None]
+        self._br_entries   = []   # (name, is_dir, size)
+        self._br_clipboard = [None]  # ('move', [(path, is_dir), ...])
+
+        # ── Header row ──
+        hdr = tk.Frame(parent, bg=BG)
+        hdr.pack(fill='x', padx=24, pady=(12, 4))
+        tk.Label(hdr, text='PS5 FTP Browser',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        tk.Label(hdr, textvariable=self._br_free,
+                 font=('Segoe UI', 8), bg=BG, fg=INFO_FG).pack(side='right')
+        tk.Label(hdr, textvariable=self._br_status,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='right', padx=(0,16))
+
+        # ── Connection bar ──
+        conn = tk.Frame(parent, bg=BG)
+        conn.pack(fill='x', padx=24, pady=(0,4))
+        tk.Button(conn, text='\U0001f517 Connect',
+                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', relief='flat', bd=0,
+                  padx=10, pady=4, cursor='hand2',
+                  command=self._br_connect).pack(side='left')
+        tk.Button(conn, text='\U0001f534 Disconnect',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                  activebackground=BORDER, relief='flat', bd=0,
+                  padx=10, pady=4, cursor='hand2',
+                  command=self._br_disconnect).pack(side='left', padx=(6,0))
+        tk.Label(conn, text='IP from Settings',
+                 font=('Segoe UI', 8), bg=BG, fg='#333333').pack(side='left', padx=(12,0))
+
+        # ── Path bar ──
+        path_row = tk.Frame(parent, bg=BG)
+        path_row.pack(fill='x', padx=24, pady=(0,4))
+        tk.Button(path_row, text='\u2191 Up',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                  command=self._br_go_up).pack(side='left', padx=(0,6))
+        pf = tk.Frame(path_row, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        pf.pack(side='left', fill='x', expand=True)
+        pe = tk.Entry(pf, textvariable=self._br_path,
+                      font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                      insertbackground=FIELD_FG, relief='flat', bd=4)
+        pe.pack(fill='x')
+        pe.bind('<Return>', lambda e: self._br_load(self._br_path.get()))
+        tk.Button(path_row, text='Go', font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
+                  padx=10, pady=4, cursor='hand2',
+                  command=lambda: self._br_load(self._br_path.get())
+                  ).pack(side='left', padx=(6,0))
+        tk.Button(path_row, text='\U0001f504', font=('Segoe UI', 9),
+                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
+                  padx=8, pady=4, cursor='hand2',
+                  command=lambda: self._br_load(self._br_path.get())
+                  ).pack(side='left', padx=(4,0))
+
+        # ── Toolbar ──
+        toolbar = tk.Frame(parent, bg=BG)
+        toolbar.pack(fill='x', padx=24, pady=(0,4))
+
+        def tbtn(text, cmd, fg=TEXT):
+            return tk.Button(toolbar, text=text, font=('Segoe UI', 8),
+                      bg=SURFACE2, fg=fg, activebackground=BORDER,
+                      activeforeground=TEXT, relief='flat', bd=0,
+                      padx=8, pady=3, cursor='hand2', command=cmd)
+
+        tbtn('\U0001f4c2 New folder',  self._br_new_folder).pack(side='left', padx=(0,3))
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
+        tbtn('\u2702 Rename',          self._br_rename).pack(side='left', padx=(0,3))
+        tbtn('\u2702\ufe0f Cut',       self._br_cut).pack(side='left', padx=(0,3))
+        tbtn('\U0001f4cb Paste',       self._br_paste).pack(side='left', padx=(0,3))
+        tbtn('\u27a1 Move to...',      self._br_move_to).pack(side='left', padx=(0,3))
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
+        tbtn('\u2935 Download',        self._br_download).pack(side='left', padx=(0,3))
+        tbtn('\u2191 Upload here',     self._br_upload_here).pack(side='left', padx=(0,3))
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
+        tbtn('\U0001f5d1 Delete',      self._br_delete, fg=DANGER).pack(side='left', padx=(0,3))
+
+        # ── File list ──
+        list_outer = tk.Frame(parent, bg=SURFACE2,
+                              highlightbackground=BORDER, highlightthickness=1)
+        list_outer.pack(fill='both', expand=True, padx=24, pady=(0,4))
+
+        col_hdr = tk.Frame(list_outer, bg='#0f0f0f')
+        col_hdr.pack(fill='x')
+        for col_text, col_w in [('Name', 50), ('Size', 12), ('Type', 8)]:
+            tk.Label(col_hdr, text=col_text, font=('Segoe UI', 8, 'bold'),
+                     bg='#0f0f0f', fg=MUTED, anchor='w',
+                     width=col_w).pack(side='left', padx=(8,0), pady=3)
+
+        self._br_listbox = tk.Listbox(list_outer, font=('Consolas', 9),
+                                       bg=SURFACE2, fg=TEXT,
+                                       selectbackground=ACCENT,
+                                       selectforeground='#ffffff',
+                                       activestyle='none', relief='flat',
+                                       bd=6, selectmode='extended')
+        br_sb = tk.Scrollbar(list_outer, command=self._br_listbox.yview,
+                              bg=SURFACE2, troughcolor=BG)
+        self._br_listbox.configure(yscrollcommand=br_sb.set)
+        br_sb.pack(side='right', fill='y')
+        self._br_listbox.pack(fill='both', expand=True)
+        self._br_listbox.bind('<Double-Button-1>', lambda e: self._br_nav())
+        self._br_listbox.bind('<Button-3>',        lambda e: self._br_ctx(e))
+        self._br_listbox.bind('<<ListboxSelect>>', lambda e: self._br_update_sel())
+
+        # ── Status bar ──
+        stat = tk.Frame(parent, bg='#0a0a0a')
+        stat.pack(fill='x', padx=24, pady=(0,6))
+        tk.Label(stat, textvariable=self._br_sel_info,
+                 font=('Segoe UI', 8), bg='#0a0a0a', fg=MUTED,
+                 anchor='w').pack(side='left', padx=8, pady=3)
+
+        # Keyboard shortcuts
+        parent.bind('<Delete>',    lambda e: self._br_delete())
+        parent.bind('<F2>',        lambda e: self._br_rename())
+        parent.bind('<F5>',        lambda e: self._br_load(self._br_path.get()))
+        parent.bind('<BackSpace>', lambda e: self._br_go_up())
+
+    # ── PS5 Browser methods ───────────────────────────────────────────────────
+    def _br_connect(self):
+        self._br_status.set('Connecting...')
+        def worker():
+            try:
+                ftp = self._ftp_connect()
+                self._br_ftp[0] = ftp
+                self.after(0, self._br_status.set, 'Connected \u2713')
+                self.after(0, self._br_load, self._br_path.get())
+            except Exception as e:
+                self.after(0, self._br_status.set, 'Failed: ' + str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_disconnect(self):
+        try:
+            if self._br_ftp[0]:
+                self._br_ftp[0].quit()
+        except Exception:
+            pass
+        self._br_ftp[0] = None
+        self._br_listbox.delete(0, 'end')
+        self._br_entries = []
+        self._br_status.set('Disconnected')
+        self._br_free.set('')
+
+    def _br_ensure(self):
+        try:
+            if self._br_ftp[0]:
+                self._br_ftp[0].voidcmd('NOOP')
+                return self._br_ftp[0]
+        except Exception:
+            pass
+        ftp = self._ftp_connect()
+        self._br_ftp[0] = ftp
+        return ftp
+
+    def _br_load(self, p):
+        p = p or '/'
+        self._br_status.set('Loading...')
+        self._br_listbox.delete(0, 'end')
+        self._br_entries = []
+        def worker():
+            try:
+                ftp   = self._br_ensure()
+                lines = []
+                ftp.retrlines('LIST ' + p, lines.append)
+                # Try to get free space
+                free_str = ''
+                try:
+                    resp = ftp.sendcmd('SITE AVAIL')
+                    free_str = 'Free: ' + resp
+                except Exception:
+                    pass
+                self.after(0, self._br_show, lines, p, free_str)
+            except Exception as e:
+                self.after(0, self._br_status.set, 'Error: ' + str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_show(self, lines, p, free_str):
+        self._br_listbox.delete(0, 'end')
+        self._br_entries = []
+        self._br_path.set(p)
+        if free_str:
+            self._br_free.set(free_str)
+        parsed = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 9: continue
+            name   = ' '.join(parts[8:])
+            is_dir = line.startswith('d')
+            try: sz = int(parts[4])
+            except: sz = 0
+            if name not in ('.', '..'):
+                parsed.append((name, is_dir, sz))
+        parsed.sort(key=lambda x: (not x[1], x[0].lower()))
+        if p != '/':
+            self._br_entries.append(('..', True, 0))
+            self._br_listbox.insert('end', '\U0001f4c2  ..')
+        for name, is_dir, sz in parsed:
+            self._br_entries.append((name, is_dir, sz))
+            icon = '\U0001f4c1  ' if is_dir else '\U0001f4be  '
+            sz_str = self._br_fmt(sz, is_dir)
+            self._br_listbox.insert('end',
+                '%-3s%-42s %12s' % (icon, name, sz_str))
+        self._br_status.set('%d items in %s' % (len(parsed), p))
+        self._br_sel_info.set('')
+
+    def _br_fmt(self, sz, is_dir):
+        if is_dir: return '<DIR>'
+        if sz >= 1024**3: return '%.2f GB' % (sz/1024**3)
+        if sz >= 1024**2: return '%.1f MB' % (sz/1024**2)
+        if sz >= 1024:    return '%d KB'   % (sz//1024)
+        return '%d B' % sz
+
+    def _br_cur(self):
+        return self._br_path.get().rstrip('/')
+
+    def _br_selected(self):
+        result = []
+        for i in self._br_listbox.curselection():
+            if i < len(self._br_entries):
+                name, is_dir, sz = self._br_entries[i]
+                if name != '..':
+                    result.append((name, is_dir, sz))
+        return result
+
+    def _br_update_sel(self):
+        sel = self._br_selected()
+        if not sel:
+            self._br_sel_info.set('')
+            return
+        total = sum(sz for _, is_dir, sz in sel if not is_dir)
+        self._br_sel_info.set(
+            '%d selected' % len(sel) +
+            ('  —  ' + self._br_fmt(total, False) if total else ''))
+
+    def _br_nav(self):
+        sel = self._br_listbox.curselection()
+        if not sel or sel[0] >= len(self._br_entries): return
+        name, is_dir, _ = self._br_entries[sel[0]]
+        if not is_dir: return
+        if name == '..':
+            self._br_go_up()
+        else:
+            self._br_load(self._br_cur() + '/' + name)
+
+    def _br_go_up(self):
+        cur = self._br_cur()
+        if not cur: return
+        parent = '/'.join(cur.split('/')[:-1]) or '/'
+        self._br_load(parent)
+
+    def _br_new_folder(self):
+        name = simpledialog.askstring('New folder', 'Folder name:', parent=self)
+        if not name: return
+        remote = self._br_cur() + '/' + name
+        def worker():
+            try:
+                ftp = self._br_ensure()
+                ftp.mkd(remote)
+                self.after(0, self._br_load, self._br_path.get())
+            except Exception as e:
+                self.after(0, messagebox.showerror, 'Error', str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_rename(self):
+        sel = self._br_selected()
+        if not sel:
+            messagebox.showwarning('No selection', 'Select a file or folder to rename.')
+            return
+        if len(sel) > 1:
+            messagebox.showwarning('Too many', 'Select only one item to rename.')
+            return
+        name, _, _ = sel[0]
+        new_name = simpledialog.askstring('Rename', 'New name:',
+                                           initialvalue=name, parent=self)
+        if not new_name or new_name == name: return
+        old_p = self._br_cur() + '/' + name
+        new_p = self._br_cur() + '/' + new_name
+        def worker():
+            try:
+                ftp = self._br_ensure()
+                ftp.rename(old_p, new_p)
+                self.after(0, self._br_load, self._br_path.get())
+                self.after(0, self._br_status.set, 'Renamed: ' + name + ' \u2192 ' + new_name)
+            except Exception as e:
+                self.after(0, messagebox.showerror, 'Rename failed', str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_cut(self):
+        sel = self._br_selected()
+        if not sel:
+            messagebox.showwarning('No selection', 'Select items to move.')
+            return
+        paths = [(self._br_cur() + '/' + name, is_dir) for name, is_dir, _ in sel]
+        self._br_clipboard[0] = ('move', paths)
+        self._br_status.set(
+            str(len(paths)) + ' item(s) cut — navigate to destination and Paste')
+
+    def _br_paste(self):
+        if not self._br_clipboard[0]:
+            messagebox.showwarning('Nothing to paste', 'Cut some files first.')
+            return
+        action, items = self._br_clipboard[0]
+        dest = self._br_cur()
+        def worker():
+            errors = []
+            ftp = self._br_ensure()
+            for src_path, _ in items:
+                name     = src_path.split('/')[-1]
+                dst_path = dest + '/' + name
+                try:
+                    ftp.rename(src_path, dst_path)
+                except Exception as e:
+                    errors.append(name + ': ' + str(e))
+            self._br_clipboard[0] = None
+            self.after(0, self._br_load, self._br_path.get())
+            if errors:
+                self.after(0, messagebox.showerror, 'Move failed', '\n'.join(errors))
+            else:
+                self.after(0, self._br_status.set,
+                           str(len(items)) + ' item(s) moved to ' + dest)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_move_to(self):
+        """Move selected items to a typed destination path."""
+        sel = self._br_selected()
+        if not sel:
+            messagebox.showwarning('No selection', 'Select items to move.')
+            return
+        dest = simpledialog.askstring(
+            'Move to', 'Destination path on PS5:',
+            initialvalue=self._br_cur(), parent=self)
+        if not dest: return
+        dest = dest.rstrip('/')
+        def worker():
+            errors = []
+            ftp = self._br_ensure()
+            # Ensure destination exists
+            parts = dest.strip('/').split('/')
+            cur = ''
+            for part in parts:
+                cur += '/' + part
+                try: ftp.mkd(cur)
+                except Exception: pass
+            for name, is_dir, _ in sel:
+                src_path = self._br_cur() + '/' + name
+                dst_path = dest + '/' + name
+                try:
+                    ftp.rename(src_path, dst_path)
+                except Exception as e:
+                    errors.append(name + ': ' + str(e))
+            self.after(0, self._br_load, self._br_path.get())
+            if errors:
+                self.after(0, messagebox.showerror, 'Move failed', '\n'.join(errors))
+            else:
+                self.after(0, self._br_status.set,
+                           str(len(sel)) + ' item(s) moved to ' + dest)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_delete(self):
+        sel = self._br_selected()
+        if not sel:
+            messagebox.showwarning('No selection', 'Select files or folders to delete.')
+            return
+        names = [name for name, _, _ in sel]
+        if not messagebox.askyesno('Delete from PS5',
+                'Permanently delete %d item(s) from PS5?\n\n%s%s' % (
+                    len(names), '\n'.join(names[:8]),
+                    '\n...' if len(names) > 8 else '')):
+            return
+        def _rmd(ftp, path):
+            lines = []
+            try: ftp.retrlines('LIST ' + path, lines.append)
+            except Exception: pass
+            for line in lines:
+                parts = line.split()
+                if len(parts) < 9: continue
+                n = ' '.join(parts[8:])
+                if n in ('.', '..'): continue
+                child = path + '/' + n
+                if line.startswith('d'): _rmd(ftp, child)
+                else:
+                    try: ftp.delete(child)
+                    except Exception: pass
+            try: ftp.rmd(path)
+            except Exception: pass
+        def worker():
+            errors = []
+            ftp = self._br_ensure()
+            for name, is_dir, _ in sel:
+                remote = self._br_cur() + '/' + name
+                try:
+                    if is_dir: _rmd(ftp, remote)
+                    else:      ftp.delete(remote)
+                except Exception as e:
+                    errors.append(name + ': ' + str(e))
+            self.after(0, self._br_load, self._br_path.get())
+            if errors:
+                self.after(0, messagebox.showerror,
+                           'Some deletions failed', '\n'.join(errors))
+            else:
+                self.after(0, self._br_status.set,
+                           'Deleted ' + str(len(sel)) + ' item(s)')
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_download(self):
+        sel = self._br_selected()
+        files_only = [(n, sz) for n, is_dir, sz in sel if not is_dir]
+        if not files_only:
+            messagebox.showwarning('Files only', 'Select files (not folders) to download.')
+            return
+        save_dir = filedialog.askdirectory(title='Save downloaded files to...')
+        if not save_dir: return
+        self._br_status.set('Downloading %d file(s)...' % len(files_only))
+        def worker():
+            errors = []
+            ftp = self._br_ensure()
+            for name, sz in files_only:
+                remote = self._br_cur() + '/' + name
+                local  = os.path.join(save_dir, name)
+                try:
+                    with open(local, 'wb') as f:
+                        ftp.retrbinary('RETR ' + remote, f.write)
+                except Exception as e:
+                    errors.append(name + ': ' + str(e))
+            if errors:
+                self.after(0, messagebox.showerror, 'Download errors', '\n'.join(errors))
+                self.after(0, self._br_status.set, 'Download finished with errors')
+            else:
+                self.after(0, self._br_status.set,
+                           '%d file(s) downloaded to %s' % (len(files_only), save_dir))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _br_upload_here(self):
+        """Upload a file or folder to the current directory."""
+        choice = messagebox.askyesnocancel(
+            'Upload', 'What do you want to upload?\n\nYes = File\nNo = Folder\nCancel = Abort')
+        if choice is None: return
+        if choice:
+            local = filedialog.askopenfilename(title='Select file to upload')
+        else:
+            local = filedialog.askdirectory(title='Select folder to upload')
+        if not local: return
+        # Reuse the FTP upload tab logic with current remote path
+        self._ftptab_local_var.set(local.replace('/', '\\'))
+        self._ftptab_remote_var.set(self._br_path.get())
+        self._ftptab_is_folder.set(not choice)
+        self._switch_tab('ftp')
+        self._ftptab_start_upload()
+
+    def _br_ctx(self, event):
+        sel_idx = self._br_listbox.nearest(event.y)
+        self._br_listbox.selection_clear(0, 'end')
+        self._br_listbox.selection_set(sel_idx)
+        if sel_idx >= len(self._br_entries): return
+        name, is_dir, sz = self._br_entries[sel_idx]
+        if name == '..': return
+        remote = self._br_cur() + '/' + name
+        menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
+                       activebackground=ACCENT, activeforeground=TEXT,
+                       font=('Segoe UI', 9))
+        menu.add_command(label=name, state='disabled',
+                         font=('Segoe UI', 9, 'bold'))
+        menu.add_separator()
+        if is_dir:
+            menu.add_command(label='\U0001f4c2  Open folder',
+                             command=lambda: self._br_load(remote))
+        else:
+            menu.add_command(label='\u2935  Download',
+                             command=self._br_download)
+        menu.add_command(label='\u2702  Rename',       command=self._br_rename)
+        menu.add_command(label='\u2702\ufe0f  Cut',    command=self._br_cut)
+        menu.add_command(label='\u27a1  Move to...',   command=self._br_move_to)
+        menu.add_separator()
+        menu.add_command(label='\U0001f5d1  Delete',   command=self._br_delete)
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _build_files_tab(self, parent):
         self._fm_image_var   = tk.StringVar()
@@ -1720,6 +3562,19 @@ class ExFATBuilder(tk.Tk):
         self._field(form, 'Game root folder  (must contain eboot.bin)',
                     self.game_folder, self._browse_game)
 
+        # Recently used folders dropdown
+        recent_row = tk.Frame(form, bg=BG)
+        recent_row.pack(fill='x', pady=(0, 6))
+        tk.Label(recent_row, text='Recent:',
+                 font=('Segoe UI', 8), bg=BG, fg='#444444').pack(side='left')
+        self._recent_var = tk.StringVar(value='')
+        self._recent_menu = ttk.Combobox(recent_row, textvariable=self._recent_var,
+                                          font=('Segoe UI', 8), state='readonly',
+                                          width=60)
+        self._recent_menu.pack(side='left', padx=(6, 0))
+        self._recent_menu.bind('<<ComboboxSelected>>', self._on_recent_select)
+        self._update_recent_menu()
+
         # Detected game info banner
         self._info_frame = tk.Frame(form, bg=INFO_BG,
                                      highlightbackground='#1a3a5c',
@@ -1816,6 +3671,14 @@ class ExFATBuilder(tk.Tk):
                   bg=BG, fg=DANGER, activebackground=BG,
                   activeforeground=DANGER, relief='flat', bd=0,
                   cursor='hand2', command=self._clear_queue).pack(side='right')
+        tk.Button(q_header, text='\U0001f4be Save queue', font=('Segoe UI', 8),
+                  bg=BG, fg=MUTED, activebackground=BG,
+                  activeforeground=TEXT, relief='flat', bd=0,
+                  cursor='hand2', command=self._queue_save).pack(side='right', padx=(0,8))
+        tk.Button(q_header, text='\U0001f4c2 Load queue', font=('Segoe UI', 8),
+                  bg=BG, fg=MUTED, activebackground=BG,
+                  activeforeground=TEXT, relief='flat', bd=0,
+                  cursor='hand2', command=self._queue_load).pack(side='right', padx=(0,8))
 
         q_outer = tk.Frame(parent, bg=SURFACE2,
                            highlightbackground=BORDER, highlightthickness=1)
@@ -2173,6 +4036,26 @@ class ExFATBuilder(tk.Tk):
                                         bg=SETTINGS_BG, fg=MUTED)
         self._autoip_status.pack(side='left', padx=(10, 0))
 
+        # ── Theme ──
+        tk.Frame(f, bg=BORDER, height=1).pack(fill='x', padx=12, pady=(4, 0))
+        theme_row = tk.Frame(f, bg=SETTINGS_BG)
+        theme_row.pack(fill='x', padx=12, pady=(6, 8))
+        tk.Label(theme_row, text='THEME',
+                 font=('Segoe UI', 8), bg=SETTINGS_BG, fg=MUTED,
+                 width=10, anchor='w').pack(side='left')
+        tk.Radiobutton(theme_row, text='Dark', variable=self._theme_var,
+                       value='dark', font=('Segoe UI', 9),
+                       bg=SETTINGS_BG, fg=MUTED,
+                       activebackground=SETTINGS_BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._toggle_theme).pack(side='left', padx=(12, 8))
+        tk.Radiobutton(theme_row, text='Light', variable=self._theme_var,
+                       value='light', font=('Segoe UI', 9),
+                       bg=SETTINGS_BG, fg=MUTED,
+                       activebackground=SETTINGS_BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._toggle_theme).pack(side='left')
+
     def _browse_temp(self):
         p = filedialog.askdirectory(title='Select temp folder for image building')
         if not p:
@@ -2451,6 +4334,10 @@ class ExFATBuilder(tk.Tk):
                          self._detected_version)
         self._queue.append(item)
         self._render_queue()
+        # Track recently used
+        game = self.game_folder.get().strip()
+        if game:
+            self._add_to_recent(game)
         self.game_folder.set('')
         # Keep output_dir so user doesn't have to re-select it each time
         self.output_name.set('game.exfat')
@@ -2643,26 +4530,36 @@ class ExFATBuilder(tk.Tk):
         if not ip:
             messagebox.showwarning('No IP', 'Enter your PS5 IP address in Settings first.')
             return
+
         win = tk.Toplevel(self)
-        win.title('PS5 File Browser — ' + ip)
-        win.geometry('600x500')
+        win.title('PS5 FTP Manager — ' + ip)
+        win.geometry('780x580')
         win.configure(bg=BG)
         win.transient(self)
 
-        path_var = tk.StringVar(value=self._ftp_path_var.get().strip() or '/data/etaHEN/games/')
-        status_var = tk.StringVar(value='Connecting...')
+        # ── State ──
+        path_var    = tk.StringVar(value=self._ftp_path_var.get().strip() or '/')
+        status_var  = tk.StringVar(value='Connecting...')
+        ftp_ref     = [None]
+        entries     = []   # list of (name, is_dir, size)
+        clipboard   = [None]  # (action, remote_path) for cut/copy
+        sel_mode    = tk.StringVar(value='extended')
 
-        # Header
+        # ── Header ──
         hdr = tk.Frame(win, bg=BG)
-        hdr.pack(fill='x', padx=16, pady=(12, 6))
-        tk.Label(hdr, text='PS5 Files', font=('Segoe UI', 13, 'bold'),
-                 bg=BG, fg=TEXT).pack(side='left')
-        tk.Label(hdr, textvariable=status_var, font=('Segoe UI', 9),
-                 bg=BG, fg=MUTED).pack(side='right')
+        hdr.pack(fill='x', padx=16, pady=(12, 4))
+        tk.Label(hdr, text='PS5 FTP Manager',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        tk.Label(hdr, textvariable=status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='right')
 
-        # Path bar
+        # ── Path / breadcrumb bar ──
         path_row = tk.Frame(win, bg=BG)
-        path_row.pack(fill='x', padx=16, pady=(0, 6))
+        path_row.pack(fill='x', padx=16, pady=(0, 4))
+        tk.Button(path_row, text='\u2191 Up',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                  command=lambda: _go_up()).pack(side='left', padx=(0, 6))
         pf = tk.Frame(path_row, bg=FIELD_BG,
                       highlightbackground=BORDER, highlightthickness=1)
         pf.pack(side='left', fill='x', expand=True)
@@ -2670,118 +4567,428 @@ class ExFATBuilder(tk.Tk):
                               font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
                               insertbackground=FIELD_FG, relief='flat', bd=4)
         path_entry.pack(fill='x')
-        tk.Button(path_row, text='Go', font=('Segoe UI', 9),
-                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
-                  padx=10, pady=4, cursor='hand2',
+        path_entry.bind('<Return>', lambda e: _load(path_var.get()))
+        tk.Button(path_row, text='Go',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
                   command=lambda: _load(path_var.get())).pack(side='left', padx=(6, 0))
+        tk.Button(path_row, text='\U0001f504',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                  command=lambda: _load(path_var.get())).pack(side='left', padx=(4, 0))
 
-        # File list
-        list_frame = tk.Frame(win, bg=SURFACE2,
+        # ── Toolbar ──
+        toolbar = tk.Frame(win, bg=BG)
+        toolbar.pack(fill='x', padx=16, pady=(0, 4))
+
+        def tbtn(text, cmd, fg=TEXT, bg=SURFACE2):
+            tk.Button(toolbar, text=text, font=('Segoe UI', 8),
+                      bg=bg, fg=fg, activebackground=BORDER,
+                      activeforeground=TEXT, relief='flat', bd=0,
+                      padx=8, pady=3, cursor='hand2',
+                      command=cmd).pack(side='left', padx=(0, 3))
+
+        tbtn('\U0001f4c2 New folder', lambda: _new_folder())
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
+        tbtn('\u2702 Rename',  lambda: _rename())
+        tbtn('\u2702\ufe0f Cut',    lambda: _cut())
+        tbtn('\U0001f4cb Copy path', lambda: _copy_path())
+        tbtn('\U0001f4cb Paste',    lambda: _paste())
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
+        tbtn('\u2935 Download', lambda: _download())
+        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
+        tbtn('\U0001f5d1 Delete', lambda: _delete(), fg=DANGER)
+
+        # Storage indicator
+        self._ps5_free_var = tk.StringVar(value='')
+        tk.Label(toolbar, textvariable=self._ps5_free_var,
+                 font=('Segoe UI', 8), bg=BG, fg=INFO_FG,
+                 anchor='e').pack(side='right')
+
+        # ── File list with columns ──
+        list_outer = tk.Frame(win, bg=SURFACE2,
                               highlightbackground=BORDER, highlightthickness=1)
-        list_frame.pack(fill='both', expand=True, padx=16, pady=(0, 8))
-        listbox = tk.Listbox(list_frame, font=('Consolas', 9),
-                             bg=SURFACE2, fg=TEXT, selectbackground=ACCENT,
-                             selectforeground='#ffffff', relief='flat',
-                             activestyle='none', bd=6)
-        scrollbar = tk.Scrollbar(list_frame, command=listbox.yview,
-                                 bg=SURFACE2, troughcolor=BG)
-        listbox.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side='right', fill='y')
+        list_outer.pack(fill='both', expand=True, padx=16, pady=(0, 6))
+
+        # Column header
+        col_hdr = tk.Frame(list_outer, bg='#0f0f0f')
+        col_hdr.pack(fill='x')
+        for col_text, col_w in [('Name', 50), ('Size', 12), ('Type', 10)]:
+            tk.Label(col_hdr, text=col_text,
+                     font=('Segoe UI', 8, 'bold'), bg='#0f0f0f', fg=MUTED,
+                     anchor='w', width=col_w).pack(side='left', padx=(8, 0), pady=3)
+
+        listbox = tk.Listbox(list_outer, font=('Consolas', 9),
+                             bg=SURFACE2, fg=TEXT,
+                             selectbackground=ACCENT, selectforeground='#ffffff',
+                             activestyle='none', relief='flat', bd=6,
+                             selectmode='extended')
+        sb = tk.Scrollbar(list_outer, command=listbox.yview,
+                          bg=SURFACE2, troughcolor=BG)
+        listbox.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
         listbox.pack(fill='both', expand=True)
 
-        # Bottom buttons
+        # ── Status bar ──
+        stat_bar = tk.Frame(win, bg='#0a0a0a')
+        stat_bar.pack(fill='x', padx=16, pady=(0, 4))
+        self._ps5_sel_var = tk.StringVar(value='')
+        tk.Label(stat_bar, textvariable=self._ps5_sel_var,
+                 font=('Segoe UI', 8), bg='#0a0a0a', fg=MUTED,
+                 anchor='w').pack(side='left', padx=8, pady=3)
+
+        # ── Bottom buttons ──
         btn_row = tk.Frame(win, bg=BG)
         btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        tk.Button(btn_row, text='Delete selected', font=('Segoe UI', 9),
-                  bg=SURFACE2, fg=DANGER, relief='flat', bd=0,
-                  padx=10, pady=5, cursor='hand2',
-                  command=lambda: _delete_selected()).pack(side='left')
-        tk.Button(btn_row, text='Refresh', font=('Segoe UI', 9),
-                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
-                  padx=10, pady=5, cursor='hand2',
-                  command=lambda: _load(path_var.get())).pack(side='left', padx=(6, 0))
         tk.Button(btn_row, text='Close', font=('Segoe UI', 9),
                   bg=SURFACE2, fg=MUTED, relief='flat', bd=0,
                   padx=10, pady=5, cursor='hand2',
-                  command=win.destroy).pack(side='right')
+                  command=lambda: (_ftp_quit(), win.destroy())
+                  ).pack(side='right')
 
-        _ftp_ref = [None]
+        # ── Helper: parse LIST line ──
+        def _parse_line(line):
+            parts = line.split()
+            if len(parts) < 9:
+                return None, None, 0
+            name    = ' '.join(parts[8:])
+            is_dir  = line.startswith('d')
+            try:    sz = int(parts[4])
+            except: sz = 0
+            return name, is_dir, sz
+
+        def _fmt_size(sz, is_dir):
+            if is_dir: return '<DIR>'
+            if sz >= 1024**3: return '%.2f GB' % (sz/1024**3)
+            if sz >= 1024**2: return '%.1f MB' % (sz/1024**2)
+            if sz >= 1024:    return '%d KB'   % (sz//1024)
+            return '%d B' % sz
+
+        def _ftp_quit():
+            try:
+                if ftp_ref[0]: ftp_ref[0].quit()
+            except Exception: pass
+            ftp_ref[0] = None
+
+        def _ensure_ftp():
+            try:
+                if ftp_ref[0]:
+                    ftp_ref[0].voidcmd('NOOP')
+                    return ftp_ref[0]
+            except Exception:
+                pass
+            ftp_ref[0] = self._ftp_connect()
+            return ftp_ref[0]
 
         def _load(p):
+            p = p or '/'
             status_var.set('Loading...')
             listbox.delete(0, 'end')
+            entries.clear()
+
             def worker():
                 try:
-                    import ftplib
-                    if _ftp_ref[0]:
-                        try: _ftp_ref[0].quit()
-                        except: pass
-                    ftp = self._ftp_connect()
-                    _ftp_ref[0] = ftp
-                    items = []
-                    ftp.retrlines('LIST ' + p, items.append)
-                    win.after(0, _show_items, items, p)
+                    ftp  = _ensure_ftp()
+                    lines = []
+                    ftp.retrlines('LIST ' + p, lines.append)
+                    # Try get free space via SITE commands (may not work on PS5)
+                    free_str = ''
+                    try:
+                        resp = ftp.sendcmd('SITE AVAIL')
+                        free_str = resp
+                    except Exception:
+                        pass
+                    win.after(0, _show_items, lines, p, free_str)
                 except Exception as e:
                     win.after(0, status_var.set, 'Error: ' + str(e))
             threading.Thread(target=worker, daemon=True).start()
 
-        def _show_items(items, p):
+        def _show_items(lines, p, free_str):
             listbox.delete(0, 'end')
+            entries.clear()
             path_var.set(p)
-            status_var.set(str(len(items)) + ' items')
+            if free_str:
+                self._ps5_free_var.set('Free: ' + free_str)
+
+            parsed = []
+            for line in lines:
+                name, is_dir, sz = _parse_line(line)
+                if name and name not in ('.', '..'):
+                    parsed.append((name, is_dir, sz))
+            # Dirs first
+            parsed.sort(key=lambda x: (not x[1], x[0].lower()))
+
             if p != '/':
+                entries.append(('..', True, 0))
                 listbox.insert('end', '\U0001f4c2  ..')
-            for line in items:
-                parts = line.split()
-                if not parts: continue
-                name = ' '.join(parts[8:]) if len(parts) >= 9 else parts[-1]
-                is_dir = line.startswith('d')
-                icon = '\U0001f4c1  ' if is_dir else '\U0001f4be  '
-                size = ''
-                if not is_dir and len(parts) >= 5:
-                    try:
-                        sz = int(parts[4])
-                        size = '  (%.1f MB)' % (sz/1024/1024) if sz > 1024*1024 else '  (%d KB)' % (sz//1024)
-                    except: pass
-                listbox.insert('end', icon + name + size)
 
-        def _delete_selected():
-            sel = listbox.curselection()
-            if not sel: return
-            name = listbox.get(sel[0]).strip()
-            # Strip icon prefix
-            for pfx in ['\U0001f4c1  ', '\U0001f4be  ', '\U0001f4c2  ']:
-                if name.startswith(pfx):
-                    name = name[len(pfx):]
-                    break
-            name = name.split('  (')[0]  # strip size
-            if not name or name == '..': return
-            remote = path_var.get().rstrip('/') + '/' + name
-            if not messagebox.askyesno('Delete', 'Delete from PS5?\n\n' + remote,
-                                        parent=win): return
-            def worker():
-                try:
-                    ftp = _ftp_ref[0] or self._ftp_connect()
-                    try: ftp.delete(remote)
-                    except: ftp.rmd(remote)
-                    win.after(0, _load, path_var.get())
-                except Exception as e:
-                    win.after(0, messagebox.showerror, 'Error', str(e), parent=win)
-            threading.Thread(target=worker, daemon=True).start()
+            for name, is_dir, sz in parsed:
+                entries.append((name, is_dir, sz))
+                icon  = '\U0001f4c1  ' if is_dir else '\U0001f4be  '
+                sz_str = _fmt_size(sz, is_dir)
+                listbox.insert('end',
+                    '%-3s%-42s %12s' % (icon, name, sz_str))
 
-        listbox.bind('<Double-Button-1>', lambda e: _nav())
+            status_var.set('%d items in %s' % (len(parsed), p))
+            self._ps5_sel_var.set('')
+
+        def _get_selected():
+            sels = listbox.curselection()
+            result = []
+            for i in sels:
+                if i < len(entries):
+                    name, is_dir, sz = entries[i]
+                    if name != '..':
+                        result.append((name, is_dir, sz))
+            return result
+
+        def _current_path():
+            return path_var.get().rstrip('/')
+
+        def _go_up():
+            cur = _current_path()
+            if cur == '': return
+            parent = '/'.join(cur.split('/')[:-1]) or '/'
+            _load(parent)
+
+        # ── Navigation ──
         def _nav():
             sel = listbox.curselection()
             if not sel: return
-            name = listbox.get(sel[0]).strip()
-            if name.startswith('\U0001f4c1  ') or name.startswith('\U0001f4c2  '):
-                n = name[3:].split('  (')[0]
-                cur = path_var.get().rstrip('/')
-                new_path = '/'.join(cur.split('/')[:-1]) if n == '..' else cur + '/' + n
-                _load(new_path or '/')
+            if sel[0] >= len(entries): return
+            name, is_dir, _ = entries[sel[0]]
+            if not is_dir: return
+            if name == '..':
+                _go_up()
+            else:
+                _load(_current_path() + '/' + name)
 
+        listbox.bind('<Double-Button-1>', lambda e: _nav())
+        listbox.bind('<<ListboxSelect>>', lambda e: _update_sel_bar())
+
+        def _update_sel_bar():
+            sel = _get_selected()
+            if not sel:
+                self._ps5_sel_var.set('')
+                return
+            total_sz = sum(sz for _, _, sz in sel if not _)
+            self._ps5_sel_var.set(
+                '%d selected' % len(sel) +
+                ('  —  ' + _fmt_size(total_sz, False) if total_sz else ''))
+
+        # ── New folder ──
+        def _new_folder():
+            name = simpledialog.askstring('New folder', 'Folder name:', parent=win)
+            if not name: return
+            remote = _current_path() + '/' + name
+            def worker():
+                try:
+                    ftp = _ensure_ftp()
+                    ftp.mkd(remote)
+                    win.after(0, _load, path_var.get())
+                except Exception as e:
+                    win.after(0, messagebox.showerror, 'Error', str(e))
+            threading.Thread(target=worker, daemon=True).start()
+
+        # ── Rename ──
+        def _rename():
+            sel = _get_selected()
+            if not sel:
+                messagebox.showwarning('No selection', 'Select a file or folder to rename.', parent=win)
+                return
+            if len(sel) > 1:
+                messagebox.showwarning('Too many', 'Select only one item to rename.', parent=win)
+                return
+            name, is_dir, _ = sel[0]
+            new_name = simpledialog.askstring('Rename', 'New name:', initialvalue=name, parent=win)
+            if not new_name or new_name == name: return
+            old_path = _current_path() + '/' + name
+            new_path = _current_path() + '/' + new_name
+            def worker():
+                try:
+                    ftp = _ensure_ftp()
+                    ftp.rename(old_path, new_path)
+                    win.after(0, _load, path_var.get())
+                    win.after(0, status_var.set, 'Renamed: ' + name + ' → ' + new_name)
+                except Exception as e:
+                    win.after(0, messagebox.showerror, 'Rename failed', str(e))
+            threading.Thread(target=worker, daemon=True).start()
+
+        # ── Cut (move) ──
+        def _cut():
+            sel = _get_selected()
+            if not sel:
+                messagebox.showwarning('No selection', 'Select items to move.', parent=win)
+                return
+            paths = [(_current_path() + '/' + name, is_dir) for name, is_dir, _ in sel]
+            clipboard[0] = ('move', paths)
+            status_var.set(str(len(paths)) + ' item(s) cut — navigate to destination and click Paste')
+
+        # ── Copy path to clipboard ──
+        def _copy_path():
+            sel = _get_selected()
+            if not sel: return
+            paths = '\n'.join(_current_path() + '/' + name for name, _, _ in sel)
+            win.clipboard_clear()
+            win.clipboard_append(paths)
+            status_var.set('Path copied to clipboard')
+
+        # ── Paste (move) ──
+        def _paste():
+            if not clipboard[0]:
+                messagebox.showwarning('Nothing to paste', 'Cut some files first.', parent=win)
+                return
+            action, items = clipboard[0]
+            dest = _current_path()
+            if action == 'move':
+                def worker():
+                    errors = []
+                    ftp = _ensure_ftp()
+                    for src_path, is_dir in items:
+                        name     = src_path.split('/')[-1]
+                        dst_path = dest + '/' + name
+                        try:
+                            ftp.rename(src_path, dst_path)
+                        except Exception as e:
+                            errors.append(name + ': ' + str(e))
+                    clipboard[0] = None
+                    win.after(0, _load, path_var.get())
+                    if errors:
+                        win.after(0, messagebox.showerror, 'Some moves failed',
+                                   '\n'.join(errors))
+                    else:
+                        win.after(0, status_var.set,
+                                   str(len(items)) + ' item(s) moved to ' + dest)
+                threading.Thread(target=worker, daemon=True).start()
+
+        # ── Delete ──
+        def _delete():
+            sel = _get_selected()
+            if not sel:
+                messagebox.showwarning('No selection', 'Select files or folders to delete.', parent=win)
+                return
+            names = [name for name, _, _ in sel]
+            if not messagebox.askyesno('Delete from PS5',
+                    'Permanently delete %d item(s) from PS5?\n\n%s%s' % (
+                        len(names),
+                        '\n'.join(names[:8]),
+                        '\n...' if len(names) > 8 else ''),
+                    parent=win):
+                return
+            def worker():
+                errors = []
+                ftp = _ensure_ftp()
+                for name, is_dir, _ in sel:
+                    remote = _current_path() + '/' + name
+                    try:
+                        if is_dir:
+                            _rmd_recursive(ftp, remote)
+                        else:
+                            ftp.delete(remote)
+                    except Exception as e:
+                        errors.append(name + ': ' + str(e))
+                win.after(0, _load, path_var.get())
+                if errors:
+                    win.after(0, messagebox.showerror, 'Some deletions failed',
+                               '\n'.join(errors))
+                else:
+                    win.after(0, status_var.set,
+                               'Deleted ' + str(len(sel)) + ' item(s)')
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _rmd_recursive(ftp, path):
+            """Recursively delete a directory over FTP."""
+            lines = []
+            try:
+                ftp.retrlines('LIST ' + path, lines.append)
+            except Exception:
+                pass
+            for line in lines:
+                name, is_dir, _ = _parse_line(line)
+                if not name or name in ('.', '..'): continue
+                child = path + '/' + name
+                if is_dir:
+                    _rmd_recursive(ftp, child)
+                else:
+                    try: ftp.delete(child)
+                    except Exception: pass
+            try: ftp.rmd(path)
+            except Exception: pass
+
+        # ── Download ──
+        def _download():
+            sel = _get_selected()
+            if not sel:
+                messagebox.showwarning('No selection', 'Select a file to download.', parent=win)
+                return
+            files_only = [(name, sz) for name, is_dir, sz in sel if not is_dir]
+            if not files_only:
+                messagebox.showwarning('Files only', 'Select files (not folders) to download.', parent=win)
+                return
+            save_dir = filedialog.askdirectory(title='Save downloaded files to...', parent=win)
+            if not save_dir: return
+
+            status_var.set('Downloading %d file(s)...' % len(files_only))
+            def worker():
+                errors = []
+                ftp = _ensure_ftp()
+                for name, sz in files_only:
+                    remote = _current_path() + '/' + name
+                    local  = os.path.join(save_dir, name)
+                    try:
+                        with open(local, 'wb') as f:
+                            ftp.retrbinary('RETR ' + remote, f.write)
+                    except Exception as e:
+                        errors.append(name + ': ' + str(e))
+                if errors:
+                    win.after(0, messagebox.showerror, 'Download errors', '\n'.join(errors))
+                    win.after(0, status_var.set, 'Download finished with errors')
+                else:
+                    win.after(0, status_var.set,
+                               '%d file(s) downloaded to %s' % (len(files_only), save_dir))
+            threading.Thread(target=worker, daemon=True).start()
+
+        # ── Right-click context menu ──
+        def _ctx(event):
+            sel_idx = listbox.nearest(event.y)
+            listbox.selection_clear(0, 'end')
+            listbox.selection_set(sel_idx)
+            if sel_idx >= len(entries): return
+            name, is_dir, sz = entries[sel_idx]
+            if name == '..': return
+            remote = _current_path() + '/' + name
+            menu = tk.Menu(win, tearoff=0, bg=SURFACE2, fg=TEXT,
+                           activebackground=ACCENT, activeforeground=TEXT,
+                           font=('Segoe UI', 9))
+            menu.add_command(label=name, state='disabled',
+                             font=('Segoe UI', 9, 'bold'))
+            menu.add_separator()
+            if is_dir:
+                menu.add_command(label='\U0001f4c2  Open folder',
+                                 command=lambda: _load(remote))
+            else:
+                menu.add_command(label='\u2935  Download',
+                                 command=_download)
+            menu.add_command(label='\u2702  Rename',
+                             command=_rename)
+            menu.add_command(label='\u2702\ufe0f  Cut (move)',
+                             command=_cut)
+            menu.add_separator()
+            menu.add_command(label='\U0001f5d1  Delete',
+                             command=_delete)
+            menu.tk_popup(event.x_root, event.y_root)
+
+        listbox.bind('<Button-3>', _ctx)
+
+        # ── Keyboard shortcuts ──
+        win.bind('<Delete>',     lambda e: _delete())
+        win.bind('<F2>',         lambda e: _rename())
+        win.bind('<F5>',         lambda e: _load(path_var.get()))
+        win.bind('<BackSpace>',  lambda e: _go_up())
+        win.bind('<Return>',     lambda e: _nav())
+
+        # Start loading
         _load(path_var.get())
-
 
     def _on_bar_resize(self, event):
         self._bar_width = event.width
@@ -2928,6 +5135,8 @@ class ExFATBuilder(tk.Tk):
         self._log('[' + str(pos + 1) + '/' + str(total) + '] ' + cmd + '\n\n')
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+        self._current_build_idx = idx
+        self._source_file_count = 0
         # Reset drive tracking for this build
         self._mounted_drive   = None   # e.g. 'E:'
         self._image_total_gb  = None   # total capacity of mounted image
@@ -3026,6 +5235,15 @@ class ExFATBuilder(tk.Tk):
                 self._copy_start_time = time.time()
             except Exception:
                 pass
+            # Count source files in background so we know the target
+            self._source_file_count = 0
+            src = self._queue[self._current_build_idx].game_folder \
+                if hasattr(self, '_current_build_idx') else None
+            if src:
+                def _count_src(folder=src):
+                    n = sum(len(files) for _, _, files in os.walk(folder))
+                    self._source_file_count = n
+                threading.Thread(target=_count_src, daemon=True).start()
             self._start_drive_poll()
 
         if pct is not None:
@@ -3152,13 +5370,28 @@ class ExFATBuilder(tk.Tk):
 
     def _verify_done(self, ok, msg, idx, indices, pos, out_path):
         self._log('[VERIFY] ' + msg + '\n')
+
+        # ── Corrupt image detection ──
+        if ok and os.path.isfile(out_path):
+            size = os.path.getsize(out_path)
+            src_size = self._get_folder_size(self._queue[idx].game_folder)
+            if src_size > 10 * 1024**2 and size < src_size * 0.05:
+                ok = False
+                msg = ('Image is suspiciously small (%.1f MB) for a game that '
+                       'should be %.1f GB. It may be corrupt.' % (
+                           size/1024**2, src_size/1024**3))
+                self._log('[WARN] ' + msg + '\n')
+
         if ok:
             self._set_status(msg, SUCCESS)
+            # Auto-export log
+            self._export_log(out_path)
         else:
             self._set_status('Verify failed: ' + msg, DANGER)
             messagebox.showwarning('Verification failed',
                 'Build completed but verification found an issue:\n\n' + msg +
                 '\n\nThe image may be incomplete.')
+            self._export_log(out_path, failed=True)
 
         self._notify('Build complete', (self._queue[idx].game_title or '') + '\n' + out_path)
         # Auto-upload if enabled
@@ -3171,6 +5404,21 @@ class ExFATBuilder(tk.Tk):
                 self._process_next(indices, pos + 1)
         else:
             self._process_next(indices, pos + 1)
+
+    def _export_log(self, out_path, failed=False):
+        """Auto-save build log alongside the output image."""
+        try:
+            log_text = self.log_box.get('1.0', 'end')
+            suffix = '_FAILED.log' if failed else '.log'
+            log_path = os.path.splitext(out_path)[0] + suffix
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write('exFAT Image Builder v' + APP_VERSION + '\n')
+                f.write('Build log: ' + os.path.basename(out_path) + '\n')
+                f.write('Date: ' + time.strftime('%Y-%m-%d %H:%M:%S') + '\n')
+                f.write('=' * 60 + '\n\n')
+                f.write(log_text)
+        except Exception:
+            pass
 
     # ── Installed games list + PS5 storage ────────────────────────────────────
     def _show_installed_games(self):
@@ -3314,14 +5562,12 @@ class ExFATBuilder(tk.Tk):
                          if self._copy_start_free is not None else 0
             remaining_gb = free_gb
 
-            elapsed_copy = time.time() - self._copy_start_time \
-                           if hasattr(self, '_copy_start_time') else 0
+            elapsed_copy  = time.time() - self._copy_start_time \
+                            if hasattr(self, '_copy_start_time') else 0
             elapsed_total = time.time() - self._start_time if self._start_time else 0
 
-            # Speed in MB/s
             speed_mbs = (written_gb * 1024) / elapsed_copy if elapsed_copy > 0 else 0
 
-            # ETA from speed + remaining
             if speed_mbs > 0 and remaining_gb > 0:
                 eta_secs = (remaining_gb * 1024) / speed_mbs
                 if eta_secs < 5:
@@ -3336,7 +5582,22 @@ class ExFATBuilder(tk.Tk):
             elapsed_str = 'Elapsed: %dm %02ds' % (
                 int(elapsed_total // 60), int(elapsed_total % 60))
 
+            # Count files currently on the mounted image (fast — just walk)
+            file_count_str = ''
+            try:
+                img_files = sum(len(files)
+                                for _, _, files in os.walk(self._mounted_drive + '\\'))
+                src_total = self._source_file_count
+                if src_total > 0:
+                    file_count_str = '%d / %d files' % (img_files, src_total)
+                elif img_files > 0:
+                    file_count_str = '%d files copied' % img_files
+            except Exception:
+                pass
+
             parts = [elapsed_str]
+            if file_count_str:
+                parts.append(file_count_str)
             if written_gb > 0.01:
                 parts.append('%.2f GB written' % written_gb)
             if remaining_gb > 0.01:
@@ -3348,7 +5609,6 @@ class ExFATBuilder(tk.Tk):
 
             self._eta_var.set('  \u2022  '.join(parts))
 
-            # Also update progress bar from written vs total
             if total_gb > 0 and self._copy_start_free is not None:
                 lo, hi, _ = STEPS['3/4']
                 pct = lo + (hi - lo) * min(1.0, written_gb / total_gb)
@@ -3358,7 +5618,6 @@ class ExFATBuilder(tk.Tk):
         except Exception:
             pass
 
-        # Poll every 1 second
         self._drive_poll_id = self.after(1000, self._poll_drive)
 
     # ── FTP ───────────────────────────────────────────────────────────────────
@@ -3658,12 +5917,41 @@ class ExFATBuilder(tk.Tk):
                 with urllib.request.urlopen(req, timeout=5) as r:
                     data = json.loads(r.read().decode())
                 latest = data.get('tag_name', '').lstrip('v')
-                current = '1.0.0'
+                current = APP_VERSION
                 if latest and latest != current:
                     self.after(0, self._show_update_notice, latest,
                                data.get('html_url', ''))
             except Exception:
                 pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _fetch_changelog(self):
+        if not hasattr(self, '_changelog_var'):
+            return
+        def worker():
+            try:
+                import urllib.request
+                url = 'https://api.github.com/repos/kerrdec97/ps5-exfat-builder/releases'
+                req = urllib.request.Request(url,
+                    headers={'User-Agent': 'ps5-exfat-builder'})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    releases = json.loads(r.read().decode())
+                lines = []
+                for rel in releases[:5]:
+                    tag  = rel.get('tag_name', '')
+                    name = rel.get('name', tag)
+                    body = rel.get('body', '').strip()
+                    if len(body) > 400:
+                        body = body[:397] + '...'
+                    lines.append('\u25b6 ' + tag + '  ' + name)
+                    if body:
+                        lines.append(body)
+                    lines.append('')
+                text = '\n'.join(lines).strip() or 'No releases found yet.'
+                self.after(0, self._changelog_var.set, text)
+            except Exception:
+                self.after(0, self._changelog_var.set,
+                           'Could not load — check your internet connection.')
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_update_notice(self, version, url):
@@ -3676,6 +5964,46 @@ class ExFATBuilder(tk.Tk):
     def _set_status(self, text, color=MUTED):
         self.status_text.set(text)
         self.status_lbl.config(fg=color)
+
+    def _parse_ver_from_name(self, filename):
+        """Extract version like 01.007.000 from a filename like 'Game (01.007.000).exfat'"""
+        m = re.search(r'\((\d{2}\.\d{3}\.\d{3})\)', filename or '')
+        return m.group(1) if m else None
+
+    # ── Dark / Light mode ─────────────────────────────────────────────────────
+    def _toggle_theme(self):
+        global BG, SURFACE2, FIELD_BG, FIELD_FG, BORDER, TEXT, MUTED
+        global SETTINGS_BG, QUEUE_ODD, QUEUE_EVEN, TRACK
+        if self._theme_var.get() == 'light':
+            BG         = '#f5f5f5'
+            SURFACE2   = '#e8e8e8'
+            FIELD_BG   = '#ffffff'
+            FIELD_FG   = '#111111'
+            BORDER     = '#cccccc'
+            TEXT       = '#111111'
+            MUTED      = '#666666'
+            SETTINGS_BG= '#eeeeee'
+            QUEUE_ODD  = '#f0f0f0'
+            QUEUE_EVEN = '#e8e8e8'
+            TRACK      = '#dddddd'
+        else:
+            BG         = '#000000'
+            SURFACE2   = '#1c1c1c'
+            FIELD_BG   = '#f0f0f0'
+            FIELD_FG   = '#111111'
+            BORDER     = '#444444'
+            TEXT       = '#ffffff'
+            MUTED      = '#aaaaaa'
+            SETTINGS_BG= '#0f0f0f'
+            QUEUE_ODD  = '#141414'
+            QUEUE_EVEN = '#1a1a1a'
+            TRACK      = '#1e1e1e'
+        self._settings['theme'] = self._theme_var.get()
+        save_settings(self._settings)
+        messagebox.showinfo('Theme changed',
+            'Theme will apply fully on next launch.\n'
+            'Some elements update immediately.')
+        self.configure(bg=BG)
 
     def _toggle_log(self, force_open=False):
         if force_open and self._log_visible.get():
