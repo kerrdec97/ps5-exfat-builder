@@ -1,6 +1,6 @@
 # PS5 exFAT Image Builder
 
-A Windows GUI tool for building exFAT disk images from PS5 game folders, designed for use with shadowmount plus and other exfat mounting payloads homebrew environments on jailbroken PS5 consoles.
+A Windows GUI tool for building exFAT disk images from PS5 game folders, for use with PS5 homebrew on jailbroken consoles.
 
 **Created by DecKerr97**
 
@@ -11,7 +11,7 @@ A Windows GUI tool for building exFAT disk images from PS5 game folders, designe
 
 ## What does it do?
 
-Converts a PS5 game folder (containing `eboot.bin`) into an `.exfat` disk image that can be loaded by etaHEN on a jailbroken PS5. It handles the entire process — sizing, mounting, formatting and copying — automatically.
+Converts a PS5 game folder (containing `eboot.bin`) into an `.exfat` disk image that can be loaded on a jailbroken PS5. It handles the entire process — sizing, mounting, formatting and copying — automatically.
 
 ---
 
@@ -50,9 +50,9 @@ That's it. No Python, no command line, nothing else. Just OSFMount + the `.exe`.
 
 ### Sending to PS5 via FTP
 
-1. Make sure the PS5 FTP server is running (enabled in etaHEN/GoldHEN settings)
-2. Enter your PS5's IP address and port (`2122` is the GoldHEN default, `2121` for etaHEN)
-3. Set the PS5 path (default: `/data/etaHEN/games/`)
+1. Make sure the PS5 FTP server is running (enabled in your homebrew settings)
+2. Enter your PS5's IP address and port (typically `2121` or `2122`)
+3. Set the PS5 remote path
 4. Click **Test Connection** to verify
 5. After a build completes, click **↑ PS5** on the queue item — or enable **Auto-upload after build**
 
@@ -147,7 +147,7 @@ The title ID (PPSA/CUSA) always comes from Sony's own metadata files inside the 
 | OSFMount error | Make sure OSFMount is installed and the app is running as Administrator |
 | Game not auto-named | Check that `sce_sys/param.sfo` or `sce_sys/param.json` exists in the game folder |
 | Version shows `01.000.000` for everything | `pfs-version.dat` may be missing — this is normal for some extraction tools |
-| FTP won't connect | Make sure the PS5 FTP server is running in etaHEN/GoldHEN settings |
+| FTP won't connect | Make sure the PS5 FTP server is running in your homebrew settings |
 | Build All button not visible | Resize the window taller |
 | Cover art not showing | Recompile with `build.bat` which installs Pillow |
 
@@ -196,7 +196,7 @@ ps5-exfat-builder/
 - **DecKerr97** — tool author
 - **[NookieAI](https://github.com/NookieAI)** — inspiration for the project
 - **stonemodder** — inspiration from Porkfolio
-- [etaHEN by LightningMods](https://github.com/LightningMods/etaHEN) — the underlying PS5 homebrew environment
+- PS5 homebrew community
 - [OSFMount by PassMark](https://www.osforensics.com/tools/mount-disk-images.html) — disk image mounting
 - [ShadowMountPlus](https://github.com/LightningMods/ShadowMountPlus) — the `make_image.bat` / `New-OsfExfatImage.ps1` scripts this tool wraps
 

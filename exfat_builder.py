@@ -13,7 +13,16 @@ import re
 import struct
 import json
 
-APP_VERSION = '1.3.0'
+# ── DPI awareness — fixes blurry/clipped UI on high-DPI and dual-GPU laptops ──
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()   # Fallback for older Windows
+    except Exception:
+        pass
+
+APP_VERSION = '1.4.0'
 
 _BAT_B64 = "QGVjaG8gb2ZmDQpzZXRsb2NhbCBFbmFibGVFeHRlbnNpb25zDQoNClJFTSBtYWtlX2ltYWdlLmJhdA0KUkVNIFVzYWdlOiBtYWtlX2ltYWdlLmJhdCAiQzpcaW1hZ2VzXGRhdGEuZXhmYXQiICJDOlxwYXlsb2FkIg0KDQppZiAiJX4xIj09IiIgZ290byA6dXNhZ2UNCmlmICIlfjIiPT0iIiBnb3RvIDp1c2FnZQ0KDQpzZXQgIklNQUdFPSV+MSINCnNldCAiU1JDRElSPSV+MiINCg0KUkVNIFNjcmlwdCBpcyBleHBlY3RlZCB0byBiZSBpbiB0aGUgc2FtZSBkaXJlY3RvcnkgYXMgdGhpcyBCQVQNCnNldCAiU0NSSVBUPSV+ZHAwTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIg0KDQppZiBub3QgZXhpc3QgIiVTQ1JJUFQlIiAoDQogIGVjaG8gW0VSUk9SXSBQb3dlclNoZWxsIHNjcmlwdCBub3QgZm91bmQ6ICIlU0NSSVBUJSINCiAgZWNobyBQdXQgTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIG5leHQgdG8gdGhpcyAuYmF0IGZpbGUuDQogIGV4aXQgL2IgMg0KKQ0KDQppZiBub3QgZXhpc3QgIiVTUkNESVIlIiAoDQogIGVjaG8gW0VSUk9SXSBTb3VyY2UgZGlyZWN0b3J5IG5vdCBmb3VuZDogIiVTUkNESVIlIg0KICBleGl0IC9iIDMNCikNCg0KaWYgbm90IGV4aXN0ICIlU1JDRElSJVxlYm9vdC5iaW4iICgNCiAgZWNobyBbRVJST1JdIGVib290LmJpbiBub3QgZm91bmQgaW4gc291cmNlIGRpcmVjdG9yeTogIiVTUkNESVIlIg0KICBleGl0IC9iIDQNCikNCg0KUkVNIFJ1biBlbGV2YXRlZD8gVGhpcyBCQVQgZG9lcyBub3QgYXV0by1lbGV2YXRlLg0KUkVNIFJpZ2h0LWNsaWNrIC0+IFJ1biBhcyBhZG1pbmlzdHJhdG9yLCBvciBzdGFydCBjbWQgYXMgYWRtaW4uDQoNCnBvd2Vyc2hlbGwuZXhlIC1Ob1Byb2ZpbGUgLUV4ZWN1dGlvblBvbGljeSBCeXBhc3MgLUZpbGUgIiVTQ1JJUFQlIiAtSW1hZ2VQYXRoICIlSU1BR0UlIiAtU291cmNlRGlyICIlU1JDRElSJSIgLUZvcmNlT3ZlcndyaXRlDQoNCnNldCAiUkM9JUVSUk9STEVWRUwlIg0KaWYgbm90ICIlUkMlIj09IjAiICgNCiAgZWNobyBbRVJST1JdIEZhaWxlZCB3aXRoIGV4aXQgY29kZSAlUkMlLg0KICBleGl0IC9iICVSQyUNCikNCg0KZWNobyBbT0tdIERvbmU6ICIlSU1BR0UlIg0KZXhpdCAvYiAwDQoNCjp1c2FnZQ0KZWNobyBVc2FnZToNCmVjaG8gICAlfm54MCAiQzpccGF0aFx0b1xpbWFnZS5pbWciICJDOlxwYXRoXHRvXGZvbGRlciINCmVjaG8uDQplY2hvIE5vdGVzOg0KZWNobyAgIC0gUnVuIHRoaXMgQkFUIGFzIEFkbWluaXN0cmF0b3IuDQplY2hvICAgLSBJbWFnZSB3aWxsIGJlIGF1dG8tc2l6ZWQuDQpleGl0IC9iIDENCg=="
 _PS1_B64 = "PCMgIE5ldy1Pc2ZFeGZhdEltYWdlLnBzMQoKICAgIFBVUlBPU0UKICAgIC0tLS0tLS0KICAgIENyZWF0ZSBhIFJBVyBpbWFnZSBmaWxlLCBtb3VudCBpdCB2aWEgT1NGTW91bnQgYXMgYSBsb2dpY2FsIHZvbHVtZSwKICAgIGZvcm1hdCBpdCBhcyBleEZBVCwgYW5kIGVpdGhlcjoKICAgICAgLSBmb3JtYXQgKyBjb3B5ICsgZGlzbW91bnQgKGRlZmF1bHQpLCBvcgogICAgICAtIGNyZWF0ZSArIG1vdW50IG9ubHkgZm9yIG1hbnVhbCBzdGVwcy4KCiAgICBVU0FHRSAocnVuIFBvd2VyU2hlbGwgYXMgQWRtaW5pc3RyYXRvcikKICAgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCiAgICAxKSBBdXRvLXNpemUgKHJlY29tbWVuZGVkKToKICAgICAgIHBvd2Vyc2hlbGwuZXhlIC1FeGVjdXRpb25Qb2xpY3kgQnlwYXNzIC1GaWxlIC5cTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIGAKICAgICAgICAgLUltYWdlUGF0aCAiQzpcaW1hZ2VzXGRhdGEuaW1nIiBgCiAgICAgICAgIC1Tb3VyY2VEaXIgIkM6XHBheWxvYWQiIGAKICAgICAgICAgLUxhYmVsICJEQVRBIiBgCiAgICAgICAgIC1Gb3JjZU92ZXJ3cml0ZQoKICAgIDIpIEZpeGVkIHNpemU6CiAgICAgICBwb3dlcnNoZWxsLmV4ZSAtRXhlY3V0aW9uUG9saWN5IEJ5cGFzcyAtRmlsZSAuXE5ldy1Pc2ZFeGZhdEltYWdlLnBzMSBgCiAgICAgICAgIC1JbWFnZVBhdGggIkM6XGltYWdlc1xkYXRhLmltZyIgYAogICAgICAgICAtU291cmNlRGlyICJDOlxwYXlsb2FkIiBgCiAgICAgICAgIC1TaXplIDhHIGAKICAgICAgICAgLUxhYmVsICJEQVRBIiBgCiAgICAgICAgIC1Gb3JjZU92ZXJ3cml0ZQoKICAgIDMpIENyZWF0ZSBlbXB0eSBpbWFnZSBhbmQga2VlcCBtb3VudGVkIChtYW51YWwgZm9ybWF0L2NvcHkpOgogICAgICAgcG93ZXJzaGVsbC5leGUgLUV4ZWN1dGlvblBvbGljeSBCeXBhc3MgLUZpbGUgLlxOZXctT3NmRXhmYXRJbWFnZS5wczEgYAogICAgICAgICAtSW1hZ2VQYXRoICJDOlxpbWFnZXNcZGF0YS5leGZhdCIgYAogICAgICAgICAtU291cmNlRGlyICJDOlxwYXlsb2FkXEFQUFhYWFgiIGAKICAgICAgICAgLUNyZWF0ZUVtcHR5QW5kTW91bnQgYAogICAgICAgICAtRm9yY2VPdmVyd3JpdGUKCiAgICBQQVJBTUVURVJTCiAgICAtLS0tLS0tLS0tCiAgICAtSW1hZ2VQYXRoICAgICAgIE91dHB1dCBpbWFnZSBmaWxlIHBhdGguCiAgICAtU291cmNlRGlyICAgICAgIEZvbGRlciB0byBjb3B5IGludG8gdGhlIG5ldyB2b2x1bWUuCiAgICAtU2l6ZSAgICAgICAgICAgIE9wdGlvbmFsLiBJZiBvbWl0dGVkLCBhbiBvcHRpbWFsIHNpemUgaXMgY29tcHV0ZWQgdG8gZml0IGFsbCBmaWxlcy4KICAgICAgICAgICAgICAgICAgICAgU3VmZml4ZXM6IEsvTS9HL1QgKDEwMjQpLCBrL20vZy90ICgxMDAwKSwgYiAoNTEyLWJ5dGUgYmxvY2tzKSwgb3IgYnl0ZXMuCiAgICAtTGFiZWwgICAgICAgICAgIFZvbHVtZSBsYWJlbC4KICAgIC1Gb3JjZU92ZXJ3cml0ZSAgUmVjcmVhdGUgaW1hZ2UgaWYgaXQgYWxyZWFkeSBleGlzdHMuCiAgICAtQ3JlYXRlRW1wdHlBbmRNb3VudAogICAgICAgICAgICAgICAgICAgICBDcmVhdGUgYW5kIG1vdW50IGltYWdlIG9ubHkuIFNraXAgZm9ybWF0L2NvcHkgYW5kIGxlYXZlIG1vdW50ZWQuCgogICAgTk9URVMKICAgIC0tLS0tCiAgICAtIFRoaXMgc2NyaXB0IGRvZXMgTk9UIGF1dG8tZWxldmF0ZS4gU3RhcnQgUG93ZXJTaGVsbCBhcyBBZG1pbmlzdHJhdG9yLgogICAgLSBGaWxlc3lzdGVtIGlzIGFsd2F5cyBleEZBVC4KICAgIC0gQ2x1c3RlciBzaXplIGlzIGF1dG8tc2VsZWN0ZWQ6CiAgICAgIC0gbGFyZ2UtZmlsZSBzZXRzOiA2NTUzNgogICAgICAtIHNtYWxsL21peGVkLWZpbGUgc2V0czogMzI3NjgKIz4KCltDbWRsZXRCaW5kaW5nKCldCnBhcmFtKAogIFtQYXJhbWV0ZXIoTWFuZGF0b3J5ID0gJHRydWUpXQogIFtzdHJpbmddJEltYWdlUGF0aCwKCiAgW1BhcmFtZXRlcihNYW5kYXRvcnkgPSAkdHJ1ZSldCiAgW3N0cmluZ10kU291cmNlRGlyLAoKICBbUGFyYW1ldGVyKE1hbmRhdG9yeSA9ICRmYWxzZSldCiAgW3N0cmluZ10kU2l6ZSwKCiAgW3N0cmluZ10kTGFiZWwgPSAiT1NGSU1HIiwKCiAgW3N3aXRjaF0kRm9yY2VPdmVyd3JpdGUsCgogIFtzd2l0Y2hdJENyZWF0ZUVtcHR5QW5kTW91bnQKKQoKU2V0LVN0cmljdE1vZGUgLVZlcnNpb24gTGF0ZXN0CiRFcnJvckFjdGlvblByZWZlcmVuY2UgPSAiU3RvcCIKJHNjcmlwdEN1bHR1cmUgPSBbU3lzdGVtLkdsb2JhbGl6YXRpb24uQ3VsdHVyZUluZm9dOjpHZXRDdWx0dXJlSW5mbygiZW4tVVMiKQpbU3lzdGVtLlRocmVhZGluZy5UaHJlYWRdOjpDdXJyZW50VGhyZWFkLkN1cnJlbnRDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5UaHJlYWRpbmcuVGhyZWFkXTo6Q3VycmVudFRocmVhZC5DdXJyZW50VUlDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5HbG9iYWxpemF0aW9uLkN1bHR1cmVJbmZvXTo6RGVmYXVsdFRocmVhZEN1cnJlbnRDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5HbG9iYWxpemF0aW9uLkN1bHR1cmVJbmZvXTo6RGVmYXVsdFRocmVhZEN1cnJlbnRVSUN1bHR1cmUgPSAkc2NyaXB0Q3VsdHVyZQoKZnVuY3Rpb24gVGVzdC1BZG1pbiB7CiAgJGlkID0gW1NlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzSWRlbnRpdHldOjpHZXRDdXJyZW50KCkKICAkcCAgPSBOZXctT2JqZWN0IFNlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzUHJpbmNpcGFsKCRpZCkKICByZXR1cm4gJHAuSXNJblJvbGUoW1NlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzQnVpbHRJblJvbGVdOjpBZG1pbmlzdHJhdG9yKQp9CgpmdW5jdGlvbiBGaW5kLU9TRk1vdW50Q29tIHsKICAkY21kID0gR2V0LUNvbW1hbmQgIm9zZm1vdW50LmNvbSIgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUKICBpZiAoJGNtZCkgeyByZXR1cm4gJGNtZC5Tb3VyY2UgfQoKICAkY2FuZGlkYXRlcyA9IEAoCiAgICAiJHtlbnY6UHJvZ3JhbUZpbGVzfVxPU0ZNb3VudFxvc2Ztb3VudC5jb20iLAogICAgIiR7ZW52OlByb2dyYW1GaWxlcyh4ODYpfVxPU0ZNb3VudFxvc2Ztb3VudC5jb20iLAogICAgIiR7ZW52OlByb2dyYW1GaWxlc31cUGFzc01hcmtcT1NGTW91bnRcb3NmbW91bnQuY29tIiwKICAgICIke2VudjpQcm9ncmFtRmlsZXMoeDg2KX1cUGFzc01hcmtcT1NGTW91bnRcb3NmbW91bnQuY29tIgogICkgfCBXaGVyZS1PYmplY3QgeyAkXyAtYW5kIChUZXN0LVBhdGggJF8pIH0KCiAgJGNhbmRpZGF0ZXMgPSBAKCRjYW5kaWRhdGVzKQogIGlmICgkY2FuZGlkYXRlcy5Db3VudCAtZ3QgMCkgeyByZXR1cm4gJGNhbmRpZGF0ZXNbMF0gfQoKICB0aHJvdyAib3NmbW91bnQuY29tIG5vdCBmb3VuZC4gQWRkIE9TRk1vdW50IHRvIFBBVEggb3IgaW5zdGFsbCBpdCB0byBhIHN0YW5kYXJkIGxvY2F0aW9uLiIKfQoKZnVuY3Rpb24gUGFyc2UtU2l6ZVRvQnl0ZXMoW3N0cmluZ10kcykgewogICRzID0gJHMuVHJpbSgpCiAgaWYgKCRzIC1tYXRjaCAnXlxzKihcZCspXHMqKFtiQmtLbU1nR3RUXT8pXHMqJCcpIHsKICAgICRudW0gPSBbSW50NjRdJG1hdGNoZXNbMV0KICAgICR1ICAgPSAkbWF0Y2hlc1syXQogICAgc3dpdGNoICgkdSkgewogICAgICAnJyAgeyByZXR1cm4gJG51bSB9CiAgICAgICdiJyB7IHJldHVybiAkbnVtICogNTEyIH0KICAgICAgJ0InIHsgcmV0dXJuICRudW0gKiA1MTIgfQogICAgICAnSycgeyByZXR1cm4gJG51bSAqIDEwMjQgfQogICAgICAnTScgeyByZXR1cm4gJG51bSAqIDEwMjQgKiAxMDI0IH0KICAgICAgJ0cnIHsgcmV0dXJuICRudW0gKiAxMDI0ICogMTAyNCAqIDEwMjQgfQogICAgICAnVCcgeyByZXR1cm4gJG51bSAqIDEwMjQgKiAxMDI0ICogMTAyNCAqIDEwMjQgfQogICAgICAnaycgeyByZXR1cm4gJG51bSAqIDEwMDAgfQogICAgICAnbScgeyByZXR1cm4gJG51bSAqIDEwMDAgKiAxMDAwIH0KICAgICAgJ2cnIHsgcmV0dXJuICRudW0gKiAxMDAwICogMTAwMCAqIDEwMDAgfQogICAgICAndCcgeyByZXR1cm4gJG51bSAqIDEwMDAgKiAxMDAwICogMTAwMCAqIDEwMDAgfQogICAgICBkZWZhdWx0IHsgdGhyb3cgIlVua25vd24gc2l6ZSBzdWZmaXg6ICckdSciIH0KICAgIH0KICB9CiAgdGhyb3cgIkZhaWxlZCB0byBwYXJzZSBzaXplIHN0cmluZzogJyRzJyIKfQoKZnVuY3Rpb24gRm9ybWF0LUJ5dGVzKFtJbnQ2NF0kYnl0ZXMpIHsKICBpZiAoJGJ5dGVzIC1nZSAxVEIpIHsgcmV0dXJuICJ7MDpOMn0gVEIiIC1mICgkYnl0ZXMvMVRCKSB9CiAgaWYgKCRieXRlcyAtZ2UgMUdCKSB7IHJldHVybiAiezA6TjJ9IEdCIiAtZiAoJGJ5dGVzLzFHQikgfQogIGlmICgkYnl0ZXMgLWdlIDFNQikgeyByZXR1cm4gInswOk4yfSBNQiIgLWYgKCRieXRlcy8xTUIpIH0KICBpZiAoJGJ5dGVzIC1nZSAxS0IpIHsgcmV0dXJuICJ7MDpOMn0gS0IiIC1mICgkYnl0ZXMvMUtCKSB9CiAgcmV0dXJuICIkYnl0ZXMgQiIKfQoKZnVuY3Rpb24gR2V0LUZyZWVEcml2ZUxldHRlciB7CiAgJHVzZWQgPSAoR2V0LVBTRHJpdmUgLVBTUHJvdmlkZXIgRmlsZVN5c3RlbSkuTmFtZQogIGZvcmVhY2ggKCRjb2RlIGluIDY4Li45MCkgewogICAgJGxldHRlciA9IFtjaGFyXSRjb2RlCiAgICBpZiAoJHVzZWQgLW5vdGNvbnRhaW5zIFtzdHJpbmddJGxldHRlcikgeyByZXR1cm4gW3N0cmluZ10kbGV0dGVyIH0KICB9CiAgdGhyb3cgIk5vIGZyZWUgZHJpdmUgbGV0dGVycyBhdmFpbGFibGUgKEQ6Li5aOikuIgp9CgpmdW5jdGlvbiBHZXQtT3B0aW1hbEltYWdlU2l6ZUJ5dGVzKFtzdHJpbmddJGRpciwgW2ludF0kY2x1c3RlckJ5dGVzKSB7CiAgJGNsdXN0ZXIgPSBbSW50NjRdJGNsdXN0ZXJCeXRlcwogIFtJbnQ2NF0kbWV0YUZpeGVkID0gMzJNQgogIFtJbnQ2NF0kbWluU2xhY2sgPSA2NE1CCiAgW0ludDY0XSRzcGFyZU1pbiA9IDY0TUIKICBbSW50NjRdJHNwYXJlTWF4ID0gNTEyTUIKICBbSW50NjRdJGVudHJ5TWV0YUJ5dGVzID0gMjU2CgogICRmaWxlcyA9IEAoR2V0LUNoaWxkSXRlbSAtTGl0ZXJhbFBhdGggJGRpciAtUmVjdXJzZSAtRmlsZSAtRm9yY2UpCiAgJGRpcnMgPSBAKEdldC1DaGlsZEl0ZW0gLUxpdGVyYWxQYXRoICRkaXIgLVJlY3Vyc2UgLURpcmVjdG9yeSAtRm9yY2UpCgogIFtJbnQ2NF0kcmF3RmlsZUJ5dGVzID0gMAogIFtJbnQ2NF0kZGF0YUJ5dGVzID0gMAogIGZvcmVhY2ggKCRmIGluICRmaWxlcykgewogICAgJGxlbiA9IFtJbnQ2NF0kZi5MZW5ndGgKICAgICRyYXdGaWxlQnl0ZXMgKz0gJGxlbgogICAgJGRhdGFCeXRlcyArPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkbGVuIC8gW2RvdWJsZV0kY2x1c3RlcikgKiAkY2x1c3RlcikKICB9CgogIFtJbnQ2NF0kZGF0YUNsdXN0ZXJzID0gW0ludDY0XShbTWF0aF06OkNlaWxpbmcoJGRhdGFCeXRlcyAvIFtkb3VibGVdJGNsdXN0ZXIpKQogIFtJbnQ2NF0kZmF0Qnl0ZXMgPSAkZGF0YUNsdXN0ZXJzICogNAogIFtJbnQ2NF0kYml0bWFwQnl0ZXMgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkZGF0YUNsdXN0ZXJzIC8gOC4wKSkKICBbSW50NjRdJGVudHJ5Qnl0ZXMgPQogICAgICAoKFtJbnQ2NF0kZmlsZXMuQ291bnQgKyBbSW50NjRdJGRpcnMuQ291bnQpICogJGVudHJ5TWV0YUJ5dGVzKQoKICBbSW50NjRdJGJhc2VUb3RhbCA9CiAgICAgICRkYXRhQnl0ZXMgKyAkZmF0Qnl0ZXMgKyAkYml0bWFwQnl0ZXMgKyAkZW50cnlCeXRlcyArICRtZXRhRml4ZWQKICBbSW50NjRdJHNwYXJlQnl0ZXMgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkYmFzZVRvdGFsIC8gMjAwLjApKQogIGlmICgkc3BhcmVCeXRlcyAtbHQgJHNwYXJlTWluKSB7ICRzcGFyZUJ5dGVzID0gJHNwYXJlTWluIH0KICBpZiAoJHNwYXJlQnl0ZXMgLWd0ICRzcGFyZU1heCkgeyAkc3BhcmVCeXRlcyA9ICRzcGFyZU1heCB9CiAgW0ludDY0XSR0b3RhbCA9ICRiYXNlVG90YWwgKyAkc3BhcmVCeXRlcwogIFtJbnQ2NF0kbWluVG90YWwgPSAkcmF3RmlsZUJ5dGVzICsgJG1pblNsYWNrCiAgaWYgKCR0b3RhbCAtbHQgJG1pblRvdGFsKSB7ICR0b3RhbCA9ICRtaW5Ub3RhbCB9CgogIFtJbnQ2NF0kYWxpZ24gPSAxTUIKICAkdG90YWwgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkdG90YWwgLyBbZG91YmxlXSRhbGlnbikgKiAkYWxpZ24pCiAgcmV0dXJuICR0b3RhbAp9CgpmdW5jdGlvbiBXYWl0LUZvckxvZ2ljYWxEcml2ZShbc3RyaW5nXSRkcml2ZUxldHRlciwgW2ludF0kdGltZW91dFNlY29uZHMgPSAyMCkgewogICR0YXJnZXQgPSAiJHtkcml2ZUxldHRlcn06IgogICRzdyA9IFtEaWFnbm9zdGljcy5TdG9wd2F0Y2hdOjpTdGFydE5ldygpCiAgd2hpbGUgKCRzdy5FbGFwc2VkLlRvdGFsU2Vjb25kcyAtbHQgJHRpbWVvdXRTZWNvbmRzKSB7CiAgICAkbG9naWNhbCA9IEdldC1DaW1JbnN0YW5jZSAtQ2xhc3NOYW1lIFdpbjMyX0xvZ2ljYWxEaXNrIC1GaWx0ZXIgIkRldmljZUlEPSckdGFyZ2V0JyIgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUKICAgIGlmICgkbG9naWNhbCkgeyByZXR1cm4gJHRydWUgfQogICAgU3RhcnQtU2xlZXAgLU1pbGxpc2Vjb25kcyAzMDAKICB9CiAgcmV0dXJuICRmYWxzZQp9CgpmdW5jdGlvbiBHZXQtTG9naWNhbERyaXZlRmlsZVN5c3RlbShbc3RyaW5nXSRkcml2ZUxldHRlcikgewogICR0YXJnZXQgPSAiJHtkcml2ZUxldHRlcn06IgogICRsb2dpY2FsID0gR2V0LUNpbUluc3RhbmNlIC1DbGFzc05hbWUgV2luMzJfTG9naWNhbERpc2sgLUZpbHRlciAiRGV2aWNlSUQ9JyR0YXJnZXQnIiAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQogIGlmICgkbG9naWNhbCkgeyByZXR1cm4gW3N0cmluZ10kbG9naWNhbC5GaWxlU3lzdGVtIH0KICByZXR1cm4gIiIKfQoKZnVuY3Rpb24gR2V0LU9wdGltYWxFeGZhdENsdXN0ZXJTaXplKFtzdHJpbmddJGRpcikgewogIFtJbnQ2NF0kbGFyZ2VGaWxlVGhyZXNob2xkID0gMU1CCgogICRmaWxlcyA9IEAoR2V0LUNoaWxkSXRlbSAtTGl0ZXJhbFBhdGggJGRpciAtUmVjdXJzZSAtRmlsZSAtRm9yY2UpCiAgaWYgKCRmaWxlcy5Db3VudCAtZXEgMCkgeyByZXR1cm4gMzI3NjggfQoKICBbSW50NjRdJHJhd0ZpbGVCeXRlcyA9IDAKICBmb3JlYWNoICgkZiBpbiAkZmlsZXMpIHsKICAgICRyYXdGaWxlQnl0ZXMgKz0gW0ludDY0XSRmLkxlbmd0aAogIH0KCiAgW0ludDY0XSRhdmdGaWxlQnl0ZXMgPSBbSW50NjRdKCRyYXdGaWxlQnl0ZXMgLyBbSW50NjRdJGZpbGVzLkNvdW50KQogIGlmICgkYXZnRmlsZUJ5dGVzIC1nZSAkbGFyZ2VGaWxlVGhyZXNob2xkKSB7IHJldHVybiA2NTUzNiB9CiAgcmV0dXJuIDMyNzY4Cn0KCmZ1bmN0aW9uIEZvcm1hdC1BbGxvY2F0aW9uVW5pdEFyZyhbaW50XSRjbHVzdGVyU2l6ZSkgewogIGlmICgkY2x1c3RlclNpemUgLWdlIDFNQiAtYW5kICgkY2x1c3RlclNpemUgJSAxTUIpIC1lcSAwKSB7CiAgICByZXR1cm4gInswfU0iIC1mICgkY2x1c3RlclNpemUgLyAxTUIpCiAgfQogIGlmICgkY2x1c3RlclNpemUgLWdlIDFLQiAtYW5kICgkY2x1c3RlclNpemUgJSAxS0IpIC1lcSAwKSB7CiAgICByZXR1cm4gInswfUsiIC1mICgkY2x1c3RlclNpemUgLyAxS0IpCiAgfQogIHJldHVybiAiJGNsdXN0ZXJTaXplIgp9CgpmdW5jdGlvbiBEaXNtb3VudC1Pc2ZWb2x1bWUoW3N0cmluZ10kb3NmUGF0aCwgW3N0cmluZ10kbW91bnRQb2ludCwgW2ludF0kbWF4QXR0ZW1wdHMgPSA2KSB7CiAgaWYgKFtzdHJpbmddOjpJc051bGxPcldoaXRlU3BhY2UoJG1vdW50UG9pbnQpKSB7IHJldHVybiAkZmFsc2UgfQoKICAkdGFyZ2V0cyA9IEAoJG1vdW50UG9pbnQpCiAgaWYgKC1ub3QgJG1vdW50UG9pbnQuRW5kc1dpdGgoIlwiKSkgeyAkdGFyZ2V0cyArPSAiJG1vdW50UG9pbnRcIiB9CgogIGZvciAoJGkgPSAxOyAkaSAtbGUgJG1heEF0dGVtcHRzOyAkaSsrKSB7CiAgICBmb3JlYWNoICgkdGFyZ2V0IGluICR0YXJnZXRzKSB7CiAgICAgIHRyeSB7CiAgICAgICAgJiAkb3NmUGF0aCAtZCAtbSAkdGFyZ2V0IDI+JjEgfCBPdXQtTnVsbAogICAgICAgIGlmICgkTEFTVEVYSVRDT0RFIC1lcSAwKSB7IHJldHVybiAkdHJ1ZSB9CiAgICAgIH0gY2F0Y2ggewogICAgICAgICMgUmV0cnk6IHZvbHVtZSBjYW4gcmVtYWluIGJ1c3kgZm9yIGEgc2hvcnQgdGltZSBhZnRlciBmb3JtYXQvY29weS4KICAgICAgfQogICAgfQogICAgU3RhcnQtU2xlZXAgLU1pbGxpc2Vjb25kcyA1MDAKICB9CgogIHJldHVybiAkZmFsc2UKfQoKZnVuY3Rpb24gSW52b2tlLUZvcm1hdFZvbHVtZShbc3RyaW5nXSRkcml2ZUxldHRlciwgW2ludF0kY2x1c3RlclNpemUsIFtzdHJpbmddJGxhYmVsKSB7CiAgJHRhcmdldCA9ICIke2RyaXZlTGV0dGVyfToiCiAgJGZpbGVTeXN0ZW0gPSAiZXhGQVQiCiAgJGNsdXN0ZXJBcmcgPSBGb3JtYXQtQWxsb2NhdGlvblVuaXRBcmcgLWNsdXN0ZXJTaXplICRjbHVzdGVyU2l6ZQogICRhdHRlbXB0cyA9IEAoCiAgICBAeyBOYW1lID0gIiRmaWxlU3lzdGVtIHF1aWNrIHdpdGggcmVxdWVzdGVkIGFsbG9jYXRpb24gdW5pdCI7IEFyZ3MgPSBAKCR0YXJnZXQsICIvRlM6JGZpbGVTeXN0ZW0iLCAiL0E6JGNsdXN0ZXJBcmciLCAiL1EiLCAiL1Y6JGxhYmVsIiwgIi9YIiwgIi9ZIikgfQogICkKCiAgJGxhc3RGb3JtYXRFeGl0Q29kZSA9IC0xCiAgZm9yZWFjaCAoJGF0dGVtcHQgaW4gJGF0dGVtcHRzKSB7CiAgICBXcml0ZS1Ib3N0ICJbSW5mb10gZm9ybWF0IGF0dGVtcHQ6ICQoJGF0dGVtcHQuTmFtZSkiCiAgICAkc3Rkb3V0UGF0aCA9IFtTeXN0ZW0uSU8uUGF0aF06OkdldFRlbXBGaWxlTmFtZSgpCiAgICAkc3RkZXJyUGF0aCA9IFtTeXN0ZW0uSU8uUGF0aF06OkdldFRlbXBGaWxlTmFtZSgpCiAgICB0cnkgewogICAgICAkcHJvYyA9IFN0YXJ0LVByb2Nlc3MgLUZpbGVQYXRoICJmb3JtYXQuY29tIiAtQXJndW1lbnRMaXN0ICRhdHRlbXB0LkFyZ3MgLVdhaXQgLVBhc3NUaHJ1IC1Ob05ld1dpbmRvdyBgCiAgICAgICAgLVJlZGlyZWN0U3RhbmRhcmRPdXRwdXQgJHN0ZG91dFBhdGggLVJlZGlyZWN0U3RhbmRhcmRFcnJvciAkc3RkZXJyUGF0aAogICAgICAkbGFzdEZvcm1hdEV4aXRDb2RlID0gW2ludF0kcHJvYy5FeGl0Q29kZQoKICAgICAgIyBTaG93IG5hdGl2ZSBmb3JtYXQuY29tIG91dHB1dCBpbiBjdXJyZW50IGNvbnNvbGUuCiAgICAgIGlmIChUZXN0LVBhdGggLUxpdGVyYWxQYXRoICRzdGRvdXRQYXRoKSB7CiAgICAgICAgR2V0LUNvbnRlbnQgLUxpdGVyYWxQYXRoICRzdGRvdXRQYXRoIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlIHwgRm9yRWFjaC1PYmplY3QgeyBXcml0ZS1Ib3N0ICRfIH0KICAgICAgfQogICAgICBpZiAoVGVzdC1QYXRoIC1MaXRlcmFsUGF0aCAkc3RkZXJyUGF0aCkgewogICAgICAgIEdldC1Db250ZW50IC1MaXRlcmFsUGF0aCAkc3RkZXJyUGF0aCAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZSB8IEZvckVhY2gtT2JqZWN0IHsgV3JpdGUtSG9zdCAkXyB9CiAgICAgIH0KICAgIH0gZmluYWxseSB7CiAgICAgIFJlbW92ZS1JdGVtIC1MaXRlcmFsUGF0aCAkc3Rkb3V0UGF0aCwgJHN0ZGVyclBhdGggLUZvcmNlIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlCiAgICB9CgogICAgIyBTb21lIGVudmlyb25tZW50cyBtYXkgcmVwb3J0IGEgbm9uLXplcm8gZXhpdCBjb2RlIGV2ZW4gd2hlbiBmb3JtYXR0aW5nIGNvbXBsZXRlZC4KICAgICMgVmFsaWRhdGUgcmVzdWx0aW5nIGZpbGVzeXN0ZW0gYXMgdGhlIHNvdXJjZSBvZiB0cnV0aC4KICAgIGlmIChXYWl0LUZvckxvZ2ljYWxEcml2ZSAtZHJpdmVMZXR0ZXIgJGRyaXZlTGV0dGVyIC10aW1lb3V0U2Vjb25kcyA1KSB7CiAgICAgICRhY3R1YWxGcyA9IEdldC1Mb2dpY2FsRHJpdmVGaWxlU3lzdGVtIC1kcml2ZUxldHRlciAkZHJpdmVMZXR0ZXIKICAgICAgaWYgKCRhY3R1YWxGcyAtYW5kICRhY3R1YWxGcy5Ub1VwcGVySW52YXJpYW50KCkgLWVxICRmaWxlU3lzdGVtLlRvVXBwZXJJbnZhcmlhbnQoKSkgewogICAgICAgIFdyaXRlLUhvc3QgIltJbmZvXSBmb3JtYXQgcmVzdWx0OiBkZXRlY3RlZCBmaWxlc3lzdGVtICckYWN0dWFsRnMnIG9uICR0YXJnZXQuIgogICAgICAgIHJldHVybgogICAgICB9CiAgICB9CgogICAgV3JpdGUtSG9zdCAiW0luZm9dIGZvcm1hdCBhdHRlbXB0IGZhaWxlZCAoZXhpdCBjb2RlICRsYXN0Rm9ybWF0RXhpdENvZGUpLCByZXRyeWluZy4uLiIKICB9CgogIHRocm93ICJmb3JtYXQuY29tIGZhaWxlZCBmb3IgJHRhcmdldCBhZnRlciBhbGwgcmV0cnkgc3RyYXRlZ2llcy4gTGFzdCBleGl0IGNvZGU6ICRsYXN0Rm9ybWF0RXhpdENvZGUiCn0KCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0gTWFpbiAtLS0tLS0tLS0tLS0tLS0tLS0tLQoKaWYgKC1ub3QgKFRlc3QtQWRtaW4pKSB7IHRocm93ICJQbGVhc2UgcnVuIFBvd2VyU2hlbGwgYXMgQWRtaW5pc3RyYXRvci4iIH0KaWYgKC1ub3QgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggJFNvdXJjZURpciAtUGF0aFR5cGUgQ29udGFpbmVyKSkgeyB0aHJvdyAiU291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6ICRTb3VyY2VEaXIiIH0KaWYgKC1ub3QgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggKEpvaW4tUGF0aCAkU291cmNlRGlyICJlYm9vdC5iaW4iKSAtUGF0aFR5cGUgTGVhZikpIHsgdGhyb3cgImVib290LmJpbiBub3QgZm91bmQgaW4gc291cmNlIGRpcmVjdG9yeTogJFNvdXJjZURpciIgfQoKIyBFbnN1cmUgb3V0cHV0IGRpcmVjdG9yeSBleGlzdHMKJG91dERpciA9IFNwbGl0LVBhdGggLVBhcmVudCAkSW1hZ2VQYXRoCmlmICgkb3V0RGlyIC1hbmQgLW5vdCAoVGVzdC1QYXRoIC1MaXRlcmFsUGF0aCAkb3V0RGlyKSkgewogIE5ldy1JdGVtIC1JdGVtVHlwZSBEaXJlY3RvcnkgLVBhdGggJG91dERpciB8IE91dC1OdWxsCn0KCmlmIChUZXN0LVBhdGggLUxpdGVyYWxQYXRoICRJbWFnZVBhdGgpIHsKICBpZiAoLW5vdCAkRm9yY2VPdmVyd3JpdGUpIHsgdGhyb3cgIkltYWdlIGZpbGUgYWxyZWFkeSBleGlzdHM6ICRJbWFnZVBhdGguIFVzZSAtRm9yY2VPdmVyd3JpdGUgdG8gcmVwbGFjZSBpdC4iIH0KICBSZW1vdmUtSXRlbSAtTGl0ZXJhbFBhdGggJEltYWdlUGF0aCAtRm9yY2UKfQoKW0ludDY0XSRleHBlY3RlZEJ5dGVzID0gMApbc3RyaW5nXSRvc2ZTaXplQXJnID0gJG51bGwKW2ludF0kRXhmYXRDbHVzdGVyU2l6ZSA9IEdldC1PcHRpbWFsRXhmYXRDbHVzdGVyU2l6ZSAtZGlyICRTb3VyY2VEaXIKW2Jvb2xdJHNpemVQcm92aWRlZCA9IC1ub3QgW3N0cmluZ106OklzTnVsbE9yV2hpdGVTcGFjZSgkU2l6ZSkKW2ludF0kVGFyZ2V0Q2x1c3RlclNpemUgPSAkRXhmYXRDbHVzdGVyU2l6ZQoKaWYgKC1ub3QgJHNpemVQcm92aWRlZCkgewogIFdyaXRlLUhvc3QgIltJbmZvXSBTaXplIG5vdCBwcm92aWRlZC4gQ29tcHV0aW5nIGFuIG9wdGltYWwgaW1hZ2Ugc2l6ZSBmcm9tICckU291cmNlRGlyJy4uLiIKICAkZXhwZWN0ZWRCeXRlcyA9IEdldC1PcHRpbWFsSW1hZ2VTaXplQnl0ZXMgLWRpciAkU291cmNlRGlyIC1jbHVzdGVyQnl0ZXMgJFRhcmdldENsdXN0ZXJTaXplCiAgJG9zZlNpemVBcmcgPSAiJGV4cGVjdGVkQnl0ZXMiCn0gZWxzZSB7CiAgJGV4cGVjdGVkQnl0ZXMgPSBQYXJzZS1TaXplVG9CeXRlcyAkU2l6ZQogICRvc2ZTaXplQXJnID0gJFNpemUKfQoKaWYgKC1ub3QgJHNpemVQcm92aWRlZCkgewogIFdyaXRlLUhvc3QgIltJbmZvXSBDb21wdXRlZCBpbWFnZSBzaXplOiAkKEZvcm1hdC1CeXRlcyAkZXhwZWN0ZWRCeXRlcykgKCRleHBlY3RlZEJ5dGVzIGJ5dGVzKS4iCn0KV3JpdGUtSG9zdCAiW0luZm9dIFNlbGVjdGVkIGZpbGVzeXN0ZW06IGV4RkFUIChjbHVzdGVyPSRUYXJnZXRDbHVzdGVyU2l6ZSkgZm9yIGltYWdlIHNpemUgJChGb3JtYXQtQnl0ZXMgJGV4cGVjdGVkQnl0ZXMpLiIKCiRvc2YgPSBGaW5kLU9TRk1vdW50Q29tCgpbc3RyaW5nXSREcml2ZUxldHRlciA9ICIiCltzdHJpbmddJE1vdW50UG9pbnQgPSAiIgpbYm9vbF0kTW91bnRlZCA9ICRmYWxzZQpbYm9vbF0kTGVhdmVNb3VudGVkID0gJENyZWF0ZUVtcHR5QW5kTW91bnQuSXNQcmVzZW50Cgp0cnkgewogICREcml2ZUxldHRlciA9IEdldC1GcmVlRHJpdmVMZXR0ZXIKICAkTW91bnRQb2ludCA9ICIke0RyaXZlTGV0dGVyfToiCgogIGlmICgkQ3JlYXRlRW1wdHlBbmRNb3VudCkgewogICAgV3JpdGUtSG9zdCAiWzEvMl0gQ3JlYXRpbmcgJiBtb3VudGluZyB0aGUgaW1hZ2UgdmlhIE9TRk1vdW50IGFzIGEgbG9naWNhbCB2b2x1bWUgb24gJE1vdW50UG9pbnQgLi4uIgogIH0gZWxzZSB7CiAgICBXcml0ZS1Ib3N0ICJbMS80XSBDcmVhdGluZyAmIG1vdW50aW5nIHRoZSBpbWFnZSB2aWEgT1NGTW91bnQgYXMgYSBsb2dpY2FsIHZvbHVtZSBvbiAkTW91bnRQb2ludCAuLi4iCiAgfQogICRvdXQgPSAmICRvc2YgLWEgLXQgZmlsZSAtZiAkSW1hZ2VQYXRoIC1zICRvc2ZTaXplQXJnIC1tICRNb3VudFBvaW50IC1vIHJ3LHJlbSAyPiYxCiAgV3JpdGUtSG9zdCAoJG91dCB8IE91dC1TdHJpbmcpLlRyaW0oKQogIGlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJvc2Ztb3VudC5jb20gZmFpbGVkIHdpdGggZXhpdCBjb2RlICRMQVNURVhJVENPREUuIiB9CiAgJE1vdW50ZWQgPSAkdHJ1ZQogIGlmICgtbm90IChXYWl0LUZvckxvZ2ljYWxEcml2ZSAtZHJpdmVMZXR0ZXIgJERyaXZlTGV0dGVyIC10aW1lb3V0U2Vjb25kcyAyMCkpIHsKICAgIHRocm93ICJNb3VudGVkIGRyaXZlICRNb3VudFBvaW50IGRpZCBub3QgYXBwZWFyIGluIHRpbWUuIgogIH0KCiAgJGRlc3QgPSAiJHtEcml2ZUxldHRlcn06XCIKICBpZiAoJENyZWF0ZUVtcHR5QW5kTW91bnQpIHsKICAgIFdyaXRlLUhvc3QgIlsyLzJdIERvbmUuIEVtcHR5IGltYWdlIGlzIG1vdW50ZWQgYXQgJGRlc3QuIgogICAgV3JpdGUtSG9zdCAiTWFudWFsIHN0ZXBzOiIKICAgIFdyaXRlLUhvc3QgIiAgMSkgRm9ybWF0ICRkZXN0IGFzIGV4RkFUIChyZWNvbW1lbmRlZCBjbHVzdGVyOiA2NEtCIGZvciBsYXJnZS1maWxlIHNldHMsIDMyS0IgZm9yIHNtYWxsL21peGVkIHNldHMpLiIKICAgIFdyaXRlLUhvc3QgIiAgMikgQ29weSBjb250ZW50cyBvZiAnJFNvdXJjZURpcicgdG8gJGRlc3QuIgogICAgV3JpdGUtSG9zdCAiICAzKSBEaXNtb3VudDogYCIkb3NmYCIgLWQgLW0gJE1vdW50UG9pbnQiCiAgICByZXR1cm4KICB9CgogIFdyaXRlLUhvc3QgIlsyLzRdIEZvcm1hdHRpbmcgJGRlc3QgYXMgZXhGQVQgKGNsdXN0ZXI9JFRhcmdldENsdXN0ZXJTaXplLCBsYWJlbD0nJExhYmVsJykgdmlhIGZvcm1hdC5jb20gLi4uIgogIEludm9rZS1Gb3JtYXRWb2x1bWUgLWRyaXZlTGV0dGVyICREcml2ZUxldHRlciAtY2x1c3RlclNpemUgJFRhcmdldENsdXN0ZXJTaXplIC1sYWJlbCAkTGFiZWwKCiAgaWYgKC1ub3QgKFRlc3QtUGF0aCAkZGVzdCkpIHsgdGhyb3cgIkRyaXZlICRkZXN0IGlzIG5vdCBhY2Nlc3NpYmxlIGFmdGVyIGZvcm1hdHRpbmcuIiB9CgogIFdyaXRlLUhvc3QgIlszLzRdIENvcHlpbmcgY29udGVudHMgb2YgJyRTb3VyY2VEaXInIC0+ICckZGVzdCcgLi4uIgogICRyb2JvQXJncyA9IEAoCiAgICAkU291cmNlRGlyLCAkZGVzdCwKICAgICIvRSIsICIvQ09QWTpEQVQiLCAiL0RDT1BZOkRBVCIsCiAgICAiL1I6MSIsICIvVzoxIiwKICAgICIvTkZMIiwgIi9OREwiLAogICAgIi9FVEEiCiAgKQogICYgcm9ib2NvcHkuZXhlIEByb2JvQXJncwogICRyb2JvY29weUV4aXRDb2RlID0gJExBU1RFWElUQ09ERQogIGlmICgkcm9ib2NvcHlFeGl0Q29kZSAtZ3QgNykgeyB0aHJvdyAicm9ib2NvcHkgZmFpbGVkLiBFeGl0IGNvZGU6ICRyb2JvY29weUV4aXRDb2RlIiB9CgogIFdyaXRlLUhvc3QgIls0LzRdIERvbmUuIERpc21vdW50aW5nIE9TRk1vdW50IHZvbHVtZS4uLiIKfQpmaW5hbGx5IHsKICBpZiAoJE1vdW50ZWQgLWFuZCAtbm90ICRMZWF2ZU1vdW50ZWQgLWFuZCAtbm90IFtzdHJpbmddOjpJc051bGxPcldoaXRlU3BhY2UoJE1vdW50UG9pbnQpKSB7CiAgICB0cnkgewogICAgICAkY3VycmVudFBhdGggPSAoR2V0LUxvY2F0aW9uKS5QYXRoCiAgICAgIGlmICgkY3VycmVudFBhdGggLWxpa2UgIiRNb3VudFBvaW50KiIpIHsKICAgICAgICBTZXQtTG9jYXRpb24gIiRlbnY6U3lzdGVtRHJpdmVcIgogICAgICB9CiAgICB9IGNhdGNoIHsKICAgICAgIyBCZXN0IGVmZm9ydCBvbmx5LgogICAgfQoKICAgIGlmICgtbm90IChEaXNtb3VudC1Pc2ZWb2x1bWUgLW9zZlBhdGggJG9zZiAtbW91bnRQb2ludCAkTW91bnRQb2ludCAtbWF4QXR0ZW1wdHMgNikpIHsKICAgICAgV3JpdGUtV2FybmluZyAiRmFpbGVkIHRvIGRpc21vdW50IE9TRk1vdW50IHZvbHVtZSAoJE1vdW50UG9pbnQpOiBhY2Nlc3MgZGVuaWVkIG9yIHZvbHVtZSBidXN5LiIKICAgIH0KICB9Cn0KCldyaXRlLUhvc3QgIk9LOiBJbWFnZSBjcmVhdGVkIGF0OiAkSW1hZ2VQYXRoIgo="
@@ -482,6 +491,8 @@ class ExFATBuilder(tk.Tk):
         self._tab_files_btn   = _make_tab(tab_bar, '\U0001f5c2  File Manager',  'files')
         self._tab_ftp_btn     = _make_tab(tab_bar, '\U0001f4e1  FTP Upload',    'ftp')
         self._tab_ftpbr_btn   = _make_tab(tab_bar, '\U0001f4e1  PS5 Browser',   'ftpbr')
+        self._tab_bp_btn      = _make_tab(tab_bar, '\U0001f9e9  Backports',     'backports')
+        self._tab_pl_btn      = _make_tab(tab_bar, '\U0001f4e6  Payloads',      'payloads')
         self._tab_help_btn    = _make_tab(tab_bar, '\u2753  Help',              'help')
         tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
 
@@ -494,6 +505,8 @@ class ExFATBuilder(tk.Tk):
         self._tab_files_frame   = tk.Frame(self, bg=BG)
         self._tab_ftp_frame     = tk.Frame(self, bg=BG)
         self._tab_ftpbr_frame   = tk.Frame(self, bg=BG)
+        self._tab_bp_frame      = tk.Frame(self, bg=BG)
+        self._tab_pl_frame      = tk.Frame(self, bg=BG)
         self._tab_help_frame    = tk.Frame(self, bg=BG)
 
         self._build_build_tab(self._tab_build_frame)
@@ -504,6 +517,8 @@ class ExFATBuilder(tk.Tk):
         self._build_files_tab(self._tab_files_frame)
         self._build_ftp_tab(self._tab_ftp_frame)
         self._build_ftpbr_tab(self._tab_ftpbr_frame)
+        self._build_backports_tab(self._tab_bp_frame)
+        self._build_payload_tab(self._tab_pl_frame)
         self._build_help_tab(self._tab_help_frame)
 
         self._switch_tab('build')
@@ -514,14 +529,16 @@ class ExFATBuilder(tk.Tk):
                       self._tab_images_frame, self._tab_ps5_frame,
                       self._tab_extract_frame, self._tab_files_frame,
                       self._tab_ftp_frame, self._tab_ftpbr_frame,
+                      self._tab_bp_frame, self._tab_pl_frame,
                       self._tab_help_frame]
         all_btns   = [self._tab_build_btn, self._tab_library_btn,
                       self._tab_images_btn, self._tab_ps5_btn,
                       self._tab_extract_btn, self._tab_files_btn,
                       self._tab_ftp_btn, self._tab_ftpbr_btn,
+                      self._tab_bp_btn, self._tab_pl_btn,
                       self._tab_help_btn]
         all_keys   = ['build','library','images','ps5','extract','files',
-                      'ftp','ftpbr','help']
+                      'ftp','ftpbr','backports','payloads','help']
         for frame, btn, k in zip(all_frames, all_btns, all_keys):
             frame.pack_forget()
             btn.config(fg=MUTED, bg='#0a0a0a')
@@ -1148,6 +1165,912 @@ class ExFATBuilder(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     # HELP TAB
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # BACKPORTS TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_backports_tab(self, parent):
+        self._bp_target_var   = tk.StringVar()
+        self._bp_target_type  = tk.StringVar(value='folder')  # 'folder' or 'exfat'
+        self._bp_backup_var   = tk.StringVar(value='auto')    # 'auto' or 'custom'
+        self._bp_backup_dir   = tk.StringVar()
+        self._bp_files        = []   # list of local paths to apply
+        self._bp_pct          = 0
+
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill='both', expand=True, padx=24, pady=16)
+
+        tk.Label(body, text='Backports',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(anchor='w')
+        tk.Label(body,
+                 text='Apply backport files to a game folder or exFAT image, '
+                      'with automatic backup of overwritten files.',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(2,16))
+
+        # ── Target type ──
+        type_row = tk.Frame(body, bg=BG)
+        type_row.pack(fill='x', pady=(0,8))
+        tk.Label(type_row, text='Target type:',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left')
+        tk.Radiobutton(type_row, text='Game folder (on PC)',
+                       variable=self._bp_target_type, value='folder',
+                       font=('Segoe UI', 9), bg=BG, fg=TEXT,
+                       activebackground=BG, selectcolor=SURFACE2,
+                       cursor='hand2',
+                       command=self._bp_update_ui).pack(side='left', padx=(12,0))
+        tk.Radiobutton(type_row, text='exFAT image (mounted)',
+                       variable=self._bp_target_type, value='exfat',
+                       font=('Segoe UI', 9), bg=BG, fg=TEXT,
+                       activebackground=BG, selectcolor=SURFACE2,
+                       cursor='hand2',
+                       command=self._bp_update_ui).pack(side='left', padx=(12,0))
+
+        # ── Target path ──
+        tgt_lbl_row = tk.Frame(body, bg=BG)
+        tgt_lbl_row.pack(fill='x')
+        self._bp_tgt_lbl = tk.Label(tgt_lbl_row, text='Game root folder',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED, anchor='w')
+        self._bp_tgt_lbl.pack(side='left')
+        tgt_inner = tk.Frame(body, bg=BG)
+        tgt_inner.pack(fill='x', pady=(3,8))
+        ef = tk.Frame(tgt_inner, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        ef.pack(side='left', fill='x', expand=True)
+        tk.Entry(ef, textvariable=self._bp_target_var,
+                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=6, state='readonly').pack(fill='x')
+        tk.Button(tgt_inner, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=14, pady=6, cursor='hand2',
+                  command=self._bp_browse_target).pack(side='left', padx=(6,0))
+        # Mount button (only shown for exFAT mode)
+        self._bp_mount_btn = tk.Button(tgt_inner, text='\U0001f517 Mount',
+                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=6, cursor='hand2',
+                  command=self._bp_mount)
+        self._bp_dismount_btn = tk.Button(tgt_inner, text='\U0001f513 Dismount',
+                  font=('Segoe UI', 9), bg=DANGER, fg=TEXT,
+                  activebackground='#c0392b', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=6, cursor='hand2',
+                  command=self._bp_dismount)
+        self._bp_drive = [None]
+        self._bp_mounted_path = [None]
+
+        # ── Backport files list ──
+        tk.Label(body, text='Backport files / folder to apply',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x')
+        files_ctrl = tk.Frame(body, bg=BG)
+        files_ctrl.pack(fill='x', pady=(3,4))
+        tk.Button(files_ctrl, text='+ Add files',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._bp_add_files).pack(side='left', padx=(0,6))
+        tk.Button(files_ctrl, text='+ Add folder',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._bp_add_folder).pack(side='left', padx=(0,6))
+        tk.Button(files_ctrl, text='Clear list',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                  activebackground=BORDER, activeforeground=DANGER,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._bp_clear_files).pack(side='left')
+        self._bp_file_count_var = tk.StringVar(value='No files added')
+        tk.Label(files_ctrl, textvariable=self._bp_file_count_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='right')
+
+        # Files listbox
+        fl_outer = tk.Frame(body, bg=SURFACE2,
+                            highlightbackground=BORDER, highlightthickness=1)
+        fl_outer.pack(fill='both', expand=True, pady=(0,8))
+        self._bp_listbox = tk.Listbox(fl_outer, font=('Consolas', 8),
+                                       bg=SURFACE2, fg=TEXT,
+                                       selectbackground=ACCENT,
+                                       selectforeground='#ffffff',
+                                       activestyle='none', relief='flat', bd=6)
+        bp_sb = tk.Scrollbar(fl_outer, command=self._bp_listbox.yview,
+                             bg=SURFACE2, troughcolor=BG)
+        self._bp_listbox.configure(yscrollcommand=bp_sb.set)
+        bp_sb.pack(side='right', fill='y')
+        self._bp_listbox.pack(fill='both', expand=True)
+        self._bp_listbox.bind('<Delete>', lambda e: self._bp_remove_selected())
+        # Drag and drop onto the file list
+        try:
+            self._bp_listbox.drop_target_register('DND_Files')
+            self._bp_listbox.dnd_bind('<<Drop>>', self._bp_on_drop)
+            fl_outer.drop_target_register('DND_Files')
+            fl_outer.dnd_bind('<<Drop>>', self._bp_on_drop)
+        except Exception:
+            pass
+
+        # ── Backup options ──
+        tk.Frame(body, bg=BORDER, height=1).pack(fill='x', pady=(0,8))
+        bk_row = tk.Frame(body, bg=BG)
+        bk_row.pack(fill='x', pady=(0,4))
+        tk.Label(bk_row, text='Backup overwritten files:',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left')
+        tk.Radiobutton(bk_row, text='Next to target (auto)',
+                       variable=self._bp_backup_var, value='auto',
+                       font=('Segoe UI', 9), bg=BG, fg=TEXT,
+                       activebackground=BG, selectcolor=SURFACE2,
+                       cursor='hand2',
+                       command=self._bp_update_backup_ui).pack(side='left', padx=(12,0))
+        tk.Radiobutton(bk_row, text='Custom folder',
+                       variable=self._bp_backup_var, value='custom',
+                       font=('Segoe UI', 9), bg=BG, fg=TEXT,
+                       activebackground=BG, selectcolor=SURFACE2,
+                       cursor='hand2',
+                       command=self._bp_update_backup_ui).pack(side='left', padx=(12,0))
+        tk.Radiobutton(bk_row, text='No backup',
+                       variable=self._bp_backup_var, value='none',
+                       font=('Segoe UI', 9), bg=BG, fg=DANGER,
+                       activebackground=BG, selectcolor=SURFACE2,
+                       cursor='hand2',
+                       command=self._bp_update_backup_ui).pack(side='left', padx=(12,0))
+
+        # Custom backup dir row (shown when custom selected)
+        self._bp_backup_dir_row = tk.Frame(body, bg=BG)
+        bk_ef = tk.Frame(self._bp_backup_dir_row, bg=FIELD_BG,
+                         highlightbackground=BORDER, highlightthickness=1)
+        bk_ef.pack(side='left', fill='x', expand=True)
+        tk.Entry(bk_ef, textvariable=self._bp_backup_dir,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=5,
+                 state='readonly').pack(fill='x')
+        tk.Button(self._bp_backup_dir_row, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=4, cursor='hand2',
+                  command=self._bp_browse_backup).pack(side='left', padx=(6,0))
+
+        # ── Apply button ──
+        btn_row = tk.Frame(body, bg=BG)
+        btn_row.pack(fill='x', pady=(8,0))
+        self._bp_apply_btn = tk.Button(
+            btn_row, text='\U0001f9e9  Apply Backport',
+            font=('Segoe UI', 11, 'bold'),
+            bg='#9b59b6', fg=TEXT,
+            activebackground='#8e44ad', activeforeground=TEXT,
+            relief='flat', bd=0, padx=24, pady=9,
+            cursor='hand2', command=self._bp_apply)
+        self._bp_apply_btn.pack(side='left')
+
+        # Progress + status
+        self._bp_status_var = tk.StringVar(value='')
+        tk.Label(body, textvariable=self._bp_status_var,
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', pady=(8,0))
+
+        bar_frame = tk.Frame(body, bg=TRACK, height=14)
+        bar_frame.pack(fill='x', pady=(4,0))
+        bar_frame.pack_propagate(False)
+        self._bp_canvas = tk.Canvas(bar_frame, height=14, bg=TRACK,
+                                     highlightthickness=0, bd=0)
+        self._bp_canvas.pack(fill='both', expand=True)
+        self._bp_bar = self._bp_canvas.create_rectangle(
+            0, 0, 0, 14, fill='#9b59b6', outline='')
+        self._bp_canvas.bind('<Configure>',
+            lambda e: self._bp_set_bar(self._bp_pct))
+
+    # ── Backports helpers ─────────────────────────────────────────────────────
+    def _bp_update_ui(self):
+        is_exfat = self._bp_target_type.get() == 'exfat'
+        self._bp_tgt_lbl.config(
+            text='exFAT image file' if is_exfat else 'Game root folder')
+        if is_exfat:
+            self._bp_mount_btn.pack(side='left', padx=(6,0))
+        else:
+            self._bp_mount_btn.pack_forget()
+            self._bp_dismount_btn.pack_forget()
+        self._bp_target_var.set('')
+
+    def _bp_update_backup_ui(self):
+        if self._bp_backup_var.get() == 'custom':
+            self._bp_backup_dir_row.pack(fill='x', pady=(0,6))
+        else:
+            self._bp_backup_dir_row.pack_forget()
+
+    def _bp_browse_target(self):
+        if self._bp_target_type.get() == 'exfat':
+            p = filedialog.askopenfilename(
+                title='Select exFAT image',
+                filetypes=[('exFAT images', '*.exfat'), ('All files', '*.*')])
+        else:
+            p = filedialog.askdirectory(title='Select game root folder')
+        if p:
+            self._bp_target_var.set(p.replace('/', '\\'))
+
+    def _bp_browse_backup(self):
+        p = filedialog.askdirectory(title='Select backup folder')
+        if p:
+            self._bp_backup_dir.set(p.replace('/', '\\'))
+
+    def _bp_mount(self):
+        img = self._bp_target_var.get().strip()
+        if not img or not os.path.isfile(img):
+            messagebox.showwarning('No image', 'Select an exFAT image file first.')
+            return
+        osf = self._find_osfmount()
+        if not osf:
+            messagebox.showerror('OSFMount not found',
+                'Please install OSFMount from osforensics.com')
+            return
+        try:
+            import ctypes as _ct
+            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            free = None
+            for i in range(25, 3, -1):
+                if not (bitmask & (1 << i)):
+                    free = chr(65 + i) + ':'
+                    break
+            if not free:
+                raise Exception('No free drive letters')
+        except Exception as e:
+            messagebox.showerror('Error', str(e))
+            return
+        self._bp_status_var.set('Mounting...')
+        result = subprocess.run(
+            [osf, '-a', '-t', 'file', '-f', img, '-m', free, '-o', 'rw,rem'],
+            capture_output=True, text=True)
+        if result.returncode != 0:
+            self._bp_status_var.set('Mount failed')
+            messagebox.showerror('Mount failed', result.stderr or result.stdout)
+            return
+        import time as _t
+        for _ in range(20):
+            if os.path.exists(free + '\\'):
+                break
+            _t.sleep(0.3)
+        self._bp_drive[0] = free
+        self._bp_mounted_path[0] = free + '\\'
+        self._bp_status_var.set('Mounted: ' + free + ' (read-write)')
+        self._bp_mount_btn.pack_forget()
+        self._bp_dismount_btn.pack(side='left', padx=(6,0))
+
+    def _bp_dismount(self):
+        osf = self._find_osfmount()
+        if osf and self._bp_drive[0]:
+            subprocess.run([osf, '-d', '-m', self._bp_drive[0]], capture_output=True)
+        self._bp_drive[0] = None
+        self._bp_mounted_path[0] = None
+        self._bp_status_var.set('Dismounted')
+        self._bp_dismount_btn.pack_forget()
+        self._bp_mount_btn.pack(side='left', padx=(6,0))
+
+    def _bp_add_files(self):
+        paths = filedialog.askopenfilenames(title='Select backport files')
+        for p in paths:
+            if p not in self._bp_files:
+                self._bp_files.append(p)
+        self._bp_refresh_list()
+
+    def _bp_add_folder(self):
+        folder = filedialog.askdirectory(title='Select backport folder')
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        # Store as (src_path, relative_path) tuples to preserve structure
+        # We store full path but track root so we can reconstruct relative paths
+        added = 0
+        for root, dirs, files in os.walk(folder):
+            for fn in files:
+                fp = os.path.join(root, fn)
+                # Store tuple: (full_src_path, relative_to_folder_root)
+                rel = os.path.relpath(fp, folder)
+                entry = (fp, rel, folder)  # src, rel, base
+                if fp not in [e[0] if isinstance(e, tuple) else e
+                              for e in self._bp_files]:
+                    self._bp_files.append(entry)
+                    added += 1
+        self._bp_refresh_list()
+        if added:
+            self._bp_status_var.set(
+                'Added %d file(s) from folder (structure preserved)' % added)
+
+    def _bp_clear_files(self):
+        self._bp_files = []
+        self._bp_refresh_list()
+
+    def _bp_remove_selected(self):
+        sels = sorted(self._bp_listbox.curselection(), reverse=True)
+        for i in sels:
+            if i < len(self._bp_files):
+                self._bp_files.pop(i)
+        self._bp_refresh_list()
+
+    def _bp_refresh_list(self):
+        self._bp_listbox.delete(0, 'end')
+        for entry in self._bp_files:
+            if isinstance(entry, tuple):
+                src, rel, base = entry
+                self._bp_listbox.insert('end', '\U0001f4c1  ' + rel)
+            else:
+                self._bp_listbox.insert('end', '\U0001f4be  ' + entry)
+        n = len(self._bp_files)
+        self._bp_file_count_var.set(
+            str(n) + ' file(s) ready to apply' if n else 'No files added')
+
+    def _bp_on_drop(self, event):
+        """Handle drag and drop onto the backport file list."""
+        data = event.data.strip()
+        # tkinterdnd2 wraps paths with spaces in braces
+        import re as _re
+        items = _re.findall(r'\{([^}]+)\}|(\S+)', data)
+        paths = [a or b for a, b in items]
+        if not paths:
+            paths = [data.strip('{}')]
+        added = 0
+        for path in paths:
+            path = path.strip()
+            if os.path.isdir(path):
+                # Folder dropped — add with structure preserved
+                path = os.path.normpath(path)
+                for root, dirs, files in os.walk(path):
+                    for fn in files:
+                        fp = os.path.join(root, fn)
+                        rel = os.path.relpath(fp, path)
+                        entry = (fp, rel, path)
+                        if fp not in [e[0] if isinstance(e, tuple) else e
+                                      for e in self._bp_files]:
+                            self._bp_files.append(entry)
+                            added += 1
+            elif os.path.isfile(path):
+                if path not in [e[0] if isinstance(e, tuple) else e
+                                for e in self._bp_files]:
+                    self._bp_files.append(path)
+                    added += 1
+        self._bp_refresh_list()
+        if added:
+            self._bp_status_var.set(
+                'Dropped %d file(s)' % added)
+
+    def _bp_set_bar(self, pct):
+        self._bp_pct = pct
+        try:
+            w = self._bp_canvas.winfo_width()
+            self._bp_canvas.coords(self._bp_bar, 0, 0, int(w * pct / 100), 14)
+            self._bp_canvas.itemconfig(
+                self._bp_bar, fill=SUCCESS if pct >= 100 else '#9b59b6')
+        except Exception:
+            pass
+
+    def _bp_get_target_dir(self):
+        if self._bp_target_type.get() == 'exfat':
+            return self._bp_mounted_path[0]
+        else:
+            return self._bp_target_var.get().strip() or None
+
+    def _bp_apply(self):
+        if not self._bp_files:
+            messagebox.showwarning('No files', 'Add backport files first.')
+            return
+
+        target = self._bp_get_target_dir()
+        if not target:
+            if self._bp_target_type.get() == 'exfat':
+                messagebox.showwarning('Not mounted',
+                    'Mount the exFAT image first — click the \U0001f517 Mount button.')
+            else:
+                messagebox.showwarning('No target',
+                    'Select a game root folder first.')
+            return
+        if not os.path.isdir(target):
+            messagebox.showerror('Target not found',
+                'The target directory was not found:\n' + target +
+                '\n\nIf using exFAT mode, make sure the image is mounted.')
+            return
+
+        backup_mode = self._bp_backup_var.get()
+        backup_dir  = None
+        if backup_mode == 'custom':
+            backup_dir = self._bp_backup_dir.get().strip()
+            if not backup_dir:
+                messagebox.showwarning('No backup folder',
+                    'You selected "Custom folder" but have not chosen a folder.\n\n'
+                    'Click Browse next to the backup folder field, or switch to Auto.')
+                return
+
+        # ── Preview conflicts ──
+        conflicts = []
+        for entry in self._bp_files:
+            if isinstance(entry, tuple):
+                src, rel, base = entry
+                dst = os.path.join(target, rel)
+            else:
+                src = entry
+                rel = os.path.basename(src)
+                dst = os.path.join(target, rel)
+            if os.path.isfile(dst):
+                conflicts.append((rel, dst,
+                                   os.path.getsize(src),
+                                   os.path.getsize(dst)))
+
+        # Build confirmation dialog
+        msg = 'Ready to apply %d file(s) to:\n%s\n\n' % (
+            len(self._bp_files), target)
+        if conflicts:
+            msg += '%d file(s) will be overwritten:\n' % len(conflicts)
+            for fn, _, src_sz, dst_sz in conflicts[:10]:
+                msg += '  \u2022 %s  (%s \u2192 %s)\n' % (
+                    fn,
+                    self._bp_fmt_size(dst_sz),
+                    self._bp_fmt_size(src_sz))
+            if len(conflicts) > 10:
+                msg += '  ... and %d more\n' % (len(conflicts) - 10)
+            msg += '\n'
+        else:
+            msg += 'No conflicts — all files are new.\n\n'
+
+        if backup_mode == 'none' and conflicts:
+            msg += '\u26a0 WARNING: No backup will be made. Overwritten files cannot be recovered.\n\n'
+        elif backup_mode == 'auto':
+            ts = time.strftime('%Y%m%d_%H%M%S')
+            backup_dir = os.path.join(
+                os.path.dirname(target.rstrip('\\/')) or target,
+                '_backport_backup_' + ts)
+            msg += 'Backup will be saved to:\n%s\n\n' % backup_dir
+        elif backup_mode == 'custom':
+            msg += 'Backup will be saved to:\n%s\n\n' % backup_dir
+
+        msg += 'Continue?'
+
+        if not messagebox.askyesno('Apply backport', msg):
+            return
+
+        self._bp_apply_btn.config(state='disabled', text='Applying...')
+        self._bp_status_var.set('Starting...')
+        self._bp_set_bar(0)
+
+        def worker():
+            try:
+                total  = len(self._bp_files)
+                errors = []
+                backed = 0
+
+                for i, entry in enumerate(self._bp_files):
+                    # Resolve source path and destination
+                    if isinstance(entry, tuple):
+                        src, rel, base = entry
+                        dst = os.path.join(target, rel)
+                    else:
+                        src = entry
+                        rel = os.path.basename(src)
+                        dst = os.path.join(target, rel)
+
+                    fn  = os.path.basename(src)
+                    pct = int((i / total) * 100)
+                    self.after(0, self._bp_set_bar, pct)
+                    self.after(0, self._bp_status_var.set,
+                               'Applying %d/%d: %s' % (i + 1, total, rel))
+
+                    # Backup if needed
+                    if backup_mode != 'none' and os.path.isfile(dst):
+                        try:
+                            os.makedirs(backup_dir, exist_ok=True)
+                            # Mirror subfolder structure in backup
+                            bk_path = os.path.join(backup_dir, rel)
+                            os.makedirs(os.path.dirname(bk_path), exist_ok=True)
+                            counter = 1
+                            while os.path.exists(bk_path):
+                                name, ext = os.path.splitext(os.path.basename(rel))
+                                bk_path = os.path.join(
+                                    os.path.dirname(os.path.join(backup_dir, rel)),
+                                    '%s_%d%s' % (name, counter, ext))
+                                counter += 1
+                            shutil.copy2(dst, bk_path)
+                            backed += 1
+                        except Exception as e:
+                            errors.append('Backup failed for %s: %s' % (rel, str(e)))
+
+                    # Copy the backport file — create subdirs if needed
+                    try:
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        shutil.copy2(src, dst)
+                    except Exception as e:
+                        errors.append('Copy failed for %s: %s' % (rel, str(e)))
+
+                self.after(0, self._bp_done, total, backed, errors, backup_dir,
+                           backup_mode)
+            except Exception as e:
+                self.after(0, self._bp_done, 0, 0, [str(e)], None, backup_mode)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _bp_done(self, total, backed, errors, backup_dir, backup_mode):
+        self._bp_apply_btn.config(state='normal',
+                                   text='\U0001f9e9  Apply Backport')
+        if errors:
+            self._bp_set_bar(0)
+            self._bp_status_var.set('%d error(s) occurred' % len(errors))
+            messagebox.showerror('Backport errors',
+                '%d file(s) had errors:\n\n' % len(errors) +
+                '\n'.join(errors[:10]))
+        else:
+            self._bp_set_bar(100)
+            msg = 'Backport applied successfully!\n\n%d file(s) copied.' % total
+            if backup_mode != 'none' and backed > 0:
+                msg += '\n%d file(s) backed up to:\n%s' % (backed, backup_dir)
+            self._bp_status_var.set(
+                'Done — %d file(s) applied, %d backed up' % (total, backed))
+            if messagebox.askyesno('Backport complete', msg +
+                    ('\n\nOpen backup folder?' if backup_dir and backed else '')):
+                if backup_dir and backed:
+                    subprocess.Popen('explorer "' + backup_dir + '"', shell=True)
+
+    def _bp_fmt_size(self, sz):
+        if sz >= 1024**3: return '%.2f GB' % (sz/1024**3)
+        if sz >= 1024**2: return '%.1f MB' % (sz/1024**2)
+        if sz >= 1024:    return '%d KB'   % (sz//1024)
+        return '%d B' % sz
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAYLOAD MANAGER TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_payload_tab(self, parent):
+        self._pl_payloads     = self._settings.get('payloads', [])
+        # Each payload: {'name': str, 'path': str, 'ip': str, 'port': int, 'notes': str}
+        self._pl_ip_var       = tk.StringVar(value=self._settings.get('pl_ip', self._settings.get('ftp_ip', '')))
+        self._pl_port_var     = tk.StringVar(value=str(self._settings.get('pl_port', 9090)))
+        self._pl_sending      = False
+
+        # ── Header ──
+        hdr = tk.Frame(parent, bg=BG)
+        hdr.pack(fill='x', padx=24, pady=(12, 4))
+        tk.Label(hdr, text='Payload Manager',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        tk.Button(hdr, text='+ Add payload',
+                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+                  activebackground='#3a8eef', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._pl_add).pack(side='right')
+
+        # ── PS5 connection ──
+        conn = tk.Frame(parent, bg=SURFACE2,
+                        highlightbackground=BORDER, highlightthickness=1)
+        conn.pack(fill='x', padx=24, pady=(0, 8))
+        inner_conn = tk.Frame(conn, bg=SURFACE2)
+        inner_conn.pack(fill='x', padx=12, pady=8)
+        tk.Label(inner_conn, text='PS5 IP',
+                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 width=6, anchor='w').pack(side='left')
+        ip_ef = tk.Frame(inner_conn, bg=FIELD_BG,
+                         highlightbackground=BORDER, highlightthickness=1)
+        ip_ef.pack(side='left', fill='x', expand=True, padx=(4, 8))
+        tk.Entry(ip_ef, textvariable=self._pl_ip_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=4).pack(fill='x')
+        tk.Label(inner_conn, text='Port',
+                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED).pack(side='left')
+        port_ef = tk.Frame(inner_conn, bg=FIELD_BG,
+                           highlightbackground=BORDER, highlightthickness=1)
+        port_ef.pack(side='left', padx=(4, 8))
+        tk.Entry(port_ef, textvariable=self._pl_port_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4,
+                 width=7).pack()
+        tk.Button(inner_conn, text='Save',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
+                  command=self._pl_save_conn).pack(side='left')
+        tk.Label(inner_conn, text='Default port: 9090 / 9021',
+                 font=('Segoe UI', 8), bg=SURFACE2, fg='#444444').pack(side='left', padx=(12,0))
+
+        # ── Payload list ──
+        tk.Label(parent, text='Saved Payloads',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', padx=24, pady=(0,4))
+
+        list_outer = tk.Frame(parent, bg=SURFACE2,
+                              highlightbackground=BORDER, highlightthickness=1)
+        list_outer.pack(fill='both', expand=True, padx=24, pady=(0,8))
+
+        # Column headers
+        col_hdr = tk.Frame(list_outer, bg='#0f0f0f')
+        col_hdr.pack(fill='x')
+        for text, w in [('Name', 28), ('File', 38), ('Notes', 20), ('Actions', 16)]:
+            tk.Label(col_hdr, text=text, font=('Segoe UI', 8, 'bold'),
+                     bg='#0f0f0f', fg=MUTED, width=w,
+                     anchor='w').pack(side='left', padx=(8,0), pady=3)
+
+        # Scrollable list
+        pl_canvas = tk.Canvas(list_outer, bg=SURFACE2, highlightthickness=0)
+        pl_sb = tk.Scrollbar(list_outer, command=pl_canvas.yview,
+                             bg=SURFACE2, troughcolor=BG)
+        pl_canvas.configure(yscrollcommand=pl_sb.set)
+        pl_sb.pack(side='right', fill='y')
+        pl_canvas.pack(side='left', fill='both', expand=True)
+        self._pl_list_frame = tk.Frame(pl_canvas, bg=SURFACE2)
+        pl_canvas.create_window((0,0), window=self._pl_list_frame,
+                                anchor='nw', tags='plf')
+        self._pl_list_frame.bind('<Configure>', lambda e:
+            pl_canvas.configure(scrollregion=pl_canvas.bbox('all')))
+        pl_canvas.bind('<Configure>', lambda e:
+            pl_canvas.itemconfig('plf', width=e.width))
+        pl_canvas.bind('<MouseWheel>',
+            lambda e: pl_canvas.yview_scroll(int(-1*(e.delta/120)), 'units'))
+
+        # Status bar
+        self._pl_status_var = tk.StringVar(value='')
+        tk.Label(parent, textvariable=self._pl_status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', padx=24, pady=(0,4))
+
+        self._pl_render()
+
+    # ── Payload helpers ───────────────────────────────────────────────────────
+    def _pl_save_conn(self):
+        self._settings['pl_ip']   = self._pl_ip_var.get().strip()
+        self._settings['pl_port'] = int(self._pl_port_var.get().strip() or '9090')
+        save_settings(self._settings)
+        self._pl_status_var.set('Connection settings saved')
+
+    def _pl_save_payloads(self):
+        self._settings['payloads'] = self._pl_payloads
+        save_settings(self._settings)
+
+    def _pl_render(self):
+        for w in self._pl_list_frame.winfo_children():
+            w.destroy()
+        if not self._pl_payloads:
+            tk.Label(self._pl_list_frame,
+                     text='No payloads saved — click "+ Add payload" to add one',
+                     font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                     pady=20).pack()
+            return
+        for i, pl in enumerate(self._pl_payloads):
+            row_bg = QUEUE_ODD if i % 2 == 0 else QUEUE_EVEN
+            row = tk.Frame(self._pl_list_frame, bg=row_bg)
+            row.pack(fill='x')
+
+            # Type badge
+            ext = os.path.splitext(pl.get('path', ''))[1].lower()
+            badge_col = '#e74c3c' if ext == '.bin' else '#8e44ad'
+            badge_txt = ext.lstrip('.').upper() if ext else '?'
+            tk.Label(row, text=badge_txt,
+                     font=('Segoe UI', 7, 'bold'), bg=badge_col, fg='#ffffff',
+                     padx=4, pady=1).pack(side='left', padx=(8,6), pady=8)
+
+            # Name
+            tk.Label(row, text=pl.get('name', 'Unnamed'),
+                     font=('Segoe UI', 9, 'bold'), bg=row_bg, fg=TEXT,
+                     anchor='w', width=24).pack(side='left')
+
+            # Filename
+            fname = os.path.basename(pl.get('path', ''))
+            exists = os.path.isfile(pl.get('path', ''))
+            tk.Label(row, text=fname,
+                     font=('Segoe UI', 8), bg=row_bg,
+                     fg=MUTED if exists else DANGER,
+                     anchor='w', width=34).pack(side='left')
+
+            # Notes
+            tk.Label(row, text=pl.get('notes', ''),
+                     font=('Segoe UI', 8), bg=row_bg, fg='#555555',
+                     anchor='w', width=20).pack(side='left')
+
+            # Actions
+            idx = i
+            tk.Button(row, text='\U0001f4e4 Send',
+                      font=('Segoe UI', 8, 'bold'), bg=SUCCESS, fg=TEXT,
+                      activebackground='#3d9140', activeforeground=TEXT,
+                      relief='flat', bd=0, padx=8, pady=3,
+                      cursor='hand2',
+                      command=lambda p=pl: self._pl_send(p)
+                      ).pack(side='left', padx=(0,4), pady=6)
+            tk.Button(row, text='\u270f',
+                      font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                      activebackground=BORDER, activeforeground=TEXT,
+                      relief='flat', bd=0, padx=6, pady=3,
+                      cursor='hand2',
+                      command=lambda ix=idx: self._pl_edit(ix)
+                      ).pack(side='left', padx=(0,4), pady=6)
+            tk.Button(row, text='\U0001f5d1',
+                      font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                      activebackground=BORDER, activeforeground=DANGER,
+                      relief='flat', bd=0, padx=6, pady=3,
+                      cursor='hand2',
+                      command=lambda ix=idx: self._pl_delete(ix)
+                      ).pack(side='left', padx=(0,8), pady=6)
+
+    def _pl_add(self):
+        self._pl_edit(None)
+
+    def _pl_edit(self, idx):
+        """Open add/edit dialog for a payload."""
+        is_new = idx is None
+        pl = {} if is_new else dict(self._pl_payloads[idx])
+
+        win = tk.Toplevel(self)
+        win.title('Add Payload' if is_new else 'Edit Payload')
+        win.geometry('520x280')
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill='both', expand=True, padx=24, pady=16)
+
+        name_var  = tk.StringVar(value=pl.get('name', ''))
+        path_var  = tk.StringVar(value=pl.get('path', ''))
+        notes_var = tk.StringVar(value=pl.get('notes', ''))
+
+        def row(label, var, browse=False):
+            r = tk.Frame(body, bg=BG)
+            r.pack(fill='x', pady=(0,8))
+            tk.Label(r, text=label, font=('Segoe UI', 9),
+                     bg=BG, fg=MUTED, width=10, anchor='w').pack(side='left')
+            ef = tk.Frame(r, bg=FIELD_BG,
+                          highlightbackground=BORDER, highlightthickness=1)
+            ef.pack(side='left', fill='x', expand=True)
+            e = tk.Entry(ef, textvariable=var, font=('Consolas', 9),
+                         bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
+                         selectbackground=FIELD_SEL_BG,
+                         selectforeground=FIELD_SEL_FG, relief='flat', bd=4)
+            e.pack(fill='x')
+            if browse:
+                tk.Button(r, text='Browse',
+                          font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                          activebackground=BORDER, activeforeground=TEXT,
+                          relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
+                          command=lambda v=var: self._pl_browse_file(v)
+                          ).pack(side='left', padx=(6,0))
+            return e
+
+        name_entry = row('Name', name_var)
+        name_entry.focus()
+        row('File (.elf/.bin)', path_var, browse=True)
+        row('Notes', notes_var)
+
+        btn_row = tk.Frame(body, bg=BG)
+        btn_row.pack(fill='x', pady=(8,0))
+
+        def _save():
+            name = name_var.get().strip()
+            path = path_var.get().strip()
+            if not name:
+                messagebox.showwarning('Missing', 'Please enter a name.', parent=win)
+                return
+            if not path:
+                messagebox.showwarning('Missing', 'Please select a payload file.', parent=win)
+                return
+            if not path.lower().endswith(('.elf', '.bin')):
+                messagebox.showwarning('Invalid file',
+                    'Only .elf and .bin files are supported.', parent=win)
+                return
+            entry = {'name': name, 'path': path, 'notes': notes_var.get().strip()}
+            if is_new:
+                self._pl_payloads.append(entry)
+            else:
+                self._pl_payloads[idx] = entry
+            self._pl_save_payloads()
+            self._pl_render()
+            self._pl_status_var.set(('Added' if is_new else 'Updated') + ': ' + name)
+            win.destroy()
+
+        tk.Button(btn_row, text='Save',
+                  font=('Segoe UI', 10, 'bold'), bg=SUCCESS, fg=TEXT,
+                  activebackground='#3d9140', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=18, pady=6, cursor='hand2',
+                  command=_save).pack(side='left')
+        tk.Button(btn_row, text='Cancel',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
+                  command=win.destroy).pack(side='left', padx=(8,0))
+        win.bind('<Return>', lambda e: _save())
+        win.bind('<Escape>', lambda e: win.destroy())
+
+        # Centre over parent
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width()  - win.winfo_width())  // 2
+        y = self.winfo_y() + (self.winfo_height() - win.winfo_height()) // 2
+        win.geometry('+%d+%d' % (x, y))
+        win.wait_window()
+
+    def _pl_browse_file(self, var):
+        p = filedialog.askopenfilename(
+            title='Select payload file',
+            filetypes=[('Payload files', '*.elf *.bin'),
+                       ('ELF files', '*.elf'),
+                       ('BIN files', '*.bin'),
+                       ('All files', '*.*')])
+        if p:
+            var.set(p.replace('/', '\\'))
+
+    def _pl_delete(self, idx):
+        name = self._pl_payloads[idx].get('name', 'this payload')
+        if not messagebox.askyesno('Delete payload',
+                'Remove "%s" from the payload manager?\n\n'
+                '(The file itself will not be deleted)' % name):
+            return
+        self._pl_payloads.pop(idx)
+        self._pl_save_payloads()
+        self._pl_render()
+        self._pl_status_var.set('Removed: ' + name)
+
+    def _pl_send(self, pl):
+        """Send a payload to the PS5 via TCP socket."""
+        path = pl.get('path', '')
+        name = pl.get('name', os.path.basename(path))
+
+        if not os.path.isfile(path):
+            messagebox.showerror('File not found',
+                'Payload file not found:\n' + path +
+                '\n\nEdit the payload to update the file path.')
+            return
+
+        ip   = self._pl_ip_var.get().strip()
+        port = self._pl_port_var.get().strip()
+        if not ip:
+            messagebox.showwarning('No IP',
+                'Enter your PS5 IP address in the connection bar above.')
+            return
+        try:
+            port = int(port)
+        except ValueError:
+            messagebox.showwarning('Invalid port', 'Port must be a number.')
+            return
+
+        self._pl_save_conn()
+        self._pl_status_var.set('Sending %s to %s:%d...' % (name, ip, port))
+        self._pl_sending = True
+
+        def worker():
+            try:
+                import socket
+                file_size = os.path.getsize(path)
+                sent      = 0
+                start     = time.time()
+
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(10)
+                    s.connect((ip, port))
+                    s.settimeout(30)
+                    with open(path, 'rb') as f:
+                        while True:
+                            chunk = f.read(65536)
+                            if not chunk:
+                                break
+                            s.sendall(chunk)
+                            sent += len(chunk)
+                            pct  = int(sent / file_size * 100) if file_size else 0
+                            elapsed = time.time() - start
+                            speed = (sent / 1024 / 1024) / elapsed if elapsed > 0 else 0
+                            self.after(0, self._pl_status_var.set,
+                                'Sending %s — %d%%  %.1f MB/s' % (name, pct, speed))
+
+                elapsed = time.time() - start
+                self.after(0, self._pl_send_done, True, name, ip, port, elapsed)
+            except Exception as e:
+                self.after(0, self._pl_send_done, False, str(e), ip, port, 0)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _pl_send_done(self, ok, info, ip, port, elapsed):
+        self._pl_sending = False
+        if ok:
+            self._pl_status_var.set(
+                '\u2713 Sent "%s" to %s:%d in %.1fs' % (info, ip, port, elapsed))
+            self._notify('Payload sent', info + ' \u2192 ' + ip)
+        else:
+            self._pl_status_var.set('\u2717 Send failed: ' + info)
+            messagebox.showerror('Send failed',
+                'Failed to send payload to PS5:\n\n' + info +
+                '\n\nCheck:\n'
+                '\u2022 PS5 is on and jailbroken\n'
+                '\u2022 IP address is correct\n'
+                '\u2022 Port matches your homebrew (9090 / 9021)\n'
+                '\u2022 PS5 is ready to receive a payload')
+
     def _build_help_tab(self, parent):
         # Scrollable canvas
         outer = tk.Frame(parent, bg=BG)
@@ -1233,10 +2156,10 @@ class ExFATBuilder(tk.Tk):
            'You can also use the "Auto-detect PS5 IP" button in Settings — it scans '
            'your network for open FTP ports automatically.')
         qa('What port should I use?',
-           'etaHEN typically uses port 2121. GoldHEN typically uses port 2122. '
+           'Port 2121 or 2122 is typically used. '
            'Check which homebrew you\'re running if unsure.')
         qa('Where do images go on the PS5?',
-           'The default path is /data/etaHEN/games/ — this is where etaHEN looks '
+           'The default path is /data/etaHEN/games/ \u2014 this is where the homebrew looks '
            'for exFAT images to load. If you\'re using a different homebrew, '
            'change the PS5 path in Settings accordingly.')
 
@@ -2920,7 +3843,7 @@ class ExFATBuilder(tk.Tk):
                  insertbackground=FIELD_FG,
                  selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
                  relief='flat', bd=6).pack(fill='x')
-        tk.Button(remote_inner, text='etaHEN default',
+        tk.Button(remote_inner, text='Default path',
                   font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=8, pady=6,
@@ -3654,8 +4577,56 @@ class ExFATBuilder(tk.Tk):
                   relief='flat', bd=0, padx=18, pady=7,
                   cursor='hand2', command=self._add_to_queue
                   ).pack(side='left')
-        tk.Label(add_row, text='Add multiple games then click Build All',
-                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left', padx=12)
+        self.build_btn = tk.Button(
+                  add_row, text='Build All',
+                  font=('Segoe UI', 10, 'bold'),
+                  bg=SUCCESS, fg=TEXT,
+                  activebackground='#3d9140', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=18, pady=7,
+                  cursor='hand2', command=self._run_queue)
+        self.build_btn.pack(side='left', padx=(8, 0))
+
+        # ── Progress — directly below buttons ──
+        prog_outer = tk.Frame(form, bg=BG)
+        prog_outer.pack(fill='x', pady=(8, 0))
+
+        top_row = tk.Frame(prog_outer, bg=BG)
+        top_row.pack(fill='x', pady=(0, 2))
+        tk.Label(top_row, textvariable=self._step_label_var,
+                 font=('Segoe UI', 10, 'bold'), bg=BG, fg=TEXT,
+                 anchor='w').pack(side='left')
+        tk.Label(top_row, textvariable=self._pct_var,
+                 font=('Consolas', 10), bg=BG, fg=ACCENT,
+                 anchor='e').pack(side='right')
+
+        bar_frame = tk.Frame(prog_outer, bg=TRACK, height=18)
+        bar_frame.pack(fill='x')
+        bar_frame.pack_propagate(False)
+        self._bar_canvas = tk.Canvas(bar_frame, height=18, bg=TRACK,
+                                      highlightthickness=0, bd=0)
+        self._bar_canvas.pack(fill='both', expand=True)
+        self._bar_rect = self._bar_canvas.create_rectangle(
+            0, 0, 0, 18, fill=ACCENT, outline='')
+        self._bar_canvas.bind('<Configure>', self._on_bar_resize)
+
+        eta_row = tk.Frame(prog_outer, bg=BG)
+        eta_row.pack(fill='x', pady=(2, 0))
+        tk.Label(eta_row, textvariable=self._eta_var,
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                 anchor='w').pack(side='left')
+
+        dots_frame = tk.Frame(prog_outer, bg=BG)
+        dots_frame.pack(fill='x', pady=(4, 2))
+        self._stage_dots = []
+        for name in ['Mount', 'Format', 'Copy files', 'Dismount']:
+            col = tk.Frame(dots_frame, bg=BG)
+            col.pack(side='left', expand=True)
+            dot = tk.Canvas(col, width=14, height=14, bg=BG, highlightthickness=0)
+            dot.pack()
+            dot.create_oval(1, 1, 13, 13, fill=BORDER, outline='', tags='dot')
+            lbl = tk.Label(col, text=name, font=('Segoe UI', 8), bg=BG, fg=MUTED)
+            lbl.pack()
+            self._stage_dots.append((dot, lbl))
 
         tk.Frame(parent, bg=BORDER, height=1).pack(fill='x')
 
@@ -3684,13 +4655,13 @@ class ExFATBuilder(tk.Tk):
                            highlightbackground=BORDER, highlightthickness=1)
         q_outer.pack(fill='x', padx=24)
         self._queue_canvas = tk.Canvas(q_outer, bg=SURFACE2,
-                                        highlightthickness=0, height=100)
+                                        highlightthickness=0, height=160)
         q_sb = tk.Scrollbar(q_outer, orient='vertical',
                              command=self._queue_canvas.yview,
                              bg=SURFACE2, troughcolor=BG)
         self._queue_canvas.configure(yscrollcommand=q_sb.set)
         q_sb.pack(side='right', fill='y')
-        self._queue_canvas.pack(side='left', fill='both', expand=True)
+        self._queue_canvas.pack(side='left', fill='x', expand=True)
         self._queue_frame = tk.Frame(self._queue_canvas, bg=SURFACE2)
         self._queue_canvas.create_window((0, 0), window=self._queue_frame,
                                           anchor='nw', tags='qf')
@@ -3707,62 +4678,12 @@ class ExFATBuilder(tk.Tk):
         except Exception:
             pass
 
-        # ── Bottom bar — packed FIRST = always visible at very bottom ──
+        # ── Bottom bar — status only ──
         bottom = tk.Frame(parent, bg=BG)
         bottom.pack(side='bottom', fill='x', padx=24, pady=6)
         self.status_lbl = tk.Label(bottom, textvariable=self.status_text,
                                     font=('Segoe UI', 9), bg=BG, fg=SUCCESS)
         self.status_lbl.pack(side='left')
-        self.build_btn = tk.Button(
-            bottom, text='Build All', font=('Segoe UI', 11, 'bold'),
-            bg=SUCCESS, fg=TEXT, activebackground='#3d9140',
-            activeforeground=TEXT, relief='flat', bd=0,
-            padx=24, pady=8, cursor='hand2', command=self._run_queue)
-        self.build_btn.pack(side='right')
-
-        tk.Frame(parent, bg=BORDER, height=1).pack(side='bottom', fill='x')
-
-        # ── Progress — packed second from bottom ──
-        prog_outer = tk.Frame(parent, bg=BG)
-        prog_outer.pack(side='bottom', fill='x', padx=24, pady=(4, 2))
-
-        dots_frame = tk.Frame(prog_outer, bg=BG)
-        dots_frame.pack(fill='x', pady=(4, 2))
-        self._stage_dots = []
-        for name in ['Mount', 'Format', 'Copy files', 'Dismount']:
-            col = tk.Frame(dots_frame, bg=BG)
-            col.pack(side='left', expand=True)
-            dot = tk.Canvas(col, width=14, height=14, bg=BG, highlightthickness=0)
-            dot.pack()
-            dot.create_oval(1, 1, 13, 13, fill=BORDER, outline='', tags='dot')
-            lbl = tk.Label(col, text=name, font=('Segoe UI', 8), bg=BG, fg=MUTED)
-            lbl.pack()
-            self._stage_dots.append((dot, lbl))
-
-        eta_row = tk.Frame(prog_outer, bg=BG)
-        eta_row.pack(fill='x', pady=(2, 0))
-        tk.Label(eta_row, textvariable=self._eta_var,
-                 font=('Segoe UI', 9), bg=BG, fg=MUTED,
-                 anchor='w').pack(side='left')
-
-        bar_frame = tk.Frame(prog_outer, bg=TRACK, height=18)
-        bar_frame.pack(fill='x')
-        bar_frame.pack_propagate(False)
-        self._bar_canvas = tk.Canvas(bar_frame, height=18, bg=TRACK,
-                                      highlightthickness=0, bd=0)
-        self._bar_canvas.pack(fill='both', expand=True)
-        self._bar_rect = self._bar_canvas.create_rectangle(
-            0, 0, 0, 18, fill=ACCENT, outline='')
-        self._bar_canvas.bind('<Configure>', self._on_bar_resize)
-
-        top_row = tk.Frame(prog_outer, bg=BG)
-        top_row.pack(fill='x', pady=(0, 4))
-        tk.Label(top_row, textvariable=self._step_label_var,
-                 font=('Segoe UI', 10, 'bold'), bg=BG, fg=TEXT,
-                 anchor='w').pack(side='left')
-        tk.Label(top_row, textvariable=self._pct_var,
-                 font=('Consolas', 10), bg=BG, fg=ACCENT,
-                 anchor='e').pack(side='right')
 
         tk.Frame(parent, bg=BORDER, height=1).pack(side='bottom', fill='x')
 
@@ -3923,7 +4844,7 @@ class ExFATBuilder(tk.Tk):
                  insertbackground=FIELD_FG,
                  selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
                  relief='flat', bd=4).pack(fill='x')
-        tk.Button(ftp_path_row, text='etaHEN default',
+        tk.Button(ftp_path_row, text='Default path',
                   font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=8, pady=4,
@@ -3988,13 +4909,65 @@ class ExFATBuilder(tk.Tk):
                  bg=SETTINGS_BG, fg=MUTED).pack(side='left')
 
         sound_row = tk.Frame(f, bg=SETTINGS_BG)
-        sound_row.pack(fill='x', padx=12, pady=(0, 8))
+        sound_row.pack(fill='x', padx=12, pady=(0, 4))
         tk.Checkbutton(sound_row, text='Play sound when build / upload completes',
                        variable=self._sound_var,
                        font=('Segoe UI', 9), bg=SETTINGS_BG, fg=MUTED,
                        activebackground=SETTINGS_BG, activeforeground=TEXT,
                        selectcolor=SURFACE2, cursor='hand2',
                        command=self._save_extra_settings).pack(side='left')
+
+        # ── Logs folder ──
+        tk.Frame(f, bg=BORDER, height=1).pack(fill='x', padx=12, pady=(4, 0))
+        logs_title = tk.Frame(f, bg=SETTINGS_BG)
+        logs_title.pack(fill='x', padx=12, pady=(6, 4))
+        tk.Label(logs_title, text='BUILD LOGS', font=('Segoe UI', 8),
+                 bg=SETTINGS_BG, fg=MUTED).pack(side='left')
+
+        logs_row = tk.Frame(f, bg=SETTINGS_BG)
+        logs_row.pack(fill='x', padx=12, pady=(0, 4))
+        tk.Label(logs_row, text='Logs folder',
+                 font=('Segoe UI', 9), bg=SETTINGS_BG, fg=MUTED,
+                 width=12, anchor='w').pack(side='left')
+        self._logs_dir_var = tk.StringVar(
+            value=self._settings.get('logs_dir',
+                  os.path.join(os.path.expanduser('~'), 'exfat_builder_logs')))
+        logs_ef = tk.Frame(logs_row, bg=FIELD_BG,
+                           highlightbackground=BORDER, highlightthickness=1)
+        logs_ef.pack(side='left', fill='x', expand=True, padx=(6, 6))
+        tk.Entry(logs_ef, textvariable=self._logs_dir_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=4, state='readonly').pack(fill='x')
+        tk.Button(logs_row, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._browse_logs_dir).pack(side='left')
+        tk.Button(logs_row, text='\U0001f4c2 Open Logs',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=ACCENT,
+                  activebackground=BORDER, activeforeground=ACCENT,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._open_logs_dir).pack(side='left', padx=(6, 0))
+
+        logs_info = tk.Frame(f, bg=SETTINGS_BG)
+        logs_info.pack(fill='x', padx=12, pady=(0, 8))
+        tk.Label(logs_info, text='',
+                 font=('Segoe UI', 9), bg=SETTINGS_BG, fg=MUTED,
+                 width=12, anchor='w').pack(side='left')
+        self._logs_count_var = tk.StringVar(value='')
+        tk.Label(logs_info, textvariable=self._logs_count_var,
+                 font=('Segoe UI', 8), bg=SETTINGS_BG, fg=MUTED).pack(side='left', padx=(6,0))
+        tk.Button(logs_info, text='Clear all logs',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                  activebackground=BORDER, activeforeground=DANGER,
+                  relief='flat', bd=0, padx=10, pady=4,
+                  cursor='hand2',
+                  command=self._clear_logs).pack(side='left', padx=(12, 0))
+        self.after(500, self._refresh_logs_count)
 
         # ── Build options ──
         tk.Frame(f, bg=BORDER, height=1).pack(fill='x', padx=12, pady=(4, 0))
@@ -5405,16 +6378,72 @@ class ExFATBuilder(tk.Tk):
         else:
             self._process_next(indices, pos + 1)
 
+    def _get_logs_dir(self):
+        custom = self._settings.get('logs_dir', '').strip()
+        if custom:
+            logs_dir = custom
+        else:
+            logs_dir = os.path.join(os.path.expanduser('~'), 'exfat_builder_logs')
+        os.makedirs(logs_dir, exist_ok=True)
+        return logs_dir
+
+    def _browse_logs_dir(self):
+        p = filedialog.askdirectory(title='Select folder for build logs')
+        if p:
+            p = os.path.normpath(p)
+            self._logs_dir_var.set(p)
+            self._settings['logs_dir'] = p
+            save_settings(self._settings)
+            self._refresh_logs_count()
+
+    def _open_logs_dir(self):
+        d = self._get_logs_dir()
+        subprocess.Popen('explorer "' + d + '"', shell=True)
+
+    def _refresh_logs_count(self):
+        try:
+            d = self._get_logs_dir()
+            logs = [f for f in os.listdir(d) if f.endswith('.log')]
+            failed = sum(1 for f in logs if '_FAILED' in f)
+            total  = len(logs)
+            self._logs_count_var.set(
+                '%d log(s) saved  (%d failed)' % (total, failed)
+                if failed else '%d log(s) saved' % total)
+        except Exception:
+            self._logs_count_var.set('')
+
+    def _clear_logs(self):
+        d = self._get_logs_dir()
+        try:
+            logs = [f for f in os.listdir(d) if f.endswith('.log')]
+            if not logs:
+                messagebox.showinfo('No logs', 'No log files found.')
+                return
+            if not messagebox.askyesno('Clear logs',
+                    'Delete %d log file(s) from:\n%s\n\nThis cannot be undone.' % (
+                        len(logs), d)):
+                return
+            for f in logs:
+                os.remove(os.path.join(d, f))
+            self._refresh_logs_count()
+            self._set_status('Cleared %d log(s)' % len(logs), SUCCESS)
+        except Exception as e:
+            messagebox.showerror('Error', str(e))
+
     def _export_log(self, out_path, failed=False):
-        """Auto-save build log alongside the output image."""
+        """Save build log to dedicated logs folder."""
         try:
             log_text = self.log_box.get('1.0', 'end')
-            suffix = '_FAILED.log' if failed else '.log'
-            log_path = os.path.splitext(out_path)[0] + suffix
+            ts        = time.strftime('%Y%m%d_%H%M%S')
+            game_name = os.path.splitext(os.path.basename(out_path))[0]
+            suffix    = '_FAILED' if failed else ''
+            filename  = '%s_%s%s.log' % (ts, game_name, suffix)
+            log_path  = os.path.join(self._get_logs_dir(), filename)
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write('exFAT Image Builder v' + APP_VERSION + '\n')
                 f.write('Build log: ' + os.path.basename(out_path) + '\n')
                 f.write('Date: ' + time.strftime('%Y-%m-%d %H:%M:%S') + '\n')
+                f.write('Status: ' + ('FAILED' if failed else 'SUCCESS') + '\n')
                 f.write('=' * 60 + '\n\n')
                 f.write(log_text)
         except Exception:
@@ -5806,9 +6835,10 @@ class ExFATBuilder(tk.Tk):
 
     # ── Extra settings ────────────────────────────────────────────────────────
     def _save_extra_settings(self):
-        self._settings['notify_sound']     = self._sound_var.get()
-        self._settings['discord_webhook']  = self._discord_var.get().strip()
-        self._settings['retry_count']      = self._retry_var.get()
+        self._settings['notify_sound']    = self._sound_var.get()
+        self._settings['retry_count']     = self._retry_var.get()
+        if hasattr(self, '_logs_dir_var'):
+            self._settings['logs_dir']    = self._logs_dir_var.get().strip()
         save_settings(self._settings)
 
     # ── Notification sound ────────────────────────────────────────────────────
