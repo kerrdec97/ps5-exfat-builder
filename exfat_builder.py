@@ -493,6 +493,7 @@ class ExFATBuilder(tk.Tk):
         self._tab_ftpbr_btn   = _make_tab(tab_bar, '\U0001f4e1  PS5 Browser',   'ftpbr')
         self._tab_bp_btn      = _make_tab(tab_bar, '\U0001f9e9  Backports',     'backports')
         self._tab_pl_btn      = _make_tab(tab_bar, '\U0001f4e6  Payloads',      'payloads')
+        self._tab_klog_btn    = _make_tab(tab_bar, '\U0001f4cb  Klog',          'klog')
         self._tab_help_btn    = _make_tab(tab_bar, '\u2753  Help',              'help')
         tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
 
@@ -507,6 +508,7 @@ class ExFATBuilder(tk.Tk):
         self._tab_ftpbr_frame   = tk.Frame(self, bg=BG)
         self._tab_bp_frame      = tk.Frame(self, bg=BG)
         self._tab_pl_frame      = tk.Frame(self, bg=BG)
+        self._tab_klog_frame    = tk.Frame(self, bg=BG)
         self._tab_help_frame    = tk.Frame(self, bg=BG)
 
         self._build_build_tab(self._tab_build_frame)
@@ -519,6 +521,7 @@ class ExFATBuilder(tk.Tk):
         self._build_ftpbr_tab(self._tab_ftpbr_frame)
         self._build_backports_tab(self._tab_bp_frame)
         self._build_payload_tab(self._tab_pl_frame)
+        self._build_klog_tab(self._tab_klog_frame)
         self._build_help_tab(self._tab_help_frame)
 
         self._switch_tab('build')
@@ -530,15 +533,15 @@ class ExFATBuilder(tk.Tk):
                       self._tab_extract_frame, self._tab_files_frame,
                       self._tab_ftp_frame, self._tab_ftpbr_frame,
                       self._tab_bp_frame, self._tab_pl_frame,
-                      self._tab_help_frame]
+                      self._tab_klog_frame, self._tab_help_frame]
         all_btns   = [self._tab_build_btn, self._tab_library_btn,
                       self._tab_images_btn, self._tab_ps5_btn,
                       self._tab_extract_btn, self._tab_files_btn,
                       self._tab_ftp_btn, self._tab_ftpbr_btn,
                       self._tab_bp_btn, self._tab_pl_btn,
-                      self._tab_help_btn]
+                      self._tab_klog_btn, self._tab_help_btn]
         all_keys   = ['build','library','images','ps5','extract','files',
-                      'ftp','ftpbr','backports','payloads','help']
+                      'ftp','ftpbr','backports','payloads','klog','help']
         for frame, btn, k in zip(all_frames, all_btns, all_keys):
             frame.pack_forget()
             btn.config(fg=MUTED, bg='#0a0a0a')
@@ -1921,7 +1924,7 @@ class ExFATBuilder(tk.Tk):
                           font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
                           activebackground=BORDER, activeforeground=TEXT,
                           relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
-                          command=lambda v=var: self._pl_browse_file(v)
+                          command=lambda v=var: self._pl_browse_file(v, name_var)
                           ).pack(side='left', padx=(6,0))
             return e
 
@@ -1976,7 +1979,7 @@ class ExFATBuilder(tk.Tk):
         win.geometry('+%d+%d' % (x, y))
         win.wait_window()
 
-    def _pl_browse_file(self, var):
+    def _pl_browse_file(self, var, name_var=None):
         p = filedialog.askopenfilename(
             title='Select payload file',
             filetypes=[('Payload files', '*.elf *.bin'),
@@ -1984,7 +1987,11 @@ class ExFATBuilder(tk.Tk):
                        ('BIN files', '*.bin'),
                        ('All files', '*.*')])
         if p:
-            var.set(p.replace('/', '\\'))
+            p = p.replace('/', '\\')
+            var.set(p)
+            # Auto-fill name from filename if name is still empty
+            if name_var is not None and not name_var.get().strip():
+                name_var.set(os.path.splitext(os.path.basename(p))[0])
 
     def _pl_delete(self, idx):
         name = self._pl_payloads[idx].get('name', 'this payload')
@@ -2070,6 +2077,338 @@ class ExFATBuilder(tk.Tk):
                 '\u2022 IP address is correct\n'
                 '\u2022 Port matches your homebrew (9090 / 9021)\n'
                 '\u2022 PS5 is ready to receive a payload')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # KLOG MONITOR TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_klog_tab(self, parent):
+        self._klog_ip_var      = tk.StringVar(value=self._settings.get('klog_ip', self._settings.get('ftp_ip', '')))
+        self._klog_port_var    = tk.StringVar(value=str(self._settings.get('klog_port', 3232)))
+        self._klog_running     = False
+        self._klog_socket      = [None]
+        self._klog_lines       = []
+        self._klog_filter_var  = tk.StringVar()
+        self._klog_autoscroll  = tk.BooleanVar(value=True)
+        self._klog_word_wrap   = tk.BooleanVar(value=True)
+
+        # ── Header ──
+        hdr = tk.Frame(parent, bg=BG)
+        hdr.pack(fill='x', padx=24, pady=(12, 6))
+        tk.Label(hdr, text='Klog Monitor',
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        self._klog_status_var = tk.StringVar(value='Disconnected')
+        self._klog_status_lbl = tk.Label(hdr, textvariable=self._klog_status_var,
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED)
+        self._klog_status_lbl.pack(side='right')
+
+        # ── Connection bar ──
+        conn = tk.Frame(parent, bg=SURFACE2,
+                        highlightbackground=BORDER, highlightthickness=1)
+        conn.pack(fill='x', padx=24, pady=(0, 6))
+        inner = tk.Frame(conn, bg=SURFACE2)
+        inner.pack(fill='x', padx=12, pady=8)
+
+        tk.Label(inner, text='IP',
+                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 width=3, anchor='w').pack(side='left')
+        ip_ef = tk.Frame(inner, bg=FIELD_BG,
+                         highlightbackground=BORDER, highlightthickness=1)
+        ip_ef.pack(side='left', fill='x', expand=True, padx=(4,8))
+        tk.Entry(ip_ef, textvariable=self._klog_ip_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
+                 relief='flat', bd=4).pack(fill='x')
+
+        tk.Label(inner, text='Port',
+                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED).pack(side='left')
+        port_ef = tk.Frame(inner, bg=FIELD_BG,
+                           highlightbackground=BORDER, highlightthickness=1)
+        port_ef.pack(side='left', padx=(4,8))
+        tk.Entry(port_ef, textvariable=self._klog_port_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4,
+                 width=7).pack()
+
+        self._klog_connect_btn = tk.Button(inner, text='\u25b6 Connect',
+                  font=('Segoe UI', 9, 'bold'), bg=SUCCESS, fg=TEXT,
+                  activebackground='#3d9140', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=4, cursor='hand2',
+                  command=self._klog_connect)
+        self._klog_connect_btn.pack(side='left')
+
+        self._klog_stop_btn = tk.Button(inner, text='\u25a0 Disconnect',
+                  font=('Segoe UI', 9, 'bold'), bg=DANGER, fg=TEXT,
+                  activebackground='#c0392b', activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=4, cursor='hand2',
+                  state='disabled', command=self._klog_disconnect)
+        self._klog_stop_btn.pack(side='left', padx=(6,0))
+
+        tk.Label(inner, text='Default port: 3232',
+                 font=('Segoe UI', 8), bg=SURFACE2, fg='#444444').pack(
+                     side='left', padx=(12,0))
+
+        # ── Toolbar ──
+        toolbar = tk.Frame(parent, bg=BG)
+        toolbar.pack(fill='x', padx=24, pady=(0, 4))
+
+        tk.Button(toolbar, text='Clear',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=3, cursor='hand2',
+                  command=self._klog_clear).pack(side='left')
+
+        tk.Button(toolbar, text='\U0001f4be Export log',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=3, cursor='hand2',
+                  command=self._klog_export).pack(side='left', padx=(6,0))
+
+        tk.Checkbutton(toolbar, text='Auto-scroll',
+                       variable=self._klog_autoscroll,
+                       font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                       activebackground=BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2').pack(
+                           side='left', padx=(12,0))
+
+        tk.Checkbutton(toolbar, text='Word wrap',
+                       variable=self._klog_word_wrap,
+                       font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                       activebackground=BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._klog_toggle_wrap).pack(
+                           side='left', padx=(8,0))
+
+        # Line count
+        self._klog_count_var = tk.StringVar(value='0 lines')
+        tk.Label(toolbar, textvariable=self._klog_count_var,
+                 font=('Segoe UI', 8), bg=BG, fg='#444444').pack(side='right')
+
+        # ── Filter bar ──
+        filter_row = tk.Frame(parent, bg=BG)
+        filter_row.pack(fill='x', padx=24, pady=(0, 4))
+        tk.Label(filter_row, text='\U0001f50d Filter:',
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left')
+        ff = tk.Frame(filter_row, bg=FIELD_BG,
+                      highlightbackground=BORDER, highlightthickness=1)
+        ff.pack(side='left', fill='x', expand=True, padx=(6,6))
+        filter_entry = tk.Entry(ff, textvariable=self._klog_filter_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4)
+        filter_entry.pack(fill='x')
+        self._klog_filter_var.trace('w', lambda *a: self._klog_apply_filter())
+        tk.Button(filter_row, text='Clear filter',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
+                  command=lambda: self._klog_filter_var.set('')
+                  ).pack(side='left')
+
+        # ── Log output ──
+        log_outer = tk.Frame(parent, bg='#050505',
+                             highlightbackground=BORDER, highlightthickness=1)
+        log_outer.pack(fill='both', expand=True, padx=24, pady=(0,8))
+
+        self._klog_box = tk.Text(
+            log_outer,
+            font=('Consolas', 9),
+            bg='#050505', fg='#00ff41',   # green on black — classic klog style
+            insertbackground='#00ff41',
+            selectbackground='#003300',
+            selectforeground='#00ff41',
+            relief='flat', bd=8,
+            state='disabled',
+            wrap='word')
+
+        klog_sb = tk.Scrollbar(log_outer, command=self._klog_box.yview,
+                               bg='#0a0a0a', troughcolor='#050505')
+        self._klog_box.configure(yscrollcommand=klog_sb.set)
+        klog_sb.pack(side='right', fill='y')
+        self._klog_box.pack(fill='both', expand=True)
+
+        # Colour tags for different log levels
+        self._klog_box.tag_configure('error',   foreground='#ff4444')
+        self._klog_box.tag_configure('warning', foreground='#ffaa00')
+        self._klog_box.tag_configure('info',    foreground='#00ff41')
+        self._klog_box.tag_configure('debug',   foreground='#888888')
+        self._klog_box.tag_configure('highlight', foreground='#ffffff',
+                                      background='#003300')
+
+    # ── Klog helpers ──────────────────────────────────────────────────────────
+    def _klog_save_settings(self):
+        self._settings['klog_ip']   = self._klog_ip_var.get().strip()
+        self._settings['klog_port'] = int(self._klog_port_var.get().strip() or '3232')
+        save_settings(self._settings)
+
+    def _klog_connect(self):
+        ip   = self._klog_ip_var.get().strip()
+        port = self._klog_port_var.get().strip()
+        if not ip:
+            messagebox.showwarning('No IP', 'Enter the PS5 IP address.')
+            return
+        try:
+            port = int(port)
+        except ValueError:
+            messagebox.showwarning('Invalid port', 'Port must be a number.')
+            return
+
+        self._klog_save_settings()
+        self._klog_running = True
+        self._klog_connect_btn.config(state='disabled')
+        self._klog_stop_btn.config(state='normal')
+        self._klog_status_var.set('Connecting...')
+        self._klog_status_lbl.config(fg=ACCENT)
+
+        def worker():
+            import socket
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(10)
+                s.connect((ip, port))
+                s.settimeout(None)
+                self._klog_socket[0] = s
+                self.after(0, self._klog_status_var.set,
+                           'Connected to ' + ip + ':' + str(port))
+                self.after(0, self._klog_status_lbl.config, {'fg': SUCCESS})
+                buf = ''
+                while self._klog_running:
+                    try:
+                        data = s.recv(4096)
+                        if not data:
+                            break
+                        buf += data.decode('utf-8', errors='replace')
+                        while '\n' in buf:
+                            line, buf = buf.split('\n', 1)
+                            line = line.rstrip('\r')
+                            if line:
+                                self.after(0, self._klog_add_line, line)
+                    except Exception:
+                        break
+            except Exception as e:
+                self.after(0, self._klog_status_var.set, 'Error: ' + str(e))
+                self.after(0, self._klog_status_lbl.config, {'fg': DANGER})
+            finally:
+                try:
+                    if self._klog_socket[0]:
+                        self._klog_socket[0].close()
+                        self._klog_socket[0] = None
+                except Exception:
+                    pass
+                self.after(0, self._klog_on_disconnect)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _klog_disconnect(self):
+        self._klog_running = False
+        try:
+            if self._klog_socket[0]:
+                self._klog_socket[0].close()
+        except Exception:
+            pass
+
+    def _klog_on_disconnect(self):
+        self._klog_running = False
+        self._klog_connect_btn.config(state='normal')
+        self._klog_stop_btn.config(state='disabled')
+        self._klog_status_var.set('Disconnected')
+        self._klog_status_lbl.config(fg=MUTED)
+
+    def _klog_get_tag(self, line):
+        l = line.lower()
+        if any(w in l for w in ['error', 'fatal', 'panic', 'assert', 'crash']):
+            return 'error'
+        if any(w in l for w in ['warn', 'caution']):
+            return 'warning'
+        if any(w in l for w in ['debug', 'trace', 'verbose']):
+            return 'debug'
+        return 'info'
+
+    def _klog_add_line(self, line):
+        self._klog_lines.append(line)
+        self._klog_count_var.set(str(len(self._klog_lines)) + ' lines')
+
+        # Check filter
+        filt = self._klog_filter_var.get().lower()
+        if filt and filt not in line.lower():
+            return
+
+        tag  = self._klog_get_tag(line)
+        self._klog_box.config(state='normal')
+        self._klog_box.insert('end', line + '\n', tag)
+
+        # Highlight filter term
+        if filt:
+            start = '1.0'
+            while True:
+                pos = self._klog_box.search(filt, start, stopindex='end',
+                                             nocase=True)
+                if not pos:
+                    break
+                end_pos = '%s+%dc' % (pos, len(filt))
+                self._klog_box.tag_add('highlight', pos, end_pos)
+                start = end_pos
+
+        self._klog_box.config(state='disabled')
+        if self._klog_autoscroll.get():
+            self._klog_box.see('end')
+
+    def _klog_apply_filter(self):
+        """Re-render all lines with current filter."""
+        filt = self._klog_filter_var.get().lower()
+        self._klog_box.config(state='normal')
+        self._klog_box.delete('1.0', 'end')
+        for line in self._klog_lines:
+            if filt and filt not in line.lower():
+                continue
+            tag = self._klog_get_tag(line)
+            self._klog_box.insert('end', line + '\n', tag)
+        if filt:
+            start = '1.0'
+            while True:
+                pos = self._klog_box.search(filt, start, stopindex='end',
+                                             nocase=True)
+                if not pos:
+                    break
+                end_pos = '%s+%dc' % (pos, len(filt))
+                self._klog_box.tag_add('highlight', pos, end_pos)
+                start = end_pos
+        self._klog_box.config(state='disabled')
+        if self._klog_autoscroll.get():
+            self._klog_box.see('end')
+
+    def _klog_toggle_wrap(self):
+        wrap = 'word' if self._klog_word_wrap.get() else 'none'
+        self._klog_box.config(wrap=wrap)
+
+    def _klog_clear(self):
+        self._klog_lines = []
+        self._klog_count_var.set('0 lines')
+        self._klog_box.config(state='normal')
+        self._klog_box.delete('1.0', 'end')
+        self._klog_box.config(state='disabled')
+
+    def _klog_export(self):
+        if not self._klog_lines:
+            messagebox.showwarning('Nothing to export', 'No log data to export.')
+            return
+        path = filedialog.asksaveasfilename(
+            title='Export klog',
+            defaultextension='.txt',
+            filetypes=[('Text files', '*.txt'), ('Log files', '*.log'),
+                       ('All files', '*.*')],
+            initialfile='klog_' + time.strftime('%Y%m%d_%H%M%S') + '.txt')
+        if not path:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('PS5 Klog Export\n')
+                f.write('Date: ' + time.strftime('%Y-%m-%d %H:%M:%S') + '\n')
+                f.write('=' * 60 + '\n\n')
+                f.write('\n'.join(self._klog_lines))
+            self._klog_status_var.set('Exported: ' + os.path.basename(path))
+            self._klog_status_lbl.config(fg=SUCCESS)
+        except Exception as e:
+            messagebox.showerror('Export failed', str(e))
 
     def _build_help_tab(self, parent):
         # Scrollable canvas
@@ -6984,12 +7323,114 @@ class ExFATBuilder(tk.Tk):
                            'Could not load — check your internet connection.')
         threading.Thread(target=worker, daemon=True).start()
 
-    def _show_update_notice(self, version, url):
-        if messagebox.askyesno('Update available',
-                'Version ' + version + ' is available on GitHub.\n\n'
-                'Open the releases page now?'):
+    def _show_update_notice(self, version, dl_url):
+        ans = messagebox.askyesnocancel(
+            'Update available',
+            'v' + version + ' is available!\n\n'
+            'Current version: v' + APP_VERSION + '\n\n'
+            'Yes  = Download and install automatically\n'
+            'No   = Open GitHub releases page\n'
+            'Cancel = Remind me later')
+        if ans is True:
+            self._auto_update(version, dl_url)
+        elif ans is False:
             import webbrowser
-            webbrowser.open(url)
+            webbrowser.open('https://github.com/kerrdec97/ps5-exfat-builder/releases')
+
+    def _auto_update(self, version, dl_url):
+        """Download the new exe and replace the current one on next launch."""
+        win = tk.Toplevel(self)
+        win.title('Updating to v' + version)
+        win.geometry('420x160')
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self)
+
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill='both', expand=True, padx=24, pady=16)
+        tk.Label(body, text='Downloading v' + version + '...',
+                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=TEXT).pack(anchor='w')
+        status_var = tk.StringVar(value='Connecting to GitHub...')
+        tk.Label(body, textvariable=status_var,
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(4,8))
+        bar_frame = tk.Frame(body, bg=TRACK, height=16)
+        bar_frame.pack(fill='x')
+        bar_frame.pack_propagate(False)
+        bar_cv = tk.Canvas(bar_frame, height=16, bg=TRACK,
+                           highlightthickness=0, bd=0)
+        bar_cv.pack(fill='both', expand=True)
+        bar_rect = bar_cv.create_rectangle(0, 0, 0, 16, fill=ACCENT, outline='')
+
+        def set_bar(pct):
+            try:
+                w = bar_cv.winfo_width()
+                bar_cv.coords(bar_rect, 0, 0, int(w * pct / 100), 16)
+                bar_cv.itemconfig(bar_rect, fill=SUCCESS if pct >= 100 else ACCENT)
+            except Exception:
+                pass
+
+        def worker():
+            try:
+                import urllib.request
+                # Get the download URL for the exe asset
+                api_url = 'https://api.github.com/repos/kerrdec97/ps5-exfat-builder/releases/latest'
+                req = urllib.request.Request(api_url,
+                    headers={'User-Agent': 'ps5-exfat-builder'})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = json.loads(r.read().decode())
+
+                # Find the .exe asset
+                exe_url = None
+                for asset in data.get('assets', []):
+                    name = asset.get('name', '')
+                    if name.endswith('.exe') and 'Lite' not in name:
+                        exe_url = asset.get('browser_download_url')
+                        break
+
+                if not exe_url:
+                    win.after(0, status_var.set, 'No exe found in release assets.')
+                    return
+
+                win.after(0, status_var.set, 'Downloading...')
+
+                # Download to temp file
+                tmp_path = sys.executable + '.new'
+                total    = [0]
+                received = [0]
+
+                def reporthook(count, block_size, total_size):
+                    received[0] = count * block_size
+                    total[0]    = total_size
+                    pct = min(100, int(received[0] / total_size * 100)) if total_size > 0 else 0
+                    mb  = received[0] / 1024 / 1024
+                    win.after(0, set_bar, pct)
+                    win.after(0, status_var.set,
+                              'Downloading... %.1f MB (%d%%)' % (mb, pct))
+
+                urllib.request.urlretrieve(exe_url, tmp_path, reporthook)
+
+                # Write a batch file that replaces the exe after exit
+                bat_path = sys.executable + '_update.bat'
+                with open(bat_path, 'w') as f:
+                    f.write('@echo off\n')
+                    f.write('timeout /t 2 /nobreak >nul\n')
+                    f.write('move /y "%s" "%s"\n' % (tmp_path, sys.executable))
+                    f.write('start "" "%s"\n' % sys.executable)
+                    f.write('del "%s"\n' % bat_path)
+
+                win.after(0, set_bar, 100)
+                win.after(0, status_var.set, 'Download complete! Restarting...')
+                win.after(1500, lambda: (
+                    subprocess.Popen(['cmd', '/c', bat_path],
+                                     creationflags=subprocess.CREATE_NO_WINDOW),
+                    self.destroy()))
+
+            except Exception as e:
+                win.after(0, status_var.set, 'Update failed: ' + str(e))
+                win.after(0, messagebox.showerror, 'Update failed',
+                          str(e) + '\n\nVisit GitHub to download manually.')
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _set_status(self, text, color=MUTED):
         self.status_text.set(text)
