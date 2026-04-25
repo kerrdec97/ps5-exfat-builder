@@ -22,7 +22,7 @@ except Exception:
     except Exception:
         pass
 
-APP_VERSION = '1.4.0'
+APP_VERSION = '1.5.0'
 
 _BAT_B64 = "QGVjaG8gb2ZmDQpzZXRsb2NhbCBFbmFibGVFeHRlbnNpb25zDQoNClJFTSBtYWtlX2ltYWdlLmJhdA0KUkVNIFVzYWdlOiBtYWtlX2ltYWdlLmJhdCAiQzpcaW1hZ2VzXGRhdGEuZXhmYXQiICJDOlxwYXlsb2FkIg0KDQppZiAiJX4xIj09IiIgZ290byA6dXNhZ2UNCmlmICIlfjIiPT0iIiBnb3RvIDp1c2FnZQ0KDQpzZXQgIklNQUdFPSV+MSINCnNldCAiU1JDRElSPSV+MiINCg0KUkVNIFNjcmlwdCBpcyBleHBlY3RlZCB0byBiZSBpbiB0aGUgc2FtZSBkaXJlY3RvcnkgYXMgdGhpcyBCQVQNCnNldCAiU0NSSVBUPSV+ZHAwTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIg0KDQppZiBub3QgZXhpc3QgIiVTQ1JJUFQlIiAoDQogIGVjaG8gW0VSUk9SXSBQb3dlclNoZWxsIHNjcmlwdCBub3QgZm91bmQ6ICIlU0NSSVBUJSINCiAgZWNobyBQdXQgTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIG5leHQgdG8gdGhpcyAuYmF0IGZpbGUuDQogIGV4aXQgL2IgMg0KKQ0KDQppZiBub3QgZXhpc3QgIiVTUkNESVIlIiAoDQogIGVjaG8gW0VSUk9SXSBTb3VyY2UgZGlyZWN0b3J5IG5vdCBmb3VuZDogIiVTUkNESVIlIg0KICBleGl0IC9iIDMNCikNCg0KaWYgbm90IGV4aXN0ICIlU1JDRElSJVxlYm9vdC5iaW4iICgNCiAgZWNobyBbRVJST1JdIGVib290LmJpbiBub3QgZm91bmQgaW4gc291cmNlIGRpcmVjdG9yeTogIiVTUkNESVIlIg0KICBleGl0IC9iIDQNCikNCg0KUkVNIFJ1biBlbGV2YXRlZD8gVGhpcyBCQVQgZG9lcyBub3QgYXV0by1lbGV2YXRlLg0KUkVNIFJpZ2h0LWNsaWNrIC0+IFJ1biBhcyBhZG1pbmlzdHJhdG9yLCBvciBzdGFydCBjbWQgYXMgYWRtaW4uDQoNCnBvd2Vyc2hlbGwuZXhlIC1Ob1Byb2ZpbGUgLUV4ZWN1dGlvblBvbGljeSBCeXBhc3MgLUZpbGUgIiVTQ1JJUFQlIiAtSW1hZ2VQYXRoICIlSU1BR0UlIiAtU291cmNlRGlyICIlU1JDRElSJSIgLUZvcmNlT3ZlcndyaXRlDQoNCnNldCAiUkM9JUVSUk9STEVWRUwlIg0KaWYgbm90ICIlUkMlIj09IjAiICgNCiAgZWNobyBbRVJST1JdIEZhaWxlZCB3aXRoIGV4aXQgY29kZSAlUkMlLg0KICBleGl0IC9iICVSQyUNCikNCg0KZWNobyBbT0tdIERvbmU6ICIlSU1BR0UlIg0KZXhpdCAvYiAwDQoNCjp1c2FnZQ0KZWNobyBVc2FnZToNCmVjaG8gICAlfm54MCAiQzpccGF0aFx0b1xpbWFnZS5pbWciICJDOlxwYXRoXHRvXGZvbGRlciINCmVjaG8uDQplY2hvIE5vdGVzOg0KZWNobyAgIC0gUnVuIHRoaXMgQkFUIGFzIEFkbWluaXN0cmF0b3IuDQplY2hvICAgLSBJbWFnZSB3aWxsIGJlIGF1dG8tc2l6ZWQuDQpleGl0IC9iIDENCg=="
 _PS1_B64 = "PCMgIE5ldy1Pc2ZFeGZhdEltYWdlLnBzMQoKICAgIFBVUlBPU0UKICAgIC0tLS0tLS0KICAgIENyZWF0ZSBhIFJBVyBpbWFnZSBmaWxlLCBtb3VudCBpdCB2aWEgT1NGTW91bnQgYXMgYSBsb2dpY2FsIHZvbHVtZSwKICAgIGZvcm1hdCBpdCBhcyBleEZBVCwgYW5kIGVpdGhlcjoKICAgICAgLSBmb3JtYXQgKyBjb3B5ICsgZGlzbW91bnQgKGRlZmF1bHQpLCBvcgogICAgICAtIGNyZWF0ZSArIG1vdW50IG9ubHkgZm9yIG1hbnVhbCBzdGVwcy4KCiAgICBVU0FHRSAocnVuIFBvd2VyU2hlbGwgYXMgQWRtaW5pc3RyYXRvcikKICAgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCiAgICAxKSBBdXRvLXNpemUgKHJlY29tbWVuZGVkKToKICAgICAgIHBvd2Vyc2hlbGwuZXhlIC1FeGVjdXRpb25Qb2xpY3kgQnlwYXNzIC1GaWxlIC5cTmV3LU9zZkV4ZmF0SW1hZ2UucHMxIGAKICAgICAgICAgLUltYWdlUGF0aCAiQzpcaW1hZ2VzXGRhdGEuaW1nIiBgCiAgICAgICAgIC1Tb3VyY2VEaXIgIkM6XHBheWxvYWQiIGAKICAgICAgICAgLUxhYmVsICJEQVRBIiBgCiAgICAgICAgIC1Gb3JjZU92ZXJ3cml0ZQoKICAgIDIpIEZpeGVkIHNpemU6CiAgICAgICBwb3dlcnNoZWxsLmV4ZSAtRXhlY3V0aW9uUG9saWN5IEJ5cGFzcyAtRmlsZSAuXE5ldy1Pc2ZFeGZhdEltYWdlLnBzMSBgCiAgICAgICAgIC1JbWFnZVBhdGggIkM6XGltYWdlc1xkYXRhLmltZyIgYAogICAgICAgICAtU291cmNlRGlyICJDOlxwYXlsb2FkIiBgCiAgICAgICAgIC1TaXplIDhHIGAKICAgICAgICAgLUxhYmVsICJEQVRBIiBgCiAgICAgICAgIC1Gb3JjZU92ZXJ3cml0ZQoKICAgIDMpIENyZWF0ZSBlbXB0eSBpbWFnZSBhbmQga2VlcCBtb3VudGVkIChtYW51YWwgZm9ybWF0L2NvcHkpOgogICAgICAgcG93ZXJzaGVsbC5leGUgLUV4ZWN1dGlvblBvbGljeSBCeXBhc3MgLUZpbGUgLlxOZXctT3NmRXhmYXRJbWFnZS5wczEgYAogICAgICAgICAtSW1hZ2VQYXRoICJDOlxpbWFnZXNcZGF0YS5leGZhdCIgYAogICAgICAgICAtU291cmNlRGlyICJDOlxwYXlsb2FkXEFQUFhYWFgiIGAKICAgICAgICAgLUNyZWF0ZUVtcHR5QW5kTW91bnQgYAogICAgICAgICAtRm9yY2VPdmVyd3JpdGUKCiAgICBQQVJBTUVURVJTCiAgICAtLS0tLS0tLS0tCiAgICAtSW1hZ2VQYXRoICAgICAgIE91dHB1dCBpbWFnZSBmaWxlIHBhdGguCiAgICAtU291cmNlRGlyICAgICAgIEZvbGRlciB0byBjb3B5IGludG8gdGhlIG5ldyB2b2x1bWUuCiAgICAtU2l6ZSAgICAgICAgICAgIE9wdGlvbmFsLiBJZiBvbWl0dGVkLCBhbiBvcHRpbWFsIHNpemUgaXMgY29tcHV0ZWQgdG8gZml0IGFsbCBmaWxlcy4KICAgICAgICAgICAgICAgICAgICAgU3VmZml4ZXM6IEsvTS9HL1QgKDEwMjQpLCBrL20vZy90ICgxMDAwKSwgYiAoNTEyLWJ5dGUgYmxvY2tzKSwgb3IgYnl0ZXMuCiAgICAtTGFiZWwgICAgICAgICAgIFZvbHVtZSBsYWJlbC4KICAgIC1Gb3JjZU92ZXJ3cml0ZSAgUmVjcmVhdGUgaW1hZ2UgaWYgaXQgYWxyZWFkeSBleGlzdHMuCiAgICAtQ3JlYXRlRW1wdHlBbmRNb3VudAogICAgICAgICAgICAgICAgICAgICBDcmVhdGUgYW5kIG1vdW50IGltYWdlIG9ubHkuIFNraXAgZm9ybWF0L2NvcHkgYW5kIGxlYXZlIG1vdW50ZWQuCgogICAgTk9URVMKICAgIC0tLS0tCiAgICAtIFRoaXMgc2NyaXB0IGRvZXMgTk9UIGF1dG8tZWxldmF0ZS4gU3RhcnQgUG93ZXJTaGVsbCBhcyBBZG1pbmlzdHJhdG9yLgogICAgLSBGaWxlc3lzdGVtIGlzIGFsd2F5cyBleEZBVC4KICAgIC0gQ2x1c3RlciBzaXplIGlzIGF1dG8tc2VsZWN0ZWQ6CiAgICAgIC0gbGFyZ2UtZmlsZSBzZXRzOiA2NTUzNgogICAgICAtIHNtYWxsL21peGVkLWZpbGUgc2V0czogMzI3NjgKIz4KCltDbWRsZXRCaW5kaW5nKCldCnBhcmFtKAogIFtQYXJhbWV0ZXIoTWFuZGF0b3J5ID0gJHRydWUpXQogIFtzdHJpbmddJEltYWdlUGF0aCwKCiAgW1BhcmFtZXRlcihNYW5kYXRvcnkgPSAkdHJ1ZSldCiAgW3N0cmluZ10kU291cmNlRGlyLAoKICBbUGFyYW1ldGVyKE1hbmRhdG9yeSA9ICRmYWxzZSldCiAgW3N0cmluZ10kU2l6ZSwKCiAgW3N0cmluZ10kTGFiZWwgPSAiT1NGSU1HIiwKCiAgW3N3aXRjaF0kRm9yY2VPdmVyd3JpdGUsCgogIFtzd2l0Y2hdJENyZWF0ZUVtcHR5QW5kTW91bnQKKQoKU2V0LVN0cmljdE1vZGUgLVZlcnNpb24gTGF0ZXN0CiRFcnJvckFjdGlvblByZWZlcmVuY2UgPSAiU3RvcCIKJHNjcmlwdEN1bHR1cmUgPSBbU3lzdGVtLkdsb2JhbGl6YXRpb24uQ3VsdHVyZUluZm9dOjpHZXRDdWx0dXJlSW5mbygiZW4tVVMiKQpbU3lzdGVtLlRocmVhZGluZy5UaHJlYWRdOjpDdXJyZW50VGhyZWFkLkN1cnJlbnRDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5UaHJlYWRpbmcuVGhyZWFkXTo6Q3VycmVudFRocmVhZC5DdXJyZW50VUlDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5HbG9iYWxpemF0aW9uLkN1bHR1cmVJbmZvXTo6RGVmYXVsdFRocmVhZEN1cnJlbnRDdWx0dXJlID0gJHNjcmlwdEN1bHR1cmUKW1N5c3RlbS5HbG9iYWxpemF0aW9uLkN1bHR1cmVJbmZvXTo6RGVmYXVsdFRocmVhZEN1cnJlbnRVSUN1bHR1cmUgPSAkc2NyaXB0Q3VsdHVyZQoKZnVuY3Rpb24gVGVzdC1BZG1pbiB7CiAgJGlkID0gW1NlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzSWRlbnRpdHldOjpHZXRDdXJyZW50KCkKICAkcCAgPSBOZXctT2JqZWN0IFNlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzUHJpbmNpcGFsKCRpZCkKICByZXR1cm4gJHAuSXNJblJvbGUoW1NlY3VyaXR5LlByaW5jaXBhbC5XaW5kb3dzQnVpbHRJblJvbGVdOjpBZG1pbmlzdHJhdG9yKQp9CgpmdW5jdGlvbiBGaW5kLU9TRk1vdW50Q29tIHsKICAkY21kID0gR2V0LUNvbW1hbmQgIm9zZm1vdW50LmNvbSIgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUKICBpZiAoJGNtZCkgeyByZXR1cm4gJGNtZC5Tb3VyY2UgfQoKICAkY2FuZGlkYXRlcyA9IEAoCiAgICAiJHtlbnY6UHJvZ3JhbUZpbGVzfVxPU0ZNb3VudFxvc2Ztb3VudC5jb20iLAogICAgIiR7ZW52OlByb2dyYW1GaWxlcyh4ODYpfVxPU0ZNb3VudFxvc2Ztb3VudC5jb20iLAogICAgIiR7ZW52OlByb2dyYW1GaWxlc31cUGFzc01hcmtcT1NGTW91bnRcb3NmbW91bnQuY29tIiwKICAgICIke2VudjpQcm9ncmFtRmlsZXMoeDg2KX1cUGFzc01hcmtcT1NGTW91bnRcb3NmbW91bnQuY29tIgogICkgfCBXaGVyZS1PYmplY3QgeyAkXyAtYW5kIChUZXN0LVBhdGggJF8pIH0KCiAgJGNhbmRpZGF0ZXMgPSBAKCRjYW5kaWRhdGVzKQogIGlmICgkY2FuZGlkYXRlcy5Db3VudCAtZ3QgMCkgeyByZXR1cm4gJGNhbmRpZGF0ZXNbMF0gfQoKICB0aHJvdyAib3NmbW91bnQuY29tIG5vdCBmb3VuZC4gQWRkIE9TRk1vdW50IHRvIFBBVEggb3IgaW5zdGFsbCBpdCB0byBhIHN0YW5kYXJkIGxvY2F0aW9uLiIKfQoKZnVuY3Rpb24gUGFyc2UtU2l6ZVRvQnl0ZXMoW3N0cmluZ10kcykgewogICRzID0gJHMuVHJpbSgpCiAgaWYgKCRzIC1tYXRjaCAnXlxzKihcZCspXHMqKFtiQmtLbU1nR3RUXT8pXHMqJCcpIHsKICAgICRudW0gPSBbSW50NjRdJG1hdGNoZXNbMV0KICAgICR1ICAgPSAkbWF0Y2hlc1syXQogICAgc3dpdGNoICgkdSkgewogICAgICAnJyAgeyByZXR1cm4gJG51bSB9CiAgICAgICdiJyB7IHJldHVybiAkbnVtICogNTEyIH0KICAgICAgJ0InIHsgcmV0dXJuICRudW0gKiA1MTIgfQogICAgICAnSycgeyByZXR1cm4gJG51bSAqIDEwMjQgfQogICAgICAnTScgeyByZXR1cm4gJG51bSAqIDEwMjQgKiAxMDI0IH0KICAgICAgJ0cnIHsgcmV0dXJuICRudW0gKiAxMDI0ICogMTAyNCAqIDEwMjQgfQogICAgICAnVCcgeyByZXR1cm4gJG51bSAqIDEwMjQgKiAxMDI0ICogMTAyNCAqIDEwMjQgfQogICAgICAnaycgeyByZXR1cm4gJG51bSAqIDEwMDAgfQogICAgICAnbScgeyByZXR1cm4gJG51bSAqIDEwMDAgKiAxMDAwIH0KICAgICAgJ2cnIHsgcmV0dXJuICRudW0gKiAxMDAwICogMTAwMCAqIDEwMDAgfQogICAgICAndCcgeyByZXR1cm4gJG51bSAqIDEwMDAgKiAxMDAwICogMTAwMCAqIDEwMDAgfQogICAgICBkZWZhdWx0IHsgdGhyb3cgIlVua25vd24gc2l6ZSBzdWZmaXg6ICckdSciIH0KICAgIH0KICB9CiAgdGhyb3cgIkZhaWxlZCB0byBwYXJzZSBzaXplIHN0cmluZzogJyRzJyIKfQoKZnVuY3Rpb24gRm9ybWF0LUJ5dGVzKFtJbnQ2NF0kYnl0ZXMpIHsKICBpZiAoJGJ5dGVzIC1nZSAxVEIpIHsgcmV0dXJuICJ7MDpOMn0gVEIiIC1mICgkYnl0ZXMvMVRCKSB9CiAgaWYgKCRieXRlcyAtZ2UgMUdCKSB7IHJldHVybiAiezA6TjJ9IEdCIiAtZiAoJGJ5dGVzLzFHQikgfQogIGlmICgkYnl0ZXMgLWdlIDFNQikgeyByZXR1cm4gInswOk4yfSBNQiIgLWYgKCRieXRlcy8xTUIpIH0KICBpZiAoJGJ5dGVzIC1nZSAxS0IpIHsgcmV0dXJuICJ7MDpOMn0gS0IiIC1mICgkYnl0ZXMvMUtCKSB9CiAgcmV0dXJuICIkYnl0ZXMgQiIKfQoKZnVuY3Rpb24gR2V0LUZyZWVEcml2ZUxldHRlciB7CiAgJHVzZWQgPSAoR2V0LVBTRHJpdmUgLVBTUHJvdmlkZXIgRmlsZVN5c3RlbSkuTmFtZQogIGZvcmVhY2ggKCRjb2RlIGluIDY4Li45MCkgewogICAgJGxldHRlciA9IFtjaGFyXSRjb2RlCiAgICBpZiAoJHVzZWQgLW5vdGNvbnRhaW5zIFtzdHJpbmddJGxldHRlcikgeyByZXR1cm4gW3N0cmluZ10kbGV0dGVyIH0KICB9CiAgdGhyb3cgIk5vIGZyZWUgZHJpdmUgbGV0dGVycyBhdmFpbGFibGUgKEQ6Li5aOikuIgp9CgpmdW5jdGlvbiBHZXQtT3B0aW1hbEltYWdlU2l6ZUJ5dGVzKFtzdHJpbmddJGRpciwgW2ludF0kY2x1c3RlckJ5dGVzKSB7CiAgJGNsdXN0ZXIgPSBbSW50NjRdJGNsdXN0ZXJCeXRlcwogIFtJbnQ2NF0kbWV0YUZpeGVkID0gMzJNQgogIFtJbnQ2NF0kbWluU2xhY2sgPSA2NE1CCiAgW0ludDY0XSRzcGFyZU1pbiA9IDY0TUIKICBbSW50NjRdJHNwYXJlTWF4ID0gNTEyTUIKICBbSW50NjRdJGVudHJ5TWV0YUJ5dGVzID0gMjU2CgogICRmaWxlcyA9IEAoR2V0LUNoaWxkSXRlbSAtTGl0ZXJhbFBhdGggJGRpciAtUmVjdXJzZSAtRmlsZSAtRm9yY2UpCiAgJGRpcnMgPSBAKEdldC1DaGlsZEl0ZW0gLUxpdGVyYWxQYXRoICRkaXIgLVJlY3Vyc2UgLURpcmVjdG9yeSAtRm9yY2UpCgogIFtJbnQ2NF0kcmF3RmlsZUJ5dGVzID0gMAogIFtJbnQ2NF0kZGF0YUJ5dGVzID0gMAogIGZvcmVhY2ggKCRmIGluICRmaWxlcykgewogICAgJGxlbiA9IFtJbnQ2NF0kZi5MZW5ndGgKICAgICRyYXdGaWxlQnl0ZXMgKz0gJGxlbgogICAgJGRhdGFCeXRlcyArPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkbGVuIC8gW2RvdWJsZV0kY2x1c3RlcikgKiAkY2x1c3RlcikKICB9CgogIFtJbnQ2NF0kZGF0YUNsdXN0ZXJzID0gW0ludDY0XShbTWF0aF06OkNlaWxpbmcoJGRhdGFCeXRlcyAvIFtkb3VibGVdJGNsdXN0ZXIpKQogIFtJbnQ2NF0kZmF0Qnl0ZXMgPSAkZGF0YUNsdXN0ZXJzICogNAogIFtJbnQ2NF0kYml0bWFwQnl0ZXMgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkZGF0YUNsdXN0ZXJzIC8gOC4wKSkKICBbSW50NjRdJGVudHJ5Qnl0ZXMgPQogICAgICAoKFtJbnQ2NF0kZmlsZXMuQ291bnQgKyBbSW50NjRdJGRpcnMuQ291bnQpICogJGVudHJ5TWV0YUJ5dGVzKQoKICBbSW50NjRdJGJhc2VUb3RhbCA9CiAgICAgICRkYXRhQnl0ZXMgKyAkZmF0Qnl0ZXMgKyAkYml0bWFwQnl0ZXMgKyAkZW50cnlCeXRlcyArICRtZXRhRml4ZWQKICBbSW50NjRdJHNwYXJlQnl0ZXMgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkYmFzZVRvdGFsIC8gMjAwLjApKQogIGlmICgkc3BhcmVCeXRlcyAtbHQgJHNwYXJlTWluKSB7ICRzcGFyZUJ5dGVzID0gJHNwYXJlTWluIH0KICBpZiAoJHNwYXJlQnl0ZXMgLWd0ICRzcGFyZU1heCkgeyAkc3BhcmVCeXRlcyA9ICRzcGFyZU1heCB9CiAgW0ludDY0XSR0b3RhbCA9ICRiYXNlVG90YWwgKyAkc3BhcmVCeXRlcwogIFtJbnQ2NF0kbWluVG90YWwgPSAkcmF3RmlsZUJ5dGVzICsgJG1pblNsYWNrCiAgaWYgKCR0b3RhbCAtbHQgJG1pblRvdGFsKSB7ICR0b3RhbCA9ICRtaW5Ub3RhbCB9CgogIFtJbnQ2NF0kYWxpZ24gPSAxTUIKICAkdG90YWwgPSBbSW50NjRdKFtNYXRoXTo6Q2VpbGluZygkdG90YWwgLyBbZG91YmxlXSRhbGlnbikgKiAkYWxpZ24pCiAgcmV0dXJuICR0b3RhbAp9CgpmdW5jdGlvbiBXYWl0LUZvckxvZ2ljYWxEcml2ZShbc3RyaW5nXSRkcml2ZUxldHRlciwgW2ludF0kdGltZW91dFNlY29uZHMgPSAyMCkgewogICR0YXJnZXQgPSAiJHtkcml2ZUxldHRlcn06IgogICRzdyA9IFtEaWFnbm9zdGljcy5TdG9wd2F0Y2hdOjpTdGFydE5ldygpCiAgd2hpbGUgKCRzdy5FbGFwc2VkLlRvdGFsU2Vjb25kcyAtbHQgJHRpbWVvdXRTZWNvbmRzKSB7CiAgICAkbG9naWNhbCA9IEdldC1DaW1JbnN0YW5jZSAtQ2xhc3NOYW1lIFdpbjMyX0xvZ2ljYWxEaXNrIC1GaWx0ZXIgIkRldmljZUlEPSckdGFyZ2V0JyIgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUKICAgIGlmICgkbG9naWNhbCkgeyByZXR1cm4gJHRydWUgfQogICAgU3RhcnQtU2xlZXAgLU1pbGxpc2Vjb25kcyAzMDAKICB9CiAgcmV0dXJuICRmYWxzZQp9CgpmdW5jdGlvbiBHZXQtTG9naWNhbERyaXZlRmlsZVN5c3RlbShbc3RyaW5nXSRkcml2ZUxldHRlcikgewogICR0YXJnZXQgPSAiJHtkcml2ZUxldHRlcn06IgogICRsb2dpY2FsID0gR2V0LUNpbUluc3RhbmNlIC1DbGFzc05hbWUgV2luMzJfTG9naWNhbERpc2sgLUZpbHRlciAiRGV2aWNlSUQ9JyR0YXJnZXQnIiAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQogIGlmICgkbG9naWNhbCkgeyByZXR1cm4gW3N0cmluZ10kbG9naWNhbC5GaWxlU3lzdGVtIH0KICByZXR1cm4gIiIKfQoKZnVuY3Rpb24gR2V0LU9wdGltYWxFeGZhdENsdXN0ZXJTaXplKFtzdHJpbmddJGRpcikgewogIFtJbnQ2NF0kbGFyZ2VGaWxlVGhyZXNob2xkID0gMU1CCgogICRmaWxlcyA9IEAoR2V0LUNoaWxkSXRlbSAtTGl0ZXJhbFBhdGggJGRpciAtUmVjdXJzZSAtRmlsZSAtRm9yY2UpCiAgaWYgKCRmaWxlcy5Db3VudCAtZXEgMCkgeyByZXR1cm4gMzI3NjggfQoKICBbSW50NjRdJHJhd0ZpbGVCeXRlcyA9IDAKICBmb3JlYWNoICgkZiBpbiAkZmlsZXMpIHsKICAgICRyYXdGaWxlQnl0ZXMgKz0gW0ludDY0XSRmLkxlbmd0aAogIH0KCiAgW0ludDY0XSRhdmdGaWxlQnl0ZXMgPSBbSW50NjRdKCRyYXdGaWxlQnl0ZXMgLyBbSW50NjRdJGZpbGVzLkNvdW50KQogIGlmICgkYXZnRmlsZUJ5dGVzIC1nZSAkbGFyZ2VGaWxlVGhyZXNob2xkKSB7IHJldHVybiA2NTUzNiB9CiAgcmV0dXJuIDMyNzY4Cn0KCmZ1bmN0aW9uIEZvcm1hdC1BbGxvY2F0aW9uVW5pdEFyZyhbaW50XSRjbHVzdGVyU2l6ZSkgewogIGlmICgkY2x1c3RlclNpemUgLWdlIDFNQiAtYW5kICgkY2x1c3RlclNpemUgJSAxTUIpIC1lcSAwKSB7CiAgICByZXR1cm4gInswfU0iIC1mICgkY2x1c3RlclNpemUgLyAxTUIpCiAgfQogIGlmICgkY2x1c3RlclNpemUgLWdlIDFLQiAtYW5kICgkY2x1c3RlclNpemUgJSAxS0IpIC1lcSAwKSB7CiAgICByZXR1cm4gInswfUsiIC1mICgkY2x1c3RlclNpemUgLyAxS0IpCiAgfQogIHJldHVybiAiJGNsdXN0ZXJTaXplIgp9CgpmdW5jdGlvbiBEaXNtb3VudC1Pc2ZWb2x1bWUoW3N0cmluZ10kb3NmUGF0aCwgW3N0cmluZ10kbW91bnRQb2ludCwgW2ludF0kbWF4QXR0ZW1wdHMgPSA2KSB7CiAgaWYgKFtzdHJpbmddOjpJc051bGxPcldoaXRlU3BhY2UoJG1vdW50UG9pbnQpKSB7IHJldHVybiAkZmFsc2UgfQoKICAkdGFyZ2V0cyA9IEAoJG1vdW50UG9pbnQpCiAgaWYgKC1ub3QgJG1vdW50UG9pbnQuRW5kc1dpdGgoIlwiKSkgeyAkdGFyZ2V0cyArPSAiJG1vdW50UG9pbnRcIiB9CgogIGZvciAoJGkgPSAxOyAkaSAtbGUgJG1heEF0dGVtcHRzOyAkaSsrKSB7CiAgICBmb3JlYWNoICgkdGFyZ2V0IGluICR0YXJnZXRzKSB7CiAgICAgIHRyeSB7CiAgICAgICAgJiAkb3NmUGF0aCAtZCAtbSAkdGFyZ2V0IDI+JjEgfCBPdXQtTnVsbAogICAgICAgIGlmICgkTEFTVEVYSVRDT0RFIC1lcSAwKSB7IHJldHVybiAkdHJ1ZSB9CiAgICAgIH0gY2F0Y2ggewogICAgICAgICMgUmV0cnk6IHZvbHVtZSBjYW4gcmVtYWluIGJ1c3kgZm9yIGEgc2hvcnQgdGltZSBhZnRlciBmb3JtYXQvY29weS4KICAgICAgfQogICAgfQogICAgU3RhcnQtU2xlZXAgLU1pbGxpc2Vjb25kcyA1MDAKICB9CgogIHJldHVybiAkZmFsc2UKfQoKZnVuY3Rpb24gSW52b2tlLUZvcm1hdFZvbHVtZShbc3RyaW5nXSRkcml2ZUxldHRlciwgW2ludF0kY2x1c3RlclNpemUsIFtzdHJpbmddJGxhYmVsKSB7CiAgJHRhcmdldCA9ICIke2RyaXZlTGV0dGVyfToiCiAgJGZpbGVTeXN0ZW0gPSAiZXhGQVQiCiAgJGNsdXN0ZXJBcmcgPSBGb3JtYXQtQWxsb2NhdGlvblVuaXRBcmcgLWNsdXN0ZXJTaXplICRjbHVzdGVyU2l6ZQogICRhdHRlbXB0cyA9IEAoCiAgICBAeyBOYW1lID0gIiRmaWxlU3lzdGVtIHF1aWNrIHdpdGggcmVxdWVzdGVkIGFsbG9jYXRpb24gdW5pdCI7IEFyZ3MgPSBAKCR0YXJnZXQsICIvRlM6JGZpbGVTeXN0ZW0iLCAiL0E6JGNsdXN0ZXJBcmciLCAiL1EiLCAiL1Y6JGxhYmVsIiwgIi9YIiwgIi9ZIikgfQogICkKCiAgJGxhc3RGb3JtYXRFeGl0Q29kZSA9IC0xCiAgZm9yZWFjaCAoJGF0dGVtcHQgaW4gJGF0dGVtcHRzKSB7CiAgICBXcml0ZS1Ib3N0ICJbSW5mb10gZm9ybWF0IGF0dGVtcHQ6ICQoJGF0dGVtcHQuTmFtZSkiCiAgICAkc3Rkb3V0UGF0aCA9IFtTeXN0ZW0uSU8uUGF0aF06OkdldFRlbXBGaWxlTmFtZSgpCiAgICAkc3RkZXJyUGF0aCA9IFtTeXN0ZW0uSU8uUGF0aF06OkdldFRlbXBGaWxlTmFtZSgpCiAgICB0cnkgewogICAgICAkcHJvYyA9IFN0YXJ0LVByb2Nlc3MgLUZpbGVQYXRoICJmb3JtYXQuY29tIiAtQXJndW1lbnRMaXN0ICRhdHRlbXB0LkFyZ3MgLVdhaXQgLVBhc3NUaHJ1IC1Ob05ld1dpbmRvdyBgCiAgICAgICAgLVJlZGlyZWN0U3RhbmRhcmRPdXRwdXQgJHN0ZG91dFBhdGggLVJlZGlyZWN0U3RhbmRhcmRFcnJvciAkc3RkZXJyUGF0aAogICAgICAkbGFzdEZvcm1hdEV4aXRDb2RlID0gW2ludF0kcHJvYy5FeGl0Q29kZQoKICAgICAgIyBTaG93IG5hdGl2ZSBmb3JtYXQuY29tIG91dHB1dCBpbiBjdXJyZW50IGNvbnNvbGUuCiAgICAgIGlmIChUZXN0LVBhdGggLUxpdGVyYWxQYXRoICRzdGRvdXRQYXRoKSB7CiAgICAgICAgR2V0LUNvbnRlbnQgLUxpdGVyYWxQYXRoICRzdGRvdXRQYXRoIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlIHwgRm9yRWFjaC1PYmplY3QgeyBXcml0ZS1Ib3N0ICRfIH0KICAgICAgfQogICAgICBpZiAoVGVzdC1QYXRoIC1MaXRlcmFsUGF0aCAkc3RkZXJyUGF0aCkgewogICAgICAgIEdldC1Db250ZW50IC1MaXRlcmFsUGF0aCAkc3RkZXJyUGF0aCAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZSB8IEZvckVhY2gtT2JqZWN0IHsgV3JpdGUtSG9zdCAkXyB9CiAgICAgIH0KICAgIH0gZmluYWxseSB7CiAgICAgIFJlbW92ZS1JdGVtIC1MaXRlcmFsUGF0aCAkc3Rkb3V0UGF0aCwgJHN0ZGVyclBhdGggLUZvcmNlIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlCiAgICB9CgogICAgIyBTb21lIGVudmlyb25tZW50cyBtYXkgcmVwb3J0IGEgbm9uLXplcm8gZXhpdCBjb2RlIGV2ZW4gd2hlbiBmb3JtYXR0aW5nIGNvbXBsZXRlZC4KICAgICMgVmFsaWRhdGUgcmVzdWx0aW5nIGZpbGVzeXN0ZW0gYXMgdGhlIHNvdXJjZSBvZiB0cnV0aC4KICAgIGlmIChXYWl0LUZvckxvZ2ljYWxEcml2ZSAtZHJpdmVMZXR0ZXIgJGRyaXZlTGV0dGVyIC10aW1lb3V0U2Vjb25kcyA1KSB7CiAgICAgICRhY3R1YWxGcyA9IEdldC1Mb2dpY2FsRHJpdmVGaWxlU3lzdGVtIC1kcml2ZUxldHRlciAkZHJpdmVMZXR0ZXIKICAgICAgaWYgKCRhY3R1YWxGcyAtYW5kICRhY3R1YWxGcy5Ub1VwcGVySW52YXJpYW50KCkgLWVxICRmaWxlU3lzdGVtLlRvVXBwZXJJbnZhcmlhbnQoKSkgewogICAgICAgIFdyaXRlLUhvc3QgIltJbmZvXSBmb3JtYXQgcmVzdWx0OiBkZXRlY3RlZCBmaWxlc3lzdGVtICckYWN0dWFsRnMnIG9uICR0YXJnZXQuIgogICAgICAgIHJldHVybgogICAgICB9CiAgICB9CgogICAgV3JpdGUtSG9zdCAiW0luZm9dIGZvcm1hdCBhdHRlbXB0IGZhaWxlZCAoZXhpdCBjb2RlICRsYXN0Rm9ybWF0RXhpdENvZGUpLCByZXRyeWluZy4uLiIKICB9CgogIHRocm93ICJmb3JtYXQuY29tIGZhaWxlZCBmb3IgJHRhcmdldCBhZnRlciBhbGwgcmV0cnkgc3RyYXRlZ2llcy4gTGFzdCBleGl0IGNvZGU6ICRsYXN0Rm9ybWF0RXhpdENvZGUiCn0KCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0gTWFpbiAtLS0tLS0tLS0tLS0tLS0tLS0tLQoKaWYgKC1ub3QgKFRlc3QtQWRtaW4pKSB7IHRocm93ICJQbGVhc2UgcnVuIFBvd2VyU2hlbGwgYXMgQWRtaW5pc3RyYXRvci4iIH0KaWYgKC1ub3QgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggJFNvdXJjZURpciAtUGF0aFR5cGUgQ29udGFpbmVyKSkgeyB0aHJvdyAiU291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6ICRTb3VyY2VEaXIiIH0KaWYgKC1ub3QgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggKEpvaW4tUGF0aCAkU291cmNlRGlyICJlYm9vdC5iaW4iKSAtUGF0aFR5cGUgTGVhZikpIHsgdGhyb3cgImVib290LmJpbiBub3QgZm91bmQgaW4gc291cmNlIGRpcmVjdG9yeTogJFNvdXJjZURpciIgfQoKIyBFbnN1cmUgb3V0cHV0IGRpcmVjdG9yeSBleGlzdHMKJG91dERpciA9IFNwbGl0LVBhdGggLVBhcmVudCAkSW1hZ2VQYXRoCmlmICgkb3V0RGlyIC1hbmQgLW5vdCAoVGVzdC1QYXRoIC1MaXRlcmFsUGF0aCAkb3V0RGlyKSkgewogIE5ldy1JdGVtIC1JdGVtVHlwZSBEaXJlY3RvcnkgLVBhdGggJG91dERpciB8IE91dC1OdWxsCn0KCmlmIChUZXN0LVBhdGggLUxpdGVyYWxQYXRoICRJbWFnZVBhdGgpIHsKICBpZiAoLW5vdCAkRm9yY2VPdmVyd3JpdGUpIHsgdGhyb3cgIkltYWdlIGZpbGUgYWxyZWFkeSBleGlzdHM6ICRJbWFnZVBhdGguIFVzZSAtRm9yY2VPdmVyd3JpdGUgdG8gcmVwbGFjZSBpdC4iIH0KICBSZW1vdmUtSXRlbSAtTGl0ZXJhbFBhdGggJEltYWdlUGF0aCAtRm9yY2UKfQoKW0ludDY0XSRleHBlY3RlZEJ5dGVzID0gMApbc3RyaW5nXSRvc2ZTaXplQXJnID0gJG51bGwKW2ludF0kRXhmYXRDbHVzdGVyU2l6ZSA9IEdldC1PcHRpbWFsRXhmYXRDbHVzdGVyU2l6ZSAtZGlyICRTb3VyY2VEaXIKW2Jvb2xdJHNpemVQcm92aWRlZCA9IC1ub3QgW3N0cmluZ106OklzTnVsbE9yV2hpdGVTcGFjZSgkU2l6ZSkKW2ludF0kVGFyZ2V0Q2x1c3RlclNpemUgPSAkRXhmYXRDbHVzdGVyU2l6ZQoKaWYgKC1ub3QgJHNpemVQcm92aWRlZCkgewogIFdyaXRlLUhvc3QgIltJbmZvXSBTaXplIG5vdCBwcm92aWRlZC4gQ29tcHV0aW5nIGFuIG9wdGltYWwgaW1hZ2Ugc2l6ZSBmcm9tICckU291cmNlRGlyJy4uLiIKICAkZXhwZWN0ZWRCeXRlcyA9IEdldC1PcHRpbWFsSW1hZ2VTaXplQnl0ZXMgLWRpciAkU291cmNlRGlyIC1jbHVzdGVyQnl0ZXMgJFRhcmdldENsdXN0ZXJTaXplCiAgJG9zZlNpemVBcmcgPSAiJGV4cGVjdGVkQnl0ZXMiCn0gZWxzZSB7CiAgJGV4cGVjdGVkQnl0ZXMgPSBQYXJzZS1TaXplVG9CeXRlcyAkU2l6ZQogICRvc2ZTaXplQXJnID0gJFNpemUKfQoKaWYgKC1ub3QgJHNpemVQcm92aWRlZCkgewogIFdyaXRlLUhvc3QgIltJbmZvXSBDb21wdXRlZCBpbWFnZSBzaXplOiAkKEZvcm1hdC1CeXRlcyAkZXhwZWN0ZWRCeXRlcykgKCRleHBlY3RlZEJ5dGVzIGJ5dGVzKS4iCn0KV3JpdGUtSG9zdCAiW0luZm9dIFNlbGVjdGVkIGZpbGVzeXN0ZW06IGV4RkFUIChjbHVzdGVyPSRUYXJnZXRDbHVzdGVyU2l6ZSkgZm9yIGltYWdlIHNpemUgJChGb3JtYXQtQnl0ZXMgJGV4cGVjdGVkQnl0ZXMpLiIKCiRvc2YgPSBGaW5kLU9TRk1vdW50Q29tCgpbc3RyaW5nXSREcml2ZUxldHRlciA9ICIiCltzdHJpbmddJE1vdW50UG9pbnQgPSAiIgpbYm9vbF0kTW91bnRlZCA9ICRmYWxzZQpbYm9vbF0kTGVhdmVNb3VudGVkID0gJENyZWF0ZUVtcHR5QW5kTW91bnQuSXNQcmVzZW50Cgp0cnkgewogICREcml2ZUxldHRlciA9IEdldC1GcmVlRHJpdmVMZXR0ZXIKICAkTW91bnRQb2ludCA9ICIke0RyaXZlTGV0dGVyfToiCgogIGlmICgkQ3JlYXRlRW1wdHlBbmRNb3VudCkgewogICAgV3JpdGUtSG9zdCAiWzEvMl0gQ3JlYXRpbmcgJiBtb3VudGluZyB0aGUgaW1hZ2UgdmlhIE9TRk1vdW50IGFzIGEgbG9naWNhbCB2b2x1bWUgb24gJE1vdW50UG9pbnQgLi4uIgogIH0gZWxzZSB7CiAgICBXcml0ZS1Ib3N0ICJbMS80XSBDcmVhdGluZyAmIG1vdW50aW5nIHRoZSBpbWFnZSB2aWEgT1NGTW91bnQgYXMgYSBsb2dpY2FsIHZvbHVtZSBvbiAkTW91bnRQb2ludCAuLi4iCiAgfQogICRvdXQgPSAmICRvc2YgLWEgLXQgZmlsZSAtZiAkSW1hZ2VQYXRoIC1zICRvc2ZTaXplQXJnIC1tICRNb3VudFBvaW50IC1vIHJ3LHJlbSAyPiYxCiAgV3JpdGUtSG9zdCAoJG91dCB8IE91dC1TdHJpbmcpLlRyaW0oKQogIGlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJvc2Ztb3VudC5jb20gZmFpbGVkIHdpdGggZXhpdCBjb2RlICRMQVNURVhJVENPREUuIiB9CiAgJE1vdW50ZWQgPSAkdHJ1ZQogIGlmICgtbm90IChXYWl0LUZvckxvZ2ljYWxEcml2ZSAtZHJpdmVMZXR0ZXIgJERyaXZlTGV0dGVyIC10aW1lb3V0U2Vjb25kcyAyMCkpIHsKICAgIHRocm93ICJNb3VudGVkIGRyaXZlICRNb3VudFBvaW50IGRpZCBub3QgYXBwZWFyIGluIHRpbWUuIgogIH0KCiAgJGRlc3QgPSAiJHtEcml2ZUxldHRlcn06XCIKICBpZiAoJENyZWF0ZUVtcHR5QW5kTW91bnQpIHsKICAgIFdyaXRlLUhvc3QgIlsyLzJdIERvbmUuIEVtcHR5IGltYWdlIGlzIG1vdW50ZWQgYXQgJGRlc3QuIgogICAgV3JpdGUtSG9zdCAiTWFudWFsIHN0ZXBzOiIKICAgIFdyaXRlLUhvc3QgIiAgMSkgRm9ybWF0ICRkZXN0IGFzIGV4RkFUIChyZWNvbW1lbmRlZCBjbHVzdGVyOiA2NEtCIGZvciBsYXJnZS1maWxlIHNldHMsIDMyS0IgZm9yIHNtYWxsL21peGVkIHNldHMpLiIKICAgIFdyaXRlLUhvc3QgIiAgMikgQ29weSBjb250ZW50cyBvZiAnJFNvdXJjZURpcicgdG8gJGRlc3QuIgogICAgV3JpdGUtSG9zdCAiICAzKSBEaXNtb3VudDogYCIkb3NmYCIgLWQgLW0gJE1vdW50UG9pbnQiCiAgICByZXR1cm4KICB9CgogIFdyaXRlLUhvc3QgIlsyLzRdIEZvcm1hdHRpbmcgJGRlc3QgYXMgZXhGQVQgKGNsdXN0ZXI9JFRhcmdldENsdXN0ZXJTaXplLCBsYWJlbD0nJExhYmVsJykgdmlhIGZvcm1hdC5jb20gLi4uIgogIEludm9rZS1Gb3JtYXRWb2x1bWUgLWRyaXZlTGV0dGVyICREcml2ZUxldHRlciAtY2x1c3RlclNpemUgJFRhcmdldENsdXN0ZXJTaXplIC1sYWJlbCAkTGFiZWwKCiAgaWYgKC1ub3QgKFRlc3QtUGF0aCAkZGVzdCkpIHsgdGhyb3cgIkRyaXZlICRkZXN0IGlzIG5vdCBhY2Nlc3NpYmxlIGFmdGVyIGZvcm1hdHRpbmcuIiB9CgogIFdyaXRlLUhvc3QgIlszLzRdIENvcHlpbmcgY29udGVudHMgb2YgJyRTb3VyY2VEaXInIC0+ICckZGVzdCcgLi4uIgogICRyb2JvQXJncyA9IEAoCiAgICAkU291cmNlRGlyLCAkZGVzdCwKICAgICIvRSIsICIvQ09QWTpEQVQiLCAiL0RDT1BZOkRBVCIsCiAgICAiL1I6MSIsICIvVzoxIiwKICAgICIvTkZMIiwgIi9OREwiLAogICAgIi9FVEEiCiAgKQogICYgcm9ib2NvcHkuZXhlIEByb2JvQXJncwogICRyb2JvY29weUV4aXRDb2RlID0gJExBU1RFWElUQ09ERQogIGlmICgkcm9ib2NvcHlFeGl0Q29kZSAtZ3QgNykgeyB0aHJvdyAicm9ib2NvcHkgZmFpbGVkLiBFeGl0IGNvZGU6ICRyb2JvY29weUV4aXRDb2RlIiB9CgogIFdyaXRlLUhvc3QgIls0LzRdIERvbmUuIERpc21vdW50aW5nIE9TRk1vdW50IHZvbHVtZS4uLiIKfQpmaW5hbGx5IHsKICBpZiAoJE1vdW50ZWQgLWFuZCAtbm90ICRMZWF2ZU1vdW50ZWQgLWFuZCAtbm90IFtzdHJpbmddOjpJc051bGxPcldoaXRlU3BhY2UoJE1vdW50UG9pbnQpKSB7CiAgICB0cnkgewogICAgICAkY3VycmVudFBhdGggPSAoR2V0LUxvY2F0aW9uKS5QYXRoCiAgICAgIGlmICgkY3VycmVudFBhdGggLWxpa2UgIiRNb3VudFBvaW50KiIpIHsKICAgICAgICBTZXQtTG9jYXRpb24gIiRlbnY6U3lzdGVtRHJpdmVcIgogICAgICB9CiAgICB9IGNhdGNoIHsKICAgICAgIyBCZXN0IGVmZm9ydCBvbmx5LgogICAgfQoKICAgIGlmICgtbm90IChEaXNtb3VudC1Pc2ZWb2x1bWUgLW9zZlBhdGggJG9zZiAtbW91bnRQb2ludCAkTW91bnRQb2ludCAtbWF4QXR0ZW1wdHMgNikpIHsKICAgICAgV3JpdGUtV2FybmluZyAiRmFpbGVkIHRvIGRpc21vdW50IE9TRk1vdW50IHZvbHVtZSAoJE1vdW50UG9pbnQpOiBhY2Nlc3MgZGVuaWVkIG9yIHZvbHVtZSBidXN5LiIKICAgIH0KICB9Cn0KCldyaXRlLUhvc3QgIk9LOiBJbWFnZSBjcmVhdGVkIGF0OiAkSW1hZ2VQYXRoIgo="
@@ -362,6 +362,8 @@ class ExFATBuilder(tk.Tk):
         self.status_text = tk.StringVar(value='Running as Administrator  ✓')
         self._temp_dir_var = tk.StringVar(
             value=self._settings.get('temp_dir', ''))
+        self._osfmount_path_var = tk.StringVar(
+            value=self._settings.get('osfmount_path', ''))
         self._ftp_ip_var   = tk.StringVar(
             value=self._settings.get('ftp_ip', ''))
         self._ftp_port_var = tk.StringVar(
@@ -378,6 +380,15 @@ class ExFATBuilder(tk.Tk):
             value=self._settings.get('retry_count', 3))
         self._auto_ip_var  = tk.BooleanVar(
             value=self._settings.get('auto_ip', False))
+        self._logs_dir_var = tk.StringVar(
+            value=self._settings.get('logs_dir',
+                  os.path.join(os.path.expanduser('~'), 'exfat_builder_logs')))
+        # Pre-initialise vars used by _refresh_* methods called in __init__
+        # before the settings tab is fully built
+        self._temp_size_var  = tk.StringVar(value='')
+        self._logs_count_var = tk.StringVar(value='')
+        self._ftp_status_var = tk.StringVar(value='Not connected')
+        self._osf_found_var  = tk.StringVar(value='')
         self._building       = False
         self._start_time     = None
         self._current_pct    = 0
@@ -494,6 +505,7 @@ class ExFATBuilder(tk.Tk):
         self._tab_bp_btn      = _make_tab(tab_bar, '\U0001f9e9  Backports',     'backports')
         self._tab_pl_btn      = _make_tab(tab_bar, '\U0001f4e6  Payloads',      'payloads')
         self._tab_klog_btn    = _make_tab(tab_bar, '\U0001f4cb  Klog',          'klog')
+        self._tab_cfg_btn     = _make_tab(tab_bar, '\u2699  Settings',          'settings')
         self._tab_help_btn    = _make_tab(tab_bar, '\u2753  Help',              'help')
         tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
 
@@ -509,6 +521,7 @@ class ExFATBuilder(tk.Tk):
         self._tab_bp_frame      = tk.Frame(self, bg=BG)
         self._tab_pl_frame      = tk.Frame(self, bg=BG)
         self._tab_klog_frame    = tk.Frame(self, bg=BG)
+        self._tab_cfg_frame     = tk.Frame(self, bg=BG)
         self._tab_help_frame    = tk.Frame(self, bg=BG)
 
         self._build_build_tab(self._tab_build_frame)
@@ -522,6 +535,7 @@ class ExFATBuilder(tk.Tk):
         self._build_backports_tab(self._tab_bp_frame)
         self._build_payload_tab(self._tab_pl_frame)
         self._build_klog_tab(self._tab_klog_frame)
+        self._build_settings_tab(self._tab_cfg_frame)
         self._build_help_tab(self._tab_help_frame)
 
         self._switch_tab('build')
@@ -533,15 +547,17 @@ class ExFATBuilder(tk.Tk):
                       self._tab_extract_frame, self._tab_files_frame,
                       self._tab_ftp_frame, self._tab_ftpbr_frame,
                       self._tab_bp_frame, self._tab_pl_frame,
-                      self._tab_klog_frame, self._tab_help_frame]
+                      self._tab_klog_frame, self._tab_cfg_frame,
+                      self._tab_help_frame]
         all_btns   = [self._tab_build_btn, self._tab_library_btn,
                       self._tab_images_btn, self._tab_ps5_btn,
                       self._tab_extract_btn, self._tab_files_btn,
                       self._tab_ftp_btn, self._tab_ftpbr_btn,
                       self._tab_bp_btn, self._tab_pl_btn,
-                      self._tab_klog_btn, self._tab_help_btn]
+                      self._tab_klog_btn, self._tab_cfg_btn,
+                      self._tab_help_btn]
         all_keys   = ['build','library','images','ps5','extract','files',
-                      'ftp','ftpbr','backports','payloads','klog','help']
+                      'ftp','ftpbr','backports','payloads','klog','settings','help']
         for frame, btn, k in zip(all_frames, all_btns, all_keys):
             frame.pack_forget()
             btn.config(fg=MUTED, bg='#0a0a0a')
@@ -837,7 +853,7 @@ class ExFATBuilder(tk.Tk):
         folder = self._recent_var.get()
         if folder and os.path.isdir(folder):
             self.game_folder.set(folder)
-            self._detect_game_info(folder)
+            self._detect_game_info_async(folder)
 
     def _add_to_recent(self, folder):
         folder = os.path.normpath(folder)
@@ -1087,18 +1103,76 @@ class ExFATBuilder(tk.Tk):
                     'local':       l,
                     'remote':      r,
                 })
+
+            # Get PS5 storage info via SITE AVAIL or df-style
+            ps5_free  = None
+            ps5_total = None
+            if ip:
+                try:
+                    import ftplib as _ftplib
+                    ftp2 = self._ftp_connect()
+                    remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
+                    # Try SITE AVAIL
+                    try:
+                        resp = ftp2.sendcmd('SITE AVAIL')
+                        ps5_free = int(''.join(filter(str.isdigit, resp)))
+                    except Exception:
+                        pass
+                    # Estimate used from remote file sizes
+                    remote_total = sum(v['size'] for v in remote.values())
+                    ftp2.quit()
+                    if ps5_free is not None:
+                        ps5_total = ps5_free + remote_total
+                except Exception:
+                    pass
+
             self.after(0, self._ps5mgr_render, merged,
-                       len(local), len(remote))
+                       len(local), len(remote), ps5_free, ps5_total)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _ps5mgr_render(self, merged, n_local, n_remote):
+    def _ps5mgr_render(self, merged, n_local, n_remote,
+                        ps5_free=None, ps5_total=None):
         for w in self._ps5mgr_rows.winfo_children():
             w.destroy()
         self._ps5mgr_merged = merged
         self._ps5mgr_status_var.set(
             '%d local  •  %d on PS5  •  %d total unique games' % (
                 n_local, n_remote, len(merged)))
+
+        # ── Storage bar ──
+        if ps5_free is not None and ps5_total and ps5_total > 0:
+            used     = ps5_total - ps5_free
+            pct      = min(100, int(used / ps5_total * 100))
+            free_gb  = ps5_free  / 1024**3
+            used_gb  = used      / 1024**3
+            total_gb = ps5_total / 1024**3
+            bar_colour = DANGER if pct > 90 else WARNING if pct > 75 else SUCCESS
+
+            storage_frame = tk.Frame(self._ps5mgr_rows, bg='#0a0a0a')
+            storage_frame.pack(fill='x', padx=8, pady=(6,4))
+            lbl_row = tk.Frame(storage_frame, bg='#0a0a0a')
+            lbl_row.pack(fill='x')
+            tk.Label(lbl_row, text='PS5 Storage',
+                     font=('Segoe UI', 8, 'bold'), bg='#0a0a0a',
+                     fg=MUTED).pack(side='left')
+            tk.Label(lbl_row,
+                     text='%.1f GB used  /  %.1f GB free  /  %.1f GB total  (%d%%)' % (
+                         used_gb, free_gb, total_gb, pct),
+                     font=('Segoe UI', 8), bg='#0a0a0a', fg=MUTED).pack(side='right')
+            bar_bg = tk.Frame(storage_frame, bg='#1a1a1a', height=12)
+            bar_bg.pack(fill='x', pady=(3,0))
+            bar_bg.pack_propagate(False)
+            bar_cv = tk.Canvas(bar_bg, height=12, bg='#1a1a1a',
+                               highlightthickness=0, bd=0)
+            bar_cv.pack(fill='both', expand=True)
+            bar_cv.update_idletasks()
+            w = bar_cv.winfo_width() or 400
+            fill_w = int(w * pct / 100)
+            bar_cv.create_rectangle(0, 0, fill_w, 12,
+                                     fill=bar_colour, outline='')
+            tk.Frame(self._ps5mgr_rows, bg=BORDER, height=1).pack(
+                fill='x', pady=(4,0))
 
         colour_map = {'on_ps5': SUCCESS, 'local_only': WARNING,
                       'remote_only': MUTED}
@@ -1387,6 +1461,10 @@ class ExFATBuilder(tk.Tk):
             p = filedialog.askdirectory(title='Select game root folder')
         if p:
             self._bp_target_var.set(p.replace('/', '\\'))
+            # Auto-clear the file list when a new target is selected
+            self._bp_files = []
+            self._bp_refresh_list()
+            self._bp_status_var.set('Target set — add backport files to apply')
 
     def _bp_browse_backup(self):
         p = filedialog.askdirectory(title='Select backup folder')
@@ -1612,10 +1690,19 @@ class ExFATBuilder(tk.Tk):
         if backup_mode == 'none' and conflicts:
             msg += '\u26a0 WARNING: No backup will be made. Overwritten files cannot be recovered.\n\n'
         elif backup_mode == 'auto':
-            ts = time.strftime('%Y%m%d_%H%M%S')
+            ts = time.strftime('%Y-%m-%d %H.%M.%S')
+            # Use game name from target folder for a friendly backup folder name
+            game_name = os.path.basename(target.rstrip('\\/'))
+            # Trim long folder names
+            if len(game_name) > 60:
+                game_name = game_name[:57] + '...'
+            backup_folder_name = '%s - Backport Backup (%s)' % (game_name, ts)
+            # Sanitise for Windows filename
+            for ch in r'<>:"/|?*':
+                backup_folder_name = backup_folder_name.replace(ch, '')
             backup_dir = os.path.join(
                 os.path.dirname(target.rstrip('\\/')) or target,
-                '_backport_backup_' + ts)
+                backup_folder_name)
             msg += 'Backup will be saved to:\n%s\n\n' % backup_dir
         elif backup_mode == 'custom':
             msg += 'Backup will be saved to:\n%s\n\n' % backup_dir
@@ -2137,12 +2224,22 @@ class ExFATBuilder(tk.Tk):
                   command=self._klog_connect)
         self._klog_connect_btn.pack(side='left')
 
+        self._klog_paused       = tk.BooleanVar(value=False)
+        self._klog_timestamps   = tk.BooleanVar(value=True)
+
         self._klog_stop_btn = tk.Button(inner, text='\u25a0 Disconnect',
                   font=('Segoe UI', 9, 'bold'), bg=DANGER, fg=TEXT,
                   activebackground='#c0392b', activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=4, cursor='hand2',
                   state='disabled', command=self._klog_disconnect)
         self._klog_stop_btn.pack(side='left', padx=(6,0))
+
+        self._klog_pause_btn = tk.Button(inner, text='\u23f8 Pause',
+                  font=('Segoe UI', 9), bg=WARNING, fg='#000000',
+                  activebackground='#cc8800', activeforeground='#000000',
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  state='disabled', command=self._klog_toggle_pause)
+        self._klog_pause_btn.pack(side='left', padx=(6,0))
 
         tk.Label(inner, text='Default port: 3232',
                  font=('Segoe UI', 8), bg=SURFACE2, fg='#444444').pack(
@@ -2177,6 +2274,13 @@ class ExFATBuilder(tk.Tk):
                        activebackground=BG, activeforeground=TEXT,
                        selectcolor=SURFACE2, cursor='hand2',
                        command=self._klog_toggle_wrap).pack(
+                           side='left', padx=(8,0))
+
+        tk.Checkbutton(toolbar, text='Timestamps',
+                       variable=self._klog_timestamps,
+                       font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                       activebackground=BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2').pack(
                            side='left', padx=(8,0))
 
         # Line count
@@ -2270,6 +2374,7 @@ class ExFATBuilder(tk.Tk):
                 self.after(0, self._klog_status_var.set,
                            'Connected to ' + ip + ':' + str(port))
                 self.after(0, self._klog_status_lbl.config, {'fg': SUCCESS})
+                self.after(0, self._klog_pause_btn.config, {'state': 'normal'})
                 buf = ''
                 while self._klog_running:
                     try:
@@ -2310,8 +2415,25 @@ class ExFATBuilder(tk.Tk):
         self._klog_running = False
         self._klog_connect_btn.config(state='normal')
         self._klog_stop_btn.config(state='disabled')
+        self._klog_pause_btn.config(state='disabled', text='\u23f8 Pause')
+        self._klog_paused.set(False)
         self._klog_status_var.set('Disconnected')
         self._klog_status_lbl.config(fg=MUTED)
+
+    def _klog_toggle_pause(self):
+        if self._klog_paused.get():
+            # Resume — flush buffered lines
+            self._klog_paused.set(False)
+            self._klog_pause_btn.config(text='\u23f8 Pause', bg=WARNING,
+                                         fg='#000000')
+            self._klog_status_var.set('Connected — live')
+            self._klog_status_lbl.config(fg=SUCCESS)
+        else:
+            self._klog_paused.set(True)
+            self._klog_pause_btn.config(text='\u25b6 Resume', bg=SUCCESS,
+                                         fg=TEXT)
+            self._klog_status_var.set('Paused — still receiving')
+            self._klog_status_lbl.config(fg=WARNING)
 
     def _klog_get_tag(self, line):
         l = line.lower()
@@ -2324,17 +2446,28 @@ class ExFATBuilder(tk.Tk):
         return 'info'
 
     def _klog_add_line(self, line):
-        self._klog_lines.append(line)
+        # Prepend timestamp if enabled
+        if self._klog_timestamps.get():
+            ts = time.strftime('%H:%M:%S')
+            line_display = '[' + ts + ']  ' + line
+        else:
+            line_display = line
+
+        self._klog_lines.append(line_display)
         self._klog_count_var.set(str(len(self._klog_lines)) + ' lines')
+
+        # Don't render if paused
+        if self._klog_paused.get():
+            return
 
         # Check filter
         filt = self._klog_filter_var.get().lower()
-        if filt and filt not in line.lower():
+        if filt and filt not in line_display.lower():
             return
 
         tag  = self._klog_get_tag(line)
         self._klog_box.config(state='normal')
-        self._klog_box.insert('end', line + '\n', tag)
+        self._klog_box.insert('end', line_display + '\n', tag)
 
         # Highlight filter term
         if filt:
@@ -2409,6 +2542,288 @@ class ExFATBuilder(tk.Tk):
             self._klog_status_lbl.config(fg=SUCCESS)
         except Exception as e:
             messagebox.showerror('Export failed', str(e))
+
+    def _tab_end_bar(self, parent, text='End of tab'):
+        """Subtle end-of-content indicator so users know there's nothing more to scroll."""
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill='x', padx=24, pady=(16, 12))
+        tk.Frame(bar, bg='#1e1e1e', height=1).pack(fill='x')
+        tk.Label(bar, text='\u2014  ' + text + '  \u2014',
+                 font=('Segoe UI', 7), bg=BG, fg='#2a2a2a').pack(pady=(4, 0))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SETTINGS TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_settings_tab(self, parent):
+        # Scrollable
+        outer = tk.Frame(parent, bg=BG)
+        outer.pack(fill='both', expand=True)
+        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(outer, command=canvas.yview,
+                          bg=SURFACE2, troughcolor=BG)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        body = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0, 0), window=body, anchor='nw', tags='sb')
+        body.bind('<Configure>', lambda e:
+            canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e:
+            canvas.itemconfig('sb', width=e.width))
+        canvas.bind('<MouseWheel>',
+            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), 'units'))
+
+        def section(title):
+            row = tk.Frame(body, bg=BG)
+            row.pack(fill='x', padx=24, pady=(20, 4))
+            tk.Label(row, text=title, font=('Segoe UI', 10, 'bold'),
+                     bg=BG, fg=ACCENT, anchor='w').pack(side='left')
+            tk.Frame(body, bg='#1e1e1e', height=1).pack(fill='x', padx=24)
+
+        def field_row(parent_frame, label, var, readonly=False, width=None):
+            row = tk.Frame(parent_frame, bg=BG)
+            row.pack(fill='x', pady=(0, 6))
+            tk.Label(row, text=label, font=('Segoe UI', 9),
+                     bg=BG, fg=MUTED, width=18, anchor='w').pack(side='left')
+            ef = tk.Frame(row, bg=FIELD_BG,
+                          highlightbackground=BORDER, highlightthickness=1)
+            ef.pack(side='left', fill='x', expand=True)
+            e = tk.Entry(ef, textvariable=var, font=('Consolas', 9),
+                         bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
+                         selectbackground=FIELD_SEL_BG,
+                         selectforeground=FIELD_SEL_FG,
+                         relief='flat', bd=4,
+                         state='readonly' if readonly else 'normal',
+                         width=width)
+            e.pack(fill='x')
+            return row
+
+        # ── OSFMount ──
+        section('OSFMount')
+        osf_body = tk.Frame(body, bg=BG)
+        osf_body.pack(fill='x', padx=24, pady=(8, 0))
+        osf_row = field_row(osf_body, 'osfmount.com path', self._osfmount_path_var)
+        tk.Button(osf_row, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._browse_osfmount).pack(side='left', padx=(6,0))
+        tk.Button(osf_row, text='Detect',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._detect_osfmount).pack(side='left', padx=(4,0))
+        self._osf_found_var = tk.StringVar(value='')
+        tk.Label(osf_body, textvariable=self._osf_found_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                 anchor='w').pack(fill='x', pady=(2,0))
+        self.after(300, self._refresh_osf_status)
+
+        # ── Temp folder ──
+        section('Build')
+        bld = tk.Frame(body, bg=BG)
+        bld.pack(fill='x', padx=24, pady=(8, 0))
+        tmp_row = field_row(bld, 'Temp folder', self._temp_dir_var, readonly=True)
+        tk.Button(tmp_row, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._browse_temp).pack(side='left', padx=(6,0))
+        tk.Button(tmp_row, text='Reset',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=lambda: (self._temp_dir_var.set(''),
+                                   self._settings.update({'temp_dir': ''}),
+                                   save_settings(self._settings),
+                                   self._refresh_temp_size())
+                  ).pack(side='left', padx=(4,0))
+        self._temp_usage_lbl = tk.Label(bld, text='',
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED, anchor='w')
+        self._temp_usage_lbl.pack(anchor='w', pady=(0,4))
+        tk.Button(bld, text='Clear Temp Files',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=WARNING,
+                  activebackground=BORDER, activeforeground=WARNING,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._clear_temp).pack(anchor='w', pady=(0,4))
+
+        # Retry
+        retry_row = tk.Frame(bld, bg=BG)
+        retry_row.pack(fill='x', pady=(4,0))
+        tk.Label(retry_row, text='Auto-retry failed', font=('Segoe UI', 9),
+                 bg=BG, fg=MUTED, width=18, anchor='w').pack(side='left')
+        for n in [0, 1, 2, 3, 5]:
+            lbl = 'Off' if n == 0 else str(n) + 'x'
+            tk.Radiobutton(retry_row, text=lbl, variable=self._retry_var,
+                           value=n, font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                           activebackground=BG, activeforeground=TEXT,
+                           selectcolor=SURFACE2, cursor='hand2',
+                           command=self._save_extra_settings
+                           ).pack(side='left', padx=(0,8))
+
+        # ── Logs ──
+        section('Logs')
+        logs_body = tk.Frame(body, bg=BG)
+        logs_body.pack(fill='x', padx=24, pady=(8,0))
+        logs_row = field_row(logs_body, 'Logs folder', self._logs_dir_var,
+                             readonly=True)
+        tk.Button(logs_row, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._browse_logs_dir).pack(side='left', padx=(6,0))
+        tk.Button(logs_row, text='\U0001f4c2 Open',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=ACCENT,
+                  activebackground=BORDER, activeforeground=ACCENT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._open_logs_dir).pack(side='left', padx=(4,0))
+        self._logs_count_var = tk.StringVar(value='')
+        tk.Label(logs_body, textvariable=self._logs_count_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED, anchor='w'
+                 ).pack(anchor='w', pady=(2,4))
+        tk.Button(logs_body, text='Clear all logs',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                  activebackground=BORDER, activeforeground=DANGER,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._clear_logs).pack(anchor='w')
+        self.after(500, self._refresh_logs_count)
+
+        # ── FTP / PS5 ──
+        section('PS5 FTP')
+        ftp_body = tk.Frame(body, bg=BG)
+        ftp_body.pack(fill='x', padx=24, pady=(8,0))
+        ip_row = field_row(ftp_body, 'PS5 IP', self._ftp_ip_var)
+        port_ef2 = tk.Frame(ip_row, bg=FIELD_BG,
+                            highlightbackground=BORDER, highlightthickness=1)
+        port_ef2.pack(side='left', padx=(4,4))
+        tk.Entry(port_ef2, textvariable=self._ftp_port_var,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG, relief='flat', bd=4,
+                 width=6).pack()
+        tk.Button(ip_row, text='Save',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._save_ftp_settings).pack(side='left')
+        ftp_path_row = field_row(ftp_body, 'PS5 games path', self._ftp_path_var)
+        tk.Button(ftp_path_row, text='Default',
+                  font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                  command=lambda: self._ftp_path_var.set('/data/etaHEN/games/')
+                  ).pack(side='left', padx=(4,0))
+        auto_row = tk.Frame(ftp_body, bg=BG)
+        auto_row.pack(fill='x', pady=(4,0))
+        tk.Checkbutton(auto_row, text='Auto-upload after build',
+                       variable=self._ftp_auto_var,
+                       font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                       activebackground=BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._save_ftp_settings).pack(side='left')
+        ftp_status_row = tk.Frame(ftp_body, bg=BG)
+        ftp_status_row.pack(fill='x', pady=(8,0))
+        self._ftp_status_var = tk.StringVar(value='Not connected')
+        self._ftp_status_lbl = tk.Label(ftp_status_row,
+                                         textvariable=self._ftp_status_var,
+                                         font=('Segoe UI', 8), bg=BG, fg=MUTED)
+        self._ftp_status_lbl.pack(side='left')
+        for txt, cmd, fg in [
+            ('Test Connection', self._ftp_test, ACCENT),
+            ('Ping PS5', lambda: self._ftp_ping(
+                lambda ok, msg: (self._ftp_status_var.set(msg),
+                                 self._ftp_status_lbl.config(
+                                     fg=SUCCESS if ok else DANGER))), MUTED),
+            ('\U0001f4c1 Browse PS5', self._show_ps5_browser, INFO_FG),
+            ('\U0001f3ae Games on PS5', self._show_installed_games, SUCCESS),
+        ]:
+            tk.Button(ftp_status_row, text=txt,
+                      font=('Segoe UI', 9), bg=SURFACE2, fg=fg,
+                      activebackground=BORDER, activeforeground=fg,
+                      relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                      command=cmd).pack(side='left', padx=(6,0))
+
+        self._cancel_btn = tk.Button(ftp_status_row, text='\u2715 Cancel Upload',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                  activebackground=BORDER, activeforeground=DANGER,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._cancel_ftp_upload)
+
+        # Auto-detect IP
+        autoip_row = tk.Frame(ftp_body, bg=BG)
+        autoip_row.pack(fill='x', pady=(8,0))
+        tk.Button(autoip_row, text='\U0001f50d Auto-detect PS5 IP',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=ACCENT,
+                  activebackground=BORDER, activeforeground=ACCENT,
+                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
+                  command=self._auto_detect_ip).pack(side='left')
+        self._autoip_status = tk.Label(autoip_row, text='',
+                                        font=('Segoe UI', 8), bg=BG, fg=MUTED)
+        self._autoip_status.pack(side='left', padx=(10,0))
+
+        # ── Notifications ──
+        section('Notifications')
+        notif_body = tk.Frame(body, bg=BG)
+        notif_body.pack(fill='x', padx=24, pady=(8,0))
+        tk.Checkbutton(notif_body,
+                       text='Play sound when build / upload completes',
+                       variable=self._sound_var,
+                       font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                       activebackground=BG, activeforeground=TEXT,
+                       selectcolor=SURFACE2, cursor='hand2',
+                       command=self._save_extra_settings).pack(anchor='w')
+
+        # ── Theme ──
+        section('Theme')
+        theme_body = tk.Frame(body, bg=BG)
+        theme_body.pack(fill='x', padx=24, pady=(8,0))
+        theme_row = tk.Frame(theme_body, bg=BG)
+        theme_row.pack(anchor='w')
+        for label, val in [('Dark', 'dark'), ('Light', 'light')]:
+            tk.Radiobutton(theme_row, text=label, variable=self._theme_var,
+                           value=val, font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                           activebackground=BG, activeforeground=TEXT,
+                           selectcolor=SURFACE2, cursor='hand2',
+                           command=self._toggle_theme).pack(side='left', padx=(0,16))
+
+        self._tab_end_bar(body, 'End of Settings')
+
+    def _browse_osfmount(self):
+        p = filedialog.askopenfilename(
+            title='Locate osfmount.com',
+            filetypes=[('osfmount.com', 'osfmount.com'),
+                       ('All executables', '*.com *.exe'),
+                       ('All files', '*.*')])
+        if p:
+            p = p.replace('/', '\\')
+            self._osfmount_path_var.set(p)
+            self._settings['osfmount_path'] = p
+            save_settings(self._settings)
+            self._refresh_osf_status()
+
+    def _detect_osfmount(self):
+        found = self._find_osfmount()
+        if found:
+            self._osfmount_path_var.set(found)
+            self._settings['osfmount_path'] = found
+            save_settings(self._settings)
+            self._refresh_osf_status()
+        else:
+            self._osf_found_var.set('\u2717 Not found — use Browse to locate it manually')
+
+    def _refresh_osf_status(self):
+        found = self._find_osfmount()
+        if found:
+            self._osf_found_var.set('\u2713 Found: ' + found)
+            if hasattr(self, '_osf_found_var'):
+                try:
+                    # Hide the banner if it was shown
+                    for w in self.winfo_children():
+                        if isinstance(w, tk.Frame) and w.cget('bg') == '#3a1500':
+                            w.pack_forget()
+                except Exception:
+                    pass
+        else:
+            self._osf_found_var.set('\u2717 Not detected — click Browse to locate osfmount.com')
 
     def _build_help_tab(self, parent):
         # Scrollable canvas
@@ -2551,7 +2966,8 @@ class ExFATBuilder(tk.Tk):
                   command=self._fetch_changelog).pack(anchor='w', padx=40)
         self.after(2000, self._fetch_changelog)
 
-        tk.Frame(body, bg=BG, height=32).pack()
+        tk.Frame(body, bg=BG, height=16).pack()
+        self._tab_end_bar(body, 'End of Help')
 
     def _build_library_tab(self, parent):
         self._lib_view_mode = tk.StringVar(value='grid')
@@ -3790,24 +4206,65 @@ class ExFATBuilder(tk.Tk):
         self._fm_dismount_btn.config(state='normal')
         self._fm_refresh()
 
+    def _dismount_with_retry(self, osf_path, drive_letter, retries=5, delay=1.5):
+        """Dismount with retries — fixes 'still mounted' issue on some systems."""
+        for attempt in range(retries):
+            result = subprocess.run(
+                [osf_path, '-d', '-m', drive_letter],
+                capture_output=True, text=True)
+            if result.returncode == 0:
+                # Give Windows a moment to release the drive letter
+                time.sleep(0.5)
+                # Verify it's gone
+                if not os.path.exists(drive_letter + '\\'):
+                    return True
+            if attempt < retries - 1:
+                time.sleep(delay)
+        # Last resort — try forcing via handle release
+        try:
+            subprocess.run(
+                ['handle.exe', '-c', drive_letter, '-y'],
+                capture_output=True, timeout=5)
+        except Exception:
+            pass
+        subprocess.run(
+            [osf_path, '-d', '-m', drive_letter],
+            capture_output=True)
+        time.sleep(1)
+        return not os.path.exists(drive_letter + '\\')
+
     def _fm_dismount(self):
         if not self._fm_drive or not self._fm_osf:
             return
         if not messagebox.askyesno('Dismount',
                 'Dismount the image?\n\nMake sure all file operations are complete.'):
             return
-        result = subprocess.run(
-            [self._fm_osf, '-d', '-m', self._fm_drive],
-            capture_output=True, text=True)
+        self._fm_dismount_btn.config(state='disabled', text='Dismounting...')
+        drive = self._fm_drive
+        osf   = self._fm_osf
+
+        def worker():
+            ok = self._dismount_with_retry(osf, drive)
+            self.after(0, self._fm_dismount_done, ok, drive)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _fm_dismount_done(self, ok, drive):
         self._fm_drive = None
         self._fm_current_dir = None
         self._fm_osf = None
         self._fm_listbox.delete(0, 'end')
         self._fm_entries = []
         self._fm_path_var.set('—')
-        self._fm_status_var.set('Dismounted successfully')
+        self._fm_dismount_btn.config(text='\U0001f513 Dismount')
         self._fm_mount_btn.config(state='normal')
         self._fm_dismount_btn.config(state='disabled')
+        if ok:
+            self._fm_status_var.set('Dismounted successfully \u2713')
+        else:
+            self._fm_status_var.set(
+                '\u26a0 Dismount may not have fully completed — '
+                'check Explorer and eject manually if needed')
 
     def _fm_refresh(self):
         if not self._fm_drive or not self._fm_current_dir:
@@ -4792,26 +5249,7 @@ class ExFATBuilder(tk.Tk):
             messagebox.showerror('Extraction failed', info)
 
     def _build_build_tab(self, parent):
-        # ── Settings strip — collapsible ──
-        settings_outer = tk.Frame(parent, bg=BG)
-        settings_outer.pack(fill='x', padx=24, pady=(8, 2))
-        settings_header = tk.Frame(settings_outer, bg=BG)
-        settings_header.pack(fill='x')
-        self._settings_toggle_lbl = tk.Label(
-            settings_header, text='\u25b6  SETTINGS',
-            font=('Segoe UI', 8), bg=BG, fg=MUTED,
-            cursor='hand2', anchor='w')
-        self._settings_toggle_lbl.pack(side='left')
-        self._settings_visible = tk.BooleanVar(value=False)
-        self._settings_toggle_lbl.bind('<Button-1>', lambda e: self._toggle_settings())
-        settings_header.bind('<Button-1>', lambda e: self._toggle_settings())
-
-        self._settings_body = tk.Frame(settings_outer, bg=BG)
-        self._settings_frame = tk.Frame(self._settings_body, bg=SETTINGS_BG,
-                                         highlightbackground=BORDER,
-                                         highlightthickness=1)
-        self._settings_frame.pack(fill='x', pady=(4, 0))
-        self._build_settings_strip()
+        # ── No settings strip here — use the Settings tab ──
 
         tk.Frame(parent, bg=BORDER, height=1).pack(fill='x', pady=(6, 0))
 
@@ -5421,20 +5859,32 @@ class ExFATBuilder(tk.Tk):
                     for root, dirs, files in os.walk(entry.path):
                         for fn in files:
                             try:
-                                total_size += os.path.getsize(os.path.join(root, fn))
+                                total_size += os.path.getsize(
+                                    os.path.join(root, fn))
                             except Exception:
                                 pass
         except Exception:
             pass
         location = self._settings.get('temp_dir') or 'System temp'
+        if not hasattr(self, '_temp_size_var'):
+            return
         if count > 0:
             mb = total_size / (1024 * 1024)
             self._temp_size_var.set(
-                location + '  —  ' + str(count) + ' folder(s), %.1f MB used' % mb)
-            self._temp_size_lbl.config(fg=WARNING if mb > 500 else MUTED)
+                location + '  —  ' + str(count) +
+                ' folder(s), %.1f MB used' % mb)
+            if hasattr(self, '_temp_size_lbl'):
+                self._temp_size_lbl.config(fg=WARNING if mb > 500 else MUTED)
+            if hasattr(self, '_temp_usage_lbl'):
+                self._temp_usage_lbl.config(
+                    text='%.1f MB in %d temp folder(s)' % (mb, count),
+                    fg=WARNING if mb > 500 else MUTED)
         else:
             self._temp_size_var.set(location + '  —  No temp files')
-            self._temp_size_lbl.config(fg=MUTED)
+            if hasattr(self, '_temp_size_lbl'):
+                self._temp_size_lbl.config(fg=MUTED)
+            if hasattr(self, '_temp_usage_lbl'):
+                self._temp_usage_lbl.config(text='No temp files', fg=MUTED)
 
     # ── Field helper ─────────────────────────────────────────────────────────
     def _field(self, parent, label, var, browse_cmd, drag_drop=False):
@@ -5482,7 +5932,23 @@ class ExFATBuilder(tk.Tk):
             return
         p_display = p.replace('/', '\\')
         self.game_folder.set(p_display)
-        self._detect_game_info(p)
+        self._detect_game_info_async(p)
+
+    def _on_drop(self, data):
+        path = data.strip('{}').strip('"').strip()
+        if os.path.isdir(path):
+            self.game_folder.set(path)
+            self._detect_game_info_async(path)
+
+    def _detect_game_info_async(self, folder):
+        """Run detect on a background thread so USB/slow drives don't freeze the UI."""
+        self._info_title_var.set('Reading game info...')
+        self._info_frame.pack(fill='x', pady=(0, 8))
+        self._auto_label.pack_forget()
+        self._no_sfo_label.pack_forget()
+        threading.Thread(
+            target=lambda: self._detect_game_info(folder),
+            daemon=True).start()
 
     def _get_folder_size(self, folder):
         total = 0
@@ -6416,6 +6882,27 @@ class ExFATBuilder(tk.Tk):
             if not messagebox.askyesno('Pre-build checklist', msg):
                 return
 
+        # ── Estimated total time ──
+        total_gb = sum(
+            self._get_folder_size(self._queue[i].game_folder) / 1024**3
+            for i in waiting)
+        # Rough estimate: ~300 MB/s copy speed average on most systems
+        est_secs = int((total_gb * 1024) / 300) if total_gb > 0 else 0
+        # Add ~30s overhead per game for mount/format/dismount
+        est_secs += len(waiting) * 30
+        if est_secs > 0:
+            if est_secs < 60:
+                est_str = '%ds' % est_secs
+            elif est_secs < 3600:
+                est_str = '%dm %02ds' % (est_secs // 60, est_secs % 60)
+            else:
+                est_str = '%dh %02dm' % (est_secs // 3600, (est_secs % 3600) // 60)
+            msg = ('Build All — %d game(s)  •  %.1f GB total\n\n'
+                   'Estimated time: ~%s\n\n'
+                   'Start building?' % (len(waiting), total_gb, est_str))
+            if not messagebox.askyesno('Ready to build', msg):
+                return
+
         self._building = True
         self.build_btn.config(state='disabled', text='Building...')
         self._process_next(waiting, 0)
@@ -6572,6 +7059,10 @@ class ExFATBuilder(tk.Tk):
         elif self._current_pct > 0 and self._start_time:
             self._eta_var.set(self._format_eta(elapsed, self._current_pct))
     def _find_osfmount(self):
+        # Check user-specified path first
+        custom = self._settings.get('osfmount_path', '').strip()
+        if custom and os.path.isfile(custom):
+            return custom
         candidates = [
             r'C:\Program Files\OSFMount\osfmount.com',
             r'C:\Program Files (x86)\OSFMount\osfmount.com',
@@ -7513,5 +8004,43 @@ class ExFATBuilder(tk.Tk):
         self.log_box.config(state='disabled')
 
 if __name__ == '__main__':
+    def _crash_handler(exc_type, exc_value, exc_tb):
+        import traceback
+        tb_str = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        report = (
+            'exFAT Image Builder v' + APP_VERSION + ' — Crash Report\n'
+            'Date: ' + time.strftime('%Y-%m-%d %H:%M:%S') + '\n'
+            'Python: ' + sys.version + '\n'
+            '=' * 60 + '\n\n' + tb_str)
+        try:
+            crash_path = os.path.join(
+                os.path.expanduser('~'), 'exfat_builder_logs',
+                'crash_' + time.strftime('%Y%m%d_%H%M%S') + '.log')
+            os.makedirs(os.path.dirname(crash_path), exist_ok=True)
+            with open(crash_path, 'w') as f:
+                f.write(report)
+        except Exception:
+            crash_path = None
+        try:
+            import tkinter as _tk
+            import tkinter.messagebox as _mb
+            root = _tk.Tk()
+            root.withdraw()
+            msg = ('An unexpected error occurred:\n\n' + str(exc_value) +
+                   '\n\nCopy the full error report to clipboard?')
+            if crash_path:
+                msg += '\n(Also saved to: ' + crash_path + ')'
+            if _mb.askyesno('Crash — exFAT Image Builder', msg):
+                root.clipboard_clear()
+                root.clipboard_append(report)
+                root.update()
+                _mb.showinfo('Copied',
+                    'Error report copied to clipboard.\n\n'
+                    'Please paste it when reporting the issue:\n'
+                    'github.com/kerrdec97/ps5-exfat-builder/issues')
+            root.destroy()
+        except Exception:
+            pass
+    sys.excepthook = _crash_handler
     app = ExFATBuilder()
     app.mainloop()

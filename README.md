@@ -1,209 +1,179 @@
-# PS5 exFAT Image Builder
+# 🎮 exFAT Image Builder
 
-A Windows GUI tool for building exFAT disk images from PS5 game folders, for use with PS5 homebrew on jailbroken consoles.
+> Build PS5 exFAT game images — scripts bundled, game name auto-detected
 
-**Created by DecKerr97**
+**by DecKerr97** · [Releases](https://github.com/kerrdec97/ps5-exfat-builder/releases) · [Issues](https://github.com/kerrdec97/ps5-exfat-builder/issues)
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-v1.5.0-4a9eff?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 ---
 
-## What does it do?
+## What is it?
 
-Converts a PS5 game folder (containing `eboot.bin`) into an `.exfat` disk image that can be loaded on a jailbroken PS5. It handles the entire process — sizing, mounting, formatting and copying — automatically.
+A Windows GUI tool that converts PS5 game folders into `.exfat` disk images for use with PS5 homebrew on jailbroken consoles. It handles the entire process — sizing, mounting, formatting and copying — automatically, with no command line required.
 
 ---
 
 ## Requirements
 
-Your friends only need **one thing** installed:
+| Requirement | Notes |
+|---|---|
+| **Windows 10 / 11** (64-bit) | Required |
+| **OSFMount** | Free — [download here](https://www.osforensics.com/tools/mount-disk-images.html) |
+| **PS5 game dump** | Must contain `eboot.bin` in the root folder |
 
-- **[OSFMount by PassMark](https://www.osforensics.com/tools/mount-disk-images.html)** — free, used to mount the disk image during building
-
-That's it. No Python, no command line, nothing else. Just OSFMount + the `.exe`.
-
-**System:** Windows 10 or 11 (64-bit)
-
----
-
-## Download & Install
-
-1. Go to the [**Releases**](../../releases) page
-2. Download `exFAT Image Builder.exe`
-3. Install [OSFMount](https://www.osforensics.com/tools/mount-disk-images.html)
-4. Double-click the `.exe` — click **Yes** on the admin prompt
-5. Done
+> ⚠️ The app requires **Administrator** privileges. It will prompt automatically on launch.
 
 ---
 
-## How to use it
+## Installation
 
-### Building a game image
-
-1. **Select game folder** — the folder containing `eboot.bin` (e.g. `F:\PPSA03596-app`)
-   - The app automatically detects the game title, version and cover art from `param.sfo`, `pfs-version.dat`, `param.json` or `nptitle.dat`
-   - The output filename is filled in automatically e.g. `God of War Ragnarok (01.000.000).exfat`
-2. **Select output directory** — where to save the `.exfat` file (remembered between sessions)
-3. Click **+ Add to Queue** — repeat for as many games as you want
-4. Click **Build All**
-
-### Sending to PS5 via FTP
-
-1. Make sure the PS5 FTP server is running (enabled in your homebrew settings)
-2. Enter your PS5's IP address and port (typically `2121` or `2122`)
-3. Set the PS5 remote path
-4. Click **Test Connection** to verify
-5. After a build completes, click **↑ PS5** on the queue item — or enable **Auto-upload after build**
+1. Download `exFAT Image Builder.exe` from the [Releases page](https://github.com/kerrdec97/ps5-exfat-builder/releases)
+2. Install [OSFMount](https://www.osforensics.com/tools/mount-disk-images.html)
+3. Run the exe — no install needed, just double-click
+4. If OSFMount is not detected automatically, go to **⚙ Settings → OSFMount → Browse** to locate `osfmount.com`
 
 ---
 
 ## Features
 
-### Game Detection
-- Reads `param.sfo`, `pfs-version.dat`, `param.json`, `nptitle.dat` for game title and version
-- `pfs-version.dat` gives the real installed patch version (e.g. `01.007.000`) — not just the base app version
-- Falls back to extracting the PPSA/CUSA ID from the folder name
-- Displays game cover art from `icon0.png`
-- Shows estimated image size before building
+### 🔨 Build Tab
+- Queue-based workflow — add multiple games and build them all in sequence
+- Game name, PPSA ID and version auto-detected from `param.sfo` / `pfs-version.dat`
+- Real-time progress — file count (`342 / 1847 files`), GB written, MB/s speed, ETA
+- Estimated total build time shown before starting
+- Pre-build checklist — checks OSFMount, `eboot.bin`, drive space
+- Image verified after build — confirms `eboot.bin` and file count match source
+- Corrupt image detection — flags suspiciously small output files
+- Build log auto-saved to dedicated logs folder
+- Queue save / load as `.json`
+- Recently used folders dropdown (last 10)
+- Auto-retry failed builds (Off / 1x / 2x / 3x / 5x)
 
-### Build Queue
-- Add multiple games, build them all in one click
-- Duplicate game folder detection
-- Disk space check before building
-- Right-click any queue item: open source folder, open output folder, rebuild, upload to PS5, remove
-- Build single item from right-click menu
-- Build history saved to `~/.exfat_builder_history.json`
+### 📚 Library Tab
+- Scans multiple folders for PS5 game dumps
+- Grid view with cover art or compact list view
+- Search / filter by game name or PPSA ID
+- Right-click menu — add to queue, view details, open folder
+- **Build All** — adds every scanned game to the queue at once
 
-### Progress & ETA
-- Real-time progress bar with stage indicators: Mount → Format → Copy files → Dismount
-- During copy phase: reads free space directly from the mounted drive every second
-- Shows: elapsed time, GB written, GB remaining, MB/s speed, ETA
-- FTP uploads show the same stats: GB sent, GB remaining, speed, ETA with 5-second rolling average
+### 💾 My Images Tab
+- Scans folders for `.exfat` files
+- Multi-select with Ctrl+Click for batch operations
+- Batch upload selected images to PS5
 
-### FTP / PS5
-- Upload finished images directly to your PS5 over FTP
+### 🎮 PS5 Manager Tab
+- Unified view of local images vs what is on your PS5
+- 🟢 In sync · 🟡 Not uploaded · ⚫ PS5 only
+- Version mismatch warning when local and PS5 versions differ
+- Upload button per row
+- PS5 storage bar — used / free / total with colour coding
+
+### 📡 FTP Upload Tab
+- Upload any `.exfat` file or folder to PS5
+- Live progress — GB sent, MB/s, ETA
 - Cancel upload at any time
-- PS5 file browser — navigate, browse and delete files on your PS5
-- Ping PS5 — quick check if the PS5 is reachable before uploading
-- Auto-upload option — prompts to upload after each build
+- Auto-upload after build option
 
-### Settings
-- **Temp folder** — point to an external drive if your system drive is low on space. The app builds the image here before saving it to your output directory. You need enough free space for the full game size (e.g. a 50 GB game needs 50 GB free in the temp folder)
-- **Clear temp files** — removes leftover `exfat_builder_*` folders
-- All settings saved automatically between launches
+### 📡 PS5 Browser Tab
+- Full FTP file browser
+- Navigate, rename, cut/paste, move to any path, delete recursively, download, upload
+- Keyboard shortcuts — Delete, F2, F5, Backspace
 
-### Other
-- Drag and drop game folders onto the app
-- Collapsible output log (auto-expands when a build starts)
-- Black background, white text — easy to read
-- `[` `]` bracket-safe — handles folder names like `[DLPSGAME.COM]-PPSA12345-app`
-- Auto-elevates to Administrator on launch (required for OSFMount)
+### 🗂 File Manager Tab
+- Mount `.exfat` images read-write via OSFMount
+- Add files, add folders, replace, delete, new folder
+- Dismount with retry — handles stubborn unmounts on some systems
+
+### 📤 Extract Tab
+- Extract `.exfat` back to a folder with live progress
+
+### 🧩 Backports Tab
+- Apply backport patches to game folders or mounted exFAT images
+- Full folder structure preserved (fakelib, sce_module, sce_sys etc)
+- Drag and drop backport files and folders
+- Conflict preview — shows exactly what will be overwritten before applying
+- Auto backup of originals — named `GameName - Backport Backup (date)`
+- File list auto-clears when a new game target is selected
+
+### 📦 Payload Manager Tab
+- Save `.elf` and `.bin` payloads permanently
+- Send to PS5 via TCP with live progress and MB/s speed
+- Auto-name from filename when browsing
+- Colour-coded ELF / BIN badges
+
+### 📋 Klog Monitor Tab
+- Connect to PS5 and stream kernel logs live via TCP (default port 3232)
+- Colour-coded output — errors, warnings, debug, info
+- Timestamps on every line
+- Pause / Resume — freezes display while still receiving in background
+- Real-time keyword filter with highlighting
+- Export log to `.txt`
+
+### ⚙ Settings Tab
+- OSFMount path — Browse or Auto-detect
+- Temp folder — usage display, change location, clear
+- Logs folder — dedicated location, Open Logs button, clear all
+- PS5 FTP — IP, port, auto-detect, test connection, ping
+- Auto-upload after build
+- Sound notifications
+- Auto-retry count
+- Dark / Light mode
+
+### ❓ Help Tab
+- Built-in FAQ
+- Live changelog fetched from GitHub
+
+### General
+- Auto-update — downloads and installs new versions automatically
+- Crash reporter — catches unhandled errors, saves log, offers clipboard copy
+- DPI awareness — no clipping on high-DPI or dual-GPU laptops
+- Window size and position remembered between launches
+- End-of-tab indicator on every scrollable tab
 
 ---
 
-## Output filename format
+## Lite Version
 
-```
-Game Title (01.000.000).exfat
-```
-
-Examples:
-```
-God of War Ragnarok (02.001.000).exfat
-ASTRO BOT (01.007.000).exfat
-Phantom Breaker Battle Grounds Ultimate (01.000.000).exfat
-PPSA08804 (01.000.000).exfat   ← when no title found
-```
+`exFAT Image Builder Lite.exe` contains only the **Build** and **Library** tabs — ideal for users who just want to build images quickly without the extra features.
 
 ---
 
-## Game metadata — how does it know the game name?
+## Building from source
 
-It reads files **inside the game folder itself** — it does not connect to the internet or look anything up online.
+```bash
+pip install pyinstaller pillow
+build.bat
+```
 
-Priority order for version:
-1. `sce_sys/pfs-version.dat` — real installed patch version
-2. `sce_sys/param.sfo` VERSION key
-3. `sce_sys/param.sfo` APP_VER key
-4. `sce_sys/param.json` version field
-
-Priority order for title:
-1. `sce_sys/param.sfo` TITLE key
-2. `sce_sys/param.json` titleName field
-3. `sce_sys/nptitle.dat`
-4. PPSA/CUSA ID extracted from the folder name
-
-The title ID (PPSA/CUSA) always comes from Sony's own metadata files inside the dump — not from a web database. If a game is correctly extracted it will always match what PlayStation shows.
+Produces both exes in `dist\`.
 
 ---
 
 ## Troubleshooting
 
 | Problem | Fix |
-|---------|-----|
-| `Source directory not found` | Folder name has `[` `]` — rename it to remove brackets |
-| Build fails exit code 1 | `eboot.bin` not found in the selected folder |
-| OSFMount error | Make sure OSFMount is installed and the app is running as Administrator |
-| Game not auto-named | Check that `sce_sys/param.sfo` or `sce_sys/param.json` exists in the game folder |
-| Version shows `01.000.000` for everything | `pfs-version.dat` may be missing — this is normal for some extraction tools |
-| FTP won't connect | Make sure the PS5 FTP server is running in your homebrew settings |
-| Build All button not visible | Resize the window taller |
-| Cover art not showing | Recompile with `build.bat` which installs Pillow |
-
----
-
-## Building from source
-
-```
-git clone https://github.com/YOUR_USERNAME/ps5-exfat-builder
-cd ps5-exfat-builder
-```
-
-Run `build.bat` — it installs PyInstaller + Pillow and compiles the exe:
-```
-build.bat
-```
-
-Or manually:
-```
-pip install pyinstaller pillow
-py -m PyInstaller --onefile --windowed --name "exFAT Image Builder" --uac-admin --icon="controller.ico" --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageTk exfat_builder.py
-```
-
-The `.exe` will be in `dist\`.
-
----
-
-## Project files
-
-```
-ps5-exfat-builder/
-├── exfat_builder.py       # Full source — single file app
-├── controller.ico         # App icon
-├── build.bat              # Compile to .exe
-├── README.md
-├── LICENSE
-└── .gitignore
-```
-
-`make_image.bat` and `New-OsfExfatImage.ps1` are embedded inside `exfat_builder.py` as base64 and extracted to a temp folder at runtime.
+|---|---|
+| OSFMount not detected | Settings → OSFMount → Browse for `osfmount.com` |
+| App freezes when browsing USB drive | Fixed in v1.5.0 — update |
+| Image not dismounting after build | Fixed in v1.5.0 — dismount now retries automatically |
+| eboot.bin not found | Must be in the root of the game folder |
+| Output drive low on space | Output drive needs free space equal to the game size |
+| FTP will not connect | Make sure homebrew FTP server is running on PS5 |
+| Crash on startup | Log saved to `~/exfat_builder_logs/` — share on GitHub Issues |
+| Game name not detected | Game may be missing `param.sfo` — falls back to folder name |
 
 ---
 
 ## Credits
 
-- **DecKerr97** — tool author
-- **[NookieAI](https://github.com/NookieAI)** — inspiration for the project
-- **stonemodder** — inspiration from Porkfolio
+- Inspired by **NookieAI** and **stonemodder** (Porkfolio)
 - PS5 homebrew community
-- [OSFMount by PassMark](https://www.osforensics.com/tools/mount-disk-images.html) — disk image mounting
-- [ShadowMountPlus](https://github.com/LightningMods/ShadowMountPlus) — the `make_image.bat` / `New-OsfExfatImage.ps1` scripts this tool wraps
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
-
-> **Disclaimer:** This tool is for use with game backups you legally own. The authors are not responsible for misuse.
+MIT — see [LICENSE](LICENSE)
