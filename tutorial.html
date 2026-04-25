@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>exFAT Image Builder — Complete Tutorial Guide</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    line-height: 1.7;
+  }
+  .cover {
+    background: linear-gradient(135deg, #0d0d0d 0%, #111827 50%, #0d0d0d 100%);
+    border-bottom: 2px solid #4a9eff;
+    padding: 60px 48px 48px;
+    text-align: center;
+  }
+  .cover h1 {
+    font-size: 2.8em;
+    color: #4a9eff;
+    letter-spacing: -1px;
+    margin-bottom: 8px;
+  }
+  .cover .subtitle {
+    font-size: 1.1em;
+    color: #888;
+    margin-bottom: 24px;
+  }
+  .cover .badge {
+    display: inline-block;
+    background: #4a9eff22;
+    border: 1px solid #4a9eff55;
+    color: #4a9eff;
+    padding: 4px 16px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    margin: 4px;
+  }
+  .toc {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 28px 36px;
+    margin: 36px 48px;
+  }
+  .toc h2 { color: #4a9eff; font-size: 1em; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 16px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin: 6px 0; }
+  .toc a { color: #aaa; text-decoration: none; }
+  .toc a:hover { color: #4a9eff; }
+  .section {
+    padding: 48px 48px 0;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #1e1e1e;
+  }
+  .section-num {
+    background: #4a9eff;
+    color: #000;
+    font-weight: bold;
+    font-size: 0.85em;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  h2 { font-size: 1.5em; color: #fff; }
+  h3 { font-size: 1.1em; color: #4a9eff; margin: 24px 0 10px; }
+  p { margin-bottom: 14px; color: #ccc; }
+  .mockup {
+    background: #111;
+    border: 1px solid #2a2a2a;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 20px 0;
+    box-shadow: 0 8px 32px #000a;
+  }
+  .mockup-titlebar {
+    background: #1a1a1a;
+    border-bottom: 1px solid #2a2a2a;
+    padding: 10px 16px;
+    font-size: 0.8em;
+    color: #666;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mockup-titlebar .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #333;
+  }
+  .mockup-title { flex: 1; text-align: center; }
+  .mockup-tabs {
+    background: #0a0a0a;
+    border-bottom: 1px solid #222;
+    padding: 0 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .tab {
+    padding: 8px 14px;
+    font-size: 0.75em;
+    color: #555;
+    cursor: default;
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active {
+    color: #fff;
+    border-bottom-color: #4a9eff;
+    background: #1a1a1a;
+  }
+  .mockup-body {
+    padding: 20px;
+    min-height: 120px;
+  }
+  .field-row {
+    margin-bottom: 12px;
+  }
+  .field-label {
+    font-size: 0.75em;
+    color: #666;
+    margin-bottom: 4px;
+  }
+  .field-input {
+    background: #f0f0f0;
+    color: #111;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+    font-size: 0.8em;
+    width: 100%;
+  }
+  .btn {
+    display: inline-block;
+    padding: 8px 18px;
+    border-radius: 4px;
+    font-size: 0.82em;
+    font-weight: bold;
+    margin: 4px 4px 4px 0;
+  }
+  .btn-blue { background: #4a9eff; color: #000; }
+  .btn-green { background: #4caf50; color: #fff; }
+  .btn-purple { background: #9b59b6; color: #fff; }
+  .btn-grey { background: #2a2a2a; color: #aaa; }
+  .btn-red { background: #f44336; color: #fff; }
+  .queue-item {
+    background: #141414;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    font-size: 0.8em;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .queue-status { width: 10px; height: 10px; border-radius: 50%; background: #4caf50; flex-shrink: 0; }
+  .queue-name { flex: 1; color: #fff; font-weight: 600; }
+  .queue-meta { color: #555; font-size: 0.85em; }
+  .progress-bar-bg {
+    background: #1e1e1e;
+    border-radius: 4px;
+    height: 16px;
+    overflow: hidden;
+    margin: 12px 0;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #4a9eff, #4caf50);
+  }
+  .dots-row {
+    display: flex;
+    justify-content: space-around;
+    margin: 8px 0;
+  }
+  .dot-col { text-align: center; font-size: 0.7em; color: #555; }
+  .dot-icon { width: 12px; height: 12px; border-radius: 50%; margin: 0 auto 4px; }
+  .dot-done { background: #4caf50; }
+  .dot-active { background: #4a9eff; }
+  .dot-wait { background: #333; }
+  .callout {
+    background: #0d1f33;
+    border-left: 3px solid #4a9eff;
+    border-radius: 0 6px 6px 0;
+    padding: 14px 18px;
+    margin: 16px 0;
+    font-size: 0.9em;
+    color: #7ec8ff;
+  }
+  .callout.warn {
+    background: #1a1200;
+    border-color: #ffaa00;
+    color: #ffcc44;
+  }
+  .callout.success {
+    background: #0a1f0a;
+    border-color: #4caf50;
+    color: #81c784;
+  }
+  .step-list { list-style: none; padding: 0; }
+  .step-list li {
+    padding: 10px 0 10px 36px;
+    position: relative;
+    border-bottom: 1px solid #1a1a1a;
+    color: #ccc;
+    font-size: 0.95em;
+  }
+  .step-list li:last-child { border-bottom: none; }
+  .step-list li::before {
+    content: attr(data-n);
+    position: absolute;
+    left: 0;
+    top: 10px;
+    background: #4a9eff;
+    color: #000;
+    font-weight: bold;
+    font-size: 0.75em;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .klog-box {
+    background: #050505;
+    border: 1px solid #1a1a1a;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'Consolas', monospace;
+    font-size: 0.78em;
+    line-height: 1.6;
+  }
+  .klog-err  { color: #ff4444; }
+  .klog-warn { color: #ffaa00; }
+  .klog-ok   { color: #00ff41; }
+  .klog-grey { color: #666; }
+  .tip-box {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-size: 0.88em;
+  }
+  .tip-box .tip-title { color: #4a9eff; font-weight: bold; margin-bottom: 8px; }
+  .tip-box ul { padding-left: 18px; color: #aaa; }
+  .tip-box li { margin: 4px 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.88em;
+  }
+  th {
+    background: #1a1a1a;
+    color: #4a9eff;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+  }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1a1a1a;
+    color: #ccc;
+  }
+  tr:hover td { background: #111; }
+  .footer {
+    text-align: center;
+    padding: 48px;
+    color: #333;
+    font-size: 0.85em;
+    border-top: 1px solid #1a1a1a;
+    margin-top: 64px;
+  }
+  .footer a { color: #4a9eff; text-decoration: none; }
+  code {
+    background: #1a1a1a;
+    color: #4a9eff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Consolas', monospace;
+    font-size: 0.88em;
+  }
+  hr { border: none; border-top: 1px solid #1e1e1e; margin: 40px 0; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════ COVER ═══════════════════════════ -->
+<div class="cover">
+  <h1>🎮 exFAT Image Builder</h1>
+  <div class="subtitle">Complete User Guide &amp; Tutorial — v1.4.1</div>
+  <div>
+    <span class="badge">by DecKerr97</span>
+    <span class="badge">github.com/kerrdec97/ps5-exfat-builder</span>
+    <span class="badge">PS5 Homebrew</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ TABLE OF CONTENTS ═══════════════════════════ -->
+<div class="toc">
+  <h2>📋 Table of Contents</h2>
+  <ol>
+    <li><a href="#requirements">Requirements &amp; Installation</a></li>
+    <li><a href="#build">Build Tab — Creating exFAT Images</a></li>
+    <li><a href="#library">Library Tab — Managing Your Game Collection</a></li>
+    <li><a href="#backports">Backports Tab — Applying Patches</a></li>
+    <li><a href="#payloads">Payload Manager — Sending Payloads to PS5</a></li>
+    <li><a href="#ftp">FTP Upload — Sending Images to PS5</a></li>
+    <li><a href="#ps5browser">PS5 Browser — Managing Files on PS5</a></li>
+    <li><a href="#filemanager">File Manager — Editing Images</a></li>
+    <li><a href="#klog">Klog Monitor — Reading PS5 Logs</a></li>
+    <li><a href="#settings">Settings — Configuration</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+  </ol>
+</div>
+
+<!-- ═══════════════════════════ 1. REQUIREMENTS ═══════════════════════════ -->
+<div class="section" id="requirements">
+  <div class="section-header">
+    <div class="section-num">1</div>
+    <h2>Requirements &amp; Installation</h2>
+  </div>
+
+  <h3>What you need</h3>
+  <table>
+    <tr><th>Requirement</th><th>Where to get it</th><th>Notes</th></tr>
+    <tr><td><strong>exFAT Image Builder.exe</strong></td><td>github.com/kerrdec97/ps5-exfat-builder/releases</td><td>No install needed, just run it</td></tr>
+    <tr><td><strong>OSFMount</strong></td><td>osforensics.com/tools/mount-disk-images.html</td><td>Free — required for building images</td></tr>
+    <tr><td><strong>Windows 10 or 11</strong></td><td>—</td><td>64-bit required</td></tr>
+    <tr><td><strong>PS5 game dump</strong></td><td>Your own PS5 game backups</td><td>Must contain eboot.bin</td></tr>
+  </table>
+
+  <div class="callout warn">
+    ⚠️ The app must run as <strong>Administrator</strong>. It will prompt you automatically when you launch it.
+  </div>
+
+  <h3>First launch</h3>
+  <ol class="step-list">
+    <li data-n="1">Download <code>exFAT Image Builder.exe</code> from the GitHub releases page</li>
+    <li data-n="2">Double-click the exe — Windows will ask for Administrator permission, click Yes</li>
+    <li data-n="3">If OSFMount is not found, a yellow banner appears at the top. Go to <strong>Settings → OSFMount</strong> and click Browse to point it to your <code>osfmount.com</code> file</li>
+    <li data-n="4">Set your <strong>Output directory</strong> — this is where your finished .exfat images will be saved</li>
+  </ol>
+
+  <div class="tip-box">
+    <div class="tip-title">💡 Tip — OSFMount not detected?</div>
+    <ul>
+      <li>Go to the <strong>Settings tab</strong> (⚙ in the tab bar)</li>
+      <li>Under <strong>OSFMount</strong>, click <strong>Browse</strong></li>
+      <li>Navigate to where you installed OSFMount and select <code>osfmount.com</code></li>
+      <li>It saves automatically — you won't need to do this again</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 2. BUILD ═══════════════════════════ -->
+<div class="section" id="build">
+  <div class="section-header">
+    <div class="section-num">2</div>
+    <h2>🔨 Build Tab — Creating exFAT Images</h2>
+  </div>
+
+  <p>The Build tab is the core of the app. It converts your PS5 game folder into an <code>.exfat</code> disk image that can be loaded by homebrew on a jailbroken PS5.</p>
+
+  <!-- Mockup of Build tab -->
+  <div class="mockup">
+    <div class="mockup-titlebar">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      <div class="mockup-title">exFAT Image Builder [Administrator] — v1.4.1</div>
+    </div>
+    <div class="mockup-tabs">
+      <div class="tab active">🔨 Build</div>
+      <div class="tab">📚 Library</div>
+      <div class="tab">💾 My Images</div>
+      <div class="tab">🎮 PS5 Manager</div>
+      <div class="tab">📤 Extract</div>
+      <div class="tab">🗂 Files</div>
+      <div class="tab">📡 FTP</div>
+      <div class="tab">🧩 Backports</div>
+      <div class="tab">📦 Payloads</div>
+      <div class="tab">📋 Klog</div>
+      <div class="tab">⚙ Settings</div>
+      <div class="tab">❓ Help</div>
+    </div>
+    <div class="mockup-body">
+      <div class="field-row">
+        <div class="field-label">Game root folder (must contain eboot.bin)</div>
+        <div class="field-input">D:\Games\Astro Bot PPSA01325</div>
+      </div>
+      <div class="field-row">
+        <div class="field-label">Recent:</div>
+        <div class="field-input" style="color:#888;">▾ D:\Games\Astro Bot PPSA01325</div>
+      </div>
+      <div class="field-row">
+        <div class="field-label">Output directory</div>
+        <div class="field-input">E:\PS5 Images</div>
+      </div>
+      <div class="field-row">
+        <div class="field-label">Output filename</div>
+        <div class="field-input">ASTRO BOT (01.007.000).exfat</div>
+      </div>
+      <div style="margin: 12px 0;">
+        <span class="btn btn-blue">+ Add to Queue</span>
+        <span class="btn btn-green">Build All</span>
+      </div>
+      <div style="font-size:0.75em; color:#555; margin-bottom:8px;">QUEUE &nbsp; <span style="color:#4a9eff;">2 items</span> &nbsp;&nbsp;&nbsp; <span style="color:#555;">📂 Load queue &nbsp; 💾 Save queue &nbsp; Clear All</span></div>
+      <div class="queue-item">
+        <div class="queue-status" style="background:#4caf50;"></div>
+        <div class="queue-name">ASTRO BOT (01.007.000).exfat</div>
+        <div class="queue-meta">PPSA01325 &nbsp;·&nbsp; 37.2 GB</div>
+      </div>
+      <div class="queue-item">
+        <div class="queue-status" style="background:#4a9eff;"></div>
+        <div class="queue-name">Wuchang Fallen Feathers (01.011.000).exfat</div>
+        <div class="queue-meta">PPSA09519 &nbsp;·&nbsp; 52.1 GB</div>
+      </div>
+      <div style="margin-top:12px; font-size:0.75em; color:#555;">Copying game files... &nbsp;&nbsp; <span style="color:#4a9eff;">56%</span></div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:56%;"></div></div>
+      <div style="font-size:0.72em; color:#555; margin-bottom:8px;">Elapsed: 1m 23s &nbsp;•&nbsp; 342 / 1847 files &nbsp;•&nbsp; 12.4 GB written &nbsp;•&nbsp; 487 MB/s &nbsp;•&nbsp; ETA: 1m 25s</div>
+      <div class="dots-row">
+        <div class="dot-col"><div class="dot-icon dot-done"></div>Mount</div>
+        <div class="dot-col"><div class="dot-icon dot-done"></div>Format</div>
+        <div class="dot-col"><div class="dot-icon dot-active"></div>Copy files</div>
+        <div class="dot-col"><div class="dot-icon dot-wait"></div>Dismount</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Step-by-step: Building a single game</h3>
+  <ol class="step-list">
+    <li data-n="1">Click <strong>Browse</strong> next to "Game root folder" and select your PS5 game folder. The app automatically reads the game title, PPSA ID and version from inside the folder</li>
+    <li data-n="2">Set your <strong>Output directory</strong> — where you want the finished .exfat saved (must have enough free space, same size as the game)</li>
+    <li data-n="3">The <strong>Output filename</strong> is filled in automatically e.g. <code>ASTRO BOT (01.007.000).exfat</code></li>
+    <li data-n="4">Click <strong>+ Add to Queue</strong></li>
+    <li data-n="5">Click <strong>Build All</strong> to start building. A confirmation shows the estimated time before starting</li>
+    <li data-n="6">Watch the progress bar and file counter update in real time. When done the image is verified automatically</li>
+  </ol>
+
+  <h3>Building multiple games at once</h3>
+  <p>Repeat steps 1–4 for each game to add them all to the queue, then click <strong>Build All</strong>. The app builds them one by one and notifies you when all are done.</p>
+
+  <div class="tip-box">
+    <div class="tip-title">💡 Tips</div>
+    <ul>
+      <li>Use <strong>Save queue</strong> to save your game list as a .json file and reload it next time</li>
+      <li>The <strong>Recent</strong> dropdown remembers your last 10 game folders</li>
+      <li>The temp folder needs free space equal to the game size — if your C: drive is low, change it in Settings</li>
+      <li>Right-click a queue item to open the source folder, rebuild it, or remove it</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 3. LIBRARY ═══════════════════════════ -->
+<div class="section" id="library">
+  <div class="section-header">
+    <div class="section-num">3</div>
+    <h2>📚 Library Tab — Managing Your Game Collection</h2>
+  </div>
+
+  <p>The Library tab scans folders for PS5 game dumps and shows them as a visual collection with cover art. From here you can browse your games and add them to the build queue.</p>
+
+  <h3>Setting up your library</h3>
+  <ol class="step-list">
+    <li data-n="1">Click <strong>+ Add folder</strong> and select the folder that contains your PS5 game dumps (e.g. <code>D:\Games</code>)</li>
+    <li data-n="2">You can add multiple folders — one per drive if you have games spread across drives</li>
+    <li data-n="3">Click <strong>🔄 Scan</strong> to find all games. It searches for folders containing <code>eboot.bin</code></li>
+    <li data-n="4">Games appear as cards with cover art, PPSA ID, version and size</li>
+  </ol>
+
+  <h3>Grid vs List view</h3>
+  <p>Use the <strong>⊞⊞ Grid</strong> and <strong>☰ List</strong> toggle buttons to switch between views. Grid shows cover art cards. List shows compact rows — better for large collections.</p>
+
+  <h3>Adding games to the build queue</h3>
+  <p>Click any game card to open a context menu with options:</p>
+  <ul style="padding-left:20px; color:#aaa; margin-bottom:14px;">
+    <li style="margin:4px 0;"><strong>➕ Add to Build Queue</strong> — adds the game immediately and switches to Build tab</li>
+    <li style="margin:4px 0;"><strong>📋 View details</strong> — opens full info panel with output directory picker</li>
+    <li style="margin:4px 0;"><strong>📂 Open folder</strong> — opens the game folder in Explorer</li>
+  </ul>
+
+  <p>To build your entire library at once, click <strong>🔨 Build All</strong> in the top bar — it adds every scanned game to the queue and switches to the Build tab.</p>
+</div>
+
+<!-- ═══════════════════════════ 4. BACKPORTS ═══════════════════════════ -->
+<div class="section" id="backports">
+  <div class="section-header">
+    <div class="section-num">4</div>
+    <h2>🧩 Backports Tab — Applying Patches</h2>
+  </div>
+
+  <p>The Backports tab lets you apply community backport patches to a game folder or mounted exFAT image. Backports allow newer games to run on older firmware versions.</p>
+
+  <!-- Mockup of Backports tab -->
+  <div class="mockup">
+    <div class="mockup-titlebar">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      <div class="mockup-title">Backports</div>
+    </div>
+    <div class="mockup-body">
+      <div style="font-size:0.8em; color:#aaa; margin-bottom:10px;">
+        Target type: &nbsp;
+        <span style="color:#4a9eff;">● Game folder (on PC)</span> &nbsp;&nbsp;
+        <span style="color:#555;">○ exFAT image (mounted)</span>
+      </div>
+      <div class="field-row">
+        <div class="field-label">Game root folder</div>
+        <div class="field-input">C:\Games\Wuchang Fallen Feathers 01.011 PPSA09519</div>
+      </div>
+      <div style="margin:8px 0; font-size:0.8em; color:#aaa;">Backport files / folder to apply &nbsp; <span style="color:#555;">35 file(s) ready to apply</span></div>
+      <div style="background:#141414; border:1px solid #222; border-radius:4px; padding:8px 12px; font-family:monospace; font-size:0.75em; color:#888; margin-bottom:12px;">
+        📁 eboot.bin<br>
+        📁 fakelib\libSceAgc.sprx<br>
+        📁 sce_module\libSceJobManager.prx<br>
+        📁 sce_sys\param.json<br>
+        <span style="color:#555;">... 31 more files</span>
+      </div>
+      <div style="font-size:0.8em; color:#aaa; margin-bottom:8px;">
+        Backup overwritten files: &nbsp;
+        <span style="color:#4a9eff;">● Next to target (auto)</span> &nbsp;
+        <span style="color:#555;">○ Custom folder &nbsp; ○ No backup</span>
+      </div>
+      <span class="btn btn-purple">🧩 Apply Backport</span>
+      <div style="font-size:0.75em; color:#4caf50; margin-top:8px;">Done — 35 file(s) applied, 32 backed up</div>
+      <div class="progress-bar-bg" style="margin-top:6px;"><div class="progress-bar-fill" style="width:100%; background:#4caf50;"></div></div>
+    </div>
+  </div>
+
+  <h3>Applying a backport to a game folder</h3>
+  <ol class="step-list">
+    <li data-n="1">Select <strong>Game folder (on PC)</strong> as the target type</li>
+    <li data-n="2">Click <strong>Browse</strong> and select your PS5 game folder. The file list clears automatically</li>
+    <li data-n="3">Click <strong>+ Add folder</strong> and select the backport folder you downloaded (e.g. <code>Chapter 1 Backport 4.xx By Baderlink</code>). The full folder structure is preserved automatically</li>
+    <li data-n="4">Choose your backup option — <strong>Next to target (auto)</strong> is recommended. It creates a backup folder named e.g. <em>"Wuchang - Backport Backup (2026-04-25 15.26)"</em></li>
+    <li data-n="5">Click <strong>🧩 Apply Backport</strong></li>
+    <li data-n="6">A confirmation shows exactly which files will be overwritten and their sizes. Click Yes to proceed</li>
+  </ol>
+
+  <h3>Applying to an exFAT image</h3>
+  <ol class="step-list">
+    <li data-n="1">Select <strong>exFAT image (mounted)</strong> as the target type</li>
+    <li data-n="2">Browse to your <code>.exfat</code> file and click <strong>🔗 Mount</strong> — the image is mounted read-write</li>
+    <li data-n="3">Add your backport files and click Apply Backport as above</li>
+    <li data-n="4">When done, click <strong>🔓 Dismount</strong> — the image is saved and ready</li>
+  </ol>
+
+  <div class="callout success">
+    ✅ You can also <strong>drag and drop</strong> a backport folder directly onto the file list — no need to click Add folder.
+  </div>
+
+  <div class="callout warn">
+    ⚠️ Always keep a backup of original files. If the backport doesn't work you'll need to restore them.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 5. PAYLOADS ═══════════════════════════ -->
+<div class="section" id="payloads">
+  <div class="section-header">
+    <div class="section-num">5</div>
+    <h2>📦 Payload Manager — Sending Payloads to PS5</h2>
+  </div>
+
+  <p>The Payload Manager saves your <code>.elf</code> and <code>.bin</code> payload files and sends them to your jailbroken PS5 over a TCP network connection with one click.</p>
+
+  <h3>Adding a payload</h3>
+  <ol class="step-list">
+    <li data-n="1">Click <strong>+ Add payload</strong> in the top right</li>
+    <li data-n="2">Click <strong>Browse</strong> and select your <code>.elf</code> or <code>.bin</code> file — the name is filled in automatically from the filename</li>
+    <li data-n="3">Add optional notes (e.g. "Use with firmware 4.xx")</li>
+    <li data-n="4">Click <strong>Save</strong> — it appears in your list and is remembered permanently</li>
+  </ol>
+
+  <h3>Sending a payload</h3>
+  <ol class="step-list">
+    <li data-n="1">Enter your PS5 IP address and port at the top</li>
+    <li data-n="2">Click <strong>Save</strong> to remember the connection</li>
+    <li data-n="3">Click <strong>📤 Send</strong> on any payload in the list</li>
+    <li data-n="4">The status bar shows live send progress and speed</li>
+  </ol>
+
+  <table>
+    <tr><th>Port</th><th>Use</th></tr>
+    <tr><td><code>9090</code></td><td>Common homebrew default</td></tr>
+    <tr><td><code>9021</code></td><td>Alternative homebrew port</td></tr>
+  </table>
+
+  <div class="callout">
+    💡 Each payload shows a coloured badge — <span style="background:#e74c3c; color:#fff; padding:1px 6px; border-radius:3px; font-size:0.85em;">BIN</span> or <span style="background:#8e44ad; color:#fff; padding:1px 6px; border-radius:3px; font-size:0.85em;">ELF</span>. If a file is missing or moved the filename shows in red as a warning.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 6. FTP UPLOAD ═══════════════════════════ -->
+<div class="section" id="ftp">
+  <div class="section-header">
+    <div class="section-num">6</div>
+    <h2>📡 FTP Upload — Sending Images to PS5</h2>
+  </div>
+
+  <p>Once you've built your <code>.exfat</code> image you need to transfer it to your PS5 over FTP. Make sure your PS5's FTP server is running in your homebrew settings first.</p>
+
+  <h3>Single file upload</h3>
+  <ol class="step-list">
+    <li data-n="1">Go to <strong>Settings → PS5 FTP</strong> and enter your PS5's IP address and port (typically 2121 or 2122). Click Save</li>
+    <li data-n="2">Go to the <strong>📡 FTP Upload</strong> tab</li>
+    <li data-n="3">Browse to your <code>.exfat</code> file</li>
+    <li data-n="4">Set the remote path on your PS5 (e.g. <code>/data/etaHEN/games/</code>)</li>
+    <li data-n="5">Click <strong>Upload</strong>. Progress, speed and ETA are shown live</li>
+  </ol>
+
+  <h3>Batch upload from My Images</h3>
+  <p>Go to <strong>💾 My Images</strong>, add your images folder, hold <strong>Ctrl+Click</strong> to select multiple images, then click <strong>↑ Upload selected to PS5</strong>.</p>
+
+  <div class="tip-box">
+    <div class="tip-title">💡 Finding your PS5 IP</div>
+    <ul>
+      <li>On your PS5: Settings → Network → View Connection Status</li>
+      <li>Or use <strong>Auto-detect PS5 IP</strong> in Settings — it scans your network automatically</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 7. PS5 BROWSER ═══════════════════════════ -->
+<div class="section" id="ps5browser">
+  <div class="section-header">
+    <div class="section-num">7</div>
+    <h2>📡 PS5 Browser — Managing Files on PS5</h2>
+  </div>
+
+  <p>The PS5 Browser is a full FTP file manager that lets you navigate, rename, move, delete and download files directly on your PS5.</p>
+
+  <h3>Connecting</h3>
+  <ol class="step-list">
+    <li data-n="1">Click <strong>🔗 Connect</strong> — uses the IP from your Settings</li>
+    <li data-n="2">Navigate folders by double-clicking, or type a path and press Enter</li>
+    <li data-n="3">Use <strong>↑ Up</strong> to go up a folder level</li>
+  </ol>
+
+  <h3>Available actions</h3>
+  <table>
+    <tr><th>Action</th><th>How</th></tr>
+    <tr><td>Rename</td><td>✂ Rename button or F2</td></tr>
+    <tr><td>Move file to another folder</td><td>✂️ Cut → navigate → 📋 Paste, or ➡ Move to...</td></tr>
+    <tr><td>Delete</td><td>🗑 Delete button or Delete key. Folders deleted recursively</td></tr>
+    <tr><td>Download to PC</td><td>⬇ Download button</td></tr>
+    <tr><td>Upload to current folder</td><td>↑ Upload here button</td></tr>
+    <tr><td>New folder</td><td>📂 New folder button</td></tr>
+    <tr><td>Refresh</td><td>🔄 button or F5</td></tr>
+  </table>
+
+  <div class="callout warn">
+    ⚠️ <strong>Move to...</strong> lets you type any destination path — the app creates the path automatically if it doesn't exist.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 8. FILE MANAGER ═══════════════════════════ -->
+<div class="section" id="filemanager">
+  <div class="section-header">
+    <div class="section-num">8</div>
+    <h2>🗂 File Manager — Editing Images</h2>
+  </div>
+
+  <p>The File Manager mounts a <code>.exfat</code> image as a Windows drive letter so you can browse and edit its contents without rebuilding.</p>
+
+  <ol class="step-list">
+    <li data-n="1">Browse to your <code>.exfat</code> file and click <strong>🔗 Mount</strong></li>
+    <li data-n="2">The image appears as a drive letter. Browse files and folders inside it</li>
+    <li data-n="3">Use the toolbar to <strong>Add files</strong>, <strong>Add folder</strong>, <strong>Replace</strong>, <strong>Delete</strong> or create <strong>New folder</strong></li>
+    <li data-n="4">When done click <strong>🔓 Dismount</strong> — changes are saved to the image</li>
+  </ol>
+
+  <div class="callout">
+    💡 This is useful for applying backports, replacing individual files, or adding extra content without a full rebuild.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ 9. KLOG ═══════════════════════════ -->
+<div class="section" id="klog">
+  <div class="section-header">
+    <div class="section-num">9</div>
+    <h2>📋 Klog Monitor — Reading PS5 Logs</h2>
+  </div>
+
+  <p>The Klog Monitor connects to your PS5 and streams kernel log output live. Useful for debugging crashes and monitoring game behaviour.</p>
+
+  <!-- Mockup klog -->
+  <div class="mockup">
+    <div class="mockup-titlebar">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      <div class="mockup-title">Klog Monitor — Connected to 192.168.1.50:3232</div>
+    </div>
+    <div class="mockup-body">
+      <div class="klog-box">
+        <div class="klog-ok">[12:34:01]  System initialised</div>
+        <div class="klog-ok">[12:34:02]  Loading game: PPSA01325</div>
+        <div class="klog-warn">[12:34:03]  WARN: shader cache miss — recompiling</div>
+        <div class="klog-ok">[12:34:05]  eboot.bin loaded successfully</div>
+        <div class="klog-err">[12:34:08]  ERROR: failed to allocate memory block 0x4000</div>
+        <div class="klog-grey">[12:34:08]  DEBUG: fallback allocator called</div>
+        <div class="klog-ok">[12:34:09]  Resuming normally</div>
+      </div>
+    </div>
+  </div>
+
+  <ol class="step-list">
+    <li data-n="1">Enter your PS5 IP and port (default <code>3232</code>)</li>
+    <li data-n="2">Click <strong>▶ Connect</strong></li>
+    <li data-n="3">Logs stream in real time with colour coding — 🔴 errors, 🟡 warnings, ⚫ debug, 🟢 info</li>
+    <li data-n="4">Use the <strong>Filter</strong> box to show only lines containing a keyword</li>
+    <li data-n="5">Click <strong>⏸ Pause</strong> to freeze the display while still receiving data — click <strong>▶ Resume</strong> when ready</li>
+    <li data-n="6">Click <strong>💾 Export log</strong> to save everything to a <code>.txt</code> file</li>
+  </ol>
+</div>
+
+<!-- ═══════════════════════════ 10. SETTINGS ═══════════════════════════ -->
+<div class="section" id="settings">
+  <div class="section-header">
+    <div class="section-num">10</div>
+    <h2>⚙ Settings — Configuration</h2>
+  </div>
+
+  <table>
+    <tr><th>Setting</th><th>What it does</th></tr>
+    <tr><td><strong>OSFMount path</strong></td><td>Point to osfmount.com if not in default location. Use Browse or Detect</td></tr>
+    <tr><td><strong>Temp folder</strong></td><td>Where builds are staged. Needs free space equal to game size. Change if C: is low</td></tr>
+    <tr><td><strong>Logs folder</strong></td><td>Where build logs are saved. Open Logs button opens it in Explorer</td></tr>
+    <tr><td><strong>PS5 IP &amp; Port</strong></td><td>Your PS5's network address for FTP. Use Auto-detect to find it automatically</td></tr>
+    <tr><td><strong>Auto-upload after build</strong></td><td>Offers to upload to PS5 automatically when each build finishes</td></tr>
+    <tr><td><strong>Auto-retry failed builds</strong></td><td>Retry up to 5x if a build fails</td></tr>
+    <tr><td><strong>Sound notification</strong></td><td>Play a sound when builds or uploads complete</td></tr>
+    <tr><td><strong>Theme</strong></td><td>Dark or Light mode — takes full effect on next launch</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════ 11. TROUBLESHOOTING ═══════════════════════════ -->
+<div class="section" id="troubleshooting">
+  <div class="section-header">
+    <div class="section-num">11</div>
+    <h2>🔧 Troubleshooting</h2>
+  </div>
+
+  <table>
+    <tr><th>Problem</th><th>Fix</th></tr>
+    <tr><td>OSFMount not detected</td><td>Go to Settings → OSFMount → Browse and point it to osfmount.com manually</td></tr>
+    <tr><td>App freezes when browsing USB drive</td><td>Fixed in v1.4.2+. Update to the latest version</td></tr>
+    <tr><td>Image not dismounting after build</td><td>Fixed in v1.4.2+. If it persists, eject manually from Explorer</td></tr>
+    <tr><td>Build failed — eboot.bin not found</td><td>Your game folder structure is wrong. eboot.bin must be in the root of the folder</td></tr>
+    <tr><td>Output drive low on space</td><td>The output drive needs free space equal to the game size. Use a bigger drive</td></tr>
+    <tr><td>FTP won't connect</td><td>Make sure PS5 FTP server is running in your homebrew settings. Check IP and port</td></tr>
+    <tr><td>App crashes on startup</td><td>A crash log is saved to C:\Users\[you]\exfat_builder_logs\. Share the log on GitHub Issues</td></tr>
+    <tr><td>Game name not detected</td><td>The game folder may be missing param.sfo. The filename will default to the folder name</td></tr>
+    <tr><td>Build queue disappears</td><td>Use Save queue before closing so you can reload it next time</td></tr>
+  </table>
+
+  <div class="callout">
+    💡 If the app crashes, it automatically offers to copy a full error report to your clipboard. Paste it when opening an issue at <strong>github.com/kerrdec97/ps5-exfat-builder/issues</strong>
+  </div>
+</div>
+
+<div class="footer">
+  <p>exFAT Image Builder — by <strong>DecKerr97</strong></p>
+  <p style="margin-top:8px;">
+    <a href="https://github.com/kerrdec97/ps5-exfat-builder">github.com/kerrdec97/ps5-exfat-builder</a>
+  </p>
+  <p style="margin-top:8px; color:#222;">Inspired by NookieAI &amp; stonemodder (Porkfolio)</p>
+</div>
+
+</body>
+</html>
