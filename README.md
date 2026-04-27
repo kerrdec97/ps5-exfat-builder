@@ -148,7 +148,8 @@ build.bat
 ## Credits
 
 - Inspired by **NookieAI** and **stonemodder** (Porkfolio)
-- ffpkg support via **UFS2Tool**
+- ffpkg support via **UFS2Tool** by SvenGDK — [github.com/SvenGDK/UFS2Tool](https://github.com/SvenGDK/UFS2Tool)
+- exFAT image creation via **ShadowMountPlus** by drakmor — [github.com/drakmor/ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus/releases)
 - PS5 homebrew community
 
 ---
