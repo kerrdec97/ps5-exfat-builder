@@ -4,15 +4,9 @@
 
 **by DecKerr97** · [Releases](https://github.com/kerrdec97/ps5-exfat-builder/releases) · [Issues](https://github.com/kerrdec97/ps5-exfat-builder/issues)
 
-![Version](https://img.shields.io/badge/version-v1.7.0-4a9eff?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.8.0-4a9eff?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
-
----
-
-## What is it?
-
-A Windows GUI tool for PS5 homebrew — build exFAT and ffpkg game images, auto-backport games to older firmware, manage your game library, send payloads, monitor klogs, and much more. No command line required.
 
 ---
 
@@ -21,95 +15,88 @@ A Windows GUI tool for PS5 homebrew — build exFAT and ffpkg game images, auto-
 | Requirement | Notes |
 |---|---|
 | **Windows 10 / 11** (64-bit) | Required |
-| **OSFMount** | Free — [download here](https://www.osforensics.com/tools/mount-disk-images.html) — required for exFAT builds |
+| **OSFMount** | [Download](https://www.osforensics.com/tools/mount-disk-images.html) — required for exFAT builds |
 | **.NET 8 Runtime** | Required for ffpkg builds only |
 | **PS5 game dump** | Must contain `eboot.bin` in the root folder |
 
-> ⚠️ The app requires **Administrator** privileges. It will prompt automatically on launch.
+> ⚠️ Requires **Administrator** privileges. Prompts automatically on launch.
+
+> ⚠️ To **play backported games** on your PS5 you need BestPig's BackPork payload running: [github.com/BestPig/BackPork](https://github.com/BestPig/BackPork)
 
 ---
 
 ## Features
 
 ### 🔨 exFAT Tab
-- Queue-based workflow — add multiple games at once or one at a time
-- Game name, PPSA ID and version auto-detected
-- Real-time progress — file count, GB written, MB/s, ETA
-- Estimated build time before starting
-- Pre-build checklist — drive root detection, write permissions, eboot.bin, space
-- Force Dismount button — uses Windows shell eject
-- Post-build dismount retry
-- Build log auto-saved, queue save/load
+- Queue multiple games, build in sequence
+- Auto-detected game name, PPSA ID, version
+- Real-time progress — files copied, GB written, MB/s, ETA
+- ⏸ Pause / ▶ Resume queue
+- Per-game elapsed time in status and log
+- Pre-build checklist — blocks output=source folder, checks space
+- Force Dismount, post-build verification
 
 ### 📦 ffpkg Tab
-- Full UFS2 ffpkg builder via UFS2Tool (bundled)
+- UFS2 ffpkg builder via UFS2Tool (bundled)
 - Sector size locked at 512 — fixes Windows broken image bug
 - Requires .NET 8
 
-### 🧩 Backports Tab — Manual
-- Apply backport files to game folder or mounted exFAT image
-- Drag and drop, conflict preview, auto backup named after game + date
-- File list auto-clears on new target
-
-### ⚡ Backports Tab — Auto Backport (NEW in v1.7.0)
-- Automatically patches PS5 ELF executables using the full decrypt/re-sign pipeline
-- Powered by Backport.py by Nazky & BestPig — bundled, no install needed
-- Select fakelib folder — applied to game/fakelib/ with originals backed up
-- Originals snapshot taken before fakelib is applied — only real game files are backed up
-- Target SDK selector (4–11) with firmware version labels
-- Fakelib path saved automatically for future use
+### ⚡ Auto Backport Tab
+- Full decrypt/re-sign pipeline via Backport.py by Nazky & BestPig
+- SDK auto-detected from param.sfo on game folder browse
+- Yellow banner shows detected SDK and recommended target
+- Fakelib support — applied to `game/fakelib/` subfolder
+- Originals snapshot before fakelib applied
 - Patched files applied back to game folder in correct paths
-- Backup zips — originals and backported files saved as separate .zip files
-- Accessible from Library tab — click any game → ⚡ Auto Backport
-
-### ⚙️ Advanced Tab
-- exFAT: cluster size, sector size, copy threads
-- ffpkg: block size, fragment size, min free %, bytes per inode
-
-### 🌐 17 Languages
-English, Chinese, German, French, Spanish, Portuguese, Japanese, Korean, Russian, Arabic, Italian, Dutch, Polish, Turkish, Thai, Vietnamese, Indonesian
+- Zip backups: `PPSA12345 Game Title (01.000.000) original files.zip`
+- PPSA ID read from param.sfo when not in folder name
+- ↩ Restore originals from zip
+- Compatibility notes field
+- `decrypted/` excluded from all operations
 
 ### 📚 Library Tab
-- Scan progress bar — live folder count and games found
 - Grid / list view with cover art
 - Right-click → Add to exFAT Queue, Add to ffpkg Queue, ⚡ Auto Backport
+- ⚡ Backport All — batch backport all library games in sequence
 
 ### 💾 My Images Tab
-- Scan for .exfat files
-- 🔄 Convert to ffpkg — mounts exFAT, builds ffpkg, live progress bar
-- Batch upload to PS5
+- Browse and manage `.exfat` image files
+- Upload to PS5 via FTP
 
-### 🎮 PS5 Manager Tab
-- Unified local vs PS5 view
-- PS5 storage bar with colour coding
+### 📡 FTP Tab (merged with PS5 Browser)
+- ↑ Upload sub-tab with live progress bar
+- 📂 PS5 Browser sub-tab — navigate, upload, download, rename, delete
+- Any "Upload to PS5" button auto-switches to this tab
 
-### 📡 FTP Upload / PS5 Browser Tabs
-- Upload with live progress, cancel, auto-upload after build
-- Full FTP browser — navigate, rename, move, delete, download, upload
+### 🧪 Language Stripper (Advanced tab) — BETA
+> ⚠️ **Beta feature — not fully tested. May not work on all games. Backs up removed files as zips before deleting.**
 
-### 🗂 File Manager Tab
-- Mount .exfat images read-write
-- Add, replace, delete files without rebuilding
+- Scans game folders for language-specific files and folders
+- Finds Unreal Engine language PAK files (`pakchunk_lang_en.pak`)
+- Finds PSARC language audio files (`audio_en.psarc`)
+- Finds loose locale folders (`en-US/`, `de-DE/` etc)
+- Single game or scan all games in a folder at once
+- Results grouped by game with size per entry
+- Quick actions: Keep All, Keep None, Keep en-US Only
+- Removes and backs up to zip before deleting
 
-### 📤 Extract Tab
-- Extract .exfat back to a folder
+### ⚙ Advanced Tab
+- exFAT: cluster size, sector size, copy threads
+- ffpkg: block size, fragment size, inode count
+- Post-Build: delete source folder after successful build
+- Language Stripper (beta)
 
-### 📦 Payload Manager Tab
-- Save and send .elf / .bin payloads to PS5 via TCP
-
-### 📋 Klog Monitor Tab
-- Stream PS5 kernel logs live via TCP
-- Timestamps, pause/resume, keyword filter, export
-
-### ⚙ Settings Tab
-- OSFMount custom path, temp folder, logs folder
-- PS5 FTP — IP, port, auto-detect
-- Language, theme, notifications
+### ⏻ Shutdown after task (Settings tab)
+- Shut down, Restart or Sleep PC after task completes
+- Configurable delay (30s–600s) with cancellable countdown dialog
+- Per-trigger: exFAT queue, ffpkg queue, backport, FTP upload
 
 ### General
+- 14-tab interface, all fitting on 1366px+ screens
+- 17 languages
+- Global output log visible on all tabs
 - Auto-update with retry logic and working directory fix
-- Crash reporter — saves log, copies to clipboard
-- End-of-tab indicator on every scrollable tab
+- Crash reporter
 
 ---
 
@@ -122,31 +109,16 @@ build.bat
 
 ---
 
-## Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| OSFMount not detected | Settings → OSFMount → Browse for `osfmount.com` |
-| Auto-update crashes on restart | Fixed in v1.6.3+ — update manually this time |
-| ffpkg build fails | Install .NET 8 Runtime |
-| Image runs out of space | Fixed in v1.6.2+ — size margins increased |
-| Output not found after build | Check antivirus isn't quarantining .exfat files |
-| FTP won't connect | Make sure homebrew FTP is running on PS5 |
-| Crash on startup | Log at `~/exfat_builder_logs/` — share on GitHub Issues |
-
----
-
 ## Credits
 
 | Contribution | Credit |
 |---|---|
 | PS5 Auto Backport pipeline (Backport.py, src/) | **Nazky** — [github.com/Nazky](https://github.com/Nazky) |
-| PS5 Backport research & tools | **BestPig** — [github.com/BestPig](https://github.com/BestPig) |
+| PS5 backport research & backport enabler payload | **BestPig** — [github.com/BestPig/BackPork](https://github.com/BestPig/BackPork) |
 | exFAT image creation (ShadowMountPlus) | **drakmor** — [github.com/drakmor/ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus/releases) |
 | ffpkg builder (UFS2Tool) | **SvenGDK** — [github.com/SvenGDK/UFS2Tool](https://github.com/SvenGDK/UFS2Tool) |
 | Klog server | **ps5-payload-dev** — [github.com/ps5-payload-dev/klogsrv](https://github.com/ps5-payload-dev/klogsrv) |
 | Inspiration | **NookieAI** and **stonemodder** (Porkfolio) |
-| PS5 homebrew community | Everyone contributing to the scene |
 
 ---
 
