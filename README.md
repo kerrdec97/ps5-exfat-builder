@@ -1,10 +1,10 @@
 # 🎮 exFAT Image Builder
 
-> Build PS5 exFAT and ffpkg game images — backport, patch, manage, rename dumps, convert
+> Build PS5 exFAT and ffpkg game images — backport, patch, manage, convert, rename
 
 **by DecKerr97** · [Releases](https://github.com/kerrdec97/ps5-exfat-builder/releases) · [Issues](https://github.com/kerrdec97/ps5-exfat-builder/issues)
 
-![Version](https://img.shields.io/badge/version-v1.9.0-4a9eff?style=flat-square)
+![Version](https://img.shields.io/badge/version-v2.5.0-b07ad6?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
@@ -12,91 +12,118 @@
 
 ## What is it?
 
-A Windows GUI tool for PS5 homebrew — build exFAT and ffpkg game images, auto-backport games to older firmware, rename and organise your dump collection, manage your game library, send payloads, monitor klogs, and much more. No command line required.
+A Windows GUI tool for PS5 homebrew — build exFAT and ffpkg game images, auto-backport games to older firmware, rename and organize your dumps, manage your library, send payloads, monitor klogs, and more. No command line required.
+
+**v2.5 is a major UI overhaul** — every tab redesigned, a new purple-tinted dark theme, a dedicated three-pane Dump Rename inspector, and dozens of bug fixes covering scanning, renaming, cover art rendering, and progress reporting.
 
 ---
 
 ## Requirements
 
 | Requirement | Notes |
-|---|---|
+| --- | --- |
 | **Windows 10 / 11** (64-bit) | Required |
 | **OSFMount** | Free — [download here](https://www.osforensics.com/tools/mount-disk-images.html) — required for exFAT builds |
 | **.NET 8 Runtime** | Required for ffpkg builds only |
-| **PS5 game dump** | Must contain `eboot.bin` in the root folder |
-| **Python 3.10+** | Only needed if running from source |
+| **PS5 game dump** | Must contain `eboot.bin` somewhere in the folder |
 
 > ⚠️ The app requires **Administrator** privileges. It will prompt automatically on launch.
+
+---
+
+## What's new in v2.5
+
+### 🎨 Full UI rebuild
+
+Every one of the 18 tabs has been redesigned from scratch against pixel-accurate HTML mocks. The chrome is consistent, fonts are readable, scrolling no longer jitters, and everything respects a single design system (`tkinter_theme.py` with a shared `COLORS` and `FONTS` palette).
+
+### 💜 Purple theme
+
+The whole app moved off the original electric-blue palette to a purple-tinted dark theme. Dark fields, light text, purple accents, klog phosphor green preserved.
+
+### 🪪 Dump Rename — three-pane inspector
+
+The old single-list rename screen is gone. The new layout:
+
+- **Left rail** — scrollable Treeview grouped by Ready / Needs review / Duplicate / Failed, with size and confidence chips
+- **Centre pane** — game inspector showing FROM / TO names, detected SFO metadata (PPSA, title, version, SDK), full path, and three name candidates you can click to apply
+- **Right rail** — naming preset radios (PPSA only, PPSA + title, PPSA + title + version), case (upper/lower/keep), special-character options, move destination field, bulk action buttons
+
+### 🐛 Major bug fixes
+
+- **Cover art** — covers now render at consistent 180×180 squares; padded logo icons (Park Beyond, Tevi) auto-trim their borders; full-bleed art (Last of Us, House of the Dead) renders edge-to-edge without distortion
+- **Library dedupe** — multiple folders sharing a PPSA (real game + backport residue) now collapse to one entry, keeping the largest copy
+- **Library scan** — folders without `eboot.bin` no longer register as games; subfolders inside a top-level scan target only count if they have eboot.bin within 3 levels
+- **Dump Rename failures** — Windows case-only renames work properly; folder access conflicts (Explorer locks, AV scans) get retried with backoff; container folders like `Keep` are recognised and recursed into rather than renamed
+- **Dump Rename progress** — determinate progress bar with byte-level ETA for cross-folder moves; status text shows current item, MB/s, time remaining
+- **Field visibility** — every text input is dark-on-light → now dark-on-dark across all 18 tabs; readonly fields display content properly
+- **Build progress** — exFAT and ffpkg output filenames render visibly; bottom-pinned action buttons no longer cut off
+- **Backports** — sub-bar with Auto / Results, filter pills (FW 4 / FW 5-7 / FW 9+), 380px game rail with cover thumbnails
 
 ---
 
 ## Features
 
 ### 🔨 exFAT Tab
-- Queue-based workflow — add multiple games at once
-- Game name, PPSA ID and version auto-detected from `param.sfo` / `param.json`
-- Output always named `PPSA##### Game Title (version).exfat`
+- Queue-based workflow — add multiple games at once or one at a time
+- Game name, PPSA ID and version auto-detected
 - Real-time progress — file count, GB written, MB/s, ETA
-- Write speed benchmark — test output drive before building for accurate ETA
-- Resume interrupted builds — detects partial images and offers to skip or rebuild
+- Estimated build time before starting
 - Pre-build checklist — drive root detection, write permissions, eboot.bin, space
-- Post-build verify, Force Dismount, build log auto-saved
+- Force Dismount button (Windows shell eject)
+- Build log auto-saved, queue save/load
 
 ### 📦 ffpkg Tab
 - Full UFS2 ffpkg builder via UFS2Tool (bundled)
 - Sector size locked at 512 — fixes Windows broken image bug
 - Requires .NET 8
 
-### 🗂️ Dump Rename Manager Tab *(New in v1.9.0)*
-- Scan a folder of PS5 game dumps and auto-rename to `PPSA##### Game Title (version)` format
-- Reads `param.sfo` and `param.json` — searches up to 5 folder levels deep
-- **Confidence indicator** — 🟢 clean read / 🟡 name guessed from folder / 🔴 no PPSA found
-- Cover art from `sce_sys/icon0.png` shown on each card
-- SDK version and folder date shown per game
-- Editable new name field — tweak before applying
-- Move to destination folder or rename in place
-- Right-click menu — Open in Explorer, Add to exFAT Queue, Delete dump
-- Session memory — remembers last scanned folder
-
-### ⚡ Backports Tab — Auto Backport
-- Automatically patches PS5 ELF executables using the full decrypt/re-sign pipeline
-- Powered by Backport.py by Nazky & BestPig — bundled, no install needed
-- Select fakelib folder — applied to `game/fakelib/` with originals backed up
-- `param.json` now included in originals backup zip
-- `fakelib/` excluded from originals zip — backup contains only real pre-patch game files
-- Target SDK selector (4–11) with firmware version labels
-- SDK auto-detected from `param.sfo` / `param.json` — searches up to 5 levels deep
-- Backup zips named `PPSA##### Game Title (version) original files.zip`
-- Accessible from Library tab — click any game → ⚡ Auto Backport
-
 ### 🧩 Backports Tab — Manual
 - Apply backport files to game folder or mounted exFAT image
-- Drag and drop, conflict preview, auto backup
+- Drag and drop, conflict preview, auto backup named after game + date
+- File list auto-clears on new target
+
+### ⚡ Backports Tab — Auto
+- Automatically patches PS5 ELF executables using the full decrypt/re-sign pipeline
+- Powered by Backport.py by Nazky & BestPig — bundled, no install needed
+- Fakelib path saved automatically for future use
+- Patched files applied back to game folder in correct paths
+- Backup zips — originals and backported files saved as separate `.zip` files
+- Filter pills: All / FW 4 / FW 5-7 / FW 9+
+- Accessible from Library tab — right-click any game → ⚡ Auto Backport
 
 ### 📚 Library Tab
 - Scan progress bar — live folder count and games found
-- Grid / list view with cover art
+- Grid / list view with cover art (covers normalized to 180px square)
+- Auto-dedupe by PPSA (keeps largest copy)
+- SDK threshold colour-coding — backport-needed games highlighted
 - Right-click → Add to exFAT Queue, Add to ffpkg Queue, ⚡ Auto Backport
 
-### 💾 My Images Tab
+### 💾 Images Tab
 - Scan for `.exfat` files
 - 🔄 Convert to ffpkg — mounts exFAT, builds ffpkg, live progress bar
 - Batch upload to PS5
 
-### 🌐 PS5 WebUI Tab
-- Quick-launch buttons for etaHEN WebUI, VoidShell WebUI, PS5 Store JSON
-- Custom IP/port with path field — opens in your system browser
-- IP saved between sessions
-
 ### 🎮 PS5 Manager Tab
 - Unified local vs PS5 view
 - PS5 storage bar with colour coding
+- Game thumbnails
 
-### 📡 FTP / PS5 Browser Tabs
-- Upload with live progress, cancel, auto-upload after build
+### 📡 FTP Upload / PS5 Browser Tab
+- Dual-pane local ↔ PS5 view
+- Upload with live progress, **Cancel button**, auto-upload after build
 - Full FTP browser — navigate, rename, move, delete, download, upload
 
-### 🗂 File Manager Tab
+### 🪪 Dump Rename Tab
+- Three-pane inspector (list rail · detail · controls)
+- Ready / Review / Duplicate / Failed grouping
+- Naming presets, case, special-character options
+- In-place rename or cross-folder move with byte-level ETA
+- Container folder detection — `Keep`, `Backups`, etc. recursed into rather than renamed
+- Windows case-only rename support (lowercase → UPPERCASE works on NTFS)
+- Retry with backoff for transient access denied / file in use errors
+
+### 🗂 Files Tab
 - Mount `.exfat` images read-write
 - Add, replace, delete files without rebuilding
 
@@ -108,78 +135,69 @@ A Windows GUI tool for PS5 homebrew — build exFAT and ffpkg game images, auto-
 
 ### 📋 Klog Monitor Tab
 - Stream PS5 kernel logs live via TCP
+- Phosphor green CRT styling
 - Timestamps, pause/resume, keyword filter, export
 
-### ⚙️ Advanced Tab
-- exFAT: cluster size, sector size, copy threads
-- Write speed benchmark for accurate ETA
-- Skip verify, exclude hidden files, custom image size override
-- Post-build: shutdown / restart / sleep countdown
+### 📜 History Tab
+- Past builds and operations
+- Quick re-run, re-export, file open
 
-### 🌍 17 Languages
+### ⚙ Advanced Tab
+- exFAT: cluster size, sector size, copy threads
+- ffpkg: block size, fragment size, min free %, bytes per inode
+
+### ⚙ Settings Tab
+- OSFMount custom path, temp folder, logs folder
+- PS5 FTP — IP, port, auto-detect
+- Library scan threshold (>= SDK 18 warn, >= SDK 16 backport)
+- Language, theme, notifications
+
+### 🌐 17 Languages
 English, Chinese, German, French, Spanish, Portuguese, Japanese, Korean, Russian, Arabic, Italian, Dutch, Polish, Turkish, Thai, Vietnamese, Indonesian
+
+### General
+- Auto-update with retry logic and working directory fix
+- Crash reporter — saves log, copies to clipboard
+- End-of-tab indicator on every scrollable tab
+- Single design system across all tabs
 
 ---
 
 ## Building from source
 
-```bash
-pip install pyinstaller pillow
+```
+pip install pyinstaller pillow tkinterdnd2
 build.bat
 ```
 
----
+Build with `--clean --noconfirm` flags is included. The build will fail if a previous `dist\exFAT Image Builder.exe` is still running or held by antivirus — close the app and pause AV scanning if needed.
 
-## Changelog
-
-### v1.9.0
-- **New: Dump Rename Manager tab** — scan, auto-rename, cover art, confidence indicator, right-click menu
-- **SDK detection improved** — reads `param.sfo` and `param.json`, searches up to 5 levels deep, detailed error if not found
-- **`param.json` included in originals backup zip** — both single backport and Backport All paths
-- **`fakelib/` excluded from originals zip** — backup now contains only pre-patch game files
-- **Naming consistency** — all outputs (exFAT, ffpkg, backport zips) always include `PPSA ID + title + version`
-- **Benchmark mode** — test write speed to output directory before building (Advanced tab)
-- **Resume interrupted builds** — detects partial `.exfat` images on queue start
-- **Shutdown fix** — countdown no longer blocked by the build complete messagebox
-- **Dump rename path fix** — mixed separator Access Denied error on Windows rename resolved
-- **WebUI** — opens PS5 WebUI (etaHEN, VoidShell etc.) in system browser; IP saved between sessions
-- Removed: 7-Zip / Batch ZIP Extract feature
-- Removed: Stream-optimised copy order
-- Various crash fixes and stability improvements
-
-### v1.8.0
-- Backport All — queue all library games for auto backport in one click
-- Klog monitor improvements
-- FTP browser enhancements
-
-### v1.7.0
-- Auto Backport pipeline — full ELF decrypt/re-sign via Backport.py
-- Fakelib support
-- SDK auto-detection
-
-[Full release history →](https://github.com/kerrdec97/ps5-exfat-builder/releases)
+Python 3.11.x is the tested version.
 
 ---
 
 ## Troubleshooting
 
 | Problem | Fix |
-|---|---|
+| --- | --- |
 | OSFMount not detected | Settings → OSFMount → Browse for `osfmount.com` |
-| SDK not detected | Check `sce_sys/param.json` exists and has `requiredSystemSoftwareVersion` |
+| Auto-update crashes on restart | Fixed in v1.6.3+ — update manually this time |
 | ffpkg build fails | Install .NET 8 Runtime |
-| Image runs out of space | Fixed in v1.6.2+ — size margins increased |
-| Output not found after build | Check antivirus isn't quarantining `.exfat` files |
 | FTP won't connect | Make sure homebrew FTP is running on PS5 |
-| Dump rename Access Denied | Run as Administrator (app should prompt automatically) |
-| Crash on startup | Log saved to `~/exfat_builder_logs/` — share on GitHub Issues |
+| Crash on startup | Log at `~/exfat_builder_logs/` — share on GitHub Issues |
+| Build "Access denied" on .exe | Close any running instance + pause AV; rebuild |
+| Dump Rename "destination already exists" on case rename | Fixed in v2.5.0+ |
+| Dump Rename freezes on Apply | Fixed in v2.5.0+ — pre-scan moved to worker thread |
+| `Keep` folder got renamed to a game | Fixed in v2.5.0+ — manually rename it back, then re-scan |
+| Cover art looks wrong sizes | Fixed in v2.5.0+ — re-scan Library after updating |
+| White text fields hard to read | Fixed in v2.5.0+ — fields now dark-on-light text |
 
 ---
 
 ## Credits
 
 | Contribution | Credit |
-|---|---|
+| --- | --- |
 | PS5 Auto Backport pipeline (Backport.py, src/) | **Nazky** — [github.com/Nazky](https://github.com/Nazky) |
 | PS5 Backport research & tools | **BestPig** — [github.com/BestPig](https://github.com/BestPig) |
 | exFAT image creation (ShadowMountPlus) | **drakmor** — [github.com/drakmor/ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus/releases) |
@@ -192,4 +210,4 @@ build.bat
 
 ## License
 
-MIT — see [LICENSE](https://github.com/kerrdec97/ps5-exfat-builder/blob/main/LICENSE)
+MIT — see [LICENSE](LICENSE)
