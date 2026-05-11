@@ -1,0 +1,8 @@
+{
+  "_comment": "Edit this file to update the supporter list shown in the Credits tab. Add named supporters to 'donors' (one per line). Set 'has_anonymous' to true to show an 'Anonymous supporters' line below the named list. No code changes or app restart needed — just click Reload donor list in the Credits tab. NOTE: a copy of these defaults is also baked into the .exe, so the EXE works standalone if donors.json is missing.",
+  "thank_you_message": "A heartfelt thank you to everyone who has supported this tool. Your generosity keeps the project alive and growing.",
+  "donors": [
+    "AceInTheHole"
+  ],
+  "has_anonymous": true
+}
