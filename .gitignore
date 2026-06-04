@@ -1,0 +1,7 @@
+@"
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec
+"@ | Out-File -Encoding ascii .gitignore
