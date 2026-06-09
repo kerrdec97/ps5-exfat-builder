@@ -1,0 +1,73 @@
+# ── exFAT Image Builder — .gitignore ─────────────────────────────────────
+# Keeps build output, caches, and runtime-generated files out of the repo.
+# NOTE: donors.json and CHANGELOG.md are intentional, app-read files — they
+# are NOT ignored. assets/, build.bat, controller.ico, *.py stay tracked.
+
+# ── PyInstaller build output ─────────────────────────────────────────────
+build/
+dist/
+*.spec
+*.manifest
+
+# Built executables (ship these as GitHub Release assets, not in the repo)
+*.exe
+*.exe.sha256
+
+# ── Python bytecode / caches ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ── Virtual environments ─────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── App runtime-generated files (written next to the exe / in home dir) ──
+# Per-user settings & history (these normally live in the user's home dir,
+# but ignore any local copies so test data never gets committed).
+.exfat_builder_settings*.json
+.exfat_builder_history*.json
+exfat_builder_settings*.json
+exfat_builder_history*.json
+
+# Session logs + the rotating log folder
+latest.log
+*.log
+logs/
+exfat_builder_logs/
+
+# Per-build provenance written next to outputs
+summary.json
+
+# Transient PFS staging folders (created during convert, cleaned on success;
+# left behind only on a force-kill — never belongs in the repo)
+.pfs_stage*/
+*.pfs_stage*
+
+# ── Built game images / large binaries (never commit these) ──────────────
+*.exfat
+*.ffpkg
+*.ffpfs
+*.ffpfsc
+*.pkg
+*.iso
+*.img
+
+# ── OS / editor cruft ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Misc temp ────────────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
