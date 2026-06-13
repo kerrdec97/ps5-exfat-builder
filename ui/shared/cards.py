@@ -52,7 +52,7 @@ class Card(tk.Frame):
     def __init__(self, parent, title=None, subtitle=None, icon=None,
                  with_actions=False, **kwargs):
         # Pop any user-supplied highlight overrides so super() doesn't collide
-        hl_bg = kwargs.pop('highlightbackground', COLORS['border_2'])
+        hl_bg = kwargs.pop('highlightbackground', COLORS['border_3'])
         hl_th = kwargs.pop('highlightthickness', 1)
         bg = kwargs.pop('bg', COLORS['bg_2'])
         super().__init__(parent, bg=bg,
@@ -62,33 +62,38 @@ class Card(tk.Frame):
 
         # ── Optional header row ──
         if title is not None:
-            head = tk.Frame(self, bg=bg)
-            head.pack(fill='x', padx=18, pady=(14, 12))
+            head_bg = COLORS['bg_3']
+            head = tk.Frame(self, bg=head_bg)
+            head.pack(fill='x')
+            head_inner = tk.Frame(head, bg=head_bg)
+            head_inner.pack(fill='x', padx=18, pady=(15, 13))
 
             if icon:
                 # Icon tile: small accented square holding the emoji
-                ico = tk.Label(head, text=icon,
+                ico = tk.Label(head_inner, text=icon,
                                font=(FONTS['h2'][0], 13),
                                bg=COLORS['accent_08'],
-                               fg=COLORS['accent'],
-                               width=2, padx=4, pady=2)
+                               fg=COLORS['accent_hi'],
+                               width=3, padx=4, pady=5,
+                               highlightbackground=COLORS['accent_lo'],
+                               highlightthickness=1)
                 ico.pack(side='left', padx=(0, 12))
 
-            text_col = tk.Frame(head, bg=bg)
+            text_col = tk.Frame(head_inner, bg=head_bg)
             text_col.pack(side='left', fill='x', expand=True)
             tk.Label(text_col, text=title,
                      font=(FONTS['h3'][0], 11, 'bold'),
-                     bg=bg, fg=COLORS['fg_0'], anchor='w'
+                     bg=head_bg, fg=COLORS['fg_0'], anchor='w'
                      ).pack(fill='x')
             if subtitle:
                 tk.Label(text_col, text=subtitle,
                          font=FONTS['meta'],
-                         bg=bg, fg=COLORS['fg_4'], anchor='w',
+                         bg=head_bg, fg=COLORS['fg_3'], anchor='w',
                          wraplength=900, justify='left'
-                         ).pack(fill='x', pady=(1, 0))
+                         ).pack(fill='x', pady=(3, 0))
 
             # Hairline divider under the header
-            tk.Frame(self, bg=COLORS['border_2'], height=1
+            tk.Frame(self, bg=COLORS['border_3'], height=1
                      ).pack(fill='x')
 
         # ── Optional actions footer ──
@@ -100,14 +105,14 @@ class Card(tk.Frame):
         self.actions = None
         if with_actions:
             self.actions = tk.Frame(self, bg=COLORS['bg_3'])
-            self.actions.pack(side='bottom', fill='x', padx=14, pady=10)
-            tk.Frame(self, bg=COLORS['border_2'], height=1
+            self.actions.pack(side='bottom', fill='x', padx=18, pady=12)
+            tk.Frame(self, bg=COLORS['border_3'], height=1
                      ).pack(side='bottom', fill='x')
 
         # ── Body ── (caller fills this) — packed AFTER actions so it
         # claims the remaining vertical space above the footer.
         self.body = tk.Frame(self, bg=bg)
-        self.body.pack(fill='both', expand=True, padx=18, pady=14)
+        self.body.pack(fill='both', expand=True, padx=20, pady=18)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -143,7 +148,9 @@ class StatusPill(tk.Label):
         super().__init__(parent, text=' ' + text + ' ',
                          bg=bg, fg=fg,
                          font=(FONTS['body'][0], 9, 'bold'),
-                         padx=6, pady=2, bd=0)
+                         padx=8, pady=3, bd=0,
+                         highlightbackground=fg,
+                         highlightthickness=1)
         self._kind = kind
 
     def set(self, kind, text):
@@ -181,7 +188,7 @@ class StatPill(tk.Frame):
     def __init__(self, parent, kind='neutral', count=0, label=''):
         bg = COLORS['bg_3']
         super().__init__(parent, bg=bg,
-                         highlightbackground=COLORS['border_2'],
+                         highlightbackground=COLORS['border_3'],
                          highlightthickness=1)
         self._kind = kind
         self._label_text = label
@@ -689,11 +696,14 @@ class SettingsCard(tk.Frame):
                          highlightthickness=1)
 
         # ── Header (title + optional hint/widget) ──
-        head = tk.Frame(self, bg=bg)
-        head.pack(fill='x', padx=18, pady=(16, 10))
-        tk.Label(head, text=title,
+        head_bg = COLORS['bg_3']
+        head = tk.Frame(self, bg=head_bg)
+        head.pack(fill='x')
+        head_inner = tk.Frame(head, bg=head_bg)
+        head_inner.pack(fill='x', padx=18, pady=(15, 13))
+        tk.Label(head_inner, text=title,
                  font=(FONTS['h3'][0], 12, 'bold'),
-                 bg=bg, fg=COLORS['fg_0'], anchor='w'
+                 bg=head_bg, fg=COLORS['fg_0'], anchor='w'
                  ).pack(side='left')
         if right_widget is not None:
             # The caller built this widget against a different parent;
@@ -703,13 +713,13 @@ class SettingsCard(tk.Frame):
             except Exception:
                 pass
         elif hint:
-            tk.Label(head, text=hint,
+            tk.Label(head_inner, text=hint,
                      font=FONTS['mono_sm'],
-                     bg=bg, fg=COLORS['fg_4']
+                     bg=head_bg, fg=COLORS['fg_3']
                      ).pack(side='right')
 
         # Hairline divider under the header
-        tk.Frame(self, bg=COLORS['border_2'], height=1).pack(fill='x')
+        tk.Frame(self, bg=COLORS['border_3'], height=1).pack(fill='x')
 
         # ── Body — rows pack here ──
         self.body = tk.Frame(self, bg=bg)
@@ -732,10 +742,10 @@ def settings_row(parent, label, description=None, with_divider=True):
     """
     bg = COLORS['bg_2']
     row = tk.Frame(parent, bg=bg)
-    row.pack(fill='x', padx=18, pady=10)
+    row.pack(fill='x', padx=20, pady=12)
 
     # Use grid for the 3 columns so labels align across rows
-    row.grid_columnconfigure(0, weight=0, minsize=200)
+    row.grid_columnconfigure(0, weight=0, minsize=220)
     row.grid_columnconfigure(1, weight=1)
     row.grid_columnconfigure(2, weight=0)
 
@@ -743,7 +753,7 @@ def settings_row(parent, label, description=None, with_divider=True):
     label_col = tk.Frame(row, bg=bg)
     label_col.grid(row=0, column=0, sticky='w', padx=(0, 16))
     tk.Label(label_col, text=label,
-             font=(FONTS['body'][0], 11),
+             font=(FONTS['body'][0], 10, 'bold'),
              bg=bg, fg=COLORS['fg_1'], anchor='w'
              ).pack(fill='x')
     if description:
@@ -764,7 +774,7 @@ def settings_row(parent, label, description=None, with_divider=True):
     # ── Optional hairline below the row ──
     if with_divider:
         tk.Frame(parent, bg=COLORS['border_1'], height=1
-                 ).pack(fill='x', padx=18)
+                 ).pack(fill='x', padx=20)
 
     return row, control, actions
 

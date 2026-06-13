@@ -29,7 +29,7 @@ from tkinter_theme import COLORS, FONTS
 
 
 def make_themed_button(parent, text, command, kind='primary',
-                        icon=None, font_size=10, padx=14, pady=7,
+                        icon=None, font_size=10, padx=16, pady=8,
                         state='normal'):
     """Build a tk.Button styled like the design-system btn-* classes.
 
@@ -65,7 +65,7 @@ def make_themed_button(parent, text, command, kind='primary',
                          COLORS['warn_hi'], '#1a0e00'),
         'danger':       (COLORS['danger'],  COLORS['fg_0'],
                          COLORS['danger_hi'], COLORS['fg_0']),
-        'ghost':        (COLORS['bg_2'],    COLORS['fg_3'],
+        'ghost':        (COLORS['bg_3'],    COLORS['fg_2'],
                          COLORS['bg_4'],    COLORS['fg_1']),
     }
     bg, fg, abg, afg = schemes.get(kind, schemes['primary'])
@@ -76,7 +76,10 @@ def make_themed_button(parent, text, command, kind='primary',
                     activebackground=abg, activeforeground=afg,
                     relief='flat', bd=0,
                     padx=padx, pady=pady,
-                    cursor='hand2', state=state,
+                    cursor='hand2', state=state, takefocus=1,
+                    highlightthickness=1,
+                    highlightbackground=bg,
+                    highlightcolor=COLORS['accent_hi'],
                     command=command)
     if kind == 'ghost':
         btn.configure(highlightbackground=COLORS['border_3'],
@@ -87,11 +90,13 @@ def make_themed_button(parent, text, command, kind='primary',
 def info_banner(parent, text, on_click=None):
     """Slim accent-tinted info bar."""
     bg = COLORS['accent_08']
-    border = COLORS['accent_15']
+    border = COLORS['accent_lo']
     bar = tk.Frame(parent, bg=bg,
                    highlightbackground=border, highlightthickness=1)
+    tk.Frame(bar, bg=COLORS['accent'], width=3).pack(
+        side='left', fill='y')
     inner = tk.Frame(bar, bg=bg)
-    inner.pack(fill='x', padx=14, pady=10)
+    inner.pack(side='left', fill='x', expand=True, padx=14, pady=11)
 
     ico = tk.Label(inner, text='i',
                    bg=COLORS['accent'], fg=COLORS['fg_0'],
@@ -121,27 +126,34 @@ def page_head(parent, badge_emoji, title_text, subtitle_text):
 
     Pack with `pady=(14, 12)` for the Build-tab standard spacing.
     """
-    bg = COLORS['bg_1']
-    head = tk.Frame(parent, bg=bg)
+    bg = COLORS['bg_2']
+    head = tk.Frame(parent, bg=bg,
+                    highlightbackground=COLORS['border_3'],
+                    highlightthickness=1)
+    tk.Frame(head, bg=COLORS['accent'], width=4).pack(
+        side='left', fill='y')
+    inner = tk.Frame(head, bg=bg)
+    inner.pack(side='left', fill='x', expand=True, padx=18, pady=16)
 
-    badge = tk.Label(head, text=badge_emoji,
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     font=(FONTS['body'][0], 18, 'bold'),
+    badge = tk.Label(inner, text=badge_emoji,
+                     bg=COLORS['accent_08'], fg=COLORS['accent_hi'],
+                     font=(FONTS['body'][0], 16, 'bold'),
                      width=3, height=2, padx=4, pady=0,
-                     highlightbackground=COLORS['accent_pressed'],
+                     highlightbackground=COLORS['accent_lo'],
                      highlightthickness=1)
     badge.pack(side='left', padx=(0, 14))
 
-    text_col = tk.Frame(head, bg=bg)
+    text_col = tk.Frame(inner, bg=bg)
     text_col.pack(side='left', fill='x', expand=True)
     tk.Label(text_col, text=title_text,
-             font=(FONTS['h2'][0], 18, 'bold'),
+             font=(FONTS['h2'][0], 17, 'bold'),
              bg=bg, fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(text_col, text=subtitle_text,
              font=FONTS['meta'],
-             bg=bg, fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(2, 0))
+             bg=bg, fg=COLORS['fg_3'], anchor='w',
+             justify='left', wraplength=900
+             ).pack(fill='x', pady=(4, 0))
 
     return head
 
@@ -164,8 +176,8 @@ def field_block(parent, label_text, var, on_browse=None,
     lbl_row = tk.Frame(block, bg=COLORS['bg_2'])
     lbl_row.pack(fill='x')
     tk.Label(lbl_row, text=label_text,
-             font=FONTS['label'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w'
+             font=(FONTS['body'][0], 9, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['fg_2'], anchor='w'
              ).pack(side='left')
     if hint:
         tk.Label(lbl_row, text='  \u2022  ' + hint,
@@ -184,7 +196,7 @@ def field_block(parent, label_text, var, on_browse=None,
                      insertbackground=COLORS['field_fg'],
                      selectbackground=COLORS['accent'],
                      selectforeground=COLORS['fg_0'],
-                     relief='flat', bd=8)
+                     relief='flat', bd=9)
     entry.pack(side='left', fill='x', expand=True)
 
     if on_browse:
@@ -194,7 +206,7 @@ def field_block(parent, label_text, var, on_browse=None,
                   activebackground=COLORS['bg_5'],
                   activeforeground=COLORS['accent'],
                   relief='flat', bd=0,
-                  padx=14, pady=6,
+                  padx=16, pady=8,
                   cursor='hand2',
                   command=on_browse
                   ).pack(side='right')

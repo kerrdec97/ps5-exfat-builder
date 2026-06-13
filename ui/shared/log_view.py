@@ -55,7 +55,7 @@ class ConsoleView(tk.Frame):
 
     def __init__(self, parent, **kwargs):
         bg = _TERM_BG
-        bd_color = COLORS['border_3']
+        bd_color = COLORS['border_4']
         super().__init__(parent, bg=bg,
                          highlightbackground=bd_color,
                          highlightthickness=1,
@@ -64,7 +64,7 @@ class ConsoleView(tk.Frame):
         # Thin green top-rule — the mock has a horizontal accent line at
         # the top of the log surface. We approximate with a 1-px Frame.
         # bg picks up the dim klog-green at low intensity.
-        rule = tk.Frame(self, bg='#1a3322', height=1)
+        rule = tk.Frame(self, bg=COLORS['success'], height=2)
         rule.pack(fill='x')
 
         # ── Scrollable Text widget ──
@@ -82,10 +82,10 @@ class ConsoleView(tk.Frame):
                             insertbackground=_TERM_GREEN,
                             selectbackground='#1a3322',
                             selectforeground=COLORS['fg_0'],
-                            relief='flat', bd=8,
+                            relief='flat', bd=12,
                             state='disabled', wrap='word',
                             yscrollcommand=sb.set,
-                            spacing1=1, spacing3=1)
+                            spacing1=2, spacing3=2)
         self.text.pack(side='left', fill='both', expand=True)
         sb.config(command=self.text.yview)
 
