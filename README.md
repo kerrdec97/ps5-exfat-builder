@@ -5,12 +5,6 @@ Game Images**
 
 Build • Edit • Convert • Backport • Deploy
 
-```{=html}
-</p>
-```
-```{=html}
-<p align="center">
-```
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow)
 ![License](https://img.shields.io/github/license/kerrdec97/ps5-exfat-builder)
