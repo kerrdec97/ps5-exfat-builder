@@ -1,8 +1,5 @@
 # 🎮 exFAT Image Builder
 
-```{=html}
-<p align="center">
-```
 **The Ultimate Windows Toolkit for Building, Editing & Backporting PS5
 Game Images**
 
@@ -20,9 +17,6 @@ Build • Edit • Convert • Backport • Deploy
 ![Release](https://img.shields.io/github/v/release/kerrdec97/ps5-exfat-builder)
 ![Downloads](https://img.shields.io/github/downloads/kerrdec97/ps5-exfat-builder/total)
 
-```{=html}
-</p>
-```
 
 ------------------------------------------------------------------------
 
@@ -182,11 +176,6 @@ If you enjoy exFAT Image Builder:
 -   💡 Suggest features
 -   ❤️ Support the PS5 Homebrew community
 
-```{=html}
-<p align="center">
-```
 Made with ☕ and a passion for PS5 homebrew.
 
-```{=html}
-</p>
-```
+
