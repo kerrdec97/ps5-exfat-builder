@@ -43,34 +43,36 @@ class NavItem(tk.Frame):
 
     def __init__(self, parent, key, label, icon=None, on_select=None,
                  **kwargs):
-        super().__init__(parent, bg=get_color("bg_1"),
-                         highlightthickness=0, bd=0, **kwargs)
+        super().__init__(parent, bg=get_color("bg_0"),
+                         highlightthickness=0, bd=0, takefocus=1, **kwargs)
         self.key = key
         self.label = label             # kept for compact-mode tooltips (5B)
         self._on_select = on_select
         self._active = False
         self._compact = False
+        self._focused = False
 
         # accent bar on the left edge — shown only when active
-        self._bar = tk.Frame(self, bg=get_color("bg_1"), width=3)
+        self._bar = tk.Frame(self, bg=get_color("bg_0"), width=4)
         self._bar.pack(side="left", fill="y")
 
-        self._inner = tk.Frame(self, bg=get_color("bg_1"))
+        self._inner = tk.Frame(self, bg=get_color("bg_0"))
         self._inner.pack(side="left", fill="both", expand=True)
 
-        pad = SPACING["sm"]
+        pad = 10
         if icon:
             self._icon = tk.Label(self._inner, text=icon,
-                                  bg=get_color("bg_1"),
+                                  bg=get_color("bg_2"),
                                   fg=get_color("fg_4"),
-                                  font=get_font("body"))
-            self._icon.pack(side="left", padx=(SPACING["md"], SPACING["sm"]),
-                            pady=pad)
+                                  font=get_font("body_b"),
+                                  width=3, padx=1, pady=3)
+            self._icon.pack(
+                side="left", padx=(SPACING["md"], SPACING["sm"]), pady=5)
         else:
             self._icon = None
 
         self._label = tk.Label(self._inner, text=label,
-                               bg=get_color("bg_1"),
+                               bg=get_color("bg_0"),
                                fg=get_color("fg_3"),
                                font=get_font("body"), anchor="w")
         self._label.pack(side="left", fill="x", expand=True,
@@ -83,6 +85,10 @@ class NavItem(tk.Frame):
             w.bind("<Enter>", self._enter)
             w.bind("<Leave>", self._leave)
             w.configure(cursor="hand2")
+        self.bind("<FocusIn>", self._focus_in)
+        self.bind("<FocusOut>", self._focus_out)
+        self.bind("<Return>", self._click)
+        self.bind("<space>", self._click)
 
     # ── compact (collapsed-rail) mode ─────────────────────────────────
     def set_compact(self, compact):
@@ -101,12 +107,12 @@ class NavItem(tk.Frame):
                 pass
             if self._icon:
                 self._icon.pack_configure(
-                    padx=SPACING["sm"], pady=SPACING["sm"])
+                    padx=(10, 0), pady=5)
         else:
             # Restore icon padding, then re-show the label after it.
             if self._icon:
                 self._icon.pack_configure(
-                    padx=(SPACING["md"], SPACING["sm"]), pady=SPACING["sm"])
+                    padx=(SPACING["md"], SPACING["sm"]), pady=5)
             try:
                 self._label.pack(side="left", fill="x", expand=True,
                                  padx=(0 if self._icon else SPACING["md"],
@@ -133,23 +139,31 @@ class NavItem(tk.Frame):
 
     def _render(self):
         if self._active:
-            bg = get_color("accent_08")       # theme 'active' fill convention
+            bg = get_color("accent_08")
             fg = get_color("accent_hi")
             bar = get_color("accent")
             icon_fg = get_color("accent")
+            icon_bg = get_color("accent_15")
             font = get_font("body_b")
         else:
-            bg = get_color("bg_1")
+            bg = get_color("bg_0")
             fg = get_color("fg_3")
-            bar = get_color("bg_1")
+            bar = get_color("bg_0")
             icon_fg = get_color("fg_4")
+            icon_bg = get_color("bg_2")
             font = get_font("body")
+        if self._focused and not self._active:
+            bg = get_color("bg_2")
+            fg = get_color("fg_1")
+            bar = get_color("accent")
+            icon_fg = get_color("accent")
+            icon_bg = get_color("accent_08")
         self._bar.configure(bg=bar)
         for w in (self, self._inner, self._label):
             w.configure(bg=bg)
         self._label.configure(fg=fg, font=font)
         if self._icon:
-            self._icon.configure(bg=bg, fg=icon_fg)
+            self._icon.configure(bg=icon_bg, fg=icon_fg)
 
     # ── events ───────────────────────────────────────────────────────
     def _enter(self, _e=None):
@@ -157,15 +171,28 @@ class NavItem(tk.Frame):
             for w in (self, self._inner, self._label):
                 w.configure(bg=get_color("bg_2"))
             if self._icon:
-                self._icon.configure(bg=get_color("bg_2"))
+                self._icon.configure(
+                    bg=get_color("bg_3"), fg=get_color("fg_1"))
 
     def _leave(self, _e=None):
         if not self._active:
             self._render()
 
     def _click(self, _e=None):
+        try:
+            self.focus_set()
+        except Exception:
+            pass
         if callable(self._on_select):
             self._on_select(self.key)
+
+    def _focus_in(self, _e=None):
+        self._focused = True
+        self._render()
+
+    def _focus_out(self, _e=None):
+        self._focused = False
+        self._render()
 
 
 class Sidebar(tk.Frame):
@@ -187,8 +214,8 @@ class Sidebar(tk.Frame):
     assigns; until then, clicking items is inert.
     """
 
-    def __init__(self, parent, width=210, rail_width=60, **kwargs):
-        super().__init__(parent, bg=get_color("bg_1"), width=width,
+    def __init__(self, parent, width=224, rail_width=64, **kwargs):
+        super().__init__(parent, bg=get_color("bg_0"), width=width,
                          highlightthickness=0, bd=0, **kwargs)
         self.pack_propagate(False)
         self.on_select = None          # host assigns a callable(key)
@@ -205,21 +232,35 @@ class Sidebar(tk.Frame):
 
         # Toggle control pinned at the very top, above the groups.
         self._toggle = tk.Label(self, text="\u2039\u2039",   # ‹‹ expanded
-                                bg=get_color("bg_1"), fg=get_color("fg_5"),
+                                bg=get_color("bg_0"), fg=get_color("fg_5"),
                                 font=get_font("body"), anchor="e",
-                                cursor="hand2")
+                                cursor="hand2", takefocus=1,
+                                highlightthickness=1,
+                                highlightbackground=get_color("bg_0"))
         self._toggle.pack(side="top", fill="x",
-                          padx=SPACING["md"], pady=(SPACING["sm"], 0))
+                          padx=SPACING["md"], pady=(SPACING["md"], SPACING["xs"]))
         self._toggle.bind("<Button-1>", lambda _e: self.toggle())
+        self._toggle.bind("<Return>", lambda _e: self.toggle())
+        self._toggle.bind("<space>", lambda _e: self.toggle())
+        self._toggle.bind(
+            "<FocusIn>",
+            lambda _e: self._toggle.configure(
+                fg=get_color("fg_1"),
+                highlightbackground=get_color("accent")))
+        self._toggle.bind(
+            "<FocusOut>",
+            lambda _e: self._toggle.configure(
+                fg=get_color("fg_5"),
+                highlightbackground=get_color("bg_0")))
         self._toggle.bind("<Enter>",
                           lambda _e: self._toggle.configure(fg=get_color("fg_3")))
         self._toggle.bind("<Leave>",
                           lambda _e: self._toggle.configure(fg=get_color("fg_5")))
 
-        self._body = tk.Frame(self, bg=get_color("bg_1"))
+        self._body = tk.Frame(self, bg=get_color("bg_0"))
         self._body.pack(side="top", fill="both", expand=True)
 
-        self._footer = tk.Frame(self, bg=get_color("bg_1"))
+        self._footer = tk.Frame(self, bg=get_color("bg_0"))
         self._footer.pack(side="bottom", fill="x")
 
     # ── building ─────────────────────────────────────────────────────
@@ -234,7 +275,7 @@ class Sidebar(tk.Frame):
             self._group_divs.append(div)
             self._build_order.append(div)
         lbl = tk.Label(self._body, text=title.upper(),
-                       bg=get_color("bg_1"), fg=get_color("fg_5"),
+                       bg=get_color("bg_0"), fg=get_color("fg_5"),
                        font=get_font("eyebrow"), anchor="w")
         lbl.pack(fill="x", padx=SPACING["md"],
                  pady=((SPACING["lg"] if first else SPACING["sm"]),

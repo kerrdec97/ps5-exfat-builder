@@ -44,41 +44,54 @@ class DropZone(tk.Frame):
 
     def __init__(self, parent, on_drop=None, on_click=None,
                  hint=None, glyph='\u2913'):
-        bg = COLORS['bg_2']
+        bg = COLORS['bg_3']
         super().__init__(parent, bg=bg,
                          highlightbackground=COLORS['border_3'],
-                         highlightthickness=1)
+                         highlightthickness=1,
+                         takefocus=1 if on_click else 0)
         self._on_drop = on_drop
         self._on_click = on_click
+        self._focused = False
         self._idle_bg = bg
         self._hover_bg = COLORS['accent_08']
         self._idle_border = COLORS['border_3']
         self._hover_border = COLORS['accent']
 
         inner = tk.Frame(self, bg=bg)
-        inner.pack(fill='both', expand=True, padx=22, pady=22)
+        inner.pack(fill='both', expand=True, padx=20, pady=18)
+        self._inner = inner
 
         self._glyph_lbl = tk.Label(inner, text=glyph,
-                                   font=(FONTS['body'][0], 24),
-                                   bg=bg, fg=COLORS['fg_5'])
-        self._glyph_lbl.pack()
+                                   font=(FONTS['body'][0], 22, 'bold'),
+                                   bg=COLORS['accent_08'],
+                                   fg=COLORS['accent_hi'],
+                                   width=3, height=2,
+                                   highlightbackground=COLORS['accent_lo'],
+                                   highlightthickness=1)
+        self._glyph_lbl.pack(side='left', padx=(0, 14))
 
-        self._main_lbl = tk.Label(inner,
+        self._text_col = tk.Frame(inner, bg=bg)
+        self._text_col.pack(side='left', fill='x', expand=True)
+        self._main_lbl = tk.Label(self._text_col,
                                   text='Drop a game folder here',
                                   font=(FONTS['body'][0], 11, 'bold'),
-                                  bg=bg, fg=COLORS['fg_2'])
-        self._main_lbl.pack(pady=(6, 0))
+                                  bg=bg, fg=COLORS['fg_1'],
+                                  anchor='w')
+        self._main_lbl.pack(fill='x')
 
         if hint:
-            self._hint_lbl = tk.Label(inner, text=hint,
+            self._hint_lbl = tk.Label(self._text_col, text=hint,
                                       font=FONTS['meta'],
-                                      bg=bg, fg=COLORS['fg_5'])
-            self._hint_lbl.pack(pady=(2, 0))
+                                      bg=bg, fg=COLORS['fg_4'],
+                                      anchor='w', justify='left',
+                                      wraplength=720)
+            self._hint_lbl.pack(fill='x', pady=(4, 0))
         else:
             self._hint_lbl = None
 
         # ── Hover and click feedback on the whole zone ──
-        for w in [self, inner, self._glyph_lbl, self._main_lbl] + (
+        for w in [self, inner, self._text_col,
+                  self._glyph_lbl, self._main_lbl] + (
                 [self._hint_lbl] if self._hint_lbl else []):
             w.bind('<Enter>', self._on_enter, add='+')
             w.bind('<Leave>', self._on_leave, add='+')
@@ -88,6 +101,11 @@ class DropZone(tk.Frame):
                     w.config(cursor='hand2')
                 except Exception:
                     pass
+        if on_click:
+            self.bind('<FocusIn>', self._on_focus_in, add='+')
+            self.bind('<FocusOut>', self._on_focus_out, add='+')
+            self.bind('<Return>', self._on_click_evt, add='+')
+            self.bind('<space>', self._on_click_evt, add='+')
 
         # ── Drag-and-drop registration (tkinterdnd2 if available) ──
         try:
@@ -106,24 +124,20 @@ class DropZone(tk.Frame):
             self.configure(highlightbackground=self._hover_border,
                            highlightthickness=1)
             self._main_lbl.configure(bg=self._hover_bg)
-            self._glyph_lbl.configure(bg=self._hover_bg, fg=COLORS['accent'])
-            for child in self.winfo_children():
-                try:
-                    child.configure(bg=self._hover_bg)
-                except Exception:
-                    pass
+            self._glyph_lbl.configure(
+                bg=COLORS['accent_15'], fg=COLORS['accent_hi'])
+            self._inner.configure(bg=self._hover_bg)
+            self._text_col.configure(bg=self._hover_bg)
             if self._hint_lbl:
                 self._hint_lbl.configure(bg=self._hover_bg)
         else:
             self.configure(highlightbackground=self._idle_border,
                            highlightthickness=1)
             self._main_lbl.configure(bg=self._idle_bg)
-            self._glyph_lbl.configure(bg=self._idle_bg, fg=COLORS['fg_5'])
-            for child in self.winfo_children():
-                try:
-                    child.configure(bg=self._idle_bg)
-                except Exception:
-                    pass
+            self._glyph_lbl.configure(
+                bg=COLORS['accent_08'], fg=COLORS['accent_hi'])
+            self._inner.configure(bg=self._idle_bg)
+            self._text_col.configure(bg=self._idle_bg)
             if self._hint_lbl:
                 self._hint_lbl.configure(bg=self._idle_bg)
 
@@ -131,10 +145,22 @@ class DropZone(tk.Frame):
         self._set_active(True)
 
     def _on_leave(self, _e=None):
+        self._set_active(self._focused)
+
+    def _on_focus_in(self, _e=None):
+        self._focused = True
+        self._set_active(True)
+
+    def _on_focus_out(self, _e=None):
+        self._focused = False
         self._set_active(False)
 
     def _on_click_evt(self, _e=None):
         if self._on_click:
+            try:
+                self.focus_set()
+            except Exception:
+                pass
             try:
                 self._on_click()
             except Exception:
@@ -201,8 +227,8 @@ class LabeledField(tk.Frame):
         lbl_row.pack(fill='x')
 
         tk.Label(lbl_row, text=label,
-                 font=FONTS['label'],
-                 bg=row_bg, fg=COLORS['fg_3'], anchor='w'
+                 font=(FONTS['body'][0], 9, 'bold'),
+                 bg=row_bg, fg=COLORS['fg_2'], anchor='w'
                  ).pack(side='left')
         if required:
             tk.Label(lbl_row, text='  *',
@@ -227,9 +253,19 @@ class LabeledField(tk.Frame):
                               insertbackground=COLORS['field_fg'],
                               selectbackground=COLORS['accent'],
                               selectforeground=COLORS['fg_0'],
-                              relief='flat', bd=6,
+                              relief='flat', bd=9,
                               state=('readonly' if readonly else 'normal'))
         self.entry.pack(side='left', fill='x', expand=True)
+        self.entry.bind(
+            '<FocusIn>',
+            lambda _e: input_wrap.configure(
+                highlightbackground=COLORS['accent']),
+            add='+')
+        self.entry.bind(
+            '<FocusOut>',
+            lambda _e: input_wrap.configure(
+                highlightbackground=COLORS['border_3']),
+            add='+')
 
         self.button = None
         if on_browse:
@@ -239,7 +275,7 @@ class LabeledField(tk.Frame):
                                     activebackground=COLORS['bg_5'],
                                     activeforeground=COLORS['accent'],
                                     relief='flat', bd=0,
-                                    padx=14, pady=6,
+                                    padx=16, pady=8,
                                     cursor='hand2',
                                     command=on_browse)
             self.button.pack(side='right')
@@ -272,6 +308,7 @@ class SegmentedToggle(tk.Frame):
         super().__init__(parent, bg=row_bg)
         self._var = var
         self._on_change = on_change
+        self._focused = False
 
         # The pill body is itself a labeled Frame with a 1px border.
         self._pill_bg_off = COLORS['bg_2']
@@ -282,19 +319,25 @@ class SegmentedToggle(tk.Frame):
         self._pill_fg_on  = COLORS['accent']
 
         self._pill = tk.Frame(self,
-                              highlightthickness=1)
+                              highlightthickness=1,
+                              takefocus=1,
+                              cursor='hand2')
         self._pill.pack()
 
         display = ((glyph + ' ') if glyph else '') + text
         self._lbl = tk.Label(self._pill, text=display,
                              font=FONTS['meta'],
-                             padx=10, pady=4,
+                             padx=12, pady=6,
                              cursor='hand2')
         self._lbl.pack()
 
         # Click anywhere on the pill (or its label) toggles the var.
         for w in (self._pill, self._lbl):
-            w.bind('<Button-1>', lambda e: self._toggle())
+            w.bind('<Button-1>', self._activate)
+        self._pill.bind('<Return>', self._activate)
+        self._pill.bind('<space>', self._activate)
+        self._pill.bind('<FocusIn>', self._on_focus_in)
+        self._pill.bind('<FocusOut>', self._on_focus_out)
 
         # Initial paint
         self._repaint()
@@ -318,10 +361,26 @@ class SegmentedToggle(tk.Frame):
             except Exception:
                 pass
 
+    def _activate(self, _e=None):
+        try:
+            self._pill.focus_set()
+        except Exception:
+            pass
+        self._toggle()
+
+    def _on_focus_in(self, _e=None):
+        self._focused = True
+        self._repaint()
+
+    def _on_focus_out(self, _e=None):
+        self._focused = False
+        self._repaint()
+
     def _repaint(self):
         on = bool(self._var.get())
         bg = self._pill_bg_on if on else self._pill_bg_off
-        bd = self._pill_border_on if on else self._pill_border_off
+        bd = (COLORS['accent_hi'] if self._focused else
+              self._pill_border_on if on else self._pill_border_off)
         fg = self._pill_fg_on if on else self._pill_fg_off
         self._pill.configure(bg=bg, highlightbackground=bd)
         self._lbl.configure(bg=bg, fg=fg)

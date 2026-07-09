@@ -55,81 +55,81 @@ import platform
 COLORS = {
     # Backgrounds — purple-tinted dark per v1-bundle/backports-tab.html
     # (deepest is bg_0 = #0a0812; panels lighten through bg_5)
-    "bg_0":     "#0a0812",
-    "bg_1":     "#110d1c",
-    "bg_2":     "#16121f",
-    "bg_3":     "#1d1729",
-    "bg_4":     "#251e34",
-    "bg_5":     "#2d2540",
+    "bg_0":     "#090b0f",
+    "bg_1":     "#0e1116",
+    "bg_2":     "#151920",
+    "bg_3":     "#1b212a",
+    "bg_4":     "#232b36",
+    "bg_5":     "#2d3744",
 
     # Borders — slight purple tint
-    "border_1": "#1c1729",
-    "border_2": "#25203a",
-    "border_3": "#322a47",
-    "border_4": "#3a3252",
+    "border_1": "#171c23",
+    "border_2": "#242c36",
+    "border_3": "#35414f",
+    "border_4": "#465568",
 
     # Foregrounds — warm-leaning grays for contrast against purple-bg
-    "fg_0":     "#f3f0fa",   # heading
-    "fg_1":     "#e0dcec",
-    "fg_2":     "#c5c0d2",
-    "fg_3":     "#9d97ad",
-    "fg_4":     "#7a7390",
-    "fg_5":     "#5d5775",
-    "fg_6":     "#423d57",
+    "fg_0":     "#f5f7fa",
+    "fg_1":     "#e3e8ef",
+    "fg_2":     "#c8d0da",
+    "fg_3":     "#a7b1bf",
+    "fg_4":     "#8f9aa8",
+    "fg_5":     "#75808e",
+    "fg_6":     "#4e5967",
 
     # Dark fields (Step 35 / v2.2.16): the app's text inputs are now
     # dark — matches the rest of the theme and prevents white-bg
     # entries from screaming against the dark UI. The previous light
     # fields (field_bg=#f0eef5, field_fg=#000000) were a deliberate
     # Windows-form-style choice; user feedback rejected that.
-    "field_bg": "#251e34",
-    "field_fg": "#e0dcec",
-    "field_select_bg": "#b07ad6",
+    "field_bg": "#11161d",
+    "field_fg": "#e3e8ef",
+    "field_select_bg": "#6ea8fe",
     "field_select_fg": "#ffffff",
 
     # Accent — purple is now the global accent (was electric blue).
     # The CSS mock used `--purple` as the primary action color.
-    "accent":     "#b07ad6",
-    "accent_hi":  "#c993e8",
-    "accent_lo":  "#2a1a3d",
-    "accent_08":  "#1a0d2a",   # opaque equivalent of purple @ 8% over bg_1
-    "accent_15":  "#241540",
-    "accent_pressed": "#8e60b8",
+    "accent":     "#6ea8fe",
+    "accent_hi":  "#9ac4ff",
+    "accent_lo":  "#1b3554",
+    "accent_08":  "#111d2c",
+    "accent_15":  "#182a40",
+    "accent_pressed": "#4f86d9",
 
     # Status — adjusted for the purple-tint background
     # (greens/ambers/reds shifted slightly cooler so they harmonize)
-    "success":    "#4ec9a4",
-    "success_hi": "#6fdcb8",
-    "success_bg": "#0f2418",
+    "success":    "#45c7a5",
+    "success_hi": "#72ddc0",
+    "success_bg": "#102720",
     "success_ok": "#00ff41",   # terminal phosphor green — klog only;
                                 # intentionally retina-burning since
                                 # klog is meant to evoke a CRT terminal
 
-    "warn":       "#d6a85a",
-    "warn_hi":    "#e8c074",
-    "warn_bg":    "#241a08",
+    "warn":       "#e1ad56",
+    "warn_hi":    "#f0c875",
+    "warn_bg":    "#2b210f",
 
-    "danger":     "#d65a6a",
-    "danger_hi":  "#e87a8a",
-    "danger_bg":  "#240e14",
+    "danger":     "#df6676",
+    "danger_hi":  "#ef8b98",
+    "danger_bg":  "#2b141a",
 
-    "info_bg":    "#1a0d2a",
+    "info_bg":    "#111d2c",
 
     # Confidence dots (Dump Rename)
-    "conf_clean": "#4ec9a4",
-    "conf_guess": "#d6a85a",
-    "conf_fail":  "#d65a6a",
+    "conf_clean": "#45c7a5",
+    "conf_guess": "#e1ad56",
+    "conf_fail":  "#df6676",
 
     # Purple — same as accent now (kept as separate tokens for clarity
     # when code semantically wants "this means backport" vs "this means
     # primary action")
-    "purple":     "#b07ad6",
-    "purple_hi":  "#c993e8",
+    "purple":     "#b58cff",
+    "purple_hi":  "#c9adff",
     # Teal — kept distinct for ffpkg, shifted to harmonize with purple
-    "teal":       "#5ac9b8",
-    "teal_hi":    "#7adcca",
-    "teal_bg":    "#0e221f",
-    "teal_lo":    "#1f4a42",
+    "teal":       "#50c5c7",
+    "teal_hi":    "#7ddbdd",
+    "teal_bg":    "#102526",
+    "teal_lo":    "#204b4d",
 }
 
 # ────────────────────────────────────────────────────────────────────
@@ -178,8 +178,8 @@ _SANS = _SANS_FALLBACK
 _MONO = _MONO_FALLBACK
 
 FONTS = {
-    "h1":      (_SANS, 22, "bold"),
-    "h2":      (_SANS, 15, "bold"),
+    "h1":      (_SANS, 24, "bold"),
+    "h2":      (_SANS, 16, "bold"),
     "h3":      (_SANS, 12, "bold"),
     "eyebrow": (_SANS,  9, "bold"),    # render uppercase manually
     "body":    (_SANS, 10, "normal"),
@@ -287,8 +287,10 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     # ── TFrame ──
     style.configure("TFrame",         background=C["bg_1"])
     style.configure("Surface.TFrame", background=C["bg_1"])
-    style.configure("Card.TFrame",    background=C["bg_2"], relief="flat", borderwidth=1)
-    style.configure("Panel.TFrame",   background=C["bg_3"], relief="flat", borderwidth=1)
+    style.configure("Card.TFrame", background=C["bg_2"], relief="solid",
+                    borderwidth=1, bordercolor=C["border_3"])
+    style.configure("Panel.TFrame", background=C["bg_3"], relief="solid",
+                    borderwidth=1, bordercolor=C["border_3"])
 
     # ── TLabelframe (sectioned cards) ──
     style.configure("TLabelframe",
@@ -333,7 +335,8 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
                     lightcolor=C["border_3"],
                     darkcolor=C["border_3"],
                     relief="flat",
-                    padding=(14, 7),
+                    padding=(16, 9),
+                    focuscolor=C["accent"],
                     font=F["button"])
     style.map("TButton",
               background=[("active", C["bg_5"]),
@@ -346,55 +349,81 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     style.configure("Primary.TButton",
                     background=C["accent"], foreground=C["fg_0"],
                     bordercolor=C["accent"], lightcolor=C["accent"], darkcolor=C["accent"],
-                    padding=(16, 8), font=F["button"], relief="flat")
+                    padding=(18, 10), font=F["body_b"], relief="flat",
+                    focuscolor=C["fg_0"])
     style.map("Primary.TButton",
               background=[("active", C["accent_hi"]),
                           ("pressed", C["accent_pressed"]),
                           ("disabled", C["bg_3"])],
-              foreground=[("disabled", C["fg_6"])])
+              foreground=[("disabled", C["fg_6"])],
+              bordercolor=[("focus", C["fg_0"])],
+              lightcolor=[("focus", C["fg_0"])],
+              darkcolor=[("focus", C["fg_0"])])
 
     style.configure("Secondary.TButton",
                     background=C["bg_4"], foreground=C["accent"],
                     bordercolor=C["accent"], lightcolor=C["accent"], darkcolor=C["accent"],
-                    padding=(14, 7), relief="flat")
+                    padding=(16, 9), relief="flat", focuscolor=C["accent_hi"])
     style.map("Secondary.TButton",
-              background=[("active", C["accent_08"]), ("pressed", C["accent_15"])])
+              background=[("active", C["accent_08"]), ("pressed", C["accent_15"])],
+              bordercolor=[("focus", C["accent_hi"])],
+              lightcolor=[("focus", C["accent_hi"])],
+              darkcolor=[("focus", C["accent_hi"])])
 
     style.configure("Ghost.TButton",
                     background=C["bg_1"], foreground=C["fg_3"],
                     bordercolor=C["bg_1"], lightcolor=C["bg_1"], darkcolor=C["bg_1"],
-                    padding=(10, 6), relief="flat")
+                    padding=(13, 8), relief="flat", focuscolor=C["accent"])
     style.map("Ghost.TButton",
               background=[("active", C["bg_3"]), ("pressed", C["bg_4"])],
-              foreground=[("active", C["fg_1"])])
+              foreground=[("active", C["fg_1"])],
+              bordercolor=[("focus", C["accent"])],
+              lightcolor=[("focus", C["accent"])],
+              darkcolor=[("focus", C["accent"])])
 
     style.configure("Warn.TButton",
                     background=C["warn"], foreground="#1a0e00",
                     bordercolor=C["warn"], lightcolor=C["warn"], darkcolor=C["warn"],
-                    padding=(14, 7), font=F["body_b"], relief="flat")
+                    padding=(16, 9), font=F["body_b"], relief="flat",
+                    focuscolor=C["fg_0"])
     style.map("Warn.TButton",
-              background=[("active", C["warn_hi"]), ("pressed", "#cc8800")])
+              background=[("active", C["warn_hi"]), ("pressed", "#cc8800")],
+              bordercolor=[("focus", C["fg_0"])],
+              lightcolor=[("focus", C["fg_0"])],
+              darkcolor=[("focus", C["fg_0"])])
 
     style.configure("Danger.TButton",
                     background=C["danger"], foreground=C["fg_0"],
                     bordercolor=C["danger"], lightcolor=C["danger"], darkcolor=C["danger"],
-                    padding=(14, 7), font=F["body_b"], relief="flat")
+                    padding=(16, 9), font=F["body_b"], relief="flat",
+                    focuscolor=C["fg_0"])
     style.map("Danger.TButton",
-              background=[("active", C["danger_hi"]), ("pressed", "#c62828")])
+              background=[("active", C["danger_hi"]), ("pressed", "#c62828")],
+              bordercolor=[("focus", C["fg_0"])],
+              lightcolor=[("focus", C["fg_0"])],
+              darkcolor=[("focus", C["fg_0"])])
 
     style.configure("Success.TButton",
                     background=C["success"], foreground=C["fg_0"],
                     bordercolor=C["success"], lightcolor=C["success"], darkcolor=C["success"],
-                    padding=(14, 7), font=F["body_b"], relief="flat")
+                    padding=(16, 9), font=F["body_b"], relief="flat",
+                    focuscolor=C["fg_0"])
     style.map("Success.TButton",
-              background=[("active", C["success_hi"]), ("pressed", "#388e3c")])
+              background=[("active", C["success_hi"]), ("pressed", "#388e3c")],
+              bordercolor=[("focus", C["fg_0"])],
+              lightcolor=[("focus", C["fg_0"])],
+              darkcolor=[("focus", C["fg_0"])])
 
     style.configure("Backport.TButton",
                     background=C["purple"], foreground=C["fg_0"],
                     bordercolor=C["purple"], lightcolor=C["purple"], darkcolor=C["purple"],
-                    padding=(14, 7), font=F["body_b"], relief="flat")
+                    padding=(16, 9), font=F["body_b"], relief="flat",
+                    focuscolor=C["fg_0"])
     style.map("Backport.TButton",
-              background=[("active", C["purple_hi"]), ("pressed", "#7d3c98")])
+              background=[("active", C["purple_hi"]), ("pressed", "#7d3c98")],
+              bordercolor=[("focus", C["fg_0"])],
+              lightcolor=[("focus", C["fg_0"])],
+              darkcolor=[("focus", C["fg_0"])])
 
     # ── TCheckbutton / TRadiobutton ──
     style.configure("TCheckbutton",
@@ -424,7 +453,7 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     style.configure("TEntry",
                     fieldbackground=C["field_bg"], foreground=C["field_fg"],
                     bordercolor=C["border_3"], lightcolor=C["border_3"], darkcolor=C["border_3"],
-                    insertcolor=C["accent"], padding=6, relief="flat")
+                    insertcolor=C["accent"], padding=9, relief="flat")
     style.map("TEntry",
               bordercolor=[("focus", C["accent"])],
               lightcolor=[("focus", C["accent"])],
@@ -440,7 +469,7 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     style.configure("TCombobox",
                     fieldbackground=C["field_bg"], foreground=C["field_fg"],
                     background=C["bg_4"], arrowcolor=C["fg_2"],
-                    bordercolor=C["border_3"], padding=6, relief="flat")
+                    bordercolor=C["border_3"], padding=9, relief="flat")
     style.map("TCombobox",
               fieldbackground=[("readonly", C["bg_4"])],
               foreground=[("readonly", C["fg_1"])],
@@ -493,14 +522,14 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     style.configure("Treeview",
                     background=C["bg_2"], fieldbackground=C["bg_2"],
                     foreground=C["fg_1"], bordercolor=C["bg_2"],
-                    rowheight=28, font=F["body"], borderwidth=0)
+                    rowheight=32, font=F["body"], borderwidth=0)
     style.map("Treeview",
               background=[("selected", C["accent_15"])],
               foreground=[("selected", C["fg_0"])])
     style.configure("Treeview.Heading",
                     background=C["bg_4"], foreground=C["fg_3"],
                     relief="flat", borderwidth=0,
-                    font=(_SANS, 9, "bold"), padding=(10, 7))
+                    font=(_SANS, 9, "bold"), padding=(12, 9))
     style.map("Treeview.Heading",
               background=[("active", C["bg_5"])],
               foreground=[("active", C["accent"])])

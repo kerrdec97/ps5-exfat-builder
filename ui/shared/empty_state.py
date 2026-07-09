@@ -40,25 +40,30 @@ class EmptyState(tk.Frame):
     """
 
     def __init__(self, parent, icon="\u2014", title="Nothing here yet",
-                 description="", bg="bg_1", **kwargs):
+                 description="", bg="bg_2", **kwargs):
         self._bg = get_color(bg)
         super().__init__(parent, bg=self._bg,
-                         highlightthickness=0, bd=0, **kwargs)
+                         highlightbackground=get_color("border_3"),
+                         highlightthickness=1, bd=0, **kwargs)
 
         center = tk.Frame(self, bg=self._bg)
         center.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(center, text=icon, bg=self._bg,
-                 fg=get_color("fg_5"),
-                 font=(get_font("h1")[0], 34, "normal")).pack()
+        tk.Label(center, text=icon, bg=get_color("accent_08"),
+                 fg=get_color("accent_hi"),
+                 font=(get_font("h1")[0], 24, "normal"),
+                 width=3, height=2,
+                 highlightbackground=get_color("accent_lo"),
+                 highlightthickness=1).pack()
 
         tk.Label(center, text=title, bg=self._bg,
-                 fg=get_color("fg_2"), font=get_font("h3")).pack(
+                 fg=get_color("fg_1"),
+                 font=(get_font("h3")[0], 12, "bold")).pack(
                      pady=(SPACING["md"], 0))
 
         if description:
             tk.Label(center, text=description, bg=self._bg,
-                     fg=get_color("fg_5"), font=get_font("body"),
+                     fg=get_color("fg_4"), font=get_font("body"),
                      wraplength=360, justify="center").pack(
                          pady=(SPACING["xs"], 0))
 
@@ -81,27 +86,35 @@ class SectionGroup(tk.Frame):
     """
 
     def __init__(self, parent, title="", description="",
-                 bg="bg_1", **kwargs):
+                 bg="bg_2", **kwargs):
         self._bg = get_color(bg)
         super().__init__(parent, bg=self._bg,
-                         highlightthickness=0, bd=0, **kwargs)
+                         highlightbackground=get_color("border_3"),
+                         highlightthickness=1, bd=0, **kwargs)
+
+        head = tk.Frame(self, bg=get_color("bg_3"))
+        head.pack(fill="x")
+        head_inner = tk.Frame(head, bg=get_color("bg_3"))
+        head_inner.pack(fill="x", padx=SPACING["lg"], pady=SPACING["md"])
 
         if title:
-            tk.Label(self, text=title.upper(), bg=self._bg,
+            tk.Label(head_inner, text=title.upper(),
+                     bg=get_color("bg_3"),
                      fg=get_color("accent"), font=get_font("eyebrow"),
                      anchor="w").pack(fill="x")
         if description:
-            tk.Label(self, text=description, bg=self._bg,
+            tk.Label(head_inner, text=description,
+                     bg=get_color("bg_3"),
                      fg=get_color("fg_4"), font=get_font("label"),
                      anchor="w", justify="left").pack(
                          fill="x", pady=(SPACING["xxs"], 0))
 
         # hairline divider
-        tk.Frame(self, bg=get_color("border_2"), height=1).pack(
-            fill="x", pady=(SPACING["sm"], SPACING["md"]))
+        tk.Frame(self, bg=get_color("border_3"), height=1).pack(fill="x")
 
         self.body = tk.Frame(self, bg=self._bg)
-        self.body.pack(fill="both", expand=True)
+        self.body.pack(fill="both", expand=True,
+                       padx=SPACING["lg"], pady=SPACING["lg"])
 
 
 # ── harmless self-test / demo ────────────────────────────────────────

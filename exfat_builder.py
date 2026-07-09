@@ -700,7 +700,7 @@ if not is_admin():
 # Step 3+ will migrate widgets to either ttk styles or direct COLORS[...] /
 # FONTS[...] lookups; for now the indirection lets us flip the entire palette
 # in one place.
-from tkinter_theme import apply_theme, COLORS, FONTS
+from tkinter_theme import apply_theme, COLORS, FONTS, SPACING
 
 BG           = COLORS['bg_1']        # was '#000000' — design system uses #0a0a0a (near-black, never pure)
 SURFACE2     = COLORS['bg_4']        # was '#1c1c1c' — closest design token is #1a1a1a
@@ -3618,21 +3618,54 @@ class ExFATBuilder(_TK_BASE):
 
     def _build_ui(self):
         # ── Header ──
-        hdr = tk.Frame(self, bg=BG)
-        hdr.pack(fill='x', padx=24, pady=(10, 6))
-        title_row = tk.Frame(hdr, bg=BG)
+        hdr = tk.Frame(self, bg=COLORS['bg_2'])
+        hdr.pack(fill='x')
+        header_inner = tk.Frame(hdr, bg=COLORS['bg_2'])
+        header_inner.pack(
+            fill='x', padx=SPACING['xxl'], pady=(SPACING['lg'], SPACING['md']))
+        title_row = tk.Frame(header_inner, bg=COLORS['bg_2'])
         title_row.pack(fill='x')
-        tk.Label(title_row, text='exFAT Image Builder',
-                 font=('Segoe UI', 16, 'bold'), bg=BG, fg=TEXT).pack(side='left', anchor='w')
-        tk.Label(title_row, text='v' + APP_VERSION,
-                 font=('Segoe UI', 8), bg=BG, fg='#3a3a3a').pack(side='left', anchor='s', padx=(8,0), pady=(0,4))
-        tk.Label(title_row, text='by DecKerr97',
-                 font=('Segoe UI', 9), bg=BG, fg='#555555').pack(side='right', anchor='s', pady=(6, 0))
-        tk.Label(hdr, text='Build PS5 exFAT game images  \u2014  scripts bundled, game name auto-detected',
-                 font=('Segoe UI', 10), bg=BG, fg=MUTED).pack(anchor='w')
-        tk.Label(hdr, text='Inspired by NookieAI \u2022 stonemodder (Porkfolio)',
-                 font=('Segoe UI', 8), bg=BG, fg='#3a3a3a').pack(anchor='w')
-        tk.Frame(self, bg=BORDER, height=1).pack(fill='x')
+        brand_tile = tk.Label(
+            title_row, text='EX', font=(FONTS['body'][0], 11, 'bold'),
+            bg=COLORS['accent'], fg=COLORS['fg_0'],
+            width=3, height=2,
+            highlightbackground=COLORS['accent_hi'],
+            highlightthickness=1)
+        brand_tile.pack(side='left', padx=(0, SPACING['md']))
+        brand_copy = tk.Frame(title_row, bg=COLORS['bg_2'])
+        brand_copy.pack(side='left', fill='x', expand=True)
+        brand_name_row = tk.Frame(brand_copy, bg=COLORS['bg_2'])
+        brand_name_row.pack(fill='x')
+        tk.Label(brand_name_row, text='exFAT Image Builder',
+                 font=FONTS['h2'], bg=COLORS['bg_2'],
+                 fg=COLORS['fg_0']).pack(side='left', anchor='w')
+        version_badge = tk.Label(
+            brand_name_row, text=' v' + APP_VERSION + ' ',
+            font=FONTS['eyebrow'], bg=COLORS['accent_08'],
+            fg=COLORS['accent_hi'], padx=SPACING['xs'], pady=SPACING['xxs'])
+        version_badge.pack(
+            side='left', anchor='s', padx=(SPACING['sm'], 0),
+            pady=(0, SPACING['xxs']))
+        tk.Label(
+            brand_copy,
+            text=('Build PS5 exFAT game images  \u2014  scripts bundled, '
+                  'game name auto-detected'),
+            font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_3']
+        ).pack(anchor='w', pady=(SPACING['xxs'], 0))
+        attribution = tk.Frame(
+            title_row, bg=COLORS['bg_3'],
+            highlightbackground=COLORS['border_3'], highlightthickness=1)
+        attribution.pack(side='right', padx=(SPACING['lg'], 0))
+        tk.Label(attribution, text='by DecKerr97',
+                 font=FONTS['label'], bg=COLORS['bg_3'],
+                 fg=COLORS['fg_2']).pack(
+                     anchor='e', padx=SPACING['md'], pady=(7, 0))
+        tk.Label(attribution,
+                 text='Inspired by NookieAI \u2022 stonemodder',
+                 font=FONTS['meta'], bg=COLORS['bg_3'],
+                 fg=COLORS['fg_5']).pack(
+                     anchor='e', padx=SPACING['md'], pady=(0, 7))
+        tk.Frame(self, bg=COLORS['border_3'], height=1).pack(fill='x')
 
         # ── Navigation ──
         # v4.0 Entry 2 Phase 3: the legacy top tab bar has been REMOVED. The
@@ -3647,15 +3680,16 @@ class ExFATBuilder(_TK_BASE):
         self._tab_extract_frame = None
 
         # ── Global output log (visible across all tabs) ──
-        self._ps5_status_frame = tk.Frame(self, bg='#0d0d0d')
+        self._ps5_status_frame = tk.Frame(self, bg=COLORS['bg_0'])
         self._ps5_status_frame.pack(side='bottom', fill='x')
         self._build_ps5_status_bar(self._ps5_status_frame)
 
-        self._global_log_frame = tk.Frame(self, bg=BG)
+        self._global_log_frame = tk.Frame(self, bg=COLORS['bg_0'])
         self._global_log_frame.pack(side='bottom', fill='x', padx=0, pady=0)
         self._build_global_log(self._global_log_frame)
 
-        tk.Frame(self, bg=BORDER, height=1).pack(side='bottom', fill='x')
+        tk.Frame(self, bg=COLORS['border_3'], height=1).pack(
+            side='bottom', fill='x')
 
         # ── Stage 3 (UI refactor): secondary sidebar navigation ─────────
         # ADDITIVE — the top tab strip above is unchanged and remains the
@@ -3668,7 +3702,7 @@ class ExFATBuilder(_TK_BASE):
         self._sidebar = None
         try:
             from ui.shared.sidebar import Sidebar as _Sidebar
-            sidebar = _Sidebar(self, width=210, rail_width=60)
+            sidebar = _Sidebar(self, width=224, rail_width=64)
             sidebar.pack(side='left', fill='y')
             # Route sidebar clicks through the existing _switch_tab.
             sidebar.on_select = self._switch_tab
@@ -3681,7 +3715,8 @@ class ExFATBuilder(_TK_BASE):
                     pass
             sidebar.on_toggle = _persist_sidebar_collapsed
             # Thin divider between sidebar and content.
-            tk.Frame(self, bg=BORDER, width=1).pack(side='left', fill='y')
+            tk.Frame(self, bg=COLORS['border_3'], width=1).pack(
+                side='left', fill='y')
 
             # WORKSPACE — quick link to the default landing tab.
             # NOTE: there is no separate Dashboard tab in Stage 3 — this
@@ -3735,12 +3770,23 @@ class ExFATBuilder(_TK_BASE):
             # SYSTEM STATUS — pinned footer (real text only, no controls).
             footer = sidebar.footer()
             self._sidebar_status_lbl = tk.Label(
-                footer, text=_('SYSTEM STATUS'), bg=BG, fg='#5d5775',
-                font=('Segoe UI', 8, 'bold'), anchor='w')
-            self._sidebar_status_lbl.pack(fill='x', padx=12, pady=(8, 2))
-            tk.Label(footer, text='exFAT Image Builder v' + APP_VERSION,
-                     bg=BG, fg=MUTED, font=('Segoe UI', 8),
-                     anchor='w').pack(fill='x', padx=12, pady=(0, 10))
+                footer, text=_('SYSTEM STATUS'), bg=COLORS['bg_0'],
+                fg=COLORS['fg_5'], font=FONTS['eyebrow'], anchor='w')
+            self._sidebar_status_lbl.pack(
+                fill='x', padx=14, pady=(10, 5))
+            status_row = tk.Frame(
+                footer, bg=COLORS['bg_2'],
+                highlightbackground=COLORS['border_3'],
+                highlightthickness=1)
+            status_row.pack(fill='x', padx=10, pady=(0, 12))
+            tk.Label(status_row, text='\u25cf', bg=COLORS['bg_2'],
+                     fg=COLORS['success'],
+                     font=(FONTS['body'][0], 8)).pack(
+                         side='left', padx=(10, 7), pady=8)
+            tk.Label(status_row, text='Ready  \u00b7  v' + APP_VERSION,
+                     bg=COLORS['bg_2'], fg=COLORS['fg_3'],
+                     font=FONTS['meta'], anchor='w').pack(
+                         side='left', pady=8)
 
             self._sidebar = sidebar
             # Phase 5A: restore the saved collapse state (no re-persist).
@@ -22486,29 +22532,31 @@ class ExFATBuilder(_TK_BASE):
 
     def _build_ps5_status_bar(self, parent):
         """Persistent PS5 connection + queue status bar."""
-        bar = tk.Frame(parent, bg='#0d0d0d',
-                       highlightbackground=BORDER, highlightthickness=1)
+        bar_bg = COLORS['bg_0']
+        bar = tk.Frame(parent, bg=bar_bg,
+                       highlightbackground=COLORS['border_3'],
+                       highlightthickness=1)
         bar.pack(fill='x')
         self._ps5_status_var = tk.StringVar(value='PS5  ●  Not connected')
         self._ps5_status_lbl = tk.Label(
             bar, textvariable=self._ps5_status_var,
-            font=('Segoe UI', 8), bg='#0d0d0d', fg='#444444',
-            padx=10, pady=3, cursor='hand2')
+            font=FONTS['meta'], bg=bar_bg, fg=COLORS['fg_5'],
+            padx=14, pady=7, cursor='hand2')
         self._ps5_status_lbl.pack(side='left')
         self._ps5_status_lbl.bind('<Button-1>', lambda e: self._ps5_status_ping())
 
         tk.Label(bar, text='│', font=('Segoe UI', 8),
-                 bg='#0d0d0d', fg=BORDER).pack(side='left')
+                 bg=bar_bg, fg=COLORS['border_4']).pack(side='left')
 
         self._ftp_status_var = tk.StringVar(value='FTP  ●  Idle')
         tk.Label(bar, textvariable=self._ftp_status_var,
-                 font=('Segoe UI', 8), bg='#0d0d0d', fg='#444444',
-                 padx=10, pady=3).pack(side='left')
+                 font=FONTS['meta'], bg=bar_bg, fg=COLORS['fg_5'],
+                 padx=14, pady=7).pack(side='left')
 
         self._queue_status_var = tk.StringVar(value='')
         tk.Label(bar, textvariable=self._queue_status_var,
-                 font=('Segoe UI', 8), bg='#0d0d0d', fg='#58a6ff',
-                 padx=10, pady=3).pack(side='right')
+                 font=FONTS['meta'], bg=bar_bg, fg=COLORS['accent_hi'],
+                 padx=14, pady=7).pack(side='right')
 
         self.after(5000, self._ps5_status_ping_loop)
 
@@ -22516,7 +22564,7 @@ class ExFATBuilder(_TK_BASE):
         ip = self._settings.get('ps5_ip', self._settings.get('ftp_ip', '')).strip()
         if not ip:
             self._ps5_status_var.set('PS5  ●  No IP set — click to ping')
-            self._ps5_status_lbl.config(fg='#444444')
+            self._ps5_status_lbl.config(fg=COLORS['fg_5'])
             return
         import threading, socket
         def _ping():
@@ -22534,7 +22582,8 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._ps5_status_lbl.config, {'fg': SUCCESS})
             else:
                 self.after(0, self._ps5_status_var.set, '🎮 PS5  ●  Offline  (%s)' % ip)
-                self.after(0, self._ps5_status_lbl.config, {'fg': '#444444'})
+                self.after(0, self._ps5_status_lbl.config,
+                           {'fg': COLORS['fg_5']})
         threading.Thread(target=_ping, daemon=True).start()
 
     def _ps5_status_ping_loop(self):
@@ -22546,53 +22595,57 @@ class ExFATBuilder(_TK_BASE):
         self._log_visible = tk.BooleanVar(value=False)
 
         # Header row — click to expand/collapse
-        log_header = tk.Frame(parent, bg=SURFACE2,
-                              highlightbackground=BORDER, highlightthickness=1)
+        log_header = tk.Frame(parent, bg=COLORS['bg_2'],
+                              highlightbackground=COLORS['border_3'],
+                              highlightthickness=1)
         log_header.pack(fill='x')
 
         self._log_toggle_lbl = tk.Label(
             log_header,
             text='\u25b6  OUTPUT LOG',
-            font=('Segoe UI', 8, 'bold'),
-            bg=SURFACE2, fg=MUTED,
-            cursor='hand2', padx=10, pady=4)
+            font=FONTS['eyebrow'],
+            bg=COLORS['bg_2'], fg=COLORS['fg_3'],
+            cursor='hand2', padx=14, pady=8)
         self._log_toggle_lbl.pack(side='left')
         self._log_toggle_lbl.bind('<Button-1>', lambda e: self._toggle_log())
 
         tk.Button(log_header, text='Clear',
-                  font=('Segoe UI', 8),
-                  bg=SURFACE2, fg=MUTED,
-                  activebackground=SURFACE2, relief='flat', bd=0,
-                  padx=8, pady=3, cursor='hand2',
+                  font=FONTS['meta'],
+                  bg=COLORS['bg_2'], fg=COLORS['fg_3'],
+                  activebackground=COLORS['bg_3'], relief='flat', bd=0,
+                  padx=10, pady=6, cursor='hand2',
                   command=self._log_clear).pack(side='right', padx=(0, 4))
 
         # v3.6.3: Copy the whole Output Log to the clipboard. Does not modify
         # or clear the log. A small status label briefly confirms the copy.
         self._log_copy_status = tk.Label(
-            log_header, text='', font=('Segoe UI', 8),
-            bg=SURFACE2, fg=MUTED)
+            log_header, text='', font=FONTS['meta'],
+            bg=COLORS['bg_2'], fg=COLORS['fg_3'])
         self._log_copy_status.pack(side='right', padx=(0, 6))
         tk.Button(log_header, text='Copy',
-                  font=('Segoe UI', 8),
-                  bg=SURFACE2, fg=MUTED,
-                  activebackground=SURFACE2, relief='flat', bd=0,
-                  padx=8, pady=3, cursor='hand2',
+                  font=FONTS['meta'],
+                  bg=COLORS['bg_2'], fg=COLORS['fg_3'],
+                  activebackground=COLORS['bg_3'], relief='flat', bd=0,
+                  padx=10, pady=6, cursor='hand2',
                   command=self._log_copy).pack(side='right', padx=(0, 4))
 
         # Log body (hidden by default)
-        self._log_body = tk.Frame(parent, bg=BG)
-        log_outer = tk.Frame(self._log_body, bg=BG,
-                             highlightbackground=BORDER, highlightthickness=1)
+        self._log_body = tk.Frame(parent, bg=COLORS['bg_0'])
+        log_outer = tk.Frame(self._log_body, bg=COLORS['bg_0'],
+                             highlightbackground=COLORS['border_4'],
+                             highlightthickness=1)
         log_outer.pack(fill='x', padx=0, pady=(2, 0))
-        log_sb = tk.Scrollbar(log_outer, bg=BG, troughcolor=SURFACE2)
+        log_sb = tk.Scrollbar(
+            log_outer, bg=COLORS['bg_2'], troughcolor=COLORS['bg_0'])
         log_sb.pack(side='right', fill='y')
         self.log_box = tk.Text(
             log_outer,
             height=8,
-            font=('Consolas', 8),
-            bg='#0a0a0f', fg='#a0c8a0',
-            insertbackground='#a0c8a0',
-            relief='flat', bd=6,
+            font=FONTS['mono_sm'],
+            bg=COLORS['bg_0'], fg=COLORS['success_hi'],
+            insertbackground=COLORS['success_hi'],
+            selectbackground=COLORS['success_bg'],
+            relief='flat', bd=10,
             state='disabled', wrap='word',
             yscrollcommand=log_sb.set)
         self.log_box.pack(fill='x')
