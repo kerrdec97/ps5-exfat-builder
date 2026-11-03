@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import uuid
 
-from core.fpkg import gp5, param as P, playgo, runner, scan as S, toolchain, verify
+from core.fpkg import aliases as A, gp5, param as P, playgo, runner, scan as S, toolchain, verify
 
 KEYSTONE_SIZE = 96
 
@@ -77,8 +77,9 @@ def build_fpkg(opts, log=None, progress=None, cancel_check=None):
     progress = progress or (lambda p, s: None)
     cancel_check = cancel_check or (lambda: False)
     res = FpkgResult()
+    al = A.Aliases(log)
     try:
-        _build(opts, res, log, progress, cancel_check)
+        _build(opts, res, log, progress, cancel_check, al)
     except FpkgBuildError as e:
         res.status = False
         res.messages.append(str(e))
@@ -91,6 +92,8 @@ def build_fpkg(opts, log=None, progress=None, cancel_check=None):
         res.status = False
         res.messages.append('Unexpected error: %r' % (e,))
         log('[FPKG] Unexpected error: %r' % (e,))
+    finally:
+        al.close()
     return res
 
 
@@ -98,7 +101,7 @@ class _Cancelled(Exception):
     pass
 
 
-def _build(opts, res, log, progress, cancel_check):
+def _build(opts, res, log, progress, cancel_check, al):
     def check_cancel():
         if cancel_check():
             raise _Cancelled()
@@ -111,15 +114,22 @@ def _build(opts, res, log, progress, cancel_check):
         raise FpkgBuildError('; '.join(tc.problems))
     log('[FPKG] Publishing Tools: ' + tc.summary())
 
-    app_dir = os.path.abspath(opts.app_dir)
-    out_dir = os.path.abspath(opts.out_dir)
-    os.makedirs(out_dir, exist_ok=True)
-    for label, p in (('game folder', app_dir), ('output folder', out_dir)):
-        if not _ascii(p):
-            raise FpkgBuildError(
-                'The %s path contains non-ASCII characters, which the '
-                'Publishing Tools reject: %s. Move or rename it to a plain '
-                'ASCII path.' % (label, p))
+    real_app_dir = os.path.abspath(opts.app_dir)
+    real_out_dir = os.path.abspath(opts.out_dir)
+    os.makedirs(real_out_dir, exist_ok=True)
+    # The Publishing Tools reject non-ASCII paths: work through ASCII
+    # junctions to the real folders (Windows), and report real paths.
+    try:
+        app_dir = al.map(real_app_dir)
+        out_dir = al.map(real_out_dir)
+    except OSError as e:
+        raise FpkgBuildError(
+            'A folder path contains characters the Publishing Tools reject '
+            'and no ASCII alias could be made (%s). Move or rename the '
+            'folder to a plain ASCII path.' % e)
+
+    def real(p):
+        return os.path.join(real_out_dir, os.path.basename(p)) if p else p
 
     progress(1, 'Reading param.json')
     try:
@@ -133,9 +143,15 @@ def _build(opts, res, log, progress, cancel_check):
     if update:
         if not (os.path.isfile(opts.ref_pkg) and opts.ref_pkg.lower().endswith('.pkg')):
             raise FpkgBuildError('Base package not found: %s' % opts.ref_pkg)
-        if not _ascii(os.path.abspath(opts.ref_pkg)):
-            raise FpkgBuildError('The base package path contains non-ASCII '
-                                 'characters: %s' % opts.ref_pkg)
+        ref_abs = os.path.abspath(opts.ref_pkg)
+        if not _ascii(os.path.basename(ref_abs)):
+            raise FpkgBuildError('The base package file name contains '
+                                 'non-ASCII characters: %s' % opts.ref_pkg)
+        try:
+            ref_pkg = os.path.join(al.map(os.path.dirname(ref_abs)),
+                                   os.path.basename(ref_abs))
+        except OSError as e:
+            raise FpkgBuildError('No ASCII alias for the base package folder: %s' % e)
         log('[FPKG] Update against base package %s. The base must have been '
             'built by the Publishing Tools, with the same Content ID and a '
             'lower contentVersion.' % opts.ref_pkg)
@@ -186,7 +202,7 @@ def _build(opts, res, log, progress, cancel_check):
     logs_dir = os.path.join(out_dir, stem + '-build-logs')
     os.makedirs(assets, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
-    res.log_dir = logs_dir
+    res.log_dir = real(logs_dir)
     gp5_path = os.path.join(out_dir, stem + '.gp5')
     scen_path = os.path.join(out_dir, stem + '.playgo-scenario.json')
 
@@ -247,13 +263,15 @@ def _build(opts, res, log, progress, cancel_check):
             raise FpkgBuildError('compression level must be -4..9')
         argv += ['--compression_level', str(lvl)]
     if update:
-        argv += ['--ref_pkg_path', os.path.abspath(opts.ref_pkg)]
+        argv += ['--ref_pkg_path', ref_pkg]
     argv += [gp5_path, partial]
 
+    _tmp_base = opts.temp_dir if (opts.temp_dir and os.path.isdir(opts.temp_dir)
+                                  and _ascii(opts.temp_dir)) else None
+    if _tmp_base is None and not _ascii(tempfile.gettempdir()):
+        _tmp_base = A.alias_root()
     sdk_tmp = tempfile.mkdtemp(prefix='sdk-tmp-%s-' % uuid.uuid4().hex[:8],
-                               dir=opts.temp_dir if opts.temp_dir and
-                               os.path.isdir(opts.temp_dir) and
-                               _ascii(opts.temp_dir) else None)
+                               dir=_tmp_base)
     env = dict(os.environ, TEMP=sdk_tmp, TMP=sdk_tmp)
     cwd = tc.root if _ascii(tc.root) else sdk_tmp
     started = datetime.datetime.now(datetime.timezone.utc)
@@ -331,17 +349,17 @@ def _build(opts, res, log, progress, cancel_check):
                              + '; '.join(hc.problems))
     final = _unique(os.path.join(out_dir, final_name))
     os.replace(partial, final)
-    res.out_path = final
+    res.out_path = real(final)
     if update:
         comp = _unique(os.path.join(out_dir, stem + '.remastered.pkg'))
         os.replace(companion_src, comp)
-        res.companion_path = comp
+        res.companion_path = real(comp)
     try:
         if os.path.exists(partial + '.naps_metric.json'):
             os.remove(partial + '.naps_metric.json')
     except OSError:
         pass
-    log('[FPKG] Package written: %s (%.2f GB)' % (final, os.path.getsize(final) / 1024**3))
+    log('[FPKG] Package written: %s (%.2f GB)' % (res.out_path, os.path.getsize(final) / 1024**3))
     res.status = True
 
     if opts.tool_verify and not update:

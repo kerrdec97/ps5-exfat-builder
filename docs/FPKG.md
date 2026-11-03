@@ -87,6 +87,9 @@ with files in it is refused). Both write their output to the Output Log.
   `prospero-pub-cmd.exe`. Please report results with the build logs.
 * Source must be a dump **folder**. Build from an `.exfat`/`.ffpkg` by
   extracting it first (Extract tab).
-* Paths must be ASCII; there is no automatic junction workaround yet.
+* File and folder names **inside** the game must be ASCII (the
+  Publishing Tools' rule). A non-ASCII path **to** the game or output
+  folder is handled on Windows with a temporary NTFS junction under an ASCII
+  temp folder, removed afterwards.
 * No DLC (`prospero_ac`) packages, no PS4→PS5 SELF repair (PS4-magic
   executables are reported), no `.ucp` digest repair, no DDS→PNG recovery.

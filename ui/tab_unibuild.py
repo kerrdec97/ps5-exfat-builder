@@ -735,7 +735,9 @@ def build_unibuild_tab(parent, app):
         'project and checks the result. A stock Publishing Tools install '
         'does not make an installable debug FPKG: such output is reported as '
         'a failure. The game folder needs sce_sys/param.json with a valid '
-        'Content ID and the dump\'s sce_sys/keystone. Paths must be ASCII. '
+        'Content ID and the dump\'s sce_sys/keystone. File names inside '
+        'the game must be plain ASCII (non-ASCII folder paths are handled '
+        'with a temporary alias). '
         'Packages are named <Content ID>-A<ver>-V<ver>.pkg; the Output name '
         'below is not used for FPKG.'),
         font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'], anchor='w', justify='left')

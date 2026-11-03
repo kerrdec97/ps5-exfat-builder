@@ -19,7 +19,7 @@ from tests._support import ROOT
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from core.fpkg import backend, gp5, param as P, playgo, runner, scan as S, verify  # noqa: E402
+from core.fpkg import aliases, backend, gp5, param as P, playgo, runner, scan as S, verify  # noqa: E402
 
 FAKE = os.path.join(ROOT, 'tests', 'fakes', 'fake_pubcmd.py')
 CID = 'UP0000-PPSA01234_00-ABCDEFGHIJKLMNOP'
@@ -281,6 +281,40 @@ class VerifyTests(unittest.TestCase):
         self.assertIn('signed', ' '.join(verify.check_header(p).problems))
 
 
+class AliasTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='fpkg_alias_')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.real = os.path.join(self.tmp, 'Ghost of Y\u014dtei')
+        os.makedirs(self.real)
+        with open(os.path.join(self.real, 'eboot.bin'), 'wb') as f:
+            f.write(b'data')
+
+    def test_ascii_path_unchanged(self):
+        with aliases.Aliases() as al:
+            self.assertEqual(al.map(self.tmp), os.path.abspath(self.tmp))
+            self.assertEqual(al.created, [])
+
+    @unittest.skipIf(os.name == 'nt', 'Windows makes a junction instead')
+    def test_non_ascii_refused_without_junctions(self):
+        with aliases.Aliases() as al:
+            with self.assertRaises(OSError):
+                al.map(self.real)
+
+    @unittest.skipUnless(os.name == 'nt', 'NTFS junctions')
+    def test_junction_alias_and_cleanup(self):
+        with aliases.Aliases() as al:
+            a = al.map(self.real)
+            self.assertTrue(aliases.is_ascii(a))
+            with open(os.path.join(a, 'eboot.bin'), 'rb') as f:
+                self.assertEqual(f.read(), b'data')
+            with open(os.path.join(a, 'new.bin'), 'wb') as f:
+                f.write(b'x')
+        self.assertFalse(os.path.exists(a))                 # junction gone
+        self.assertTrue(os.path.isfile(os.path.join(self.real, 'eboot.bin')))
+        self.assertTrue(os.path.isfile(os.path.join(self.real, 'new.bin')))
+
+
 @unittest.skipIf(os.name == 'nt', 'the fake Publishing Tools is a script')
 class EndToEnd(unittest.TestCase):
     def setUp(self):
@@ -404,6 +438,12 @@ class EndToEnd(unittest.TestCase):
                                            os.path.join(self.tmp, 'x2'))
         self.assertIs(st, False)
         os.environ.pop('FAKE_PUBCMD_EXTRACT')
+
+    def test_non_ascii_folder_fails_clearly_without_junctions(self):
+        bad = make_dump(self.tmp, name='Y\u014dtei')
+        r = backend.build_fpkg(backend.FpkgOptions(bad, self.out, tool_path=self.exe))
+        self.assertIs(r.status, False)
+        self.assertIn('ASCII', ' '.join(r.messages))
 
     def test_preflight_failures(self):
         os.remove(os.path.join(self.dump, 'sce_sys', 'keystone'))

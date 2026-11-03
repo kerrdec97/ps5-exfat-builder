@@ -71,8 +71,7 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
   keep project files. Queue job type `fpkg`.
 * **Licensing:** nothing copied from the reference FPKG builder (no licence,
   ships Sony binaries); no Sony tools bundled, linked or downloaded.
-* **Not done:** building from `.exfat`/`.ffpkg` directly, non-ASCII paths
-  (junctions), DLC (`prospero_ac`), SELF/UCP repair, DDS→PNG. Real-tool and
+* **Not done:** building from `.exfat`/`.ffpkg` directly, DLC (`prospero_ac`), SELF/UCP repair, DDS→PNG. Real-tool and
   console testing. (Update builds and verify/extract of an existing `.pkg`
   are in the GUI.)
 
