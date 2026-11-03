@@ -11928,6 +11928,14 @@ class ExFATBuilder(_TK_BASE):
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_queue(self):
+        # Each dump is measured once per run (it used to be walked twice on
+        # the UI thread: space check and time estimate; technical audit M4).
+        _sizes = {}
+
+        def _size_of(folder):
+            if folder not in _sizes:
+                _sizes[folder] = self._get_folder_size(folder)
+            return _sizes[folder]
         if self._building:
             return
         if not self._queue:
@@ -11982,7 +11990,7 @@ class ExFATBuilder(_TK_BASE):
             # output drive space?
             try:
                 free = shutil.disk_usage(item.output_dir).free
-                needed = self._get_folder_size(item.game_folder) * 1.05
+                needed = _size_of(item.game_folder) * 1.05
                 if needed > 0 and free < needed:
                     issues.append(label + ': output drive low on space '
                         '(need %.1f GB, have %.1f GB)' % (needed/1024**3, free/1024**3))
@@ -12002,7 +12010,7 @@ class ExFATBuilder(_TK_BASE):
 
         # ── Estimated total time ──
         total_gb = sum(
-            self._get_folder_size(self._queue[i].game_folder) / 1024**3
+            _size_of(self._queue[i].game_folder) / 1024**3
             for i in waiting)
         # Rough estimate: ~300 MB/s copy speed average on most systems
         est_secs = int((total_gb * 1024) / 300) if total_gb > 0 else 0
