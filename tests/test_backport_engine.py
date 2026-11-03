@@ -102,5 +102,174 @@ class ExtractBackport(unittest.TestCase):
         __import__('shutil').rmtree(tmp2, True)
 
 
+ELF = b'\x7fELF' + b'\0' * 2000
+
+
+class _Inline:
+    """threading.Thread stand-in that runs the target at start()."""
+    def __init__(self, target=None, daemon=None, **_kw):
+        self._t = target
+
+    def start(self):
+        self._t()
+
+
+def _bare_app(mod, temp_dir):
+    app = mod.ExFATBuilder.__new__(mod.ExFATBuilder)
+    app._settings = {'temp_dir': temp_dir}
+    app.after = lambda _ms, fn=None, *a: fn(*a) if fn else None
+    app._log = lambda *_a, **_k: None
+    app.logged = []
+    app._abp_log_line = lambda text, tag='ok': app.logged.append((tag, text))
+    app._bpr_log_entry = lambda *a: None
+    app._sfo_zip_prefix = lambda folder, fallback='': 'PPSA01234 Game'
+    app._apply_name_case = lambda name: name
+    app.done = []
+    app._abp_done = app.done.append
+
+    class _Var:
+        def set(self, *_a):
+            pass
+    app._abp_status_var = _Var()
+    return app
+
+
+class BackportRunSafety(unittest.TestCase):
+    """The Auto Backport / Backport All plumbing around the engine: what
+    is refused before anything changes, and what happens to the originals
+    when a ZIP cannot be written."""
+
+    def setUp(self):
+        import shutil
+        from unittest import mock
+        self.mod = load_app()
+        self.d = tempfile.mkdtemp(prefix='bp_run_')
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.game = os.path.join(self.d, 'PPSA01234-app')
+        self.out = os.path.join(self.d, 'zips')
+        self.tmp = os.path.join(self.d, 'temp')
+        for p in (self.game, self.out, self.tmp,
+                  os.path.join(self.game, 'sce_module')):
+            os.makedirs(p, exist_ok=True)
+        self._w('eboot.bin', ELF + b'orig')
+        self._w('sce_module/libc.prx', ELF + b'libc')
+        self.app = _bare_app(self.mod, self.tmp)
+        p = mock.patch.object(self.mod.ExFATBuilder, '_read_sdk_from_folder',
+                              staticmethod(lambda _f: 7))
+        p.start()
+        self.addCleanup(p.stop)
+        p2 = mock.patch.object(self.mod, 'get_game_info',
+                               lambda _f: ('Game', 'PPSA01234', '01.000'))
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def _w(self, rel, data, base=None):
+        p = os.path.join(base or self.game, *rel.split('/'))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'wb') as f:
+            f.write(data)
+        return p
+
+    def _pre(self, sdk=4, fakelib=None, dest=None, pat=None):
+        return self.app._abp_all_preflight(self.game, sdk, fakelib,
+                                           dest or self.out, pat)
+
+    def _temp_run(self):
+        """A finished pipeline run: originals + patched copies in temp."""
+        bk = tempfile.mkdtemp(prefix='exfat_builder_abp_', dir=self.tmp)
+        o, p = os.path.join(bk, 'originals'), os.path.join(bk, 'patched')
+        self._w('eboot.bin', ELF + b'orig', base=o)
+        self._w('fakelib/libSceAgc.sprx', b'other tool', base=o)
+        self._w('eboot.bin', ELF + b'patched', base=p)
+        return bk, o, p
+
+    def test_preflight_ok_and_refusals(self):
+        self.assertIsNone(self._pre())
+        self.assertIn('higher than the game', self._pre(sdk=8))
+        self.assertIn('no originals ZIP folder', self.app._abp_all_preflight(
+            self.game, 4, None, '', None))
+        inside = os.path.join(self.game, 'backups')
+        os.makedirs(inside)
+        self.assertIn('inside the game folder', self._pre(dest=inside))
+        self.assertIn('inside the game folder', self._pre(pat=inside))
+
+    def test_preflight_fakelib(self):
+        fl = os.path.join(self.d, 'fl')
+        self._w('libSceAgc.sprx', ELF, base=fl)
+        self.assertIsNone(self._pre(fakelib=fl))
+        self._w('fakelib/libSceAgc.sprx', ELF, base=self.game)
+        self.assertIn('already backported', self._pre(fakelib=fl))
+        self.assertIn('inside the game', self._pre(
+            fakelib=os.path.join(self.game, 'fakelib')))
+
+    def test_second_run_refused_after_manifest(self):
+        bk, o, p = self._temp_run()
+        orig_zip, pat_zip, err = self.app._abp_all_save_zips(
+            self.game, o, p, 'PPSA01234 Game', 4, self.out, self.out)
+        self.assertIsNone(err)
+        import zipfile
+        with zipfile.ZipFile(orig_zip) as zf:
+            # Another tool's fakelib file is part of the originals now.
+            self.assertEqual(sorted(zf.namelist()),
+                             ['eboot.bin', 'fakelib/libSceAgc.sprx'])
+        self.assertTrue(os.path.basename(pat_zip).startswith('FW 4xx '))
+        self.assertIsNone(self._pre())              # still the originals
+        self._w('eboot.bin', ELF + b'patched')      # now what we produced
+        self.assertIn('already backported', self._pre())
+        self._w('eboot.bin', ELF + b'something else')
+        self.assertIn('differ from the recorded originals', self._pre())
+
+    def test_earlier_originals_zip_never_overwritten(self):
+        first = os.path.join(self.out, 'PPSA01234 Game original files.zip')
+        with open(first, 'wb') as f:
+            f.write(b'the real originals')
+        _bk, o, p = self._temp_run()
+        orig_zip, _pz, err = self.app._abp_all_save_zips(
+            self.game, o, p, 'PPSA01234 Game', 4, self.out, None)
+        self.assertIsNone(err)
+        self.assertTrue(orig_zip.endswith('original files (2).zip'))
+        with open(first, 'rb') as f:
+            self.assertEqual(f.read(), b'the real originals')
+
+    def _zip_backups(self, dests, failed=0):
+        from unittest import mock
+        bk, o, p = self._temp_run()
+        with mock.patch.object(self.mod.threading, 'Thread', _Inline):
+            self.app._abp_zip_backups(o, p, 'PPSA01234-app', 4, self.game,
+                                      dests=dests, failed=failed)
+        return bk
+
+    def test_zip_backups_success_removes_temp(self):
+        bk = self._zip_backups((self.out, self.out))
+        self.assertEqual(self.app.done, [True])
+        self.assertFalse(os.path.exists(bk))
+        names = sorted(os.listdir(self.out))
+        self.assertIn('PPSA01234 Game original files.zip', names)
+        self.assertIn('FW 4xx PPSA01234 Game backport files.zip', names)
+
+    def test_zip_failure_is_reported_and_keeps_originals(self):
+        gone = os.path.join(self.d, 'removed-after-check')
+        bk = self._zip_backups((gone, None))
+        self.assertEqual(self.app.done, [False])
+        self.assertTrue(os.path.isfile(os.path.join(bk, 'originals', 'eboot.bin')))
+        self.assertTrue(any(bk in t for _tag, t in self.app.logged))
+
+    def test_pipeline_failures_are_not_success(self):
+        self._zip_backups((self.out, None), failed=2)
+        self.assertEqual(self.app.done, [False])
+
+    def test_restore_refuses_zip_slip(self):
+        import zipfile
+        zp = os.path.join(self.out, 'evil.zip')
+        with zipfile.ZipFile(zp, 'w') as zf:
+            zf.writestr('eboot.bin', b'orig')
+            zf.writestr('../../outside.txt', b'x')
+        ok, n, err = self.app._abp_restore_one_zip(self.game, zp)
+        self.assertFalse(ok)
+        self.assertEqual(n, 1)
+        self.assertIn('outside the game folder', err)
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'outside.txt')))
+
+
 if __name__ == '__main__':
     unittest.main()

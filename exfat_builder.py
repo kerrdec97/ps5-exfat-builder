@@ -14931,20 +14931,9 @@ class ExFATBuilder(_TK_BASE):
                 % (zip_path, game)):
             return
 
-        import zipfile as _zf, shutil as _sh
-        restored = 0
-        errors   = []
+        from core import backport_safety as _bsf
         try:
-            with _zf.ZipFile(zip_path, 'r') as zf:
-                for member in zf.infolist():
-                    dst = os.path.join(game, member.filename.replace('/', os.sep))
-                    try:
-                        os.makedirs(os.path.dirname(dst), exist_ok=True)
-                        with zf.open(member) as src_f, open(dst, 'wb') as dst_f:
-                            _sh.copyfileobj(src_f, dst_f)
-                        restored += 1
-                    except Exception as e:
-                        errors.append(member.filename + ': ' + str(e))
+            restored, errors = _bsf.restore_zip(zip_path, game)
         except Exception as e:
             app_error(self, 'Restore failed', str(e))
             return
@@ -15003,24 +14992,15 @@ class ExFATBuilder(_TK_BASE):
     def _abp_restore_one_zip(self, game_folder, zip_path):
         """Restore a single game from a single originals zip. Returns (ok,
         restored_count, error_str_or_None). Shared by single and multi flows."""
-        import zipfile as _zf, shutil as _sh
-        restored = 0
+        from core import backport_safety as _bsf
         try:
-            with _zf.ZipFile(zip_path, 'r') as zf:
-                for member in zf.infolist():
-                    if member.is_dir():
-                        continue
-                    dst = os.path.join(
-                        game_folder, member.filename.replace('/', os.sep))
-                    try:
-                        os.makedirs(os.path.dirname(dst), exist_ok=True)
-                        with zf.open(member) as src_f, open(dst, 'wb') as dst_f:
-                            _sh.copyfileobj(src_f, dst_f)
-                        restored += 1
-                    except Exception:
-                        pass
+            restored, errors = _bsf.restore_zip(zip_path, game_folder)
         except Exception as e:
-            return False, restored, str(e)
+            return False, 0, str(e)
+        if errors:
+            # A partial restore leaves a mix of patched and original files.
+            return False, restored, '%d file(s) not restored: %s' % (
+                len(errors), '; '.join(errors[:3]))
         return True, restored, None
 
     def _abp_restore_multi(self):
@@ -16895,6 +16875,50 @@ class ExFATBuilder(_TK_BASE):
                 'folder. Use an unmodified copy of the game, or restore the '
                 'originals ZIP from the earlier run first.')
             return
+        from core import backport_safety as _bsf
+        # 2b. A fakelib set that would not load: libraries in sub-folders,
+        #     placeholders, non-ELF files, or a folder inside the game.
+        if fakelib_src:
+            _fl_problems = _bsf.validate_fakelib_source(
+                fakelib_src, ExFATBuilder._abp_is_executable_file, game=game)
+            if _fl_problems:
+                app_warning(self, 'Fakelib folder not usable',
+                    'Nothing was changed. Problems with\n%s:\n\n%s'
+                    % (fakelib_src, '\n'.join(
+                        '\u2022 ' + p for p in _fl_problems[:8])))
+                return
+        # 2c. Where the ZIPs go: chosen and checked now, before any file is
+        #     changed. Without an originals ZIP the originals would only
+        #     exist in a temp folder.
+        _dests = self._abp_resolve_zip_dests(game)
+        if _dests is None:
+            return
+        # 2d. A folder this app backported before, judged by the file
+        #     hashes recorded in the profile manifest next to the ZIPs.
+        _verdict, _vfiles = self._abp_manifest_verdict(game, _dests[0])
+        if _verdict == 'patched':
+            app_warning(self, 'Already backported',
+                'These files match the backported files recorded after an '
+                'earlier run:\n%s\n\nOriginals cannot be captured from a '
+                'patched folder. Restore the originals ZIP first, or use an '
+                'unmodified copy.' % '\n'.join(_vfiles[:6]))
+            return
+        if _verdict == 'differs' and not app_confirm(self,
+                'Files differ from the recorded originals',
+                'These executables differ from the originals recorded for '
+                'this game:\n%s\n\nThe folder may already be backported (by '
+                'an older version of this app or another tool), or it is a '
+                'different version of the game. If it is patched, the new '
+                '"originals" ZIP would hold patched files.\n\nContinue only '
+                'if this is an unmodified dump.' % '\n'.join(_vfiles[:6])):
+            return
+        # 2e. Paths Windows cannot create in the temp folder.
+        _tp = _bsf.temp_path_problem(
+            self._settings.get('temp_dir') or tempfile.gettempdir(), game,
+            self._abp_scan_executables(game)[0])
+        if _tp:
+            app_warning(self, 'Path too long', _tp)
+            return
         # 3. Room for the originals/patched copies and their ZIPs.
         try:
             _ex_bytes = 0
@@ -16933,8 +16957,10 @@ class ExFATBuilder(_TK_BASE):
                 'Fakelib: %s\n\n'
                 'This will patch all .self / .sprx / .prx / .elf files '
                 'in the game folder.\n'
-                'Originals and backported files will be saved as zip archives.\n\n'
-                'Continue?' % (game, sdk_int, fakelib_src or 'None')):
+                'Originals and backported files will be saved as zip archives.\n'
+                'Originals ZIP folder: %s\nBackported ZIP folder: %s\n\n'
+                'Continue?' % (game, sdk_int, fakelib_src or 'None',
+                               _dests[0], _dests[1] or '(not saved)')):
             return
 
         self._abp_running = True
@@ -17240,9 +17266,9 @@ class ExFATBuilder(_TK_BASE):
                                'Patched copies:   ' + patched_dir, 'info')
 
                     # ── Zip originals and patched ──
-                    self.after(0, self._abp_zip_backups,
-                               originals_dir, patched_dir,
-                               game_base, sdk_int, game)
+                    self.after(0, lambda: self._abp_zip_backups(
+                        originals_dir, patched_dir, game_base, sdk_int, game,
+                        dests=_dests, failed=failed))
                     return
 
                 # Farewell Edition: there is no safe fallback. The old
@@ -17467,9 +17493,188 @@ class ExFATBuilder(_TK_BASE):
             return ppsa
         return fallback_name or 'Unknown Game'
 
-    def _abp_zip_backups(self, originals_dir, patched_dir, game_base, sdk_int, game_folder=None):
-        """Automatically zip originals and patched files with PPSA-prefixed names."""
-        import zipfile as _zf, re as _re
+    def _abp_zip_dest(self, var_name, label, prompt=True):
+        """The folder for one kind of backup ZIP: the form field first (the
+        user may have typed it), then settings, then — if `prompt` — a
+        folder picker. Returns '' when none is chosen. Tk thread only."""
+        tk_var = getattr(self, '_abp_zip_orig_var' if 'orig' in var_name
+                         else '_abp_zip_pat_var', None)
+        dest = ''
+        if tk_var is not None:
+            try:
+                dest = (tk_var.get() or '').strip()
+            except Exception:
+                dest = ''
+        if not dest:
+            dest = self._settings.get(var_name, '').strip()
+        if dest:
+            dest = dest.replace('/', os.sep)
+        if dest and os.path.isdir(dest):
+            if self._settings.get(var_name, '') != dest:
+                self._settings[var_name] = dest
+                try:
+                    save_settings(self._settings)
+                except Exception:
+                    pass
+            return dest
+        if not prompt:
+            return ''
+        dest = filedialog.askdirectory(
+            title='Select folder to save %s zip' % label)
+        if not dest:
+            return ''
+        dest = dest.replace('/', os.sep)
+        if app_confirm(self, 'Save location?',
+                'Save\n"%s"\nas default for %s zips?' % (dest, label)):
+            self._settings[var_name] = dest
+            save_settings(self._settings)
+            if tk_var is not None:
+                tk_var.set(dest)
+        return dest
+
+    def _abp_resolve_zip_dests(self, game):
+        """(originals folder, backported folder or None) for a run on
+        `game`, checked before anything is changed; None to stop. The
+        originals ZIP is required: it is the only lasting copy of the
+        files the backport replaces."""
+        from core import backport_safety as _bsf
+        try:
+            prefix = self._sfo_zip_prefix(
+                game, os.path.basename(game.rstrip('\\/')))
+        except Exception:
+            prefix = os.path.basename(game.rstrip('\\/'))
+        orig = self._abp_zip_dest('abp_zip_orig_dest', 'originals')
+        if not orig:
+            app_warning(self, 'Originals ZIP folder needed',
+                'Choose where the originals ZIP is saved. Without it the '
+                'original files would only exist in a temp folder.\n\n'
+                'Nothing was changed.')
+            return None
+        err = _bsf.validate_zip_destination(
+            orig, game, '%s original files.zip' % prefix)
+        if err:
+            app_warning(self, 'Originals ZIP folder not usable',
+                '%s\n\n%s\n\nNothing was changed.' % (orig, err))
+            return None
+        pat = self._abp_zip_dest('abp_zip_pat_dest', 'backported files')
+        if pat:
+            err = _bsf.validate_zip_destination(
+                pat, game, 'FW 10xx %s backport files.zip' % prefix)
+            if err:
+                app_warning(self, 'Backported ZIP folder not usable',
+                    '%s\n\n%s\n\nNothing was changed.' % (pat, err))
+                return None
+        return orig, (pat or None)
+
+    def _abp_manifest_verdict(self, game, orig_dest):
+        """backported_by_manifest() against the profile manifest that an
+        earlier run wrote next to the originals ZIPs in `orig_dest`."""
+        from core import backport_safety as _bsf
+        try:
+            from ui import backport_profiles as _bpm
+            try:
+                _t, title_id, _v = get_game_info(game)
+            except Exception:
+                title_id = ''
+            mpath = _bpm.manifest_path_for(
+                game, title_id, base_dir=os.path.join(orig_dest, 'BackportBackup'))
+            return _bsf.backported_by_manifest(game, _bpm.read_manifest(mpath))
+        except Exception:
+            return 'unknown', []
+
+    def _abp_all_preflight(self, folder, sdk_int, fakelib_src, orig_dest,
+                           pat_dest, prefix=None):
+        """Why Backport All must skip `folder` (nothing changed yet), or
+        None. The same checks as the single-game run, without dialogs, so
+        it is safe on the worker thread. Doubtful cases are skipped: there
+        is nobody to ask."""
+        from core import backport_safety as _bsf
+        if not os.path.isfile(os.path.join(folder, 'eboot.bin')):
+            return 'eboot.bin not found in the folder'
+        try:
+            game_sdk = ExFATBuilder._read_sdk_from_folder(folder)
+        except Exception:
+            game_sdk = None
+        if game_sdk and sdk_int > int(game_sdk):
+            return ('target SDK %d is higher than the game\'s own SDK %d'
+                    % (sdk_int, game_sdk))
+        if fakelib_src:
+            if _bsf.is_within(fakelib_src, folder) or \
+                    _bsf.is_within(folder, fakelib_src):
+                return 'the fakelib folder is inside the game folder'
+            if backport_fakelib_state(folder, fakelib_src) == 'same':
+                return ('already backported (fakelib already present); '
+                        'restore the originals first')
+        if not orig_dest:
+            return 'no originals ZIP folder'
+        prefix = prefix or os.path.basename(folder.rstrip('\\/'))
+        for dest, name in ((orig_dest, '%s original files.zip' % prefix),
+                           (pat_dest, 'FW 10xx %s backport files.zip' % prefix)):
+            if dest:
+                err = _bsf.validate_zip_destination(dest, folder, name)
+                if err:
+                    return '%s: %s' % (dest, err)
+        verdict, files = self._abp_manifest_verdict(folder, orig_dest)
+        if verdict == 'patched':
+            return ('already backported: %s match the recorded backported '
+                    'files' % ', '.join(files[:3]))
+        if verdict == 'differs':
+            return ('%s differ from the recorded originals (already patched, '
+                    'or another version); use Auto Backport for this game to '
+                    'confirm' % ', '.join(files[:3]))
+        try:
+            rels = self._abp_scan_executables(folder)[0]
+        except Exception:
+            rels = []
+        return _bsf.temp_path_problem(
+            self._settings.get('temp_dir') or tempfile.gettempdir(),
+            folder, rels)
+
+    def _abp_all_save_zips(self, folder, originals_dir, patched_dir, prefix,
+                           sdk_int, orig_dest, pat_dest, orig_extras=()):
+        """Backport All: write the originals ZIP (required) and the
+        backported ZIP (when a folder is set) without overwriting earlier
+        ones. Returns (originals_zip, backported_zip, error); a path is ''
+        when that ZIP was not written."""
+        from core import backport_safety as _bsf
+        saved_orig = saved_pat = ''
+        try:
+            saved_orig = _bsf.unique_path(os.path.join(
+                orig_dest, prefix + ' original files.zip'))
+            _bsf.write_zip_atomic(
+                saved_orig,
+                _bsf.dir_members(originals_dir, ['decrypted']) +
+                list(orig_extras))
+        except Exception as e:
+            return '', '', 'originals ZIP not saved: %s' % e
+        if pat_dest:
+            try:
+                tag = ('FW %dxx ' % int(sdk_int)) if sdk_int else ''
+                saved_pat = _bsf.unique_path(os.path.join(
+                    pat_dest, tag + prefix + ' backport files.zip'))
+                _bsf.write_zip_atomic(
+                    saved_pat, _bsf.dir_members(patched_dir, ['decrypted']))
+            except Exception as e:
+                return saved_orig, '', 'backported ZIP not saved: %s' % e
+        try:
+            post = _bsf.tree_hashes(
+                patched_dir, strip_first=os.path.basename(folder.rstrip('\\/')))
+            self._abp_write_managed_manifest(folder, sdk_int, saved_orig,
+                                             post_hashes=post)
+        except Exception:
+            pass
+        return saved_orig, saved_pat, None
+
+    def _abp_zip_backups(self, originals_dir, patched_dir, game_base, sdk_int,
+                         game_folder=None, dests=None, failed=0):
+        """Zip originals and patched files with PPSA-prefixed names.
+
+        `dests` is (originals folder, backported folder or None), chosen
+        and checked before the game was changed (_abp_resolve_zip_dests).
+        ZIPs are written through a '.part' file and never overwrite an
+        earlier one. The temp copy of the originals is removed only after
+        the originals ZIP was written and read back."""
+        from core import backport_safety as _bsf
 
         # Build zip filename prefix — extract PPSA/CUSA, title, version
         # Handle formats like:
@@ -17486,70 +17691,6 @@ class ExFATBuilder(_TK_BASE):
             _fw_tag = ('FW %dxx ' % int(sdk_int)) if sdk_int else ''
         except (TypeError, ValueError):
             _fw_tag = ''
-
-        def _get_dest(var_name, label):
-            # Step 47 (v2.6.1): consult the live Tk StringVar FIRST.
-            # The form lets users browse OR type a path into the entry,
-            # but only the Browse button writes through to self._settings.
-            # Reading just self._settings here was popping a "where to
-            # save?" prompt whenever the user typed/pasted a path or the
-            # settings value had been cleared between runs, even though
-            # the form clearly showed a chosen folder. Source of truth
-            # is now the Tk var — settings is a fallback for first run.
-            tk_var = getattr(self,
-                '_abp_zip_orig_var' if 'orig' in var_name
-                else '_abp_zip_pat_var', None)
-            dest = ''
-            if tk_var is not None:
-                try:
-                    dest = (tk_var.get() or '').strip()
-                except Exception:
-                    dest = ''
-            if not dest:
-                dest = self._settings.get(var_name, '').strip()
-            # Normalize separators before the isdir() check — users on
-            # Windows paste paths with forward slashes from logs/URLs and
-            # os.path.isdir handles those, but the saved settings form
-            # is backslash-normalized so we match it.
-            if dest:
-                dest = dest.replace('/', '\\')
-            if not dest or not os.path.isdir(dest):
-                dest = filedialog.askdirectory(
-                    title='Select folder to save %s zip' % label)
-                if not dest:
-                    return None
-                dest = dest.replace('/', '\\')
-                if app_confirm(self, 'Save location?',
-                        'Save\n"%s"\nas default for %s zips?' % (dest, label)):
-                    self._settings[var_name] = dest
-                    save_settings(self._settings)
-                    if tk_var is not None:
-                        self.after(0, tk_var.set, dest)
-            else:
-                # Keep settings in sync with the form so the next run
-                # finds the value pre-populated even if the user typed
-                # the path in by hand this time.
-                if self._settings.get(var_name, '') != dest:
-                    self._settings[var_name] = dest
-                    try:
-                        save_settings(self._settings)
-                    except Exception:
-                        pass
-            return dest
-
-        def _zip_folder(src_dir, zip_path, extra_files=None, exclude_dirs=None):
-            """Zip src_dir contents. extra_files = list of (abs_path, arcname) to add."""
-            _excl = {d.lower() for d in (exclude_dirs or [])} | {'decrypted'}
-            with _zf.ZipFile(zip_path, 'w', _zf.ZIP_DEFLATED) as zf:
-                for root, dirs, files in os.walk(src_dir):
-                    dirs[:] = [d for d in dirs if d.lower() not in _excl]
-                    for fn in files:
-                        fpath = os.path.join(root, fn)
-                        zf.write(fpath, os.path.relpath(fpath, src_dir))
-                if extra_files:
-                    for abs_path, arcname in extra_files:
-                        if os.path.isfile(abs_path):
-                            zf.write(abs_path, arcname)
 
         def _find_param_json(gf):
             """Find param.json — walks up to 3 levels deep for nested dumps."""
@@ -17630,105 +17771,129 @@ class ExFATBuilder(_TK_BASE):
                 pass
             return collected
 
+        orig_dest, pat_dest = dests if dests else (None, None)
+
         def worker():
+            saved = []
+            orig_zip = pat_zip = ''
+            orig_ok = False
             try:
-                saved = []
-
                 # ── Originals zip ──
-                orig_dest = _get_dest('abp_zip_orig_dest', 'originals')
-                if orig_dest:
-                    orig_name = '%s original files.zip' % zip_prefix
-                    orig_zip  = os.path.join(orig_dest, orig_name)
-                    self.after(0, self._abp_status_var.set,
-                               'Saving originals zip...')
+                if not orig_dest:
+                    raise OSError('no originals ZIP folder was chosen')
+                orig_zip = _bsf.unique_path(os.path.join(
+                    orig_dest, '%s original files.zip' % zip_prefix))
+                orig_name = os.path.basename(orig_zip)
+                self.after(0, self._abp_status_var.set,
+                           'Saving originals zip...')
+                self.after(0, self._abp_log_line,
+                           'Zipping originals → ' + orig_name, 'info')
+                # Include param.json from game folder alongside originals
+                extra = []
+                pj = _find_param_json(game_folder)
+                if pj:
+                    extra.append((pj, 'sce_sys/param.json'))
                     self.after(0, self._abp_log_line,
-                               'Zipping originals → ' + orig_name, 'info')
-                    # Include param.json from game folder alongside originals
-                    extra = []
-                    pj = _find_param_json(game_folder)
-                    if pj:
-                        # Use the real relative path inside the zip
-                        extra.append((pj, 'sce_sys/param.json'))
-                        self.after(0, self._abp_log_line,
-                                   '📄 Adding param.json to originals zip', 'info')
-                    else:
-                        self.after(0, self._abp_log_line,
-                                   '⚠ param.json not found in: ' + str(game_folder), 'warn')
-
-                    # Step 51 (v2.6.1): include the dump's `decrypted`
-                    # folder if it exists. This preserves the cleartext
-                    # binaries with the originals so a future re-patch
-                    # has everything it needs. The folder is normally
-                    # excluded from walks (it's pipeline output), but
-                    # for the originals backup it's exactly what we
-                    # want — bundle it explicitly via extra_files,
-                    # since _zip_folder skips `decrypted` in its walk.
-                    dec_files = _collect_decrypted_files(game_folder)
-                    if dec_files:
-                        try:
-                            total_mb = sum(
-                                os.path.getsize(p) for p, _ in dec_files
-                            ) / (1024.0 * 1024.0)
-                        except Exception:
-                            total_mb = 0.0
-                        extra.extend(dec_files)
-                        self.after(0, self._abp_log_line,
-                                   '🔓 Adding decrypted folder: %d file(s), '
-                                   '%.1f MB' % (len(dec_files), total_mb),
-                                   'info')
-                    else:
-                        self.after(0, self._abp_log_line,
-                                   'ℹ No decrypted folder in dump — '
-                                   'skipping (not all dumps have one)',
-                                   'info')
-
-                    _zip_folder(originals_dir, orig_zip, extra_files=extra,
-                                   exclude_dirs=['fakelib'])
+                               '📄 Adding param.json to originals zip', 'info')
+                else:
                     self.after(0, self._abp_log_line,
-                               '📦 Saved: ' + orig_zip, 'ok')
-                    saved.append(orig_name)
+                               '⚠ param.json not found in: ' + str(game_folder), 'warn')
+
+                # Step 51 (v2.6.1): include the dump's `decrypted`
+                # folder if it exists, so a future re-patch has the
+                # cleartext binaries next to the originals.
+                dec_files = _collect_decrypted_files(game_folder)
+                if dec_files:
+                    try:
+                        total_mb = sum(
+                            os.path.getsize(p) for p, _ in dec_files
+                        ) / (1024.0 * 1024.0)
+                    except Exception:
+                        total_mb = 0.0
+                    extra.extend(dec_files)
+                    self.after(0, self._abp_log_line,
+                               '🔓 Adding decrypted folder: %d file(s), '
+                               '%.1f MB' % (len(dec_files), total_mb),
+                               'info')
+                else:
+                    self.after(0, self._abp_log_line,
+                               'ℹ No decrypted folder in dump — '
+                               'skipping (not all dumps have one)',
+                               'info')
+
+                # originals_dir/fakelib holds only files another tool had
+                # put there before (ours are never backed up), so it is
+                # part of the originals.
+                _bsf.write_zip_atomic(
+                    orig_zip,
+                    _bsf.dir_members(originals_dir, ['decrypted']) + extra)
+                orig_ok = True
+                self.after(0, self._abp_log_line,
+                           '📦 Saved: ' + orig_zip, 'ok')
+                saved.append(orig_name)
 
                 # ── Backported zip ──
-                pat_dest = _get_dest('abp_zip_pat_dest', 'backported files')
                 if pat_dest:
-                    pat_name = f'{_fw_tag!s}{zip_prefix!s} backport files.zip'
-                    pat_zip  = os.path.join(pat_dest, pat_name)
+                    pat_zip = _bsf.unique_path(os.path.join(
+                        pat_dest,
+                        f'{_fw_tag!s}{zip_prefix!s} backport files.zip'))
+                    pat_name = os.path.basename(pat_zip)
                     self.after(0, self._abp_status_var.set,
                                'Saving backport zip...')
                     self.after(0, self._abp_log_line,
                                'Zipping backported files → ' + pat_name, 'info')
-                    _zip_folder(patched_dir, pat_zip)
+                    try:
+                        _bsf.write_zip_atomic(
+                            pat_zip, _bsf.dir_members(patched_dir, ['decrypted']))
+                        self.after(0, self._abp_log_line,
+                                   '📦 Saved: ' + pat_zip, 'ok')
+                        saved.append(pat_name)
+                    except Exception as e:
+                        pat_zip = ''
+                        self.after(0, self._abp_log_line,
+                                   '✗ Backported ZIP not saved: %s' % e, 'err')
+            except Exception as e:
+                self.after(0, self._abp_log_line,
+                           '✗ Zip error: ' + str(e), 'err')
+                if not orig_ok:
                     self.after(0, self._abp_log_line,
-                               '📦 Saved: ' + pat_zip, 'ok')
-                    saved.append(pat_name)
-
-                if saved:
-                    self.after(0, self._abp_status_var.set,
-                               '✓ Zips saved (%d)' % len(saved))
-                    # Log to BP Results tab
-                    self.after(0, self._bpr_log_entry,
-                               zip_prefix,
-                               orig_zip if orig_dest else '',
-                               pat_zip if pat_dest else '')
+                               'The game folder is already patched. Its '
+                               'originals are only in ' + originals_dir +
+                               ' — copy that folder somewhere safe before '
+                               'closing the app or clearing temp files.', 'err')
+            if saved:
+                self.after(0, self._abp_status_var.set,
+                           '✓ Zips saved (%d)' % len(saved))
+                self.after(0, self._bpr_log_entry,
+                           zip_prefix, orig_zip if orig_ok else '', pat_zip)
+            if orig_ok:
                 try:
-                    if game_folder and orig_dest and orig_zip and \
-                            os.path.isfile(orig_zip):
-                        self._abp_write_managed_manifest(
-                            game_folder, sdk_int, orig_zip)
+                    post = _bsf.tree_hashes(
+                        patched_dir,
+                        strip_first=os.path.basename(
+                            (game_folder or '').rstrip('\\/')))
+                    self._abp_write_managed_manifest(
+                        game_folder, sdk_int, orig_zip, post_hashes=post)
                 except Exception as _mm_err:
                     self.after(0, self._abp_log_line,
                                'ℹ Profile manifest not written: %s'
                                % _mm_err, 'warn')
-                self.after(0, self._abp_done, True)
-
-            except Exception as e:
+                # The originals are safe in a verified ZIP now.
+                _bk = os.path.dirname(originals_dir)
+                if os.path.basename(_bk).startswith('exfat_builder_abp_'):
+                    shutil.rmtree(_bk, ignore_errors=True)
+            ok = orig_ok and (not pat_dest or bool(pat_zip)) and not failed
+            if failed:
                 self.after(0, self._abp_log_line,
-                           '✗ Zip error: ' + str(e), 'err')
-                self.after(0, self._abp_done, True)
+                           '✗ %d file(s) failed to decrypt or sign — the '
+                           'game may not start. See the log above.' % failed,
+                           'err')
+            self.after(0, self._abp_done, ok)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _abp_write_managed_manifest(self, game_folder, sdk_int, orig_zip):
+    def _abp_write_managed_manifest(self, game_folder, sdk_int, orig_zip,
+                                    post_hashes=None):
         """Write/update a Backport Profile Manager manifest for a completed
         backport (v3.6.8, additive). Reuses the originals zip that _abp_zip_
         backups just produced as the managed backup source. The manifest lets
@@ -17781,7 +17946,8 @@ class ExFATBuilder(_TK_BASE):
                 'files': file_hashes,
                 'snapshot_at': _bpm._now(),
             }
-            _bpm.record_target_built(manifest, sdk_int, APP_VERSION)
+            _bpm.record_target_built(manifest, sdk_int, APP_VERSION,
+                                     post_hashes=post_hashes)
             if _bpm.write_manifest(mpath, manifest):
                 self.after(0, self._abp_log_line, '🗂 Profile manifest written: target '
                            f'{_bpm.normalize_fw(sdk_int)!s} · {mpath!s}',
@@ -22260,9 +22426,18 @@ class ExFATBuilder(_TK_BASE):
                                'configured — those zips will be skipped)'
                                % orig_zip_dest)
             else:
-                out_display = ('Backport zips: %s\n(originals zip dest not '
-                               'configured — those zips will be skipped)'
-                               % pat_zip_dest)
+                # Farewell Edition: the originals ZIP is required. Without
+                # it the originals only existed in a temp folder that was
+                # deleted after each game.
+                orig_zip_dest = self._abp_zip_dest('abp_zip_orig_dest',
+                                                   'originals')
+                if not orig_zip_dest:
+                    app_warning(self, 'Originals ZIP folder needed',
+                        'Choose where the originals ZIPs are saved. Nothing '
+                        'was changed.')
+                    return
+                out_display = ('Originals zips: %s\nBackport zips:  %s'
+                               % (orig_zip_dest, pat_zip_dest))
         else:
             # Nothing configured — fall back to the original picker so
             # the user has at least one destination on file.
@@ -22336,6 +22511,16 @@ class ExFATBuilder(_TK_BASE):
         save_settings(self._settings)
 
         fakelib_src = self._settings.get('abp_fakelib', '').strip() or None
+        if fakelib_src:
+            from core import backport_safety as _bsf
+            _fl_problems = _bsf.validate_fakelib_source(
+                fakelib_src, ExFATBuilder._abp_is_executable_file)
+            if _fl_problems:
+                app_warning(self, 'Fakelib folder not usable',
+                    'Nothing was changed. Problems with\n%s:\n\n%s'
+                    % (fakelib_src, '\n'.join(
+                        '\u2022 ' + p for p in _fl_problems[:8])))
+                return
 
         if not app_confirm(self, 'Backport All',
                 'Backport %d game(s) with SDK %d?\n\n%s\n\n'
@@ -22370,6 +22555,21 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._abp_game_var.set, folder)
                 self.after(0, self._abp_sdk_var.set, str(sdk_int))
                 _glog('\n── %d/%d: %s ──' % (i+1, total, title))
+                try:
+                    _pfx = self._apply_name_case(self._sfo_zip_prefix(
+                        folder, os.path.basename(folder.rstrip('\\/'))))
+                except Exception:
+                    _pfx = None
+                try:
+                    _why = self._abp_all_preflight(
+                        folder, sdk_int, fakelib_src, orig_zip_dest,
+                        pat_zip_dest, prefix=_pfx)
+                except Exception as _pe:
+                    _why = 'pre-check failed: %s' % _pe
+                if _why:
+                    fail_count += 1
+                    _glog('✗ Skipped, nothing changed: ' + _why)
+                    continue
 
                 game_base = os.path.basename(folder.rstrip('\\/'))
                 if ' - Auto Backport Backup' in game_base:
@@ -22405,10 +22605,20 @@ class ExFATBuilder(_TK_BASE):
                                 fl_rel = os.path.relpath(fl_src, fakelib_src)
                                 fl_dst = os.path.join(fakelib_dest, fl_rel)
                                 os.makedirs(os.path.dirname(fl_dst), exist_ok=True)
+                                # Another tool's file: keep it with the
+                                # originals before replacing it.
+                                if os.path.isfile(fl_dst):
+                                    _fbk = os.path.join(originals_dir,
+                                                        'fakelib', fl_rel)
+                                    if not os.path.exists(_fbk):
+                                        os.makedirs(os.path.dirname(_fbk),
+                                                    exist_ok=True)
+                                        _sh.copy2(fl_dst, _fbk)
                                 _sh.copy2(fl_src, fl_dst)
 
-                    # Run pipeline or fallback
+                    # Run the pipeline (there is no fallback)
                     bp_ok = False
+                    _pipe_failed = 0
                     try:
                         bp_path, bp_tmp = extract_backport(
                             self._settings.get('temp_dir') or None)
@@ -22456,31 +22666,23 @@ class ExFATBuilder(_TK_BASE):
                                                     exist_ok=True)
                                         _sh.copy2(p_dest, orig_p)
                                 _sh.copy2(p_src, p_dest)
+                        _pipe_failed = (
+                            results.get('decrypt', {}).get('failed', 0) +
+                            results.get('signing', {}).get('failed', 0))
                         bp_ok = True
                     except Exception as bp_e:
-                        _glog('⚠ Pipeline failed, using basic patch: ' + str(bp_e))
+                        _glog('✗ Pipeline failed: %s. The originals of any '
+                              'file already changed are in %s'
+                              % (bp_e, originals_dir))
 
                     if bp_ok:
-                        ok_count += 1
-                        _glog('✓ Done: ' + title + ' — zipping...')
+                        _glog('✓ Patched: ' + title + ' — zipping...')
+                        saved_orig = saved_pat = ''
+                        _zerr = None
                         try:
-                            import zipfile as _bpzf
                             prefix = self._sfo_zip_prefix(
                                 folder, os.path.basename(folder.rstrip('\\/')))
                             _glog('📦 Prefix: ' + prefix)
-
-                            def _zf_dir(src_dir, zip_path, extra_files=None, excl=None):
-                                _ed = {d.lower() for d in (excl or [])} | {'decrypted'}
-                                with _bpzf.ZipFile(zip_path, 'w', _bpzf.ZIP_DEFLATED) as zf:
-                                    for zr, zd, zf2 in os.walk(src_dir):
-                                        zd[:] = [d for d in zd if d.lower() not in _ed]
-                                        for fn in zf2:
-                                            fp = os.path.join(zr, fn)
-                                            zf.write(fp, os.path.relpath(fp, src_dir))
-                                    if extra_files:
-                                        for abs_path, arcname in extra_files:
-                                            if os.path.isfile(abs_path):
-                                                zf.write(abs_path, arcname)
 
                             def _find_pj(gf):
                                 if not gf or not os.path.isdir(gf):
@@ -22498,31 +22700,6 @@ class ExFATBuilder(_TK_BASE):
                                     if 'param.json' in files:
                                         return os.path.join(root, 'param.json')
                                 return None
-
-                            # Step 47 (v2.6.1): consult live Tk vars
-                            # before settings, same fix as _get_dest in
-                            # the single-game flow. Without this, the
-                            # queue runner silently skipped the zip
-                            # write when the form had a path but the
-                            # settings key was empty/stale.
-                            def _live_dest(setting_key, attr_name):
-                                _v = getattr(self, attr_name, None)
-                                _d = ''
-                                if _v is not None:
-                                    try:
-                                        _d = (_v.get() or '').strip()
-                                    except Exception:
-                                        _d = ''
-                                if not _d:
-                                    _d = self._settings.get(setting_key, '').strip()
-                                if _d:
-                                    _d = _d.replace('/', '\\')
-                                return _d
-
-                            orig_dest   = _live_dest('abp_zip_orig_dest', '_abp_zip_orig_var')
-                            pat_dest    = _live_dest('abp_zip_pat_dest',  '_abp_zip_pat_var')
-                            saved_orig  = ''
-                            saved_pat   = ''
 
                             # Find param.json to include in originals zip
                             _pj = _find_pj(game.get('folder', ''))
@@ -22582,33 +22759,38 @@ class ExFATBuilder(_TK_BASE):
 
                             _orig_extras = _pj_extra + _dec_extra
 
-                            if orig_dest and os.path.isdir(orig_dest):
-                                saved_orig = os.path.join(
-                                    orig_dest, self._apply_name_case(prefix) + ' original files.zip')
-                                _zf_dir(originals_dir, saved_orig,
-                                        extra_files=_orig_extras, excl=['fakelib'])
-                                _glog('📦 Originals zip saved')
-                            if pat_dest and os.path.isdir(pat_dest):
-                                try:
-                                    _fw_tag = ('FW %dxx ' % int(sdk_int)) if sdk_int else ''
-                                except (TypeError, ValueError):
-                                    _fw_tag = ''
-                                saved_pat = os.path.join(
-                                    pat_dest, _fw_tag + self._apply_name_case(prefix) + ' backport files.zip')
-                                _zf_dir(patched_dir, saved_pat)
-                                _glog('📦 Backport zip saved')
-
-                            # Log to BP Results tab
+                            saved_orig, saved_pat, _zerr = \
+                                self._abp_all_save_zips(
+                                    folder, originals_dir, patched_dir,
+                                    self._apply_name_case(prefix), sdk_int,
+                                    orig_zip_dest, pat_zip_dest,
+                                    orig_extras=_orig_extras)
+                            if saved_orig:
+                                _glog('📦 Originals zip saved: ' + saved_orig)
+                            if saved_pat:
+                                _glog('📦 Backport zip saved: ' + saved_pat)
                             self.after(0, self._bpr_log_entry,
                                        prefix, saved_orig, saved_pat)
                         except Exception as ze:
-                            _glog('⚠ Zip error: ' + str(ze))
-                        # Clean up temp dir
-                        try:
-                            import shutil as _sh2
-                            _sh2.rmtree(backup_dir, ignore_errors=True)
-                        except Exception:
-                            pass
+                            _zerr = str(ze)
+                        if _zerr:
+                            _glog('✗ ' + _zerr)
+                        if saved_orig:
+                            # Originals are in a verified ZIP; the temp
+                            # copies can go.
+                            shutil.rmtree(backup_dir, ignore_errors=True)
+                        else:
+                            _glog('✗ The game is patched but its originals '
+                                  'are only in %s — copy that folder '
+                                  'somewhere safe.' % originals_dir)
+                        if _pipe_failed:
+                            _glog('✗ %d file(s) failed to decrypt or sign.'
+                                  % _pipe_failed)
+                        if saved_orig and not _zerr and not _pipe_failed:
+                            ok_count += 1
+                            _glog('✓ Done: ' + title)
+                        else:
+                            fail_count += 1
                     else:
                         fail_count += 1
                         _glog('✗ Failed: ' + title)
