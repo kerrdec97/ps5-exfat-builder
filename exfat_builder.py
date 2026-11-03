@@ -3752,6 +3752,11 @@ class ExFATBuilder(_TK_BASE):
         # Existing tk.* widgets with explicit bg/fg kwargs continue to work;
         # they'll be migrated to ttk styles tab-by-tab in Step 3+.
         apply_theme(self)
+        try:
+            from ui.shared.modernize import install as _xb_modern_install
+            _xb_modern_install()
+        except Exception:
+            pass
         self.title('exFAT Image Builder %s \u2014 %s  [Administrator]'
                    % (APP_VERSION, APP_EDITION))
 

@@ -145,3 +145,33 @@ def modernize(root):
         except Exception:
             pass
     return n
+
+
+_INSTALLED = [False]
+
+
+def install():
+    """Class-level safety net: any tk.Label later configured with
+    emoji-led text (e.g. a cover placeholder reset to '🎮') is converted
+    to its icon too, not only labels seen by modernize() at tab switch."""
+    if _INSTALLED[0]:
+        return
+    _INSTALLED[0] = True
+    orig = tk.Label.configure
+
+    def configure(self, cnf=None, **kw):
+        if cnf:
+            kw = dict(cnf, **kw)
+        txt = kw.get('text')
+        if (txt is not None and not getattr(self, '_xb_modern', False)
+                and not kw.get('image') and _picto(txt)):
+            try:
+                if not orig(self, 'textvariable')[-1]:
+                    _patch(self)
+                    return self.configure(**kw)
+            except Exception:
+                pass
+        return orig(self, **kw) if kw else orig(self)
+
+    tk.Label.configure = configure
+    tk.Label.config = configure

@@ -282,8 +282,9 @@ def build_unibuild_tab(parent, app):
         autowrap, TextField)
     from ui.icons import icon_image
     BG1, BG2, BG3 = COLORS['bg_1'], COLORS['bg_2'], COLORS['bg_3']
+    from ui.shared.page_head import _tr
     page_hdr = PageHeader(
-        inner, 'Build',
+        inner, _tr('Build'),
         'Pack a game dump into an exFAT, ffpkg or compressed PFS image. '
         'Jobs of different formats can share one queue.')
     page_hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))

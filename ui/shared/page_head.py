@@ -75,9 +75,19 @@ def page_head(parent, badge_emoji, title_text, subtitle_text):
     return PageHeader(parent, title_text, subtitle_text)
 
 
+def _tr(text):
+    """Translate through the app's language table when it is loaded."""
+    try:
+        from exfat_builder import _ as tr
+        return tr(text)
+    except Exception:
+        return text
+
+
 def field_block(parent, label_text, var, on_browse=None,
                 browse_text='Browse', hint=None):
     bg = surface_of(parent)
+    browse_text = _tr(browse_text)
     block = tk.Frame(parent, bg=bg)
     block.pack(fill='x', pady=(px(12), 0))
     lbl_row = tk.Frame(block, bg=bg)
