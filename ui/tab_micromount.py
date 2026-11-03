@@ -26,6 +26,7 @@ import socket
 import threading
 import time
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from ui.shared.scroll import wheel_units
 from tkinter import filedialog
 
@@ -390,7 +391,7 @@ def _toolbar_btn(parent, text, cmd, kind='default'):
         bg, fg = _SUCCESS, '#000000'
     elif kind == 'ghost':
         bg, fg = _BG_TOOLBAR, _FG_MUTED
-    return tk.Button(parent, text=text, command=cmd,
+    return XButton(parent, text=text, command=cmd,
                      bg=bg, fg=fg, font=_F_BUTTON,
                      activebackground=_BG_ROW_HOV, activeforeground=fg,
                      bd=0, padx=12, pady=7, cursor='hand2', relief='flat')
@@ -403,7 +404,7 @@ def _build_rail(parent, app):
     search_frame = tk.Frame(parent, bg=_BG_RAIL)
     search_frame.pack(side='top', fill='x', padx=12, pady=(12, 6))
     app._mm_search_var = tk.StringVar(value='')
-    search_entry = tk.Entry(search_frame, textvariable=app._mm_search_var,
+    search_entry = XEntry(search_frame, textvariable=app._mm_search_var,
                             bg=COLORS['bg_0'], fg=_FG,
                             insertbackground=_FG,
                             bd=0, relief='flat',
@@ -778,7 +779,7 @@ def _build_overview_card(parent, app):
 
 def _build_content(parent, app):
     canvas = tk.Canvas(parent, bg=_BG_APP, highlightthickness=0)
-    vsb    = tk.Scrollbar(parent, orient='vertical', command=canvas.yview,
+    vsb    = XScrollbar(parent, orient='vertical', command=canvas.yview,
                           bg=_BG_CARD, troughcolor=_BG_APP)
     canvas.configure(yscrollcommand=vsb.set)
     vsb.pack(side='right', fill='y')
@@ -1119,7 +1120,7 @@ def _build_payload_section(parent, app):
             except Exception:
                 pass
 
-    tk.Button(browse_row, text='\U0001f4c2  Browse\u2026',
+    XButton(browse_row, text='\U0001f4c2  Browse\u2026',
               command=_browse_elf,
               bg=_BG_CARD_HEAD, fg=_FG, font=_F_BUTTON,
               activebackground=_BG_ROW_HOV, activeforeground=_FG,
@@ -1488,7 +1489,7 @@ class SettingRow:
 
     def _build_int(self, cell, value):
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-        entry = tk.Entry(cell, textvariable=self._tk_var,
+        entry = XEntry(cell, textvariable=self._tk_var,
                          bg=COLORS['bg_0'], fg=_FG,
                          insertbackground=_FG,
                          bd=0, relief='flat', font=_F_MONO,
@@ -1505,7 +1506,7 @@ class SettingRow:
 
     def _build_text(self, cell, value):
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-        entry = tk.Entry(cell, textvariable=self._tk_var,
+        entry = XEntry(cell, textvariable=self._tk_var,
                          bg=COLORS['bg_0'], fg=_FG,
                          insertbackground=_FG,
                          bd=0, relief='flat', font=_F_MONO,
@@ -2087,7 +2088,7 @@ def _show_log_window(app, text):
     bar = tk.Frame(win, bg=SURFACE)
     bar.pack(fill='x')
     tk.Label(bar, text=REMOTE_DEBUG_LOG,
-             font=('Consolas', 9), bg=SURFACE, fg=MUTED).pack(
+             font=(FONTS['code'][0], 9), bg=SURFACE, fg=MUTED).pack(
                  side='left', padx=10, pady=8)
 
     def _save_as():
@@ -2102,16 +2103,16 @@ def _show_log_window(app, text):
             except Exception as e:
                 app_error(app, 'Save failed', str(e))
 
-    tk.Button(bar, text='Save as\u2026', command=_save_as,
-              bg=SURFACE2, fg=TEXT, font=('Segoe UI', 9),
+    XButton(bar, text='Save as\u2026', command=_save_as,
+              bg=SURFACE2, fg=TEXT, font=(FONTS['body'][0], 9),
               activebackground=BORDER, activeforeground=TEXT,
               bd=0, padx=10, pady=4, cursor='hand2',
               relief='flat').pack(side='right', padx=10, pady=6)
 
     txt = tk.Text(win, bg=BG, fg=TEXT, insertbackground=TEXT,
-                  font=('Consolas', 9), bd=0, wrap='word')
+                  font=(FONTS['code'][0], 9), bd=0, wrap='word')
     txt.pack(fill='both', expand=True)
-    sb = tk.Scrollbar(txt, command=txt.yview,
+    sb = XScrollbar(txt, command=txt.yview,
                       bg=SURFACE2, troughcolor=BG)
     sb.pack(side='right', fill='y')
     txt.configure(yscrollcommand=sb.set)

@@ -29,6 +29,7 @@ OSFMount cleanup is the app's existing close-time sweep
 import os
 import threading
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog
 
 from ui.shared.app_dialog import app_confirm, app_warning
@@ -75,11 +76,11 @@ def build_edit_tab(parent, app):
     icon_tile.pack(side='left')
     icon_tile.pack_propagate(False)
     tk.Label(icon_tile, text='\u270f', bg=COLORS['accent_15'],
-             fg=COLORS['accent'], font=('Segoe UI', 14)).pack(expand=True)
+             fg=COLORS['accent'], font=(FONTS['body'][0], 14)).pack(expand=True)
 
     title_col = tk.Frame(head, bg=COLORS['bg_1'])
     title_col.pack(side='left', padx=(10, 0))
-    tk.Label(title_col, text=_('Edit'), font=(FONTS['h2'][0], 14, 'bold'),
+    tk.Label(title_col, text=_('Edit'), font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
     tk.Label(title_col,
              text=_('Open a .ffpkg, .exfat, or PFS image \u2014 the editor '
@@ -90,7 +91,7 @@ def build_edit_tab(parent, app):
     # Active-format pill (right side)
     pill_var = tk.StringVar(value=_MODE_PILL['none'][0])
     pill = tk.Label(head, textvariable=pill_var,
-                    font=(FONTS['mono_sm'][0], 9, 'bold'),
+                    font=(FONTS['body_strong'][0], 9),
                     bg=COLORS['bg_3'], fg=COLORS['fg_4'], padx=10, pady=4,
                     highlightbackground=COLORS['border_3'],
                     highlightthickness=1)
@@ -109,7 +110,7 @@ def build_edit_tab(parent, app):
     seg_btns = {}
 
     def _seg(key, label):
-        b = tk.Label(seg_row, text=label, font=(FONTS['mono_sm'][0], 9, 'bold'),
+        b = tk.Label(seg_row, text=label, font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['bg_3'], fg=COLORS['fg_3'], padx=14, pady=6,
                      cursor='hand2', highlightbackground=COLORS['border_3'],
                      highlightthickness=1)
@@ -238,16 +239,16 @@ def _build_pfs_workspace(pane, app, state):
         top = tk.Frame(sp, bg=COLORS['bg_2'])
         top.pack(fill='x')
         eyebrow = tk.Label(top, text=_('STEP ') + num,
-                           font=(FONTS['mono_sm'][0], 8, 'bold'),
+                           font=(FONTS['body_strong'][0], 9),
                            bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
         eyebrow.pack(side='left')
-        chk = tk.Label(top, text='', font=(FONTS['mono_sm'][0], 10, 'bold'),
+        chk = tk.Label(top, text='', font=(FONTS['body_strong'][0], 10),
                        bg=COLORS['bg_2'], fg=COLORS['success'])
         chk.pack(side='right')
-        gl = tk.Label(sp, text=glyph, font=('Segoe UI', 22),
+        gl = tk.Label(sp, text=glyph, font=(FONTS['body'][0], 22),
                       bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
         gl.pack(anchor='w', pady=(8, 4))
-        tl = tk.Label(sp, text=title, font=(FONTS['h3'][0], 11, 'bold'),
+        tl = tk.Label(sp, text=title, font=(FONTS['body_strong'][0], 11),
                       bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w',
                       justify='left', wraplength=150)
         tl.pack(anchor='w', fill='x')
@@ -296,7 +297,7 @@ def _build_pfs_workspace(pane, app, state):
     pad.pack(fill='x', padx=20, pady=16)
 
     tk.Label(pad, text=_('PFS workspace mode'),
-             font=(FONTS['h3'][0], 12, 'bold'), bg=COLORS['bg_2'],
+             font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'],
              fg=COLORS['accent'], anchor='w').pack(anchor='w')
     tk.Label(pad, text=_('PFS images are not edited in place. Unpack to a '
                          'workspace, edit the contents (or the nested '
@@ -316,7 +317,7 @@ def _build_pfs_workspace(pane, app, state):
                         highlightbackground=COLORS['border_3'],
                         highlightthickness=1)
         line.pack(fill='x')
-        tk.Entry(line, textvariable=var, font=FONTS['mono_sm'],
+        XEntry(line, textvariable=var, font=FONTS['mono_sm'],
                  bg=COLORS['field_bg'], fg=COLORS['field_fg'],
                  insertbackground=COLORS['field_fg'], relief='flat',
                  bd=8).pack(side='left', fill='x', expand=True)

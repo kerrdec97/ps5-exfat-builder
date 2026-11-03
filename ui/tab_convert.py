@@ -38,6 +38,7 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
@@ -71,17 +72,17 @@ def _flow_chips(parent, src_ext, dst_ext):
     wrap = tk.Frame(parent, bg=COLORS['bg_2'])
     wrap.pack(side='right', padx=(8, 0))
     tk.Label(wrap, text=' ' + src_ext + ' ',
-             font=(FONTS['mono_sm'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['accent_08'], fg=COLORS['accent_hi'],
              padx=6, pady=2,
              highlightbackground=COLORS['accent_lo'],
              highlightthickness=1).pack(side='left')
     tk.Label(wrap, text='\u2192',
-             font=(FONTS['body'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_4']
              ).pack(side='left', padx=6)
     tk.Label(wrap, text=' ' + dst_ext + ' ',
-             font=(FONTS['mono_sm'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['teal_bg'], fg=COLORS['teal_hi'],
              padx=6, pady=2,
              highlightbackground=COLORS['border_3'],
@@ -237,7 +238,7 @@ def build_convert_tab(parent, app):
     _dh = tk.Frame(dir_card, bg=COLORS['bg_2'])
     _dh.pack(fill='x', padx=24, pady=(16, 14))
     tk.Label(_dh, text='1.  Conversion direction',
-             font=(FONTS['h3'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         anchor='w', pady=(0, 8))
     _seg = tk.Frame(_dh, bg=COLORS['bg_1'])
@@ -246,7 +247,7 @@ def build_convert_tab(parent, app):
     _conv_seg_btns = {}
 
     def _seg_btn(key, label):
-        b = tk.Label(_seg, text=label, font=(FONTS['body'][0], 10, 'bold'),
+        b = tk.Label(_seg, text=label, font=(FONTS['body_strong'][0], 10),
                      bg=COLORS['bg_1'], fg=COLORS['fg_4'],
                      padx=14, pady=7, cursor='hand2')
         b.pack(side='left', padx=2, pady=2)
@@ -264,7 +265,7 @@ def build_convert_tab(parent, app):
              ).pack(anchor='w')
     _conv_dir_var = tk.StringVar(value='exFAT  \u2192  FFPKG')
     tk.Label(_conv_hdr, textvariable=_conv_dir_var,
-             font=(FONTS['h3'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w'
              ).pack(
         anchor='w')
@@ -310,7 +311,7 @@ def build_convert_tab(parent, app):
 
     # Icon tile
     ico = tk.Label(chead, text='\u2192',
-                   font=(FONTS['h2'][0], 13),
+                   font=(FONTS['body'][0], 11),
                    bg=COLORS['accent_08'], fg=COLORS['accent'],
                    width=2, padx=4, pady=2)
     ico.pack(side='left', padx=(0, 12))
@@ -320,7 +321,7 @@ def build_convert_tab(parent, app):
     title_col = tk.Frame(chead, bg=COLORS['bg_2'])
     title_col.pack(side='left', fill='x', expand=True)
     tk.Label(title_col, text='exFAT \u2192 ffpkg',
-             font=(FONTS['h3'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(title_col,
@@ -351,13 +352,13 @@ def build_convert_tab(parent, app):
         if p:
             e2f_outdir.set(p)
 
-    tk.Label(body, text='2.  Source image', font=(FONTS['h3'][0], 11, 'bold'),
+    tk.Label(body, text='2.  Source image', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         fill='x', pady=(0, 6))
     field_block(body, 'Source .exfat',
                  var=e2f_src, on_browse=_browse_src,
                  hint='the image to convert')
-    tk.Label(body, text='3.  Output', font=(FONTS['h3'][0], 11, 'bold'),
+    tk.Label(body, text='3.  Output', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         fill='x', pady=(12, 6))
     field_block(body, 'Output folder',
@@ -378,7 +379,7 @@ def build_convert_tab(parent, app):
     e2f_src.trace_add('write', _on_e2f_src)
 
     # ── Action row: Convert button + status + progress bar ──
-    tk.Label(body, text='4.  Convert', font=(FONTS['h3'][0], 11, 'bold'),
+    tk.Label(body, text='4.  Convert', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         fill='x', pady=(14, 6))
     action_row = tk.Frame(body, bg=COLORS['bg_2'])
@@ -816,7 +817,7 @@ def build_convert_tab(parent, app):
     f2e_chead = tk.Frame(f2e_card, bg=COLORS['bg_2'])
     f2e_chead.pack(fill='x', padx=24, pady=(18, 14))
     f2e_ico = tk.Label(f2e_chead, text='\u2192',
-                       font=(FONTS['h2'][0], 13),
+                       font=(FONTS['body'][0], 11),
                        bg=COLORS['accent_08'], fg=COLORS['accent'],
                        width=2, padx=4, pady=2)
     f2e_ico.pack(side='left', padx=(0, 12))
@@ -825,7 +826,7 @@ def build_convert_tab(parent, app):
     f2e_title_col = tk.Frame(f2e_chead, bg=COLORS['bg_2'])
     f2e_title_col.pack(side='left', fill='x', expand=True)
     tk.Label(f2e_title_col, text='ffpkg \u2192 exFAT',
-             font=(FONTS['h3'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(f2e_title_col,
@@ -854,13 +855,13 @@ def build_convert_tab(parent, app):
             f2e_outdir.set(p)
 
     tk.Label(f2e_body, text='2.  Source image',
-             font=(FONTS['h3'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         fill='x', pady=(0, 6))
     field_block(f2e_body, 'Source .ffpkg',
                  var=f2e_src, on_browse=_f2e_browse_src,
                  hint='the image to convert')
-    tk.Label(f2e_body, text='3.  Output', font=(FONTS['h3'][0], 11, 'bold'),
+    tk.Label(f2e_body, text='3.  Output', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         fill='x', pady=(12, 6))
     field_block(f2e_body, 'Output folder',
@@ -882,7 +883,7 @@ def build_convert_tab(parent, app):
     # Both cards exist now — show the default direction (exFAT → ffpkg).
     _set_direction('e2f')
 
-    tk.Label(f2e_body, text='4.  Convert', font=(FONTS['h3'][0], 11, 'bold'),
+    tk.Label(f2e_body, text='4.  Convert', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
         fill='x', pady=(14, 6))
     f2e_action_row = tk.Frame(f2e_body, bg=COLORS['bg_2'])

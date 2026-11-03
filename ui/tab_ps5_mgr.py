@@ -31,6 +31,7 @@ match the new table layout.
 import os
 import re
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -65,7 +66,7 @@ def build_ps5_mgr_tab(parent, app):
     # _build_table) so there is exactly ONE scrollbar — no nested-canvas
     # weirdness; the game list simply extends the page.
     page_canvas = tk.Canvas(parent, bg=COLORS['bg_1'], highlightthickness=0)
-    page_sb = tk.Scrollbar(parent, orient='vertical',
+    page_sb = XScrollbar(parent, orient='vertical',
                            command=page_canvas.yview,
                            bg=COLORS['bg_3'], troughcolor=COLORS['bg_1'])
     page_canvas.configure(yscrollcommand=page_sb.set)
@@ -144,7 +145,7 @@ def _build_hero(body, app):
     app._ps5mgr_conn_dot.pack(side='left', padx=(0, 6))
     app._ps5mgr_conn_dot.pack_propagate(False)
     app._ps5mgr_conn_lbl = tk.Label(pill_inner, textvariable=app._ps5mgr_conn_var,
-             font=(FONTS['mono_sm'][0], 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=COLORS['bg_3'], fg=COLORS['fg_4'])
     app._ps5mgr_conn_lbl.pack(side='left')
     app._ps5mgr_conn_pill = pill
@@ -240,7 +241,7 @@ def _build_connection_card(body, app):
     head = tk.Frame(inner, bg=COLORS['bg_2'])
     head.pack(fill='x')
     tk.Label(head, text=_('PS5 Connection'),
-             font=(FONTS['h3'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w'
              ).pack(side='left')
 
@@ -251,7 +252,7 @@ def _build_connection_card(body, app):
                        ).pack(side='right')
 
     # Status pill (driven by the existing _ps5mgr_conn_var).
-    status_lbl = tk.Label(head, text='', font=(FONTS['mono_sm'][0], 10, 'bold'),
+    status_lbl = tk.Label(head, text='', font=(FONTS['body_strong'][0], 10),
                           bg=COLORS['bg_2'], fg=COLORS['fg_5'])
     status_lbl.pack(side='right', padx=(0, 14))
 
@@ -263,10 +264,10 @@ def _build_connection_card(body, app):
         col = tk.Frame(parent, bg=COLORS['bg_2'])
         col.pack(side='left', padx=(0, 32))
         tk.Label(col, text=label.upper(),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
                  ).pack(anchor='w')
-        v = tk.Label(col, text=value, font=(FONTS['mono_sm'][0], 11, 'bold'),
+        v = tk.Label(col, text=value, font=(FONTS['body_strong'][0], 11),
                      bg=COLORS['bg_2'],
                      fg=value_fg or COLORS['fg_1'], anchor='w')
         v.pack(anchor='w', pady=(2, 0))
@@ -340,11 +341,11 @@ def _build_setup_checklist(body, app):
     hrow = tk.Frame(inner, bg=COLORS['bg_2'])
     hrow.pack(fill='x', pady=(0, 8))
     tk.Label(hrow, text=_('Setup Checklist'),
-             font=(FONTS['h3'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w'
              ).pack(side='left')
     app._ps5ov_check_progress = tk.Label(
-        hrow, text='', font=(FONTS['mono_sm'][0], 10, 'bold'),
+        hrow, text='', font=(FONTS['body_strong'][0], 10),
         bg=COLORS['bg_2'], fg=COLORS['fg_4'])
     app._ps5ov_check_progress.pack(side='right')
 
@@ -358,7 +359,7 @@ def _build_setup_checklist(body, app):
     def _row(key, done_label, pending_label):
         r = tk.Frame(rows, bg=COLORS['bg_2'])
         r.pack(fill='x', pady=2)
-        dot = tk.Label(r, text='\u25cb', font=(FONTS['mono_sm'][0], 11),
+        dot = tk.Label(r, text='\u25cb', font=(FONTS['body'][0], 11),
                        bg=COLORS['bg_2'], fg=COLORS['fg_5'], width=2)
         dot.pack(side='left')
         txt = tk.Label(r, text=pending_label, font=FONTS['meta'],
@@ -456,7 +457,7 @@ def _build_tool_cards(body, app):
     section.pack(fill='x', padx=24, pady=(4, 10))
 
     tk.Label(section, text=_('PS5 Tools'),
-             font=(FONTS['h3'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_1'], fg=COLORS['fg_2'], anchor='w'
              ).pack(fill='x', pady=(0, 8))
 
@@ -503,10 +504,10 @@ def _build_tool_cards(body, app):
         # Title row: icon + name (+ status pill on the right).
         trow = tk.Frame(inner, bg=COLORS['bg_3'])
         trow.pack(fill='x')
-        tk.Label(trow, text=icon, font=(FONTS['h3'][0], 14),
+        tk.Label(trow, text=icon, font=(FONTS['body'][0], 14),
                  bg=COLORS['bg_3'], fg=COLORS['teal']
                  ).pack(side='left', padx=(0, 8))
-        tk.Label(trow, text=title, font=(FONTS['h3'][0], 11, 'bold'),
+        tk.Label(trow, text=title, font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_3'], fg=COLORS['fg_1'], anchor='w'
                  ).pack(side='left')
 
@@ -615,7 +616,7 @@ def _build_recent_activity(body, app):
     inner.pack(fill='x', padx=16, pady=12)
 
     tk.Label(inner, text=_('Recent PS5 Activity'),
-             font=(FONTS['h3'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w'
              ).pack(fill='x', pady=(0, 8))
 
@@ -653,14 +654,14 @@ def _build_recent_activity(body, app):
             icon = _ICONS.get(kind, '\u2022')
             icon_fg = (COLORS['warn'] if kind == 'error'
                        else COLORS['teal'])
-            tk.Label(r, text=icon, font=(FONTS['mono_sm'][0], 10),
+            tk.Label(r, text=icon, font=(FONTS['body'][0], 10),
                      bg=COLORS['bg_2'], fg=icon_fg, width=2
                      ).pack(side='left')
             tk.Label(r, text=ev.get('detail', ''), font=FONTS['meta'],
                      bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w'
                      ).pack(side='left')
             tk.Label(r, text=ev.get('time', ''),
-                     font=(FONTS['mono_sm'][0], 8),
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='e'
                      ).pack(side='right')
 
@@ -687,7 +688,7 @@ def _build_page_head(body, app):
     title_col = tk.Frame(head, bg=COLORS['bg_1'])
     title_col.pack(side='left')
     tk.Label(title_col, text=_('PS5 Game Manager'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
              ).pack(anchor='w')
     tk.Label(title_col,
@@ -747,7 +748,7 @@ def _build_toolbar(body, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(8, 4))
-    tk.Entry(search_wrap, textvariable=app._ps5mgr_filter_var,
+    XEntry(search_wrap, textvariable=app._ps5mgr_filter_var,
              font=FONTS['body'],
              bg=COLORS['bg_0'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -830,7 +831,7 @@ def _build_table(body, app):
 
     for i, (key, label, width, anchor) in enumerate(_COLS):
         tk.Label(head_inner, text=(label or '').upper(),
-                 font=(FONTS['eyebrow'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_3'], fg=COLORS['fg_4'],
                  anchor=anchor
                  ).grid(row=0, column=i, sticky='ew',
@@ -916,8 +917,8 @@ def humanize_size(sz):
 
 
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -930,8 +931,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -947,7 +948,7 @@ def _icon_btn(parent, glyph, tooltip='', command=None,
     fg = (COLORS['accent'] if accent
           else COLORS['danger_hi'] if danger
           else COLORS['fg_4'])
-    btn = tk.Button(parent, text=glyph,
+    btn = XButton(parent, text=glyph,
                     font=(FONTS['body'][0], 11),
                     bg=COLORS['bg_2'], fg=fg,
                     activebackground=COLORS['bg_3'],

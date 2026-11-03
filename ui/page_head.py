@@ -24,6 +24,7 @@ Public API:
         subtitle. Pack with `pady=(14, 12)` for the standard spacing.
 """
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -70,7 +71,7 @@ def make_themed_button(parent, text, command, kind='primary',
     }
     bg, fg, abg, afg = schemes.get(kind, schemes['primary'])
     label = (icon + '  ' + text) if icon else text
-    btn = tk.Button(parent, text=label,
+    btn = XButton(parent, text=label,
                     font=(FONTS['button'][0], font_size, 'bold'),
                     bg=bg, fg=fg,
                     activebackground=abg, activeforeground=afg,
@@ -95,7 +96,7 @@ def info_banner(parent, text, on_click=None):
 
     ico = tk.Label(inner, text='i',
                    bg=COLORS['accent'], fg=COLORS['fg_0'],
-                   font=(FONTS['body'][0], 9, 'bold'),
+                   font=(FONTS['body_strong'][0], 9),
                    width=2, padx=2, pady=0)
     ico.pack(side='left', padx=(0, 10))
 
@@ -126,7 +127,7 @@ def page_head(parent, badge_emoji, title_text, subtitle_text):
 
     badge = tk.Label(head, text=badge_emoji,
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     font=(FONTS['body'][0], 18, 'bold'),
+                     font=(FONTS['body_strong'][0], 18),
                      width=3, height=2, padx=4, pady=0,
                      highlightbackground=COLORS['accent_pressed'],
                      highlightthickness=1)
@@ -135,7 +136,7 @@ def page_head(parent, badge_emoji, title_text, subtitle_text):
     text_col = tk.Frame(head, bg=bg)
     text_col.pack(side='left', fill='x', expand=True)
     tk.Label(text_col, text=title_text,
-             font=(FONTS['h2'][0], 18, 'bold'),
+             font=(FONTS['body_strong'][0], 18),
              bg=bg, fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(text_col, text=subtitle_text,
@@ -178,7 +179,7 @@ def field_block(parent, label_text, var, on_browse=None,
                           highlightthickness=1)
     input_wrap.pack(fill='x', pady=(6, 0))
 
-    entry = tk.Entry(input_wrap, textvariable=var,
+    entry = XEntry(input_wrap, textvariable=var,
                      font=FONTS['mono_sm'],
                      bg=COLORS['field_bg'], fg=COLORS['field_fg'],
                      insertbackground=COLORS['field_fg'],
@@ -188,7 +189,7 @@ def field_block(parent, label_text, var, on_browse=None,
     entry.pack(side='left', fill='x', expand=True)
 
     if on_browse:
-        tk.Button(input_wrap, text=browse_text,
+        XButton(input_wrap, text=browse_text,
                   font=FONTS['button'],
                   bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                   activebackground=COLORS['bg_5'],

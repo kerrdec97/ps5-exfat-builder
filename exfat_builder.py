@@ -1,4 +1,5 @@
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog, ttk, simpledialog
 from ui.shared.app_dialog import (
     app_choose3, app_confirm, app_danger, app_error, app_info,
@@ -845,7 +846,7 @@ if __name__ == '__main__' and not is_admin():
 # Step 3+ will migrate widgets to either ttk styles or direct COLORS[...] /
 # FONTS[...] lookups; for now the indirection lets us flip the entire palette
 # in one place.
-from tkinter_theme import apply_theme, COLORS, FONTS
+from tkinter_theme import apply_theme, COLORS, FONTS, px, scrollbar_style
 
 BG           = COLORS['bg_1']        # was '#000000' — design system uses #0a0a0a (near-black, never pure)
 SURFACE2     = COLORS['bg_4']        # was '#1c1c1c' — closest design token is #1a1a1a
@@ -2743,8 +2744,8 @@ class Tooltip:
             tip.attributes('-topmost', True)
         except Exception:
             pass
-        lbl = tk.Label(tip, text=self.text, bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                       font=('Segoe UI', 8), padx=8, pady=4,
+        lbl = tk.Label(tip, text=self.text, bg=COLORS['bg_3'], fg=COLORS['fg_1'],
+                       font=FONTS['caption'], padx=8, pady=5,
                        justify='left', wraplength=self.wraplength)
         lbl.pack()
         self._tip = tip
@@ -2759,103 +2760,81 @@ class Tooltip:
             Tooltip._active = None
 
 class SubTabBar:
-    """Lightweight horizontal sub-tab bar — used inside main tabs that have
-    multiple sub-views (Y2JB, Settings, Advanced). Owns the bar widget and the
-    container in which sub-frames will be packed; only one sub-frame is shown
-    at a time.
-
-    Step 14 (v2.1.6): redesigned with design-system tokens — bg_0 bar bg,
-    accent text + 2px accent underline on active tab, hover lifts inactive
-    tabs to fg_2.
+    """Horizontal sub-tab bar for main tabs with several views (design
+    system › Tabs): page-coloured bar, labels in fg_3, the selected tab in
+    fg_0 semibold with a 3px accent indicator, 1px hairline under the row.
+    Legacy emoji in tab labels become icons.
 
     Usage:
         bar = SubTabBar(parent_frame)
-        conn  = bar.add_tab('connection', '🔌 Connection')
-        inst  = bar.add_tab('install',    '📤 Install')
-        # ... build widgets inside `conn` and `inst` ...
+        conn = bar.add_tab('connection', 'Connection')
         bar.show('connection')   # or bar.show_first()
     """
     def __init__(self, parent, font_size=10, pad=(14, 7)):
+        from tkinter_theme import COLORS as _C
         self.parent = parent
-        self.font_size = font_size
-        self.pad = pad
-        self._tabs   = []   # list of (key, btn, frame)
+        self._tabs = []     # list of (key, btn, frame)
         self._active = None
-
-        # Design tokens via the theme module (defensive fallback below)
-        try:
-            from tkinter_theme import COLORS as _C
-            self._bar_bg   = _C['bg_0']
-            self._fg_inact = _C['fg_4']
-            self._fg_hover = _C['fg_2']
-            self._fg_act   = _C['accent']
-            self._border   = _C['border_2']
-            self._body_bg  = _C['bg_1']
-        except Exception:
-            self._bar_bg   = '#0a0a0a'
-            self._fg_inact = '#888888'
-            self._fg_hover = '#c0c0c0'
-            self._fg_act   = '#4a9eff'
-            self._border   = '#222222'
-            self._body_bg  = BG
-
+        self._bar_bg = _C['bg_1']
+        self._body_bg = _C['bg_1']
         self.bar = tk.Frame(parent, bg=self._bar_bg)
         self.bar.pack(fill='x')
-        # 1px hairline divider under the bar
-        tk.Frame(parent, bg=self._border, height=1).pack(fill='x')
-
-        # Inner padding so tabs align to the page padding
         self._bar_inner = tk.Frame(self.bar, bg=self._bar_bg)
-        self._bar_inner.pack(fill='x', padx=16)
-
-        # Container for the sub-frames
+        self._bar_inner.pack(fill='x', padx=px(20), pady=(px(8), 0))
+        tk.Frame(parent, bg=_C['border_2'], height=1).pack(fill='x')
         self.body = tk.Frame(parent, bg=self._body_bg)
         self.body.pack(fill='both', expand=True)
 
     def add_tab(self, key, text):
-        # Each tab is a vertical wrapper: the Label sits on top, a thin
-        # bottom Frame becomes a 2px accent underline when active.
-        wrap = tk.Frame(self._bar_inner, bg=self._bar_bg)
-        wrap.pack(side='left')
-        btn = tk.Label(wrap, text=text,
-                       font=('Segoe UI', self.font_size, 'bold'),
-                       bg=self._bar_bg, fg=self._fg_inact,
-                       padx=self.pad[0], pady=self.pad[1],
-                       cursor='hand2')
+        from tkinter_theme import COLORS as _C
+        from ui.icons import leading_icon, strip_glyphs, icon_image
+        icon = leading_icon(text)
+        label = strip_glyphs(text)
+        wrap = tk.Frame(self._bar_inner, bg=self._bar_bg, cursor='hand2')
+        wrap.pack(side='left', padx=(0, px(4)))
+        btn = tk.Label(wrap, text=label, font=FONTS['body'],
+                       bg=self._bar_bg, fg=_C['fg_3'], padx=px(12),
+                       pady=px(8), cursor='hand2')
+        if icon:
+            btn._icon = icon
+            btn.configure(image=icon_image(icon, 16, _C['fg_3'], self._bar_bg),
+                          compound='left', text=' ' + label)
         btn.pack()
-        underline = tk.Frame(wrap, bg=self._bar_bg, height=2)
-        underline.pack(fill='x')
+        underline = tk.Frame(wrap, bg=self._bar_bg, height=px(3))
+        underline.pack(fill='x', padx=px(12))
         btn._underline = underline
         btn._wrap = wrap
+        for w in (btn, wrap, underline):
+            w.bind('<Button-1>', lambda e, k=key: self.show(k))
 
-        btn.bind('<Button-1>', lambda e, k=key: self.show(k))
-        wrap.bind('<Button-1>', lambda e, k=key: self.show(k))
-        # Hover effect — only when the tab isn't already active
-        def _enter(e, b=btn, k=key):
+        def _hover(on, b=btn, k=key):
             if self._active != k:
-                b.configure(fg=self._fg_hover)
-        def _leave(e, b=btn, k=key):
-            if self._active != k:
-                b.configure(fg=self._fg_inact)
-        btn.bind('<Enter>', _enter)
-        btn.bind('<Leave>', _leave)
-
+                self._paint(b, False, on)
+        btn.bind('<Enter>', lambda e: _hover(True))
+        btn.bind('<Leave>', lambda e: _hover(False))
         frame = tk.Frame(self.body, bg=self._body_bg)
         self._tabs.append((key, btn, frame))
+        self._paint(btn, False)
         return frame
+
+    def _paint(self, btn, active, hover=False):
+        from tkinter_theme import COLORS as _C
+        from ui.icons import icon_image
+        fg = _C['fg_0'] if active else (_C['fg_1'] if hover else _C['fg_3'])
+        btn.configure(fg=fg, font=FONTS['body_strong'] if active else FONTS['body'])
+        if getattr(btn, '_icon', None):
+            btn.configure(image=icon_image(
+                btn._icon, 16, _C['accent_hi'] if active else fg, self._bar_bg))
+        btn._underline.configure(bg=_C['accent'] if active else self._bar_bg)
 
     def show(self, key):
         for k, btn, frame in self._tabs:
             if k == key:
                 frame.pack(fill='both', expand=True)
-                btn.configure(fg=self._fg_act)
-                if hasattr(btn, '_underline'):
-                    btn._underline.configure(bg=self._fg_act)
+                self._paint(btn, True)
             else:
                 frame.pack_forget()
-                btn.configure(fg=self._fg_inact)
-                if hasattr(btn, '_underline'):
-                    btn._underline.configure(bg=self._bar_bg)
+                self._paint(btn, False)
         self._active = key
 
     def show_first(self):
@@ -2864,142 +2843,66 @@ class SubTabBar:
 
 
 class LeftRail:
-    """Sidebar-style category picker: vertical list of labels on the left,
-    content panel on the right. Used for the Settings tab and Help tab where
-    a 'list of categories → focused content' layout reads better than a
-    horizontal sub-tab bar.
-
-    Step 8 (v2.1.0): redesigned with design-system tokens — bg_0 rail
-    background, accent-blue left border on the active item, hover state on
-    bg_1, optional section label header.
+    """Category picker: a list of sections on the left, the focused section
+    on the right (Settings, Help). Items match the main sidebar: 36px rows,
+    16px icon, bg_3 selected fill with a 3px accent pill.
 
     Usage:
-        rail = LeftRail(parent_frame, rail_width=210)
+        rail = LeftRail(parent_frame, rail_width=220)
         rail.add_section_label('SETTINGS')
-        general_pane  = rail.add_section('general',  '\u2699 General')
-        ftp_pane      = rail.add_section('ftp',      '\U0001f4e1 FTP / PS5')
+        general_pane = rail.add_section('general', 'General')
         rail.add_divider()
-        reset_pane    = rail.add_section('reset',    '\u21bb Reset to defaults')
-        # ... build widgets inside `general_pane`, `ftp_pane` ...
         rail.show('general')
     """
-    def __init__(self, parent, rail_width=210, font_size=10):
+    def __init__(self, parent, rail_width=220, font_size=10):
+        from tkinter_theme import COLORS as _C
         self.parent = parent
-        self.rail_width = rail_width
-        self.font_size = font_size
         self._sections = []   # list of (key, btn, frame)
         self._active = None
-
-        # Pull design tokens here so the legacy callers that import this
-        # class don't need to do it themselves.
-        try:
-            from tkinter_theme import COLORS as _C
-            self._rail_bg     = _C['bg_0']
-            self._rail_hover  = _C['bg_1']
-            self._rail_active = _C['accent_08']
-            self._rail_accent = _C['accent']
-            self._fg_muted    = _C['fg_4']
-            self._fg_active   = _C['fg_0']
-            self._border      = _C['border_2']
-            self._fg_dim      = _C['fg_5']
-        except Exception:
-            # Fallback to legacy colors if theme isn't available
-            self._rail_bg = '#0a0a0a'
-            self._rail_hover = '#151515'
-            self._rail_active = '#1a2232'
-            self._rail_accent = '#4a9eff'
-            self._fg_muted = '#888888'
-            self._fg_active = '#ffffff'
-            self._border = '#222222'
-            self._fg_dim = '#555555'
-
-        # Outer container
-        outer = tk.Frame(parent, bg=BG)
+        self._rail_bg = _C['bg_1']
+        outer = tk.Frame(parent, bg=_C['bg_1'])
         outer.pack(fill='both', expand=True)
-
-        # Left rail (vertical button strip) + 1px right separator
-        self.rail = tk.Frame(outer, bg=self._rail_bg, width=rail_width)
+        self.rail = tk.Frame(outer, bg=self._rail_bg,
+                             width=px(max(rail_width, 220)))
         self.rail.pack(side='left', fill='y')
         self.rail.pack_propagate(False)
-        # Top inner padding
-        tk.Frame(self.rail, bg=self._rail_bg, height=12).pack(fill='x')
-
-        tk.Frame(outer, bg=self._border, width=1).pack(side='left', fill='y')
-
-        # Body container — holds the active section's frame
-        self.body = tk.Frame(outer, bg=BG)
+        tk.Frame(self.rail, bg=self._rail_bg, height=px(16)).pack(fill='x')
+        tk.Frame(outer, bg=_C['border_2'], width=1).pack(side='left', fill='y')
+        self.body = tk.Frame(outer, bg=_C['bg_1'])
         self.body.pack(side='left', fill='both', expand=True)
 
     def add_section_label(self, text):
-        """Add a small uppercase section header in the rail (e.g. 'SETTINGS').
-        Decorative — not selectable."""
-        tk.Label(self.rail, text=text,
-                 font=('Segoe UI', 8, 'bold'),
-                 bg=self._rail_bg, fg=self._fg_dim,
-                 padx=20, pady=4, anchor='w'
-                 ).pack(fill='x')
+        from tkinter_theme import COLORS as _C
+        tk.Label(self.rail, text=text.upper(), font=FONTS['overline'],
+                 bg=self._rail_bg, fg=_C['fg_4'], padx=px(24), pady=px(4),
+                 anchor='w').pack(fill='x', pady=(0, px(2)))
 
     def add_divider(self):
-        """Insert a 1px horizontal divider in the rail."""
-        wrap = tk.Frame(self.rail, bg=self._rail_bg)
-        wrap.pack(fill='x', pady=(8, 8))
-        tk.Frame(wrap, bg=self._border, height=1
-                 ).pack(fill='x', padx=16)
+        from tkinter_theme import COLORS as _C
+        tk.Frame(self.rail, bg=_C['border_2'], height=1).pack(
+            fill='x', padx=px(20), pady=px(8))
 
     def add_section(self, key, text):
-        # Each rail item is a wrapper Frame so we can paint a 2px accent
-        # left border when the item is active. The Frame holds an inner
-        # Label for the actual click target.
-        wrap = tk.Frame(self.rail, bg=self._rail_bg)
-        wrap.pack(fill='x')
-        # Left accent strip — width 2px, color toggles on/off
-        accent = tk.Frame(wrap, bg=self._rail_bg, width=2)
-        accent.pack(side='left', fill='y')
-        accent.pack_propagate(False)
-
-        btn = tk.Label(wrap, text=text,
-                       font=('Segoe UI', self.font_size),
-                       bg=self._rail_bg, fg=self._fg_muted,
-                       padx=18, pady=9,
-                       anchor='w', cursor='hand2')
-        btn.pack(side='left', fill='x', expand=True)
-
-        # Stash the accent strip on the button so .show() can recolor it
-        btn._wrap = wrap
-        btn._accent_strip = accent
-
-        btn.bind('<Button-1>', lambda e, k=key: self.show(k))
-        # Hover effect
-        def _enter(e, b=btn, w=wrap, k=key):
-            if self._active != k:
-                w.configure(bg=self._rail_hover)
-                b.configure(bg=self._rail_hover, fg=self._fg_active)
-        def _leave(e, b=btn, w=wrap, k=key):
-            if self._active != k:
-                w.configure(bg=self._rail_bg)
-                b.configure(bg=self._rail_bg, fg=self._fg_muted)
-        btn.bind('<Enter>', _enter)
-        btn.bind('<Leave>', _leave)
-        wrap.bind('<Enter>', _enter)
-        wrap.bind('<Leave>', _leave)
-        accent.bind('<Button-1>', lambda e, k=key: self.show(k))
-
+        from ui.shared.sidebar import NavItem
+        from ui.icons import leading_icon, strip_glyphs
+        icon = leading_icon(text) or 'chevron_right'
+        holder = tk.Frame(self.rail, bg=self._rail_bg)
+        holder.pack(fill='x', padx=px(8))
+        item = NavItem(holder, key, strip_glyphs(text), icon=icon,
+                       on_select=self.show, rail_bg=self._rail_bg)
+        item.pack(fill='x', pady=(0, px(2)))
         frame = tk.Frame(self.body, bg=BG)
-        self._sections.append((key, btn, frame))
+        self._sections.append((key, item, frame))
         return frame
 
     def show(self, key):
-        for k, btn, frame in self._sections:
+        for k, item, frame in self._sections:
             if k == key:
                 frame.pack(fill='both', expand=True)
-                btn.configure(fg=self._fg_active, bg=self._rail_active)
-                btn._wrap.configure(bg=self._rail_active)
-                btn._accent_strip.configure(bg=self._rail_accent)
+                item.set_active(True)
             else:
                 frame.pack_forget()
-                btn.configure(fg=self._fg_muted, bg=self._rail_bg)
-                btn._wrap.configure(bg=self._rail_bg)
-                btn._accent_strip.configure(bg=self._rail_bg)
+                item.set_active(False)
         self._active = key
 
     def show_first(self):
@@ -3395,7 +3298,7 @@ class ExFATBuilder(_TK_BASE):
             tile.pack_propagate(False)
             tk.Label(tile, text=icon, bg=_TC['accent_15'],
                      fg=_TC.get(accent_key, _TC['accent']),
-                     font=('Segoe UI', 14)).pack(expand=True)
+                     font=(FONTS['body'][0], 14)).pack(expand=True)
             tk.Label(head, text=title, font=(_TF['h3'][0], 12, 'bold'),
                      bg=_TC['bg_2'], fg=_TC['fg_0']).pack(side='left')
 
@@ -3408,7 +3311,7 @@ class ExFATBuilder(_TK_BASE):
                      justify='left', anchor='w',
                      wraplength=240).pack(anchor='w', pady=(0, 10))
 
-            btn = tk.Button(inner, text=btn_text,
+            btn = XButton(inner, text=btn_text,
                             font=(_TF['button'][0], 9, 'bold'),
                             bg=_TC.get(accent_key, _TC['accent']),
                             fg=_TC['fg_0'],
@@ -3484,7 +3387,7 @@ class ExFATBuilder(_TK_BASE):
         foot.pack(fill='x', pady=(12, 0))
         tk.Label(foot, textvariable=toast_var, font=_TF['mono_sm'],
                  bg=_TC['bg_1'], fg=_TC['accent_hi']).pack(side='left')
-        tk.Button(foot, text='Close',
+        XButton(foot, text='Close',
                   font=(_TF['button'][0], 10),
                   bg=_TC['bg_3'], fg=_TC['fg_2'],
                   activebackground=_TC['bg_4'], activeforeground=_TC['fg_0'],
@@ -3521,7 +3424,7 @@ class ExFATBuilder(_TK_BASE):
         body = tk.Frame(win, bg=_TC['bg_1'])
         body.pack(fill='both', expand=True, padx=26, pady=22)
 
-        tk.Label(body, text='\u2764', font=('Segoe UI', 26),
+        tk.Label(body, text='\u2764', font=(FONTS['body'][0], 26),
                  bg=_TC['bg_1'], fg=_TC['danger_hi']
                  ).pack(pady=(0, 8))
         tk.Label(body, text='Support is appreciated',
@@ -3557,7 +3460,7 @@ class ExFATBuilder(_TK_BASE):
 
         btns = tk.Frame(body, bg=_TC['bg_1'])
         btns.pack()
-        tk.Button(btns, text='\u2615  Open Ko-fi',
+        XButton(btns, text='\u2615  Open Ko-fi',
                   font=(_TF['button'][0], 10, 'bold'),
                   bg=_TC['accent'], fg=_TC['fg_0'],
                   activebackground=_TC.get('accent_hi', _TC['accent']),
@@ -3565,7 +3468,7 @@ class ExFATBuilder(_TK_BASE):
                   relief='flat', bd=0, padx=16, pady=8,
                   cursor='hand2', command=_open_kofi
                   ).pack(side='left')
-        tk.Button(btns, text='Close',
+        XButton(btns, text='Close',
                   font=(_TF['button'][0], 10),
                   bg=_TC['bg_3'], fg=_TC['fg_2'],
                   activebackground=_TC['bg_4'],
@@ -3796,7 +3699,7 @@ class ExFATBuilder(_TK_BASE):
             pass
 
         tk.Label(dlg, text='\u2328  Keyboard shortcuts',
-                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT,
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT,
                  padx=20, pady=14).pack(anchor='w')
 
         body = tk.Frame(dlg, bg=BG)
@@ -3817,12 +3720,12 @@ class ExFATBuilder(_TK_BASE):
             tk.Label(row, text=keys, font=('Consolas', 10, 'bold'),
                      bg=SURFACE2, fg=ACCENT, width=18, anchor='w',
                      padx=8, pady=3).pack(side='left')
-            tk.Label(row, text=desc, font=('Segoe UI', 9),
+            tk.Label(row, text=desc, font=(FONTS['body'][0], 9),
                      bg=BG, fg=TEXT, anchor='w',
                      padx=10).pack(side='left', fill='x', expand=True)
 
-        tk.Button(dlg, text='Close',
-                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+        XButton(dlg, text='Close',
+                  font=(FONTS['body'][0], 9), bg=ACCENT, fg=TEXT,
                   activebackground=COLORS['accent_pressed'], relief='flat', bd=0,
                   padx=20, pady=6, cursor='hand2',
                   command=dlg.destroy).pack(pady=(0, 16))
@@ -3886,16 +3789,16 @@ class ExFATBuilder(_TK_BASE):
                     if x >= -50 and y >= -50 and x < sw - 100 and y < sh - 100:
                         self.geometry(saved_geom)
                     else:
-                        self.geometry('780x760')
+                        self.geometry('1280x820')
                 else:
                     self.geometry(saved_geom)
             except Exception:
-                self.geometry('780x760')
+                self.geometry('1280x820')
         else:
-            self.geometry('780x760')
+            self.geometry('1280x820')
 
         self.resizable(True, True)
-        self.minsize(680, 640)
+        self.minsize(960, 640)
         self.configure(bg=BG)
         self.protocol('WM_DELETE_WINDOW', self._on_close)
 
@@ -4169,7 +4072,7 @@ class ExFATBuilder(_TK_BASE):
         self._sidebar = None
         try:
             from ui.shared.sidebar import Sidebar as _Sidebar
-            sidebar = _Sidebar(self, width=210, rail_width=60)
+            sidebar = _Sidebar(self)
             sidebar.pack(side='left', fill='y')
             # Route sidebar clicks through the existing _switch_tab.
             sidebar.on_select = self._switch_tab
@@ -4182,7 +4085,7 @@ class ExFATBuilder(_TK_BASE):
                     pass
             sidebar.on_toggle = _persist_sidebar_collapsed
             # Thin divider between sidebar and content.
-            tk.Frame(self, bg=BORDER, width=1).pack(side='left', fill='y')
+            tk.Frame(self, bg=COLORS['border_2'], width=1).pack(side='left', fill='y')
 
             # WORKSPACE — quick link to the default landing tab.
             # NOTE: there is no separate Dashboard tab in Stage 3 — this
@@ -4236,12 +4139,12 @@ class ExFATBuilder(_TK_BASE):
             # SYSTEM STATUS — pinned footer (real text only, no controls).
             footer = sidebar.footer()
             self._sidebar_status_lbl = tk.Label(
-                footer, text=_('SYSTEM STATUS'), bg=BG, fg=COLORS['fg_5'],
-                font=(FONTS['eyebrow'][0], 8, 'bold'), anchor='w')
-            self._sidebar_status_lbl.pack(fill='x', padx=12, pady=(8, 2))
+                footer, text=_('SYSTEM STATUS'), bg=COLORS['bg_0'],
+                fg=COLORS['fg_4'], font=FONTS['overline'], anchor='w')
+            self._sidebar_status_lbl.pack(fill='x', padx=px(20), pady=(px(12), px(2)))
             tk.Label(footer, text='exFAT Image Builder v' + APP_VERSION,
-                     bg=BG, fg=COLORS['fg_4'], font=FONTS['meta'],
-                     anchor='w').pack(fill='x', padx=12, pady=(0, 10))
+                     bg=COLORS['bg_0'], fg=COLORS['fg_3'], font=FONTS['caption'],
+                     anchor='w').pack(fill='x', padx=px(20), pady=(0, px(12)))
 
             self._sidebar = sidebar
             # Phase 5A: restore the saved collapse state (no re-persist).
@@ -4641,6 +4544,12 @@ class ExFATBuilder(_TK_BASE):
 
         active = reg[key]
         active['frame'].pack(fill='both', expand=True)
+        # Design system: legacy emoji on labels become real icons.
+        try:
+            from ui.shared.modernize import modernize as _modernize
+            _modernize(active['frame'])
+        except Exception:
+            pass
 
         # Mirror the active state onto the sidebar (the sole primary nav).
         sb = getattr(self, '_sidebar', None)
@@ -4689,7 +4598,7 @@ class ExFATBuilder(_TK_BASE):
         except Exception as _e:
             tk.Label(build_pane,
                      text='Could not load Build sub-tab:\n' + repr(_e),
-                     bg=BG, fg=DANGER, font=('Consolas', 10),
+                     bg=BG, fg=DANGER, font=(FONTS['code'][0], 10),
                      justify='left'
                      ).pack(padx=24, pady=24, anchor='nw')
 
@@ -4700,7 +4609,7 @@ class ExFATBuilder(_TK_BASE):
         except Exception as _e:
             tk.Label(edit_pane,
                      text='Could not build Edit sub-tab:\n' + repr(_e),
-                     bg=BG, fg=DANGER, font=('Consolas', 10),
+                     bg=BG, fg=DANGER, font=(FONTS['code'][0], 10),
                      justify='left'
                      ).pack(padx=24, pady=24, anchor='nw')
 
@@ -4710,7 +4619,7 @@ class ExFATBuilder(_TK_BASE):
         except Exception as _e:
             tk.Label(extract_pane,
                      text='Could not build Extract sub-tab:\n' + repr(_e),
-                     bg=BG, fg=DANGER, font=('Consolas', 10),
+                     bg=BG, fg=DANGER, font=(FONTS['code'][0], 10),
                      justify='left'
                      ).pack(padx=24, pady=24, anchor='nw')
 
@@ -4767,12 +4676,12 @@ class ExFATBuilder(_TK_BASE):
         icon_tile.pack_propagate(False)
         tk.Label(icon_tile, text='\U0001f4e4',
                  bg=COLORS['accent_15'], fg=ACCENT,
-                 font=('Segoe UI', 14)
+                 font=(FONTS['body'][0], 14)
                  ).pack(expand=True)
         title_col = tk.Frame(head, bg=BG)
         title_col.pack(side='left', padx=(10, 0))
         tk.Label(title_col, text=_('Extract ffpkg Image'),
-                 font=(FONTS['h2'][0], 14, 'bold'),
+                 font=(FONTS['body_strong'][0], 14),
                  bg=BG, fg=COLORS['fg_0']
                  ).pack(anchor='w')
         tk.Label(title_col,
@@ -4800,14 +4709,14 @@ class ExFATBuilder(_TK_BASE):
                       highlightbackground=COLORS['border_3'],
                       highlightthickness=1)
         ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(ef, textvariable=self._ffpkg_extract_file_var,
+        XEntry(ef, textvariable=self._ffpkg_extract_file_var,
                  font=FONTS['mono_sm'],
                  bg=COLORS['bg_0'], fg=COLORS['fg_1'],
                  insertbackground=ACCENT,
                  relief='flat', bd=4
                  ).pack(fill='x')
-        tk.Button(img_row, text=_('Browse'),
-                  font=(FONTS['button'][0], 9),
+        XButton(img_row, text=_('Browse'),
+                  font=(FONTS['body'][0], 9),
                   bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                   activebackground=COLORS['bg_5'], relief='flat', bd=0,
                   padx=12, pady=6, cursor='hand2',
@@ -4826,14 +4735,14 @@ class ExFATBuilder(_TK_BASE):
                        highlightbackground=COLORS['border_3'],
                        highlightthickness=1)
         ef2.pack(side='left', fill='x', expand=True)
-        tk.Entry(ef2, textvariable=self._ffpkg_extract_outdir_var,
+        XEntry(ef2, textvariable=self._ffpkg_extract_outdir_var,
                  font=FONTS['mono_sm'],
                  bg=COLORS['bg_0'], fg=COLORS['fg_1'],
                  insertbackground=ACCENT,
                  relief='flat', bd=4
                  ).pack(fill='x')
-        tk.Button(out_row, text=_('Browse'),
-                  font=(FONTS['button'][0], 9),
+        XButton(out_row, text=_('Browse'),
+                  font=(FONTS['body'][0], 9),
                   bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                   activebackground=COLORS['bg_5'], relief='flat', bd=0,
                   padx=12, pady=6, cursor='hand2',
@@ -4852,7 +4761,7 @@ class ExFATBuilder(_TK_BASE):
                        highlightbackground=COLORS['border_3'],
                        highlightthickness=1)
         ef3.pack(side='left', fill='x', expand=True)
-        tk.Entry(ef3, textvariable=self._ffpkg_extract_name_var,
+        XEntry(ef3, textvariable=self._ffpkg_extract_name_var,
                  font=FONTS['mono_sm'],
                  bg=COLORS['bg_0'], fg=COLORS['fg_1'],
                  insertbackground=ACCENT,
@@ -4862,27 +4771,27 @@ class ExFATBuilder(_TK_BASE):
         # Action + status row
         act_row = tk.Frame(parent, bg=BG)
         act_row.pack(fill='x', padx=24, pady=(0, 8))
-        self._ffpkg_extract_btn = tk.Button(act_row,
+        self._ffpkg_extract_btn = XButton(act_row,
             text='\U0001f4e4  ' + _('Extract Image'),
-            font=(FONTS['button'][0], 10, 'bold'),
+            font=(FONTS['body_strong'][0], 10),
             bg=ACCENT, fg=COLORS['fg_0'],
             activebackground=COLORS['accent_hi'],
             relief='flat', bd=0, padx=18, pady=8,
             cursor='hand2',
             command=self._run_ffpkg_extract)
         self._ffpkg_extract_btn.pack(side='left')
-        self._ffpkg_mount_btn = tk.Button(act_row,
+        self._ffpkg_mount_btn = XButton(act_row,
             text='\U0001f4bd  ' + _('Mount as drive'),
-            font=(FONTS['button'][0], 10, 'bold'),
+            font=(FONTS['body_strong'][0], 10),
             bg=COLORS['bg_3'], fg=COLORS['fg_1'],
             activebackground=COLORS['bg_5'], activeforeground=COLORS['fg_0'],
             relief='flat', bd=0, padx=16, pady=8, cursor='hand2',
             highlightbackground=COLORS['border_3'], highlightthickness=1,
             command=self._run_ffpkg_mount)
         self._ffpkg_mount_btn.pack(side='left', padx=(8, 0))
-        self._ffpkg_open_btn = tk.Button(act_row,
+        self._ffpkg_open_btn = XButton(act_row,
             text='\U0001f4c2  ' + _('Open'),
-            font=(FONTS['button'][0], 9),
+            font=(FONTS['body'][0], 9),
             bg=COLORS['bg_3'], fg=COLORS['fg_2'],
             activebackground=COLORS['bg_5'], relief='flat', bd=0,
             padx=12, pady=6, cursor='hand2',
@@ -4923,12 +4832,12 @@ class ExFATBuilder(_TK_BASE):
                               highlightthickness=1)
         log_outer.pack(fill='both', expand=True, padx=24, pady=(0, 12))
         self._ffpkg_extract_log = tk.Text(log_outer,
-            font=('Consolas', 9),
+            font=(FONTS['code'][0], 9),
             bg=COLORS['bg_0'], fg=COLORS['fg_3'],
             insertbackground=ACCENT,
             relief='flat', bd=6, wrap='word',
             state='disabled')
-        sb = tk.Scrollbar(log_outer, command=self._ffpkg_extract_log.yview,
+        sb = XScrollbar(log_outer, command=self._ffpkg_extract_log.yview,
                           bg=COLORS['bg_3'], troughcolor=COLORS['bg_0'])
         self._ffpkg_extract_log.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
@@ -6742,9 +6651,9 @@ class ExFATBuilder(_TK_BASE):
         remote = self._br_cur() + '/' + name
         menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
                        activebackground=ACCENT, activeforeground=TEXT,
-                       font=('Segoe UI', 9))
+                       font=(FONTS['body'][0], 9))
         menu.add_command(label=name, state='disabled',
-                         font=('Segoe UI', 9, 'bold'))
+                         font=(FONTS['body_strong'][0], 9))
         menu.add_separator()
         if is_dir:
             menu.add_command(label='\U0001f4c2  Open folder',
@@ -7383,37 +7292,35 @@ class ExFATBuilder(_TK_BASE):
     def _check_osfmount_banner(self):
         if self._find_osfmount():
             return  # All good, no banner needed
-        # Show warning banner under header (anchored below the app bar so it
-        # never drifts to the bottom of the window; theme warning tokens).
-        wbg, wfg = COLORS['warn_bg'], COLORS['warn']
-        banner = tk.Frame(self, bg=wbg,
-                          highlightbackground=wfg, highlightthickness=1)
+        # App-level notice strip directly under the header (design system ›
+        # InfoBar, warning tone), full width so it reads as app state.
+        from ui.shared.widgets import Button, IconButton, IconLabel
+        wbg = COLORS['warn_bg']
+        banner = tk.Frame(self, bg=wbg)
         _anchor = getattr(self, '_app_header_frame', None)
         try:
             if _anchor is not None and _anchor.winfo_manager() == 'pack':
-                banner.pack(fill='x', padx=24, pady=(8, 0), after=_anchor)
+                banner.pack(fill='x', after=_anchor)
             else:
-                banner.pack(fill='x', padx=24, pady=(4, 0))
+                banner.pack(fill='x')
         except tk.TclError:
-            banner.pack(fill='x', padx=24, pady=(4, 0))
+            banner.pack(fill='x')
         inner = tk.Frame(banner, bg=wbg)
-        inner.pack(fill='x', padx=12, pady=8)
-        tk.Label(inner, text='\u26a0  OSFMount not detected',
-                 font=FONTS['body_b'],
-                 bg=wbg, fg=wfg).pack(side='left')
-        tk.Label(inner,
-                 text='  \u2014  Required for building and verifying exFAT images.',
-                 font=FONTS['body'], bg=wbg, fg=COLORS['fg_2']).pack(side='left')
+        inner.pack(fill='x', padx=px(16), pady=px(6))
+        IconLabel(inner, 'warning', 16, COLORS['warn'], wbg).pack(side='left')
+        tk.Label(inner, text='OSFMount not detected', font=FONTS['body_strong'],
+                 bg=wbg, fg=COLORS['fg_0']).pack(side='left', padx=(px(10), px(8)))
+        tk.Label(inner, text='Required for building and verifying exFAT images.',
+                 font=FONTS['body'], bg=wbg, fg=COLORS['fg_1']).pack(side='left')
         def _open_download():
             import webbrowser
             webbrowser.open('https://www.osforensics.com/tools/mount-disk-images.html')
-        tk.Button(inner, text='Download OSFMount \u2197',
-                  font=FONTS['body_b'],
-                  bg=wfg, fg='#1a0e00',
-                  activebackground=COLORS['warn_hi'], activeforeground='#1a0e00',
-                  relief='flat', bd=0, padx=12, pady=4,
-                  cursor='hand2',
-                  command=_open_download).pack(side='right')
+        IconButton(inner, 'close', banner.destroy, tooltip='Dismiss',
+                   size='sm', surface=wbg).pack(side='right', padx=(px(4), 0))
+        Button(inner, text='Download OSFMount', icon='external',
+               icon_right=True, size='sm', command=_open_download,
+               surface=wbg).pack(side='right')
+        tk.Frame(banner, bg=COLORS['border_2'], height=1).pack(fill='x')
 
     # ── Verify image ───────────────────────────────────────────────────────────
     def _check_pause_then_next(self, indices, pos):
@@ -7489,10 +7396,10 @@ class ExFATBuilder(_TK_BASE):
                                           width=96, height=96)
             except Exception:
                 self._cover_label.config(image='', text='\U0001f3ae',
-                                          font=('Segoe UI', 32), fg=INFO_FG)
+                                          font=(FONTS['body'][0], 32), fg=INFO_FG)
         else:
             self._cover_label.config(image='', text='\U0001f3ae',
-                                      font=('Segoe UI', 32), fg=COLORS['fg_5'])
+                                      font=(FONTS['body'][0], 32), fg=COLORS['fg_5'])
 
         # ── Folder size ──
         def calc_size():
@@ -7718,24 +7625,24 @@ class ExFATBuilder(_TK_BASE):
                 dlg.grab_set()
                 tk.Label(dlg,
                          text='\u26a0  .NET 8 Runtime not found',
-                         font=('Segoe UI', 12, 'bold'), bg=BG, fg='#ffaa44'
+                         font=(FONTS['body_strong'][0], 11), bg=BG, fg='#ffaa44'
                          ).pack(padx=24, pady=(18, 4))
                 tk.Label(dlg,
                          text='UFS2Tool requires the .NET 8 Runtime (not SDK) to build .ffpkg images.\n'
                               'Download and install the Windows x64 Desktop Runtime.',
-                         font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                         font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
                          wraplength=340, justify='left'
                          ).pack(padx=24, pady=(0, 12))
                 btn_row = tk.Frame(dlg, bg=BG)
                 btn_row.pack(pady=(0, 18))
-                tk.Button(btn_row, text='\U0001f30d  Open Download Page',
-                          font=('Segoe UI', 10, 'bold'),
+                XButton(btn_row, text='\U0001f30d  Open Download Page',
+                          font=(FONTS['body_strong'][0], 10),
                           bg=ACCENT, fg=TEXT, relief='flat', bd=0,
                           padx=14, pady=6, cursor='hand2',
                           command=lambda: (_open_dl(), dlg.destroy())
                           ).pack(side='left', padx=(0, 8))
-                tk.Button(btn_row, text='Close',
-                          font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                XButton(btn_row, text='Close',
+                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                           relief='flat', bd=0, padx=14, pady=6, cursor='hand2',
                           command=dlg.destroy).pack(side='left')
 
@@ -7768,10 +7675,10 @@ class ExFATBuilder(_TK_BASE):
                     image=self._ffpkg_cover_image, text='', width=96, height=96)
             except Exception:
                 self._ffpkg_cover_label.config(
-                    image='', text='\U0001f3ae', font=('Segoe UI', 32), fg=INFO_FG)
+                    image='', text='\U0001f3ae', font=(FONTS['body'][0], 32), fg=INFO_FG)
         else:
             self._ffpkg_cover_label.config(
-                image='', text='\U0001f3ae', font=('Segoe UI', 32), fg=COLORS['fg_5'])
+                image='', text='\U0001f3ae', font=(FONTS['body'][0], 32), fg=COLORS['fg_5'])
 
         # Size + file count — calculate and cache for ETA/progress use during build
         def calc_size():
@@ -8155,7 +8062,7 @@ class ExFATBuilder(_TK_BASE):
         if not self._ffpkg_queue:
             tk.Label(self._ffpkg_queue_frame,
                      text='Queue is empty — add a game folder above',
-                     font=('Segoe UI', 9), bg=SURFACE2, fg=COLORS['fg_5'],
+                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5'],
                      pady=14).pack()
             return
         for i, item in enumerate(self._ffpkg_queue):
@@ -8174,13 +8081,13 @@ class ExFATBuilder(_TK_BASE):
             dot.create_oval(1, 1, 11, 11, fill=colour, outline='')
             # Name
             tk.Label(row, text=item['name'],
-                     font=('Segoe UI', 9), bg=bg, fg=TEXT,
+                     font=(FONTS['body'][0], 9), bg=bg, fg=TEXT,
                      anchor='w').pack(side='left', fill='x', expand=True, padx=(0, 8))
             # Remove button (only when not building)
             if not self._ffpkg_building:
                 idx = i
-                tk.Button(row, text='\u2715',
-                          font=('Segoe UI', 8), bg=bg, fg=DANGER,
+                XButton(row, text='\u2715',
+                          font=(FONTS['body'][0], 9), bg=bg, fg=DANGER,
                           activebackground=bg, activeforeground=DANGER,
                           relief='flat', bd=0, padx=8, cursor='hand2',
                           command=lambda ix=idx: self._ffpkg_remove_item(ix)
@@ -8188,8 +8095,8 @@ class ExFATBuilder(_TK_BASE):
             # Upload button if done
             if item['status'] == 'done':
                 out_path = os.path.join(item['odir'], item['name'])
-                tk.Button(row, text='\u2191 PS5',
-                          font=('Segoe UI', 8), bg=SURFACE2, fg=ACCENT,
+                XButton(row, text='\u2191 PS5',
+                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=ACCENT,
                           activebackground=BORDER, activeforeground=ACCENT,
                           relief='flat', bd=0, padx=8, pady=2, cursor='hand2',
                           command=lambda p=out_path: self._ftp_upload_file(p)
@@ -8303,14 +8210,14 @@ class ExFATBuilder(_TK_BASE):
     def _field(self, parent, label, var, browse_cmd, drag_drop=False):
         row = tk.Frame(parent, bg=BG)
         row.pack(fill='x', pady=(0, 6))
-        tk.Label(row, text=label, font=('Segoe UI', 9),
+        tk.Label(row, text=label, font=(FONTS['body'][0], 9),
                  bg=BG, fg=MUTED, anchor='w').pack(fill='x')
         inner = tk.Frame(row, bg=BG)
         inner.pack(fill='x', pady=(3, 0))
         ef = tk.Frame(inner, bg=FIELD_BG,
                       highlightbackground=BORDER, highlightthickness=1)
         ef.pack(side='left', fill='x', expand=True)
-        entry = tk.Entry(ef, textvariable=var, font=('Consolas', 10),
+        entry = XEntry(ef, textvariable=var, font=(FONTS['code'][0], 10),
                  bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
                  selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
                  disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
@@ -8325,7 +8232,7 @@ class ExFATBuilder(_TK_BASE):
                 ef.dnd_bind('<<Drop>>', lambda e: self._on_drop(e.data))
             except Exception:
                 pass
-        tk.Button(inner, text='Browse', font=('Segoe UI', 9),
+        XButton(inner, text='Browse', font=(FONTS['body'][0], 9),
                   bg=SURFACE2, fg=TEXT, activebackground=BORDER,
                   activeforeground=TEXT, relief='flat', bd=0,
                   padx=14, pady=6, cursor='hand2',
@@ -8658,7 +8565,7 @@ class ExFATBuilder(_TK_BASE):
             return
         menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
                        activebackground=ACCENT, activeforeground=TEXT,
-                       font=('Segoe UI', 9))
+                       font=(FONTS['body'][0], 9))
         if not is_dir:
             menu.add_command(label='\U0001f504  Replace file',
                              command=self._fm_replace_file)
@@ -8882,9 +8789,9 @@ class ExFATBuilder(_TK_BASE):
         win.grab_set()
 
         tk.Label(win, text='\u26a0  File already exists',
-                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=WARNING).pack(padx=24, pady=(16, 4))
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=WARNING).pack(padx=24, pady=(16, 4))
         tk.Label(win, text=filename,
-                 font=('Consolas', 9), bg=BG, fg=MUTED).pack(padx=24, pady=(0, 16))
+                 font=(FONTS['code'][0], 9), bg=BG, fg=MUTED).pack(padx=24, pady=(0, 16))
 
         result = [None]
 
@@ -8892,7 +8799,7 @@ class ExFATBuilder(_TK_BASE):
         btn_frame.pack(padx=24, pady=(0, 16))
 
         def make_btn(text, val, fg=TEXT, bg=SURFACE2):
-            tk.Button(btn_frame, text=text, font=('Segoe UI', 9),
+            XButton(btn_frame, text=text, font=(FONTS['body'][0], 9),
                       bg=bg, fg=fg, activebackground=BORDER,
                       activeforeground=TEXT, relief='flat', bd=0,
                       padx=12, pady=6, cursor='hand2',
@@ -9119,12 +9026,12 @@ class ExFATBuilder(_TK_BASE):
         dlg.attributes('-topmost', True)
 
         tk.Label(dlg, text='Select drive(s) to force dismount:',
-                 font=('Segoe UI', 10, 'bold'), bg=BG, fg=TEXT,
+                 font=(FONTS['body_strong'][0], 10), bg=BG, fg=TEXT,
                  padx=20, pady=12).pack(anchor='w')
 
         tk.Label(dlg,
                  text='Your system drive is hidden for safety.',
-                 font=('Segoe UI', 8),
+                 font=(FONTS['body'][0], 9),
                  bg=BG, fg=COLORS['fg_4'],
                  padx=20, pady=(0, 6)).pack(anchor='w')
 
@@ -9142,7 +9049,7 @@ class ExFATBuilder(_TK_BASE):
                 tag = '  \u2190 current build drive'
             elif not d['is_virtual']:
                 tag = '  \u2014 physical drive!'
-            tk.Checkbutton(row, variable=var,
+            XCheck(row, variable=var,
                            bg=BG, activebackground=BG,
                            selectcolor=ACCENT,
                            cursor='hand2').pack(side='left')
@@ -9151,7 +9058,7 @@ class ExFATBuilder(_TK_BASE):
             tk.Label(row,
                      text='%s:  %s  (%s)%s' % (
                          d['letter'], d['label'], d['size'], tag),
-                     font=('Segoe UI', 9),
+                     font=(FONTS['body'][0], 9),
                      bg=BG, fg=color,
                      anchor='w').pack(side='left')
             return row
@@ -9166,7 +9073,7 @@ class ExFATBuilder(_TK_BASE):
                      text='(No virtual drives detected. Use the '
                           'Advanced toggle below to show physical '
                           'drives — but be very careful.)',
-                     font=('Segoe UI', 8),
+                     font=(FONTS['body'][0], 9),
                      bg=BG, fg=COLORS['fg_4'],
                      padx=20, pady=(6, 0), wraplength=380,
                      justify='left'
@@ -9193,11 +9100,11 @@ class ExFATBuilder(_TK_BASE):
                             if d['letter'] in check_vars:
                                 check_vars[d['letter']].set(False)
 
-            tk.Checkbutton(adv, variable=show_phys,
+            XCheck(adv, variable=show_phys,
                            text=('\u26a0  Show physical drives '
                                  '(%d hidden) \u2014 advanced'
                                  % n_physical),
-                           font=('Segoe UI', 9),
+                           font=(FONTS['body'][0], 9),
                            bg=BG, fg='#c08040',
                            activebackground=BG,
                            selectcolor=BG,
@@ -9236,13 +9143,13 @@ class ExFATBuilder(_TK_BASE):
             selected[0] = picks
             dlg.destroy()
 
-        tk.Button(btn_row, text='\u23cf Dismount Selected',
-                  font=('Segoe UI', 10, 'bold'),
+        XButton(btn_row, text='\u23cf Dismount Selected',
+                  font=(FONTS['body_strong'][0], 10),
                   bg=DANGER, fg=TEXT, activebackground='#c0392b',
                   relief='flat', bd=0, padx=16, pady=8,
                   cursor='hand2', command=_go).pack(side='right')
-        tk.Button(btn_row, text='Cancel',
-                  font=('Segoe UI', 9),
+        XButton(btn_row, text='Cancel',
+                  font=(FONTS['body'][0], 9),
                   bg=SURFACE2, fg=MUTED, activebackground=BORDER,
                   relief='flat', bd=0, padx=12, pady=8,
                   cursor='hand2', command=dlg.destroy
@@ -10954,10 +10861,10 @@ class ExFATBuilder(_TK_BASE):
         head = tk.Frame(win, bg=BG)
         head.pack(fill='x', padx=20, pady=(18, 4))
         tk.Label(head, text='\U0001f4cf  Custom image size',
-                  font=('Segoe UI', 12, 'bold'),
+                  font=(FONTS['body_strong'][0], 11),
                   bg=BG, fg=TEXT).pack(anchor='w')
         tk.Label(head, text=display,
-                  font=('Segoe UI', 9),
+                  font=(FONTS['body'][0], 9),
                   bg=BG, fg=MUTED, wraplength=440,
                   justify='left').pack(anchor='w', pady=(2, 0))
 
@@ -10976,25 +10883,25 @@ class ExFATBuilder(_TK_BASE):
                            % (src_gb,
                               '{:,}'.format(self._count_files(
                                   item.game_folder))),
-                      font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                       anchor='w').pack(fill='x')
             tk.Label(inner,
                       text='Suggested override: %d GB  '
                            '(source \u00d7 1.10, rounded up)'
                            % suggested_gb,
-                      font=('Segoe UI', 9), bg=SURFACE2, fg=ACCENT,
+                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=ACCENT,
                       anchor='w').pack(fill='x', pady=(2, 8))
         else:
             tk.Label(inner,
                       text='(Could not measure source folder size)',
-                      font=('Segoe UI', 9), bg=SURFACE2, fg=DANGER,
+                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=DANGER,
                       anchor='w').pack(fill='x', pady=(0, 8))
 
         # Entry
         entry_row = tk.Frame(inner, bg=SURFACE2)
         entry_row.pack(fill='x')
         tk.Label(entry_row, text='Image size (GB):',
-                  font=('Segoe UI', 10, 'bold'),
+                  font=(FONTS['body_strong'][0], 10),
                   bg=SURFACE2, fg=TEXT).pack(side='left')
         _cur_gb = coerce_size_gb(item.size_override_gb)
         size_var = tk.StringVar(
@@ -11002,8 +10909,8 @@ class ExFATBuilder(_TK_BASE):
         ef = tk.Frame(entry_row, bg=FIELD_BG,
                        highlightbackground=BORDER, highlightthickness=1)
         ef.pack(side='left', padx=(8, 0))
-        entry = tk.Entry(ef, textvariable=size_var,
-                          font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+        entry = XEntry(ef, textvariable=size_var,
+                          font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
                           insertbackground=FIELD_FG, relief='flat', bd=4,
                           width=8)
         entry.pack()
@@ -11015,7 +10922,7 @@ class ExFATBuilder(_TK_BASE):
             qp = tk.Frame(inner, bg=SURFACE2)
             qp.pack(fill='x', pady=(10, 0))
             tk.Label(qp, text='Quick pick:',
-                      font=('Segoe UI', 8), bg=SURFACE2,
+                      font=(FONTS['body'][0], 9), bg=SURFACE2,
                       fg=MUTED).pack(side='left', padx=(0, 6))
             for bump_label, bump_val in [
                     ('Suggested (%d)' % suggested_gb, suggested_gb),
@@ -11024,8 +10931,8 @@ class ExFATBuilder(_TK_BASE):
                     ('+5 GB',  suggested_gb + 5)]:
                 def _set(v=bump_val):
                     size_var.set(str(v))
-                tk.Button(qp, text=bump_label,
-                          font=('Segoe UI', 8), bg=SURFACE2, fg=TEXT,
+                XButton(qp, text=bump_label,
+                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                           activebackground=BORDER,
                           relief='flat', bd=0, padx=10, pady=3,
                           cursor='hand2', command=_set
@@ -11037,7 +10944,7 @@ class ExFATBuilder(_TK_BASE):
                         'is in whole GB. The build will fail at the '
                         'copy step if you pick a size smaller than '
                         'the source.'),
-                  font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                   wraplength=400, justify='left', anchor='w'
                   ).pack(fill='x', pady=(10, 0))
 
@@ -11091,23 +10998,23 @@ class ExFATBuilder(_TK_BASE):
                 pass
             win.destroy()
 
-        tk.Button(btn_row, text='Apply',
-                   font=('Segoe UI', 9, 'bold'),
+        XButton(btn_row, text='Apply',
+                   font=(FONTS['body_strong'][0], 9),
                    bg=ACCENT, fg=TEXT,
                    activebackground=ACCENT, activeforeground=TEXT,
                    relief='flat', bd=0, padx=18, pady=7,
                    cursor='hand2', command=_apply
                    ).pack(side='right')
-        tk.Button(btn_row, text='Cancel',
-                   font=('Segoe UI', 9),
+        XButton(btn_row, text='Cancel',
+                   font=(FONTS['body'][0], 9),
                    bg=SURFACE2, fg=TEXT,
                    activebackground=BORDER, activeforeground=TEXT,
                    relief='flat', bd=0, padx=14, pady=7,
                    cursor='hand2', command=win.destroy
                    ).pack(side='right', padx=(0, 6))
         if coerce_size_gb(item.size_override_gb):
-            tk.Button(btn_row, text='Clear override',
-                       font=('Segoe UI', 9),
+            XButton(btn_row, text='Clear override',
+                       font=(FONTS['body'][0], 9),
                        bg=SURFACE2, fg=DANGER,
                        activebackground=BORDER, activeforeground=DANGER,
                        relief='flat', bd=0, padx=12, pady=7,
@@ -11154,7 +11061,7 @@ class ExFATBuilder(_TK_BASE):
         if not self._queue:
             tk.Label(self._queue_frame,
                      text='No items yet  \u2014  add a game above',
-                     font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                      pady=14).pack()
             return
         for i, item in enumerate(self._queue):
@@ -11172,10 +11079,10 @@ class ExFATBuilder(_TK_BASE):
                 display += '  v' + item.version
             # Status badge for done/failed
             if item.status == 'done':
-                tk.Label(row, text='\u2713', font=('Segoe UI', 9),
+                tk.Label(row, text='\u2713', font=(FONTS['body'][0], 9),
                          bg=row_bg, fg=SUCCESS).pack(side='left', padx=(0, 4))
             elif item.status == 'failed':
-                tk.Label(row, text='\u2717', font=('Segoe UI', 9),
+                tk.Label(row, text='\u2717', font=(FONTS['body'][0], 9),
                          bg=row_bg, fg=DANGER).pack(side='left', padx=(0, 4))
             idx = i
             # v3.0.0: pack the right-side action cluster BEFORE the
@@ -11183,7 +11090,7 @@ class ExFATBuilder(_TK_BASE):
             # push these off-screen and the user can't reach them.
             # The × remove button packs first (rightmost), then any
             # status-specific buttons (Open folder, Upload, Size).
-            tk.Button(row, text='\u00d7', font=('Segoe UI', 10),
+            XButton(row, text='\u00d7', font=(FONTS['body'][0], 10),
                       bg=row_bg, fg=DANGER,
                       activebackground=row_bg, activeforeground=DANGER,
                       relief='flat', bd=0, padx=8, pady=4,
@@ -11193,14 +11100,14 @@ class ExFATBuilder(_TK_BASE):
             # Open output folder + Upload — only when done
             if item.status == 'done':
                 out_path = os.path.join(item.output_dir, item.output_name)
-                tk.Button(row, text='\U0001f4c2', font=('Segoe UI', 10),
+                XButton(row, text='\U0001f4c2', font=(FONTS['body'][0], 10),
                           bg=row_bg, fg=MUTED,
                           activebackground=row_bg, activeforeground=TEXT,
                           relief='flat', bd=0, padx=6, pady=4,
                           cursor='hand2',
                           command=lambda p=item.output_dir: self._open_folder(p)
                           ).pack(side='right', padx=(0, 2))
-                tk.Button(row, text='\u2191 PS5', font=('Segoe UI', 8),
+                XButton(row, text='\u2191 PS5', font=(FONTS['body'][0], 9),
                           bg=row_bg, fg=ACCENT,
                           activebackground=row_bg, activeforeground=ACCENT,
                           relief='flat', bd=0, padx=6, pady=4,
@@ -11241,7 +11148,7 @@ class ExFATBuilder(_TK_BASE):
                 # even on rows that share its interior colour.
                 pill_wrap = tk.Frame(row, bg=pill_border)
                 pill_wrap.pack(side='right', padx=(0, 6), pady=4)
-                size_btn = tk.Button(pill_wrap, text=pill_text,
+                size_btn = XButton(pill_wrap, text=pill_text,
                           font=('Segoe UI', 8, pill_weight),
                           bg=pill_bg, fg=pill_fg,
                           activebackground=ACCENT,
@@ -11258,19 +11165,19 @@ class ExFATBuilder(_TK_BASE):
                 except Exception:
                     pass
             # Now the expanding text labels can take whatever's left.
-            tk.Label(row, text=display, font=('Segoe UI', 9, 'bold'),
+            tk.Label(row, text=display, font=(FONTS['body_strong'][0], 9),
                      bg=row_bg, fg=TEXT, anchor='w').pack(side='left')
             tk.Label(row, text='  \u2192  ' + item.output_name,
-                     font=('Consolas', 8), bg=row_bg, fg=INFO_FG,
+                     font=(FONTS['code'][0], 8), bg=row_bg, fg=INFO_FG,
                      anchor='w').pack(side='left')
             tk.Label(row, text=item.output_dir,
-                     font=('Segoe UI', 8), bg=row_bg, fg=MUTED,
+                     font=(FONTS['body'][0], 9), bg=row_bg, fg=MUTED,
                      anchor='w').pack(side='left', padx=(6, 0), fill='x', expand=True)
             # Right-click context menu
             def _show_ctx(event, it=item, ix=idx):
                 menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
                                activebackground=ACCENT, activeforeground=TEXT,
-                               font=('Segoe UI', 9))
+                               font=(FONTS['body'][0], 9))
                 menu.add_command(label='\U0001f4c2  Open source folder',
                     command=lambda: self._open_folder(it.game_folder))
                 menu.add_command(label='\U0001f4c2  Open output folder',
@@ -11987,31 +11894,31 @@ class ExFATBuilder(_TK_BASE):
         hdr = tk.Frame(win, bg=BG)
         hdr.pack(fill='x', padx=16, pady=(12, 4))
         tk.Label(hdr, text=_('PS5 FTP Manager'),
-                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
         tk.Label(hdr, textvariable=status_var,
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='right')
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='right')
 
         # ── Path / breadcrumb bar ──
         path_row = tk.Frame(win, bg=BG)
         path_row.pack(fill='x', padx=16, pady=(0, 4))
-        tk.Button(path_row, text='\u2191 Up',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(path_row, text='\u2191 Up',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
                   command=lambda: _go_up()).pack(side='left', padx=(0, 6))
         pf = tk.Frame(path_row, bg=FIELD_BG,
                       highlightbackground=BORDER, highlightthickness=1)
         pf.pack(side='left', fill='x', expand=True)
-        path_entry = tk.Entry(pf, textvariable=path_var,
-                              font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        path_entry = XEntry(pf, textvariable=path_var,
+                              font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                               insertbackground=FIELD_FG, relief='flat', bd=4)
         path_entry.pack(fill='x')
         path_entry.bind('<Return>', lambda e: _load(path_var.get()))
-        tk.Button(path_row, text='Go',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(path_row, text='Go',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
                   command=lambda: _load(path_var.get())).pack(side='left', padx=(6, 0))
-        tk.Button(path_row, text='\U0001f504',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(path_row, text='\U0001f504',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
                   command=lambda: _load(path_var.get())).pack(side='left', padx=(4, 0))
 
@@ -12020,7 +11927,7 @@ class ExFATBuilder(_TK_BASE):
         toolbar.pack(fill='x', padx=16, pady=(0, 4))
 
         def tbtn(text, cmd, fg=TEXT, bg=SURFACE2):
-            tk.Button(toolbar, text=text, font=('Segoe UI', 8),
+            XButton(toolbar, text=text, font=(FONTS['body'][0], 9),
                       bg=bg, fg=fg, activebackground=BORDER,
                       activeforeground=TEXT, relief='flat', bd=0,
                       padx=8, pady=3, cursor='hand2',
@@ -12040,7 +11947,7 @@ class ExFATBuilder(_TK_BASE):
         # Storage indicator
         self._ps5_free_var = tk.StringVar(value='')
         tk.Label(toolbar, textvariable=self._ps5_free_var,
-                 font=('Segoe UI', 8), bg=BG, fg=INFO_FG,
+                 font=(FONTS['body'][0], 9), bg=BG, fg=INFO_FG,
                  anchor='e').pack(side='right')
 
         # ── File list with columns ──
@@ -12053,15 +11960,15 @@ class ExFATBuilder(_TK_BASE):
         col_hdr.pack(fill='x')
         for col_text, col_w in [('Name', 50), ('Size', 12), ('Type', 10)]:
             tk.Label(col_hdr, text=col_text,
-                     font=('Segoe UI', 8, 'bold'), bg=COLORS['bg_0'], fg=MUTED,
+                     font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_0'], fg=MUTED,
                      anchor='w', width=col_w).pack(side='left', padx=(8, 0), pady=3)
 
-        listbox = tk.Listbox(list_outer, font=('Consolas', 9),
+        listbox = tk.Listbox(list_outer, font=(FONTS['code'][0], 9),
                              bg=SURFACE2, fg=TEXT,
                              selectbackground=ACCENT, selectforeground='#ffffff',
                              activestyle='none', relief='flat', bd=6,
                              selectmode='extended')
-        sb = tk.Scrollbar(list_outer, command=listbox.yview,
+        sb = XScrollbar(list_outer, command=listbox.yview,
                           bg=SURFACE2, troughcolor=BG)
         listbox.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
@@ -12072,13 +11979,13 @@ class ExFATBuilder(_TK_BASE):
         stat_bar.pack(fill='x', padx=16, pady=(0, 4))
         self._ps5_sel_var = tk.StringVar(value='')
         tk.Label(stat_bar, textvariable=self._ps5_sel_var,
-                 font=('Segoe UI', 8), bg=COLORS['bg_0'], fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=MUTED,
                  anchor='w').pack(side='left', padx=8, pady=3)
 
         # ── Bottom buttons ──
         btn_row = tk.Frame(win, bg=BG)
         btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        tk.Button(btn_row, text='Close', font=('Segoe UI', 9),
+        XButton(btn_row, text='Close', font=(FONTS['body'][0], 9),
                   bg=SURFACE2, fg=MUTED, relief='flat', bd=0,
                   padx=10, pady=5, cursor='hand2',
                   command=lambda: (_ftp_quit(), win.destroy())
@@ -12399,9 +12306,9 @@ class ExFATBuilder(_TK_BASE):
             remote = _current_path() + '/' + name
             menu = tk.Menu(win, tearoff=0, bg=SURFACE2, fg=TEXT,
                            activebackground=ACCENT, activeforeground=TEXT,
-                           font=('Segoe UI', 9))
+                           font=(FONTS['body'][0], 9))
             menu.add_command(label=name, state='disabled',
-                             font=('Segoe UI', 9, 'bold'))
+                             font=(FONTS['body_strong'][0], 9))
             menu.add_separator()
             if is_dir:
                 menu.add_command(label='\U0001f4c2  Open folder',
@@ -12512,7 +12419,7 @@ class ExFATBuilder(_TK_BASE):
                      bg=_TC['bg_3'], fg=_TC['fg_3'],
                      padx=8, pady=4
                      ).pack(side='left')
-            tk.Button(chip, text='\u00d7',
+            XButton(chip, text='\u00d7',
                       font=(_TF['body'][0], 9, 'bold'),
                       bg=_TC['bg_3'], fg=_TC['fg_5'],
                       activebackground=_TC['bg_3'],
@@ -13163,7 +13070,7 @@ class ExFATBuilder(_TK_BASE):
             tk.Label(self._ps5mgr_rows,
                      text=_('No games found on PS5 or in local images.\n'
                             'Build a few in the exFAT tab first, then refresh.'),
-                     font=('Segoe UI', 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
+                     font=(FONTS['body'][0], 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
                      pady=40, justify='center'
                      ).pack(fill='x')
             return
@@ -13360,7 +13267,7 @@ class ExFATBuilder(_TK_BASE):
         if rendered == 0:
             tk.Label(self._ps5mgr_rows,
                      text=_('No matches for current filter.'),
-                     font=('Segoe UI', 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
+                     font=(FONTS['body'][0], 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
                      pady=40
                      ).pack(fill='x')
 
@@ -13550,7 +13457,7 @@ class ExFATBuilder(_TK_BASE):
                     'bad':   ('#3a1a1a', _TC['danger_hi'],
                               _TC['danger']),
                 }[scheme]
-                return tk.Button(parent, text=text,
+                return XButton(parent, text=text,
                                  font=(_TF['button'][0], 9, 'bold'),
                                  bg=colors[0], fg=colors[1],
                                  activebackground=_TC['bg_4'],
@@ -13744,7 +13651,7 @@ class ExFATBuilder(_TK_BASE):
         for w in self._bp_games_frame.winfo_children():
             w.destroy()
         tk.Label(self._bp_games_frame, text='Scanning...',
-                 font=('Segoe UI', 8), bg=COLORS['bg_0'], fg=MUTED).pack(pady=8)
+                 font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=MUTED).pack(pady=8)
         self.update_idletasks()
 
         def _scan():
@@ -13835,7 +13742,7 @@ class ExFATBuilder(_TK_BASE):
         if not games:
             tk.Label(self._bp_games_frame,
                      text='No games found.\nCheck the folder contains\ngame dumps with eboot.bin',
-                     font=('Segoe UI', 9), bg=COLORS['bg_0'], fg=COLORS['fg_4'],
+                     font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=COLORS['fg_4'],
                      justify='center').pack(pady=30)
             return
 
@@ -13876,7 +13783,7 @@ class ExFATBuilder(_TK_BASE):
         cover_lbl = tk.Label(inner, bg='#1a2540',
                              width=4, height=2,
                              text='\U0001f3ae',
-                             font=('Segoe UI', 14),
+                             font=(FONTS['body'][0], 14),
                              fg='#4a9eff',
                              highlightbackground=COLORS['border_3'],
                              highlightthickness=1)
@@ -13905,7 +13812,7 @@ class ExFATBuilder(_TK_BASE):
         if len(title) > 28:
             title = title[:26] + '\u2026'
         title_lbl = tk.Label(info_f, text=title,
-                             font=('Segoe UI', 10, 'bold'),
+                             font=(FONTS['body_strong'][0], 10),
                              bg=idle_bg, fg='#ffffff', anchor='w')
         title_lbl.pack(fill='x')
         card._title_lbl = title_lbl
@@ -13917,7 +13824,7 @@ class ExFATBuilder(_TK_BASE):
         ]))
         if sub:
             sub_lbl = tk.Label(info_f, text=sub,
-                               font=('Consolas', 8),
+                               font=(FONTS['code'][0], 8),
                                bg=idle_bg, fg=COLORS['fg_4'], anchor='w')
             sub_lbl.pack(fill='x')
             card._sub_lbl = sub_lbl
@@ -13943,7 +13850,7 @@ class ExFATBuilder(_TK_BASE):
 
         # ── Right chevron arrow ──
         arrow_lbl = tk.Label(inner, text='\u203a',
-                             font=('Segoe UI', 12),
+                             font=(FONTS['body'][0], 11),
                              bg=idle_bg, fg=COLORS['fg_4'])
         arrow_lbl.pack(side='right', padx=(4, 0))
         card._arrow_lbl = arrow_lbl
@@ -14020,7 +13927,7 @@ class ExFATBuilder(_TK_BASE):
                  bg=_TC['bg_1'], fg=_TC['fg_0']).pack(side='left')
 
         def _hbtn(text, command, danger=False):
-            return tk.Button(head, text=text,
+            return XButton(head, text=text,
                              font=(_TF['button'][0], 9),
                              bg=_TC['bg_2'],
                              fg=_TC['danger_hi'] if danger else _TC['fg_2'],
@@ -14073,7 +13980,7 @@ class ExFATBuilder(_TK_BASE):
         list_outer.pack(fill='both', expand=True)
         canvas = tk.Canvas(list_outer, bg=_TC['bg_1'],
                            highlightthickness=0)
-        sb = tk.Scrollbar(list_outer, command=canvas.yview,
+        sb = XScrollbar(list_outer, command=canvas.yview,
                           bg=_TC['bg_2'], troughcolor=_TC['bg_1'])
         canvas.configure(yscrollcommand=sb.set)
         self._bpr_list_frame = tk.Frame(canvas, bg=_TC['bg_1'])
@@ -14866,20 +14773,20 @@ class ExFATBuilder(_TK_BASE):
         win.transient(self)
 
         tk.Label(win, text='Restore original files (multi-select)',
-                 font=('Segoe UI', 13, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=BG, fg=TEXT).pack(anchor='w', padx=20, pady=(16, 2))
         tk.Label(win,
                  text='Each game is auto-matched to its saved originals zip by title-id.\nOnly games with a found backup can be ticked. Nothing on disk is deleted.',
-                 font=('Segoe UI', 9), justify='left',
+                 font=(FONTS['body'][0], 9), justify='left',
                  bg=BG, fg=MUTED).pack(anchor='w', padx=20, pady=(0, 10))
         tk.Label(win, text='Originals folder: %s' % orig_dir,
-                 font=('Consolas', 8), bg=BG, fg=MUTED,
+                 font=(FONTS['code'][0], 8), bg=BG, fg=MUTED,
                  wraplength=600, justify='left').pack(anchor='w', padx=20)
 
         outer = tk.Frame(win, bg=BG)
         outer.pack(fill='both', expand=True, padx=20, pady=10)
         canvas = tk.Canvas(outer, bg=COLORS['bg_0'], highlightthickness=0)
-        sb = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        sb = XScrollbar(outer, orient='vertical', command=canvas.yview)
         inner = tk.Frame(canvas, bg=COLORS['bg_0'])
         inner.bind('<Configure>',
                    lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
@@ -14893,7 +14800,7 @@ class ExFATBuilder(_TK_BASE):
             row = tk.Frame(inner, bg=COLORS['bg_0'])
             row.pack(fill='x', padx=6, pady=2)
             var = tk.BooleanVar(value=bool(zp))
-            cb = tk.Checkbutton(row, variable=var, bg=COLORS['bg_0'],
+            cb = XCheck(row, variable=var, bg=COLORS['bg_0'],
                                 activebackground='#0a0a0a',
                                 selectcolor='#1a1a1a',
                                 state='normal' if zp else 'disabled')
@@ -14906,7 +14813,7 @@ class ExFATBuilder(_TK_BASE):
             else:
                 lbl = '%s\n    ↳ (no matching originals zip found)' % title
                 fg = '#cc6666'
-            tk.Label(row, text=lbl, font=('Segoe UI', 9), justify='left',
+            tk.Label(row, text=lbl, font=(FONTS['body'][0], 9), justify='left',
                      bg=COLORS['bg_0'], fg=fg, anchor='w').pack(side='left',
                                                            fill='x', padx=6)
             vars_.append((var, g, zp))
@@ -14919,14 +14826,14 @@ class ExFATBuilder(_TK_BASE):
             for bv, _g, z in vars_:
                 if z:
                     bv.set(any_off)
-        tk.Button(footer, text='Select / clear all', font=('Segoe UI', 9),
+        XButton(footer, text='Select / clear all', font=(FONTS['body'][0], 9),
                   bg=COLORS['bg_4'], fg=TEXT, relief='flat', bd=0,
                   padx=12, pady=6, cursor='hand2',
                   command=_toggle_all).pack(side='left')
 
         tk.Label(footer, text='%d of %d have backups'
                  % (n_found, len(games)),
-                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left',
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='left',
                                                             padx=12)
 
         def _do_restore():
@@ -14966,12 +14873,12 @@ class ExFATBuilder(_TK_BASE):
                     % (ok_n, total_files, fail_n)))
             threading.Thread(target=worker, daemon=True).start()
 
-        tk.Button(footer, text='Restore selected',
-                  font=('Segoe UI', 10, 'bold'),
+        XButton(footer, text='Restore selected',
+                  font=(FONTS['body_strong'][0], 10),
                   bg='#9b59b6', fg=TEXT, relief='flat', bd=0,
                   padx=16, pady=8, cursor='hand2',
                   command=_do_restore).pack(side='right')
-        tk.Button(footer, text='Cancel', font=('Segoe UI', 9),
+        XButton(footer, text='Cancel', font=(FONTS['body'][0], 9),
                   bg=COLORS['bg_4'], fg=TEXT, relief='flat', bd=0,
                   padx=12, pady=8, cursor='hand2',
                   command=win.destroy).pack(side='right', padx=(0, 8))
@@ -17699,43 +17606,43 @@ class ExFATBuilder(_TK_BASE):
 
         row1 = tk.Frame(c_inner, bg=SURFACE2)
         row1.pack(fill='x', pady=(0, 6))
-        tk.Label(row1, text='PS5 IP Address:', font=('Segoe UI', 9),
+        tk.Label(row1, text='PS5 IP Address:', font=(FONTS['body'][0], 9),
                  bg=SURFACE2, fg=MUTED, width=18, anchor='w').pack(side='left')
         ip_ef = tk.Frame(row1, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
         ip_ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(ip_ef, textvariable=self._y2jb_ps5_ip,
-                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(ip_ef, textvariable=self._y2jb_ps5_ip,
+                 font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG, relief='flat', bd=6).pack(fill='x')
 
         row2 = tk.Frame(c_inner, bg=SURFACE2)
         row2.pack(fill='x', pady=(0, 6))
-        tk.Label(row2, text='FTP Port:', font=('Segoe UI', 9),
+        tk.Label(row2, text='FTP Port:', font=(FONTS['body'][0], 9),
                  bg=SURFACE2, fg=MUTED, width=18, anchor='w').pack(side='left')
         fp_ef = tk.Frame(row2, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
         fp_ef.pack(side='left')
-        tk.Entry(fp_ef, textvariable=self._y2jb_ftp_port,
-                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(fp_ef, textvariable=self._y2jb_ftp_port,
+                 font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG, relief='flat', bd=6, width=8).pack()
         tk.Label(row2, text='  (ftpsrv: 2121  /  etaHEN: 1337)',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(8,0))
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(8,0))
 
         row3 = tk.Frame(c_inner, bg=SURFACE2)
         row3.pack(fill='x')
-        tk.Label(row3, text='DPI Port:', font=('Segoe UI', 9),
+        tk.Label(row3, text='DPI Port:', font=(FONTS['body'][0], 9),
                  bg=SURFACE2, fg=MUTED, width=18, anchor='w').pack(side='left')
         dp_ef = tk.Frame(row3, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
         dp_ef.pack(side='left')
-        tk.Entry(dp_ef, textvariable=self._y2jb_dpi_port,
-                 font=('Consolas', 10), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(dp_ef, textvariable=self._y2jb_dpi_port,
+                 font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG, relief='flat', bd=6, width=8).pack()
         tk.Label(row3, text='  Direct Package Installer V2 port (default 12800)',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(8,0))
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(8,0))
 
         # Save connection button
         save_row = tk.Frame(c_inner, bg=SURFACE2)
         save_row.pack(fill='x', pady=(10, 0))
-        save_btn = tk.Button(save_row, text='Save Connection Settings',
-                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+        save_btn = XButton(save_row, text='Save Connection Settings',
+                  font=(FONTS['body'][0], 9), bg=ACCENT, fg=TEXT,
                   activebackground=COLORS['accent_pressed'], activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
                   command=self._y2jb_save_connection)
@@ -17743,8 +17650,8 @@ class ExFATBuilder(_TK_BASE):
         Tooltip(save_btn, 'Save the IP and port settings to disk so they\'re '
                           'restored on next launch.')
 
-        ftp_btn = tk.Button(save_row, text='Test FTP',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+        ftp_btn = XButton(save_row, text='Test FTP',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
                   command=self._y2jb_test_ftp)
@@ -17753,8 +17660,8 @@ class ExFATBuilder(_TK_BASE):
                          'and FTP port above. Confirms the PS5 is reachable '
                          'and an FTP payload (etaHEN, ftpsrv) is running.')
 
-        dpi_btn = tk.Button(save_row, text='Test DPI',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+        dpi_btn = XButton(save_row, text='Test DPI',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
                   command=self._y2jb_test_dpi)
@@ -17790,10 +17697,10 @@ class ExFATBuilder(_TK_BASE):
             lbl_row = tk.Frame(rf, bg=SURFACE2)
             lbl_row.pack(fill='x')
             tk.Label(lbl_row, text=region,
-                     font=('Segoe UI', 10, 'bold'), bg=SURFACE2, fg=TEXT,
+                     font=(FONTS['body_strong'][0], 10), bg=SURFACE2, fg=TEXT,
                      width=5, anchor='w').pack(side='left')
             tk.Label(lbl_row, text=patch_note,
-                     font=('Segoe UI', 8), bg=SURFACE2, fg=note_color).pack(side='left')
+                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=note_color).pack(side='left')
 
             # File path row
             field_row = tk.Frame(rf, bg=SURFACE2)
@@ -17801,8 +17708,8 @@ class ExFATBuilder(_TK_BASE):
             ef = tk.Frame(field_row, bg=FIELD_BG,
                           highlightbackground=BORDER, highlightthickness=1)
             ef.pack(side='left', fill='x', expand=True)
-            tk.Entry(ef, textvariable=self._y2jb_pkg_paths[region],
-                     font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+            XEntry(ef, textvariable=self._y2jb_pkg_paths[region],
+                     font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                      insertbackground=FIELD_FG,
                      disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
                      relief='flat', bd=4,
@@ -17819,8 +17726,8 @@ class ExFATBuilder(_TK_BASE):
                     save_settings(self._settings)
                     self._y2jb_check_pkg(r)
 
-            tk.Button(field_row, text='Browse',
-                      font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+            XButton(field_row, text='Browse',
+                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                       activebackground=BORDER, activeforeground=TEXT,
                       relief='flat', bd=0, padx=12, pady=4, cursor='hand2',
                       command=_browse_pkg).pack(side='left', padx=(6, 0))
@@ -17829,7 +17736,7 @@ class ExFATBuilder(_TK_BASE):
             status_var = tk.StringVar(value='')
             self._y2jb_pkg_status[region] = status_var
             tk.Label(rf, textvariable=status_var,
-                     font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                      anchor='w').pack(fill='x', pady=(2, 0))
 
         # Check existing paths on load
@@ -17843,15 +17750,15 @@ class ExFATBuilder(_TK_BASE):
 
         tk.Label(inst_body,
                  text='Select which region to install. Requires etaHEN + Direct Package Installer V2 enabled.',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED, anchor='w').pack(fill='x', pady=(0,8))
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED, anchor='w').pack(fill='x', pady=(0,8))
 
         inst_btns = tk.Frame(inst_body, bg=SURFACE2)
         inst_btns.pack(fill='x')
         for region in ('USA', 'EU', 'JP'):
             r = region
-            ibtn = tk.Button(inst_btns,
+            ibtn = XButton(inst_btns,
                       text='\U0001f4e4  Install %s' % region,
-                      font=('Segoe UI', 10, 'bold'),
+                      font=(FONTS['body_strong'][0], 10),
                       bg='#2a5298' if region == 'USA' else '#1a4a1a' if region == 'EU' else '#4a1a1a',
                       fg=TEXT,
                       activebackground=BORDER, activeforeground=TEXT,
@@ -17866,7 +17773,7 @@ class ExFATBuilder(_TK_BASE):
         self._y2jb_inst_step = tk.StringVar(value='')
         self._y2jb_inst_pct  = tk.StringVar(value='')
         tk.Label(inst_body, textvariable=self._y2jb_inst_step,
-                 font=('Segoe UI', 9, 'bold'), bg=SURFACE2, fg=TEXT,
+                 font=(FONTS['body_strong'][0], 9), bg=SURFACE2, fg=TEXT,
                  anchor='w').pack(fill='x', pady=(10, 2))
         bar_f = tk.Frame(inst_body, bg=TRACK, height=10)
         bar_f.pack(fill='x')
@@ -17879,7 +17786,7 @@ class ExFATBuilder(_TK_BASE):
             lambda e: self._y2jb_update_bar(getattr(self, '_y2jb_inst_pct_val', 0)))
         self._y2jb_inst_pct_val = 0
         tk.Label(inst_body, textvariable=self._y2jb_inst_pct,
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  anchor='w').pack(fill='x', pady=(2, 0))
 
 
@@ -17894,7 +17801,7 @@ class ExFATBuilder(_TK_BASE):
         reg_lbl_row = tk.Frame(patch_body, bg=SURFACE2)
         reg_lbl_row.pack(fill='x', pady=(0, 6))
         tk.Label(reg_lbl_row, text='Region to patch:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=16, anchor='w').pack(side='left')
         self._y2jb_patch_region = tk.StringVar(value='USA')
         # v3.0.0: use the central Y2JB_REGION_IDS so the UI label
@@ -17903,9 +17810,9 @@ class ExFATBuilder(_TK_BASE):
         REGION_IDS = self.Y2JB_REGION_IDS
         for reg in ['USA', 'EU', 'JP']:
             tid = REGION_IDS.get(reg, '')
-            tk.Radiobutton(reg_lbl_row, text='%s (%s)' % (reg, tid),
+            XRadio(reg_lbl_row, text='%s (%s)' % (reg, tid),
                            variable=self._y2jb_patch_region, value=reg,
-                           font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                            selectcolor=BG, activebackground=SURFACE2,
                            cursor='hand2').pack(side='left', padx=(0, 16))
 
@@ -17921,31 +17828,31 @@ class ExFATBuilder(_TK_BASE):
                        'by reading the file back.'
                        % (REGION_IDS['USA'], REGION_IDS['EU'],
                           REGION_IDS['JP'])),
-                 font=('Segoe UI', 8), bg='#2a1500', fg='#ffaa44',
+                 font=(FONTS['body'][0], 9), bg='#2a1500', fg='#ffaa44',
                  anchor='w', wraplength=860).pack(fill='x', padx=10, pady=6)
 
         # Patch local files
         local_lbl = tk.Frame(patch_body, bg=SURFACE2)
         local_lbl.pack(fill='x')
         tk.Label(local_lbl, text='Patch local files',
-                 font=('Segoe UI', 10, 'bold'), bg=SURFACE2, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 10), bg=SURFACE2, fg=TEXT).pack(side='left')
         tk.Label(local_lbl,
                  text='  \u2014  select folder containing app.db, appinfo.db and param.json from your PC',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
 
         self._y2jb_patch_dir = tk.StringVar()
         pf_row = tk.Frame(patch_body, bg=SURFACE2)
         pf_row.pack(fill='x', pady=(4, 8))
         pf_ef = tk.Frame(pf_row, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
         pf_ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(pf_ef, textvariable=self._y2jb_patch_dir,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(pf_ef, textvariable=self._y2jb_patch_dir,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG,
                  disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
                  relief='flat', bd=4,
                  state='readonly').pack(fill='x')
-        plf_browse = tk.Button(pf_row, text='Browse',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        plf_browse = XButton(pf_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=12, pady=4, cursor='hand2',
                   command=self._y2jb_browse_patch_dir)
@@ -17954,8 +17861,8 @@ class ExFATBuilder(_TK_BASE):
                             'app.db and appinfo.db you want to patch (usually '
                             'a folder you\'ve previously downloaded from PS5).')
 
-        plf_btn = tk.Button(pf_row, text='\U0001f6e1  Patch Local Files',
-                  font=('Segoe UI', 9, 'bold'), bg='#5a3a00', fg=TEXT,
+        plf_btn = XButton(pf_row, text='\U0001f6e1  Patch Local Files',
+                  font=(FONTS['body_strong'][0], 9), bg='#5a3a00', fg=TEXT,
                   activebackground='#7a5a00', relief='flat', bd=0,
                   padx=14, pady=4, cursor='hand2',
                   command=self._y2jb_patch_local)
@@ -17971,16 +17878,16 @@ class ExFATBuilder(_TK_BASE):
         ftp_lbl = tk.Frame(patch_body, bg=SURFACE2)
         ftp_lbl.pack(fill='x')
         tk.Label(ftp_lbl, text='Auto-Block over FTP',
-                 font=('Segoe UI', 10, 'bold'), bg=SURFACE2, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 10), bg=SURFACE2, fg=TEXT).pack(side='left')
         tk.Label(ftp_lbl,
                  text='  \u2014  patches param.json, appinfo.db and app.db directly on PS5 via FTP  \u2022  stay in PS5 Settings before running',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
 
         ftp_btn_row = tk.Frame(patch_body, bg=SURFACE2)
         ftp_btn_row.pack(fill='x', pady=(8, 0))
-        ab_btn = tk.Button(ftp_btn_row,
+        ab_btn = XButton(ftp_btn_row,
                   text='\U0001f4e1  Auto-Block over FTP',
-                  font=('Segoe UI', 9, 'bold'), bg=DANGER, fg=TEXT,
+                  font=(FONTS['body_strong'][0], 9), bg=DANGER, fg=TEXT,
                   activebackground='#cc2222', relief='flat', bd=0,
                   padx=14, pady=6, cursor='hand2',
                   command=self._y2jb_auto_block_ftp)
@@ -17993,12 +17900,12 @@ class ExFATBuilder(_TK_BASE):
         self._y2jb_register_gated_button(ab_btn)
         tk.Label(ftp_btn_row,
                  text='  \u2190 Stay in PS5 Settings menu before clicking this!',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg='#aa4444').pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg='#aa4444').pack(side='left')
 
         # Patch status
         self._y2jb_patch_status = tk.StringVar(value='')
         tk.Label(patch_body, textvariable=self._y2jb_patch_status,
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=SUCCESS,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
                  anchor='w', wraplength=900, justify='left').pack(fill='x', pady=(8, 0))
 
 
@@ -18012,14 +17919,14 @@ class ExFATBuilder(_TK_BASE):
         tk.Label(dat_body,
                  text='Places download0.dat into the correct PS5 path for the selected region. '
                       'The PS5 must have an FTP server running.',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
 
         # Region selector for dat
         dat_reg_row = tk.Frame(dat_body, bg=SURFACE2)
         dat_reg_row.pack(fill='x', pady=(0, 6))
         tk.Label(dat_reg_row, text='Region:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=10, anchor='w').pack(side='left')
         self._y2jb_dat_region = tk.StringVar(value='USA')
         DAT_PATHS = {
@@ -18028,9 +17935,9 @@ class ExFATBuilder(_TK_BASE):
             'JP':  '/user/download/PPSA01652',
         }
         for reg in ('USA', 'EU', 'JP'):
-            tk.Radiobutton(dat_reg_row, text='%s (%s)' % (reg, DAT_PATHS[reg]),
+            XRadio(dat_reg_row, text='%s (%s)' % (reg, DAT_PATHS[reg]),
                            variable=self._y2jb_dat_region, value=reg,
-                           font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                            selectcolor=BG, activebackground=SURFACE2,
                            cursor='hand2').pack(side='left', padx=(0, 12))
 
@@ -18039,18 +17946,18 @@ class ExFATBuilder(_TK_BASE):
         dat_file_row = tk.Frame(dat_body, bg=SURFACE2)
         dat_file_row.pack(fill='x', pady=(0, 8))
         tk.Label(dat_file_row, text='download0.dat:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=16, anchor='w').pack(side='left')
         dat_ef = tk.Frame(dat_file_row, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
         dat_ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(dat_ef, textvariable=self._y2jb_dat_path,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(dat_ef, textvariable=self._y2jb_dat_path,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG,
                  disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
                  relief='flat', bd=4,
                  state='readonly').pack(fill='x')
-        dat_browse_btn = tk.Button(dat_file_row, text='Browse',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        dat_browse_btn = XButton(dat_file_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=12, pady=4, cursor='hand2',
                   command=lambda: self._y2jb_browse_dat())
@@ -18058,9 +17965,9 @@ class ExFATBuilder(_TK_BASE):
         Tooltip(dat_browse_btn, 'Pick the download0.dat file you downloaded '
                                 'from the ps5-y2jb-autoloader releases page.')
 
-        place_btn = tk.Button(dat_file_row,
+        place_btn = XButton(dat_file_row,
                   text='\U0001f4e4  Place on PS5',
-                  font=('Segoe UI', 9, 'bold'), bg='#1a5a3a', fg=TEXT,
+                  font=(FONTS['body_strong'][0], 9), bg='#1a5a3a', fg=TEXT,
                   activebackground='#2a7a4a', relief='flat', bd=0,
                   padx=14, pady=4, cursor='hand2',
                   command=self._y2jb_place_dat)
@@ -18073,7 +17980,7 @@ class ExFATBuilder(_TK_BASE):
 
         self._y2jb_dat_status = tk.StringVar(value='')
         tk.Label(dat_body, textvariable=self._y2jb_dat_status,
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=SUCCESS,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
                  anchor='w').pack(fill='x')
         ico_outer = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
         ico_outer.pack(fill='x', padx=24, pady=(0, 12))
@@ -18083,14 +17990,14 @@ class ExFATBuilder(_TK_BASE):
         tk.Label(ico_body,
                  text='Upload a custom 512x512 PNG as the YouTube app icon. '
                       'Uploads to /user/appmeta/<TitleID>/icon0.png for the selected region(s) via FTP.',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
 
         # Region checkboxes (can do all 3 at once)
         ico_reg_row = tk.Frame(ico_body, bg=SURFACE2)
         ico_reg_row.pack(fill='x', pady=(0, 6))
         tk.Label(ico_reg_row, text='Region(s):',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=12, anchor='w').pack(side='left')
         ICON_PATHS = {
             'USA': '/user/appmeta/PPSA01650/icon0.png',
@@ -18101,10 +18008,10 @@ class ExFATBuilder(_TK_BASE):
         for reg in ('USA', 'EU', 'JP'):
             var = tk.BooleanVar(value=True)
             self._y2jb_icon_regions[reg] = var
-            tk.Checkbutton(ico_reg_row,
+            XCheck(ico_reg_row,
                            text='%s  (%s)' % (reg, ICON_PATHS[reg]),
                            variable=var,
-                           font=('Segoe UI', 8), bg=SURFACE2, fg=TEXT,
+                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                            selectcolor=BG, activebackground=SURFACE2,
                            cursor='hand2').pack(side='left', padx=(0, 14))
 
@@ -18113,25 +18020,25 @@ class ExFATBuilder(_TK_BASE):
         ico_file_row = tk.Frame(ico_body, bg=SURFACE2)
         ico_file_row.pack(fill='x', pady=(0, 8))
         tk.Label(ico_file_row, text='icon0.png (512x512):',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=20, anchor='w').pack(side='left')
         ico_ef = tk.Frame(ico_file_row, bg=FIELD_BG,
                           highlightbackground=BORDER, highlightthickness=1)
         ico_ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(ico_ef, textvariable=self._y2jb_icon_path,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(ico_ef, textvariable=self._y2jb_icon_path,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG,
                  disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
                  relief='flat', bd=4,
                  state='readonly').pack(fill='x')
-        tk.Button(ico_file_row, text='Browse',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(ico_file_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=12, pady=4, cursor='hand2',
                   command=self._y2jb_browse_icon).pack(side='left', padx=(6, 0))
-        icon_upload_btn = tk.Button(ico_file_row,
+        icon_upload_btn = XButton(ico_file_row,
                   text='\U0001f5bc  Upload Icon to PS5',
-                  font=('Segoe UI', 9, 'bold'), bg='#3a2a5a', fg=TEXT,
+                  font=(FONTS['body_strong'][0], 9), bg='#3a2a5a', fg=TEXT,
                   activebackground='#5a3a8a', relief='flat', bd=0,
                   padx=14, pady=4, cursor='hand2',
                   command=self._y2jb_upload_icon)
@@ -18142,12 +18049,12 @@ class ExFATBuilder(_TK_BASE):
         tk.Label(ico_body,
                  text='\u26a0  PNG must be exactly 512x512 pixels. The PS5 may need to be restarted '
                       'or the app re-launched for the icon to refresh.',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg='#aa8800',
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg='#aa8800',
                  anchor='w', wraplength=880).pack(fill='x', pady=(0, 4))
 
         self._y2jb_icon_status = tk.StringVar(value='')
         tk.Label(ico_body, textvariable=self._y2jb_icon_status,
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=SUCCESS,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
                  anchor='w').pack(fill='x')
 
         art_outer = tk.Frame(parent, bg=SURFACE2,
@@ -18157,22 +18064,22 @@ class ExFATBuilder(_TK_BASE):
         art_body.pack(fill='x', padx=14, pady=10)
         tk.Label(art_body,
                  text='Upload a full art set from a local folder. Sends pic0.png / pic0.dds / pic1.dds / pic2.dds (and icon0.png if present) to /user/appmeta/<TitleID>/, and icon0.png / pic0.png to /user/catalog_downloader/appmeta/<TitleID>/. Overwrite only — missing files are skipped.',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
 
         art_reg_row = tk.Frame(art_body, bg=SURFACE2)
         art_reg_row.pack(fill='x', pady=(0, 6))
         tk.Label(art_reg_row, text='Region(s):',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=12, anchor='w').pack(side='left')
         self._y2jb_art_regions = {}
         for reg in ('USA', 'EU', 'JP'):
             var = tk.BooleanVar(value=True)
             self._y2jb_art_regions[reg] = var
-            tk.Checkbutton(art_reg_row,
+            XCheck(art_reg_row,
                            text=f'{reg!s}  ({self.Y2JB_REGION_IDS[reg]!s})',
                            variable=var,
-                           font=('Segoe UI', 8), bg=SURFACE2, fg=TEXT,
+                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                            selectcolor=BG, activebackground=SURFACE2,
                            cursor='hand2').pack(side='left', padx=(0, 14))
 
@@ -18180,25 +18087,25 @@ class ExFATBuilder(_TK_BASE):
         art_file_row = tk.Frame(art_body, bg=SURFACE2)
         art_file_row.pack(fill='x', pady=(0, 8))
         tk.Label(art_file_row, text='Art folder:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=20, anchor='w').pack(side='left')
         art_ef = tk.Frame(art_file_row, bg=FIELD_BG,
                           highlightbackground=BORDER, highlightthickness=1)
         art_ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(art_ef, textvariable=self._y2jb_art_dir,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(art_ef, textvariable=self._y2jb_art_dir,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG,
                  disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
                  relief='flat', bd=4, state='readonly').pack(fill='x')
-        tk.Button(art_file_row, text='Browse',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(art_file_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=12, pady=4, cursor='hand2',
                   command=self._y2jb_browse_art_dir).pack(side='left',
                                                           padx=(6, 0))
-        art_upload_btn = tk.Button(art_file_row,
+        art_upload_btn = XButton(art_file_row,
                   text='\U0001f5bc  Upload Art Set to PS5',
-                  font=('Segoe UI', 9, 'bold'), bg='#3a2a5a', fg=TEXT,
+                  font=(FONTS['body_strong'][0], 9), bg='#3a2a5a', fg=TEXT,
                   activebackground='#5a3a8a', relief='flat', bd=0,
                   padx=14, pady=4, cursor='hand2',
                   command=self._y2jb_upload_art_set)
@@ -18207,7 +18114,7 @@ class ExFATBuilder(_TK_BASE):
 
         self._y2jb_art_status = tk.StringVar(value='')
         tk.Label(art_body, textvariable=self._y2jb_art_status,
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=SUCCESS,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
                  anchor='w').pack(fill='x')
 
 
@@ -18216,10 +18123,10 @@ class ExFATBuilder(_TK_BASE):
         al_hdr = tk.Frame(parent, bg=BG)
         al_hdr.pack(fill='x', padx=24, pady=(8, 4))
         tk.Label(al_hdr, text='\U0001f4c4  ps5_autoloader Editor',
-                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
         tk.Label(al_hdr,
                  text='  — edit autoload.txt and manage ELF files in the ps5_autoloader folder',
-                 font=('Segoe UI', 8), bg=BG, fg=COLORS['fg_5']).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=BG, fg=COLORS['fg_5']).pack(side='left')
 
         al_outer = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
         al_outer.pack(fill='x', padx=24, pady=(0, 6))
@@ -18230,25 +18137,25 @@ class ExFATBuilder(_TK_BASE):
         al_dir_row = tk.Frame(al_inner, bg=SURFACE2)
         al_dir_row.pack(fill='x', pady=(0, 6))
         tk.Label(al_dir_row, text='ps5_autoloader folder:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=22, anchor='w').pack(side='left')
         self._al_dir_var = tk.StringVar(value=self._settings.get('al_dir', ''))
         al_dir_ef = tk.Frame(al_dir_row, bg=FIELD_BG,
                              highlightbackground=BORDER, highlightthickness=1)
         al_dir_ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(al_dir_ef, textvariable=self._al_dir_var,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(al_dir_ef, textvariable=self._al_dir_var,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG,
                  disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
                  relief='flat', bd=4,
                  state='readonly').pack(fill='x')
-        tk.Button(al_dir_row, text='Browse',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(al_dir_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=10, pady=3, cursor='hand2',
                   command=self._al_browse_dir).pack(side='left', padx=(6, 0))
-        tk.Button(al_dir_row, text='Load',
-                  font=('Segoe UI', 9), bg=ACCENT, fg=TEXT,
+        XButton(al_dir_row, text='Load',
+                  font=(FONTS['body'][0], 9), bg=ACCENT, fg=TEXT,
                   activebackground=COLORS['accent_pressed'], relief='flat', bd=0,
                   padx=10, pady=3, cursor='hand2',
                   command=self._al_load).pack(side='left', padx=(4, 0))
@@ -18256,17 +18163,17 @@ class ExFATBuilder(_TK_BASE):
         # Info label
         tk.Label(al_inner,
                  text='autoload.txt format: one ELF/BIN/JS per line \u2022 !1000 = sleep 1000ms \u2022 # lines are comments',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5'],
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5'],
                  anchor='w').pack(fill='x', pady=(0, 6))
 
         # Text editor for autoload.txt
         al_edit_frame = tk.Frame(al_inner, bg=COLORS['bg_0'],
                                   highlightbackground=BORDER, highlightthickness=1)
         al_edit_frame.pack(fill='x', pady=(0, 6))
-        al_edit_sb = tk.Scrollbar(al_edit_frame, bg=SURFACE2, troughcolor=BG)
+        al_edit_sb = XScrollbar(al_edit_frame, bg=SURFACE2, troughcolor=BG)
         al_edit_sb.pack(side='right', fill='y')
         self._al_text = tk.Text(al_edit_frame,
-                                 font=('Consolas', 9), bg=COLORS['bg_0'], fg=COLORS['fg_2'],
+                                 font=(FONTS['code'][0], 9), bg=COLORS['bg_0'], fg=COLORS['fg_2'],
                                  insertbackground=TEXT, relief='flat', bd=6,
                                  spacing1=0, spacing2=0, spacing3=0, height=8,
                                  yscrollcommand=al_edit_sb.set)
@@ -18277,10 +18184,10 @@ class ExFATBuilder(_TK_BASE):
         al_files_lbl = tk.Frame(al_inner, bg=SURFACE2)
         al_files_lbl.pack(fill='x', pady=(6, 2))
         tk.Label(al_files_lbl, text='ELF files in folder:',
-                 font=('Segoe UI', 9, 'bold'), bg=SURFACE2, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 9), bg=SURFACE2, fg=TEXT).pack(side='left')
         tk.Label(al_files_lbl,
                  text='  click to insert into editor at cursor',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
 
         self._al_files_frame = tk.Frame(al_inner, bg=SURFACE2)
         self._al_files_frame.pack(fill='x', pady=(0, 6))
@@ -18288,24 +18195,24 @@ class ExFATBuilder(_TK_BASE):
         # Action buttons
         al_btn_row = tk.Frame(al_inner, bg=SURFACE2)
         al_btn_row.pack(fill='x')
-        tk.Button(al_btn_row, text='\u2795 Add ELF file',
-                  font=('Segoe UI', 9), bg='#1a5a3a', fg=TEXT,
+        XButton(al_btn_row, text='\u2795 Add ELF file',
+                  font=(FONTS['body'][0], 9), bg='#1a5a3a', fg=TEXT,
                   activebackground='#2a7a4a', relief='flat', bd=0,
                   padx=10, pady=4, cursor='hand2',
                   command=self._al_add_elf).pack(side='left')
-        tk.Button(al_btn_row, text='!sleep Insert',
-                  font=('Segoe UI', 9), bg='#3a3a1a', fg=TEXT,
+        XButton(al_btn_row, text='!sleep Insert',
+                  font=(FONTS['body'][0], 9), bg='#3a3a1a', fg=TEXT,
                   activebackground='#5a5a2a', relief='flat', bd=0,
                   padx=10, pady=4, cursor='hand2',
                   command=self._al_insert_sleep).pack(side='left', padx=(6, 0))
-        tk.Button(al_btn_row, text='\U0001f4be Save autoload.txt',
-                  font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg=TEXT,
+        XButton(al_btn_row, text='\U0001f4be Save autoload.txt',
+                  font=(FONTS['body_strong'][0], 9), bg=ACCENT, fg=TEXT,
                   activebackground=COLORS['accent_pressed'], relief='flat', bd=0,
                   padx=14, pady=4, cursor='hand2',
                   command=self._al_save).pack(side='left', padx=(6, 0))
         self._al_status_var = tk.StringVar(value='')
         tk.Label(al_btn_row, textvariable=self._al_status_var,
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=SUCCESS).pack(side='left', padx=(12, 0))
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS).pack(side='left', padx=(12, 0))
 
         # Auto-load if folder already saved
         if self._al_dir_var.get() and os.path.isdir(self._al_dir_var.get()):
@@ -18451,7 +18358,7 @@ class ExFATBuilder(_TK_BASE):
                      ).pack(side='left', padx=(10, 0))
 
             # Right action — Send button
-            send_btn = tk.Button(inner,
+            send_btn = XButton(inner,
                 text='\u2197  ' + _('Send'),
                 font=(_TF['button'][0], 9, 'bold'),
                 bg=_TC['accent'], fg=_TC['fg_0'],
@@ -18487,7 +18394,7 @@ class ExFATBuilder(_TK_BASE):
         if rendered == 0:
             tk.Label(self._pl_list_frame,
                      text='No matches for current filter.',
-                     font=('Segoe UI', 9), bg=_TC['bg_2'], fg=_TC['fg_5'],
+                     font=(FONTS['body'][0], 9), bg=_TC['bg_2'], fg=_TC['fg_5'],
                      pady=40
                      ).pack(fill='x')
 
@@ -18517,19 +18424,19 @@ class ExFATBuilder(_TK_BASE):
         def row(label, var, browse=False):
             r = tk.Frame(body, bg=BG)
             r.pack(fill='x', pady=(0,8))
-            tk.Label(r, text=label, font=('Segoe UI', 9),
+            tk.Label(r, text=label, font=(FONTS['body'][0], 9),
                      bg=BG, fg=MUTED, width=10, anchor='w').pack(side='left')
             ef = tk.Frame(r, bg=FIELD_BG,
                           highlightbackground=BORDER, highlightthickness=1)
             ef.pack(side='left', fill='x', expand=True)
-            e = tk.Entry(ef, textvariable=var, font=('Consolas', 9),
+            e = XEntry(ef, textvariable=var, font=(FONTS['code'][0], 9),
                          bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
                          selectbackground=FIELD_SEL_BG,
                          selectforeground=FIELD_SEL_FG, relief='flat', bd=4)
             e.pack(fill='x')
             if browse:
-                tk.Button(r, text='Browse',
-                          font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                XButton(r, text='Browse',
+                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                           activebackground=BORDER, activeforeground=TEXT,
                           relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
                           command=lambda v=var: self._pl_browse_file(v, name_var)
@@ -18567,13 +18474,13 @@ class ExFATBuilder(_TK_BASE):
             self._pl_status_var.set(('Added' if is_new else 'Updated') + ': ' + name)
             win.destroy()
 
-        tk.Button(btn_row, text='Save',
-                  font=('Segoe UI', 10, 'bold'), bg=SUCCESS, fg=TEXT,
+        XButton(btn_row, text='Save',
+                  font=(FONTS['body_strong'][0], 10), bg=SUCCESS, fg=TEXT,
                   activebackground='#3d9140', activeforeground=TEXT,
                   relief='flat', bd=0, padx=18, pady=6, cursor='hand2',
                   command=_save).pack(side='left')
-        tk.Button(btn_row, text='Cancel',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+        XButton(btn_row, text='Cancel',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
                   command=win.destroy).pack(side='left', padx=(8,0))
@@ -18768,21 +18675,21 @@ class ExFATBuilder(_TK_BASE):
             files = []
         if not files:
             tk.Label(self._al_files_frame, text='No ELF/BIN/JS files in folder',
-                     font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
             return
         for fname in files:
             # Card: [filename button] [🗑 delete]
             card = tk.Frame(self._al_files_frame, bg='#1a2a1a',
                             highlightbackground='#2a4a2a', highlightthickness=1)
             card.pack(side='left', padx=(0, 4))
-            tk.Button(card, text=fname,
-                      font=('Consolas', 8), bg='#1a2a1a', fg='#88dd88',
+            XButton(card, text=fname,
+                      font=(FONTS['code'][0], 8), bg='#1a2a1a', fg='#88dd88',
                       activebackground='#2a4a2a', activeforeground=TEXT,
                       relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
                       command=lambda fn=fname: self._al_insert_filename(fn)
                       ).pack(side='left')
-            tk.Button(card, text='🗑',
-                      font=('Segoe UI', 8), bg='#1a2a1a', fg='#884444',
+            XButton(card, text='🗑',
+                      font=(FONTS['body'][0], 9), bg='#1a2a1a', fg='#884444',
                       activebackground='#3a1a1a', activeforeground='#ff6666',
                       relief='flat', bd=0, padx=4, pady=3, cursor='hand2',
                       command=lambda fn=fname: self._al_delete_payload(fn)
@@ -19138,14 +19045,14 @@ class ExFATBuilder(_TK_BASE):
         hdr_row = tk.Frame(body, bg=SURFACE2)
         hdr_row.pack(fill='x')
         tk.Label(hdr_row, text='Language Stripper',
-                 font=('Segoe UI', 11, 'bold'), bg=SURFACE2, fg=TEXT,
+                 font=(FONTS['body_strong'][0], 11), bg=SURFACE2, fg=TEXT,
                  padx=12, pady=8).pack(side='left')
         tk.Label(hdr_row,
                  text='⚠ Deletes files permanently — back up games first',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=DANGER).pack(side='left', padx=(0,8))
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=DANGER).pack(side='left', padx=(0,8))
         tk.Label(hdr_row,
                  text='🔬 BETA — may not work on all games',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=WARNING).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=WARNING).pack(side='left')
 
         inner = tk.Frame(body, bg=SURFACE2)
         inner.pack(fill='both', expand=True, pady=(0, 12))
@@ -19155,20 +19062,20 @@ class ExFATBuilder(_TK_BASE):
         tk.Label(desc,
                  text='Remove unwanted language folders from PS5 game dumps to save space.\n'
                       'Only language-specific subfolders are removed — core game files are never touched.',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED, justify='left').pack(anchor='w')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED, justify='left').pack(anchor='w')
 
         # Mode selector
         mode_row = tk.Frame(inner, bg=SURFACE2)
         mode_row.pack(fill='x', padx=12, pady=(6, 0))
         self._ls_mode_var = tk.StringVar(value='single')
-        tk.Radiobutton(mode_row, text='Single game folder',
+        XRadio(mode_row, text='Single game folder',
                        variable=self._ls_mode_var, value='single',
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        command=self._ls_mode_change).pack(side='left')
-        tk.Radiobutton(mode_row, text='Scan all games in a folder',
+        XRadio(mode_row, text='Scan all games in a folder',
                        variable=self._ls_mode_var, value='batch',
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        command=self._ls_mode_change).pack(side='left', padx=(20, 0))
 
@@ -19176,23 +19083,23 @@ class ExFATBuilder(_TK_BASE):
         path_row = tk.Frame(inner, bg=SURFACE2)
         path_row.pack(fill='x', padx=12, pady=(8, 0))
         tk.Label(path_row, text='Games folder:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=14, anchor='w').pack(side='left')
         self._ls_game_var = tk.StringVar()
         ef = tk.Frame(path_row, bg=FIELD_BG,
                       highlightbackground=BORDER, highlightthickness=1)
         ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(ef, textvariable=self._ls_game_var,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(ef, textvariable=self._ls_game_var,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG, relief='flat', bd=4).pack(fill='x')
-        self._ls_browse_btn = tk.Button(path_row, text='Browse',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        self._ls_browse_btn = XButton(path_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=SURFACE2, relief='flat', bd=0,
                   padx=10, pady=3, cursor='hand2',
                   command=self._ls_browse)
         self._ls_browse_btn.pack(side='left', padx=(6, 0))
-        self._ls_scan_btn = tk.Button(path_row, text='🔍 Scan',
-                  font=('Segoe UI', 9, 'bold'),
+        self._ls_scan_btn = XButton(path_row, text='🔍 Scan',
+                  font=(FONTS['body_strong'][0], 9),
                   bg=ACCENT, fg=TEXT, activebackground='#2d7dd6',
                   relief='flat', bd=0, padx=12, pady=3, cursor='hand2',
                   command=self._ls_scan)
@@ -19202,7 +19109,7 @@ class ExFATBuilder(_TK_BASE):
         quick_row = tk.Frame(inner, bg=SURFACE2)
         quick_row.pack(fill='x', padx=12, pady=(8, 4))
         tk.Label(quick_row, text='Quick keep:',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED).pack(side='left')
         for label, codes in [
             ('🇬🇧 EN only', ['en','en-us','en-gb']),
             ('🇯🇵 JA only', ['ja']),
@@ -19212,8 +19119,8 @@ class ExFATBuilder(_TK_BASE):
             ('EN+JA', ['en','en-us','en-gb','ja']),
             ('EU only', ['en','fr','de','es','it','pt','nl']),
         ]:
-            tk.Button(quick_row, text=label,
-                      font=('Segoe UI', 8), bg=SURFACE2, fg=TEXT,
+            XButton(quick_row, text=label,
+                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                       activebackground=BG, relief='flat', bd=0,
                       padx=8, pady=2, cursor='hand2',
                       command=lambda c=codes: self._ls_keep_only(c)
@@ -19222,7 +19129,7 @@ class ExFATBuilder(_TK_BASE):
         # Status
         self._ls_status_var = tk.StringVar(value='Select a game folder and click Scan')
         tk.Label(inner, textvariable=self._ls_status_var,
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  anchor='w', padx=12, pady=4).pack(fill='x')
 
         # Results area
@@ -19230,7 +19137,7 @@ class ExFATBuilder(_TK_BASE):
         self._ls_scroll_outer.pack(fill='both', expand=True, padx=12, pady=(0, 8))
         self._ls_canvas = tk.Canvas(self._ls_scroll_outer, bg=SURFACE2,
                                     highlightthickness=0, height=200)
-        self._ls_sb = tk.Scrollbar(self._ls_scroll_outer, orient='vertical',
+        self._ls_sb = XScrollbar(self._ls_scroll_outer, orient='vertical',
                                    command=self._ls_canvas.yview)
         self._ls_canvas.configure(yscrollcommand=self._ls_sb.set)
         self._ls_check_frame = tk.Frame(self._ls_canvas, bg=SURFACE2)
@@ -19248,23 +19155,23 @@ class ExFATBuilder(_TK_BASE):
         # Bottom action bar
         act = tk.Frame(inner, bg=SURFACE2)
         act.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Button(act, text='✓ Keep All',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(act, text='✓ Keep All',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=SURFACE2, relief='flat', bd=0,
                   padx=10, pady=4, cursor='hand2',
                   command=lambda: self._ls_select_all(True)).pack(side='left')
-        tk.Button(act, text='✗ Keep None',
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(act, text='✗ Keep None',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=SURFACE2, relief='flat', bd=0,
                   padx=10, pady=4, cursor='hand2',
                   command=lambda: self._ls_select_all(False)).pack(side='left', padx=(4, 0))
         self._ls_savings_var = tk.StringVar(value='')
         tk.Label(act, textvariable=self._ls_savings_var,
-                 font=('Segoe UI', 9, 'bold'), bg=SURFACE2,
+                 font=(FONTS['body_strong'][0], 9), bg=SURFACE2,
                  fg=SUCCESS).pack(side='left', padx=(12, 0))
-        tk.Button(act,
+        XButton(act,
                   text='🗑  Strip Unchecked Languages',
-                  font=('Segoe UI', 9, 'bold'),
+                  font=(FONTS['body_strong'][0], 9),
                   bg=DANGER, fg='#ffffff', activebackground='#c0392b',
                   relief='flat', bd=0, padx=14, pady=5,
                   cursor='hand2', command=self._ls_strip).pack(side='right')
@@ -19515,7 +19422,7 @@ class ExFATBuilder(_TK_BASE):
         hdr.pack(fill='x', pady=(2, 0))
         for txt, w, anchor in [('Keep?', 5, 'w'), ('Language', 22, 'w'),
                                 ('Files/Folders', 8, 'center'), ('Size', 10, 'e')]:
-            tk.Label(hdr, text=txt, font=('Segoe UI', 8, 'bold'),
+            tk.Label(hdr, text=txt, font=(FONTS['body_strong'][0], 9),
                      bg=BG, fg=MUTED, width=w, anchor=anchor,
                      padx=4, pady=3).pack(side='left')
         tk.Frame(self._ls_check_frame, bg=BORDER, height=1).pack(fill='x')
@@ -19539,7 +19446,7 @@ class ExFATBuilder(_TK_BASE):
                         self._ls_check_vars[p].set(state)
                 self._ls_update_savings()
 
-            chk = tk.Checkbutton(row, variable=chk_var,
+            chk = XCheck(row, variable=chk_var,
                                   bg=row_bg, activebackground=row_bg,
                                   selectcolor='#1a3a1a', cursor='hand2',
                                   command=_on_group_toggle)
@@ -19556,11 +19463,11 @@ class ExFATBuilder(_TK_BASE):
                     'bg':'🇧🇬','sk':'🇸🇰'}.get(code, '🌐')
 
             tk.Label(row, text='%s  %s' % (flag, lang_name),
-                     font=('Segoe UI', 9, 'bold'), bg=row_bg, fg=TEXT,
+                     font=(FONTS['body_strong'][0], 9), bg=row_bg, fg=TEXT,
                      anchor='w', width=24).pack(side='left', padx=(2, 0))
 
             tk.Label(row, text=str(len(items)),
-                     font=('Segoe UI', 8), bg=row_bg, fg=MUTED,
+                     font=(FONTS['body'][0], 9), bg=row_bg, fg=MUTED,
                      width=8, anchor='center').pack(side='left')
 
             sz_str = ('%.1f GB' % (total_lang_sz/1024**3)
@@ -19569,7 +19476,7 @@ class ExFATBuilder(_TK_BASE):
                       if total_lang_sz >= 1024**2
                       else '%d KB' % (total_lang_sz/1024))
             tk.Label(row, text=sz_str,
-                     font=('Segoe UI', 9, 'bold'), bg=row_bg,
+                     font=(FONTS['body_strong'][0], 9), bg=row_bg,
                      fg=DANGER if total_lang_sz > 500*1024*1024 else MUTED,
                      width=10, anchor='e').pack(side='left')
 
@@ -19585,7 +19492,7 @@ class ExFATBuilder(_TK_BASE):
                         ivar = self._ls_check_vars.get(p, tk.BooleanVar(value=True))
                         self._ls_check_vars[p] = ivar
                         tk.Label(irow, text='   ', bg=rb, width=4).pack(side='left')
-                        ck = tk.Checkbutton(irow, variable=ivar, bg=rb,
+                        ck = XCheck(irow, variable=ivar, bg=rb,
                                             activebackground=rb, selectcolor='#1a3a1a',
                                             cursor='hand2',
                                             command=self._ls_update_savings)
@@ -19593,13 +19500,13 @@ class ExFATBuilder(_TK_BASE):
                         rel = os.path.relpath(p, game) if game else p
                         type_icon = '📁' if kind == 'folder' else '🎬' if 'video' in lang.lower() else '🔊' if 'audio' in lang.lower() else '📄'
                         tk.Label(irow, text=type_icon + ' ' + (rel[:72] if len(rel) > 72 else rel),
-                                 font=('Consolas', 7), bg=rb, fg=COLORS['fg_5'], anchor='w'
+                                 font=(FONTS['code'][0], 7), bg=rb, fg=COLORS['fg_5'], anchor='w'
                                  ).pack(side='left', fill='x', expand=True)
                         s = ('%.0fMB' % (sz/1024**2) if sz >= 1024**2 else '%dKB' % (sz/1024))
-                        tk.Label(irow, text=s, font=('Segoe UI', 7), bg=rb, fg=MUTED
+                        tk.Label(irow, text=s, font=(FONTS['body'][0], 9), bg=rb, fg=MUTED
                                  ).pack(side='right', padx=(0,8))
 
-            expand_btn = tk.Label(row, text='▶', font=('Segoe UI', 7),
+            expand_btn = tk.Label(row, text='▶', font=(FONTS['body'][0], 9),
                                    bg=row_bg, fg=MUTED, cursor='hand2')
             expand_btn.pack(side='right', padx=(0, 8))
             expand_btn.bind('<Button-1>', lambda e, df=detail_frame,
@@ -19637,7 +19544,7 @@ class ExFATBuilder(_TK_BASE):
             hdr = tk.Frame(self._ls_check_frame, bg=ACCENT)
             hdr.pack(fill='x', pady=(6, 0))
             tk.Label(hdr, text='🎮 ' + game_name,
-                     font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg=TEXT,
+                     font=(FONTS['body_strong'][0], 9), bg=ACCENT, fg=TEXT,
                      padx=8, pady=3).pack(side='left')
 
             # Calc sizes
@@ -19795,10 +19702,10 @@ class ExFATBuilder(_TK_BASE):
         pb_label = tk.Frame(body, bg=BG)
         pb_label.pack(fill='x', padx=24, pady=(0, 6))
         tk.Label(pb_label, text='Post-Build Actions',
-                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
         tk.Label(pb_label,
                  text='Actions performed automatically after a successful build',
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left', padx=(10, 0))
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='left', padx=(10, 0))
 
         pb_body = tk.Frame(body, bg=SURFACE2,
                            highlightbackground=BORDER, highlightthickness=1)
@@ -19811,68 +19718,68 @@ class ExFATBuilder(_TK_BASE):
             value=self._settings.get('adv_delete_source', False))
         del_row = tk.Frame(pb_inner, bg=SURFACE2)
         del_row.pack(fill='x', pady=(0, 6))
-        tk.Checkbutton(del_row,
+        XCheck(del_row,
                        text='Delete source game folder after successful exFAT build',
                        variable=self._adv_delete_source_var,
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        cursor='hand2',
                        command=self._adv_save_post_build).pack(side='left')
         tk.Label(del_row,
                  text='  ⚠ Cannot be undone',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=DANGER).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=DANGER).pack(side='left')
 
         # Delete source folder after successful ffpkg build
         self._adv_delete_source_ffpkg_var = tk.BooleanVar(
             value=self._settings.get('adv_delete_source_ffpkg', False))
         del_row2 = tk.Frame(pb_inner, bg=SURFACE2)
         del_row2.pack(fill='x', pady=(0, 6))
-        tk.Checkbutton(del_row2,
+        XCheck(del_row2,
                        text='Delete source game folder after successful ffpkg build',
                        variable=self._adv_delete_source_ffpkg_var,
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        cursor='hand2',
                        command=self._adv_save_post_build).pack(side='left')
         tk.Label(del_row2,
                  text='  ⚠ Cannot be undone',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=DANGER).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=DANGER).pack(side='left')
 
         tk.Frame(pb_inner, bg=BORDER, height=1).pack(fill='x', pady=(8, 8))
 
         # ── Auto FTP upload after build ──
         upload_row = tk.Frame(pb_inner, bg=SURFACE2)
         upload_row.pack(fill='x', pady=(0, 6))
-        tk.Checkbutton(upload_row,
+        XCheck(upload_row,
                        text='Auto-upload .exfat to PS5 via FTP after successful build',
                        variable=self._adv_auto_upload_var,
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        cursor='hand2',
                        command=self._adv_save_post_build).pack(side='left')
         tk.Label(upload_row,
                  text='  (uses FTP settings from Settings tab)',
-                 font=('Segoe UI', 7), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
 
         # ── Robocopy log file ──
         robo_row = tk.Frame(pb_inner, bg=SURFACE2)
         robo_row.pack(fill='x', pady=(0, 6))
-        tk.Checkbutton(robo_row,
+        XCheck(robo_row,
                        text='Save robocopy log to file',
                        variable=self._adv_robo_log_var,
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        cursor='hand2',
                        command=self._adv_save_post_build).pack(side='left')
         robo_ef = tk.Frame(robo_row, bg=FIELD_BG,
                            highlightbackground=BORDER, highlightthickness=1)
         robo_ef.pack(side='left', padx=(8,0), fill='x', expand=True)
-        tk.Entry(robo_ef, textvariable=self._adv_robo_log_dir_var,
-                 font=('Consolas', 8), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(robo_ef, textvariable=self._adv_robo_log_dir_var,
+                 font=(FONTS['code'][0], 8), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG, relief='flat', bd=3,
                  width=28).pack(fill='x')
-        tk.Button(robo_row, text='Browse',
-                  font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+        XButton(robo_row, text='Browse',
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=6, pady=2, cursor='hand2',
                   command=self._adv_browse_robo_log).pack(side='left', padx=(4,0))
@@ -19880,10 +19787,10 @@ class ExFATBuilder(_TK_BASE):
         # ── Checksum verification ──
         cksum_row = tk.Frame(pb_inner, bg=SURFACE2)
         cksum_row.pack(fill='x', pady=(0, 6))
-        tk.Checkbutton(cksum_row,
+        XCheck(cksum_row,
                        text='Checksum verification after build (SHA-256 hash, slower but accurate)',
                        variable=self._adv_checksum_var,
-                       font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                       font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                        activebackground=SURFACE2, selectcolor=BG,
                        cursor='hand2',
                        command=self._adv_save_post_build).pack(side='left')
@@ -19892,17 +19799,17 @@ class ExFATBuilder(_TK_BASE):
         imgsize_row = tk.Frame(pb_inner, bg=SURFACE2)
         imgsize_row.pack(fill='x', pady=(0, 4))
         tk.Label(imgsize_row, text='Image size override (GB):',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED).pack(side='left')
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED).pack(side='left')
         imgsize_ef = tk.Frame(imgsize_row, bg=FIELD_BG,
                               highlightbackground=BORDER, highlightthickness=1)
         imgsize_ef.pack(side='left', padx=(8, 0))
-        tk.Entry(imgsize_ef, textvariable=self._adv_img_size_var,
-                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+        XEntry(imgsize_ef, textvariable=self._adv_img_size_var,
+                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
                  insertbackground=FIELD_FG, relief='flat', bd=3,
                  width=8).pack()
         tk.Label(imgsize_row,
                  text='  Leave blank for auto. Set e.g. 90 to force a 90 GB image.',
-                 font=('Segoe UI', 7), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(6,0))
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(6,0))
         self._adv_img_size_var.trace_add('write', lambda *a: self._adv_save_post_build())
 
     # ── Advanced tab helpers ──────────────────────────────────────────────────
@@ -20031,11 +19938,11 @@ class ExFATBuilder(_TK_BASE):
         hdr_row = tk.Frame(body, bg=BG)
         hdr_row.pack(fill='x', padx=24, pady=(0, 6))
         tk.Label(hdr_row, text='Shutdown / Sleep after task',
-                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
 
         tk.Label(body,
                  text='Automatically shut down, restart or sleep the PC when a task completes.',
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
                  anchor='w').pack(fill='x', padx=24, pady=(0, 8))
 
         card = tk.Frame(body, bg=SURFACE2,
@@ -20050,15 +19957,15 @@ class ExFATBuilder(_TK_BASE):
         action_row = tk.Frame(inner, bg=SURFACE2)
         action_row.pack(fill='x', pady=(0, 8))
         tk.Label(action_row, text='Action:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=10, anchor='w').pack(side='left')
         for val, lbl in [('none',     'None — do nothing'),
                          ('shutdown', '⏻ Shut down'),
                          ('restart',  '🔄 Restart'),
                          ('sleep',    '💤 Sleep')]:
-            tk.Radiobutton(action_row, text=lbl,
+            XRadio(action_row, text=lbl,
                            variable=self._shutdown_action_var, value=val,
-                           font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                            activebackground=SURFACE2, selectcolor=BG,
                            cursor='hand2',
                            command=self._save_shutdown_settings
@@ -20068,7 +19975,7 @@ class ExFATBuilder(_TK_BASE):
         delay_row = tk.Frame(inner, bg=SURFACE2)
         delay_row.pack(fill='x', pady=(0, 8))
         tk.Label(delay_row, text='Delay:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  width=10, anchor='w').pack(side='left')
         self._shutdown_delay_var = tk.StringVar(
             value=str(self._settings.get('shutdown_delay', 60)))
@@ -20077,18 +19984,18 @@ class ExFATBuilder(_TK_BASE):
                                    textvariable=self._shutdown_delay_var,
                                    values=['0', '30', '60', '120', '300', '600'],
                                    state='readonly',
-                                   font=('Segoe UI', 9), width=6)
+                                   font=(FONTS['body'][0], 9), width=6)
         delay_cb.pack(side='left')
         tk.Label(delay_row,
                  text='seconds after task completes  (0 = immediate, no cancel window)',
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=COLORS['fg_5']
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']
                  ).pack(side='left', padx=(8, 0))
         self._shutdown_delay_var.trace_add('write',
             lambda *a: self._save_shutdown_settings())
 
         # Trigger checkboxes
         tk.Label(inner, text='Trigger after:',
-                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
                  anchor='w').pack(anchor='w', pady=(4, 4))
 
         self._shutdown_on_unibuild_var = tk.BooleanVar(
@@ -20114,8 +20021,8 @@ class ExFATBuilder(_TK_BASE):
             (self._shutdown_on_ftp_var,      'FTP upload finished'),
             (self._shutdown_on_pfs_var,      'PFS build finished'),
         ]:
-            tk.Checkbutton(triggers_row, text=lbl, variable=var,
-                           font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+            XCheck(triggers_row, text=lbl, variable=var,
+                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                            activebackground=SURFACE2, selectcolor=BG,
                            cursor='hand2',
                            command=self._save_shutdown_settings
@@ -20123,7 +20030,7 @@ class ExFATBuilder(_TK_BASE):
 
         self._shutdown_status_var = tk.StringVar(value='')
         tk.Label(inner, textvariable=self._shutdown_status_var,
-                 font=('Segoe UI', 8), bg=SURFACE2, fg=WARNING,
+                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=WARNING,
                  anchor='w').pack(fill='x', pady=(6, 0))
 
     def _save_shutdown_settings(self):
@@ -20159,11 +20066,11 @@ class ExFATBuilder(_TK_BASE):
         dlg.attributes('-topmost', True)
 
         tk.Label(dlg, text='\u23fb  ' + label + ' scheduled',
-                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=WARNING,
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=WARNING,
                  padx=24, pady=16).pack()
         countdown_var = tk.StringVar()
         tk.Label(dlg, textvariable=countdown_var,
-                 font=('Segoe UI', 10), bg=BG, fg=MUTED, padx=24).pack()
+                 font=(FONTS['body'][0], 10), bg=BG, fg=MUTED, padx=24).pack()
 
         cancelled = [False]
         def _cancel():
@@ -20171,8 +20078,8 @@ class ExFATBuilder(_TK_BASE):
             dlg.destroy()
             self._log('[SHUTDOWN] %s cancelled by user.\n' % label)
 
-        tk.Button(dlg, text='\u2717  Cancel ' + label,
-                  font=('Segoe UI', 10, 'bold'),
+        XButton(dlg, text='\u2717  Cancel ' + label,
+                  font=(FONTS['body_strong'][0], 10),
                   bg=DANGER, fg=TEXT, activebackground='#c0392b',
                   relief='flat', bd=0, padx=20, pady=10,
                   cursor='hand2', command=_cancel).pack(pady=(8, 20))
@@ -20322,7 +20229,7 @@ class ExFATBuilder(_TK_BASE):
                    if not history
                    else 'No matches for current filter.')
             tk.Label(list_frame, text=msg,
-                     font=('Segoe UI', 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
+                     font=(FONTS['body'][0], 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
                      pady=40).pack(fill='x')
             return
 
@@ -21949,7 +21856,7 @@ class ExFATBuilder(_TK_BASE):
     def _help_text_fallback(self, parent):
         """Simple text fallback when tkinterweb isn't installed."""
         canvas = tk.Canvas(parent, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(parent, command=canvas.yview,
+        sb = XScrollbar(parent, command=canvas.yview,
                           bg=SURFACE2, troughcolor=BG)
         canvas.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
@@ -21964,28 +21871,28 @@ class ExFATBuilder(_TK_BASE):
             lambda e: canvas.yview_scroll(wheel_units(canvas, e.delta), 'units'))
 
         def section(title):
-            tk.Label(body, text=title, font=('Segoe UI', 11, 'bold'),
+            tk.Label(body, text=title, font=(FONTS['body_strong'][0], 11),
                      bg=BG, fg=ACCENT, anchor='w').pack(
                          fill='x', padx=32, pady=(20,4))
             tk.Frame(body, bg=BORDER, height=1).pack(fill='x', padx=32)
 
         def qa(question, answer):
-            tk.Label(body, text=question, font=('Segoe UI', 9, 'bold'),
+            tk.Label(body, text=question, font=(FONTS['body_strong'][0], 9),
                      bg=BG, fg=TEXT, anchor='w',
                      wraplength=680, justify='left').pack(
                          fill='x', padx=40, pady=(10,2))
-            tk.Label(body, text=answer, font=('Segoe UI', 9),
+            tk.Label(body, text=answer, font=(FONTS['body'][0], 9),
                      bg=BG, fg=MUTED, anchor='w',
                      wraplength=680, justify='left').pack(
                          fill='x', padx=40, pady=(0,4))
 
         tk.Label(body, text='Help & Tutorial',
-                 font=('Segoe UI', 16, 'bold'), bg=BG, fg=TEXT).pack(
+                 font=(FONTS['body_strong'][0], 16), bg=BG, fg=TEXT).pack(
                      anchor='w', padx=32, pady=(20,2))
         tk.Label(body,
                  text='exFAT Image Builder v' + APP_VERSION + '  —  by DecKerr97\n'
                       'Click "Open in browser" above for the full tutorial.',
-                 font=('Segoe UI', 9), bg=BG, fg=COLORS['fg_5']).pack(anchor='w', padx=32)
+                 font=(FONTS['body'][0], 9), bg=BG, fg=COLORS['fg_5']).pack(anchor='w', padx=32)
 
         section('Getting Started')
         qa('Do I need Python installed?',
@@ -22127,7 +22034,7 @@ class ExFATBuilder(_TK_BASE):
         if not self._lib_folders:
             tk.Label(self._lib_folder_frame,
                      text=_('No scan folders added yet — click "+ Add Folder"'),
-                     font=('Segoe UI', 8), bg=BG, fg=MUTED,
+                     font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
                      pady=4).pack(anchor='w')
             if hasattr(self, '_lib_stat_folders_var'):
                 self._lib_stat_folders_var.set('0')
@@ -22152,12 +22059,12 @@ class ExFATBuilder(_TK_BASE):
                      ).pack(side='left', padx=(0, 8))
             name = os.path.basename(folder.rstrip('/\\')) or folder
             tk.Label(top, text=name,
-                     font=(FONTS['h3'][0], 10, 'bold'),
+                     font=(FONTS['body_strong'][0], 10),
                      bg=COLORS['bg_2'], fg=COLORS['fg_0']
                      ).pack(side='left')
             tk.Label(top, text=' %d game%s ' % (count,
                                                  '' if count == 1 else 's'),
-                     font=(FONTS['mono_sm'][0], 8, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                      padx=5, pady=1,
                      highlightbackground=COLORS['border_3'],
@@ -22166,14 +22073,14 @@ class ExFATBuilder(_TK_BASE):
             def _folder_menu(e, f=folder, ix=idx):
                 m = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
                             activebackground=ACCENT, activeforeground=TEXT,
-                            font=('Segoe UI', 9))
+                            font=(FONTS['body'][0], 9))
                 m.add_command(label='\U0001f4c2  ' + _('Open folder'),
                               command=lambda: self._open_folder(f))
                 m.add_command(label='\u2715  ' + _('Stop scanning this folder'),
                               command=lambda: self._lib_remove_folder(ix))
                 m.tk_popup(e.x_root, e.y_root)
             mb = tk.Label(top, text='\u22ee',
-                          font=(FONTS['body'][0], 12, 'bold'),
+                          font=(FONTS['body_strong'][0], 11),
                           bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                           padx=8, pady=0, cursor='hand2',
                           highlightbackground=COLORS['border_3'],
@@ -22181,7 +22088,7 @@ class ExFATBuilder(_TK_BASE):
             mb.pack(side='left', padx=(10, 0))
             mb.bind('<Button-1>', _folder_menu)
             tk.Label(fin, text=folder,
-                     font=(FONTS['mono_sm'][0], 8),
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
                      ).pack(fill='x', pady=(3, 0))
         if hasattr(self, '_lib_stat_folders_var'):
@@ -22558,10 +22465,10 @@ class ExFATBuilder(_TK_BASE):
         placeholder than a bare label."""
         wrap = tk.Frame(parent, bg=COLORS['bg_1'])
         wrap.pack(fill='x', pady=48)
-        tk.Label(wrap, text='\U0001f4c1', font=('Segoe UI', 30),
+        tk.Label(wrap, text='\U0001f4c1', font=(FONTS['body'][0], 30),
                  bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack()
         tk.Label(wrap, text=_('No games to show'),
-                 font=(FONTS['h3'][0], 13, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(pady=(10, 2))
         tk.Label(wrap,
                  text=_('Add a folder of PS5 dumps, then Scan to populate your library.'),
@@ -22585,7 +22492,7 @@ class ExFATBuilder(_TK_BASE):
 
             # Cover thumbnail (small)
             thumb_lbl = tk.Label(row, bg=COLORS['bg_4'], text='\U0001f3ae',
-                                  font=('Segoe UI', 14), fg=COLORS['fg_5'],
+                                  font=(FONTS['body'][0], 14), fg=COLORS['fg_5'],
                                   width=4, height=2)
             thumb_lbl.pack(side='left', padx=(10, 10), pady=6)
             if game.get('cover'):
@@ -22606,7 +22513,7 @@ class ExFATBuilder(_TK_BASE):
             info_col = tk.Frame(row, bg=row_bg)
             info_col.pack(side='left', fill='x', expand=True, pady=6)
             tk.Label(info_col, text=game['title'],
-                     font=(FONTS['body'][0], 10, 'bold'),
+                     font=(FONTS['body_strong'][0], 10),
                      bg=row_bg, fg=COLORS['fg_0'],
                      anchor='w').pack(anchor='w')
             meta = game['title_id']
@@ -22815,9 +22722,9 @@ class ExFATBuilder(_TK_BASE):
     def _lib_context_menu(self, event, game):
         menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
                        activebackground=ACCENT, activeforeground=TEXT,
-                       font=('Segoe UI', 9))
+                       font=(FONTS['body'][0], 9))
         menu.add_command(label='\U0001f3ae  ' + game['title'],
-                         state='disabled', font=('Segoe UI', 9, 'bold'))
+                         state='disabled', font=(FONTS['body_strong'][0], 9))
         menu.add_separator()
         menu.add_command(label='\U0001f528  Build',
                          command=lambda: self._lib_quick_add(game))
@@ -22918,19 +22825,19 @@ class ExFATBuilder(_TK_BASE):
         sdk_win.resizable(False, False)
         sdk_var = tk.StringVar(value=sdk)
         tk.Label(sdk_win, text='Target SDK for all games:',
-                 font=('Segoe UI', 10), bg=BG, fg=TEXT,
+                 font=(FONTS['body'][0], 10), bg=BG, fg=TEXT,
                  padx=20, pady=10).pack()
         import tkinter.ttk as _ttk
         ttk_cb = _ttk.Combobox(sdk_win, textvariable=sdk_var,
                                 values=['4','5','6','7','8','9','10','11'],
-                                state='readonly', font=('Segoe UI', 10), width=6)
+                                state='readonly', font=(FONTS['body'][0], 10), width=6)
         ttk_cb.pack(pady=(0,10))
         confirmed = [False]
         def _confirm():
             confirmed[0] = True
             sdk_win.destroy()
-        tk.Button(sdk_win, text='Start Backport All',
-                  font=('Segoe UI', 10, 'bold'),
+        XButton(sdk_win, text='Start Backport All',
+                  font=(FONTS['body_strong'][0], 10),
                   bg='#9b59b6', fg=TEXT, relief='flat', bd=0,
                   padx=16, pady=8, cursor='hand2',
                   command=_confirm).pack(pady=(0,16))
@@ -23347,7 +23254,7 @@ class ExFATBuilder(_TK_BASE):
         cover_frame.pack(side='left', padx=(0, 20))
         cover_frame.pack_propagate(False)
         cover_lbl = tk.Label(cover_frame, bg=COLORS['bg_0'],
-                             text='\U0001f3ae', font=('Segoe UI', 30),
+                             text='\U0001f3ae', font=(FONTS['body'][0], 30),
                              fg='#2a2a2a')
         cover_lbl.pack(expand=True)
 
@@ -23368,27 +23275,27 @@ class ExFATBuilder(_TK_BASE):
         info.pack(side='left', fill='both', expand=True)
 
         tk.Label(info, text=game['title'],
-                 font=('Segoe UI', 12, 'bold'), bg=BG, fg=TEXT,
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT,
                  wraplength=300, justify='left', anchor='w').pack(anchor='w')
         tk.Label(info, text=game['title_id'],
-                 font=('Consolas', 9), bg=BG, fg=INFO_FG,
+                 font=(FONTS['code'][0], 9), bg=BG, fg=INFO_FG,
                  anchor='w').pack(anchor='w', pady=(4, 0))
         if game['version']:
             tk.Label(info, text='Version ' + game['version'],
-                     font=('Segoe UI', 9), bg=BG, fg=MUTED,
+                     font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
                      anchor='w').pack(anchor='w')
         if game['size'] > 0:
             sz = ('%.2f GB' % (game['size'] / 1024**3)
                   if game['size'] >= 1024**3
                   else '%d MB' % (game['size'] // 1024**2))
             tk.Label(info, text=sz + ' estimated image size',
-                     font=('Segoe UI', 8), bg=BG, fg=COLORS['fg_5'],
+                     font=(FONTS['body'][0], 9), bg=BG, fg=COLORS['fg_5'],
                      anchor='w').pack(anchor='w', pady=(4, 0))
 
         # SDK version — read in background
         sdk_var = tk.StringVar(value='Detecting SDK...')
         sdk_lbl = tk.Label(info, textvariable=sdk_var,
-                           font=('Segoe UI', 8, 'bold'),
+                           font=(FONTS['body_strong'][0], 9),
                            bg=BG, fg='#ffaa00', anchor='w')
         sdk_lbl.pack(anchor='w', pady=(4, 0))
 
@@ -23404,7 +23311,7 @@ class ExFATBuilder(_TK_BASE):
 
         # Folder path
         tk.Label(body, text=game['folder'],
-                 font=('Consolas', 8), bg=BG, fg=COLORS['fg_5'],
+                 font=(FONTS['code'][0], 8), bg=BG, fg=COLORS['fg_5'],
                  wraplength=440, justify='left', anchor='w').pack(anchor='w')
 
         
@@ -25564,23 +25471,23 @@ class ExFATBuilder(_TK_BASE):
         hdr = tk.Frame(win, bg=BG)
         hdr.pack(fill='x', padx=16, pady=(12, 4))
         tk.Label(hdr, text='Installed Games',
-                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
         self._ps5_storage_var = tk.StringVar(value='')
         tk.Label(hdr, textvariable=self._ps5_storage_var,
-                 font=('Segoe UI', 9), bg=BG, fg=INFO_FG).pack(side='right')
+                 font=(FONTS['body'][0], 9), bg=BG, fg=INFO_FG).pack(side='right')
 
         status_var = tk.StringVar(value='Connecting...')
         tk.Label(win, textvariable=status_var,
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(anchor='w', padx=16)
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(anchor='w', padx=16)
 
         list_frame = tk.Frame(win, bg=SURFACE2,
                               highlightbackground=BORDER, highlightthickness=1)
         list_frame.pack(fill='both', expand=True, padx=16, pady=(6, 8))
-        listbox = tk.Listbox(list_frame, font=('Consolas', 9),
+        listbox = tk.Listbox(list_frame, font=(FONTS['code'][0], 9),
                              bg=SURFACE2, fg=TEXT,
                              selectbackground=ACCENT, selectforeground='#ffffff',
                              relief='flat', activestyle='none', bd=6)
-        sb = tk.Scrollbar(list_frame, command=listbox.yview,
+        sb = XScrollbar(list_frame, command=listbox.yview,
                           bg=SURFACE2, troughcolor=BG)
         listbox.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
@@ -25588,11 +25495,11 @@ class ExFATBuilder(_TK_BASE):
 
         btn_row = tk.Frame(win, bg=BG)
         btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        tk.Button(btn_row, text='Refresh', font=('Segoe UI', 9),
+        XButton(btn_row, text='Refresh', font=(FONTS['body'][0], 9),
                   bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
                   padx=10, pady=5, cursor='hand2',
                   command=lambda: _load()).pack(side='left')
-        tk.Button(btn_row, text='Close', font=('Segoe UI', 9),
+        XButton(btn_row, text='Close', font=(FONTS['body'][0], 9),
                   bg=SURFACE2, fg=MUTED, relief='flat', bd=0,
                   padx=10, pady=5, cursor='hand2',
                   command=win.destroy).pack(side='right')
@@ -26203,25 +26110,25 @@ class ExFATBuilder(_TK_BASE):
         hdr = tk.Frame(win, bg=BG)
         hdr.pack(fill='x', padx=16, pady=(12, 6))
         tk.Label(hdr, text=_('Select PS5 game folder'),
-                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
         tk.Label(hdr, textvariable=status_var,
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='right')
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='right')
 
         path_row = tk.Frame(win, bg=BG)
         path_row.pack(fill='x', padx=16, pady=(0, 6))
-        tk.Button(path_row, text='↑ ' + _('Up'), command=_up,
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(path_row, text='↑ ' + _('Up'), command=_up,
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=5,
                   cursor='hand2', highlightthickness=0).pack(side='left')
-        path_entry = tk.Entry(path_row, textvariable=cur_path,
-                              font=('Consolas', 10), bg=SURFACE2, fg=TEXT,
+        path_entry = XEntry(path_row, textvariable=cur_path,
+                              font=(FONTS['code'][0], 10), bg=SURFACE2, fg=TEXT,
                               insertbackground=TEXT, relief='flat',
                               highlightthickness=1, highlightbackground=BORDER)
         path_entry.pack(side='left', fill='x', expand=True, padx=(8, 8), ipady=4)
         path_entry.bind('<Return>', _refresh)
-        tk.Button(path_row, text=_('Go'), command=_refresh,
-                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+        XButton(path_row, text=_('Go'), command=_refresh,
+                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=12, pady=5,
                   cursor='hand2', highlightthickness=0).pack(side='left')
@@ -26229,12 +26136,12 @@ class ExFATBuilder(_TK_BASE):
         roots_row = tk.Frame(win, bg=BG)
         roots_row.pack(fill='x', padx=16, pady=(0, 6))
         tk.Label(roots_row, text=_('Jump to:'),
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left',
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='left',
                                                               padx=(0, 6))
         for _lbl in ('/data/etaHEN/games', '/mnt', '/mnt/data', '/user/app'):
-            tk.Button(roots_row, text=_lbl,
+            XButton(roots_row, text=_lbl,
                       command=lambda p=_lbl: _goto(p),
-                      font=('Consolas', 8), bg=SURFACE2, fg=TEXT,
+                      font=(FONTS['code'][0], 8), bg=SURFACE2, fg=TEXT,
                       activebackground=BORDER, activeforeground=TEXT,
                       relief='flat', bd=0, padx=8, pady=3,
                       cursor='hand2', highlightthickness=0).pack(side='left',
@@ -26242,8 +26149,8 @@ class ExFATBuilder(_TK_BASE):
 
         list_wrap = tk.Frame(win, bg=BG)
         list_wrap.pack(fill='both', expand=True, padx=16, pady=(0, 6))
-        sb = tk.Scrollbar(list_wrap, orient='vertical')
-        lb = tk.Listbox(list_wrap, font=('Consolas', 10),
+        sb = XScrollbar(list_wrap, orient='vertical')
+        lb = tk.Listbox(list_wrap, font=(FONTS['code'][0], 10),
                         bg=SURFACE2, fg=TEXT, selectmode='browse',
                         activestyle='none', relief='flat',
                         highlightthickness=1, highlightbackground=BORDER,
@@ -26256,23 +26163,23 @@ class ExFATBuilder(_TK_BASE):
 
         tk.Label(win,
                  text=_('Double-click a folder to open it. Choose the game’s app0 folder — the one containing eboot.bin / sce_sys.'),
-                 font=('Segoe UI', 8), bg=BG, fg=MUTED, justify='left',
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED, justify='left',
                  wraplength=600).pack(fill='x', padx=16, pady=(0, 4))
 
         btn_row = tk.Frame(win, bg=BG)
         btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        tk.Button(btn_row, text=_('Select this folder'), command=_select,
-                  font=('Segoe UI', 10, 'bold'), bg=ACCENT, fg='#ffffff',
+        XButton(btn_row, text=_('Select this folder'), command=_select,
+                  font=(FONTS['body_strong'][0], 10), bg=ACCENT, fg='#ffffff',
                   activebackground=ACCENT, activeforeground='#ffffff',
                   relief='flat', bd=0, padx=16, pady=8,
                   cursor='hand2', highlightthickness=0).pack(side='left')
-        tk.Button(btn_row, text=_('Cancel'), command=_close,
-                  font=('Segoe UI', 10), bg=SURFACE2, fg=TEXT,
+        XButton(btn_row, text=_('Cancel'), command=_close,
+                  font=(FONTS['body'][0], 10), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=16, pady=8,
                   cursor='hand2', highlightthickness=0).pack(side='right')
-        tk.Button(btn_row, text=_('Refresh'), command=_refresh,
-                  font=('Segoe UI', 10), bg=SURFACE2, fg=TEXT,
+        XButton(btn_row, text=_('Refresh'), command=_refresh,
+                  font=(FONTS['body'][0], 10), bg=SURFACE2, fg=TEXT,
                   activebackground=BORDER, activeforeground=TEXT,
                   relief='flat', bd=0, padx=16, pady=8,
                   cursor='hand2', highlightthickness=0).pack(side='right',
@@ -26781,10 +26688,10 @@ class ExFATBuilder(_TK_BASE):
         body = tk.Frame(win, bg=BG)
         body.pack(fill='both', expand=True, padx=24, pady=16)
         tk.Label(body, text='Downloading v' + version + '...',
-                 font=('Segoe UI', 11, 'bold'), bg=BG, fg=TEXT).pack(anchor='w')
+                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(anchor='w')
         status_var = tk.StringVar(value='Connecting to GitHub...')
         tk.Label(body, textvariable=status_var,
-                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(4,8))
+                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(4,8))
         bar_frame = tk.Frame(body, bg=TRACK, height=16)
         bar_frame.pack(fill='x')
         bar_frame.pack_propagate(False)
@@ -27125,61 +27032,63 @@ class ExFATBuilder(_TK_BASE):
     }
 
     def _build_app_header(self, parent):
-        """Build the top application header strip (presentation only).
+        """Top application header (design system › AppHeader).
 
-        Refinement pass: compressed from a two-line banner to a single-row
-        toolbar (~32px). Dropped the duplicate "PS5 image tooling" subtitle
-        and the stacked CURRENT SECTION eyebrow; the section name now sits
-        inline after the app name with a separator. Padding tightened.
-        Still presentation only — same vars, no new controls.
+        48px bg_0 strip: sidebar toggle, product name in type, edition,
+        version badge and the current section; author credits and quick
+        links to Help / Settings on the right. Presentation only — keeps
+        `_header_section_var` and adds no behaviour beyond navigation.
         """
-        bg = COLORS['bg_2']
-        bar = tk.Frame(parent, bg=bg)
+        from ui.shared.widgets import IconButton, Badge, Divider
+        bg = COLORS['bg_0']
+        bar = tk.Frame(parent, bg=bg, height=px(48))
         bar.pack(fill='x')
+        bar.pack_propagate(False)
 
         left = tk.Frame(bar, bg=bg)
-        left.pack(side='left', padx=(16, 0), pady=8)
-        # Brand tile (Farewell Edition app bar).
-        tk.Label(left, text='EX', font=(FONTS['body'][0], 10, 'bold'),
-                 bg=COLORS['accent'], fg=COLORS['field_select_fg'],
-                 width=3, pady=2).pack(side='left', padx=(0, 10))
-        tk.Label(left, text=_('exFAT Image Builder'),
-                 font=(FONTS['h3'][0], 13, 'bold'),
-                 bg=bg, fg=COLORS['fg_0']).pack(side='left')
+        left.pack(side='left', fill='y', padx=(px(6), 0))
 
-        tk.Label(left, text='\u203a', font=(FONTS['body'][0], 12),
-                 bg=bg, fg=COLORS['fg_5']).pack(side='left', padx=8)
+        def _toggle_nav():
+            sb = getattr(self, '_sidebar', None)
+            if sb is not None:
+                sb.toggle()
+        IconButton(left, 'menu', _toggle_nav, tooltip='Collapse navigation',
+                   surface=bg).pack(side='left', pady=px(5))
+        tk.Label(left, text=_('exFAT Image Builder'),
+                 font=FONTS['body_strong'], bg=bg,
+                 fg=COLORS['fg_0']).pack(side='left', padx=(px(6), 0))
+        tk.Label(left, text=APP_EDITION, font=FONTS['body'], bg=bg,
+                 fg=COLORS['fg_3']).pack(side='left', padx=(px(8), 0))
+        Badge(left, 'v' + APP_VERSION, 'outline', mono=True,
+              surface=bg).pack(side='left', padx=(px(10), 0))
+        Divider(left, vertical=True, color=COLORS['border_3']).pack(
+            side='left', fill='y', padx=px(14), pady=px(15))
         self._header_section_var = tk.StringVar(
             value=_(self._HEADER_SECTION_NAMES.get(
                 self._active_tab.get(), self._active_tab.get().title())))
         tk.Label(left, textvariable=self._header_section_var,
-                 font=(FONTS['body'][0], 12, 'bold'),
-                 bg=bg, fg=COLORS['accent_hi']).pack(side='left')
+                 font=FONTS['body'], bg=bg,
+                 fg=COLORS['fg_2']).pack(side='left')
 
-        ver = tk.Frame(bar, bg=COLORS['bg_3'],
-                       highlightbackground=COLORS['border_3'],
-                       highlightthickness=1)
-        ver.pack(side='right', padx=(0, 12), pady=4)
-        tk.Label(ver, text='\u25cf', font=FONTS['meta'],
-                 bg=COLORS['bg_3'], fg=COLORS['success']).pack(
-                     side='left', padx=(8, 4))
-        tk.Label(ver, text='v%s \u00b7 %s' % (APP_VERSION, APP_EDITION),
-                 font=FONTS['meta'],
-                 bg=COLORS['bg_3'], fg=COLORS['fg_3']).pack(
-                     side='left', padx=(0, 10))
-
+        right = tk.Frame(bar, bg=bg)
+        right.pack(side='right', fill='y', padx=(0, px(8)))
+        IconButton(right, 'settings', lambda: self._switch_tab('settings'),
+                   tooltip=_('Settings'), surface=bg).pack(side='right',
+                                                          pady=px(5))
+        IconButton(right, 'help', lambda: self._switch_tab('help'),
+                   tooltip=_('Help'), surface=bg).pack(side='right',
+                                                      pady=px(5))
+        Divider(right, vertical=True, color=COLORS['border_3']).pack(
+            side='right', fill='y', padx=px(10), pady=px(15))
+        # Credits stay visible on every screen.
+        tk.Label(right,
+                 text=('by DecKerr97  \u00b7  Inspired by NookieAI '
+                       '\u2022 stonemodder (Porkfolio)'),
+                 font=FONTS['caption'], bg=bg,
+                 fg=COLORS['fg_4']).pack(side='right')
         if not hasattr(self, '_ps5_status_var'):
             self._ps5_status_var = tk.StringVar(
                 value='PS5  \u25cf  Not connected')
-        tk.Label(bar, textvariable=self._ps5_status_var,
-                 font=FONTS['meta'], bg=bg, fg=COLORS['fg_3'],
-                 padx=8).pack(side='right', padx=(0, 6), pady=4)
-        # Credits stay visible on every screen (moved from the old banner).
-        tk.Label(bar,
-                 text=('by DecKerr97  \u00b7  Inspired by NookieAI '
-                       '\u2022 stonemodder (Porkfolio)'),
-                 font=FONTS['meta'], bg=bg, fg=COLORS['fg_5']).pack(
-                     side='right', padx=(0, 14), pady=4)
         tk.Frame(parent, bg=COLORS['border_2'], height=1).pack(fill='x')
 
     def _update_header_section(self, key):
@@ -27190,43 +27099,33 @@ class ExFATBuilder(_TK_BASE):
         var.set(_(self._HEADER_SECTION_NAMES.get(key, key.title())))
 
     def _build_ps5_status_bar(self, parent):
-        """Persistent PS5 connection + queue status bar.
+        """Persistent PS5 / FTP / queue status bar (28px, bg_0).
 
-        Phase 1 shell refresh: token-driven colours (was hardcoded
-        #0d0d0d / #444444 / #58a6ff), slightly more padding, a thin top
-        hairline so the bar reads as its own surface. PRESENTATION ONLY —
-        the status variables (_ps5_status_var / _ftp_status_var /
-        _queue_status_var), the click-to-ping binding, and the ping loop
-        are unchanged.
+        Presentation only — the status variables (_ps5_status_var /
+        _ftp_status_var / _queue_status_var), the click-to-ping binding and
+        the ping loop are unchanged. Each status shows a coloured dot and
+        its text with the legacy glyphs removed.
         """
+        from ui.shared.status import StatusText
         _bar_bg = COLORS['bg_0']
-
-        tk.Frame(parent, bg=COLORS['border_2'], height=1).pack(fill='x')
-        bar = tk.Frame(parent, bg=_bar_bg,
-                       highlightbackground=COLORS['border_2'],
-                       highlightthickness=0)
+        bar = tk.Frame(parent, bg=_bar_bg, height=px(28))
         bar.pack(fill='x')
+        bar.pack_propagate(False)
         if not hasattr(self, '_ps5_status_var'):
-            self._ps5_status_var = tk.StringVar(value='PS5  ●  Not connected')
-        self._ps5_status_lbl = tk.Label(
-            bar, textvariable=self._ps5_status_var,
-            font=FONTS['meta'], bg=_bar_bg, fg=COLORS['fg_4'],
-            padx=12, pady=5, cursor='hand2')
-        self._ps5_status_lbl.pack(side='left')
+            self._ps5_status_var = tk.StringVar(value='PS5  \u25cf  Not connected')
+        self._ps5_status_lbl = StatusText(bar, self._ps5_status_var,
+                                          bg=_bar_bg, cursor='hand2')
+        self._ps5_status_lbl.pack(side='left', padx=(px(12), 0))
         self._ps5_status_lbl.bind('<Button-1>', lambda e: self._ps5_status_ping())
-
-        tk.Label(bar, text='│', font=FONTS['meta'],
-                 bg=_bar_bg, fg=COLORS['border_3']).pack(side='left')
-
-        self._ftp_status_var = tk.StringVar(value='FTP  ●  Idle')
-        tk.Label(bar, textvariable=self._ftp_status_var,
-                 font=FONTS['meta'], bg=_bar_bg, fg=COLORS['fg_4'],
-                 padx=12, pady=5).pack(side='left')
-
+        tk.Frame(bar, bg=COLORS['border_3'], width=1).pack(
+            side='left', fill='y', padx=px(12), pady=px(8))
+        self._ftp_status_var = tk.StringVar(value='FTP  \u25cf  Idle')
+        StatusText(bar, self._ftp_status_var, bg=_bar_bg,
+                   prefix='FTP').pack(side='left')
         self._queue_status_var = tk.StringVar(value='')
         tk.Label(bar, textvariable=self._queue_status_var,
-                 font=FONTS['meta'], bg=_bar_bg, fg=COLORS['accent_hi'],
-                 padx=12, pady=5).pack(side='right')
+                 font=FONTS['caption'], bg=_bar_bg, fg=COLORS['accent_hi'],
+                 padx=px(12)).pack(side='right')
 
         self.after(5000, self._ps5_status_ping_loop)
 
@@ -27260,74 +27159,59 @@ class ExFATBuilder(_TK_BASE):
         self.after(30000, self._ps5_status_ping_loop)
 
     def _build_global_log(self, parent):
-        """Build the collapsible OUTPUT LOG bar at the bottom of the window.
+        """Collapsible OUTPUT LOG drawer at the bottom of the window.
 
-        Phase 1 shell refresh: token-driven colours, a small accent tick on
-        the header, slightly larger mono body text and a deeper console
-        background for readability. PRESENTATION ONLY — _log_visible, the
-        toggle label/_toggle_log, Copy (_log_copy / _log_copy_status) and
-        Clear (_log_clear), and the log_box widget all keep their existing
-        names and behaviour.
+        Presentation only — _log_visible, the toggle label/_toggle_log,
+        Copy (_log_copy / _log_copy_status), Clear (_log_clear) and the
+        log_box widget keep their names and behaviour.
         """
+        from ui.shared.widgets import Button, IconLabel
+        from ui.icons import icon_image
         self._log_visible = tk.BooleanVar(value=False)
-
-        # Header row — click to expand/collapse
-        log_header = tk.Frame(parent, bg=COLORS['bg_2'],
-                              highlightbackground=COLORS['border_2'],
-                              highlightthickness=1)
+        hbg = COLORS['bg_0']
+        log_header = tk.Frame(parent, bg=hbg, height=px(32))
         log_header.pack(fill='x')
+        log_header.pack_propagate(False)
+        tk.Frame(parent, bg=COLORS['border_2'], height=1).pack(fill='x', before=log_header)
 
-        tk.Frame(log_header, bg=COLORS['accent'], width=3).pack(
-            side='left', fill='y')
-
+        self._log_chev = {
+            False: icon_image('chevron_right', 14, COLORS['fg_3'], hbg),
+            True: icon_image('chevron_down', 14, COLORS['fg_2'], hbg)}
         self._log_toggle_lbl = tk.Label(
-            log_header,
-            text='\u25b6  OUTPUT LOG',
-            font=(FONTS['eyebrow'][0], 8, 'bold'),
-            bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-            cursor='hand2', padx=10, pady=4)
-        self._log_toggle_lbl.pack(side='left')
+            log_header, text='  ' + _('OUTPUT LOG'), image=self._log_chev[False],
+            compound='left', font=FONTS['overline'],
+            bg=hbg, fg=COLORS['fg_3'], cursor='hand2', padx=px(12))
+        self._log_toggle_lbl.pack(side='left', fill='y')
         self._log_toggle_lbl.bind('<Button-1>', lambda e: self._toggle_log())
 
-        tk.Button(log_header, text='Clear',
-                  font=FONTS['meta'],
-                  bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-                  activebackground=COLORS['bg_4'],
-                  activeforeground=COLORS['fg_1'],
-                  relief='flat', bd=0,
-                  padx=10, pady=3, cursor='hand2',
-                  command=self._log_clear).pack(side='right', padx=(0, 6))
-
+        Button(log_header, text='Clear', icon='trash', variant='subtle',
+               size='sm', command=self._log_clear, surface=hbg
+               ).pack(side='right', padx=(0, px(6)))
         # v3.6.3: Copy the whole Output Log to the clipboard. Does not modify
         # or clear the log. A small status label briefly confirms the copy.
+        Button(log_header, text='Copy', icon='copy', variant='subtle',
+               size='sm', command=self._log_copy, surface=hbg
+               ).pack(side='right')
         self._log_copy_status = tk.Label(
-            log_header, text='', font=FONTS['meta'],
-            bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-        self._log_copy_status.pack(side='right', padx=(0, 6))
-        tk.Button(log_header, text='Copy',
-                  font=FONTS['meta'],
-                  bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-                  activebackground=COLORS['bg_4'],
-                  activeforeground=COLORS['fg_1'],
-                  relief='flat', bd=0,
-                  padx=10, pady=3, cursor='hand2',
-                  command=self._log_copy).pack(side='right', padx=(0, 4))
+            log_header, text='', font=FONTS['caption'],
+            bg=hbg, fg=COLORS['success_hi'])
+        self._log_copy_status.pack(side='right', padx=(0, px(6)))
 
         # Log body (hidden by default)
-        self._log_body = tk.Frame(parent, bg=BG)
-        log_outer = tk.Frame(self._log_body, bg=BG,
-                             highlightbackground=COLORS['border_2'],
-                             highlightthickness=1)
-        log_outer.pack(fill='x', padx=0, pady=(2, 0))
-        log_sb = tk.Scrollbar(log_outer, bg=BG, troughcolor=COLORS['bg_2'])
+        self._log_body = tk.Frame(parent, bg=COLORS['bg_0'])
+        tk.Frame(self._log_body, bg=COLORS['border_1'], height=1).pack(fill='x')
+        log_outer = tk.Frame(self._log_body, bg=COLORS['bg_0'])
+        log_outer.pack(fill='x')
+        log_sb = ttk.Scrollbar(log_outer, orient='vertical',
+                               style=scrollbar_style(COLORS['bg_0']))
         log_sb.pack(side='right', fill='y')
         self.log_box = tk.Text(
             log_outer,
-            height=8,
-            font=(FONTS['mono_sm'][0], 9),
-            bg=COLORS['bg_0'], fg='#a8d0a8',
-            insertbackground='#a8d0a8',
-            relief='flat', bd=8,
+            height=9,
+            font=FONTS['code_sm'],
+            bg=COLORS['bg_0'], fg=COLORS['fg_2'],
+            insertbackground=COLORS['fg_1'],
+            relief='flat', bd=0, padx=px(14), pady=px(8),
             state='disabled', wrap='word',
             yscrollcommand=log_sb.set)
         self.log_box.pack(fill='x')
@@ -27344,14 +27228,16 @@ class ExFATBuilder(_TK_BASE):
         if force_open:
             return
         self._log_visible.set(not self._log_visible.get())
-        if self._log_visible.get():
-            self._log_body.pack(fill='x', pady=(2, 0))
-            self._log_toggle_lbl.config(text='\u25bc  OUTPUT LOG',
-                                        fg=COLORS['fg_2'])
+        opened = self._log_visible.get()
+        if opened:
+            self._log_body.pack(fill='x')
         else:
             self._log_body.pack_forget()
-            self._log_toggle_lbl.config(text='\u25b6  OUTPUT LOG',
-                                        fg=COLORS['fg_3'])
+        try:
+            self._log_toggle_lbl.config(image=self._log_chev[opened],
+                                        fg=COLORS['fg_1'] if opened else COLORS['fg_3'])
+        except Exception:
+            pass
 
     def _preflight_source(self, src_folder, out_path):
         """Single-pass scan of the source folder + sanity checks before

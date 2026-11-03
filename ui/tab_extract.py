@@ -59,6 +59,7 @@ import time
 import threading
 import subprocess
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog
 
 from tkinter_theme import COLORS, FONTS
@@ -91,7 +92,7 @@ def build_extract_tab(parent, app):
     canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0,
                        highlightthickness=0)
     canvas.pack(side='left', fill='both', expand=True)
-    sb = tk.Scrollbar(parent, orient='vertical', command=canvas.yview,
+    sb = XScrollbar(parent, orient='vertical', command=canvas.yview,
                        bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
     sb.pack(side='right', fill='y')
     canvas.configure(yscrollcommand=sb.set)
@@ -154,7 +155,7 @@ def build_extract_tab(parent, app):
 
     # Numbered section headings (same look as the Convert tab)
     def _section(text, top=0):
-        tk.Label(pad, text=text, font=(FONTS['h3'][0], 12, 'bold'),
+        tk.Label(pad, text=text, font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
             fill='x', pady=(top, 6))
 
@@ -177,7 +178,7 @@ def build_extract_tab(parent, app):
     fmt_row.pack(fill='x', pady=(0, 12))
     app._extract_fmt_badge = tk.Label(
         fmt_row, text=_('NO IMAGE'),
-        font=(FONTS['mono_sm'][0], 10, 'bold'),
+        font=(FONTS['body_strong'][0], 10),
         bg=COLORS['bg_4'], fg=COLORS['fg_4'], padx=10, pady=3)
     app._extract_fmt_badge.pack(side='left')
     app._extract_fmt_note = tk.Label(
@@ -220,7 +221,7 @@ def build_extract_tab(parent, app):
                           highlightbackground=COLORS['border_3'],
                           highlightthickness=1)
     name_wrap.pack(fill='x', pady=(6, 0))
-    tk.Entry(name_wrap, textvariable=app._extract_name_var,
+    XEntry(name_wrap, textvariable=app._extract_name_var,
              font=FONTS['mono_sm'],
              bg=COLORS['field_bg'], fg=COLORS['field_fg'],
              insertbackground=COLORS['field_fg'],
@@ -273,7 +274,7 @@ def build_extract_tab(parent, app):
         # compress to a slim one-line strip
         _inner = dz._glyph_lbl.master
         _inner.pack_configure(padx=12, pady=7)
-        dz._glyph_lbl.configure(font=(FONTS['body'][0], 12))
+        dz._glyph_lbl.configure(font=(FONTS['body'][0], 11))
         dz._glyph_lbl.pack_configure(side='left', padx=(0, 8))
         dz._main_lbl.configure(
             text=_('Drop .exfat / .ffpkg / PFS image here \u00b7 or Browse above'),

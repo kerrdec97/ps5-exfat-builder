@@ -46,6 +46,7 @@ NEW attributes for transfer panel (visual only this iteration):
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog
 
 from tkinter_theme import COLORS, FONTS
@@ -126,8 +127,8 @@ def _build_subtab_bar(parent, app):
     def _make_subtab(text, key):
         wrap = tk.Frame(inner, bg=COLORS['bg_0'])
         wrap.pack(side='left')
-        btn = tk.Button(wrap, text=text,
-                        font=(FONTS['button'][0], 10, 'bold'),
+        btn = XButton(wrap, text=text,
+                        font=(FONTS['body_strong'][0], 10),
                         bg=COLORS['bg_0'], fg=COLORS['fg_4'],
                         activebackground=COLORS['bg_0'],
                         activeforeground=COLORS['fg_1'],
@@ -173,7 +174,7 @@ def _build_connection_bar(parent, app):
     app._ftp_conn_dot.pack_propagate(False)
     app._ftp_conn_lbl = tk.Label(pill_inner,
                                   textvariable=app._ftp_conn_pill_var,
-                                  font=(FONTS['mono_sm'][0], 10, 'bold'),
+                                  font=(FONTS['body_strong'][0], 10),
                                   bg=COLORS['bg_3'], fg=COLORS['fg_4'])
     app._ftp_conn_lbl.pack(side='left')
     app._ftp_conn_pill = pill
@@ -183,7 +184,7 @@ def _build_connection_bar(parent, app):
     ip = app._ftp_ip_var.get().strip() or _('No PS5 IP set')
     port = app._ftp_port_var.get().strip() or '2121'
     tk.Label(inner, text='%s:%s' % (ip, port),
-             font=(FONTS['mono_sm'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_1']
              ).pack(side='left', padx=(12, 12))
 
@@ -278,7 +279,7 @@ def _build_upload_subtab(parent, app):
 
     # Header
     tk.Label(body, text=_('File Transfer Dashboard'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(anchor='w')
     tk.Label(body,
@@ -368,12 +369,12 @@ def _build_upload_subtab(parent, app):
         cell = tk.Frame(ci, bg=COLORS['bg_2'])
         cell.pack(side='left', padx=(0, 26))
         tk.Label(cell, text=label.upper(),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
                  ).pack(anchor='w')
         v = tk.StringVar(value=var_getter())
         tk.Label(cell, textvariable=v,
-                 font=(FONTS['mono_sm'][0], 11, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w'
                  ).pack(anchor='w', pady=(2, 0))
         return v
@@ -401,7 +402,7 @@ def _build_upload_subtab(parent, app):
              bg=COLORS['bg_2'], fg=COLORS['fg_3']
              ).pack(side='left', padx=(0, 12))
     for val, lbl in [(False, _('File')), (True, _('Folder'))]:
-        tk.Radiobutton(type_row, text=lbl,
+        XRadio(type_row, text=lbl,
                        variable=app._ftptab_is_folder, value=val,
                        font=FONTS['body'],
                        bg=COLORS['bg_2'], fg=COLORS['fg_2'],
@@ -449,9 +450,9 @@ def _build_upload_subtab(parent, app):
         '\U0001f4e1  ' + _('Upload to PS5'),
         command=app._ftptab_start_upload)
     app._ftptab_upload_btn.pack(side='left')
-    app._ftptab_cancel_btn = tk.Button(btn_row,
+    app._ftptab_cancel_btn = XButton(btn_row,
         text='\u2715  ' + _('Cancel'),
-        font=(FONTS['button'][0], 9),
+        font=(FONTS['body'][0], 9),
         bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
         activebackground=COLORS['bg_3'],
         activeforeground=COLORS['danger_hi'],
@@ -508,7 +509,7 @@ def _build_upload_subtab(parent, app):
                               relief='flat', bd=6,
                               state='disabled', wrap='word',
                               height=8)
-    sb = tk.Scrollbar(log_frame, command=app._ftptab_log.yview,
+    sb = XScrollbar(log_frame, command=app._ftptab_log.yview,
                       bg=COLORS['bg_4'], troughcolor=COLORS['bg_2'])
     app._ftptab_log.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -621,7 +622,7 @@ def _build_local_pane(parent, app):
     head_inner = tk.Frame(head, bg=COLORS['bg_3'])
     head_inner.pack(fill='x', padx=10, pady=8)
     tk.Label(head_inner, text=_('Local'),
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_3'], fg=COLORS['fg_2']
              ).pack(side='left', padx=(0, 8))
     _dark_entry(head_inner, app._lp_path, readonly=False
@@ -666,7 +667,7 @@ def _build_local_pane(parent, app):
                                   relief='flat', bd=4,
                                   selectmode='extended',
                                   highlightthickness=0)
-    sb = tk.Scrollbar(list_outer, command=app._lp_listbox.yview,
+    sb = XScrollbar(list_outer, command=app._lp_listbox.yview,
                       bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
     app._lp_listbox.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -705,7 +706,7 @@ def _build_divider(parent, app):
     _attach_tooltip(app._xfer_to_remote_btn, 'Queue selected local file(s) for upload. Tip: Ctrl/Shift-click to select several — each is queued as its own transfer.')
     _ghost_btn(arrows, '←', command=(lambda: _xfer_to_local(app))).pack(pady=4)
     app._xfer_hint_var = tk.StringVar(value=_('Ctrl/Shift-select'))
-    tk.Label(arrows, textvariable=app._xfer_hint_var, font=(FONTS['mono_sm'][0], 8), bg=COLORS['bg_1'], fg=COLORS['fg_5'], wraplength=70, justify='center').pack(pady=(2, 0))
+    tk.Label(arrows, textvariable=app._xfer_hint_var, font=(FONTS['body'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_5'], wraplength=70, justify='center').pack(pady=(2, 0))
     spacer_bot = tk.Frame(div, bg=COLORS['bg_1'])
     spacer_bot.pack(fill='both', expand=True)
     return div
@@ -749,7 +750,7 @@ def _build_remote_pane(parent, app):
     head.pack(fill='x')
     head_inner = tk.Frame(head, bg=COLORS['bg_3'])
     head_inner.pack(fill='x', padx=10, pady=8)
-    tk.Label(head_inner, text=_('PS5'), font=(FONTS['eyebrow'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_2']).pack(side='left', padx=(0, 8))
+    tk.Label(head_inner, text=_('PS5'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_2']).pack(side='left', padx=(0, 8))
     _dark_entry(head_inner, app._br_path, readonly=False).pack(side='left', fill='x', expand=True)
     _icon_btn(head_inner, '⌂', tooltip='Home', command=(lambda: app._br_load('/data/etaHEN/games/'))).pack(side='left', padx=(4, 0))
     head_inner.winfo_children()[1].winfo_children()[0].bind('<Return>', lambda e: app._br_load(app._br_path.get()))
@@ -767,7 +768,7 @@ def _build_remote_pane(parent, app):
     list_outer = tk.Frame(pane, bg=COLORS['bg_2'])
     list_outer.pack(fill='both', expand=True, padx=10, pady=(0, 4))
     app._br_listbox = tk.Listbox(list_outer, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectbackground=COLORS['accent'], selectforeground=COLORS['fg_0'], activestyle='none', relief='flat', bd=4, selectmode='extended', highlightthickness=0)
-    sb = tk.Scrollbar(list_outer, command=app._br_listbox.yview, bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
+    sb = XScrollbar(list_outer, command=app._br_listbox.yview, bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
     app._br_listbox.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     app._br_listbox.pack(fill='both', expand=True)
@@ -791,7 +792,7 @@ def _build_xfers_panel(parent, app):
     panel = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_3'], highlightthickness=1)
     head_inner = tk.Frame(panel, bg=COLORS['bg_2'])
     head_inner.pack(fill='x', padx=14, pady=10)
-    tk.Label(head_inner, text=_('Transfers'), font=(FONTS['body'][0], 11, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
+    tk.Label(head_inner, text=_('Transfers'), font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
     app._xfers_stats_var = tk.StringVar(value=_('No transfers yet'))
     tk.Label(head_inner, textvariable=app._xfers_stats_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
     pause_btn = _ghost_btn(head_inner, _('Pause all'), command=(lambda: None))
@@ -911,13 +912,13 @@ def _tq_build_row(app, parent, snap):
     row.pack(fill='x', pady=2)
     inner = tk.Frame(row, bg=COLORS['bg_3'])
     inner.pack(fill='x', padx=10, pady=6)
-    tk.Label(inner, text='↑', font=(FONTS['body'][0], 13, 'bold'), bg=COLORS['bg_3'], fg=COLORS['accent']).pack(side='left', padx=(0, 10))
+    tk.Label(inner, text='↑', font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_3'], fg=COLORS['accent']).pack(side='left', padx=(0, 10))
     col = tk.Frame(inner, bg=COLORS['bg_3'])
     col.pack(side='left', fill='x', expand=True)
     top = tk.Frame(col, bg=COLORS['bg_3'])
     top.pack(fill='x')
     folder_tag = '  [folder]' if snap.get('is_folder') else ''
-    tk.Label(top, text=snap['name'] + folder_tag, font=(FONTS['body'][0], 10, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w').pack(side='left')
+    tk.Label(top, text=snap['name'] + folder_tag, font=(FONTS['body_strong'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w').pack(side='left')
     size_lbl = tk.Label(top, text=_tq_fmt_size(snap.get('size', 0)), font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5'], anchor='e')
     size_lbl.pack(side='right')
     tk.Label(col, text='→  ' + (snap.get('remote_display') or ''), font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', pady=(1, 3))
@@ -929,9 +930,9 @@ def _tq_build_row(app, parent, snap):
     meta_var = tk.StringVar(value='')
     tk.Label(col, textvariable=meta_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5'], anchor='w').pack(fill='x', pady=(2, 0))
     badge_var = tk.StringVar(value='')
-    badge = tk.Label(inner, textvariable=badge_var, font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_4'])
+    badge = tk.Label(inner, textvariable=badge_var, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_4'])
     badge.pack(side='right', padx=(8, 0))
-    cancel_btn = tk.Button(inner, text=_('Cancel'), font=(FONTS['button'][0], 9, 'bold'), bg=COLORS['danger'], fg=COLORS['fg_0'], activebackground=COLORS['danger_hi'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=10, pady=3, cursor='hand2', command=(lambda _id=snap['id']: app._tq_cancel_item(_id)))
+    cancel_btn = XButton(inner, text=_('Cancel'), font=(FONTS['body_strong'][0], 9), bg=COLORS['danger'], fg=COLORS['fg_0'], activebackground=COLORS['danger_hi'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=10, pady=3, cursor='hand2', command=(lambda _id=snap['id']: app._tq_cancel_item(_id)))
     cancel_btn.pack(side='right', padx=(8, 0))
     reg = {'row': row, 'canvas': canvas, 'bar': bar, 'meta_var': meta_var, 'badge': badge, 'badge_var': badge_var, 'cancel_btn': cancel_btn}
     _tq_update_row(app, reg, snap)
@@ -1278,13 +1279,13 @@ def _dark_entry(parent, var, readonly=False, width=None):
               state=state)
     if width is not None:
         kw['width'] = width
-    tk.Entry(wrap, **kw).pack(fill='x')
+    XEntry(wrap, **kw).pack(fill='x')
     return wrap
 
 
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -1302,13 +1303,13 @@ def _diag_btn(parent, text, command, primary=False):
     gives the single accent fill; the rest are bordered ghost-style so the
     three read as one unified action group."""
     if primary:
-        return tk.Button(parent, text=text, font=(FONTS['button'][0], 8, 'bold'), bg=COLORS['accent'], fg=COLORS['fg_0'], activebackground=COLORS['accent_hi'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=9, pady=3, cursor='hand2', command=command)
-    return tk.Button(parent, text=text, font=(FONTS['button'][0], 8), bg=COLORS['bg_2'], fg=COLORS['fg_2'], activebackground=COLORS['bg_3'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=9, pady=3, cursor='hand2', highlightbackground=COLORS['border_3'], highlightthickness=1, command=command)
+        return XButton(parent, text=text, font=(FONTS['body_strong'][0], 9), bg=COLORS['accent'], fg=COLORS['fg_0'], activebackground=COLORS['accent_hi'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=9, pady=3, cursor='hand2', command=command)
+    return XButton(parent, text=text, font=(FONTS['body'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_2'], activebackground=COLORS['bg_3'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=9, pady=3, cursor='hand2', highlightbackground=COLORS['border_3'], highlightthickness=1, command=command)
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -1322,7 +1323,7 @@ def _path_chip(parent, text, command):
     """Small bordered quick-jump chip for the remote-pane mount bar
     (Root / Data / User / USB0 / Games). Navigation only — never writes,
     so no protected-path guard is involved."""
-    return tk.Button(parent, text=text, font=(FONTS['button'][0], 8, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_3'], activebackground=COLORS['accent'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=10, pady=3, cursor='hand2', highlightbackground=COLORS['border_3'], highlightthickness=1, command=command)
+    return XButton(parent, text=text, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_3'], activebackground=COLORS['accent'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=10, pady=3, cursor='hand2', highlightbackground=COLORS['border_3'], highlightthickness=1, command=command)
 
 
 def _icon_btn(parent, glyph, tooltip='', command=None,
@@ -1331,7 +1332,7 @@ def _icon_btn(parent, glyph, tooltip='', command=None,
     fg = (COLORS['accent'] if accent
           else COLORS['danger_hi'] if danger
           else COLORS['fg_3'])
-    btn = tk.Button(parent, text=glyph,
+    btn = XButton(parent, text=glyph,
                     font=(FONTS['body'][0], 11),
                     bg=COLORS['bg_2'], fg=fg,
                     activebackground=COLORS['bg_3'],
@@ -1358,7 +1359,7 @@ def _build_diagnostics_panel(parent, app):
     SEP = '·'
     head_inner = tk.Frame(panel, bg=COLORS['bg_2'])
     head_inner.pack(fill='x', padx=12, pady=(6, 5))
-    tk.Label(head_inner, text='🔎  ' + _('Connection Diagnostics'), font=(FONTS['body'][0], 10, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
+    tk.Label(head_inner, text='🔎  ' + _('Connection Diagnostics'), font=(FONTS['body_strong'][0], 10), bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
     app._ftpdiag_status = tk.StringVar(value=_('Not run yet'))
     tk.Label(head_inner, textvariable=app._ftpdiag_status, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(10, 0))
     btnbar = tk.Frame(head_inner, bg=COLORS['bg_2'])
@@ -1375,9 +1376,9 @@ def _build_diagnostics_panel(parent, app):
         """Inline 'CAPTION value' on a single baseline. Returns (var, lbl)."""
         cell = tk.Frame(parent_, bg=COLORS['bg_2'])
         cell.pack(side='left')
-        tk.Label(cell, text=caption, font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 4))
+        tk.Label(cell, text=caption, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 4))
         var = tk.StringVar(value='—')
-        lbl = tk.Label(cell, textvariable=var, font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_2'])
+        lbl = tk.Label(cell, textvariable=var, font=(FONTS['body_strong'][0], 10), bg=COLORS['bg_2'], fg=COLORS['fg_2'])
         lbl.pack(side='left')
         return cell, var, lbl
     def _sep():
@@ -1391,27 +1392,27 @@ def _build_diagnostics_panel(parent, app):
     _sep()
     dest_cell = tk.Frame(status, bg=COLORS['bg_2'])
     dest_cell.pack(side='left')
-    tk.Label(dest_cell, text=_('DEST'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 4))
+    tk.Label(dest_cell, text=_('DEST'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 4))
     app._ftpdiag_dest_dot = tk.Frame(dest_cell, bg=COLORS['fg_5'], width=9, height=9)
     app._ftpdiag_dest_dot.pack(side='left', padx=(0, 5), pady=(0, 1))
     app._ftpdiag_dest_dot.pack_propagate(False)
     app._ftpdiag_dest_var = tk.StringVar(value='—')
-    app._ftpdiag_dest_lbl = tk.Label(dest_cell, textvariable=app._ftpdiag_dest_var, font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_2'])
+    app._ftpdiag_dest_lbl = tk.Label(dest_cell, textvariable=app._ftpdiag_dest_var, font=(FONTS['body_strong'][0], 10), bg=COLORS['bg_2'], fg=COLORS['fg_2'])
     app._ftpdiag_dest_lbl.pack(side='left')
     _sep()
     _c, app._ftpdiag_write_var, app._ftpdiag_write_lbl = _field(status, _('WRITABLE'))
     feat = tk.Frame(status, bg=COLORS['bg_2'])
     feat.pack(side='left', padx=(16, 0))
-    tk.Label(feat, text=_('FEAT'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 5))
+    tk.Label(feat, text=_('FEAT'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 5))
     app._ftpdiag_feat_chips = {}
     _feat_help = {'mlsd': 'MLSD — modern machine-readable directory listings', 'rest': 'REST — transfer resume is supported', 'size': 'SIZE — server can report exact file sizes', 'mdtm': 'MDTM — server reports file modification times', 'utf8': 'UTF8 — Unicode filenames are supported', 'xcrypt': 'XCRYPT — optional encrypted transfers (zftpd; slower, off by default)'}
     for key, text in ('mlsd', 'MLSD'), ('rest', 'REST'), ('size', 'SIZE'), ('mdtm', 'MDTM'), ('utf8', 'UTF8'), ('xcrypt', 'XCRYPT'):
-        chip = tk.Label(feat, text=text, font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_5'], padx=6, pady=2, cursor='question_arrow')
+        chip = tk.Label(feat, text=text, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_5'], padx=6, pady=2, cursor='question_arrow')
         chip.pack(side='left', padx=(0, 4))
         _attach_tooltip(chip, _feat_help[key])
         app._ftpdiag_feat_chips[key] = chip
     app._ftpdiag_adv_open = False
-    app._ftpdiag_adv_toggle = tk.Label(status, text='▶  ' + _('Advanced Details'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_3'], padx=8, pady=2, cursor='hand2')
+    app._ftpdiag_adv_toggle = tk.Label(status, text='▶  ' + _('Advanced Details'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_3'], padx=8, pady=2, cursor='hand2')
     app._ftpdiag_adv_toggle.pack(side='right')
     app._ftpdiag_adv_toggle.bind('<Button-1>', lambda e: _ftpdiag_toggle_adv(app))
     app._ftpdiag_adv_toggle.bind('<Enter>', lambda e: app._ftpdiag_adv_toggle.configure(bg=COLORS['accent'], fg=COLORS['fg_0']))
@@ -1422,7 +1423,7 @@ def _build_diagnostics_panel(parent, app):
     adv_inner.pack(fill='x', padx=12, pady=(0, 8))
     proto = tk.Frame(adv_inner, bg=COLORS['bg_2'])
     proto.pack(fill='x', pady=(0, 0))
-    tk.Label(proto, text=_('PROTOCOL'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 8))
+    tk.Label(proto, text=_('PROTOCOL'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 8))
     _c, app._ftpdiag_pasv_var, app._ftpdiag_pasv_lbl = _field(proto, _('PASSIVE'))
     tk.Label(proto, text='  %s  ' % SEP, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left')
     _c, app._ftpdiag_bin_var, app._ftpdiag_bin_lbl = _field(proto, _('BINARY'))
@@ -1430,7 +1431,7 @@ def _build_diagnostics_panel(parent, app):
     _c, app._ftpdiag_copy_var, app._ftpdiag_copy_lbl = _field(proto, _('SERVER-SIDE COPY'))
     thr = tk.Frame(adv_inner, bg=COLORS['bg_2'])
     thr.pack(fill='x', pady=(4, 0))
-    tk.Label(thr, text=_('THROUGHPUT'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 8))
+    tk.Label(thr, text=_('THROUGHPUT'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 8))
     _c, app._ftpspeed_up_var, _l = _field(thr, _('UPLOAD'))
     tk.Label(thr, text='  %s  ' % SEP, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left')
     _c, app._ftpspeed_dn_var, _l = _field(thr, _('DOWNLOAD'))

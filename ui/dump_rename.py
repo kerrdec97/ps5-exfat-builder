@@ -38,6 +38,7 @@ the main file imports it at the top of the function.
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
@@ -172,7 +173,7 @@ class DumpRenameTab:
         head = tk.Frame(parent, bg=COLORS['bg_1'])
         head.pack(fill='x', padx=24, pady=(14, 6))
         tk.Label(head, text='\u270f  ' + _('Dump Rename'),
-                 font=(FONTS['h2'][0], 14, 'bold'),
+                 font=(FONTS['body_strong'][0], 14),
                  bg=COLORS['bg_1'], fg=COLORS['fg_0']
                  ).pack(side='left')
         tk.Label(head,
@@ -220,15 +221,15 @@ class DumpRenameTab:
             cell.grid(row=0, column=col, sticky='ew',
                       padx=(0 if col == 0 else 10, 0))
             tk.Label(cell, text=caption,
-                     font=(FONTS['mono_sm'][0], 8, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_5']
                      ).pack(anchor='w', padx=14, pady=(10, 0))
             v = tk.Label(cell, text='0',
-                         font=(FONTS['h2'][0], 18, 'bold'),
+                         font=(FONTS['body_strong'][0], 18),
                          bg=COLORS['bg_2'], fg=value_fg)
             v.pack(anchor='w', padx=14, pady=(2, 0))
             tk.Label(cell, text=sub,
-                     font=(FONTS['mono_sm'][0], 8),
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_5']
                      ).pack(anchor='w', padx=14, pady=(0, 10))
             return v
@@ -269,7 +270,7 @@ class DumpRenameTab:
         inner.pack(fill='x', padx=14, pady=10)
 
         tk.Label(inner, text=_('Source folder'),
-                 font=(FONTS['body'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['fg_1']
                  ).pack(anchor='w')
         tk.Label(inner,
@@ -284,7 +285,7 @@ class DumpRenameTab:
         row = tk.Frame(inner, bg=COLORS['bg_2'])
         row.pack(fill='x')
 
-        tk.Entry(row, textvariable=self.app._dumps_src_var,
+        XEntry(row, textvariable=self.app._dumps_src_var,
                  font=FONTS['mono_sm'],
                  bg=COLORS['bg_3'], fg=COLORS['fg_0'],
                  insertbackground=COLORS['fg_0'],
@@ -311,14 +312,14 @@ class DumpRenameTab:
         inner.pack(fill='x', padx=14, pady=10)
 
         tk.Label(inner, text=_('Naming pattern'),
-                 font=(FONTS['body'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['fg_1']
                  ).pack(anchor='w', pady=(0, 6))
 
         for key, label, example in _PATTERNS:
             row = tk.Frame(inner, bg=COLORS['bg_2'])
             row.pack(fill='x', pady=2)
-            rb = tk.Radiobutton(row, text=' ' + _(label),
+            rb = XRadio(row, text=' ' + _(label),
                                 value=key,
                                 variable=self.app._dumps_naming_preset_var,
                                 font=FONTS['body'],
@@ -349,7 +350,7 @@ class DumpRenameTab:
         head.pack(fill='x')
 
         tk.Label(head, text=_('Found dumps'),
-                 font=(FONTS['body'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['fg_1']
                  ).pack(side='left')
 
@@ -571,7 +572,7 @@ class DumpRenameTab:
         inner.pack(fill='x', padx=10, pady=10)
 
         # ── Checkbox ──
-        cb = tk.Checkbutton(inner, variable=chk_var,
+        cb = XCheck(inner, variable=chk_var,
                             bg=COLORS['bg_2'],
                             activebackground=COLORS['bg_2'],
                             selectcolor=COLORS['bg_3'],
@@ -613,7 +614,7 @@ class DumpRenameTab:
         # Title — biggest text, top of the card
         title_text = title if title else _('(unknown title)')
         tk.Label(text_wrap, text=title_text,
-                 font=(FONTS['body'][0], 12, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_2'], fg=COLORS['fg_0'],
                  anchor='w', justify='left'
                  ).pack(anchor='w', fill='x')
@@ -682,7 +683,7 @@ class DumpRenameTab:
         new_color = COLORS.get('fg_4', '#888') if is_noop \
             else COLORS.get('accent', '#5b8cff')
         tk.Label(new_row, text=proposed,
-                 font=(FONTS['body'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=new_color,
                  anchor='w', justify='left'
                  ).pack(side='left', fill='x', expand=True)
@@ -709,12 +710,12 @@ class DumpRenameTab:
         }
         c_text, c_bg, c_fg = chip_map[kind]
         tk.Label(right, text=' ' + c_text + ' ',
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=c_bg, fg=c_fg, padx=6, pady=2
                  ).pack(anchor='e', pady=(0, 6))
 
         tk.Label(right, textvariable=size_var,
-                 font=(FONTS['body'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['fg_1']
                  ).pack(anchor='e')
         tk.Label(right, textvariable=status_var,
@@ -832,8 +833,8 @@ class DumpRenameTab:
 # Helpers — themed buttons matching tab_help.py / tab_advanced.py styling
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -847,7 +848,7 @@ def _ghost_btn(parent, text, command):
 
 def _accent_btn(parent, text, command, big=False):
     accent = COLORS.get('accent', '#5b8cff')
-    return tk.Button(parent, text=text,
+    return XButton(parent, text=text,
                      font=(FONTS['button'][0],
                            11 if big else 9,
                            'bold'),

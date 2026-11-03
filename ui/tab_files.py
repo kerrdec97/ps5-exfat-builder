@@ -28,6 +28,7 @@ with Treeview row order.
 import os
 import time
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk
 
 from tkinter_theme import COLORS, FONTS
@@ -240,12 +241,12 @@ def build_files_tab(parent, app):
     icon_tile.pack_propagate(False)
     tk.Label(icon_tile, text='\U0001f4c1',
              bg=COLORS['accent_15'], fg=COLORS['accent'],
-             font=('Segoe UI', 14)
+             font=(FONTS['body'][0], 14)
              ).pack(expand=True)
     title_col = tk.Frame(head, bg=COLORS['bg_1'])
     title_col.pack(side='left', padx=(10, 0))
     tk.Label(title_col, text=_('exFAT File Manager'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(anchor='w')
     tk.Label(title_col,
@@ -335,7 +336,7 @@ def _build_mounted_card(parent, app):
                         highlightbackground=COLORS['border_3'],
                         highlightthickness=1)
     ef_outer.pack(side='left', fill='x', expand=True)
-    tk.Entry(ef_outer, textvariable=app._fm_image_var,
+    XEntry(ef_outer, textvariable=app._fm_image_var,
              font=FONTS['mono_sm'],
              bg=COLORS['bg_0'], fg=COLORS['fg_1'],
              disabledforeground=COLORS['fg_1'],
@@ -456,18 +457,18 @@ def _stat_tile(parent, eyebrow_text, value_var, has_dot=False):
     tile = tk.Frame(parent, bg=COLORS['bg_2'])
     tile.pack(side='left', padx=14)
     tk.Label(tile, text=eyebrow_text,
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(anchor='w')
     val_row = tk.Frame(tile, bg=COLORS['bg_2'])
     val_row.pack(anchor='w')
     if has_dot:
         tk.Label(val_row, text='\u25cf',
-                 font=('Segoe UI', 6),
+                 font=(FONTS['body'][0], 6),
                  bg=COLORS['bg_2'], fg=COLORS['success']
                  ).pack(side='left', padx=(0, 4))
     tk.Label(val_row, textvariable=value_var,
-             font=(FONTS['mono_sm'][0], 11),
+             font=(FONTS['body'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_1']
              ).pack(side='left')
 
@@ -478,7 +479,7 @@ def _build_toolbar(parent, app):
     bc = tk.Frame(tb, bg=COLORS['bg_1'])
     bc.pack(side='left')
     tk.Label(bc, text='\U0001f4c0',
-             font=('Segoe UI', 10), bg=COLORS['bg_1'],
+             font=(FONTS['body'][0], 10), bg=COLORS['bg_1'],
              fg=COLORS['accent']).pack(side='left')
     tk.Label(bc, text=' \u203a ',
              font=FONTS['mono_sm'], bg=COLORS['bg_1'],
@@ -533,12 +534,12 @@ def _build_file_table(parent, app):
                     lightcolor=COLORS['bg_2'],
                     darkcolor=COLORS['bg_2'],
                     rowheight=22,
-                    font=(FONTS['mono_sm'][0], 10))
+                    font=(FONTS['body'][0], 10))
     style.configure('FileMgr.Treeview.Heading',
                     background=COLORS['bg_3'],
                     foreground=COLORS['fg_5'],
                     relief='flat',
-                    font=('Segoe UI', 9, 'bold'))
+                    font=(FONTS['body_strong'][0], 9))
     style.map('FileMgr.Treeview',
               background=[('selected', COLORS['accent_15'])],
               foreground=[('selected', COLORS['accent_hi'])])
@@ -566,7 +567,7 @@ def _build_file_table(parent, app):
     foot = tk.Frame(parent, bg=COLORS['bg_3'])
     foot.pack(fill='x', pady=(1, 0))
     app._fm_sel_pill = tk.Label(foot, text='0 selected',
-        font=(FONTS['mono_sm'][0], 10, 'bold'),
+        font=(FONTS['body_strong'][0], 10),
         bg=COLORS['bg_3'], fg=COLORS['fg_4'],
         padx=8, pady=2)
     app._fm_sel_pill.pack(side='left', padx=(10, 6), pady=4)
@@ -616,20 +617,20 @@ def _build_inspector(parent, app):
     head = tk.Frame(parent, bg=COLORS['bg_2'])
     head.pack(fill='x', padx=12, pady=(10, 6))
     tk.Label(head, text='INSPECTOR',
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left')
 
     hero = tk.Frame(parent, bg=COLORS['bg_2'])
     hero.pack(fill='x', padx=12, pady=(0, 8))
     app._fm_insp_icon = tk.Label(hero, text='\U0001f4be',
-        font=('Segoe UI', 40),
+        font=(FONTS['body'][0], 40),
         bg=COLORS['bg_3'], fg=COLORS['fg_3'],
         width=2, height=2,
         highlightbackground=COLORS['border_3'], highlightthickness=1)
     app._fm_insp_icon.pack(anchor='center', pady=(8, 6))
     app._fm_insp_name = tk.Label(hero, text=_('No selection'),
-        font=(FONTS['mono_sm'][0], 11, 'bold'),
+        font=(FONTS['body_strong'][0], 11),
         bg=COLORS['bg_2'], fg=COLORS['fg_0'],
         wraplength=_INSPECTOR_WIDTH - 24, justify='center')
     app._fm_insp_name.pack(anchor='center')
@@ -654,12 +655,12 @@ def _build_inspector(parent, app):
     hex_outer = tk.Frame(parent, bg=COLORS['bg_2'])
     hex_outer.pack(fill='x', padx=12, pady=(0, 8))
     tk.Label(hex_outer, text='FIRST 64 BYTES',
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(anchor='w', pady=(0, 4))
     app._fm_insp_hex = tk.Text(hex_outer,
         height=4, width=34,
-        font=('Consolas', 9),
+        font=(FONTS['code'][0], 9),
         bg=COLORS['bg_0'], fg=COLORS['fg_3'],
         insertbackground=COLORS['accent'],
         relief='flat', bd=6, wrap='none', state='disabled',
@@ -686,12 +687,12 @@ def _detail_row(parent, app, eyebrow, mono=False, accent=False, attr=None):
     row = tk.Frame(parent, bg=COLORS['bg_2'])
     row.pack(fill='x', pady=(0, 4))
     tk.Label(row, text=eyebrow,
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5'],
              width=10, anchor='w'
              ).pack(side='left')
     fg = COLORS['accent_hi'] if accent else COLORS['fg_2']
-    fnt = (FONTS['mono_sm'][0], 10) if mono else ('Segoe UI', 10)
+    fnt = (FONTS['body'][0], 10) if mono else (FONTS['body'][0], 10)
     val = tk.Label(row, text='—',
                    font=fnt, bg=COLORS['bg_2'], fg=fg,
                    anchor='w', justify='left',
@@ -819,8 +820,8 @@ def _extract_selected(app):
 # Button helpers
 # ─────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_5'],
                      activeforeground=COLORS['fg_0'],
@@ -833,8 +834,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -845,8 +846,8 @@ def _accent_btn(parent, text, command):
 
 
 def _danger_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['danger'], fg=COLORS['fg_0'],
                      activebackground=COLORS['danger_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -864,8 +865,8 @@ def _icon_text_btn(parent, text, command, kind='ghost'):
         fg = COLORS['danger_hi']
     else:
         fg = COLORS['fg_2']
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=fg,
                      activebackground=COLORS['bg_3'],
                      activeforeground=fg,
@@ -1309,12 +1310,12 @@ def _bp_pick_source_kind(app):
     body.pack(fill='both', expand=True, padx=18, pady=16)
 
     tk.Label(body, text=_('What\u2019s your backport source?'),
-             font=('Segoe UI', 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_1'], fg=COLORS['fg_1']
              ).pack(anchor='w')
     tk.Label(body,
              text=_('Pick the format that matches what you have.'),
-             font=('Segoe UI', 9),
+             font=(FONTS['body'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_4']
              ).pack(anchor='w', pady=(2, 14))
 
@@ -1333,7 +1334,7 @@ def _bp_pick_source_kind(app):
         inner = tk.Frame(outer, bg=COLORS['bg_2'])
         inner.pack(fill='x', padx=12, pady=10)
         inner.bind('<Button-1>', _on_click)
-        ico = tk.Label(inner, text=icon, font=('Segoe UI', 18),
+        ico = tk.Label(inner, text=icon, font=(FONTS['body'][0], 18),
                        bg=COLORS['bg_2'], fg=COLORS['accent'])
         ico.pack(side='left', padx=(0, 12))
         ico.bind('<Button-1>', _on_click)
@@ -1341,11 +1342,11 @@ def _bp_pick_source_kind(app):
         col.pack(side='left', fill='x', expand=True)
         col.bind('<Button-1>', _on_click)
         tlbl = tk.Label(col, text=title,
-                        font=('Segoe UI', 10, 'bold'),
+                        font=(FONTS['body_strong'][0], 10),
                         bg=COLORS['bg_2'], fg=COLORS['fg_1'])
         tlbl.pack(anchor='w')
         tlbl.bind('<Button-1>', _on_click)
-        slbl = tk.Label(col, text=sub, font=('Segoe UI', 8),
+        slbl = tk.Label(col, text=sub, font=(FONTS['body'][0], 9),
                         bg=COLORS['bg_2'], fg=COLORS['fg_4'])
         slbl.pack(anchor='w')
         slbl.bind('<Button-1>', _on_click)

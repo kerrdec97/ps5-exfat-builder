@@ -33,6 +33,7 @@ give a design-tokens chrome.
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog
 
 from tkinter_theme import COLORS, FONTS
@@ -55,7 +56,7 @@ def build_y2jb_tab(parent, app):
     head = tk.Frame(parent, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=24, pady=(14, 6))
     tk.Label(head, text='\U0001f3ac  ' + _('Y2JB Tools'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(side='left')
     tk.Label(head,
@@ -73,7 +74,7 @@ def build_y2jb_tab(parent, app):
     bi = tk.Frame(banner, bg=COLORS['accent_08'])
     bi.pack(fill='x', padx=12, pady=8)
     tk.Label(bi, text='\u2139',
-             font=(FONTS['body'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['accent_08'], fg=COLORS['accent']
              ).pack(side='left', padx=(0, 8))
     tk.Label(bi,
@@ -128,7 +129,7 @@ def build_y2jb_tab(parent, app):
     qi = tk.Frame(qa, bg=COLORS['bg_2'])
     qi.pack(fill='x', padx=14, pady=12)
     tk.Label(qi, text=_('QUICK ACTIONS'),
-             font=(FONTS['mono_sm'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(anchor='w', pady=(0, 8))
     qbtns = tk.Frame(qi, bg=COLORS['bg_2'])
@@ -173,14 +174,14 @@ def build_y2jb_tab(parent, app):
     ai = tk.Frame(act, bg=COLORS['bg_2'])
     ai.pack(fill='both', expand=True, padx=14, pady=12)
     tk.Label(ai, text=_('INSTALL QUEUE'),
-             font=(FONTS['mono_sm'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(anchor='w', pady=(0, 6))
 
     cur_var = tk.StringVar(value=_('No install running'))
     last_var = tk.StringVar(value=_('Last installed: \u2014'))
     tk.Label(ai, textvariable=cur_var,
-             font=(FONTS['mono_sm'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['teal'],
              anchor='w').pack(fill='x')
     tk.Label(ai, textvariable=last_var,
@@ -189,7 +190,7 @@ def build_y2jb_tab(parent, app):
              anchor='w').pack(fill='x', pady=(2, 0))
     feed_var = tk.StringVar(value='')
     tk.Label(ai, textvariable=feed_var,
-             font=(FONTS['mono_sm'][0], 8),
+             font=(FONTS['body'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5'],
              anchor='w', justify='left').pack(fill='x', pady=(4, 0))
 
@@ -238,10 +239,10 @@ def build_y2jb_tab(parent, app):
     log_hdr = tk.Frame(log_outer, bg=COLORS['bg_1'])
     log_hdr.pack(fill='x', pady=(6, 4))
     tk.Label(log_hdr, text=_('OUTPUT LOG'),
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_5']
              ).pack(side='left')
-    tk.Button(log_hdr, text=_('Clear'),
+    XButton(log_hdr, text=_('Clear'),
               font=FONTS['meta'],
               bg=COLORS['bg_1'], fg=COLORS['fg_5'],
               activebackground=COLORS['bg_2'],
@@ -279,7 +280,7 @@ def build_y2jb_tab(parent, app):
         wrap = tk.Frame(pane, bg=COLORS['bg_1'])
         wrap.pack(fill='both', expand=True)
         cv = tk.Canvas(wrap, bg=COLORS['bg_1'], highlightthickness=0)
-        sb = tk.Scrollbar(wrap, command=cv.yview,
+        sb = XScrollbar(wrap, command=cv.yview,
                           bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
         cv.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
@@ -373,24 +374,24 @@ def _build_install_cards(parent, app):
         head = tk.Frame(body, bg=COLORS['bg_2'])
         head.pack(fill='x')
         tk.Label(head, text=region,
-                 font=(FONTS['h3'][0], 13, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_2'], fg=COLORS['fg_0']
                  ).pack(side='left')
         tk.Label(head, text='\u2713 ' + _('Patchable'),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['success_bg'], fg=COLORS['success_hi'],
                  padx=8, pady=2
                  ).pack(side='right')
 
         tk.Label(body, text=region_ids.get(region, ''),
-                 font=(FONTS['mono_sm'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w'
                  ).pack(fill='x', pady=(2, 10))
 
         # PKG file row — readonly entry + Browse (same behavior as the
         # legacy builder: persist to settings + re-check readiness)
         tk.Label(body, text=_('YouTube PKG').upper(),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
                  ).pack(fill='x')
         field_row = tk.Frame(body, bg=COLORS['bg_2'])
@@ -399,8 +400,8 @@ def _build_install_cards(parent, app):
                       highlightbackground=COLORS['border_3'],
                       highlightthickness=1)
         ef.pack(side='left', fill='x', expand=True)
-        tk.Entry(ef, textvariable=app._y2jb_pkg_paths[region],
-                 font=(FONTS['mono_sm'][0], 9),
+        XEntry(ef, textvariable=app._y2jb_pkg_paths[region],
+                 font=(FONTS['body'][0], 9),
                  bg=COLORS['field_bg'], fg=COLORS['field_fg'],
                  insertbackground=COLORS['field_fg'],
                  disabledforeground=COLORS['field_fg'],
@@ -460,7 +461,7 @@ def _build_install_cards(parent, app):
     app._y2jb_inst_step = tk.StringVar(value='')
     app._y2jb_inst_pct  = tk.StringVar(value='')
     tk.Label(prog.body, textvariable=app._y2jb_inst_step,
-             font=(FONTS['body'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'],
              anchor='w').pack(fill='x', pady=(0, 2))
     bar_f = tk.Frame(prog.body, bg=COLORS['bg_4'], height=10)

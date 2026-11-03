@@ -10,6 +10,7 @@ Presentation only. All colours/fonts via COLORS/FONTS tokens (standing rule).
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -27,7 +28,7 @@ def build_home_tab(parent, app):
 
     # ── Page-level scroll (consistent with the PS5 Overview page) ──
     page_canvas = tk.Canvas(parent, bg=COLORS['bg_1'], highlightthickness=0)
-    page_sb = tk.Scrollbar(parent, orient='vertical',
+    page_sb = XScrollbar(parent, orient='vertical',
                            command=page_canvas.yview,
                            bg=COLORS['bg_3'], troughcolor=COLORS['bg_1'])
     page_canvas.configure(yscrollcommand=page_sb.set)
@@ -54,7 +55,7 @@ def build_home_tab(parent, app):
     hero = tk.Frame(body, bg=COLORS['bg_1'])
     hero.pack(fill='x', padx=24, pady=(20, 6))
     tk.Label(hero, text=_('exFAT Image Builder'),
-             font=(FONTS['h1'][0], 22, 'bold'),
+             font=(FONTS['body_strong'][0], 22),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
              ).pack(anchor='w')
     tk.Label(hero, text=_('What would you like to do?'),
@@ -128,11 +129,11 @@ def build_home_tab(parent, app):
 
         trow = tk.Frame(inner, bg=COLORS['bg_3'])
         trow.pack(fill='x')
-        icon_tile = tk.Label(trow, text=icon, font=(FONTS['h3'][0], 14),
+        icon_tile = tk.Label(trow, text=icon, font=(FONTS['body'][0], 14),
                              bg=COLORS['accent_08'], fg=COLORS['teal'],
                              padx=6, pady=3)
         icon_tile.pack(side='left', padx=(0, 9))
-        tk.Label(trow, text=title, font=(FONTS['h3'][0], 12, 'bold'),
+        tk.Label(trow, text=title, font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w'
                  ).pack(side='left')
         # "Open →" affordance on the right of the title row — the whole

@@ -34,6 +34,7 @@ later steps.
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk
 
 from tkinter_theme import COLORS, FONTS
@@ -93,7 +94,7 @@ def _make_themed_button(parent, text, command, kind='primary',
     }
     bg, fg, abg, afg = schemes.get(kind, schemes['primary'])
     label = (icon + '  ' + text) if icon else text
-    btn = tk.Button(parent, text=label,
+    btn = XButton(parent, text=label,
                     font=(FONTS['button'][0], font_size, 'bold'),
                     bg=bg, fg=fg,
                     activebackground=abg, activeforeground=afg,
@@ -123,7 +124,7 @@ def _info_banner(parent, text, on_click=None):
     # Round-ish "i" glyph in a small accent disc on the left
     ico = tk.Label(inner, text='i',
                    bg=COLORS['accent'], fg=COLORS['fg_0'],
-                   font=(FONTS['body'][0], 9, 'bold'),
+                   font=(FONTS['body_strong'][0], 9),
                    width=2, padx=2, pady=0)
     ico.pack(side='left', padx=(0, 10))
 
@@ -229,7 +230,7 @@ def _build_left_column(grid, app):
     # when the scrollbar isn't visible — useful when the wrapper is
     # only barely overflowing.
     _cv = tk.Canvas(card.body, bg=COLORS['bg_2'], highlightthickness=0)
-    _sb = tk.Scrollbar(card.body, command=_cv.yview,
+    _sb = XScrollbar(card.body, command=_cv.yview,
                        bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
     _cv.configure(yscrollcommand=_sb.set)
     _cv.pack(side='left', fill='both', expand=True)
@@ -303,7 +304,7 @@ def _build_left_column(grid, app):
     # ── "+ Add multiple folders at once" link button ──
     multi_row = tk.Frame(body, bg=COLORS['bg_2'])
     multi_row.pack(fill='x', pady=(6, 0))
-    multi_btn = tk.Button(multi_row,
+    multi_btn = XButton(multi_row,
                           text='\U0001f4c1  Add multiple folders at once',
                           font=(FONTS['body'][0], 10),
                           bg=COLORS['bg_2'], fg=COLORS['accent'],
@@ -423,7 +424,7 @@ class _CompactDropZone(tk.Frame):
         self._main_lbl = tk.Label(txt_col,
                                   text='Drop a game folder here, '
                                        'or click to browse',
-                                  font=(FONTS['body'][0], 10, 'bold'),
+                                  font=(FONTS['body_strong'][0], 10),
                                   bg=bg, fg=COLORS['fg_2'], anchor='w')
         self._main_lbl.pack(fill='x')
 
@@ -572,12 +573,12 @@ def _build_right_column(grid, app):
     head_left = tk.Frame(q_head, bg=COLORS['bg_2'])
     head_left.pack(side='left')
     tk.Label(head_left, text='Build queue',
-             font=(FONTS['body'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0']
              ).pack(side='left')
     app._queue_count_var = tk.StringVar(value='0 items')
     tk.Label(head_left, textvariable=app._queue_count_var,
-             font=(FONTS['body'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['accent_08'], fg=COLORS['accent_hi'],
              padx=8, pady=2
              ).pack(side='left', padx=(10, 0))
@@ -610,7 +611,7 @@ def _build_right_column(grid, app):
 
     canvas = tk.Canvas(q_outer, bg=COLORS['bg_3'],
                        highlightthickness=0, height=200)
-    sb = tk.Scrollbar(q_outer, orient='vertical', command=canvas.yview,
+    sb = XScrollbar(q_outer, orient='vertical', command=canvas.yview,
                       bg=COLORS['bg_4'], troughcolor=COLORS['bg_2'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -669,7 +670,7 @@ def _qbtn(parent, text, command, danger=False):
     fg = COLORS['fg_3']
     abg = COLORS['bg_4']
     afg = COLORS['danger_hi'] if danger else COLORS['fg_1']
-    return tk.Button(parent, text=text,
+    return XButton(parent, text=text,
                      font=FONTS['meta'],
                      bg=bg, fg=fg,
                      activebackground=abg, activeforeground=afg,

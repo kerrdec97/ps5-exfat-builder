@@ -30,6 +30,7 @@ import json
 import time
 import datetime
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -70,7 +71,7 @@ def _build_page_head(body, app):
     head.pack(fill='x', padx=24, pady=(14, 12))
 
     tk.Label(head, text=_('Build History'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(side='left')
 
@@ -152,7 +153,7 @@ def _stat_card(grid, col, label, value, sub='', value_color=None):
     inner.pack(fill='both', expand=True, padx=14, pady=12)
 
     tk.Label(inner, text=label.upper(),
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_4'],
              anchor='w'
              ).pack(fill='x')
@@ -232,7 +233,7 @@ def _build_filters(body, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(8, 4))
-    tk.Entry(search_wrap, textvariable=app._hist_search_var,
+    XEntry(search_wrap, textvariable=app._hist_search_var,
              font=FONTS['body'],
              bg=COLORS['bg_0'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -329,7 +330,7 @@ def _build_table(body, app):
     for i, (key, label, width) in enumerate(_COLS):
         anchor = 'e' if key in ('size', 'duration') else 'w'
         tk.Label(head_inner, text=label.upper(),
-                 font=(FONTS['eyebrow'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_3'], fg=COLORS['fg_4'],
                  anchor=anchor
                  ).grid(row=0, column=i, sticky='ew',
@@ -342,7 +343,7 @@ def _build_table(body, app):
     outer.pack(fill='both', expand=True)
 
     canvas = tk.Canvas(outer, bg=COLORS['bg_2'], highlightthickness=0)
-    sb = tk.Scrollbar(outer, orient='vertical', command=canvas.yview,
+    sb = XScrollbar(outer, orient='vertical', command=canvas.yview,
                       bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -450,8 +451,8 @@ def _export_csv(app):
 # Helpers for buttons
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -464,8 +465,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _danger_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['danger_hi'],
@@ -482,7 +483,7 @@ def _icon_btn(parent, glyph, tooltip='', command=None, accent=False, danger=Fals
     fg = (COLORS['accent'] if accent
           else COLORS['danger_hi'] if danger
           else COLORS['fg_4'])
-    btn = tk.Button(parent, text=glyph,
+    btn = XButton(parent, text=glyph,
                     font=(FONTS['body'][0], 11),
                     bg=COLORS['bg_2'], fg=fg,
                     activebackground=COLORS['bg_3'],

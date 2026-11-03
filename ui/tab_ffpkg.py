@@ -39,6 +39,7 @@ pattern as `_activate_dot` in step 3).
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -114,7 +115,7 @@ def _build_left_column(body, app):
     bottom_actions.pack(side='bottom', fill='x', padx=24, pady=(6, 12))
 
     cv = tk.Canvas(wrap, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = tk.Scrollbar(wrap, command=cv.yview,
+    sb = XScrollbar(wrap, command=cv.yview,
                       bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
     cv.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -153,7 +154,7 @@ def _build_left_column(body, app):
     inner_b = tk.Frame(banner, bg=COLORS['teal_bg'])
     inner_b.pack(fill='x', padx=12, pady=10)
     tk.Label(inner_b, text='\U0001f4e6',
-             font=(FONTS['body'][0], 12),
+             font=(FONTS['body'][0], 11),
              bg=COLORS['teal_bg'], fg=COLORS['teal']
              ).pack(side='left', padx=(0, 10))
     tk.Label(inner_b,
@@ -184,8 +185,8 @@ def _build_left_column(body, app):
              anchor='w'
              ).pack(side='left', fill='x', expand=True)
     # Right-side button to manually re-check
-    tk.Button(dn_inner, text=_('Check'),
-              font=(FONTS['button'][0], 9),
+    XButton(dn_inner, text=_('Check'),
+              font=(FONTS['body'][0], 9),
               bg=COLORS['success_bg'], fg=COLORS['success_hi'],
               activebackground=COLORS['bg_3'],
               activeforeground=COLORS['fg_0'],
@@ -294,7 +295,7 @@ def _build_params_card(parent, app):
         row.grid_columnconfigure(2, weight=0, minsize=70)
 
         tk.Label(row, text=key,
-                 font=(FONTS['mono_sm'][0], 10, 'bold'),
+                 font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['teal'],
                  anchor='w'
                  ).grid(row=0, column=0, sticky='w')
@@ -417,20 +418,20 @@ def _build_right_column(body, app):
     head_left = tk.Frame(q_head, bg=COLORS['bg_2'])
     head_left.pack(side='left')
     tk.Label(head_left, text=_('Queue'),
-             font=(FONTS['body'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0']
              ).pack(side='left')
 
     app._ffpkg_queue_count_var = tk.StringVar(value='0 items')
     tk.Label(head_left, textvariable=app._ffpkg_queue_count_var,
-             font=(FONTS['body'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['teal_bg'], fg=COLORS['teal_hi'],
              padx=8, pady=2
              ).pack(side='left', padx=(10, 0))
 
     head_right = tk.Frame(q_head, bg=COLORS['bg_2'])
     head_right.pack(side='right')
-    tk.Button(head_right, text='\U0001f5d1  ' + _('Clear'),
+    XButton(head_right, text='\U0001f5d1  ' + _('Clear'),
               font=FONTS['meta'],
               bg=COLORS['bg_3'], fg=COLORS['fg_3'],
               activebackground=COLORS['bg_4'],
@@ -451,7 +452,7 @@ def _build_right_column(body, app):
 
     canvas = tk.Canvas(q_outer, bg=COLORS['bg_3'],
                        highlightthickness=0, height=200)
-    sb = tk.Scrollbar(q_outer, orient='vertical', command=canvas.yview,
+    sb = XScrollbar(q_outer, orient='vertical', command=canvas.yview,
                       bg=COLORS['bg_4'], troughcolor=COLORS['bg_2'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -516,7 +517,7 @@ def _field(parent, label_text, var, on_browse=None, hint=None):
                           highlightthickness=1)
     input_wrap.pack(fill='x', pady=(6, 0))
 
-    tk.Entry(input_wrap, textvariable=var,
+    XEntry(input_wrap, textvariable=var,
              font=FONTS['mono_sm'],
              bg=COLORS['field_bg'], fg=COLORS['field_fg'],
              insertbackground=COLORS['field_fg'],
@@ -526,7 +527,7 @@ def _field(parent, label_text, var, on_browse=None, hint=None):
              ).pack(side='left', fill='x', expand=True)
 
     if on_browse:
-        tk.Button(input_wrap, text=_('Browse'),
+        XButton(input_wrap, text=_('Browse'),
                   font=FONTS['button'],
                   bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                   activebackground=COLORS['bg_5'],
@@ -543,8 +544,8 @@ def _field(parent, label_text, var, on_browse=None, hint=None):
 def _accent_btn(parent, text, command):
     """Accent (brand-purple) action button — main CTA in ffpkg flows.
     Used for 'Add to queue', which is the primary action on this tab."""
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 10, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 10),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -558,8 +559,8 @@ def _teal_btn(parent, text, command):
     """Muted teal action button — secondary forward action.
     Used for 'Build All' — recedes next to the purple primary button
     instead of competing with it like the old mint-green did."""
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 10, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 10),
                      bg=COLORS['teal'], fg=COLORS['fg_0'],
                      activebackground=COLORS['teal_hi'],
                      activeforeground=COLORS['fg_0'],

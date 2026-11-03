@@ -35,6 +35,7 @@ absorb config() calls from the legacy `_bp_switch_right` helper.
 import os
 import threading
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 from ui.shared.cards import GameCard, build_subtabs
@@ -208,7 +209,7 @@ def _build_games_head(body, app):
     head.pack(fill='x', padx=24, pady=(14, 12))
 
     tk.Label(head, text='\u26a1  ' + _('Backports'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(side='left')
 
@@ -264,7 +265,7 @@ def _build_games_toolbar(body, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(8, 4))
-    tk.Entry(sw, textvariable=app._bp_search_var,
+    XEntry(sw, textvariable=app._bp_search_var,
              font=FONTS['body'],
              bg=COLORS['bg_0'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -280,7 +281,7 @@ def _build_games_toolbar(body, app):
     app._bp_pill_widgets = {}
     for key, label, _pred in _FILTER_PILLS:
         pill = tk.Label(pills, text=label,
-                        font=(FONTS['mono_sm'][0], 9, 'bold'),
+                        font=(FONTS['body_strong'][0], 9),
                         bg=COLORS['bg_3'], fg=COLORS['fg_3'],
                         padx=12, pady=4,
                         cursor='hand2',
@@ -351,7 +352,7 @@ def _refresh_folder_chips(app):
                  padx=8, pady=4
                  ).pack(side='left')
         rm = tk.Label(chip, text=' \u2715 ',
-                      font=(FONTS['body'][0], 8),
+                      font=(FONTS['body'][0], 9),
                       bg=COLORS['bg_2'], fg=COLORS['fg_5'],
                       cursor='hand2', padx=6)
         rm.pack(side='left')
@@ -366,7 +367,7 @@ def _build_games_scan_bar(body, app):
     inner = tk.Frame(app._bp_progress_frame, bg=COLORS['bg_0'])
     inner.pack(fill='x', padx=24, pady=(0, 8))
     tk.Label(inner, text='\u25cf',
-             font=(FONTS['body'][0], 8),
+             font=(FONTS['body'][0], 9),
              bg=COLORS['bg_0'], fg=COLORS['accent']
              ).pack(side='left', padx=(0, 6))
     tk.Label(inner, text=_('Scanning\u2026'),
@@ -383,7 +384,7 @@ def _build_games_grid(body, app):
 
     canvas = tk.Canvas(grid_outer, bg=COLORS['bg_1'],
                         highlightthickness=0)
-    sb = tk.Scrollbar(grid_outer, orient='vertical',
+    sb = XScrollbar(grid_outer, orient='vertical',
                       command=canvas.yview,
                       bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
     canvas.configure(yscrollcommand=sb.set)
@@ -471,12 +472,12 @@ def _build_advfixes_subtab(parent, app):
     app._afx_last_result = None
     wrap = tk.Frame(parent, bg=COLORS['bg_1'])
     wrap.pack(fill='both', expand=True, padx=16, pady=12)
-    tk.Label(wrap, text='🔍  ' + _('Advanced Fixes — read-only diagnostics'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    tk.Label(wrap, text='🔍  ' + _('Advanced Fixes — read-only diagnostics'), font=(FONTS['body_strong'][0], 14), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
     tk.Label(wrap, text=_('Read-only. Evidence hierarchy (strongest first):\n  1. CONFIRMED PROFILE (DBS, SM2) — console-backed, patch-eligible (Channel-Config scan)\n  2. TWIN-BRANCH / API-context — strong lead, report-only (Channel-Config scan)\n  3. LEGACY structural fields (0C F1 63 2D) — NOT a confirmed fix, report-only (Scan Audio Fix Candidates)\n  4. Loose clusters — noise, report-only\nOnly a CONFIRMED PROFILE is ever patch-eligible. Use “Scan Channel-Config” as the primary scanner.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=760).pack(anchor='w', pady=(2, 12))
     fr = tk.Frame(wrap, bg=COLORS['bg_1'])
     fr.pack(fill='x', pady=(0, 6))
     tk.Label(fr, text=_('Dump folder:'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 8))
-    ent = tk.Entry(fr, textvariable=app._afx_folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+    ent = XEntry(fr, textvariable=app._afx_folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
     ent.pack(side='left', fill='x', expand=True, padx=(0, 8))
     def _browse():
         d = filedialog.askdirectory(title=_('Select the PS5 dump folder'))
@@ -485,17 +486,17 @@ def _build_advfixes_subtab(parent, app):
     _btn(fr, _('Browse…'), _browse, kind='ghost').pack(side='left')
     scope = tk.Frame(wrap, bg=COLORS['bg_1'])
     scope.pack(fill='x', pady=(0, 8))
-    tk.Checkbutton(scope, text=_('Also scan all .bin/.prx/.sprx in the whole folder'), variable=app._afx_whole_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left')
+    XCheck(scope, text=_('Also scan all .bin/.prx/.sprx in the whole folder'), variable=app._afx_whole_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left')
     tk.Label(scope, text=_('  (default: eboot.bin + prx/ + sce_module/ + fakelib/)'), font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack(side='left')
     summary_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
     summary_card.pack(fill='x', pady=(6, 8))
     summary_var = tk.StringVar(value=_('No scan run yet.'))
-    tk.Label(summary_card, text=_('Summary'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(summary_card, text=_('Summary'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
     tk.Label(summary_card, textvariable=summary_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], justify='left', anchor='w', wraplength=760).pack(anchor='w', fill='x', padx=12, pady=(0, 10))
     prv_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
-    tk.Label(prv_card, text=_('Profile-relative validation'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(prv_card, text=_('Profile-relative validation'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
     prv_verdict_var = tk.StringVar(value='')
-    prv_verdict_lbl = tk.Label(prv_card, textvariable=prv_verdict_var, font=(FONTS['mono_sm'][0], 11, 'bold'), bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w')
+    prv_verdict_lbl = tk.Label(prv_card, textvariable=prv_verdict_var, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w')
     prv_verdict_lbl.pack(anchor='w', padx=12, pady=(0, 2))
     prv_body_var = tk.StringVar(value='')
     tk.Label(prv_card, textvariable=prv_body_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], justify='left', anchor='w', wraplength=760).pack(anchor='w', fill='x', padx=12, pady=(0, 6))
@@ -506,10 +507,10 @@ def _build_advfixes_subtab(parent, app):
     app._afx_prv_verdict_lbl = prv_verdict_lbl
     app._afx_prv_body_var = prv_body_var
     table_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
-    tk.Label(table_card, text=_('Scan report'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(table_card, text=_('Scan report'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
     table_holder = tk.Frame(table_card, bg=COLORS['bg_3'])
     table_holder.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-    table_scroll = tk.Scrollbar(table_holder, orient='vertical')
+    table_scroll = XScrollbar(table_holder, orient='vertical')
     table_scroll.pack(side='right', fill='y')
     table_txt = tk.Text(table_holder, height=8, bg=COLORS['bg_3'], fg=COLORS['fg_2'], font=FONTS['mono_sm'], relief='flat', wrap='none', highlightthickness=0, yscrollcommand=table_scroll.set)
     table_txt.pack(side='left', fill='both', expand=True)
@@ -743,7 +744,7 @@ def _open_selector_patch_dialog(app):
     dlg.geometry('640x560')
     pad = tk.Frame(dlg, bg=COLORS['bg_1'])
     pad.pack(fill='both', expand=True, padx=16, pady=14)
-    tk.Label(pad, text=_('Experimental Selector Test Patch'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    tk.Label(pad, text=_('Experimental Selector Test Patch'), font=(FONTS['body_strong'][0], 14), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
     warn = tk.Frame(pad, bg=COLORS.get('teal_bg', COLORS['bg_2']), highlightbackground=COLORS.get('amber', COLORS['border_2']), highlightthickness=1)
     warn.pack(fill='x', pady=(8, 12))
     tk.Label(warn, text=_('⚠  EXPERIMENTAL\nThis is NOT a confirmed fix.\nThis creates a patched COPY for console testing only.\nAudio may remain broken. Game may behave identically.\nThe original file is never modified.\nThis selector resembles the DBS/SM2 channel selector but is NOT a confirmed profile for this title. A successful test does NOT by itself create a confirmed profile.'), font=FONTS['mono_sm'], bg=COLORS.get('teal_bg', COLORS['bg_2']), fg=COLORS['fg_1'], justify='left', wraplength=580).pack(anchor='w', padx=10, pady=8)
@@ -762,7 +763,7 @@ def _open_selector_patch_dialog(app):
             except Exception:
                 pass
     for var, label in (ack1, _('I understand this is EXPERIMENTAL and NOT a confirmed fix')), (ack2, _('I understand audio may remain broken / behavior may be unchanged')), (ack3, _('Patch a COPY, not the original')), (ack4, _('This test result does not by itself create a confirmed profile')):
-        tk.Checkbutton(pad, text=label, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=_gate).pack(anchor='w', pady=1)
+        XCheck(pad, text=label, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=_gate).pack(anchor='w', pady=1)
     status = tk.StringVar(value='')
     tk.Label(pad, textvariable=status, font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=580).pack(anchor='w', pady=(6, 0))
     row = tk.Frame(pad, bg=COLORS['bg_1'])
@@ -839,11 +840,11 @@ def _open_testpatch_dialog(app, afs):
     dlg.geometry('640x620')
     pad = tk.Frame(dlg, bg=COLORS['bg_1'])
     pad.pack(fill='both', expand=True, padx=16, pady=14)
-    tk.Label(pad, text=_('Unconfirmed Test Patch'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    tk.Label(pad, text=_('Unconfirmed Test Patch'), font=(FONTS['body_strong'][0], 14), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
     warn = tk.Frame(pad, bg=COLORS.get('teal_bg', COLORS['bg_2']), highlightbackground=COLORS.get('amber', COLORS['border_2']), highlightthickness=1)
     warn.pack(fill='x', pady=(8, 12))
     tk.Label(warn, text=_('⚠  LEGACY TEST PATCH — UNCONFIRMED. These are the historical 0C F1 63 2D fields. Patching exactly this pattern did NOT fix audio on console (DBS), and these fields were ABSENT from the DBS real working diff. This is a LEGACY MARKER, not a confirmed fix. Use the channel-config scan for confirmed-profile detection. The original file is never modified — a patched COPY is created. Only proceed to gather your own console evidence.'), font=FONTS['mono_sm'], bg=COLORS.get('teal_bg', COLORS['bg_2']), fg=COLORS['fg_1'], justify='left', wraplength=580).pack(anchor='w', padx=10, pady=8)
-    tk.Label(pad, text=_('Available test patches:'), font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(anchor='w')
+    tk.Label(pad, text=_('Available test patches:'), font=(FONTS['body_strong'][0], 10), bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(anchor='w')
     tk.Label(pad, text=_('STRUCTURAL = relocated profile match (selected). MEDIUM = heuristic only (off by default).'), font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack(anchor='w', pady=(0, 4))
     list_card = tk.Frame(pad, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
     list_card.pack(fill='both', expand=True, pady=(0, 10))
@@ -854,8 +855,8 @@ def _open_testpatch_dialog(app, afs):
         cand_vars.append((v, c))
         row = tk.Frame(list_card, bg=COLORS['bg_2'])
         row.pack(fill='x', padx=8, pady=1)
-        tk.Checkbutton(row, text=f"{c['confidence']!s:11} {c['offset_hex']!s}   {c['leading_byte'][2:]!s} → 08   ({c['file_name']!s})", variable=v, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, anchor='w').pack(anchor='w', fill='x')
-    tk.Label(pad, text=_('Required acknowledgements:'), font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(anchor='w')
+        XCheck(row, text=f"{c['confidence']!s:11} {c['offset_hex']!s}   {c['leading_byte'][2:]!s} → 08   ({c['file_name']!s})", variable=v, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, anchor='w').pack(anchor='w', fill='x')
+    tk.Label(pad, text=_('Required acknowledgements:'), font=(FONTS['body_strong'][0], 10), bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(anchor='w')
     ack1 = tk.BooleanVar(value=False)
     ack2 = tk.BooleanVar(value=False)
     ack3 = tk.BooleanVar(value=False)
@@ -869,7 +870,7 @@ def _open_testpatch_dialog(app, afs):
             except Exception:
                 pass
     for var, label in (ack1, _('I understand this is unconfirmed and may not fix audio')), (ack2, _('Create a .bak backup first')), (ack3, _('Patch a COPY, not the original')):
-        tk.Checkbutton(pad, text=label, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=_update_gate).pack(anchor='w', pady=1)
+        XCheck(pad, text=label, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=_update_gate).pack(anchor='w', pady=1)
     status_var = tk.StringVar(value='')
     tk.Label(pad, textvariable=status_var, font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=580).pack(anchor='w', pady=(6, 0))
     btn_row = tk.Frame(pad, bg=COLORS['bg_1'])
@@ -932,18 +933,18 @@ def _build_switcher_subtab(parent, app):
         app._bsw_state_var = tk.StringVar(value='Select a game folder.')
     wrap = tk.Frame(parent, bg=COLORS['bg_1'])
     wrap.pack(fill='both', expand=True, padx=16, pady=12)
-    tk.Label(wrap, text='🔄  ' + _('Backport Target Switcher'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    tk.Label(wrap, text='🔄  ' + _('Backport Target Switcher'), font=(FONTS['body_strong'][0], 14), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
     tk.Label(wrap, text=_('Safely build, swap, or remove a backport. Swap and Remove always restore verified original files first — no patching over patched files.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=720).pack(anchor='w', pady=(2, 12))
     mode_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
     mode_card.pack(fill='x', pady=(0, 10))
-    tk.Label(mode_card, text=_('Mode'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(mode_card, text=_('Mode'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
     for val, lab in ('build', _('Build new backport from clean / original files')), ('swap', _('Swap existing backport to another target')), ('remove', _('Remove backport / restore defaults')):
-        tk.Radiobutton(mode_card, text=lab, value=val, variable=app._bsw_mode_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=(lambda: _bsw_refresh_state(app, bpm))).pack(anchor='w', padx=14, pady=1)
+        XRadio(mode_card, text=lab, value=val, variable=app._bsw_mode_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=(lambda: _bsw_refresh_state(app, bpm))).pack(anchor='w', padx=14, pady=1)
     tk.Frame(mode_card, bg=COLORS['bg_2'], height=6).pack()
     fr = tk.Frame(wrap, bg=COLORS['bg_1'])
     fr.pack(fill='x', pady=(0, 8))
     tk.Label(fr, text=_('Game folder / image:'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 8))
-    ent = tk.Entry(fr, textvariable=app._bsw_folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+    ent = XEntry(fr, textvariable=app._bsw_folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
     ent.pack(side='left', fill='x', expand=True, padx=(0, 8))
     def _browse():
         d = filedialog.askdirectory(title=_('Select the PS5 game root folder'))
@@ -953,16 +954,16 @@ def _build_switcher_subtab(parent, app):
     _btn(fr, _('Browse…'), _browse, kind='ghost').pack(side='left')
     state_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
     state_card.pack(fill='x', pady=(2, 10))
-    tk.Label(state_card, text=_('Current detected state'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(state_card, text=_('Current detected state'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
     tk.Label(state_card, textvariable=app._bsw_state_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], justify='left', anchor='w', wraplength=720).pack(anchor='w', fill='x', padx=12, pady=(0, 10))
     tr = tk.Frame(wrap, bg=COLORS['bg_1'])
     tr.pack(fill='x', pady=(0, 8))
     tk.Label(tr, text=_('New target firmware:'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 8))
     for val, lab in ('4', '4.xx'), ('5', '5.xx'), ('7', '7.xx'), ('10', '10.xx'):
-        tk.Radiobutton(tr, text=lab, value=val, variable=app._bsw_target_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 10))
+        XRadio(tr, text=lab, value=val, variable=app._bsw_target_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 10))
     prev_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
     prev_card.pack(fill='both', expand=True, pady=(2, 10))
-    tk.Label(prev_card, text=_('Preview (dry-run — nothing is changed)'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(prev_card, text=_('Preview (dry-run — nothing is changed)'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
     prev_txt = tk.Text(prev_card, height=9, bg=COLORS['bg_3'], fg=COLORS['fg_2'], font=FONTS['mono_sm'], relief='flat', wrap='word', highlightthickness=0)
     prev_txt.pack(fill='both', expand=True, padx=10, pady=(0, 10))
     prev_txt.configure(state='disabled')
@@ -1139,7 +1140,7 @@ def _build_sdkfixer_subtab(parent, app):
     pad = 24
     head = tk.Frame(body, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=pad, pady=(16, 4))
-    tk.Label(head, text='🔧  ' + _('SDK Fixer'), font=(FONTS['h2'][0], 15, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
+    tk.Label(head, text='🔧  ' + _('SDK Fixer'), font=(FONTS['body_strong'][0], 15), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
     tk.Label(head, text=_('Change only the SDK marker in a folder’s executables.'), font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
     warn = tk.Frame(body, bg=COLORS.get('bg_2', '#1a1426'), highlightbackground=COLORS.get('warn', '#d6a13a'), highlightthickness=1)
     warn.pack(fill='x', padx=pad, pady=(6, 12))
@@ -1147,7 +1148,7 @@ def _build_sdkfixer_subtab(parent, app):
     _sdkfix_label(body, _('Source folder'), _('Backport files — eboot.bin / .prx / .sprx / sce_module / fakelib. param.json is not required.'), pad)
     srow = tk.Frame(body, bg=COLORS['bg_1'])
     srow.pack(fill='x', padx=pad, pady=(0, 10))
-    ent = tk.Entry(srow, textvariable=app._sdkfix_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
+    ent = XEntry(srow, textvariable=app._sdkfix_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
     ent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
     ent.bind('<FocusOut>', lambda e: app._sdkfix_scan_folder())
     ent.bind('<Return>', lambda e: app._sdkfix_scan_folder())
@@ -1160,7 +1161,7 @@ def _build_sdkfixer_subtab(parent, app):
         c = tk.Frame(col_parent, bg=COLORS['bg_0'])
         c.pack(side='left', expand=True, fill='x')
         tk.Label(c, text=caption, font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=COLORS['fg_4']).pack(anchor='w')
-        v = tk.Label(c, text='—', font=(FONTS['body'][0], 12, 'bold'), bg=COLORS['bg_0'], fg=COLORS['fg_1'])
+        v = tk.Label(c, text='—', font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_0'], fg=COLORS['fg_1'])
         v.pack(anchor='w')
         return v
     app._sdkfix_det_type = _cell(inner, _('FOLDER TYPE'))
@@ -1180,7 +1181,7 @@ def _build_sdkfixer_subtab(parent, app):
     orow = tk.Frame(body, bg=COLORS['bg_1'])
     orow.pack(fill='x', padx=pad, pady=(0, 12))
     for val, label in ('copy', _('Save as new copy (safe, default)')), ('overwrite', _('Overwrite selected folder')):
-        rb = tk.Radiobutton(orow, text=label, value=val, variable=app._sdkfix_out_mode_var, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_1'], selectcolor=COLORS['bg_0'], activebackground=COLORS['bg_1'], activeforeground=COLORS['fg_0'], highlightthickness=0, anchor='w')
+        rb = XRadio(orow, text=label, value=val, variable=app._sdkfix_out_mode_var, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_1'], selectcolor=COLORS['bg_0'], activebackground=COLORS['bg_1'], activeforeground=COLORS['fg_0'], highlightthickness=0, anchor='w')
         rb.pack(side='left', padx=(0, 18))
     arow = tk.Frame(body, bg=COLORS['bg_1'])
     arow.pack(fill='x', padx=pad, pady=(4, 8))
@@ -1216,7 +1217,7 @@ def _build_batchsdk_subtab(parent, app):
     body.pack(fill='both', expand=True)
     head = tk.Frame(body, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=pad, pady=(16, 4))
-    tk.Label(head, text='📦  ' + _('Batch SDK Retag'), font=(FONTS['h2'][0], 15, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
+    tk.Label(head, text='📦  ' + _('Batch SDK Retag'), font=(FONTS['body_strong'][0], 15), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
     tk.Label(head, text=_('Change the SDK marker across a whole folder of backport zips.'), font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
     warn = tk.Frame(body, bg=COLORS.get('bg_2', '#1a1426'), highlightbackground=COLORS.get('warn', '#d6a13a'), highlightthickness=1)
     warn.pack(fill='x', padx=pad, pady=(6, 12))
@@ -1224,14 +1225,14 @@ def _build_batchsdk_subtab(parent, app):
     _sdkfix_label(body, _('Source folder (backport zips)'), _('A folder containing backport zips, e.g. “FW 7xx PPSA21382 Tomba! (01.003.000) backport files.zip”.'), pad)
     srow = tk.Frame(body, bg=COLORS['bg_1'])
     srow.pack(fill='x', padx=pad, pady=(0, 10))
-    sent = tk.Entry(srow, textvariable=app._batchsdk_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
+    sent = XEntry(srow, textvariable=app._batchsdk_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
     sent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
     sent.bind('<Return>', lambda e: app._batchsdk_scan())
     _sdkfix_btn(srow, _('Browse'), app._batchsdk_browse_src, primary=False).pack(side='left')
     _sdkfix_label(body, _('Output folder'), _('Retagged zips are written here. Must be different from the source folder.'), pad)
     orow = tk.Frame(body, bg=COLORS['bg_1'])
     orow.pack(fill='x', padx=pad, pady=(0, 10))
-    oent = tk.Entry(orow, textvariable=app._batchsdk_out_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
+    oent = XEntry(orow, textvariable=app._batchsdk_out_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
     oent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
     _sdkfix_btn(orow, _('Browse'), app._batchsdk_browse_out, primary=False).pack(side='left')
     _sdkfix_label(body, _('Target SDK'), _('Any direction. 6 = firmware 6.xx, 7 = firmware 7.xx, etc. Each zip’s filename “FW Nxx” tag is updated to match.'), pad)
@@ -1265,7 +1266,7 @@ def _build_batchsdk_subtab(parent, app):
     tree.pack(side='left', fill='both', expand=True)
     vsb.pack(side='right', fill='y')
     app._batchsdk_tree = tree
-    tk.Label(body, textvariable=app._batchsdk_status_var, font=(FONTS['body'][0], 11, 'bold'), bg=COLORS['bg_1'], fg=COLORS.get('accent', '#b07ad6')).pack(anchor='w', padx=pad, pady=(4, 2))
+    tk.Label(body, textvariable=app._batchsdk_status_var, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_1'], fg=COLORS.get('accent', '#b07ad6')).pack(anchor='w', padx=pad, pady=(4, 2))
     prog = tk.Canvas(body, height=12, bg=COLORS['bg_0'], highlightthickness=0)
     prog.pack(fill='x', padx=pad, pady=(0, 6))
     app._batchsdk_prog_cv = prog
@@ -1283,7 +1284,7 @@ def _build_batchsdk_subtab(parent, app):
 def _sdkfix_label(parent, title, sub, pad):
     box = tk.Frame(parent, bg=COLORS['bg_1'])
     box.pack(fill='x', padx=pad, pady=(2, 2))
-    tk.Label(box, text=title, font=(FONTS['body'][0], 11, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(anchor='w')
+    tk.Label(box, text=title, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(anchor='w')
     if sub:
         tk.Label(box, text=sub, font=(FONTS['body'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left').pack(anchor='w')
 
@@ -1291,7 +1292,7 @@ def _sdkfix_label(parent, title, sub, pad):
 def _sdkfix_btn(parent, text, cmd, primary=False):
     bg = COLORS.get('accent', '#b07ad6') if primary else COLORS.get('bg_2', '#1a1426')
     fg = '#ffffff' if primary else COLORS['fg_1']
-    b = tk.Button(parent, text=text, command=cmd, font=FONTS['body'], bg=bg, fg=fg, activebackground=bg, activeforeground=fg, relief='flat', bd=0, padx=16, pady=8, cursor='hand2', highlightthickness=0)
+    b = XButton(parent, text=text, command=cmd, font=FONTS['body'], bg=bg, fg=fg, activebackground=bg, activeforeground=fg, relief='flat', bd=0, padx=16, pady=8, cursor='hand2', highlightthickness=0)
     return b
 
 
@@ -1637,8 +1638,8 @@ def _make_card(app, parent, game, row, col, queued):
     arow = tk.Frame(card, bg=COLORS['bg_2'])
     arow.pack(fill='x', padx=12, pady=(0, 12))
     if queued:
-        qbtn = tk.Button(arow, text='\u2713  ' + _('Queued'),
-                         font=(FONTS['button'][0], 9, 'bold'),
+        qbtn = XButton(arow, text='\u2713  ' + _('Queued'),
+                         font=(FONTS['body_strong'][0], 9),
                          bg=COLORS.get('purple', '#9b59b6'),
                          fg=COLORS['fg_0'],
                          activebackground=COLORS.get('purple_hi',
@@ -1648,8 +1649,8 @@ def _make_card(app, parent, game, row, col, queued):
                          cursor='hand2',
                          command=lambda g=game: _toggle_queue(app, g))
     else:
-        qbtn = tk.Button(arow, text='+  ' + _('Queue'),
-                         font=(FONTS['button'][0], 9, 'bold'),
+        qbtn = XButton(arow, text='+  ' + _('Queue'),
+                         font=(FONTS['body_strong'][0], 9),
                          bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                          activebackground=COLORS['bg_4'],
                          activeforeground=COLORS['fg_0'],
@@ -1659,8 +1660,8 @@ def _make_card(app, parent, game, row, col, queued):
                          highlightthickness=1,
                          command=lambda g=game: _toggle_queue(app, g))
     qbtn.pack(side='left')
-    tk.Button(arow, text='\u26a1  ' + _('Process'),
-              font=(FONTS['button'][0], 9, 'bold'),
+    XButton(arow, text='\u26a1  ' + _('Process'),
+              font=(FONTS['body_strong'][0], 9),
               bg=COLORS['bg_3'],
               fg=COLORS.get('purple_hi', '#c891e0'),
               activebackground=COLORS['bg_4'],
@@ -1687,7 +1688,7 @@ def _make_card(app, parent, game, row, col, queued):
             qbadge = tk.Label(
                 cover_frame,
                 text=' \u2713 ' + _('Queued') + ' ',
-                font=(FONTS['mono_sm'][0], 8, 'bold'),
+                font=(FONTS['body_strong'][0], 9),
                 bg=COLORS.get('purple', '#9b59b6'),
                 fg=COLORS['fg_0'],
                 padx=4, pady=1)
@@ -1801,15 +1802,15 @@ def _build_games_stats(body, app):
         colf = tk.Frame(cell, bg=COLORS['bg_2'])
         colf.pack(side='left')
         tk.Label(colf, text=caption.upper(),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_2'], fg=COLORS['fg_5']
                  ).pack(anchor='w')
         v = tk.Label(colf, text='0',
-                     font=(FONTS['h2'][0], 16, 'bold'),
+                     font=(FONTS['body_strong'][0], 16),
                      bg=COLORS['bg_2'], fg=COLORS['fg_0'])
         v.pack(anchor='w')
         tk.Label(colf, text=sub,
-                 font=(FONTS['mono_sm'][0], 8),
+                 font=(FONTS['body'][0], 9),
                  bg=COLORS['bg_2'], fg=COLORS['fg_5']
                  ).pack(anchor='w')
         return v
@@ -1935,8 +1936,8 @@ def _btn(parent, text, command, kind='ghost'):
                     COLORS['bg_3'],     COLORS['fg_0']),
     }
     bg, fg, abg, afg = schemes.get(kind, schemes['ghost'])
-    btn = tk.Button(parent, text=text,
-                    font=(FONTS['button'][0], 9, 'bold'),
+    btn = XButton(parent, text=text,
+                    font=(FONTS['body_strong'][0], 9),
                     bg=bg, fg=fg,
                     activebackground=abg, activeforeground=afg,
                     relief='flat', bd=0,

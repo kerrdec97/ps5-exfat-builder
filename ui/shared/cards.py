@@ -68,7 +68,7 @@ class Card(tk.Frame):
             if icon:
                 # Icon tile: small accented square holding the emoji
                 ico = tk.Label(head, text=icon,
-                               font=(FONTS['h2'][0], 13),
+                               font=(FONTS['body'][0], 11),
                                bg=COLORS['accent_08'],
                                fg=COLORS['accent'],
                                width=2, padx=4, pady=2)
@@ -77,7 +77,7 @@ class Card(tk.Frame):
             text_col = tk.Frame(head, bg=bg)
             text_col.pack(side='left', fill='x', expand=True)
             tk.Label(text_col, text=title,
-                     font=(FONTS['h3'][0], 11, 'bold'),
+                     font=(FONTS['body_strong'][0], 11),
                      bg=bg, fg=COLORS['fg_0'], anchor='w'
                      ).pack(fill='x')
             if subtitle:
@@ -142,7 +142,7 @@ class StatusPill(tk.Label):
         bg, fg = self._SCHEMES.get(kind, self._SCHEMES['wait'])
         super().__init__(parent, text=' ' + text + ' ',
                          bg=bg, fg=fg,
-                         font=(FONTS['body'][0], 9, 'bold'),
+                         font=(FONTS['body_strong'][0], 9),
                          padx=6, pady=2, bd=0)
         self._kind = kind
 
@@ -189,7 +189,7 @@ class StatPill(tk.Frame):
 
         self._count_var = tk.StringVar(value=str(count))
         self._count_lbl = tk.Label(self, textvariable=self._count_var,
-                                   font=(FONTS['mono_sm'][0], 10, 'bold'),
+                                   font=(FONTS['body_strong'][0], 10),
                                    bg=bg, fg=count_fg,
                                    padx=6, pady=2)
         self._count_lbl.pack(side='left')
@@ -316,7 +316,7 @@ class GameCard(tk.Frame):
             cb_bg, cb_fg = self._BADGE_SCHEMES.get(
                 cb_scheme, self._BADGE_SCHEMES['purple'])
             tk.Label(cover, text=' ' + cb_text + ' ',
-                     font=(FONTS['mono_sm'][0], 8, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=cb_bg, fg=cb_fg, padx=4, pady=1
                      ).place(relx=1.0, rely=0.0, anchor='ne', x=-6, y=6)
         elif status and status in ('built', 'backport', 'warn'):
@@ -326,7 +326,7 @@ class GameCard(tk.Frame):
                                    'backport': 'BACKPORT',
                                    'warn': 'SDK'}[status]
             tk.Label(cover, text=' ' + text + ' ',
-                     font=(FONTS['mono_sm'][0], 8, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=bg_b, fg=fg_b, padx=4, pady=1
                      ).place(relx=1.0, rely=0.0, anchor='ne', x=-6, y=6)
 
@@ -349,7 +349,7 @@ class GameCard(tk.Frame):
         if len(display_title) > _max_chars:
             display_title = display_title[:_max_chars - 1].rstrip() + '\u2026'
         tk.Label(info, text=display_title,
-                 font=(FONTS['h3'][0], 12, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  wraplength=max(80, info_width - 4),
                  bg=bg, fg=COLORS['fg_0'], anchor='w',
                  justify='left').pack(fill='x')
@@ -358,7 +358,7 @@ class GameCard(tk.Frame):
             idrow = tk.Frame(info, bg=bg)
             idrow.pack(fill='x', pady=(5, 0))
             tk.Label(idrow, text=' ' + game_id + ' ',
-                     font=(FONTS['mono_sm'][0], 9, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent_15'], fg=COLORS['accent_hi'],
                      padx=6, pady=2,
                      highlightbackground=COLORS['accent_lo'],
@@ -411,14 +411,14 @@ class GameCard(tk.Frame):
             p_bg, p_fg = self._BADGE_SCHEMES.get(
                 scheme, self._BADGE_SCHEMES['purple'])
             tk.Label(brow, text=' ' + text + ' ',
-                     font=(FONTS['mono_sm'][0], 8, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=p_bg, fg=p_fg, padx=5, pady=2
                      ).pack(side='left', padx=(0, 5))
 
         self._menu_btn = None
         if on_menu:
             mb = tk.Label(brow, text='\u22ee',
-                          font=(FONTS['body'][0], 13, 'bold'),
+                          font=(FONTS['body_strong'][0], 11),
                           bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                           padx=9, pady=1, cursor='hand2',
                           highlightbackground=COLORS['border_3'],
@@ -546,7 +546,7 @@ class FolderChip(tk.Frame):
             # button at rest, not just a glyph. Hover turns it red.
             x_bg = COLORS.get('bg_3', '#2a2733')
             x_lbl = tk.Label(inner, text='\u2715',
-                             font=(FONTS['body'][0], 13, 'bold'),
+                             font=(FONTS['body_strong'][0], 11),
                              bg=x_bg, fg=COLORS['fg_1'],
                              cursor='hand2', padx=8, pady=1,
                              highlightbackground=COLORS['border_3'],
@@ -634,7 +634,7 @@ class DetectedGameStrip(tk.Frame):
         self.size_var  = tk.StringVar()
 
         tk.Label(text_col, textvariable=self.title_var,
-                 font=(FONTS['body'][0], 11, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=bg, fg=COLORS['fg_0'], anchor='w'
                  ).pack(fill='x')
 
@@ -692,7 +692,7 @@ class SettingsCard(tk.Frame):
         head = tk.Frame(self, bg=bg)
         head.pack(fill='x', padx=18, pady=(16, 10))
         tk.Label(head, text=title,
-                 font=(FONTS['h3'][0], 12, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=bg, fg=COLORS['fg_0'], anchor='w'
                  ).pack(side='left')
         if right_widget is not None:
@@ -797,18 +797,15 @@ def build_subtabs(parent, items, default=None):
     on a slightly elevated background; idle is muted text on the
     sub-tab strip background.
     """
-    sub_bg       = COLORS.get('bg_2', '#1a1426')
-    sub_active   = COLORS.get('bg_3', '#251e34')
-    sub_idle_fg  = COLORS.get('fg_3', '#7a7388')
-    sub_hover_fg = COLORS.get('fg_1', '#e0dcec')
-    accent_fg    = COLORS.get('accent', '#b07ad6')
-    border       = COLORS.get('border_4', '#2c2438')
-    body_font    = FONTS.get('body', ('Segoe UI', 10))
-    bg           = COLORS.get('bg_1', '#0a0812')
+    from tkinter_theme import px
+    from ui.icons import leading_icon, strip_glyphs, icon_image
+    bg = COLORS['bg_1']
+    sub_bg = bg
 
-    # Sub-tab bar at the top of `parent`
+    # Design system › Tabs: page-coloured strip, fg_3 labels, the selected
+    # tab fg_0 semibold over a 3px accent indicator, 1px hairline below.
     subbar = tk.Frame(parent, bg=sub_bg)
-    subbar.pack(fill='x', padx=0, pady=0)
+    subbar.pack(fill='x', padx=px(20), pady=(px(8), 0))
 
     # Per-key content frame (only one shown at a time)
     frames = {}
@@ -844,14 +841,18 @@ def build_subtabs(parent, items, default=None):
             import traceback
             traceback.print_exc()
 
-    def _restyle(name):
+    def _restyle(name, hover=False):
         b = btns.get(name)
         if not b:
             return
-        if state['name'] == name:
-            b.configure(fg=accent_fg, bg=sub_active)
-        else:
-            b.configure(fg=sub_idle_fg, bg=sub_bg)
+        lbl, bar, icon = b
+        on = state['name'] == name
+        fg = COLORS['fg_0'] if on else (COLORS['fg_1'] if hover else COLORS['fg_3'])
+        lbl.configure(fg=fg, font=FONTS['body_strong'] if on else FONTS['body'])
+        if icon:
+            lbl.configure(image=icon_image(icon, 16, COLORS['accent_hi'] if on else fg,
+                                           sub_bg))
+        bar.configure(bg=COLORS['accent'] if on else sub_bg)
 
     def activate(name):
         if name not in frames:
@@ -864,22 +865,27 @@ def build_subtabs(parent, items, default=None):
         frames[name].pack(fill='both', expand=True)
 
     for key, label, _builder in items:
-        btn = tk.Label(subbar, text=label, padx=18, pady=10,
-                       bg=sub_bg, fg=sub_idle_fg,
-                       font=body_font,
-                       cursor='hand2')
-        btn.pack(side='left')
-        btn.bind('<Button-1>', lambda e, n=key: activate(n))
-        btn.bind('<Enter>',
-                 lambda e, b=btn, n=key:
-                     b.configure(fg=sub_hover_fg)
-                     if state['name'] != n else None)
-        btn.bind('<Leave>',
-                 lambda e, n=key: _restyle(n))
-        btns[key] = btn
+        icon = leading_icon(label)
+        text = strip_glyphs(label)
+        wrap = tk.Frame(subbar, bg=sub_bg, cursor='hand2')
+        wrap.pack(side='left', padx=(0, px(4)))
+        lbl = tk.Label(wrap, text=(' ' + text) if icon else text,
+                       padx=px(12), pady=px(8), bg=sub_bg, fg=COLORS['fg_3'],
+                       font=FONTS['body'], cursor='hand2',
+                       compound='left' if icon else 'none')
+        lbl.pack()
+        bar = tk.Frame(wrap, bg=sub_bg, height=px(3))
+        bar.pack(fill='x', padx=px(12))
+        for w in (wrap, lbl, bar):
+            w.bind('<Button-1>', lambda e, n=key: activate(n))
+        lbl.bind('<Enter>', lambda e, n=key: _restyle(n, True)
+                 if state['name'] != n else None)
+        lbl.bind('<Leave>', lambda e, n=key: _restyle(n))
+        btns[key] = (lbl, bar, icon)
+        _restyle(key)
 
     # 1px divider under the strip
-    tk.Frame(parent, bg=border, height=1).pack(fill='x')
+    tk.Frame(parent, bg=COLORS['border_2'], height=1).pack(fill='x')
 
     # Only the initially-active panel is built now; activate() builds the
     # rest on first use.

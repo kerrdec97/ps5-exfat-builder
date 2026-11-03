@@ -26,6 +26,7 @@ import tempfile
 import subprocess
 import threading
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
@@ -316,11 +317,11 @@ def build_ffpkg_edit_tab(parent, app):
     icon_tile.pack_propagate(False)
     tk.Label(icon_tile, text='\u270f',
              bg=COLORS['accent_15'], fg=COLORS['accent'],
-             font=('Segoe UI', 14)).pack(expand=True)
+             font=(FONTS['body'][0], 14)).pack(expand=True)
     title_col = tk.Frame(head, bg=COLORS['bg_1'])
     title_col.pack(side='left', padx=(10, 0))
     tk.Label(title_col, text=_('Edit ffpkg Image'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(anchor='w')
     tk.Label(title_col,
@@ -489,7 +490,7 @@ def _build_toolbar(parent, app):
     bc = tk.Frame(tb, bg=COLORS['bg_1'])
     bc.pack(side='left')
     tk.Label(bc, text='\U0001f4e6',
-             font=('Segoe UI', 10), bg=COLORS['bg_1'],
+             font=(FONTS['body'][0], 10), bg=COLORS['bg_1'],
              fg=COLORS['accent']).pack(side='left')
     tk.Label(bc, text=' \u203a ',
              font=FONTS['mono_sm'], bg=COLORS['bg_1'],
@@ -507,7 +508,7 @@ def _build_toolbar(parent, app):
         col = tk.Frame(btns, bg=COLORS['bg_1'])
         col.pack(side='left', padx=(0, 10))
         tk.Label(col, text=title.upper(),
-                 font=(FONTS['mono_sm'][0], 7, 'bold'), bg=COLORS['bg_1'],
+                 font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_1'],
                  fg=COLORS['fg_5']).pack(anchor='w', pady=(0, 2))
         row = tk.Frame(col, bg=COLORS['bg_1'])
         row.pack(anchor='w')
@@ -569,10 +570,10 @@ def _build_table(parent, app):
         bordercolor=COLORS['border_3'],
         lightcolor=COLORS['bg_2'], darkcolor=COLORS['bg_2'],
         rowheight=22,
-        font=(FONTS['mono_sm'][0], 10))
+        font=(FONTS['body'][0], 10))
     style.configure('FfpkgEdit.Treeview.Heading',
         background=COLORS['bg_3'], foreground=COLORS['fg_5'],
-        relief='flat', font=('Segoe UI', 9, 'bold'))
+        relief='flat', font=(FONTS['body_strong'][0], 9))
     style.map('FfpkgEdit.Treeview',
         background=[('selected', COLORS['accent_15'])],
         foreground=[('selected', COLORS['accent_hi'])])
@@ -606,7 +607,7 @@ def _build_table(parent, app):
     foot = tk.Frame(parent, bg=COLORS['bg_3'])
     foot.pack(fill='x', pady=(1, 0))
     app._fe_sel_pill = tk.Label(foot, text='0 selected',
-        font=(FONTS['mono_sm'][0], 10, 'bold'),
+        font=(FONTS['body_strong'][0], 10),
         bg=COLORS['bg_3'], fg=COLORS['fg_4'],
         padx=8, pady=2)
     app._fe_sel_pill.pack(side='left', padx=(10, 6), pady=4)
@@ -678,20 +679,20 @@ def _build_inspector(parent, app):
     head = tk.Frame(parent, bg=COLORS['bg_2'])
     head.pack(fill='x', padx=12, pady=(10, 6))
     tk.Label(head, text='INSPECTOR',
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left')
 
     hero = tk.Frame(parent, bg=COLORS['bg_2'])
     hero.pack(fill='x', padx=12, pady=(0, 8))
     app._fe_insp_icon = tk.Label(hero, text='\U0001f4be',
-        font=('Segoe UI', 40),
+        font=(FONTS['body'][0], 40),
         bg=COLORS['bg_3'], fg=COLORS['fg_3'],
         width=2, height=2,
         highlightbackground=COLORS['border_3'], highlightthickness=1)
     app._fe_insp_icon.pack(anchor='center', pady=(8, 6))
     app._fe_insp_name = tk.Label(hero, text=_('No selection'),
-        font=(FONTS['mono_sm'][0], 11, 'bold'),
+        font=(FONTS['body_strong'][0], 11),
         bg=COLORS['bg_2'], fg=COLORS['fg_0'],
         wraplength=_INSPECTOR_WIDTH - 24, justify='center')
     app._fe_insp_name.pack(anchor='center')
@@ -715,7 +716,7 @@ def _build_inspector(parent, app):
         command=lambda: _fetch_hex(app))
     app._fe_insp_hex_btn.pack(fill='x')
     app._fe_insp_hex = tk.Text(hex_outer,
-        height=4, width=34, font=('Consolas', 9),
+        height=4, width=34, font=(FONTS['code'][0], 9),
         bg=COLORS['bg_0'], fg=COLORS['fg_3'],
         relief='flat', bd=6, wrap='none', state='disabled',
         highlightbackground=COLORS['border_2'], highlightthickness=1)
@@ -743,11 +744,11 @@ def _detail_row(parent, app, eyebrow, mono=False, accent=False, attr=None):
     row = tk.Frame(parent, bg=COLORS['bg_2'])
     row.pack(fill='x', pady=(0, 4))
     tk.Label(row, text=eyebrow,
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5'],
              width=10, anchor='w').pack(side='left')
     fg = COLORS['accent_hi'] if accent else COLORS['fg_2']
-    fnt = (FONTS['mono_sm'][0], 10) if mono else ('Segoe UI', 10)
+    fnt = (FONTS['body'][0], 10) if mono else (FONTS['body'][0], 10)
     val = tk.Label(row, text='—',
         font=fnt, bg=COLORS['bg_2'], fg=fg,
         anchor='w', justify='left',
@@ -1401,13 +1402,13 @@ def _ask_overwrite(app, name, is_dir, allow_apply_to_all=False,
     head = tk.Frame(dlg, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=16, pady=(14, 4))
     tk.Label(head, text='\u26a0',
-             font=('Segoe UI', 16),
+             font=(FONTS['body'][0], 16),
              bg=COLORS['bg_1'], fg=COLORS['warn']
              ).pack(side='left', padx=(0, 8))
     tk.Label(head,
              text=_('A %s named "%s" already exists in this folder.')
                   % (kind, name),
-             font=('Segoe UI', 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'],
              wraplength=dlg_w - 60, justify='left'
              ).pack(side='left', fill='x', expand=True)
@@ -1434,7 +1435,7 @@ def _ask_overwrite(app, name, is_dir, allow_apply_to_all=False,
 
     apply_var = tk.BooleanVar(value=False)
     if allow_apply_to_all:
-        tk.Checkbutton(dlg,
+        XCheck(dlg,
             text=_('Apply this choice to remaining conflicts'),
             variable=apply_var,
             font=FONTS['mono_sm'],
@@ -1469,15 +1470,15 @@ def _ask_overwrite(app, name, is_dir, allow_apply_to_all=False,
             _pick('overwrite')
 
     # Right side: Cancel + Skip (low-risk)
-    tk.Button(btns, text=_('Cancel'),
-        font=(FONTS['button'][0], 9),
+    XButton(btns, text=_('Cancel'),
+        font=(FONTS['body'][0], 9),
         bg=COLORS['bg_3'], fg=COLORS['fg_2'],
         activebackground=COLORS['bg_5'],
         relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
         highlightbackground=COLORS['border_3'], highlightthickness=1,
         command=lambda: _pick('cancel')).pack(side='right')
-    tk.Button(btns, text=_('Skip'),
-        font=(FONTS['button'][0], 9),
+    XButton(btns, text=_('Skip'),
+        font=(FONTS['body'][0], 9),
         bg=COLORS['bg_3'], fg=COLORS['fg_2'],
         activebackground=COLORS['bg_5'],
         relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
@@ -1486,18 +1487,18 @@ def _ask_overwrite(app, name, is_dir, allow_apply_to_all=False,
 
     if allow_merge:
         # Left side: Replace entirely (subtle ghost, with extra confirm)
-        tk.Button(btns,
+        XButton(btns,
             text='\U0001f5d1  ' + _('Replace entirely'),
-            font=(FONTS['button'][0], 9),
+            font=(FONTS['body'][0], 9),
             bg=COLORS['bg_3'], fg=COLORS['danger_hi'],
             activebackground=COLORS['bg_5'],
             relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
             highlightbackground=COLORS['border_3'], highlightthickness=1,
             command=_confirm_replace).pack(side='left')
         # Merge primary, right of Replace (so it sits next to Skip/Cancel)
-        merge_btn = tk.Button(btns,
+        merge_btn = XButton(btns,
             text='\u2713  ' + _('Merge'),
-            font=(FONTS['button'][0], 9, 'bold'),
+            font=(FONTS['body_strong'][0], 9),
             bg=COLORS['accent'], fg=COLORS['fg_0'],
             activebackground=COLORS['accent_hi'],
             relief='flat', bd=0, padx=14, pady=6, cursor='hand2',
@@ -1508,9 +1509,9 @@ def _ask_overwrite(app, name, is_dir, allow_apply_to_all=False,
         merge_btn.focus_set()
     else:
         # Files (non-folder): plain Overwrite stays as the primary action
-        ow_btn = tk.Button(btns,
+        ow_btn = XButton(btns,
             text=_('Overwrite'),
-            font=(FONTS['button'][0], 9, 'bold'),
+            font=(FONTS['body_strong'][0], 9),
             bg=COLORS['warn'], fg='#000000',
             activebackground=COLORS['warn_hi'],
             relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
@@ -1529,14 +1530,14 @@ def _opt_row(parent, icon, icon_fg, title, body):
     row = tk.Frame(parent, bg=COLORS['bg_1'])
     row.pack(fill='x', pady=(2, 4))
     tk.Label(row, text=icon,
-        font=('Segoe UI', 11, 'bold'),
+        font=(FONTS['body_strong'][0], 11),
         bg=COLORS['bg_1'], fg=icon_fg,
         width=2
         ).pack(side='left', anchor='n')
     col = tk.Frame(row, bg=COLORS['bg_1'])
     col.pack(side='left', fill='x', expand=True)
     tk.Label(col, text=title,
-        font=('Segoe UI', 10, 'bold'),
+        font=(FONTS['body_strong'][0], 10),
         bg=COLORS['bg_1'], fg=COLORS['fg_1'],
         anchor='w').pack(anchor='w')
     tk.Label(col, text=body,
@@ -1558,8 +1559,8 @@ def _invalidate_cache(app, path):
 # Button helpers
 # ─────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-        font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+        font=(FONTS['body'][0], 9),
         bg=COLORS['bg_3'], fg=COLORS['fg_2'],
         activebackground=COLORS['bg_5'], activeforeground=COLORS['fg_0'],
         relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
@@ -1568,8 +1569,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-        font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+        font=(FONTS['body_strong'][0], 9),
         bg=COLORS['accent'], fg=COLORS['fg_0'],
         activebackground=COLORS['accent_hi'], activeforeground=COLORS['fg_0'],
         relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
@@ -1577,8 +1578,8 @@ def _accent_btn(parent, text, command):
 
 
 def _danger_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-        font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+        font=(FONTS['body_strong'][0], 9),
         bg=COLORS['danger'], fg=COLORS['fg_0'],
         activebackground=COLORS['danger_hi'], activeforeground=COLORS['fg_0'],
         disabledforeground=COLORS['fg_5'],
@@ -1593,8 +1594,8 @@ def _icon_btn(parent, text, command, kind='ghost'):
         fg = COLORS['danger_hi']
     else:
         fg = COLORS['fg_2']
-    return tk.Button(parent, text=text,
-        font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+        font=(FONTS['body'][0], 9),
         bg=COLORS['bg_2'], fg=fg,
         activebackground=COLORS['bg_3'], activeforeground=fg,
         relief='flat', bd=0, padx=10, pady=5, cursor='hand2',
@@ -2606,12 +2607,12 @@ def _bp_pick_source_kind(app):
     body.pack(fill='both', expand=True, padx=18, pady=16)
 
     tk.Label(body, text=_('What\u2019s your backport source?'),
-             font=('Segoe UI', 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_1'], fg=COLORS['fg_1']
              ).pack(anchor='w')
     tk.Label(body,
              text=_('Pick the format that matches what you have.'),
-             font=('Segoe UI', 9),
+             font=(FONTS['body'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_4']
              ).pack(anchor='w', pady=(2, 14))
 
@@ -2631,7 +2632,7 @@ def _bp_pick_source_kind(app):
         inner = tk.Frame(outer, bg=COLORS['bg_2'])
         inner.pack(fill='x', padx=12, pady=10)
         inner.bind('<Button-1>', _on_click)
-        ico = tk.Label(inner, text=icon, font=('Segoe UI', 18),
+        ico = tk.Label(inner, text=icon, font=(FONTS['body'][0], 18),
                        bg=COLORS['bg_2'], fg=COLORS['accent'])
         ico.pack(side='left', padx=(0, 12))
         ico.bind('<Button-1>', _on_click)
@@ -2639,12 +2640,12 @@ def _bp_pick_source_kind(app):
         col.pack(side='left', fill='x', expand=True)
         col.bind('<Button-1>', _on_click)
         tlbl = tk.Label(col, text=title,
-                        font=('Segoe UI', 10, 'bold'),
+                        font=(FONTS['body_strong'][0], 10),
                         bg=COLORS['bg_2'], fg=COLORS['fg_1'])
         tlbl.pack(anchor='w')
         tlbl.bind('<Button-1>', _on_click)
         slbl = tk.Label(col, text=sub,
-                        font=('Segoe UI', 8),
+                        font=(FONTS['body'][0], 9),
                         bg=COLORS['bg_2'], fg=COLORS['fg_4'])
         slbl.pack(anchor='w')
         slbl.bind('<Button-1>', _on_click)
@@ -3502,11 +3503,11 @@ class _RebuildProgress:
         self._timing_var = tk.StringVar(value='')
 
         tk.Label(body, textvariable=self._stage_var,
-                 font=('Segoe UI', 11, 'bold'),
+                 font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_1'], fg=COLORS['fg_1'],
                  anchor='w').pack(fill='x', anchor='w')
         tk.Label(body, textvariable=self._detail_var,
-                 font=('Segoe UI', 9),
+                 font=(FONTS['body'][0], 9),
                  bg=COLORS['bg_1'], fg=COLORS['fg_4'],
                  anchor='w').pack(fill='x', anchor='w', pady=(2, 12))
 
@@ -3530,7 +3531,7 @@ class _RebuildProgress:
         self._bar.pack(fill='x', pady=(0, 8))
 
         tk.Label(body, textvariable=self._timing_var,
-                 font=(FONTS['mono_sm'][0], 9),
+                 font=(FONTS['body'][0], 9),
                  bg=COLORS['bg_1'], fg=COLORS['fg_5'],
                  anchor='w').pack(fill='x', anchor='w')
 

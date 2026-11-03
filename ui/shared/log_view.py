@@ -15,6 +15,7 @@ Step 4 (v2.0.6).
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter_theme import COLORS, FONTS
 
 
@@ -71,13 +72,13 @@ class ConsoleView(tk.Frame):
         body = tk.Frame(self, bg=bg)
         body.pack(fill='both', expand=True)
 
-        sb = tk.Scrollbar(body, bg=COLORS['bg_1'], troughcolor=bg,
+        sb = XScrollbar(body, bg=COLORS['bg_1'], troughcolor=bg,
                           activebackground=COLORS['bg_4'],
                           relief='flat', bd=0)
         sb.pack(side='right', fill='y')
 
         self.text = tk.Text(body,
-                            font=(FONTS['mono_sm'][0], 9),
+                            font=(FONTS['body'][0], 9),
                             bg=bg, fg=_TERM_GREEN,
                             insertbackground=_TERM_GREEN,
                             selectbackground='#1a3322',

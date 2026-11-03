@@ -15,6 +15,7 @@ import sys
 import webbrowser
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 from ui.shared.scroll import attach_scroll
@@ -34,7 +35,7 @@ def _btn(parent, text, primary=False, command=None, accent=None):
         bg = COLORS['bg_4']
         fg = COLORS['fg_2']
         abg = COLORS['bg_5']
-    return tk.Button(parent, text=text, command=command,
+    return XButton(parent, text=text, command=command,
                      font=FONTS['button'], bg=bg, fg=fg,
                      activebackground=abg, activeforeground='#ffffff',
                      relief='flat', bd=0, padx=14, pady=8, cursor='hand2')
@@ -51,7 +52,7 @@ def build_report_tab(parent, app):
     """Build the Report Issue page into `parent`."""
     # Scrollable host (consistent with other tabs).
     canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0, highlightthickness=0)
-    sb = tk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+    sb = XScrollbar(parent, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     canvas.pack(side='left', fill='both', expand=True)
@@ -124,7 +125,7 @@ def build_report_tab(parent, app):
              bg=COLORS['bg_1'], fg=COLORS['fg_1'], anchor='w').pack(
                  fill='x', pady=(20, 6))
     prev_frame.pack(fill='x')
-    log_text = tk.Text(prev_frame, height=10, font=('Consolas', 9),
+    log_text = tk.Text(prev_frame, height=10, font=(FONTS['code'][0], 9),
                        bg='#0a0a0f', fg='#a0c8a0', relief='flat', bd=8,
                        wrap='none', state='disabled')
     log_text.pack(fill='both', expand=True)

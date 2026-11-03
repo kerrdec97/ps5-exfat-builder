@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 import webbrowser
 
 from tkinter_theme import COLORS, FONTS
@@ -236,7 +237,7 @@ def build_about_tab(parent, app):
     canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0,
                        highlightthickness=0)
     canvas.pack(side='left', fill='both', expand=True)
-    sb = tk.Scrollbar(parent, orient='vertical', command=canvas.yview,
+    sb = XScrollbar(parent, orient='vertical', command=canvas.yview,
                        bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
     sb.pack(side='right', fill='y')
     canvas.configure(yscrollcommand=sb.set)
@@ -253,7 +254,7 @@ def build_about_tab(parent, app):
     head = tk.Frame(inner, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=24, pady=(14, 6))
     tk.Label(head, text='\u2139  ' + _('Credits'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(side='left')
     tk.Label(head,
@@ -282,7 +283,7 @@ def build_about_tab(parent, app):
     id_col = tk.Frame(id_inner, bg=COLORS['bg_2'])
     id_col.pack(side='left', fill='x', expand=True)
     tk.Label(id_col, text='exFAT Image Builder',
-             font=(FONTS['h2'][0], 16, 'bold'),
+             font=(FONTS['body_strong'][0], 16),
              bg=COLORS['bg_2'], fg=COLORS['fg_0']
              ).pack(anchor='w')
     tk.Label(id_col, text=_('Version') + ' ' + APP_VERSION +
@@ -315,7 +316,7 @@ def build_about_tab(parent, app):
 
     tk.Label(cred_inner,
              text='\U0001f31f  ' + _('Contributors'),
-             font=(FONTS['h2'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0']
              ).pack(anchor='w')
     tk.Label(cred_inner,
@@ -340,7 +341,7 @@ def build_about_tab(parent, app):
 
     tk.Label(sup_inner,
              text='\u2764  ' + _('Supporters'),
-             font=(FONTS['h2'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0']
              ).pack(anchor='w')
 
@@ -367,11 +368,11 @@ def build_about_tab(parent, app):
         cell.grid(row=0, column=col, sticky='ew',
                   padx=(0 if col == 0 else 8, 0))
         val_lbl = tk.Label(cell, text=str(value),
-                           font=(FONTS['h2'][0], 15, 'bold'),
+                           font=(FONTS['body_strong'][0], 15),
                            bg=COLORS['bg_3'], fg=value_fg)
         val_lbl.pack(anchor='w', padx=12, pady=(8, 0))
         tk.Label(cell, text=caption,
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_3'], fg=COLORS['fg_5']
                  ).pack(anchor='w', padx=12, pady=(1, 8))
         return val_lbl
@@ -432,7 +433,7 @@ def build_about_tab(parent, app):
                   cursor='arrow',
                   highlightthickness=0,
                   height=6)
-    txt_sb = tk.Scrollbar(list_frame, orient='vertical',
+    txt_sb = XScrollbar(list_frame, orient='vertical',
                            command=txt.yview)
     txt.config(yscrollcommand=txt_sb.set)
     txt_sb.pack(side='right', fill='y')
@@ -489,8 +490,8 @@ def build_about_tab(parent, app):
         except Exception:
             pass
 
-    tk.Button(foot, text='\u2764  ' + _('Support the tool'),
-              font=(FONTS['button'][0], 9, 'bold'),
+    XButton(foot, text='\u2764  ' + _('Support the tool'),
+              font=(FONTS['body_strong'][0], 9),
               bg=COLORS['accent'], fg=COLORS['fg_0'],
               activebackground=COLORS.get('accent_hi', COLORS['accent']),
               activeforeground=COLORS['fg_0'],
@@ -504,8 +505,8 @@ def build_about_tab(parent, app):
         except Exception:
             pass
 
-    tk.Button(foot, text='\U0001f41b  ' + _('Report Issue'),
-              font=(FONTS['button'][0], 9, 'bold'),
+    XButton(foot, text='\U0001f41b  ' + _('Report Issue'),
+              font=(FONTS['body_strong'][0], 9),
               bg=COLORS['bg_3'], fg=COLORS['fg_1'],
               activebackground=COLORS['bg_4'], activeforeground=COLORS['fg_0'],
               relief='flat', bd=0, padx=14, pady=6,
@@ -535,7 +536,7 @@ def _credit_row(parent, cred):
     tile.pack(side='left', padx=(0, 12))
     tile.pack_propagate(False)
     tk.Label(tile, text=cred['emoji'],
-             font=(FONTS['body'][0], 13),
+             font=(FONTS['body'][0], 11),
              bg=COLORS['accent_08'], fg=COLORS['accent_hi']
              ).pack(expand=True)
 
@@ -544,7 +545,7 @@ def _credit_row(parent, cred):
 
     # Name — clickable if a URL is set
     name_lbl = tk.Label(col, text=cred['name'],
-                         font=(FONTS['body'][0], 10, 'bold'),
+                         font=(FONTS['body_strong'][0], 10),
                          bg=COLORS['bg_3'],
                          fg=COLORS['accent'] if cred['url']
                              else COLORS['fg_1'],
@@ -575,8 +576,8 @@ def _credit_row(parent, cred):
 
 
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],

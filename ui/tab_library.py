@@ -31,6 +31,7 @@ Deferred (out of scope for this iteration; would require modifying
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -78,7 +79,7 @@ def _build_page_head(body, app):
     title_col = tk.Frame(head, bg=COLORS['bg_1'])
     title_col.pack(side='left')
     tk.Label(title_col, text=_('Game Library'),
-             font=(FONTS['h2'][0], 15, 'bold'),
+             font=(FONTS['body_strong'][0], 15),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(anchor='w')
     # v3.6.3: one-line helper so first-time users know what this view holds.
@@ -98,7 +99,7 @@ def _build_page_head(body, app):
                      highlightthickness=1)
         f.pack(side='left', padx=(10, 0))
         tk.Label(f, textvariable=var,
-                 font=(FONTS['mono_sm'][0], 9, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_2'], fg=accent
                  ).pack(side='left', padx=(8, 2), pady=2)
         tk.Label(f, text=suffix, font=FONTS['mono_sm'],
@@ -142,7 +143,7 @@ def _build_toolbar(body, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['field_bg'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(10, 6))
-    se = tk.Entry(search_wrap, textvariable=app._lib_search_var,
+    se = XEntry(search_wrap, textvariable=app._lib_search_var,
                   font=(FONTS['body'][0], 10),
                   bg=COLORS['field_bg'], fg=COLORS['field_fg'],
                   insertbackground=COLORS['accent'],
@@ -209,12 +210,12 @@ def _build_folder_strip(body, app):
     header.pack(fill='x', padx=24, pady=(2, 4))
 
     tk.Label(header, text=_('Scanning folders:'),
-             font=(FONTS['body'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_0'], fg=COLORS['fg_2']
              ).pack(side='left')
     tk.Label(header,
              text=_('(click \u2715 to stop scanning a folder)'),
-             font=(FONTS['body'][0], 8),
+             font=(FONTS['body'][0], 9),
              bg=COLORS['bg_0'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(8, 0))
 
@@ -237,7 +238,7 @@ def _build_scan_bar(body, app):
 
     # Tiny dot + scanning label
     tk.Label(inner, text='\u25cf',
-             font=(FONTS['body'][0], 8),
+             font=(FONTS['body'][0], 9),
              bg=COLORS['bg_0'], fg=COLORS['accent']
              ).pack(side='left', padx=(0, 6))
     tk.Label(inner, text=_('Scanning…'),
@@ -281,11 +282,11 @@ def _build_footer_stats(body, app):
         col = tk.Frame(t, bg=COLORS['bg_0'])
         col.pack(side='left')
         tk.Label(col, text=caption.upper(),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_0'], fg=COLORS['fg_5'], anchor='w'
                  ).pack(anchor='w')
         tk.Label(col, textvariable=var,
-                 font=(FONTS['h3'][0], 14, 'bold'),
+                 font=(FONTS['body_strong'][0], 14),
                  bg=COLORS['bg_0'], fg=COLORS['fg_0'], anchor='w'
                  ).pack(anchor='w')
 
@@ -310,7 +311,7 @@ def _build_grid_area(body, app):
     grid_outer.pack(fill='both', expand=True, padx=24, pady=(0, 12))
 
     canvas = tk.Canvas(grid_outer, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = tk.Scrollbar(grid_outer, orient='vertical',
+    sb = XScrollbar(grid_outer, orient='vertical',
                       command=canvas.yview,
                       bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
     canvas.configure(yscrollcommand=sb.set)
@@ -345,8 +346,8 @@ def _btn(parent, text, command, kind='ghost'):
                     COLORS['bg_3'],     COLORS['fg_0']),
     }
     bg, fg, abg, afg = schemes.get(kind, schemes['ghost'])
-    btn = tk.Button(parent, text=text,
-                    font=(FONTS['button'][0], 9, 'bold'),
+    btn = XButton(parent, text=text,
+                    font=(FONTS['body_strong'][0], 9),
                     bg=bg, fg=fg,
                     activebackground=abg, activeforeground=afg,
                     relief='flat', bd=0,

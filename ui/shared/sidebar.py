@@ -1,131 +1,155 @@
 """
-ui/shared/sidebar.py — left navigation rail components.
+ui/shared/sidebar.py — the application's left navigation rail.
 
-Components
-----------
-- NavItem  — a single clickable nav row: optional icon glyph + label,
-             active/idle states, hover feedback. Fires an on_select
-             callback with its key when clicked.
-- Sidebar  — a vertical rail that holds grouped NavItems plus an
-             optional pinned footer widget area. Tracks the active key
-             and exposes `select(key)` / `on_select` for the host.
+Design system › Sidebar: 232px rail on bg_0 (56px compact), grouped items
+under overline labels, 36px items with a 16px icon. The selected item gets
+a bg_3 fill, fg_0 semibold label, an accent_hi icon and a 3px accent pill on
+its left edge; hover is a bg_2 fill. Compact mode hides labels, group
+labels and the footer and shows the label as a tooltip.
 
-Design intent (matches the uploaded dashboard mock): grouped sections
-("WORKSPACE", "MAIN TOOLS", "ADVANCED") with an accent bar on the active
-item and a status panel pinned at the bottom.
+Public API (unchanged, used by exfat_builder.py):
+    Sidebar(parent, width=232, rail_width=56)
+    .add_group(title) / .add_item(key, label, icon=None) / .footer()
+    .select(key) / .active_key / .on_select = callable(key)
+    .toggle() / .set_collapsed(bool, persist=False) / .collapsed
+    .on_toggle = callable(collapsed)
+    .set_item_label(key, text) / .set_group_labels([...])
 
-Stage 2 (UI refactor): standalone, NOT wired into the app. The host app
-will later create a Sidebar, add items, and point on_select at the real
-`_switch_tab`. No backend calls are made here. Safe to import alone.
+`icon` may be an icon name from ui.icons or a legacy emoji (mapped to the
+matching icon).
 """
 
 import tkinter as tk
 
-from tkinter_theme import (
-    COLORS, FONTS, SPACING,
-    get_color, get_font,
-)
+from tkinter_theme import COLORS, FONTS, px, SIZES, get_color, get_font
+from ui.icons import icon_image, EMOJI_ICON, has_icon
+
+C = COLORS
+
+# Sidebar key -> icon (wins over whatever glyph the caller passes).
+KEY_ICONS = {
+    'home': 'home', 'unibuild': 'build', 'extract': 'extract', 'edit': 'edit',
+    'library': 'library', 'ps5': 'ps5', 'convert': 'convert',
+    'dumps': 'rename', 'backports': 'backports', 'advanced': 'advanced',
+    'hist': 'history', 'settings': 'settings', 'about': 'credits',
+    'report': 'bug', 'help': 'help',
+}
+
+
+def _resolve_icon(key, icon):
+    if key in KEY_ICONS:
+        return KEY_ICONS[key]
+    if icon and has_icon(icon):
+        return icon
+    if icon:
+        return EMOJI_ICON.get(icon.strip()[:1], 'circle')
+    return None
+
+
+class _Tip:
+    """Tooltip used for compact-mode labels."""
+
+    def __init__(self, widget, get_text):
+        self.widget, self.get_text = widget, get_text
+        self.enabled = False
+        self.tw = None
+        self._after = None
+
+    def enter(self):
+        if self.enabled:
+            self._after = self.widget.after(450, self.show)
+
+    def leave(self):
+        if self._after:
+            try:
+                self.widget.after_cancel(self._after)
+            except Exception:
+                pass
+            self._after = None
+        if self.tw:
+            try:
+                self.tw.destroy()
+            except Exception:
+                pass
+            self.tw = None
+
+    def show(self):
+        if self.tw or not self.enabled:
+            return
+        try:
+            w = self.widget
+            x = w.winfo_rootx() + w.winfo_width() + px(6)
+            y = w.winfo_rooty() + px(6)
+            tw = tk.Toplevel(w)
+            tw.wm_overrideredirect(True)
+            tw.configure(bg=C['border_3'])
+            tk.Label(tw, text=self.get_text(), bg=C['bg_3'], fg=C['fg_1'],
+                     font=FONTS['caption'], padx=px(8), pady=px(4)
+                     ).pack(padx=1, pady=1)
+            tw.wm_geometry('+%d+%d' % (x, y))
+            self.tw = tw
+        except Exception:
+            self.tw = None
 
 
 class NavItem(tk.Frame):
-    """One row in the sidebar.
-
-    Args:
-        parent   : container widget
-        key      : string id passed back through on_select
-        label    : visible text
-        icon     : optional leading glyph (str), e.g. an emoji
-        on_select: callable(key) invoked on click — optional. If None,
-                   the item is purely visual (no fake behavior).
-
-    The item never invents functionality: with no on_select it is inert.
-    """
+    """One 36px row in the sidebar."""
 
     def __init__(self, parent, key, label, icon=None, on_select=None,
-                 **kwargs):
-        super().__init__(parent, bg=get_color("bg_1"),
-                         highlightthickness=0, bd=0, **kwargs)
+                 rail_bg=None, **kwargs):
+        self._rail_bg = rail_bg or C['bg_0']
+        super().__init__(parent, bg=self._rail_bg, highlightthickness=0,
+                         bd=0, height=px(SIZES['nav_item']), **kwargs)
+        self.pack_propagate(False)
         self.key = key
-        self.label = label             # kept for compact-mode tooltips (5B)
+        self.label = label
         self._on_select = on_select
         self._active = False
+        self._hover = False
         self._compact = False
+        self._icon_name = _resolve_icon(key, icon)
 
-        # accent bar on the left edge — shown only when active
-        self._bar = tk.Frame(self, bg=get_color("bg_1"), width=4)
-        self._bar.pack(side="left", fill="y")
+        from ui.shared.widgets import Rounded
+        self._bgf = Rounded(self, bg=self._rail_bg, radius=4,
+                            surface=self._rail_bg)
+        self._bgf.place(x=0, y=0, relwidth=1, relheight=1)
+        self._bar = tk.Frame(self._bgf, bg=self._rail_bg, width=px(3),
+                             height=px(16))
+        self._icon = tk.Label(self._bgf, bg=self._rail_bg, bd=0)
+        self._label = tk.Label(self._bgf, text=label, bg=self._rail_bg,
+                               fg=C['fg_2'], font=FONTS['body'], anchor='w')
+        self._layout()
+        self._tip = _Tip(self, lambda: self.label)
+        for w in (self, self._bgf, self._icon, self._label):
+            w.bind('<Button-1>', self._click)
+            w.bind('<Enter>', self._enter)
+            w.bind('<Leave>', self._leave)
+            w.configure(cursor='hand2')
+        self._render()
 
-        self._inner = tk.Frame(self, bg=get_color("bg_1"))
-        self._inner.pack(side="left", fill="both", expand=True)
-
-        pad = SPACING["sm"]
-        if icon:
-            self._icon = tk.Label(self._inner, text=icon,
-                                  bg=get_color("bg_1"),
-                                  fg=get_color("fg_4"),
-                                  font=get_font("body"))
-            self._icon.pack(side="left", padx=(SPACING["md"], SPACING["sm"]),
-                            pady=pad)
+    def _layout(self):
+        for w in (self._icon, self._label):
+            w.place_forget()
+        self._bar.place(x=0, rely=0.5, anchor='w')
+        if self._compact:
+            self._icon.place(relx=0.5, rely=0.5, anchor='center')
         else:
-            self._icon = None
+            self._icon.place(x=px(12), rely=0.5, anchor='w')
+            self._label.place(x=px(40), rely=0.5, anchor='w')
 
-        self._label = tk.Label(self._inner, text=label,
-                               bg=get_color("bg_1"),
-                               fg=get_color("fg_3"),
-                               font=get_font("body"), anchor="w")
-        self._label.pack(side="left", fill="x", expand=True,
-                         padx=(0 if icon else SPACING["md"], SPACING["md"]),
-                         pady=pad)
-
-        for w in (self, self._inner, self._label,
-                  *( [self._icon] if self._icon else [] )):
-            w.bind("<Button-1>", self._click)
-            w.bind("<Enter>", self._enter)
-            w.bind("<Leave>", self._leave)
-            w.configure(cursor="hand2")
-
-    # ── compact (collapsed-rail) mode ─────────────────────────────────
     def set_compact(self, compact):
-        """Compact mode (Phase 5A): hide the text label and center the
-        icon so the item reads as an icon-only rail entry. Expanding
-        restores the label. Purely visual — never affects on_select."""
         compact = bool(compact)
         if compact == self._compact:
             return
         self._compact = compact
-        if compact:
-            # Hide the label; center the icon within the narrow rail.
-            try:
-                self._label.pack_forget()
-            except Exception:
-                pass
-            if self._icon:
-                self._icon.pack_configure(
-                    side="left", fill="x", expand=True,
-                    padx=SPACING["xs"], pady=SPACING["sm"])
-        else:
-            # Restore icon padding, then re-show the label after it.
-            if self._icon:
-                self._icon.pack_configure(
-                    padx=(SPACING["md"], SPACING["sm"]), pady=SPACING["sm"])
-            try:
-                self._label.pack(side="left", fill="x", expand=True,
-                                 padx=(0 if self._icon else SPACING["md"],
-                                       SPACING["md"]),
-                                 pady=SPACING["sm"])
-            except Exception:
-                pass
+        self._tip.enabled = compact
+        self._layout()
 
-    # ── state ────────────────────────────────────────────────────────
     def set_active(self, active):
         self._active = bool(active)
         self._render()
 
     def set_label(self, text):
-        """Update the visible label text in place (issue #35 — language
-        retranslation). Safe in compact mode: the pack-forgotten Label
-        keeps the new text and shows it when the rail expands. Also
-        refreshes the compact-mode tooltip source (self.label)."""
         self.label = text
         try:
             self._label.configure(text=text)
@@ -134,140 +158,109 @@ class NavItem(tk.Frame):
 
     def _render(self):
         if self._active:
-            bg = get_color("accent_15")       # theme 'active' fill convention
-            fg = get_color("accent_hi")
-            bar = get_color("accent")
-            icon_fg = get_color("accent_hi")
-            font = get_font("body_b")
+            bg, fg, ifg, font, bar = (C['bg_3'], C['fg_0'], C['accent_hi'],
+                                      FONTS['body_strong'], C['accent'])
+        elif self._hover:
+            bg, fg, ifg, font, bar = (C['bg_2'], C['fg_0'], C['fg_1'],
+                                      FONTS['body'], C['bg_2'])
         else:
-            bg = get_color("bg_1")
-            fg = get_color("fg_3")
-            bar = get_color("bg_1")
-            icon_fg = get_color("fg_4")
-            font = get_font("body")
+            bg, fg, ifg, font, bar = (self._rail_bg, C['fg_2'], C['fg_3'],
+                                      FONTS['body'], self._rail_bg)
+        self._bgf.set_style(bg=bg)
         self._bar.configure(bg=bar)
-        for w in (self, self._inner, self._label):
-            w.configure(bg=bg)
-        self._label.configure(fg=fg, font=font)
-        if self._icon:
-            self._icon.configure(bg=bg, fg=icon_fg)
+        self._label.configure(bg=bg, fg=fg, font=font)
+        if self._icon_name:
+            self._icon.configure(image=icon_image(self._icon_name, 16, ifg, bg),
+                                 bg=bg)
+        self._bar.lift()
 
-    # ── events ───────────────────────────────────────────────────────
     def _enter(self, _e=None):
-        if not self._active:
-            for w in (self, self._inner, self._label):
-                w.configure(bg=get_color("bg_2"))
-            if self._icon:
-                self._icon.configure(bg=get_color("bg_2"))
+        self._hover = True
+        self._render()
+        self._tip.enter()
 
     def _leave(self, _e=None):
-        if not self._active:
-            self._render()
+        # Leave fires when moving between child widgets; only clear the
+        # hover once the pointer has really left the row.
+        try:
+            x, y = self.winfo_pointerxy()
+            w = self.winfo_containing(x, y)
+            while w is not None:
+                if w is self:
+                    return
+                w = w.master
+        except Exception:
+            pass
+        self._hover = False
+        self._render()
+        self._tip.leave()
 
     def _click(self, _e=None):
+        self._tip.leave()
         if callable(self._on_select):
             self._on_select(self.key)
 
 
 class Sidebar(tk.Frame):
-    """Vertical navigation rail holding grouped NavItems.
+    """Vertical navigation rail holding grouped NavItems."""
 
-    Usage (host app, a later stage):
-        sb = Sidebar(parent, width=210)
-        sb.on_select = app._switch_tab          # real callback
-        sb.add_group("WORKSPACE")
-        sb.add_item("dashboard", "Dashboard", icon="\u25a3")
-        sb.add_item("quickstart", "Quick Start", icon="\u26a1")
-        sb.add_group("MAIN TOOLS")
-        sb.add_item("build", "Build Image", icon="\U0001f528")
-        sb.select("dashboard")
-        footer = sb.footer()                    # pinned bottom area
-        ...populate footer...
-
-    The Sidebar makes no backend calls. on_select is whatever the host
-    assigns; until then, clicking items is inert.
-    """
-
-    def __init__(self, parent, width=210, rail_width=60, **kwargs):
-        super().__init__(parent, bg=get_color("bg_1"), width=width,
+    def __init__(self, parent, width=None, rail_width=None, **kwargs):
+        width = px(SIZES['sidebar']) if not width or width < 220 else px(width)
+        rail_width = px(SIZES['sidebar_compact'])
+        super().__init__(parent, bg=C['bg_0'], width=width,
                          highlightthickness=0, bd=0, **kwargs)
         self.pack_propagate(False)
-        self.on_select = None          # host assigns a callable(key)
-        self.on_toggle = None          # host assigns a callable(collapsed)
-        self._items = {}               # key -> NavItem
+        self.on_select = None
+        self.on_toggle = None
+        self._items = {}
         self._active_key = None
-        # Phase 5A — collapsible icon-only rail.
         self._collapsed = False
-        self._full_width = width       # expanded width (default 210)
-        self._rail_width = rail_width  # collapsed width (icon + accent room)
-        self._group_headers = []       # uppercase section labels (hidden compact)
-        self._group_divs = []          # hairline dividers (hidden compact)
-        self._build_order = []         # _body children in creation order
+        self._full_width = width
+        self._rail_width = rail_width
+        self._group_headers = []
+        self._group_divs = []
+        self._build_order = []
+        # Kept for compatibility: the collapse control now lives in the app
+        # header (hamburger), as in Windows 11 navigation.
+        self._toggle = tk.Label(self, bg=C['bg_0'])
 
-        # Toggle control pinned at the very top, above the groups.
-        self._toggle = tk.Label(self, text="\u2039\u2039",   # ‹‹ expanded
-                                bg=get_color("bg_1"), fg=get_color("fg_5"),
-                                font=get_font("body"), anchor="e",
-                                cursor="hand2")
-        self._toggle.pack(side="top", fill="x",
-                          padx=SPACING["md"], pady=(SPACING["sm"], 0))
-        self._toggle.bind("<Button-1>", lambda _e: self.toggle())
-        self._toggle.bind("<Enter>",
-                          lambda _e: self._toggle.configure(fg=get_color("fg_3")))
-        self._toggle.bind("<Leave>",
-                          lambda _e: self._toggle.configure(fg=get_color("fg_5")))
-
-        self._body = tk.Frame(self, bg=get_color("bg_1"))
-        self._body.pack(side="top", fill="both", expand=True)
-
-        self._footer = tk.Frame(self, bg=get_color("bg_1"))
-        self._footer.pack(side="bottom", fill="x")
+        self._footer = tk.Frame(self, bg=C['bg_0'])
+        self._footer.pack(side='bottom', fill='x')
+        self._footer_rule = tk.Frame(self, bg=C['border_2'], height=1)
+        self._footer_rule.pack(side='bottom', fill='x')
+        self._body = tk.Frame(self, bg=C['bg_0'])
+        self._body.pack(side='top', fill='both', expand=True,
+                        padx=px(8), pady=(px(8), 0))
 
     # ── building ─────────────────────────────────────────────────────
     def add_group(self, title):
-        """Add an uppercase section header. Non-first groups get extra
-        breathing room and a hairline divider (presentation only)."""
-        first = not getattr(self, "_has_groups", False)
+        first = not getattr(self, '_has_groups', False)
         self._has_groups = True
-        if not first:
-            div = tk.Frame(self._body, bg=get_color("border_2"), height=1)
-            div.pack(fill="x", padx=SPACING["md"], pady=(SPACING["lg"], 0))
-            self._group_divs.append(div)
-            self._build_order.append(div)
-        lbl = tk.Label(self._body, text=title.upper(),
-                       bg=get_color("bg_1"), fg=get_color("fg_5"),
-                       font=get_font("eyebrow"), anchor="w")
-        lbl.pack(fill="x", padx=SPACING["md"],
-                 pady=((SPACING["lg"] if first else SPACING["sm"]),
-                       SPACING["xs"]))
+        lbl = tk.Label(self._body, text=title.upper(), bg=C['bg_0'],
+                       fg=C['fg_4'], font=FONTS['overline'], anchor='w')
+        lbl.pack(fill='x', padx=px(12), pady=(px(14), px(4)))
         self._group_headers.append(lbl)
         self._build_order.append(lbl)
+        div = tk.Frame(self._body, bg=C['border_2'], height=1)
+        self._group_divs.append(div)
+        self._build_order.append(div)
         return lbl
 
     def add_item(self, key, label, icon=None):
-        """Add a NavItem. Clicking it routes through self._dispatch."""
         item = NavItem(self._body, key, label, icon=icon,
                        on_select=self._dispatch)
-        item.pack(fill="x")
+        item.pack(fill='x', pady=(0, px(2)))
         self._items[key] = item
         self._build_order.append(item)
-        # If the rail is already collapsed (e.g. items added after a
-        # restore), keep the new item consistent.
         if self._collapsed:
             item.set_compact(True)
         return item
 
     def footer(self):
-        """Return the pinned bottom frame for the host to fill
-        (e.g. a system-status panel). Empty by default."""
         return self._footer
 
-    # ── retranslation (issue #35) ─────────────────────────────────────
+    # ── retranslation ────────────────────────────────────────────────
     def set_item_label(self, key, text):
-        """Update one NavItem's visible text in place. The sidebar is
-        never rebuilt for a language change, so routing, the active
-        highlight and the collapsed state are untouched. Unknown keys
-        are a no-op (presentation only — never raises)."""
         item = self._items.get(key)
         if item is None:
             return
@@ -277,9 +270,6 @@ class Sidebar(tk.Frame):
             pass
 
     def set_group_labels(self, titles):
-        """Replace the group header texts in creation order. Shorter or
-        longer lists are zipped safely; extra entries on either side are
-        ignored (presentation only — never raises)."""
         for lbl, title in zip(self._group_headers, titles):
             try:
                 lbl.configure(text=str(title).upper())
@@ -293,7 +283,6 @@ class Sidebar(tk.Frame):
             self.on_select(key)
 
     def select(self, key):
-        """Mark `key` active (visual only — does not call on_select)."""
         self._active_key = key
         for k, item in self._items.items():
             item.set_active(k == key)
@@ -302,119 +291,58 @@ class Sidebar(tk.Frame):
     def active_key(self):
         return self._active_key
 
-    # ── collapse / expand (Phase 5A) ──────────────────────────────────
+    # ── collapse / expand ────────────────────────────────────────────
     @property
     def collapsed(self):
         return self._collapsed
 
     def toggle(self):
-        """User-driven collapse/expand; persists via on_toggle."""
         self.set_collapsed(not self._collapsed, persist=True)
 
     def set_collapsed(self, collapsed, persist=False):
-        """Switch the rail between full (labelled) and narrow (icon-only).
-        persist=False is used to restore the saved state at startup
-        without re-firing on_toggle."""
-        collapsed = bool(collapsed)
-        self._collapsed = collapsed
+        self._collapsed = bool(collapsed)
         self._apply_collapsed()
         if persist and callable(self.on_toggle):
             try:
-                self.on_toggle(collapsed)
+                self.on_toggle(self._collapsed)
             except Exception:
                 pass
 
     def _apply_collapsed(self):
-        """Apply the current collapsed state: width, item labels, group
-        headers/dividers, footer visibility, toggle glyph. Visual only."""
-        if self._collapsed:
-            self.configure(width=self._rail_width)
-            for item in self._items.values():
-                item.set_compact(True)
-            # Hide group headers + dividers (grouping implied by gaps).
-            for w in self._group_headers + self._group_divs:
-                try:
-                    w.pack_forget()
-                except Exception:
-                    pass
-            # Hide footer contents (keep the frame for layout stability).
-            try:
-                self._footer.pack_forget()
-            except Exception:
-                pass
-            self._toggle.configure(text="\u203a\u203a", anchor="center")  # ››
-        else:
-            self.configure(width=self._full_width)
-            for item in self._items.values():
-                item.set_compact(False)
-            # Re-show headers/dividers in original order is non-trivial via
-            # pack; simplest robust approach is to re-pack each in the order
-            # they were created. They were interleaved with items, but pack
-            # order within _body is preserved by re-packing headers/divs
-            # relative to existing children using their original sequence.
-            self._repack_groups_expanded()
-            try:
-                self._footer.pack(side="bottom", fill="x")
-            except Exception:
-                pass
-            self._toggle.configure(text="\u2039\u2039", anchor="e")  # ‹‹
-
-    def _repack_groups_expanded(self):
-        """Re-show group headers and dividers when expanding. Because pack
-        appends to the end, we rebuild the _body child order: walk the
-        recorded creation sequence and re-pack each header/divider before
-        the items that follow it. Simpler and reliable: re-pack every
-        header/div, then re-pack all items after — but that reorders. To
-        avoid reordering, we instead never destroyed them and only
-        pack_forget()'d; re-packing in original creation order relative to
-        the items requires the items still be packed. We achieve correct
-        order by re-packing headers/divs and items together in the stored
-        build order."""
-        # Rebuild full body order from the original build sequence.
         for w in self._body.winfo_children():
             try:
                 w.pack_forget()
             except Exception:
                 pass
-        for w in self._build_order:
-            try:
+        if self._collapsed:
+            self.configure(width=self._rail_width)
+            for item in self._items.values():
+                item.set_compact(True)
+            first = True
+            for w in self._build_order:
+                if w in self._group_headers:
+                    continue
                 if w in self._group_divs:
-                    w.pack(fill="x", padx=SPACING["md"],
-                           pady=(SPACING["lg"], 0))
-                elif w in self._group_headers:
-                    first = (w is self._group_headers[0])
-                    w.pack(fill="x", padx=SPACING["md"],
-                           pady=((SPACING["lg"] if first else SPACING["sm"]),
-                                 SPACING["xs"]))
-                else:  # NavItem
-                    w.pack(fill="x")
-            except Exception:
-                pass
-
-
-# ── harmless self-test / demo ────────────────────────────────────────
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("sidebar.py — preview")
-    root.configure(bg=COLORS["bg_0"])
-    root.geometry("260x520")
-
-    sb = Sidebar(root, width=220)
-    sb.pack(side="left", fill="y")
-    sb.on_select = lambda k: print("selected:", k)
-
-    sb.add_group("Workspace")
-    sb.add_item("dashboard", "Dashboard", icon="\u25a3")
-    sb.add_item("quickstart", "Quick Start", icon="\u26a1")
-    sb.add_group("Main Tools")
-    sb.add_item("build", "Build Image", icon="\U0001f528")
-    sb.add_item("library", "Game Library", icon="\U0001f4da")
-    sb.add_group("Advanced")
-    sb.add_item("advanced", "Advanced Options", icon="\u2699")
-    sb.select("dashboard")
-
-    tk.Label(sb.footer(), text="System: Healthy",
-             bg=COLORS["bg_1"], fg=COLORS["success_hi"],
-             font=FONTS["meta"]).pack(padx=12, pady=12, anchor="w")
-
-    root.mainloop()
+                    if not first:
+                        w.pack(fill='x', padx=px(4), pady=px(8))
+                    continue
+                first = False
+                w.pack(fill='x', pady=(0, px(2)))
+            for w in (self._footer, self._footer_rule):
+                w.pack_forget()
+        else:
+            self.configure(width=self._full_width)
+            for item in self._items.values():
+                item.set_compact(False)
+            for w in self._build_order:
+                if w in self._group_divs:
+                    continue
+                if w in self._group_headers:
+                    w.pack(fill='x', padx=px(12), pady=(px(14), px(4)))
+                else:
+                    w.pack(fill='x', pady=(0, px(2)))
+            self._body.pack_forget()
+            self._footer.pack(side='bottom', fill='x')
+            self._footer_rule.pack(side='bottom', fill='x')
+            self._body.pack(side='top', fill='both', expand=True,
+                            padx=px(8), pady=(px(8), 0))

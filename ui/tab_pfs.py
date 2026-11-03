@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog, ttk
 
 from ui.shared.app_dialog import app_confirm, app_error, app_info, app_warning
@@ -277,11 +278,11 @@ def build_pfs_tab(parent, app):
                          highlightbackground=COLORS['border_2'],
                          cursor='hand2')
         outer.pack(side='left', fill='both', expand=True, padx=(0, 8))
-        icon_lbl = tk.Label(outer, text=icon, font=(FONTS['h2'][0], 20),
+        icon_lbl = tk.Label(outer, text=icon, font=(FONTS['body'][0], 20),
                             bg=COLORS['bg_2'], fg=COLORS['fg_4'])
         icon_lbl.pack(pady=(18, 4))
         title_lbl = tk.Label(outer, text=title,
-                             font=(FONTS['h3'][0], 11, 'bold'),
+                             font=(FONTS['body_strong'][0], 11),
                              bg=COLORS['bg_2'], fg=COLORS['fg_1'],
                              wraplength=240, justify='center')
         title_lbl.pack(padx=12)
@@ -490,7 +491,7 @@ def build_pfs_tab(parent, app):
     cover_row_b = tk.Frame(cover_panel_b, bg=COLORS['bg_3'])
     cover_row_b.pack(fill='x', pady=(0, 10))
     cover_lbl_b = tk.Label(cover_row_b, text='\U0001f3ae', bg=COLORS['bg_3'],
-                           fg=COLORS['fg_5'], font=(FONTS['mono_sm'][0], 34))
+                           fg=COLORS['fg_5'], font=(FONTS['body'][0], 34))
     cover_lbl_b.pack(pady=(4, 4))
 
     # ── Output format ────────────────────────────────────────────────
@@ -500,7 +501,7 @@ def build_pfs_tab(parent, app):
              bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left')
 
     def _mk_fmt_radio(value, text):
-        rb = tk.Radiobutton(
+        rb = XRadio(
             fmt_frame, text=text, value=value, variable=fmt_var,
             command=lambda: _apply_fmt(),
             font=FONTS['mono_sm'],
@@ -661,7 +662,7 @@ def build_pfs_tab(parent, app):
                 if var is None:
                     var = tk.BooleanVar(value=False)
                     _sel_vars[id(job)] = var
-                tk.Checkbutton(row, variable=var, bg=COLORS['bg_3'],
+                XCheck(row, variable=var, bg=COLORS['bg_3'],
                                activebackground=COLORS['bg_3'],
                                selectcolor=COLORS['bg_4'],
                                highlightthickness=0, bd=0,
@@ -670,7 +671,7 @@ def build_pfs_tab(parent, app):
                 tk.Frame(row, bg=COLORS['bg_3'], width=20,
                          height=1).pack(side='left')
             dot = tk.Label(row, text=_STATUS_DOT.get(job['status'], '\u25cb'),
-                           font=(FONTS['mono_sm'][0], 9), bg=COLORS['bg_3'],
+                           font=(FONTS['body'][0], 9), bg=COLORS['bg_3'],
                            fg=_STATUS_COLORS.get(job['status'], COLORS['fg_4']))
             dot.pack(side='left', padx=(2, 8))
             tk.Label(row, text=job['name'], font=FONTS['mono_sm'],
@@ -1968,14 +1969,14 @@ def build_pfs_tab(parent, app):
                 if var is None:
                     var = tk.BooleanVar(value=False)
                     cq_state['sel'][id(job)] = var
-                tk.Checkbutton(row, variable=var, bg=COLORS['bg_3'],
+                XCheck(row, variable=var, bg=COLORS['bg_3'],
                                activebackground=COLORS['bg_3'],
                                selectcolor=COLORS['bg_4'], highlightthickness=0,
                                bd=0, cursor='hand2').pack(side='left')
             else:
                 tk.Frame(row, bg=COLORS['bg_3'], width=20, height=1).pack(side='left')
             tk.Label(row, text=_STATUS_DOT.get(job['status'], '\u25cb'),
-                     font=(FONTS['mono_sm'][0], 9), bg=COLORS['bg_3'],
+                     font=(FONTS['body'][0], 9), bg=COLORS['bg_3'],
                      fg=_STATUS_COLORS.get(job['status'], COLORS['fg_4'])).pack(
                          side='left', padx=(2, 8))
             tk.Label(row, text=job['name'], font=FONTS['mono_sm'],
@@ -2277,14 +2278,14 @@ def _card_head(card, icon, title, subtitle):
     chead = tk.Frame(card, bg=COLORS['bg_2'])
     chead.pack(fill='x', padx=24, pady=(18, 14))
     ico = tk.Label(chead, text=icon,
-                   font=(FONTS['h2'][0], 13),
+                   font=(FONTS['body'][0], 11),
                    bg=COLORS['accent_08'], fg=COLORS['teal'],
                    width=2, padx=4, pady=2)
     ico.pack(side='left', padx=(0, 12))
     col = tk.Frame(chead, bg=COLORS['bg_2'])
     col.pack(side='left', fill='x', expand=True)
     tk.Label(col, text=title,
-             font=(FONTS['h3'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(fill='x')
     tk.Label(col, text=subtitle,
              font=FONTS['meta'],
@@ -2295,7 +2296,7 @@ def _card_head(card, icon, title, subtitle):
 def _make_cb(parent, text, var):
     def _style(*_):
         cb.config(fg=COLORS['teal'] if var.get() else COLORS['fg_4'])
-    cb = tk.Checkbutton(parent, text=text, variable=var,
+    cb = XCheck(parent, text=text, variable=var,
                          font=FONTS['mono_sm'],
                          bg=COLORS['bg_2'], fg=COLORS['teal'],
                          selectcolor=COLORS['bg_3'],
@@ -2424,7 +2425,7 @@ class _ProgressBlock:
         top.pack(fill='x', pady=(0, 6))
 
         self._pct_lbl = tk.Label(top, text='',
-                                  font=(FONTS['h2'][0], 28, 'bold'),
+                                  font=(FONTS['body_strong'][0], 28),
                                   bg=COLORS['bg_2'], fg=COLORS['teal'],
                                   width=5, anchor='e')
         self._pct_lbl.pack(side='left')
@@ -2432,7 +2433,7 @@ class _ProgressBlock:
         right = tk.Frame(top, bg=COLORS['bg_2'])
         right.pack(side='left', padx=(10, 0))
         self._stage_lbl = tk.Label(right, text='',
-                                    font=(FONTS['h3'][0], 11, 'bold'),
+                                    font=(FONTS['body_strong'][0], 11),
                                     bg=COLORS['bg_2'], fg=COLORS['fg_1'],
                                     anchor='w')
         self._stage_lbl.pack(anchor='w')
@@ -2460,7 +2461,7 @@ class _ProgressBlock:
             tile.pack(side='left', padx=(0, 6), ipadx=10, ipady=4)
             dot = tk.Label(tile, text='\u25cf',
                            bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                           font=(FONTS['mono_sm'][0], 8))
+                           font=(FONTS['body'][0], 9))
             dot.pack(side='left', padx=(6, 2))
             lbl = tk.Label(tile, text=label,
                            bg=COLORS['bg_3'], fg=COLORS['fg_4'],

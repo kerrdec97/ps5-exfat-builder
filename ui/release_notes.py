@@ -28,6 +28,7 @@ import time
 import webbrowser
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from ui.shared.scroll import wheel_units
 
 from tkinter_theme import COLORS, FONTS
@@ -117,7 +118,7 @@ def _btn(parent, text, primary=False, command=None, accent=None):
         bg = COLORS['bg_4']
         fg = COLORS['fg_2']
         abg = COLORS['bg_5']
-    b = tk.Button(parent, text=text, command=command,
+    b = XButton(parent, text=text, command=command,
                   font=FONTS['button'], bg=bg, fg=fg,
                   activebackground=abg, activeforeground='#ffffff',
                   relief='flat', bd=0, padx=16, pady=9, cursor='hand2')
@@ -191,7 +192,7 @@ def show_release_modal(app, force=False):
     outer = tk.Frame(win, bg=COLORS['bg_1'])
     outer.pack(fill='both', expand=True)
     canvas = tk.Canvas(outer, bg=COLORS['bg_1'], highlightthickness=0)
-    vsb = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+    vsb = XScrollbar(outer, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=vsb.set)
     vsb.pack(side='right', fill='y')
     canvas.pack(side='left', fill='both', expand=True)

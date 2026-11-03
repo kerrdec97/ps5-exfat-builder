@@ -22,6 +22,7 @@ Stage 2 (UI refactor): standalone, not wired into the app yet.
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk
 
 from tkinter_theme import (

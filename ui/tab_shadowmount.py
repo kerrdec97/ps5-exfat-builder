@@ -22,6 +22,7 @@ import socket
 import threading
 import time
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from ui.shared.scroll import wheel_units
 from tkinter import ttk, filedialog
 
@@ -473,7 +474,7 @@ def _toolbar_btn(parent, text, cmd, kind='default'):
         bg, fg = _SUCCESS, '#ffffff'
     elif kind == 'ghost':
         bg, fg = _BG_TOOLBAR, _FG_MUTED
-    return tk.Button(parent, text=text, command=cmd,
+    return XButton(parent, text=text, command=cmd,
                      bg=bg, fg=fg, font=_F_BUTTON,
                      activebackground=_BG_ROW_HOV, activeforeground=fg,
                      bd=0, padx=12, pady=7, cursor='hand2', relief='flat')
@@ -489,7 +490,7 @@ def _build_rail(parent, app):
     search_frame = tk.Frame(parent, bg=_BG_RAIL)
     search_frame.pack(side='top', fill='x', padx=12, pady=(12, 6))
     app._smp_search_var = tk.StringVar(value='')
-    search_entry = tk.Entry(search_frame, textvariable=app._smp_search_var,
+    search_entry = XEntry(search_frame, textvariable=app._smp_search_var,
                             bg=COLORS['bg_0'], fg=_FG,
                             insertbackground=_FG,
                             bd=0, relief='flat',
@@ -924,7 +925,7 @@ def _build_overview_card(parent, app):
 def _build_content(parent, app):
     # Scrollable canvas inside `parent`
     canvas = tk.Canvas(parent, bg=_BG_APP, highlightthickness=0)
-    vsb    = tk.Scrollbar(parent, orient='vertical', command=canvas.yview,
+    vsb    = XScrollbar(parent, orient='vertical', command=canvas.yview,
                           bg=_BG_CARD, troughcolor=_BG_APP)
     canvas.configure(yscrollcommand=vsb.set)
     vsb.pack(side='right', fill='y')
@@ -1461,8 +1462,8 @@ def _fakelib_render_row(app, parent, e):
     chk.bind('<Button-1>', lambda _ev, en=e: _fakelib_toggle(app, en))
     name_txt = e['name'] + ('' if e['enabled'] else '   (disabled)')
     tk.Label(row, text=name_txt, bg=_BG_CARD, fg=_FG if e['enabled'] else _FG_MUTED, font=_F_BODY, anchor='w').pack(side='left', padx=(4, 0))
-    tk.Button(row, text='Remove', command=(lambda en=e: _fakelib_remove(app, en)), font=_F_META, bg=_BG_CARD, fg=_DANGER, activebackground=_BG_ROW_HOV, activeforeground=_DANGER, relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0).pack(side='right')
-    tk.Button(row, text='Replace', command=(lambda en=e: _fakelib_replace(app, en)), font=_F_META, bg=_BG_CARD, fg=_ACCENT, activebackground=_BG_ROW_HOV, activeforeground=_ACCENT, relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0).pack(side='right', padx=(0, 4))
+    XButton(row, text='Remove', command=(lambda en=e: _fakelib_remove(app, en)), font=_F_META, bg=_BG_CARD, fg=_DANGER, activebackground=_BG_ROW_HOV, activeforeground=_DANGER, relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0).pack(side='right')
+    XButton(row, text='Replace', command=(lambda en=e: _fakelib_replace(app, en)), font=_F_META, bg=_BG_CARD, fg=_ACCENT, activebackground=_BG_ROW_HOV, activeforeground=_ACCENT, relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0).pack(side='right', padx=(0, 4))
     tk.Label(row, text=_fl_fmt_date(e['mtime']), bg=_BG_CARD, fg=_FG_DIM, font=_F_META, width=16, anchor='e').pack(side='right', padx=6)
     tk.Label(row, text=_fl_fmt_size(e['size']), bg=_BG_CARD, fg=_FG_MUTED, font=_F_META, width=9, anchor='e').pack(side='right')
 
@@ -1597,7 +1598,7 @@ def _build_fakelib_manager(parent, app):
     fr = tk.Frame(parent, bg=_BG_CARD)
     fr.pack(fill='x', padx=14, pady=(0, 4))
     tk.Label(fr, text='Folder: ' + FAKELIB_DIR, bg=_BG_CARD, fg=_FG_MUTED, font=_F_MONO, anchor='w').pack(side='left')
-    tk.Button(fr, text='↻ Refresh', command=(lambda: _fakelib_refresh(app)), font=_F_META, bg=_BG_CARD_HEAD, fg=_FG, activebackground=_BG_ROW_HOV, activeforeground=_FG, relief='flat', bd=0, padx=10, pady=3, cursor='hand2', highlightthickness=1, highlightbackground=_BORDER_STRG).pack(side='right')
+    XButton(fr, text='↻ Refresh', command=(lambda: _fakelib_refresh(app)), font=_F_META, bg=_BG_CARD_HEAD, fg=_FG, activebackground=_BG_ROW_HOV, activeforeground=_FG, relief='flat', bd=0, padx=10, pady=3, cursor='hand2', highlightthickness=1, highlightbackground=_BORDER_STRG).pack(side='right')
     list_wrap = tk.Frame(parent, bg=_BG_CARD, highlightthickness=1, highlightbackground=_BORDER)
     list_wrap.pack(fill='x', padx=14, pady=(0, 6))
     app._fakelib_list_frame = tk.Frame(list_wrap, bg=_BG_CARD)
@@ -1605,7 +1606,7 @@ def _build_fakelib_manager(parent, app):
     tk.Label(app._fakelib_list_frame, text='Press Refresh to list overlays on the PS5.', bg=_BG_CARD, fg=_FG_DIM, font=_F_MONO, anchor='w').pack(fill='x', padx=14, pady=6)
     act = tk.Frame(parent, bg=_BG_CARD)
     act.pack(fill='x', padx=14, pady=(0, 4))
-    tk.Button(act, text='+ Add library…', command=(lambda: _fakelib_add(app)), font=_F_BUTTON, bg=_PURPLE, fg='#ffffff', activebackground=_PURPLE, activeforeground='#ffffff', relief='flat', bd=0, padx=14, pady=6, cursor='hand2', highlightthickness=0).pack(side='left')
+    XButton(act, text='+ Add library…', command=(lambda: _fakelib_add(app)), font=_F_BUTTON, bg=_PURPLE, fg='#ffffff', activebackground=_PURPLE, activeforeground='#ffffff', relief='flat', bd=0, padx=14, pady=6, cursor='hand2', highlightthickness=0).pack(side='left')
     tk.Label(act, textvariable=app._fakelib_status_var, bg=_BG_CARD, fg=_ACCENT, font=_F_META, anchor='w').pack(side='left', padx=(12, 0))
     tk.Label(parent, text='ℹ Changes may require remounting the game or restarting the title before they take effect.', bg=_BG_CARD, fg=_FG_DIM, font=_F_META, anchor='w', justify='left').pack(fill='x', padx=14, pady=(2, 4))
 
@@ -1816,7 +1817,7 @@ def _build_payload_section(parent, app):
                 _on_smp_change(app, 'smp_payload_path', p)
             except Exception:
                 pass
-    tk.Button(browse_row, text='\U0001f4c2  Browse\u2026',
+    XButton(browse_row, text='\U0001f4c2  Browse\u2026',
               command=_browse_elf,
               bg=_BG_CARD_HEAD, fg=_FG, font=_F_BUTTON,
               activebackground=_BG_ROW_HOV, activeforeground=_FG,
@@ -2050,7 +2051,7 @@ def _show_diff_modal(app):
     body_outer = tk.Frame(top, bg=_BG_APP)
     body_outer.pack(side='top', fill='both', expand=True)
     canvas = tk.Canvas(body_outer, bg=_BG_APP, highlightthickness=0)
-    vsb = tk.Scrollbar(body_outer, orient='vertical', command=canvas.yview,
+    vsb = XScrollbar(body_outer, orient='vertical', command=canvas.yview,
                        bg=_BG_CARD, troughcolor=_BG_APP)
     canvas.configure(yscrollcommand=vsb.set)
     vsb.pack(side='right', fill='y')
@@ -2444,7 +2445,7 @@ class SettingRow:
     # ── Control: int (number entry with optional unit) ────────────────
     def _build_int(self, cell, value):
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-        entry = tk.Entry(cell, textvariable=self._tk_var,
+        entry = XEntry(cell, textvariable=self._tk_var,
                          bg=COLORS['bg_0'], fg=_FG,
                          insertbackground=_FG,
                          bd=0, relief='flat', font=_F_MONO,
@@ -2464,7 +2465,7 @@ class SettingRow:
     # ── Control: text (free-form single-line) ─────────────────────────
     def _build_text(self, cell, value):
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-        entry = tk.Entry(cell, textvariable=self._tk_var,
+        entry = XEntry(cell, textvariable=self._tk_var,
                          bg=COLORS['bg_0'], fg=_FG,
                          insertbackground=_FG,
                          bd=0, relief='flat', font=_F_MONO,
@@ -3357,7 +3358,7 @@ def _show_log_window(app, text):
     bar = tk.Frame(win, bg=SURFACE)
     bar.pack(fill='x')
     tk.Label(bar, text=REMOTE_DEBUG_LOG,
-             font=('Consolas', 9), bg=SURFACE, fg=MUTED).pack(
+             font=(FONTS['code'][0], 9), bg=SURFACE, fg=MUTED).pack(
                  side='left', padx=10, pady=8)
 
     def _save_as():
@@ -3372,16 +3373,16 @@ def _show_log_window(app, text):
             except Exception as e:
                 app_error(app, 'Save failed', str(e))
 
-    tk.Button(bar, text='Save as...', command=_save_as,
-              bg=SURFACE2, fg=TEXT, font=('Segoe UI', 9),
+    XButton(bar, text='Save as...', command=_save_as,
+              bg=SURFACE2, fg=TEXT, font=(FONTS['body'][0], 9),
               activebackground=BORDER, activeforeground=TEXT,
               bd=0, padx=10, pady=4, cursor='hand2',
               relief='flat').pack(side='right', padx=10, pady=6)
 
     txt = tk.Text(win, bg=BG, fg=TEXT, insertbackground=TEXT,
-                  font=('Consolas', 9), bd=0, wrap='word')
+                  font=(FONTS['code'][0], 9), bd=0, wrap='word')
     txt.pack(fill='both', expand=True)
-    sb = tk.Scrollbar(txt, command=txt.yview,
+    sb = XScrollbar(txt, command=txt.yview,
                       bg=SURFACE2, troughcolor=BG)
     sb.pack(side='right', fill='y')
     txt.configure(yscrollcommand=sb.set)

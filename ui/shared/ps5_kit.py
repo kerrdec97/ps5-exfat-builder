@@ -56,11 +56,11 @@ class StatStrip(tk.Frame):
             cell = tk.Frame(self, bg=bg)
             cell.pack(side='left', padx=(0 if i == 0 else gap, 0))
             tk.Label(cell, text=label.upper(),
-                     font=(FONTS['mono_sm'][0], 8, 'bold'), bg=bg,
+                     font=(FONTS['body_strong'][0], 9), bg=bg,
                      fg=COLORS['fg_5'], anchor='w').pack(anchor='w')
             v = tk.StringVar(value='\u2014')
             val = tk.Label(cell, textvariable=v,
-                           font=(FONTS['mono_sm'][0], 11, 'bold'),
+                           font=(FONTS['body_strong'][0], 11),
                            bg=bg, fg=COLORS['teal'], anchor='w')
             val.pack(anchor='w', pady=(2, 0))
             self._cells[key] = (v, val)
@@ -152,17 +152,17 @@ class ControlHero(tk.Frame):
         tcol.pack(side='left', fill='x', expand=True)
         self.title_var = tk.StringVar(value=(title or '').upper())
         tk.Label(tcol, textvariable=self.title_var,
-                 font=(FONTS['h2'][0], 16, 'bold'), bg=COLORS['bg_2'],
+                 font=(FONTS['body_strong'][0], 16), bg=COLORS['bg_2'],
                  fg=COLORS['fg_0'], anchor='w').pack(anchor='w', fill='x')
         self.subtitle_var = tk.StringVar(value=subtitle or '')
         tk.Label(tcol, textvariable=self.subtitle_var,
-                 font=(FONTS['mono_sm'][0], 9), bg=COLORS['bg_2'],
+                 font=(FONTS['body'][0], 9), bg=COLORS['bg_2'],
                  fg=COLORS['fg_4'], anchor='w', justify='left'
                  ).pack(anchor='w', pady=(2, 0))
 
         # status badge (top-right, GameHero style)
         self._badge = tk.Label(title_row, text='',
-                               font=(FONTS['mono_sm'][0], 9, 'bold'),
+                               font=(FONTS['body_strong'][0], 9),
                                bg=COLORS['bg_4'], fg=COLORS['fg_3'],
                                padx=10, pady=4)
         self._badge.pack(side='right', anchor='n')

@@ -1,48 +1,32 @@
 """
-exFAT Image Builder — tkinter/ttk theme module
-==============================================
+exFAT Image Builder — tkinter/ttk theme module (Farewell Edition design system)
+===============================================================================
 
-Drop-in dark theme that mirrors the design system in colors_and_type.css.
-The app already uses tkinter + ttk; this module gives every widget the
-"professional tools" look without rewriting the rest of the codebase.
+The code side of the published design system "PS5 exFAT Image Builder —
+Farewell Edition": graphite surfaces, one electric-blue accent, Windows 11
+geometry (4px control radius, 8px containers, 32px controls).
 
-USAGE
------
-At the top of `exfat_builder.py`, after creating your root:
-
-    import tkinter as tk
-    from tkinter import ttk
-    from tkinter_theme import apply_theme, COLORS, FONTS
+Single call themes the whole application:
 
     root = tk.Tk()
-    apply_theme(root)                 # <-- single call themes everything
-    root.configure(bg=COLORS["bg_1"])
-    root.title("exFAT Image Builder")
+    apply_theme(root)
 
-After this:
-    ttk.Button(root, text="Build All", style="Primary.TButton").pack()
-    ttk.Button(root, text="Cancel",    style="Ghost.TButton").pack()
-    ttk.Button(root, text="⚠ Backport", style="Warn.TButton").pack()
-    ttk.Button(root, text="Delete",    style="Danger.TButton").pack()
+After that every ttk widget picks up the design system, and
+`ui.shared.widgets` builds the custom components (buttons, fields, cards,
+badges, switches, progress bars) on top of the helpers defined here.
 
-STYLE NAMES (use as `style="..."` on a ttk widget)
---------------------------------------------------
-Buttons        : Primary.TButton, Secondary.TButton, Ghost.TButton,
-                 Warn.TButton, Danger.TButton, Success.TButton
-Frames         : Card.TFrame, Panel.TFrame, Surface.TFrame
-Labels         : H1.TLabel, H2.TLabel, H3.TLabel, Eyebrow.TLabel,
-                 Body.TLabel, Muted.TLabel, Meta.TLabel, Mono.TLabel,
-                 Accent.TLabel, Success.TLabel, Warn.TLabel, Danger.TLabel
-Entry/Combo    : Field.TEntry, Field.TCombobox  (light-on-dark — matches app)
-Notebook tabs  : (default — already themed)
-Progress       : Build.Horizontal.TProgressbar
-Treeview       : Library.Treeview  (for game grid / queue list)
-Scrollbar      : (default — already themed)
-LabelFrame     : Card.TLabelframe  (for sectioned cards in Settings/Advanced)
-Separator      : Hairline.TSeparator
+Token names are the keys the application already used (bg_0 … bg_5,
+fg_0 … fg_6, accent, success …). Keys from earlier palettes are kept as
+aliases so no call site breaks.
 
-NON-TTK WIDGETS (tk.Listbox, tk.Text, tk.Canvas) get their defaults set via
-root.option_add — colors are picked up automatically.
+Rounded controls
+----------------
+Native Tk widgets are square. Buttons, fields, checkboxes, radios,
+scrollbars and progress bars here are ttk image elements: small rounded
+rectangles rendered with Pillow at 4x and downsampled. Every image is
+composited onto the surface colour it sits on (no transparency), so it
+renders identically on Windows and Linux. Styles are created lazily per
+surface via ``button_style()``, ``entry_style()`` and friends.
 """
 
 import tkinter as tk
@@ -50,680 +34,971 @@ from tkinter import ttk
 import platform
 
 # ────────────────────────────────────────────────────────────────────
-# COLOR TOKENS  (1:1 with colors_and_type.css)
+# COLOR TOKENS
 # ────────────────────────────────────────────────────────────────────
 COLORS = {
-    # Farewell Edition palette (v4.1.0): a neutral graphite, Windows 11-style
-    # dark theme with a single blue accent. Direction and status colours
-    # follow the community UI proposal in pull request #57 by @alik70952.
-    # Every key of the previous "Dark Purple" palette is kept, so all
-    # existing widgets pick the new values up without code changes; purple
-    # survives as the semantic "backport" colour.
+    # Surfaces — graphite ladder, darkest = window chrome
+    "bg_0":     "#0d0f12",   # sidebar, header, console wells, drop zones
+    "bg_1":     "#131519",   # content canvas, root window
+    "bg_2":     "#191c21",   # cards, panels, tables, dialogs
+    "bg_3":     "#20242a",   # secondary button, hover row, active nav, menus
+    "bg_4":     "#272b32",   # hover on bg_3, scrollbar thumb
+    "bg_5":     "#30353c",   # pressed, progress track
 
-    # Backgrounds — deepest (sunken log / status bar) to lightest (pressed)
-    "bg_0":     "#0e1014",
-    "bg_1":     "#14171c",   # app background
-    "bg_2":     "#1a1e24",   # header, sidebar, cards
-    "bg_3":     "#21262d",   # raised cards, inputs on cards
-    "bg_4":     "#292f37",   # panels / hover
-    "bg_5":     "#333a44",   # selected / pressed
+    # Lines
+    "border_1": "#1e2126",   # row dividers
+    "border_2": "#262a30",   # card / header / sidebar hairlines
+    "border_3": "#30353c",   # buttons, dialogs, menus
+    "border_4": "#3c424a",   # hover borders
+    "border_control": "#6a717b",  # input / checkbox / switch outline (3:1)
 
-    # Borders — subtle hairlines up to strong outlines
-    "border_1": "#1e2329",
-    "border_2": "#282e36",
-    "border_3": "#343b45",
-    "border_4": "#444c58",
+    # Text
+    "fg_0":     "#f3f5f8",   # headings
+    "fg_1":     "#dce0e5",   # body
+    "fg_2":     "#bcc2ca",   # emphasised secondary
+    "fg_3":     "#9da4ad",   # secondary text, idle icons
+    "fg_4":     "#8a919b",   # meta, placeholders (not on bg_4)
+    "fg_5":     "#6b727c",   # disabled only
+    "fg_6":     "#454b53",   # decorative only
 
-    # Foregrounds — heading to faintest hint text
-    "fg_0":     "#f4f6f9",   # headings / primary text
-    "fg_1":     "#e1e5ea",
-    "fg_2":     "#c6ccd4",
-    "fg_3":     "#9ea7b2",   # secondary text
-    "fg_4":     "#848d99",
-    "fg_5":     "#6a7380",   # meta / disabled
-    "fg_6":     "#4b535e",
-
-    # Dark fields (Step 35 / v2.2.16): text inputs stay dark so they never
-    # glare against the UI.
-    "field_bg": "#11141a",
-    "field_fg": "#e1e5ea",
-    "field_select_bg": "#2f7fef",
+    # Fields
+    "field_bg": "#1d2026",
+    "field_fg": "#dce0e5",
+    "field_select_bg": "#2a6de8",
     "field_select_fg": "#ffffff",
 
-    # Accent — one blue for primary actions, focus and selection.
-    # #2f7fef keeps white button text above 3:1 and reads at ~4.6:1 as text
-    # on the app background.
-    "accent":     "#2f7fef",
-    "accent_hi":  "#6ea8fe",
-    "accent_lo":  "#17304f",
-    "accent_08":  "#131c27",   # opaque ~8% accent over bg_1
-    "accent_15":  "#172539",
-    "accent_pressed": "#2465c4",
+    # Accent — electric blue
+    "accent":         "#2a6de8",
+    "accent_hover":   "#2766d9",
+    "accent_pressed": "#2259c0",
+    "accent_hi":      "#6ea8ff",
+    "accent_lo":      "#122340",
+    "accent_08":      "#121a28",
+    "on_accent":      "#ffffff",
+    "focus":          "#6ea8ff",
 
     # Status
-    "success":    "#45c7a5",
-    "success_hi": "#72ddc0",
-    "success_bg": "#102720",
-    "success_ok": "#00ff41",   # terminal phosphor green — klog only;
-                                # intentionally retina-burning since
-                                # klog is meant to evoke a CRT terminal
+    "success":    "#34c48a", "success_hi": "#4fd39b", "success_bg": "#0f2a20",
+    "warn":       "#e0a030", "warn_hi":    "#f0b443", "warn_bg":    "#2d220c",
+    "danger":     "#e5484d", "danger_hi":  "#ff7a7f", "danger_bg":  "#33161a",
+    "danger_fill": "#c62f39", "danger_fill_hover": "#b22a33",
 
-    "warn":       "#e1ad56",
-    "warn_hi":    "#f0c875",
-    "warn_bg":    "#2b210f",
-
-    "danger":     "#df6676",
-    "danger_hi":  "#ef8b98",
-    "danger_bg":  "#2b141a",
-
-    "info_bg":    "#111d2c",
-
-    # Confidence dots (Dump Rename)
-    "conf_clean": "#45c7a5",
-    "conf_guess": "#e1ad56",
-    "conf_fail":  "#df6676",
-
-    # Purple — semantic "backport" colour (no longer the global accent)
-    "purple":     "#b58cff",
-    "purple_hi":  "#c9adff",
-    # Teal — ffpkg
-    "teal":       "#50c5c7",
-    "teal_hi":    "#7ddbdd",
-    "teal_bg":    "#102526",
-    "teal_lo":    "#204b4d",
+    "scrim":      "#050608",
 }
+# Legacy keys from earlier palettes — kept as aliases so every existing
+# call site keeps working. Purple and teal are retired: they now resolve
+# to the single accent.
+COLORS.update({
+    "accent_15":  COLORS["accent_lo"],
+    "info_bg":    COLORS["accent_lo"],
+    "purple":     COLORS["accent"],
+    "purple_hi":  COLORS["accent_hi"],
+    "teal":       COLORS["accent"],
+    "teal_hi":    COLORS["accent_hi"],
+    "teal_bg":    COLORS["accent_lo"],
+    "teal_lo":    COLORS["accent_lo"],
+    "success_ok": COLORS["success_hi"],   # klog keeps mono, loses neon
+    "conf_clean": COLORS["success"],
+    "conf_guess": COLORS["warn"],
+    "conf_fail":  COLORS["danger"],
+})
 
 # ────────────────────────────────────────────────────────────────────
 # FONTS
 # ────────────────────────────────────────────────────────────────────
-# tkinter takes (family, size, weight) tuples. Sizes here mirror the CSS
-# scale (px → tk pt; close enough on Windows where 1pt ≈ 1.33px).
-# Font choice: per the v1-bundle/backports-tab.html mock, the design uses
-# Inter (sans) and JetBrains Mono (mono). These are not bundled with
-# Windows by default, so the user needs to install them — but we list
-# Segoe UI / Consolas as fallback so tkinter renders something sensible
-# if Inter/JetBrains Mono aren't on the system.
-#
-# tkinter picks the FIRST family from a comma-separated list at the
-# Tk-level, NOT a CSS-style font-stack — so we pass the preferred name
-# and rely on tk's automatic substitution if the family is missing.
-# On Windows, font registration via tkinter.font.families() can confirm
-# whether the install worked.
-def _pick_font(preferred, fallback):
-    """Return preferred if it's installed, else fallback. Run at theme
-    apply time so we can probe the actual system font list."""
+# Windows 11 ships Segoe UI Variable; Windows 10 has Segoe UI. Tk only knows
+# "normal"/"bold", so semibold comes from the named semibold family. The
+# families are resolved against the installed fonts in apply_theme(); the
+# values below are the Windows 10 fallbacks used until then.
+_IS_WIN = platform.system() == "Windows"
+_SANS = "Segoe UI"
+_SEMI = "Segoe UI Semibold"
+_DISP = "Segoe UI Semibold"
+_MONO = "Consolas" if _IS_WIN else "Cascadia Mono"
+
+
+def _build_fonts():
+    return {
+        # Design-system roles (sizes in points: 1pt = 1.33px at 96 dpi)
+        "display":        (_DISP, 20, "normal"),   # 26px — hero title
+        "title":          (_DISP, 15, "normal"),   # 20px — page / dialog title
+        "stat":           (_DISP, 16, "normal"),   # 22px — stat numbers
+        "subtitle":       (_SEMI, 11, "normal"),   # 15px — card titles
+        "body_strong":    (_SEMI, 10, "normal"),   # 13px
+        "body":           (_SANS, 10, "normal"),   # 13px
+        "caption":        (_SANS, 9, "normal"),    # 12px
+        "caption_strong": (_SEMI, 9, "normal"),
+        "overline":       (_SEMI, 8, "normal"),    # 11px, upper-case text
+        "code":           (_MONO, 9, "normal"),    # 12px paths, IDs, logs
+        "code_sm":        (_MONO, 8, "normal"),    # 11px dense logs
+        # Legacy keys. `mono_sm` was used as a general label font all over
+        # the app; it is now the sans caption — real monospace is `code`.
+        "h1":      (_DISP, 20, "normal"),
+        "h2":      (_DISP, 15, "normal"),
+        "h3":      (_SEMI, 11, "normal"),
+        "eyebrow": (_SEMI, 8, "normal"),
+        "body_b":  (_SEMI, 10, "normal"),
+        "label":   (_SANS, 10, "normal"),
+        "meta":    (_SANS, 9, "normal"),
+        "button":  (_SANS, 10, "normal"),
+        "tab":     (_SANS, 10, "normal"),
+        "mono":    (_MONO, 9, "normal"),
+        "mono_sm": (_SANS, 9, "normal"),
+    }
+
+
+FONTS = _build_fonts()
+
+
+def _resolve_fonts(root):
+    """Pick the best installed families and rebuild FONTS in place."""
+    global _SANS, _SEMI, _DISP, _MONO
     try:
-        from tkinter import font as _tkfont
-        # Build a temporary root only if no default exists; this is
-        # cheap and doesn't display anything.
-        try:
-            installed = set(_tkfont.families())
-        except Exception:
-            installed = set()
-        if preferred in installed:
-            return preferred
+        from tkinter import font as tkfont
+        fams = set(tkfont.families(root))
     except Exception:
-        pass
-    return fallback
+        fams = set()
+
+    def first(*names):
+        for n in names:
+            if n in fams:
+                return n
+        return names[-1]
+
+    _SANS = first("Segoe UI Variable Text", "Segoe UI")
+    if _SANS == "Segoe UI Variable Text":
+        _SEMI = first("Segoe UI Variable Text Semibold",
+                      "Segoe UI Variable Text Semib", "Segoe UI Semibold")
+        _DISP = first("Segoe UI Variable Display Semibold",
+                      "Segoe UI Variable Display Semib", _SEMI)
+    else:
+        _SEMI = _DISP = "Segoe UI Semibold"
+    _MONO = first("Cascadia Mono", "Consolas")
+    FONTS.clear()
+    FONTS.update(_build_fonts())
 
 
-# Set at module-load with platform-default fallbacks. apply_theme will
-# later re-resolve via _pick_font() to use Inter/JetBrains Mono if they're
-# actually installed.
-_SANS_FALLBACK = "Segoe UI" if platform.system() == "Windows" else (
-    ".AppleSystemUIFont" if platform.system() == "Darwin" else "Sans")
-_MONO_FALLBACK = "Consolas" if platform.system() == "Windows" else (
-    "Menlo" if platform.system() == "Darwin" else "DejaVu Sans Mono")
+def font(role, size=None):
+    """Return the font tuple for a design-system role, optionally resized."""
+    f = FONTS.get(role, FONTS["body"])
+    return f if size is None else (f[0], size, f[2])
 
-_SANS = _SANS_FALLBACK
-_MONO = _MONO_FALLBACK
 
-FONTS = {
-    "h1":      (_SANS, 22, "bold"),
-    "h2":      (_SANS, 15, "bold"),
-    "h3":      (_SANS, 12, "bold"),
-    "eyebrow": (_SANS,  9, "bold"),    # render uppercase manually
-    "body":    (_SANS, 10, "normal"),
-    "body_b":  (_SANS, 10, "bold"),
-    "label":   (_SANS,  9, "normal"),
-    "meta":    (_SANS,  8, "normal"),
-    "button":  (_SANS, 10, "normal"),
-    "tab":     (_SANS, 10, "normal"),
-    "mono":    (_MONO, 10, "normal"),
-    "mono_sm": (_MONO,  9, "normal"),
+# ────────────────────────────────────────────────────────────────────
+# SCALE — pixel sizes follow the Windows display scale
+# ────────────────────────────────────────────────────────────────────
+SCALE = 1.0
+
+
+def px(n):
+    """Scale a 96-dpi pixel length to the current display."""
+    return int(round(n * SCALE))
+
+
+# ────────────────────────────────────────────────────────────────────
+# SPACING / RADIUS / SIZES
+# ────────────────────────────────────────────────────────────────────
+SPACING = {
+    "none": 0, "xxs": 2, "xs": 4, "sm": 8, "md": 12, "lg": 16,
+    "xl": 20, "xxl": 24, "xxxl": 32, "huge": 48,
 }
+
+RADIUS = {"none": 0, "xs": 2, "sm": 4, "md": 8, "lg": 8, "xl": 8, "pill": 999}
+
+SIZES = {
+    "header": 48, "sidebar": 232, "sidebar_compact": 56, "nav_item": 36,
+    "control": 32, "control_sm": 28, "row": 36, "row_compact": 28,
+    "icon": 16, "check": 18, "switch_w": 40, "progress": 6,
+    "dialog": 480, "toast": 360,
+}
+
+# ────────────────────────────────────────────────────────────────────
+# IMAGE FACTORY — rounded, anti-aliased, surface-composited
+# ────────────────────────────────────────────────────────────────────
+_IMAGES = {}      # cache: key -> PhotoImage (also keeps references alive)
+_ROOT = [None]
+
+
+def _rgb(c):
+    c = c.lstrip("#")
+    return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def rounded_image(w, h, radius, fill, surface, border=None, bw=1,
+                  ring=None, ring_w=2, gap=1, margin=0, key=None):
+    """Return a cached PhotoImage of a rounded rectangle.
+
+    The control occupies the box inset by `margin`; when `ring` is given a
+    focus ring of `ring_w` is drawn in the margin, `gap` px away from the
+    control. Everything is composited on `surface` (fully opaque).
+    """
+    k = key or ("rr", w, h, radius, fill, surface, border, bw, ring,
+                ring_w, gap, margin)
+    img = _IMAGES.get(k)
+    if img is not None:
+        return img
+    from PIL import Image, ImageDraw, ImageTk
+    sc = 4
+    W, H = w * sc, h * sc
+    im = Image.new("RGB", (W, H), _rgb(surface))
+    d = ImageDraw.Draw(im)
+    m = margin * sc
+    if ring:
+        rr = (radius + margin) * sc
+        d.rounded_rectangle((0, 0, W - 1, H - 1), rr, fill=_rgb(ring))
+        inner = (ring_w) * sc
+        d.rounded_rectangle((inner, inner, W - 1 - inner, H - 1 - inner),
+                            max(0, rr - inner), fill=_rgb(surface))
+    r = radius * sc
+    box = (m, m, W - 1 - m, H - 1 - m)
+    if border and border != fill:
+        d.rounded_rectangle(box, r, fill=_rgb(border))
+        b = bw * sc
+        d.rounded_rectangle((box[0] + b, box[1] + b, box[2] - b, box[3] - b),
+                            max(0, r - b), fill=_rgb(fill))
+    else:
+        d.rounded_rectangle(box, r, fill=_rgb(fill))
+    im = im.resize((w, h), Image.LANCZOS)
+    img = ImageTk.PhotoImage(im, master=_ROOT[0])
+    _IMAGES[k] = img
+    return img
+
+
+def surface_of(widget, default=None):
+    """Best-effort background colour of a widget (tk or ttk)."""
+    w = widget
+    for _ in range(6):
+        if w is None:
+            break
+        try:
+            bg = w.cget("bg")
+            if bg:
+                return bg if bg.startswith("#") else _named_to_hex(w, bg)
+        except Exception:
+            pass
+        try:
+            st = w.cget("style") or w.winfo_class()
+            bg = ttk.Style(w).lookup(st, "background")
+            if bg:
+                return bg if bg.startswith("#") else _named_to_hex(w, bg)
+        except Exception:
+            pass
+        try:
+            w = w.master
+        except Exception:
+            break
+    return default or COLORS["bg_1"]
+
+
+def _named_to_hex(w, name):
+    try:
+        r, g, b = w.winfo_rgb(name)
+        return "#%02x%02x%02x" % (r >> 8, g >> 8, b >> 8)
+    except Exception:
+        return COLORS["bg_1"]
+
+
+def _skey(surface):
+    return surface.lstrip("#").lower()
+
+
+# ────────────────────────────────────────────────────────────────────
+# BUTTON STYLES (lazy, per variant / size / surface)
+# ────────────────────────────────────────────────────────────────────
+# visual box = control height; the ttk widget adds a 3px margin on every
+# side that carries the keyboard focus ring.
+_FOCUS_MARGIN = 3
+
+BUTTON_VARIANTS = {
+    #           fill        border      hover_fill     hover_border    pressed        fg           font
+    "primary":   ("accent",      "accent",      "accent_hover",      "accent_hover",      "accent_pressed",    "on_accent", "body_strong"),
+    "secondary": ("bg_3",        "border_3",    "bg_4",              "border_4",          "bg_5",              "fg_1",      "body"),
+    "subtle":    (None,          None,          "bg_3",              "bg_3",              "bg_4",              "fg_1",      "body"),
+    "danger":    ("danger_fill", "danger_fill", "danger_fill_hover", "danger_fill_hover", "danger_fill_hover", "on_accent", "body_strong"),
+    # Toggle "on" look for segmented / selected buttons
+    "selected":  ("bg_5",        "border_4",    "bg_5",              "border_4",          "bg_5",              "fg_0",      "body_strong"),
+    # Quiet accent text button (links in cards)
+    "link":      (None,          None,          "bg_3",              "bg_3",              "bg_4",              "accent_hi", "body"),
+}
+BUTTON_ALIASES = {
+    "ghost": "secondary", "default": "secondary", "success": "primary",
+    "go": "primary", "warn": "secondary", "backport": "secondary",
+    "purple": "secondary", "success_done": "secondary",
+    "danger_ghost": "secondary", "danger_filled": "danger",
+}
+_BUTTON_SIZES = {"md": 32, "sm": 28, "lg": 36}
+
+
+def _c(tok, surface):
+    return surface if tok is None else COLORS.get(tok, tok)
+
+
+def button_style(variant="secondary", size="md", surface=None, square=False):
+    """Create (once) and return the ttk style name for a button."""
+    variant = BUTTON_ALIASES.get(variant, variant)
+    if variant not in BUTTON_VARIANTS:
+        variant = "secondary"
+    surface = surface or COLORS["bg_1"]
+    name = "XB%s%s%s.%s.TButton" % (variant.capitalize(), size.capitalize(),
+                                      "Sq" if square else "", _skey(surface))
+    root = _ROOT[0]
+    if root is None:
+        return "TButton"
+    st = ttk.Style(root)
+    if name in _CREATED:
+        return name
+    fill, border, hfill, hborder, pfill, fg, ftok = BUTTON_VARIANTS[variant]
+    hpx = px(_BUTTON_SIZES.get(size, 32))
+    m = px(_FOCUS_MARGIN)
+    r = px(4)
+    w = h = hpx + 2 * m
+    sf = surface
+    ring = COLORS["focus"]
+
+    def img(fl, bd, rg=None):
+        return rounded_image(w, h, r, _c(fl, sf), sf, _c(bd, sf), bw=1,
+                             ring=rg, ring_w=px(2), margin=m)
+
+    dis_fill = None if variant in ("subtle", "link") else (
+        "bg_2" if sf != COLORS["bg_2"] else "bg_3")
+    dis_border = None if variant in ("subtle", "link") else "border_2"
+    e = "XB.%s.%s%s.%s.border" % (variant, size, "sq" if square else "", _skey(sf))
+    try:
+        st.element_create(
+            e, "image", img(fill, border),
+            ("disabled", img(dis_fill, dis_border)),
+            ("pressed", img(pfill, hborder)),
+            ("focus", "active", img(hfill, hborder, ring)),
+            ("active", img(hfill, hborder)),
+            ("focus", img(fill, border, ring)),
+            border=m + r + 1, padding=0, sticky="nsew")
+    except tk.TclError:
+        pass
+    st.layout(name, [(e, {"sticky": "nsew", "children": [
+        ("Button.padding", {"sticky": "nsew", "children": [
+            ("Button.label", {"sticky": "nsew"})]})]})])
+    try:
+        from tkinter import font as tkfont
+        line = tkfont.Font(root=root, font=FONTS[ftok]).metrics("linespace")
+    except Exception:
+        line = px(18)
+    total = hpx + 2 * m
+    if square:
+        pad_v = pad_h = max(0, (total - px(16)) // 2)
+    else:
+        pad_v = max(0, (total - max(line, px(16))) // 2)
+        pad_h = m + px(12 if size != "sm" else 10)
+    st.configure(name, foreground=COLORS[fg], background=sf,
+                 font=FONTS[ftok], padding=(pad_h, pad_v, pad_h,
+                                            total - pad_v - max(line, px(16)) if not square else pad_v),
+                 anchor="center", relief="flat", borderwidth=0,
+                 focusthickness=0, width=0)
+    st.map(name, foreground=[("disabled", COLORS["fg_5"])],
+           background=[("!disabled", sf)])
+    _CREATED.add(name)
+    return name
+
+
+_CREATED = set()
+
+
+# ────────────────────────────────────────────────────────────────────
+# FIELD STYLES (entry / combobox / spinbox), per surface
+# ────────────────────────────────────────────────────────────────────
+def entry_style(surface=None, kind="TEntry"):
+    """ttk style for Entry/Combobox/Spinbox fields on `surface`."""
+    surface = surface or COLORS["bg_1"]
+    name = "XB.%s.%s" % (_skey(surface), kind)
+    root = _ROOT[0]
+    if root is None:
+        return kind
+    if name in _CREATED:
+        return name
+    st = ttk.Style(root)
+    hpx = px(32)
+    r = px(4)
+    sf = surface
+    C = COLORS
+
+    def img(bd, fl="field_bg", bw=1):
+        return rounded_image(hpx, hpx, r, C[fl], sf, C[bd], bw=bw)
+
+    base = "Entry" if kind == "TEntry" else kind[1:]
+    e = "XB.field.%s.%s" % (_skey(sf), base)
+    try:
+        st.element_create(
+            e, "image", img("border_control"),
+            ("disabled", img("border_3", "bg_2" if sf != C["bg_2"] else "bg_1")),
+            ("invalid", img("danger", bw=px(2))),
+            ("focus", img("focus", bw=px(2))),
+            ("hover", img("fg_4")),
+            border=r + px(2), padding=(px(12), px(6)), sticky="nsew")
+    except tk.TclError:
+        pass
+    if kind == "TEntry":
+        layout = [(e, {"sticky": "nsew", "children": [
+            ("Entry.padding", {"sticky": "nsew", "children": [
+                ("Entry.textarea", {"sticky": "nsew"})]})]})]
+    elif kind == "TCombobox":
+        arrow = "XB.arrow.%s" % _skey(sf)
+        try:
+            from ui.icons import icon_image
+            st.element_create(
+                arrow, "image",
+                icon_image("chevron_down", 16, C["fg_3"], C["field_bg"]),
+                ("disabled", icon_image("chevron_down", 16, C["fg_5"],
+                                        C["bg_2"] if sf != C["bg_2"] else C["bg_1"])),
+                sticky="", padding=(px(4), 0, 0, 0))
+        except Exception:
+            arrow = "Combobox.downarrow"
+        layout = [(e, {"sticky": "nsew", "children": [
+            (arrow, {"side": "right", "sticky": "ns"}),
+            ("Combobox.padding", {"sticky": "nsew", "children": [
+                ("Combobox.textarea", {"sticky": "nsew"})]})]})]
+    else:  # TSpinbox
+        layout = [(e, {"sticky": "nsew", "children": [
+            ("Spinbox.uparrow", {"side": "top", "sticky": "e"}),
+            ("Spinbox.downarrow", {"side": "bottom", "sticky": "e"}),
+            ("Spinbox.padding", {"sticky": "nsew", "children": [
+                ("Spinbox.textarea", {"sticky": "nsew"})]})]})]
+    st.layout(name, layout)
+    st.configure(name, foreground=C["field_fg"], fieldbackground=C["field_bg"],
+                 background=sf, insertcolor=C["fg_0"],
+                 selectbackground=C["field_select_bg"],
+                 selectforeground=C["field_select_fg"],
+                 font=FONTS["body"], padding=0, arrowcolor=C["fg_3"],
+                 arrowsize=px(12))
+    st.map(name,
+           foreground=[("disabled", C["fg_5"])],
+           fieldbackground=[("readonly", C["field_bg"]),
+                            ("disabled", C["bg_2"])],
+           selectbackground=[("readonly", "!focus", C["field_bg"]),
+                             ("readonly", "focus", C["field_bg"])],
+           selectforeground=[("readonly", C["field_fg"])])
+    _CREATED.add(name)
+    return name
+
+
+# ────────────────────────────────────────────────────────────────────
+# CHECKBOX / RADIO STYLES, per surface
+# ────────────────────────────────────────────────────────────────────
+def _check_images(sf, radio=False):
+    from PIL import Image, ImageDraw, ImageTk
+    C = COLORS
+    box = px(18)
+    m = px(3)
+    size = box + 2 * m
+    out = {}
+    states = {
+        "off":       ("field_bg", "border_control", None),
+        "off_hover": ("bg_3",     "fg_4",           None),
+        "on":        ("accent",   "accent",         "on_accent"),
+        "on_hover":  ("accent_hover", "accent_hover", "on_accent"),
+        "dis":       ("bg_2" if sf != C["bg_2"] else "bg_1", "border_3", None),
+        "dis_on":    ("bg_5",     "bg_5",           "fg_5"),
+        "alt":       ("accent",   "accent",         "on_accent"),
+    }
+    for nm, (fl, bd, mark) in states.items():
+        for focus in (False, True):
+            k = ("chk", radio, sf, nm, focus, box)
+            if k in _IMAGES:
+                out[(nm, focus)] = _IMAGES[k]
+                continue
+            sc = 4
+            S = size * sc
+            im = Image.new("RGB", (S, S), _rgb(sf))
+            d = ImageDraw.Draw(im)
+            M = m * sc
+            if focus:
+                if radio:
+                    d.ellipse((0, 0, S - 1, S - 1), fill=_rgb(C["focus"]))
+                    i = px(2) * sc
+                    d.ellipse((i, i, S - 1 - i, S - 1 - i), fill=_rgb(sf))
+                else:
+                    d.rounded_rectangle((0, 0, S - 1, S - 1), (px(4) + m) * sc,
+                                        fill=_rgb(C["focus"]))
+                    i = px(2) * sc
+                    d.rounded_rectangle((i, i, S - 1 - i, S - 1 - i),
+                                        (px(4) + m) * sc - i, fill=_rgb(sf))
+            bx = (M, M, S - 1 - M, S - 1 - M)
+            b = max(1, px(1)) * sc
+            if radio:
+                d.ellipse(bx, fill=_rgb(C[bd]))
+                d.ellipse((bx[0] + b, bx[1] + b, bx[2] - b, bx[3] - b),
+                          fill=_rgb(C[fl]))
+                if mark and nm != "alt":
+                    c = S / 2
+                    rr = box * sc * 0.22
+                    d.ellipse((c - rr, c - rr, c + rr, c + rr), fill=_rgb(C[mark]))
+            else:
+                rad = px(4) * sc
+                d.rounded_rectangle(bx, rad, fill=_rgb(C[bd]))
+                d.rounded_rectangle((bx[0] + b, bx[1] + b, bx[2] - b, bx[3] - b),
+                                    max(0, rad - b), fill=_rgb(C[fl]))
+                if mark:
+                    lw = max(2, int(px(2) * sc * 0.9))
+                    if nm == "alt":
+                        y = S / 2
+                        d.line((S * 0.33, y, S * 0.67, y), fill=_rgb(C[mark]), width=lw)
+                    else:
+                        pts = [(S * 0.32, S * 0.52), (S * 0.45, S * 0.64),
+                               (S * 0.69, S * 0.38)]
+                        d.line(pts, fill=_rgb(C[mark]), width=lw, joint="curve")
+            img = ImageTk.PhotoImage(im.resize((size, size), Image.LANCZOS),
+                                     master=_ROOT[0])
+            _IMAGES[k] = img
+            out[(nm, focus)] = img
+    return out
+
+
+def check_style(surface=None, radio=False):
+    """ttk style for a Checkbutton (or Radiobutton) on `surface`."""
+    surface = surface or COLORS["bg_1"]
+    kind = "TRadiobutton" if radio else "TCheckbutton"
+    name = "XB.%s.%s" % (_skey(surface), kind)
+    root = _ROOT[0]
+    if root is None:
+        return kind
+    if name in _CREATED:
+        return name
+    st = ttk.Style(root)
+    I = _check_images(surface, radio)
+    e = "XB.ind.%s.%s" % (_skey(surface), "r" if radio else "c")
+    try:
+        st.element_create(
+            e, "image", I[("off", False)],
+            ("disabled", "selected", I[("dis_on", False)]),
+            ("disabled", I[("dis", False)]),
+            ("alternate", I[("alt", False)]),
+            ("selected", "focus", I[("on", True)]),
+            ("selected", "active", I[("on_hover", False)]),
+            ("selected", I[("on", False)]),
+            ("focus", I[("off", True)]),
+            ("active", I[("off_hover", False)]),
+            sticky="")
+    except tk.TclError:
+        pass
+    base = "Radiobutton" if radio else "Checkbutton"
+    st.layout(name, [(base + ".padding", {"sticky": "nsew", "children": [
+        (e, {"side": "left", "sticky": ""}),
+        (base + ".label", {"side": "left", "sticky": "w"})]})])
+    st.configure(name, background=surface, foreground=COLORS["fg_1"],
+                 font=FONTS["body"], padding=(0, px(2), px(4), px(2)),
+                 focusthickness=0, indicatormargin=0)
+    st.map(name, foreground=[("disabled", COLORS["fg_5"])],
+           background=[("active", surface)])
+    _CREATED.add(name)
+    return name
+
+
+# ────────────────────────────────────────────────────────────────────
+# SCROLLBAR / PROGRESS STYLES, per surface
+# ────────────────────────────────────────────────────────────────────
+def scrollbar_style(surface=None, orient="vertical"):
+    surface = surface or COLORS["bg_1"]
+    O = "Vertical" if orient == "vertical" else "Horizontal"
+    name = "XB.%s.%s.TScrollbar" % (_skey(surface), O)
+    root = _ROOT[0]
+    if root is None or name in _CREATED:
+        return name if root else O + ".TScrollbar"
+    st = ttk.Style(root)
+    t = px(10)
+    L = px(40)
+    w, h = (t, L) if O == "Vertical" else (L, t)
+    th = rounded_image(w, h, px(3), COLORS["bg_4"], surface, margin=px(2),
+                       key=("sb", O, surface, "n"))
+    tha = rounded_image(w, h, px(3), COLORS["bg_5"], surface, margin=px(2),
+                        key=("sb", O, surface, "a"))
+    tr = rounded_image(w, h, 0, surface, surface, key=("sbt", O, surface))
+    e = "XB%s.%s.Scrollbar.thumb" % (_skey(surface), O)
+    et = "XB%s.%s.Scrollbar.trough" % (_skey(surface), O)
+    try:
+        st.element_create(e, "image", th, ("pressed", tha), ("active", tha),
+                          border=px(5), sticky="nsew")
+        st.element_create(et, "image", tr, border=0, sticky="nsew")
+    except tk.TclError:
+        pass
+    st.layout(name, [(et, {"sticky": "nsew", "children": [
+        (e, {"expand": "1", "sticky": "nsew"})]})])
+    st.configure(name, width=t, arrowsize=0)
+    _CREATED.add(name)
+    return name
+
+
+def progress_style(surface=None, tone="accent", thickness=6):
+    surface = surface or COLORS["bg_2"]
+    name = "XB%s%d.%s.Horizontal.TProgressbar" % (tone.capitalize(), thickness,
+                                                   _skey(surface))
+    root = _ROOT[0]
+    if root is None or name in _CREATED:
+        return name if root else "Horizontal.TProgressbar"
+    st = ttk.Style(root)
+    t = px(thickness)
+    fill = COLORS.get(tone, COLORS["accent"])
+    tr = rounded_image(px(24), t, px(2), COLORS["bg_5"], surface,
+                       key=("pbt", surface, t))
+    pb = rounded_image(px(24), t, px(2), fill, COLORS["bg_5"],
+                       key=("pbb", fill, t))
+    e1 = "XB%s%d.Horizontal.Progressbar.trough" % (_skey(surface), t)
+    e2 = "XB%s%d.Horizontal.Progressbar.pbar" % (fill.lstrip("#"), t)
+    cap = px(3)
+    try:
+        st.element_create(e1, "image", tr, border=(cap, 0, cap, 0),
+                          padding=0, sticky="nsew")
+    except tk.TclError:
+        pass
+    try:
+        st.element_create(e2, "image", pb, border=(cap, 0, cap, 0),
+                          padding=0, sticky="nsew")
+    except tk.TclError:
+        pass
+    st.layout(name, [(e1, {"sticky": "nsew", "children": [
+        (e2, {"side": "left", "sticky": "ns"})]})])
+    st.configure(name, thickness=t, background=surface)
+    _CREATED.add(name)
+    return name
 
 
 # ────────────────────────────────────────────────────────────────────
 # THEME APPLICATION
 # ────────────────────────────────────────────────────────────────────
 def apply_theme(root: tk.Tk) -> ttk.Style:
-    """Apply the dark theme to `root`. Returns the ttk.Style for further tweaks."""
-    # ── Probe for Inter / JetBrains Mono now that we have a Tk root.
-    # If installed, replace the family in every FONTS entry so the
-    # design-system fonts are used; otherwise fall back to Segoe UI /
-    # Consolas (already in place from module load).
-    global _SANS, _MONO
+    """Apply the design system to `root`. Returns the ttk.Style."""
+    global SCALE
+    _ROOT[0] = root
     try:
-        from tkinter import font as _tkfont
-        installed = set(_tkfont.families())
-        if "Inter" in installed:
-            _SANS = "Inter"
-        if "JetBrains Mono" in installed:
-            _MONO = "JetBrains Mono"
-        # Re-build FONTS with the resolved families
-        for key, val in list(FONTS.items()):
-            family, size, weight = val
-            new_family = _SANS if family == _SANS_FALLBACK else (
-                _MONO if family == _MONO_FALLBACK else family)
-            FONTS[key] = (new_family, size, weight)
+        SCALE = max(1.0, round(root.winfo_fpixels("1i") / 96.0 * 4) / 4)
     except Exception:
-        pass
-
+        SCALE = 1.0
+    _resolve_fonts(root)
     C = COLORS
     F = FONTS
 
     style = ttk.Style(root)
-    # 'clam' is the only built-in theme that fully respects color overrides
-    # on Windows. Without this, ttk falls back to the native Windows theme
-    # and most of these configure() calls will be ignored.
     style.theme_use("clam")
 
-    # ── tk option defaults (cover non-ttk widgets: Listbox, Text, Menu, Canvas) ──
+    # ── tk option defaults (non-ttk widgets) ──
     root.configure(bg=C["bg_1"])
-    root.option_add("*background",        C["bg_1"])
-    root.option_add("*foreground",        C["fg_1"])
-    root.option_add("*Font",              F["body"])
-    root.option_add("*selectBackground",  C["accent"])
-    root.option_add("*selectForeground",  C["fg_0"])
-    root.option_add("*insertBackground",  C["fg_0"])
+    root.option_add("*background",         C["bg_1"])
+    root.option_add("*foreground",         C["fg_1"])
+    root.option_add("*Font",               F["body"])
+    root.option_add("*selectBackground",   C["field_select_bg"])
+    root.option_add("*selectForeground",   C["field_select_fg"])
+    root.option_add("*insertBackground",   C["fg_0"])
     root.option_add("*highlightThickness", 0)
     root.option_add("*borderWidth",        0)
+    root.option_add("*activeBackground",   C["bg_3"])
+    root.option_add("*activeForeground",   C["fg_0"])
+    root.option_add("*disabledForeground", C["fg_5"])
 
-    root.option_add("*Listbox.background",         C["bg_2"])
-    root.option_add("*Listbox.foreground",         C["fg_1"])
-    root.option_add("*Listbox.selectBackground",   C["accent"])
-    root.option_add("*Listbox.selectForeground",   C["fg_0"])
-    root.option_add("*Listbox.borderWidth",        0)
-    root.option_add("*Listbox.highlightThickness", 1)
+    root.option_add("*Listbox.background",          C["bg_2"])
+    root.option_add("*Listbox.foreground",          C["fg_1"])
+    root.option_add("*Listbox.selectBackground",    C["accent_lo"])
+    root.option_add("*Listbox.selectForeground",    C["fg_0"])
+    root.option_add("*Listbox.borderWidth",         0)
+    root.option_add("*Listbox.highlightThickness",  1)
     root.option_add("*Listbox.highlightBackground", C["border_2"])
-    root.option_add("*Listbox.highlightColor",     C["accent"])
-    root.option_add("*Listbox.activeStyle",        "none")
+    root.option_add("*Listbox.highlightColor",      C["focus"])
+    root.option_add("*Listbox.activeStyle",         "none")
 
-    root.option_add("*Text.background",      C["bg_0"])
-    root.option_add("*Text.foreground",      C["fg_1"])
-    root.option_add("*Text.insertBackground", C["accent"])
-    root.option_add("*Text.borderWidth",     0)
+    root.option_add("*Text.background",       C["bg_0"])
+    root.option_add("*Text.foreground",       C["fg_1"])
+    root.option_add("*Text.insertBackground", C["fg_0"])
+    root.option_add("*Text.borderWidth",      0)
     root.option_add("*Text.highlightThickness", 0)
-    root.option_add("*Text.font",            F["mono"])
-    root.option_add("*Text.padX",            8)
-    root.option_add("*Text.padY",            8)
+    root.option_add("*Text.font",             F["code_sm"])
+    root.option_add("*Text.padX",             px(10))
+    root.option_add("*Text.padY",             px(8))
+    root.option_add("*Text.selectBackground", C["accent_lo"])
 
     root.option_add("*Menu.background",          C["bg_3"])
     root.option_add("*Menu.foreground",          C["fg_1"])
-    root.option_add("*Menu.activeBackground",    C["accent_08"])
-    root.option_add("*Menu.activeForeground",    C["accent"])
+    root.option_add("*Menu.activeBackground",    C["bg_4"])
+    root.option_add("*Menu.activeForeground",    C["fg_0"])
     root.option_add("*Menu.borderWidth",         1)
     root.option_add("*Menu.activeBorderWidth",   0)
     root.option_add("*Menu.relief",              "flat")
+    root.option_add("*Menu.font",                F["body"])
 
-    root.option_add("*Canvas.background",       C["bg_1"])
+    root.option_add("*Canvas.background",         C["bg_1"])
     root.option_add("*Canvas.highlightThickness", 0)
 
-    # ── ttk base ──
-    style.configure(".",
-                    background=C["bg_1"],
-                    foreground=C["fg_1"],
-                    fieldbackground=C["field_bg"],
-                    bordercolor=C["border_2"],
-                    lightcolor=C["border_2"],
-                    darkcolor=C["border_2"],
-                    troughcolor=C["bg_4"],
-                    focuscolor=C["accent"],
-                    selectbackground=C["accent"],
-                    selectforeground=C["fg_0"],
-                    insertcolor=C["fg_0"],
-                    font=F["body"])
-
-    # ── TFrame ──
-    style.configure("TFrame",         background=C["bg_1"])
-    style.configure("Surface.TFrame", background=C["bg_1"])
-    style.configure("Card.TFrame", background=C["bg_2"], relief="solid",
-                    borderwidth=1, bordercolor=C["border_3"])
-    style.configure("Panel.TFrame", background=C["bg_3"], relief="solid",
-                    borderwidth=1, bordercolor=C["border_3"])
-
-    # ── TLabelframe (sectioned cards) ──
-    style.configure("TLabelframe",
-                    background=C["bg_2"],
-                    bordercolor=C["border_2"],
-                    relief="solid",
-                    borderwidth=1)
-    style.configure("TLabelframe.Label",
-                    background=C["bg_2"],
-                    foreground=C["accent"],
-                    font=F["h3"])
-    style.configure("Card.TLabelframe",
-                    background=C["bg_2"],
-                    bordercolor=C["border_3"],
-                    borderwidth=1, relief="solid", padding=16)
-    style.configure("Card.TLabelframe.Label",
-                    background=C["bg_2"], foreground=C["accent"], font=F["h3"])
-
-    # ── TLabel variants ──
-    style.configure("TLabel",        background=C["bg_1"], foreground=C["fg_1"], font=F["body"])
-    style.configure("H1.TLabel",     foreground=C["accent"], font=F["h1"])
-    style.configure("H2.TLabel",     foreground=C["fg_0"],   font=F["h2"])
-    style.configure("H3.TLabel",     foreground=C["accent"], font=F["h3"])
-    style.configure("Eyebrow.TLabel", foreground=C["accent"], font=F["eyebrow"])
-    style.configure("Body.TLabel",   foreground=C["fg_1"],   font=F["body"])
-    style.configure("Muted.TLabel",  foreground=C["fg_4"],   font=F["body"])
-    style.configure("Meta.TLabel",   foreground=C["fg_5"],   font=F["meta"])
-    style.configure("Mono.TLabel",   foreground=C["accent"], font=F["mono"], background=C["bg_4"])
-    style.configure("Accent.TLabel", foreground=C["accent"], font=F["body_b"])
-    style.configure("Success.TLabel", foreground=C["success_hi"], font=F["body"])
-    style.configure("Warn.TLabel",   foreground=C["warn_hi"], font=F["body"])
-    style.configure("Danger.TLabel", foreground=C["danger_hi"], font=F["body"])
-    style.configure("OnCard.TLabel", background=C["bg_2"], foreground=C["fg_1"])
-    style.configure("OnCard.H3.TLabel", background=C["bg_2"], foreground=C["accent"], font=F["h3"])
-    style.configure("OnCard.Muted.TLabel", background=C["bg_2"], foreground=C["fg_4"])
-
-    # ── TButton — primary ──
-    style.configure("TButton",
-                    background=C["bg_4"],
-                    foreground=C["fg_1"],
-                    bordercolor=C["border_3"],
-                    lightcolor=C["border_3"],
-                    darkcolor=C["border_3"],
-                    relief="flat",
-                    padding=(14, 7),
-                    focuscolor=C["accent"],
-                    font=F["button"])
-    style.map("TButton",
-              background=[("active", C["bg_5"]),
-                          ("pressed", C["bg_3"]),
-                          ("disabled", C["bg_2"])],
-              foreground=[("disabled", C["fg_6"])],
-              bordercolor=[("focus", C["accent"]),
-                           ("active", C["border_4"])])
-
-    style.configure("Primary.TButton",
-                    background=C["accent"], foreground=C["fg_0"],
-                    bordercolor=C["accent"], lightcolor=C["accent"], darkcolor=C["accent"],
-                    padding=(16, 8), font=F["body_b"], relief="flat",
-                    focuscolor=C["fg_0"])
-    style.map("Primary.TButton",
-              background=[("active", C["accent_hi"]),
-                          ("pressed", C["accent_pressed"]),
-                          ("disabled", C["bg_3"])],
-              foreground=[("disabled", C["fg_6"])],
-              bordercolor=[("focus", C["fg_0"])],
-              lightcolor=[("focus", C["fg_0"])],
-              darkcolor=[("focus", C["fg_0"])])
-
-    style.configure("Secondary.TButton",
-                    background=C["bg_4"], foreground=C["accent"],
-                    bordercolor=C["accent"], lightcolor=C["accent"], darkcolor=C["accent"],
-                    padding=(14, 7), relief="flat", focuscolor=C["accent_hi"])
-    style.map("Secondary.TButton",
-              background=[("active", C["accent_08"]), ("pressed", C["accent_15"])],
-              bordercolor=[("focus", C["accent_hi"])],
-              lightcolor=[("focus", C["accent_hi"])],
-              darkcolor=[("focus", C["accent_hi"])])
-
-    style.configure("Ghost.TButton",
-                    background=C["bg_1"], foreground=C["fg_3"],
-                    bordercolor=C["bg_1"], lightcolor=C["bg_1"], darkcolor=C["bg_1"],
-                    padding=(10, 6), relief="flat", focuscolor=C["accent"])
-    style.map("Ghost.TButton",
-              background=[("active", C["bg_3"]), ("pressed", C["bg_4"])],
-              foreground=[("active", C["fg_1"])],
-              bordercolor=[("focus", C["accent"])],
-              lightcolor=[("focus", C["accent"])],
-              darkcolor=[("focus", C["accent"])])
-
-    style.configure("Warn.TButton",
-                    background=C["warn"], foreground="#1a0e00",
-                    bordercolor=C["warn"], lightcolor=C["warn"], darkcolor=C["warn"],
-                    padding=(14, 7), font=F["body_b"], relief="flat",
-                    focuscolor=C["fg_0"])
-    style.map("Warn.TButton",
-              background=[("active", C["warn_hi"]), ("pressed", "#cc8800")],
-              bordercolor=[("focus", C["fg_0"])],
-              lightcolor=[("focus", C["fg_0"])],
-              darkcolor=[("focus", C["fg_0"])])
-
-    style.configure("Danger.TButton",
-                    background=C["danger"], foreground=C["fg_0"],
-                    bordercolor=C["danger"], lightcolor=C["danger"], darkcolor=C["danger"],
-                    padding=(14, 7), font=F["body_b"], relief="flat",
-                    focuscolor=C["fg_0"])
-    style.map("Danger.TButton",
-              background=[("active", C["danger_hi"]), ("pressed", "#c62828")],
-              bordercolor=[("focus", C["fg_0"])],
-              lightcolor=[("focus", C["fg_0"])],
-              darkcolor=[("focus", C["fg_0"])])
-
-    style.configure("Success.TButton",
-                    background=C["success"], foreground=C["fg_0"],
-                    bordercolor=C["success"], lightcolor=C["success"], darkcolor=C["success"],
-                    padding=(14, 7), font=F["body_b"], relief="flat",
-                    focuscolor=C["fg_0"])
-    style.map("Success.TButton",
-              background=[("active", C["success_hi"]), ("pressed", "#388e3c")],
-              bordercolor=[("focus", C["fg_0"])],
-              lightcolor=[("focus", C["fg_0"])],
-              darkcolor=[("focus", C["fg_0"])])
-
-    style.configure("Backport.TButton",
-                    background=C["purple"], foreground=C["fg_0"],
-                    bordercolor=C["purple"], lightcolor=C["purple"], darkcolor=C["purple"],
-                    padding=(14, 7), font=F["body_b"], relief="flat",
-                    focuscolor=C["fg_0"])
-    style.map("Backport.TButton",
-              background=[("active", C["purple_hi"]), ("pressed", "#7d3c98")],
-              bordercolor=[("focus", C["fg_0"])],
-              lightcolor=[("focus", C["fg_0"])],
-              darkcolor=[("focus", C["fg_0"])])
-
-    # ── TCheckbutton / TRadiobutton ──
-    style.configure("TCheckbutton",
-                    background=C["bg_1"], foreground=C["fg_1"],
-                    indicatorcolor=C["bg_4"], indicatorbackground=C["bg_4"],
-                    focuscolor=C["accent"], font=F["body"])
-    style.map("TCheckbutton",
-              indicatorcolor=[("selected", C["accent"]), ("pressed", C["accent_lo"])],
-              foreground=[("disabled", C["fg_6"])])
-    style.configure("OnCard.TCheckbutton", background=C["bg_2"])
-
-    style.configure("TRadiobutton",
-                    background=C["bg_1"], foreground=C["fg_1"],
-                    indicatorcolor=C["bg_4"], focuscolor=C["accent"])
-    style.map("TRadiobutton", indicatorcolor=[("selected", C["accent"])])
-    # On-card radio: same as TRadiobutton but with bg_2 background so it
-    # blends into Card.TFrame surfaces.
-    style.configure("OnCard.TRadiobutton",
-                    background=C["bg_2"], foreground=C["fg_1"],
-                    indicatorcolor=C["bg_4"], focuscolor=C["accent"])
-    style.map("OnCard.TRadiobutton",
-              indicatorcolor=[("selected", C["accent"])])
-
-    # ── TEntry ──
-    # Note: the app's entries are intentionally light-on-dark — matches Windows-form
-    # style. If you want fully-dark entries instead, swap field_bg → bg_4, field_fg → fg_1.
-    style.configure("TEntry",
-                    fieldbackground=C["field_bg"], foreground=C["field_fg"],
-                    bordercolor=C["border_3"], lightcolor=C["border_3"], darkcolor=C["border_3"],
-                    insertcolor=C["accent"], padding=7, relief="flat")
-    style.map("TEntry",
-              bordercolor=[("focus", C["accent"])],
-              lightcolor=[("focus", C["accent"])],
-              darkcolor=[("focus", C["accent"])])
-
-    style.configure("Dark.TEntry",
-                    fieldbackground=C["bg_4"], foreground=C["fg_1"],
-                    insertcolor=C["accent"], padding=6, relief="flat",
-                    bordercolor=C["border_3"], lightcolor=C["border_3"], darkcolor=C["border_3"])
-    style.map("Dark.TEntry", bordercolor=[("focus", C["accent"])])
-
-    # ── TCombobox ──
-    style.configure("TCombobox",
-                    fieldbackground=C["field_bg"], foreground=C["field_fg"],
-                    background=C["bg_4"], arrowcolor=C["fg_2"],
-                    bordercolor=C["border_3"], padding=7, relief="flat")
-    style.map("TCombobox",
-              fieldbackground=[("readonly", C["bg_4"])],
-              foreground=[("readonly", C["fg_1"])],
-              arrowcolor=[("active", C["accent"])],
-              bordercolor=[("focus", C["accent"])])
-    # Dropdown listbox must be themed via option_add
     root.option_add("*TCombobox*Listbox.background",       C["bg_3"])
     root.option_add("*TCombobox*Listbox.foreground",       C["fg_1"])
-    root.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
+    root.option_add("*TCombobox*Listbox.selectBackground", C["bg_5"])
     root.option_add("*TCombobox*Listbox.selectForeground", C["fg_0"])
     root.option_add("*TCombobox*Listbox.borderWidth",      0)
     root.option_add("*TCombobox*Listbox.font",             F["body"])
 
-    # ── TNotebook (the main tab strip) ──
-    style.configure("TNotebook",
-                    background=C["bg_1"], bordercolor=C["bg_1"],
-                    borderwidth=0, tabmargins=(8, 8, 8, 0))
-    style.configure("TNotebook.Tab",
-                    background=C["bg_1"], foreground=C["fg_4"],
-                    bordercolor=C["bg_1"], lightcolor=C["bg_1"], darkcolor=C["bg_1"],
-                    padding=(14, 7), font=F["tab"])
+    # ── ttk base ──
+    style.configure(".",
+                    background=C["bg_1"], foreground=C["fg_1"],
+                    fieldbackground=C["field_bg"],
+                    bordercolor=C["border_2"], lightcolor=C["bg_1"],
+                    darkcolor=C["bg_1"], troughcolor=C["bg_5"],
+                    focuscolor=C["focus"],
+                    selectbackground=C["field_select_bg"],
+                    selectforeground=C["field_select_fg"],
+                    insertcolor=C["fg_0"], font=F["body"])
+
+    style.configure("TFrame",         background=C["bg_1"])
+    style.configure("Surface.TFrame", background=C["bg_1"])
+    style.configure("Card.TFrame", background=C["bg_2"], relief="solid",
+                    borderwidth=1, bordercolor=C["border_2"])
+    style.configure("Panel.TFrame", background=C["bg_0"], relief="solid",
+                    borderwidth=1, bordercolor=C["border_2"])
+
+    style.configure("TLabelframe", background=C["bg_2"],
+                    bordercolor=C["border_2"], relief="solid", borderwidth=1)
+    style.configure("TLabelframe.Label", background=C["bg_2"],
+                    foreground=C["fg_0"], font=F["subtitle"])
+    style.configure("Card.TLabelframe", background=C["bg_2"],
+                    bordercolor=C["border_2"], borderwidth=1, relief="solid",
+                    padding=px(16))
+    style.configure("Card.TLabelframe.Label", background=C["bg_2"],
+                    foreground=C["fg_0"], font=F["subtitle"])
+
+    style.configure("TLabel", background=C["bg_1"], foreground=C["fg_1"],
+                    font=F["body"])
+    for nm, fg, f in (("H1", "fg_0", "display"), ("H2", "fg_0", "title"),
+                      ("H3", "fg_0", "subtitle"), ("Eyebrow", "fg_4", "overline"),
+                      ("Body", "fg_1", "body"), ("Muted", "fg_3", "body"),
+                      ("Meta", "fg_4", "caption"), ("Mono", "fg_2", "code"),
+                      ("Accent", "accent_hi", "body_strong"),
+                      ("Success", "success_hi", "body"),
+                      ("Warn", "warn_hi", "body"),
+                      ("Danger", "danger_hi", "body")):
+        style.configure(nm + ".TLabel", foreground=C[fg], font=F[f])
+    style.configure("OnCard.TLabel", background=C["bg_2"], foreground=C["fg_1"])
+    style.configure("OnCard.H3.TLabel", background=C["bg_2"],
+                    foreground=C["fg_0"], font=F["subtitle"])
+    style.configure("OnCard.Muted.TLabel", background=C["bg_2"],
+                    foreground=C["fg_3"])
+
+    # ── Buttons: legacy style names map onto the design-system variants ──
+    for legacy, variant in (("TButton", "secondary"),
+                            ("Primary.TButton", "primary"),
+                            ("Secondary.TButton", "secondary"),
+                            ("Ghost.TButton", "subtle"),
+                            ("Warn.TButton", "secondary"),
+                            ("Danger.TButton", "danger"),
+                            ("Success.TButton", "primary"),
+                            ("Backport.TButton", "secondary")):
+        src = button_style(variant, "md", C["bg_1"])
+        style.layout(legacy, style.layout(src))
+        style.configure(legacy, **{k: v for k, v in
+                                   style.configure(src).items()})
+        style.map(legacy, foreground=[("disabled", C["fg_5"])])
+
+    # ── Check / radio ──
+    for legacy, radio, sf in (("TCheckbutton", False, C["bg_1"]),
+                              ("OnCard.TCheckbutton", False, C["bg_2"]),
+                              ("TRadiobutton", True, C["bg_1"]),
+                              ("OnCard.TRadiobutton", True, C["bg_2"])):
+        src = check_style(sf, radio)
+        style.layout(legacy, style.layout(src))
+        style.configure(legacy, **style.configure(src))
+        style.map(legacy, foreground=[("disabled", C["fg_5"])],
+                  background=[("active", sf)])
+
+    # ── Fields ──
+    for legacy, kind in (("TEntry", "TEntry"), ("Dark.TEntry", "TEntry"),
+                         ("Field.TEntry", "TEntry"),
+                         ("TCombobox", "TCombobox"),
+                         ("Field.TCombobox", "TCombobox"),
+                         ("TSpinbox", "TSpinbox")):
+        src = entry_style(C["bg_1"], kind)
+        style.layout(legacy, style.layout(src))
+        style.configure(legacy, **style.configure(src))
+        style.map(legacy, **{k: style.map(src, k) for k in
+                             ("foreground", "fieldbackground",
+                              "selectbackground", "selectforeground")})
+
+    # ── Notebook (any ttk.Notebook still in use) ──
+    style.configure("TNotebook", background=C["bg_1"], borderwidth=0,
+                    tabmargins=(0, 0, 0, 0))
+    style.configure("TNotebook.Tab", background=C["bg_1"],
+                    foreground=C["fg_3"], bordercolor=C["bg_1"],
+                    lightcolor=C["bg_1"], darkcolor=C["bg_1"],
+                    padding=(px(12), px(8)), font=F["body"], borderwidth=0)
     style.map("TNotebook.Tab",
-              background=[("selected", C["bg_2"]), ("active", C["bg_3"])],
-              foreground=[("selected", C["accent"]), ("active", C["fg_1"])],
-              bordercolor=[("selected", C["accent"])],
-              lightcolor=[("selected", C["accent"])])
-    # Custom layout: thicker bottom border on selected tab (the blue underline)
+              background=[("selected", C["bg_1"]), ("active", C["bg_2"])],
+              foreground=[("selected", C["fg_0"]), ("active", C["fg_1"])],
+              font=[("selected", F["body_strong"])])
     style.layout("TNotebook.Tab", [
         ("Notebook.tab", {"sticky": "nswe", "children": [
             ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
-                ("Notebook.label", {"side": "top", "sticky": ""})
-            ]})
-        ]})
-    ])
+                ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
+    style.layout("Hidden.TNotebook.Tab", [])
+    style.configure("Hidden.TNotebook", background=C["bg_1"], borderwidth=0)
 
-    # ── Horizontal.TProgressbar ──
-    style.configure("Horizontal.TProgressbar",
-                    troughcolor=C["bg_4"], background=C["accent"],
-                    bordercolor=C["bg_4"], lightcolor=C["accent"], darkcolor=C["accent"],
-                    thickness=8)
-    style.configure("Build.Horizontal.TProgressbar",
-                    troughcolor=C["bg_4"], background=C["accent"],
-                    bordercolor=C["bg_4"], lightcolor=C["accent"], darkcolor=C["accent"],
-                    thickness=10)
-    style.configure("Success.Horizontal.TProgressbar",
-                    troughcolor=C["bg_4"], background=C["success"],
-                    bordercolor=C["bg_4"], lightcolor=C["success"], darkcolor=C["success"])
+    # ── Progress bars ──
+    for legacy, tone, sf in (("Horizontal.TProgressbar", "accent", C["bg_2"]),
+                             ("Build.Horizontal.TProgressbar", "accent", C["bg_2"]),
+                             ("Success.Horizontal.TProgressbar", "success", C["bg_2"])):
+        src = progress_style(sf, tone)
+        style.layout(legacy, style.layout(src))
+        style.configure(legacy, **style.configure(src))
 
-    # ── Treeview (game library, queue list) ──
-    style.configure("Treeview",
-                    background=C["bg_2"], fieldbackground=C["bg_2"],
-                    foreground=C["fg_1"], bordercolor=C["bg_2"],
-                    rowheight=32, font=F["body"], borderwidth=0)
+    # ── Treeview ──
+    style.configure("Treeview", background=C["bg_2"],
+                    fieldbackground=C["bg_2"], foreground=C["fg_1"],
+                    bordercolor=C["bg_2"], lightcolor=C["bg_2"],
+                    darkcolor=C["bg_2"], rowheight=px(36), font=F["body"],
+                    borderwidth=0)
     style.map("Treeview",
-              background=[("selected", C["accent_15"])],
+              background=[("selected", C["accent_lo"])],
               foreground=[("selected", C["fg_0"])])
-    style.configure("Treeview.Heading",
-                    background=C["bg_4"], foreground=C["fg_3"],
-                    relief="flat", borderwidth=0,
-                    font=(_SANS, 9, "bold"), padding=(12, 9))
+    style.configure("Treeview.Heading", background=C["bg_2"],
+                    foreground=C["fg_2"], relief="flat", borderwidth=0,
+                    bordercolor=C["border_2"], lightcolor=C["bg_2"],
+                    darkcolor=C["border_2"],
+                    font=F["caption_strong"], padding=(px(12), px(8)))
     style.map("Treeview.Heading",
-              background=[("active", C["bg_5"])],
-              foreground=[("active", C["accent"])])
-    style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])  # no border
-
-    # Library variant — taller rows for cover art
-    style.configure("Library.Treeview", rowheight=72, background=C["bg_2"])
+              background=[("active", C["bg_3"])],
+              foreground=[("active", C["fg_0"])])
+    style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+    style.configure("Library.Treeview", rowheight=px(72), background=C["bg_2"])
+    style.configure("Compact.Treeview", rowheight=px(28))
 
     # ── Scrollbars ──
-    style.configure("TScrollbar",
-                    background=C["bg_4"], troughcolor=C["bg_1"],
+    for O in ("Vertical", "Horizontal"):
+        src = scrollbar_style(C["bg_1"], O.lower())
+        style.layout(O + ".TScrollbar", style.layout(src))
+        style.configure(O + ".TScrollbar", **style.configure(src))
+    style.configure("TScrollbar", troughcolor=C["bg_1"], background=C["bg_4"],
                     bordercolor=C["bg_1"], arrowcolor=C["fg_4"],
                     relief="flat", borderwidth=0)
-    style.map("TScrollbar",
-              background=[("active", C["bg_5"]), ("pressed", C["accent_lo"])],
-              arrowcolor=[("active", C["fg_1"])])
-    style.configure("Vertical.TScrollbar", arrowsize=14)
-    style.configure("Horizontal.TScrollbar", arrowsize=14)
 
-    # ── Separator ──
+    # ── Separator / scale ──
     style.configure("TSeparator", background=C["border_2"])
     style.configure("Hairline.TSeparator", background=C["border_2"])
+    style.configure("TScale", background=C["bg_1"], troughcolor=C["bg_5"],
+                    bordercolor=C["bg_1"], lightcolor=C["accent"],
+                    darkcolor=C["accent"])
 
-    # ── Spinbox ──
-    style.configure("TSpinbox",
-                    fieldbackground=C["bg_4"], foreground=C["fg_1"],
-                    background=C["bg_4"], arrowcolor=C["fg_3"],
-                    bordercolor=C["border_3"], lightcolor=C["border_3"], darkcolor=C["border_3"],
-                    insertcolor=C["accent"], padding=6, relief="flat")
-    style.map("TSpinbox",
-              bordercolor=[("focus", C["accent"])],
-              arrowcolor=[("active", C["accent"])])
-
-    # ── Scale (slider) ──
-    style.configure("TScale",
-                    background=C["bg_1"], troughcolor=C["bg_4"],
-                    bordercolor=C["bg_4"], lightcolor=C["accent"], darkcolor=C["accent"])
-
+    # Windows: dark title bars for the root and every Toplevel.
+    try:
+        _dark_title_bar(root)
+        root.bind_class("Toplevel", "<Map>",
+                        lambda e: _dark_title_bar(e.widget), add="+")
+    except Exception:
+        pass
     return style
 
 
+def _dark_title_bar(win):
+    """Ask DWM for a dark caption (Windows 10 2004+ / 11). No-op elsewhere."""
+    if not _IS_WIN:
+        return
+    try:
+        if getattr(win, "_xb_dark_done", False):
+            return
+        import ctypes
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        val = ctypes.c_int(1)
+        for attr in (20, 19):   # DWMWA_USE_IMMERSIVE_DARK_MODE (+ pre-20H1)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(val), ctypes.sizeof(val)) == 0:
+                break
+        # Windows 11: caption colour = window chrome (COLORREF is 0x00BBGGRR)
+        r, g, b = _rgb(COLORS["bg_0"])
+        cref = ctypes.c_int(r | (g << 8) | (b << 16))
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 35, ctypes.byref(cref), ctypes.sizeof(cref))
+        win._xb_dark_done = True
+    except Exception:
+        pass
+
+
 # ────────────────────────────────────────────────────────────────────
-# CONVENIENCE WIDGET FACTORIES
-# Use these instead of raw tk.* widgets for consistent look without
-# remembering style names.
+# CONVENIENCE FACTORIES (kept for compatibility)
 # ────────────────────────────────────────────────────────────────────
 def make_card(parent: tk.Widget, **kwargs) -> ttk.Frame:
     """A bordered card surface (bg_2)."""
-    f = ttk.Frame(parent, style="Card.TFrame", padding=16, **kwargs)
-    return f
+    return ttk.Frame(parent, style="Card.TFrame", padding=16, **kwargs)
 
 
 def make_callout(parent: tk.Widget, kind: str = "info", text: str = "") -> tk.Frame:
-    """
-    A callout box (info / warn / danger / success) — left-bordered tinted strip.
-    Uses raw tk.Frame because ttk doesn't expose a left-only border. Match the
-    .info / .warn / .danger / .success classes in the design system.
-    """
-    palette = {
-        "info":    (COLORS["info_bg"],    COLORS["accent"],     "#9ecdff"),
-        "warn":    (COLORS["warn_bg"],    COLORS["warn"],       COLORS["warn_hi"]),
-        "danger":  (COLORS["danger_bg"],  COLORS["danger"],     "#ff8080"),
-        "success": (COLORS["success_bg"], COLORS["success"],    COLORS["success_hi"]),
-    }
-    bg, accent_color, fg = palette.get(kind, palette["info"])
-
-    wrap = tk.Frame(parent, bg=accent_color)                 # left strip = accent
-    inner = tk.Frame(wrap, bg=bg, padx=14, pady=10)
-    inner.pack(side="right", fill="both", expand=True, padx=(3, 0))
-    if text:
-        tk.Label(inner, text=text, bg=bg, fg=fg,
-                 font=FONTS["body"], anchor="w", justify="left",
-                 wraplength=560).pack(anchor="w")
-    return wrap
+    """An inline info bar (info / warn / danger / success)."""
+    try:
+        from ui.shared.widgets import InfoBar
+        return InfoBar(parent, kind=kind, text=text)
+    except Exception:
+        tone = {"info": "accent_lo", "warn": "warn_bg", "danger": "danger_bg",
+                "success": "success_bg"}.get(kind, "accent_lo")
+        f = tk.Frame(parent, bg=COLORS[tone], padx=16, pady=12)
+        if text:
+            tk.Label(f, text=text, bg=COLORS[tone], fg=COLORS["fg_1"],
+                     font=FONTS["body"], anchor="w", justify="left",
+                     wraplength=560).pack(anchor="w")
+        return f
 
 
 def make_status_pill(parent: tk.Widget, kind: str, text: str) -> tk.Label:
-    """A rounded-feel status pill. tk doesn't do real rounded corners,
-    so this is a subtly tinted label — looks correct in the dark UI."""
+    """A status badge (ok / active / wait / warn / fail)."""
     palette = {
-        "ok":      (COLORS["success_bg"], COLORS["success_hi"]),
-        "active":  (COLORS["accent_08"],  COLORS["accent_hi"]),
-        "wait":    (COLORS["bg_3"],       COLORS["fg_5"]),
-        "warn":    (COLORS["warn_bg"],    COLORS["warn_hi"]),
-        "fail":    (COLORS["danger_bg"],  COLORS["danger_hi"]),
+        "ok":     (COLORS["success_bg"], COLORS["success_hi"]),
+        "active": (COLORS["accent_lo"],  COLORS["accent_hi"]),
+        "wait":   (COLORS["bg_3"],       COLORS["fg_2"]),
+        "warn":   (COLORS["warn_bg"],    COLORS["warn_hi"]),
+        "fail":   (COLORS["danger_bg"],  COLORS["danger_hi"]),
     }
     bg, fg = palette.get(kind, palette["wait"])
-    return tk.Label(parent, text=f" {text} ", bg=bg, fg=fg,
-                    font=(_SANS, 9, "bold"), padx=8, pady=2, bd=0)
+    return tk.Label(parent, text=text, bg=bg, fg=fg,
+                    font=FONTS["caption_strong"], padx=8, pady=1, bd=0)
 
 
 def make_titlebar(parent: tk.Widget, title: str, version: str = "") -> ttk.Frame:
-    """The app's top header strip: brand + version, accent underline."""
-    bar = ttk.Frame(parent, style="Card.TFrame", padding=(20, 14))
+    """Legacy header strip: product name + version in type."""
+    bar = tk.Frame(parent, bg=COLORS["bg_0"], padx=16, pady=12)
     bar.pack(fill="x")
-    ttk.Label(bar, text="🎮", font=(_SANS, 18), style="OnCard.TLabel").pack(side="left")
-    title_frame = ttk.Frame(bar, style="Card.TFrame")
-    title_frame.pack(side="left", padx=(10, 0))
-    ttk.Label(title_frame, text=title, style="OnCard.H3.TLabel",
-              font=(_SANS, 13, "bold")).pack(anchor="w")
+    tk.Label(bar, text=title, bg=COLORS["bg_0"], fg=COLORS["fg_0"],
+             font=FONTS["body_strong"]).pack(side="left")
     if version:
-        ttk.Label(title_frame, text=f"v{version}",
-                  style="OnCard.Muted.TLabel",
-                  font=FONTS["meta"]).pack(anchor="w")
+        tk.Label(bar, text="v" + version, bg=COLORS["bg_0"], fg=COLORS["fg_3"],
+                 font=FONTS["caption"]).pack(side="left", padx=(8, 0))
     return bar
 
 
-# ════════════════════════════════════════════════════════════════════
-# STAGE 1 — DESIGN-TOKEN SYSTEM  (added 2026-05, UI refactor)
-# ════════════════════════════════════════════════════════════════════
-# Everything below this banner is ADDITIVE. No constant above this line
-# is changed or removed. All existing imports
-# (`apply_theme`, `COLORS`, `FONTS`, `make_card`, `make_callout`,
-# `make_status_pill`, `make_titlebar`) keep working exactly as before.
-#
-# These tokens are NOT yet wired into any page. They exist so later
-# stages can build reusable components against one source of truth.
-# The app launches and behaves identically with this block present.
-# ════════════════════════════════════════════════════════════════════
-
-# ── SPACING ──────────────────────────────────────────────────────────
-# A 4px base scale. Use SPACING["md"] etc. instead of magic numbers so
-# padding stays consistent across the redesigned UI.
-SPACING = {
-    "none": 0,
-    "xxs":  2,
-    "xs":   4,
-    "sm":   8,
-    "md":   12,
-    "lg":   16,
-    "xl":   20,
-    "xxl":  24,
-    "xxxl": 32,
-    "huge": 48,
-}
-
-# ── RADIUS ───────────────────────────────────────────────────────────
-# Tkinter widgets cannot truly round their corners; these values are for
-# Canvas-drawn rounded rectangles in later component work. Kept here so
-# the "roundedness" of the UI is defined in one place.
-RADIUS = {
-    "none": 0,
-    "sm":   4,
-    "md":   8,
-    "lg":   12,
-    "xl":   16,
-    "pill": 999,
-}
-
-# ── ELEVATION / BORDER STYLES ────────────────────────────────────────
-# Tk has no drop-shadow; "elevation" here is expressed as a background +
-# border pairing. Each level names a (background-token, border-token).
+# ────────────────────────────────────────────────────────────────────
+# TOKEN TABLES (used by ui/shared components)
+# ────────────────────────────────────────────────────────────────────
 ELEVATION = {
     "flat":    {"bg": "bg_1", "border": "border_1"},
     "raised":  {"bg": "bg_2", "border": "border_2"},
     "overlay": {"bg": "bg_3", "border": "border_3"},
-    "popover": {"bg": "bg_4", "border": "border_4"},
+    "popover": {"bg": "bg_3", "border": "border_3"},
 }
 
 BORDERS = {
-    "hairline":  {"color": "border_2", "width": 1},
-    "card":      {"color": "border_3", "width": 1},
-    "strong":    {"color": "border_4", "width": 1},
-    "accent":    {"color": "accent",   "width": 1},
-    "focus":     {"color": "accent",   "width": 2},
+    "hairline": {"color": "border_2", "width": 1},
+    "card":     {"color": "border_2", "width": 1},
+    "strong":   {"color": "border_3", "width": 1},
+    "accent":   {"color": "accent",   "width": 1},
+    "focus":    {"color": "focus",    "width": 2},
 }
 
-# ── SEMANTIC / STATUS COLORS ─────────────────────────────────────────
-# Maps an app-level status word to a (text, background, border) trio of
-# EXISTING color-token names. Used by apply_status_badge_style and by
-# later badge components. Values are token names, resolved via get_color.
+# Status word -> (text, background, border) token names.
 STATUS_COLORS = {
-    "idle":     {"fg": "fg_5",       "bg": "bg_3",        "border": "border_3"},
-    "waiting":  {"fg": "fg_5",       "bg": "bg_3",        "border": "border_3"},
-    "queued":   {"fg": "fg_4",       "bg": "bg_3",        "border": "border_3"},
-    "running":  {"fg": "accent_hi",  "bg": "accent_08",   "border": "accent"},
-    "active":   {"fg": "accent_hi",  "bg": "accent_08",   "border": "accent"},
-    "progress": {"fg": "accent_hi",  "bg": "accent_08",   "border": "accent"},
-    "success":  {"fg": "success_hi", "bg": "success_bg",  "border": "success"},
-    "done":     {"fg": "success_hi", "bg": "success_bg",  "border": "success"},
-    "ok":       {"fg": "success_hi", "bg": "success_bg",  "border": "success"},
-    "warn":     {"fg": "warn_hi",    "bg": "warn_bg",     "border": "warn"},
-    "warning":  {"fg": "warn_hi",    "bg": "warn_bg",     "border": "warn"},
-    "error":    {"fg": "danger_hi",  "bg": "danger_bg",   "border": "danger"},
-    "failed":   {"fg": "danger_hi",  "bg": "danger_bg",   "border": "danger"},
-    "fail":     {"fg": "danger_hi",  "bg": "danger_bg",   "border": "danger"},
+    "idle":     {"fg": "fg_2",       "bg": "bg_3",       "border": "border_3"},
+    "waiting":  {"fg": "fg_2",       "bg": "bg_3",       "border": "border_3"},
+    "queued":   {"fg": "fg_2",       "bg": "bg_3",       "border": "border_3"},
+    "running":  {"fg": "accent_hi",  "bg": "accent_lo",  "border": "accent"},
+    "active":   {"fg": "accent_hi",  "bg": "accent_lo",  "border": "accent"},
+    "progress": {"fg": "accent_hi",  "bg": "accent_lo",  "border": "accent"},
+    "info":     {"fg": "accent_hi",  "bg": "accent_lo",  "border": "accent"},
+    "success":  {"fg": "success_hi", "bg": "success_bg", "border": "success"},
+    "done":     {"fg": "success_hi", "bg": "success_bg", "border": "success"},
+    "ok":       {"fg": "success_hi", "bg": "success_bg", "border": "success"},
+    "warn":     {"fg": "warn_hi",    "bg": "warn_bg",    "border": "warn"},
+    "warning":  {"fg": "warn_hi",    "bg": "warn_bg",    "border": "warn"},
+    "error":    {"fg": "danger_hi",  "bg": "danger_bg",  "border": "danger"},
+    "failed":   {"fg": "danger_hi",  "bg": "danger_bg",  "border": "danger"},
+    "fail":     {"fg": "danger_hi",  "bg": "danger_bg",  "border": "danger"},
 }
 
-# ── BUTTON STYLES ────────────────────────────────────────────────────
-# Maps a variant name to the EXISTING ttk style string already defined
-# in apply_theme(). Nothing new is registered with ttk — this is just a
-# lookup so components can ask for "primary" without knowing the exact
-# ttk style name.
 BUTTON_STYLES = {
     "default":   "TButton",
     "primary":   "Primary.TButton",
@@ -733,32 +1008,24 @@ BUTTON_STYLES = {
     "danger":    "Danger.TButton",
     "success":   "Success.TButton",
     "backport":  "Backport.TButton",
-    "purple":    "Backport.TButton",   # alias — purple == backport accent
+    "purple":    "Backport.TButton",
 }
 
-# ── CARD STYLES ──────────────────────────────────────────────────────
-# Named card surfaces → (background-token, border-token, default padding).
 CARD_STYLES = {
-    "default":  {"bg": "bg_2", "border": "border_3", "pad": SPACING["lg"]},
-    "flat":     {"bg": "bg_1", "border": "border_2", "pad": SPACING["md"]},
-    "raised":   {"bg": "bg_3", "border": "border_3", "pad": SPACING["lg"]},
-    "inset":    {"bg": "bg_0", "border": "border_2", "pad": SPACING["md"]},
-    "accent":   {"bg": "bg_2", "border": "accent",   "pad": SPACING["lg"]},
+    "default": {"bg": "bg_2", "border": "border_2", "pad": SPACING["lg"]},
+    "flat":    {"bg": "bg_1", "border": "border_2", "pad": SPACING["md"]},
+    "raised":  {"bg": "bg_3", "border": "border_3", "pad": SPACING["lg"]},
+    "inset":   {"bg": "bg_0", "border": "border_2", "pad": SPACING["md"]},
+    "accent":  {"bg": "accent_08", "border": "accent", "pad": SPACING["lg"]},
 }
 
-# ── INPUT STYLES ─────────────────────────────────────────────────────
-# Named input surfaces → token set + the matching ttk style for ttk
-# entries/combos. Raw tk widgets use the color tokens directly.
 INPUT_STYLES = {
-    "default": {"bg": "field_bg", "fg": "field_fg", "border": "border_3",
-                "focus": "accent", "ttk_entry": "TEntry"},
-    "dark":    {"bg": "bg_4",     "fg": "fg_1",      "border": "border_3",
-                "focus": "accent", "ttk_entry": "Dark.TEntry"},
+    "default": {"bg": "field_bg", "fg": "field_fg", "border": "border_control",
+                "focus": "focus", "ttk_entry": "TEntry"},
+    "dark":    {"bg": "field_bg", "fg": "field_fg", "border": "border_control",
+                "focus": "focus", "ttk_entry": "TEntry"},
 }
 
-# ── LOG COLORS ───────────────────────────────────────────────────────
-# Colors for live-log / console text by line severity. Resolved to hex
-# via get_color. Used by the log-view component in a later stage.
 LOG_COLORS = {
     "bg":       "bg_0",
     "default":  "fg_1",
@@ -767,40 +1034,26 @@ LOG_COLORS = {
     "success":  "success_hi",
     "warn":     "warn_hi",
     "error":    "danger_hi",
-    "command":  "teal_hi",
-    "phosphor": "success_ok",   # klog CRT-green
+    "command":  "accent_hi",
+    "phosphor": "success_hi",
 }
 
 
 # ── SAFE HELPER FUNCTIONS ────────────────────────────────────────────
-# All helpers are defensive: bad input never raises, it returns a
-# sensible fallback. Wiring them into a widget is harmless because the
-# worst case is a no-op.
-
 def get_color(name, fallback=None):
-    """Resolve a color token to its hex value.
-
-    `name` may be a key in COLORS or in STATUS_COLORS. Unknown names
-    return `fallback` (or COLORS['fg_1'] if no fallback given). Never
-    raises.
-    """
+    """Resolve a color token to its hex value (never raises)."""
     try:
         if name in COLORS:
             return COLORS[name]
     except Exception:
         pass
     if fallback is not None:
-        # fallback may itself be a token name — resolve one level.
         return COLORS.get(fallback, fallback)
-    return COLORS.get("fg_1", "#e0dcec")
+    return COLORS["fg_1"]
 
 
 def get_font(name, fallback=None):
-    """Resolve a font token to its (family, size, weight) tuple.
-
-    Unknown names return `fallback` if it is a known token, else the
-    fallback tuple as-is, else FONTS['body']. Never raises.
-    """
+    """Resolve a font token to its (family, size, weight) tuple."""
     try:
         if name in FONTS:
             return FONTS[name]
@@ -810,219 +1063,95 @@ def get_font(name, fallback=None):
         if isinstance(fallback, str) and fallback in FONTS:
             return FONTS[fallback]
         return fallback
-    return FONTS.get("body", (_SANS, 10, "normal"))
+    return FONTS["body"]
 
 
 def get_status_color(status, role="fg"):
-    """Resolve a STATUS_COLORS entry to a hex value.
-
-    `role` is one of 'fg', 'bg', 'border'. Unknown status falls back to
-    'idle'. Never raises.
-    """
+    """Resolve a STATUS_COLORS entry to a hex value."""
     entry = STATUS_COLORS.get(str(status).lower(), STATUS_COLORS["idle"])
-    token = entry.get(role, entry.get("fg"))
-    return get_color(token)
+    return get_color(entry.get(role, entry.get("fg")))
 
 
 def apply_card_style(widget, variant="default"):
-    """Style an existing tk.Frame (or tk.Widget) as a card surface.
-
-    Only applies to plain tk widgets that accept bg/highlight options;
-    ttk widgets are left untouched (they should use the 'Card.TFrame'
-    ttk style instead). Returns the widget for chaining. Never raises.
-    """
+    """Style an existing tk.Frame as a card surface."""
     spec = CARD_STYLES.get(variant, CARD_STYLES["default"])
     try:
-        widget.configure(
-            bg=get_color(spec["bg"]),
-            highlightbackground=get_color(spec["border"]),
-            highlightcolor=get_color(spec["border"]),
-            highlightthickness=1,
-            bd=0,
-        )
+        widget.configure(bg=get_color(spec["bg"]),
+                         highlightbackground=get_color(spec["border"]),
+                         highlightcolor=get_color(spec["border"]),
+                         highlightthickness=1, bd=0)
     except Exception:
-        # ttk widget or option not supported — no-op, safe.
         pass
     return widget
 
 
 def apply_button_style(widget, variant="default"):
-    """Apply a button variant to a widget.
-
-    For a ttk.Button, sets the matching ttk style string. For a plain
-    tk.Button, applies a token-based color approximation. Returns the
-    widget. Never raises.
-    """
-    ttk_style = BUTTON_STYLES.get(variant, BUTTON_STYLES["default"])
-    # ttk path
+    """Apply a button variant to a ttk.Button (or approximate on tk.Button)."""
     try:
         if isinstance(widget, ttk.Widget):
-            widget.configure(style=ttk_style)
+            widget.configure(style=button_style(
+                variant, "md", surface_of(widget.master)))
             return widget
     except Exception:
         pass
-    # plain tk.Button path — approximate with token colors
-    _tk_btn_palette = {
-        "default":   ("bg_4",   "fg_1"),
-        "primary":   ("accent", "fg_0"),
-        "secondary": ("bg_4",   "accent"),
-        "ghost":     ("bg_1",   "fg_3"),
-        "warn":      ("warn",   "bg_0"),
-        "danger":    ("danger", "fg_0"),
-        "success":   ("success", "fg_0"),
-        "backport":  ("purple", "fg_0"),
-        "purple":    ("purple", "fg_0"),
-    }
-    bg_tok, fg_tok = _tk_btn_palette.get(variant, _tk_btn_palette["default"])
+    v = BUTTON_VARIANTS.get(BUTTON_ALIASES.get(variant, variant),
+                            BUTTON_VARIANTS["secondary"])
+    sf = surface_of(widget.master)
     try:
-        widget.configure(
-            bg=get_color(bg_tok), fg=get_color(fg_tok),
-            activebackground=get_color(bg_tok),
-            activeforeground=get_color(fg_tok),
-            relief="flat", bd=0, font=get_font("button"),
-            highlightthickness=0, cursor="hand2",
-        )
+        widget.configure(bg=_c(v[0], sf), fg=COLORS[v[5]],
+                         activebackground=_c(v[2], sf),
+                         activeforeground=COLORS[v[5]], relief="flat", bd=0,
+                         font=FONTS[v[6]], highlightthickness=0)
     except Exception:
         pass
     return widget
 
 
 def apply_input_style(widget, variant="default"):
-    """Style an input widget (tk.Entry / ttk.Entry / tk.Text).
-
-    ttk entries/combos get the matching ttk style; plain tk inputs get
-    token colors. Returns the widget. Never raises.
-    """
-    spec = INPUT_STYLES.get(variant, INPUT_STYLES["default"])
-    # ttk path
+    """Style an input widget (tk.Entry / ttk.Entry / tk.Text)."""
     try:
         if isinstance(widget, ttk.Widget):
-            widget.configure(style=spec["ttk_entry"])
+            widget.configure(style=entry_style(surface_of(widget.master)))
             return widget
     except Exception:
         pass
-    # plain tk path
     try:
-        widget.configure(
-            bg=get_color(spec["bg"]),
-            fg=get_color(spec["fg"]),
-            insertbackground=get_color(spec["focus"]),
-            highlightbackground=get_color(spec["border"]),
-            highlightcolor=get_color(spec["focus"]),
-            highlightthickness=1,
-            relief="flat", bd=0,
-        )
+        widget.configure(bg=COLORS["field_bg"], fg=COLORS["field_fg"],
+                         insertbackground=COLORS["fg_0"],
+                         highlightbackground=COLORS["border_control"],
+                         highlightcolor=COLORS["focus"], highlightthickness=1,
+                         relief="flat", bd=0)
     except Exception:
         pass
     return widget
 
 
 def apply_status_badge_style(widget, status):
-    """Style a tk.Label (or similar) as a status badge.
-
-    Uses STATUS_COLORS to set fg/bg. Intended for plain tk.Label badges.
-    Returns the widget. Never raises.
-    """
+    """Style a tk.Label as a status badge."""
     try:
-        widget.configure(
-            bg=get_status_color(status, "bg"),
-            fg=get_status_color(status, "fg"),
-            font=get_font("eyebrow"),
-            padx=SPACING["sm"], pady=SPACING["xxs"],
-            bd=0, highlightthickness=0,
-        )
+        widget.configure(bg=get_status_color(status, "bg"),
+                         fg=get_status_color(status, "fg"),
+                         font=get_font("caption_strong"),
+                         padx=SPACING["sm"], pady=1, bd=0,
+                         highlightthickness=0)
     except Exception:
         pass
     return widget
 
 
-# ── DESIGN-TOKEN SELF-TEST ───────────────────────────────────────────
-# Optional sanity check; not run on import. Call tokens_selftest() in a
-# REPL to confirm every token table resolves cleanly.
 def tokens_selftest():
-    """Return True if all token tables are internally consistent."""
+    """Return True if all token tables resolve to real colours."""
     ok = True
     for tbl in (CARD_STYLES, INPUT_STYLES):
-        for _name, spec in tbl.items():
+        for spec in tbl.values():
             for key in ("bg", "border"):
                 if key in spec and spec[key] not in COLORS:
                     print("MISSING color token:", spec[key]); ok = False
-    for _s, spec in STATUS_COLORS.items():
+    for spec in STATUS_COLORS.values():
         for role in ("fg", "bg", "border"):
             if spec[role] not in COLORS:
                 print("MISSING status token:", spec[role]); ok = False
     for tok in LOG_COLORS.values():
         if tok not in COLORS:
             print("MISSING log token:", tok); ok = False
-    for _v, st in BUTTON_STYLES.items():
-        if not isinstance(st, str):
-            print("BAD button style:", st); ok = False
     return ok
-
-
-# ────────────────────────────────────────────────────────────────────
-# DEMO — run this file directly to see every styled component
-# ────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.geometry("980x720")
-    root.title("exFAT Image Builder — theme preview")
-    apply_theme(root)
-
-    make_titlebar(root, "exFAT Image Builder", "1.9.0")
-
-    main = ttk.Frame(root, style="Surface.TFrame", padding=20)
-    main.pack(fill="both", expand=True)
-
-    nb = ttk.Notebook(main)
-    nb.pack(fill="both", expand=True)
-
-    for label in ("📀 exFAT", "📦 ffpkg", "📚 Library", "💾 My Images",
-                  "📋 Klog", "⚙ Settings"):
-        page = ttk.Frame(nb, style="Surface.TFrame", padding=20)
-        nb.add(page, text=label)
-
-    page = nb.nametowidget(nb.tabs()[0])
-
-    card = make_card(page); card.pack(fill="x", pady=(0, 12))
-    ttk.Label(card, text="Build a new image", style="OnCard.H3.TLabel").pack(anchor="w")
-    ttk.Label(card, text="Source folder must contain eboot.bin",
-              style="OnCard.Muted.TLabel").pack(anchor="w", pady=(2, 12))
-
-    row = ttk.Frame(card, style="Card.TFrame"); row.pack(fill="x", pady=4)
-    ttk.Label(row, text="Game folder", style="OnCard.TLabel", width=14).pack(side="left")
-    ttk.Entry(row).pack(side="left", fill="x", expand=True, padx=(0, 8))
-    ttk.Button(row, text="Browse…", style="Secondary.TButton").pack(side="left")
-
-    btnrow = ttk.Frame(card, style="Card.TFrame"); btnrow.pack(fill="x", pady=(16, 0))
-    ttk.Button(btnrow, text="+ Add to Queue", style="Primary.TButton").pack(side="left", padx=(0, 8))
-    ttk.Button(btnrow, text="Build All",      style="Success.TButton").pack(side="left", padx=(0, 8))
-    ttk.Button(btnrow, text="⏸ Pause",        style="Secondary.TButton").pack(side="left", padx=(0, 8))
-    ttk.Button(btnrow, text="⚠ Backport",     style="Backport.TButton").pack(side="left", padx=(0, 8))
-    ttk.Button(btnrow, text="Cancel",         style="Ghost.TButton").pack(side="right")
-
-    make_callout(page, "info",
-        "Sector size is locked at 512 bytes — required for PS5 compatibility."
-        ).pack(fill="x", pady=4)
-    make_callout(page, "warn",
-        "Output folder must NOT be inside the game folder."
-        ).pack(fill="x", pady=4)
-    make_callout(page, "danger",
-        "Post-build deletion of source folder cannot be undone."
-        ).pack(fill="x", pady=4)
-    make_callout(page, "success",
-        "Build complete · 12.4 GB · verified."
-        ).pack(fill="x", pady=4)
-
-    pb_card = make_card(page); pb_card.pack(fill="x", pady=(12, 0))
-    ttk.Label(pb_card, text="Build progress", style="OnCard.H3.TLabel").pack(anchor="w")
-    pb = ttk.Progressbar(pb_card, style="Build.Horizontal.TProgressbar",
-                         mode="determinate", value=63)
-    pb.pack(fill="x", pady=(8, 4))
-
-    pillrow = ttk.Frame(pb_card, style="Card.TFrame"); pillrow.pack(anchor="w", pady=(8, 0))
-    for kind, text in (("ok", "Mount"), ("ok", "Format"),
-                       ("active", "Copy 63%"), ("wait", "Verify")):
-        make_status_pill(pillrow, kind, text).pack(side="left", padx=(0, 6))
-
-    root.mainloop()

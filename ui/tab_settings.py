@@ -30,6 +30,7 @@ changed.
 import os
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk
 
 from tkinter_theme import COLORS, FONTS
@@ -126,7 +127,7 @@ def _make_pane(host, title, description):
     head_inner = tk.Frame(head, bg=COLORS['bg_1'])
     head_inner.pack(fill='x', padx=32, pady=(20, 16))
     tk.Label(head_inner, text=title,
-             font=(FONTS['h2'][0], 18, 'bold'),
+             font=(FONTS['body_strong'][0], 18),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'],
              anchor='w'
              ).pack(fill='x')
@@ -141,7 +142,7 @@ def _make_pane(host, title, description):
     wrap = tk.Frame(host, bg=COLORS['bg_1'])
     wrap.pack(fill='both', expand=True)
     cv = tk.Canvas(wrap, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = tk.Scrollbar(wrap, command=cv.yview,
+    sb = XScrollbar(wrap, command=cv.yview,
                       bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
     cv.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -192,11 +193,11 @@ def _pane_summary(body, items):
         cell = tk.Frame(row, bg=COLORS['bg_2'])
         cell.grid(row=0, column=i, sticky='ew', padx=(14, 4))
         tk.Label(cell, text=caption.upper(),
-                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_2'], fg=COLORS['fg_5'],
                  anchor='w').pack(fill='x')
         lbl = tk.Label(cell, text='\u2014',
-                       font=(FONTS['mono_sm'][0], 11, 'bold'),
+                       font=(FONTS['body_strong'][0], 11),
                        bg=COLORS['bg_2'], fg=COLORS['fg_1'],
                        anchor='w')
         lbl.pack(fill='x', pady=(2, 0))
@@ -415,7 +416,7 @@ def _build_build(body, app):
     _retry_seg.pack(side='left')
     for n in [0, 1, 2, 3, 5]:
         lbl = _('Off') if n == 0 else (str(n) + 'x')
-        tk.Radiobutton(_retry_seg, text=lbl, variable=app._retry_var,
+        XRadio(_retry_seg, text=lbl, variable=app._retry_var,
                        value=n,
                        font=FONTS['body'],
                        bg=COLORS['bg_2'], fg=COLORS['fg_3'],
@@ -446,7 +447,7 @@ def _build_build(body, app):
         except Exception:
             pass
 
-    tk.Checkbutton(ctrl, text=_('Check on startup'),
+    XCheck(ctrl, text=_('Check on startup'),
                    variable=app._check_updates_var,
                    font=FONTS['body'],
                    bg=COLORS['bg_2'], fg=COLORS['fg_3'],
@@ -484,7 +485,7 @@ def _build_build(body, app):
         except Exception:
             pass
 
-    tk.Checkbutton(ctrl, text=_('Auto-delete source'),
+    XCheck(ctrl, text=_('Auto-delete source'),
                    variable=app._pfs_del_src_var,
                    font=FONTS['body'],
                    bg=COLORS['bg_2'], fg=COLORS['fg_3'],
@@ -510,7 +511,7 @@ def _build_build(body, app):
         except Exception:
             pass
 
-    tk.Checkbutton(ctrl, text=_('Pipeline build \u2192 .ffpfsc'),
+    XCheck(ctrl, text=_('Pipeline build \u2192 .ffpfsc'),
                    variable=app._pipeline_var,
                    font=FONTS['body'],
                    bg=COLORS['bg_2'], fg=COLORS['fg_3'],
@@ -546,7 +547,7 @@ def _build_build(body, app):
         except Exception:
             pass
 
-    tk.Checkbutton(ctrl, text=_('Extraction multithread (/MT)'),
+    XCheck(ctrl, text=_('Extraction multithread (/MT)'),
                    variable=app._exfat_extract_mt_var,
                    font=FONTS['body'],
                    bg=COLORS['bg_2'], fg=COLORS['fg_3'],
@@ -565,7 +566,7 @@ def _build_build(body, app):
         app._exfat_extract_threads_var = tk.StringVar(
             value=str(app._settings.get('exfat_extract_mt_threads', 32)))
 
-    _thr_entry = tk.Entry(ctrl2, textvariable=app._exfat_extract_threads_var,
+    _thr_entry = XEntry(ctrl2, textvariable=app._exfat_extract_threads_var,
                           font=FONTS['mono'] if 'mono' in FONTS else FONTS['body'],
                           bg=COLORS['bg_4'], fg=COLORS['fg_1'],
                           insertbackground=COLORS['fg_1'],
@@ -633,7 +634,7 @@ def _build_build(body, app):
     for _val, _lbl in (('lazy', _('Lazy_MkPFS by Nazky (Default)')),
                        ('mkpfs', _('MkPFS by PSBrew (Experimental \u2014 native, '
                                    'OSFMount-free extract/verify)'))):
-        tk.Radiobutton(_be_seg, text=_lbl,
+        XRadio(_be_seg, text=_lbl,
                        variable=app._pfs_backend_var, value=_val,
                        font=FONTS['body'],
                        bg=COLORS['bg_2'], fg=COLORS['fg_3'],
@@ -657,7 +658,7 @@ def _build_build(body, app):
         app._exp_mkpfs_dir_var = tk.StringVar(
             value=app._settings.get('experimental_mkpfs_folder', ''))
 
-    _exp_entry = tk.Entry(ctrl2, textvariable=app._exp_mkpfs_dir_var,
+    _exp_entry = XEntry(ctrl2, textvariable=app._exp_mkpfs_dir_var,
                           font=FONTS['mono'] if 'mono' in FONTS else FONTS['body'],
                           bg=COLORS['bg_4'], fg=COLORS['fg_1'],
                           insertbackground=COLORS['fg_1'],
@@ -745,7 +746,7 @@ def _build_logs(body, app):
                            bg='bg_2').pack(fill='both', expand=True)
                 return
             tk.Label(table_holder, text=_('RECENT LOGS'),
-                     font=(FONTS['mono_sm'][0], 8, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['bg_1'], fg=COLORS['fg_5'],
                      anchor='w').pack(fill='x', pady=(0, 6))
             tbl = tk.Frame(table_holder, bg=COLORS['bg_2'],
@@ -759,7 +760,7 @@ def _build_logs(body, app):
                 r.pack(fill='x')
                 bad = '_FAILED' in fn
                 tk.Label(r, text='\u2715' if bad else '\u2713',
-                         font=(FONTS['mono_sm'][0], 9, 'bold'),
+                         font=(FONTS['body_strong'][0], 9),
                          bg=rbg, fg=COLORS['danger_hi'] if bad
                          else COLORS['success_hi'], width=3
                          ).pack(side='left')
@@ -953,7 +954,7 @@ def _build_ftp(body, app):
     info_inner = tk.Frame(info_banner, bg=COLORS['accent_08'])
     info_inner.pack(fill='x', padx=14, pady=10)
     tk.Label(info_inner, text='\u2139',
-             font=(FONTS['body'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['accent_08'], fg=COLORS['accent']
              ).pack(side='left', padx=(0, 10))
     tk.Label(info_inner,
@@ -1004,8 +1005,8 @@ def _build_ftp(body, app):
 
     # Cancel-upload button — same legacy attribute name. Not packed by
     # default; legacy code packs it during an upload.
-    app._cancel_btn = tk.Button(btn_row, text='\u2715  ' + _('Cancel Upload'),
-                                font=(FONTS['button'][0], 9, 'bold'),
+    app._cancel_btn = XButton(btn_row, text='\u2715  ' + _('Cancel Upload'),
+                                font=(FONTS['body_strong'][0], 9),
                                 bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
                                 activebackground=COLORS['bg_3'],
                                 activeforeground=COLORS['danger_hi'],
@@ -1106,11 +1107,11 @@ def _build_theme(body, app):
 
         hr = tk.Frame(ci, bg=COLORS['bg_2'])
         hr.pack(fill='x', pady=(10, 0))
-        tk.Label(hr, text=title, font=(FONTS['body'][0], 10, 'bold'),
+        tk.Label(hr, text=title, font=(FONTS['body_strong'][0], 10),
                  bg=COLORS['bg_2'], fg=COLORS['fg_0']
                  ).pack(side='left')
         active = tk.Label(hr, text='\u2713 ' + _('ACTIVE'),
-                          font=(FONTS['mono_sm'][0], 8, 'bold'),
+                          font=(FONTS['body_strong'][0], 9),
                           bg=COLORS['success_bg'],
                           fg=COLORS['success_hi'], padx=8, pady=2)
         tk.Label(ci, text=sub, font=FONTS['mono_sm'],
@@ -1172,7 +1173,7 @@ def _build_theme(body, app):
     prow = tk.Frame(prev, bg=COLORS['bg_2'])
     prow.pack(fill='x', padx=18, pady=12)
     tk.Label(prow, text=_('Palette').upper(),
-             font=(FONTS['mono_sm'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left', padx=(0, 14))
     for key in ('bg_1', 'bg_3', 'accent', 'purple', 'teal',
@@ -1210,7 +1211,7 @@ def _build_shutdown(body, app):
 
     def _flow_chip():
         c = tk.Label(fi, text='\u2014',
-                     font=(FONTS['mono_sm'][0], 9, 'bold'),
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['bg_3'], fg=COLORS['fg_4'],
                      padx=12, pady=5,
                      highlightbackground=COLORS['border_3'],
@@ -1219,11 +1220,11 @@ def _build_shutdown(body, app):
         return c
 
     fc_trigger = _flow_chip()
-    tk.Label(fi, text='\u2192', font=(FONTS['body'][0], 11, 'bold'),
+    tk.Label(fi, text='\u2192', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left', padx=8)
     fc_wait = _flow_chip()
-    tk.Label(fi, text='\u2192', font=(FONTS['body'][0], 11, 'bold'),
+    tk.Label(fi, text='\u2192', font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left', padx=8)
     fc_action = _flow_chip()
@@ -1324,14 +1325,14 @@ def _dark_entry(parent, var, readonly=False, width=None):
               state=state)
     if width is not None:
         kw['width'] = width
-    tk.Entry(wrap, **kw).pack(fill='x')
+    XEntry(wrap, **kw).pack(fill='x')
     return wrap
 
 
 def _ghost_btn(parent, text, command):
     """Small ghost-style button."""
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -1345,8 +1346,8 @@ def _ghost_btn(parent, text, command):
 
 def _accent_btn(parent, text, command):
     """Primary (accent blue) button."""
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -1358,8 +1359,8 @@ def _accent_btn(parent, text, command):
 
 def _danger_btn(parent, text, command):
     """Danger (red, ghost) button."""
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['danger_hi'],

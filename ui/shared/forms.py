@@ -13,6 +13,7 @@ hex literals. Step 3 (v2.0.5).
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter_theme import COLORS, FONTS
 
 
@@ -65,7 +66,7 @@ class DropZone(tk.Frame):
 
         self._main_lbl = tk.Label(inner,
                                   text='Drop a game folder here',
-                                  font=(FONTS['body'][0], 11, 'bold'),
+                                  font=(FONTS['body_strong'][0], 11),
                                   bg=bg, fg=COLORS['fg_2'])
         self._main_lbl.pack(pady=(6, 0))
 
@@ -221,7 +222,7 @@ class LabeledField(tk.Frame):
                               highlightthickness=1)
         input_wrap.pack(fill='x', pady=(6, 0))
 
-        self.entry = tk.Entry(input_wrap, textvariable=var,
+        self.entry = XEntry(input_wrap, textvariable=var,
                               font=FONTS['mono_sm'],
                               bg=COLORS['field_bg'], fg=COLORS['field_fg'],
                               insertbackground=COLORS['field_fg'],
@@ -233,7 +234,7 @@ class LabeledField(tk.Frame):
 
         self.button = None
         if on_browse:
-            self.button = tk.Button(input_wrap, text='Browse',
+            self.button = XButton(input_wrap, text='Browse',
                                     font=FONTS['button'],
                                     bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                                     activebackground=COLORS['bg_5'],

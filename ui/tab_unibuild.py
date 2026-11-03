@@ -14,6 +14,7 @@ import re
 import time
 import threading
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog, messagebox, ttk
 
 from tkinter_theme import COLORS, FONTS
@@ -52,7 +53,7 @@ def _dash_card(parent, title, subtitle=None,
                     highlightbackground=COLORS['border_2'])
     head = tk.Frame(card, bg=COLORS['bg_2'])
     head.pack(fill='x', padx=20, pady=head_pady)
-    tk.Label(head, text=title, font=(FONTS['h3'][0], 12, 'bold'),
+    tk.Label(head, text=title, font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(anchor='w')
     if subtitle:
         tk.Label(head, text=subtitle, font=FONTS['meta'],
@@ -69,7 +70,7 @@ def _hero_stat(parent, label_text, var):
     tk.Label(box, text=label_text, font=FONTS['eyebrow'],
              bg=COLORS['bg_3'], fg=COLORS['fg_5'], anchor='w').pack(
                  anchor='w', padx=10, pady=(7, 0))
-    val = tk.Label(box, textvariable=var, font=(FONTS['mono_sm'][0], 11, 'bold'),
+    val = tk.Label(box, textvariable=var, font=(FONTS['body_strong'][0], 11),
                    bg=COLORS['bg_3'], fg=COLORS['fg_1'], anchor='w')
     val.pack(anchor='w', padx=10, pady=(0, 7))
     return box, val
@@ -82,7 +83,7 @@ def _strip_cell(parent, label_text, var):
     tk.Label(cell, text=label_text, font=FONTS['eyebrow'],
              bg=COLORS['bg_3'], fg=COLORS['fg_5'], anchor='w').pack(
                  anchor='w', padx=14, pady=(8, 0))
-    val = tk.Label(cell, textvariable=var, font=(FONTS['mono_sm'][0], 11, 'bold'),
+    val = tk.Label(cell, textvariable=var, font=(FONTS['body_strong'][0], 11),
                    bg=COLORS['bg_3'], fg=COLORS['teal'], anchor='w')
     val.pack(anchor='w', padx=14, pady=(0, 8))
     return cell, val
@@ -104,11 +105,11 @@ def _toast(app, title, line1='', line2='', ok=True):
         pad = tk.Frame(frame, bg=COLORS['bg_3'])
         pad.pack(fill='both', expand=True, padx=16, pady=13)
         tk.Label(pad, text=('\u2713' if ok else '\u26a0'),
-                 font=(FONTS['h2'][0], 15, 'bold'), bg=COLORS['bg_3'],
+                 font=(FONTS['body_strong'][0], 15), bg=COLORS['bg_3'],
                  fg=accent).pack(side='left', padx=(0, 13))
         col = tk.Frame(pad, bg=COLORS['bg_3'])
         col.pack(side='left')
-        tk.Label(col, text=title, font=(FONTS['h3'][0], 11, 'bold'),
+        tk.Label(col, text=title, font=(FONTS['body_strong'][0], 11),
                  bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w').pack(anchor='w')
         if line1:
             tk.Label(col, text=line1, font=FONTS['meta'], bg=COLORS['bg_3'],
@@ -295,15 +296,15 @@ def build_unibuild_tab(parent, app):
     row1.columnconfigure(1, weight=6, uniform='r1')
     hero = tk.Frame(row1, bg=COLORS['bg_2'], highlightthickness=1, highlightbackground=COLORS['border_2'])
     hero.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
-    tk.Label(hero, text='1.  Source', font=(FONTS['h3'][0], 12, 'bold'), bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(anchor='w', padx=16, pady=(14, 0))
+    tk.Label(hero, text='1.  Source', font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(anchor='w', padx=16, pady=(14, 0))
     hero_in = tk.Frame(hero, bg=COLORS['bg_2'])
     hero_in.pack(fill='both', expand=True, padx=16, pady=(8, 16))
-    cover_lbl = tk.Label(hero_in, text='🎮', font=('Segoe UI', 56), bg=COLORS['bg_4'], fg=COLORS['fg_5'], width=4, height=4)
+    cover_lbl = tk.Label(hero_in, text='🎮', font=(FONTS['body'][0], 56), bg=COLORS['bg_4'], fg=COLORS['fg_5'], width=4, height=4)
     cover_lbl.pack(side='left', padx=(0, 16))
     hcol = tk.Frame(hero_in, bg=COLORS['bg_2'])
     hcol.pack(side='left', fill='both', expand=True)
-    tk.Label(hcol, textvariable=det_title_var, font=(FONTS['h2'][0], 16, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w', justify='left', wraplength=300).pack(fill='x')
-    tk.Label(hcol, textvariable=det_id_var, font=(FONTS['mono_sm'][0], 11, 'bold'), bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(fill='x', pady=(2, 8))
+    tk.Label(hcol, textvariable=det_title_var, font=(FONTS['body_strong'][0], 16), bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w', justify='left', wraplength=300).pack(fill='x')
+    tk.Label(hcol, textvariable=det_id_var, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(fill='x', pady=(2, 8))
     stat_row = tk.Frame(hcol, bg=COLORS['bg_2'])
     stat_row.pack(fill='x')
     for c in range(3):
@@ -316,7 +317,7 @@ def build_unibuild_tab(parent, app):
     b3.grid(row=0, column=2, sticky='ew', padx=(6, 0))
     hero_bottom = tk.Frame(hcol, bg=COLORS['bg_2'])
     hero_bottom.pack(fill='x', pady=(10, 0))
-    ready_badge = tk.Label(hero_bottom, text='✓ READY TO BUILD', font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['success'], fg=_DARK_TEXT, padx=10, pady=4)
+    ready_badge = tk.Label(hero_bottom, text='✓ READY TO BUILD', font=(FONTS['body_strong'][0], 9), bg=COLORS['success'], fg=_DARK_TEXT, padx=10, pady=4)
     ready_hint = tk.Label(hero_bottom, text='', font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w')
     make_themed_button(hero_bottom, text='Browse dump', command=(lambda: _browse_src()), kind='accent', icon='📁', font_size=9, padx=12, pady=6).pack(side='right')
     fmt_card, fmt_body = _dash_card(row1, '2.  Choose output format', 'Pick a format below and add the dump to the queue')
@@ -355,22 +356,22 @@ def build_unibuild_tab(parent, app):
         card = tk.Frame(fmt_row, bg=COLORS['bg_3'], highlightthickness=1, highlightbackground=COLORS['border_2'], cursor='hand2')
         card.grid(row=0, column=col, sticky='nsew', padx=(0 if col == 0 else 8, 0))
         labels = []
-        ic = tk.Label(card, text=icon, font=(FONTS['h2'][0], 19), bg=COLORS['bg_3'], fg=COLORS['teal'], anchor='w')
+        ic = tk.Label(card, text=icon, font=(FONTS['body'][0], 19), bg=COLORS['bg_3'], fg=COLORS['teal'], anchor='w')
         ic.pack(anchor='w', padx=14, pady=(14, 4))
         labels.append(ic)
-        nm = tk.Label(card, text=title, font=(FONTS['h3'][0], 12, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_1'], anchor='w')
+        nm = tk.Label(card, text=title, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_3'], fg=COLORS['fg_1'], anchor='w')
         nm.pack(fill='x', padx=14)
         labels.append(nm)
         sbl = tk.Label(card, text=sub, font=FONTS['meta'], bg=COLORS['bg_3'], fg=COLORS['fg_4'], anchor='w', justify='left', wraplength=175)
         sbl.pack(fill='x', padx=14, pady=(2, 0))
         labels.append(sbl)
         if recommended:
-            tk.Label(card, text='RECOMMENDED', font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['success'], fg=_DARK_TEXT, padx=6, pady=1).pack(anchor='w', padx=14, pady=(8, 14))
+            tk.Label(card, text='RECOMMENDED', font=(FONTS['body_strong'][0], 9), bg=COLORS['success'], fg=_DARK_TEXT, padx=6, pady=1).pack(anchor='w', padx=14, pady=(8, 14))
         else:
             sp = tk.Label(card, text='', bg=COLORS['bg_3'])
             sp.pack(pady=(4, 12))
             labels.append(sp)
-        check = tk.Label(card, text='✓', font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['teal'], fg=_DARK_TEXT, width=2)
+        check = tk.Label(card, text='✓', font=(FONTS['body_strong'][0], 10), bg=COLORS['teal'], fg=_DARK_TEXT, width=2)
         for w in [card] + labels:
             w.bind('<Button-1>', lambda e, kk=key: _pick_type(kk))
         if tip:
@@ -388,7 +389,7 @@ def build_unibuild_tab(parent, app):
     adv_state = {'open': False}
     adv_disc_header = tk.Label(fmt_body, text='▸  Advanced Options', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], cursor='hand2', anchor='w')
     via_frame = tk.Frame(fmt_body, bg=COLORS['bg_2'])
-    tk.Label(via_frame, text='Intermediate format (advanced)', font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_2'], anchor='w').pack(anchor='w')
+    tk.Label(via_frame, text='Intermediate format (advanced)', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_2'], anchor='w').pack(anchor='w')
     def _save_pfs_via():
         # v3.6.3: persist the intermediate choice so it survives restart.
         try:
@@ -400,7 +401,7 @@ def build_unibuild_tab(parent, app):
     _via_radios = tk.Frame(via_frame, bg=COLORS['bg_2'])
     _via_radios.pack(anchor='w', pady=(4, 0))
     for val, lab in ('exfat', 'exFAT (recommended)'), ('ffpkg', 'ffpkg'):
-        tk.Radiobutton(_via_radios, text=lab, value=val, variable=pfs_via, command=(lambda: (_save_pfs_via(), _refresh_strip(), _update_space())), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 12))
+        XRadio(_via_radios, text=lab, value=val, variable=pfs_via, command=(lambda: (_save_pfs_via(), _refresh_strip(), _update_space())), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 12))
     tk.Label(via_frame, text='Determines the temporary format used before PFS compression. Most users should leave this set to exFAT.', font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=420).pack(anchor='w', pady=(4, 0))
     def _toggle_advanced():
         adv_state['open'] = not adv_state['open']
@@ -412,7 +413,7 @@ def build_unibuild_tab(parent, app):
     pfs_mode_frame = tk.Frame(fmt_body, bg=COLORS['bg_2'])
     tk.Label(pfs_mode_frame, text='PFS — source:', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 10))
     for _val, _lab in ('folder', 'Game dump folder'), ('image', 'Existing .exfat / .ffpkg'):
-        tk.Radiobutton(pfs_mode_frame, text=_lab, value=_val, variable=pfs_src_mode, command=(lambda: _on_pfs_mode_change()), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 12))
+        XRadio(pfs_mode_frame, text=_lab, value=_val, variable=pfs_src_mode, command=(lambda: _on_pfs_mode_change()), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 12))
     pfs_backend_frame = tk.Frame(fmt_body, bg=COLORS['bg_2'])
     tk.Label(pfs_backend_frame, text='PFS — backend:', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 10))
     def _save_pfs_backend():
@@ -449,7 +450,7 @@ def build_unibuild_tab(parent, app):
         return 'MkPFS by PSBrew (native) — Experimental'
     _lazy_radio = {'w': None}
     for _val, _lab in ('lazy', _lazy_label()), ('mkpfs', _mkpfs_label()):
-        _rb = tk.Radiobutton(pfs_backend_frame, text=_lab, value=_val, variable=pfs_backend, command=_save_pfs_backend, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0)
+        _rb = XRadio(pfs_backend_frame, text=_lab, value=_val, variable=pfs_backend, command=_save_pfs_backend, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0)
         _rb.pack(side='left', padx=(0, 12))
         if _val == 'lazy':
             _lazy_radio['w'] = _rb
@@ -471,7 +472,7 @@ def build_unibuild_tab(parent, app):
             save_settings(app._settings)
         except Exception:
             return
-    tk.Checkbutton(pfs_isa_frame, text='ISA-L acceleration — experimental', variable=_isa_var, command=_save_isa, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], selectcolor=COLORS['bg_4'], highlightthickness=0, bd=0).pack(side='left')
+    XCheck(pfs_isa_frame, text='ISA-L acceleration — experimental', variable=_isa_var, command=_save_isa, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], selectcolor=COLORS['bg_4'], highlightthickness=0, bd=0).pack(side='left')
     pfs_isa_note = tk.Label(fmt_body, text='Faster compression backend for Lazy_MkPFS. Uses native code and supports compression levels 0–3 only (higher levels are clamped to 3). Default remains safe zlib until PS5 mount testing is confirmed.', font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=420)
     def _refresh_isa_visibility():
         try:
@@ -521,7 +522,7 @@ def build_unibuild_tab(parent, app):
             cover_lbl.config(image='',
                              text='🗜' if pfs_src_mode.get() == 'image'
                              else '🎮',
-                             font=('Segoe UI', 56), width=4, height=4)
+                             font=(FONTS['body'][0], 56), width=4, height=4)
         except Exception:
             pass
         _refresh_via()
@@ -533,10 +534,10 @@ def build_unibuild_tab(parent, app):
     size_frame = tk.Frame(fmt_body, bg=COLORS['bg_2'])
     tk.Label(size_frame, text='exFAT image size:', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 10))
     for val, lab in ('auto', 'Auto (smallest)'), ('custom', 'Custom:'):
-        tk.Radiobutton(size_frame, text=lab, value=val, variable=img_size_mode, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 8))
+        XRadio(size_frame, text=lab, value=val, variable=img_size_mode, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 8))
     size_ef = tk.Frame(size_frame, bg=COLORS['field_bg'], highlightbackground=COLORS['border_3'], highlightthickness=1)
     size_ef.pack(side='left')
-    tk.Entry(size_ef, textvariable=img_size_gb, width=6, font=FONTS['mono_sm'], bg=COLORS['field_bg'], fg=COLORS['field_fg'], insertbackground=COLORS['field_fg'], relief='flat', bd=4, justify='center').pack()
+    XEntry(size_ef, textvariable=img_size_gb, width=6, font=FONTS['mono_sm'], bg=COLORS['field_bg'], fg=COLORS['field_fg'], insertbackground=COLORS['field_fg'], relief='flat', bd=4, justify='center').pack()
     tk.Label(size_frame, text='GB', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(4, 0))
     def _refresh_size_row():
         if out_type.get() == 'exfat':
@@ -559,7 +560,7 @@ def build_unibuild_tab(parent, app):
     apo_hdr.pack(fill='x')
     apo_caret = tk.Label(apo_hdr, text='▸', font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['accent_hi'])
     apo_caret.pack(side='left', padx=(10, 6), pady=7)
-    tk.Label(apo_hdr, text='⚙  Advanced Performance', font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_1']).pack(side='left', pady=7)
+    tk.Label(apo_hdr, text='⚙  Advanced Performance', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_1']).pack(side='left', pady=7)
     apo_hdr_sub = tk.Label(apo_hdr, text='copy performance · compression', font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5'])
     apo_hdr_sub.pack(side='left', padx=(8, 0), pady=7)
     apo_body = tk.Frame(apo_wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
@@ -577,7 +578,7 @@ def build_unibuild_tab(parent, app):
         _child.bind('<Button-1>', _apo_toggle)
     def _apo_group_header(parent, text):
         hdr = tk.Frame(parent, bg=COLORS['bg_2'])
-        tk.Label(hdr, text=text, font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w').pack(fill='x')
+        tk.Label(hdr, text=text, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w').pack(fill='x')
         tk.Frame(hdr, bg=COLORS['border_2'], height=1).pack(fill='x', pady=(3, 0))
         return hdr
     grp_copy = tk.Frame(apo_body, bg=COLORS['bg_2'])
@@ -587,7 +588,7 @@ def build_unibuild_tab(parent, app):
     cpu_row.pack(fill='x', pady=(8, 0))
     cpu_lcol = tk.Frame(cpu_row, bg=COLORS['bg_2'])
     cpu_lcol.pack(side='left', fill='x', expand=True)
-    tk.Label(cpu_lcol, text='Build copy threads', font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
+    tk.Label(cpu_lcol, text='Build copy threads', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
     n_cores = max(1, os.cpu_count() or 1)
     tk.Label(cpu_lcol, text='Parallel file copies during the image build (robocopy /MT) — %d cores available. Does NOT affect .ffpfsc compression, which uses a separate memory-safe worker limit automatically.' % n_cores, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=380).pack(fill='x')
     _core_steps = [*(1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)]
@@ -616,13 +617,13 @@ def build_unibuild_tab(parent, app):
     grp_comp.pack(fill='x', padx=12, pady=(14, 0))
     _apo_group_header(grp_comp, 'Compression').pack(fill='x')
     comp_na = tk.Frame(grp_comp, bg=COLORS['bg_2'])
-    tk.Label(comp_na, text='Not applicable', font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w').pack(fill='x')
+    tk.Label(comp_na, text='Not applicable', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w').pack(fill='x')
     comp_na_desc = tk.Label(comp_na, text='Native exFAT images are not compressed.', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=420)
     comp_na_desc.pack(fill='x', pady=(2, 0))
     comp_ctl = tk.Frame(grp_comp, bg=COLORS['bg_2'])
     be_row = tk.Frame(comp_ctl, bg=COLORS['bg_2'])
     be_row.pack(fill='x', pady=(8, 0))
-    tk.Label(be_row, text='Backend', font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
+    tk.Label(be_row, text='Backend', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
     _BE_LAZY_LABEL = 'Lazy MkPFS (Default)'
     _BE_MKPFS_LABEL = 'Stock MkPFS — compatibility fallback'
     def _apo_save_backend():
@@ -639,23 +640,23 @@ def build_unibuild_tab(parent, app):
             _refresh_apo_groups()
         except NameError:
             return
-    tk.Radiobutton(be_row, text=_BE_LAZY_LABEL, value='lazy', variable=pfs_backend, command=_apo_save_backend, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(anchor='w', pady=(4, 0))
+    XRadio(be_row, text=_BE_LAZY_LABEL, value='lazy', variable=pfs_backend, command=_apo_save_backend, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(anchor='w', pady=(4, 0))
     _apo_exp_state = {'open': pfs_backend.get() == 'mkpfs'}
     _apo_exp_var = tk.BooleanVar(value=_apo_exp_state['open'])
     exp_wrap = tk.Frame(be_row, bg=COLORS['bg_2'])
     exp_wrap.pack(fill='x', pady=(4, 0))
     mkpfs_radio_frame = tk.Frame(exp_wrap, bg=COLORS['bg_2'])
-    tk.Radiobutton(mkpfs_radio_frame, text=_BE_MKPFS_LABEL, value='mkpfs', variable=pfs_backend, command=_apo_save_backend, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left')
+    XRadio(mkpfs_radio_frame, text=_BE_MKPFS_LABEL, value='mkpfs', variable=pfs_backend, command=_apo_save_backend, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left')
     def _apo_toggle_exp():
         _apo_exp_state['open'] = bool(_apo_exp_var.get())
         if _apo_exp_state['open']:
             mkpfs_radio_frame.pack(anchor='w', padx=(18, 0), pady=(2, 0))
             return
         mkpfs_radio_frame.pack_forget()
-    tk.Checkbutton(exp_wrap, text='Show experimental compression backends', variable=_apo_exp_var, command=_apo_toggle_exp, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], selectcolor=COLORS['bg_4'], highlightthickness=0, bd=0).pack(anchor='w')
+    XCheck(exp_wrap, text='Show experimental compression backends', variable=_apo_exp_var, command=_apo_toggle_exp, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], selectcolor=COLORS['bg_4'], highlightthickness=0, bd=0).pack(anchor='w')
     eng_row = tk.Frame(comp_ctl, bg=COLORS['bg_2'])
     eng_row.pack(fill='x', pady=(10, 0))
-    tk.Label(eng_row, text='Compression engine', font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
+    tk.Label(eng_row, text='Compression engine', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
     _apo_isa_var = tk.BooleanVar(value=pfs_zlib_backend.get() == 'isa-l')
     def _apo_save_engine():
         try:
@@ -686,14 +687,14 @@ def build_unibuild_tab(parent, app):
             return
     eng_choice = tk.Frame(eng_row, bg=COLORS['bg_2'])
     eng_choice.pack(fill='x', pady=(4, 0))
-    tk.Radiobutton(eng_choice, text='zlib — safe (default)', value=False, variable=_apo_isa_var, command=_apo_save_engine, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(anchor='w')
-    tk.Radiobutton(eng_choice, text='zlib-isa — experimental', value=True, variable=_apo_isa_var, command=_apo_save_engine, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(anchor='w', pady=(2, 0))
+    XRadio(eng_choice, text='zlib — safe (default)', value=False, variable=_apo_isa_var, command=_apo_save_engine, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(anchor='w')
+    XRadio(eng_choice, text='zlib-isa — experimental', value=True, variable=_apo_isa_var, command=_apo_save_engine, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(anchor='w', pady=(2, 0))
     eng_isa_note = tk.Label(eng_row, text='Experimental: uses zlib-isa acceleration for faster compression. PS5 mount compatibility is still under validation — use only for testing.', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=420)
     lvl_row = tk.Frame(comp_ctl, bg=COLORS['bg_2'])
     lvl_row.pack(fill='x', pady=(10, 8))
     lvl_lcol = tk.Frame(lvl_row, bg=COLORS['bg_2'])
     lvl_lcol.pack(side='left', fill='x', expand=True)
-    tk.Label(lvl_lcol, text='Compression level', font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
+    tk.Label(lvl_lcol, text='Compression level', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(fill='x')
     lvl_desc = tk.Label(lvl_lcol, text='Higher = smaller output, more CPU. All levels mount fine in ShadowMount.', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=300)
     lvl_desc.pack(fill='x')
     _CLVL_LABELS = {'9': '9 — Stable / safest (default)', '6': '6 — Balanced / faster', '3': '3 — Fast / larger output', '1': '1 — Fastest / largest'}
@@ -803,14 +804,14 @@ def build_unibuild_tab(parent, app):
     tips_hdr.pack(fill='x')
     tips_caret = tk.Label(tips_hdr, text='▸', font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['accent_hi'])
     tips_caret.pack(side='left', padx=(10, 6), pady=7)
-    tk.Label(tips_hdr, text='⚡  Performance Tips', font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_1']).pack(side='left', pady=7)
+    tk.Label(tips_hdr, text='⚡  Performance Tips', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_1']).pack(side='left', pady=7)
     tk.Label(tips_hdr, text='help · not settings', font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5']).pack(side='left', padx=(8, 0), pady=7)
     tips_body = tk.Frame(tips_wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
     tip_lines = [*(('Use separate physical drives.', 'Put the game dump, the Output folder, and the Temp folder on three different drives. PFS compression reads the whole image and writes the result at the same time — on one disk that contention drops you to a few MB/s with the CPU sitting idle.'), ('Point Temp at your fastest drive (ideally NVMe SSD).', 'During compression the .ffpfsc is written to the Temp drive so the read and write hit different disks, then moved to the Output folder. A fast Temp drive is the single biggest speed-up for large games.'), ('Give Temp enough free space.', 'Because the compressed image is staged on the Temp drive, it needs room for it (budget about 2x the image size, transiently). If Temp is too small the build automatically falls back to writing beside the source — safe, but slower.'), ('Build copy threads affect the copy, not the squeeze.', 'The copy-threads selector controls parallel file copies during the build (robocopy /MT). PFS compression uses a separate, memory-safe worker count that is set automatically — it is not controlled by that setting.'))]
     for _ti, (_head, _desc) in enumerate(tip_lines):
         row = tk.Frame(tips_body, bg=COLORS['bg_2'])
         row.pack(fill='x', padx=12, pady=(10 if _ti == 0 else 6, 10 if _ti == len(tip_lines) - 1 else 0))
-        tk.Label(row, text='•  ' + _head, font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w', justify='left').pack(fill='x')
+        tk.Label(row, text='•  ' + _head, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w', justify='left').pack(fill='x')
         tk.Label(row, text=_desc, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w', justify='left', wraplength=440).pack(fill='x', padx=(14, 0))
     def _toggle_tips(_e=None):
         if tips_state['open']:
@@ -888,7 +889,7 @@ def build_unibuild_tab(parent, app):
     preset_row = tk.Frame(name_body, bg=COLORS['bg_2'])
     preset_row.pack(fill='x', pady=(0, 2))
     for val, lab in ('ppsa', 'PPSA only'), ('ppsa_title', 'PPSA + Title'), ('ppsa_title_ver', 'PPSA + Title + Version'), ('ppsa_title_ver_fw', 'PPSA + Title + Version + Firmware'), ('custom', 'Custom template'):
-        tk.Radiobutton(preset_row, text=lab, value=val, variable=name_preset, command=(lambda: _on_preset_change()), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 10))
+        XRadio(preset_row, text=lab, value=val, variable=name_preset, command=(lambda: _on_preset_change()), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 10))
     fw_row = tk.Frame(name_body, bg=COLORS['bg_2'])
     fw_row.pack(fill='x', pady=(0, 2))
     fw_lbl = tk.Label(fw_row, text='Firmware:', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3'])
@@ -910,7 +911,7 @@ def build_unibuild_tab(parent, app):
     tmpl_row = tk.Frame(name_body, bg=COLORS['bg_2'])
     tmpl_lbl = tk.Label(tmpl_row, text='Template:', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3'])
     tmpl_lbl.pack(side='left', padx=(0, 6))
-    tmpl_entry = tk.Entry(tmpl_row, textvariable=name_template, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_3'], highlightcolor=COLORS['teal'])
+    tmpl_entry = XEntry(tmpl_row, textvariable=name_template, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_3'], highlightcolor=COLORS['teal'])
     tmpl_entry.pack(side='left', fill='x', expand=True, ipady=3)
     tmpl_hint = tk.Label(name_body, text='Tokens: %TITLE%  %PPSA%  %VERSION%  %FIRMWARE%  %TYPE%  %DATE%   ·   empty ( ) are removed automatically', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left')
     def _show_tmpl(show):
@@ -1215,7 +1216,7 @@ def build_unibuild_tab(parent, app):
             hero_ver_var.set(ver or '—')
             cover_ref['img'] = None
             try:
-                cover_lbl.config(image='', text='🗜', font=('Segoe UI', 56), width=4, height=4)
+                cover_lbl.config(image='', text='🗜', font=(FONTS['body'][0], 56), width=4, height=4)
             except Exception:
                 pass
             _gen_name()
@@ -1272,7 +1273,7 @@ def build_unibuild_tab(parent, app):
             def _done():
                 if not got_cover['ok']:
                     cover_ref['img'] = None
-                    cover_lbl.config(image='', text='🎮', font=('Segoe UI', 56), width=4, height=4)
+                    cover_lbl.config(image='', text='🎮', font=(FONTS['body'][0], 56), width=4, height=4)
                 disp = title or (title_id or os.path.basename(folder.rstrip('/\\')))
                 det_title_var.set(disp.upper())
                 det_id_var.set(title_id or '—')
@@ -1479,7 +1480,7 @@ def build_unibuild_tab(parent, app):
     status_card = tk.Frame(cfg_body, bg=COLORS['bg_3'], highlightthickness=1, highlightbackground=COLORS['border_2'])
     sc_in = tk.Frame(status_card, bg=COLORS['bg_3'])
     sc_in.pack(fill='x', padx=14, pady=12)
-    tk.Label(sc_in, text='6.  Build progress', font=(FONTS['h3'][0], 11, 'bold'), bg=COLORS['bg_3'], fg=COLORS['accent'], anchor='w').pack(anchor='w', pady=(0, 8))
+    tk.Label(sc_in, text='6.  Build progress', font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_3'], fg=COLORS['accent'], anchor='w').pack(anchor='w', pady=(0, 8))
     phase_row = tk.Frame(sc_in, bg=COLORS['bg_3'])
     phase_row.pack(fill='x', pady=(0, 10))
     phase_lbls = []
@@ -1695,7 +1696,7 @@ def build_unibuild_tab(parent, app):
     qcard = tk.Frame(inner, bg=COLORS['bg_2'], highlightthickness=1, highlightbackground=COLORS['border_2'])
     qhead = tk.Frame(qcard, bg=COLORS['bg_2'])
     qhead.pack(fill='x', padx=20, pady=(16, 4))
-    tk.Label(qhead, text='5.  Build queue', font=(FONTS['h3'][0], 12, 'bold'), bg=COLORS['bg_2'], fg=COLORS['accent']).pack(side='left')
+    tk.Label(qhead, text='5.  Build queue', font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['accent']).pack(side='left')
     tk.Label(qhead, textvariable=uq_count, font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(10, 0))
     make_themed_button(qhead, text='Clear', command=(lambda: _uq_clear()), kind='accent', icon='✗', font_size=9, padx=12, pady=6).pack(side='right')
     make_themed_button(qhead, text='Remove selected', command=(lambda: _uq_remove_selected()), kind='accent', icon='✕', font_size=9, padx=12, pady=6).pack(side='right', padx=(0, 8))
@@ -1752,10 +1753,10 @@ def build_unibuild_tab(parent, app):
                 if var is None:
                     var = tk.BooleanVar(value=False)
                     uq_state['sel'][id(job)] = var
-                tk.Checkbutton(inner_r, variable=var, bg=COLORS['bg_3'], activebackground=COLORS['bg_3'], selectcolor=COLORS['bg_4'], highlightthickness=0, bd=0, cursor='hand2').pack(side='left', padx=(0, 6))
+                XCheck(inner_r, variable=var, bg=COLORS['bg_3'], activebackground=COLORS['bg_3'], selectcolor=COLORS['bg_4'], highlightthickness=0, bd=0, cursor='hand2').pack(side='left', padx=(0, 6))
             else:
                 tk.Frame(inner_r, bg=COLORS['bg_3'], width=18, height=1).pack(side='left')
-            tk.Label(inner_r, text=_TYPE_LABEL[job['type']], font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_4'], fg=COLORS['teal'], padx=7, pady=2).pack(side='left', padx=(0, 10))
+            tk.Label(inner_r, text=_TYPE_LABEL[job['type']], font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_4'], fg=COLORS['teal'], padx=7, pady=2).pack(side='left', padx=(0, 10))
             label = job['name']
             if job['type'] == 'pfs':
                 if job.get('from_image'):
@@ -1779,7 +1780,7 @@ def build_unibuild_tab(parent, app):
             if dur:
                 tk.Label(inner_r, text='%ds' % int(dur), font=FONTS['meta'], bg=COLORS['bg_3'], fg=COLORS['fg_4']).pack(side='right', padx=(8, 10))
             btxt, bcol = _STATUS_BADGE.get(job['status'], ('?', 'fg_4'))
-            tk.Label(inner_r, text=btxt, font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_4'], fg=COLORS[bcol], padx=8, pady=2).pack(side='right', padx=(8, 0))
+            tk.Label(inner_r, text=btxt, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_4'], fg=COLORS[bcol], padx=8, pady=2).pack(side='right', padx=(8, 0))
     def _uq_add():
         src = src_var.get().strip()
         outdir = outdir_var.get().strip()
@@ -1936,11 +1937,11 @@ def build_unibuild_tab(parent, app):
     summary_card = tk.Frame(inner, bg=COLORS['bg_2'], highlightthickness=1, highlightbackground=COLORS['success'])
     swrap = tk.Frame(summary_card, bg=COLORS['bg_2'])
     swrap.pack(fill='x', padx=20, pady=16)
-    sum_icon = tk.Label(swrap, text='✓', font=(FONTS['h2'][0], 22, 'bold'), bg=COLORS['bg_2'], fg=COLORS['success'])
+    sum_icon = tk.Label(swrap, text='✓', font=(FONTS['body_strong'][0], 22), bg=COLORS['bg_2'], fg=COLORS['success'])
     sum_icon.pack(side='left', padx=(0, 16))
     scol = tk.Frame(swrap, bg=COLORS['bg_2'])
     scol.pack(side='left', fill='x', expand=True)
-    tk.Label(scol, textvariable=sum_title_var, font=(FONTS['h3'][0], 12, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(anchor='w')
+    tk.Label(scol, textvariable=sum_title_var, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(anchor='w')
     tk.Label(scol, textvariable=sum_jobs_var, font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(anchor='w')
     sgrid = tk.Frame(swrap, bg=COLORS['bg_2'])
     sgrid.pack(side='right')
@@ -1954,7 +1955,7 @@ def build_unibuild_tab(parent, app):
             f.grid(row=0, column=col, sticky='w', padx=(0, 26))
             tk.Label(f, text=label, font=FONTS['eyebrow'], bg=COLORS['bg_2'],
                      fg=COLORS['fg_5'], anchor='w').pack(anchor='w')
-            tk.Label(f, text=value, font=(FONTS['mono_sm'][0], 10, 'bold'),
+            tk.Label(f, text=value, font=(FONTS['body_strong'][0], 10),
                      bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w').pack(
                          anchor='w')
     def _set_buttons(enabled):

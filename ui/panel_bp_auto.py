@@ -34,6 +34,7 @@ The panel exposes a public helper:
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk
 
 from tkinter_theme import COLORS, FONTS
@@ -241,7 +242,7 @@ def _build_description_card(parent, app):
     inner.pack(fill='x', padx=14, pady=10)
 
     tk.Label(inner, text='\u26a1  Auto Backport',
-             font=(FONTS['h3'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=bg, fg=COLORS['purple'],
              anchor='w'
              ).pack(fill='x')
@@ -301,7 +302,7 @@ def _build_detected_strip(parent, app):
         cell = tk.Frame(inner, bg=bg)
         cell.grid(row=0, column=col, sticky='ew', padx=2)
         tk.Label(cell, text=label_text.upper(),
-                 font=(FONTS['eyebrow'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=bg, fg=COLORS['fg_5'],
                  anchor='w'
                  ).pack(fill='x')
@@ -452,7 +453,7 @@ def _build_sdk_and_fakelib(parent, app):
     for val, lbl in [('none',   _('None')),
                      ('folder', _('Select folder')),
                      ('file',   _('Select file'))]:
-        tk.Radiobutton(fl_row, text=lbl,
+        XRadio(fl_row, text=lbl,
                        variable=app._abp_fakelib_var, value=val,
                        font=FONTS['body'],
                        bg=COLORS['bg_1'], fg=COLORS['fg_3'],
@@ -498,9 +499,9 @@ def _build_action_row(parent, app):
     row = tk.Frame(parent, bg=COLORS['bg_1'])
     row.pack(fill='x', pady=(4, 8))
 
-    app._abp_btn = tk.Button(row,
+    app._abp_btn = XButton(row,
                              text='\u26a1  ' + _('Apply Auto Backport'),
-                             font=(FONTS['button'][0], 11, 'bold'),
+                             font=(FONTS['body_strong'][0], 11),
                              bg=COLORS['purple'], fg=COLORS['fg_0'],
                              activebackground=COLORS['purple_hi'],
                              activeforeground=COLORS['fg_0'],
@@ -510,8 +511,8 @@ def _build_action_row(parent, app):
                              command=app._abp_run)
     app._abp_btn.pack(side='left')
 
-    tk.Button(row, text='\u21a9  ' + _('Restore originals'),
-              font=(FONTS['button'][0], 10),
+    XButton(row, text='\u21a9  ' + _('Restore originals'),
+              font=(FONTS['body'][0], 10),
               bg=COLORS['bg_2'], fg=COLORS['warn_hi'],
               activebackground=COLORS['bg_3'],
               activeforeground=COLORS['warn_hi'],
@@ -523,8 +524,8 @@ def _build_action_row(parent, app):
               command=app._abp_restore
               ).pack(side='left', padx=(8, 0))
 
-    tk.Button(row, text='\u21a9\u21a9  ' + _('Restore multiple\u2026'),
-              font=(FONTS['button'][0], 10),
+    XButton(row, text='\u21a9\u21a9  ' + _('Restore multiple\u2026'),
+              font=(FONTS['body'][0], 10),
               bg=COLORS['bg_2'], fg=COLORS['warn_hi'],
               activebackground=COLORS['bg_3'],
               activeforeground=COLORS['warn_hi'],
@@ -586,10 +587,10 @@ def _build_output_log(parent, app):
     head = tk.Frame(parent, bg=COLORS['bg_1'])
     head.pack(fill='x')
     tk.Label(head, text=_('OUTPUT LOG'),
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_5']
              ).pack(side='left')
-    tk.Button(head, text=_('Clear'),
+    XButton(head, text=_('Clear'),
               font=FONTS['meta'],
               bg=COLORS['bg_1'], fg=COLORS['fg_5'],
               activebackground=COLORS['bg_2'],
@@ -678,15 +679,15 @@ def _dark_entry(parent, var, readonly=False, width=None):
                         state=state)
     if width is not None:
         entry_kwargs['width'] = width
-    entry = tk.Entry(wrap, **entry_kwargs)
+    entry = XEntry(wrap, **entry_kwargs)
     entry.pack(fill='x')
     return wrap
 
 
 def _ghost_btn(parent, text, command):
     """Small ghost-style button matching mock's `.btn-ghost`."""
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_3'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_4'],
                      activeforeground=COLORS['fg_1'],

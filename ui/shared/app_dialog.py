@@ -36,6 +36,7 @@ a wall of text, once migrated.
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 # theme_tokens lives in ui/ but the app runs with the repo root on sys.path
 # (and the PyInstaller bundle flattens it), so try both import spellings.
@@ -61,7 +62,7 @@ def _themed_button(parent, text, variant, command):
     Kept local so the dialog depends only on tkinter + theme_tokens."""
     b = T.button(variant)
     bg = b["bg"] if b["bg"] else T.BG_CARD
-    btn = tk.Button(
+    btn = XButton(
         parent, text=text, command=command,
         font=T.FONT_BODY, fg=b["fg"], bg=bg,
         activeforeground=b["fg"], activebackground=b["active"] or T.BG_RAISED,

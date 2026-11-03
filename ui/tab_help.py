@@ -22,6 +22,7 @@ is preserved with the same name.
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -38,7 +39,7 @@ def build_help_tab(parent, app):
     head.pack(fill='x', padx=24, pady=(14, 12))
 
     tk.Label(head, text='\u2753  ' + _('Help & Tutorial'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(side='left')
 
@@ -92,8 +93,8 @@ def build_help_tab(parent, app):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],

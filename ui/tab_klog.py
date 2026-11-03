@@ -36,6 +36,7 @@ callbacks" rule. Can be added in a follow-up.
 """
 
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -91,7 +92,7 @@ def _build_page_head(body, app):
     # Green gradient-ish badge tile (▣ glyph, success-on-bg-darker)
     badge = tk.Label(head, text='\u25a3',
                      bg=COLORS['success'], fg='#001a05',
-                     font=(FONTS['body'][0], 16, 'bold'),
+                     font=(FONTS['body_strong'][0], 16),
                      width=2, height=1, padx=4, pady=0,
                      highlightbackground='#00b32d',
                      highlightthickness=1)
@@ -101,7 +102,7 @@ def _build_page_head(body, app):
     title_col = tk.Frame(head, bg=COLORS['bg_1'])
     title_col.pack(side='left', fill='x', expand=True)
     tk.Label(title_col, text=_('Kernel Log Monitor'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'],
              anchor='w'
              ).pack(fill='x')
@@ -132,7 +133,7 @@ def _build_page_head(body, app):
     app._klog_status_var = tk.StringVar(value=_('Disconnected'))
     app._klog_status_lbl = tk.Label(pill_inner,
                                     textvariable=app._klog_status_var,
-                                    font=(FONTS['mono_sm'][0], 10, 'bold'),
+                                    font=(FONTS['body_strong'][0], 10),
                                     bg=COLORS['success_bg'],
                                     fg=COLORS['fg_4'])
     app._klog_status_lbl.pack(side='left')
@@ -239,7 +240,7 @@ def _build_conn_bar(body, app):
 
     # IP label + input
     tk.Label(inner, text='IP',
-             font=(FONTS['label'][0], 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=COLORS['bg_2'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(0, 6))
     _dark_entry(inner, app._klog_ip_var, width=18).pack(side='left',
@@ -247,7 +248,7 @@ def _build_conn_bar(body, app):
 
     # Port label + input
     tk.Label(inner, text='Port',
-             font=(FONTS['label'][0], 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=COLORS['bg_2'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(0, 6))
     _dark_entry(inner, app._klog_port_var, width=8).pack(side='left',
@@ -329,7 +330,7 @@ def _build_filter_row(body, app):
     # The filter input itself — dark theme variant (the design system rule
     # "fields are light-on-dark" doesn't apply to inline filter inputs,
     # which use the dark style per the mock).
-    filter_entry = tk.Entry(inner, textvariable=app._klog_filter_var,
+    filter_entry = XEntry(inner, textvariable=app._klog_filter_var,
                             font=FONTS['mono_sm'],
                             bg=COLORS['bg_2'], fg=COLORS['fg_1'],
                             insertbackground=COLORS['accent'],
@@ -344,7 +345,7 @@ def _build_filter_row(body, app):
     app._klog_filter_var.trace_add('write', lambda *a: app._klog_apply_filter())
 
     # Clear-filter button (small, ghost-style)
-    tk.Button(inner, text=_('Clear'),
+    XButton(inner, text=_('Clear'),
               font=FONTS['meta'],
               bg=COLORS['bg_3'], fg=COLORS['fg_4'],
               activebackground=COLORS['bg_4'], activeforeground=COLORS['fg_1'],
@@ -382,7 +383,7 @@ def _dark_entry(parent, var, width=20):
     f = tk.Frame(parent, bg=COLORS['bg_4'],
                  highlightbackground=COLORS['border_3'],
                  highlightthickness=1)
-    e = tk.Entry(f, textvariable=var,
+    e = XEntry(f, textvariable=var,
                  font=FONTS['mono_sm'],
                  bg=COLORS['bg_4'], fg=COLORS['fg_1'],
                  insertbackground=COLORS['accent'],
@@ -411,8 +412,8 @@ def _btn(parent, text, command, kind='primary', state='normal'):
                     COLORS['bg_4'],    COLORS['fg_1']),
     }
     bg, fg, abg, afg = schemes.get(kind, schemes['ghost'])
-    btn = tk.Button(parent, text=text,
-                    font=(FONTS['button'][0], 9, 'bold'),
+    btn = XButton(parent, text=text,
+                    font=(FONTS['body_strong'][0], 9),
                     bg=bg, fg=fg,
                     activebackground=abg, activeforeground=afg,
                     relief='flat', bd=0,

@@ -33,6 +33,7 @@ visible card grid into the hidden listbox on every click.
 import os
 import re
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -101,7 +102,7 @@ def _build_toolbar(parent, app):
     title_col.pack(side='left', fill='x', expand=True)
 
     tk.Label(title_col, text=_('My Images'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(anchor='w')
 
@@ -146,7 +147,7 @@ def _build_filterbar(parent, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(8, 4))
-    tk.Entry(search_wrap, textvariable=app._img_search_var,
+    XEntry(search_wrap, textvariable=app._img_search_var,
              font=FONTS['body'],
              bg=COLORS['bg_0'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -225,7 +226,7 @@ def _build_action_bar(parent, app):
              ).pack(side='left')
 
     tk.Label(inner, textvariable=app._img_sel_var,
-             font=(FONTS['mono_sm'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['accent_hi']
              ).pack(side='right')
 
@@ -238,7 +239,7 @@ def _build_grid(parent, app):
     outer.pack(fill='both', expand=True, padx=24, pady=(0, 12))
 
     canvas = tk.Canvas(outer, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = tk.Scrollbar(outer, command=canvas.yview,
+    sb = XScrollbar(outer, command=canvas.yview,
                       bg=COLORS['bg_3'], troughcolor=COLORS['bg_1'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -535,8 +536,8 @@ def _parse_meta(name):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -549,8 +550,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],

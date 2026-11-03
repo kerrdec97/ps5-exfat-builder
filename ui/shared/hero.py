@@ -53,7 +53,7 @@ class GameHero(tk.Frame):
         self._cover_tile.pack_propagate(False)
         self._cover_lbl = tk.Label(self._cover_tile, text=cover_glyph,
                                    bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                                   font=('Segoe UI', 52))
+                                   font=(FONTS['body'][0], 52))
         self._cover_lbl.pack(expand=True)
 
         # ── right column: title row + stats strip ──
@@ -67,23 +67,22 @@ class GameHero(tk.Frame):
         tcol.pack(side='left', fill='x', expand=True)
         self.title_var = tk.StringVar(value='')
         tk.Label(tcol, textvariable=self.title_var,
-                 font=(FONTS['h2'][0], 17, 'bold'), bg=COLORS['bg_2'],
+                 font=(FONTS['body_strong'][0], 17), bg=COLORS['bg_2'],
                  fg=COLORS['fg_0'], anchor='w', justify='left').pack(
                      anchor='w', fill='x')
         self.id_var = tk.StringVar(value='')
         tk.Label(tcol, textvariable=self.id_var,
-                 font=(FONTS['mono_sm'][0], 11), bg=COLORS['bg_2'],
+                 font=(FONTS['body'][0], 11), bg=COLORS['bg_2'],
                  fg=COLORS['fg_4'], anchor='w').pack(anchor='w')
         self.path_var = tk.StringVar(value='')
         self._path_lbl = tk.Label(tcol, textvariable=self.path_var,
-                                  font=(FONTS['mono_sm'][0], 9),
+                                  font=(FONTS['body'][0], 9),
                                   bg=COLORS['bg_2'], fg=COLORS['fg_5'],
                                   anchor='w')
         self._path_lbl.pack(anchor='w', pady=(2, 0))
 
         # status badge (top-right)
-        self._badge = tk.Label(title_row, text='', font=(FONTS['mono_sm'][0],
-                               9, 'bold'), bg=COLORS['bg_4'], fg=COLORS['fg_3'],
+        self._badge = tk.Label(title_row, text='', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_4'], fg=COLORS['fg_3'],
                                padx=10, pady=4)
         self._badge.pack(side='right', anchor='n')
 
@@ -95,11 +94,11 @@ class GameHero(tk.Frame):
             cell = tk.Frame(strip, bg=COLORS['bg_2'])
             cell.pack(side='left', padx=(0 if i == 0 else 26, 0))
             tk.Label(cell, text=label.upper(),
-                     font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'],
+                     font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'],
                      fg=COLORS['fg_5'], anchor='w').pack(anchor='w')
             v = tk.StringVar(value='\u2014')
             val = tk.Label(cell, textvariable=v,
-                           font=(FONTS['mono_sm'][0], 11, 'bold'),
+                           font=(FONTS['body_strong'][0], 11),
                            bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w')
             val.pack(anchor='w', pady=(2, 0))
             self._cells[key] = (v, val)
@@ -137,7 +136,7 @@ class GameHero(tk.Frame):
         self._cover_img = None
         try:
             self._cover_lbl.config(image='', text=self._cover_glyph,
-                                   font=('Segoe UI', 52))
+                                   font=(FONTS['body'][0], 52))
         except Exception:
             pass
 

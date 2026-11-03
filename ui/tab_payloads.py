@@ -37,6 +37,7 @@ scope-bend pattern.
 
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -85,7 +86,7 @@ def _build_connection_bar(parent, app):
              width=8, height=8
              ).pack(side='left', padx=(0, 6))
     tk.Label(pill_inner, text=_('PAYLOAD BUS'),
-             font=(FONTS['mono_sm'][0], 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=COLORS['accent_08'], fg=COLORS['accent_hi']
              ).pack(side='left')
 
@@ -98,7 +99,7 @@ def _build_connection_bar(parent, app):
                        highlightbackground=COLORS['border_3'],
                        highlightthickness=1)
     ip_wrap.pack(side='left')
-    tk.Entry(ip_wrap, textvariable=app._pl_ip_var,
+    XEntry(ip_wrap, textvariable=app._pl_ip_var,
              font=FONTS['mono_sm'],
              bg=COLORS['bg_3'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -115,7 +116,7 @@ def _build_connection_bar(parent, app):
                          highlightbackground=COLORS['border_3'],
                          highlightthickness=1)
     port_wrap.pack(side='left')
-    tk.Entry(port_wrap, textvariable=app._pl_port_var,
+    XEntry(port_wrap, textvariable=app._pl_port_var,
              font=FONTS['mono_sm'],
              bg=COLORS['bg_3'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -228,7 +229,7 @@ def _build_list_pane(parent, app):
     head = tk.Frame(pane, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=22, pady=(14, 8))
     tk.Label(head, text=_('Payloads'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0']
              ).pack(side='left')
 
@@ -250,7 +251,7 @@ def _build_list_pane(parent, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_4']
              ).pack(side='left', padx=(8, 4))
-    tk.Entry(search_wrap, textvariable=app._pl_search_var,
+    XEntry(search_wrap, textvariable=app._pl_search_var,
              font=FONTS['body'],
              bg=COLORS['bg_0'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -269,7 +270,7 @@ def _build_list_pane(parent, app):
     list_outer.pack(fill='both', expand=True, padx=22, pady=(0, 12))
 
     canvas = tk.Canvas(list_outer, bg=COLORS['bg_2'], highlightthickness=0)
-    sb = tk.Scrollbar(list_outer, command=canvas.yview,
+    sb = XScrollbar(list_outer, command=canvas.yview,
                       bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -301,7 +302,7 @@ def _build_detail_pane(parent, app):
     head = tk.Frame(pane, bg=COLORS['bg_1'])
     head.pack(fill='x', padx=18, pady=(14, 8))
     tk.Label(head, text=_('Detail'),
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_4']
              ).pack(side='left')
     tk.Frame(pane, bg=COLORS['border_2'], height=1).pack(fill='x', padx=18)
@@ -353,14 +354,14 @@ def _render_detail_for(app, idx):
     title_row = tk.Frame(parent, bg=COLORS['bg_1'])
     title_row.pack(fill='x')
     tk.Label(title_row, text=p.get('name', '(unnamed)'),
-             font=(FONTS['h2'][0], 14, 'bold'),
+             font=(FONTS['body_strong'][0], 14),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
              ).pack(side='left', fill='x', expand=True)
     badge_bg = COLORS['success_bg'] if exists else COLORS['danger_bg']
     badge_fg = COLORS['success_hi'] if exists else COLORS['danger_hi']
     tk.Label(title_row,
              text=('\u2713 ' + _('READY')) if exists else ('\u2717 ' + _('MISSING')),
-             font=(FONTS['mono_sm'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=badge_bg, fg=badge_fg, padx=8, pady=2
              ).pack(side='right')
 
@@ -397,7 +398,7 @@ def _render_detail_for(app, idx):
         row = tk.Frame(parent, bg=COLORS['bg_1'])
         row.pack(fill='x', pady=2)
         tk.Label(row, text=key.upper(),
-                 font=(FONTS['eyebrow'][0], 8, 'bold'),
+                 font=(FONTS['body_strong'][0], 9),
                  bg=COLORS['bg_1'], fg=COLORS['fg_5'], anchor='w'
                  ).pack(fill='x')
         tk.Label(row, text=value,
@@ -420,7 +421,7 @@ def _render_detail_for(app, idx):
     tk.Frame(parent, bg=COLORS['border_2'], height=1
              ).pack(fill='x', pady=(8, 8))
     tk.Label(parent, text=_('TARGET'),
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w'
              ).pack(fill='x', pady=(0, 4))
 
@@ -466,7 +467,7 @@ def _render_detail_for(app, idx):
     wi = tk.Frame(warn, bg=COLORS['warn_bg'])
     wi.pack(fill='x', padx=10, pady=6)
     tk.Label(wi, text='\u26a0',
-             font=(FONTS['body'][0], 11, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['warn_bg'], fg=COLORS['warn']
              ).pack(side='left', padx=(0, 6))
     tk.Label(wi,
@@ -498,8 +499,8 @@ def _pl_remove_then_refresh(app, idx):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -512,8 +513,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
@@ -524,8 +525,8 @@ def _accent_btn(parent, text, command):
 
 
 def _danger_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['danger_hi'],

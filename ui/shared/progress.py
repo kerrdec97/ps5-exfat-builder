@@ -122,7 +122,7 @@ class StagedProgressBar(tk.Frame):
         top_row.pack(fill='x')
         num_lbl = tk.Label(top_row,
                            text=('%02d' % (idx + 1)),
-                           font=(FONTS['eyebrow'][0], 8, 'bold'),
+                           font=(FONTS['body_strong'][0], 9),
                            bg=fill, fg=num_fg)
         num_lbl.pack(side='left')
         # Dot indicator on the right of the top row
@@ -132,7 +132,7 @@ class StagedProgressBar(tk.Frame):
         dot_lbl.pack(side='right')
 
         name_lbl = tk.Label(inner, text=name,
-                            font=(FONTS['body'][0], 10, 'bold'),
+                            font=(FONTS['body_strong'][0], 10),
                             bg=fill, fg=name_fg, anchor='w')
         name_lbl.pack(fill='x', pady=(4, 0))
 

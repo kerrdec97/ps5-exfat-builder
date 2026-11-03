@@ -35,6 +35,7 @@ and `app._switch_tab()`. All exist and are unchanged.
 import json
 import os
 import tkinter as tk
+from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
 from tkinter_theme import COLORS, FONTS
 
@@ -118,7 +119,7 @@ def _build_left_pane(parent, app):
     head = tk.Frame(pane, bg=COLORS['bg_0'])
     head.pack(fill='x', padx=18, pady=(16, 6))
     tk.Label(head, text=_('Interface language'),
-             font=(FONTS['h3'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_0'], fg=COLORS['fg_0'],
              anchor='w'
              ).pack(fill='x')
@@ -142,7 +143,7 @@ def _build_left_pane(parent, app):
              font=(FONTS['body'][0], 11),
              bg=COLORS['bg_3'], fg=COLORS['fg_5']
              ).pack(side='left', padx=(8, 4))
-    tk.Entry(search_wrap, textvariable=app._lang_search_var,
+    XEntry(search_wrap, textvariable=app._lang_search_var,
              font=FONTS['body'],
              bg=COLORS['bg_3'], fg=COLORS['fg_1'],
              insertbackground=COLORS['accent'],
@@ -156,7 +157,7 @@ def _build_left_pane(parent, app):
     list_outer.pack(fill='both', expand=True)
 
     canvas = tk.Canvas(list_outer, bg=COLORS['bg_0'], highlightthickness=0)
-    sb = tk.Scrollbar(list_outer, command=canvas.yview,
+    sb = XScrollbar(list_outer, command=canvas.yview,
                       bg=COLORS['bg_3'], troughcolor=COLORS['bg_0'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
@@ -224,11 +225,11 @@ def _render_lang_row(parent, app, code, name, native, flag, is_active):
     name_row = tk.Frame(text_col, bg=row_bg)
     name_row.pack(fill='x')
     tk.Label(name_row, text=flag,
-             font=(FONTS['body'][0], 12),
+             font=(FONTS['body'][0], 11),
              bg=row_bg, fg=COLORS['fg_0']
              ).pack(side='left', padx=(0, 8))
     tk.Label(name_row, text=name,
-             font=(FONTS['body'][0], 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=row_bg, fg=COLORS['fg_0'], anchor='w'
              ).pack(side='left')
     tk.Label(text_col, text=native,
@@ -255,7 +256,7 @@ def _render_lang_row(parent, app, code, name, native, flag, is_active):
     fill.pack(side='left', fill='y')
 
     tk.Label(meta_col, text='%d%%' % pct,
-             font=(FONTS['mono_sm'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=row_bg, fg=pct_color
              ).pack(anchor='e', pady=(2, 0))
 
@@ -332,7 +333,7 @@ def _refresh_preview_pane(app):
     title_col = tk.Frame(app._lang_right_head_frame, bg=COLORS['bg_1'])
     title_col.pack(side='left', fill='x', expand=True)
     tk.Label(title_col, text=name,
-             font=(FONTS['h2'][0], 16, 'bold'),
+             font=(FONTS['body_strong'][0], 16),
              bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
 
@@ -383,7 +384,7 @@ def _build_preview(parent, app, code):
     head = tk.Frame(card, bg=COLORS['bg_2'])
     head.pack(fill='x', padx=14, pady=(12, 6))
     tk.Label(head, text=_('Live preview'),
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left')
     tk.Label(head, text='menu \u203a build',
@@ -395,7 +396,7 @@ def _build_preview(parent, app, code):
     inner.pack(fill='x', padx=14, pady=(0, 12))
     tk.Label(inner, text=_t(code, 'BUILD exFAT IMAGE',
                              default='Build exFAT image'),
-             font=(FONTS['h3'][0], 12, 'bold'),
+             font=(FONTS['body_strong'][0], 11),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(inner,
@@ -410,18 +411,18 @@ def _build_preview(parent, app, code):
 
     btn_row = tk.Frame(inner, bg=COLORS['bg_2'])
     btn_row.pack(fill='x')
-    tk.Button(btn_row,
+    XButton(btn_row,
               text=_t(code, 'Browse', default='Browse'),
-              font=(FONTS['button'][0], 9),
+              font=(FONTS['body'][0], 9),
               bg=COLORS['bg_3'], fg=COLORS['fg_2'],
               relief='flat', bd=0, padx=12, pady=6,
               cursor='hand2',
               highlightbackground=COLORS['border_3'],
               highlightthickness=1
               ).pack(side='left', padx=(0, 6))
-    tk.Button(btn_row,
+    XButton(btn_row,
               text='\u25b6  ' + _t(code, 'Build All', default='Start build'),
-              font=(FONTS['button'][0], 9, 'bold'),
+              font=(FONTS['body_strong'][0], 9),
               bg=COLORS['accent'], fg=COLORS['fg_0'],
               relief='flat', bd=0, padx=12, pady=6,
               cursor='hand2'
@@ -436,7 +437,7 @@ def _build_preview(parent, app, code):
     str_head = tk.Frame(str_card, bg=COLORS['bg_2'])
     str_head.pack(fill='x', padx=14, pady=(12, 6))
     tk.Label(str_head, text=_('Strings'),
-             font=(FONTS['eyebrow'][0], 8, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_2'], fg=COLORS['fg_5']
              ).pack(side='left')
     n_done, n_total, _pct = app._lang_coverage[code]
@@ -487,7 +488,7 @@ def _build_status_aside(parent, app, code):
     n_done, n_total, pct = app._lang_coverage[code]
 
     tk.Label(parent, text=_('Status'),
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_4'],
              anchor='w'
              ).pack(fill='x', pady=(0, 6))
@@ -509,7 +510,7 @@ def _build_status_aside(parent, app, code):
                sub=_('Click Apply to switch'))
 
     tk.Label(parent, text=_('Contributors'),
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
+             font=(FONTS['body_strong'][0], 9),
              bg=COLORS['bg_1'], fg=COLORS['fg_4'],
              anchor='w'
              ).pack(fill='x', pady=(14, 6))
@@ -521,7 +522,7 @@ def _build_status_aside(parent, app, code):
     inner = tk.Frame(contrib_card, bg=COLORS['bg_2'])
     inner.pack(fill='x', padx=12, pady=10)
     tk.Label(inner, text='@kerrdec97',
-             font=(FONTS['body'][0], 10, 'bold'),
+             font=(FONTS['body_strong'][0], 10),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(inner,
@@ -643,8 +644,8 @@ def _english_string_count():
 
 
 def _ghost_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9),
+    return XButton(parent, text=text,
+                     font=(FONTS['body'][0], 9),
                      bg=COLORS['bg_2'], fg=COLORS['fg_2'],
                      activebackground=COLORS['bg_3'],
                      activeforeground=COLORS['fg_0'],
@@ -657,8 +658,8 @@ def _ghost_btn(parent, text, command):
 
 
 def _accent_btn(parent, text, command):
-    return tk.Button(parent, text=text,
-                     font=(FONTS['button'][0], 9, 'bold'),
+    return XButton(parent, text=text,
+                     font=(FONTS['body_strong'][0], 9),
                      bg=COLORS['accent'], fg=COLORS['fg_0'],
                      activebackground=COLORS['accent_hi'],
                      activeforeground=COLORS['fg_0'],
