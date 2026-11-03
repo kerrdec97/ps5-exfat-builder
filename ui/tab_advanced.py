@@ -39,11 +39,15 @@ import os
 import sys
 import subprocess
 import tkinter as tk
-from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
+from ui.shared.widgets import (
+    Button as XButton, Check as XCheck, Radio as XRadio,
+    TextField as XEntry, Scrollbar as XScrollbar, IconButton, Dropdown,
+    Card, Rounded, Badge, InfoBar, PageHeader, Tabs, Segmented, Divider,
+    IconLabel, EmptyState as XEmptyState, Tooltip as XTooltip, autowrap)
 from ui.shared.scroll import wheel_units
 from tkinter import ttk
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
 from exfat_builder import *  # noqa: F401,F403
 from ui.shared.app_dialog import (
@@ -51,6 +55,9 @@ from ui.shared.app_dialog import (
 )
 from exfat_builder import _, save_settings, SubTabBar, Tooltip
 from ui.shared.scroll import attach_scroll
+from ui.tab_settings import setting_row, TSwitch
+
+C = COLORS
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -201,18 +208,18 @@ def build_advanced_tab(parent, app):
 
     _build_head(parent, app)
     _build_subtab_bar(parent, app)
-    body = tk.Frame(parent, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True, padx=24, pady=(0, 12))
+    body = tk.Frame(parent, bg=C['bg_1'])
+    body.pack(fill='both', expand=True)
     app._adv_v2_body = body
 
-    # Three panes — only one visible at a time. Each pane is a
+    # Five panes — only one visible at a time. Each pane is a
     # scrollable host so tall content (e.g. Post-Build's Danger Zone)
     # is always reachable instead of being clipped at the viewport
     # bottom. The scrollregion is recomputed on every <Configure> of
     # the inner frame, so adding cards never pushes content off-screen.
     app._adv_v2_panes = {}
     for key in ('params', 'post', 'lang', 'ampr', 'dlc'):
-        pane = tk.Frame(body, bg=COLORS['bg_1'])
+        pane = tk.Frame(body, bg=C['bg_1'])
         app._adv_v2_panes[key] = pane
 
     _build_params_pane(_scroll_host(app._adv_v2_panes['params']), app)
@@ -229,119 +236,77 @@ def build_advanced_tab(parent, app):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Page head
+# Page head — title, description and the page actions
 # ─────────────────────────────────────────────────────────────────────
 def _build_head(parent, app):
-    head = tk.Frame(parent, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=24, pady=(18, 14))
-
-    # Left: 32x32 accent tile + h2 + subtitle
-    left = tk.Frame(head, bg=COLORS['bg_1'])
-    left.pack(side='left', fill='x', expand=True)
-    icon_tile = tk.Frame(left, bg=COLORS['accent_15'],
-                         width=32, height=32)
-    icon_tile.pack(side='left')
-    icon_tile.pack_propagate(False)
-    tk.Label(icon_tile, text='\u2699',
-             bg=COLORS['accent_15'], fg=COLORS['accent'],
-             font=(FONTS['body'][0], 14)
-             ).pack(expand=True)
-    title_col = tk.Frame(left, bg=COLORS['bg_1'])
-    title_col.pack(side='left', padx=(10, 0))
-    tk.Label(title_col, text=_('Advanced'),
-             font=(FONTS['body_strong'][0], 16),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']
-             ).pack(anchor='w')
-    tk.Label(title_col,
-             text=_('Power-user configuration for image creation, '
-                    'performance tuning and automation.'),
-             font=(FONTS['body'][0], 10),
-             bg=COLORS['bg_1'], fg=COLORS['fg_5']
-             ).pack(anchor='w')
+    head = PageHeader(parent, _('Advanced'),
+                      _('Power-user configuration for image creation, '
+                        'performance tuning and automation.'),
+                      bg=C['bg_1'])
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(12)))
+    app._adv_v2_header = head
+    # Save parameters is the primary action of the Build Parameters view;
+    # on the other sub-tabs it steps back to secondary (see _show_subtab)
+    # so each view keeps a single primary button.
+    save_btn = XButton(head.actions, text=_('Save parameters'),
+                       variant='primary', icon='save',
+                       command=lambda: _save_params(app))
+    save_btn.pack(side='right')
+    reset_btn = XButton(head.actions, text=_('Reset all'), icon='undo',
+                        command=lambda: _reset_all(app))
+    reset_btn.pack(side='right', padx=(0, px(6)))
+    app._adv_v2_save_btn = save_btn
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Sub-tab bar (pill buttons + global Reset/Save actions on the right)
+# Sub-tab bar — design-system underline tabs with counter badges
 # ─────────────────────────────────────────────────────────────────────
 def _build_subtab_bar(parent, app):
-    bar = tk.Frame(parent, bg=COLORS['bg_1'])
-    bar.pack(fill='x', padx=24, pady=(4, 8))
-
-    app._adv_v2_tab_btns = {}     # key -> outer frame
-    app._adv_v2_tab_counts = {}   # key -> count label (or None)
+    app._adv_v2_tab_btns = {}     # key -> tab frame
+    app._adv_v2_tab_counts = {}   # key -> count badge
     tabs = [
-        ('params', '\U0001f527', _('Build Parameters')),
-        ('post',   '\U0001f680', _('Post-Build')),
-        ('lang',   '\U0001f310', _('Language Stripper')),
-        ('ampr',   '\U0001f5c2', _('AMPR Index')),
-        ('dlc',    '\U0001f5c3', _('DLC-emu')),
+        ('params', '\U0001f527', _('Build Parameters'), 'wrench'),
+        ('post',   '\U0001f680', _('Post-Build'), 'rocket'),
+        ('lang',   '\U0001f310', _('Language Stripper'), 'globe'),
+        ('ampr',   '\U0001f5c2', _('AMPR Index'), 'folders'),
+        ('dlc',    '\U0001f5c3', _('DLC-emu'), 'database'),
     ]
-    for key, icon, label in tabs:
-        btn = _pill_tab(bar, key, icon, label, app)
-        btn.pack(side='left', padx=(0, 6))
-        app._adv_v2_tab_btns[key] = btn
-
-    # Right side: spacer + Reset all + Save parameters
-    spacer = tk.Frame(bar, bg=COLORS['bg_1'])
-    spacer.pack(side='left', fill='x', expand=True)
-
-    reset_btn = _ghost_btn(bar, '\u21bb  ' + _('Reset all'),
-        command=lambda: _reset_all(app))
-    reset_btn.pack(side='left', padx=(0, 6))
-    save_btn = _accent_btn(bar, '\U0001f4be  ' + _('Save parameters'),
-        command=lambda: _save_params(app))
-    save_btn.pack(side='left')
+    bar = Tabs(parent, bg=C['bg_1'],
+               on_select=lambda k: _show_subtab(app, k))
+    bar.pack(fill='x', padx=px(24), pady=(0, px(16)))
+    app._adv_v2_tabs = bar
+    for key, _glyph, label, icon in tabs:
+        f = bar.add(key, label, icon)
+        app._adv_v2_tab_btns[key] = f
+        badge = Badge(bar._tabs[key]['inner'], '', 'warn', icon=False,
+                      surface=C['bg_1'])
+        # NOT packed yet — _update_tab_count handles pack/forget
+        app._adv_v2_tab_counts[key] = badge
 
 
 def _pill_tab(parent, key, icon, label, app):
-    """Create a pill-button sub-tab with optional counter badge."""
-    outer = tk.Frame(parent, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_2'],
-                     highlightthickness=1,
-                     cursor='hand2')
-    inner = tk.Frame(outer, bg=COLORS['bg_2'])
-    inner.pack(padx=14, pady=7)
-    ic = tk.Label(inner, text=icon,
-                  font=(FONTS['body'][0], 11),
-                  bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-    ic.pack(side='left', padx=(0, 6))
-    lbl = tk.Label(inner, text=label,
-                   font=(FONTS['body'][0], 10),
-                   bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-    lbl.pack(side='left')
-    # Counter badge (hidden by default)
-    count = tk.Label(inner, text='',
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['warn'], fg='#1a0e00',
-                     padx=5, pady=1)
-    # NOT packed yet — _update_tab_count handles pack/forget
-    app._adv_v2_tab_counts[key] = count
-    # Click handler — applied to ALL constituents so clicks register
-    # anywhere on the pill, not just the bg frame
-    def _click(_e=None):
-        _show_subtab(app, key)
-    for w in (outer, inner, ic, lbl, count):
-        w.bind('<Button-1>', _click)
-    # Stash refs for the active-state toggle
-    outer._smp_inner = inner
-    outer._smp_ic    = ic
-    outer._smp_lbl   = lbl
-    outer._smp_count = count
-    outer._smp_key   = key
-    return outer
+    """Kept for compatibility — the sub-tabs are a `Tabs` row now."""
+    return app._adv_v2_tab_btns.get(key)
 
 
 def _show_subtab(app, key):
-    """Switch to a sub-tab. Updates pill active state, hides other panes,
+    """Switch to a sub-tab. Updates the tab indicator, hides other panes,
     shows the chosen pane, persists the choice."""
     for k, pane in app._adv_v2_panes.items():
         if k == key:
             pane.pack(fill='both', expand=True)
         else:
             pane.pack_forget()
-    for k, btn in app._adv_v2_tab_btns.items():
-        active = (k == key)
-        _style_tab(btn, active)
+    try:
+        app._adv_v2_tabs.select(key)
+    except Exception:
+        pass
+    try:
+        # (Button maps a legacy bg= colour onto its variant.)
+        app._adv_v2_save_btn.configure(
+            bg=C['accent'] if key == 'params' else C['bg_3'])
+    except Exception:
+        pass
     app._settings['adv_active_subtab'] = key
     try:
         save_settings(app._settings)
@@ -350,138 +315,97 @@ def _show_subtab(app, key):
 
 
 def _style_tab(btn, active):
-    """Apply active/inactive styling to a pill-button sub-tab."""
-    if active:
-        bg = COLORS['accent_08']
-        fg_ic  = COLORS['accent_hi']
-        fg_lbl = COLORS['accent_hi']
-        border = COLORS['accent_lo']
-        weight = 'bold'
-    else:
-        bg = COLORS['bg_2']
-        fg_ic  = COLORS['fg_4']
-        fg_lbl = COLORS['fg_4']
-        border = COLORS['border_2']
-        weight = 'normal'
-    btn.configure(bg=bg, highlightbackground=border)
-    btn._smp_inner.configure(bg=bg)
-    btn._smp_ic.configure(bg=bg, fg=fg_ic)
-    fnt = btn._smp_lbl.cget('font')
-    if isinstance(fnt, str):
-        fnt_family = 'Segoe UI'
-        fnt_size = 10
-    else:
-        try:
-            fnt_family, fnt_size = fnt[0], fnt[1]
-        except Exception:
-            fnt_family, fnt_size = 'Segoe UI', 10
-    btn._smp_lbl.configure(bg=bg, fg=fg_lbl,
-                            font=(fnt_family, fnt_size, weight))
+    """Kept for compatibility — `Tabs.select` paints the active tab."""
+    return None
 
 
 def _update_tab_count(app, key, count):
-    """Show / hide / update the warn-tinted count badge on a sub-tab."""
-    lbl = app._adv_v2_tab_counts.get(key)
-    if lbl is None:
+    """Show / hide / update the warn count badge on a sub-tab."""
+    badge = app._adv_v2_tab_counts.get(key)
+    if badge is None:
         return
     if count > 0:
-        lbl.config(text=str(count))
-        lbl.pack(side='left', padx=(6, 0))
+        badge.set(str(count))
+        badge.pack(side='left', padx=(px(6), 0))
     else:
-        lbl.pack_forget()
+        badge.pack_forget()
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Legacy pane (post-build + lang-stripper) — kept inside scroll wrapper
+# Scroll host for each sub-tab pane
 # ─────────────────────────────────────────────────────────────────────
 def _scroll_host(parent):
     """Wrap `parent` in a vertical-scroll canvas and return the inner
-    frame to build into. Fixes content taller than the viewport being
-    clipped (the scrollregion tracks the inner frame's real size)."""
-    cv = tk.Canvas(parent, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = ttk.Scrollbar(parent, orient='vertical', command=cv.yview)
+    frame to build into (24px page gutter applied). Fixes content taller
+    than the viewport being clipped (the scrollregion tracks the inner
+    frame's real size)."""
+    cv = tk.Canvas(parent, bg=C['bg_1'], highlightthickness=0, bd=0)
+    sb = XScrollbar(parent, orient='vertical', command=cv.yview,
+                    surface=C['bg_1'])
     cv.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     cv.pack(side='left', fill='both', expand=True)
-    inner = tk.Frame(cv, bg=COLORS['bg_1'])
-    tag = 'host_' + str(id(inner))
-    cv.create_window((0, 0), window=inner, anchor='nw', tags=tag)
+    outer = tk.Frame(cv, bg=C['bg_1'])
+    tag = 'host_' + str(id(outer))
+    # Fixed initial width: a hidden pane gets no <Configure>, and an
+    # unsized window would follow its content's requested width, which
+    # wrapping labels change (layout feedback loop).
+    cv.create_window((0, 0), window=outer, anchor='nw', tags=tag,
+                     width=px(1060))
 
     def _on_inner(_e=None, c=cv):
         c.configure(scrollregion=c.bbox('all'))
-    inner.bind('<Configure>', _on_inner)
+    outer.bind('<Configure>', _on_inner)
     cv.bind('<Configure>',
             lambda e, c=cv, t=tag: c.itemconfig(t, width=e.width))
 
-    # Scroll only while the pointer is over THIS pane (3 panes stack;
+    # Scroll only while the pointer is over THIS pane (panes stack;
     # bind_all/unbind_all on Enter/Leave keeps them from fighting).
     def _wheel(e, c=cv):
         c.yview_scroll(wheel_units(c, e.delta), 'units')
     cv.bind('<Enter>', lambda _e, c=cv: c.bind_all('<MouseWheel>', _wheel))
     cv.bind('<Leave>', lambda _e, c=cv: c.unbind_all('<MouseWheel>'))
+    inner = tk.Frame(outer, bg=C['bg_1'])
+    inner.pack(fill='both', expand=True, padx=(px(24), px(16)),
+               pady=(0, px(24)))
     return inner
 
 
 def _build_legacy_pane(parent, app, builder_fn):
-    """Wrap the existing legacy builder in our scroll frame so it can
-    sit inside the new sub-tab pane without modification."""
-    wrap = tk.Frame(parent, bg=COLORS['bg_1'])
-    wrap.pack(fill='both', expand=True)
-    cv = tk.Canvas(wrap, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = ttk.Scrollbar(wrap, command=cv.yview)
-    cv.configure(yscrollcommand=sb.set)
-    sb.pack(side='right', fill='y')
-    cv.pack(side='left', fill='both', expand=True)
-    inner = tk.Frame(cv, bg=COLORS['bg_1'])
-    tag = 'inner_' + str(id(inner))
-    cv.create_window((0, 0), window=inner, anchor='nw', tags=tag)
-    inner.bind('<Configure>',
-        lambda e, c=cv: c.configure(scrollregion=c.bbox('all')))
-    cv.bind('<Configure>',
-        lambda e, c=cv, t=tag: c.itemconfig(t, width=e.width))
-    attach_scroll(cv)
+    """Wrap a legacy builder in our scroll frame so it can sit inside a
+    sub-tab pane without modification."""
+    inner = _scroll_host(parent)
     try:
         builder_fn(inner)
     except Exception as _e:
         # If a legacy builder fails (some have late-init dependencies),
         # at least show a friendly placeholder rather than a blank pane.
-        tk.Label(inner,
-                 text='(' + str(_e) + ')',
-                 font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['danger']
-                 ).pack(padx=24, pady=24)
+        InfoBar(inner, kind='danger', text='(' + str(_e) + ')').pack(
+            fill='x')
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Post-Build pane (v2.9.0) — single card with 6 SettingRows
+# Post-Build pane — automation summary + cards of settings rows
 # ─────────────────────────────────────────────────────────────────────
 def _build_post_summary(parent, app):
     """Automation Summary — enabled-actions checklist + a visual
-    Build → Verify → Log → Upload workflow strip. Pure mirror of the
-    five post-build vars; updates live via traces."""
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    card.grid(row=0, column=0, columnspan=2, sticky='ew',
-              padx=(0, 12), pady=(0, 12))
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=16, pady=(10, 12))
+    Build → Verify → Upload workflow strip. Pure mirror of the
+    post-build vars; updates live via traces."""
+    card = Card(parent, padding=16)
+    card.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, px(16)))
 
-    tk.Label(inner, text=_('AUTOMATION PIPELINE'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(anchor='w')
-
-    body = tk.Frame(inner, bg=COLORS['bg_2'])
-    body.pack(fill='x', pady=(8, 0))
-    # checklist + flow hug the left; a trailing spacer absorbs the
-    # slack instead of stranding the flow at the far edge.
+    body = tk.Frame(card, bg=C['bg_2'])
+    body.pack(fill='x')
     body.grid_columnconfigure(0, weight=0)
     body.grid_columnconfigure(1, weight=0)
     body.grid_columnconfigure(2, weight=1)
 
     # Left: enabled-actions checklist
-    checks = tk.Frame(body, bg=COLORS['bg_2'])
-    checks.grid(row=0, column=0, sticky='nw', padx=(0, 40))
+    checks = tk.Frame(body, bg=C['bg_2'])
+    checks.grid(row=0, column=0, sticky='nw', padx=(0, px(48)))
+    tk.Label(checks, text=_('AUTOMATION PIPELINE').upper(),
+             font=FONTS['overline'], bg=C['bg_2'], fg=C['fg_4']
+             ).pack(anchor='w', pady=(0, px(8)))
     items = [(app._adv_auto_upload_var, _('Upload to PS5')),
              (app._adv_checksum_var, _('Verify checksum')),
              (app._adv_delete_source_var, _('Delete source (exFAT)')),
@@ -489,69 +413,72 @@ def _build_post_summary(parent, app):
               _('Delete source (ffpkg)'))]
     rows = []
     for var, label in items:
-        r = tk.Label(checks, text='', font=FONTS['mono_sm'],
-                     bg=COLORS['bg_2'], anchor='w')
-        r.pack(anchor='w', pady=(0, 2))
-        rows.append((var, label, r))
+        r = tk.Frame(checks, bg=C['bg_2'])
+        r.pack(anchor='w', pady=(0, px(4)))
+        ic = IconLabel(r, 'circle', 16, C['fg_5'], C['bg_2'])
+        ic.pack(side='left', padx=(0, px(8)))
+        lbl = tk.Label(r, text=label, font=FONTS['body'], bg=C['bg_2'],
+                       anchor='w')
+        lbl.pack(side='left')
+        rows.append((var, ic, lbl))
 
     # Workflow strip — sits right next to the checklist
-    flow_wrap = tk.Frame(body, bg=COLORS['bg_2'])
+    flow_wrap = tk.Frame(body, bg=C['bg_2'])
     flow_wrap.grid(row=0, column=1, sticky='nw')
-    tk.Label(flow_wrap, text=_('Current flow'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-             ).pack(anchor='w', pady=(0, 6))
-    flow = tk.Frame(flow_wrap, bg=COLORS['bg_2'])
+    tk.Label(flow_wrap, text=_('Current flow').upper(),
+             font=FONTS['overline'], bg=C['bg_2'], fg=C['fg_4'], anchor='w'
+             ).pack(anchor='w', pady=(0, px(8)))
+    flow = tk.Frame(flow_wrap, bg=C['bg_2'])
     flow.pack(anchor='w')
     steps = {}
 
     def _chip(key, icon, label):
-        c = tk.Label(flow, text=icon + '  ' + label,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                     padx=9, pady=4,
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1)
+        c = Rounded(flow, bg=C['bg_3'], border=C['border_3'], radius=4,
+                    padding=(px(10), px(5)), surface=C['bg_2'])
         c.pack(side='left')
-        steps[key] = c
+        ic = IconLabel(c, icon, 16, C['fg_3'], C['bg_3'])
+        ic.pack(side='left', padx=(0, px(6)))
+        lbl = tk.Label(c, text=label, font=FONTS['body'], bg=C['bg_3'],
+                       fg=C['fg_3'])
+        lbl.pack(side='left')
+        steps[key] = (c, ic, lbl, icon)
         return c
 
     def _arrow():
-        tk.Label(flow, text='\u2192',
-                 font=(FONTS['body_strong'][0], 11),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                 ).pack(side='left', padx=6)
+        IconLabel(flow, 'arrow_right', 16, C['fg_4'], C['bg_2']).pack(
+            side='left', padx=px(8))
 
-    _chip('build', '\U0001f528', _('Build'))
+    _chip('build', 'build', _('Build'))
     _arrow()
-    _chip('verify', '\U0001f50d', _('Verify'))
+    _chip('verify', 'search', _('Verify'))
     _arrow()
-    _chip('upload', '\U0001f4e1', _('Upload'))
+    _chip('upload', 'upload', _('Upload'))
 
     def _sync(*_a):
         try:
-            for var, label, lbl in rows:
+            for var, ic, lbl in rows:
                 on = bool(var.get())
-                lbl.config(
-                    text=('\u2713  ' if on else '\u2717  ') + label,
-                    fg=COLORS['success_hi'] if on else COLORS['fg_5'])
+                ic.set('success' if on else 'circle',
+                       fg=C['success'] if on else C['fg_5'])
+                lbl.config(fg=C['fg_1'] if on else C['fg_4'])
             states = {'build': True,
                       'verify': bool(app._adv_checksum_var.get()),
                       'upload': bool(app._adv_auto_upload_var.get())}
-            for key, chip in steps.items():
+            for key, (chip, ic, lbl, icon) in steps.items():
                 if not chip.winfo_exists():
                     return
                 if states[key]:
-                    chip.config(bg=COLORS['accent_08'],
-                                fg=COLORS['accent_hi'],
-                                highlightbackground=COLORS['accent_lo'])
+                    chip.set_style(bg=C['accent_lo'], border=C['accent'])
+                    ic.set(icon, fg=C['accent_hi'], bg=C['accent_lo'])
+                    lbl.config(bg=C['accent_lo'], fg=C['fg_0'])
                 else:
-                    chip.config(bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                                highlightbackground=COLORS['border_3'])
+                    chip.set_style(bg=C['bg_3'], border=C['border_3'])
+                    ic.set(icon, fg=C['fg_4'], bg=C['bg_3'])
+                    lbl.config(bg=C['bg_3'], fg=C['fg_3'])
         except Exception:
             pass
 
-    for var, _l, _r in rows:
+    for var, _i, _l in rows:
         try:
             var.trace_add('write', _sync)
         except Exception:
@@ -559,51 +486,31 @@ def _build_post_summary(parent, app):
     _sync()
 
 
+def _head_first(card):
+    """Give a Card's head actions layout priority over its (wrapping)
+    title column, so header badges are never squeezed."""
+    try:
+        card.head_actions.pack_configure(before=card.title_label.master)
+    except Exception:
+        pass
+
+
 def _post_card(parent, row, col, icon, title, desc, accent,
                state_vars=None, danger=False):
-    """Automation card shell with a live ON/OFF state pill derived
-    from the supplied BooleanVars (any True → ON). Presentation only —
+    """Automation card with a live On/Off (or Armed) state badge derived
+    from the supplied BooleanVars (any True → on). Presentation only —
     the rows inside keep their existing vars and callbacks."""
-    # Danger cards keep the normal surface so the shared setting rows
-    # blend; the red lives in the border, title, and pill.
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=(COLORS['danger'] if danger
-                                         else COLORS['border_2']),
-                    highlightthickness=2 if danger else 1)
+    card = Card(parent, title=title, subtitle=desc)
     card.grid(row=row, column=col, sticky='nsew',
-              padx=(0, 12), pady=(0, 12))
-    bgc = COLORS['bg_2']
-
-    hbg = COLORS['danger_bg'] if danger else bgc
-    head = tk.Frame(card, bg=hbg)
-    head.pack(fill='x')
-    hpad = tk.Frame(head, bg=hbg)
-    hpad.pack(fill='x', padx=14, pady=(12, 8 if danger else 4))
-    tk.Label(hpad, text=icon, font=(FONTS['body'][0], 11),
-             bg=hbg, fg=accent).pack(side='left', padx=(0, 8))
-    tcol = tk.Frame(hpad, bg=hbg)
-    tcol.pack(side='left', fill='x', expand=True)
-    trow = tk.Frame(tcol, bg=hbg)
-    trow.pack(anchor='w', fill='x')
-    tk.Label(trow, text=title, font=(FONTS['body_strong'][0], 10),
-             bg=hbg, fg=COLORS['danger_hi'] if danger
-             else COLORS['fg_0'], anchor='w').pack(side='left')
-    if danger:
-        tk.Label(trow, text=_('DESTRUCTIVE'),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['danger'], fg='#000000',
-                 padx=6, pady=1).pack(side='left', padx=(8, 0))
-    tk.Label(tcol, text=desc, font=FONTS['mono_sm'],
-             bg=hbg, fg=COLORS['fg_5'], anchor='w',
-             wraplength=420, justify='left').pack(anchor='w')
-
-    pill = tk.Label(hpad, text='OFF',
-                    font=(FONTS['body_strong'][0], 9),
-                    bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                    padx=8, pady=2,
-                    highlightbackground=COLORS['border_3'],
-                    highlightthickness=1)
+              padx=(0 if col == 0 else px(8), px(8) if col == 0 else 0),
+              pady=(0, px(16)))
+    pill = Badge(card.head_actions, _('Off'), 'neutral')
     pill.pack(side='right')
+    _head_first(card)
+    if danger:
+        Badge(card.head_actions, _('DESTRUCTIVE'), 'danger').pack(
+            side='right', padx=(0, px(6)))
+        _head_first(card)
 
     if state_vars:
         def _sync(*_a):
@@ -612,17 +519,11 @@ def _post_card(parent, row, col, icon, title, desc, accent,
                 if not pill.winfo_exists():
                     return
                 if on and danger:
-                    pill.config(text='ARMED', bg=COLORS['danger_bg'],
-                                fg=COLORS['danger_hi'],
-                                highlightbackground=COLORS['danger'])
+                    pill.set(_('ARMED'), 'danger')
                 elif on:
-                    pill.config(text='ON', bg=COLORS['success_bg'],
-                                fg=COLORS['success_hi'],
-                                highlightbackground=COLORS['success'])
+                    pill.set(_('On'), 'success')
                 else:
-                    pill.config(text='OFF', bg=COLORS['bg_3'],
-                                fg=COLORS['fg_5'],
-                                highlightbackground=COLORS['border_3'])
+                    pill.set(_('Off'), 'neutral')
             except Exception:
                 pass
         for v in state_vars:
@@ -631,20 +532,17 @@ def _post_card(parent, row, col, icon, title, desc, accent,
             except Exception:
                 pass
         _sync()
-
-    body = tk.Frame(card, bg=bgc)
-    body.pack(fill='x', padx=14, pady=(0, 12))
-    return body
+    else:
+        pill.pack_forget()
+    return card.body
 
 
 def _build_post_pane(parent, app):
-    """v3.6.0: the single post-build form became an automation
-    dashboard — Upload / Verification / Image Output cards
-    in a grid with live state pills, and a full-width Danger Zone
-    card for the destructive delete-source toggles. (The Logging card
-    was removed in v3.6.4 — its toggle wrote a setting no build path
-    consumed.) Same six
-    SettingRows, same vars, same callbacks."""
+    """Automation dashboard — Upload / Verification / Image Output cards
+    in a grid with live state badges, and a full-width Danger Zone card
+    for the destructive delete-source toggles. (The Logging card was
+    removed in v3.6.4 — its toggle wrote a setting no build path
+    consumed.) Same SettingRows, same vars, same callbacks."""
     parent.columnconfigure(0, weight=1, uniform='postc')
     parent.columnconfigure(1, weight=1, uniform='postc')
 
@@ -659,7 +557,7 @@ def _build_post_pane(parent, app):
     # ── Upload ──
     b = _post_card(parent, 1, 0, '\U0001f4e1', _('Upload'),
                    _('Push finished images to the PS5 automatically.'),
-                   COLORS['accent'],
+                   C['accent'],
                    state_vars=[app._adv_auto_upload_var])
     _setting_row(b, app,
         label=_('Auto-upload .exfat to PS5 via FTP'),
@@ -673,7 +571,7 @@ def _build_post_pane(parent, app):
     # ── Verification ──
     b = _post_card(parent, 1, 1, '\U0001f50d', _('Verification'),
                    _('Integrity checks after every copy pass.'),
-                   COLORS['teal'],
+                   C['accent'],
                    state_vars=[app._adv_checksum_var])
     _setting_row(b, app,
         label=_('Checksum verification (SHA-256)'),
@@ -692,7 +590,7 @@ def _build_post_pane(parent, app):
     # for settings-compat; only the dead UI is gone.)
     b = _post_card(parent, 2, 0, '\U0001f4bf', _('Image Output'),
                    _('Override how the output image is sized.'),
-                   COLORS['accent_hi'])
+                   C['accent_hi'])
     _setting_row(b, app,
         label=_('Image size override (GB)'),
         kind='text',
@@ -703,21 +601,21 @@ def _build_post_pane(parent, app):
         on_change=app._adv_save_post_build)
 
     # ── Danger Zone (full width) ──
-    dz = _post_card(parent, 3, 0, '\u26a0', _('Danger Zone'),
-                    _('Destructive cleanup \u2014 these delete the '
+    dz = _post_card(parent, 3, 0, '⚠', _('Danger Zone'),
+                    _('Destructive cleanup — these delete the '
                       'source folder once a build succeeds. Cannot be '
                       'undone.'),
-                    COLORS['danger_hi'],
+                    C['danger_hi'],
                     state_vars=[app._adv_delete_source_var,
                                 app._adv_delete_source_ffpkg_var],
                     danger=True)
-    dz.master.grid_configure(columnspan=2)
+    dz.master.grid_configure(columnspan=2, padx=0)
     _setting_row(dz, app,
         label=_('Delete source folder after exFAT build'),
         kind='toggle',
         var=app._adv_delete_source_var,
         default=False,
-        help_text=_('\u26a0 Cannot be undone. Source folder is removed '
+        help_text=_('⚠ Cannot be undone. Source folder is removed '
                     'once the .exfat is built successfully.'),
         severity='danger')
     _setting_row(dz, app,
@@ -725,7 +623,7 @@ def _build_post_pane(parent, app):
         kind='toggle',
         var=app._adv_delete_source_ffpkg_var,
         default=False,
-        help_text=_('\u26a0 Cannot be undone. Source folder is removed '
+        help_text=_('⚠ Cannot be undone. Source folder is removed '
                     'once the .ffpkg is built successfully.'),
         severity='danger')
 
@@ -741,69 +639,31 @@ def _build_ampr_pane(parent, app):
     from tkinter import filedialog
 
     parent.columnconfigure(0, weight=1)
-    parent.rowconfigure(0, weight=1)
 
-    card_outer = tk.Frame(parent, bg=COLORS['bg_2'],
-                          highlightbackground=COLORS['border_2'],
-                          highlightthickness=1)
-    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, 12))
-
-    head = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    head.pack(fill='x', padx=14, pady=(12, 4))
-    tk.Label(head, text='\U0001f5c2',
-             font=(FONTS['body'][0], 14),
-             bg=COLORS['bg_2'], fg=COLORS['purple']
-             ).pack(side='left', padx=(0, 8))
-    title_col = tk.Frame(head, bg=COLORS['bg_2'])
-    title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(title_col, text=_('AMPR Index Builder'),
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(anchor='w')
-    tk.Label(title_col,
-             text=_('Generate ampr_emu.index for an APR title — for an '
-                    'existing dump folder, or a connected PS5. Builds run '
-                    'automatically too (when fakelib/libSceAmpr.sprx is '
-                    'present); this is the manual entry point.'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w',
-             justify='left', wraplength=720
-             ).pack(anchor='w')
-
-    body = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    body.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+    card_outer = Card(parent, title=_('AMPR Index Builder'),
+                      subtitle=_('Generate ampr_emu.index for an APR title — for an '
+                                 'existing dump folder, or a connected PS5. Builds run '
+                                 'automatically too (when fakelib/libSceAmpr.sprx is '
+                                 'present); this is the manual entry point.'))
+    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, px(16)))
+    body = card_outer.body
 
     # Stat cells: files indexed / index size / output
-    top = tk.Frame(body, bg=COLORS['bg_2'])
-    top.pack(fill='x', pady=(4, 8))
-    for i in range(3):
-        top.grid_columnconfigure(i, weight=1, uniform='amprtop')
-
-    def _cell(col, caption, fg):
-        cell = tk.Frame(top, bg=COLORS['bg_3'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        cell.grid(row=0, column=col, sticky='ew',
-                  padx=(0 if col == 0 else 10, 0))
-        tk.Label(cell, text=caption.upper(),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['bg_3'], fg=COLORS['fg_5']
-                 ).pack(anchor='w', padx=12, pady=(9, 0))
-        v = tk.Label(cell, text='—',
-                     font=(FONTS['body_strong'][0], 11),
-                     bg=COLORS['bg_3'], fg=fg, anchor='w')
-        v.pack(fill='x', padx=12, pady=(2, 9))
-        return v
-
-    c_files = _cell(0, _('Files Indexed'), COLORS['purple_hi'])
-    c_size = _cell(1, _('Index Size'), COLORS['accent_hi'])
-    c_out = _cell(2, _('Output'), COLORS['fg_1'])
+    top, (c_files, c_size, c_out) = _stat_cells(body, [
+        (_('Files Indexed'), False), (_('Index Size'), False),
+        (_('Output'), True)])
+    top.pack(fill='x', pady=(0, px(12)))
+    c_out.configure(justify='left', wraplength=px(300))
 
     status_var = tk.StringVar(value=_('Idle.'))
-    tk.Label(body, textvariable=status_var,
-             font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w', justify='left', wraplength=720
-             ).pack(fill='x', pady=(2, 8))
+    st_row = tk.Frame(body, bg=C['bg_2'])
+    st_row.pack(fill='x', pady=(0, px(12)))
+    IconLabel(st_row, 'info', 16, C['fg_4'], C['bg_2']).pack(
+        side='left', anchor='n', padx=(0, px(8)))
+    _st = tk.Label(st_row, textvariable=status_var, font=FONTS['caption'],
+                   bg=C['bg_2'], fg=C['fg_3'], anchor='w', justify='left')
+    _st.pack(side='left', fill='x', expand=True)
+    autowrap(_st)
 
     busy = {'on': False}
 
@@ -1119,27 +979,15 @@ def _build_ampr_pane(parent, app):
 
         _thr.Thread(target=_work, daemon=True).start()
 
-    btn_row = tk.Frame(body, bg=COLORS['bg_2'])
-    btn_row.pack(fill='x', pady=(2, 2))
-    btn_folder = XButton(btn_row, text='\U0001f4c1  ' + _('Generate From Folder'),
-                           command=_generate_from_folder,
-                           font=(FONTS['body'][0], 10),
-                           bg=COLORS['accent'], fg='#ffffff',
-                           activebackground=COLORS['accent'],
-                           activeforeground='#ffffff',
-                           relief='flat', bd=0, padx=16, pady=8,
-                           cursor='hand2', highlightthickness=0)
-    btn_folder.pack(side='left', padx=(0, 8))
-    btn_ps5 = XButton(btn_row,
-                        text='\U0001f4e1  ' + _('Generate From Connected PS5'),
-                        command=_generate_from_ps5,
-                        font=(FONTS['body'][0], 10),
-                        bg=COLORS['bg_3'], fg=COLORS['fg_1'],
-                        activebackground=COLORS['bg_4'],
-                        activeforeground=COLORS['fg_0'],
-                        relief='flat', bd=0, padx=16, pady=8,
-                        cursor='hand2', highlightthickness=1,
-                        highlightbackground=COLORS['border_2'])
+    Divider(body, color=C['border_1']).pack(fill='x', pady=(0, px(12)))
+    btn_row = tk.Frame(body, bg=C['bg_2'])
+    btn_row.pack(fill='x')
+    btn_folder = XButton(btn_row, text=_('Generate From Folder'),
+                         command=_generate_from_folder, variant='primary',
+                         icon='folder_open')
+    btn_folder.pack(side='left', padx=(0, px(6)))
+    btn_ps5 = XButton(btn_row, text=_('Generate From Connected PS5'),
+                      command=_generate_from_ps5, icon='wifi')
     btn_ps5.pack(side='left')
 
 
@@ -1157,18 +1005,11 @@ def _build_dlc_pane(parent, app):
     from ui import dlc_emu_ini as _D
     parent.columnconfigure(0, weight=1)
     parent.rowconfigure(0, weight=1)
-    card_outer = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
-    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, 12))
-    head = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    head.pack(fill='x', padx=14, pady=(12, 4))
-    tk.Label(head, text='🗃', font=(FONTS['body'][0], 14), bg=COLORS['bg_2'], fg=COLORS['purple']).pack(side='left', padx=(0, 8))
-    title_col = tk.Frame(head, bg=COLORS['bg_2'])
-    title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(title_col, text=_('DLC-emu'), font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(anchor='w')
-    tk.Label(title_col, text=_('Build / edit /app0/dlc_emu.ini for a game dump folder. Phase 1 writes only into the app0 folder (packed by your normal build); it never edits images. PSAC is the recommended entry type for most add-on content; every other type stays available for special cases.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=760).pack(anchor='w')
-    tk.Label(head, text=_('PHASE 1'), font=(FONTS['body_strong'][0], 9), bg=COLORS['warn_bg'], fg=COLORS['warn'], padx=8, pady=2, highlightbackground=COLORS['warn'], highlightthickness=1).pack(side='right')
-    body = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    body.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+    card_outer = Card(parent, title=_('DLC-emu'), subtitle=_('Build / edit /app0/dlc_emu.ini for a game dump folder. Phase 1 writes only into the app0 folder (packed by your normal build); it never edits images. PSAC is the recommended entry type for most add-on content; every other type stays available for special cases.'))
+    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, px(16)))
+    Badge(card_outer.head_actions, _('PHASE 1'), 'warn').pack(side='right')
+    _head_first(card_outer)
+    body = card_outer.body
     state = {'entries': [], 'app0': ''}
     folder_var = tk.StringVar(value='')
     try:
@@ -1185,25 +1026,25 @@ def _build_dlc_pane(parent, app):
             folder_var.set(_prefill)
     except Exception:
         pass
-    row1 = tk.Frame(body, bg=COLORS['bg_2'])
-    row1.pack(fill='x', pady=(4, 4))
-    tk.Label(row1, text=_('app0 folder:'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 6))
-    folder_entry = XEntry(row1, textvariable=folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
-    folder_entry.pack(side='left', fill='x', expand=True, padx=(0, 6))
+    tk.Label(body, text=_('app0 folder:').rstrip(':'), font=FONTS['body'], bg=C['bg_2'], fg=C['fg_2'], anchor='w').pack(fill='x')
+    row1 = tk.Frame(body, bg=C['bg_2'])
+    row1.pack(fill='x', pady=(px(4), px(4)))
+    folder_entry = XEntry(row1, textvariable=folder_var, mono=True)
+    folder_entry.pack(side='left', fill='x', expand=True)
     folder_status = tk.StringVar(value='')
-    tk.Label(body, textvariable=folder_status, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', pady=(0, 6))
-    strip = tk.Frame(body, bg=COLORS['bg_2'])
-    strip.pack(fill='x', pady=(0, 6))
+    tk.Label(body, textvariable=folder_status, font=FONTS['caption'], bg=C['bg_2'], fg=C['fg_3'], anchor='w').pack(fill='x', pady=(0, px(6)))
+    strip = tk.Frame(body, bg=C['bg_2'])
+    strip.pack(fill='x', pady=(0, px(8)))
     count_var = tk.StringVar(value=_('Entries: 0 / %d') % _D.MAX_ENTRIES)
     size_var = tk.StringVar(value=_('Size: 0 B / 32 KiB'))
-    tk.Label(strip, textvariable=count_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['accent_hi']).pack(side='left', padx=(0, 18))
-    tk.Label(strip, textvariable=size_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['purple_hi']).pack(side='left')
-    list_wrap = tk.Frame(body, bg=COLORS['bg_1'], highlightbackground=COLORS['border_2'], highlightthickness=1)
-    list_wrap.pack(fill='both', expand=True, pady=(0, 6))
-    list_canvas = tk.Canvas(list_wrap, bg=COLORS['bg_1'], highlightthickness=0, height=240)
-    list_sb = XScrollbar(list_wrap, command=list_canvas.yview, bg=COLORS['bg_2'])
+    tk.Label(strip, textvariable=count_var, font=FONTS['body_strong'], bg=C['bg_2'], fg=C['fg_0']).pack(side='left', padx=(0, px(16)))
+    tk.Label(strip, textvariable=size_var, font=FONTS['caption'], bg=C['bg_2'], fg=C['fg_3']).pack(side='left')
+    list_wrap = Rounded(body, bg=C['bg_0'], border=C['border_2'], radius=8, padding=(px(4), px(4)), surface=C['bg_2'])
+    list_wrap.pack(fill='both', expand=True, pady=(0, px(8)))
+    list_canvas = tk.Canvas(list_wrap, bg=C['bg_0'], highlightthickness=0, height=px(260), bd=0)
+    list_sb = XScrollbar(list_wrap, command=list_canvas.yview, surface=C['bg_0'])
     list_canvas.configure(yscrollcommand=list_sb.set)
-    list_frame = tk.Frame(list_canvas, bg=COLORS['bg_1'])
+    list_frame = tk.Frame(list_canvas, bg=C['bg_0'])
     _win = list_canvas.create_window((0, 0), window=list_frame, anchor='nw')
     list_frame.bind('<Configure>', lambda e: (list_canvas.configure(scrollregion=list_canvas.bbox('all')), list_canvas.itemconfig(_win, width=list_canvas.winfo_width())))
     list_canvas.bind('<Configure>', lambda e: list_canvas.itemconfig(_win, width=e.width))
@@ -1214,8 +1055,9 @@ def _build_dlc_pane(parent, app):
     list_sb.pack(side='right', fill='y')
     list_canvas.pack(side='left', fill='both', expand=True)
     valid_var = tk.StringVar(value='')
-    valid_lbl = tk.Label(body, textvariable=valid_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w', justify='left', wraplength=760)
-    valid_lbl.pack(fill='x', pady=(0, 6))
+    valid_lbl = tk.Label(body, textvariable=valid_var, font=FONTS['caption'], bg=C['bg_2'], fg=C['fg_3'], anchor='w', justify='left')
+    valid_lbl.pack(fill='x', pady=(0, px(4)))
+    autowrap(valid_lbl)
     _ENTRY_FIELDS = [*('content_id', 'label', 'mount_point', 'entitlement_key', 'service_label', 'download_status')]
     def _recompute():
         n = len(state['entries'])
@@ -1243,7 +1085,7 @@ def _build_dlc_pane(parent, app):
         for w in list_frame.winfo_children():
             w.destroy()
         if not state['entries']:
-            tk.Label(list_frame, text=_('No entries yet. Click "Add entry" to begin, or load an existing dlc_emu.ini.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack(anchor='w', padx=12, pady=12)
+            tk.Label(list_frame, text=_('No entries yet. Click "Add entry" to begin, or load an existing dlc_emu.ini.'), font=FONTS['caption'], bg=C['bg_0'], fg=C['fg_3']).pack(anchor='w', padx=px(12), pady=px(12))
             _recompute()
         else:
             for i, e in enumerate(state['entries']):
@@ -1271,43 +1113,39 @@ def _build_dlc_pane(parent, app):
         label = {'high': 'HIGH', 'medium': 'MEDIUM', 'low': 'LOW'}.get(conf, conf.upper())
         return f"{label!s} — {src or ''!s}", conf
     def _make_entry_row(i, entry):
-        row = tk.Frame(list_frame, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
-        row.pack(fill='x', padx=8, pady=4)
-        topr = tk.Frame(row, bg=COLORS['bg_2'])
-        topr.pack(fill='x', padx=8, pady=(6, 2))
-        tk.Label(topr, text='#%d' % (i + 1), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(0, 8))
+        RB = C['bg_2']
+        row = Rounded(list_frame, bg=RB, border=C['border_2'], radius=8, padding=(px(12), px(10)), surface=C['bg_0'])
+        row.pack(fill='x', padx=px(6), pady=px(4))
+        topr = tk.Frame(row, bg=RB)
+        topr.pack(fill='x', pady=(0, px(8)))
+        tk.Label(topr, text='#%d' % (i + 1), font=FONTS['code'], bg=RB, fg=C['fg_3']).pack(side='left', padx=(0, px(10)))
         sec_var = tk.StringVar(value=entry.section)
-        sec_menu = tk.OptionMenu(topr, sec_var, *_D.SECTION_TYPES, command=(lambda v, _i=i: _set_section(_i, v)))
-        try:
-            sec_menu.configure(font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, highlightthickness=0)
-        except Exception:
-            pass
-        sec_menu.pack(side='left', padx=(0, 8))
+        sec_menu = Dropdown(topr, textvariable=sec_var, values=list(_D.SECTION_TYPES), width=8)
+        sec_menu.bind('<<ComboboxSelected>>', lambda _e, _i=i, _v=sec_var: _set_section(_i, _v.get()))
+        sec_menu.pack(side='left', padx=(0, px(10)))
         btxt, bkind = _badge_text(entry)
-        _badge_fg = {'high': COLORS.get('success_hi', '#4caf50'), 'medium': COLORS['accent_hi'], 'low': COLORS['warn'], 'manual': COLORS['fg_5']}.get(bkind, COLORS['fg_5'])
-        tk.Label(topr, text=btxt, font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=_badge_fg).pack(side='left', padx=(2, 0))
-        def _mini(txt, cmd):
-            return XButton(topr, text=txt, command=cmd, font=(FONTS['body'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_2'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0)
-        _mini('✕', lambda _i=i: _remove(_i)).pack(side='right')
-        _mini('⧉', lambda _i=i: _duplicate(_i)).pack(side='right', padx=(0, 4))
-        _mini('↓', lambda _i=i: _move(_i, 1)).pack(side='right', padx=(0, 4))
-        _mini('↑', lambda _i=i: _move(_i, -1)).pack(side='right', padx=(0, 4))
-        simple = tk.Frame(row, bg=COLORS['bg_2'])
-        simple.pack(fill='x', padx=8, pady=(0, 4))
+        _btone = {'high': 'success', 'medium': 'info', 'low': 'warn', 'manual': 'neutral'}.get(bkind, 'neutral')
+        Badge(topr, btxt, _btone, icon=False).pack(side='left')
+        IconButton(topr, 'close', lambda _i=i: _remove(_i), tooltip=_('Remove'), size='sm').pack(side='right')
+        IconButton(topr, 'copy', lambda _i=i: _duplicate(_i), tooltip=_('Duplicate'), size='sm').pack(side='right')
+        IconButton(topr, 'arrow_down', lambda _i=i: _move(_i, 1), tooltip=_('Move down'), size='sm').pack(side='right')
+        IconButton(topr, 'arrow_up', lambda _i=i: _move(_i, -1), tooltip=_('Move up'), size='sm').pack(side='right')
+        simple = tk.Frame(row, bg=RB)
+        simple.pack(fill='x')
         simple.grid_columnconfigure(1, weight=1)
-        tk.Label(simple, text=_('Content ID:'), font=(FONTS['body'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).grid(row=0, column=0, sticky='e', padx=(0, 6), pady=2)
+        tk.Label(simple, text=_('Content ID:').rstrip(':'), font=FONTS['body'], bg=RB, fg=C['fg_2']).grid(row=0, column=0, sticky='w', padx=(0, px(10)), pady=px(2))
         cid_var = tk.StringVar(value=entry.get('content_id', ''))
-        cid_ent = XEntry(simple, textvariable=cid_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
-        cid_ent.grid(row=0, column=1, sticky='ew', padx=(0, 8), pady=2)
-        status_lbl = tk.Label(simple, font=(FONTS['body'][0], 9), bg=COLORS['bg_2'], anchor='w')
-        status_lbl.grid(row=1, column=1, sticky='w', padx=(0, 8))
-        mount_lbl = tk.Label(simple, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
-        mount_lbl.grid(row=2, column=1, sticky='w', padx=(0, 8))
-        src_lbl = tk.Label(simple, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
-        src_lbl.grid(row=3, column=1, sticky='w', padx=(0, 8), pady=(0, 2))
+        cid_ent = XEntry(simple, textvariable=cid_var, mono=True)
+        cid_ent.grid(row=0, column=1, sticky='ew', pady=px(2))
+        status_lbl = tk.Label(simple, font=FONTS['caption'], bg=RB, anchor='w')
+        status_lbl.grid(row=1, column=1, sticky='w', pady=(px(4), 0))
+        mount_lbl = tk.Label(simple, font=FONTS['caption'], bg=RB, fg=C['fg_3'], anchor='w')
+        mount_lbl.grid(row=2, column=1, sticky='w')
+        src_lbl = tk.Label(simple, font=FONTS['caption'], bg=RB, fg=C['fg_3'], anchor='w')
+        src_lbl.grid(row=3, column=1, sticky='w')
         def _refresh_simple():
             stext, skind = _entry_status(entry)
-            status_lbl.configure(text=_('Status:  ') + stext, fg=COLORS.get('success_hi', '#4caf50') if skind == 'ok' else COLORS['warn'])
+            status_lbl.configure(text=_('Status:  ') + stext, fg=C['success_hi'] if skind == 'ok' else C['warn_hi'])
             mp = entry.get('mount_point', '')
             mount_lbl.configure(text=_('Mount:  ') + (mp if mp else _('No mount path detected')))
             src = getattr(entry, 'source', None)
@@ -1318,29 +1156,26 @@ def _build_dlc_pane(parent, app):
         cid_var.trace_add('write', _on_cid)
         _refresh_simple()
         adv_state = {'open': False, 'frame': None}
-        adv_bar = tk.Frame(row, bg=COLORS['bg_2'])
-        adv_bar.pack(fill='x', padx=8, pady=(0, 6))
-        adv_btn = tk.Label(adv_bar, text=_('Advanced ▾'), cursor='hand2', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['accent_hi'])
+        adv_bar = tk.Frame(row, bg=RB)
+        adv_bar.pack(fill='x', pady=(px(6), 0))
+        adv_btn = XButton(adv_bar, text=_('Advanced ▾').rstrip(' ▾▴'), variant='link', size='sm', icon='chevron_right', surface=RB)
         adv_btn.pack(side='left')
         def _build_adv(parent_):
-            grid = tk.Frame(parent_, bg=COLORS['bg_2'])
+            grid = tk.Frame(parent_, bg=RB)
             for ci in range(2):
                 grid.grid_columnconfigure(ci * 2 + 1, weight=1, uniform='dlcf')
             for fi, fld in enumerate(_ADV_FIELDS):
                 r, c = divmod(fi, 2)
-                tk.Label(grid, text=fld, font=(FONTS['body'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_5']).grid(row=r, column=c * 2, sticky='e', padx=(0, 4), pady=2)
+                tk.Label(grid, text=fld, font=FONTS['code'], bg=RB, fg=C['fg_3']).grid(row=r, column=c * 2, sticky='w', padx=(0, px(8)), pady=px(3))
                 if fld == 'download_status':
                     dv = tk.StringVar(value=entry.get(fld, ''))
-                    dm = tk.OptionMenu(grid, dv, '', *_D.DOWNLOAD_STATUSES, command=(lambda v, _i=i, _f=fld: (_set_field(_i, _f, v), _refresh_simple())))
-                    try:
-                        dm.configure(font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], relief='flat', bd=0, highlightthickness=1, highlightbackground=COLORS['border_2'])
-                    except Exception:
-                        pass
-                    dm.grid(row=r, column=c * 2 + 1, sticky='ew', padx=(0, 12), pady=2)
+                    dm = Dropdown(grid, textvariable=dv, values=[''] + list(_D.DOWNLOAD_STATUSES), width=12)
+                    dm.bind('<<ComboboxSelected>>', lambda _e, _i=i, _f=fld, _v=dv: (_set_field(_i, _f, _v.get()), _refresh_simple()))
+                    dm.grid(row=r, column=c * 2 + 1, sticky='ew', padx=(0, px(16)), pady=px(3))
                 else:
                     fv = tk.StringVar(value=entry.get(fld, ''))
-                    ent = XEntry(grid, textvariable=fv, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
-                    ent.grid(row=r, column=c * 2 + 1, sticky='ew', padx=(0, 12), pady=2)
+                    ent = XEntry(grid, textvariable=fv, mono=True)
+                    ent.grid(row=r, column=c * 2 + 1, sticky='ew', padx=(0, px(16)), pady=px(3))
                     fv.trace_add('write', lambda *_a, _i=i, _f=fld, _v=fv: (_set_field(_i, _f, _v.get()), _refresh_simple()))
             return grid
         def _toggle_adv(_e=None):
@@ -1350,14 +1185,14 @@ def _build_dlc_pane(parent, app):
                     adv_state['frame'].destroy()
                     adv_state['frame'] = None
                 adv_state['open'] = False
-                adv_btn.configure(text=_('Advanced ▾'))
+                adv_btn.configure(text=_('Advanced ▾').rstrip(' ▾▴'), icon='chevron_right')
             else:
                 f = _build_adv(row)
-                f.pack(fill='x', padx=8, pady=(0, 6))
+                f.pack(fill='x', pady=(px(8), 0))
                 adv_state['frame'] = f
                 adv_state['open'] = True
-                adv_btn.configure(text=_('Advanced ▴'))
-        adv_btn.bind('<Button-1>', _toggle_adv)
+                adv_btn.configure(text=_('Advanced ▴').rstrip(' ▾▴'), icon='chevron_down')
+        adv_btn.configure(command=_toggle_adv)
     def _set_section(i, v):
         if 0 <= i < len(state['entries']):
             state['entries'][i].section = v
@@ -1419,14 +1254,14 @@ def _build_dlc_pane(parent, app):
                 app_error(app, _('Load failed'), str(e))
                 state['entries'] = []
         _render_entries()
-    XButton(row1, text=_('Browse'), command=_browse_folder, font=(FONTS['body'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=12, pady=4, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left')
+    XButton(row1, text=_('Browse'), command=_browse_folder, icon='folder_open').pack(side='left', padx=(px(6), 0))
     def _preview():
         text_ini = _D.emit_ini(state['entries'])
         win = tk.Toplevel(parent)
         win.title(_('dlc_emu.ini preview'))
-        win.configure(bg=COLORS['bg_1'])
-        txt = tk.Text(win, wrap='none', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_1'], width=80, height=30, insertbackground=COLORS['fg_1'])
-        txt.pack(fill='both', expand=True, padx=10, pady=10)
+        win.configure(bg=COLORS['bg_2'])
+        txt = tk.Text(win, wrap='none', font=FONTS['code'], bg=COLORS['bg_0'], relief='flat', bd=0, highlightthickness=1, highlightbackground=COLORS['border_2'], fg=COLORS['fg_1'], width=80, height=30, insertbackground=COLORS['fg_1'])
+        txt.pack(fill='both', expand=True, padx=px(16), pady=px(16))
         txt.insert('1.0', text_ini)
         txt.configure(state='disabled')
     def _confirm_and_save(dest_path, into_app0):
@@ -1496,15 +1331,17 @@ def _build_dlc_pane(parent, app):
         variant = {'v': None}
         dlg = tk.Toplevel(parent)
         dlg.title(_('Module variant'))
-        dlg.configure(bg=COLORS['bg_1'])
-        tk.Label(dlg, text=_('Which module build do you want to copy?'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(padx=16, pady=(14, 8))
+        dlg.configure(bg=COLORS['bg_2'])
+        tk.Label(dlg, text=_('Which module build do you want to copy?'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_1']).pack(padx=16, pady=(14, 8))
         var = tk.StringVar(value='nolog')
         for val, lab in ('nolog', _('nolog (no logging — recommended)')), ('log', _('log (writes /app0/dlc_emu.log)')):
-            XRadio(dlg, text=lab, value=val, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_3'], activebackground=COLORS['bg_1'], highlightthickness=0).pack(anchor='w', padx=24)
+            XRadio(dlg, text=lab, value=val, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_3'], activebackground=COLORS['bg_2'], highlightthickness=0).pack(anchor='w', padx=24)
         def _ok():
             variant['v'] = var.get()
             dlg.destroy()
-        XButton(dlg, text=_('Continue'), command=_ok, font=(FONTS['body'][0], 9), bg=COLORS['accent'], fg='#ffffff', relief='flat', bd=0, padx=14, pady=6, cursor='hand2').pack(pady=12)
+        _ft = tk.Frame(dlg, bg=COLORS['bg_1'])
+        _ft.pack(fill='x', side='bottom', pady=(px(14), 0))
+        XButton(_ft, text=_('Continue'), command=_ok, variant='primary', width=12).pack(side='right', padx=px(16), pady=px(12))
         dlg.transient(parent)
         dlg.grab_set()
         parent.wait_window(dlg)
@@ -1577,19 +1414,19 @@ def _build_dlc_pane(parent, app):
     def _show_suggestions(sugg, info):
         win = tk.Toplevel(parent)
         win.title(_('Suggested DLC entries'))
-        win.configure(bg=COLORS['bg_1'])
-        hdr = tk.Label(win, text=_('Found %d suggestion(s). Tick the ones to add, then Apply selected.') % len(sugg), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_1'], anchor='w', justify='left', wraplength=620)
+        win.configure(bg=COLORS['bg_2'])
+        hdr = tk.Label(win, text=_('Found %d suggestion(s). Tick the ones to add, then Apply selected.') % len(sugg), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w', justify='left', wraplength=620)
         hdr.pack(fill='x', padx=12, pady=(12, 4))
         if info.get('prefix_placeholder'):
-            tk.Label(win, text=_('Note: content-id prefix is a placeholder (%s) — no CONTENT_ID/param.json id was found. Edit if needed.') % info.get('prefix', ''), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['warn'], anchor='w', justify='left', wraplength=620).pack(fill='x', padx=12, pady=(0, 4))
+            tk.Label(win, text=_('Note: content-id prefix is a placeholder (%s) — no CONTENT_ID/param.json id was found. Edit if needed.') % info.get('prefix', ''), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['warn'], anchor='w', justify='left', wraplength=620).pack(fill='x', padx=12, pady=(0, 4))
         if not info.get('addcont'):
-            tk.Label(win, text=_('No addcont folders found. DLC-emu exposes ownership but does not create DLC files. Mount paths must already exist.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['warn'], anchor='w', justify='left', wraplength=620).pack(fill='x', padx=12, pady=(0, 6))
-        wrap = tk.Frame(win, bg=COLORS['bg_1'])
+            tk.Label(win, text=_('No addcont folders found. DLC-emu exposes ownership but does not create DLC files. Mount paths must already exist.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['warn'], anchor='w', justify='left', wraplength=620).pack(fill='x', padx=12, pady=(0, 6))
+        wrap = tk.Frame(win, bg=COLORS['bg_2'])
         wrap.pack(fill='both', expand=True, padx=12, pady=(0, 8))
-        cv = tk.Canvas(wrap, bg=COLORS['bg_1'], highlightthickness=0, width=620, height=320)
+        cv = tk.Canvas(wrap, bg=COLORS['bg_2'], highlightthickness=0, width=620, height=320)
         sb = XScrollbar(wrap, command=cv.yview, bg=COLORS['bg_2'])
         cv.configure(yscrollcommand=sb.set)
-        inner = tk.Frame(cv, bg=COLORS['bg_1'])
+        inner = tk.Frame(cv, bg=COLORS['bg_2'])
         win_id = cv.create_window((0, 0), window=inner, anchor='nw')
         inner.bind('<Configure>', lambda e: (cv.configure(scrollregion=cv.bbox('all')), cv.itemconfig(win_id, width=cv.winfo_width())))
         cv.bind('<Configure>', lambda e: cv.itemconfig(win_id, width=e.width))
@@ -1612,7 +1449,7 @@ def _build_dlc_pane(parent, app):
             mp = s.entry.get('mount_point', '')
             txt = f"{s.entry.section!s}  [{cid!s}]  {s.source!s}{'  -> ' + mp if mp else ''!s}"
             tk.Label(rowf, text=txt, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w', justify='left').pack(side='left', fill='x', expand=True, padx=(6, 8), pady=4)
-        btnr = tk.Frame(win, bg=COLORS['bg_1'])
+        btnr = tk.Frame(win, bg=COLORS['bg_2'])
         btnr.pack(fill='x', padx=12, pady=(0, 12))
         def _apply_selected():
             added = 0
@@ -1627,8 +1464,8 @@ def _build_dlc_pane(parent, app):
                     app._log('[DLC] Auto Find added %d entr%s\n' % (added, 'y' if added == 1 else 'ies'))
                 except Exception:
                     pass
-        XButton(btnr, text=_('Apply selected'), command=_apply_selected, font=(FONTS['body'][0], 10), bg=COLORS['accent'], fg='#ffffff', relief='flat', bd=0, padx=16, pady=8, cursor='hand2').pack(side='left')
-        XButton(btnr, text=_('Cancel'), command=win.destroy, font=(FONTS['body'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], relief='flat', bd=0, padx=16, pady=8, cursor='hand2').pack(side='left', padx=(8, 0))
+        XButton(btnr, text=_('Apply selected'), command=_apply_selected, variant='primary').pack(side='right')
+        XButton(btnr, text=_('Cancel'), command=win.destroy).pack(side='right', padx=(0, px(6)))
         win.transient(parent)
     def _import_pack():
         from tkinter import filedialog as _fd
@@ -1711,13 +1548,13 @@ def _build_dlc_pane(parent, app):
             return all_items
         dlg = tk.Toplevel(parent)
         dlg.title(_('SerialStation Lookup'))
-        dlg.configure(bg=COLORS['bg_1'])
+        dlg.configure(bg=COLORS['bg_2'])
         dlg.geometry('700x520')
         dlg.resizable(True, True)
         dlg.transient(parent)
-        tk.Label(dlg, text='🔗  ' + _('SerialStation Lookup'), font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w', padx=16, pady=(16, 2))
-        tk.Label(dlg, text=_('Enter a game name or Title ID (e.g. PPSA04930). Results are unverified candidates — review before saving.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=660).pack(anchor='w', padx=16, pady=(0, 10))
-        q_row = tk.Frame(dlg, bg=COLORS['bg_1'])
+        tk.Label(dlg, text=_('SerialStation Lookup'), font=FONTS['title'], bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(anchor='w', padx=16, pady=(16, 2))
+        tk.Label(dlg, text=_('Enter a game name or Title ID (e.g. PPSA04930). Results are unverified candidates — review before saving.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], justify='left', wraplength=660).pack(anchor='w', padx=16, pady=(0, 10))
+        q_row = tk.Frame(dlg, bg=COLORS['bg_2'])
         q_row.pack(fill='x', padx=16)
         q_entry = XEntry(q_row, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
         q_entry.pack(side='left', fill='x', expand=True, padx=(0, 8))
@@ -1730,15 +1567,15 @@ def _build_dlc_pane(parent, app):
         except Exception:
             pass
         status_var = tk.StringVar(value='')
-        tk.Label(dlg, textvariable=status_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', padx=16, pady=(6, 0))
+        tk.Label(dlg, textvariable=status_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', padx=16, pady=(6, 0))
         games_frame = tk.Frame(dlg, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
         games_frame.pack(fill='x', padx=16, pady=(6, 0))
         tk.Label(games_frame, text=_('Games (select one, then Import):'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=8, pady=(6, 2))
         games_lb = tk.Listbox(games_frame, bg=COLORS['bg_3'], fg=COLORS['fg_1'], selectbackground=COLORS['accent'], selectforeground='#ffffff', font=FONTS['mono_sm'], relief='flat', highlightthickness=0, height=5, activestyle='none')
         games_lb.pack(fill='x', padx=8, pady=(0, 8))
-        cid_outer = tk.Frame(dlg, bg=COLORS['bg_1'])
+        cid_outer = tk.Frame(dlg, bg=COLORS['bg_2'])
         cid_outer.pack(fill='both', expand=True, padx=16, pady=(6, 0))
-        tk.Label(cid_outer, text=_('Content IDs (tick to import):'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(anchor='w')
+        tk.Label(cid_outer, text=_('Content IDs (tick to import):'), font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w')
         cid_wrap = tk.Frame(cid_outer, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
         cid_wrap.pack(fill='both', expand=True)
         cid_canvas = tk.Canvas(cid_wrap, bg=COLORS['bg_2'], highlightthickness=0, height=160)
@@ -1848,9 +1685,9 @@ def _build_dlc_pane(parent, app):
                     dlg.after(0, _done)
                 import threading as _thr2
                 _thr2.Thread(target=_work, daemon=True).start()
-        XButton(q_row, text=_('Search'), command=_do_search, font=(FONTS['body'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=12, pady=5, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left')
+        XButton(q_row, text=_('Search'), command=_do_search, icon='search').pack(side='left')
         q_entry.bind('<Return>', _do_search)
-        btn_row = tk.Frame(dlg, bg=COLORS['bg_1'])
+        btn_row = tk.Frame(dlg, bg=COLORS['bg_2'])
         btn_row.pack(fill='x', padx=16, pady=10)
         def _do_import():
             to_add = [(cid, name) for var, cid, name, already in _ss['cid_checks'] if var.get() and not already]
@@ -1880,28 +1717,25 @@ def _build_dlc_pane(parent, app):
                         app._log('[DLC] SerialStation imported %d content ID(s)\n' % added)
                     except Exception:
                         pass
-        XButton(btn_row, text=_('Import selected'), command=_do_import, font=(FONTS['body'][0], 10), bg=COLORS['accent'], fg='#ffffff', activebackground=COLORS['accent'], activeforeground='#ffffff', relief='flat', bd=0, padx=16, pady=8, cursor='hand2', highlightthickness=0).pack(side='left')
-        XButton(btn_row, text=_('Close'), command=dlg.destroy, font=(FONTS['body'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=14, pady=8, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left', padx=(8, 0))
-    top_actions = tk.Frame(body, bg=COLORS['bg_2'])
-    top_actions.pack(fill='x', pady=(2, 6))
-    XButton(top_actions, text='🔎  ' + _('Auto Find DLC Entries'), command=_auto_find, font=(FONTS['body'][0], 10), bg=COLORS['accent'], fg='#ffffff', activebackground=COLORS['accent'], activeforeground='#ffffff', relief='flat', bd=0, padx=16, pady=9, cursor='hand2', highlightthickness=0).pack(side='left', padx=(0, 6))
-    XButton(top_actions, text='🔗  ' + _('SerialStation Lookup…'), command=_serialstation_lookup, font=(FONTS['body'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=16, pady=9, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left', padx=(0, 6))
-    XButton(top_actions, text='📥  ' + _('Import DLC-emu Pack…'), command=_import_pack, font=(FONTS['body'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=16, pady=9, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left')
-    btns = tk.Frame(body, bg=COLORS['bg_2'])
-    btns.pack(fill='x', pady=(2, 2))
-    def _abtn(txt, cmd, primary=False):
-        return XButton(btns, text=txt, command=cmd, font=(FONTS['body'][0], 10), bg=COLORS['accent'] if primary else COLORS['bg_3'], fg='#ffffff' if primary else COLORS['fg_1'], activebackground=COLORS['accent'] if primary else COLORS['bg_4'], activeforeground='#ffffff' if primary else COLORS['fg_0'], relief='flat', bd=0, padx=14, pady=8, cursor='hand2', highlightthickness=0 if primary else 1, highlightbackground=COLORS['border_2'])
-    _abtn('+  ' + _('Add entry'), _add).pack(side='left', padx=(0, 6))
-    _abtn('👁  ' + _('Preview INI'), _preview).pack(side='left', padx=(0, 6))
-    _abtn('💾  ' + _('Save to app0'), _save_to_app0, primary=True).pack(side='left', padx=(0, 6))
-    _abtn('⬇  ' + _('Export copy…'), _export_copy).pack(side='left', padx=(0, 6))
-    btns2 = tk.Frame(body, bg=COLORS['bg_2'])
-    btns2.pack(fill='x', pady=(6, 0))
-    def _abtn2(txt, cmd):
-        return XButton(btns2, text=txt, command=cmd, font=(FONTS['body'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_2'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=12, pady=6, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2'])
-    _abtn2('🔍  ' + _('Scan eboot for codes…'), _scan_eboot).pack(side='left', padx=(0, 6))
-    _abtn2('📦  ' + _('Copy replacement modules…'), _copy_modules).pack(side='left')
-    tk.Label(body, text=_('Required runtime files — DLC-emu only works when BOTH are installed\n✓  dlc_emu.ini — created by “Save to app0” (contains the DLC configuration)\n✓  Runtime SPRX modules (libSceAppContent.sprx, libSceGameUpdate.sprx, libSceNpEntitlementAccess.sprx) — installed by “Copy replacement modules…”\nThe INI tells DLC-emu what DLC exists. The SPRX modules make the game use that configuration. Both are required.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], justify='left', anchor='w', wraplength=760).pack(fill='x', anchor='w', pady=(10, 2))
+        XButton(btn_row, text=_('Import selected'), command=_do_import, variant='primary').pack(side='right')
+        XButton(btn_row, text=_('Close'), command=dlg.destroy).pack(side='right', padx=(0, px(6)))
+    # Toolbar — discovery/import actions above the entry list
+    top_actions = tk.Frame(body, bg=C['bg_2'])
+    top_actions.pack(fill='x', pady=(0, px(12)), before=strip)
+    XButton(top_actions, text=_('Auto Find DLC Entries'), command=_auto_find, icon='search').pack(side='left', padx=(0, px(6)))
+    XButton(top_actions, text=_('SerialStation Lookup…'), command=_serialstation_lookup, icon='link').pack(side='left', padx=(0, px(6)))
+    XButton(top_actions, text=_('Import DLC-emu Pack…'), command=_import_pack, icon='download').pack(side='left')
+    XButton(strip, text=_('Add entry'), icon='plus', size='sm', command=_add).pack(side='right')
+    # Footer — preview / export / save (primary rightmost)
+    Divider(body, color=C['border_1']).pack(fill='x', pady=(px(8), px(12)))
+    btns2 = tk.Frame(body, bg=C['bg_2'])
+    btns2.pack(fill='x')
+    XButton(btns2, text=_('Save to app0'), command=_save_to_app0, variant='primary', icon='save').pack(side='right')
+    XButton(btns2, text=_('Export copy…'), command=_export_copy, icon='download').pack(side='right', padx=(0, px(6)))
+    XButton(btns2, text=_('Preview INI'), command=_preview, icon='eye').pack(side='right', padx=(0, px(6)))
+    XButton(btns2, text=_('Scan eboot for codes…'), command=_scan_eboot, icon='binary').pack(side='left', padx=(0, px(6)))
+    XButton(btns2, text=_('Copy replacement modules…'), command=_copy_modules, icon='package').pack(side='left')
+    InfoBar(body, kind='info', text=_('Required runtime files — DLC-emu only works when BOTH are installed\n✓  dlc_emu.ini — created by “Save to app0” (contains the DLC configuration)\n✓  Runtime SPRX modules (libSceAppContent.sprx, libSceGameUpdate.sprx, libSceNpEntitlementAccess.sprx) — installed by “Copy replacement modules…”\nThe INI tells DLC-emu what DLC exists. The SPRX modules make the game use that configuration. Both are required.')).pack(fill='x', pady=(px(16), 0))
     _init_folder = folder_var.get().strip()
     if _init_folder and _os.path.isdir(_init_folder):
         _load_from_folder(_init_folder)
@@ -1910,95 +1744,61 @@ def _build_dlc_pane(parent, app):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Language Stripper pane (v2.9.0) — banner + radios + browse + chips
+# Language Stripper pane — warning, source, quick keep, results
 # ─────────────────────────────────────────────────────────────────────
+def _stat_cells(parent, specs):
+    """Row of caption/value cells (overview style). specs: list of
+    (caption, mono). Returns the value labels (configure(text=…))."""
+    row = tk.Frame(parent, bg=C['bg_2'])
+    out = []
+    for i, (caption, mono) in enumerate(specs):
+        row.grid_columnconfigure(i, weight=1, uniform='stc%d' % id(row))
+        cell = tk.Frame(row, bg=C['bg_2'])
+        cell.grid(row=0, column=i, sticky='nw',
+                  padx=(0 if i == 0 else px(16), 0))
+        tk.Label(cell, text=caption, font=FONTS['caption'], bg=C['bg_2'],
+                 fg=C['fg_3'], anchor='w').pack(anchor='w')
+        v = tk.Label(cell, text='—',
+                     font=FONTS['code'] if mono else FONTS['body_strong'],
+                     bg=C['bg_2'], fg=C['fg_0'], anchor='w')
+        v.pack(anchor='w', pady=(px(4), 0))
+        out.append(v)
+    return row, out
+
+
 def _build_lang_pane(parent, app):
     parent.columnconfigure(0, weight=1)
-    parent.rowconfigure(0, weight=1)
 
-    card_outer = tk.Frame(parent, bg=COLORS['bg_2'],
-                          highlightbackground=COLORS['border_2'],
-                          highlightthickness=1)
-    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, 12))
+    card_outer = Card(parent, title=_('Language Stripper'),
+                      subtitle=_('Remove unwanted language packs from PS5 '
+                                 'game dumps to save space.'))
+    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, px(16)))
+    Badge(card_outer.head_actions, _('BETA'), 'warn').pack(side='right')
+    _head_first(card_outer)
+    body = card_outer.body
 
-    # Card header
-    head = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    head.pack(fill='x', padx=14, pady=(12, 4))
-    tk.Label(head, text='\U0001f310',
-             font=(FONTS['body'][0], 14),
-             bg=COLORS['bg_2'], fg=COLORS['purple']
-             ).pack(side='left', padx=(0, 8))
-    title_col = tk.Frame(head, bg=COLORS['bg_2'])
-    title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(title_col, text=_('Language Stripper'),
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(anchor='w')
-    tk.Label(title_col,
-             text=_('Remove unwanted language packs from PS5 game dumps to save space.'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-             ).pack(anchor='w')
-    # BETA pill on the right of the header
-    tk.Label(head, text=_('BETA'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['warn_bg'], fg=COLORS['warn'],
-             padx=8, pady=2,
-             highlightbackground=COLORS['warn'], highlightthickness=1
-             ).pack(side='right')
-
-    body = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    body.pack(fill='both', expand=True, padx=14, pady=(0, 12))
-
-    # ── Feature-page summary strip (v3.6.0) ──
+    # ── Summary strip ──
     # Selected Folder mirrors the path var live; the scan-derived
     # cells read app._adv_lang_stats when a scan backend populates it
-    # (keys: languages, est_saving, files, new_size) and show "\u2014"
+    # (keys: languages, est_saving, files, new_size) and show "—"
     # until then. Presentation only.
-    top = tk.Frame(body, bg=COLORS['bg_2'])
-    top.pack(fill='x', pady=(0, 4))
-    for i in range(4):
-        top.grid_columnconfigure(i, weight=1, uniform='langtop')
-
-    def _lang_cell(parent_, col, caption, fg, ncols, key):
-        cell = tk.Frame(parent_, bg=COLORS['bg_3'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        cell.grid(row=0, column=col, sticky='ew',
-                  padx=(0 if col == 0 else 10, 0))
-        tk.Label(cell, text=caption.upper(),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['bg_3'], fg=COLORS['fg_5']
-                 ).pack(anchor='w', padx=12, pady=(9, 0))
-        v = tk.Label(cell, text='\u2014',
-                     font=(FONTS['body_strong'][0], 11),
-                     bg=COLORS['bg_3'], fg=fg, anchor='w')
-        v.pack(fill='x', padx=12, pady=(2, 9))
-        return v
-
-    c_folder = _lang_cell(top, 0, _('Selected Folder'),
-                          COLORS['fg_1'], 4, 'folder')
-    c_langs = _lang_cell(top, 1, _('Languages Found'),
-                         COLORS['purple_hi'], 4, 'languages')
-    c_sel = _lang_cell(top, 2, _('Selected'),
-                       COLORS['accent_hi'], 4, 'selected')
-    c_save = _lang_cell(top, 3, _('Estimated Saving'),
-                        COLORS['success_hi'], 4, 'est_saving')
+    top, (c_folder, c_langs, c_sel, c_save) = _stat_cells(body, [
+        (_('Selected Folder'), True), (_('Languages Found'), False),
+        (_('Selected'), False), (_('Estimated Saving'), False)])
+    top.pack(fill='x', pady=(0, px(4)))
 
     keep_var = tk.StringVar(value='')
-    keep_lbl = tk.Label(body, textvariable=keep_var,
-                        font=FONTS['mono_sm'],
-                        bg=COLORS['bg_2'], fg=COLORS['teal'],
-                        anchor='w')
-    keep_lbl.pack(fill='x', pady=(0, 8))
+    keep_lbl = tk.Label(body, textvariable=keep_var, font=FONTS['caption'],
+                        bg=C['bg_2'], fg=C['fg_2'], anchor='w')
+    keep_lbl.pack(fill='x', pady=(0, px(12)))
 
     def _mirror_folder(*_a):
         try:
             f = (app._adv_lang_folder_var.get() or '').strip()
-            if len(f) > 34:
-                f = '\u2026' + f[-32:]
-            c_folder.config(text=f or '\u2014',
-                            font=(FONTS['body_strong'][0], 10))
+            if len(f) > 26:
+                f = '…' + f[-24:]
+            c_folder.config(text=f or '—',
+                            font=FONTS['code'] if f else FONTS['body_strong'])
         except Exception:
             pass
 
@@ -2007,18 +1807,18 @@ def _build_lang_pane(parent, app):
             if not c_langs.winfo_exists():
                 return
             st = getattr(app, '_adv_lang_stats', None) or {}
-            c_langs.config(text=str(st.get('languages', '\u2014')))
-            c_sel.config(text=str(st.get('selected', '\u2014')))
-            c_save.config(text=str(st.get('est_saving', '\u2014')))
+            c_langs.config(text=str(st.get('languages', '—')))
+            c_sel.config(text=str(st.get('selected', '—')))
+            c_save.config(text=str(st.get('est_saving', '—')))
             keep = st.get('keep')
             keep_var.set((_('Keep') + ':  ' + ' / '.join(keep))
                          if keep else '')
             if hasattr(app, '_adv_lang_bottom_cells'):
                 bc = app._adv_lang_bottom_cells
                 bc['save'].config(
-                    text=str(st.get('est_saving', '\u2014')))
-                bc['files'].config(text=str(st.get('files', '\u2014')))
-                bc['new'].config(text=str(st.get('new_size', '\u2014')))
+                    text=str(st.get('est_saving', '—')))
+                bc['files'].config(text=str(st.get('files', '—')))
+                bc['new'].config(text=str(st.get('new_size', '—')))
         except Exception:
             pass
         try:
@@ -2029,58 +1829,26 @@ def _build_lang_pane(parent, app):
     app._adv_lang_refresh_stats = _refresh_lang_stats
     body.after(600, _refresh_lang_stats)
 
-    # Banner row — red-tinted
-    banner = tk.Frame(body, bg=COLORS['danger_bg'],
-                      highlightbackground=COLORS['danger'],
-                      highlightthickness=1)
-    banner.pack(fill='x', pady=(0, 12))
-    bi = tk.Frame(banner, bg=COLORS['danger_bg'])
-    bi.pack(fill='x', padx=12, pady=8)
-    tk.Label(bi, text='\u26a0',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['danger_bg'], fg=COLORS['danger_hi']
-             ).pack(side='left', padx=(0, 8))
-    tk.Label(bi,
-             text=_('Deletes files permanently \u2014 back up games first.'),
-             font=(FONTS['body'][0], 10),
-             bg=COLORS['danger_bg'], fg=COLORS['danger_hi']
-             ).pack(side='left')
-    tk.Label(bi,
-             text=_('  May not work on all games'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['danger_bg'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(8, 0))
+    # Warning
+    warn = InfoBar(body, kind='danger',
+                   title=_('Deletes files permanently — back up games first.'),
+                   text=_('  May not work on all games').strip())
+    warn.pack(fill='x', pady=(0, px(16)))
 
-    # Mode radios
-    mode_row = tk.Frame(body, bg=COLORS['bg_2'])
-    mode_row.pack(fill='x', pady=(0, 8))
+    # Mode (same variable/values as the old radios)
     if not hasattr(app, '_adv_lang_mode_var'):
         app._adv_lang_mode_var = tk.StringVar(
             value=app._settings.get('adv_lang_mode', 'single'))
-    XRadio(mode_row, text=_('Single game folder'),
-                    variable=app._adv_lang_mode_var, value='single',
-                    font=(FONTS['body'][0], 10),
-                    bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-                    activebackground=COLORS['bg_2'],
-                    selectcolor=COLORS['bg_3'],
-                    cursor='hand2'
-                    ).pack(side='left', padx=(0, 16))
-    XRadio(mode_row, text=_('Scan all games in a folder'),
-                    variable=app._adv_lang_mode_var, value='scan',
-                    font=(FONTS['body'][0], 10),
-                    bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-                    activebackground=COLORS['bg_2'],
-                    selectcolor=COLORS['bg_3'],
-                    cursor='hand2'
-                    ).pack(side='left')
+    Segmented(body, [('single', _('Single game folder')),
+                     ('scan', _('Scan all games in a folder'))],
+              variable=app._adv_lang_mode_var).pack(anchor='w',
+                                                    pady=(0, px(12)))
 
     # Games folder field
-    folder_row = tk.Frame(body, bg=COLORS['bg_2'])
-    folder_row.pack(fill='x', pady=(0, 8))
-    tk.Label(folder_row, text=_('Games folder:'),
-             font=(FONTS['body'][0], 10),
-             bg=COLORS['bg_2'], fg=COLORS['fg_3']
-             ).pack(side='left', padx=(0, 8))
+    tk.Label(body, text=_('Games folder:').rstrip(':'), font=FONTS['body'],
+             bg=C['bg_2'], fg=C['fg_2'], anchor='w').pack(fill='x')
+    folder_row = tk.Frame(body, bg=C['bg_2'])
+    folder_row.pack(fill='x', pady=(px(4), px(12)))
     if not hasattr(app, '_adv_lang_folder_var'):
         app._adv_lang_folder_var = tk.StringVar(
             value=app._settings.get('adv_lang_folder', ''))
@@ -2090,30 +1858,21 @@ def _build_lang_pane(parent, app):
             'write', lambda *a: _mirror_folder())
     except Exception:
         pass
-    folder_ef = tk.Frame(folder_row, bg=COLORS['field_bg'],
-                          highlightbackground=COLORS['border_3'],
-                          highlightthickness=1)
-    folder_ef.pack(side='left', fill='x', expand=True)
-    XEntry(folder_ef, textvariable=app._adv_lang_folder_var,
-             font=(FONTS['body'][0], 10),
-             bg=COLORS['field_bg'], fg=COLORS['field_fg'],
-             insertbackground=COLORS['field_fg'],
-             relief='flat', bd=4
-             ).pack(fill='x')
-    _ghost_btn(folder_row, '\U0001f4c1  ' + _('Browse'),
-        command=lambda: _lang_browse(app)
-        ).pack(side='left', padx=(6, 0))
-    _accent_btn(folder_row, '\U0001f50d  ' + _('Scan'),
-        command=lambda: _lang_scan(app)
-        ).pack(side='left', padx=(6, 0))
+    XEntry(folder_row, textvariable=app._adv_lang_folder_var, mono=True
+           ).pack(side='left', fill='x', expand=True)
+    XButton(folder_row, text=_('Scan'), icon='search',
+            command=lambda: _lang_scan(app)).pack(side='right',
+                                                  padx=(px(6), 0))
+    XButton(folder_row, text=_('Browse'), icon='folder_open',
+            command=lambda: _lang_browse(app)).pack(side='right',
+                                                    padx=(px(6), 0))
 
-    # Quick-keep chip row
-    chip_row = tk.Frame(body, bg=COLORS['bg_2'])
-    chip_row.pack(fill='x', pady=(0, 12))
-    tk.Label(chip_row, text=_('Quick keep:'),
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='left', padx=(0, 8))
+    # Quick-keep row
+    chip_row = tk.Frame(body, bg=C['bg_2'])
+    chip_row.pack(fill='x', pady=(0, px(12)))
+    tk.Label(chip_row, text=_('Quick keep:').rstrip(':'),
+             font=FONTS['body'], bg=C['bg_2'], fg=C['fg_2']
+             ).pack(side='left', padx=(0, px(10)))
     chips = [
         ('GB', _('EN only'),  ['en']),
         ('JP', _('JA only'),  ['ja']),
@@ -2123,90 +1882,59 @@ def _build_lang_pane(parent, app):
         ('',   _('EN+JA'),    ['en', 'ja']),
         ('EU', _('EU only'),  ['en', 'de', 'fr', 'es', 'it']),
     ]
-    for prefix, label, keep_codes in chips:
-        text = prefix + ' ' + label if prefix else label
-        chip = tk.Label(chip_row, text=text,
-            font=(FONTS['body'][0], 9),
-            bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-            padx=8, pady=3,
-            highlightbackground=COLORS['border_3'],
-            highlightthickness=1, cursor='hand2')
-        chip.pack(side='left', padx=(0, 4))
-        chip.bind('<Button-1>',
-            lambda _e, codes=keep_codes: _lang_quick_keep(app, codes))
-        # Hover effect
-        def _enter(_e, c=chip):
-            c.config(bg=COLORS['accent_08'],
-                     highlightbackground=COLORS['accent_lo'])
-        def _leave(_e, c=chip):
-            c.config(bg=COLORS['bg_3'],
-                     highlightbackground=COLORS['border_3'])
-        chip.bind('<Enter>', _enter)
-        chip.bind('<Leave>', _leave)
+    for _prefix, label, keep_codes in chips:
+        XButton(chip_row, text=label, size='sm',
+                command=lambda codes=keep_codes: _lang_quick_keep(app, codes)
+                ).pack(side='left', padx=(0, px(6)))
 
-    # Result area (200px min height, dashed border)
-    result_outer = tk.Frame(body, bg=COLORS['bg_3'],
-                            highlightbackground=COLORS['border_3'],
-                            highlightthickness=1, height=200)
-    result_outer.pack(fill='both', expand=True, pady=(0, 8))
+    # Result area (inset well) — empty state replaced when results arrive
+    result_outer = Rounded(body, bg=C['bg_0'], border=C['border_2'],
+                           radius=8, padding=(px(8), px(8)),
+                           surface=C['bg_2'], height=px(200))
+    result_outer.pack(fill='both', expand=True, pady=(0, px(16)))
     result_outer.pack_propagate(False)
-    # Empty state — replaced when scan results arrive
     app._adv_lang_result_frame = result_outer
     _show_lang_empty_state(app)
 
-    # ── Bottom summary strip (v3.6.0) — scan-derived, "\u2014" until
-    # a scan populates app._adv_lang_stats ──
-    bot = tk.Frame(body, bg=COLORS['bg_2'])
-    bot.pack(fill='x', pady=(0, 10))
-    for i in range(3):
-        bot.grid_columnconfigure(i, weight=1, uniform='langbot')
-    app._adv_lang_bottom_cells = {
-        'save': _lang_cell(bot, 0, _('Space To Save'),
-                           COLORS['success_hi'], 3, 'est_saving'),
-        'files': _lang_cell(bot, 1, _('Files To Remove'),
-                            COLORS['warn_hi'], 3, 'files'),
-        'new': _lang_cell(bot, 2, _('New Estimated Size'),
-                          COLORS['teal'], 3, 'new_size'),
-    }
+    # ── Bottom summary strip — scan-derived, "—" until a scan
+    # populates app._adv_lang_stats ──
+    bot, (b_save, b_files, b_new) = _stat_cells(body, [
+        (_('Space To Save'), False), (_('Files To Remove'), False),
+        (_('New Estimated Size'), False)])
+    bot.pack(fill='x', pady=(0, px(16)))
+    app._adv_lang_bottom_cells = {'save': b_save, 'files': b_files,
+                                  'new': b_new}
 
-    # Footer: Keep all / Keep none on the left; large primary strip
-    footer = tk.Frame(body, bg=COLORS['bg_2'])
+    # Footer: Keep all / Keep none on the left; destructive action right
+    Divider(body, color=C['border_1']).pack(fill='x', pady=(0, px(12)))
+    footer = tk.Frame(body, bg=C['bg_2'])
     footer.pack(fill='x')
-    _ghost_btn(footer, '\u2713  ' + _('Keep all'),
-        command=lambda: _lang_keep_all(app)
-        ).pack(side='left', padx=(0, 4))
-    _ghost_btn(footer, '\u2717  ' + _('Keep none'),
-        command=lambda: _lang_keep_none(app)
-        ).pack(side='left')
-    strip_btn = XButton(footer,
-        text='\U0001f5d1  ' + _('Strip Selected Languages'),
-        font=(FONTS['body_strong'][0], 11),
-        bg=COLORS['danger'], fg=COLORS['fg_0'],
-        activebackground=COLORS['danger_hi'],
-        activeforeground=COLORS['fg_0'],
-        relief='flat', bd=0, padx=22, pady=10,
-        cursor='hand2',
-        command=lambda: _lang_strip(app))
+    XButton(footer, text=_('Keep all'), icon='check',
+            command=lambda: _lang_keep_all(app)).pack(side='left',
+                                                      padx=(0, px(6)))
+    XButton(footer, text=_('Keep none'), icon='close',
+            command=lambda: _lang_keep_none(app)).pack(side='left')
+    strip_btn = XButton(footer, text=_('Strip Selected Languages'),
+                        variant='danger', icon='trash',
+                        command=lambda: _lang_strip(app))
     strip_btn.pack(side='right')
 
 
 def _show_lang_empty_state(app):
     """Render the empty-state placeholder in the result area."""
     frame = app._adv_lang_result_frame
-    for w in frame.winfo_children():
+    for w in list(frame.winfo_children()):
+        if w in getattr(frame, '_xb_deco', []):
+            continue
         w.destroy()
-    inner = tk.Frame(frame, bg=COLORS['bg_3'])
-    inner.pack(expand=True)
-    tk.Label(inner, text='\U0001f310',
-             font=(FONTS['body'][0], 28),
-             bg=COLORS['bg_3'], fg=COLORS['fg_6']
-             ).pack(pady=(0, 6))
-    tk.Label(inner,
-             text=_('Select a games folder and click Scan to see language packs.'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-             wraplength=400, justify='center'
-             ).pack()
+    XEmptyState(frame, icon='globe', title=_('No scan yet'),
+                text=_('Select a games folder and click Scan to see '
+                       'language packs.'), bg=C['bg_0']
+                ).pack(fill='both', expand=True)
+    try:
+        frame.raise_decorations()
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -2277,14 +2005,13 @@ def _lang_strip(app):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Build Parameters pane — the redesigned 2x2 grid + side rail
+# Build Parameters pane — 2x2 card grid + full-width assistant row
 # ─────────────────────────────────────────────────────────────────────
 def _build_params_pane(parent, app):
-    # v3.6.0 layout: a 2x2 card grid on top with a full-width
-    # recommendation assistant beneath it (replaces the cramped 300px
-    # right sidebar that wrapped text and unbalanced the cards on
-    # smaller displays / Windows scaling).
-    grid = tk.Frame(parent, bg=COLORS['bg_1'])
+    # A 2x2 card grid on top with the recommendation assistant beneath it
+    # (three columns: setup recommendation · current profile · why these
+    # defaults).
+    grid = tk.Frame(parent, bg=C['bg_1'])
     grid.pack(fill='x')
     grid.columnconfigure(0, weight=1, uniform='card')
     grid.columnconfigure(1, weight=1, uniform='card')
@@ -2294,57 +2021,32 @@ def _build_params_pane(parent, app):
     _build_card_perf  (grid, app, row=1, col=0)
     _build_card_ffpkg (grid, app, row=1, col=1)
 
-    # Recommendation Configuration Assistant — full width, three
-    # columns (setup recommendation · current profile · why these
-    # defaults) so nothing has to wrap into a narrow rail.
-    assistant = tk.Frame(parent, bg=COLORS['bg_1'])
-    assistant.pack(fill='x', pady=(0, 4))
+    assistant = tk.Frame(parent, bg=C['bg_1'])
+    assistant.pack(fill='x')
     assistant.columnconfigure(0, weight=3, uniform='asst')
     assistant.columnconfigure(1, weight=2, uniform='asst')
     assistant.columnconfigure(2, weight=2, uniform='asst')
 
-    col0 = tk.Frame(assistant, bg=COLORS['bg_1'])
-    col0.grid(row=0, column=0, sticky='nsew', padx=(0, 12))
+    col0 = tk.Frame(assistant, bg=C['bg_1'])
+    col0.grid(row=0, column=0, sticky='nsew', padx=(0, px(16)))
     _build_recco_card(col0, app)
-    col1 = tk.Frame(assistant, bg=COLORS['bg_1'])
-    col1.grid(row=0, column=1, sticky='nsew', padx=(0, 12))
+    col1 = tk.Frame(assistant, bg=C['bg_1'])
+    col1.grid(row=0, column=1, sticky='nsew', padx=(0, px(16)))
     _build_profile_card(col1, app)
-    col2 = tk.Frame(assistant, bg=COLORS['bg_1'])
+    col2 = tk.Frame(assistant, bg=C['bg_1'])
     col2.grid(row=0, column=2, sticky='nsew')
     _build_help_card(col2, app)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Cards — each is a Frame with a header + body of SettingRows
+# Cards — each is a titled Card with a body of setting rows
 # ─────────────────────────────────────────────────────────────────────
 def _card_shell(parent, row, col, icon, title, subtitle):
-    outer = tk.Frame(parent, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_2'],
-                     highlightthickness=1)
-    outer.grid(row=row, column=col, sticky='nsew',
-               padx=(0 if col == 0 else 6, 6 if col == 0 else 0),
-               pady=(0, 12))
-
-    head = tk.Frame(outer, bg=COLORS['bg_2'])
-    head.pack(fill='x', padx=16, pady=(14, 6))
-    tk.Label(head, text=icon,
-             font=(FONTS['body'][0], 15),
-             bg=COLORS['bg_2'], fg=COLORS['accent']
-             ).pack(side='left', padx=(0, 9))
-    title_col = tk.Frame(head, bg=COLORS['bg_2'])
-    title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(title_col, text=title,
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(anchor='w')
-    tk.Label(title_col, text=subtitle,
-             font=(FONTS['body'][0], 10),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-             ).pack(anchor='w', pady=(1, 0))
-
-    body = tk.Frame(outer, bg=COLORS['bg_2'])
-    body.pack(fill='x', padx=16, pady=(2, 14))
-    return body
+    card = Card(parent, title=title, subtitle=subtitle)
+    card.grid(row=row, column=col, sticky='nsew',
+              padx=(0 if col == 0 else px(8), px(8) if col == 0 else 0),
+              pady=(0, px(16)))
+    return card.body
 
 
 # ── Filesystem layout ────────────────────────────────────────────────
@@ -2374,11 +2076,10 @@ def _build_card_fs(parent, app, row, col):
         help_text=_('PS5 expects 512. 4096 needs config.ini edits.'))
 
 
-
 # ── Performance ──────────────────────────────────────────────────────
 def _build_card_perf(parent, app, row, col):
     body = _card_shell(parent, row, col,
-        '\u26a1', _('Performance'),
+        '⚡', _('Performance'),
         _('Copy concurrency, retries, benchmark.'))
 
     # Recommended threads meta line — only if HW detected
@@ -2387,7 +2088,7 @@ def _build_card_perf(parent, app, row, col):
         hw = None
     meta = None
     if hw:
-        meta = _('Recommended: 1 \u2014 single-threaded avoids '
+        meta = _('Recommended: 1 — single-threaded avoids '
                  'fragmenting the image')
 
     _setting_row(body, app,
@@ -2395,7 +2096,7 @@ def _build_card_perf(parent, app, row, col):
         kind='int',
         var=app._adv_threads_var,
         default='1',
-        help_text=_('1 = sequential \u2014 recommended, avoids fragmenting the image. Higher copies faster but fragments output.'),
+        help_text=_('1 = sequential — recommended, avoids fragmenting the image. Higher copies faster but fragments output.'),
         meta=meta)
 
     _setting_row(body, app,
@@ -2414,38 +2115,21 @@ def _build_card_perf(parent, app, row, col):
         default='3',
         help_text=_('Seconds to wait between retries.'))
 
-    # Write benchmark pill + button — laid out like a _setting_row so
-    # the controls line up with the entries above
-    bench_row = tk.Frame(body, bg=COLORS['bg_2'])
-    bench_row.pack(fill='x', pady=(8, 0))
-    bench_lcol = tk.Frame(bench_row, bg=COLORS['bg_2'])
-    bench_lcol.pack(side='left', fill='x', expand=True)
-    tk.Label(bench_lcol, text=_('Write speed'),
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-             anchor='w').pack(anchor='w')
-    tk.Label(bench_lcol, text=_('1 GiB sequential test on the temp drive.'),
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-             anchor='w').pack(anchor='w', pady=(3, 0))
-    bench_ctrl = tk.Frame(bench_row, bg=COLORS['bg_2'])
-    bench_ctrl.pack(side='left', padx=(12, 12))
-    bench_val = app._settings.get('adv_write_benchmark', '\u2014')
-    bench_pill = tk.Label(bench_ctrl, text=bench_val,
-        font=(FONTS['body_strong'][0], 10),
-        bg=COLORS['accent_08'], fg=COLORS['accent_hi'],
-        padx=8, pady=2,
-        highlightbackground=COLORS['accent_lo'], highlightthickness=1)
-    bench_pill.pack(side='left', padx=(0, 6))
-    _ghost_btn(bench_ctrl, '\u25b6  ' + _('Run'),
-        command=lambda: _run_benchmark(app, bench_pill)
-        ).pack(side='left')
+    # Write benchmark — a setting row with a value badge + Run button
+    ctrl = setting_row(body, _('Write speed'),
+                       _('1 GiB sequential test on the temp drive.'))
+    bench_val = app._settings.get('adv_write_benchmark', '—')
+    bench_pill = Badge(ctrl, bench_val, 'neutral', mono=True)
+    bench_pill.pack(side='left', padx=(0, px(8)))
+    XButton(ctrl, text=_('Run'), icon='play', size='sm',
+            command=lambda: _run_benchmark(app, bench_pill)
+            ).pack(side='left')
 
 
 # ── Image options ────────────────────────────────────────────────────
 def _build_card_image(parent, app, row, col):
     body = _card_shell(parent, row, col,
-        '\u2699', _('Image options'),
+        '⚙', _('Image options'),
         _('Hygiene flags & verification.'))
 
     _setting_row(body, app,
@@ -2520,7 +2204,7 @@ def _build_card_ffpkg(parent, app, row, col):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# SettingRow primitive — label + control + default indicator
+# SettingRow primitive — label + control + restore-default link
 # ─────────────────────────────────────────────────────────────────────
 def _setting_row(parent, app, label, kind, var=None,
                  default=None, options=None, help_text=None, meta=None,
@@ -2528,13 +2212,13 @@ def _setting_row(parent, app, label, kind, var=None,
     """Build one setting row inside a card body.
 
     kind:
-      'select'  — combobox with [(value, display)] options
-      'int'     — text entry validated to integer
-      'text'    — free-text entry
-      'toggle'  — boolean toggle pill (ON/OFF flat label)
-      'locked'  — read-only display with a lock pill
-    severity: None or 'danger' — danger rows get a danger pill next to
-      the label and warn-tinted help text.
+      'select'  — dropdown with [(value, display)] options
+      'int'     — text field validated to integer
+      'text'    — free-text field
+      'toggle'  — on/off switch (saves immediately)
+      'locked'  — read-only field with a lock icon
+    severity: None or 'danger' — danger rows get a danger badge next to
+      the label and danger-tinted help text.
     on_change: optional zero-arg callback invoked on every save. If
       provided, it's called INSTEAD of app._save_adv_params.
     """
@@ -2546,58 +2230,53 @@ def _setting_row(parent, app, label, kind, var=None,
             app._save_adv_params()
             if hasattr(app, '_save_adv_params') else None)
 
-    row = tk.Frame(parent, bg=COLORS['bg_2'])
-    row.pack(fill='x', pady=(2, 0))
-    sep = tk.Frame(parent, bg=COLORS['border_1'], height=1)
-    sep.pack(fill='x', pady=(10, 10))
-
-    # Column 1: label + help + meta
-    lcol = tk.Frame(row, bg=COLORS['bg_2'])
-    lcol.pack(side='left', fill='x', expand=True)
-    # Label + optional danger pill
-    label_row = tk.Frame(lcol, bg=COLORS['bg_2'])
-    label_row.pack(anchor='w', fill='x')
-    tk.Label(label_row, text=label,
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-             anchor='w').pack(side='left')
+    help_plain = help_text
+    if help_text and severity == 'danger':
+        from ui.icons import strip_glyphs
+        help_plain = strip_glyphs(help_text)
+    ctrl_col = setting_row(parent, label,
+                           None if severity == 'danger' else help_plain)
+    lcol = ctrl_col.text_col
+    bg = C['bg_2']
     if severity == 'danger':
-        tk.Label(label_row, text=_('destructive'),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['danger_bg'], fg=COLORS['danger_hi'],
-                 padx=6, pady=1,
-                 highlightbackground=COLORS['danger'], highlightthickness=1
-                 ).pack(side='left', padx=(8, 0))
-    if help_text:
-        help_fg = COLORS['danger_hi'] if severity == 'danger' else COLORS['fg_5']
-        tk.Label(lcol, text=help_text,
-                 font=(FONTS['body'][0], 9),
-                 bg=COLORS['bg_2'], fg=help_fg,
-                 anchor='w', justify='left', wraplength=340
-                 ).pack(anchor='w', pady=(3, 0))
+        ctrl_col.label.pack_forget()
+        lrow = tk.Frame(lcol, bg=bg)
+        lrow.pack(fill='x')
+        tk.Label(lrow, text=label, font=FONTS['body'], bg=bg, fg=C['fg_1'],
+                 anchor='w').pack(side='left')
+        Badge(lrow, _('destructive'), 'danger', icon=False).pack(
+            side='left', padx=(px(8), 0))
+        if help_plain:
+            hrow = tk.Frame(lcol, bg=bg)
+            hrow.pack(fill='x', pady=(px(2), 0))
+            IconLabel(hrow, 'warning', 12, C['danger'], bg).pack(
+                side='left', anchor='n', pady=(px(2), 0), padx=(0, px(6)))
+            hl = tk.Label(hrow, text=help_plain, font=FONTS['caption'],
+                          bg=bg, fg=C['danger_hi'], anchor='w',
+                          justify='left')
+            hl.pack(side='left', fill='x', expand=True)
+            autowrap(hl)
     if meta:
-        tk.Label(lcol, text='\U0001f4a1  ' + meta,
-                 font=(FONTS['body'][0], 9),
-                 bg=COLORS['bg_2'], fg=COLORS['accent_hi'],
-                 anchor='w').pack(anchor='w', pady=(2, 0))
+        mrow = tk.Frame(lcol, bg=bg)
+        mrow.pack(fill='x', pady=(px(4), 0))
+        IconLabel(mrow, 'lightbulb', 12, C['fg_3'], bg).pack(
+            side='left', padx=(0, px(6)))
+        tk.Label(mrow, text=meta, font=FONTS['caption'], bg=bg,
+                 fg=C['fg_2'], anchor='w').pack(side='left')
 
-    # Column 2: control
-    ctrl_col = tk.Frame(row, bg=COLORS['bg_2'])
-    ctrl_col.pack(side='right', padx=(12, 0))
     ctrl_widget = None
 
     if kind == 'select':
-        # Light-on-dark Combobox (light field is a Windows-form holdover)
         display_var = tk.StringVar(value='')
         # Resolve current value to its display label
         cur = var.get() if var else default
         display_map = dict(options)
         display_var.set(display_map.get(cur, cur))
         values = [d for (_v, d) in options]
-        ctrl_widget = ttk.Combobox(ctrl_col, textvariable=display_var,
-                                    values=values, state='readonly',
-                                    font=(FONTS['body'][0], 10), width=14)
-        ctrl_widget.pack()
+        ctrl_widget = Dropdown(ctrl_col, textvariable=display_var,
+                               values=values, width=12)
+        ctrl_widget.pack(side='right', padx=(0, px(3)))
+
         # Sync display back to the real var
         def _on_pick(_e=None):
             sel = display_var.get()
@@ -2611,17 +2290,23 @@ def _setting_row(parent, app, label, kind, var=None,
                 pass
         ctrl_widget.bind('<<ComboboxSelected>>', _on_pick)
 
+        # Keep the display in step with programmatic changes (reset /
+        # restore default).
+        def _sync_disp(*_a):
+            try:
+                display_var.set(display_map.get(var.get(), var.get()))
+            except Exception:
+                pass
+        if var is not None:
+            try:
+                var.trace_add('write', _sync_disp)
+            except Exception:
+                pass
+
     elif kind == 'int' or kind == 'text':
-        ef = tk.Frame(ctrl_col, bg=COLORS['field_bg'],
-                      highlightbackground=COLORS['border_3'],
-                      highlightthickness=1)
-        ef.pack()
-        ctrl_widget = XEntry(ef, textvariable=var,
-                 font=(FONTS['body'][0], 10),
-                 bg=COLORS['field_bg'], fg=COLORS['field_fg'],
-                 insertbackground=COLORS['field_fg'],
-                 relief='flat', bd=4, width=12)
-        ctrl_widget.pack()
+        ctrl_widget = XEntry(ctrl_col, textvariable=var, width=10)
+        ctrl_widget.pack(side='right', padx=(0, px(3)))
+
         def _entry_save(_e=None):
             try:
                 _save_handler()
@@ -2631,151 +2316,97 @@ def _setting_row(parent, app, label, kind, var=None,
         ctrl_widget.bind('<Return>',   _entry_save)
 
     elif kind == 'toggle':
-        # Status chip + flat ON/OFF pill (v3.6.0: every toggle row
-        # shows its state in words next to the control)
-        is_on = bool(var.get()) if var else False
-        status_lbl = tk.Label(ctrl_col,
-                              text=('\u2713 ' + _('Enabled')) if is_on
-                              else ('\u25cb ' + _('Disabled')),
-                              font=(FONTS['body_strong'][0], 9),
-                              bg=COLORS['success_bg'] if is_on
-                              else COLORS['bg_3'],
-                              fg=COLORS['success_hi'] if is_on
-                              else COLORS['fg_5'],
-                              padx=8, pady=2,
-                              highlightbackground=(
-                                  COLORS['success'] if is_on
-                                  else COLORS['border_3']),
-                              highlightthickness=1)
-        status_lbl.pack(side='left', padx=(0, 10))
-        pill = tk.Label(ctrl_col,
-                        text='ON' if is_on else 'OFF',
-                        bg=COLORS['success'] if is_on else COLORS['bg_5'],
-                        fg='#000000' if is_on else COLORS['fg_5'],
-                        font=(FONTS['body_strong'][0], 9),
-                        padx=10, pady=2,
-                        width=3, anchor='center',
-                        cursor='hand2')
-        pill.pack(side='left')
-        def _paint(on):
-            pill.config(text='ON' if on else 'OFF',
-                        bg=COLORS['success'] if on else COLORS['bg_5'],
-                        fg='#000000' if on else COLORS['fg_5'])
-            try:
-                status_lbl.config(
-                    text=('\u2713 ' + _('Enabled')) if on
-                    else ('\u25cb ' + _('Disabled')),
-                    bg=COLORS['success_bg'] if on else COLORS['bg_3'],
-                    fg=COLORS['success_hi'] if on else COLORS['fg_5'],
-                    highlightbackground=(COLORS['success'] if on
-                                         else COLORS['border_3']))
-            except Exception:
-                pass
-        def _flip(_e=None):
-            new = not bool(var.get())
-            var.set(new)
-            _paint(new)
+        def _flip():
             try:
                 _save_handler()
             except Exception:
                 pass
-        pill.bind('<Button-1>', _flip)
-        if var is not None:
-            try:
-                var.trace_add('write',
-                              lambda *a: _paint(bool(var.get())))
-            except Exception:
-                pass
-        ctrl_widget = pill
+        ctrl_widget = TSwitch(ctrl_col, variable=var, command=_flip)
+        ctrl_widget.pack(side='right')
 
     elif kind == 'locked':
-        # Read-only field + 🔒 pill
-        ef = tk.Frame(ctrl_col, bg=COLORS['field_bg'],
-                      highlightbackground=COLORS['border_3'],
-                      highlightthickness=1)
-        ef.pack(side='left')
-        tk.Label(ef, text=value_text or '',
-                 bg=COLORS['field_bg'], fg=COLORS['field_fg'],
-                 font=(FONTS['body'][0], 10),
-                 padx=8, pady=3, width=8, anchor='w'
-                 ).pack()
-        lock_pill = tk.Label(ctrl_col, text='\U0001f512',
-                              font=(FONTS['body'][0], 10),
-                              bg=COLORS['bg_2'], fg=COLORS['warn'])
-        lock_pill.pack(side='left', padx=(6, 0))
+        lock_pill = IconLabel(ctrl_col, 'lock', 16, C['fg_3'], bg)
+        lock_pill.pack(side='right', padx=(px(8), 0))
+        XTooltip(lock_pill, _('Locked. 4096 produces broken images on Windows.'))
+        ent = XEntry(ctrl_col, width=10)
+        ent.insert(0, value_text or '')
+        ent.configure(state='disabled')
+        ent.pack(side='right')
         ctrl_widget = lock_pill
 
-    # Column 3: inline "Restore default" badge — only shown when the
-    # value differs from its default (sits just left of the control)
+    # Inline "Restore default" link — only shown when the value differs
+    # from its default (sits just left of the control)
     if default is not None and var is not None:
-        def_inline = tk.Frame(row, bg=COLORS['bg_2'])
-        def_inline.pack(side='right', padx=(0, 4))
+        def_inline = tk.Frame(lcol, bg=bg)
 
         def _update_def_indicator(*_a):
             try:
                 cur = var.get()
             except Exception:
                 return
+            try:
+                if not def_inline.winfo_exists():
+                    return
+            except Exception:
+                return
             for w in def_inline.winfo_children():
                 w.destroy()
             if str(cur) == str(default):
+                def_inline.pack_forget()
                 return
-            # Off-default — clickable revert badge
-            badge = tk.Label(def_inline,
-                text='\u21bb  ' + _('Restore default') + ' (' + str(default) + ')',
-                font=(FONTS['body_strong'][0], 9),
-                bg=COLORS['warn_bg'], fg=COLORS['warn'],
-                padx=8, pady=2, cursor='hand2',
-                highlightbackground=COLORS['warn'], highlightthickness=1)
-            badge.pack(side='right')
-            def _revert(_e=None):
+            def_inline.pack(anchor='w', pady=(px(4), 0))
+
+            def _revert():
                 var.set(default)
                 try:
                     _save_handler()
                 except Exception:
                     pass
                 _update_def_indicator()
-            badge.bind('<Button-1>', _revert)
+            # Off-default — revert link
+            XButton(def_inline,
+                    text=_('Restore default') + ' (' + str(default) + ')',
+                    variant='link', size='sm', icon='undo', surface=bg,
+                    command=_revert).pack(side='left')
         _update_def_indicator()
         try:
             var.trace_add('write', _update_def_indicator)
         except Exception:
             pass
+    return ctrl_widget
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Side rail — Recommended-for-your-setup + Why-these-defaults
+# Assistant row — Recommended-for-your-setup · profile · why defaults
 # ─────────────────────────────────────────────────────────────────────
+def _overline(parent, text, bg=None):
+    bg = bg or C['bg_2']
+    lbl = tk.Label(parent, text=text.upper(), font=FONTS['overline'],
+                   bg=bg, fg=C['fg_4'], anchor='w')
+    return lbl
+
+
 def _build_profile_card(parent, app):
     """Current Build Profile — live mirror of the five key params with
-    per-row status dots and an overall Optimal / Custom / Risky pill.
-    Green = matches the hardware recommendation, yellow = custom,
-    red = the known-risky 4096 sector size. Read-only."""
+    per-row status icons and an overall Optimal / Custom / Risky badge.
+    Success = matches the hardware recommendation, warn = custom,
+    danger = the known-risky 4096 sector size. Read-only."""
     hw = getattr(app, '_adv_v2_hw', None)
     if not isinstance(hw, dict) or not hw.get('model'):
         hw = None
     rec_threads = str(hw['recommended_threads']) if hw else None
 
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    card.pack(fill='x', pady=(0, 12))
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=14, pady=12)
+    card = Card(parent, padding=16)
+    card.pack(fill='x', pady=(0, px(16)))
 
-    hrow = tk.Frame(inner, bg=COLORS['bg_2'])
-    hrow.pack(fill='x')
-    tk.Label(hrow, text=_('CURRENT BUILD PROFILE'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='left')
-    status_pill = tk.Label(hrow, text='',
-                           font=(FONTS['body_strong'][0], 9),
-                           padx=8, pady=2)
+    hrow = tk.Frame(card, bg=C['bg_2'])
+    hrow.pack(fill='x', pady=(0, px(10)))
+    _overline(hrow, _('CURRENT BUILD PROFILE')).pack(side='left')
+    status_pill = Badge(hrow, '', 'neutral')
     status_pill.pack(side='right')
 
-    body = tk.Frame(inner, bg=COLORS['bg_2'])
-    body.pack(fill='x', pady=(8, 0))
+    body = tk.Frame(card, bg=C['bg_2'])
+    body.pack(fill='x')
 
     specs = [
         ('cluster', _('Cluster Size'), app._adv_cluster_var),
@@ -2786,18 +2417,14 @@ def _build_profile_card(parent, app):
     ]
     rows = {}
     for key, label, var in specs:
-        r = tk.Frame(body, bg=COLORS['bg_2'])
-        r.pack(fill='x', pady=(0, 5))
-        dot = tk.Label(r, text='\u25cf',
-                       font=(FONTS['body'][0], 9),
-                       bg=COLORS['bg_2'], fg=COLORS['fg_5'])
-        dot.pack(side='left', padx=(0, 6))
-        tk.Label(r, text=label, font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w'
-                 ).pack(side='left')
-        val = tk.Label(r, text='\u2014',
-                       font=(FONTS['body_strong'][0], 9),
-                       bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='e')
+        r = tk.Frame(body, bg=C['bg_2'])
+        r.pack(fill='x', pady=(0, px(6)))
+        dot = IconLabel(r, 'dot', 16, C['fg_5'], C['bg_2'])
+        dot.pack(side='left', padx=(0, px(6)))
+        tk.Label(r, text=label, font=FONTS['body'], bg=C['bg_2'],
+                 fg=C['fg_2'], anchor='w').pack(side='left')
+        val = tk.Label(r, text='—', font=FONTS['code'],
+                       bg=C['bg_2'], fg=C['fg_0'], anchor='e')
         val.pack(side='right')
         rows[key] = (var, dot, val)
 
@@ -2816,8 +2443,8 @@ def _build_profile_card(parent, app):
             return 'ok' if low == rec_threads else 'custom'
         return 'neutral'
 
-    dotc = {'ok': COLORS['success_hi'], 'custom': COLORS['warn_hi'],
-            'risky': COLORS['danger_hi'], 'neutral': COLORS['fg_5']}
+    dotc = {'ok': ('success', C['success']), 'custom': ('warning', C['warn']),
+            'risky': ('error', C['danger']), 'neutral': ('dot', C['fg_5'])}
 
     def _sync(*_a):
         try:
@@ -2826,25 +2453,20 @@ def _build_profile_card(parent, app):
                 if not val.winfo_exists():
                     return
                 raw = (var.get() or '').strip()
-                val.config(text=raw or '\u2014')
+                val.config(text=raw or '—')
                 j = _judge(key, raw)
-                dot.config(fg=dotc[j])
+                ic, col = dotc[j]
+                dot.set(ic, fg=col)
                 if j == 'risky':
                     worst = 'risky'
                 elif j == 'custom' and worst != 'risky':
                     worst = 'custom'
             if worst == 'risky':
-                status_pill.config(text=_('RISKY'),
-                                   bg=COLORS['danger_bg'],
-                                   fg=COLORS['danger_hi'])
+                status_pill.set(_('RISKY'), 'danger')
             elif worst == 'custom':
-                status_pill.config(text=_('CUSTOM'),
-                                   bg=COLORS['warn_bg'],
-                                   fg=COLORS['warn_hi'])
+                status_pill.set(_('CUSTOM'), 'warn')
             else:
-                status_pill.config(text=_('OPTIMAL'),
-                                   bg=COLORS['success_bg'],
-                                   fg=COLORS['success_hi'])
+                status_pill.set(_('OPTIMAL'), 'success')
         except Exception:
             pass
 
@@ -2858,85 +2480,58 @@ def _build_profile_card(parent, app):
 
 def _build_recco_card(parent, app):
     hw = app._adv_v2_hw
-    # v3.6.3: hw may be None (detection still running in the background) or a
+    # hw may be None (detection still running in the background) or a
     # {'_failed': True} sentinel (detection finished but found nothing). Only
-    # treat it as real hardware when it actually carries a model. This keeps
-    # the async deferral from ever raising a KeyError here.
+    # treat it as real hardware when it actually carries a model.
     _detecting = (hw is None)
     if not isinstance(hw, dict) or not hw.get('model'):
         hw = None
-    card = tk.Frame(parent, bg=COLORS['accent_08'],
-                    highlightbackground=COLORS['accent_lo'],
-                    highlightthickness=1)
-    card.pack(fill='x', pady=(0, 12))
-    inner = tk.Frame(card, bg=COLORS['accent_08'])
-    inner.pack(fill='x', padx=14, pady=12)
+    card = Card(parent, padding=16)
+    card.pack(fill='x', pady=(0, px(16)))
+    bg = C['bg_2']
 
     # Header
-    head = tk.Frame(inner, bg=COLORS['accent_08'])
+    head = tk.Frame(card, bg=bg)
     head.pack(fill='x')
-    tk.Label(head, text='\U0001f4a1',
-             font=(FONTS['body'][0], 14),
-             bg=COLORS['accent_08'], fg=COLORS['accent_hi']
-             ).pack(side='left', padx=(0, 8))
-    head_col = tk.Frame(head, bg=COLORS['accent_08'])
+    IconLabel(head, 'lightbulb', 16, C['fg_3'], bg).pack(
+        side='left', anchor='n', padx=(0, px(10)))
+    head_col = tk.Frame(head, bg=bg)
     head_col.pack(side='left', fill='x', expand=True)
-    tk.Label(head_col, text=_('RECOMMENDED FOR YOUR SETUP'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['accent_08'], fg=COLORS['accent']
-             ).pack(anchor='w')
+    _overline(head_col, _('RECOMMENDED FOR YOUR SETUP')).pack(anchor='w')
     if _detecting:
-        sub_text = _('Detecting hardware\u2026')
+        sub_text = _('Detecting hardware…')
     elif hw:
-        sub_text = _('Detected: %s \u00b7 %s') % (hw['model'], hw['kind'])
+        sub_text = _('Detected: %s · %s') % (hw['model'], hw['kind'])
     else:
         sub_text = _('HW detection failed')
-    tk.Label(head_col, text=sub_text,
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['accent_08'], fg=COLORS['fg_4'],
-             wraplength=320, justify='left'
-             ).pack(anchor='w', pady=(2, 0))
+    sub = tk.Label(head_col, text=sub_text, font=FONTS['body'], bg=bg,
+                   fg=C['fg_2'], justify='left', anchor='w')
+    sub.pack(fill='x', pady=(px(4), 0))
+    autowrap(sub)
 
-    # v3.6.0: compact HW stat cells under the header
+    # Compact HW stat cells under the header
     if hw:
-        perf_map = {'NVMe Gen4 SSD': (_('Excellent'),
-                                      COLORS['success_hi']),
-                    'SATA SSD': (_('Good'), COLORS['teal']),
-                    'HDD': (_('Limited'), COLORS['warn_hi'])}
-        perf, perf_fg = perf_map.get(hw.get('kind', ''),
-                                     (_('Unknown'), COLORS['fg_4']))
-        statrow = tk.Frame(inner, bg=COLORS['accent_08'])
-        statrow.pack(fill='x', pady=(10, 2))
-        for i in range(2):
-            statrow.grid_columnconfigure(i, weight=1, uniform='hwst')
-
-        def _hw_cell(r, c, cap, val, fg):
-            cell = tk.Frame(statrow, bg=COLORS['bg_2'],
-                            highlightbackground=COLORS['border_2'],
-                            highlightthickness=1)
-            cell.grid(row=r, column=c, sticky='ew',
-                      padx=(0 if c == 0 else 6, 0),
-                      pady=(0 if r == 0 else 6, 0))
-            tk.Label(cell, text=cap.upper(),
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                     ).pack(anchor='w', padx=8, pady=(5, 0))
-            tk.Label(cell, text=val,
-                     font=(FONTS['body_strong'][0], 10),
-                     bg=COLORS['bg_2'], fg=fg, anchor='w'
-                     ).pack(fill='x', padx=8, pady=(0, 5))
-
-        _hw_cell(0, 0, _('Threads'),
-                 str(hw.get('recommended_threads', '\u2014')),
-                 COLORS['accent_hi'])
-        _hw_cell(0, 1, _('Sector'), '512', COLORS['fg_1'])
-        _hw_cell(1, 0, _('Performance'), perf, perf_fg)
-        _hw_cell(1, 1, _('Health'), _('Optimal'), COLORS['success_hi'])
+        perf_map = {'NVMe Gen4 SSD': (_('Excellent'), 'success'),
+                    'SATA SSD': (_('Good'), 'success'),
+                    'HDD': (_('Limited'), 'warn')}
+        perf, perf_tone = perf_map.get(hw.get('kind', ''),
+                                       (_('Unknown'), 'neutral'))
+        statrow, cells = _stat_cells(card, [(_('Threads'), False),
+                                            (_('Sector'), False),
+                                            (_('Performance'), False),
+                                            (_('Health'), False)])
+        statrow.pack(fill='x', pady=(px(14), 0))
+        cells[0].config(text=str(hw.get('recommended_threads', '—')))
+        cells[1].config(text='512')
+        cells[2].config(text=perf)
+        cells[3].config(text=_('Optimal'))
 
     if hw:
         # Detail list
-        details = tk.Frame(inner, bg=COLORS['accent_08'])
-        details.pack(fill='x', pady=(10, 10))
+        Divider(card, color=C['border_1']).pack(fill='x',
+                                                pady=(px(14), px(10)))
+        details = tk.Frame(card, bg=bg)
+        details.pack(fill='x', pady=(0, px(10)))
         cur_threads = app._adv_threads_var.get()
         _recco_row(details, 'THREADS', str(hw['recommended_threads']),
                    cur_threads, str(hw['recommended_threads']))
@@ -2944,7 +2539,7 @@ def _build_recco_card(parent, app):
                    app._adv_cluster_var.get(), 'Auto')
         _recco_row(details, 'SECTOR', '512',
                    app._adv_sector_var.get(), '512')
-        bench_val = app._settings.get('adv_write_benchmark', '\u2014')
+        bench_val = app._settings.get('adv_write_benchmark', '—')
         _recco_row(details, 'WRITE SPEED', bench_val, None, None)
 
         # CTA button
@@ -2958,62 +2553,48 @@ def _build_recco_card(parent, app):
                 app._adv_clamp_threads()
             except Exception:
                 pass
-        _accent_btn(inner,
-            '\u26a1  ' + _('Apply recommended'),
-            command=_apply_reco
-            ).pack(fill='x', pady=(0, 0))
+        XButton(card, text=_('Apply recommended'), icon='zap',
+                command=_apply_reco).pack(anchor='w', pady=(px(4), 0))
 
 
 def _recco_row(parent, eyebrow, recommended_val, current_val, matches_val):
-    row = tk.Frame(parent, bg=COLORS['accent_08'])
-    row.pack(fill='x', pady=(0, 6))
-    tk.Label(row, text=eyebrow,
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['accent_08'], fg=COLORS['fg_5'],
-             width=10, anchor='w').pack(side='left')
-    tk.Label(row, text=str(recommended_val),
-             font=(FONTS['body_strong'][0], 10),
-             bg=COLORS['accent_08'], fg=COLORS['fg_1'],
-             anchor='w').pack(side='left')
+    bg = C['bg_2']
+    row = tk.Frame(parent, bg=bg)
+    row.pack(fill='x', pady=(0, px(6)))
+    tk.Label(row, text=eyebrow.capitalize(), font=FONTS['body'], bg=bg,
+             fg=C['fg_3'], width=12, anchor='w').pack(side='left')
+    tk.Label(row, text=str(recommended_val), font=FONTS['body_strong'],
+             bg=bg, fg=C['fg_0'], anchor='w').pack(side='left')
     if current_val is not None and matches_val is not None:
         if str(current_val) == str(matches_val):
-            tk.Label(row, text='\u2713  ' + _('matches'),
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['accent_08'], fg=COLORS['success_hi']
-                     ).pack(side='left', padx=(8, 0))
+            Badge(row, _('matches'), 'success').pack(side='left',
+                                                     padx=(px(8), 0))
         else:
-            tk.Label(row, text=_('currently ') + str(current_val),
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['warn_bg'], fg=COLORS['warn'],
-                     padx=6, pady=1
-                     ).pack(side='left', padx=(8, 0))
+            Badge(row, _('currently ') + str(current_val), 'warn').pack(
+                side='left', padx=(px(8), 0))
 
 
 def _build_help_card(parent, app):
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
+    card = Card(parent, padding=16)
     card.pack(fill='x')
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=14, pady=12)
-    tk.Label(inner, text=_('WHY THESE DEFAULTS?'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_3']
-             ).pack(anchor='w')
+    bg = C['bg_2']
+    hrow = tk.Frame(card, bg=bg)
+    hrow.pack(fill='x', pady=(0, px(8)))
+    IconLabel(hrow, 'help', 16, C['fg_3'], bg).pack(side='left',
+                                                    padx=(0, px(8)))
+    _overline(hrow, _('WHY THESE DEFAULTS?')).pack(side='left')
     text1 = _(
-        'PS5 expects 64K clusters and 512-byte sectors \u2014 anything '
+        'PS5 expects 64K clusters and 512-byte sectors — anything '
         'else needs config.ini edits or the image won\'t mount.')
-    tk.Label(inner, text=text1,
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w', justify='left', wraplength=300
-             ).pack(anchor='w', pady=(6, 4))
+    l1 = tk.Label(card, text=text1, font=FONTS['caption'], bg=bg,
+                  fg=C['fg_2'], anchor='w', justify='left')
+    l1.pack(fill='x', pady=(0, px(6)))
+    autowrap(l1)
     text2 = _('More threads = faster but more fragmentation.')
-    tk.Label(inner, text=text2,
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w', justify='left', wraplength=300
-             ).pack(anchor='w')
+    l2 = tk.Label(card, text=text2, font=FONTS['caption'], bg=bg,
+                  fg=C['fg_2'], anchor='w', justify='left')
+    l2.pack(fill='x')
+    autowrap(l2)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -3079,39 +2660,12 @@ def _run_benchmark(app, bench_pill):
 # Button helpers
 # ─────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_5'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
+    return XButton(parent, text=text, command=command)
 
 
 def _accent_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['accent_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     command=command)
+    return XButton(parent, text=text, command=command, variant='primary')
 
 
 def _danger_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['danger'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['danger_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     disabledforeground=COLORS['fg_5'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     command=command)
+    return XButton(parent, text=text, command=command, variant='danger')
