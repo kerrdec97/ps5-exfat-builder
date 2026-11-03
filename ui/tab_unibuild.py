@@ -2304,8 +2304,8 @@ def build_unibuild_tab(parent, app):
     def _dispatch_ffpkg(job, cb):
         try:
             _maybe_build_ampr_index(job['src'], 'ffpkg')
-            if not getattr(app, '_ffpkg_ufs2_exe', None) or not os.path.isfile(app._ffpkg_ufs2_exe):
-                from exfat_builder import extract_ufs2tool
+            from exfat_builder import extract_ufs2tool, ufs2tool_intact
+            if not ufs2tool_intact(getattr(app, '_ffpkg_ufs2_exe', None)):
                 temp_dir = app._settings.get('temp_dir') or None
                 app._ffpkg_ufs2_exe = extract_ufs2tool(temp_dir)
             job['_final_path'] = os.path.normpath(os.path.join(job['outdir'], job['name']))

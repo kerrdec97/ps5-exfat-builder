@@ -783,7 +783,8 @@ def _fmt_size(b):
 # ─────────────────────────────────────────────────────────────────────
 def _ufs2_exe(app):
     """Ensure UFS2Tool.exe is extracted and return its path."""
-    if not getattr(app, '_ffpkg_ufs2_exe', None) or not os.path.isfile(app._ffpkg_ufs2_exe):
+    from exfat_builder import ufs2tool_intact
+    if not ufs2tool_intact(getattr(app, '_ffpkg_ufs2_exe', None)):
         app._ffpkg_ufs2_exe = extract_ufs2tool(
             app._settings.get('temp_dir') or None)
     return app._ffpkg_ufs2_exe

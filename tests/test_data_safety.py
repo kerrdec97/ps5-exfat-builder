@@ -377,6 +377,26 @@ class BackgroundDelete(unittest.TestCase):
         self.assertIn('deleted', seen[-1][1])
 
 
+class ExtractedToolIntegrity(unittest.TestCase):
+    def test_scripts_and_ufs2tool_rechecked(self):
+        mod = load_app()
+        d = tempfile.mkdtemp(prefix='integ_')
+        self.addCleanup(shutil.rmtree, d, True)
+        bat, _ico = mod.extract_scripts(d)
+        self.addCleanup(mod.cleanup_scripts)
+        self.assertTrue(mod.scripts_intact(bat))
+        ps1 = os.path.join(os.path.dirname(bat), 'New-OsfExfatImage.ps1')
+        with open(ps1, 'ab') as f:
+            f.write(b'\nWrite-Host injected\n')
+        self.assertFalse(mod.scripts_intact(bat))
+        self.assertFalse(mod.scripts_intact(None))
+        exe = mod.extract_ufs2tool(d)
+        self.assertTrue(mod.ufs2tool_intact(exe))
+        with open(os.path.join(os.path.dirname(exe), 'DokanNet.dll'), 'r+b') as f:
+            f.write(b'MZ!!')
+        self.assertFalse(mod.ufs2tool_intact(exe))
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()
