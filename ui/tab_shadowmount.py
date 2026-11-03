@@ -30,9 +30,9 @@ from ui.shared.app_dialog import app_info, app_warning, app_error, app_confirm, 
 
 # Theme is always loaded by the app on startup (see exfat_builder.py:636).
 # Use the real token names from tkinter_theme.COLORS — no fallback layer.
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
-from ui.shared.ps5_kit import ControlHero
+from ui.tab_ps5_mgr import TintIcon as _TintIcon
 from ui.shared.page_head import make_themed_button
 
 # Convenience aliases for the tokens we use most in this module.
@@ -41,7 +41,7 @@ _BG_APP       = COLORS['bg_1']         # global background
 _BG_RAIL      = COLORS['bg_0']         # rail background (slightly darker)
 _BG_TOOLBAR   = COLORS['bg_2']         # toolbar / chrome strips
 _BG_CARD      = COLORS['bg_2']         # section card background
-_BG_CARD_HEAD = COLORS['bg_3']         # card header strip
+_BG_CARD_HEAD = COLORS['bg_2']         # card header (on the card surface)
 _BG_ROW_HOV   = COLORS['bg_3']         # row hover
 _BG_SAVEBAR   = COLORS['bg_0']         # sticky save bar
 _BG_LOG       = COLORS['bg_0']         # log strip
@@ -76,7 +76,7 @@ def _blend_hex(fg_hex, bg_hex, alpha):
 # purple-soft = purple @ 10% over bg_1 (theme module ships purple +
 # purple_hi but no purple_soft yet). Pre-blended into a solid colour
 # because Tk widget backgrounds don't take alpha.
-_PURPLE_SOFT  = _blend_hex(COLORS['purple'], COLORS['bg_1'], 0.10)
+_PURPLE_SOFT = COLORS['bg_3']   # selected rail row
 _PURPLE_BORDER = _blend_hex(COLORS['purple'], COLORS['bg_1'], 0.30)
 _SUCCESS      = COLORS['success']
 _WARN         = COLORS['warn']
@@ -241,6 +241,7 @@ def build_shadowmount_tab(parent, app):
 
     # ── Content area (scrollable, fills remaining space) ───────────
     content_outer = tk.Frame(main, bg=_BG_APP)
+    app._smp_content_outer = content_outer
     content_outer.pack(side='left', fill='both', expand=True)
     _build_content(content_outer, app)
 
@@ -340,21 +341,14 @@ def _build_toolbar(parent, app):
     All four actions call the same functions as before. The editor
     below (rail / sections / savebar / log strip) is untouched.
     """
-    wrap = tk.Frame(parent, bg=_BG_APP)
-    wrap.pack(side='top', fill='x', padx=16, pady=(12, 10))
-
-    hero = ControlHero(
-        wrap,
-        title='ShadowMountPlus',
-        subtitle=('Manage ShadowMount+ configuration and deployment  '
-                  '\u00b7  ' + REMOTE_CONFIG_PATH),
-        stats=[('Configuration', 'config'),
-               ('Sections', 'sections'),
-               ('Rules', 'rules'),
-               ('TCP Port', 'port'),
-               ('Status', 'status')],
-        icon='\u26a1', icon_size=64)
-    hero.pack(fill='x')
+    from ui.tab_ps5_mgr import ToolHero
+    hero = ToolHero(
+        parent, 'ShadowMount+',
+        'Manage ShadowMount+ configuration and deployment.',
+        REMOTE_CONFIG_PATH,
+        [('Configuration', 'config'), ('Sections', 'sections'),
+         ('Rules', 'rules'), ('TCP Port', 'port'), ('Status', 'status')])
+    wrap = hero.frame
     app._smp_hero = hero
 
     # Per-image rules count — read from the editor row once the
@@ -420,46 +414,32 @@ def _build_toolbar(parent, app):
         var.trace_add('write', _sync)
     wrap.after(500, _hook_footer)
 
-    # ── Actions row ──
-    actions = hero.actions_row()
+    # ── Actions (page header, primary rightmost) ──
+    from ui.shared.widgets import Button as _Btn, Badge as _Badge
+    acts = hero.actions
+    _Btn(acts, text='Send Payload', icon='send', variant='primary',
+         command=lambda: _send_payload(app)).pack(side='right')
+    _Btn(acts, text='Safe to unplug', icon='eject',
+         command=lambda: _stop_shadowmount(app)).pack(side='right',
+                                                      padx=(0, 6))
+    _Btn(acts, text='Fetch log', icon='file_text',
+         command=lambda: _fetch_debug_log(app)).pack(side='right',
+                                                     padx=(0, 6))
+    _Btn(acts, text='Load from PS5', icon='download',
+         command=lambda: _load_from_ps5(app)).pack(side='right',
+                                                   padx=(0, 6))
 
-    make_themed_button(actions, '\U0001f4e5  Load from PS5',
-                       command=lambda: _load_from_ps5(app), kind='primary',
-                       font_size=9, padx=12, pady=6).pack(side='left')
-    make_themed_button(actions, '\U0001f4dd  Fetch log',
-                       command=lambda: _fetch_debug_log(app), kind='ghost',
-                       font_size=9, padx=12, pady=6
-                       ).pack(side='left', padx=(6, 0))
-    make_themed_button(actions, '\u26a1  Send Payload',
-                       command=lambda: _send_payload(app), kind='success',
-                       font_size=9, padx=12, pady=6
-                       ).pack(side='left', padx=(6, 0))
-    make_themed_button(actions, '\u23cf  Safe to unplug',
-                       command=lambda: _stop_shadowmount(app), kind='ghost',
-                       font_size=9, padx=12, pady=6
-                       ).pack(side='left', padx=(6, 0))
+    # Dirty pill — _refresh_dirty_ui() packs it (side='right') next to the
+    # source badge when there are pending edits, and hides it otherwise.
+    app._smp_dirty_pill = _Badge(hero.actions_row(), '', 'warn', icon='edit')
 
-    # Dirty pill — shown when there are pending edits, hidden otherwise.
-    # _refresh_dirty_ui() packs it with side='right' into its parent,
-    # so it lands at the right edge of the actions row.
-    app._smp_dirty_pill = tk.Label(actions, text='',
-                                   bg=_WARN_BG, fg=_WARN,
-                                   font=_F_MONO,
-                                   padx=12, pady=4,
-                                   highlightthickness=1,
-                                   highlightbackground=_WARN)
-    # Don't pack yet — _refresh_dirty_ui() will pack/unpack based on count
-
-    # Status label (network operation feedback) — full untrimmed text,
-    # right-aligned in the hero title row next to the badge.
+    # Status label (network operation feedback); _set_status() recolours it.
     status_lbl = tk.Label(hero.title_row, textvariable=app._smp_status_var,
-                          bg=COLORS['bg_2'], fg=_FG_MUTED, font=_F_MONO,
-                          anchor='e', wraplength=320, justify='right')
-    status_lbl.pack(side='right', anchor='n', padx=(8, 10))
+                          bg=COLORS['bg_2'], fg=_FG_MUTED,
+                          font=FONTS['caption'], anchor='e', wraplength=320,
+                          justify='right')
+    status_lbl.pack(side='right', anchor='n')
     app._smp_status_lbl = status_lbl
-
-    # Bottom hairline under the hero zone
-    tk.Frame(parent, bg=_BORDER, height=1).pack(side='top', fill='x')
 
 
 def _toolbar_btn(parent, text, cmd, kind='default'):
@@ -498,7 +478,7 @@ def _build_rail(parent, app):
     search_entry.pack(fill='x', ipady=4, ipadx=8)
     # Placeholder text (Tk lacks native placeholder; use a focus trick)
     _install_placeholder(search_entry, app._smp_search_var,
-                         '\U0001f50d  Filter settings\u2026')
+                         'Filter settings\u2026')
 
     # Live filter on every keystroke
     def _on_search_change(*_):
@@ -554,7 +534,7 @@ def _make_rail_row(parent, app, key, icon, label, count):
     row.pack(side='top', fill='x')
 
     # Left accent bar (2px wide) — hidden until selected
-    accent_bar = tk.Frame(row, bg=_BG_RAIL, width=2)
+    accent_bar = tk.Frame(row, bg=_BG_RAIL, width=3)
     accent_bar.pack(side='left', fill='y')
 
     body = tk.Frame(row, bg=_BG_RAIL)
@@ -563,11 +543,11 @@ def _make_rail_row(parent, app, key, icon, label, count):
     inner = tk.Frame(body, bg=_BG_RAIL)
     inner.pack(fill='x', padx=12, pady=7)
 
-    tk.Label(inner, text=icon, bg=_BG_RAIL, fg=_FG_MUTED,
-             font=_F_BODY, width=2, anchor='w').pack(side='left')
+    from ui.tab_ps5_mgr import TintIcon
+    TintIcon(inner, icon, 16, _FG_MUTED, _BG_RAIL).pack(side='left')
     lbl = tk.Label(inner, text=label, bg=_BG_RAIL, fg=_FG_MUTED,
                    font=_F_BODY, anchor='w')
-    lbl.pack(side='left', fill='x', expand=True, padx=(6, 0))
+    lbl.pack(side='left', fill='x', expand=True, padx=(10, 0))
 
     # Count badge
     count_bg = tk.Label(inner, text=str(count),
@@ -731,12 +711,12 @@ def _apply_search_filter(app, q):
 def _style_rail_row(row, active):
     bg_active = _PURPLE_SOFT
     if active:
-        row._smp_accent_bar.configure(bg=_PURPLE)
+        row._smp_accent_bar.configure(bg=COLORS['accent'])
         for w in (row, row._smp_body, row._smp_inner):
             w.configure(bg=bg_active)
         row._smp_label.configure(bg=bg_active, fg=_FG)
-        row._smp_count_bg.configure(bg=bg_active, fg=_PURPLE_HI)
-        row._smp_icon.configure(bg=bg_active, fg=_PURPLE)
+        row._smp_count_bg.configure(bg=bg_active, fg=_FG)
+        row._smp_icon.configure(bg=bg_active, fg=COLORS['accent_hi'])
         # Dirty dot canvas bg follows row bg (so the dot looks isolated,
         # not on a different surface)
         dot = getattr(row, '_smp_dirty_dot', None)
@@ -788,8 +768,7 @@ def _build_overview_card(parent, app):
     head.pack(fill='x')
     hi = tk.Frame(head, bg=_BG_CARD_HEAD)
     hi.pack(fill='x', padx=14, pady=10)
-    tk.Label(hi, text='\U0001f3e0', bg=_BG_CARD_HEAD, fg=_PURPLE,
-             font=_F_BODY).pack(side='left')
+    _TintIcon(hi, 'grid', 16, COLORS['fg_3'], _BG_CARD_HEAD).pack(side='left')
     tk.Label(hi, text='Overview', bg=_BG_CARD_HEAD, fg=_FG,
              font=_F_H3).pack(side='left', padx=(10, 0))
     tk.Label(hi, text='  \u2014  configuration at a glance \u00b7 '
@@ -815,12 +794,11 @@ def _build_overview_card(parent, app):
         ti.pack(fill='x', padx=12, pady=10)
         hr = tk.Frame(ti, bg=COLORS['bg_3'])
         hr.pack(fill='x')
-        tk.Label(hr, text=icon, bg=COLORS['bg_3'], fg=accent,
-                 font=_F_BODY).pack(side='left')
+        _TintIcon(hr, icon, 16, COLORS['fg_3'], COLORS['bg_3']).pack(side='left')
         tk.Label(hr, text=label, bg=COLORS['bg_3'], fg=_FG,
-                 font=(_F_BODY[0], 10, 'bold')
+                 font=FONTS['body_strong']
                  ).pack(side='left', padx=(8, 0))
-        tk.Label(hr, text='%d SETTINGS' % count,
+        tk.Label(hr, text='%d settings' % count,
                  bg=COLORS['bg_3'], fg=_FG_DIM, font=_F_META
                  ).pack(side='right')
         for k, klabel in _overview_summary_keys(key):
@@ -830,8 +808,8 @@ def _build_overview_card(parent, app):
                      fg=_FG_MUTED, font=_F_MONO,
                      anchor='w').pack(side='left')
             v = tk.Label(rrow, text='\u2014', bg=COLORS['bg_3'],
-                         fg=COLORS['teal'],
-                         font=(_F_MONO[0], 9, 'bold'), anchor='w')
+                         fg=COLORS['fg_0'],
+                         font=FONTS['caption_strong'], anchor='w')
             v.pack(side='left', padx=(6, 0))
             value_setters[k] = v
 
@@ -842,7 +820,7 @@ def _build_overview_card(parent, app):
             for sub in w.winfo_children():
                 sub.bind('<Button-1>', _open)
         def _hin(_e=None, w=t):
-            w.config(highlightbackground=_PURPLE)
+            w.config(highlightbackground=COLORS['border_4'])
         def _hout(_e=None, w=t):
             w.config(highlightbackground=_BORDER)
         t.bind('<Enter>', _hin)
@@ -876,7 +854,7 @@ def _build_overview_card(parent, app):
                  font=_F_MONO, anchor='w').pack(fill='x')
         v = tk.StringVar(value='\u2014')
         tk.Label(r, textvariable=v, bg=COLORS['bg_3'],
-                 fg=COLORS['teal'], font=(_F_MONO[0], 9, 'bold'),
+                 fg=COLORS['fg_0'], font=FONTS['caption_strong'],
                  anchor='w').pack(fill='x')
         act_vars[k] = v
 
@@ -984,8 +962,7 @@ def _build_section_card(parent, app, key, icon, label, sublabel, count, accent):
                       width=24, height=24)
     swatch.pack(side='left')
     swatch.pack_propagate(False)
-    tk.Label(swatch, text=icon, bg=_BG_CARD_HEAD, fg=accent,
-             font=_F_BODY).pack(expand=True)
+    _TintIcon(swatch, icon, 16, COLORS['fg_3'], _BG_CARD_HEAD).pack(expand=True)
 
     tk.Label(head_inner, text=label,
              bg=_BG_CARD_HEAD, fg=_FG, font=_F_H3,
@@ -994,7 +971,7 @@ def _build_section_card(parent, app, key, icon, label, sublabel, count, accent):
              bg=_BG_CARD_HEAD, fg=_FG_MUTED, font=_F_MONO,
              anchor='w').pack(side='left')
 
-    meta = tk.Label(head_inner, text='%d SETTINGS' % count,
+    meta = tk.Label(head_inner, text='%d settings' % count,
                     bg=_BG_CARD_HEAD, fg=_FG_DIM, font=_F_META,
                     anchor='e')
     meta.pack(side='right')
@@ -1606,7 +1583,7 @@ def _build_fakelib_manager(parent, app):
     tk.Label(app._fakelib_list_frame, text='Press Refresh to list overlays on the PS5.', bg=_BG_CARD, fg=_FG_DIM, font=_F_MONO, anchor='w').pack(fill='x', padx=14, pady=6)
     act = tk.Frame(parent, bg=_BG_CARD)
     act.pack(fill='x', padx=14, pady=(0, 4))
-    XButton(act, text='+ Add library…', command=(lambda: _fakelib_add(app)), font=_F_BUTTON, bg=_PURPLE, fg='#ffffff', activebackground=_PURPLE, activeforeground='#ffffff', relief='flat', bd=0, padx=14, pady=6, cursor='hand2', highlightthickness=0).pack(side='left')
+    XButton(act, text='Add library…', icon='plus', command=(lambda: _fakelib_add(app))).pack(side='left')
     tk.Label(act, textvariable=app._fakelib_status_var, bg=_BG_CARD, fg=_ACCENT, font=_F_META, anchor='w').pack(side='left', padx=(12, 0))
     tk.Label(parent, text='ℹ Changes may require remounting the game or restarting the title before they take effect.', bg=_BG_CARD, fg=_FG_DIM, font=_F_META, anchor='w', justify='left').pack(fill='x', padx=14, pady=(2, 4))
 
@@ -1885,8 +1862,12 @@ def _refresh_dirty_ui(app):
             # Already visible? winfo_ismapped tells us
             try:
                 if not savebar.winfo_ismapped():
-                    savebar_border.pack(side='bottom', fill='x')
-                    savebar.pack(side='bottom', fill='x')
+                    _kw = {}
+                    _co = getattr(app, '_smp_content_outer', None)
+                    if _co is not None:
+                        _kw['before'] = _co
+                    savebar_border.pack(side='bottom', fill='x', **_kw)
+                    savebar.pack(side='bottom', fill='x', **_kw)
             except Exception:
                 pass
         else:
@@ -1976,10 +1957,10 @@ def _refresh_dirty_ui(app):
             base = next((s[4] for s in _SECTIONS if s[0] == active), 0)
             if sec_dirty:
                 meta_lbl.configure(
-                    text='%d SETTINGS \u00b7 %d CHANGED' % (base, sec_dirty),
+                    text='%d settings \u00b7 %d changed' % (base, sec_dirty),
                     fg=_WARN)
             else:
-                meta_lbl.configure(text='%d SETTINGS' % base, fg=_FG_DIM)
+                meta_lbl.configure(text='%d settings' % base, fg=_FG_DIM)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -2265,8 +2246,7 @@ class SettingRow:
                 self._ctl_cell.configure(bg=_BG_CARD)
                 self._help_cell.configure(bg=_BG_CARD)
                 self._badge_cell.configure(bg=_BG_CARD)
-        self._row.bind('<Enter>', _enter)
-        self._row.bind('<Leave>', _leave)
+        # Settings rows do not hover (controls keep their own surface).
 
     # ── Public API ──
     def get_value(self):
@@ -2314,7 +2294,7 @@ class SettingRow:
         self._label_cell.pack_propagate(False)
 
         label_inner = tk.Frame(self._label_cell, bg=_BG_CARD)
-        label_inner.pack(fill='both', expand=True, pady=8)
+        label_inner.pack(fill='both', expand=True, pady=(11, 8))
 
         # Label first
         self._label_lbl = tk.Label(label_inner, text=self.label,
@@ -2349,7 +2329,8 @@ class SettingRow:
             self._ctl_cell.pack(side='left', fill='both', expand=True,
                                 pady=8, padx=(14, 0))
         else:
-            self._ctl_cell = tk.Frame(self._body, bg=_BG_CARD, width=220)
+            self._ctl_cell = tk.Frame(self._body, bg=_BG_CARD, width=230,
+                                      height=px(40))
             self._ctl_cell.pack(side='left', fill='y',
                                 pady=8, padx=(14, 0))
             self._ctl_cell.pack_propagate(False)
@@ -2363,7 +2344,7 @@ class SettingRow:
         else:
             self._help_cell = tk.Frame(self._body, bg=_BG_CARD)
             self._help_cell.pack(side='left', fill='both', expand=True,
-                                 pady=8, padx=(10, 0))
+                                 pady=(12, 8), padx=(10, 0))
             if help:
                 tk.Label(self._help_cell, text=help,
                          bg=_BG_CARD, fg=_FG_MUTED, font=_F_MONO,
@@ -2371,7 +2352,11 @@ class SettingRow:
 
         # ── Badge cell (auto) ─────────────────────────────────────────
         self._badge_cell = tk.Frame(self._body, bg=_BG_CARD)
-        self._badge_cell.pack(side='right', fill='y', pady=8, padx=(10, 0))
+        _bkw = {}
+        if self._help_cell.winfo_manager():
+            _bkw['before'] = self._help_cell
+        self._badge_cell.pack(side='right', fill='y', pady=(12, 8),
+                              padx=(10, 0), **_bkw)
         self._badge_lbl = tk.Label(self._badge_cell, text='',
                                    bg=_BG_CARD, fg=_FG_DIM, font=_F_MONO,
                                    cursor='hand2')
@@ -2395,47 +2380,29 @@ class SettingRow:
 
     # ── Control: toggle (canvas pill) ─────────────────────────────────
     def _build_toggle(self, cell, value):
-        # BooleanVar mirrors the on/off state
+        # BooleanVar mirrors the on/off state; a design-system Switch
+        # (with its On/Off word) drives it. Instant setting -> Switch.
+        from ui.shared.widgets import Switch
         initial = bool(value) if not isinstance(value, str) else (
             value.strip().lower() in ('1', 'true', 'yes', 'on'))
         self._tk_var = tk.BooleanVar(value=initial)
-
-        # Flat status pill — no canvas, no curves, so no aliasing.
-        # Filled green rectangle with "ON" when active, dark grey with
-        # "OFF" when inactive. Danger toggles flip green → red.
-        self._toggle_pill = tk.Label(cell, text='ON',
-                                      bg=_SUCCESS, fg='#000000',
-                                      font=_F_MONO,
-                                      padx=10, pady=2,
-                                      cursor='hand2',
-                                      width=3, anchor='center')
-        self._toggle_pill.pack(side='left')
-        self._toggle_pill.bind('<Button-1>',
-                                lambda _e: self._on_toggle_click())
-
-        # "on"/"off" inline help text alongside the pill (keeps the
-        # status readable even when the colour cue is missed)
-        self._toggle_label = tk.Label(cell,
-                                       text='on' if initial else 'off',
-                                       bg=_BG_CARD, fg=_FG_MUTED, font=_F_MONO)
-        self._toggle_label.pack(side='left', padx=(10, 0))
-
+        self._toggle_switch = Switch(cell, variable=self._tk_var,
+                                     command=self._on_switch)
+        self._toggle_switch.pack(side='left')
         self._refresh_toggle_visual()
 
     def _refresh_toggle_visual(self):
-        on = bool(self._tk_var.get())
-        if on:
-            bg = _DANGER if self._danger else _SUCCESS
-            fg = '#ffffff' if self._danger else '#000000'
-            text = 'ON'
-        else:
-            bg = _BG_CARD_HEAD
-            fg = _FG_DIM
-            text = 'OFF'
-        if hasattr(self, '_toggle_pill'):
-            self._toggle_pill.configure(text=text, bg=bg, fg=fg)
-        if hasattr(self, '_toggle_label'):
-            self._toggle_label.configure(text='on' if on else 'off')
+        # The Switch follows _tk_var itself; nothing else to repaint.
+        sw = getattr(self, '_toggle_switch', None)
+        if sw is not None:
+            try:
+                sw._draw()
+            except Exception:
+                pass
+
+    def _on_switch(self):
+        self._refresh_toggle_visual()
+        self._fire_change()
 
     def _on_toggle_click(self):
         self._tk_var.set(not self._tk_var.get())
@@ -2444,94 +2411,48 @@ class SettingRow:
 
     # ── Control: int (number entry with optional unit) ────────────────
     def _build_int(self, cell, value):
+        from ui.shared.widgets import TextField
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-        entry = XEntry(cell, textvariable=self._tk_var,
-                         bg=COLORS['bg_0'], fg=_FG,
-                         insertbackground=_FG,
-                         bd=0, relief='flat', font=_F_MONO,
-                         width=8,
-                         highlightthickness=1,
-                         highlightbackground=_BORDER_STRG,
-                         highlightcolor=_PURPLE)
-        entry.pack(side='left', ipady=4, ipadx=6)
+        entry = TextField(cell, textvariable=self._tk_var, mono=True,
+                          width=8)
+        entry.pack(side='left')
         if self._unit:
             tk.Label(cell, text=self._unit,
-                     bg=_BG_CARD, fg=_FG_MUTED, font=_F_MONO).pack(
+                     bg=_BG_CARD, fg=_FG_MUTED, font=FONTS['caption']).pack(
                 side='left', padx=(8, 0))
-        # Fire change on each keystroke (debouncing is a P5 polish task)
-        self._tk_var.trace_add('write',
-                                lambda *_: self._fire_change())
+        self._tk_var.trace_add('write', lambda *_: self._fire_change())
 
     # ── Control: text (free-form single-line) ─────────────────────────
     def _build_text(self, cell, value):
+        from ui.shared.widgets import TextField
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-        entry = XEntry(cell, textvariable=self._tk_var,
-                         bg=COLORS['bg_0'], fg=_FG,
-                         insertbackground=_FG,
-                         bd=0, relief='flat', font=_F_MONO,
-                         highlightthickness=1,
-                         highlightbackground=_BORDER_STRG,
-                         highlightcolor=_PURPLE)
-        entry.pack(side='left', fill='x', expand=True, ipady=4, ipadx=6)
-        self._tk_var.trace_add('write',
-                                lambda *_: self._fire_change())
+        entry = TextField(cell, textvariable=self._tk_var, mono=True)
+        entry.pack(side='left', fill='x', expand=True)
+        self._tk_var.trace_add('write', lambda *_: self._fire_change())
 
-    # ── Control: select (tk.Menubutton + tk.Menu dropdown) ───────────
+    # ── Control: select (design-system Dropdown) ──────────────────────
     def _build_select(self, cell, value):
-        # We use tk.Menubutton instead of ttk.Combobox here. The clam
-        # ttk theme renders Combobox values at a fixed Y offset that
-        # doesn't match our font metrics, causing the visible text to
-        # sit either above or below the field's visible area. A bare
-        # tk.Menubutton respects bg/fg/font/padding consistently and
-        # renders the value centered in its box.
+        from ui.shared.widgets import Dropdown
         choices = list(self._choices or [])
         self._tk_var = tk.StringVar(value='' if value is None else str(value))
-
-        mb = tk.Menubutton(cell,
-                           textvariable=self._tk_var,
-                           bg=COLORS['bg_0'], fg=_FG,
-                           activebackground=_BG_ROW_HOV,
-                           activeforeground=_FG,
-                           font=_F_MONO,
-                           bd=0, relief='flat',
-                           padx=10, pady=4,
-                           highlightthickness=1,
-                           highlightbackground=_BORDER_STRG,
-                           highlightcolor=_PURPLE,
-                           anchor='w', width=14,
-                           cursor='hand2',
-                           indicatoron=True,
-                           compound='right')
-        mb.pack(side='left', anchor='w')
-
-        # Build the dropdown menu — bare tk.Menu themed to match
-        menu = tk.Menu(mb, tearoff=0,
-                       bg=COLORS['bg_3'], fg=_FG,
-                       activebackground=_PURPLE,
-                       activeforeground='#ffffff',
-                       bd=0, font=_F_MONO)
-        for choice in choices:
-            def _pick(v=choice):
-                self._tk_var.set(v)
-                # _tk_var.trace_add below will fire _fire_change
-            menu.add_command(label=choice, command=_pick)
-        mb.configure(menu=menu)
-
-        self._tk_var.trace_add('write',
-                                lambda *_: self._fire_change())
+        dd = Dropdown(cell, textvariable=self._tk_var, values=choices,
+                      width=16)
+        dd.pack(side='left', anchor='w')
+        self._tk_var.trace_add('write', lambda *_: self._fire_change())
 
     # ── Control: textarea ─────────────────────────────────────────────
     def _build_textarea(self, cell, value):
-        # 3 lines tall by default — matches the 54px target in the mock.
-        # Caller can resize later if needed.
+        # 3 lines tall by default; a field-styled Text (field_bg, control
+        # outline, focus ring colour).
         self._text_widget = tk.Text(cell, height=3,
-                                     bg=COLORS['bg_0'], fg=_FG,
-                                     insertbackground=_FG,
-                                     bd=0, relief='flat',
-                                     font=_F_MONO, wrap='word',
-                                     highlightthickness=1,
-                                     highlightbackground=_BORDER_STRG,
-                                     highlightcolor=_PURPLE)
+                                    bg=COLORS['field_bg'], fg=COLORS['fg_1'],
+                                    insertbackground=COLORS['fg_0'],
+                                    selectbackground=COLORS['accent_lo'],
+                                    bd=0, relief='flat', padx=8, pady=6,
+                                    font=FONTS['code'], wrap='word',
+                                    highlightthickness=1,
+                                    highlightbackground=COLORS['border_control'],
+                                    highlightcolor=COLORS['focus'])
         self._text_widget.pack(fill='both', expand=True)
         if value:
             if isinstance(value, list):
@@ -2575,7 +2496,7 @@ class SettingRow:
         if changed:
             # Off-default: show what the default IS plus a reset arrow.
             # Amber accent strip on the left of the row + amber badge.
-            self._accent.configure(bg=_WARN)
+            self._accent.configure(bg=_BG_CARD)
             self._badge_lbl.configure(
                 text='default: %s  \u21ba' % self._format_default(),
                 fg=_WARN)
@@ -2603,20 +2524,9 @@ class SettingRow:
 
 
 def _make_pill(parent, text, kind='advanced'):
-    """Small inline pill used on SettingRow labels for danger/advanced flags."""
-    if kind == 'danger':
-        bg = _blend_hex(COLORS['danger'], COLORS['bg_2'], 0.15)
-        fg = COLORS['danger_hi']
-        border = _blend_hex(COLORS['danger'], COLORS['bg_2'], 0.30)
-    else:
-        bg = _BG_CARD_HEAD
-        fg = _FG_MUTED
-        border = _BORDER_STRG
-    return tk.Label(parent, text=text.upper(),
-                    bg=bg, fg=fg, font=_F_META,
-                    padx=6, pady=0,
-                    highlightthickness=1, highlightbackground=border)
-
+    """Inline danger / advanced flag (design-system Badge)."""
+    from ui.tab_ps5_mgr import pill
+    return pill(parent, text, kind)
 
 
 def _install_placeholder(entry, var, placeholder):

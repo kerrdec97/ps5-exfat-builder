@@ -1,56 +1,41 @@
 """
-ui/tab_payloads.py — Payload Manager tab.
+ui/tab_payloads.py — Payloads sub-tab of PS5 (payload manager).
 
-Step 14 (v2.1.6): refactored against preview/payloads-tab-redesign.html.
+Farewell Edition redesign on the design system:
 
-Layout:
+    PageHeader  Payload Manager                          [+ Add payload]
+    ┌ Payload target ─ IP [....] Port [9090] [Save]  default ports ────┐
+    │ ── payloads · console IP · default port · last sent ──            │
+    └──────────────────────────────────────────────────────────────────┘
+    ┌ Payloads (N saved) ──────────────────┐ ┌ Detail ────────────────┐
+    │ [search…]                            │ │ name  [Ready]          │
+    │ row: icon · name · notes · meta [Send]│ │ file · port · ip · last│
+    │ row …                                │ │ [Send to …]            │
+    └──────────────────────────────────────┘ │ [Edit] [Remove]  ⚠ bar │
+                                             └────────────────────────┘
 
-    ┌─ connection bar ────────────────────────────────────────────────┐
-    │ ●LISTENING  192.168.1.42:9020  …  [+ Add custom] [↻ Refresh]    │
-    ├─ workspace ─────────────────────────────────────────────────────┤
-    │ ┌─ list-wrap (left, expands) ──┐ ┌─ detail aside (right, 280px)┐│
-    │ │ Payloads  N saved             │ │ etaHEN                       ││
-    │ │ 🔍 search…                    │ │ v2.1b · 2.4 MB              ││
-    │ │ ┌─ payload card ─────────────┐│ │                              ││
-    │ │ │⚡ etaHEN                    ││ │ Description text…            ││
-    │ │ │ HEN payload, FTP+klog       ││ │ ──────────────────           ││
-    │ │ │ FW 5.50 · v2.1b · ↗ Send   ││ │ file: etahen.bin             ││
-    │ │ └────────────────────────────┘│ │ target: ...                  ││
-    │ │ ┌─ payload card (selected) ──┐│ │ requires: ...                ││
-    │ │ │⚡ kex umtx                  ││ │ ──────────────────           ││
-    │ │ └────────────────────────────┘│ │ Target consoles              ││
-    │ │ ...                           │ │ ●192.168.1.42 · :9020        ││
-    │ │                               │ │ [↗ Send to ...]              ││
-    │ └───────────────────────────────┘ └─────────────────────────────┘│
-    └─────────────────────────────────────────────────────────────────┘
-
-The mock's "categories sidebar" (Source / Category / Firmware) is dropped
-this iteration — the existing payload schema has no category field, so
-populating those bins would require a data-model change. Search input +
-filter on name/notes covers the practical use case.
-
-Backwards compat: every `_pl_*` attribute the existing 6+ callbacks read
-is preserved with the same name. The `_pl_render` callback is rewritten
-in place to build cards in the new design — UI-only rewrite, same
-scope-bend pattern.
+Backwards compat: every `_pl_*` attribute the callbacks read is preserved.
+Rows are rendered by app._pl_render (main file) into `_pl_list_frame`.
 """
 
 import os
 import tkinter as tk
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
 from exfat_builder import *  # noqa: F401,F403
 from ui.shared.app_dialog import app_confirm
 from exfat_builder import _, save_settings
-from ui.shared.scroll import attach_scroll
+
+from ui.tab_ps5_mgr import (
+    ps5_page, page_header, section, two_columns, StatGrid, search_field,
+)
+
+C = COLORS
 
 
 def build_payloads_tab(parent, app):
-    parent.configure(bg=COLORS['bg_1'])
-
-    # State
     app._pl_payloads     = app._settings.get('payloads', [])
     app._pl_ip_var       = tk.StringVar(
         value=app._settings.get('pl_ip', app._settings.get('ftp_ip', '')))
@@ -61,112 +46,65 @@ def build_payloads_tab(parent, app):
     app._pl_selected_idx = tk.IntVar(value=-1)
     app._pl_status_var   = tk.StringVar(value='')
 
-    _build_connection_bar(parent, app)
-    _build_metrics_strip(parent, app)
-    _build_workspace(parent, app)
+    body = ps5_page(parent)
+    hdr = page_header(body, _('Payload Manager'),
+                      _('Send .elf / .bin payloads to your PS5.'))
+    from ui.shared.widgets import Button
+    Button(hdr.actions, text=_('Add payload'), icon='plus',
+           command=app._pl_add).pack(side='right')
+
+    _build_connection_bar(body, app)
+    _build_workspace(body, app)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Connection bar at top
+# Payload target card — IP / port + metrics
 # ─────────────────────────────────────────────────────────────────────────
 def _build_connection_bar(parent, app):
-    bar = tk.Frame(parent, bg=COLORS['bg_0'])
-    bar.pack(fill='x')
-    inner = tk.Frame(bar, bg=COLORS['bg_0'])
-    inner.pack(fill='x', padx=24, pady=8)
+    from ui.shared.widgets import Card, Button, Divider, field_label, Badge
+    sec = section(parent)
+    card = Card(sec, title='Payload target',
+                subtitle=_('Default ports: 9090 / 9021'))
+    card.pack(fill='x')
+    BG2 = C['bg_2']
 
-    # Status pill — visual: shows the IP from settings (no live probe)
-    pill = tk.Frame(inner, bg=COLORS['accent_08'],
-                    highlightbackground=COLORS['accent_lo'],
-                    highlightthickness=1)
-    pill.pack(side='left')
-    pill_inner = tk.Frame(pill, bg=COLORS['accent_08'])
-    pill_inner.pack(padx=10, pady=4)
-    tk.Frame(pill_inner, bg=COLORS['accent'],
-             width=8, height=8
-             ).pack(side='left', padx=(0, 6))
-    tk.Label(pill_inner, text=_('PAYLOAD BUS'),
-             font=(FONTS['body_strong'][0], 10),
-             bg=COLORS['accent_08'], fg=COLORS['accent_hi']
-             ).pack(side='left')
+    row = tk.Frame(card.body, bg=BG2)
+    row.pack(fill='x')
 
-    # Editable IP + port (legacy attrs)
-    tk.Label(inner, text=_('IP'),
-             font=FONTS['label'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(16, 4))
-    ip_wrap = tk.Frame(inner, bg=COLORS['bg_3'],
-                       highlightbackground=COLORS['border_3'],
-                       highlightthickness=1)
-    ip_wrap.pack(side='left')
-    XEntry(ip_wrap, textvariable=app._pl_ip_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=4, width=16
-             ).pack()
+    def _field(label, var, width):
+        f = tk.Frame(row, bg=BG2)
+        f.pack(side='left', padx=(0, px(12)))
+        field_label(f, label, bg=BG2).pack(fill='x')
+        XEntry(f, textvariable=var, mono=True, width=width).pack(
+            anchor='w', pady=(px(4), 0))
 
-    tk.Label(inner, text=_('Port'),
-             font=FONTS['label'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(8, 4))
-    port_wrap = tk.Frame(inner, bg=COLORS['bg_3'],
-                         highlightbackground=COLORS['border_3'],
-                         highlightthickness=1)
-    port_wrap.pack(side='left')
-    XEntry(port_wrap, textvariable=app._pl_port_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=4, width=7
-             ).pack()
+    _field(_('IP'), app._pl_ip_var, 18)
+    _field(_('Port'), app._pl_port_var, 7)
+    Button(row, text=_('Save'), icon='save', command=app._pl_save_conn
+           ).pack(side='left', anchor='s')
 
-    _ghost_btn(inner, _('Save'),
-               command=app._pl_save_conn
-               ).pack(side='left', padx=(6, 0))
-    tk.Label(inner, text=_('Default ports: 9090 / 9021'),
-             font=FONTS['meta'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_5']
-             ).pack(side='left', padx=(12, 0))
-
-    # Right-aligned actions
-    _accent_btn(inner, '+  ' + _('Add payload'),
-                command=app._pl_add
-                ).pack(side='right')
-
-    tk.Frame(parent, bg=COLORS['border_2'], height=1).pack(fill='x')
+    Divider(card.body, color=C['border_1']).pack(fill='x', pady=px(16))
+    _build_metrics_strip(card.body, app)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Metrics strip — payload bus dashboard (v3.6.0 PS5 pass)
-# ─────────────────────────────────────────────────────────────────────────
 def _build_metrics_strip(parent, app):
     """Payloads / Console IP / Default Port / Last Sent. Every value
     mirrors an existing var; Last Sent is a session timestamp recorded
     when the status line reports a successful send."""
-    from ui.shared.ps5_kit import StatStrip
-
-    wrap = tk.Frame(parent, bg=COLORS['bg_1'])
-    wrap.pack(fill='x', padx=22, pady=(12, 0))
-    strip = StatStrip(wrap, [('Payloads', 'count'),
-                             ('Console IP', 'ip'),
-                             ('Default Port', 'port'),
-                             ('Last Sent', 'last')])
+    strip = StatGrid(parent, [('Payloads', 'count'),
+                              ('Console IP', 'ip'),
+                              ('Default Port', 'port'),
+                              ('Last Sent', 'last')])
     strip.pack(fill='x')
     app._pl_metrics_strip = strip
 
     def _mirror(*_a):
         try:
-            strip.set('count', str(len(app._pl_payloads)), 'purple')
+            strip.set('count', str(len(app._pl_payloads)))
         except Exception:
             pass
         try:
-            strip.set('ip', app._pl_ip_var.get().strip() or '\u2014',
-                      'accent')
+            strip.set('ip', app._pl_ip_var.get().strip() or '—')
             strip.set('port', ':' + (app._pl_port_var.get().strip()
                                      or '9090'))
         except Exception:
@@ -175,10 +113,10 @@ def _build_metrics_strip(parent, app):
     def _on_status(*_a):
         try:
             txt = app._pl_status_var.get()
-            if '\u2713' in txt and ('sent' in txt.lower() or
+            if '✓' in txt and ('sent' in txt.lower() or
                                      'Sent' in txt):
                 import time as _t
-                strip.set('last', _t.strftime('%H:%M:%S'), 'ok')
+                strip.set('last', _t.strftime('%H:%M:%S'), ok=True)
             _mirror()
         except Exception:
             pass
@@ -191,7 +129,6 @@ def _build_metrics_strip(parent, app):
     except Exception:
         pass
 
-    # _pl_count_var is created later in the list pane — wire deferred
     def _wire_count(tries=0):
         v = getattr(app, '_pl_count_var', None)
         if v is not None:
@@ -202,170 +139,99 @@ def _build_metrics_strip(parent, app):
             _mirror()
             return
         if tries < 10:
-            wrap.after(300, lambda: _wire_count(tries + 1))
-    wrap.after(300, _wire_count)
+            strip.after(300, lambda: _wire_count(tries + 1))
+    strip.after(300, _wire_count)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Workspace — list + detail
+# Workspace — list card + detail card
 # ─────────────────────────────────────────────────────────────────────────
 def _build_workspace(parent, app):
-    ws = tk.Frame(parent, bg=COLORS['bg_1'])
-    ws.pack(fill='both', expand=True)
-    ws.grid_columnconfigure(0, weight=1)
-    ws.grid_columnconfigure(1, weight=0, minsize=300)
-    ws.grid_rowconfigure(0, weight=1)
-
-    _build_list_pane(ws, app).grid(row=0, column=0, sticky='nsew')
-    tk.Frame(ws, bg=COLORS['border_2'], width=1
-             ).grid(row=0, column=0, sticky='nse')
-    _build_detail_pane(ws, app).grid(row=0, column=1, sticky='nsew')
+    left, right = two_columns(parent, 7, 5, pady=(0, 24))
+    _build_list_pane(left, app).pack(fill='both', expand=True)
+    _build_detail_pane(right, app).pack(fill='both', expand=True)
 
 
 def _build_list_pane(parent, app):
-    pane = tk.Frame(parent, bg=COLORS['bg_1'])
-
-    # Head
-    head = tk.Frame(pane, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=22, pady=(14, 8))
-    tk.Label(head, text=_('Payloads'),
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']
-             ).pack(side='left')
-
+    from ui.shared.widgets import Card, Divider
+    card = Card(parent, title=_('Payloads'), padding=0)
+    try:
+        card.title_label.master.master.pack_configure(
+            padx=px(16), pady=(px(16), px(12)))
+    except Exception:
+        pass
     app._pl_count_var = tk.StringVar(value='')
-    tk.Label(head, textvariable=app._pl_count_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             padx=8, pady=2,
-             highlightbackground=COLORS['border_2'],
-             highlightthickness=1
-             ).pack(side='left', padx=(12, 0))
+    tk.Label(card.head_actions, textvariable=app._pl_count_var,
+             font=FONTS['caption'], bg=C['bg_2'], fg=C['fg_3']
+             ).pack(side='right', pady=(px(3), 0))
 
-    # Search input
-    search_wrap = tk.Frame(pane, bg=COLORS['bg_0'],
-                           highlightbackground=COLORS['border_3'],
-                           highlightthickness=1)
-    search_wrap.pack(fill='x', padx=22, pady=(0, 10))
-    tk.Label(search_wrap, text='\U0001f50d',
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(8, 4))
-    XEntry(search_wrap, textvariable=app._pl_search_var,
-             font=FONTS['body'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=0
-             ).pack(fill='x', ipady=5, padx=(0, 8))
-
-    # Live filter
+    sf = search_field(card.body, app._pl_search_var,
+                      placeholder='Search payloads')
+    sf.pack(fill='x', padx=px(16), pady=(0, px(12)))
     app._pl_search_var.trace_add('write', lambda *a: app._pl_render())
 
-    # Scrollable list area
-    list_outer = tk.Frame(pane, bg=COLORS['bg_2'],
-                          highlightbackground=COLORS['border_3'],
-                          highlightthickness=1)
-    list_outer.pack(fill='both', expand=True, padx=22, pady=(0, 12))
-
-    canvas = tk.Canvas(list_outer, bg=COLORS['bg_2'], highlightthickness=0)
-    sb = XScrollbar(list_outer, command=canvas.yview,
-                      bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
-    canvas.configure(yscrollcommand=sb.set)
-    sb.pack(side='right', fill='y')
-    canvas.pack(side='left', fill='both', expand=True)
-
-    app._pl_list_frame = tk.Frame(canvas, bg=COLORS['bg_2'])
-    win = canvas.create_window((0, 0), window=app._pl_list_frame,
-                                anchor='nw')
-    app._pl_list_frame.bind('<Configure>', lambda e:
-        canvas.configure(scrollregion=canvas.bbox('all')))
-    canvas.bind('<Configure>', lambda e: canvas.itemconfig(win, width=e.width))
-    attach_scroll(canvas)
-
     # Status text — kept for legacy compat (worker writes here)
-    tk.Label(pane, textvariable=app._pl_status_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-             anchor='w'
-             ).pack(fill='x', padx=22, pady=(0, 8))
+    foot = tk.Frame(card.body, bg=C['bg_2'])
+    foot.pack(fill='x', side='bottom')
+    tk.Label(foot, textvariable=app._pl_status_var, font=FONTS['caption'],
+             bg=C['bg_2'], fg=C['fg_3'], anchor='w'
+             ).pack(fill='x', padx=px(16), pady=px(10))
+    Divider(card.body, color=C['border_1']).pack(fill='x', side='bottom')
 
-    # Initial render
+    Divider(card.body, color=C['border_2']).pack(fill='x')
+    # The list grows inside the page scroll (one scrollbar per page).
+    app._pl_list_frame = tk.Frame(card.body, bg=C['bg_2'])
+    app._pl_list_frame.pack(fill='both', expand=True)
     app._pl_render()
-    return pane
+    return card
 
 
 def _build_detail_pane(parent, app):
-    pane = tk.Frame(parent, bg=COLORS['bg_1'])
-
-    head = tk.Frame(pane, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=18, pady=(14, 8))
-    tk.Label(head, text=_('Detail'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_1'], fg=COLORS['fg_4']
-             ).pack(side='left')
-    tk.Frame(pane, bg=COLORS['border_2'], height=1).pack(fill='x', padx=18)
-
-    # Detail content area — re-rendered when selection changes
-    app._pl_detail_frame = tk.Frame(pane, bg=COLORS['bg_1'])
-    app._pl_detail_frame.pack(fill='both', expand=True, padx=18, pady=12)
-
+    from ui.shared.widgets import Card
+    card = Card(parent, title=_('Detail'))
+    app._pl_detail_frame = card.body
     _render_detail_empty(app)
-    return pane
+    return card
 
 
 def _render_detail_empty(app):
-    """Empty state for the detail pane — shown when nothing selected."""
+    """Empty state for the detail card — shown when nothing is selected."""
+    from ui.shared.widgets import EmptyState
     for w in app._pl_detail_frame.winfo_children():
         w.destroy()
-    inner = tk.Frame(app._pl_detail_frame, bg=COLORS['bg_1'])
-    inner.pack(fill='both', expand=True, pady=40)
-    tk.Label(inner, text='\U0001f4e5',
-             font=(FONTS['body'][0], 32),
-             bg=COLORS['bg_1'], fg=COLORS['fg_6']
-             ).pack()
-    tk.Label(inner, text=_('Select a payload to see details'),
-             font=FONTS['meta'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_5'],
-             wraplength=240, justify='center'
-             ).pack(pady=(8, 0))
+    es = EmptyState(app._pl_detail_frame, icon='rocket',
+                    title=_('Select a payload to see details'),
+                    bg=C['bg_2'])
+    es.configure(height=px(200))
+    es.pack(fill='both', expand=True)
 
 
 def _render_detail_for(app, idx):
-    """Render the detail pane for the payload at index `idx` in the list.
-
-    v3.6.0 PS5 pass: adds a file-status badge and richer key facts
-    (size, effective port, last sent). Action wiring is unchanged.
-    """
+    """Render the detail card for the payload at index `idx`."""
+    from ui.shared.widgets import (Badge, Button, Divider, InfoBar,
+                                   autowrap)
     if idx < 0 or idx >= len(app._pl_payloads):
         _render_detail_empty(app)
         return
     p = app._pl_payloads[idx]
-
     for w in app._pl_detail_frame.winfo_children():
         w.destroy()
-
     parent = app._pl_detail_frame
+    BG2 = C['bg_2']
 
-    # Title + file-status badge
     path = p.get('path', '')
     exists = bool(path and os.path.isfile(path))
-    title_row = tk.Frame(parent, bg=COLORS['bg_1'])
+    title_row = tk.Frame(parent, bg=BG2)
     title_row.pack(fill='x')
-    tk.Label(title_row, text=p.get('name', '(unnamed)'),
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(side='left', fill='x', expand=True)
-    badge_bg = COLORS['success_bg'] if exists else COLORS['danger_bg']
-    badge_fg = COLORS['success_hi'] if exists else COLORS['danger_hi']
-    tk.Label(title_row,
-             text=('\u2713 ' + _('READY')) if exists else ('\u2717 ' + _('MISSING')),
-             font=(FONTS['body_strong'][0], 9),
-             bg=badge_bg, fg=badge_fg, padx=8, pady=2
-             ).pack(side='right')
+    Badge(title_row, _('READY').capitalize() if exists else
+          _('MISSING').capitalize(),
+          'success' if exists else 'danger').pack(side='right', anchor='n')
+    t = tk.Label(title_row, text=p.get('name', '(unnamed)'),
+                 font=FONTS['subtitle'], bg=BG2, fg=C['fg_0'], anchor='w',
+                 justify='left')
+    t.pack(side='left', fill='x', expand=True)
+    autowrap(t)
 
-    # Subtitle — file size
     size_str = ''
     if exists:
         try:
@@ -374,40 +240,32 @@ def _render_detail_for(app, idx):
                         else '%.2f MB' % (sz / 1024**2))
         except Exception:
             pass
-    tk.Label(parent,
-             text=os.path.basename(path) + ((' \u00b7 ' + size_str)
-                                             if size_str else ''),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(2, 12))
+    tk.Label(parent, text=os.path.basename(path) + ((' · ' + size_str)
+                                                    if size_str else ''),
+             font=FONTS['code'], bg=BG2, fg=C['fg_3'], anchor='w'
+             ).pack(fill='x', pady=(px(2), px(12)))
 
-    # Notes / description
     notes = p.get('notes', '').strip()
     if notes:
-        tk.Label(parent, text=notes,
-                 font=FONTS['body'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_3'],
-                 anchor='w', justify='left', wraplength=240
-                 ).pack(fill='x', pady=(0, 12))
+        n = tk.Label(parent, text=notes, font=FONTS['body'], bg=BG2,
+                     fg=C['fg_2'], anchor='w', justify='left')
+        n.pack(fill='x', pady=(0, px(12)))
+        autowrap(n)
 
-    # KV section
-    tk.Frame(parent, bg=COLORS['border_2'], height=1
-             ).pack(fill='x', pady=(4, 8))
+    Divider(parent, color=C['border_1']).pack(fill='x', pady=(0, px(4)))
 
-    def _kv(key, value):
-        row = tk.Frame(parent, bg=COLORS['bg_1'])
-        row.pack(fill='x', pady=2)
-        tk.Label(row, text=key.upper(),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['bg_1'], fg=COLORS['fg_5'], anchor='w'
-                 ).pack(fill='x')
-        tk.Label(row, text=value,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_2'],
-                 anchor='w', justify='left', wraplength=240
-                 ).pack(fill='x', pady=(2, 0))
+    def _kv(key, value, mono=True):
+        row = tk.Frame(parent, bg=BG2)
+        row.pack(fill='x', pady=px(6))
+        tk.Label(row, text=key, font=FONTS['caption'], bg=BG2, fg=C['fg_3'],
+                 anchor='w').pack(fill='x')
+        v = tk.Label(row, text=value, font=FONTS['code'] if mono else
+                     FONTS['body'], bg=BG2, fg=C['fg_1'], anchor='w',
+                     justify='left')
+        v.pack(fill='x', pady=(px(2), 0))
+        autowrap(v)
 
-    _kv(_('File'), path or '\u2014')
+    _kv(_('File'), path or '—')
     eff_port = str(p.get('port', '') or app._pl_port_var.get().strip()
                    or '9090')
     _kv(_('Port'), eff_port +
@@ -415,68 +273,33 @@ def _render_detail_for(app, idx):
     _kv(_('Per-payload IP'),
         p.get('ip', '') or _('uses connection bar IP'))
     last = p.get('last_sent', '')
-    _kv(_('Last sent'), str(last) if last else '\u2014')
-
-    # Target consoles section
-    tk.Frame(parent, bg=COLORS['border_2'], height=1
-             ).pack(fill='x', pady=(8, 8))
-    tk.Label(parent, text=_('TARGET'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(0, 4))
+    _kv(_('Last sent'), str(last) if last else '—')
 
     target_ip = p.get('ip') or app._pl_ip_var.get()
     target_port = p.get('port') or app._pl_port_var.get()
-    target_row = tk.Frame(parent, bg=COLORS['bg_1'])
-    target_row.pack(fill='x', pady=(0, 12))
-    dot = tk.Frame(target_row,
-                   bg=COLORS['success'] if target_ip else COLORS['fg_5'],
-                   width=7, height=7)
-    dot.pack(side='left', padx=(0, 8))
-    dot.pack_propagate(False)
-    tk.Label(target_row, text=target_ip or _('(no IP set)'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_2']
-             ).pack(side='left')
-    tk.Label(target_row, text=':' + str(target_port),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_5']
-             ).pack(side='left', padx=(2, 0))
+    _kv(_('TARGET').capitalize(),
+        (target_ip or _('(no IP set)')) + ':' + str(target_port))
 
-    # Send / Edit / Delete actions — fall through to legacy callbacks
-    actions = tk.Frame(parent, bg=COLORS['bg_1'])
-    actions.pack(fill='x')
+    actions = tk.Frame(parent, bg=BG2)
+    actions.pack(fill='x', pady=(px(12), 0))
+    Button(actions, text=_('Send to %s') % (target_ip or '...'), icon='send',
+           variant='primary', command=lambda: app._pl_send(p)
+           ).pack(fill='x', pady=(0, px(8)))
+    row2 = tk.Frame(actions, bg=BG2)
+    row2.pack(fill='x')
+    row2.columnconfigure(0, weight=1, uniform='pla')
+    row2.columnconfigure(1, weight=1, uniform='pla')
+    Button(row2, text=_('Edit'), icon='pencil',
+           command=lambda: app._pl_edit(idx)
+           ).grid(row=0, column=0, sticky='ew', padx=(0, px(4)))
+    Button(row2, text=_('Remove'), icon='trash', variant='danger',
+           command=lambda: _pl_remove_then_refresh(app, idx)
+           ).grid(row=0, column=1, sticky='ew', padx=(px(4), 0))
 
-    _accent_btn(actions, '\u2197  ' + _('Send to %s') % (target_ip or '...'),
-                command=lambda: app._pl_send(p)
-                ).pack(fill='x', pady=(0, 6))
-    _ghost_btn(actions, '\u270e  ' + _('Edit'),
-               command=lambda: app._pl_edit(idx)
-               ).pack(side='left', fill='x', expand=True, padx=(0, 4))
-    _danger_btn(actions, '\U0001f5d1  ' + _('Remove'),
-                command=lambda: _pl_remove_then_refresh(app, idx)
-                ).pack(side='left', fill='x', expand=True)
-
-    # Warning banner (matches mock)
-    tk.Frame(parent, bg=COLORS['border_2'], height=1
-             ).pack(fill='x', pady=(12, 8))
-    warn = tk.Frame(parent, bg=COLORS['warn_bg'],
-                    highlightbackground=COLORS['warn'],
-                    highlightthickness=1)
-    warn.pack(fill='x')
-    wi = tk.Frame(warn, bg=COLORS['warn_bg'])
-    wi.pack(fill='x', padx=10, pady=6)
-    tk.Label(wi, text='\u26a0',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['warn_bg'], fg=COLORS['warn']
-             ).pack(side='left', padx=(0, 6))
-    tk.Label(wi,
-             text=_('Sending a payload while another is resident can crash '
-                    'the kernel. Reboot between unrelated payloads.'),
-             font=FONTS['meta'],
-             bg=COLORS['warn_bg'], fg=COLORS['warn_hi'],
-             anchor='w', justify='left', wraplength=220
-             ).pack(side='left', fill='x', expand=True)
+    InfoBar(parent, kind='warn',
+            text=_('Sending a payload while another is resident can crash '
+                   'the kernel. Reboot between unrelated payloads.')
+            ).pack(fill='x', pady=(px(16), 0))
 
 
 def _pl_remove_then_refresh(app, idx):
@@ -499,40 +322,12 @@ def _pl_remove_then_refresh(app, idx):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
+    return XButton(parent, text=text, command=command)
 
 
 def _accent_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['accent_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=8,
-                     cursor='hand2',
-                     command=command)
+    return XButton(parent, text=text, command=command, variant='primary')
 
 
 def _danger_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['danger_hi'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['danger'],
-                     highlightthickness=1,
-                     command=command)
+    return XButton(parent, text=text, command=command, variant='danger')
