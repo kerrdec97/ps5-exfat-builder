@@ -310,7 +310,15 @@ def run_lazy_mkpfs(app, src_image, final_ffpfsc, *,
             cmd, cwd=lazy_dir,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            universal_newlines=True, bufsize=1, env=env, **popen_kwargs)
+            # Farewell Edition (issues #85 / #69): decode exactly what the
+            # child writes (PYTHONIOENCODING=utf-8 above). Without this the
+            # parent used the Windows locale codec (cp1252 / cp936 /
+            # cp1256 ...); the first undecodable byte killed the reader
+            # thread, the pipe stopped being drained and the worker died on
+            # its next progress write with "OSError: [Errno 22] Invalid
+            # argument".
+            universal_newlines=True, encoding='utf-8', errors='replace',
+            bufsize=1, env=env, **popen_kwargs)
     except Exception as e:
         log('[LAZY] Failed to start Lazy_MkPFS worker: %s — falling back to stock mkpfs\n'
             % e)

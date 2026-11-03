@@ -303,7 +303,7 @@ class SegmentedToggle(tk.Frame):
             var.trace_add('write', lambda *a: self._repaint())
         except Exception:
             try:
-                var.trace('w', lambda *a: self._repaint())
+                var.trace_add('write', lambda *a: self._repaint())
             except Exception:
                 pass
 

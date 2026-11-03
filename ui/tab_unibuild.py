@@ -35,6 +35,9 @@ _STATUS_BADGE = {
     'done':    ('COMPLETE', 'success'),
     'failed':  ('FAILED',   'danger'),
     'skipped': ('SKIPPED',  'fg_5'),
+    # Farewell Edition: built, but verification flagged it - the image is
+    # kept for the user to check (issue #86).
+    'warn':    ('CHECK',    'warn'),
 }
 
 _DARK_TEXT = '#001a05'   # readable text on the green/teal pills
@@ -1729,6 +1732,9 @@ def build_unibuild_tab(parent, app):
         lab = '%d job%s  ·  %d done' % (len(queue), '' if len(queue) == 1 else 's', done)
         if failed:
             lab += '  ·  %d failed' % failed
+        warned = sum(1 for j in queue if j['status'] == 'warn')
+        if warned:
+            lab += '  ·  %d to check' % warned
         uq_count.set(lab)
         present = {id(j) for j in queue}
         for k in [k for k in uq_state['sel'] if k not in present]:
@@ -2222,6 +2228,17 @@ def build_unibuild_tab(parent, app):
             if not ok:
                 cb(False)
                 return
+            if ok == 'warn':
+                # Do not compress an image that verification flagged; keep
+                # it so nothing is lost (issue #86).
+                try:
+                    app._log('[UNIBUILD] PFS: the intermediate image was '
+                             'flagged by verification, so it was not '
+                             'compressed. It is kept at: %s\n' % inter_path)
+                except Exception:
+                    pass
+                cb('warn')
+                return
             if not os.path.isfile(inter_path):
                 try:
                     app._log('[UNIBUILD] PFS: intermediate not found: %s\n' % inter_path)
@@ -2593,16 +2610,41 @@ def build_unibuild_tab(parent, app):
             return
         cb(None)
     def _uq_cleanup_job(job, reason='failed'):
+        # Farewell Edition (issue #86): this used to delete whatever the job
+        # had produced on ANY failure - including a finished exFAT image
+        # whose verification merely raised a doubt, and the verified
+        # intermediate image when only the later .ffpfsc compression
+        # failed. Completed images are now always kept. What is still
+        # removed: the intermediate when the user cancelled, and a
+        # half-written .ffpfsc this run created.
         removed = []
+        kept = []
         try:
             ip = job.get('_inter_path')
             if ip and (job.get('_inter_is_artifact') and os.path.isfile(ip)):
-                os.remove(ip)
-                removed.append(ip)
+                if reason == 'cancelled':
+                    os.remove(ip)
+                    removed.append(ip)
+                else:
+                    kept.append(ip)
         except Exception:
             pass
-        try:
+        if job.get('type') in ('exfat', 'ffpkg') and reason != 'cancelled':
+            # The builders already delete genuinely partial images
+            # themselves; anything still here was built to the end.
             fp = job.get('_final_path') or job.get('out_path')
+            if fp and os.path.isfile(fp):
+                kept.append(fp)
+            fp = None
+        else:
+            fp = job.get('_final_path') or job.get('out_path')
+        for k in kept:
+            try:
+                app._log('[UNIBUILD] %s — kept %s for inspection (not deleted).\n'
+                         % (reason, k))
+            except Exception:
+                pass
+        try:
             if fp and (os.path.isfile(fp) and job.get('status') in (None, 'running', 'failed', 'cancelled')):
                 _keep = False
                 _pre = job.get('_final_preexists')
@@ -2642,6 +2684,15 @@ def build_unibuild_tab(parent, app):
             _uq_cleanup_job(job, reason='cancelled')
         elif ok is None:
             job['status'] = 'skipped'
+        elif ok == 'warn':
+            # Built, but verification raised a doubt: keep everything.
+            job['status'] = 'warn'
+            try:
+                app._log('[UNIBUILD] %s finished with a verification warning; '
+                         'the image was kept — check it before use.\n'
+                         % job.get('name', ''))
+            except Exception:
+                pass
         elif ok:
             job['status'] = 'done'
         else:
@@ -2730,6 +2781,9 @@ def build_unibuild_tab(parent, app):
             done, '' if done == 1 else 's', failed)
         if cancelled:
             line += '  \u00b7  %d cancelled' % cancelled
+        warned = sum(1 for j in queue if j['status'] == 'warn')
+        if warned:
+            line += '  \u00b7  %d kept for checking' % warned
         if len(queue) > 1 and done_jobs:
             counts = {}
             for j in done_jobs:

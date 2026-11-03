@@ -105,13 +105,13 @@ def build_bp_auto_panel(parent, app):
 
     # ── Settings persistence ──
     # Same as legacy: trace these vars so changes save automatically.
-    app._abp_zip_orig_var.trace('w', lambda *a: (
+    app._abp_zip_orig_var.trace_add('write', lambda *a: (
         app._settings.update({'abp_zip_orig_dest': app._abp_zip_orig_var.get()}),
         save_settings(app._settings)))
-    app._abp_zip_pat_var.trace('w', lambda *a: (
+    app._abp_zip_pat_var.trace_add('write', lambda *a: (
         app._settings.update({'abp_zip_pat_dest': app._abp_zip_pat_var.get()}),
         save_settings(app._settings)))
-    app._abp_notes_var.trace('w', lambda *a: (
+    app._abp_notes_var.trace_add('write', lambda *a: (
         app._settings.update({'abp_notes': app._abp_notes_var.get()}),
         save_settings(app._settings)))
 
@@ -362,7 +362,7 @@ def _build_detected_strip(parent, app):
             app._abp_detected_sdk_var.set('—')
             app._abp_target_fw_var.set('—')
             app._abp_patches_var.set('—')
-    app._abp_sdk_info_var.trace('w', _sync)
+    app._abp_sdk_info_var.trace_add('write', _sync)
 
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -1563,7 +1563,10 @@ def _bp_exfat_to_temp(app, img_path):
                 (result.stderr or result.stdout or '')[:300])
         mounted['drive'] = free_letter
 
-        for _ in range(30):
+        # (loop variable must not be called "_": that would shadow the
+        # translation function for this whole function and turn every
+        # error message here into an UnboundLocalError)
+        for _attempt in range(30):
             if os.path.exists(free_letter + '\\'):
                 break
             _t2.sleep(0.5)

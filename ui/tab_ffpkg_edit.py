@@ -2839,7 +2839,10 @@ def _bp_extract_exfat_to_temp(app, img_path):
 
         # Wait for the drive to appear.
         import time as _t
-        for _ in range(30):
+        # (loop variable must not be called "_": that would shadow the
+        # translation function for this whole function and turn every
+        # error message here into an UnboundLocalError)
+        for _attempt in range(30):
             if os.path.exists(free_letter + '\\'):
                 break
             _t.sleep(0.5)

@@ -341,7 +341,7 @@ def _build_filter_row(body, app):
     filter_entry.pack(side='left', fill='x', expand=True, padx=(0, 8))
 
     # Watch the var → re-render the log on every keystroke
-    app._klog_filter_var.trace('w', lambda *a: app._klog_apply_filter())
+    app._klog_filter_var.trace_add('write', lambda *a: app._klog_apply_filter())
 
     # Clear-filter button (small, ghost-style)
     tk.Button(inner, text=_('Clear'),

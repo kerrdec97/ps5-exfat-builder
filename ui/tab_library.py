@@ -152,7 +152,7 @@ def _build_toolbar(body, app):
     se.pack(side='left', fill='x', expand=True, ipady=7, padx=(0, 10))
     # placeholder-style hint via empty-state fg swap is out of scope;
     # the magnifier glyph carries the affordance.
-    app._lib_search_var.trace('w', lambda *a: app._lib_apply_filter())
+    app._lib_search_var.trace_add('write', lambda *a: app._lib_apply_filter())
 
     # ── View mode seg (Grid / List) ──
     seg = tk.Frame(inner, bg=COLORS['bg_0'],
