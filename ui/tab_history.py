@@ -1,62 +1,53 @@
 """
-ui/tab_history.py — Build History tab.
+ui/tab_history.py — Build History page (design-system layout).
 
-Step 10 (v2.1.2): refactored against preview/history-tab-redesign.html.
+    PageHeader  "Build History"                 [Refresh] [Export CSV] [Clear history]
+    Stat cards  Total builds · Success rate · Failures · Total built
+    Table card  ┌ search field · All | Successful | Failed ·········· count · since ┐
+                │ Game | Type | Output | Size | Duration | When | Status | actions │
+                │ rows (cover thumb, title, ID · version, badges, row actions)    │
+                └──────────────────────────────────────────────────────────────────┘
 
-Layout:
-
-    ┌─ page-head ─────────────────────────────────────────────────────┐
-    │  Build History  [since 2025-08-11]  [↻ Refresh][⤓CSV][🗑Clear]   │
-    ├─ stats grid (4 cards) ──────────────────────────────────────────┤
-    │ [Total: 142]  [Success: 94%]  [Failed: 9]  [Total built: 8.4 TB]│
-    ├─ filters row ───────────────────────────────────────────────────┤
-    │ 🔍 Search…  [All][✓ Success][✗ Failed]    [Type ▼] [Range ▼]    │
-    ├─ table (sticky header) ─────────────────────────────────────────┤
-    │ Game  | Type  | Output           | Size    | Dur  | When | Status│
-    │ ────────────────────────────────────────────────────────────────│
-    │ Returnal  EXFAT  D:/...  56.8GB  04:12  12m  ●SUCCESS  📂↻✕    │
-    │ ...                                                              │
-    └─────────────────────────────────────────────────────────────────┘
-
-Backwards compat: every `app._hist_*` and history widget the existing
-callbacks read is preserved. Worker logic (read JSON, filter, save)
-untouched. The `_history_refresh(list_frame)` callback is rewritten to
-build rows in the new design — UI-only rewrite, same scope-bend pattern
-as `_lib_make_card`.
+Backwards compat: every `app._hist_*` attribute and history callback the
+rest of the app reads is preserved (`_hist_search_var`, `_hist_show_success`,
+`_hist_show_failed`, `_hist_list_frame`, `app._history_refresh(list_frame)`,
+`app._history_clear`, `app._history_view_log`). Reading/filtering the JSON
+still happens in `exfat_builder._history_refresh`; this module only builds
+widgets. `render_history_rows` draws the rows that callback hands it.
 """
 
 import os
 import json
-import time
 import datetime
+import threading
 import tkinter as tk
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
+from ui.shared.widgets import (
+    PageHeader, Card, Badge, IconButton, Segmented, EmptyState, Divider,
+    Tooltip, Button,
+)
+import tkinter.font as tkfont
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
 from exfat_builder import *  # noqa: F401,F403
 from exfat_builder import _
 from ui.shared.scroll import attach_scroll
 from ui.shared.app_dialog import app_info, app_error
 
+C = COLORS
+BG1, BG2, BG3 = C['bg_1'], C['bg_2'], C['bg_3']
+
 
 def build_history_tab(parent, app):
-    """Build the redesigned History tab body into `parent`."""
-    parent.configure(bg=COLORS['bg_1'])
+    """Build the History page into `parent`."""
+    parent.configure(bg=BG1)
 
-    body = tk.Frame(parent, bg=COLORS['bg_1'])
+    body = tk.Frame(parent, bg=BG1)
     body.pack(fill='both', expand=True)
 
-    # ── Page head ──
     _build_page_head(body, app)
-
-    # ── Stats grid ──
     _build_stats(body, app)
-
-    # ── Filters row ──
-    _build_filters(body, app)
-
-    # ── Table (header + scrollable body) ──
     list_frame = _build_table(body, app)
 
     # Initial render — defer slightly so the canvas has a real width
@@ -64,36 +55,21 @@ def build_history_tab(parent, app):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Page head — title + since pill + Refresh / Export / Clear buttons
+# Page head — title + description, actions on the right
 # ─────────────────────────────────────────────────────────────────────────
 def _build_page_head(body, app):
-    head = tk.Frame(body, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=24, pady=(14, 12))
+    head = PageHeader(body, _('Build History'),
+                      _('Every image you have built on this PC, newest first.'))
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
-    tk.Label(head, text=_('Build History'),
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']
-             ).pack(side='left')
-
-    # "since YYYY-MM-DD" pill — derived from oldest entry, if any
-    since_text = _compute_since_text(app)
-    tk.Label(head, text=since_text,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             padx=8, pady=2,
-             highlightbackground=COLORS['border_2'],
-             highlightthickness=1
-             ).pack(side='left', padx=(12, 0))
-
-    # Right-aligned action buttons
-    _danger_btn(head, '\U0001f5d1  ' + _('Clear history'),
-                command=app._history_clear).pack(side='right')
-    _ghost_btn(head, '\u2913  ' + _('Export CSV'),
-               command=lambda: _export_csv(app)
-               ).pack(side='right', padx=(0, 6))
-    _ghost_btn(head, '\u21bb  ' + _('Refresh'),
-               command=lambda: app._history_refresh(app._hist_list_frame)
-               ).pack(side='right', padx=(0, 6))
+    Button(head.actions, text=_('Clear history'), icon='trash',
+           command=app._history_clear).pack(side='right')
+    Button(head.actions, text=_('Export CSV'), icon='download',
+           command=lambda: _export_csv(app)
+           ).pack(side='right', padx=(0, px(8)))
+    Button(head.actions, text=_('Refresh'), icon='refresh',
+           command=lambda: app._history_refresh(app._hist_list_frame)
+           ).pack(side='right', padx=(0, px(8)))
 
 
 def _compute_since_text(app):
@@ -111,64 +87,68 @@ def _compute_since_text(app):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Stats grid — 4 cards
+# Stat cards
 # ─────────────────────────────────────────────────────────────────────────
 def _build_stats(body, app):
-    """4-column stat grid: Total / Success rate / Failures / Total built."""
-    stats = _compute_stats(app)
-
-    grid = tk.Frame(body, bg=COLORS['bg_1'])
-    grid.pack(fill='x', padx=24, pady=(0, 14))
+    """Four stat cards: Total / Success rate / Failures / Total built.
+    The value labels are kept on `app._hist_stat_labels` so every list
+    refresh can update them."""
+    grid = tk.Frame(body, bg=BG1)
+    grid.pack(fill='x', padx=px(24), pady=(0, px(16)))
     for i in range(4):
         grid.grid_columnconfigure(i, weight=1, uniform='stat')
 
-    _stat_card(grid, 0, _('Total builds'), str(stats['total']),
-               sub=_('last: %s') % stats['last_when'],
-               value_color=COLORS['fg_0'])
-    _stat_card(grid, 1, _('Success rate'),
-               '%d%%' % stats['success_pct'] if stats['total'] else '—',
-               sub='%d / %d %s' % (stats['success_count'], stats['total'],
-                                    _('succeeded')) if stats['total'] else '',
-               value_color=COLORS['success_hi'])
-    _stat_card(grid, 2, _('Failures'),
-               str(stats['failed_count']),
-               sub=_('out of %d builds') % stats['total']
-                   if stats['total'] else _('no builds yet'),
-               value_color=COLORS['danger_hi'] if stats['failed_count']
-                                              else COLORS['fg_4'])
-    _stat_card(grid, 3, _('Total built'),
-               stats['total_size_str'],
-               sub='%d %s' % (stats['outputs_on_disk'],
-                              _('outputs on disk')),
-               value_color=COLORS['accent_hi'])
+    labels = {}
+    for col, key, label in ((0, 'total', _('Total builds')),
+                            (1, 'rate', _('Success rate')),
+                            (2, 'failed', _('Failures')),
+                            (3, 'size', _('Total built'))):
+        labels[key] = _stat_card(grid, col, label)
+    app._hist_stat_labels = labels
+    _update_stats(app)
 
 
-def _stat_card(grid, col, label, value, sub='', value_color=None):
-    """Single stat card — label + big value + sub text."""
-    card = tk.Frame(grid, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    card.grid(row=0, column=col, sticky='nsew', padx=(0, 8) if col < 3 else 0)
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='both', expand=True, padx=14, pady=12)
+def _stat_card(grid, col, label):
+    """Single stat card — overline label, stat value, caption."""
+    card = Card(grid, padding=16)
+    card.grid(row=0, column=col, sticky='nsew',
+              padx=(0 if col == 0 else px(8), 0 if col == 3 else px(8)))
+    tk.Label(card, text=label.upper(), font=FONTS['overline'],
+             bg=BG2, fg=C['fg_4'], anchor='w').pack(fill='x')
+    val = tk.Label(card, text='—', font=FONTS['stat'], bg=BG2,
+                   fg=C['fg_0'], anchor='w')
+    val.pack(fill='x', pady=(px(6), px(2)))
+    sub = tk.Label(card, text='', font=FONTS['caption'], bg=BG2,
+                   fg=C['fg_3'], anchor='w')
+    sub.pack(fill='x')
+    return val, sub
 
-    tk.Label(inner, text=label.upper(),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w'
-             ).pack(fill='x')
-    tk.Label(inner, text=value,
-             font=(FONTS['mono'][0], 22, 'bold'),
-             bg=COLORS['bg_2'],
-             fg=value_color or COLORS['fg_0'],
-             anchor='w'
-             ).pack(fill='x', pady=(4, 2))
-    if sub:
-        tk.Label(inner, text=sub,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-                 anchor='w'
-                 ).pack(fill='x')
+
+def _update_stats(app):
+    labels = getattr(app, '_hist_stat_labels', None)
+    if not labels:
+        return
+    try:
+        if not labels['total'][0].winfo_exists():
+            return
+    except Exception:
+        return
+    stats = _compute_stats(app)
+    t = stats['total']
+
+    def put(key, value, sub):
+        v, s = labels[key]
+        v.config(text=value)
+        s.config(text=sub)
+
+    put('total', str(t), _('last: %s') % stats['last_when'])
+    put('rate', ('%d%%' % stats['success_pct']) if t else '—',
+        ('%d / %d %s' % (stats['success_count'], t, _('succeeded')))
+        if t else _('no builds yet'))
+    put('failed', str(stats['failed_count']),
+        _('out of %d builds') % t if t else _('no builds yet'))
+    put('size', stats['total_size_str'],
+        '%d %s' % (stats['outputs_on_disk'], _('outputs on disk')))
 
 
 def _compute_stats(app):
@@ -206,92 +186,17 @@ def _compute_stats(app):
     if total_bytes >= 1024**4:
         out['total_size_str'] = '%.1f TB' % (total_bytes / 1024**4)
     elif total_bytes >= 1024**3:
-        out['total_size_str'] = '%.0f GB' % (total_bytes / 1024**3)
+        out['total_size_str'] = '%.1f GB' % (total_bytes / 1024**3)
     elif total_bytes > 0:
         out['total_size_str'] = '%d MB' % (total_bytes // 1024**2)
     return out
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Filters row — search + chip filters + dropdowns
+# Table card — toolbar, column header, scrollable rows
 # ─────────────────────────────────────────────────────────────────────────
-def _build_filters(body, app):
-    app._hist_search_var = tk.StringVar()
-    app._hist_show_success = tk.BooleanVar(value=True)
-    app._hist_show_failed  = tk.BooleanVar(value=True)
-
-    row = tk.Frame(body, bg=COLORS['bg_1'])
-    row.pack(fill='x', padx=24, pady=(0, 12))
-
-    # Search input
-    search_wrap = tk.Frame(row, bg=COLORS['bg_0'],
-                           highlightbackground=COLORS['border_3'],
-                           highlightthickness=1)
-    search_wrap.pack(side='left', fill='x', expand=False)
-
-    tk.Label(search_wrap, text='\U0001f50d',
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(8, 4))
-    XEntry(search_wrap, textvariable=app._hist_search_var,
-             font=FONTS['body'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=0,
-             width=36
-             ).pack(side='left', ipady=5, padx=(0, 8))
-
-    # Trigger filter on every keystroke
-    app._hist_search_var.trace_add('write',
-        lambda *a: app._history_refresh(app._hist_list_frame))
-
-    # Chip filters — All / Successful / Failed
-    chips_frame = tk.Frame(row, bg=COLORS['bg_1'])
-    chips_frame.pack(side='left', padx=(10, 0))
-    _chip(chips_frame, _('All'), kind='all',
-          on_click=lambda: (app._hist_show_success.set(True),
-                            app._hist_show_failed.set(True),
-                            app._history_refresh(app._hist_list_frame))
-          ).pack(side='left', padx=2)
-    _chip(chips_frame, '\u25cf  ' + _('Successful'), kind='ok',
-          on_click=lambda: (
-              app._hist_show_success.set(not app._hist_show_success.get()),
-              app._history_refresh(app._hist_list_frame))
-          ).pack(side='left', padx=2)
-    _chip(chips_frame, '\u25cf  ' + _('Failed'), kind='fail',
-          on_click=lambda: (
-              app._hist_show_failed.set(not app._hist_show_failed.get()),
-              app._history_refresh(app._hist_list_frame))
-          ).pack(side='left', padx=2)
-
-
-def _chip(parent, text, kind='all', on_click=None):
-    """A small clickable chip pill with an optional colored dot."""
-    bg = COLORS['bg_3']
-    if kind == 'ok':
-        fg = COLORS['success_hi']
-    elif kind == 'fail':
-        fg = COLORS['danger_hi']
-    else:
-        fg = COLORS['fg_2']
-    chip = tk.Label(parent, text=text,
-                    font=FONTS['meta'],
-                    bg=bg, fg=fg,
-                    padx=10, pady=4,
-                    cursor='hand2',
-                    highlightbackground=COLORS['border_3'],
-                    highlightthickness=1)
-    if on_click:
-        chip.bind('<Button-1>', lambda e: on_click())
-    return chip
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# Table — sticky header + scrollable body
-# ─────────────────────────────────────────────────────────────────────────
-# Column widths (proportional). Order matters — must match _history_refresh.
+# Column spec (key, label, fixed width or None = flexible). Order matters —
+# the header and every row share it.
 _COLS = [
     ('game',     _('Game'),     None),     # flex
     ('type',     _('Type'),     90),
@@ -302,54 +207,145 @@ _COLS = [
     ('status',   _('Status'),   120),
     ('actions',  '',            90),
 ]
+_FLEX = {'game': 5, 'output': 4}
+_RIGHT = ('size', 'duration')
+_CELL_PADX = 12
+_COLW = {'type': 96, 'size': 84, 'duration': 76, 'when': 120,
+         'status': 112, 'actions': 112}
+
+
+def _measure_columns():
+    """Size the fixed columns from the real fonts and (translated) strings
+    so no cell ever asks for more than its column — otherwise grid widens
+    that column in one row only and the columns stop lining up."""
+    try:
+        f_cap = tkfont.Font(font=FONTS['caption_strong'])
+        f_code = tkfont.Font(font=FONTS['code'])
+        f_body = tkfont.Font(font=FONTS['body'])
+    except Exception:
+        return
+    pad = 2 * px(_CELL_PADX)
+    head = {k: f_cap.measure(_(lbl)) if lbl else 0 for k, lbl, _w in _COLS}
+
+    def badge(text, icon=True):
+        return px(16) + f_cap.measure(text) + (px(16) if icon else 0)
+
+    _COLW['type'] = max(head['type'], max(badge(t, False) for t in
+                        ('exFAT', 'FFPKG', 'Backport'))) + pad
+    _COLW['size'] = max(head['size'], f_code.measure('999.9 GB')) + pad
+    _COLW['duration'] = max(head['duration'], f_code.measure('00:00')) + pad
+    _COLW['when'] = max(head['when'], f_body.measure(_('Yesterday %s') % '00:00'),
+                        f_body.measure('2026-10-22'),
+                        f_body.measure('59m ' + _('ago'))) + pad
+    _COLW['status'] = max(head['status'], badge(_('Successful')),
+                          badge(_('Failed'))) + pad
+    _COLW['actions'] = 3 * px(34) + px(8)
+
+
+_NARROW_PX = 1000          # below this table width the Duration column
+_FLEX_NARROW = {'game': 6, 'output': 3}   # folds away and Game gets more
+
+
+def _grid_columns(frame, narrow=False):
+    flex = _FLEX_NARROW if narrow else _FLEX
+    for i, (key, _label, _w) in enumerate(_COLS):
+        if key in flex:
+            frame.grid_columnconfigure(i, weight=flex[key], uniform='hflex',
+                                       minsize=0)
+        elif narrow and key == 'duration':
+            frame.grid_columnconfigure(i, weight=0, minsize=0)
+        else:
+            frame.grid_columnconfigure(i, weight=0, minsize=_COLW[key])
 
 
 def _build_table(body, app):
-    """Build the table header + scrollable list, return the list_frame
-    that `_history_refresh` populates."""
-    # Wrapper with hairline border
-    wrap = tk.Frame(body, bg=COLORS['bg_1'])
-    wrap.pack(fill='both', expand=True, padx=24, pady=(0, 14))
+    """Build the table card and return the list frame that
+    `_history_refresh` populates."""
+    app._hist_search_var = tk.StringVar()
+    app._hist_show_success = tk.BooleanVar(value=True)
+    app._hist_show_failed  = tk.BooleanVar(value=True)
+    app._hist_filter_var   = tk.StringVar(value='all')
 
-    # Header row (sticky-style — pinned above the scroll area)
-    head = tk.Frame(wrap, bg=COLORS['bg_3'],
-                    highlightbackground=COLORS['border_3'],
-                    highlightthickness=1)
-    head.pack(fill='x')
+    card = Card(body, padding=0)
+    card.pack(fill='both', expand=True, padx=px(24), pady=(0, px(24)))
 
-    head_inner = tk.Frame(head, bg=COLORS['bg_3'])
-    head_inner.pack(fill='x', padx=14, pady=10)
+    # ── Toolbar: search · status filter ········· count · since ──
+    bar = tk.Frame(card, bg=BG2)
+    bar.pack(fill='x', padx=px(16), pady=(px(12), px(12)))
 
-    # Configure grid columns to match the rows below
-    for i, (key, label, width) in enumerate(_COLS):
-        if width is None:
-            head_inner.grid_columnconfigure(i, weight=1, uniform='col')
+    search = XEntry(bar, textvariable=app._hist_search_var, width=34,
+                    placeholder=_('Search title, ID or path'))
+    search.pack(side='left')
+    _sync_placeholder(search, app._hist_search_var)
+
+    def _set_filter(v):
+        app._hist_show_success.set(v in ('all', 'ok'))
+        app._hist_show_failed.set(v in ('all', 'fail'))
+        app._history_refresh(app._hist_list_frame)
+
+    Segmented(bar, [('all', _('All')), ('ok', _('Successful')),
+                    ('fail', _('Failed'))],
+              variable=app._hist_filter_var, command=_set_filter
+              ).pack(side='left', padx=(px(12), 0))
+
+    tk.Label(bar, text=_compute_since_text(app), font=FONTS['caption'],
+             bg=BG2, fg=C['fg_4']).pack(side='right')
+    app._hist_count_lbl = tk.Label(bar, text='', font=FONTS['caption'],
+                                   bg=BG2, fg=C['fg_3'])
+    app._hist_count_lbl.pack(side='right', padx=(0, px(12)))
+
+    # Trigger filter on every keystroke
+    app._hist_search_var.trace_add('write',
+        lambda *a: app._history_refresh(app._hist_list_frame))
+
+    Divider(card, color=C['border_2']).pack(fill='x')
+
+    # ── Body grid: header row + canvas, scrollbar beside the canvas ──
+    tbl = tk.Frame(card, bg=BG2)
+    tbl.pack(fill='both', expand=True, pady=(0, px(4)))
+    tbl.grid_columnconfigure(0, weight=1)
+    tbl.grid_rowconfigure(2, weight=1)
+
+    _measure_columns()
+    app._hist_narrow = False
+    head = tk.Frame(tbl, bg=BG2)
+    head.grid(row=0, column=0, sticky='ew', padx=(px(4), 0))
+    _grid_columns(head)
+    head_labels = {}
+    for i, (key, label, _w) in enumerate(_COLS):
+        anchor = 'e' if key in _RIGHT else 'w'
+        lbl = tk.Label(head, text=_(label) if label else '',
+                       font=FONTS['caption_strong'], bg=BG2, fg=C['fg_2'],
+                       anchor=anchor, width=1)
+        lbl.grid(row=0, column=i, sticky='ew', padx=px(_CELL_PADX),
+                 pady=(px(8), px(8)))
+        head_labels[key] = lbl
+
+    def _on_resize(e):
+        narrow = e.width < px(_NARROW_PX)
+        if narrow == app._hist_narrow:
+            return
+        app._hist_narrow = narrow
+        _grid_columns(head, narrow)
+        if narrow:
+            head_labels['duration'].grid_remove()
         else:
-            head_inner.grid_columnconfigure(i, weight=0, minsize=width)
+            head_labels['duration'].grid()
+        try:
+            app._history_refresh(app._hist_list_frame)
+        except Exception:
+            pass
+    tbl.bind('<Configure>', _on_resize, add='+')
+    Divider(tbl, color=C['border_2']).grid(row=1, column=0, columnspan=2,
+                                            sticky='ew')
 
-    for i, (key, label, width) in enumerate(_COLS):
-        anchor = 'e' if key in ('size', 'duration') else 'w'
-        tk.Label(head_inner, text=label.upper(),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-                 anchor=anchor
-                 ).grid(row=0, column=i, sticky='ew',
-                        padx=(0 if i == 0 else 8, 0))
-
-    # Scrollable body
-    outer = tk.Frame(wrap, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1)
-    outer.pack(fill='both', expand=True)
-
-    canvas = tk.Canvas(outer, bg=COLORS['bg_2'], highlightthickness=0)
-    sb = XScrollbar(outer, orient='vertical', command=canvas.yview,
-                      bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
+    canvas = tk.Canvas(tbl, bg=BG2, highlightthickness=0, bd=0)
+    sb = XScrollbar(tbl, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=sb.set)
-    sb.pack(side='right', fill='y')
-    canvas.pack(side='left', fill='both', expand=True)
+    canvas.grid(row=2, column=0, sticky='nsew', padx=(px(4), 0))
+    sb.grid(row=2, column=1, sticky='ns', padx=(0, px(4)))
 
-    list_frame = tk.Frame(canvas, bg=COLORS['bg_2'])
+    list_frame = tk.Frame(canvas, bg=BG2)
     win = canvas.create_window((0, 0), window=list_frame, anchor='nw')
     list_frame.bind('<Configure>',
         lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
@@ -357,14 +353,266 @@ def _build_table(body, app):
         lambda e: canvas.itemconfig(win, width=e.width))
     attach_scroll(canvas)
 
+    card.raise_decorations()
+
     # Stash on app so refresh callback can find it
     app._hist_list_frame = list_frame
+    app._hist_canvas = canvas
     return list_frame
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Helpers for the row builder (called by main file's _history_refresh)
-# These are exposed so the rewritten callback can use them directly.
+# Row rendering — called by exfat_builder._history_refresh
+# ─────────────────────────────────────────────────────────────────────────
+def _elide(label, text, side='right'):
+    """Keep `text` in `label`, shortened with an ellipsis to the label's
+    current width (recomputed on resize). side='left' keeps the end."""
+    fnt = tkfont.Font(font=label.cget('font'))
+
+    def fit(_e=None):
+        try:
+            w = label.winfo_width() - 2
+        except Exception:
+            return
+        if w <= 4:
+            return
+        t = text
+        if fnt.measure(t) > w:
+            ell = '…'
+            lo, hi = 0, len(t)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                cand = (ell + t[-mid:]) if side == 'left' else (t[:mid] + ell)
+                if fnt.measure(cand) <= w:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            t = (ell + text[-lo:]) if side == 'left' else (text[:lo] + ell)
+        if label.cget('text') != t:
+            label.config(text=t)
+    label.config(text=text)
+    label.bind('<Configure>', fit, add='+')
+    return label
+
+
+def _sync_placeholder(field, var):
+    """Re-check a TextField placeholder after programmatic var.set():
+    the field's own trace runs before the entry has the new text."""
+    def _later(*_a):
+        try:
+            field.after_idle(lambda: field.winfo_exists() and
+                             field.event_generate('<FocusOut>'))
+        except Exception:
+            pass
+    try:
+        var.trace_add('write', _later)
+    except Exception:
+        pass
+    _later()
+
+
+def _size_text(out_path):
+    if out_path and os.path.isfile(out_path):
+        try:
+            sz = os.path.getsize(out_path)
+            if sz >= 1024**3:
+                return '%.1f GB' % (sz / 1024**3)
+            return '%d MB' % (sz // 1024**2)
+        except Exception:
+            return '—'
+    return '—'
+
+
+_KIND_LABEL = {'exfat': 'exFAT', 'ffpkg': 'FFPKG', 'backport': 'Backport',
+               'unknown': '—'}
+
+
+def render_history_rows(app, list_frame, history, filtered):
+    """Draw `filtered` (a list of history dicts) into `list_frame`.
+    `history` is the unfiltered list (used for the count and the empty
+    state wording)."""
+    for w in list_frame.winfo_children():
+        w.destroy()
+
+    _update_stats(app)
+    try:
+        if len(filtered) == len(history):
+            txt = (_('%d builds') % len(history)) if history else ''
+        else:
+            txt = _('%d of %d builds') % (len(filtered), len(history))
+        app._hist_count_lbl.config(text=txt)
+    except Exception:
+        pass
+
+    if not filtered:
+        try:
+            h = max(px(260), app._hist_canvas.winfo_height() - px(8))
+        except Exception:
+            h = px(300)
+        if not history:
+            es = EmptyState(list_frame, icon='history',
+                            title=_('No builds yet'),
+                            text=_('Finished builds appear here with their '
+                                   'output, size and result.'),
+                            action=(_('Go to Build'),
+                                    lambda: app._switch_tab('unibuild'),
+                                    'build'),
+                            bg=BG2)
+        else:
+            es = EmptyState(list_frame, icon='search',
+                            title=_('No matching builds'),
+                            text=_('Try a different search or status filter.'),
+                            bg=BG2)
+        es.configure(height=h)
+        es.pack(fill='x')
+        return
+
+    for i, entry in enumerate(filtered):
+        if i:
+            Divider(list_frame, color=C['border_1']).pack(fill='x',
+                                                          padx=px(8))
+        _history_row(app, list_frame, entry)
+
+
+def _history_row(app, list_frame, entry):
+    ok = entry.get('success', True)
+    kind = _detect_kind(entry)
+    folder = entry.get('folder', '')
+    out_path = entry.get('output', '')
+    output_dir = os.path.dirname(out_path) if out_path else folder
+    has_out_dir = bool(output_dir) and os.path.isdir(output_dir)
+
+    narrow = bool(getattr(app, '_hist_narrow', False))
+    row = tk.Frame(list_frame, bg=BG2)
+    row.pack(fill='x')
+    _grid_columns(row, narrow)
+    pad = px(_CELL_PADX)
+
+    # ── Game: cover thumb + title + ID · version ──
+    game = tk.Frame(row, bg=BG2)
+    game.grid(row=0, column=0, sticky='ew', padx=pad, pady=px(8))
+    tw, th = px(26), px(38)
+    from ui.icons import icon_image
+    ph = icon_image('game', 16, C['fg_4'], BG3)
+    thumb = tk.Label(game, image=ph, bg=BG3, bd=0, width=tw, height=th)
+    thumb.image = ph
+    thumb.pack(side='left', padx=(0, px(12)))
+    if folder and os.path.isdir(folder):
+        _load_thumb(app, folder, thumb, th)
+    txt = tk.Frame(game, bg=BG2)
+    txt.pack(side='left', fill='x', expand=True)
+    _elide(tk.Label(txt, font=FONTS['body_strong'], bg=BG2, fg=C['fg_0'],
+                    anchor='w', width=1),
+           entry.get('title', '') or _('(no title)')).pack(fill='x')
+    meta = ' · '.join(filter(None, [
+        entry.get('title_id', ''),
+        ('v' + entry['version']) if entry.get('version') else '',
+    ]))
+    if meta:
+        _elide(tk.Label(txt, font=FONTS['code'], bg=BG2, fg=C['fg_3'],
+                        anchor='w', width=1), meta).pack(fill='x')
+
+    # ── Type ──
+    tcell = tk.Frame(row, bg=BG2)
+    tcell.grid(row=0, column=1, sticky='w', padx=pad)
+    Badge(tcell, _KIND_LABEL.get(kind, '—'), 'outline', surface=BG2).pack(
+        anchor='w')
+
+    # ── Output path (elided from the left so the file name stays) ──
+    out_lbl = tk.Label(row, font=FONTS['code'], bg=BG2,
+                       fg=C['fg_3'] if out_path else C['fg_5'],
+                       anchor='w', width=1,
+                       cursor='hand2' if has_out_dir else '')
+    _elide(out_lbl, out_path or _('No output'), side='left')
+    out_lbl.grid(row=0, column=2, sticky='ew', padx=pad)
+    if out_path:
+        Tooltip(out_lbl, out_path)
+    if out_path and has_out_dir:
+        out_lbl.bind('<Button-1>', lambda e, p=output_dir: _open_dir(p))
+
+    # ── Size / duration (right-aligned figures) ──
+    tk.Label(row, text=_size_text(out_path), font=FONTS['code'], bg=BG2,
+             fg=C['fg_1'], anchor='e', width=1
+             ).grid(row=0, column=3, sticky='ew', padx=pad)
+    if not narrow:
+        tk.Label(row, text='—', font=FONTS['code'], bg=BG2, fg=C['fg_4'],
+                 anchor='e', width=1
+                 ).grid(row=0, column=4, sticky='ew', padx=pad)
+
+    # ── When ──
+    when = tk.Label(row, text=_humanize_when(entry.get('time', '')),
+                    font=FONTS['body'], bg=BG2, fg=C['fg_2'], anchor='w',
+                    width=1)
+    when.grid(row=0, column=5, sticky='ew', padx=pad)
+    if entry.get('time'):
+        Tooltip(when, entry.get('time'))
+
+    # ── Status ──
+    scell = tk.Frame(row, bg=BG2)
+    scell.grid(row=0, column=6, sticky='w', padx=pad)
+    if ok:
+        Badge(scell, _('Successful'), 'success', surface=BG2).pack(anchor='w')
+    else:
+        Badge(scell, _('Failed'), 'danger', surface=BG2).pack(anchor='w')
+
+    # ── Row actions ──
+    acts = tk.Frame(row, bg=BG2)
+    acts.grid(row=0, column=7, sticky='e', padx=(0, px(8)))
+    if folder and os.path.isdir(folder):
+        IconButton(acts, 'repeat',
+                   lambda f=folder: app._add_to_queue_from_path(f),
+                   tooltip=_('Re-queue'), size='sm', surface=BG2
+                   ).pack(side='right')
+    ttl_for_log = entry.get('title') or entry.get('title_id') or ''
+    IconButton(acts, 'file_text',
+               lambda t=ttl_for_log, o=output_dir: app._history_view_log(t, o),
+               tooltip=_('View log'), size='sm', surface=BG2
+               ).pack(side='right')
+    if has_out_dir:
+        IconButton(acts, 'folder_open', lambda p=output_dir: _open_dir(p),
+                   tooltip=_('Open folder'), size='sm', surface=BG2
+                   ).pack(side='right')
+        # Double-click anywhere on the row opens the build folder
+        for w in (row, game, txt, when, tcell, scell):
+            w.bind('<Double-Button-1>', lambda e, p=output_dir: _open_dir(p))
+
+
+def _open_dir(path):
+    try:
+        os.startfile(path)
+    except Exception:
+        pass
+
+
+def _load_thumb(app, folder, lbl, height):
+    """Load the game's cover into the row thumbnail on a worker thread."""
+    def work():
+        try:
+            from exfat_builder import _load_cover_image
+            cp = app._load_cover_art(folder)
+            if not cp:
+                return
+            img = _load_cover_image(cp, target=height)
+            if img is None:
+                return
+            from PIL import ImageTk
+
+            def apply():
+                try:
+                    if lbl.winfo_exists():
+                        photo = ImageTk.PhotoImage(img)
+                        lbl.config(image=photo)
+                        lbl.image = photo
+                except Exception:
+                    pass
+            app.after(0, apply)
+        except Exception:
+            pass
+    threading.Thread(target=work, daemon=True).start()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Helpers shared with the main file
 # ─────────────────────────────────────────────────────────────────────────
 def _humanize_when(time_str):
     """Convert 'YYYY-MM-DD HH:MM:SS' to '12m ago' / '2h ago' / 'Yesterday 22:14' / '3d ago'."""
@@ -447,50 +695,8 @@ def _export_csv(app):
         app_error(app, _('Export CSV'), str(e))
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Helpers for buttons
-# ─────────────────────────────────────────────────────────────────────────
-def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
-
-
-def _danger_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['danger_hi'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['danger_hi'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['danger'],
-                     highlightthickness=1,
-                     command=command)
-
-
 def _icon_btn(parent, glyph, tooltip='', command=None, accent=False, danger=False):
-    """Small square icon button — used in the table row Actions column."""
-    fg = (COLORS['accent'] if accent
-          else COLORS['danger_hi'] if danger
-          else COLORS['fg_4'])
-    btn = XButton(parent, text=glyph,
-                    font=(FONTS['body'][0], 11),
-                    bg=COLORS['bg_2'], fg=fg,
-                    activebackground=COLORS['bg_3'],
-                    activeforeground=fg,
-                    relief='flat', bd=0,
-                    padx=4, pady=2,
-                    width=2,
-                    cursor='hand2',
-                    command=command)
-    return btn
+    """Legacy helper (kept for any external caller): a small subtle icon
+    button. Glyphs map to icons via the Button component."""
+    return XButton(parent, text=glyph, command=command, variant='subtle',
+                   size='sm', tooltip=tooltip or None)

@@ -1,6 +1,13 @@
 """
 ui/dump_rename.py — Simplified Dump Rename tab.
 
+Layout (design system): page header; Source folder card (path, Browse,
+Scan) beside the Naming pattern card; then one preview table card —
+inline metrics, Game / Rename preview / Size / Status columns with
+confidence badges, and a pinned footer (status, progress, Rename).
+
+Original flow notes:
+
 Replaces the v3 inspector (3-pane list/detail/bulk + KPI cards + Move-to
 + candidates + sanitize toggles) with a streamlined single-screen flow:
 
@@ -38,13 +45,48 @@ the main file imports it at the top of the function.
 
 import os
 import tkinter as tk
+import tkinter.font as tkfont
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
+from ui.shared.widgets import (
+    PageHeader, Card, Badge, Button, Divider, EmptyState, IconLabel,
+    ProgressBar, Tooltip,
+)
 from tkinter import ttk, filedialog
 
-from tkinter_theme import COLORS, FONTS
-from ui.shared.empty_state import EmptyState
+from tkinter_theme import COLORS, FONTS, px
+from ui.icons import icon_image
+from ui.shared.scroll import attach_scroll
+from ui.tab_history import _elide, _sync_placeholder
 
 from exfat_builder import _, _load_cover_image
+
+BG1, BG2, BG3 = COLORS['bg_1'], COLORS['bg_2'], COLORS['bg_3']
+
+
+class _ScanBar(ProgressBar):
+    """Indeterminate scan bar that is only visible while it runs. The scan
+    worker drives it with .configure(mode=…) / .start() / .stop()."""
+
+    def __init__(self, master=None, pack_kw=None, **kw):
+        super().__init__(master, **kw)
+        self._pack_kw = pack_kw or {}
+
+    def start(self, interval=None):
+        try:
+            self.pack(**self._pack_kw)
+        except Exception:
+            pass
+        return super().start(interval) if interval else super().start()
+
+    def stop(self):
+        res = super().stop()
+        try:
+            self.pack_forget()
+        except Exception:
+            pass
+        return res
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -169,80 +211,54 @@ class DumpRenameTab:
     # UI
     # ─────────────────────────────────────────────────────────────────
     def _build(self, parent):
-        # Page head
-        head = tk.Frame(parent, bg=COLORS['bg_1'])
-        head.pack(fill='x', padx=24, pady=(14, 6))
-        tk.Label(head, text='\u270f  ' + _('Dump Rename'),
-                 font=(FONTS['body_strong'][0], 14),
-                 bg=COLORS['bg_1'], fg=COLORS['fg_0']
-                 ).pack(side='left')
-        tk.Label(head,
-                 text='\u2014  ' + _('Rename PS5 dump folders from their '
-                                     'PPSA metadata'),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_4']
-                 ).pack(side='left', padx=(12, 0), pady=(2, 0))
+        # Page header
+        head = PageHeader(parent, _('Dump Rename'),
+                          _('Rename PS5 dump folders from their '
+                            'PPSA metadata'))
+        head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
-        # ── Stats strip (v3.6.0 pass) ──
-        self._build_kpi_strip(parent)
+        # ── Source folder + naming pattern side by side ──
+        top = tk.Frame(parent, bg=BG1)
+        top.pack(fill='x', padx=px(24), pady=(0, px(16)))
+        top.grid_columnconfigure(0, weight=1, uniform='drtop')
+        top.grid_columnconfigure(1, weight=1, uniform='drtop')
+        self._build_source_card(top)
+        self._build_pattern_card(top)
 
-        # ── Source folder card ──
-        self._build_source_card(parent)
-
-        # ── Naming pattern card ──
-        self._build_pattern_card(parent)
-
-        # ── Status + progressbar + Rename button (footer) ──
-        # v3.6.2: built BEFORE the list card and packed side='bottom'.
-        # Packed last (the old order), pack clipped the footer first
-        # whenever the fixed cards + list outgrew the window height —
-        # the Rename button fell off-screen and no amount of scrolling
-        # could reach it (it isn't inside the list's canvas). Packing
-        # it first pins it to the bottom; the list then expands into
-        # the remaining space and shrinks instead of eating the button.
-        self._build_footer(parent)
-
-        # ── Found dumps list ──
+        # ── Preview table card (footer with the Rename action pinned) ──
         self._build_list_card(parent)
 
     def _build_kpi_strip(self, parent):
-        """Four stat cards: Dumps Found / Matched / Unknown / Already
+        """Four inline metrics: Dumps Found / Matched / Unknown / Already
         Named. Fed by _refresh_kpi from the scan model — presentation
         only, derived from data the scan already produces."""
-        strip = tk.Frame(parent, bg=COLORS['bg_1'])
-        strip.pack(fill='x', padx=24, pady=(6, 4))
-        for i in range(4):
-            strip.grid_columnconfigure(i, weight=1, uniform='drkpi')
+        strip = tk.Frame(parent, bg=BG2)
+        strip.pack(side='left', padx=(px(16), 0))
 
-        def _cell(col, caption, sub, value_fg):
-            cell = tk.Frame(strip, bg=COLORS['bg_2'],
-                            highlightbackground=COLORS['border_2'],
-                            highlightthickness=1)
-            cell.grid(row=0, column=col, sticky='ew',
-                      padx=(0 if col == 0 else 10, 0))
-            tk.Label(cell, text=caption,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                     ).pack(anchor='w', padx=14, pady=(10, 0))
-            v = tk.Label(cell, text='0',
-                         font=(FONTS['body_strong'][0], 18),
-                         bg=COLORS['bg_2'], fg=value_fg)
-            v.pack(anchor='w', padx=14, pady=(2, 0))
-            tk.Label(cell, text=sub,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                     ).pack(anchor='w', padx=14, pady=(0, 10))
+        def _cell(caption, sub, first=False):
+            cell = tk.Frame(strip, bg=BG2)
+            cell.pack(side='left', padx=(0 if first else px(16), 0))
+            v = tk.Label(cell, text='0', font=FONTS['body_strong'], bg=BG2,
+                         fg=COLORS['fg_0'])
+            v.pack(side='left')
+            lbl = tk.Label(cell, text=caption, font=FONTS['caption'], bg=BG2,
+                           fg=COLORS['fg_3'])
+            lbl.pack(side='left', padx=(px(4), 0))
+            Tooltip(lbl, sub)
+            Tooltip(v, sub)
             return v
 
-        self._kpi_found   = _cell(0, _('Dumps Found').upper(),
-                                  _('folders scanned'), COLORS['fg_0'])
-        self._kpi_matched = _cell(1, _('Matched').upper(),
-                                  _('will be renamed'),
-                                  COLORS['success_hi'])
-        self._kpi_unknown = _cell(2, _('Unknown').upper(),
-                                  _('no match found'), COLORS['warn_hi'])
-        self._kpi_already = _cell(3, _('Already Named').upper(),
-                                  _('already clean'), COLORS['fg_4'])
+        self._kpi_found   = _cell(_('Dumps Found'), _('folders scanned'),
+                                  first=True)
+        self._kpi_matched = _cell(_('Matched'), _('will be renamed'))
+        self._kpi_unknown = _cell(_('Unknown'), _('no match found'))
+        self._kpi_already = _cell(_('Already Named'), _('already clean'))
+
+    @staticmethod
+    def _ppsa(item, m):
+        """Title ID of a dump: the scan model stores it as `title_id`."""
+        m = m or {}
+        return m.get('ppsa') or m.get('title_id') or ''
 
     @staticmethod
     def _classify(item, m):
@@ -251,7 +267,7 @@ class DumpRenameTab:
             full, name_var, _c, _s, _st = item
         except (ValueError, TypeError):
             return 'unknown'
-        ppsa = (m or {}).get('ppsa', '') or ''
+        ppsa = DumpRenameTab._ppsa(item, m)
         if not ppsa:
             return 'unknown'
         orig = (m or {}).get('orig_name') or os.path.basename(full)
@@ -260,129 +276,161 @@ class DumpRenameTab:
             return 'already'
         return 'matched'
 
+    @staticmethod
+    def _confidence(m):
+        """green / yellow / red. Uses the model's own value when present,
+        else derives it from what the scan found (ID + title = green,
+        ID only = yellow, nothing = red)."""
+        m = m or {}
+        conf = m.get('confidence')
+        if conf in ('green', 'yellow', 'red'):
+            return conf
+        if m.get('ppsa') or m.get('title_id'):
+            return 'green' if m.get('title') else 'yellow'
+        return 'red'
+
     def _build_source_card(self, parent):
-        card = tk.Frame(parent, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1)
-        card.pack(fill='x', padx=24, pady=(8, 8))
+        card = Card(parent, title=_('Source folder'),
+                    subtitle=_('Folder containing your PS5 dumps. Each dump is '
+                               'a sub-folder. The original folders will be '
+                               'renamed in place.'))
+        card.grid(row=0, column=0, sticky='nsew', padx=(0, px(8)))
 
-        inner = tk.Frame(card, bg=COLORS['bg_2'])
-        inner.pack(fill='x', padx=14, pady=10)
+        row = tk.Frame(card.body, bg=BG2)
+        row.pack(fill='x', side='bottom')
 
-        tk.Label(inner, text=_('Source folder'),
-                 font=(FONTS['body_strong'][0], 10),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_1']
-                 ).pack(anchor='w')
-        tk.Label(inner,
-                 text=_('Folder containing your PS5 dumps. Each dump is '
-                        'a sub-folder. The original folders will be '
-                        'renamed in place.'),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                 wraplength=720, justify='left'
-                 ).pack(anchor='w', pady=(2, 8))
-
-        row = tk.Frame(inner, bg=COLORS['bg_2'])
-        row.pack(fill='x')
-
-        XEntry(row, textvariable=self.app._dumps_src_var,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_3'], fg=COLORS['fg_0'],
-                 insertbackground=COLORS['fg_0'],
-                 relief='flat', bd=0,
-                 highlightbackground=COLORS['border_2'],
-                 highlightthickness=1
-                 ).pack(side='left', fill='x', expand=True, ipady=4)
-
-        _ghost_btn(row, '\U0001f4c1  ' + _('Browse'),
-                   command=self._browse_src
-                   ).pack(side='left', padx=(8, 0))
-
-        _accent_btn(row, '\U0001f50d  ' + _('Scan'),
-                    command=self._do_scan
-                    ).pack(side='left', padx=(6, 0))
+        src = XEntry(row, textvariable=self.app._dumps_src_var, mono=True,
+                     placeholder=_('Choose folder containing PS5 dumps'))
+        src.pack(side='left', fill='x', expand=True)
+        _sync_placeholder(src, self.app._dumps_src_var)
+        Button(row, text=_('Browse') + '…', icon='folder_open',
+               command=self._browse_src, surface=BG2
+               ).pack(side='left', padx=(px(6), 0))
+        Button(row, text=_('Scan'), icon='search', command=self._do_scan,
+               surface=BG2).pack(side='left', padx=(px(6), 0))
 
     def _build_pattern_card(self, parent):
-        card = tk.Frame(parent, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1)
-        card.pack(fill='x', padx=24, pady=(0, 8))
+        card = Card(parent, title=_('Naming pattern'))
+        card.grid(row=0, column=1, sticky='nsew', padx=(px(8), 0))
 
-        inner = tk.Frame(card, bg=COLORS['bg_2'])
-        inner.pack(fill='x', padx=14, pady=10)
+        grid = tk.Frame(card.body, bg=BG2)
+        grid.pack(fill='x')
+        grid.grid_columnconfigure(1, weight=1)
+        for r, (key, label, example) in enumerate(_PATTERNS):
+            rb = XRadio(grid, text=_(label), value=key,
+                        variable=self.app._dumps_naming_preset_var)
+            rb.grid(row=r, column=0, sticky='w', pady=px(1))
+            tk.Label(grid, text=example, font=FONTS['code'], bg=BG2,
+                     fg=COLORS['fg_4'], anchor='w'
+                     ).grid(row=r, column=1, sticky='w', padx=(px(16), 0))
 
-        tk.Label(inner, text=_('Naming pattern'),
-                 font=(FONTS['body_strong'][0], 10),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_1']
-                 ).pack(anchor='w', pady=(0, 6))
+    # Table columns: (key, header, fixed width or None = flexible)
+    _COLS = [('chk', '', 40), ('dump', 'Dump', None),
+             ('rename', 'Rename preview', None), ('size', 'Size', 96),
+             ('status', 'Status', 150)]
+    _FLEX = {'dump': 4, 'rename': 5}
 
-        for key, label, example in _PATTERNS:
-            row = tk.Frame(inner, bg=COLORS['bg_2'])
-            row.pack(fill='x', pady=2)
-            rb = XRadio(row, text=' ' + _(label),
-                                value=key,
-                                variable=self.app._dumps_naming_preset_var,
-                                font=FONTS['body'],
-                                bg=COLORS['bg_2'],
-                                fg=COLORS['fg_1'],
-                                activebackground=COLORS['bg_2'],
-                                activeforeground=COLORS['fg_0'],
-                                selectcolor=COLORS['bg_3'],
-                                relief='flat', bd=0,
-                                highlightthickness=0,
-                                anchor='w')
-            rb.pack(side='left')
-            tk.Label(row, text='  e.g.  ' + example,
-                     font=FONTS['mono_sm'],
-                     bg=COLORS['bg_2'], fg=COLORS['fg_4']
-                     ).pack(side='left', padx=(12, 0))
+    def _grid_cols(self, frame):
+        for i, (key, _l, w) in enumerate(self._COLS):
+            if w is None:
+                frame.grid_columnconfigure(i, weight=self._FLEX[key],
+                                           uniform='drflex', minsize=0)
+            else:
+                frame.grid_columnconfigure(i, weight=0,
+                                           minsize=self._colw.get(key, px(w)))
+
+    def _measure_cols(self):
+        """Fixed column widths from the real fonts/strings, so a wide
+        badge in one row can never shift that row's columns."""
+        self._colw = {}
+        try:
+            f_cap = tkfont.Font(font=FONTS['caption_strong'])
+            f_code = tkfont.Font(font=FONTS['code'])
+        except Exception:
+            return
+        pad = 2 * px(12)
+        badge = max(f_cap.measure(t) for t in
+                    (_('Ready'), _('Needs review'), _('Cannot rename')))
+        self._colw['status'] = max(px(150), badge + px(32) + pad)
+        self._colw['size'] = max(px(96), f_code.measure('999.99 GB') + pad)
+        self._colw['chk'] = px(40)
 
     def _build_list_card(self, parent):
-        card = tk.Frame(parent, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1)
-        card.pack(fill='both', expand=True, padx=24, pady=(0, 8))
+        card = Card(parent, padding=0)
+        card.pack(fill='both', expand=True, padx=px(24), pady=(0, px(24)))
+        self._list_card = card
 
-        inner = tk.Frame(card, bg=COLORS['bg_2'])
-        inner.pack(fill='both', expand=True, padx=14, pady=10)
+        head = tk.Frame(card, bg=BG2)
+        head.pack(fill='x', padx=px(16), pady=(px(12), px(12)))
 
-        head = tk.Frame(inner, bg=COLORS['bg_2'])
-        head.pack(fill='x')
+        tk.Label(head, text=_('Found dumps'), font=FONTS['subtitle'],
+                 bg=BG2, fg=COLORS['fg_0']).pack(side='left')
 
-        tk.Label(head, text=_('Found dumps'),
-                 font=(FONTS['body_strong'][0], 10),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_1']
+        self._count_lbl = tk.Label(head, text='', font=FONTS['caption'],
+                                   bg=BG2, fg=COLORS['fg_3'])
+        self._count_lbl.pack(side='left', padx=(px(8), 0))
+
+        Button(head, text=_('Select all'), command=self._select_all,
+               size='sm', surface=BG2).pack(side='right')
+        Button(head, text=_('Select none'), command=self._select_none,
+               size='sm', surface=BG2).pack(side='right', padx=(0, px(6)))
+
+        # Inline metrics (Found / Matched / Unknown / Already named)
+        self._build_kpi_strip(head)
+
+        # ── Footer: status · progress ······ Rename selected ──
+        # Packed side='bottom' BEFORE the list so the Rename button is
+        # always visible: the list shrinks instead of pushing it away.
+        foot = tk.Frame(card, bg=BG2)
+        foot.pack(side='bottom', fill='x', padx=px(16), pady=(px(12), px(12)))
+        Divider(card, color=COLORS['border_2']).pack(side='bottom', fill='x')
+
+        self._rename_btn = Button(foot, text=_('Rename selected'),
+                                  icon='rename', variant='primary',
+                                  command=self._do_rename, surface=BG2)
+        self._rename_btn.pack(side='right')
+
+        tk.Label(foot, textvariable=self.app._dumps_status_var,
+                 font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'],
+                 anchor='w', justify='left'
                  ).pack(side='left')
 
-        self._count_lbl = tk.Label(head, text='',
-                                    font=FONTS['mono_sm'],
-                                    bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-        self._count_lbl.pack(side='left', padx=(8, 0))
+        # Progressbar — the scan worker starts/stops it (indeterminate)
+        self.app._dumps_pbar = _ScanBar(
+            foot, mode='indeterminate', length=px(160), surface=BG2,
+            pack_kw=dict(side='left', padx=(px(16), 0)))
 
-        _ghost_btn(head, _('Select all'),
-                   command=self._select_all
-                   ).pack(side='right')
-        _ghost_btn(head, _('Select none'),
-                   command=self._select_none
-                   ).pack(side='right', padx=(0, 6))
+        Divider(card, color=COLORS['border_2']).pack(fill='x')
 
-        # Scrollable list of rows (Canvas + inner Frame)
-        list_wrap = tk.Frame(inner, bg=COLORS['bg_3'],
-                             highlightbackground=COLORS['border_2'],
-                             highlightthickness=1)
-        list_wrap.pack(fill='both', expand=True, pady=(8, 0))
+        # ── Column header + scrollable rows ──
+        self._measure_cols()
+        tbl = tk.Frame(card, bg=BG2)
+        tbl.pack(fill='both', expand=True)
+        tbl.grid_columnconfigure(0, weight=1)
+        tbl.grid_rowconfigure(2, weight=1)
 
-        self._canvas = tk.Canvas(list_wrap, bg=COLORS['bg_3'],
-                                  highlightthickness=0, bd=0,
-                                  height=160)  # request small; expand grows it
-        sb = ttk.Scrollbar(list_wrap, orient='vertical',
-                           command=self._canvas.yview)
+        colhead = tk.Frame(tbl, bg=BG2)
+        colhead.grid(row=0, column=0, sticky='ew', padx=(px(4), 0))
+        self._grid_cols(colhead)
+        hdr_txt = {'dump': _('Game'), 'rename': 'Rename preview',
+                   'size': _('Size'), 'status': _('Status')}
+        for i, (key, _l, _w) in enumerate(self._COLS):
+            tk.Label(colhead, text=hdr_txt.get(key, ''),
+                     font=FONTS['caption_strong'], bg=BG2, fg=COLORS['fg_2'],
+                     anchor='e' if key == 'size' else 'w', width=1
+                     ).grid(row=0, column=i, sticky='ew', padx=px(12),
+                            pady=px(8))
+        Divider(tbl, color=COLORS['border_2']).grid(row=1, column=0,
+                                                     columnspan=2, sticky='ew')
+
+        self._canvas = tk.Canvas(tbl, bg=BG2, highlightthickness=0, bd=0,
+                                 height=px(120))  # request small; expand grows it
+        sb = XScrollbar(tbl, orient='vertical', command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=sb.set)
+        self._canvas.grid(row=2, column=0, sticky='nsew', padx=(px(4), 0))
+        sb.grid(row=2, column=1, sticky='ns', padx=(0, px(4)))
 
-        sb.pack(side='right', fill='y')
-        self._canvas.pack(side='left', fill='both', expand=True)
-
-        self._list_inner = tk.Frame(self._canvas, bg=COLORS['bg_3'])
+        self._list_inner = tk.Frame(self._canvas, bg=BG2)
         self._list_window = self._canvas.create_window(
             (0, 0), window=self._list_inner, anchor='nw')
 
@@ -393,51 +441,30 @@ class DumpRenameTab:
         def _on_canvas_config(event):
             self._canvas.itemconfig(self._list_window, width=event.width)
         self._canvas.bind('<Configure>', _on_canvas_config)
+        attach_scroll(self._canvas)
 
-        # Mouse-wheel scroll over the list
-        def _on_wheel(event):
-            self._canvas.yview_scroll(-int(event.delta / 60), 'units')
-        self._canvas.bind('<Enter>',
-                          lambda e: self._canvas.bind_all(
-                              '<MouseWheel>', _on_wheel))
-        self._canvas.bind('<Leave>',
-                          lambda e: self._canvas.unbind_all('<MouseWheel>'))
+        card.raise_decorations()
 
         # Empty-state placeholder
-        self._empty_label = tk.Frame(self._list_inner, bg=COLORS['bg_3'],
-                                     height=260)
-        self._empty_label.pack(fill='x')
-        self._empty_label.pack_propagate(False)
-        EmptyState(self._empty_label, icon='\U0001f4e6',
-                   title=_('No dumps scanned yet'),
-                   description=_('Pick a source folder and click Scan.'),
-                   bg='bg_3').pack(fill='both', expand=True)
+        self._empty_label = self._empty_state()
+
+    def _empty_state(self):
+        try:
+            h = max(px(200), self._canvas.winfo_height() - px(8))
+        except Exception:
+            h = px(240)
+        es = EmptyState(self._list_inner, icon='folders',
+                        title=_('No dumps scanned yet'),
+                        text=_('Pick a source folder and click Scan.'),
+                        bg=BG2)
+        es.configure(height=h)
+        es.pack(fill='x')
+        return es
 
     def _build_footer(self, parent):
-        foot = tk.Frame(parent, bg=COLORS['bg_1'])
-        # side='bottom' + packed before the list card = always visible
-        foot.pack(side='bottom', fill='x', padx=24, pady=(0, 14))
-
-        # Status line
-        status_row = tk.Frame(foot, bg=COLORS['bg_1'])
-        status_row.pack(fill='x', pady=(0, 6))
-
-        tk.Label(status_row, textvariable=self.app._dumps_status_var,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_3'],
-                 anchor='w', justify='left'
-                 ).pack(side='left', fill='x', expand=True)
-
-        # Progressbar — used by the rename worker to report bytes copied
-        self.app._dumps_pbar = ttk.Progressbar(
-            foot, mode='indeterminate', length=200)
-        self.app._dumps_pbar.pack(fill='x', pady=(0, 8))
-
-        # Big rename button — label tracks the live selection count
-        self._rename_btn = _accent_btn(
-            foot, '\u270f  ' + _('Rename selected'),
-            command=self._do_rename, big=True)
-        self._rename_btn.pack(fill='x')
+        """Kept for compatibility — the footer now lives inside the list
+        card (see _build_list_card)."""
+        return None
 
     # ─────────────────────────────────────────────────────────────────
     # Actions
@@ -520,14 +547,7 @@ class DumpRenameTab:
         model = list(self.app._dumps_model)
 
         if not items:
-            holder = tk.Frame(self._list_inner, bg=COLORS['bg_3'],
-                              height=260)
-            holder.pack(fill='x')
-            holder.pack_propagate(False)
-            EmptyState(holder, icon='\U0001f4e6',
-                       title=_('No dumps scanned yet'),
-                       description=_('Pick a source folder and click Scan.'),
-                       bg='bg_3').pack(fill='both', expand=True)
+            self._empty_state()
             self._refresh_kpi()
             return
 
@@ -537,194 +557,140 @@ class DumpRenameTab:
             except (ValueError, TypeError):
                 continue
             m = model[i] if i < len(model) else {}
+            if i:
+                Divider(self._list_inner, color=COLORS['border_1']).pack(
+                    fill='x', padx=px(8))
             self._row(i, full, name_var, chk_var, size_var, status_var, m)
 
         self._refresh_kpi()
 
     def _row(self, idx, full, name_var, chk_var, size_var, status_var, m):
         orig_name  = m.get('orig_name') or os.path.basename(full)
-        proposed   = name_var.get() or _('(no PPSA found)')
-        confidence = m.get('confidence', 'yellow')
+        proposed   = name_var.get() or ''
+        confidence = self._confidence(m)
 
-        # Pull components for the rich title display
-        ppsa     = m.get('ppsa', '') or ''
+        ppsa     = self._ppsa(None, m)
         title    = m.get('title', '') or ''
         version  = m.get('version', '') or ''
 
-        # Confidence pip colour (matches the legacy mapping)
-        pip_color = {'green':  COLORS.get('ok',   '#4caf50'),
-                     'yellow': COLORS.get('warn', '#f0a93a'),
-                     'red':    COLORS.get('err',  '#e0584b')
-                     }.get(confidence, COLORS.get('warn', '#f0a93a'))
-
-        # ── Row container ──
-        row = tk.Frame(self._list_inner, bg=COLORS['bg_3'])
-        row.pack(fill='x', padx=8, pady=4)
-
-        # Inner panel — gives each row its own card-like surface so
-        # padding around the cover/text doesn't bleed into the next row.
-        card = tk.Frame(row, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        card.pack(fill='x')
-
-        inner = tk.Frame(card, bg=COLORS['bg_2'])
-        inner.pack(fill='x', padx=10, pady=10)
+        row = tk.Frame(self._list_inner, bg=BG2)
+        row.pack(fill='x')
+        self._grid_cols(row)
+        pad = px(12)
 
         # ── Checkbox ──
-        cb = XCheck(inner, variable=chk_var,
-                            bg=COLORS['bg_2'],
-                            activebackground=COLORS['bg_2'],
-                            selectcolor=COLORS['bg_3'],
-                            relief='flat', bd=0,
-                            highlightthickness=0,
-                            command=self._refresh_count)
-        cb.pack(side='left', padx=(2, 10), anchor='n', pady=(36, 0))
+        cb = XCheck(row, variable=chk_var, command=self._refresh_count)
+        cb.grid(row=0, column=0, sticky='w', padx=(pad, 0))
 
-        # ── Cover image (96 × 128) ──
-        # Reserve the slot even if no cover loads, so all rows align.
-        cover_lbl = tk.Label(inner,
-                              bg=COLORS['bg_3'],
-                              fg=COLORS['fg_4'],
-                              text='\U0001f3ae',  # placeholder gamepad
-                              font=(FONTS['body'][0], 22),
-                              width=8,            # in chars; ~96 px
-                              height=6,           # in lines; ~128 px
-                              relief='flat', bd=0,
-                              highlightbackground=COLORS['border_3'],
-                              highlightthickness=1)
-        cover_lbl.pack(side='left', padx=(0, 14))
-
-        # If we already cached a PhotoImage for this folder, use it
-        # immediately. Otherwise kick off a background load.
+        # ── Dump: cover thumb + title + PPSA · version ──
+        dump = tk.Frame(row, bg=BG2)
+        dump.grid(row=0, column=1, sticky='ew', padx=pad, pady=px(8))
+        tw, th = px(26), px(38)
+        ph = icon_image('game', 16, COLORS['fg_4'], BG3)
+        cover_lbl = tk.Label(dump, image=ph, bg=BG3, bd=0, width=tw,
+                             height=th)
+        cover_lbl.image = ph
+        cover_lbl.pack(side='left', padx=(0, px(12)))
         cached = self._cover_cache.get(full)
         if cached is not None:
             try:
-                cover_lbl.config(image=cached, text='', width=96, height=128)
+                cover_lbl.config(image=cached)
                 cover_lbl.image = cached
             except Exception:
                 pass
         else:
             self._async_load_cover(full, cover_lbl)
 
-        # ── Centre column: title + ppsa/version + old name ──
-        text_wrap = tk.Frame(inner, bg=COLORS['bg_2'])
-        text_wrap.pack(side='left', fill='x', expand=True, anchor='n')
-
-        # Title — biggest text, top of the card
-        title_text = title if title else _('(unknown title)')
-        tk.Label(text_wrap, text=title_text,
-                 font=(FONTS['body_strong'][0], 11),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_0'],
-                 anchor='w', justify='left'
-                 ).pack(anchor='w', fill='x')
-
-        # PPSA + version pill row
-        meta_row = tk.Frame(text_wrap, bg=COLORS['bg_2'])
-        meta_row.pack(anchor='w', fill='x', pady=(4, 0))
-
+        txt = tk.Frame(dump, bg=BG2)
+        txt.pack(side='left', fill='x', expand=True)
+        _elide(tk.Label(txt, font=FONTS['body_strong'], bg=BG2,
+                        fg=COLORS['fg_0'] if title else COLORS['fg_3'],
+                        anchor='w', width=1),
+               title if title else _('(unknown title)')).pack(fill='x')
         if ppsa:
-            tk.Label(meta_row, text=' ' + ppsa + ' ',
-                     font=FONTS['mono_sm'],
-                     bg=COLORS['bg_3'], fg=COLORS['fg_1'],
-                     padx=6, pady=1
-                     ).pack(side='left')
+            meta = ppsa + (('  ·  v' + version) if version else '')
+            _elide(tk.Label(txt, font=FONTS['code'], bg=BG2,
+                            fg=COLORS['fg_3'], anchor='w', width=1),
+                   meta).pack(fill='x')
         else:
-            tk.Label(meta_row, text=_('No PPSA detected'),
-                     font=FONTS['mono_sm'],
-                     bg=COLORS['bg_2'], fg=COLORS['fg_4']
-                     ).pack(side='left')
+            tk.Label(txt, text=_('No PPSA detected'), font=FONTS['caption'],
+                     bg=BG2, fg=COLORS['fg_4'], anchor='w', width=1
+                     ).pack(fill='x')
 
-        if version:
-            tk.Label(meta_row, text='  v' + version,
-                     font=FONTS['mono_sm'],
-                     bg=COLORS['bg_2'], fg=COLORS['fg_3']
-                     ).pack(side='left', padx=(8, 0))
+        # ── Rename preview: current name → proposed name ──
+        ren = tk.Frame(row, bg=BG2)
+        ren.grid(row=0, column=2, sticky='ew', padx=pad)
+        ren.grid_columnconfigure(1, weight=1)
+        IconLabel(ren, 'folder', 12, COLORS['fg_5'], BG2).grid(
+            row=0, column=0, sticky='w', padx=(0, px(8)))
+        old_l = tk.Label(ren, font=FONTS['code'], bg=BG2, fg=COLORS['fg_4'],
+                         anchor='w', width=1)
+        old_l.grid(row=0, column=1, sticky='ew')
+        _elide(old_l, orig_name, side='left')
+        Tooltip(old_l, full)
 
-        # Confidence pip + label
-        conf_label = {'green':  _('Ready'),
-                      'yellow': _('Needs review'),
-                      'red':    _('Cannot rename')
-                      }.get(confidence, _('Needs review'))
-        tk.Label(meta_row, text='\u25cf  ' + conf_label,
-                 fg=pip_color, bg=COLORS['bg_2'],
-                 font=FONTS['mono_sm']
-                 ).pack(side='left', padx=(12, 0))
+        is_noop = bool(proposed) and (orig_name == proposed)
+        IconLabel(ren, 'arrow_right', 12,
+                  COLORS['fg_3'] if proposed and not is_noop else COLORS['fg_5'],
+                  BG2).grid(row=1, column=0, sticky='w', padx=(0, px(8)),
+                            pady=(px(2), 0))
+        if not proposed:
+            new_text, new_fg, new_font = (_('(no PPSA found)'), COLORS['fg_5'],
+                                          FONTS['caption'])
+        elif is_noop:
+            new_text, new_fg, new_font = (_('(unchanged)'), COLORS['fg_4'],
+                                          FONTS['caption'])
+        else:
+            new_text, new_fg, new_font = proposed, COLORS['fg_0'], FONTS['code']
+        new_l = tk.Label(ren, font=new_font, bg=BG2, fg=new_fg, anchor='w',
+                         width=1)
+        new_l.grid(row=1, column=1, sticky='ew', pady=(px(2), 0))
+        _elide(new_l, new_text)
+        if proposed and not is_noop:
+            Tooltip(new_l, proposed)
 
-        # ── Old → New names (always shown, per user preference) ──
-        names_wrap = tk.Frame(text_wrap, bg=COLORS['bg_2'])
-        names_wrap.pack(anchor='w', fill='x', pady=(10, 0))
+        # ── Size ──
+        tk.Label(row, textvariable=size_var, font=FONTS['code'], bg=BG2,
+                 fg=COLORS['fg_1'], anchor='e', width=1
+                 ).grid(row=0, column=3, sticky='ew', padx=pad)
 
-        # Old name row
-        old_row = tk.Frame(names_wrap, bg=COLORS['bg_2'])
-        old_row.pack(anchor='w', fill='x')
-        tk.Label(old_row, text=_('Old:'),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                 width=5, anchor='w'
-                 ).pack(side='left')
-        tk.Label(old_row, text=orig_name,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-                 anchor='w', justify='left'
-                 ).pack(side='left', fill='x', expand=True)
-
-        # New name row
-        new_row = tk.Frame(names_wrap, bg=COLORS['bg_2'])
-        new_row.pack(anchor='w', fill='x', pady=(2, 0))
-        tk.Label(new_row, text=_('New:'),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                 width=5, anchor='w'
-                 ).pack(side='left')
-
-        # Highlight when the rename is a no-op (already matches)
-        is_noop = (orig_name == proposed)
-        new_color = COLORS.get('fg_4', '#888') if is_noop \
-            else COLORS.get('accent', '#5b8cff')
-        tk.Label(new_row, text=proposed,
-                 font=(FONTS['body_strong'][0], 10),
-                 bg=COLORS['bg_2'], fg=new_color,
-                 anchor='w', justify='left'
-                 ).pack(side='left', fill='x', expand=True)
-
-        if is_noop:
-            tk.Label(new_row, text='  ' + _('(unchanged)'),
-                     font=FONTS['mono_sm'],
-                     bg=COLORS['bg_2'], fg=COLORS['fg_4']
-                     ).pack(side='left')
-
-        # ── Right column: outcome chip + size + status ──
-        right = tk.Frame(inner, bg=COLORS['bg_2'])
-        right.pack(side='right', padx=(8, 4), anchor='n', pady=(2, 0))
-
+        # ── Status: confidence badge + live row status ──
+        st = tk.Frame(row, bg=BG2)
+        st.grid(row=0, column=4, sticky='w', padx=pad)
+        conf_label, tone = {'green':  (_('Ready'), 'success'),
+                            'yellow': (_('Needs review'), 'warn'),
+                            'red':    (_('Cannot rename'), 'danger')
+                            }.get(confidence, (_('Needs review'), 'warn'))
+        Badge(st, conf_label, tone, surface=BG2).pack(anchor='w')
         kind = self._classify(
             (full, name_var, chk_var, size_var, status_var), m)
-        chip_map = {
-            'matched': ('\u2713 ' + _('Will rename'),
-                        COLORS['success_bg'], COLORS['success_hi']),
-            'unknown': ('\u26a0 ' + _('No match'),
-                        COLORS['warn_bg'], COLORS['warn_hi']),
-            'already': ('\u2713 ' + _('Already OK'),
-                        COLORS['bg_3'], COLORS['fg_4']),
-        }
-        c_text, c_bg, c_fg = chip_map[kind]
-        tk.Label(right, text=' ' + c_text + ' ',
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=c_bg, fg=c_fg, padx=6, pady=2
-                 ).pack(anchor='e', pady=(0, 6))
+        outcome = {'matched': _('Will rename'), 'unknown': _('No match'),
+                   'already': _('Already OK')}[kind]
+        sv = tk.Label(st, font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'],
+                      anchor='w')
+        sv.pack(anchor='w', pady=(px(2), 0))
 
-        tk.Label(right, textvariable=size_var,
-                 font=(FONTS['body_strong'][0], 10),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_1']
-                 ).pack(anchor='e')
-        tk.Label(right, textvariable=status_var,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_4']
-                 ).pack(anchor='e', pady=(2, 0))
+        # The scan's own statuses repeat the badge; show the outcome
+        # instead until the rename worker reports something new.
+        regen = (_('Ready'), _('Already named'), _('No PPSA found'))
+
+        def _sync_status(*_a, lbl=sv, var=status_var, fallback=outcome):
+            try:
+                if lbl.winfo_exists():
+                    v = var.get()
+                    lbl.config(text=fallback if (not v or v in regen) else v)
+            except Exception:
+                pass
+        _sync_status()
+        try:
+            tid = status_var.trace_add('write', _sync_status)
+            sv.bind('<Destroy>', lambda e, v=status_var, t=tid:
+                    _untrace(v, t), add='+')
+        except Exception:
+            pass
 
     def _async_load_cover(self, full, label_widget):
-        """Find icon0.png for the dump and load it as a 96×128 thumb on
+        """Find icon0.png for the dump and load it as a small row thumb on
         a worker thread. Posts the resulting PhotoImage back to the Tk
         main thread for assignment to the label widget. Cached on
         self._cover_cache for the lifetime of the tab so subsequent
@@ -734,30 +700,27 @@ class DumpRenameTab:
         self._covers_in_flight.add(full)
 
         import threading
+        th = px(38)
 
         def _worker():
-            photo = None
+            img = None
             try:
                 # Use the same discovery + decode pipeline the
                 # Library and exFAT tabs use.
                 cover_path = self.app._load_cover_art(full)
                 if cover_path:
-                    img = _load_cover_image(cover_path, target=128)
-                    if img is not None:
-                        try:
-                            from PIL import Image, ImageTk
-                            # Fit to 96x128 portrait box. _load_cover_image
-                            # returns a square crop; resize keeping aspect.
-                            img.thumbnail((96, 128), Image.LANCZOS)
-                            photo = ImageTk.PhotoImage(img)
-                        except Exception:
-                            photo = None
+                    img = _load_cover_image(cover_path, target=th)
             except Exception:
-                photo = None
+                img = None
 
             def _apply():
                 self._covers_in_flight.discard(full)
-                if photo is None:
+                if img is None:
+                    return
+                try:
+                    from PIL import ImageTk
+                    photo = ImageTk.PhotoImage(img)
+                except Exception:
                     return
                 # Cache so subsequent refreshes are instant
                 self._cover_cache[full] = photo
@@ -765,8 +728,7 @@ class DumpRenameTab:
                 # in the meantime — guard the config call.
                 try:
                     if label_widget.winfo_exists():
-                        label_widget.config(image=photo, text='',
-                                            width=96, height=128)
+                        label_widget.config(image=photo)
                         label_widget.image = photo
                 except Exception:
                     pass
@@ -787,15 +749,14 @@ class DumpRenameTab:
                 self._count_lbl.config(text='')
             else:
                 self._count_lbl.config(
-                    text='\u2014 %d ' % selected + _('of') +
+                    text='%d ' % selected + _('of') +
                          ' %d ' % total + _('selected'))
             btn = getattr(self, '_rename_btn', None)
             if btn is not None and btn.winfo_exists():
                 if selected > 0:
-                    btn.config(text='\u270f  ' + _('Rename %d folder(s)')
-                               % selected)
+                    btn.config(text=_('Rename %d folder(s)') % selected)
                 else:
-                    btn.config(text='\u270f  ' + _('Rename selected'))
+                    btn.config(text=_('Rename selected'))
         except Exception:
             pass
 
@@ -803,8 +764,8 @@ class DumpRenameTab:
     # Stubs — kept so legacy callbacks in exfat_builder.py don't crash
     # ─────────────────────────────────────────────────────────────────
     def _refresh_kpi(self):
-        """v3.6.0 pass: feed the four KPI cards from the scan model,
-        then refresh the selection count (the legacy hook)."""
+        """Feed the four inline metrics from the scan model, then refresh
+        the selection count (the legacy hook)."""
         try:
             items = list(self.app._dumps_items)
             model = list(self.app._dumps_model)
@@ -829,37 +790,22 @@ class DumpRenameTab:
         self._refresh_list()
 
 
+def _untrace(var, tid):
+    try:
+        var.trace_remove('write', tid)
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────
-# Helpers — themed buttons matching tab_help.py / tab_advanced.py styling
+# Helpers — design-system buttons (kept for any external caller)
 # ─────────────────────────────────────────────────────────────────────────
 def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
+    return Button(parent, text=text, command=command)
 
 
 def _accent_btn(parent, text, command, big=False):
-    accent = COLORS.get('accent', '#5b8cff')
-    return XButton(parent, text=text,
-                     font=(FONTS['button'][0],
-                           11 if big else 9,
-                           'bold'),
-                     bg=accent, fg='#0a0a0a',
-                     activebackground=accent,
-                     activeforeground='#0a0a0a',
-                     relief='flat', bd=0,
-                     padx=16,
-                     pady=10 if big else 6,
-                     cursor='hand2',
-                     command=command)
+    return Button(parent, text=text, command=command, variant='primary')
 
 
 # ─────────────────────────────────────────────────────────────────────────

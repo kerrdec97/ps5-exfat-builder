@@ -1,11 +1,19 @@
 """
-ui/tab_report.py — dedicated "Report Issue" support-center page.
+ui/tab_report.py — "Report Issue" support page.
 
-Replaces the old Report Issue modal with a full page. Reuses the app's
-existing diagnostic generator (app.create_bug_report_file) so report content
-and redaction are unchanged. No auto-upload: it writes a local .txt, shows a
-contents summary + recent-log preview, and offers the four support
-destinations plus an "open report folder" action.
+    PageHeader "Report an issue"
+    ┌ Diagnostic report ───────────────┐ ┌ Recent log preview (inset well) ─┐
+    │ what it contains · status        │ │ last 200 lines of the output log │
+    │ [Generate] [Open folder] [Copy]  │ │                                  │
+    └──────────────────────────────────┘ └──────────────────────────────────┘
+    Where to report
+    [GitHub Issues] [Telegram Group]
+    [Telegram Direct] [Discord]                 (channel cards)
+
+Reuses the app's existing diagnostic generator (app.create_bug_report_file)
+so report content and redaction are unchanged. No auto-upload: it writes a
+local .txt, shows its path + a recent-log preview, and offers the four
+support destinations plus "open report folder" / "copy path".
 
 Entry point: build_report_tab(parent, app)
 """
@@ -16,8 +24,12 @@ import webbrowser
 
 import tkinter as tk
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
+from ui.shared.widgets import (
+    PageHeader, Card, Badge, Button, IconLabel, Rounded, SectionTitle,
+    autowrap,
+)
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 from ui.shared.scroll import attach_scroll
 
 GITHUB_ISSUES   = 'https://github.com/kerrdec97/ps5-exfat-builder/issues'
@@ -25,20 +37,14 @@ TELEGRAM_GROUP  = 'https://t.me/ps5exfatbuilder'
 TELEGRAM_DIRECT = '@deckerr97'
 DISCORD_HANDLE  = 'scottish_deckerr'
 
+C = COLORS
+BG1, BG2, BG3 = C['bg_1'], C['bg_2'], C['bg_3']
 
-def _btn(parent, text, primary=False, command=None, accent=None):
-    if primary:
-        bg = accent or COLORS['accent']
-        fg = '#ffffff'
-        abg = COLORS.get('accent_pressed', bg)
-    else:
-        bg = COLORS['bg_4']
-        fg = COLORS['fg_2']
-        abg = COLORS['bg_5']
-    return XButton(parent, text=text, command=command,
-                     font=FONTS['button'], bg=bg, fg=fg,
-                     activebackground=abg, activeforeground='#ffffff',
-                     relief='flat', bd=0, padx=14, pady=8, cursor='hand2')
+
+def _btn(parent, text, primary=False, command=None, accent=None, icon=None):
+    """Design-system button (primary or secondary)."""
+    return Button(parent, text=text, command=command, icon=icon,
+                  variant='primary' if primary else 'secondary')
 
 
 def _open(url):
@@ -50,13 +56,14 @@ def _open(url):
 
 def build_report_tab(parent, app):
     """Build the Report Issue page into `parent`."""
+    parent.configure(bg=BG1)
     # Scrollable host (consistent with other tabs).
-    canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0, highlightthickness=0)
+    canvas = tk.Canvas(parent, bg=BG1, bd=0, highlightthickness=0)
     sb = XScrollbar(parent, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     canvas.pack(side='left', fill='both', expand=True)
-    inner = tk.Frame(canvas, bg=COLORS['bg_1'])
+    inner = tk.Frame(canvas, bg=BG1)
     inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
     inner.bind('<Configure>',
                lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
@@ -64,71 +71,95 @@ def build_report_tab(parent, app):
                 lambda e: canvas.itemconfig(inner_id, width=e.width))
     attach_scroll(canvas)
 
-    body = tk.Frame(inner, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True, padx=28, pady=22)
-
     # ── Header ──
-    tk.Label(body, text='SUPPORT CENTER', font=FONTS['eyebrow'],
-             bg=COLORS['bg_1'], fg=COLORS['accent_hi'], anchor='w').pack(
-                 fill='x')
-    tk.Label(body, text='Report an Issue', font=FONTS['h1'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w').pack(
-                 fill='x', pady=(2, 4))
-    tk.Label(body,
-             text=('Generate a diagnostic report and send it through any of '
-                   'the channels below. Passwords and host details are '
-                   'redacted, and nothing is uploaded automatically \u2014 '
-                   'you attach the report yourself.'),
-             font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_3'],
-             anchor='w', justify='left', wraplength=760).pack(fill='x')
+    head = PageHeader(
+        inner, 'Report an issue',
+        'Generate a diagnostic report and send it through any of the '
+        'channels below. Passwords and host details are redacted, and '
+        'nothing is uploaded automatically — you attach the report '
+        'yourself.')
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
     # ── State ──
     state = {'path': None}
     status_var = tk.StringVar(value='No report generated yet.')
 
-    tk.Frame(body, bg=COLORS['border_2'], height=1).pack(fill='x', pady=18)
+    # ── Row 1: diagnostic report + log preview ──
+    row1 = tk.Frame(inner, bg=BG1)
+    row1.pack(fill='x', padx=px(24))
+    row1.grid_columnconfigure(0, weight=1, uniform='rep')
+    row1.grid_columnconfigure(1, weight=1, uniform='rep')
 
-    # ── Generate card ──
-    gen_card = tk.Frame(body, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-    gen_card.pack(fill='x')
-    gi = tk.Frame(gen_card, bg=COLORS['bg_2'])
-    gi.pack(fill='x', padx=18, pady=16)
-    tk.Label(gi, text='\U0001f4c4  Diagnostic report', font=FONTS['h3'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(fill='x')
-    tk.Label(gi,
-             text=('Includes: app version, timestamp, Windows version, '
-                   'system info, free disk space, recent build summary, last '
-                   'error/traceback, redacted settings, and the full output '
-                   'log.'),
-             font=FONTS['label'], bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w', justify='left', wraplength=720).pack(
-                 fill='x', pady=(4, 4))
-    tk.Label(gi, textvariable=status_var, font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w',
-             justify='left', wraplength=720).pack(fill='x', pady=(4, 12))
+    gen_card = Card(row1, title='Diagnostic report',
+                    subtitle='A plain-text file you attach to your report.')
+    gen_card.grid(row=0, column=0, sticky='nsew', padx=(0, px(8)))
+    gi = gen_card.body
 
-    gbtns = tk.Frame(gi, bg=COLORS['bg_2'])
-    gbtns.pack(fill='x')
+    tk.Label(gi, text='INCLUDES', font=FONTS['overline'], bg=BG2,
+             fg=C['fg_4'], anchor='w').pack(fill='x')
+    inc = tk.Frame(gi, bg=BG2)
+    inc.pack(fill='x', pady=(px(6), 0))
+    inc.grid_columnconfigure(0, weight=1, uniform='inc')
+    inc.grid_columnconfigure(1, weight=1, uniform='inc')
+    items = ('App version and timestamp', 'Windows version and system info',
+             'Free disk space', 'Recent build summary',
+             'Last error or traceback', 'Redacted settings',
+             'Full output log')
+    for i, it in enumerate(items):
+        cell = tk.Frame(inc, bg=BG2)
+        cell.grid(row=i // 2, column=i % 2, sticky='ew', pady=px(3))
+        IconLabel(cell, 'check', 12, C['fg_4'], BG2).pack(
+            side='left', padx=(0, px(8)))
+        tk.Label(cell, text=it, font=FONTS['body'], bg=BG2, fg=C['fg_2'],
+                 anchor='w').pack(side='left')
 
-    open_folder_btn = _btn(gbtns, 'Open report folder',
-                           command=lambda: _open_report_folder(state['path']))
-    copy_path_btn = _btn(gbtns, 'Copy path',
-                         command=lambda: _copy(app, state['path']))
+    # Status well
+    well = Rounded(gi, bg=C['bg_0'], border=C['border_2'], radius=4,
+                   padding=(px(12), px(10)), surface=BG2)
+    well.pack(fill='x', pady=(px(16), px(16)))
+    well_top = tk.Frame(well, bg=C['bg_0'])
+    well_top.pack(fill='x')
+    status_badge = Badge(well_top, 'Not generated', 'neutral',
+                         surface=C['bg_0'])
+    status_badge.pack(side='left')
+    status_lbl = tk.Label(well, textvariable=status_var, font=FONTS['caption'],
+                          bg=C['bg_0'], fg=C['fg_3'], anchor='w',
+                          justify='left')
+    status_lbl.pack(fill='x', pady=(px(8), 0))
+    autowrap(status_lbl)
 
-    # Recent log preview (read-only).
-    prev_frame = tk.Frame(body, bg=COLORS['bg_2'],
-                          highlightbackground=COLORS['border_2'],
-                          highlightthickness=1)
-    tk.Label(body, text='Recent log preview', font=FONTS['h3'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_1'], anchor='w').pack(
-                 fill='x', pady=(20, 6))
-    prev_frame.pack(fill='x')
-    log_text = tk.Text(prev_frame, height=10, font=(FONTS['code'][0], 9),
-                       bg='#0a0a0f', fg='#a0c8a0', relief='flat', bd=8,
-                       wrap='none', state='disabled')
-    log_text.pack(fill='both', expand=True)
+    copy_path_btn = Button(well_top, text='Copy path', icon='copy',
+                           size='sm', surface=C['bg_0'],
+                           command=lambda: _copy(app, state['path'],
+                                                 copy_path_btn))
+    copy_path_btn.pack(side='right')
+    open_folder_btn = Button(well_top, text='Open report folder',
+                             icon='folder_open', size='sm', surface=C['bg_0'],
+                             command=lambda: _open_report_folder(state['path']))
+    open_folder_btn.pack(side='right', padx=(0, px(6)))
+
+    gbtns = tk.Frame(gi, bg=BG2)
+    gbtns.pack(fill='x', side='bottom')
+
+    # Recent log preview (read-only), in an inset well.
+    prev_card = Card(row1, title='Recent log preview',
+                     subtitle='The last 200 lines of the output log, '
+                              'refreshed when you generate a report.')
+    prev_card.grid(row=0, column=1, sticky='nsew', padx=(px(8), 0))
+    prev_frame = Rounded(prev_card.body, bg=C['bg_0'], border=C['border_2'],
+                         radius=4, padding=px(2), surface=BG2)
+    prev_frame.pack(fill='both', expand=True)
+    log_text = tk.Text(prev_frame, height=14, font=FONTS['code'],
+                       bg=C['bg_0'], fg=C['fg_2'], relief='flat', bd=0,
+                       padx=px(10), pady=px(8), wrap='none',
+                       highlightthickness=0, state='disabled',
+                       insertbackground=C['fg_2'],
+                       selectbackground=C['accent_lo'])
+    log_sb = XScrollbar(prev_frame, orient='vertical', command=log_text.yview,
+                        surface=C['bg_0'])
+    log_text.configure(yscrollcommand=log_sb.set)
+    log_sb.pack(side='right', fill='y')
+    log_text.pack(side='left', fill='both', expand=True)
 
     def _refresh_preview():
         try:
@@ -152,6 +183,7 @@ def build_report_tab(parent, app):
             path = info.get('path')
         except Exception as e:
             status_var.set('Could not create report: %s' % e)
+            status_badge.set('Failed', 'danger')
             return
         ok = False
         try:
@@ -161,77 +193,82 @@ def build_report_tab(parent, app):
             ok = False
         if ok:
             state['path'] = path
-            status_var.set('Report saved:  %s' % path)
+            status_var.set(path)
+            status_lbl.config(font=FONTS['code'], fg=C['fg_1'])
+            status_badge.set('Saved', 'success')
             open_folder_btn.config(state='normal')
             copy_path_btn.config(state='normal')
         else:
             status_var.set('Could not write the report file. You can still '
                            'copy the output log manually from the log panel.')
+            status_badge.set('Failed', 'danger')
         _refresh_preview()
 
-    # Generate button (primary) — placed first, before the secondary actions.
-    _btn(gi, '\u26a1  Generate Diagnostic Report', primary=True,
-         command=_generate).pack(anchor='w', pady=(0, 10), before=gbtns)
-    open_folder_btn.pack(side='left')
-    copy_path_btn.pack(side='left', padx=8)
+    # Generate button (primary) first, then the secondary actions.
+    _btn(gbtns, 'Generate diagnostic report', primary=True, icon='zap',
+         command=_generate).pack(side='left')
     open_folder_btn.config(state='disabled')
     copy_path_btn.config(state='disabled')
 
     # ── Destination cards (2x2 grid) ──
-    tk.Label(body, text='Where to report', font=FONTS['h3'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_1'], anchor='w').pack(
-                 fill='x', pady=(22, 2))
-    tk.Label(body, text='Pick a channel, then attach the report file.',
-             font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-             anchor='w').pack(fill='x', pady=(0, 10))
+    sect = SectionTitle(inner, 'Where to report',
+                        caption='Pick a channel, then attach the report file.')
+    sect.pack(fill='x', padx=px(24), pady=(px(24), px(12)))
 
-    grid = tk.Frame(body, bg=COLORS['bg_1'])
-    grid.pack(fill='x')
+    grid = tk.Frame(inner, bg=BG1)
+    grid.pack(fill='x', padx=px(24), pady=(0, px(24)))
     grid.columnconfigure(0, weight=1, uniform='rc')
     grid.columnconfigure(1, weight=1, uniform='rc')
 
     def _card(col, row, icon, title, desc, detail, action_label, action,
-              accent_key='accent'):
-        card = tk.Frame(grid, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        card.grid(row=row, column=col, sticky='ew', padx=6, pady=6)
-        ci = tk.Frame(card, bg=COLORS['bg_2'])
-        ci.pack(fill='both', expand=True, padx=16, pady=14)
-        tk.Label(ci, text='%s  %s' % (icon, title), font=FONTS['body_b'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(
-                     fill='x')
-        tk.Label(ci, text=desc, font=FONTS['meta'], bg=COLORS['bg_2'],
-                 fg=COLORS['fg_4'], anchor='w', justify='left',
-                 wraplength=320).pack(fill='x', pady=(3, 2))
-        tk.Label(ci, text=detail, font=FONTS['mono_sm'], bg=COLORS['bg_2'],
-                 fg=COLORS['fg_3'], anchor='w').pack(fill='x', pady=(0, 10))
-        _btn(ci, action_label, command=action,
-             accent=COLORS.get(accent_key)).pack(anchor='w')
+              btn_icon):
+        card = Card(grid, padding=16)
+        card.grid(row=row, column=col, sticky='nsew',
+                  padx=(0 if col == 0 else px(8), px(8) if col == 0 else 0),
+                  pady=(0 if row == 0 else px(8), px(8) if row == 0 else 0))
+        top = tk.Frame(card, bg=BG2)
+        top.pack(fill='x')
+        tile = Rounded(top, bg=BG3, radius=8, surface=BG2)
+        tile.pack(side='left', anchor='n', padx=(0, px(14)))
+        IconLabel(tile, icon, 16, C['fg_2'], BG3).pack(padx=px(10),
+                                                       pady=px(10))
+        col_f = tk.Frame(top, bg=BG2)
+        col_f.pack(side='left', fill='x', expand=True)
+        tk.Label(col_f, text=title, font=FONTS['subtitle'], bg=BG2,
+                 fg=C['fg_0'], anchor='w').pack(fill='x')
+        d = tk.Label(col_f, text=desc, font=FONTS['body'], bg=BG2,
+                     fg=C['fg_2'], anchor='w', justify='left')
+        d.pack(fill='x', pady=(px(2), 0))
+        autowrap(d)
+        tk.Label(col_f, text=detail, font=FONTS['code'], bg=BG2,
+                 fg=C['fg_3'], anchor='w').pack(fill='x', pady=(px(6), 0))
+        b = Button(col_f, text=action_label, icon=btn_icon, surface=BG2)
+        b.configure(command=lambda: action(b))
+        b.pack(anchor='w', pady=(px(12), 0))
 
-    _card(0, 0, '\U0001f41e', 'GitHub Issues',
+    _card(0, 0, 'github', 'GitHub Issues',
           'Best for bugs, crashes and feature requests. Tracked + '
           'searchable history.',
           GITHUB_ISSUES, 'Open GitHub Issues',
-          lambda: _open(GITHUB_ISSUES))
-    _card(1, 0, '\U0001f465', 'Telegram Group',
+          lambda b: _open(GITHUB_ISSUES), 'external')
+    _card(1, 0, 'users', 'Telegram Group',
           'Best for community help and testing feedback.',
           't.me/ps5exfatbuilder', 'Open Telegram Group',
-          lambda: _open(TELEGRAM_GROUP), accent_key='teal')
-    _card(0, 1, '\U0001f4e2', 'Telegram Direct',
+          lambda b: _open(TELEGRAM_GROUP), 'external')
+    _card(0, 1, 'send', 'Telegram Direct',
           'Best for direct contact with Deckerr97.',
           'Username: ' + TELEGRAM_DIRECT, 'Copy Telegram Username',
-          lambda: _copy(app, TELEGRAM_DIRECT), accent_key='teal')
-    _card(1, 1, '\U0001f4ac', 'Discord',
+          lambda b: _copy(app, TELEGRAM_DIRECT, b), 'copy')
+    _card(1, 1, 'message', 'Discord',
           'Best for quick support and troubleshooting.',
           'Username: ' + DISCORD_HANDLE, 'Copy Discord Username',
-          lambda: _copy(app, DISCORD_HANDLE))
+          lambda b: _copy(app, DISCORD_HANDLE, b), 'copy')
 
     # Initial preview fill.
     _refresh_preview()
 
 
-def _copy(app, text):
+def _copy(app, text, button=None):
     if not text:
         return
     try:
@@ -240,6 +277,17 @@ def _copy(app, text):
         app.update()
     except Exception:
         pass
+    # Brief confirmation on the button that was pressed.
+    if button is not None:
+        try:
+            old = button.cget('text')
+            if old == 'Copied':
+                return
+            button.config(text='Copied', icon='check')
+            button.after(1500, lambda: button.winfo_exists() and
+                         button.config(text=old, icon='copy'))
+        except Exception:
+            pass
 
 
 def _open_report_folder(path):
