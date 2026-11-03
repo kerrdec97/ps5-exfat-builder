@@ -1,31 +1,21 @@
 """
-ui/tab_language.py — Language picker tab.
+ui/tab_language.py — Language picker (Settings › Language).
 
-Step 13 (v2.1.5): refactored against preview/language-tab-redesign.html.
+Design-system pass (Farewell Edition):
 
-Layout:
+    Interface language                      [Import] [Export] [Apply]
+    17 languages · N fully translated · community-maintained
+    ┌─ languages ──────────┐ ┌─ selected language ───────────────────┐
+    │ [search…]            │ │ [DE] German  Deutsch · 106 strings      │
+    │ GB English (UK) 100% │ │ Coverage ▬▬▬▬  Strings  Applied  Contr. │
+    │ US English (US) 100% │ └─────────────────────────────────────────┘
+    │ FR French        92% │ ┌─ Live preview ──────┐ ┌─ Strings ───────┐
+    │ ▌DE German       92% │ │ Build exFAT image   │ │ key → value     │
+    │ …                    │ │ [Browse] [Build]    │ │ …               │
+    └──────────────────────┘ └─────────────────────┘ └─────────────────┘
 
-    ┌─ left pane (320px) ─────┬─ right pane ─────────────────────────┐
-    │ Interface language      │ ┌─ head (lang + actions) ──────────┐ │
-    │ 17 languages · 16 done  │ │ 🇬🇧 English (UK) · 1,847 strings  │ │
-    │ ┌─ search ─────────────┐│ │ [Import] [Export] [Apply]        │ │
-    │ │ 🔍 search…           ││ ├─ body (preview + status aside) ──┤ │
-    │ └────────────────────┘ │ │ ┌─ live preview ─┐ ┌─ status ──┐  │ │
-    │ ┌─ list ─────────────┐ │ │ │ Build exFAT    │ │Coverage   │  │ │
-    │ │ ▌🇬🇧 English (UK)  │ │ │ │ … translated   │ │Last upd   │  │ │
-    │ │  🇺🇸 English (US)  │ │ │ │ ┌─ strings ──┐ │ │Contributor│  │ │
-    │ │  🇫🇷 Français       │ │ │ │ │ key→value   │ │ │           │  │ │
-    │ │  🇩🇪 Deutsch        │ │ │ │ └────────────┘ │ │           │  │ │
-    │ │  🇪🇸 Español       │ │ │ └────────────────┘ └───────────┘  │ │
-    │ │  ...               │ │ │                                    │ │
-    │ │ ▌█████ 100%        │ │ │                                    │ │
-    │ │ ▌███▄  88% (amber) │ │ │                                    │ │
-    │ │ ▌██    41% (red)   │ │ │                                    │ │
-    │ └────────────────────┘ │ │                                    │ │
-    └────────────────────────┴─────────────────────────────────────┘
-
-The active language gets a 2px accent left border + tinted background,
-matching the rail-item style we built for Settings.
+Flags are shown as small region-code tiles (emoji flags render as boxes on
+many Windows builds). Picking a row previews it; Apply commits it.
 
 Backwards compat: relies on `app._lang_var` (set in App.__init__),
 `set_language()` and `save_settings()` from main, `app._rebuild_all_tabs()`,
@@ -35,9 +25,12 @@ and `app._switch_tab()`. All exist and are unchanged.
 import json
 import os
 import tkinter as tk
-from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
+from ui.shared.widgets import (
+    Button as XButton, TextField as XEntry, Scrollbar as XScrollbar,
+    Card, Rounded, Badge, PageHeader, Divider, IconLabel, RoundedBar,
+    autowrap)
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
 from exfat_builder import *  # noqa: F401,F403
 from exfat_builder import (
@@ -45,6 +38,8 @@ from exfat_builder import (
 )
 from ui.shared.scroll import attach_scroll
 from ui.shared.app_dialog import app_error, app_info
+
+C = COLORS
 
 
 # Master list of supported language codes with native + English name.
@@ -71,9 +66,31 @@ _LANGS = [
 ]
 
 
+def _region(flag):
+    """'🇩🇪' -> 'DE' (regional-indicator pair to its two letters)."""
+    try:
+        return ''.join(chr(ord(ch) - 0x1F1E6 + ord('A')) for ch in flag
+                       if 0x1F1E6 <= ord(ch) <= 0x1F1FF) or '··'
+    except Exception:
+        return '··'
+
+
+def _code_tile(parent, flag, bg, big=False):
+    """Small rounded region-code tile standing in for an emoji flag."""
+    tile = Rounded(parent, bg=C['bg_4'] if big else C['bg_3'],
+                   border=C['border_3'], radius=4,
+                   padding=(px(10), px(8)) if big else (px(5), px(2)),
+                   surface=bg)
+    tk.Label(tile, text=_region(flag),
+             font=FONTS['subtitle'] if big else FONTS['caption_strong'],
+             bg=C['bg_4'] if big else C['bg_3'], fg=C['fg_1'],
+             width=2 if not big else 3).pack()
+    return tile
+
+
 def build_language_tab(parent, app):
-    """Build the redesigned Language tab into `parent`."""
-    parent.configure(bg=COLORS['bg_1'])
+    """Build the Language tab into `parent`."""
+    parent.configure(bg=C['bg_1'])
 
     # Compute coverage so the bars + status panel can show real numbers.
     # English is the source of truth — its key set is the maximum.
@@ -95,76 +112,67 @@ def build_language_tab(parent, app):
     # starts at the saved active language.
     app._lang_preview_code = tk.StringVar(value=app._lang_var.get())
 
-    # ── 2-column workspace ──
-    body = tk.Frame(parent, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True)
+    # ── Page header with the page actions (Apply is the primary) ──
+    n_total = len(_LANGS)
+    n_full = sum(1 for c in coverage.values() if c[2] >= 100)
+    head = PageHeader(parent, _('Interface language'),
+                      _('%d languages · %d fully translated · '
+                        'community-maintained') % (n_total, n_full),
+                      bg=C['bg_1'])
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
+    XButton(head.actions, text=_('Apply'), variant='primary', icon='check',
+            command=lambda: _apply_lang(app, app._lang_preview_code.get())
+            ).pack(side='right')
+    XButton(head.actions, text=_('Export .json'), icon='download',
+            command=lambda: _export_json(app, app._lang_preview_code.get())
+            ).pack(side='right', padx=(0, px(6)))
+    XButton(head.actions, text=_('Import .json'), icon='upload',
+            command=lambda: _import_json(app)
+            ).pack(side='right', padx=(0, px(6)))
 
-    body.grid_columnconfigure(0, weight=0, minsize=320)
+    # ── 2-column workspace ──
+    body = tk.Frame(parent, bg=C['bg_1'])
+    body.pack(fill='both', expand=True, padx=px(24), pady=(0, px(20)))
+    body.grid_columnconfigure(0, weight=0, minsize=px(300))
     body.grid_columnconfigure(1, weight=1)
     body.grid_rowconfigure(0, weight=1)
 
-    _build_left_pane(body, app).grid(row=0, column=0, sticky='nsew')
-    tk.Frame(body, bg=COLORS['border_2'], width=1
-             ).grid(row=0, column=0, sticky='nse')
+    _build_left_pane(body, app).grid(row=0, column=0, sticky='nsew',
+                                     padx=(0, px(16)))
     _build_right_pane(body, app).grid(row=0, column=1, sticky='nsew')
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Left pane — header + search + scrollable list with mini progress bars
+# Left pane — search + scrollable language list
 # ─────────────────────────────────────────────────────────────────────────
 def _build_left_pane(parent, app):
-    pane = tk.Frame(parent, bg=COLORS['bg_0'])
+    pane = Card(parent, padding=0)
+    pane.configure(width=px(300))
 
-    # Header
-    head = tk.Frame(pane, bg=COLORS['bg_0'])
-    head.pack(fill='x', padx=18, pady=(16, 6))
-    tk.Label(head, text=_('Interface language'),
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_0'], fg=COLORS['fg_0'],
-             anchor='w'
-             ).pack(fill='x')
-
-    n_total = len(_LANGS)
-    n_full = sum(1 for c in app._lang_coverage.values() if c[2] >= 100)
-    tk.Label(head,
-             text=_('%d languages · %d fully translated · '
-                    'community-maintained') % (n_total, n_full),
-             font=FONTS['meta'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_5'],
-             anchor='w', wraplength=280, justify='left'
-             ).pack(fill='x', pady=(2, 10))
-
-    # Search input
-    search_wrap = tk.Frame(pane, bg=COLORS['bg_3'],
-                           highlightbackground=COLORS['border_3'],
-                           highlightthickness=1)
-    search_wrap.pack(fill='x', padx=18, pady=(0, 10))
-    tk.Label(search_wrap, text='\U0001f50d',
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_3'], fg=COLORS['fg_5']
-             ).pack(side='left', padx=(8, 4))
-    XEntry(search_wrap, textvariable=app._lang_search_var,
-             font=FONTS['body'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=0
-             ).pack(fill='x', ipady=5, padx=(0, 8))
+    search_row = tk.Frame(pane, bg=C['bg_2'])
+    search_row.pack(fill='x', padx=px(12), pady=(px(12), px(10)))
+    ent = XEntry(search_row, textvariable=app._lang_search_var,
+                 placeholder=_('Search languages'))
+    ent.pack(side='left', fill='x', expand=True)
+    IconLabel(search_row, 'search', 16, C['fg_3'], C['bg_2']).pack(
+        side='right', padx=(px(8), px(2)))
+    Divider(pane, color=C['border_2']).pack(fill='x')
 
     # Scrollable list
-    list_outer = tk.Frame(pane, bg=COLORS['bg_0'])
-    list_outer.pack(fill='both', expand=True)
+    list_outer = tk.Frame(pane, bg=C['bg_2'])
+    list_outer.pack(fill='both', expand=True, padx=(0, px(4)),
+                    pady=(px(4), px(8)))
 
-    canvas = tk.Canvas(list_outer, bg=COLORS['bg_0'], highlightthickness=0)
-    sb = XScrollbar(list_outer, command=canvas.yview,
-                      bg=COLORS['bg_3'], troughcolor=COLORS['bg_0'])
+    canvas = tk.Canvas(list_outer, bg=C['bg_2'], highlightthickness=0,
+                       bd=0, width=px(280))
+    sb = XScrollbar(list_outer, command=canvas.yview, surface=C['bg_2'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     canvas.pack(side='left', fill='both', expand=True)
 
-    inner = tk.Frame(canvas, bg=COLORS['bg_0'])
-    win = canvas.create_window((0, 0), window=inner, anchor='nw')
+    inner = tk.Frame(canvas, bg=C['bg_2'])
+    win = canvas.create_window((0, 0), window=inner, anchor='nw',
+                               width=px(280))
     inner.bind('<Configure>', lambda e:
         canvas.configure(scrollregion=canvas.bbox('all')))
     canvas.bind('<Configure>', lambda e: canvas.itemconfig(win, width=e.width))
@@ -188,6 +196,7 @@ def _render_lang_list(app):
     search = app._lang_search_var.get().strip().lower()
     active = app._lang_preview_code.get()
 
+    shown = 0
     for code, name, native, flag in _LANGS:
         # Search filter
         if search:
@@ -196,82 +205,95 @@ def _render_lang_list(app):
                 continue
         is_active = (code == active)
         _render_lang_row(parent_frame, app, code, name, native, flag,
-                          is_active)
+                         is_active)
+        shown += 1
+    if not shown:
+        tk.Label(parent_frame, text=_('No matching language'),
+                 font=FONTS['caption'], bg=C['bg_2'], fg=C['fg_3']
+                 ).pack(anchor='w', padx=px(16), pady=px(12))
 
 
 def _render_lang_row(parent, app, code, name, native, flag, is_active):
-    """One row in the language list."""
+    """One row in the language list (selected: accent_lo + accent pill)."""
     n_done, n_total, pct = app._lang_coverage.get(code, (0, 1, 0))
+    applied = (code == app._lang_var.get())
+    row_bg = C['accent_lo'] if is_active else C['bg_2']
 
-    # Active row uses accent-tinted bg + 2px left border accent strip,
-    # matching the rail item style.
-    row_bg = COLORS['accent_08'] if is_active else COLORS['bg_0']
-    border_color = COLORS['accent'] if is_active else COLORS['bg_0']
+    wrap = tk.Frame(parent, bg=C['bg_2'])
+    wrap.pack(fill='x', padx=px(6), pady=(0, px(2)))
+    row = Rounded(wrap, bg=row_bg, radius=4, padding=(px(10), px(7)),
+                  surface=C['bg_2'])
+    row.pack(fill='x')
+    row.configure(cursor='hand2')
+    pill = tk.Frame(row, bg=C['accent'] if is_active else row_bg,
+                    width=px(3), height=px(18))
+    pill.place(x=-px(10) + 1, rely=0.5, anchor='w')
 
-    wrap = tk.Frame(parent, bg=row_bg)
-    wrap.pack(fill='x')
+    tile = _code_tile(row, flag, row_bg)
+    tile.pack(side='left', padx=(px(2), px(10)))
 
-    accent_strip = tk.Frame(wrap, bg=border_color, width=2)
-    accent_strip.pack(side='left', fill='y')
-    accent_strip.pack_propagate(False)
-
-    inner = tk.Frame(wrap, bg=row_bg, cursor='hand2')
-    inner.pack(side='left', fill='x', expand=True, padx=(8, 14), pady=8)
-
-    # Flag + names column
-    text_col = tk.Frame(inner, bg=row_bg)
+    text_col = tk.Frame(row, bg=row_bg)
     text_col.pack(side='left', fill='x', expand=True)
-
     name_row = tk.Frame(text_col, bg=row_bg)
     name_row.pack(fill='x')
-    tk.Label(name_row, text=flag,
-             font=(FONTS['body'][0], 11),
-             bg=row_bg, fg=COLORS['fg_0']
-             ).pack(side='left', padx=(0, 8))
     tk.Label(name_row, text=name,
-             font=(FONTS['body_strong'][0], 10),
-             bg=row_bg, fg=COLORS['fg_0'], anchor='w'
-             ).pack(side='left')
-    tk.Label(text_col, text=native,
-             font=FONTS['mono_sm'],
-             bg=row_bg, fg=COLORS['fg_5'], anchor='w'
-             ).pack(fill='x', padx=(28, 0))
+             font=FONTS['body_strong'] if is_active else FONTS['body'],
+             bg=row_bg, fg=C['fg_0'], anchor='w').pack(side='left')
+    if applied:
+        IconLabel(name_row, 'check', 12, C['success'], row_bg).pack(
+            side='left', padx=(px(6), 0))
+    tk.Label(text_col, text=native, font=FONTS['caption'],
+             bg=row_bg, fg=C['fg_3'], anchor='w').pack(fill='x')
 
-    # Mini bar + percentage
-    meta_col = tk.Frame(inner, bg=row_bg)
-    meta_col.pack(side='right', padx=(8, 0))
+    # Coverage: percentage over a mini bar
+    meta_col = tk.Frame(row, bg=row_bg)
+    meta_col.pack(side='right', padx=(px(8), 0))
+    tk.Label(meta_col, text='%d%%' % pct, font=FONTS['caption'],
+             bg=row_bg, fg=C['fg_2'], anchor='e').pack(anchor='e')
+    bar = RoundedBar(meta_col, height=4,
+                     color=C['success'] if pct >= 100 else C['accent'],
+                     track=C['bg_5'], surface=row_bg)
+    bar.configure(width=px(44))
+    bar.pack(anchor='e', pady=(px(3), 0))
+    bar.set(pct / 100.0)
 
-    pct_color = (COLORS['success_hi'] if pct >= 95
-                 else COLORS['warn_hi'] if pct >= 60
-                 else COLORS['danger_hi'])
-    bar_fill = (COLORS['success'] if pct >= 95
-                else COLORS['warn'] if pct >= 60
-                else COLORS['danger'])
+    # Hover (idle rows only)
+    def _hover(on, _r=row):
+        if is_active:
+            return
+        bgc = C['bg_3'] if on else C['bg_2']
+        try:
+            _paint(bgc)
+        except Exception:
+            pass
 
-    bar_track = tk.Frame(meta_col, bg=COLORS['bg_4'], width=60, height=4)
-    bar_track.pack(anchor='e')
-    bar_track.pack_propagate(False)
-    fill_w = max(1, int(60 * pct / 100))
-    fill = tk.Frame(bar_track, bg=bar_fill, width=fill_w, height=4)
-    fill.pack(side='left', fill='y')
-
-    tk.Label(meta_col, text='%d%%' % pct,
-             font=(FONTS['body_strong'][0], 9),
-             bg=row_bg, fg=pct_color
-             ).pack(anchor='e', pady=(2, 0))
+    def _paint(bgc):
+        row.set_style(bg=bgc)
+        pill.configure(bg=bgc)
+        for w in (text_col, name_row, meta_col):
+            w.configure(bg=bgc)
+        for w in name_row.winfo_children() + text_col.winfo_children() \
+                + meta_col.winfo_children():
+            if isinstance(w, RoundedBar):
+                w._sf = bgc
+                w.configure(bg=bgc)
+                w._redraw()
+            elif isinstance(w, IconLabel):
+                w.set(bg=bgc)
+            elif isinstance(w, tk.Label):
+                w.configure(bg=bgc)
 
     # Click-to-select binds — entire row (and all descendants)
     def _on_click(_e=None, c=code):
         _select_lang(app, c)
-    for w in [wrap, accent_strip, inner, text_col, meta_col, bar_track, fill]:
+
+    def _bind(w):
         w.bind('<Button-1>', _on_click)
-    for w in inner.winfo_children() + text_col.winfo_children() + meta_col.winfo_children():
-        try:
-            w.bind('<Button-1>', _on_click)
-            for sub in w.winfo_children():
-                sub.bind('<Button-1>', _on_click)
-        except Exception:
-            pass
+        w.bind('<Enter>', lambda e: _hover(True), add='+')
+        w.bind('<Leave>', lambda e: _hover(False), add='+')
+        for ch in w.winfo_children():
+            _bind(ch)
+    _bind(row)
 
 
 def _select_lang(app, code):
@@ -283,36 +305,35 @@ def _select_lang(app, code):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Right pane — head + body (preview + status aside)
+# Right pane — selected-language card + preview / strings cards
 # ─────────────────────────────────────────────────────────────────────────
 def _build_right_pane(parent, app):
-    pane = tk.Frame(parent, bg=COLORS['bg_1'])
+    pane = tk.Frame(parent, bg=C['bg_1'])
 
-    # Head
-    app._lang_right_head_frame = tk.Frame(pane, bg=COLORS['bg_1'])
-    app._lang_right_head_frame.pack(fill='x', padx=24, pady=(16, 12))
+    # Head card (name, native, coverage stats) — rebuilt per selection
+    app._lang_right_head_frame = tk.Frame(pane, bg=C['bg_1'])
+    app._lang_right_head_frame.pack(fill='x', pady=(0, px(16)))
 
-    # Body
-    body_wrap = tk.Frame(pane, bg=COLORS['bg_1'])
-    body_wrap.pack(fill='both', expand=True, padx=24, pady=(0, 16))
-
-    body_wrap.grid_columnconfigure(0, weight=1)
-    body_wrap.grid_columnconfigure(1, weight=0, minsize=240)
+    body_wrap = tk.Frame(pane, bg=C['bg_1'])
+    body_wrap.pack(fill='both', expand=True)
+    body_wrap.grid_columnconfigure(0, weight=1, uniform='lgr')
+    body_wrap.grid_columnconfigure(1, weight=1, uniform='lgr')
     body_wrap.grid_rowconfigure(0, weight=1)
 
-    app._lang_preview_frame = tk.Frame(body_wrap, bg=COLORS['bg_1'])
+    app._lang_preview_frame = tk.Frame(body_wrap, bg=C['bg_1'])
     app._lang_preview_frame.grid(row=0, column=0, sticky='nsew',
-                                  padx=(0, 16))
+                                 padx=(0, px(8)))
 
-    app._lang_status_frame = tk.Frame(body_wrap, bg=COLORS['bg_1'])
-    app._lang_status_frame.grid(row=0, column=1, sticky='nsew')
+    app._lang_status_frame = tk.Frame(body_wrap, bg=C['bg_1'])
+    app._lang_status_frame.grid(row=0, column=1, sticky='nsew',
+                                padx=(px(8), 0))
 
     _refresh_preview_pane(app)
     return pane
 
 
 def _refresh_preview_pane(app):
-    """Populate the right-pane head, preview, and status from the
+    """Populate the right-pane head, preview, and strings from the
     currently selected preview language."""
     code = app._lang_preview_code.get()
     info = next((l for l in _LANGS if l[0] == code), _LANGS[0])
@@ -321,131 +342,96 @@ def _refresh_preview_pane(app):
     # breaks every later `_('...')` call in this function.
     _ignored_code, name, native, flag = info
 
-    # ── Head ──
+    # ── Head card ──
     for w in app._lang_right_head_frame.winfo_children():
         w.destroy()
-
-    flag_lbl = tk.Label(app._lang_right_head_frame, text=flag,
-                        font=(FONTS['body'][0], 26),
-                        bg=COLORS['bg_1'], fg=COLORS['fg_0'])
-    flag_lbl.pack(side='left', padx=(0, 14))
-
-    title_col = tk.Frame(app._lang_right_head_frame, bg=COLORS['bg_1'])
-    title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(title_col, text=name,
-             font=(FONTS['body_strong'][0], 16),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(fill='x')
-
-    n_done, n_total, pct = app._lang_coverage.get(code, (0, 1, 0))
-    tk.Label(title_col,
-             text='%s · %s %s · %s' % (
-                 native,
-                 '{:,}'.format(n_done),
-                 _('strings'),
-                 _('community-maintained')),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(4, 0))
-
-    # Action buttons (right-aligned)
-    actions = tk.Frame(app._lang_right_head_frame, bg=COLORS['bg_1'])
-    actions.pack(side='right')
-
-    _accent_btn(actions, _('Apply'),
-                command=lambda: _apply_lang(app, code)
-                ).pack(side='right')
-    _ghost_btn(actions, _('Export .json'),
-               command=lambda: _export_json(app, code)
-               ).pack(side='right', padx=(0, 6))
-    _ghost_btn(actions, _('Import .json'),
-               command=lambda: _import_json(app)
-               ).pack(side='right', padx=(0, 6))
+    _build_head_card(app._lang_right_head_frame, app, code, name, native,
+                     flag)
 
     # ── Preview body ──
     for w in app._lang_preview_frame.winfo_children():
         w.destroy()
     _build_preview(app._lang_preview_frame, app, code)
 
-    # ── Status aside ──
+    # ── Strings sample ──
     for w in app._lang_status_frame.winfo_children():
         w.destroy()
     _build_status_aside(app._lang_status_frame, app, code)
 
 
+def _build_head_card(parent, app, code, name, native, flag):
+    n_done, n_total, pct = app._lang_coverage.get(code, (0, 1, 0))
+    card = Card(parent, padding=16)
+    card.pack(fill='x')
+    top = tk.Frame(card, bg=C['bg_2'])
+    top.pack(fill='x')
+    _code_tile(top, flag, C['bg_2'], big=True).pack(side='left',
+                                                   padx=(0, px(14)))
+    col = tk.Frame(top, bg=C['bg_2'])
+    col.pack(side='left', fill='x', expand=True)
+    tk.Label(col, text=name, font=FONTS['title'], bg=C['bg_2'],
+             fg=C['fg_0'], anchor='w').pack(fill='x')
+    tk.Label(col,
+             text='%s · %s %s · %s' % (
+                 native,
+                 '{:,}'.format(n_done),
+                 _('strings'),
+                 _('community-maintained')),
+             font=FONTS['caption'], bg=C['bg_2'], fg=C['fg_3'],
+             anchor='w').pack(fill='x', pady=(px(2), 0))
+    if code == app._lang_var.get():
+        Badge(top, _('Currently applied'), 'success').pack(side='right',
+                                                           anchor='n')
+    else:
+        Badge(top, _('Click Apply to switch'), 'info',
+              icon='info').pack(side='right', anchor='n')
+
+    Divider(card, color=C['border_1']).pack(fill='x', pady=(px(14), px(12)))
+    tk.Label(card, text=_('Status').upper(), font=FONTS['overline'],
+             bg=C['bg_2'], fg=C['fg_4'], anchor='w').pack(fill='x',
+                                                          pady=(0, px(8)))
+    _build_status_stats(card, app, code)
+
+
 def _build_preview(parent, app, code):
     """Live preview of UI strings rendered in the chosen language."""
-    # Preview Card 1: a fake 'Build exFAT image' card
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    card.pack(fill='x', pady=(0, 12))
+    card = Card(parent, title=_('Live preview'))
+    card.pack(fill='both', expand=True)
 
-    head = tk.Frame(card, bg=COLORS['bg_2'])
-    head.pack(fill='x', padx=14, pady=(12, 6))
-    tk.Label(head, text=_('Live preview'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='left')
-    tk.Label(head, text='menu \u203a build',
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='right')
+    well = Card(card.body, tone='inset', padding=14)
+    well.pack(fill='x')
+    t1 = tk.Label(well, text=_t(code, 'BUILD exFAT IMAGE',
+                                default='Build exFAT image'),
+                  font=FONTS['body_strong'], bg=C['bg_0'], fg=C['fg_0'],
+                  anchor='w', justify='left')
+    t1.pack(fill='x')
+    autowrap(t1)
+    t2 = tk.Label(well,
+                  text=_t(code, 'Drop a folder above',
+                          default='Drop a folder above and choose where to '
+                                  'save the image. The builder will mount, '
+                                  'format, and copy automatically.'),
+                  font=FONTS['caption'], bg=C['bg_0'], fg=C['fg_3'],
+                  anchor='w', justify='left')
+    t2.pack(fill='x', pady=(px(4), px(10)))
+    autowrap(t2)
 
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=14, pady=(0, 12))
-    tk.Label(inner, text=_t(code, 'BUILD exFAT IMAGE',
-                             default='Build exFAT image'),
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(fill='x')
-    tk.Label(inner,
-             text=_t(code, 'Drop a folder above',
-                     default='Drop a folder above and choose where to save '
-                             'the image. The builder will mount, format, '
-                             'and copy automatically.'),
-             font=FONTS['body'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-             anchor='w', justify='left', wraplength=400
-             ).pack(fill='x', pady=(4, 8))
-
-    btn_row = tk.Frame(inner, bg=COLORS['bg_2'])
+    btn_row = tk.Frame(well, bg=C['bg_0'])
     btn_row.pack(fill='x')
-    XButton(btn_row,
-              text=_t(code, 'Browse', default='Browse'),
-              font=(FONTS['body'][0], 9),
-              bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-              relief='flat', bd=0, padx=12, pady=6,
-              cursor='hand2',
-              highlightbackground=COLORS['border_3'],
-              highlightthickness=1
-              ).pack(side='left', padx=(0, 6))
-    XButton(btn_row,
-              text='\u25b6  ' + _t(code, 'Build All', default='Start build'),
-              font=(FONTS['body_strong'][0], 9),
-              bg=COLORS['accent'], fg=COLORS['fg_0'],
-              relief='flat', bd=0, padx=12, pady=6,
-              cursor='hand2'
-              ).pack(side='left')
+    XButton(btn_row, text=_t(code, 'Browse', default='Browse'),
+            icon='folder_open', size='sm', surface=C['bg_0']
+            ).pack(side='left', padx=(0, px(6)))
+    XButton(btn_row, text=_t(code, 'Build All', default='Start build'),
+            icon='play', size='sm', surface=C['bg_0']).pack(side='left')
 
-    # Preview Card 2: sample of translation strings (key → value)
-    str_card = tk.Frame(parent, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-    str_card.pack(fill='both', expand=True)
 
-    str_head = tk.Frame(str_card, bg=COLORS['bg_2'])
-    str_head.pack(fill='x', padx=14, pady=(12, 6))
-    tk.Label(str_head, text=_('Strings'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='left')
+def _build_status_aside(parent, app, code):
+    """Sample of translation strings (key → value)."""
     n_done, n_total, _pct = app._lang_coverage[code]
-    tk.Label(str_head,
-             text='%d / %d' % (n_done, n_total),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='right')
+    card = Card(parent, title=_('Strings'))
+    card.pack(fill='both', expand=True)
+    tk.Label(card.head_actions, text='%d / %d' % (n_done, n_total),
+             font=FONTS['code'], bg=C['bg_2'], fg=C['fg_3']).pack()
 
     # Sample 8 string entries
     trans = _TRANSLATIONS.get(code, {}) if code != 'en' else {}
@@ -460,99 +446,83 @@ def _build_preview(parent, app, code):
         'Settings',
     ]
 
-    table = tk.Frame(str_card, bg=COLORS['bg_2'])
-    table.pack(fill='both', expand=True, padx=14, pady=(0, 12))
-    table.grid_columnconfigure(0, weight=0, minsize=160)
-    table.grid_columnconfigure(1, weight=1)
+    table = tk.Frame(card.body, bg=C['bg_2'])
+    table.pack(fill='both', expand=True)
+    table.grid_columnconfigure(0, weight=1, uniform='strs')
+    table.grid_columnconfigure(1, weight=1, uniform='strs')
 
+    r = 0
     for i, key in enumerate(sample_keys):
-        tk.Label(table, text=key,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['accent_hi'],
-                 anchor='w'
-                 ).grid(row=i, column=0, sticky='w', pady=3)
+        if i:
+            Divider(table, color=C['border_1']).grid(
+                row=r, column=0, columnspan=2, sticky='ew')
+            r += 1
+        k = tk.Label(table, text=key, font=FONTS['caption'], bg=C['bg_2'],
+                     fg=C['fg_3'], anchor='w', justify='left')
+        k.grid(row=r, column=0, sticky='ew', pady=px(5), padx=(0, px(8)))
+        autowrap(k)
         translated = trans.get(key, key) if code != 'en' else key
         # If the translation key isn't in this language's dict, the key
-        # itself is shown — call that out subtly with a warn color.
+        # itself is shown — call that out subtly in a dimmer colour.
         is_missing = (code != 'en' and key not in trans)
-        fg = COLORS['fg_5'] if is_missing else COLORS['fg_1']
-        tk.Label(table, text=translated,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=fg,
-                 anchor='w', wraplength=300, justify='left'
-                 ).grid(row=i, column=1, sticky='w', pady=3, padx=(8, 0))
+        v = tk.Label(table, text=translated, font=FONTS['body'],
+                     bg=C['bg_2'], fg=C['fg_4'] if is_missing else C['fg_1'],
+                     anchor='w', justify='left')
+        v.grid(row=r, column=1, sticky='ew', pady=px(5))
+        autowrap(v)
+        r += 1
 
 
-def _build_status_aside(parent, app, code):
-    """Status aside — coverage / last-updated / contributors."""
+def _build_status_stats(parent, app, code):
+    """Status row — coverage / strings translated / applied / contributors."""
     n_done, n_total, pct = app._lang_coverage[code]
+    grid = tk.Frame(parent, bg=C['bg_2'])
+    grid.pack(fill='x')
+    for i in range(4):
+        grid.grid_columnconfigure(i, weight=1, uniform='lst')
 
-    tk.Label(parent, text=_('Status'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-             anchor='w'
-             ).pack(fill='x', pady=(0, 6))
+    def _cell(col, label, value, sub=None, mono=False):
+        cell = tk.Frame(grid, bg=C['bg_2'])
+        cell.grid(row=0, column=col, sticky='nw',
+                  padx=(0 if col == 0 else px(16), 0))
+        tk.Label(cell, text=label, font=FONTS['caption'], bg=C['bg_2'],
+                 fg=C['fg_3'], anchor='w').pack(fill='x')
+        tk.Label(cell, text=value,
+                 font=FONTS['code'] if mono else FONTS['body_strong'],
+                 bg=C['bg_2'], fg=C['fg_0'], anchor='w'
+                 ).pack(fill='x', pady=(px(4), 0))
+        if sub:
+            tk.Label(cell, text=sub, font=FONTS['caption'], bg=C['bg_2'],
+                     fg=C['fg_4'], anchor='w').pack(fill='x', pady=(px(2), 0))
+        return cell
 
-    # Coverage card
-    cov_color = (COLORS['success_hi'] if pct >= 95
-                 else COLORS['warn_hi'] if pct >= 60
-                 else COLORS['danger_hi'])
-    _stat_card(parent, _('Coverage'), '%d%%' % pct,
-               value_color=cov_color)
-
-    # Strings translated
-    _stat_card(parent, _('Strings translated'),
-               '%d / %d' % (n_done, n_total))
-
-    # Active language
-    _stat_card(parent, _('Currently applied'),
-               app._lang_var.get(),
-               sub=_('Click Apply to switch'))
-
-    tk.Label(parent, text=_('Contributors'),
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-             anchor='w'
-             ).pack(fill='x', pady=(14, 6))
-
-    contrib_card = tk.Frame(parent, bg=COLORS['bg_2'],
-                            highlightbackground=COLORS['border_2'],
-                            highlightthickness=1)
-    contrib_card.pack(fill='x')
-    inner = tk.Frame(contrib_card, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=12, pady=10)
-    tk.Label(inner, text='@kerrdec97',
-             font=(FONTS['body_strong'][0], 10),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(fill='x')
-    tk.Label(inner,
-             text=_('Maintainer · %d strings') % n_done,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(2, 0))
+    cov = _cell(0, _('Coverage'), '%d%%' % pct)
+    bar = RoundedBar(cov, height=4,
+                     color=C['success'] if pct >= 100 else C['accent'],
+                     track=C['bg_5'], surface=C['bg_2'])
+    bar.configure(width=px(120))
+    bar.pack(anchor='w', pady=(px(6), 0))
+    bar.set(pct / 100.0)
+    _cell(1, _('Strings translated'), '%d / %d' % (n_done, n_total))
+    _applied = app._lang_var.get()
+    _cell(2, _('Currently applied'),
+          next((l[1] for l in _LANGS if l[0] == _applied), _applied),
+          sub=_applied)
+    _cell(3, _('Contributors'), '@kerrdec97',
+          sub=_('Maintainer · %d strings') % n_done)
 
 
 def _stat_card(parent, label, value, sub='', value_color=None):
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    card.pack(fill='x', pady=(0, 8))
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=12, pady=10)
-    tk.Label(inner, text=label,
-             font=FONTS['meta'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-             ).pack(fill='x')
-    tk.Label(inner, text=value,
-             font=(FONTS['mono'][0], 13, 'bold'),
-             bg=COLORS['bg_2'],
-             fg=value_color or COLORS['fg_0'], anchor='w'
-             ).pack(fill='x', pady=(2, 0))
+    """Kept for compatibility: a small caption/value block."""
+    box = tk.Frame(parent, bg=C['bg_2'])
+    box.pack(fill='x', pady=(0, px(8)))
+    tk.Label(box, text=label, font=FONTS['caption'], bg=C['bg_2'],
+             fg=C['fg_3'], anchor='w').pack(fill='x')
+    tk.Label(box, text=value, font=FONTS['body_strong'], bg=C['bg_2'],
+             fg=value_color or C['fg_0'], anchor='w').pack(fill='x')
     if sub:
-        tk.Label(inner, text=sub,
-                 font=FONTS['meta'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-                 ).pack(fill='x', pady=(2, 0))
+        tk.Label(box, text=sub, font=FONTS['caption'], bg=C['bg_2'],
+                 fg=C['fg_4'], anchor='w').pack(fill='x')
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -644,26 +614,8 @@ def _english_string_count():
 
 
 def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
+    return XButton(parent, text=text, command=command)
 
 
 def _accent_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['accent_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=14, pady=6,
-                     cursor='hand2',
-                     command=command)
+    return XButton(parent, text=text, command=command, variant='primary')

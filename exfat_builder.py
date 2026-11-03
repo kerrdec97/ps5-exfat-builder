@@ -19932,72 +19932,76 @@ class ExFATBuilder(_TK_BASE):
         ])
 
     def _build_shutdown_section(self, body):
-        """Shutdown / Sleep after task section in Settings tab."""
-        tk.Frame(body, bg=BORDER, height=1).pack(fill='x', padx=24, pady=(0, 12))
+        """Shutdown / Sleep after task section in Settings tab (design
+        system: settings cards with rows; vars, values and the save
+        callback are unchanged)."""
+        from tkinter_theme import px as _px
+        from ui.shared.widgets import Dropdown as _Dropdown
+        from ui.tab_settings import settings_card, setting_row, TSwitch
 
-        hdr_row = tk.Frame(body, bg=BG)
-        hdr_row.pack(fill='x', padx=24, pady=(0, 6))
-        tk.Label(hdr_row, text='Shutdown / Sleep after task',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
+        card = settings_card(body, 'Shutdown / Sleep after task',
+            'Automatically shut down, restart or sleep the PC when a task completes.')
 
-        tk.Label(body,
-                 text='Automatically shut down, restart or sleep the PC when a task completes.',
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
-                 anchor='w').pack(fill='x', padx=24, pady=(0, 8))
-
-        card = tk.Frame(body, bg=SURFACE2,
-                        highlightbackground=BORDER, highlightthickness=1)
-        card.pack(fill='x', padx=24, pady=(0, 16))
-        inner = tk.Frame(card, bg=SURFACE2)
-        inner.pack(fill='x', padx=14, pady=10)
-
-        # Action selector
+        # Action selector (same values as the old radio row)
         self._shutdown_action_var = tk.StringVar(
             value=self._settings.get('shutdown_action', 'none'))
-        action_row = tk.Frame(inner, bg=SURFACE2)
-        action_row.pack(fill='x', pady=(0, 8))
-        tk.Label(action_row, text='Action:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=10, anchor='w').pack(side='left')
-        for val, lbl in [('none',     'None — do nothing'),
-                         ('shutdown', '⏻ Shut down'),
-                         ('restart',  '🔄 Restart'),
-                         ('sleep',    '💤 Sleep')]:
-            XRadio(action_row, text=lbl,
-                           variable=self._shutdown_action_var, value=val,
-                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                           activebackground=SURFACE2, selectcolor=BG,
-                           cursor='hand2',
-                           command=self._save_shutdown_settings
-                           ).pack(side='left', padx=(0, 16))
+        _actions = [('none',     'None — do nothing'),
+                    ('shutdown', '⏻ Shut down'),
+                    ('restart',  '🔄 Restart'),
+                    ('sleep',    '💤 Sleep')]
+        from ui.icons import strip_glyphs as _sg
+        _act_disp = tk.StringVar()
+
+        def _act_sync(*_a):
+            cur = self._shutdown_action_var.get()
+            _act_disp.set(next((_sg(l) for v, l in _actions if v == cur), cur))
+
+        def _act_pick(_e=None):
+            sel = _act_disp.get()
+            for v, l in _actions:
+                if _sg(l) == sel:
+                    self._shutdown_action_var.set(v)
+                    break
+            self._save_shutdown_settings()
+        _act_sync()
+        ctrl = setting_row(card.body, 'Action',
+                           'What the PC does once a selected task finishes.')
+        dd = _Dropdown(ctrl, textvariable=_act_disp,
+                       values=[_sg(l) for _v, l in _actions], width=20)
+        dd.pack(side='left', padx=(0, _px(3)))
+        dd.bind('<<ComboboxSelected>>', _act_pick)
+        self._shutdown_action_var.trace_add('write', _act_sync)
 
         # Delay
-        delay_row = tk.Frame(inner, bg=SURFACE2)
-        delay_row.pack(fill='x', pady=(0, 8))
-        tk.Label(delay_row, text='Delay:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=10, anchor='w').pack(side='left')
         self._shutdown_delay_var = tk.StringVar(
             value=str(self._settings.get('shutdown_delay', 60)))
-        import tkinter.ttk as _ttsd
-        delay_cb = _ttsd.Combobox(delay_row,
-                                   textvariable=self._shutdown_delay_var,
-                                   values=['0', '30', '60', '120', '300', '600'],
-                                   state='readonly',
-                                   font=(FONTS['body'][0], 9), width=6)
-        delay_cb.pack(side='left')
-        tk.Label(delay_row,
-                 text='seconds after task completes  (0 = immediate, no cancel window)',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']
-                 ).pack(side='left', padx=(8, 0))
+        ctrl = setting_row(card.body, 'Delay',
+            'Seconds to wait after the task completes. 0 = immediate, '
+            'with no cancel window.')
+        _Dropdown(ctrl, textvariable=self._shutdown_delay_var,
+                  values=['0', '30', '60', '120', '300', '600'],
+                  width=6).pack(side='left')
+        tk.Label(ctrl, text='s', font=FONTS['body'], bg=COLORS['bg_2'],
+                 fg=COLORS['fg_3']).pack(side='left', padx=(_px(6), _px(3)))
         self._shutdown_delay_var.trace_add('write',
             lambda *a: self._save_shutdown_settings())
 
-        # Trigger checkboxes
-        tk.Label(inner, text='Trigger after:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 anchor='w').pack(anchor='w', pady=(4, 4))
+        self._shutdown_status_var = tk.StringVar(value='')
+        _sd_status = tk.Label(card.body, textvariable=self._shutdown_status_var,
+                              font=FONTS['caption'], bg=COLORS['bg_2'],
+                              fg=COLORS['warn_hi'], anchor='w')
 
+        def _sd_status_vis(*_a):
+            try:
+                if self._shutdown_status_var.get():
+                    _sd_status.pack(fill='x', pady=(0, _px(8)))
+                else:
+                    _sd_status.pack_forget()
+            except Exception:
+                pass
+        self._shutdown_status_var.trace_add('write', _sd_status_vis)
+
+        # Trigger switches
         self._shutdown_on_unibuild_var = tk.BooleanVar(
             value=self._settings.get('shutdown_on_unibuild', False))
         self._shutdown_on_exfat_var    = tk.BooleanVar(
@@ -20011,8 +20015,8 @@ class ExFATBuilder(_TK_BASE):
         self._shutdown_on_pfs_var      = tk.BooleanVar(
             value=self._settings.get('shutdown_on_pfs', False))
 
-        triggers_row = tk.Frame(inner, bg=SURFACE2)
-        triggers_row.pack(fill='x')
+        tcard = settings_card(body, 'Triggers',
+                              'Run the action when any of these finish.')
         for var, lbl in [
             (self._shutdown_on_unibuild_var, 'Build tab queue finished'),
             (self._shutdown_on_exfat_var,    'exFAT queue finished'),
@@ -20021,17 +20025,9 @@ class ExFATBuilder(_TK_BASE):
             (self._shutdown_on_ftp_var,      'FTP upload finished'),
             (self._shutdown_on_pfs_var,      'PFS build finished'),
         ]:
-            XCheck(triggers_row, text=lbl, variable=var,
-                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                           activebackground=SURFACE2, selectcolor=BG,
-                           cursor='hand2',
-                           command=self._save_shutdown_settings
-                           ).pack(side='left', padx=(0, 16))
-
-        self._shutdown_status_var = tk.StringVar(value='')
-        tk.Label(inner, textvariable=self._shutdown_status_var,
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=WARNING,
-                 anchor='w').pack(fill='x', pady=(6, 0))
+            ctrl = setting_row(tcard.body, lbl)
+            TSwitch(ctrl, variable=var,
+                    command=self._save_shutdown_settings).pack(side='left')
 
     def _save_shutdown_settings(self):
         self._settings['shutdown_action']       = self._shutdown_action_var.get()
@@ -20059,18 +20055,26 @@ class ExFATBuilder(_TK_BASE):
             self.after(0, self._shutdown_countdown, action, labels.get(action, action), delay)
 
     def _shutdown_countdown(self, action, label, seconds_left):
+        from tkinter_theme import px as _px
+        from ui.shared.widgets import IconLabel as _IconLabel
         dlg = tk.Toplevel(self)
         dlg.title('PC ' + label + ' scheduled')
-        dlg.configure(bg=BG)
+        dlg.configure(bg=COLORS['bg_2'])
         dlg.resizable(False, False)
         dlg.attributes('-topmost', True)
 
-        tk.Label(dlg, text='\u23fb  ' + label + ' scheduled',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=WARNING,
-                 padx=24, pady=16).pack()
+        body = tk.Frame(dlg, bg=COLORS['bg_2'])
+        body.pack(fill='both', expand=True, padx=_px(24), pady=(_px(20), _px(16)))
+        head = tk.Frame(body, bg=COLORS['bg_2'])
+        head.pack(fill='x')
+        _IconLabel(head, 'power', 20, COLORS['warn'], COLORS['bg_2']).pack(
+            side='left', padx=(0, _px(10)))
+        tk.Label(head, text=label + ' scheduled', font=FONTS['title'],
+                 bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
         countdown_var = tk.StringVar()
-        tk.Label(dlg, textvariable=countdown_var,
-                 font=(FONTS['body'][0], 10), bg=BG, fg=MUTED, padx=24).pack()
+        tk.Label(body, textvariable=countdown_var, font=FONTS['body'],
+                 bg=COLORS['bg_2'], fg=COLORS['fg_2'], anchor='w'
+                 ).pack(fill='x', pady=(_px(10), 0))
 
         cancelled = [False]
         def _cancel():
@@ -20078,11 +20082,11 @@ class ExFATBuilder(_TK_BASE):
             dlg.destroy()
             self._log('[SHUTDOWN] %s cancelled by user.\n' % label)
 
-        XButton(dlg, text='\u2717  Cancel ' + label,
-                  font=(FONTS['body_strong'][0], 10),
-                  bg=DANGER, fg=TEXT, activebackground='#c0392b',
-                  relief='flat', bd=0, padx=20, pady=10,
-                  cursor='hand2', command=_cancel).pack(pady=(8, 20))
+        foot = tk.Frame(dlg, bg=COLORS['bg_1'])
+        foot.pack(fill='x', side='bottom')
+        XButton(foot, text='Cancel ' + label, variant='danger',
+                icon='close', command=_cancel).pack(
+                    side='right', padx=_px(16), pady=_px(12))
 
         def _tick(n):
             if cancelled[0] or not dlg.winfo_exists():
