@@ -132,7 +132,12 @@ def _migrate_settings(data):
 def load_settings():
     try:
         with open(_settings_path(), 'r', encoding='utf-8') as f:
-            return _migrate_settings(json.load(f))
+            data = json.load(f)
+        if not isinstance(data, dict):
+            # Valid JSON but not settings (e.g. [] or null): every .get()
+            # would crash at start-up, so set it aside like a corrupt file.
+            raise ValueError('settings file is not a JSON object')
+        return _migrate_settings(data)
     except FileNotFoundError:
         return {}
     except Exception:
@@ -10335,8 +10340,12 @@ class ExFATBuilder(_TK_BASE):
                 self._stop_drive_poll()
             except Exception:
                 pass
-            self._update_queue_dot(idx, 'done')
-            self._set_progress(100, 'Complete!',
+            # Technical audit M1: the image is built but not yet verified;
+            # 'Complete!' and the history entry follow the verdict.
+            self._update_queue_dot(idx, 'building')
+            self._set_progress(100, 'Built \u2014 verifying\u2026'
+                               if not self._adv_skip_verify_var.get()
+                               else 'Complete!',
                                'Game: %dm %02ds  •  Total: %dm %02ds' % (gm, gs, m, s))
             self._activate_dot(4)
             try:
@@ -10348,7 +10357,6 @@ class ExFATBuilder(_TK_BASE):
                 pass
             self._log('\n[OK] Done: ' + out_path +
                       ' (%dm %02ds)\n' % (gm, gs))
-            self._save_history(self._queue[idx], out_path, True)
             # Write a per-build summary.json next to the .exfat. Records
             # provenance + settings so later you can verify a known-good
             # build matches a config or diagnose drift between similar
@@ -11954,10 +11962,21 @@ class ExFATBuilder(_TK_BASE):
 
     def _save_history(self, item, out_path, success):
         try:
+            path = self._history_path()
             try:
-                with open(self._history_path(), 'r', encoding='utf-8') as f:
+                with open(path, 'r', encoding='utf-8') as f:
                     history = json.load(f)
+                if not isinstance(history, list):
+                    raise ValueError('history is not a list')
+            except FileNotFoundError:
+                history = []
             except Exception:
+                # Unreadable history: keep it for the user instead of
+                # silently overwriting it (technical audit L1).
+                try:
+                    os.replace(path, path + '.corrupt')
+                except OSError:
+                    pass
                 history = []
             history.insert(0, {
                 'title':    item.game_title or os.path.basename(item.game_folder),
@@ -11969,8 +11988,10 @@ class ExFATBuilder(_TK_BASE):
                 'time':     time.strftime('%Y-%m-%d %H:%M:%S'),
             })
             history = history[:50]  # keep last 50
-            with open(self._history_path(), 'w', encoding='utf-8') as f:
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(history, f, indent=2)
+            os.replace(tmp, path)
         except Exception:
             pass
 
@@ -23689,7 +23710,16 @@ class ExFATBuilder(_TK_BASE):
 
     def _verify_done_final(self, ok, msg, idx, indices, pos, out_path):
         """Final verification result — handle success/failure and continue queue."""
+        try:
+            self._save_history(self._queue[idx], out_path, bool(ok))
+        except Exception:
+            pass
         if ok:
+            self._update_queue_dot(idx, 'done')
+            try:
+                self._set_progress(100, 'Complete!', msg)
+            except Exception:
+                pass
             self._set_status(msg, SUCCESS)
             self._export_log(out_path)
             # v3.6.2: occasional, frequency-gated support nudge (never every

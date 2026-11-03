@@ -275,6 +275,51 @@ class DriveLetters(unittest.TestCase):
         self.assertIsInstance(drives.used_letter_mask(), int)
 
 
+class SettingsAndHistoryFiles(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_app()
+        self.d = tempfile.mkdtemp(prefix='hist_')
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_non_object_settings_set_aside(self):
+        from tests._support import temp_settings_file
+        with temp_settings_file() as path:
+            with open(path, 'w') as f:
+                f.write('[1, 2]')
+            self.assertEqual(self.mod.load_settings(), {})
+            self.assertTrue(os.path.isfile(path + '.corrupt'))
+
+    def _fake(self):
+        hp = os.path.join(self.d, 'history.json')
+
+        class Fake:
+            def _history_path(self_inner):
+                return hp
+
+        class Item:
+            game_title = 'Game'
+            game_folder = self.d
+            title_id = 'PPSA00001'
+            version = '01.000'
+        return Fake(), Item(), hp
+
+    def test_history_written_atomically_and_corrupt_kept(self):
+        import json
+        fake, item, hp = self._fake()
+        with open(hp, 'w') as f:
+            f.write('{not json')
+        self.mod.ExFATBuilder._save_history(fake, item, 'x.exfat', True)
+        self.assertTrue(os.path.isfile(hp + '.corrupt'))
+        with open(hp) as f:
+            data = json.load(f)
+        self.assertEqual(len(data), 1)
+        self.assertTrue(data[0]['success'])
+        self.assertFalse(os.path.exists(hp + '.tmp'))
+        self.mod.ExFATBuilder._save_history(fake, item, 'y.exfat', False)
+        with open(hp) as f:
+            self.assertEqual([e['success'] for e in json.load(f)], [False, True])
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()
