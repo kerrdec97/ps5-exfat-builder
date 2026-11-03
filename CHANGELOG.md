@@ -8,6 +8,84 @@ The final release of exFAT Image Builder. It restores the v4.0.2 source that
 was never published, fixes the problems reported since, and gives the app a
 consistent look. Every existing feature, setting and language is kept.
 
+### Added — FPKG (installable PS5 packages)
+- New **FPKG** output format in the Build tab. The app writes a Publishing
+  Tools project (GP5) from the dump and packs it with **your own**
+  `prospero-pub-cmd.exe`. No Sony software is included or downloaded.
+  See `docs/FPKG.md`.
+- Pre-flight before anything slow: Content ID and version from
+  `param.json`, the dump's 96-byte keystone, non-ASCII paths, `%`/`;`/trailing
+  dots in names, links, free space and the Visual C++ runtime.
+- Project: layout-order file list; SDK-generated files, dump leftovers and OS
+  clutter left out (each listed in `01-create-gp5.log`); empty folders such
+  as DLC mount points declared; DRM type `standard`; automatic package size
+  class; a PlayGo layout where every chunk is initial and has data.
+- Packing shows the tool's progress bar (or bytes written). Any `[Error]`
+  line fails the build even with exit code 0, and known SDK errors are
+  explained. The package header is checked (unsigned, plaintext debug
+  marker) before the file gets its final name. Output from a stock
+  Publishing Tools install, which consoles will not install, is reported as a
+  failure. Packages are never overwritten; optional `img_verify` afterwards.
+- Cancel stops the tool's whole process tree and removes the partial file.
+
+### Fixed — data safety (technical and issue audits, `docs/farewell/`)
+- **PFS:** mkpfs exit code 1 means it wrote the image and then its check
+  found errors. That was reported as "Done ✓" and could delete the source
+  image; now it is a failure and the source is kept.
+- **"Delete source folder"** only runs after verification really compared
+  the image with the source. Skipped, OSFMount-missing, mount-failed and
+  inconclusive checks keep the source. The FFPKG option requires a
+  complete-size image.
+- **Verification** requires every copied file on the image at full size; the
+  old 0.5 % / 2-file tolerance could pass an image with missing files. Native
+  MkPFS verification no longer reports false failures for dumps with excluded
+  files (decrypted folder, old images, hidden files).
+- **Build script:** source statistics count only what robocopy copies, so a
+  dump containing an old `.exfat` no longer fails its post-copy check and
+  loses the image; an unreadable image root is "unknown", not "0 files".
+- **Rebuilding** keeps the previous image until the new one succeeds
+  (restored on failure; the failed attempt is kept as `.failed.exfat`).
+- **FFPKG** builds write `<name>.part` and rename on success, so a failed
+  build never leaves a broken image under the real name.
+- **Build queue:** a job that finishes after Cancel keeps its image; a
+  finished `.ffpfsc` is no longer deleted because the intermediate image was
+  locked; end-of-queue messages count real outcomes instead of queued items.
+- **Closing the app** stops the tools it started (PowerShell, robocopy,
+  UFS2Tool, mkpfs, Publishing Tools) before releasing drives.
+- **Threads:** every widget's `after()` is safe to call from worker threads
+  (seen as "main thread is not in main loop" in Windows test runs).
+
+### Fixed — backports
+- The "basic byte-patch" fallback, used when the backport engine could not
+  load, wrote the SDK number into executable header bytes that are not the
+  SDK field and reported success. It is removed; nothing is changed and the
+  run fails clearly instead.
+- The backport engine is unpacked to a fresh private folder every time (it
+  reused a stale `Backport.py` and put the shared Temp folder on the module
+  path of the elevated app).
+- Safeguards from the PS5 Backport GUI: a Target SDK above the game's own SDK
+  is refused; an already backported folder (same fakelib set) is refused
+  because its originals would be patched files; another tool's fakelib folder
+  is backed up and allowed; free space for backups is checked first.
+
+### Security & dependencies
+- PyInstaller 6.22.3 (hardening for elevated one-file apps), Pillow 13.0.0
+  (fixes the advisories against 12.3.0, two critical), cryptography 50.0.2.
+  `docs/farewell/DEPENDENCIES.md` has the inventory.
+- Cover art from dumps is decoded only as PNG/JPEG/WEBP/BMP/DDS, and very
+  large images are refused.
+- UFS2Tool may run on .NET 9/10: .NET 8 support ends on 2026-11-10. The
+  .NET check accepts 8 or newer.
+- In-app updates: packaged `.exe` only, never during a build, the release's
+  `.sha256` is required (fail closed), downloads time out, and the app exits
+  through its normal close path.
+- Notices: DokanNet (MIT), the bundled Python runtime and packages, and
+  corrected Lazy_MkPFS licence provenance.
+
+### Fixed — shortcuts
+- `Ctrl+B` and `Esc` work on the Build tab again (they called removed
+  functions); `Esc` asks before cancelling.
+
 ### Restored
 - **The v4.0.2 source is back in the repository (#75).** The published
   v4.0.2 was built from code that was never committed; the repository only
@@ -101,8 +179,13 @@ consistent look. Every existing feature, setting and language is kept.
   writes the `.sha256` file for the updater. v4.0.2 had accidentally bundled
   numpy, PyYAML and charset_normalizer from the build machine.
 - Third-party licences verified against upstream; full texts in `LICENSES/`.
-- Automated tests in `tests/` (51 tests; `EXFAT_GUI_SMOKE=1` adds a GUI smoke
-  test).
+- Automated tests in `tests/` (118 tests; `EXFAT_GUI_SMOKE=1` adds GUI
+  tests, including an FPKG job driven through the real Build tab).
+- **Windows CI** (`.github/workflows/windows-build.yml`, windows-2025): builds
+  the exe with `build.bat`, runs the tests on Windows (including a real
+  UFS2Tool `.ffpkg` build and a PowerShell parse of the embedded build
+  script), opens and screenshots every page in English, German and Japanese,
+  and launches the built exe. The exe and screenshots are kept as artifacts.
 
 ### Removed
 - Code that nothing referenced: the superseded What's New and launch-time
@@ -117,8 +200,16 @@ consistent look. Every existing feature, setting and language is kept.
 - Unsigned PyInstaller executables can still be flagged by antivirus heuristics
   (#78, #63). The build no longer uses UPX and carries version information, but
   only a code-signing certificate addresses this properly.
-- Not tested on real hardware for this release: OSFMount, robocopy, UFS2Tool,
-  Windows 10/11 locales, and a PS5. See the README.
+- **FPKG** has not been run against real Publishing Tools or installed on a
+  console; its tests use a stand-in tool. Source must be a dump folder with
+  ASCII paths; no DLC packages, SELF repair, `.ucp` repair or DDS→PNG
+  recovery yet. Update builds exist in the engine but not in the Build tab.
+- The PS5 Backport GUI's engine (`right.sprx` replacement, confirmed-fix
+  families, import-table audit) is not merged: its source was not available
+  to this build.
+- Not tested on real hardware for this release: image builds with OSFMount,
+  robocopy on a real game, Windows 10/11 locales, and a PS5. The Windows CI
+  runner has no OSFMount and no console. See the README.
 
 
 ## [4.0.2] - 2026-07-05

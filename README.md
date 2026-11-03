@@ -27,6 +27,10 @@ backporting PS5 game images from your own game dumps.**
 **Build & convert**
 - Build **exFAT** images, **FFPKG** (UFS2) images and compressed **FFPFSC** /
   uncompressed **FFPFS** PFS images from a game dump folder.
+- Build installable **FPKG** (`.pkg`) packages with your own Sony Publishing
+  Tools (`prospero-pub-cmd.exe`, not included): project generation, PlayGo
+  layout, progress, header checks and optional `img_verify`. See
+  [docs/FPKG.md](docs/FPKG.md).
 - Convert existing `.exfat` / `.ffpkg` images to each other or to `.ffpfsc`.
 - Mixed-format **build queue**, editable while it runs (queued jobs can be
   added, removed and reordered).
@@ -201,8 +205,8 @@ report (version, system information, recent log, redacted settings).
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl + B` | Start the build/queue on the current Build tab |
-| `Esc` | Cancel the running build/queue |
+| `Ctrl + B` | Start the build queue (Build tab) |
+| `Esc` | Cancel the running build queue (asks first) |
 | `F5` | Refresh the current list (PS5, Library, My Images) |
 | `Ctrl + Shift + T` | Test the PS5 FTP connection |
 | `Ctrl + Q` | Quit |
@@ -211,19 +215,21 @@ report (version, system information, recent log, redacted settings).
 
 ## 🧪 What was and wasn't tested for the Farewell Edition
 
-Tested in a Linux CI-style environment: every module compiles; 51 automated
-tests pass (copy accounting with real localized robocopy output from issue
-reports, output-rejection policy, verification helpers, updater environment,
-translations for all 17 languages, scrolling, OSFMount discovery, free-space
-checks); the full GUI starts and every page builds without errors (Xvfb); a
-PyInstaller build with the release flags succeeds and contains the vendored
-backend, licences and changelog. The restored v4.0.2 source was verified
-byte-for-byte against the published executable's bytecode.
+**On Windows (GitHub Actions, Windows Server 2025, every push to the
+development branch):** the release exe is built with `build.bat`; 118
+automated tests run, including a real `.ffpkg` build with the bundled
+UFS2Tool on .NET 10 and a PowerShell parse of the embedded build script; the
+app opens every page in English, German and Japanese with no errors and
+screenshots each one; the built exe is launched and must still be running
+after 40 seconds. The exe and screenshots are kept as build artifacts.
 
-**Not** tested for this release (no Windows machine, OSFMount, UFS2Tool or PS5
-was available): actual image builds, mounting, robocopy on Windows, the
-embedded PowerShell builder changes, extraction, FTP to a console, and the
-Windows `.exe` itself. Please report anything that misbehaves.
+**On Linux:** the same tests plus GUI tests under Xvfb, including an FPKG
+job driven through the real Build tab against a stand-in Publishing Tools.
+
+**Not tested:** image builds that need OSFMount (not available on the CI
+runner), robocopy copying a real game, the FPKG builder against real Sony
+Publishing Tools, and anything on a PS5. Please report anything that
+misbehaves, with the log.
 
 ------------------------------------------------------------------------
 
@@ -234,6 +240,11 @@ Windows `.exe` itself. Please report anything that misbehaves.
 - Compressed archives (zip / 7z / rar) are not read directly — extract them
   first.
 - Wine / Linux is not supported (OSFMount needs real Windows).
+- FPKG needs your own Publishing Tools build that makes plaintext debug
+  packages; a stock install's output is rejected. It has not yet been tested
+  with real tools or on a console. Paths must be ASCII; no DLC packages yet.
+- The PS5 Backport GUI's engine improvements are not merged into the
+  Backports page yet.
 
 ------------------------------------------------------------------------
 
