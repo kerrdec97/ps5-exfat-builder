@@ -38,31 +38,29 @@ _BADGE = {
 
 
 class StatStrip(tk.Frame):
-    """The Build hero's stats strip as a standalone widget.
+    """A row of facts: caption label above a semibold value.
 
-    stats: ordered list of (label, key) pairs.
-    Use `.set(key, value, warn=False)` to update a cell. Values default
-    to an em-dash. Cell styling is identical to GameHero's strip:
-    uppercase mono label in fg_5, bold mono value in teal (warn flips
-    the value to the warn token).
+    stats: ordered list of (label, key) pairs. `.set(key, value,
+    warn=False, ok=False)` updates a cell (warn -> warn_hi, ok ->
+    success_hi). Values default to an em-dash.
     """
 
-    def __init__(self, parent, stats, bg=None, gap=26):
+    def __init__(self, parent, stats, bg=None, gap=28):
+        from tkinter_theme import px
         bg = bg or COLORS['bg_2']
         super().__init__(parent, bg=bg)
         self._bg = bg
         self._cells = {}
         for i, (label, key) in enumerate(stats):
             cell = tk.Frame(self, bg=bg)
-            cell.pack(side='left', padx=(0 if i == 0 else gap, 0))
-            tk.Label(cell, text=label.upper(),
-                     font=(FONTS['body_strong'][0], 9), bg=bg,
-                     fg=COLORS['fg_5'], anchor='w').pack(anchor='w')
+            cell.pack(side='left', padx=(0 if i == 0 else px(gap), 0))
+            lab = label.capitalize() if label.isupper() else label
+            tk.Label(cell, text=lab, font=FONTS['caption'], bg=bg,
+                     fg=COLORS['fg_3'], anchor='w').pack(anchor='w')
             v = tk.StringVar(value='\u2014')
-            val = tk.Label(cell, textvariable=v,
-                           font=(FONTS['body_strong'][0], 11),
-                           bg=bg, fg=COLORS['teal'], anchor='w')
-            val.pack(anchor='w', pady=(2, 0))
+            val = tk.Label(cell, textvariable=v, font=FONTS['body_strong'],
+                           bg=bg, fg=COLORS['fg_0'], anchor='w')
+            val.pack(anchor='w', pady=(px(2), 0))
             self._cells[key] = (v, val)
 
     def set(self, key, value, warn=False, ok=False):
@@ -72,12 +70,8 @@ class StatStrip(tk.Frame):
         v, val = cell
         v.set(value if value not in (None, '') else '\u2014')
         try:
-            if warn:
-                val.config(fg=COLORS['warn'])
-            elif ok:
-                val.config(fg=COLORS['success_hi'])
-            else:
-                val.config(fg=COLORS['teal'])
+            val.config(fg=COLORS['warn_hi'] if warn else (
+                COLORS['success_hi'] if ok else COLORS['fg_0']))
         except Exception:
             pass
 
@@ -86,112 +80,70 @@ class StatStrip(tk.Frame):
         return cell[0].get() if cell else ''
 
 
+_HERO_TONE = {'ready': 'success', 'wait': 'neutral', 'busy': 'info',
+              'warn': 'warn', 'fail': 'danger', 'error': 'danger',
+              'ok': 'success', 'off': 'neutral'}
+
+
 class ControlHero(tk.Frame):
-    """Build-style hero card for PS5 tool pages.
+    """Hero card for PS5 tool pages (design system › Card): icon tile,
+    title + subtitle, status badge, facts strip(s) and an actions row.
 
-    Layout mirrors ui/shared/hero.GameHero:
-
-        ┌──────────────────────────────────────────────────────────┐
-        │ [icon]  TITLE                          [STATUS BADGE]    │
-        │  tile   subtitle (mono, muted)                            │
-        │         LABEL    LABEL    LABEL    LABEL   (stats strip)  │
-        │         value    value    value    value                  │
-        │         [action] [action] [action] …       (actions row)  │
-        └──────────────────────────────────────────────────────────┘
-
-    Args:
-        parent:  parent widget
-        title:   hero title (rendered uppercase, like GameHero)
-        subtitle: small mono line under the title
-        stats:   ordered list of (label, key) pairs for the strip
-        icon:    glyph for the icon tile
-        icon_size: tile edge in px (default 64 — smaller than the
-                 150px cover tile because there's no cover art here)
-
-    Attributes:
-        actions: a frame under the stats strip — caller packs themed
-                 buttons (ui.shared.page_head.make_themed_button) into
-                 it. Created lazily on first access via `.actions_row()`
-                 so heroes without actions don't reserve the space.
-
-    API: set_title, set_subtitle, set_badge, set_stat — same verbs as
-    GameHero so call sites read identically.
+    API: set_title, set_subtitle, set_badge, set_stat, add_strip,
+    actions_row() / .actions — unchanged.
     """
 
     def __init__(self, parent, title='', subtitle='', stats=(),
                  icon='\U0001f3ae', icon_size=64):
-        super().__init__(parent, bg=COLORS['bg_2'],
-                         highlightbackground=COLORS['border_2'],
-                         highlightthickness=1)
-
-        pad = tk.Frame(self, bg=COLORS['bg_2'])
-        pad.pack(fill='both', expand=True, padx=20, pady=16)
-
-        # ── icon tile (accent-tinted square, like the Build cover
-        #    tile family but sized for a glyph) ──
-        tile = tk.Frame(pad, bg=COLORS['accent_08'], width=icon_size,
-                        height=icon_size,
-                        highlightbackground=COLORS['accent_15'],
-                        highlightthickness=1)
+        from tkinter_theme import px
+        from ui.shared.widgets import Rounded, IconLabel, Badge, autowrap
+        from ui.icons import leading_icon, has_icon
+        super().__init__(parent, bg=COLORS['bg_1'], highlightthickness=0)
+        card = Rounded(self, bg=COLORS['bg_2'], border=COLORS['border_2'],
+                       radius=8, padding=px(16), surface=COLORS['bg_1'])
+        card.pack(fill='both', expand=True)
+        name = icon if has_icon(str(icon)) else (leading_icon(str(icon)) or 'ps5')
+        tile = Rounded(card, bg=COLORS['accent_lo'], radius=8,
+                       surface=COLORS['bg_2'])
         tile.pack(side='left', anchor='n')
-        tile.pack_propagate(False)
-        self._icon_lbl = tk.Label(tile, text=icon, bg=COLORS['accent_08'],
-                                  fg=COLORS['accent'],
-                                  font=(FONTS['body'][0],
-                                        max(16, int(icon_size * 0.42))))
-        self._icon_lbl.pack(expand=True)
-
-        # ── right column ──
-        right = tk.Frame(pad, bg=COLORS['bg_2'])
-        right.pack(side='left', fill='both', expand=True, padx=(16, 0))
-
+        self._icon_lbl = IconLabel(tile, name, 24, COLORS['accent_hi'],
+                                   COLORS['accent_lo'])
+        self._icon_lbl.pack(padx=px(12), pady=px(12))
+        right = tk.Frame(card, bg=COLORS['bg_2'])
+        right.pack(side='left', fill='both', expand=True, padx=(px(16), 0))
         title_row = tk.Frame(right, bg=COLORS['bg_2'])
         title_row.pack(fill='x')
-
         tcol = tk.Frame(title_row, bg=COLORS['bg_2'])
         tcol.pack(side='left', fill='x', expand=True)
-        self.title_var = tk.StringVar(value=(title or '').upper())
-        tk.Label(tcol, textvariable=self.title_var,
-                 font=(FONTS['body_strong'][0], 16), bg=COLORS['bg_2'],
-                 fg=COLORS['fg_0'], anchor='w').pack(anchor='w', fill='x')
+        self.title_var = tk.StringVar(value=title or '')
+        tk.Label(tcol, textvariable=self.title_var, font=FONTS['subtitle'],
+                 bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(
+                     anchor='w', fill='x')
         self.subtitle_var = tk.StringVar(value=subtitle or '')
-        tk.Label(tcol, textvariable=self.subtitle_var,
-                 font=(FONTS['body'][0], 9), bg=COLORS['bg_2'],
-                 fg=COLORS['fg_4'], anchor='w', justify='left'
-                 ).pack(anchor='w', pady=(2, 0))
-
-        # status badge (top-right, GameHero style)
-        self._badge = tk.Label(title_row, text='',
-                               font=(FONTS['body_strong'][0], 9),
-                               bg=COLORS['bg_4'], fg=COLORS['fg_3'],
-                               padx=10, pady=4)
-        self._badge.pack(side='right', anchor='n')
-
-        # stats strip
+        sub = tk.Label(tcol, textvariable=self.subtitle_var,
+                       font=FONTS['caption'], bg=COLORS['bg_2'],
+                       fg=COLORS['fg_3'], anchor='w', justify='left')
+        sub.pack(anchor='w', fill='x', pady=(px(2), 0))
+        autowrap(sub)
+        self._badge = Badge(title_row, '', 'neutral', surface=COLORS['bg_2'])
+        self._badge_shown = False
         self.strip = StatStrip(right, stats) if stats else None
         if self.strip is not None:
-            self.strip.pack(fill='x', pady=(14, 0))
-
+            self.strip.pack(fill='x', pady=(px(14), 0))
         self.title_row = title_row
         self._right = right
         self._actions = None
         self._extra_strips = []
 
     def add_strip(self, stats):
-        """Add a second (or third) stats-strip row under the first.
-
-        Returns the StatStrip. `set_stat` falls through to extra rows,
-        so callers address every cell through the hero regardless of
-        which row it lives on.
-        """
+        from tkinter_theme import px
         s = StatStrip(self._right, stats)
-        s.pack(fill='x', pady=(10, 0))
+        s.pack(fill='x', pady=(px(10), 0))
         self._extra_strips.append(s)
         return s
 
-    # ── public API (GameHero verbs) ──
     def set_title(self, title):
-        self.title_var.set((title or '').upper() or '\u2014')
+        self.title_var.set((title or '') or '\u2014')
 
     def set_subtitle(self, text):
         self.subtitle_var.set(text or '')
@@ -206,23 +158,26 @@ class ControlHero(tk.Frame):
                 return
 
     def set_badge(self, text, kind='ready'):
-        bg, fg = _BADGE.get(kind, _BADGE['wait'])
-        prefix = '\u2713  ' if kind == 'ready' else ''
         try:
-            self._badge.config(text=(prefix + text) if text else '',
-                               bg=bg, fg=fg)
+            if not text:
+                if self._badge_shown:
+                    self._badge.pack_forget()
+                    self._badge_shown = False
+                return
+            self._badge.set(text, _HERO_TONE.get(kind, 'neutral'))
+            if not self._badge_shown:
+                self._badge.pack(side='right', anchor='n')
+                self._badge_shown = True
         except Exception:
             pass
 
     def actions_row(self):
-        """Return the actions row frame, creating it on first call."""
+        from tkinter_theme import px
         if self._actions is None:
             self._actions = tk.Frame(self._right, bg=COLORS['bg_2'])
-            self._actions.pack(fill='x', pady=(14, 0))
+            self._actions.pack(fill='x', pady=(px(14), 0))
         return self._actions
 
-    # Convenience alias so call sites can do `hero.actions` after the
-    # row exists (mirrors Card.actions naming).
     @property
     def actions(self):
         return self.actions_row()

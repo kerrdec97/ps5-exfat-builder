@@ -41,166 +41,129 @@ import tkinter as tk
 from tkinter_theme import COLORS, FONTS
 
 
-class StagedProgressBar(tk.Frame):
-    """Four-stage progress widget with a bar and meta row."""
+class _BarCanvasShim:
+    """Legacy code drew on `bar_canvas` with coords()/itemconfig(); this
+    translates those calls onto the RoundedBar."""
 
-    # State color schemes — (border, fill, dot, name_fg, num_fg)
-    _PENDING = (COLORS['border_2'], COLORS['bg_3'],
-                COLORS['fg_6'],     COLORS['fg_2'], COLORS['fg_5'])
-    _ACTIVE  = (COLORS['accent'],   COLORS['accent_15'],
-                COLORS['accent'],   COLORS['accent_hi'], COLORS['accent'])
-    _DONE    = (COLORS['success'],  COLORS['success_bg'],
-                COLORS['success'],  COLORS['success_hi'], COLORS['success_hi'])
-    _ERROR   = (COLORS['danger'],   COLORS['danger_bg'],
-                COLORS['danger'],   COLORS['danger_hi'], COLORS['danger_hi'])
+    def __init__(self, bar):
+        self._bar = bar
+
+    def coords(self, _item, *xy):
+        if len(xy) == 1 and isinstance(xy[0], (list, tuple)):
+            xy = xy[0]
+        if len(xy) >= 4:
+            w = max(1, self._bar.winfo_width())
+            x0, x1 = float(xy[0]), float(xy[2])
+            self._bar.set(max(0.0, (x1 - x0) / w), relx=max(0.0, x0 / w))
+        return []
+
+    def itemconfig(self, _item, cnf=None, **kw):
+        if cnf:
+            kw.update(cnf)
+        fill = kw.get('fill')
+        if fill:
+            lo = str(fill).lower()
+            if lo in (COLORS['success'].lower(), COLORS['success_hi'].lower()):
+                self._bar.set_color(COLORS['success'])
+            elif lo in (COLORS['danger'].lower(), COLORS['danger_hi'].lower()):
+                self._bar.set_color(COLORS['danger'])
+            else:
+                self._bar.set_color(COLORS['accent'])
+
+    itemconfigure = itemconfig
+
+    def bind(self, seq=None, func=None, add=None):
+        return self._bar.bind(seq, func, '+')
+
+    def __getattr__(self, name):
+        return getattr(self._bar, name)
+
+
+class StagedProgressBar(tk.Frame):
+    """Staged progress (design system › ProgressBar): a stepper row (step
+    icon + name; done = success, active = accent, error = danger), a 6px
+    rounded bar and a meta row. API unchanged: set_pending, set_active,
+    set_complete, set_error, reset, set_progress, set_meta."""
 
     def __init__(self, parent, stages, **kwargs):
+        from tkinter_theme import px
+        from ui.shared.widgets import RoundedBar, StepIcon
         bg = kwargs.pop('bg', COLORS['bg_2'])
         super().__init__(parent, bg=bg, **kwargs)
         self._bg = bg
         self._stages = list(stages)
-        self._tiles = []        # list of dicts: {frame, num, name, dot}
-        self._bar_width = 0
+        self._tiles = []
         self._current_pct = 0
-
-        # ── Stage tile row ──
-        # Use a grid so tiles share width equally regardless of label length.
-        tiles_row = tk.Frame(self, bg=bg)
-        tiles_row.pack(fill='x', pady=(0, 12))
+        row = tk.Frame(self, bg=bg)
+        row.pack(fill='x', pady=(0, px(12)))
         for i, name in enumerate(self._stages):
-            tiles_row.grid_columnconfigure(i, weight=1, uniform='stages')
-            tile = self._make_tile(tiles_row, i, name)
-            tile['frame'].grid(row=0, column=i, sticky='nsew',
-                               padx=(0 if i == 0 else 4, 0))
-            self._tiles.append(tile)
-
-        # ── Progress bar ──
-        # Canvas-based so we can do a simple gradient fill (left=accent,
-        # right=success). tkinter doesn't render true CSS gradients; we fake
-        # it with two overlaid rectangles whose widths track progress.
-        bar_outer = tk.Frame(self, bg=COLORS['bg_4'], height=10,
-                             highlightthickness=0)
-        bar_outer.pack(fill='x')
-        bar_outer.pack_propagate(False)
-        self.bar_canvas = tk.Canvas(bar_outer, height=10,
-                                    bg=COLORS['bg_4'],
-                                    highlightthickness=0, bd=0)
-        self.bar_canvas.pack(fill='both', expand=True)
-        # Two rectangles — one for the accent gradient body, one for the
-        # success-tinted leading edge that grows as progress nears 100%.
-        # Simple approximation of the design's accent→success gradient.
-        self.bar_rect = self.bar_canvas.create_rectangle(
-            0, 0, 0, 10, fill=COLORS['accent'], outline='')
-        self.bar_canvas.bind('<Configure>', self._on_bar_resize)
-
-        # ── Meta row ──
+            row.grid_columnconfigure(i, weight=1, uniform='stages')
+            cell = tk.Frame(row, bg=bg)
+            cell.grid(row=0, column=i, sticky='w')
+            icon = StepIcon(cell, '\u23f3', size=16, bg=bg)
+            icon.pack(side='left')
+            lbl = tk.Label(cell, text=name, font=FONTS['caption'], bg=bg,
+                           fg=COLORS['fg_4'])
+            lbl.pack(side='left', padx=(px(6), 0))
+            self._tiles.append({'frame': cell, 'icon': icon, 'name': lbl})
+        self._bar = RoundedBar(self, height=6, surface=bg)
+        self._bar.pack(fill='x')
+        # Legacy hooks: callers drew on these directly.
+        self.bar_canvas = _BarCanvasShim(self._bar)
+        self.bar_rect = 'bar'
         meta_row = tk.Frame(self, bg=bg)
-        meta_row.pack(fill='x', pady=(8, 0))
-        self._meta_left_var  = tk.StringVar(value='')
+        meta_row.pack(fill='x', pady=(px(6), 0))
+        self._meta_left_var = tk.StringVar(value='')
         self._meta_right_var = tk.StringVar(value='')
         tk.Label(meta_row, textvariable=self._meta_left_var,
-                 font=FONTS['mono_sm'],
-                 bg=bg, fg=COLORS['fg_4'], anchor='w'
-                 ).pack(side='left')
+                 font=FONTS['caption'], bg=bg, fg=COLORS['fg_3'],
+                 anchor='w').pack(side='left')
         tk.Label(meta_row, textvariable=self._meta_right_var,
-                 font=FONTS['mono_sm'],
-                 bg=bg, fg=COLORS['accent'], anchor='e'
-                 ).pack(side='right')
+                 font=FONTS['caption'], bg=bg, fg=COLORS['fg_2'],
+                 anchor='e').pack(side='right')
 
-    # ── Tile factory ──
-    def _make_tile(self, parent, idx, name):
-        # Wrap each tile in a 1px-bordered Frame for the colored border state.
-        border, fill, dot, name_fg, num_fg = self._PENDING
-        frame = tk.Frame(parent, bg=fill,
-                         highlightbackground=border,
-                         highlightthickness=1)
-        # Padding inside
-        inner = tk.Frame(frame, bg=fill)
-        inner.pack(fill='both', expand=True, padx=10, pady=8)
+    _GLYPH = {'pending': ('\u23f3', 'fg_4'), 'active': ('\u25b6', 'fg_0'),
+              'done': ('\u2714', 'fg_2'), 'error': ('\u2715', 'danger_hi')}
 
-        top_row = tk.Frame(inner, bg=fill)
-        top_row.pack(fill='x')
-        num_lbl = tk.Label(top_row,
-                           text=('%02d' % (idx + 1)),
-                           font=(FONTS['body_strong'][0], 9),
-                           bg=fill, fg=num_fg)
-        num_lbl.pack(side='left')
-        # Dot indicator on the right of the top row
-        dot_lbl = tk.Label(top_row, text='\u25cf',
-                           font=(FONTS['body'][0], 11),
-                           bg=fill, fg=dot)
-        dot_lbl.pack(side='right')
-
-        name_lbl = tk.Label(inner, text=name,
-                            font=(FONTS['body_strong'][0], 10),
-                            bg=fill, fg=name_fg, anchor='w')
-        name_lbl.pack(fill='x', pady=(4, 0))
-
-        return {
-            'frame': frame, 'inner': inner, 'top_row': top_row,
-            'num': num_lbl, 'name': name_lbl, 'dot': dot_lbl,
-        }
-
-    # ── State setters ──
-    def _apply_state(self, idx, scheme):
+    def _apply_state(self, idx, state):
         if not (0 <= idx < len(self._tiles)):
             return
-        border, fill, dot, name_fg, num_fg = scheme
+        g, fg = self._GLYPH[state]
         t = self._tiles[idx]
-        t['frame'].configure(bg=fill, highlightbackground=border)
-        t['inner'].configure(bg=fill)
-        t['top_row'].configure(bg=fill)
-        t['num'].configure(bg=fill, fg=num_fg)
-        t['name'].configure(bg=fill, fg=name_fg)
-        t['dot'].configure(bg=fill, fg=dot)
+        t['icon'].config(text=g)
+        t['name'].configure(fg=COLORS[fg],
+                            font=FONTS['caption_strong'] if state == 'active'
+                            else FONTS['caption'])
 
     def set_pending(self, idx):
-        self._apply_state(idx, self._PENDING)
+        self._apply_state(idx, 'pending')
 
     def set_active(self, idx):
-        # Steps before idx → done, idx → active, after → pending.
         for i in range(len(self._tiles)):
-            if i < idx:
-                self._apply_state(i, self._DONE)
-            elif i == idx:
-                self._apply_state(i, self._ACTIVE)
-            else:
-                self._apply_state(i, self._PENDING)
+            self._apply_state(i, 'done' if i < idx else
+                              ('active' if i == idx else 'pending'))
 
     def set_complete(self, idx):
-        self._apply_state(idx, self._DONE)
+        self._apply_state(idx, 'done')
 
     def set_error(self, idx):
-        self._apply_state(idx, self._ERROR)
+        self._apply_state(idx, 'error')
+        self._bar.set_color(COLORS['danger'])
 
     def reset(self):
         for i in range(len(self._tiles)):
-            self._apply_state(i, self._PENDING)
+            self._apply_state(i, 'pending')
+        self._bar.set_color(COLORS['accent'])
         self.set_progress(0)
         self._meta_left_var.set('')
         self._meta_right_var.set('')
 
-    # ── Bar control ──
-    def _on_bar_resize(self, event):
-        self._bar_width = event.width
-        self._redraw_bar()
-
-    def _redraw_bar(self):
-        fill_w = int(self._bar_width * self._current_pct / 100)
-        self.bar_canvas.coords(self.bar_rect, 0, 0, fill_w, 10)
-        # Switch fill to success when complete, otherwise stay accent.
-        # (The mock uses an accent→success gradient; tk's flat fill is the
-        # closest non-image approximation without going full-canvas-stripes.)
-        self.bar_canvas.itemconfig(
-            self.bar_rect,
-            fill=COLORS['success'] if self._current_pct >= 100
-            else COLORS['accent'])
-
     def set_progress(self, pct):
         self._current_pct = max(0, min(100, pct))
-        self._redraw_bar()
+        self._bar.set_color(COLORS['success'] if self._current_pct >= 100
+                            else COLORS['accent'])
+        self._bar.set(self._current_pct / 100.0)
 
-    # ── Meta row ──
     def set_meta(self, left=None, right=None):
         if left is not None:
             self._meta_left_var.set(left)

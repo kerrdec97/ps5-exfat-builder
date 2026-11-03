@@ -24,82 +24,59 @@ from tkinter_theme import (
 
 
 class EmptyState(tk.Frame):
-    """A centered empty-list placeholder.
+    """Centered empty-list placeholder (design system › Table empty state):
+    a 56px rounded tile with the icon, a subtitle-style title, one line of
+    description and an `actions` frame the host fills.
 
-    Usage:
-        es = EmptyState(parent, icon="\U0001f4e6",
-                        title="No images built yet",
-                        description="Build an image to see it here.")
-        es.pack(fill="both", expand=True)
-        # optional real action:
-        from ui.shared.toolbar import IconButton
-        IconButton(es.actions, label="Build Now", variant="primary",
-                   command=app._switch_tab_build).pack()
-
-    `es.actions` is empty by default; the host fills it (or leaves it).
+    `icon` may be an icon name from ui.icons or a legacy emoji.
     """
 
     def __init__(self, parent, icon="\u2014", title="Nothing here yet",
                  description="", bg="bg_1", **kwargs):
-        self._bg = get_color(bg)
+        from tkinter_theme import px
+        from ui.shared.widgets import Rounded, IconLabel
+        from ui.icons import leading_icon, has_icon
+        self._bg = get_color(bg) if not str(bg).startswith('#') else bg
         super().__init__(parent, bg=self._bg,
                          highlightthickness=0, bd=0, **kwargs)
-
         center = tk.Frame(self, bg=self._bg)
         center.place(relx=0.5, rely=0.5, anchor="center")
-
-        tk.Label(center, text=icon, bg=self._bg,
-                 fg=get_color("fg_5"),
-                 font=(get_font("h1")[0], 34, "normal")).pack()
-
-        tk.Label(center, text=title, bg=self._bg,
-                 fg=get_color("fg_2"), font=get_font("h3")).pack(
-                     pady=(SPACING["md"], 0))
-
+        name = icon if has_icon(str(icon)) else (leading_icon(str(icon)) or "box")
+        tile = Rounded(center, bg=COLORS["bg_3"], radius=8, surface=self._bg)
+        tile.pack()
+        IconLabel(tile, name, 24, COLORS["fg_3"], COLORS["bg_3"]).pack(
+            padx=px(16), pady=px(16))
+        tk.Label(center, text=title, bg=self._bg, fg=COLORS["fg_0"],
+                 font=FONTS["subtitle"]).pack(pady=(px(14), 0))
         if description:
             tk.Label(center, text=description, bg=self._bg,
-                     fg=get_color("fg_5"), font=get_font("body"),
-                     wraplength=360, justify="center").pack(
-                         pady=(SPACING["xs"], 0))
-
+                     fg=COLORS["fg_3"], font=FONTS["body"],
+                     wraplength=px(420), justify="center").pack(
+                         pady=(px(4), 0))
         self.actions = tk.Frame(center, bg=self._bg)
-        self.actions.pack(pady=(SPACING["lg"], 0))
+        self.actions.pack(pady=(px(14), 0))
 
 
 class SectionGroup(tk.Frame):
-    """A labelled grouping container for related controls.
-
-    Usage:
-        sg = SectionGroup(parent, title="FTP Connection",
-                          description="Settings for PS5 transfers.")
-        sg.pack(fill="x")
-        # host fills sg.body:
-        SomeFieldRow(sg.body, ...).pack(fill="x")
-
-    Renders an uppercase eyebrow title + optional description + a hair-
-    line, with the content area in `.body`.
-    """
+    """A labelled grouping: overline title, optional caption, `.body`."""
 
     def __init__(self, parent, title="", description="",
                  bg="bg_1", **kwargs):
-        self._bg = get_color(bg)
+        from tkinter_theme import px
+        self._bg = get_color(bg) if not str(bg).startswith('#') else bg
         super().__init__(parent, bg=self._bg,
                          highlightthickness=0, bd=0, **kwargs)
-
         if title:
             tk.Label(self, text=title.upper(), bg=self._bg,
-                     fg=get_color("accent"), font=get_font("eyebrow"),
+                     fg=COLORS["fg_4"], font=FONTS["overline"],
                      anchor="w").pack(fill="x")
         if description:
             tk.Label(self, text=description, bg=self._bg,
-                     fg=get_color("fg_4"), font=get_font("label"),
+                     fg=COLORS["fg_3"], font=FONTS["caption"],
                      anchor="w", justify="left").pack(
-                         fill="x", pady=(SPACING["xxs"], 0))
-
-        # hairline divider
-        tk.Frame(self, bg=get_color("border_2"), height=1).pack(
-            fill="x", pady=(SPACING["sm"], SPACING["md"]))
-
+                         fill="x", pady=(px(2), 0))
+        tk.Frame(self, bg=COLORS["border_2"], height=1).pack(
+            fill="x", pady=(px(8), px(12)))
         self.body = tk.Frame(self, bg=self._bg)
         self.body.pack(fill="both", expand=True)
 

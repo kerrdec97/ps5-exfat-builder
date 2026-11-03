@@ -1,93 +1,55 @@
 """
-ui/shared/app_dialog.py — v4.0 Design System: AppDialog (§4.9)
-==============================================================
+ui/shared/app_dialog.py — the application's themed modal dialog.
 
-The one themed modal that replaces every native tkinter `messagebox`. Native
-message boxes are light-grey Windows dialogs that crack the dark theme — the
-single biggest "unfinished" signal in the app (UI/UX audit, component §4.9).
+Design system › Dialog: a 480px modal on bg_2 with a status icon and a
+`title` heading, short body text in fg_2, an optional monospace detail well
+and caution line, and a bg_1 footer band with right-aligned buttons (primary
+or danger rightmost, minimum width ~96px). Enter = primary, Esc = cancel.
 
-This module is ADDITIVE and self-contained:
-  * imports only tkinter + the design-system semantic layer (theme_tokens);
-    it does NOT import exfat_builder, so it adds no double-import surface and
-    cannot change any existing screen just by existing;
-  * nothing calls it until call sites are migrated (that happens in later,
-    individually testable batches — see V4.0.0_RELEASE_PLAN.md).
+The `app_*` helpers mirror tkinter.messagebox names and RETURN VALUES:
 
-MIGRATION CONTRACT (why the shims exist)
-----------------------------------------
-The `app_*` helpers mirror messagebox's names and RETURN VALUES so migrating a
-call site is a minimal diff:
+    app_info / app_warning / app_error / app_success (parent, title, msg)
+    app_confirm(...)  -> bool          (askyesno)
+    app_danger(...)   -> bool          (destructive confirm)
+    app_choose3(...)  -> True/False/None  (askyesnocancel)
+    app_question(...) -> 'yes' | 'no'  (askquestion)
 
-    messagebox.showinfo(title, msg)            -> app_info(parent, title, msg)
-    messagebox.showwarning(title, msg)         -> app_warning(parent, title, msg)
-    messagebox.showerror(title, msg)           -> app_error(parent, title, msg)
-    messagebox.askyesno(title, msg)  -> bool   -> app_confirm(parent, title, msg)  -> bool
-    (destructive confirm)            -> bool   -> app_danger(parent, title, msg, ok_label='Delete') -> bool
-
-`parent` is any widget on the target window (usually the tab frame or `app`).
-Like messagebox, these are MODAL and BLOCK, so they must be called on the Tk
-main thread (worker threads already marshal via `after(0, ...)` — unchanged).
-
-Extra affordances the native boxes can't do (optional, all keyword args):
-  * detail=  a monospace sub-box for a path / id (e.g. a backup .zip path)
-  * note=    an amber caution line under the message
-These let the Apply-Backport confirmation become formatted sections instead of
-a wall of text, once migrated.
+Like messagebox they are modal and block, so call them on the Tk thread.
+Optional keyword args: detail= (monospace well for a path / id),
+note= (caution line).
 """
 
 import tkinter as tk
-from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
-# theme_tokens lives in ui/ but the app runs with the repo root on sys.path
-# (and the PyInstaller bundle flattens it), so try both import spellings.
-try:
-    from ui import theme_tokens as T
-except Exception:
-    import theme_tokens as T
+from tkinter_theme import COLORS, FONTS, px
+from ui.shared.widgets import Button, IconLabel, Divider, autowrap
 
+C = COLORS
 
-# Variant -> (glyph, accent colour)
+# variant -> (icon, icon colour)
 _VARIANTS = {
-    "info": {"glyph": "ℹ", "accent": T.INFO},
-    "warning": {"glyph": "⚠", "accent": T.WARNING},
-    "error": {"glyph": "✖", "accent": T.DANGER},
-    "success": {"glyph": "✓", "accent": T.GO},
-    "confirm": {"glyph": "❓", "accent": T.PRIMARY},
-    "danger": {"glyph": "⚠", "accent": T.DANGER},
+    "info":    ("info", "accent_hi"),
+    "warning": ("warning", "warn"),
+    "error":   ("error", "danger"),
+    "success": ("success", "success"),
+    "confirm": ("help", "accent_hi"),
+    "danger":  ("warning", "warn"),
 }
 
 
 def _themed_button(parent, text, variant, command):
-    """A single design-system button (theme_tokens.button bundle) with hover.
-    Kept local so the dialog depends only on tkinter + theme_tokens."""
-    b = T.button(variant)
-    bg = b["bg"] if b["bg"] else T.BG_CARD
-    btn = XButton(
-        parent, text=text, command=command,
-        font=T.FONT_BODY, fg=b["fg"], bg=bg,
-        activeforeground=b["fg"], activebackground=b["active"] or T.BG_RAISED,
-        relief="flat", bd=0, cursor="hand2",
-        highlightthickness=1 if b["border"] else 0,
-        highlightbackground=b["border"] or bg,
-        highlightcolor=b["border"] or bg,
-        padx=T.SPACE["lg"], pady=T.SPACE["sm"])
-    # hover: swap to the variant's hover colour and back
-    _hover_bg = b["hover"] or T.BG_RAISED
-    _rest_bg = bg
-    btn.bind("<Enter>", lambda _e: btn.configure(bg=_hover_bg))
-    btn.bind("<Leave>", lambda _e: btn.configure(bg=_rest_bg))
-    return btn
+    """Compatibility shim: a design-system button."""
+    v = {"primary": "primary", "danger_filled": "danger", "danger": "danger",
+         "go": "primary"}.get(variant, "secondary")
+    return Button(parent, text=text, variant=v, command=command)
 
 
 class AppDialog(tk.Toplevel):
-    """Themed modal dialog. Prefer the module-level helpers (info/confirm/…)
-    over constructing this directly.
+    """Themed modal dialog. Prefer the module-level helpers.
 
-    Result contract: `.result` is True/False for confirm-style dialogs (True =
-    primary/confirm pressed) and None for acknowledge-only dialogs. When
-    `alt_label` is given the dialog is TRI-STATE (askyesnocancel replacement):
-    primary → True, alt → False, cancel/Escape/close → None. Escape and the
-    window-close button always resolve to the cancel/None outcome.
+    `.result` is True/False for confirm-style dialogs (True = primary) and
+    None for acknowledge-only. With `alt_label` the dialog is tri-state:
+    primary -> True, alt -> False, cancel/Escape/close -> None.
     """
 
     def __init__(self, parent, title, message, *,
@@ -97,90 +59,96 @@ class AppDialog(tk.Toplevel):
         super().__init__(parent)
         self.result = None
         self._alt = alt_label is not None
-        # What Escape / close resolve to: None when tri-state, False for a
-        # two-button confirm, None for acknowledge-only.
         self._cancel_value = None if self._alt else (
-            False if cancel_label is not None
-            else None)
-
-        meta = _VARIANTS.get(variant, _VARIANTS["info"])
+            False if cancel_label is not None else None)
+        icon, icol = _VARIANTS.get(variant, _VARIANTS["info"])
         if ok_variant is None:
-            ok_variant = {"danger": "danger_filled",
-                          "confirm": "primary"}.get(variant, "primary")
+            ok_variant = {"danger": "danger"}.get(variant, "primary")
+        ok_variant = {"danger_filled": "danger"}.get(ok_variant, ok_variant)
+        if ok_variant not in ("primary", "danger", "secondary"):
+            ok_variant = "primary"
 
         self.withdraw()
         self.title(title or "exFAT Image Builder")
-        self.configure(bg=T.BG_APP)
+        self.configure(bg=C["border_3"])
         self.resizable(False, False)
         try:
             self.transient(parent.winfo_toplevel())
         except Exception:
             pass
 
-        # ---- card ----
-        card = tk.Frame(self, bg=T.BG_CARD,
-                        highlightthickness=1,
-                        highlightbackground=T.BORDER_SUBTLE,
-                        highlightcolor=T.BORDER_SUBTLE)
-        card.pack(fill="both", expand=True,
-                  padx=T.SPACE["sm"], pady=T.SPACE["sm"])
-        inner = tk.Frame(card, bg=T.BG_CARD)
-        inner.pack(fill="both", expand=True,
-                   padx=T.SPACE["lg"], pady=T.SPACE["lg"])
+        wrap_w = px(440)
+        frame = tk.Frame(self, bg=C["bg_2"], width=px(480))
+        frame.pack(fill="both", expand=True)
 
-        # ---- header: glyph + title ----
-        head = tk.Frame(inner, bg=T.BG_CARD)
+        body = tk.Frame(frame, bg=C["bg_2"])
+        body.pack(fill="both", expand=True, padx=px(24), pady=(px(22), px(20)))
+        head = tk.Frame(body, bg=C["bg_2"])
         head.pack(fill="x")
-        tk.Label(head, text=meta["glyph"], font=T.FONT_TITLE,
-                 fg=meta["accent"], bg=T.BG_CARD).pack(side="left",
-                                                       padx=(0, T.SPACE["sm"]))
-        tk.Label(head, text=title or "", font=T.FONT_TITLE,
-                 fg=T.TEXT_PRIMARY, bg=T.BG_CARD,
-                 anchor="w", justify="left").pack(side="left", fill="x",
+        IconLabel(head, icon, 20, C[icol], C["bg_2"]).pack(
+            side="left", anchor="n", padx=(0, px(10)), pady=(px(3), 0))
+        tk.Label(head, text=title or "", font=FONTS["title"], fg=C["fg_0"],
+                 bg=C["bg_2"], anchor="w", justify="left",
+                 wraplength=wrap_w - px(30)).pack(side="left", fill="x",
                                                   expand=True)
-
-        # ---- message ----
         if message:
-            tk.Label(inner, text=message, font=T.FONT_BODY,
-                     fg=T.TEXT_PRIMARY, bg=T.BG_CARD,
-                     wraplength=420, justify="left", anchor="w").pack(
-                fill="x", pady=(T.SPACE["md"], 0))
-
-        # ---- detail (monospace sub-box) ----
+            tk.Label(body, text=message, font=FONTS["body"], fg=C["fg_2"],
+                     bg=C["bg_2"], wraplength=wrap_w, justify="left",
+                     anchor="w").pack(fill="x", pady=(px(12), 0))
         if detail:
-            box = tk.Frame(inner, bg=T.BG_SUNKEN,
-                           highlightthickness=1,
-                           highlightbackground=T.BORDER_SUBTLE)
-            box.pack(fill="x", pady=(T.SPACE["md"], 0))
-            tk.Label(box, text=detail, font=T.FONT_MONO_SM,
-                     fg=T.TEXT_SECONDARY, bg=T.BG_SUNKEN,
-                     wraplength=420, justify="left", anchor="w").pack(
-                fill="x", padx=T.SPACE["sm"], pady=T.SPACE["sm"])
-
-        # ---- note (amber caution line) ----
+            box = tk.Frame(body, bg=C["bg_0"], highlightthickness=1,
+                           highlightbackground=C["border_2"])
+            box.pack(fill="x", pady=(px(12), 0))
+            tk.Label(box, text=detail, font=FONTS["code"], fg=C["fg_2"],
+                     bg=C["bg_0"], wraplength=wrap_w - px(24),
+                     justify="left", anchor="w").pack(
+                fill="x", padx=px(12), pady=px(10))
         if note:
-            tk.Label(inner, text=note, font=T.FONT_SMALL,
-                     fg=T.WARNING, bg=T.BG_CARD,
-                     wraplength=420, justify="left", anchor="w").pack(
-                fill="x", pady=(T.SPACE["md"], 0))
+            nrow = tk.Frame(body, bg=C["bg_2"])
+            nrow.pack(fill="x", pady=(px(12), 0))
+            IconLabel(nrow, "warning", 14, C["warn"], C["bg_2"]).pack(
+                side="left", anchor="n", padx=(0, px(8)), pady=(px(2), 0))
+            tk.Label(nrow, text=note, font=FONTS["caption"], fg=C["warn_hi"],
+                     bg=C["bg_2"], wraplength=wrap_w - px(24),
+                     justify="left", anchor="w").pack(side="left", fill="x")
 
-        # ---- buttons (right-aligned, primary rightmost) ----
-        bar = tk.Frame(inner, bg=T.BG_CARD)
-        bar.pack(fill="x", pady=(T.SPACE["lg"], 0))
-        ok_btn = _themed_button(bar, ok_label, ok_variant, self._on_ok)
+        foot = tk.Frame(frame, bg=C["bg_1"])
+        foot.pack(fill="x", side="bottom")
+        tk.Frame(frame, bg=C["border_2"], height=1).pack(fill="x", side="bottom")
+        bar = tk.Frame(foot, bg=C["bg_1"])
+        bar.pack(fill="x", padx=px(18), pady=px(10))
+
+        def mk(text, variant, cmd):
+            b = Button(bar, text=text, variant=variant, command=cmd,
+                       surface=C["bg_1"])
+            try:
+                import tkinter.font as tkfont
+                chars = max(len(text), 8)
+                b.configure(width=chars)
+            except Exception:
+                pass
+            return b
+
+        ok_btn = mk(ok_label, ok_variant, self._on_ok)
         ok_btn.pack(side="right")
         if alt_label is not None:
-            _themed_button(bar, alt_label, "ghost", self._on_alt).pack(
-                side="right", padx=(0, T.SPACE["sm"]))
+            mk(alt_label, "secondary", self._on_alt).pack(
+                side="right", padx=(0, px(4)))
         if cancel_label is not None:
-            _themed_button(bar, cancel_label, "ghost", self._on_cancel).pack(
-                side="right", padx=(0, T.SPACE["sm"]))
+            mk(cancel_label, "secondary", self._on_cancel).pack(
+                side="right", padx=(0, px(4)))
 
-        # ---- keyboard / close ----
         self.bind("<Return>", lambda _e: self._on_ok())
         self.bind("<Escape>", lambda _e: self._on_cancel())
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
+        self.update_idletasks()
+        try:
+            want = max(px(480), frame.winfo_reqwidth())
+            self.geometry("%dx%d" % (want, frame.winfo_reqheight() + 2))
+        except Exception:
+            pass
+        frame.pack_configure(padx=1, pady=1)
         self._center_on(parent)
         self.deiconify()
         ok_btn.focus_set()
@@ -190,7 +158,6 @@ class AppDialog(tk.Toplevel):
             pass
         self.wait_window(self)
 
-    # ---- outcomes ----
     def _on_ok(self):
         self.result = True
         self._close()
@@ -215,16 +182,14 @@ class AppDialog(tk.Toplevel):
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
         try:
             top = parent.winfo_toplevel()
-            px, py = top.winfo_rootx(), top.winfo_rooty()
+            x0, y0 = top.winfo_rootx(), top.winfo_rooty()
             pw, ph = top.winfo_width(), top.winfo_height()
-            x = px + max(0, (pw - w) // 2)
-            y = py + max(0, (ph - h) // 3)
+            x = x0 + max(0, (pw - w) // 2)
+            y = y0 + max(0, (ph - h) // 3)
         except Exception:
             x = y = 200
         self.geometry("+%d+%d" % (x, y))
 
-
-# ---- messagebox-shaped helpers (see MIGRATION CONTRACT above) ----
 
 def app_info(parent, title, message, *, detail=None):
     AppDialog(parent, title, message, variant="info", detail=detail,
@@ -248,7 +213,7 @@ def app_success(parent, title, message, *, detail=None):
 
 def app_confirm(parent, title, message, *, detail=None, note=None,
                 ok_label="OK", cancel_label="Cancel"):
-    """askyesno replacement — returns True if the primary button was pressed."""
+    """askyesno replacement — True if the primary button was pressed."""
     dlg = AppDialog(parent, title, message, variant="confirm", detail=detail,
                     note=note, ok_label=ok_label, cancel_label=cancel_label)
     return bool(dlg.result)
@@ -256,20 +221,17 @@ def app_confirm(parent, title, message, *, detail=None, note=None,
 
 def app_danger(parent, title, message, *, detail=None, note=None,
                ok_label="Delete", cancel_label="Cancel"):
-    """Destructive confirm (filled-danger button) — returns True to proceed."""
+    """Destructive confirm (danger button) — True to proceed."""
     dlg = AppDialog(parent, title, message, variant="danger", detail=detail,
                     note=note, ok_label=ok_label, cancel_label=cancel_label,
-                    ok_variant="danger_filled")
+                    ok_variant="danger")
     return bool(dlg.result)
 
 
 def app_choose3(parent, title, message, *, detail=None, note=None,
                 ok_label="Yes", alt_label="No", cancel_label="Cancel",
                 variant="confirm"):
-    """askyesnocancel replacement — returns True (primary), False (alt) or
-    None (cancel / Escape / window close), matching messagebox semantics.
-    Label the buttons as ACTIONS (e.g. 'Overwrite' / 'Save copy') rather than
-    Yes/No where possible — that's the whole point of owning the dialog."""
+    """askyesnocancel replacement — True (primary), False (alt) or None."""
     dlg = AppDialog(parent, title, message, variant=variant, detail=detail,
                     note=note, ok_label=ok_label, alt_label=alt_label,
                     cancel_label=cancel_label)
@@ -278,9 +240,7 @@ def app_choose3(parent, title, message, *, detail=None, note=None,
 
 def app_question(parent, title, message, *, detail=None, note=None,
                  yes_label="Yes", no_label="No", variant="confirm"):
-    """askquestion replacement — returns the STRING 'yes' or 'no' (matching
-    messagebox.askquestion) so callers that compare `== 'yes'` are unchanged.
-    Escape / window-close resolve to 'no' (askquestion has no Cancel)."""
+    """askquestion replacement — returns 'yes' or 'no'."""
     dlg = AppDialog(parent, title, message, variant=variant, detail=detail,
                     note=note, ok_label=yes_label, cancel_label=no_label)
     return "yes" if dlg.result else "no"

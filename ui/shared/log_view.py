@@ -55,53 +55,38 @@ class ConsoleView(tk.Frame):
     """
 
     def __init__(self, parent, **kwargs):
-        bg = _TERM_BG
-        bd_color = COLORS['border_3']
-        super().__init__(parent, bg=bg,
-                         highlightbackground=bd_color,
-                         highlightthickness=1,
+        from tkinter_theme import px, scrollbar_style
+        from tkinter import ttk
+        from ui.shared.widgets import Rounded
+        outside = kwargs.pop('surface', None)
+        super().__init__(parent, bg=COLORS['bg_0'], highlightthickness=0,
                          **kwargs)
-
-        # Thin green top-rule — the mock has a horizontal accent line at
-        # the top of the log surface. We approximate with a 1-px Frame.
-        # bg picks up the dim klog-green at low intensity.
-        rule = tk.Frame(self, bg='#1a3322', height=1)
-        rule.pack(fill='x')
-
-        # ── Scrollable Text widget ──
-        body = tk.Frame(self, bg=bg)
+        # Inset console well (design system › Card inset): bg_0, hairline,
+        # monospace log text in the log colours.
+        body = tk.Frame(self, bg=COLORS['bg_0'], highlightthickness=1,
+                        highlightbackground=COLORS['border_2'])
         body.pack(fill='both', expand=True)
-
-        sb = XScrollbar(body, bg=COLORS['bg_1'], troughcolor=bg,
-                          activebackground=COLORS['bg_4'],
-                          relief='flat', bd=0)
+        sb = ttk.Scrollbar(body, orient='vertical',
+                           style=scrollbar_style(COLORS['bg_0']))
         sb.pack(side='right', fill='y')
-
         self.text = tk.Text(body,
-                            font=(FONTS['body'][0], 9),
-                            bg=bg, fg=_TERM_GREEN,
-                            insertbackground=_TERM_GREEN,
-                            selectbackground='#1a3322',
+                            font=FONTS['code_sm'],
+                            bg=COLORS['bg_0'], fg=COLORS['fg_2'],
+                            insertbackground=COLORS['fg_1'],
+                            selectbackground=COLORS['accent_lo'],
                             selectforeground=COLORS['fg_0'],
-                            relief='flat', bd=8,
+                            relief='flat', bd=0, padx=px(12), pady=px(10),
                             state='disabled', wrap='word',
                             yscrollcommand=sb.set,
                             spacing1=1, spacing3=1)
         self.text.pack(side='left', fill='both', expand=True)
         sb.config(command=self.text.yview)
-
-        # ── Tag scheme — matches the design system's level colors ──
-        # Foreground only; the mock's lvl-pill backgrounds are decorative
-        # and don't need to be reproduced inside the text widget itself.
-        self.text.tag_configure('error',     foreground=_TERM_RED)
-        self.text.tag_configure('warning',   foreground=_TERM_AMBER)
-        self.text.tag_configure('info',      foreground=_TERM_GREEN)
-        self.text.tag_configure('debug',     foreground=_TERM_DIM)
-        # Highlighted text (search match) — amber tinted background, bright
-        # white foreground. Matches the mock's `.match` style.
-        self.text.tag_configure('highlight',
-                                foreground=COLORS['fg_0'],
-                                background='#3a2a00')   # warn at low alpha
+        self.text.tag_configure('error',   foreground=COLORS['danger_hi'])
+        self.text.tag_configure('warning', foreground=COLORS['warn_hi'])
+        self.text.tag_configure('info',    foreground=COLORS['fg_1'])
+        self.text.tag_configure('debug',   foreground=COLORS['fg_4'])
+        self.text.tag_configure('highlight', foreground=COLORS['fg_0'],
+                                background=COLORS['warn_bg'])
 
     # ── Convenience pass-through methods ──
     # These mirror the most-used tk.Text methods so callers can write

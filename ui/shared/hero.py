@@ -17,95 +17,82 @@ import tkinter as tk
 
 from tkinter_theme import COLORS, FONTS
 
-_BADGE = {
-    'ready':   (COLORS['success'], '#0a0a0a'),
-    'wait':    (COLORS['bg_4'],    COLORS['fg_3']),
-    'busy':    (COLORS['accent'],  '#0a0a0a'),
-    'warn':    (COLORS['warn'],    '#0a0a0a'),
-}
+_BADGE_TONE = {'ready': 'success', 'wait': 'neutral', 'busy': 'info',
+               'warn': 'warn', 'fail': 'danger', 'error': 'danger'}
+_BADGE = _BADGE_TONE   # legacy name
 
 
 class GameHero(tk.Frame):
-    """Build-style hero card.
+    """Source / image summary card (design system › Card): cover tile,
+    title, ID, path, a status badge and a row of facts.
 
-    stats: ordered list of (label, key) pairs for the strip cells.
+    stats: ordered list of (label, key) pairs for the fact cells.
+    Public API unchanged: title_var / id_var / path_var, set_title,
+    set_path, set_stat, set_badge, reset_cover, set_cover_from_folder,
+    set_cover_from_file.
     """
 
     def __init__(self, parent, stats, cover_glyph='\U0001f3ae',
                  cover_size=150):
-        super().__init__(parent, bg=COLORS['bg_2'],
-                         highlightbackground=COLORS['border_2'],
-                         highlightthickness=1)
-        self._cover_size = cover_size
+        from tkinter_theme import px
+        from ui.shared.widgets import Rounded, CoverLabel, Badge, autowrap
+        from ui.icons import leading_icon
+        super().__init__(parent, bg=COLORS['bg_1'], highlightthickness=0)
+        self._cover_size = min(px(cover_size), px(128))
         self._cover_glyph = cover_glyph
         self._cover_img = None
         self._cover_token = 0
-
-        pad = tk.Frame(self, bg=COLORS['bg_2'])
-        pad.pack(fill='both', expand=True, padx=20, pady=18)
-
-        # ── cover tile ──
-        self._cover_tile = tk.Frame(pad, bg=COLORS['bg_3'], width=cover_size,
-                                    height=cover_size,
-                                    highlightbackground=COLORS['border_3'],
-                                    highlightthickness=1)
-        self._cover_tile.pack(side='left')
-        self._cover_tile.pack_propagate(False)
-        self._cover_lbl = tk.Label(self._cover_tile, text=cover_glyph,
-                                   bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                                   font=(FONTS['body'][0], 52))
-        self._cover_lbl.pack(expand=True)
-
-        # ── right column: title row + stats strip ──
-        right = tk.Frame(pad, bg=COLORS['bg_2'])
-        right.pack(side='left', fill='both', expand=True, padx=(18, 0))
-
+        card = Rounded(self, bg=COLORS['bg_2'], border=COLORS['border_2'],
+                       radius=8, padding=px(16), surface=COLORS['bg_1'])
+        card.pack(fill='both', expand=True)
+        self._card = card
+        ph = leading_icon(cover_glyph or '') or 'game'
+        if ph == 'ps5':
+            ph = 'game'
+        self._ph = ph
+        self._cover_lbl = CoverLabel(card, box=int(self._cover_size / max(1, px(1))),
+                                     placeholder=ph)
+        self._cover_lbl.pack(side='left', anchor='n')
+        right = tk.Frame(card, bg=COLORS['bg_2'])
+        right.pack(side='left', fill='both', expand=True, padx=(px(16), 0))
         title_row = tk.Frame(right, bg=COLORS['bg_2'])
         title_row.pack(fill='x')
-
         tcol = tk.Frame(title_row, bg=COLORS['bg_2'])
         tcol.pack(side='left', fill='x', expand=True)
         self.title_var = tk.StringVar(value='')
-        tk.Label(tcol, textvariable=self.title_var,
-                 font=(FONTS['body_strong'][0], 17), bg=COLORS['bg_2'],
-                 fg=COLORS['fg_0'], anchor='w', justify='left').pack(
-                     anchor='w', fill='x')
+        autowrap(tk.Label(tcol, textvariable=self.title_var,
+                          font=FONTS['subtitle'], bg=COLORS['bg_2'],
+                          fg=COLORS['fg_0'], anchor='w', justify='left'))
+        tcol.winfo_children()[-1].pack(fill='x')
         self.id_var = tk.StringVar(value='')
-        tk.Label(tcol, textvariable=self.id_var,
-                 font=(FONTS['body'][0], 11), bg=COLORS['bg_2'],
-                 fg=COLORS['fg_4'], anchor='w').pack(anchor='w')
+        tk.Label(tcol, textvariable=self.id_var, font=FONTS['code'],
+                 bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(
+                     anchor='w', pady=(px(2), 0))
         self.path_var = tk.StringVar(value='')
         self._path_lbl = tk.Label(tcol, textvariable=self.path_var,
-                                  font=(FONTS['body'][0], 9),
-                                  bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-                                  anchor='w')
-        self._path_lbl.pack(anchor='w', pady=(2, 0))
-
-        # status badge (top-right)
-        self._badge = tk.Label(title_row, text='', font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_4'], fg=COLORS['fg_3'],
-                               padx=10, pady=4)
-        self._badge.pack(side='right', anchor='n')
-
-        # stats strip
+                                  font=FONTS['caption'], bg=COLORS['bg_2'],
+                                  fg=COLORS['fg_4'], anchor='w')
+        self._path_lbl.pack(anchor='w', pady=(px(2), 0))
+        self._badge = Badge(title_row, '', 'neutral', surface=COLORS['bg_2'])
+        self._badge_shown = False
         strip = tk.Frame(right, bg=COLORS['bg_2'])
-        strip.pack(fill='x', pady=(16, 0))
+        strip.pack(fill='x', pady=(px(14), 0))
         self._cells = {}
         for i, (label, key) in enumerate(stats):
             cell = tk.Frame(strip, bg=COLORS['bg_2'])
-            cell.pack(side='left', padx=(0 if i == 0 else 26, 0))
-            tk.Label(cell, text=label.upper(),
-                     font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_2'],
-                     fg=COLORS['fg_5'], anchor='w').pack(anchor='w')
+            cell.pack(side='left', padx=(0 if i == 0 else px(28), 0))
+            lab = label if not label.isupper() else label.capitalize()
+            tk.Label(cell, text=lab, font=FONTS['caption'], bg=COLORS['bg_2'],
+                     fg=COLORS['fg_3'], anchor='w').pack(anchor='w')
             v = tk.StringVar(value='\u2014')
-            val = tk.Label(cell, textvariable=v,
-                           font=(FONTS['body_strong'][0], 11),
-                           bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w')
-            val.pack(anchor='w', pady=(2, 0))
+            val = tk.Label(cell, textvariable=v, font=FONTS['body_strong'],
+                           bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w')
+            val.pack(anchor='w', pady=(px(2), 0))
             self._cells[key] = (v, val)
 
     # ── public API ──
     def set_title(self, title, game_id=''):
-        self.title_var.set((title or '').upper() or '\u2014')
+        self.title_var.set((title or '') or '\u2014')
         self.id_var.set(game_id or '\u2014')
 
     def set_path(self, text):
@@ -118,16 +105,21 @@ class GameHero(tk.Frame):
         v, val = cell
         v.set(value if value not in (None, '') else '\u2014')
         try:
-            val.config(fg=COLORS['warn'] if warn else COLORS['teal'])
+            val.config(fg=COLORS['warn_hi'] if warn else COLORS['fg_0'])
         except Exception:
             pass
 
     def set_badge(self, text, kind='ready'):
-        bg, fg = _BADGE.get(kind, _BADGE['wait'])
-        prefix = '\u2713  ' if kind == 'ready' else ''
         try:
-            self._badge.config(text=(prefix + text) if text else '',
-                               bg=bg, fg=fg)
+            if not text:
+                if self._badge_shown:
+                    self._badge.pack_forget()
+                    self._badge_shown = False
+                return
+            self._badge.set(text, _BADGE_TONE.get(kind, 'neutral'))
+            if not self._badge_shown:
+                self._badge.pack(side='right', anchor='n')
+                self._badge_shown = True
         except Exception:
             pass
 
@@ -135,8 +127,7 @@ class GameHero(tk.Frame):
         self._cover_token += 1
         self._cover_img = None
         try:
-            self._cover_lbl.config(image='', text=self._cover_glyph,
-                                   font=(FONTS['body'][0], 52))
+            self._cover_lbl.config(image='', text=self._cover_glyph)
         except Exception:
             pass
 

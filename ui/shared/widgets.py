@@ -703,7 +703,7 @@ class Badge(tk.Canvas):
         super().__init__(master, bg=self._sf, highlightthickness=0, bd=0,
                          height=px(20), width=px(40))
         self._mono = mono
-        self.set(text, tone, icon)
+        Badge.set(self, text, tone, icon)
 
     def set(self, text=None, tone=None, icon='__keep__'):
         if text is not None:

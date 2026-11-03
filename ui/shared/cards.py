@@ -23,134 +23,51 @@ from tkinter_theme import COLORS, FONTS
 # ─────────────────────────────────────────────────────────────────────────
 # Card — bordered content container with optional header + body.
 # ─────────────────────────────────────────────────────────────────────────
-class Card(tk.Frame):
-    """A bordered card with optional title header.
+from ui.shared.widgets import Card as _XCard, Badge as _XBadge
 
-    Visual: bg_2 fill, border_2 hairline border, optional header row showing
-    an icon-tile + title + subtitle. Caller adds content to `card.body` and
-    optional action buttons to `card.actions` (a separate footer strip).
 
-    Args:
-        parent: parent widget
-        title: optional title shown in the header row
-        subtitle: optional subtitle (one line, smaller, muted)
-        icon: optional emoji shown in the icon tile to the left of the title
-        with_actions: if True, creates `card.actions` (a bg_3 footer frame
-            for buttons)
+class Card(_XCard):
+    """Legacy card API on the design-system Card.
 
-    Attributes:
-        body: the main content frame (bg_2, padded). Caller's children go here.
-        actions: footer frame (bg_3, no padding) — only present if
-            with_actions=True. Pack buttons into it.
-
-    Example:
-        card = Card(parent, title='Add to queue', icon='＋')
-        card.pack(fill='x', padx=18, pady=12)
-        tk.Label(card.body, text='Hello').pack()
+    Card(parent, title=None, subtitle=None, icon=None, with_actions=False)
+    `card.body` holds content; `card.actions` (with_actions=True) is a
+    footer frame for buttons. A legacy emoji `icon` becomes an icon tile.
     """
 
     def __init__(self, parent, title=None, subtitle=None, icon=None,
                  with_actions=False, **kwargs):
-        # Pop any user-supplied highlight overrides so super() doesn't collide
-        hl_bg = kwargs.pop('highlightbackground', COLORS['border_2'])
-        hl_th = kwargs.pop('highlightthickness', 1)
-        bg = kwargs.pop('bg', COLORS['bg_2'])
-        super().__init__(parent, bg=bg,
-                         highlightbackground=hl_bg,
-                         highlightthickness=hl_th,
+        from ui.icons import leading_icon, has_icon
+        kwargs.pop('highlightbackground', None)
+        kwargs.pop('highlightthickness', None)
+        bg = kwargs.pop('bg', None)
+        name = None
+        if icon:
+            name = icon if has_icon(icon) else leading_icon(icon)
+        super().__init__(parent, title=title, subtitle=subtitle, icon=name,
+                         actions=with_actions, **({'bg': bg} if bg else {}),
                          **kwargs)
-
-        # ── Optional header row ──
-        if title is not None:
-            head = tk.Frame(self, bg=bg)
-            head.pack(fill='x', padx=18, pady=(14, 12))
-
-            if icon:
-                # Icon tile: small accented square holding the emoji
-                ico = tk.Label(head, text=icon,
-                               font=(FONTS['body'][0], 11),
-                               bg=COLORS['accent_08'],
-                               fg=COLORS['accent'],
-                               width=2, padx=4, pady=2)
-                ico.pack(side='left', padx=(0, 12))
-
-            text_col = tk.Frame(head, bg=bg)
-            text_col.pack(side='left', fill='x', expand=True)
-            tk.Label(text_col, text=title,
-                     font=(FONTS['body_strong'][0], 11),
-                     bg=bg, fg=COLORS['fg_0'], anchor='w'
-                     ).pack(fill='x')
-            if subtitle:
-                tk.Label(text_col, text=subtitle,
-                         font=FONTS['meta'],
-                         bg=bg, fg=COLORS['fg_4'], anchor='w',
-                         wraplength=900, justify='left'
-                         ).pack(fill='x', pady=(1, 0))
-
-            # Hairline divider under the header
-            tk.Frame(self, bg=COLORS['border_2'], height=1
-                     ).pack(fill='x')
-
-        # ── Optional actions footer ──
-        # IMPORTANT: pack actions FIRST with side='bottom' so it pins to the
-        # bottom of the card regardless of how short the available height is.
-        # If we packed body first with expand=True, body would eat all space
-        # and the actions row would get clipped when the window is shorter
-        # than the natural content height (e.g. when the OUTPUT LOG is open).
-        self.actions = None
-        if with_actions:
-            self.actions = tk.Frame(self, bg=COLORS['bg_3'])
-            self.actions.pack(side='bottom', fill='x', padx=14, pady=10)
-            tk.Frame(self, bg=COLORS['border_2'], height=1
-                     ).pack(side='bottom', fill='x')
-
-        # ── Body ── (caller fills this) — packed AFTER actions so it
-        # claims the remaining vertical space above the footer.
-        self.body = tk.Frame(self, bg=bg)
-        self.body.pack(fill='both', expand=True, padx=18, pady=14)
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # StatusPill — small rounded label showing build status per queue item.
 # ─────────────────────────────────────────────────────────────────────────
-class StatusPill(tk.Label):
-    """A status pill matching the design system's queue row pill.
+class StatusPill(_XBadge):
+    """Status pill (design system › StatusBadge) with the legacy API:
+    StatusPill(parent, kind='active|done|wait|fail', text) and
+    .set(kind, text). Leading glyphs in `text` become the badge icon."""
 
-    Four kinds:
-      'active'  — accent blue, e.g. "● Building 63%"
-      'done'    — green, e.g. "✓ Done"
-      'wait'    — neutral grey, e.g. "Waiting"
-      'fail'    — red, e.g. "✗ Failed"
-
-    tkinter doesn't do real rounded corners on a Label, but the small
-    padding + accent foreground reads as a pill in the dark UI.
-
-    Args:
-        parent: parent widget
-        kind:   one of 'active' / 'done' / 'wait' / 'fail'
-        text:   pill label (caller provides the leading glyph if any)
-    """
-
-    _SCHEMES = {
-        'active': (COLORS['accent_08'],  COLORS['accent_hi']),
-        'done':   (COLORS['success_bg'], COLORS['success_hi']),
-        'wait':   (COLORS['bg_4'],       COLORS['fg_5']),
-        'fail':   (COLORS['danger_bg'],  COLORS['danger_hi']),
-    }
+    _TONE = {'active': 'info', 'done': 'success', 'wait': 'neutral',
+             'fail': 'danger', 'warn': 'warn'}
 
     def __init__(self, parent, kind='wait', text=''):
-        bg, fg = self._SCHEMES.get(kind, self._SCHEMES['wait'])
-        super().__init__(parent, text=' ' + text + ' ',
-                         bg=bg, fg=fg,
-                         font=(FONTS['body_strong'][0], 9),
-                         padx=6, pady=2, bd=0)
+        super().__init__(parent, text=text, tone=self._TONE.get(kind, 'neutral'))
         self._kind = kind
 
-    def set(self, kind, text):
-        """Update the pill to a different kind + text."""
-        bg, fg = self._SCHEMES.get(kind, self._SCHEMES['wait'])
-        self.configure(text=' ' + text + ' ', bg=bg, fg=fg)
-        self._kind = kind
+    def set(self, kind=None, text=None, *args, **kw):
+        if kind in self._TONE:
+            self._kind = kind
+            return super().set(text, self._TONE[kind])
+        return super().set(kind if text is None else text, *args, **kw)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -172,7 +89,7 @@ class StatPill(tk.Frame):
     """
 
     _COUNT_FG = {
-        'info': COLORS['success_ok'],
+        'info': COLORS['fg_0'],
         'warn': COLORS['warn_hi'],
         'err':  COLORS['danger_hi'],
         'neutral': COLORS['fg_1'],
@@ -181,7 +98,7 @@ class StatPill(tk.Frame):
     def __init__(self, parent, kind='neutral', count=0, label=''):
         bg = COLORS['bg_3']
         super().__init__(parent, bg=bg,
-                         highlightbackground=COLORS['border_2'],
+                         highlightbackground=COLORS['border_3'],
                          highlightthickness=1)
         self._kind = kind
         self._label_text = label
@@ -503,62 +420,29 @@ class GameCard(tk.Frame):
 # FolderChip — the library tab's "📁 D:\PS5\Dumps  28 games  ✕" pill.
 # ─────────────────────────────────────────────────────────────────────────
 class FolderChip(tk.Frame):
-    """A folder chip: dim background, monospace path, optional close button.
-
-    Args:
-        parent: parent widget
-        path: the folder path text
-        meta: optional small dim text (e.g. "28 games")
-        on_remove: callback() fired when the ✕ is clicked. If None, no close.
-    """
+    """Folder chip: rounded bg_3 pill with a folder icon, monospace path,
+    optional meta and a remove button."""
 
     def __init__(self, parent, path, meta=None, on_remove=None):
-        bg = COLORS['bg_2']
-        super().__init__(parent, bg=bg,
-                         highlightbackground=COLORS['border_3'],
-                         highlightthickness=1)
-
-        inner = tk.Frame(self, bg=bg)
-        inner.pack(padx=10, pady=5)
-
-        # Folder glyph + path (monospace)
-        tk.Label(inner, text='\U0001f4c1',
-                 font=(FONTS['body'][0], 10),
-                 bg=bg, fg=COLORS['fg_3']
-                 ).pack(side='left', padx=(0, 6))
-        tk.Label(inner, text=path,
-                 font=FONTS['mono_sm'],
-                 bg=bg, fg=COLORS['fg_1']
-                 ).pack(side='left')
-
+        from tkinter_theme import px, surface_of
+        from ui.shared.widgets import Rounded, IconLabel, IconButton
+        outside = surface_of(parent)
+        super().__init__(parent, bg=outside)
+        bg = COLORS['bg_3']
+        chip = Rounded(self, bg=bg, border=COLORS['border_3'], radius=4,
+                       padding=(px(10), px(2)), surface=outside)
+        chip.pack()
+        IconLabel(chip, 'folder', 14, COLORS['fg_3'], bg).pack(
+            side='left', padx=(0, px(6)))
+        tk.Label(chip, text=path, font=FONTS['code'], bg=bg,
+                 fg=COLORS['fg_1']).pack(side='left', pady=px(4))
         if meta:
-            tk.Label(inner, text=meta,
-                     font=FONTS['meta'],
-                     bg=bg, fg=COLORS['fg_4']
-                     ).pack(side='left', padx=(8, 0))
-
+            tk.Label(chip, text=meta, font=FONTS['caption'], bg=bg,
+                     fg=COLORS['fg_3']).pack(side='left', padx=(px(8), 0))
         if on_remove:
-            # Step 41 (v2.5.7): make the ✕ unmistakable. Earlier versions
-            # rendered a small ✕ that users routinely missed — multiple
-            # reports of "no way to remove a scan folder" despite the
-            # button being functionally present. Now: 13pt bold ✕ with
-            # an always-visible dim pill background so it reads as a
-            # button at rest, not just a glyph. Hover turns it red.
-            x_bg = COLORS.get('bg_3', '#2a2733')
-            x_lbl = tk.Label(inner, text='\u2715',
-                             font=(FONTS['body_strong'][0], 11),
-                             bg=x_bg, fg=COLORS['fg_1'],
-                             cursor='hand2', padx=8, pady=1,
-                             highlightbackground=COLORS['border_3'],
-                             highlightthickness=1)
-            x_lbl.pack(side='left', padx=(12, 0))
-            x_lbl.bind('<Button-1>', lambda e: on_remove())
-            x_lbl.bind('<Enter>',
-                       lambda e: x_lbl.configure(fg='#ffffff',
-                                                  bg=COLORS['danger']))
-            x_lbl.bind('<Leave>',
-                       lambda e: x_lbl.configure(fg=COLORS['fg_1'],
-                                                  bg=x_bg))
+            IconButton(chip, 'close', on_remove, tooltip='Remove folder',
+                       size='sm', surface=bg).pack(side='left',
+                                                   padx=(px(4), 0))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -568,98 +452,45 @@ class FolderChip(tk.Frame):
 # the same attribute names so existing callbacks keep working.
 # ─────────────────────────────────────────────────────────────────────────
 class DetectedGameStrip(tk.Frame):
-    """Auto-detected game info strip, matching exfat-tab-redesign.html `.detected`.
+    """Auto-detected game strip (design system › InfoBar, success tone):
+    cover thumbnail, title, ID / version, size and a "Detected" badge.
 
-    Visual: tinted background with a 1px accent border, cover thumbnail
-    on the left, title + metadata in the middle, "✓ Detected" pill on the right.
-
-    Args:
-        parent: parent widget
-        kind:   color scheme — 'success' (green, default — exFAT tab),
-                'teal' (ffpkg tab), 'accent' (blue, generic)
-
-    The widget exposes the same attributes the legacy code expected on
-    `_info_frame`'s siblings, so populating logic in exfat_builder.py
-    continues to work unchanged:
-
-        cover_label  — set image via .config(image=..., text=...)
-        title_var    — StringVar
-        id_var       — StringVar
-        ver_var      — StringVar
-        size_var     — StringVar
-
-    Lifecycle: pack/pack_forget by the caller (legacy code already does this).
+    Same attributes as before: cover_label (.config(image=…, text=…)),
+    title_var, id_var, ver_var, size_var. pack/pack_forget by the caller.
     """
 
-    _SCHEMES = {
-        'success': ('success_bg', 'success', 'success_hi'),
-        'teal':    ('teal_bg',    'teal',    'teal_hi'),
-        'accent':  ('accent_08',  'accent',  'accent_hi'),
-    }
-
     def __init__(self, parent, kind='success', **kwargs):
-        scheme = self._SCHEMES.get(kind, self._SCHEMES['success'])
-        bg_key, border_key, accent_key = scheme
-        bg = COLORS[bg_key]
-        border_color = COLORS[border_key]
-        accent = COLORS[accent_key]
-
-        super().__init__(parent, bg=bg,
-                         highlightbackground=border_color,
-                         highlightthickness=1,
-                         **kwargs)
-
-        inner = tk.Frame(self, bg=bg)
-        inner.pack(fill='x', padx=12, pady=10)
-
-        # ── Cover thumbnail (left) ──
-        # 48px square. Real cover art is set via .config(image=..., text='').
-        self.cover_label = tk.Label(inner, bg=COLORS['bg_5'],
-                                    fg=accent,
-                                    text='\U0001f3ae',
-                                    font=(FONTS['body'][0], 18),
-                                    width=4, height=2,
-                                    relief='flat', bd=0,
-                                    highlightbackground=COLORS['border_3'],
-                                    highlightthickness=1)
-        self.cover_label.pack(side='left', padx=(0, 12))
-
-        # ── Title + metadata (middle, expands) ──
-        text_col = tk.Frame(inner, bg=bg)
+        from tkinter_theme import px, surface_of
+        from ui.shared.widgets import Rounded, CoverLabel, Badge
+        outside = surface_of(parent)
+        super().__init__(parent, bg=outside, **kwargs)
+        bg = COLORS['success_bg'] if kind == 'success' else COLORS['accent_lo']
+        strip = Rounded(self, bg=bg, border=COLORS['border_2'], radius=8,
+                        padding=(px(12), px(10)), surface=outside)
+        strip.pack(fill='x')
+        self.cover_label = CoverLabel(strip, box=48, placeholder='game')
+        self.cover_label.pack(side='left', padx=(0, px(12)))
+        text_col = tk.Frame(strip, bg=bg)
         text_col.pack(side='left', fill='x', expand=True)
-
         self.title_var = tk.StringVar()
-        self.id_var    = tk.StringVar()
-        self.ver_var   = tk.StringVar()
-        self.size_var  = tk.StringVar()
-
+        self.id_var = tk.StringVar()
+        self.ver_var = tk.StringVar()
+        self.size_var = tk.StringVar()
         tk.Label(text_col, textvariable=self.title_var,
-                 font=(FONTS['body_strong'][0], 11),
-                 bg=bg, fg=COLORS['fg_0'], anchor='w'
-                 ).pack(fill='x')
-
+                 font=FONTS['body_strong'], bg=bg, fg=COLORS['fg_0'],
+                 anchor='w').pack(fill='x')
         meta_row = tk.Frame(text_col, bg=bg)
-        meta_row.pack(fill='x', pady=(2, 0))
-        tk.Label(meta_row, textvariable=self.id_var,
-                 font=FONTS['mono_sm'],
-                 bg=bg, fg=accent, anchor='w'
-                 ).pack(side='left')
-        tk.Label(meta_row, textvariable=self.ver_var,
-                 font=FONTS['mono_sm'],
-                 bg=bg, fg=COLORS['fg_4'], anchor='w'
-                 ).pack(side='left', padx=(12, 0))
-
-        tk.Label(text_col, textvariable=self.size_var,
-                 font=FONTS['meta'],
-                 bg=bg, fg=accent, anchor='w'
-                 ).pack(fill='x', pady=(1, 0))
-
-        # ── "Detected" pill (right) ──
-        # Use 'done' kind for success, but mock has the pill match the tab
-        # accent. Keep it simple — green pill works visually for either.
-        StatusPill(inner, kind='done',
-                   text='\u2713 Detected').pack(side='right', padx=(8, 0))
-
+        meta_row.pack(fill='x', pady=(px(2), 0))
+        tk.Label(meta_row, textvariable=self.id_var, font=FONTS['code'],
+                 bg=bg, fg=COLORS['fg_2'], anchor='w').pack(side='left')
+        tk.Label(meta_row, textvariable=self.ver_var, font=FONTS['caption'],
+                 bg=bg, fg=COLORS['fg_3'], anchor='w').pack(
+                     side='left', padx=(px(12), 0))
+        tk.Label(text_col, textvariable=self.size_var, font=FONTS['caption'],
+                 bg=bg, fg=COLORS['fg_2'], anchor='w').pack(fill='x',
+                                                            pady=(px(1), 0))
+        Badge(strip, 'Detected', 'success', surface=bg).pack(
+            side='right', padx=(px(8), 0))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -667,105 +498,59 @@ class DetectedGameStrip(tk.Frame):
 # rows packed directly into body with no extra padding).
 # Used by ui/tab_settings.py for each section group.
 # ─────────────────────────────────────────────────────────────────────────
-class SettingsCard(tk.Frame):
-    """A bordered card with a header (title + optional right-aligned hint)
-    and a body the caller fills with `settings_row` (or any widget).
-
-    Args:
-        parent: parent widget
-        title: section title shown in the header
-        hint: optional right-aligned hint text (e.g. "last test 12s ago")
-        right_widget: optional widget packed to the right of the title
-                      (e.g. an "+ Add console" button)
-
-    Attributes:
-        body: the content frame; rows pack into this directly with no padding
-    """
+class SettingsCard(_XCard):
+    """Settings group card (Windows 11 settings pattern): subtitle-style
+    title with an optional right-aligned hint or widget, then rows (use
+    `settings_row`) packed into `.body`."""
 
     def __init__(self, parent, title, hint=None, right_widget=None):
+        from tkinter_theme import px
+        super().__init__(parent, padding=(px(16), px(4)))
         bg = COLORS['bg_2']
-        super().__init__(parent, bg=bg,
-                         highlightbackground=COLORS['border_2'],
-                         highlightthickness=1)
-
-        # ── Header (title + optional hint/widget) ──
         head = tk.Frame(self, bg=bg)
-        head.pack(fill='x', padx=18, pady=(16, 10))
-        tk.Label(head, text=title,
-                 font=(FONTS['body_strong'][0], 11),
-                 bg=bg, fg=COLORS['fg_0'], anchor='w'
-                 ).pack(side='left')
+        head.pack(fill='x', pady=(px(12), px(4)))
+        tk.Label(head, text=title, font=FONTS['subtitle'], bg=bg,
+                 fg=COLORS['fg_0'], anchor='w').pack(side='left')
         if right_widget is not None:
-            # The caller built this widget against a different parent;
-            # we just pack it. (E.g. an "+ Add console" button.)
             try:
                 right_widget.pack(side='right')
             except Exception:
                 pass
         elif hint:
-            tk.Label(head, text=hint,
-                     font=FONTS['mono_sm'],
-                     bg=bg, fg=COLORS['fg_4']
-                     ).pack(side='right')
-
-        # Hairline divider under the header
-        tk.Frame(self, bg=COLORS['border_2'], height=1).pack(fill='x')
-
-        # ── Body — rows pack here ──
+            tk.Label(head, text=hint, font=FONTS['caption'], bg=bg,
+                     fg=COLORS['fg_3']).pack(side='right')
         self.body = tk.Frame(self, bg=bg)
-        self.body.pack(fill='both', expand=True)
+        self.body.pack(fill='both', expand=True, pady=(0, px(4)))
 
 
 def settings_row(parent, label, description=None, with_divider=True):
-    """Helper to build a 3-column settings row inside a SettingsCard.body.
-
-    Layout:
-        [label + description]  [control area]  [actions area]
-        ──────────────────────────────────────────────────────  (divider)
-
-    Returns the row's `(row_frame, control_frame, actions_frame)` so the
-    caller packs widgets into the latter two. The row_frame can be ignored
-    in most cases.
-
-    The control_frame and actions_frame are bare tk.Frames; pack widgets
-    using `side='left'` for typical horizontal layouts.
-    """
+    """A settings row inside SettingsCard.body: label + description on the
+    left, control area and actions area on the right, hairline between
+    rows. Returns (row_frame, control_frame, actions_frame)."""
+    from tkinter_theme import px
+    from ui.shared.widgets import autowrap
     bg = COLORS['bg_2']
+    if with_divider and getattr(parent, '_xb_rows', 0):
+        tk.Frame(parent, bg=COLORS['border_1'], height=1).pack(fill='x')
+    parent._xb_rows = getattr(parent, '_xb_rows', 0) + 1
     row = tk.Frame(parent, bg=bg)
-    row.pack(fill='x', padx=18, pady=10)
-
-    # Use grid for the 3 columns so labels align across rows
-    row.grid_columnconfigure(0, weight=0, minsize=200)
+    row.pack(fill='x', pady=px(12))
+    row.grid_columnconfigure(0, weight=1, minsize=px(220))
     row.grid_columnconfigure(1, weight=1)
     row.grid_columnconfigure(2, weight=0)
-
-    # ── Label column ──
     label_col = tk.Frame(row, bg=bg)
-    label_col.grid(row=0, column=0, sticky='w', padx=(0, 16))
-    tk.Label(label_col, text=label,
-             font=(FONTS['body'][0], 11),
-             bg=bg, fg=COLORS['fg_1'], anchor='w'
-             ).pack(fill='x')
+    label_col.grid(row=0, column=0, sticky='nw', padx=(0, px(16)))
+    tk.Label(label_col, text=label, font=FONTS['body'], bg=bg,
+             fg=COLORS['fg_1'], anchor='w', justify='left').pack(fill='x')
     if description:
-        tk.Label(label_col, text=description,
-                 font=FONTS['meta'],
-                 bg=bg, fg=COLORS['fg_4'], anchor='w',
-                 wraplength=220, justify='left'
-                 ).pack(fill='x', pady=(2, 0))
-
-    # ── Control column (caller fills) ──
+        d = tk.Label(label_col, text=description, font=FONTS['caption'],
+                     bg=bg, fg=COLORS['fg_3'], anchor='w', justify='left',
+                     wraplength=px(320))
+        d.pack(fill='x', pady=(px(2), 0))
     control = tk.Frame(row, bg=bg)
     control.grid(row=0, column=1, sticky='ew')
-
-    # ── Actions column (caller fills) ──
     actions = tk.Frame(row, bg=bg)
-    actions.grid(row=0, column=2, sticky='e', padx=(8, 0))
-
-    # ── Optional hairline below the row ──
-    if with_divider:
-        tk.Frame(parent, bg=COLORS['border_1'], height=1
-                 ).pack(fill='x', padx=18)
-
+    actions.grid(row=0, column=2, sticky='e', padx=(px(8), 0))
     return row, control, actions
 
 

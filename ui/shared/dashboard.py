@@ -71,47 +71,36 @@ class DashboardCard(tk.Frame):
 
 
 class StatCard(tk.Frame):
-    """A compact metric tile: icon, large value, caption.
-
-    Usage:
-        sc = StatCard(parent, icon="\U0001f4be", value="12",
-                      caption="Built Images", status="success")
-        sc.pack(side="left")
-        ...
-        sc.set_value("13")           # live update
-
-    `status` (optional, a STATUS_COLORS key) tints the icon + value.
-    Purely presentational — holds no logic.
-    """
+    """Stat card (design system › Card, stat): caption label with an
+    optional icon, then the value in the `stat` style. `status` (a
+    STATUS_COLORS key) tints the icon. set_value() updates the value."""
 
     def __init__(self, parent, icon="", value="", caption="",
                  status=None, **kwargs):
+        from tkinter_theme import px, surface_of
+        from ui.shared.widgets import Rounded, IconLabel
+        from ui.icons import leading_icon, has_icon
+        outside = surface_of(parent)
+        super().__init__(parent, bg=outside, highlightthickness=0, bd=0,
+                         **kwargs)
         self._bg = get_color("bg_2")
-        self._border = get_color("border_3")
-        super().__init__(parent, bg=self._bg,
-                         highlightbackground=self._border,
-                         highlightcolor=self._border,
-                         highlightthickness=1, bd=0, **kwargs)
-
-        accent = (get_status_color(status, "fg") if status
-                  else get_color("accent"))
-        pad = SPACING["md"]
-
-        top = tk.Frame(self, bg=self._bg)
-        top.pack(fill="x", padx=pad, pady=(pad, 0))
+        card = Rounded(self, bg=self._bg, border=get_color("border_2"),
+                       radius=8, padding=(px(16), px(14)), surface=outside)
+        card.pack(fill="both", expand=True)
+        tint = get_status_color(status, "fg") if status else get_color("fg_3")
+        top = tk.Frame(card, bg=self._bg)
+        top.pack(fill="x")
         if icon:
-            tk.Label(top, text=icon, bg=self._bg, fg=accent,
-                     font=get_font("h2")).pack(side="left")
-
-        self._value_lbl = tk.Label(self, text=str(value), bg=self._bg,
-                                   fg=get_color("fg_0"),
-                                   font=get_font("h1"), anchor="w")
-        self._value_lbl.pack(fill="x", padx=pad, pady=(SPACING["xs"], 0))
-
-        tk.Label(self, text=caption, bg=self._bg,
-                 fg=get_color("fg_4"), font=get_font("label"),
-                 anchor="w").pack(fill="x", padx=pad,
-                                  pady=(0, pad))
+            name = icon if has_icon(icon) else leading_icon(icon)
+            if name:
+                IconLabel(top, name, 16, tint, self._bg).pack(
+                    side="left", padx=(0, px(8)))
+        tk.Label(top, text=caption, bg=self._bg, fg=get_color("fg_3"),
+                 font=FONTS["caption"], anchor="w").pack(side="left")
+        self._value_lbl = tk.Label(card, text=str(value), bg=self._bg,
+                                   fg=get_color("fg_0"), font=FONTS["stat"],
+                                   anchor="w")
+        self._value_lbl.pack(fill="x", pady=(px(6), 0))
 
     def set_value(self, value):
         """Update the displayed metric value."""
