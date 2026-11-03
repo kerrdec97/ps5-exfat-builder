@@ -44,43 +44,19 @@ from ui.shared.app_dialog import app_warning, app_error, app_confirm, app_succes
 import subprocess
 import tempfile
 
-
-# ─────────────────────────────────────────────────────────────────────
-# Constants — picked to match the design tokens in the handoff CSS
-# ─────────────────────────────────────────────────────────────────────
-_INSPECTOR_WIDTH = 288   # px, fixed per design
-
-
-def _style_sel_pill(pill, n):
-    """Selection-count pill: muted at zero, accent when items are
-    selected. Presentation only."""
-    if n:
-        pill.config(text='%d selected' % n,
-                    bg=COLORS['accent_15'], fg=COLORS['accent_hi'])
-    else:
-        pill.config(text='0 selected',
-                    bg=COLORS['bg_3'], fg=COLORS['fg_4'])
-
-_TYPE_ICONS = {
-    'folder':  '\U0001f4c1',  # 📁
-    'binary':  '\u26ac',       # ⚬
-    'exec':    '\u2b22',       # ⬢ — eboot.bin / sidbase.bin
-    'log':     '\u2261',       # ≡ — playlgo.log
-    'text':    '\U0001f4c4',  # 📄 — discname.txt
-    'data':    '\u25c6',       # ◆ — sce_*
-    'config':  '\u2699',       # ⚙ — sys
-    'unknown': '\U0001f4be',  # 💾 — fallback
-}
-_TYPE_COLORS = {
-    'folder':  COLORS['accent'],
-    'exec':    COLORS['warn'],
-    'log':     COLORS['success_hi'],
-    'text':    COLORS['fg_3'],
-    'data':    COLORS['purple'],
-    'config':  COLORS['fg_3'],
-    'binary':  COLORS['fg_3'],
-    'unknown': COLORS['fg_4'],
-}
+# Design-system components and the editor workspace building blocks
+# shared with the ffpkg editor (summary bar, command bar, table and
+# inspector cards, dialog skeleton). Imported after the star import so
+# nothing from exfat_builder's namespace can shadow them.
+from tkinter_theme import px
+from ui.shared.widgets import (PageHeader, Button, IconButton,
+                               EmptyState as DSEmptyState)
+from ui.tab_ffpkg_edit import (
+    _INSPECTOR_WIDTH, _style_sel_pill, _kind_icon, _kind_fg, _tree_icon,
+    _ImageSummary, _CommandBar, _build_file_table_card,
+    _build_inspector_card, _inspector_row, _insp_set_icon, _hex_well,
+    _place_overlay, _hex_lines, _elide_middle,
+    _dialog_shell, _dialog_place, _dialog_button, _choice_row)
 
 
 def _classify(name, is_dir):
@@ -148,11 +124,12 @@ class ListboxProxy:
         is_dir = (name == '..' or text.lstrip().startswith(
             ('\U0001f4c1', '\U0001f4c2')))
         kind, type_label = _classify(name, is_dir)
-        icon = _TYPE_ICONS.get(kind, '\U0001f4be')
-        # Prefix the name column with the type icon
-        name_with_icon = icon + '  ' + name
-        self._tree.insert('', 'end', iid=iid,
-                          values=(name_with_icon, type_label, size_str, ''),
+        icon = 'folder_out' if name == '..' else _kind_icon(kind)
+        # The tree column shows icon + name; `values` keeps its old
+        # 4-tuple shape (name, type, size, modified) for the callers.
+        self._tree.insert('', 'end', iid=iid, text=name,
+                          image=_tree_icon(icon, _kind_fg(kind)),
+                          values=(name, type_label, size_str, ''),
                           tags=(kind,))
         return iid
 
@@ -219,7 +196,12 @@ class ListboxProxy:
 # ─────────────────────────────────────────────────────────────────────
 # Main entry
 # ─────────────────────────────────────────────────────────────────────
-def build_files_tab(parent, app):
+def build_files_tab(parent, app, embedded=False):
+    """Build the exFAT File Manager into `parent`.
+
+    embedded=True is the unified Edit page (exFAT mode): that page owns
+    the page header, so this pane starts at the image summary bar.
+    Stand-alone hosts get their own page header."""
     parent.configure(bg=COLORS['bg_1'])
 
     # State — every attribute the rest of the app reads must be set
@@ -228,88 +210,90 @@ def build_files_tab(parent, app):
     app._fm_osf         = None
     app._fm_current_dir = None
     app._fm_status_var  = tk.StringVar(value=_('No image mounted'))
-    app._fm_path_var    = tk.StringVar(value='\u2014')
+    app._fm_path_var    = tk.StringVar(value='—')
     app._fm_entries     = []
     app._fm_used_var    = tk.StringVar(value='')
 
-    # ── Page head ──
-    head = tk.Frame(parent, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=24, pady=(14, 6))
-    icon_tile = tk.Frame(head, bg=COLORS['accent_15'],
-                         width=32, height=32)
-    icon_tile.pack(side='left')
-    icon_tile.pack_propagate(False)
-    tk.Label(icon_tile, text='\U0001f4c1',
-             bg=COLORS['accent_15'], fg=COLORS['accent'],
-             font=(FONTS['body'][0], 14)
-             ).pack(expand=True)
-    title_col = tk.Frame(head, bg=COLORS['bg_1'])
-    title_col.pack(side='left', padx=(10, 0))
-    tk.Label(title_col, text=_('exFAT File Manager'),
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']
-             ).pack(anchor='w')
-    tk.Label(title_col,
-             text=_('Mount an .exfat image and edit its contents in place.'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_5']
-             ).pack(anchor='w')
+    # ── Page header (stand-alone hosts only) ──
+    if not embedded:
+        hdr = PageHeader(
+            parent, _('exFAT File Manager'),
+            _('Mount an .exfat image and edit its contents in place.'))
+        hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
-    # ── Mounted-image hero card ──
-    _build_mounted_card(parent, app)
+    wrap = tk.Frame(parent, bg=COLORS['bg_1'])
+    wrap.pack(fill='both', expand=True, padx=px(24), pady=(0, px(20)))
 
-    # ── Body: split layout (list 1fr + inspector 288px) ──
-    body = tk.Frame(parent, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True, padx=24, pady=(8, 12))
+    # ── Mounted-image summary bar ──
+    _build_mounted_card(wrap, app, embedded)
+
+    # ── Command bar ──
+    _build_toolbar(wrap, app)
+
+    # ── Workspace: listing card + inspector card ──
+    body = tk.Frame(wrap, bg=COLORS['bg_1'])
+    body.pack(fill='both', expand=True, pady=(px(12), 0))
     body.columnconfigure(0, weight=1)
-    body.columnconfigure(1, weight=0)
+    body.columnconfigure(1, weight=0, minsize=px(_INSPECTOR_WIDTH))
     body.rowconfigure(0, weight=1)
 
     list_col = tk.Frame(body, bg=COLORS['bg_1'])
     list_col.grid(row=0, column=0, sticky='nsew')
-    _build_toolbar(list_col, app)
     _build_file_table(list_col, app)
 
-    inspector = tk.Frame(body, bg=COLORS['bg_2'],
-                         width=_INSPECTOR_WIDTH,
-                         highlightbackground=COLORS['border_2'],
-                         highlightthickness=1)
-    inspector.grid(row=0, column=1, sticky='nsew', padx=(12, 0))
-    inspector.grid_propagate(False)
+    inspector = tk.Frame(body, bg=COLORS['bg_1'])
+    inspector.grid(row=0, column=1, sticky='nsew', padx=(px(16), 0))
     _build_inspector(inspector, app)
 
+    _watch_mount_state(app)
 
-def _build_mounted_card(parent, app):
-    from ui.shared.hero import GameHero
-    wrap = tk.Frame(parent, bg=COLORS['bg_1'])
-    wrap.pack(fill='x', padx=24, pady=(0, 8))
 
-    app._fm_hero = GameHero(
-        wrap,
-        stats=[('Mounted On', 'drive'), ('Image Size', 'size'),
+def _build_mounted_card(parent, app, embedded=False):
+    app._fm_hero = _ImageSummary(
+        parent,
+        stats=[('Mounted on', 'drive'), ('Image size', 'size'),
                ('Files', 'files'), ('Format', 'format')],
-        cover_glyph='\U0001f4c0', cover_size=110)
-    app._fm_hero.pack(side='left', fill='x', expand=True)
+        icon='drive',
+        # stand-alone hosts already say this in their page header
+        placeholder=(_('Mount an .exfat image and edit its contents in place.')
+                     if embedded else ''))
+    app._fm_hero.pack(fill='x')
+    app._fm_hero.path_prefix = _('Image:') + ' '
     app._fm_hero.set_title(_('No image mounted'), '')
     app._fm_hero.set_stat('format', 'exFAT')
     app._fm_hero.set_badge(_('NO IMAGE'), 'wait')
 
-    btns = tk.Frame(wrap, bg=COLORS['bg_1'])
-    btns.pack(side='right', padx=(12, 0))
-    app._fm_remount_btn = _ghost_btn(btns,
-        '\u21bb  ' + _('Remount'),
-        command=lambda: _remount(app))
-    app._fm_remount_btn.pack(side='top', pady=(0, 4))
-    app._fm_dismount_btn = _danger_btn(btns,
-        '\u23cf  ' + _('Dismount'),
-        command=app._fm_dismount)
+    # The image path shows on the summary bar's second line; Browse sets
+    # it, Mount mounts it (needed before mount, and visible during mount
+    # in case you want to switch).
+    def _show_image(*_a):
+        try:
+            app._fm_hero.set_path(app._fm_image_var.get())
+        except Exception:
+            pass
+    app._fm_image_var.trace_add('write', _show_image)
+
+    acts = app._fm_hero.actions
+    IconButton(acts, 'folder_open', app._fm_browse, tooltip=_('Browse'),
+               variant='secondary').pack(side='left', padx=(0, px(8)))
+    app._fm_mount_btn = Button(acts, text=_('Mount'), icon='mount',
+                               command=lambda: (_remount_and_refresh(app)))
+    app._fm_mount_btn.pack(side='left', padx=(0, px(8)))
+    app._fm_remount_btn = IconButton(acts, 'refresh',
+                                     lambda: _remount(app),
+                                     tooltip=_('Remount'),
+                                     variant='secondary')
+    app._fm_remount_btn.pack(side='left', padx=(0, px(8)))
+    app._fm_dismount_btn = Button(acts, text=_('Dismount'), icon='eject',
+                                  command=app._fm_dismount)
     app._fm_dismount_btn.configure(state='disabled')
-    app._fm_dismount_btn.pack(side='top')
+    app._fm_dismount_btn.pack(side='left')
 
     # back-compat shims so existing mount/dismount code keeps working
     class _ShimLabel:
-        def __init__(self, setter):
+        def __init__(self, setter, clear_on_hide=False):
             self._setter = setter
+            self._clear = clear_on_hide
         def config(self, **kw):
             if 'text' in kw:
                 self._setter(kw['text'])
@@ -317,42 +301,41 @@ def _build_mounted_card(parent, app):
         def pack(self, *a, **k):
             pass
         def pack_forget(self):
-            pass
-    app._fm_card_ppsa = _ShimLabel(lambda t: app._fm_hero.id_var.set(t or ''))
+            if self._clear:
+                self._setter('')
+    app._fm_card_ppsa = _ShimLabel(lambda t: app._fm_hero.id_var.set(t or ''),
+                                   clear_on_hide=True)
     app._fm_card_title = _ShimLabel(
-        lambda t: app._fm_hero.title_var.set((t or '').upper()))
+        lambda t: app._fm_hero.title_var.set(t or '—'))
     app._fm_card_ver = _ShimLabel(lambda t: None)  # version folded elsewhere
     app._fm_card_path = _ShimLabel(lambda t: app._fm_hero.set_path(t or ''))
 
-    # Image entry + Browse + Mount under-card (always visible — needed
-    # before mount and visible during mount in case you want to switch)
-    sub = tk.Frame(parent, bg=COLORS['bg_1'])
-    sub.pack(fill='x', padx=24, pady=(0, 8))
-    tk.Label(sub, text=_('Image:'),
-             font=FONTS['label'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_3']
-             ).pack(side='left', padx=(0, 6))
-    ef_outer = tk.Frame(sub, bg=COLORS['bg_0'],
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1)
-    ef_outer.pack(side='left', fill='x', expand=True)
-    XEntry(ef_outer, textvariable=app._fm_image_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-             disabledforeground=COLORS['fg_1'],
-             readonlybackground=COLORS['bg_0'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=4, state='readonly'
-             ).pack(fill='x')
-    _ghost_btn(sub, _('Browse'),
-               command=app._fm_browse
-               ).pack(side='left', padx=(6, 0))
-    app._fm_mount_btn = _accent_btn(sub,
-        '\U0001f517  ' + _('Mount'),
-        command=lambda: (_remount_and_refresh(app)))
-    app._fm_mount_btn.pack(side='left', padx=(6, 0))
+
+def _watch_mount_state(app):
+    """Keep the summary bar and the empty-table overlay in step with the
+    mount state. The app's mount/dismount code reports through
+    _fm_status_var / _fm_path_var; react to those writes (display only —
+    mount logic is untouched)."""
+    last = {'drive': object()}
+
+    def _sync(*_a):
+        drive = getattr(app, '_fm_drive', None)
+        try:
+            if drive:
+                app._fm_empty.place_forget()
+            else:
+                _place_overlay(app._fm_empty)
+        except Exception:
+            pass
+        if drive != last['drive']:
+            last['drive'] = drive
+            try:
+                app.after_idle(lambda: _refresh_card(app))
+            except Exception:
+                pass
+    app._fm_status_var.trace_add('write', _sync)
+    app._fm_path_var.trace_add('write', _sync)
+    _sync()
 
 
 def _remount(app):
@@ -436,7 +419,7 @@ def _refresh_card(app):
                     pass
 
                 def _apply(n=n, cover=cover):
-                    h.set_stat('files', '%d files' % n)
+                    h.set_stat('files', '{:,}'.format(n))
                     if cover:
                         h.set_cover_from_folder(app, cover)
                 try:
@@ -453,130 +436,64 @@ def _refresh_card(app):
             hero.reset_cover()
 
 
-def _stat_tile(parent, eyebrow_text, value_var, has_dot=False):
-    tile = tk.Frame(parent, bg=COLORS['bg_2'])
-    tile.pack(side='left', padx=14)
-    tk.Label(tile, text=eyebrow_text,
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(anchor='w')
-    val_row = tk.Frame(tile, bg=COLORS['bg_2'])
-    val_row.pack(anchor='w')
-    if has_dot:
-        tk.Label(val_row, text='\u25cf',
-                 font=(FONTS['body'][0], 6),
-                 bg=COLORS['bg_2'], fg=COLORS['success']
-                 ).pack(side='left', padx=(0, 4))
-    tk.Label(val_row, textvariable=value_var,
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_1']
-             ).pack(side='left')
-
-
 def _build_toolbar(parent, app):
-    tb = tk.Frame(parent, bg=COLORS['bg_1'])
-    tb.pack(fill='x', pady=(0, 6))
-    bc = tk.Frame(tb, bg=COLORS['bg_1'])
-    bc.pack(side='left')
-    tk.Label(bc, text='\U0001f4c0',
-             font=(FONTS['body'][0], 10), bg=COLORS['bg_1'],
-             fg=COLORS['accent']).pack(side='left')
-    tk.Label(bc, text=' \u203a ',
-             font=FONTS['mono_sm'], bg=COLORS['bg_1'],
-             fg=COLORS['fg_6']).pack(side='left')
-    tk.Label(bc, textvariable=app._fm_path_var,
-             font=FONTS['mono_sm'], bg=COLORS['bg_1'],
-             fg=COLORS['fg_3']).pack(side='left')
-
-    btns = tk.Frame(tb, bg=COLORS['bg_1'])
-    btns.pack(side='right')
-
-    def _tb(text, cmd, kind='ghost'):
-        return _icon_text_btn(btns, text, cmd, kind=kind)
-
-    _tb('\u2191  ' + _('Up'),         app._fm_go_up
-        ).pack(side='left', padx=(0, 4))
-    _tb('\u21bb  ' + _('Refresh'),    app._fm_refresh
-        ).pack(side='left', padx=(0, 4))
-    tk.Frame(btns, bg=COLORS['border_3'], width=1
-             ).pack(side='left', fill='y', padx=6)
-    _tb('\u2795  ' + _('Add files'),  app._fm_add_file, kind='accent'
-        ).pack(side='left', padx=(0, 4))
-    _tb('\U0001f4c1  ' + _('Add folder'), app._fm_add_folder
-        ).pack(side='left', padx=(0, 4))
-    _tb('\U0001f4c2  ' + _('New folder'), app._fm_new_folder
-        ).pack(side='left', padx=(0, 4))
-    # ── Backport apply (overlays a user-made backport folder onto the
-    #    mounted image, backing up replaced originals first). ──
-    _tb('\U0001f4e5  ' + _('Apply backport'),
-        lambda: _apply_backport(app), kind='accent'
-        ).pack(side='left', padx=(0, 4))
-    tk.Frame(btns, bg=COLORS['border_3'], width=1
-             ).pack(side='left', fill='y', padx=6)
-    _tb('\u21bb  ' + _('Replace'),    app._fm_replace_file
-        ).pack(side='left', padx=(0, 4))
-    _tb('\U0001f5d1  ' + _('Delete'), app._fm_delete, kind='danger'
-        ).pack(side='left', padx=(0, 4))
+    """One command bar: Navigation | Creation | Modification, separated
+    by hairlines. Commands unchanged."""
+    bar = _CommandBar(parent)
+    bar.pack(fill='x', pady=(px(16), 0))
+    bar.group([
+        ('arrow_up', _('Up'), app._fm_go_up),
+        ('refresh', _('Refresh'), app._fm_refresh),
+    ], rank=3)
+    # Backport apply overlays a user-made backport folder onto the
+    # mounted image, backing up replaced originals first.
+    bar.group([
+        ('file_plus', _('Add files'), app._fm_add_file, 0),
+        ('folder_in', _('Add folder'), app._fm_add_folder),
+        ('folder_plus', _('New folder'), app._fm_new_folder),
+        ('backports', _('Apply backport'), lambda: _apply_backport(app), 0),
+    ], rank=1)
+    bar.group([
+        ('replace', _('Replace'), app._fm_replace_file),
+        ('trash', _('Delete'), app._fm_delete),
+    ], rank=2)
+    app._fm_toolbar = bar
+    return bar
 
 
 def _build_file_table(parent, app):
-    outer = tk.Frame(parent, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1)
-    outer.pack(fill='both', expand=True)
-
-    style = ttk.Style()
-    style.configure('FileMgr.Treeview',
-                    background=COLORS['bg_2'],
-                    foreground=COLORS['fg_1'],
-                    fieldbackground=COLORS['bg_2'],
-                    bordercolor=COLORS['border_3'],
-                    lightcolor=COLORS['bg_2'],
-                    darkcolor=COLORS['bg_2'],
-                    rowheight=22,
-                    font=(FONTS['body'][0], 10))
-    style.configure('FileMgr.Treeview.Heading',
-                    background=COLORS['bg_3'],
-                    foreground=COLORS['fg_5'],
-                    relief='flat',
-                    font=(FONTS['body_strong'][0], 9))
-    style.map('FileMgr.Treeview',
-              background=[('selected', COLORS['accent_15'])],
-              foreground=[('selected', COLORS['accent_hi'])])
-
-    cols = ('name', 'type', 'size', 'mod')
-    tree = ttk.Treeview(outer, columns=cols, show='headings',
-                        style='FileMgr.Treeview', selectmode='extended')
-    tree.heading('name', text='NAME')
-    tree.heading('type', text='TYPE')
-    tree.heading('size', text='SIZE')
-    tree.heading('mod',  text='MODIFIED')
-    tree.column('name', width=420, stretch=True,  anchor='w')
-    tree.column('type', width=100, stretch=False, anchor='w')
-    tree.column('size', width=110, stretch=False, anchor='e')
-    tree.column('mod',  width=180, stretch=False, anchor='w')
-
-    sb = ttk.Scrollbar(outer, orient='vertical', command=tree.yview)
-    tree.configure(yscrollcommand=sb.set)
-    sb.pack(side='right', fill='y')
-    tree.pack(side='left', fill='both', expand=True)
+    t = _build_file_table_card(
+        parent, [('type', 'Type', 110, 'w'), ('size', 'Size', 100, 'e'),
+                 ('mod', 'Modified', 180, 'w')],
+        root_icon='drive', path_var=app._fm_path_var)
+    t['card'].pack(fill='both', expand=True)
+    tree = t['tree']
 
     app._fm_listbox = ListboxProxy(tree)
     app._fm_tree    = tree
 
-    foot = tk.Frame(parent, bg=COLORS['bg_3'])
-    foot.pack(fill='x', pady=(1, 0))
-    app._fm_sel_pill = tk.Label(foot, text='0 selected',
-        font=(FONTS['body_strong'][0], 10),
-        bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-        padx=8, pady=2)
-    app._fm_sel_pill.pack(side='left', padx=(10, 6), pady=4)
-    app._fm_sel_size = tk.Label(foot, text='',
-        font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_3'])
-    app._fm_sel_size.pack(side='left')
-    app._fm_folder_summary = tk.Label(foot, text='',
-        font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5'])
-    app._fm_folder_summary.pack(side='right', padx=(0, 10))
+    # Empty state over the table until an image is mounted
+    app._fm_empty = DSEmptyState(
+        t['body'], icon='drive', title=_('No image mounted'),
+        text=_('Mount an .exfat image and edit its contents in place.'),
+        bg=COLORS['bg_2'])
+    _place_overlay(app._fm_empty)
+
+    # Footer: selection (count + size) left, folder summary / status right
+    bg = COLORS['bg_2']
+    app._fm_sel_pill = tk.Label(t['foot_left'], text='0 selected',
+                                font=FONTS['body'], bg=bg, fg=COLORS['fg_3'])
+    app._fm_sel_pill.pack(side='left')
+    app._fm_sel_size = tk.Label(t['foot_left'], text='', font=FONTS['code'],
+                                bg=bg, fg=COLORS['fg_3'])
+    app._fm_sel_size.pack(side='left', padx=(px(8), 0))
+    tk.Label(t['foot_right'], textvariable=app._fm_status_var,
+             font=FONTS['caption'], bg=bg, fg=COLORS['fg_3']).pack(
+                 side='right')
+    app._fm_folder_summary = tk.Label(t['foot_right'], text='',
+                                      font=FONTS['caption'], bg=bg,
+                                      fg=COLORS['fg_3'])
+    app._fm_folder_summary.pack(side='right', padx=(0, px(12)))
 
     tree.bind('<Double-Button-1>', lambda e: app._fm_enter())
     tree.bind('<Button-3>',        app._fm_context_menu)
@@ -614,99 +531,41 @@ def _build_file_table(parent, app):
 
 
 def _build_inspector(parent, app):
-    head = tk.Frame(parent, bg=COLORS['bg_2'])
-    head.pack(fill='x', padx=12, pady=(10, 6))
-    tk.Label(head, text='INSPECTOR',
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(side='left')
+    card, r = _build_inspector_card(parent)
+    card.pack(fill='both', expand=True)
+    app._fm_insp_icon = r['icon']
+    app._fm_insp_name = r['name']
+    app._fm_insp_size = r['size']
 
-    hero = tk.Frame(parent, bg=COLORS['bg_2'])
-    hero.pack(fill='x', padx=12, pady=(0, 8))
-    app._fm_insp_icon = tk.Label(hero, text='\U0001f4be',
-        font=(FONTS['body'][0], 40),
-        bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-        width=2, height=2,
-        highlightbackground=COLORS['border_3'], highlightthickness=1)
-    app._fm_insp_icon.pack(anchor='center', pady=(8, 6))
-    app._fm_insp_name = tk.Label(hero, text=_('No selection'),
-        font=(FONTS['body_strong'][0], 11),
-        bg=COLORS['bg_2'], fg=COLORS['fg_0'],
-        wraplength=_INSPECTOR_WIDTH - 24, justify='center')
-    app._fm_insp_name.pack(anchor='center')
-    app._fm_insp_size = tk.Label(hero, text='',
-        font=FONTS['mono_sm'],
-        bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-    app._fm_insp_size.pack(anchor='center', pady=(0, 6))
+    d = r['details']
+    _inspector_row(d, app, 'Path', '_fm_insp_path_lbl', mono=True)
+    _inspector_row(d, app, 'Type', '_fm_insp_type_lbl')
+    _inspector_row(d, app, 'Modified', '_fm_insp_mod_lbl')
+    _inspector_row(d, app, 'Size', '_fm_insp_bytes_lbl', mono=True)
+    _inspector_row(d, app, 'SHA-256', '_fm_insp_hash_lbl', mono=True)
 
-    details = tk.Frame(parent, bg=COLORS['bg_2'])
-    details.pack(fill='x', padx=12, pady=(0, 8))
-    _detail_row(details, app, 'PATH',     mono=True, accent=True,
-                attr='_fm_insp_path_lbl')
-    _detail_row(details, app, 'TYPE',
-                attr='_fm_insp_type_lbl')
-    _detail_row(details, app, 'MODIFIED',
-                attr='_fm_insp_mod_lbl')
-    _detail_row(details, app, 'SIZE',     mono=True,
-                attr='_fm_insp_bytes_lbl')
-    _detail_row(details, app, 'SHA-256',  mono=True,
-                attr='_fm_insp_hash_lbl')
-
-    hex_outer = tk.Frame(parent, bg=COLORS['bg_2'])
-    hex_outer.pack(fill='x', padx=12, pady=(0, 8))
-    tk.Label(hex_outer, text='FIRST 64 BYTES',
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5']
-             ).pack(anchor='w', pady=(0, 4))
-    app._fm_insp_hex = tk.Text(hex_outer,
-        height=4, width=34,
-        font=(FONTS['code'][0], 9),
-        bg=COLORS['bg_0'], fg=COLORS['fg_3'],
-        insertbackground=COLORS['accent'],
-        relief='flat', bd=6, wrap='none', state='disabled',
-        highlightbackground=COLORS['border_2'], highlightthickness=1)
+    hex_outer = tk.Frame(r['body'], bg=COLORS['bg_2'])
+    hex_outer.pack(fill='x', pady=(px(4), 0))
+    tk.Label(hex_outer, text='First 64 bytes', font=FONTS['caption'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w').pack(
+                 fill='x', pady=(0, px(4)))
+    app._fm_insp_hex = _hex_well(hex_outer)
     app._fm_insp_hex.pack(fill='x')
 
-    # Actions row pinned to bottom
-    # v3.0.0: Replace and Delete were removed from the Inspector;
-    # they duplicated the toolbar buttons. Extract stays — it's the
-    # one action in the Inspector that the toolbar doesn't offer.
-    spacer = tk.Frame(parent, bg=COLORS['bg_2'])
-    spacer.pack(fill='both', expand=True)
-    actions = tk.Frame(parent, bg=COLORS['bg_2'])
-    actions.pack(fill='x', padx=12, pady=(8, 12), side='bottom')
-    app._fm_insp_extract = _ghost_btn(actions,
-        '\u2197  ' + _('Extract'),
-        command=lambda: _extract_selected(app))
-    app._fm_insp_extract.pack(side='left', fill='x', expand=True)
+    # v3.0.0: Replace and Delete live in the toolbar only; Extract stays
+    # here — it's the one action the toolbar doesn't offer.
+    app._fm_insp_extract = Button(r['actions'], text=_('Extract'),
+                                  icon='file_down',
+                                  command=lambda: _extract_selected(app))
+    app._fm_insp_extract.pack(fill='x')
 
     _clear_inspector(app)
 
 
-def _detail_row(parent, app, eyebrow, mono=False, accent=False, attr=None):
-    row = tk.Frame(parent, bg=COLORS['bg_2'])
-    row.pack(fill='x', pady=(0, 4))
-    tk.Label(row, text=eyebrow,
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-             width=10, anchor='w'
-             ).pack(side='left')
-    fg = COLORS['accent_hi'] if accent else COLORS['fg_2']
-    fnt = (FONTS['body'][0], 10) if mono else (FONTS['body'][0], 10)
-    val = tk.Label(row, text='—',
-                   font=fnt, bg=COLORS['bg_2'], fg=fg,
-                   anchor='w', justify='left',
-                   wraplength=_INSPECTOR_WIDTH - 110)
-    val.pack(side='left', fill='x', expand=True)
-    if attr:
-        setattr(app, attr, val)
-
-
 def _clear_inspector(app):
     if hasattr(app, '_fm_insp_icon'):
-        app._fm_insp_icon.config(text='\U0001f4be',
-                                  fg=COLORS['fg_6'])
-        app._fm_insp_name.config(text=_('No selection'), fg=COLORS['fg_4'])
+        _insp_set_icon(app._fm_insp_icon, None)
+        app._fm_insp_name.config(text=_('No selection'), fg=COLORS['fg_3'])
         app._fm_insp_size.config(text='')
         app._fm_insp_path_lbl.config(text='—')
         app._fm_insp_type_lbl.config(text='—')
@@ -747,11 +606,10 @@ def _on_tree_select(app):
                  if app._fm_current_dir else name)
 
     kind, type_label = _classify(name, is_dir)
-    app._fm_insp_icon.config(text=_TYPE_ICONS.get(kind, '\U0001f4be'),
-                              fg=_TYPE_COLORS.get(kind, COLORS['fg_3']))
+    _insp_set_icon(app._fm_insp_icon, kind)
     app._fm_insp_name.config(text=name, fg=COLORS['fg_0'])
     app._fm_insp_size.config(text=_format_size(size) if size else '')
-    app._fm_insp_path_lbl.config(text=full_path)
+    app._fm_insp_path_lbl.config(text=_elide_middle(full_path))
     app._fm_insp_type_lbl.config(text=type_label)
     try:
         mtime = os.path.getmtime(full_path)
@@ -760,7 +618,7 @@ def _on_tree_select(app):
     except Exception:
         app._fm_insp_mod_lbl.config(text='—')
     app._fm_insp_bytes_lbl.config(
-        text='%s (%d bytes)' % (_format_size(size), size) if size else '—')
+        text='%s (%s bytes)' % (_format_size(size), '{:,}'.format(size)) if size else '—')
 
     app._fm_insp_hex.config(state='normal')
     app._fm_insp_hex.delete('1.0', 'end')
@@ -770,13 +628,7 @@ def _on_tree_select(app):
         try:
             with open(full_path, 'rb') as f:
                 data = f.read(64)
-            lines = []
-            for off in range(0, len(data), 16):
-                chunk = data[off:off + 16]
-                left  = ' '.join('%02x' % b for b in chunk[:8])
-                right = ' '.join('%02x' % b for b in chunk[8:])
-                lines.append('%08x  %-23s  %s' % (off, left, right))
-            app._fm_insp_hex.insert('end', '\n'.join(lines))
+            app._fm_insp_hex.insert('end', _hex_lines(data))
         except Exception as e:
             app._fm_insp_hex.insert('end', '(could not read: %s)' % e)
         try:
@@ -814,66 +666,6 @@ def _extract_selected(app):
         app._fm_status_var.set('Extracted: ' + dest)
     except Exception as e:
         app_error(app, 'Extract failed', str(e))
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Button helpers
-# ─────────────────────────────────────────────────────────────────────
-def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_5'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
-
-
-def _accent_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['accent_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     command=command)
-
-
-def _danger_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['danger'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['danger_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     disabledforeground=COLORS['fg_5'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     command=command)
-
-
-def _icon_text_btn(parent, text, command, kind='ghost'):
-    if kind == 'accent':
-        return _accent_btn(parent, text, command)
-    if kind == 'danger':
-        fg = COLORS['danger_hi']
-    else:
-        fg = COLORS['fg_2']
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=fg,
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=fg,
-                     relief='flat', bd=0,
-                     padx=10, pady=5,
-                     cursor='hand2',
-                     command=command)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1287,88 +1079,34 @@ def _bp_pick_source_kind(app):
     source they have. Returns 'folder', 'ffpkg', 'exfat', or None if
     the user cancels.
     """
-    from tkinter import Toplevel
     result = {'kind': None}
-
-    dlg = Toplevel(app)
-    dlg.title(_('Apply backport \u2014 pick source'))
-    dlg.configure(bg=COLORS['bg_1'])
-    dlg.transient(app)
-    dlg.grab_set()
-    dlg.resizable(False, False)
-
-    dlg_w, dlg_h = 480, 320
-    dlg.update_idletasks()
-    try:
-        x = app.winfo_x() + (app.winfo_width()  - dlg_w) // 2
-        y = app.winfo_y() + (app.winfo_height() - dlg_h) // 2
-        dlg.geometry('%dx%d+%d+%d' % (dlg_w, dlg_h, x, y))
-    except Exception:
-        dlg.geometry('%dx%d' % (dlg_w, dlg_h))
-
-    body = tk.Frame(dlg, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True, padx=18, pady=16)
-
-    tk.Label(body, text=_('What\u2019s your backport source?'),
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_1'], fg=COLORS['fg_1']
-             ).pack(anchor='w')
-    tk.Label(body,
-             text=_('Pick the format that matches what you have.'),
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['bg_1'], fg=COLORS['fg_4']
-             ).pack(anchor='w', pady=(2, 14))
+    dlg, body, footer = _dialog_shell(
+        app, _('Apply backport \u2014 pick source'),
+        _('What\u2019s your backport source?'),
+        _('Pick the format that matches what you have.'), width=500)
 
     def _pick(k):
         result['kind'] = k
         dlg.destroy()
 
-    def _row(icon, title, sub, kind):
-        outer = tk.Frame(body, bg=COLORS['bg_2'],
-                         highlightbackground=COLORS['border_3'],
-                         highlightthickness=1, cursor='hand2')
-        outer.pack(fill='x', pady=(0, 6))
-        def _on_click(_e=None, k=kind): _pick(k)
-        outer.bind('<Button-1>', _on_click)
-
-        inner = tk.Frame(outer, bg=COLORS['bg_2'])
-        inner.pack(fill='x', padx=12, pady=10)
-        inner.bind('<Button-1>', _on_click)
-        ico = tk.Label(inner, text=icon, font=(FONTS['body'][0], 18),
-                       bg=COLORS['bg_2'], fg=COLORS['accent'])
-        ico.pack(side='left', padx=(0, 12))
-        ico.bind('<Button-1>', _on_click)
-        col = tk.Frame(inner, bg=COLORS['bg_2'])
-        col.pack(side='left', fill='x', expand=True)
-        col.bind('<Button-1>', _on_click)
-        tlbl = tk.Label(col, text=title,
-                        font=(FONTS['body_strong'][0], 10),
-                        bg=COLORS['bg_2'], fg=COLORS['fg_1'])
-        tlbl.pack(anchor='w')
-        tlbl.bind('<Button-1>', _on_click)
-        slbl = tk.Label(col, text=sub, font=(FONTS['body'][0], 9),
-                        bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-        slbl.pack(anchor='w')
-        slbl.bind('<Button-1>', _on_click)
-
-    _row('\U0001f4c1', _('A folder'),
+    rows = tk.Frame(body, bg=COLORS['bg_2'])
+    rows.pack(fill='x', pady=(px(16), 0))
+    _choice_row(rows, 'folder', _('A folder'),
          _('A backport folder like the ones produced by Auto Backport '
            '(e.g. fakelib/, sce_module/, sce_sys/, eboot.bin).'),
-         'folder')
-    _row('\U0001f4e6', _('A .ffpkg image'),
+         lambda: _pick('folder'), body.wrap)
+    _choice_row(rows, 'package', _('A .ffpkg image'),
          _('Read the backport tree out of a .ffpkg using UFS2Tool, '
            'then overlay it onto the mounted image.'),
-         'ffpkg')
-    _row('\U0001f4be', _('An exFAT image'),
+         lambda: _pick('ffpkg'), body.wrap)
+    _choice_row(rows, 'drive', _('An exFAT image'),
          _('Mount a .exfat / .img read-only via OSFMount, copy its '
            'contents to a temp folder, then overlay.'),
-         'exfat')
+         lambda: _pick('exfat'), body.wrap)
 
-    btnbar = tk.Frame(body, bg=COLORS['bg_1'])
-    btnbar.pack(fill='x', pady=(8, 0))
-    _ghost_btn(btnbar, _('Cancel'), command=dlg.destroy
-               ).pack(side='right')
-
+    _dialog_button(footer, _('Cancel'), dlg.destroy)
+    dlg.bind('<Escape>', lambda e: dlg.destroy())
+    _dialog_place(dlg, app)
     app.wait_window(dlg)
     return result['kind']
 

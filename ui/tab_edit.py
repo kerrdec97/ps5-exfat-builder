@@ -29,24 +29,29 @@ OSFMount cleanup is the app's existing close-time sweep
 import os
 import threading
 import tkinter as tk
-from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog
 
 from ui.shared.app_dialog import app_confirm, app_warning
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 from exfat_builder import _
 
+from ui.shared.widgets import (PageHeader, Card, Badge, Button, IconLabel,
+                               Rounded, Segmented, autowrap)
+from ui.shared.page_head import field_block
 from ui.tab_ffpkg_edit import build_ffpkg_edit_tab, open_ffpkg_path
-from ui.tab_files import build_files_tab
+from ui.tab_files import build_files_tab, _refresh_card as _fm_refresh_card
 
 
+# mode -> (pill text, badge tone)
 _MODE_PILL = {
-    'ffpkg': ('FFPKG \u00b7 in-place edit', 'teal'),
-    'exfat': ('exFAT \u00b7 mounted edit', 'accent_hi'),
-    'pfs':   ('PFS \u00b7 workspace',       'warn'),
-    'none':  ('No image open',              'fg_4'),
+    'ffpkg': ('FFPKG · in-place edit', 'info'),
+    'exfat': ('exFAT · mounted edit', 'info'),
+    'pfs':   ('PFS · workspace',       'warn'),
+    'none':  ('No image open',              'neutral'),
 }
+_MODE_ICON = {'ffpkg': 'package', 'exfat': 'drive', 'pfs': 'compress',
+              'none': 'circle'}
 
 
 def _detect_format(path):
@@ -68,59 +73,28 @@ def build_edit_tab(parent, app):
 
     state = {'mode': 'ffpkg', 'pfs_src': '', 'pfs_compressed': False}
 
-    # ── Header: title + active-format pill + unified Open + segments ──
-    head = tk.Frame(parent, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=24, pady=(14, 6))
+    # ── Page header: title + description; actions = mode badge, editor
+    #    switcher and the unified Open (the page's primary action) ──
+    hdr = PageHeader(
+        parent, _('Edit'),
+        _('Open a .ffpkg, .exfat, or PFS image — the editor '
+          'is chosen automatically from the file.'))
+    hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
-    icon_tile = tk.Frame(head, bg=COLORS['accent_15'], width=32, height=32)
-    icon_tile.pack(side='left')
-    icon_tile.pack_propagate(False)
-    tk.Label(icon_tile, text='\u270f', bg=COLORS['accent_15'],
-             fg=COLORS['accent'], font=(FONTS['body'][0], 14)).pack(expand=True)
-
-    title_col = tk.Frame(head, bg=COLORS['bg_1'])
-    title_col.pack(side='left', padx=(10, 0))
-    tk.Label(title_col, text=_('Edit'), font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
-    tk.Label(title_col,
-             text=_('Open a .ffpkg, .exfat, or PFS image \u2014 the editor '
-                    'is chosen automatically from the file.'),
-             font=FONTS['mono_sm'], bg=COLORS['bg_1'],
-             fg=COLORS['fg_5']).pack(anchor='w')
-
-    # Active-format pill (right side)
     pill_var = tk.StringVar(value=_MODE_PILL['none'][0])
-    pill = tk.Label(head, textvariable=pill_var,
-                    font=(FONTS['body_strong'][0], 9),
-                    bg=COLORS['bg_3'], fg=COLORS['fg_4'], padx=10, pady=4,
-                    highlightbackground=COLORS['border_3'],
-                    highlightthickness=1)
-    pill.pack(side='right')
+    pill = Badge(hdr.actions, pill_var.get(), 'neutral', icon=False)
+    pill.pack(side='left', padx=(0, px(12)))
+
+    mode_var = tk.StringVar(value='ffpkg')
+    seg = Segmented(hdr.actions,
+                    [('ffpkg', 'ffpkg'), ('exfat', 'exFAT'), ('pfs', 'PFS')],
+                    variable=mode_var, command=lambda m: _show_mode(m))
+    seg.pack(side='left', padx=(0, px(12)))
 
     def _open():
         _edit_open(app, state, _show_mode, _set_pill, pfs_api)
-    from ui.shared.page_head import make_themed_button
-    make_themed_button(head, _('Open image\u2026'), command=_open,
-                       kind='accent', icon='\U0001f4c2',
-                       font_size=10).pack(side='right', padx=(0, 10))
-
-    # ── Format selector strip (manual override) ──
-    seg_row = tk.Frame(parent, bg=COLORS['bg_1'])
-    seg_row.pack(fill='x', padx=24, pady=(0, 8))
-    seg_btns = {}
-
-    def _seg(key, label):
-        b = tk.Label(seg_row, text=label, font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['bg_3'], fg=COLORS['fg_3'], padx=14, pady=6,
-                     cursor='hand2', highlightbackground=COLORS['border_3'],
-                     highlightthickness=1)
-        b.pack(side='left', padx=(0, 6))
-        b.bind('<Button-1>', lambda e, k=key: _show_mode(k))
-        seg_btns[key] = b
-
-    _seg('ffpkg', '\U0001f4e6  ffpkg')
-    _seg('exfat', '\U0001f5c2  exFAT')
-    _seg('pfs',   '\U0001f5dc  PFS')
+    Button(hdr.actions, text=_('Open image…'), command=_open,
+           variant='primary', icon='folder_open').pack(side='left')
 
     # ── Stacked editor panes ──
     body = tk.Frame(parent, bg=COLORS['bg_1'])
@@ -130,18 +104,19 @@ def build_edit_tab(parent, app):
     exfat_pane = tk.Frame(body, bg=COLORS['bg_1'])
     pfs_pane = tk.Frame(body, bg=COLORS['bg_1'])
 
-    # Reuse the existing editors verbatim (no second editor is created).
-    build_ffpkg_edit_tab(ffpkg_pane, app)
-    build_files_tab(exfat_pane, app)
+    # Reuse the existing editors verbatim (no second editor is created);
+    # embedded=True drops their own page headers — this page has one.
+    build_ffpkg_edit_tab(ffpkg_pane, app, embedded=True)
+    build_files_tab(exfat_pane, app, embedded=True)
     pfs_api = _build_pfs_workspace(pfs_pane, app, state)
 
     panes = {'ffpkg': ffpkg_pane, 'exfat': exfat_pane, 'pfs': pfs_pane}
 
     def _set_pill(mode_key):
-        text, color = _MODE_PILL.get(mode_key, _MODE_PILL['none'])
+        text, tone = _MODE_PILL.get(mode_key, _MODE_PILL['none'])
         pill_var.set(text)
         try:
-            pill.config(fg=COLORS[color])
+            pill.set(text, tone)
         except Exception:
             pass
 
@@ -153,12 +128,8 @@ def build_edit_tab(parent, app):
             except Exception:
                 pass
         panes[mode].pack(fill='both', expand=True)
-        for k, b in seg_btns.items():
-            sel = (k == mode)
-            b.config(bg=COLORS['accent_08'] if sel else COLORS['bg_3'],
-                     fg=COLORS['teal'] if sel else COLORS['fg_3'],
-                     highlightbackground=COLORS['teal'] if sel
-                     else COLORS['border_3'])
+        if mode_var.get() != mode:
+            mode_var.set(mode)
         # keep the pill honest: only show an active edit-mode when one of
         # the editors actually holds an image
         if mode == 'pfs':
@@ -167,9 +138,34 @@ def build_edit_tab(parent, app):
     # Expose a couple of hooks the PFS workspace uses for handoff.
     pfs_api['show_mode'] = _show_mode
     pfs_api['set_pill'] = _set_pill
+    # Sub-mode activator (like the other pages' _*_subtab_activate), so
+    # a route such as 'files' -> ('edit', 'exfat') can open a mode.
+    app._edit_mode_activate = _show_mode
+    _route_files_key(app, _show_mode)
 
     _show_mode('ffpkg')
     _set_pill('none')
+
+
+def _route_files_key(app, show_mode):
+    """The hidden 'files' registry key still owns an empty frame (the
+    File Manager lives in this page's exFAT mode). When that frame is
+    shown, open Edit in exFAT mode instead of leaving a blank page."""
+    frame = getattr(app, '_tab_files_frame', None)
+    if frame is None:
+        return
+
+    def _go():
+        try:
+            if str(app._active_tab.get()) == 'files':
+                app._switch_tab('edit')
+                show_mode('exfat')
+        except Exception:
+            pass
+    try:
+        frame.bind('<Map>', lambda e: app.after_idle(_go))
+    except Exception:
+        pass
 
 
 def _edit_open(app, state, show_mode, set_pill, pfs_api):
@@ -195,6 +191,7 @@ def _edit_open(app, state, show_mode, set_pill, pfs_api):
             app._fm_image_var.set(p)
             app._fm_mount()
             set_pill('exfat')
+            app.after(800, lambda: _fm_refresh_card(app))
         except Exception:
             pass
     elif fmt in ('pfs', 'pfs_c'):
@@ -211,74 +208,70 @@ def _edit_open(app, state, show_mode, set_pill, pfs_api):
 # ─────────────────────────────────────────────────────────────────────────
 def _build_pfs_workspace(pane, app, state):
     api = {}
-    wrap = tk.Frame(pane, bg=COLORS['bg_1'])
-    wrap.pack(fill='both', expand=True, padx=24, pady=(6, 16))
+    BG1, BG2 = COLORS['bg_1'], COLORS['bg_2']
+    wrap = tk.Frame(pane, bg=BG1)
+    wrap.pack(fill='both', expand=True, padx=px(24), pady=(0, px(20)))
 
-    # ── 4-step workflow strip (Select -> Unpack -> Edit -> Rebuild) ──
-    steps_row = tk.Frame(wrap, bg=COLORS['bg_1'])
-    steps_row.pack(fill='x', pady=(0, 14))
+    # ── Workflow stepper (Select -> Unpack -> Edit -> Rebuild) ──
+    steps_row = tk.Frame(wrap, bg=BG1)
+    steps_row.pack(fill='x', pady=(0, px(16)))
     _STEP_DEFS = [
-        ('1', _('Select PFS Image'), '\U0001f5dc', _('Choose a .ffpfs or .ffpfsc.')),
-        ('2', _('Unpack to Workspace'), '\U0001f4e4',
+        ('1', _('Select PFS Image'), 'compress', _('Choose a .ffpfs or .ffpfsc.')),
+        ('2', _('Unpack to Workspace'), 'folder_out',
          _('Extract contents to a folder.')),
-        ('3', _('Edit Files'), '\U0001f4dd',
+        ('3', _('Edit Files'), 'file_edit',
          _('Edit files (or the nested image).')),
-        ('4', _('Rebuild Image'), '\U0001f4e6',
+        ('4', _('Rebuild Image'), 'package',
          _('Rebuild a NEW image from Build.')),
     ]
     step_refs = []
-    for i, (num, title, glyph, sub) in enumerate(_STEP_DEFS):
+    for i, (num, title, icon, sub) in enumerate(_STEP_DEFS):
         steps_row.columnconfigure(i, weight=1, uniform='step')
-        sc = tk.Frame(steps_row, bg=COLORS['bg_2'],
-                      highlightbackground=COLORS['border_2'],
-                      highlightthickness=1)
+        sc = Rounded(steps_row, bg=BG2, border=COLORS['border_2'], radius=8,
+                     padding=(px(14), px(12)))
         sc.grid(row=0, column=i, sticky='nsew',
-                padx=(0 if i == 0 else 8, 0))
-        sp = tk.Frame(sc, bg=COLORS['bg_2'])
-        sp.pack(fill='both', expand=True, padx=14, pady=12)
-        top = tk.Frame(sp, bg=COLORS['bg_2'])
+                padx=(0 if i == 0 else px(12), 0))
+        top = tk.Frame(sc, bg=BG2)
         top.pack(fill='x')
-        eyebrow = tk.Label(top, text=_('STEP ') + num,
-                           font=(FONTS['body_strong'][0], 9),
-                           bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
-        eyebrow.pack(side='left')
-        chk = tk.Label(top, text='', font=(FONTS['body_strong'][0], 10),
-                       bg=COLORS['bg_2'], fg=COLORS['success'])
+        ic = IconLabel(top, icon, 16, COLORS['fg_4'], BG2)
+        ic.pack(side='left')
+        eyebrow = tk.Label(top, text=(_('STEP ') + num).upper(),
+                           font=FONTS['overline'], bg=BG2,
+                           fg=COLORS['fg_4'], anchor='w')
+        eyebrow.pack(side='left', padx=(px(8), 0))
+        chk = IconLabel(top, 'circle', 16, COLORS['fg_5'], BG2)
         chk.pack(side='right')
-        gl = tk.Label(sp, text=glyph, font=(FONTS['body'][0], 22),
-                      bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
-        gl.pack(anchor='w', pady=(8, 4))
-        tl = tk.Label(sp, text=title, font=(FONTS['body_strong'][0], 11),
-                      bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w',
-                      justify='left', wraplength=150)
-        tl.pack(anchor='w', fill='x')
-        tk.Label(sp, text=sub, font=FONTS['meta'], bg=COLORS['bg_2'],
-                 fg=COLORS['fg_4'], anchor='w', justify='left',
-                 wraplength=150).pack(anchor='w', pady=(2, 0))
+        tl = tk.Label(sc, text=title, font=FONTS['body_strong'], bg=BG2,
+                      fg=COLORS['fg_1'], anchor='w', justify='left')
+        tl.pack(fill='x', pady=(px(10), 0))
+        autowrap(tl)
+        sl = tk.Label(sc, text=sub, font=FONTS['caption'], bg=BG2,
+                      fg=COLORS['fg_3'], anchor='w', justify='left')
+        sl.pack(fill='x', pady=(px(2), 0))
+        autowrap(sl)
+        sc.raise_decorations()
         step_refs.append({'card': sc, 'eyebrow': eyebrow, 'chk': chk,
-                          'glyph': gl, 'title': tl})
+                          'glyph': ic, 'title': tl})
 
     def _set_step(idx, st):
         # st: 'done' | 'active' | 'pending'
         r = step_refs[idx]
         if st == 'done':
-            r['card'].config(highlightbackground=COLORS['success'],
-                             highlightthickness=2)
-            r['chk'].config(text='\u2713', fg=COLORS['success'])
-            r['glyph'].config(fg=COLORS['success'])
+            r['card'].set_style(border=COLORS['border_3'])
+            r['chk'].set('success', COLORS['success'])
+            r['glyph'].set(fg=COLORS['fg_2'])
             r['title'].config(fg=COLORS['fg_0'])
         elif st == 'active':
-            r['card'].config(highlightbackground=COLORS['teal'],
-                             highlightthickness=2)
-            r['chk'].config(text='\u25b6', fg=COLORS['teal'])
-            r['glyph'].config(fg=COLORS['teal'])
-            r['title'].config(fg=COLORS['teal'])
+            r['card'].set_style(border=COLORS['accent'])
+            r['chk'].set('play_circle', COLORS['accent_hi'])
+            r['glyph'].set(fg=COLORS['fg_1'])
+            r['title'].config(fg=COLORS['fg_0'])
         else:
-            r['card'].config(highlightbackground=COLORS['border_2'],
-                             highlightthickness=1)
-            r['chk'].config(text='\u25cb', fg=COLORS['fg_5'])
-            r['glyph'].config(fg=COLORS['fg_5'])
-            r['title'].config(fg=COLORS['fg_1'])
+            r['card'].set_style(border=COLORS['border_2'])
+            r['chk'].set('circle', COLORS['fg_5'])
+            r['glyph'].set(fg=COLORS['fg_4'])
+            r['title'].config(fg=COLORS['fg_2'])
+        r['card'].raise_decorations()
 
     def _steps(active_idx, done_upto):
         for i in range(4):
@@ -290,67 +283,46 @@ def _build_pfs_workspace(pane, app, state):
                 _set_step(i, 'pending')
     _steps(0, 0)
 
-    card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightthickness=1,
-                    highlightbackground=COLORS['border_2'])
+    # ── Workspace card ──
+    card = Card(wrap, title=_('PFS workspace mode'),
+                subtitle=_('PFS images are not edited in place. Unpack to a '
+                           'workspace, edit the contents (or the nested '
+                           'image), then rebuild to a NEW file from the Build '
+                           'tab — the source is never modified.'))
     card.pack(fill='x')
-    pad = tk.Frame(card, bg=COLORS['bg_2'])
-    pad.pack(fill='x', padx=20, pady=16)
-
-    tk.Label(pad, text=_('PFS workspace mode'),
-             font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_2'],
-             fg=COLORS['accent'], anchor='w').pack(anchor='w')
-    tk.Label(pad, text=_('PFS images are not edited in place. Unpack to a '
-                         'workspace, edit the contents (or the nested '
-                         'image), then rebuild to a NEW file from the Build '
-                         'tab \u2014 the source is never modified.'),
-             font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w', justify='left', wraplength=720).pack(
-                 anchor='w', pady=(2, 12))
+    pad = card.body
 
     src_var = tk.StringVar(value='')
     ws_var = tk.StringVar(value='')
-
-    def _row(label_text, var, browse_cmd, hint):
-        tk.Label(pad, text=label_text, font=FONTS['label'], bg=COLORS['bg_2'],
-                 fg=COLORS['fg_3'], anchor='w').pack(anchor='w', pady=(6, 2))
-        line = tk.Frame(pad, bg=COLORS['field_bg'],
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1)
-        line.pack(fill='x')
-        XEntry(line, textvariable=var, font=FONTS['mono_sm'],
-                 bg=COLORS['field_bg'], fg=COLORS['field_fg'],
-                 insertbackground=COLORS['field_fg'], relief='flat',
-                 bd=8).pack(side='left', fill='x', expand=True)
-        if browse_cmd:
-            from ui.shared.page_head import make_themed_button
-            make_themed_button(line, _('Browse'), command=browse_cmd,
-                               kind='ghost', font_size=9).pack(side='right')
 
     def _browse_ws():
         d = filedialog.askdirectory(title=_('Select workspace folder'))
         if d:
             ws_var.set(d)
 
-    _row(_('Source PFS image'), src_var, None, '')
-    _row(_('Workspace folder'), ws_var, _browse_ws, '')
+    src_block = field_block(pad, _('Source PFS image'), src_var)
+    src_block.pack_configure(pady=0)
+    try:
+        src_block.entry.configure(state='readonly')
+    except Exception:
+        pass
+    field_block(pad, _('Workspace folder'), ws_var,
+                on_browse=_browse_ws, browse_text=_('Browse'))
 
-    btn_row = tk.Frame(pad, bg=COLORS['bg_2'])
-    btn_row.pack(fill='x', pady=(14, 0))
-    from ui.shared.page_head import make_themed_button
-    unpack_btn = make_themed_button(btn_row, _('Unpack to workspace'),
-                                    command=lambda: _unpack(),
-                                    kind='success', icon='\u25b6',
-                                    font_size=10, padx=18, pady=9)
+    btn_row = tk.Frame(pad, bg=BG2)
+    btn_row.pack(fill='x', pady=(px(16), 0))
+    unpack_btn = Button(btn_row, text=_('Unpack to workspace'),
+                        command=lambda: _unpack(), icon='play')
     unpack_btn.pack(side='left')
 
     status_var = tk.StringVar(value='')
-    tk.Label(pad, textvariable=status_var, font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w').pack(
-                 fill='x', pady=(12, 0))
+    tk.Label(btn_row, textvariable=status_var, font=FONTS['body'],
+             bg=BG2, fg=COLORS['fg_2'], anchor='w').pack(
+                 side='left', fill='x', expand=True, padx=(px(12), 0))
 
     # action area — repopulated after a successful unpack
-    actions = tk.Frame(pad, bg=COLORS['bg_2'])
-    actions.pack(fill='x', pady=(8, 0))
+    actions = tk.Frame(pad, bg=BG2)
+    actions.pack(fill='x', pady=(px(8), 0))
 
     def _clear_actions():
         for w in actions.winfo_children():
@@ -373,6 +345,12 @@ def _build_pfs_workspace(pane, app, state):
         _steps(1, 1)   # step 1 done, step 2 active
 
     api['set_source'] = set_source
+
+    def _action_note(text):
+        lbl = tk.Label(actions, text=text, font=FONTS['caption'], bg=BG2,
+                       fg=COLORS['fg_3'], anchor='w', justify='left')
+        lbl.pack(fill='x', pady=(px(8), px(6)))
+        autowrap(lbl)
 
     def _after_unpack(dest):
         _clear_actions()
@@ -398,37 +376,24 @@ def _build_pfs_workspace(pane, app, state):
                 pass
 
         if kind == 'ffpkg':
-            tk.Label(actions,
-                     text=_('Nested .ffpkg found \u2014 edit it directly:'),
-                     font=FONTS['meta'], bg=COLORS['bg_2'],
-                     fg=COLORS['fg_3'], anchor='w').pack(anchor='w',
-                                                          pady=(0, 4))
-            make_themed_button(actions, _('Edit nested .ffpkg here'),
-                command=lambda np=nested: _handoff_ffpkg(np),
-                kind='accent', icon='\U0001f4e6', font_size=10).pack(
-                    side='left')
+            _action_note(_('Nested .ffpkg found — edit it directly:'))
+            Button(actions, text=_('Edit nested .ffpkg here'),
+                   command=lambda np=nested: _handoff_ffpkg(np),
+                   icon='package').pack(side='left')
         elif kind == 'exfat':
-            tk.Label(actions,
-                     text=_('Nested .exfat found \u2014 mount and edit it:'),
-                     font=FONTS['meta'], bg=COLORS['bg_2'],
-                     fg=COLORS['fg_3'], anchor='w').pack(anchor='w',
-                                                          pady=(0, 4))
-            make_themed_button(actions, _('Edit nested .exfat here'),
-                command=lambda np=nested: _handoff_exfat(np),
-                kind='accent', icon='\U0001f5c2', font_size=10).pack(
-                    side='left')
+            _action_note(_('Nested .exfat found — mount and edit it:'))
+            Button(actions, text=_('Edit nested .exfat here'),
+                   command=lambda np=nested: _handoff_exfat(np),
+                   icon='drive').pack(side='left')
         else:
             msg = (_('Unpacked the nested raw PFS image (pfs_image.dat). '
                      'It cannot be edited directly here.')
                    if kind == 'raw'
                    else _('Unpacked the game files. Edit them on disk, then '
                           'rebuild a new .ffpfsc from the Build tab.'))
-            tk.Label(actions, text=msg, font=FONTS['meta'], bg=COLORS['bg_2'],
-                     fg=COLORS['fg_3'], anchor='w', justify='left',
-                     wraplength=720).pack(anchor='w', pady=(0, 6))
-            make_themed_button(actions, _('Rebuild in Build tab'),
-                command=_go_build, kind='ghost', font_size=10).pack(
-                    side='left')
+            _action_note(msg)
+            Button(actions, text=_('Rebuild in Build tab'),
+                   command=_go_build, icon='build').pack(side='left')
 
     def _handoff_ffpkg(path):
         if 'show_mode' in api:
@@ -445,6 +410,7 @@ def _build_pfs_workspace(pane, app, state):
             app._fm_mount()
             if 'set_pill' in api:
                 api['set_pill']('exfat')
+            app.after(800, lambda: _fm_refresh_card(app))
         except Exception:
             pass
 
