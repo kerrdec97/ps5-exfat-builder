@@ -384,6 +384,27 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(os.path.basename(r.out_path).startswith('UPDATE_'))
         self.assertTrue(r.companion_path.endswith('.remastered.pkg'))
 
+    def test_verify_and_extract_existing_package(self):
+        r, _l, _p = self.build()
+        st, msgs = backend.verify_package(self.exe, r.out_path)
+        self.assertIs(st, True, msgs)
+        os.environ['FAKE_PUBCMD_VERIFY'] = 'fail'
+        st, msgs = backend.verify_package(self.exe, r.out_path)
+        self.assertIs(st, False)
+        dest = os.path.join(self.tmp, 'extracted')
+        st, msgs = backend.extract_package(self.exe, r.out_path, dest)
+        self.assertIs(st, True, msgs)
+        self.assertTrue(os.path.isfile(os.path.join(dest, 'eboot.bin')))
+        # never into a non-empty folder
+        st, msgs = backend.extract_package(self.exe, r.out_path, dest)
+        self.assertIs(st, False)
+        self.assertIn('not empty', msgs[0])
+        os.environ['FAKE_PUBCMD_EXTRACT'] = 'fail'
+        st, msgs = backend.extract_package(self.exe, r.out_path,
+                                           os.path.join(self.tmp, 'x2'))
+        self.assertIs(st, False)
+        os.environ.pop('FAKE_PUBCMD_EXTRACT')
+
     def test_preflight_failures(self):
         os.remove(os.path.join(self.dump, 'sce_sys', 'keystone'))
         r, _l, _p = self.build()

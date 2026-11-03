@@ -666,12 +666,78 @@ def build_unibuild_tab(parent, app):
            variable=fpkg_verify_var, command=_fpkg_save).pack(side='left', padx=(0, px(18)))
     XCheck(_fpkg_checks, text='Keep project files (.gp5)',
            variable=fpkg_keep_var, command=_fpkg_save).pack(side='left')
+    # Update builds: an optional base package (built by the Publishing
+    # Tools, same Content ID, lower contentVersion).
+    fpkg_base_var = tk.StringVar(value='')
+
+    def _fpkg_browse_base():
+        p = filedialog.askopenfilename(title='Base package for an update',
+                                       filetypes=[('PS5 package', '*.pkg'),
+                                                  ('All files', '*.*')])
+        if p:
+            fpkg_base_var.set(os.path.normpath(p))
+    _fpkg_base_block = field_block(fpkg_frame, 'Base package (updates only, optional)',
+                                   var=fpkg_base_var, on_browse=_fpkg_browse_base,
+                                   hint='makes UPDATE_….pkg + full .remastered.pkg')
+
+    # Verify / extract an existing package with the same tools.
+    def _fpkg_tool_action(kind):
+        tool = fpkg_tool_var.get().strip()
+        pkg = filedialog.askopenfilename(title='Select a PS5 package',
+                                         filetypes=[('PS5 package', '*.pkg'),
+                                                    ('All files', '*.*')])
+        if not pkg:
+            return
+        pkg = os.path.normpath(pkg)
+        dest = None
+        if kind == 'extract':
+            dest = filedialog.askdirectory(title='Extract into an EMPTY folder')
+            if not dest:
+                return
+            dest = os.path.normpath(dest)
+
+        def _log(line):
+            try:
+                app._log(line + '\n')
+            except Exception:
+                pass
+
+        def _work():
+            from core.fpkg.backend import verify_package, extract_package
+            if kind == 'verify':
+                st, msgs = verify_package(tool, pkg, log=_log)
+            else:
+                st, msgs = extract_package(tool, pkg, dest, log=_log)
+            title = 'Verify package' if kind == 'verify' else 'Extract package'
+
+            def _show():
+                if st is True:
+                    app_info(app, title, ('The package passed the checks:\n%s' % pkg)
+                             if kind == 'verify' else
+                             'Extracted to:\n%s' % dest)
+                elif st == 'warn':
+                    app_warning(app, title, 'img_verify passed, but:\n\n' + '\n'.join(msgs))
+                elif st is None:
+                    app_warning(app, title, 'Cancelled.')
+                else:
+                    app_error(app, title, '\n'.join(msgs) or 'Failed — see the Output Log.')
+            app.after(0, _show)
+        _log('[FPKG] %s %s' % ('Verifying' if kind == 'verify' else 'Extracting', pkg))
+        threading.Thread(target=_work, daemon=True).start()
+    _fpkg_tools_row = tk.Frame(fpkg_frame, bg=BG2)
+    _fpkg_tools_row.pack(fill='x', pady=(px(10), 0))
+    XButton(_fpkg_tools_row, text='Verify a package…', icon='shield', size='sm',
+            command=lambda: _fpkg_tool_action('verify'), surface=BG2).pack(side='left')
+    XButton(_fpkg_tools_row, text='Extract a package…', icon='extract', size='sm',
+            command=lambda: _fpkg_tool_action('extract'), surface=BG2).pack(side='left', padx=(px(8), 0))
     _fpkg_note = tk.Label(fpkg_frame, text=(
         'The package is made by your Publishing Tools; this app writes the '
         'project and checks the result. A stock Publishing Tools install '
         'does not make an installable debug FPKG: such output is reported as '
         'a failure. The game folder needs sce_sys/param.json with a valid '
-        'Content ID and the dump\'s sce_sys/keystone. Paths must be ASCII.'),
+        'Content ID and the dump\'s sce_sys/keystone. Paths must be ASCII. '
+        'Packages are named <Content ID>-A<ver>-V<ver>.pkg; the Output name '
+        'below is not used for FPKG.'),
         font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'], anchor='w', justify='left')
     _fpkg_note.pack(fill='x', pady=(px(10), 0))
     autowrap(_fpkg_note)
@@ -1970,11 +2036,15 @@ def build_unibuild_tab(parent, app):
                 pass
         _fpkg_opts_job = None
         if t == 'fpkg':
+            _base = fpkg_base_var.get().strip() or None
+            if _base and not (os.path.isfile(_base) and _base.lower().endswith('.pkg')):
+                app_error(app, 'FPKG', 'The base package was not found:\n\n%s' % _base)
+                return
             try:
                 from core.fpkg import param as _fp
                 from core.fpkg.toolchain import find_toolchain as _ftc
                 _prm = _fp.load(src)
-                name = _fp.output_name(_prm)
+                name = _fp.output_name(_prm, update=bool(_base))
             except Exception as e:
                 app_error(app, 'FPKG', 'This folder cannot be packaged yet:\n\n%s' % e)
                 return
@@ -1989,7 +2059,7 @@ def build_unibuild_tab(parent, app):
             except ValueError:
                 app_error(app, 'FPKG', 'PlayGo chunks must be a number from 1 to 255.')
                 return
-            _fpkg_opts_job = {'tool': _tc.exe, 'level': dict(_FPKG_LEVELS).get(fpkg_level_var.get()), 'chunks': _chunks, 'verify': bool(fpkg_verify_var.get()), 'keep': bool(fpkg_keep_var.get())}
+            _fpkg_opts_job = {'tool': _tc.exe, 'level': dict(_FPKG_LEVELS).get(fpkg_level_var.get()), 'chunks': _chunks, 'verify': bool(fpkg_verify_var.get()), 'keep': bool(fpkg_keep_var.get()), 'ref_pkg': _base}
         ext = _TYPE_EXT[t]
         if not name:
             name = os.path.basename(src.rstrip('/\\')) + ext
@@ -2806,6 +2876,7 @@ def build_unibuild_tab(parent, app):
                            chunk_count=o.get('chunks', 100),
                            keep_intermediate=o.get('keep', False),
                            tool_verify=o.get('verify', True),
+                           ref_pkg=o.get('ref_pkg'),
                            temp_dir=job.get('temp') or None)
         _last = {'pct': 0.0}
 
@@ -2829,6 +2900,8 @@ def build_unibuild_tab(parent, app):
                     job['out_path'] = res.out_path
                     job['_final_path'] = res.out_path
                     job['name'] = os.path.basename(res.out_path)
+                if res.companion_path:
+                    job['companion_path'] = res.companion_path
                 if res.messages and res.status is not True:
                     job['error'] = res.messages[0]
                 cb(res.status if res.status is not None else False)

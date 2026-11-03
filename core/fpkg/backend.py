@@ -373,3 +373,80 @@ def _build(opts, res, log, progress, cancel_check):
         except OSError:
             pass
     progress(100, 'Done')
+
+
+def _tool_or_error(tool_path):
+    tc = toolchain.find_toolchain(tool_path)
+    if not tc.ok:
+        raise FpkgBuildError('; '.join(tc.problems))
+    return tc
+
+
+def verify_package(tool_path, pkg, passcode=gp5.DEFAULT_PASSCODE, log=None,
+                   cancel_check=None, integrity=True):
+    """Check an existing .pkg: header checks, then the user's img_verify.
+    Returns (status, messages) with status True | 'warn' | False | None."""
+    log = log or (lambda s: None)
+    msgs = []
+    try:
+        if not os.path.isfile(pkg):
+            raise FpkgBuildError('Package not found: %s' % pkg)
+        hc = verify.check_header(pkg)
+        for p in hc.problems:
+            msgs.append('Header: ' + p)
+            log('[FPKG] Header: ' + p)
+        if hc.ok:
+            log('[FPKG] Header OK (unsigned debug package, plaintext marker).')
+        tc = _tool_or_error(tool_path)
+        rr = runner.run(verify.img_verify_argv(tc.exe, pkg, passcode, integrity),
+                        cwd=tc.root, cancel_check=cancel_check,
+                        log=lambda k, line: log('[FPKG] ' + line))
+        if rr.cancelled:
+            return None, msgs + ['Cancelled']
+        if rr.ok:
+            log('[FPKG] img_verify passed.')
+            return (True if hc.ok else 'warn'), msgs
+        why = 'img_verify failed (exit %s)%s' % (
+            rr.returncode, (': ' + rr.errors[0]) if rr.errors else '')
+        log('[FPKG] ' + why)
+        return False, msgs + [why]
+    except FpkgBuildError as e:
+        log('[FPKG] ' + str(e))
+        return False, msgs + [str(e)]
+
+
+def extract_package(tool_path, pkg, dest, passcode=gp5.DEFAULT_PASSCODE,
+                    log=None, cancel_check=None):
+    """Extract an existing .pkg into an empty folder with img_extract.
+    Returns (status, messages). The destination must be empty or absent;
+    a cancelled or failed extraction leaves what was written for review."""
+    log = log or (lambda s: None)
+    try:
+        if not os.path.isfile(pkg):
+            raise FpkgBuildError('Package not found: %s' % pkg)
+        if os.path.isdir(dest) and os.listdir(dest):
+            raise FpkgBuildError('The destination folder is not empty: %s' % dest)
+        for label, p in (('package', pkg), ('destination', dest)):
+            if not _ascii(os.path.abspath(p)):
+                raise FpkgBuildError('The %s path contains non-ASCII '
+                                     'characters: %s' % (label, p))
+        tc = _tool_or_error(tool_path)
+        os.makedirs(dest, exist_ok=True)
+        rr = runner.run(verify.img_extract_argv(tc.exe, pkg, dest, passcode),
+                        cwd=tc.root, cancel_check=cancel_check,
+                        log=lambda k, line: log('[FPKG] ' + line))
+        if rr.cancelled:
+            return None, ['Cancelled; partial output left in %s' % dest]
+        if not rr.ok:
+            why = 'img_extract failed (exit %s)%s' % (
+                rr.returncode, (': ' + rr.errors[0]) if rr.errors else '')
+            log('[FPKG] ' + why)
+            return False, [why]
+        n = sum(len(f) for _r, _d, f in os.walk(dest))
+        log('[FPKG] Extracted %d file(s) to %s' % (n, dest))
+        if n == 0:
+            return False, ['img_extract reported success but wrote no files']
+        return True, []
+    except FpkgBuildError as e:
+        log('[FPKG] ' + str(e))
+        return False, [str(e)]

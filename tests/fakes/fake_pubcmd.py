@@ -67,6 +67,18 @@ def main(argv):
             return 1
         print('[Info] Verification passed')
         return 0
+    if cmd == 'img_extract':
+        pkg, dest = argv[-2], argv[-1]
+        if os.environ.get('FAKE_PUBCMD_EXTRACT') == 'fail':
+            print('[Error] Cannot open package')
+            return 1
+        os.makedirs(os.path.join(dest, 'sce_sys'), exist_ok=True)
+        with open(os.path.join(dest, 'eboot.bin'), 'wb') as f:
+            f.write(b'\x7fELF')
+        with open(os.path.join(dest, 'sce_sys', 'param.json'), 'w') as f:
+            f.write('{}')
+        print('[Info] Extraction finished')
+        return 0
     print('[Error] unknown command %s' % cmd)
     return 1
 

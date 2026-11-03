@@ -64,12 +64,20 @@ deletes the partial package. The final name only ever appears on success.
 default. *Fast (2)*, *Standard (4)*, *Smallest (7)* and *Maximum (9)* pass
 `--compression_level`.
 
-## Updates (engine only)
+## Updates
 
-The engine can build an update against a base package (`--ref_pkg_path`).
-The base must have been built by the Publishing Tools, with the same Content
-ID and a lower `contentVersion`. It writes `UPDATE_<name>.pkg` and the full
-`<name>.remastered.pkg`. This is not offered in the Build tab yet.
+Fill in *Base package (updates only)* to build an update against an earlier
+package (`--ref_pkg_path`). The base must have been built by the Publishing
+Tools, with the same Content ID and a lower `contentVersion`; the dump must
+carry the new version. The build writes `UPDATE_<name>.pkg` (the delta) and
+`<name>.remastered.pkg` (the full game); the header check runs on the full
+package. The size class is not changed for updates.
+
+## Verifying or extracting an existing package
+
+*Verify a package…* runs the header checks and your tool's `img_verify`.
+*Extract a package…* runs `img_extract` into an **empty** folder (a folder
+with files in it is refused). Both write their output to the Output Log.
 
 ## Limitations
 
@@ -82,6 +90,3 @@ ID and a lower `contentVersion`. It writes `UPDATE_<name>.pkg` and the full
 * Paths must be ASCII; there is no automatic junction workaround yet.
 * No DLC (`prospero_ac`) packages, no PS4→PS5 SELF repair (PS4-magic
   executables are reported), no `.ucp` digest repair, no DDS→PNG recovery.
-* Extracting an existing `.pkg` needs `img_extract` from your tools; it is
-  available in the engine (`core/fpkg/verify.py: img_extract_argv`) but not
-  yet in the GUI.

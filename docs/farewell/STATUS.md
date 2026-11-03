@@ -72,9 +72,9 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
 * **Licensing:** nothing copied from the reference FPKG builder (no licence,
   ships Sony binaries); no Sony tools bundled, linked or downloaded.
 * **Not done:** building from `.exfat`/`.ffpkg` directly, non-ASCII paths
-  (junctions), DLC (`prospero_ac`), SELF/UCP repair, DDS→PNG, update builds
-  in the GUI (engine supports `ref_pkg`), extract/verify of existing `.pkg`
-  in the GUI (engine has the argv helpers). Real-tool and console testing.
+  (junctions), DLC (`prospero_ac`), SELF/UCP repair, DDS→PNG. Real-tool and
+  console testing. (Update builds and verify/extract of an existing `.pkg`
+  are in the GUI.)
 
 ## Backport modernisation report
 
