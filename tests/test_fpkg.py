@@ -113,9 +113,20 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(r.total_bytes, sum(f[2] for f in r.files))
 
     def test_bad_names_collected(self):
-        d = make_dump(self.tmp, extra={'Data/50%.pak': b'x', 'Data/trail.': b'y'})
+        extra = {'Data/50%.pak': b'x', 'Data/semi;colon.pak': b'z'}
+        if os.name != 'nt':
+            # Windows itself cannot create a name ending in a dot.
+            extra['Data/trail.'] = b'y'
+        d = make_dump(self.tmp, extra=extra)
         r = S.scan(d)
-        self.assertEqual(len(r.bad_paths), 2)
+        self.assertEqual(len(r.bad_paths), len(extra))
+        self.assertTrue(all(why for _rel, why in r.bad_paths))
+
+    def test_path_rules(self):
+        self.assertIsNone(S._path_problem('Data/ok_name-1.pak'))
+        self.assertTrue(S._path_problem('Data/trail.'))
+        self.assertTrue(S._path_problem('Data/space '))
+        self.assertTrue(S._path_problem('Dätä/x.pak'))
 
     def test_not_an_app_folder(self):
         os.makedirs(os.path.join(self.tmp, 'empty'))
