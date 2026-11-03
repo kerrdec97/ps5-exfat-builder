@@ -2,7 +2,124 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
-<!-- FAREWELL-ENTRY -->
+## [4.1.0] - 2026-11-03 — Farewell Edition
+
+The final release of exFAT Image Builder. It restores the v4.0.2 source that
+was never published, fixes the problems reported since, and gives the app a
+consistent look. Every existing feature, setting and language is kept.
+
+### Restored
+- **The v4.0.2 source is back in the repository (#75).** The published
+  v4.0.2 was built from code that was never committed; the repository only
+  held v3.6.4. Every module was rebuilt from the official v4.0.2 executable
+  and verified to compile to identical Python bytecode (1,237 code objects in
+  `exfat_builder.py`, 64 UI/theme modules, 10 modules that were missing
+  entirely). The vendored **Lazy_MkPFS** backend (`vendor/lazy_mkpfs`, GPL-3.0)
+  is restored too.
+
+### Fixed — finished images were deleted
+- **Non-English Windows (#72, #73, #74, #76, #79, #80).** Robocopy's summary is
+  translated ("Fichiers :", "File:", "文件:" …), so the copied-file count was
+  never read, the build was judged "0 of N source files copied" and the
+  finished image was deleted. Copies are now counted on the mounted image
+  itself (`[COPY-STATS]`), with a language-independent fallback that reads
+  the robocopy summary by its table layout.
+- **Status checks can no longer delete an image.** Only hard evidence (no
+  files on the image, or a corrupt container) fails a build, and even then the
+  image is kept and its location logged. An "ERROR 87" line on its own no
+  longer rejects a build.
+- **Verification warnings no longer delete the image (#86).** The Build tab
+  deleted a finished exFAT/FFPKG image when verification raised a doubt, and
+  deleted the verified intermediate image when only the `.ffpfsc` compression
+  failed. Both are kept now; a flagged job shows **CHECK** in the queue and is
+  not compressed.
+- **Queue crash** `TypeError: %d format: a real number is required, not str`
+  after every build or failure (#73, #74, #76, #77, #79, #80).
+
+### Fixed — building, verifying, extracting
+- **Verification "Mounted drive did not appear" (#86):** waits up to 90 s for
+  a freshly mounted image and reports *inconclusive* instead of *failed* if
+  Windows never makes it readable.
+- **Repeated "install OSFMount" prompts during verification (#86, likely
+  cause):** a lone `osfmount.exe` (PassMark's installer has that name) saved as
+  the custom path no longer beats a real installation.
+- **False "Image is missing data" (#81):** hidden files are excluded from the
+  comparison when the build excluded them, and the missing or short files are
+  named in the log.
+- **Stuck at "Creating & mounting image" (#82):** OSFMount calls now have
+  timeouts and a clear message, so a stuck driver cannot hang a queue
+  overnight. Drive letters are chosen with knowledge of network drives mapped
+  outside the elevated session (#64, #42).
+- **Robocopy ERROR 87 with unbuffered copies (#62):** the copy is retried once
+  without `/J`.
+- **exFAT extraction (#71):** bounded mount/dismount, scan progress, and
+  robocopy failures are reported instead of a silent "complete".
+- **Full images (#33):** adding files to an image that is too small is refused
+  up front with an explanation, instead of failing file by file.
+- **Missing .NET 8 runtime (closed #70):** UFS2Tool failures caused by it say
+  so and link the download.
+
+### Fixed — PFS
+- **`OSError: [Errno 22] Invalid argument` (#85, #69, closed #46):** the
+  Lazy_MkPFS worker's UTF-8 output was decoded with the Windows code page; the
+  first unusual byte stopped the reader and the worker died on its next
+  progress line. Output is decoded as UTF-8 and worker output can no longer
+  abort a pack.
+
+### Fixed — other
+- **Languages (#23, #35):** sidebar and page titles had no translations in any
+  table and stayed English; added for all 16 languages (existing community
+  translations are never overwritten). **Apply** in Settings → Language, and
+  "Upload to PS5 now?" after a build, opened a blank page; they now open the
+  right screen.
+- **In-app updater (closed #6):** the new exe is started without the old
+  process's PyInstaller state (cause of "Failed to import encodings module"),
+  and the updater no longer appends bytes to the exe as a lock test.
+- **Touchpad scrolling** did nothing (small wheel steps were rounded to zero);
+  follow-up to the scrolling remark in #39.
+- Error messages in two mount helpers turned into `UnboundLocalError`.
+- Crash reports and other text files are written as UTF-8.
+- The changelog and icon are found inside the single-file exe.
+- Tk 9 compatibility (`trace_add`).
+
+### Changed — interface
+- New neutral graphite theme with one blue accent, visible keyboard focus and
+  taller table rows (direction and status colours from pull request #57 by
+  @alik70952). Text contrast meets WCAG AA.
+- One application bar instead of the old banner plus header; author credit and
+  the "Inspired by NookieAI • stonemodder (Porkfolio)" acknowledgement stay on
+  every screen.
+- The OSFMount warning sits under the app bar in the theme's warning colours.
+- Version **4.1.0 — Farewell Edition** in the title bar, app bar and release
+  notes.
+
+### Build & release
+- `build.bat` builds in an isolated, pinned environment
+  (`requirements-build.txt`), runs `tools/release_check.py` (compile, bundled
+  files, version, tests) first, embeds Windows version information, disables
+  UPX, bundles the vendored backend, changelog, notices and licence texts, and
+  writes the `.sha256` file for the updater. v4.0.2 had accidentally bundled
+  numpy, PyYAML and charset_normalizer from the build machine.
+- Third-party licences verified against upstream; full texts in `LICENSES/`.
+- Automated tests in `tests/` (51 tests; `EXFAT_GUI_SMOKE=1` adds a GUI smoke
+  test).
+
+### Removed
+- Code that nothing referenced: the superseded What's New and launch-time
+  Ko-fi popups, the old Build Parameters pane, `_log_write_OLD`, no-op
+  compatibility shims and unused helpers (about 1,100 lines).
+
+### Known limitations
+- Files over 4 GB inside an `.ffpkg` cannot be extracted with the bundled
+  UFS2Tool (#65, #21). This is a UFS2Tool limitation.
+- Archives (zip/7z/rar) are not read directly (#67, #37) and there is no
+  "dump fixer" (#26); these were feature requests.
+- Unsigned PyInstaller executables can still be flagged by antivirus heuristics
+  (#78, #63). The build no longer uses UPX and carries version information, but
+  only a code-signing certificate addresses this properly.
+- Not tested on real hardware for this release: OSFMount, robocopy, UFS2Tool,
+  Windows 10/11 locales, and a PS5. See the README.
+
 
 ## [4.0.2] - 2026-07-05
 

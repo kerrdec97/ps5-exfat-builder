@@ -57,7 +57,7 @@ class ResourcePath(unittest.TestCase):
     def test_source_checkout_finds_bundled_files(self):
         app = load_app()
         for parts in (('CHANGELOG.md',), ('controller.ico',),
-                      ('assets', 'whatsnew', 'settings.png')):
+                      ('LICENSES', 'GPL-3.0.txt')):
             self.assertTrue(os.path.isfile(app.resource_path(*parts)), parts)
 
     def test_frozen_falls_back_to_bundle(self):

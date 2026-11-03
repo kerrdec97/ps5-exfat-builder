@@ -8,7 +8,7 @@ Run by build.bat before PyInstaller (and usable on its own):
 Checks:
   * every first-party .py file compiles;
   * files the executable bundles or reads at runtime are present
-    (vendored Lazy_MkPFS, icon, What's New assets, CHANGELOG.md, notices);
+    (vendored Lazy_MkPFS, icon, CHANGELOG.md, notices, licence texts);
   * the version in exfat_builder.py is the version documented at the top of
     CHANGELOG.md, so the app, the exe properties and the notes agree;
   * the unit-test suite in tests/ passes.
@@ -34,9 +34,6 @@ REQUIRED_FILES = [
     'vendor/lazy_mkpfs/lazy_mkpfs/__init__.py',
     'vendor/lazy_mkpfs/LICENSE',
     'vendor/lazy_mkpfs/UPSTREAM_COMMIT.txt',
-    'assets/whatsnew/settings.png',
-    'assets/whatsnew/advanced.png',
-    'assets/whatsnew/backports.png',
     'LICENSES/GPL-3.0.txt',
     'LICENSES/UFS2Tool-BSD-2-Clause.txt',
 ]

@@ -79,7 +79,6 @@ REM          false positives; the app never used UPX intentionally.
     --paths . ^
     --paths vendor\lazy_mkpfs ^
     --add-data "vendor\lazy_mkpfs;vendor\lazy_mkpfs" ^
-    --add-data "assets;assets" ^
     --add-data "CHANGELOG.md;." ^
     --add-data "THIRD_PARTY_NOTICES.md;." ^
     --add-data "LICENSES;LICENSES" ^
