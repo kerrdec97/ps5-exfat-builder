@@ -4469,8 +4469,11 @@ class ExFATBuilder(_TK_BASE):
         'images': ('library', 'images'),
         'language': ('settings', 'language'),
         'help': ('settings', 'help'),
+        # The File Manager lives in the Edit page's exFAT mode.
+        'files': ('edit', 'exfat'),
     }
     _SUBTAB_ACTIVATORS = {
+        'edit': '_edit_mode_activate',
         'ps5': '_ps5_subtab_activate',
         'library': '_library_subtab_activate',
         'settings': '_settings_subtab_activate',

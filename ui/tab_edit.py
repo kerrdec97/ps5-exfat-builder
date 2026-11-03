@@ -141,31 +141,9 @@ def build_edit_tab(parent, app):
     # Sub-mode activator (like the other pages' _*_subtab_activate), so
     # a route such as 'files' -> ('edit', 'exfat') can open a mode.
     app._edit_mode_activate = _show_mode
-    _route_files_key(app, _show_mode)
 
     _show_mode('ffpkg')
     _set_pill('none')
-
-
-def _route_files_key(app, show_mode):
-    """The hidden 'files' registry key still owns an empty frame (the
-    File Manager lives in this page's exFAT mode). When that frame is
-    shown, open Edit in exFAT mode instead of leaving a blank page."""
-    frame = getattr(app, '_tab_files_frame', None)
-    if frame is None:
-        return
-
-    def _go():
-        try:
-            if str(app._active_tab.get()) == 'files':
-                app._switch_tab('edit')
-                show_mode('exfat')
-        except Exception:
-            pass
-    try:
-        frame.bind('<Map>', lambda e: app.after_idle(_go))
-    except Exception:
-        pass
 
 
 def _edit_open(app, state, show_mode, set_pill, pfs_api):
