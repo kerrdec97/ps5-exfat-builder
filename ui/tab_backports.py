@@ -1,30 +1,26 @@
 """
-ui/tab_backports.py — Backports tab (v3: sub-tabs Games / Auto / Results).
+ui/tab_backports.py — Backports screen (sub-tabs Games / Auto Backport /
+SDK Fixer / Batch SDK Retag / Results), built on the design system in
+ui/shared/widgets.py.
 
-Structure:
+Every sub-tab is a page of its own: a PageHeader carrying the sub-tab's
+main actions (primary rightmost), then cards.
 
-    ┌─ Sub-tab strip ───────────────────────────────────────┐
-    │ [🎮 Games]  [⚙ Auto Backport]  [📋 Results]            │
-    ├───────────────────────────────────────────────────────┤
-    │                                                       │
-    │   Active sub-tab content here                         │
-    │                                                       │
-    └───────────────────────────────────────────────────────┘
+Games (default)
+    Stat cards (games / queued / completed / est. time), a filter card
+    (search, firmware Segmented, scan folders) and a grid of game cards
+    with status badges. Clicking a card toggles it in/out of the backport
+    queue; "Process queue" switches to Auto Backport and runs the queue.
 
-Sub-tab 1 — Games (DEFAULT)
-    Library-style cover-art grid. Multi-folder support, search box,
-    FW filter pills. Click a cover to toggle the game in/out of the
-    backport queue. The "Process queue (N)" button auto-switches to
-    the Auto Backport tab and runs every queued game sequentially.
+Auto Backport
+    The options form — built by `_build_bp_auto_panel` (ui/panel_bp_auto.py).
+    Live build details show in the global OUTPUT LOG drawer.
 
-Sub-tab 2 — Auto Backport
-    The full options form (output folder, fakelib path, target SDK,
-    advanced toggles, etc.) — built by `_build_bp_auto_panel`.
-    Live build details show in the global OUTPUT LOG drawer at the
-    bottom of the window (click it to expand).
+SDK Fixer / Batch SDK Retag
+    SDK-marker-only tools, composed as source / options / progress cards.
 
-Sub-tab 3 — Results
-    ✅ worked / ❌ didn't work tracking — built by `_build_bpr_panel`.
+Results
+    Worked / didn't-work tracking — built by `_build_bpr_panel`.
 
 Backwards compat: every `_bp_*` attribute the rest of exfat_builder.py
 expects is constructed (form pane, results pane, switch helpers, scan
@@ -32,13 +28,21 @@ vars, etc.). Stub `_bp_rt_form_btn` / `_bp_rt_results_btn` labels
 absorb config() calls from the legacy `_bp_switch_right` helper.
 """
 
+import colorsys
 import os
 import threading
 import tkinter as tk
+from tkinter import ttk
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
+from ui.shared.widgets import (
+    Button, IconButton, TextField, Dropdown, Radio, Card, Rounded, Badge,
+    InfoBar, PageHeader, Segmented, IconLabel, Divider, RoundedBar,
+    Scrollbar, Tooltip, autowrap)
+from ui.shared.widgets import EmptyState as DSEmptyState
 
-from tkinter_theme import COLORS, FONTS
-from ui.shared.cards import GameCard, build_subtabs
+from tkinter_theme import COLORS, FONTS, px
+from ui.icons import icon_image, strip_glyphs, leading_icon
+from ui.shared.cards import build_subtabs
 
 # Star-import for legacy theme constants used by inner panel builders
 from exfat_builder import *  # noqa: F401,F403
@@ -46,6 +50,8 @@ from ui.shared.app_dialog import app_confirm, app_error, app_info, app_warning
 from exfat_builder import _, _load_cover_image
 from ui.shared.scroll import attach_scroll
 from ui.shared.empty_state import EmptyState
+
+C = COLORS
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -63,13 +69,14 @@ _FILTER_PRED = {key: pred for key, _label, pred in _FILTER_PILLS}
 # ─────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────
-# Natural width of one game card with a fixed 2:3 cover and fixed info
-# column: 120px cover + 252px info + paddings ~= 411px, plus grid pad.
-_CARD_MIN_W = 425
+# Minimum width of one game card column (72px cover + text column +
+# card padding + grid gap). The grid shows as many columns as fit.
+_CARD_MIN_W = 340
+_COVER_W, _COVER_H = 72, 108
 
 
 def build_backports_tab(parent, app):
-    """Build the v3 Backports tab body (Games / Auto / Results sub-tabs)."""
+    """Build the Backports screen (Games / Auto / SDK / Batch / Results)."""
     parent.configure(bg=COLORS['bg_1'])
 
     # ── Persistent state on `app` ──
@@ -97,17 +104,17 @@ def build_backports_tab(parent, app):
             lambda *a: _refresh_grid(app))
         app._bp_traces_wired = True
 
-    # ── Sub-tabs ──
+    # ── Sub-tabs (the leading glyph picks the tab icon) ──
     items = [
         ('games',   '\U0001f3ae  ' + _('Games'),
             lambda f: _build_games_subtab(f, app)),
-        ('auto',    '\u2699  ' + _('Auto Backport'),
+        ('auto',    '⚡  ' + _('Auto Backport'),
             lambda f: _build_auto_subtab(f, app)),
         ('sdkfixer', '\U0001f527  ' + _('SDK Fixer'),
             lambda f: _build_sdkfixer_subtab(f, app)),
         ('batchsdk', '\U0001f4e6  ' + _('Batch SDK Retag'),
             lambda f: _build_batchsdk_subtab(f, app)),
-        ('results', '\U0001f4cb  ' + _('Results'),
+        ('results', '✅  ' + _('Results'),
             lambda f: _build_results_subtab(f, app)),
     ]
     app._bp_subtab_activate = build_subtabs(parent, items, default='games')
@@ -156,7 +163,284 @@ def _widget_alive(w):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# SUB-TAB 3: RESULTS — ✅/❌ tracking pane (existing builder)
+# Private layout helpers (design-system compositions used by every
+# Backports sub-tab, the Auto Backport panel and the Results pane)
+# ─────────────────────────────────────────────────────────────────────────
+def _scroll_page(parent):
+    """A vertically scrolling page on bg_1. Returns the inner frame."""
+    bg = C['bg_1']
+    holder = tk.Frame(parent, bg=bg)
+    holder.pack(fill='both', expand=True)
+    canvas = tk.Canvas(holder, bg=bg, bd=0, highlightthickness=0)
+    sb = Scrollbar(holder, orient='vertical', command=canvas.yview,
+                   surface=bg)
+    canvas.configure(yscrollcommand=sb.set)
+    sb.pack(side='right', fill='y')
+    canvas.pack(side='left', fill='both', expand=True)
+    inner = tk.Frame(canvas, bg=bg)
+    win = canvas.create_window((0, 0), window=inner, anchor='nw')
+    inner.bind('<Configure>', lambda e: canvas.configure(
+        scrollregion=canvas.bbox('all')))
+    canvas.bind('<Configure>', lambda e: canvas.itemconfig(win, width=e.width))
+    attach_scroll(canvas)
+    inner._xb_canvas = canvas
+    return inner
+
+
+def _page_header(parent, title, description=None):
+    hdr = PageHeader(parent, title, description)
+    hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
+    return hdr
+
+
+def _columns(parent, left=7, right=5, pady=(0, 16)):
+    """Two-column grid row (uniform). Returns (left, right) frames."""
+    bg = C['bg_1']
+    cols = tk.Frame(parent, bg=bg)
+    cols.pack(fill='x', padx=px(24), pady=(px(pady[0]), px(pady[1])))
+    cols.columnconfigure(0, weight=left, uniform='bpcols')
+    cols.columnconfigure(1, weight=right, uniform='bpcols')
+    lf = tk.Frame(cols, bg=bg)
+    lf.grid(row=0, column=0, sticky='nsew', padx=(0, px(8)))
+    rf = tk.Frame(cols, bg=bg)
+    rf.grid(row=0, column=1, sticky='nsew', padx=(px(8), 0))
+    return lf, rf
+
+
+def _label_row(parent, text, hint=None):
+    """Field label (body, fg_2) with an optional caption hint."""
+    bg = parent.cget('bg')
+    row = tk.Frame(parent, bg=bg)
+    tk.Label(row, text=text, bg=bg, fg=C['fg_2'], font=FONTS['body'],
+             anchor='w').pack(side='left')
+    if hint:
+        tk.Label(row, text=hint, bg=bg, fg=C['fg_4'], font=FONTS['caption'],
+                 anchor='w').pack(side='left', padx=(px(8), 0))
+    return row
+
+
+def _field(parent, label, var, hint=None, readonly=False, mono=True,
+           buttons=(), help_below=None, first=False):
+    """Label above a 32px field with trailing buttons.
+
+    buttons: iterable of (text, icon, command[, variant]).
+    Returns (block, entry). Packs itself.
+    """
+    bg = parent.cget('bg')
+    block = tk.Frame(parent, bg=bg)
+    block.pack(fill='x', pady=(0 if first else px(12), 0))
+    if label:
+        _label_row(block, label, hint).pack(fill='x')
+    row = tk.Frame(block, bg=bg)
+    row.pack(fill='x', pady=(px(4) if label else 0, 0))
+    entry = TextField(row, textvariable=var, mono=mono, surface=bg,
+                      state='readonly' if readonly else 'normal')
+    entry.pack(side='left', fill='x', expand=True)
+    block.buttons = []
+    for spec in buttons:
+        text, icon, cmd = spec[0], spec[1], spec[2]
+        variant = spec[3] if len(spec) > 3 else 'secondary'
+        b = Button(row, text=text, icon=icon, command=cmd, variant=variant,
+                   surface=bg)
+        b.pack(side='left', padx=(px(6), 0))
+        block.buttons.append(b)
+    if help_below:
+        h = tk.Label(block, text=help_below, bg=bg, fg=C['fg_3'],
+                     font=FONTS['caption'], anchor='w', justify='left')
+        h.pack(fill='x', pady=(px(4), 0))
+        autowrap(h)
+    block.entry = entry
+    return block, entry
+
+
+def _setting_row(parent, title, desc=None, first=False):
+    """Settings-style row: title + description left, control slot right.
+    Rows after the first get a border_1 divider above. Returns the
+    right-aligned control frame."""
+    bg = parent.cget('bg')
+    if not first:
+        Divider(parent, color=C['border_1']).pack(fill='x', pady=(px(12), 0))
+    row = tk.Frame(parent, bg=bg)
+    row.pack(fill='x', pady=(0 if first else px(12), 0))
+    ctl = tk.Frame(row, bg=bg)
+    ctl.pack(side='right', anchor='n', padx=(px(16), 0))
+    col = tk.Frame(row, bg=bg)
+    col.pack(side='left', fill='x', expand=True)
+    tk.Label(col, text=title, bg=bg, fg=C['fg_1'], font=FONTS['body'],
+             anchor='w').pack(fill='x')
+    if desc:
+        d = tk.Label(col, text=desc, bg=bg, fg=C['fg_3'],
+                     font=FONTS['caption'], anchor='w', justify='left')
+        d.pack(fill='x', pady=(px(2), 0))
+        autowrap(d)
+    row.ctl = ctl
+    return ctl
+
+
+def _stat_cell(parent, caption, var=None, text='—', big=False):
+    """Caption above a value (fg_0). Returns (cell, value label)."""
+    bg = parent.cget('bg')
+    cell = tk.Frame(parent, bg=bg)
+    cap = strip_glyphs(caption)
+    is_upper = cap.isupper()
+    tk.Label(cell, text=cap, bg=bg,
+             fg=C['fg_4'] if is_upper else C['fg_3'],
+             font=FONTS['overline'] if is_upper else FONTS['caption'],
+             anchor='w').pack(anchor='w')
+    kw = dict(textvariable=var) if var is not None else dict(text=text)
+    val = tk.Label(cell, bg=bg, fg=C['fg_0'], anchor='w',
+                   font=FONTS['stat'] if big else FONTS['subtitle'], **kw)
+    val.pack(anchor='w', pady=(px(2), 0))
+    return cell, val
+
+
+def _tone_colour(colour):
+    """Map a legacy progress colour onto a design-system tone colour."""
+    try:
+        h = str(colour).lstrip('#')
+        r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except Exception:
+        return C['accent']
+    hue, _l, sat = colorsys.rgb_to_hls(r, g, b)
+    deg = hue * 360
+    if sat < 0.2:
+        return C['accent']
+    if 85 <= deg <= 175:
+        return C['success']
+    if 25 <= deg < 70:
+        return C['warn']
+    if deg < 15 or deg > 340:
+        return C['danger']
+    return C['accent']
+
+
+class _CanvasBar(RoundedBar):
+    """6px rounded progress bar that also answers the legacy canvas calls
+    the backport workers make: create_rectangle() -> item,
+    coords(item, 0, 0, x1, h) and itemconfig(item, fill=colour)."""
+
+    _ITEM = 'xb_fill'
+
+    def __init__(self, master=None, **kw):
+        self._xb_drawing = False
+        super().__init__(master, **kw)
+
+    def _redraw(self):
+        self._xb_drawing = True
+        try:
+            super()._redraw()
+        finally:
+            self._xb_drawing = False
+
+    def create_rectangle(self, *args, **kw):
+        if self._xb_drawing:
+            return super().create_rectangle(*args, **kw)
+        fill = kw.get('fill')
+        if fill:
+            self._color = _tone_colour(fill)
+        return self._ITEM
+
+    def coords(self, item, *args):
+        if item == self._ITEM:
+            if args:
+                vals = args[0] if (len(args) == 1 and
+                                   isinstance(args[0], (list, tuple))) else args
+                try:
+                    w = max(1, self.winfo_width())
+                    self.set(max(0.0, min(1.0, float(vals[2]) / w)))
+                except Exception:
+                    pass
+            return []
+        return super().coords(item, *args)
+
+    def itemconfig(self, item, cnf=None, **kw):
+        if item == self._ITEM:
+            if cnf:
+                kw.update(cnf)
+            if kw.get('fill'):
+                self.set_color(_tone_colour(kw['fill']))
+            return None
+        return super().itemconfig(item, cnf, **kw)
+
+    itemconfigure = itemconfig
+
+
+_STATUS_ICON = {'check': ('success', 'success'), 'success': ('success', 'success'),
+                'warning': ('warning', 'warn'), 'close': ('error', 'danger'),
+                'error': ('error', 'danger'), 'loader': ('loader', 'accent_hi'),
+                'zap': ('loader', 'accent_hi')}
+
+
+def _status_line(parent, var, idle_text=''):
+    """Status text bound to `var`. A leading ✓ / ⚠ / ✗ in the text becomes
+    a status icon (the text itself is shown without the glyph)."""
+    bg = parent.cget('bg')
+    row = tk.Frame(parent, bg=bg)
+    ic = IconLabel(row, 'info', 16, C['fg_3'], bg)
+    lbl = tk.Label(row, bg=bg, fg=C['fg_1'], font=FONTS['body'],
+                   anchor='w', justify='left')
+    lbl.pack(side='left', fill='x', expand=True)
+    autowrap(lbl)
+
+    def _sync(*_a):
+        try:
+            raw = var.get() or ''
+        except Exception:
+            raw = ''
+        name = leading_icon(raw)
+        txt = strip_glyphs(raw).strip()
+        if not txt:
+            ic.pack_forget()
+            lbl.configure(text=idle_text, fg=C['fg_3'])
+            return
+        icon, tone = _STATUS_ICON.get(name, ('info', 'fg_3'))
+        ic.set(icon=icon, fg=C[tone])
+        if not ic.winfo_ismapped():
+            ic.pack(side='left', padx=(0, px(8)), before=lbl)
+        lbl.configure(text=txt, fg=C['fg_1'])
+    try:
+        var.trace_add('write', _sync)
+    except Exception:
+        pass
+    _sync()
+    return row
+
+
+_TREE_TAG_TONES = {
+    '#8a7fa8': 'fg_4', '#b07ad6': 'accent_hi', '#4caf7d': 'fg_1',
+    '#d6a13a': 'fg_3', '#d66a6a': 'danger_hi',
+}
+
+
+class _TokenTree(ttk.Treeview):
+    """Treeview that maps the legacy per-row tag colours onto tokens."""
+
+    def tag_configure(self, tagname, option=None, **kw):
+        fg = kw.get('foreground')
+        if isinstance(fg, str) and fg.lower() in _TREE_TAG_TONES:
+            kw['foreground'] = C[_TREE_TAG_TONES[fg.lower()]]
+        return super().tag_configure(tagname, option, **kw)
+
+
+def _dropdown_row(parent, var, values, width=8):
+    dd = Dropdown(parent, textvariable=var, values=values, width=width,
+                  surface=parent.cget('bg'))
+    return dd
+
+
+def _clean(text):
+    """Display text of a translated string without its leading glyph."""
+    return strip_glyphs(str(text).lstrip('\u2139\u26a0\ufe0f \t'))
+
+
+def _hidden_frame(parent):
+    """A frame that is never packed: legacy widgets the logic still
+    references (and occasionally packs) live in here, out of sight."""
+    return tk.Frame(parent)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SUB-TAB: RESULTS — worked / didn't-work tracking pane
 # ─────────────────────────────────────────────────────────────────────────
 def _build_results_subtab(parent, app):
     """Build the Backports Results sub-tab.
@@ -177,17 +461,13 @@ def _build_results_subtab(parent, app):
     try:
         app._build_bpr_panel(app._bp_results_frame)
     except Exception as e:
-        tk.Label(app._bp_results_frame,
-                 text=_('Could not load Results pane:') +
-                      '\n\n' + str(e),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_1'], fg=COLORS.get('err', '#e0584b'),
-                 wraplength=720, justify='left'
-                 ).pack(padx=24, pady=24, anchor='nw')
+        InfoBar(app._bp_results_frame, kind='danger',
+                title=_('Could not load Results pane:'),
+                text=str(e)).pack(fill='x', padx=px(24), pady=px(24))
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# SUB-TAB 1: GAMES — grid + queue
+# SUB-TAB: GAMES — stat cards, filters, game grid
 # ─────────────────────────────────────────────────────────────────────────
 def _build_games_subtab(parent, app):
     parent.configure(bg=COLORS['bg_1'])
@@ -196,135 +476,111 @@ def _build_games_subtab(parent, app):
     body.pack(fill='both', expand=True)
 
     _build_games_head(body, app)
-    _build_games_toolbar(body, app)
-    _build_games_folder_strip(body, app)
-    _build_games_scan_bar(body, app)
-    _build_games_grid(body, app)
     _build_games_stats(body, app)
+    _build_games_toolbar(body, app)
+    _build_games_grid(body, app)
 
 
-# ── Page head: title + count + action buttons ──
+# ── Page head: title + count badge + main actions ──
 def _build_games_head(body, app):
-    head = tk.Frame(body, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=24, pady=(14, 12))
+    hdr = _page_header(
+        body, _('Backports'),
+        'Scan folders of game dumps, queue the games to patch, then '
+        'process the queue.')
 
-    tk.Label(head, text='\u26a1  ' + _('Backports'),
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']
-             ).pack(side='left')
-
+    # Count badge next to the title (mirrors `_bp_count_var`).
     app._bp_count_var = tk.StringVar(value=_('0 games'))
-    count_pill = tk.Label(head, textvariable=app._bp_count_var,
-                          font=FONTS['mono_sm'],
-                          bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                          padx=8, pady=2,
-                          highlightbackground=COLORS['border_2'],
-                          highlightthickness=1)
-    count_pill.pack(side='left', padx=(12, 0))
+    tl = hdr.title_label
+    trow = tk.Frame(tl.master, bg=C['bg_1'])
+    trow.pack(fill='x', before=tl)
+    tl.pack_forget()
+    tl.pack(in_=trow, side='left')
+    tl.lift(trow)
+    count_badge = Badge(trow, app._bp_count_var.get(), 'neutral',
+                        surface=C['bg_1'])
+    count_badge.pack(side='left', padx=(px(12), 0), pady=(px(4), 0))
+    app._bp_count_var.trace_add(
+        'write', lambda *a: count_badge.set(app._bp_count_var.get())
+        if _widget_alive(count_badge) else None)
 
-    # Right-aligned actions
-    app._bp_process_btn = _btn(head, _process_label(app),
-                                command=lambda: _process_queue(app),
-                                kind='purple')
+    # Right-aligned actions — primary (Process queue) rightmost.
+    app._bp_process_btn = Button(hdr.actions, text=_process_label(app),
+                                 variant='primary',
+                                 command=lambda: _process_queue(app))
     app._bp_process_btn.pack(side='right')
     _update_process_btn(app)
 
-    _btn(head, '\u21bb  ' + _('Scan'),
-         command=lambda: _scan_all_folders(app),
-         kind='primary'
-         ).pack(side='right', padx=(0, 6))
+    Button(hdr.actions, text=_('Scan'), icon='refresh',
+           command=lambda: _scan_all_folders(app)
+           ).pack(side='right', padx=(0, px(8)))
 
-    _btn(head, '+  ' + _('Add folder'),
-         command=lambda: _add_folder(app),
-         kind='ghost'
-         ).pack(side='right', padx=(0, 6))
+    Button(hdr.actions, text=_('Add folder'), icon='folder_plus',
+           command=lambda: _add_folder(app)
+           ).pack(side='right', padx=(0, px(8)))
 
 
 def _process_label(app):
     n = len(app._bp_queue)
     if n == 0:
-        return '\u26a1  ' + _('Process queue')
-    return '\u26a1  ' + _('Process queue (%d)') % n
+        return '⚡  ' + _('Process queue')
+    return '⚡  ' + _('Process queue (%d)') % n
 
 
-# ── Toolbar: search + filter pills + status ──
+# ── Filter card: search + firmware Segmented + status, folders, scanning ──
 def _build_games_toolbar(body, app):
-    bar = tk.Frame(body, bg=COLORS['bg_0'],
-                   highlightbackground=COLORS['border_2'],
-                   highlightthickness=1)
-    bar.pack(fill='x')
-    inner = tk.Frame(bar, bg=COLORS['bg_0'])
-    inner.pack(fill='x', padx=24, pady=10)
+    card = Card(body, padding=16)
+    card.pack(fill='x', padx=px(24), pady=(0, px(8)))
+    bg = C['bg_2']
 
-    # Search
-    sw = tk.Frame(inner, bg=COLORS['bg_0'],
-                  highlightbackground=COLORS['border_3'],
-                  highlightthickness=1)
-    sw.pack(side='left')
-    tk.Label(sw, text='\U0001f50d',
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(8, 4))
-    XEntry(sw, textvariable=app._bp_search_var,
-             font=FONTS['body'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=0, width=32
-             ).pack(side='left', ipady=5, padx=(0, 8))
+    row = tk.Frame(card, bg=bg)
+    row.pack(fill='x')
 
-    # Filter pills
-    pills = tk.Frame(inner, bg=COLORS['bg_0'])
-    pills.pack(side='left', padx=(10, 0))
+    search = TextField(row, textvariable=app._bp_search_var, width=30,
+                       surface=bg, placeholder='Search by title or ID')
+    search.pack(side='left')
+    IconLabel(search, 'search', 16, C['fg_4'], C['field_bg']).place(
+        relx=1.0, x=-px(12), rely=0.5, anchor='e')
 
-    app._bp_pill_widgets = {}
-    for key, label, _pred in _FILTER_PILLS:
-        pill = tk.Label(pills, text=label,
-                        font=(FONTS['body_strong'][0], 9),
-                        bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-                        padx=12, pady=4,
-                        cursor='hand2',
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1)
-        pill.pack(side='left', padx=2)
-        pill.bind('<Button-1>',
-                  lambda e, k=key: app._bp_filter_var.set(k))
-        app._bp_pill_widgets[key] = pill
+    seg = Segmented(row, [(k, lbl) for k, lbl, _p in _FILTER_PILLS],
+                    variable=app._bp_filter_var, bg=bg)
+    seg.pack(side='left', padx=(px(12), 0))
+    app._bp_filter_seg = seg
+    app._bp_pill_widgets = dict(seg._btns)
 
-    _paint_filter_pills(app)
-
-    # Right: status
     app._bp_status_var = tk.StringVar(
         value=_('No games scanned yet — add a folder and click Scan'))
-    tk.Label(inner, textvariable=app._bp_status_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='right')
+    tk.Label(row, textvariable=app._bp_status_var, font=FONTS['caption'],
+             bg=bg, fg=C['fg_3'], anchor='e').pack(side='right')
+
+    Divider(card, color=C['border_1']).pack(fill='x', pady=(px(12), px(12)))
+    _build_games_folder_strip(card, app)
+    _build_games_scan_bar(card, app)
 
 
 def _paint_filter_pills(app):
-    active = app._bp_filter_var.get()
-    for key, pill in app._bp_pill_widgets.items():
-        if not _widget_alive(pill):
-            continue
-        if key == active:
-            pill.configure(bg=COLORS.get('accent_lo', '#1a1024'),
-                           fg=COLORS.get('purple_hi', '#c891e0'),
-                           highlightbackground=COLORS.get('purple',
-                                                          '#9b59b6'))
-        else:
-            pill.configure(bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-                           highlightbackground=COLORS['border_3'])
+    seg = getattr(app, '_bp_filter_seg', None)
+    if _widget_alive(seg):
+        try:
+            seg._paint()
+        except Exception:
+            pass
 
 
 # ── Folder chip strip ──
 def _build_games_folder_strip(body, app):
-    outer = tk.Frame(body, bg=COLORS['bg_0'])
+    bg = body.cget('bg')
+    outer = tk.Frame(body, bg=bg)
     outer.pack(fill='x')
-    app._bp_folder_frame = tk.Frame(outer, bg=COLORS['bg_0'])
-    app._bp_folder_frame.pack(fill='x', padx=24, pady=(0, 8))
+    tk.Label(outer, text='Scan folders', font=FONTS['body'], bg=bg,
+             fg=C['fg_2'], anchor='w').pack(side='left', anchor='n',
+                                            pady=(px(6), 0), padx=(0, px(12)))
+    app._bp_folder_frame = tk.Frame(outer, bg=bg)
+    app._bp_folder_frame.pack(side='left', fill='x', expand=True)
     _refresh_folder_chips(app)
+
+
+def _short_path(path, limit=64):
+    return path if len(path) <= limit else '…' + path[-(limit - 1):]
 
 
 def _refresh_folder_chips(app):
@@ -333,60 +589,53 @@ def _refresh_folder_chips(app):
         return
     for w in ff.winfo_children():
         w.destroy()
+    bg = ff.cget('bg')
     if not app._bp_folders:
         tk.Label(ff,
                  text=_('No folders added yet.'),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_0'], fg=COLORS['fg_5']
-                 ).pack(side='left', pady=4)
+                 font=FONTS['caption'],
+                 bg=bg, fg=C['fg_4']
+                 ).pack(side='left', pady=(px(7), 0))
         return
     for folder in app._bp_folders:
-        chip = tk.Frame(ff,
-                        bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        chip.pack(side='left', padx=(0, 6), pady=4)
-        tk.Label(chip, text='\U0001f4c1  ' + folder,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                 padx=8, pady=4
-                 ).pack(side='left')
-        rm = tk.Label(chip, text=' \u2715 ',
-                      font=(FONTS['body'][0], 9),
-                      bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-                      cursor='hand2', padx=6)
-        rm.pack(side='left')
-        rm.bind('<Button-1>',
-                lambda e, f=folder: _remove_folder(app, f))
+        chip = Rounded(ff, bg=C['bg_3'], border=C['border_3'], radius=4,
+                       padding=(px(8), px(2)), surface=bg)
+        chip.pack(side='left', padx=(0, px(6)), pady=(0, px(4)))
+        IconLabel(chip, 'folder', 16, C['fg_3'], C['bg_3']).pack(side='left')
+        lbl = tk.Label(chip, text=_short_path(folder),
+                       font=FONTS['code'], bg=C['bg_3'], fg=C['fg_2'])
+        lbl.pack(side='left', padx=(px(6), px(2)))
+        Tooltip(lbl, folder)
+        IconButton(chip, 'close', lambda f=folder: _remove_folder(app, f),
+                   tooltip='Remove folder', size='sm', surface=C['bg_3']
+                   ).pack(side='left')
 
 
-# ── Scan progress strip ──
+# ── Scan progress strip (packed / forgotten by the scan logic) ──
 def _build_games_scan_bar(body, app):
-    app._bp_progress_frame = tk.Frame(body, bg=COLORS['bg_0'])
+    bg = body.cget('bg')
+    app._bp_progress_frame = tk.Frame(body, bg=bg)
     app._bp_progress_frame.pack(fill='x')
-    inner = tk.Frame(app._bp_progress_frame, bg=COLORS['bg_0'])
-    inner.pack(fill='x', padx=24, pady=(0, 8))
-    tk.Label(inner, text='\u25cf',
-             font=(FONTS['body'][0], 9),
-             bg=COLORS['bg_0'], fg=COLORS['accent']
-             ).pack(side='left', padx=(0, 6))
-    tk.Label(inner, text=_('Scanning\u2026'),
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left')
+    inner = tk.Frame(app._bp_progress_frame, bg=bg)
+    inner.pack(fill='x', pady=(px(12), 0))
+    IconLabel(inner, 'loader', 16, C['accent_hi'], bg).pack(side='left')
+    tk.Label(inner, text=_('Scanning…'),
+             font=FONTS['caption'],
+             bg=bg, fg=C['fg_3']
+             ).pack(side='left', padx=(px(8), 0))
     app._bp_progress_frame.pack_forget()
 
 
 # ── Grid area ──
 def _build_games_grid(body, app):
     grid_outer = tk.Frame(body, bg=COLORS['bg_1'])
-    grid_outer.pack(fill='both', expand=True, padx=24, pady=(0, 12))
+    grid_outer.pack(fill='both', expand=True, padx=(px(16), px(8)),
+                    pady=(0, px(8)))
 
     canvas = tk.Canvas(grid_outer, bg=COLORS['bg_1'],
-                        highlightthickness=0)
-    sb = XScrollbar(grid_outer, orient='vertical',
-                      command=canvas.yview,
-                      bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
+                       highlightthickness=0)
+    sb = Scrollbar(grid_outer, orient='vertical', command=canvas.yview,
+                   surface=C['bg_1'])
     canvas.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     canvas.pack(side='left', fill='both', expand=True)
@@ -403,7 +652,7 @@ def _build_games_grid(body, app):
         # changes — the old unconditional rebuild fired on every resize
         # pixel and re-created every card (and its async cover load).
         canvas.itemconfig('bpg', width=e.width)
-        new_cols = max(1, e.width // _CARD_MIN_W)
+        new_cols = max(1, e.width // px(_CARD_MIN_W))
         if new_cols != getattr(app, '_bp_last_cols', None):
             _refresh_grid(app)
     canvas.bind('<Configure>', _on_canvas_resize)
@@ -414,7 +663,7 @@ def _build_games_grid(body, app):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# SUB-TAB 2: AUTO BACKPORT — options form only.
+# SUB-TAB: AUTO BACKPORT — options form only.
 # The global OUTPUT LOG at the bottom of the window shows the details
 # of what's happening during a backport; we don't duplicate it here.
 # ─────────────────────────────────────────────────────────────────────────
@@ -426,37 +675,17 @@ def _build_auto_subtab(parent, app):
     try:
         app._build_bp_auto_panel(app._bp_form_frame)
     except Exception as e:
-        tk.Label(app._bp_form_frame,
-                 text=_('Could not load Auto Backport form:') +
-                      '\n\n' + str(e),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_1'], fg=COLORS.get('err', '#e0584b'),
-                 wraplength=720, justify='left'
-                 ).pack(padx=24, pady=24, anchor='nw')
+        InfoBar(app._bp_form_frame, kind='danger',
+                title=_('Could not load Auto Backport form:'),
+                text=str(e)).pack(fill='x', padx=px(24), pady=px(24))
 
-    # Hide the panel's built-in OUTPUT LOG widgets. The single global
-    # OUTPUT LOG at the bottom of the window is the one and only log
-    # surface — backport details are funnelled there via the redirected
-    # `_abp_log_line` method.
-    #
-    # `_build_output_log` in ui/panel_bp_auto.py is the LAST builder
-    # called in the panel and adds exactly two widgets to the form
-    # parent: a header Frame containing "OUTPUT LOG" + Clear, then a
-    # ConsoleView (stored as `app._abp_log_console`). We hide both by
-    # pack_forget-ing the ConsoleView and its preceding sibling.
+    # The panel's own OUTPUT LOG console is built into a hidden frame:
+    # the single global OUTPUT LOG at the bottom of the window is the one
+    # and only log surface (backport details are funnelled there via the
+    # redirected `_abp_log_line` method). Make sure it stays out of view.
     try:
         cv = getattr(app, '_abp_log_console', None)
         if cv is not None and cv.winfo_exists():
-            # Find the head Frame: it's the sibling packed just before
-            # the ConsoleView in the same parent.
-            siblings = list(app._bp_form_frame.winfo_children())
-            try:
-                idx = siblings.index(cv)
-                if idx > 0:
-                    head = siblings[idx - 1]
-                    head.pack_forget()
-            except ValueError:
-                pass
             cv.pack_forget()
     except Exception:
         pass
@@ -1135,65 +1364,72 @@ def _build_sdkfixer_subtab(parent, app):
     if not hasattr(app, '_sdkfix_status_var'):
         app._sdkfix_status_var = tk.StringVar(value='')
     app._sdkfix_running = getattr(app, '_sdkfix_running', False)
-    body = tk.Frame(parent, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True)
-    pad = 24
-    head = tk.Frame(body, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=pad, pady=(16, 4))
-    tk.Label(head, text='🔧  ' + _('SDK Fixer'), font=(FONTS['body_strong'][0], 15), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
-    tk.Label(head, text=_('Change only the SDK marker in a folder’s executables.'), font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
-    warn = tk.Frame(body, bg=COLORS.get('bg_2', '#1a1426'), highlightbackground=COLORS.get('warn', '#d6a13a'), highlightthickness=1)
-    warn.pack(fill='x', padx=pad, pady=(6, 12))
-    tk.Label(warn, text=_('⚠ SDK Fixer only changes SDK markers. It does not apply normal backport patches, fakelib, or libc patches. Use this only when the game already works and only the SDK marker needs changing.'), font=FONTS['body'], bg=COLORS.get('bg_2', '#1a1426'), fg=COLORS.get('warn', '#d6a13a'), wraplength=860, justify='left').pack(anchor='w', padx=12, pady=8)
-    _sdkfix_label(body, _('Source folder'), _('Backport files — eboot.bin / .prx / .sprx / sce_module / fakelib. param.json is not required.'), pad)
-    srow = tk.Frame(body, bg=COLORS['bg_1'])
-    srow.pack(fill='x', padx=pad, pady=(0, 10))
-    ent = XEntry(srow, textvariable=app._sdkfix_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
-    ent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
+    body = _scroll_page(parent)
+    BG2 = C['bg_2']
+
+    hdr = _page_header(body, _('SDK Fixer'),
+                       _('Change only the SDK marker in a folder’s executables.'))
+    app._sdkfix_run_btn = Button(hdr.actions, text='⚡  ' + _('Run SDK Fix'),
+                                 variant='primary', command=app._sdkfix_run)
+    app._sdkfix_run_btn.pack(side='right')
+    Button(hdr.actions, text='🔍  ' + _('Preview (dry-run)'),
+           command=app._sdkfix_preview).pack(side='right', padx=(0, px(8)))
+
+    InfoBar(body, kind='warn',
+            text=_clean(_('⚠ SDK Fixer only changes SDK markers. It does not apply normal backport patches, fakelib, or libc patches. Use this only when the game already works and only the SDK marker needs changing.'))
+            ).pack(fill='x', padx=px(24), pady=(0, px(16)))
+
+    left, right = _columns(body)
+
+    # ── Source ──
+    src = Card(left, title=_('Source folder'),
+               subtitle=_('Backport files — eboot.bin / .prx / .sprx / sce_module / fakelib. param.json is not required.'))
+    src.pack(fill='x')
+    _blk, ent = _field(src.body, None, app._sdkfix_src_var, first=True,
+                       buttons=[(_('Browse'), 'folder_open',
+                                 app._sdkfix_browse_src)])
     ent.bind('<FocusOut>', lambda e: app._sdkfix_scan_folder())
     ent.bind('<Return>', lambda e: app._sdkfix_scan_folder())
-    _sdkfix_btn(srow, _('Browse'), app._sdkfix_browse_src, primary=False).pack(side='left')
-    strip = tk.Frame(body, bg=COLORS['bg_0'], highlightbackground=COLORS.get('border_2', '#241d33'), highlightthickness=1)
-    strip.pack(fill='x', padx=pad, pady=(0, 12))
-    inner = tk.Frame(strip, bg=COLORS['bg_0'])
-    inner.pack(fill='x', padx=14, pady=10)
-    def _cell(col_parent, caption):
-        c = tk.Frame(col_parent, bg=COLORS['bg_0'])
-        c.pack(side='left', expand=True, fill='x')
-        tk.Label(c, text=caption, font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=COLORS['fg_4']).pack(anchor='w')
-        v = tk.Label(c, text='—', font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_0'], fg=COLORS['fg_1'])
-        v.pack(anchor='w')
-        return v
-    app._sdkfix_det_type = _cell(inner, _('FOLDER TYPE'))
-    app._sdkfix_det_sdk = _cell(inner, _('DETECTED SDK'))
-    app._sdkfix_det_files = _cell(inner, _('FILES TO PATCH'))
-    _sdkfix_label(body, _('Target SDK'), _('4 = firmware 4.xx · 5 = firmware 5.xx · 7 = firmware 7.xx, etc.'), pad)
-    trow = tk.Frame(body, bg=COLORS['bg_1'])
-    trow.pack(fill='x', padx=pad, pady=(0, 12))
-    om = tk.OptionMenu(trow, app._sdkfix_tgt_var, *[str(n) for n in range(1, 11)])
-    try:
-        om.config(font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], activebackground=COLORS.get('bg_2', '#1a1426'), activeforeground=COLORS['fg_0'], relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'), width=6)
-        om['menu'].config(bg=COLORS['bg_0'], fg=COLORS['fg_1'])
-    except Exception:
-        pass
-    om.pack(side='left')
-    _sdkfix_label(body, _('Output mode'), '', pad)
-    orow = tk.Frame(body, bg=COLORS['bg_1'])
-    orow.pack(fill='x', padx=pad, pady=(0, 12))
+    Divider(src.body, color=C['border_1']).pack(fill='x', pady=(px(16), px(12)))
+    det = tk.Frame(src.body, bg=BG2)
+    det.pack(fill='x')
+    for i in range(3):
+        det.columnconfigure(i, weight=1, uniform='sdkdet')
+    cell, app._sdkfix_det_type = _stat_cell(det, _('FOLDER TYPE'))
+    cell.grid(row=0, column=0, sticky='w')
+    cell, app._sdkfix_det_sdk = _stat_cell(det, _('DETECTED SDK'))
+    cell.grid(row=0, column=1, sticky='w')
+    cell, app._sdkfix_det_files = _stat_cell(det, _('FILES TO PATCH'))
+    cell.grid(row=0, column=2, sticky='w')
+
+    # ── Options ──
+    opt = Card(right, title='Options',
+               subtitle='What to change and where the result goes.')
+    opt.pack(fill='x')
+    ctl = _setting_row(opt.body, _('Target SDK'),
+                       _('4 = firmware 4.xx · 5 = firmware 5.xx · 7 = firmware 7.xx, etc.'),
+                       first=True)
+    _dropdown_row(ctl, app._sdkfix_tgt_var,
+                  [str(n) for n in range(1, 11)], width=6).pack()
+    Divider(opt.body, color=C['border_1']).pack(fill='x', pady=(px(12), 0))
+    _label_row(opt.body, _('Output mode')).pack(fill='x', pady=(px(12), px(4)))
     for val, label in ('copy', _('Save as new copy (safe, default)')), ('overwrite', _('Overwrite selected folder')):
-        rb = XRadio(orow, text=label, value=val, variable=app._sdkfix_out_mode_var, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_1'], selectcolor=COLORS['bg_0'], activebackground=COLORS['bg_1'], activeforeground=COLORS['fg_0'], highlightthickness=0, anchor='w')
-        rb.pack(side='left', padx=(0, 18))
-    arow = tk.Frame(body, bg=COLORS['bg_1'])
-    arow.pack(fill='x', padx=pad, pady=(4, 8))
-    _sdkfix_btn(arow, '🔍  ' + _('Preview (dry-run)'), app._sdkfix_preview, primary=False).pack(side='left')
-    app._sdkfix_run_btn = _sdkfix_btn(arow, '⚡  ' + _('Run SDK Fix'), app._sdkfix_run, primary=True)
-    app._sdkfix_run_btn.pack(side='left', padx=(10, 0))
-    tk.Label(body, textvariable=app._sdkfix_status_var, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS.get('accent', '#b07ad6')).pack(anchor='w', padx=pad, pady=(8, 2))
-    prog = tk.Canvas(body, height=12, bg=COLORS['bg_0'], highlightthickness=0)
-    prog.pack(fill='x', padx=pad, pady=(0, 6))
+        Radio(opt.body, text=label, value=val,
+              variable=app._sdkfix_out_mode_var).pack(anchor='w', pady=(px(2), 0))
+
+    # ── Progress ──
+    prog_card = Card(body, title='Progress')
+    prog_card.pack(fill='x', padx=px(24), pady=(0, px(24)))
+    _status_line(prog_card.body, app._sdkfix_status_var,
+                 idle_text='Not started. Preview first to see what will change.'
+                 ).pack(fill='x')
+    prog = _CanvasBar(prog_card.body, surface=BG2)
+    prog.pack(fill='x', pady=(px(12), 0))
     app._sdkfix_prog_cv = prog
-    app._sdkfix_prog_rect = prog.create_rectangle(0, 0, 0, 12, fill=COLORS.get('accent', '#b07ad6'), width=0)
-    tk.Label(body, text=_('Detailed output appears in the OUTPUT LOG at the bottom of the window.'), font=(FONTS['body'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(anchor='w', padx=pad, pady=(0, 18))
+    app._sdkfix_prog_rect = prog.create_rectangle(0, 0, 0, 12, fill=COLORS['accent'], width=0)
+    autowrap(tk.Label(prog_card.body, text=_('Detailed output appears in the OUTPUT LOG at the bottom of the window.'),
+                      font=FONTS['caption'], bg=BG2, fg=C['fg_3'], anchor='w',
+                      justify='left')).pack(fill='x', pady=(px(12), 0))
 
 
 def _build_batchsdk_subtab(parent, app):
@@ -1212,69 +1448,89 @@ def _build_batchsdk_subtab(parent, app):
     if not hasattr(app, '_batchsdk_status_var'):
         app._batchsdk_status_var = tk.StringVar(value='')
     app._batchsdk_running = getattr(app, '_batchsdk_running', False)
-    pad = 24
-    body = tk.Frame(parent, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True)
-    head = tk.Frame(body, bg=COLORS['bg_1'])
-    head.pack(fill='x', padx=pad, pady=(16, 4))
-    tk.Label(head, text='📦  ' + _('Batch SDK Retag'), font=(FONTS['body_strong'][0], 15), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
-    tk.Label(head, text=_('Change the SDK marker across a whole folder of backport zips.'), font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
-    warn = tk.Frame(body, bg=COLORS.get('bg_2', '#1a1426'), highlightbackground=COLORS.get('warn', '#d6a13a'), highlightthickness=1)
-    warn.pack(fill='x', padx=pad, pady=(6, 12))
-    tk.Label(warn, text=_('⚠ Batch SDK Retag only changes SDK markers inside each zip’s eboot. It does not apply normal backport patches, fakelib, or libc patches. The source folder is never modified — retagged copies are written to the output folder.'), font=FONTS['body'], bg=COLORS.get('bg_2', '#1a1426'), fg=COLORS.get('warn', '#d6a13a'), wraplength=860, justify='left').pack(anchor='w', padx=12, pady=8)
-    _sdkfix_label(body, _('Source folder (backport zips)'), _('A folder containing backport zips, e.g. “FW 7xx PPSA21382 Tomba! (01.003.000) backport files.zip”.'), pad)
-    srow = tk.Frame(body, bg=COLORS['bg_1'])
-    srow.pack(fill='x', padx=pad, pady=(0, 10))
-    sent = XEntry(srow, textvariable=app._batchsdk_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
-    sent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
+    body = _scroll_page(parent)
+    BG2 = C['bg_2']
+
+    hdr = _page_header(body, _('Batch SDK Retag'),
+                       _('Change the SDK marker across a whole folder of backport zips.'))
+    app._batchsdk_run_btn = Button(hdr.actions, text='⚡  ' + _('Run Batch Retag'),
+                                   variant='primary', command=app._batchsdk_run)
+    app._batchsdk_run_btn.pack(side='right')
+    Button(hdr.actions, text='🔍  ' + _('Scan'),
+           command=app._batchsdk_scan).pack(side='right', padx=(0, px(8)))
+
+    InfoBar(body, kind='warn',
+            text=_clean(_('⚠ Batch SDK Retag only changes SDK markers inside each zip’s eboot. It does not apply normal backport patches, fakelib, or libc patches. The source folder is never modified — retagged copies are written to the output folder.'))
+            ).pack(fill='x', padx=px(24), pady=(0, px(16)))
+
+    left, right = _columns(body)
+
+    # ── Folders ──
+    fcard = Card(left, title='Folders',
+                 subtitle='Zips are read from the source and written, retagged, to the output folder.')
+    fcard.pack(fill='x')
+    _blk, sent = _field(fcard.body, _('Source folder (backport zips)'),
+                        app._batchsdk_src_var, first=True,
+                        buttons=[(_('Browse'), 'folder_open',
+                                  app._batchsdk_browse_src)],
+                        help_below=_('A folder containing backport zips, e.g. “FW 7xx PPSA21382 Tomba! (01.003.000) backport files.zip”.'))
     sent.bind('<Return>', lambda e: app._batchsdk_scan())
-    _sdkfix_btn(srow, _('Browse'), app._batchsdk_browse_src, primary=False).pack(side='left')
-    _sdkfix_label(body, _('Output folder'), _('Retagged zips are written here. Must be different from the source folder.'), pad)
-    orow = tk.Frame(body, bg=COLORS['bg_1'])
-    orow.pack(fill='x', padx=pad, pady=(0, 10))
-    oent = XEntry(orow, textvariable=app._batchsdk_out_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
-    oent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
-    _sdkfix_btn(orow, _('Browse'), app._batchsdk_browse_out, primary=False).pack(side='left')
-    _sdkfix_label(body, _('Target SDK'), _('Any direction. 6 = firmware 6.xx, 7 = firmware 7.xx, etc. Each zip’s filename “FW Nxx” tag is updated to match.'), pad)
-    trow = tk.Frame(body, bg=COLORS['bg_1'])
-    trow.pack(fill='x', padx=pad, pady=(0, 8))
-    om = tk.OptionMenu(trow, app._batchsdk_tgt_var, *[str(n) for n in range(1, 11)])
-    try:
-        om.config(font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], activebackground=COLORS.get('bg_2', '#1a1426'), activeforeground=COLORS['fg_0'], relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'), width=6)
-        om['menu'].config(bg=COLORS['bg_0'], fg=COLORS['fg_1'])
-    except Exception:
-        pass
-    om.pack(side='left')
-    arow = tk.Frame(body, bg=COLORS['bg_1'])
-    arow.pack(fill='x', padx=pad, pady=(4, 8))
-    _sdkfix_btn(arow, '🔍  ' + _('Scan'), app._batchsdk_scan, primary=False).pack(side='left')
-    app._batchsdk_run_btn = _sdkfix_btn(arow, '⚡  ' + _('Run Batch Retag'), app._batchsdk_run, primary=True)
-    app._batchsdk_run_btn.pack(side='left', padx=(10, 0))
-    _sdkfix_label(body, _('Preview'), _('Detected current SDK and the planned action per zip. Scan first to populate.'), pad)
-    tblf = tk.Frame(body, bg=COLORS['bg_0'], highlightbackground=COLORS.get('border_2', '#241d33'), highlightthickness=1)
-    tblf.pack(fill='both', expand=True, padx=pad, pady=(0, 10))
+    _field(fcard.body, _('Output folder'), app._batchsdk_out_var,
+           buttons=[(_('Browse'), 'folder_open', app._batchsdk_browse_out)],
+           help_below=_('Retagged zips are written here. Must be different from the source folder.'))
+
+    # ── Target + progress ──
+    tcard = Card(right, title=_('Target SDK'),
+                 subtitle=_('Any direction. 6 = firmware 6.xx, 7 = firmware 7.xx, etc. Each zip’s filename “FW Nxx” tag is updated to match.'))
+    tcard.pack(fill='x')
+    trow = tk.Frame(tcard.body, bg=BG2)
+    trow.pack(fill='x')
+    _dropdown_row(trow, app._batchsdk_tgt_var,
+                  [str(n) for n in range(1, 11)], width=6).pack(side='left')
+    Divider(tcard.body, color=C['border_1']).pack(fill='x', pady=(px(16), px(12)))
+    _status_line(tcard.body, app._batchsdk_status_var,
+                 idle_text='Scan the source folder, review the preview, then run.'
+                 ).pack(fill='x')
+    prog = _CanvasBar(tcard.body, surface=BG2)
+    prog.pack(fill='x', pady=(px(12), 0))
+    app._batchsdk_prog_cv = prog
+    app._batchsdk_prog_rect = prog.create_rectangle(0, 0, 0, 12, fill=COLORS['accent'], width=0)
+
+    # ── Preview table ──
+    pcard = Card(body, title=_('Preview'),
+                 subtitle=_('Detected current SDK and the planned action per zip. Scan first to populate.'))
+    pcard.pack(fill='x', padx=px(24), pady=(0, px(16)))
+    tblf = Rounded(pcard.body, bg=BG2, border=C['border_2'], radius=4,
+                   padding=1, surface=BG2)
+    tblf.pack(fill='both', expand=True)
     cols = 'zip', 'cur', 'action'
-    tree = ttk.Treeview(tblf, columns=cols, show='headings', height=8)
-    tree.heading('zip', text=_('Zip'))
-    tree.heading('cur', text=_('Current SDK'))
-    tree.heading('action', text=_('Status'))
+    tree = _TokenTree(tblf, columns=cols, show='headings', height=8)
+    tree.heading('zip', text=_('Zip'), anchor='w')
+    tree.heading('cur', text=_('Current SDK'), anchor='w')
+    tree.heading('action', text=_('Status'), anchor='w')
     tree.column('zip', width=420, anchor='w')
-    tree.column('cur', width=110, anchor='center')
+    tree.column('cur', width=110, anchor='w')
     tree.column('action', width=230, anchor='w')
-    vsb = ttk.Scrollbar(tblf, orient='vertical', command=tree.yview)
+    vsb = Scrollbar(tblf, orient='vertical', command=tree.yview, surface=BG2)
     tree.configure(yscrollcommand=vsb.set)
     tree.pack(side='left', fill='both', expand=True)
     vsb.pack(side='right', fill='y')
     app._batchsdk_tree = tree
-    tk.Label(body, textvariable=app._batchsdk_status_var, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_1'], fg=COLORS.get('accent', '#b07ad6')).pack(anchor='w', padx=pad, pady=(4, 2))
-    prog = tk.Canvas(body, height=12, bg=COLORS['bg_0'], highlightthickness=0)
-    prog.pack(fill='x', padx=pad, pady=(0, 6))
-    app._batchsdk_prog_cv = prog
-    app._batchsdk_prog_rect = prog.create_rectangle(0, 0, 0, 12, fill=COLORS.get('accent', '#b07ad6'), width=0)
-    logf = tk.Frame(body, bg=COLORS['bg_0'], highlightbackground=COLORS.get('border_2', '#241d33'), highlightthickness=1)
-    logf.pack(fill='both', expand=True, padx=pad, pady=(0, 18))
-    logw = tk.Text(logf, height=7, bg=COLORS['bg_0'], fg=COLORS['fg_1'], relief='flat', wrap='word', font=(FONTS['body'][0], 9), state='disabled', insertbackground=COLORS.get('accent', '#b07ad6'))
-    lvsb = ttk.Scrollbar(logf, orient='vertical', command=logw.yview)
+
+    # ── Log ──
+    lcard = Card(body, title='Retag log',
+                 subtitle='Per-zip results of the last scan or run.')
+    lcard.pack(fill='x', padx=px(24), pady=(0, px(24)))
+    logf = Rounded(lcard.body, bg=C['bg_0'], border=C['border_2'], radius=4,
+                   padding=(px(10), px(8)), surface=BG2)
+    logf.pack(fill='both', expand=True)
+    logw = tk.Text(logf, height=7, bg=C['bg_0'], fg=C['fg_2'], relief='flat',
+                   bd=0, highlightthickness=0, wrap='word',
+                   font=FONTS['code'], state='disabled',
+                   insertbackground=C['fg_1'],
+                   selectbackground=C['accent_lo'])
+    lvsb = Scrollbar(logf, orient='vertical', command=logw.yview,
+                     surface=C['bg_0'])
     logw.configure(yscrollcommand=lvsb.set)
     logw.pack(side='left', fill='both', expand=True)
     lvsb.pack(side='right', fill='y')
@@ -1284,16 +1540,14 @@ def _build_batchsdk_subtab(parent, app):
 def _sdkfix_label(parent, title, sub, pad):
     box = tk.Frame(parent, bg=COLORS['bg_1'])
     box.pack(fill='x', padx=pad, pady=(2, 2))
-    tk.Label(box, text=title, font=(FONTS['body_strong'][0], 11), bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(anchor='w')
+    tk.Label(box, text=title, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_2']).pack(anchor='w')
     if sub:
-        tk.Label(box, text=sub, font=(FONTS['body'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left').pack(anchor='w')
+        tk.Label(box, text=sub, font=FONTS['caption'], bg=COLORS['bg_1'], fg=COLORS['fg_3'], justify='left').pack(anchor='w')
 
 
 def _sdkfix_btn(parent, text, cmd, primary=False):
-    bg = COLORS.get('accent', '#b07ad6') if primary else COLORS.get('bg_2', '#1a1426')
-    fg = '#ffffff' if primary else COLORS['fg_1']
-    b = XButton(parent, text=text, command=cmd, font=FONTS['body'], bg=bg, fg=fg, activebackground=bg, activeforeground=fg, relief='flat', bd=0, padx=16, pady=8, cursor='hand2', highlightthickness=0)
-    return b
+    return Button(parent, text=text, command=cmd,
+                  variant='primary' if primary else 'secondary')
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1478,6 +1732,17 @@ def _start_sdk_detect(app):
 # ─────────────────────────────────────────────────────────────────────────
 # Grid rendering — applies search + filter to games list
 # ─────────────────────────────────────────────────────────────────────────
+def _grid_empty(grid, icon, title, text, action=None):
+    holder = Card(grid, padding=0)
+    holder.pack(fill='x', padx=px(8), pady=px(8))
+    es = DSEmptyState(holder, icon=icon, title=title, text=text,
+                      action=action, bg=C['bg_2'])
+    es.configure(height=px(300))
+    es.pack(fill='x')
+    holder.raise_decorations()
+    return holder
+
+
 def _refresh_grid(app):
     _paint_filter_pills(app)
     grid = getattr(app, '_bp_games_frame', None)
@@ -1489,14 +1754,11 @@ def _refresh_grid(app):
 
     games = list(getattr(app, '_bp_games_list', []))
     if not games:
-        holder = tk.Frame(grid, bg=COLORS['bg_1'], height=300)
-        holder.pack(fill='x', pady=20)
-        holder.pack_propagate(False)
-        EmptyState(holder, icon='\U0001f4e6',
-                   title=_('No games scanned yet'),
-                   description=_('Add a folder and click Scan to find '
-                                 'PS5 game dumps.')
-                   ).pack(fill='both', expand=True)
+        _grid_empty(grid, 'folder_plus', _('No games scanned yet'),
+                    _('Add a folder and click Scan to find '
+                      'PS5 game dumps.'),
+                    action=(_('Add folder'), lambda: _add_folder(app),
+                            'folder_plus'))
         _refresh_games_stats(app)
         return
 
@@ -1516,13 +1778,8 @@ def _refresh_grid(app):
 
     visible = [g for g in games if _matches(g)]
     if not visible:
-        holder = tk.Frame(grid, bg=COLORS['bg_1'], height=300)
-        holder.pack(fill='x', pady=20)
-        holder.pack_propagate(False)
-        EmptyState(holder, icon='\U0001f50d',
-                   title=_('No matches'),
-                   description=_('No games match the current filter.')
-                   ).pack(fill='both', expand=True)
+        _grid_empty(grid, 'filter', _('No matches'),
+                    _('No games match the current filter.'))
         _refresh_games_stats(app)
         return
 
@@ -1530,12 +1787,13 @@ def _refresh_grid(app):
         width = app._bp_canvas.winfo_width()
     except Exception:
         width = 800
-    # v3.6.2: a card is a 180px cover + text column + padding (~400px
-    # natural width). The old `width // 200` packed up to twice as many
-    # columns as fit, crushing every card into slivers. Size columns
-    # from the real card width and keep them uniform.
-    cols = max(1, width // _CARD_MIN_W)
+    # Columns are sized from the real card width and kept uniform.
+    cols = max(1, width // px(_CARD_MIN_W))
     app._bp_last_cols = cols
+    # Text column width inside one card: column - grid gap - card
+    # padding - cover - cover gap.
+    app._bp_info_w = max(px(140), width // cols - px(16) - px(24)
+                         - px(_COVER_W) - px(12))
 
     # Reset stale column weights from a previous, wider layout — empty
     # columns that keep weight=1 would still claim a share of the width.
@@ -1561,7 +1819,7 @@ def _refresh_grid(app):
     try:
         if qn:
             app._bp_count_var.set(
-                '%d %s \u00b7 %d %s' %
+                '%d %s · %d %s' %
                 (total,
                  _('games') if total != 1 else _('game'),
                  qn, _('queued')))
@@ -1572,6 +1830,11 @@ def _refresh_grid(app):
     except Exception:
         pass
     _refresh_games_stats(app)
+
+
+def _fit_text(text, width_px, lines=2, char_px=7.4):
+    limit = max(12, int(width_px / char_px) * lines)
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
 
 
 def _make_card(app, parent, game, row, col, queued):
@@ -1590,13 +1853,6 @@ def _make_card(app, parent, game, row, col, queued):
         except (ValueError, IndexError):
             version = 'v' + v_raw[:8]
 
-    # v3.6.0 pass: SDK badge rides on the cover; size / date / folder
-    # meta rows come from the detect worker's display-only fields.
-    cover_badge = None
-    if sdk_val:
-        cover_badge = ('SDK %d' % sdk_val,
-                       'warn' if sdk_val >= 16 else 'purple')
-
     size_text = None
     sz = game.get('size_bytes')
     if sz:
@@ -1610,96 +1866,95 @@ def _make_card(app, parent, game, row, col, queued):
                 game['mtime']).strftime('%d/%m/%Y %H:%M')
         except Exception:
             pass
-    folder_text = os.path.dirname(game.get('folder', '')) or None
 
-    def _menu(e, g=game):
-        _card_menu(app, e, g)
+    info_w = getattr(app, '_bp_info_w', px(220))
+    card = Card(parent, padding=12, tone='selected' if queued else 'default')
+    card.grid(row=row, column=col, padx=px(8), pady=px(8), sticky='nsew')
+    bg = card.cget('bg')
+    hot = [card]
 
-    card = GameCard(
-        parent,
-        title=title,
-        game_id=title_id,
-        version=version,
-        size_text=size_text,
-        date_text=date_text,
-        folder_text=folder_text,
-        kind_text=_('Base Game'),
-        cover_badge=cover_badge,
-        badges=[],
-        cover_size=180,
-        on_click=lambda e, g=game: _toggle_queue(app, g),
-        on_double=lambda e, g=game: _toggle_queue(app, g),
-        on_right=_menu,
-        on_menu=_menu,
-    )
-    card.grid(row=row, column=col, padx=6, pady=6, sticky='nsew')
+    # ── Cover (2:3 portrait) ──
+    cov = tk.Frame(card, bg=C['bg_3'], width=px(_COVER_W),
+                   height=px(_COVER_H))
+    cov.pack(side='left', anchor='n')
+    cov.pack_propagate(False)
+    cover_lbl = tk.Label(cov, bg=C['bg_3'], bd=0,
+                         image=icon_image('game', 28, C['fg_4'], C['bg_3']))
+    cover_lbl.place(relx=0.5, rely=0.5, anchor='center')
+    hot += [cov, cover_lbl]
 
-    # ── Per-card action row (Queue / Process / handled by ⋮ too) ──
-    arow = tk.Frame(card, bg=COLORS['bg_2'])
-    arow.pack(fill='x', padx=12, pady=(0, 12))
+    # ── Text column ──
+    info = tk.Frame(card, bg=bg)
+    info.pack(side='left', fill='both', expand=True, padx=(px(12), 0))
+    hot.append(info)
+    t = tk.Label(info, text=_fit_text(title, info_w), font=FONTS['body_strong'],
+                 bg=bg, fg=C['fg_0'], anchor='w', justify='left',
+                 wraplength=info_w)
+    t.pack(fill='x')
+    hot.append(t)
+    meta = ' · '.join(x for x in (title_id, version) if x)
+    if meta:
+        m = tk.Label(info, text=meta, font=FONTS['code'], bg=bg,
+                     fg=C['fg_3'], anchor='w')
+        m.pack(fill='x', pady=(px(2), 0))
+        hot.append(m)
+
+    brow = tk.Frame(info, bg=bg)
+    brow.pack(fill='x', pady=(px(8), 0))
+    hot.append(brow)
+    if sdk_val:
+        Badge(brow, 'SDK %d' % sdk_val, 'warn' if sdk_val >= 16 else 'neutral',
+              surface=bg).pack(side='left', padx=(0, px(6)))
     if queued:
-        qbtn = XButton(arow, text='\u2713  ' + _('Queued'),
-                         font=(FONTS['body_strong'][0], 9),
-                         bg=COLORS.get('purple', '#9b59b6'),
-                         fg=COLORS['fg_0'],
-                         activebackground=COLORS.get('purple_hi',
-                                                     '#c891e0'),
-                         activeforeground=COLORS['fg_0'],
-                         relief='flat', bd=0, padx=12, pady=5,
-                         cursor='hand2',
-                         command=lambda g=game: _toggle_queue(app, g))
+        Badge(brow, _('Queued'), 'info', icon='check',
+              surface=bg).pack(side='left', padx=(0, px(6)))
+
+    facts = ' · '.join(x for x in (size_text, date_text) if x)
+    if facts:
+        f = tk.Label(info, text=facts, font=FONTS['caption'], bg=bg,
+                     fg=C['fg_4'], anchor='w')
+        f.pack(fill='x', pady=(px(8), 0))
+        hot.append(f)
+
+    # ── Actions ──
+    arow = tk.Frame(info, bg=bg)
+    arow.pack(fill='x', side='bottom', pady=(px(10), 0))
+    if queued:
+        Button(arow, text=_('Queued'), icon='check', variant='selected',
+               size='sm', surface=bg,
+               command=lambda g=game: _toggle_queue(app, g)).pack(side='left')
     else:
-        qbtn = XButton(arow, text='+  ' + _('Queue'),
-                         font=(FONTS['body_strong'][0], 9),
-                         bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                         activebackground=COLORS['bg_4'],
-                         activeforeground=COLORS['fg_0'],
-                         relief='flat', bd=0, padx=12, pady=5,
-                         cursor='hand2',
-                         highlightbackground=COLORS['border_3'],
-                         highlightthickness=1,
-                         command=lambda g=game: _toggle_queue(app, g))
-    qbtn.pack(side='left')
-    XButton(arow, text='\u26a1  ' + _('Process'),
-              font=(FONTS['body_strong'][0], 9),
-              bg=COLORS['bg_3'],
-              fg=COLORS.get('purple_hi', '#c891e0'),
-              activebackground=COLORS['bg_4'],
-              activeforeground=COLORS.get('purple_hi', '#c891e0'),
-              relief='flat', bd=0, padx=12, pady=5,
-              cursor='hand2',
-              highlightbackground=COLORS.get('purple', '#9b59b6'),
-              highlightthickness=1,
-              command=lambda g=game: _process_single(app, g)
-              ).pack(side='left', padx=(6, 0))
+        Button(arow, text=_('Queue'), icon='plus', size='sm', surface=bg,
+               command=lambda g=game: _toggle_queue(app, g)).pack(side='left')
+    Button(arow, text=_('Process'), icon='zap', variant='subtle', size='sm',
+           surface=bg, command=lambda g=game: _process_single(app, g)
+           ).pack(side='left', padx=(px(4), 0))
 
-    if queued:
+    def _menu_at(w, g=game):
+        class _Ev:
+            x_root = w.winfo_rootx()
+            y_root = w.winfo_rooty() + w.winfo_height()
+        _card_menu(app, _Ev, g)
+    more = IconButton(arow, 'more', None, tooltip='More actions', size='sm',
+                      surface=bg)
+    more.configure(command=lambda w=more: _menu_at(w))
+    more.pack(side='right')
+
+    for w in hot:
         try:
-            purple = COLORS.get('purple', '#9b59b6')
-            purple_hi = COLORS.get('purple_hi', '#c891e0')
-            card.configure(highlightbackground=purple,
-                           highlightthickness=2)
-            card._idle_border = purple
-            card._hover_border = purple_hi
+            w.configure(cursor='hand2')
         except Exception:
             pass
-        try:
-            cover_frame = card.cover_label.master
-            qbadge = tk.Label(
-                cover_frame,
-                text=' \u2713 ' + _('Queued') + ' ',
-                font=(FONTS['body_strong'][0], 9),
-                bg=COLORS.get('purple', '#9b59b6'),
-                fg=COLORS['fg_0'],
-                padx=4, pady=1)
-            qbadge.place(relx=0.5, rely=1.0, anchor='s', y=-8)
-        except Exception:
-            pass
+        w.bind('<Button-1>', lambda e, g=game: _toggle_queue(app, g))
+        w.bind('<Button-3>', lambda e, g=game: _card_menu(app, e, g))
+    folder = game.get('folder', '')
+    if folder:
+        Tooltip(t, folder)
 
     if game.get('cover'):
-        def _load(path=game['cover'], lbl=card.cover_label):
+        def _load(path=game['cover'], lbl=cover_lbl):
             try:
-                img = _load_cover_image(path, target=180)  # 2:3 -> 120x180
+                img = _load_cover_image(path, target=px(_COVER_H))
                 if img is None:
                     return
                 from PIL import ImageTk
@@ -1710,6 +1965,9 @@ def _make_card(app, parent, game, row, col, queued):
                         if lbl.winfo_exists():
                             lbl.config(image=photo, text='')
                             lbl.image = photo
+                            lbl.place_configure(relx=0, rely=0, x=0, y=0,
+                                                anchor='nw', relwidth=1,
+                                                relheight=1)
                     except Exception:
                         pass
                 app.after(0, _apply)
@@ -1719,19 +1977,26 @@ def _make_card(app, parent, game, row, col, queued):
 
 
 def _card_menu(app, event, game):
-    """⋮ / right-click context menu for a game card (v3.6.0 pass)."""
+    """⋮ / right-click context menu for a game card."""
+    menu = None
     try:
+        bg = C['bg_3']
         menu = tk.Menu(app, tearoff=0,
-                       bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-                       activebackground=COLORS['bg_3'],
-                       activeforeground=COLORS['fg_0'],
-                       relief='flat', bd=1)
+                       bg=bg, fg=C['fg_1'],
+                       activebackground=C['bg_4'],
+                       activeforeground=C['fg_0'],
+                       font=FONTS['body'], relief='flat', bd=1)
         in_q = any(g.get('folder') == game.get('folder')
                    for g in app._bp_queue)
+        menu._xb_imgs = imgs = {
+            k: icon_image(k, 16, C['fg_3'], bg)
+            for k in ('minus', 'plus', 'zap', 'folder_open')}
         menu.add_command(
-            label=(_('Remove from queue') if in_q else _('Add to queue')),
+            label='  ' + (_('Remove from queue') if in_q else _('Add to queue')),
+            image=imgs['minus' if in_q else 'plus'], compound='left',
             command=lambda g=game: _toggle_queue(app, g))
-        menu.add_command(label='\u26a1  ' + _('Process this game'),
+        menu.add_command(label='  ' + strip_glyphs('⚡  ' + _('Process this game')),
+                         image=imgs['zap'], compound='left',
                          command=lambda g=game: _process_single(app, g))
         menu.add_separator()
 
@@ -1740,7 +2005,8 @@ def _card_menu(app, event, game):
                 os.startfile(g.get('folder', ''))
             except Exception:
                 pass
-        menu.add_command(label='\U0001f4c2  ' + _('Open folder'),
+        menu.add_command(label='  ' + strip_glyphs('\U0001f4c2  ' + _('Open folder')),
+                         image=imgs['folder_open'], compound='left',
                          command=_open_folder)
         menu.tk_popup(event.x_root, event.y_root)
     except Exception:
@@ -1777,53 +2043,39 @@ def _process_single(app, game):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Bottom stats strip — Games / Queued / Completed / Est. time
+# Stat cards — Games / Queued / Completed / Est. time
 # ─────────────────────────────────────────────────────────────────────────
 def _build_games_stats(body, app):
-    outer = tk.Frame(body, bg=COLORS['bg_1'])
-    outer.pack(fill='x', padx=24, pady=(0, 14))
-    strip = tk.Frame(outer, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_2'],
-                     highlightthickness=1)
-    strip.pack(fill='x')
-    row = tk.Frame(strip, bg=COLORS['bg_2'])
-    row.pack(fill='x', padx=10, pady=12)
+    row = tk.Frame(body, bg=COLORS['bg_1'])
+    row.pack(fill='x', padx=px(24), pady=(0, px(16)))
     for i in range(4):
         row.grid_columnconfigure(i, weight=1, uniform='bpstat')
 
     cells = {}
 
-    def _cell(col, icon, icon_fg, caption, sub):
-        cell = tk.Frame(row, bg=COLORS['bg_2'])
-        cell.grid(row=0, column=col, sticky='ew')
-        ic = tk.Label(cell, text=icon, font=(FONTS['body'][0], 16),
-                      bg=COLORS['bg_2'], fg=icon_fg)
-        ic.pack(side='left', padx=(14, 12))
-        colf = tk.Frame(cell, bg=COLORS['bg_2'])
-        colf.pack(side='left')
-        tk.Label(colf, text=caption.upper(),
-                 font=(FONTS['body_strong'][0], 9),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                 ).pack(anchor='w')
-        v = tk.Label(colf, text='0',
-                     font=(FONTS['body_strong'][0], 16),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_0'])
-        v.pack(anchor='w')
-        tk.Label(colf, text=sub,
-                 font=(FONTS['body'][0], 9),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                 ).pack(anchor='w')
+    def _cell(col, icon, caption, sub):
+        card = Card(row, padding=(px(16), px(12)))
+        card.grid(row=0, column=col, sticky='nsew',
+                  padx=(0 if col == 0 else px(8), 0 if col == 3 else px(8)))
+        bg = C['bg_2']
+        top = tk.Frame(card, bg=bg)
+        top.pack(fill='x')
+        IconLabel(top, icon, 16, C['fg_3'], bg).pack(side='right')
+        tk.Label(top, text=caption, font=FONTS['caption'],
+                 bg=bg, fg=C['fg_3'], anchor='w').pack(side='left')
+        v = tk.Label(card, text='0', font=FONTS['stat'],
+                     bg=bg, fg=C['fg_0'], anchor='w')
+        v.pack(fill='x', pady=(px(2), 0))
+        tk.Label(card, text=sub, font=FONTS['caption'],
+                 bg=bg, fg=C['fg_4'], anchor='w').pack(fill='x')
         return v
 
-    cells['games'] = _cell(0, '\U0001f3ae',
-                           COLORS.get('purple_hi', '#c891e0'),
-                           _('Games'), _('Total games'))
-    cells['queued'] = _cell(1, '\U0001f4c1', COLORS['warn_hi'],
-                            _('Queued'), _('In the queue'))
-    cells['done'] = _cell(2, '\u2713', COLORS['success_hi'],
-                          _('Completed'), _('Backports completed'))
-    cells['eta'] = _cell(3, '\u23f1', COLORS['accent_hi'],
-                         _('Est. Time'), _('Estimated queue time'))
+    cells['games'] = _cell(0, 'game', _('Games'), _('Total games'))
+    cells['queued'] = _cell(1, 'queue', _('Queued'), _('In the queue'))
+    cells['done'] = _cell(2, 'success', _('Completed'),
+                          _('Backports completed'))
+    cells['eta'] = _cell(3, 'timer', _('Est. Time'),
+                         _('Estimated queue time'))
     app._bp_stat_cells = cells
     _refresh_games_stats(app)
 

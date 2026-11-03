@@ -13279,11 +13279,15 @@ class ExFATBuilder(_TK_BASE):
     # ══════════════════════════════════════════════════════════════════════════
 
     def _bpr_render(self):
-        """v3.6.0 pass: results render as Build-style cards (cover
-        tile, status badge, zip chips with Open Folder / Open ZIP),
-        filtered by the All/Worked/Failed pills. Presentation only —
-        the It Worked / Didn\u2019t Work callbacks are unchanged."""
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
+        """Results list: one card, a row per entry (cover tile, title,
+        status badge, zip paths with a missing-file badge, actions),
+        filtered by the All / Worked / Failed Segmented. Presentation only
+        — the It Worked / Didn’t Work callbacks are unchanged."""
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
+        from ui.shared.widgets import (
+            Button as _Btn, Card as _Card, Badge as _Badge, Divider as _Div,
+            Rounded as _Rnd, IconLabel as _Ico, EmptyState as _Empty,
+            Tooltip as _Tip)
 
         for w in self._bpr_list_frame.winfo_children():
             w.destroy()
@@ -13295,26 +13299,20 @@ class ExFATBuilder(_TK_BASE):
         except Exception:
             pass
 
-        # Update pill labels + active state
+        # Update the filter labels (counts) + selection
         try:
             n_all = len(log)
             n_ok = sum(1 for e in log if e.get('status') == 'worked')
             n_bad = sum(1 for e in log if e.get('status') == 'failed')
             texts = {'all': _('All') + ' (%d)' % n_all,
-                     'worked': '\u2713 ' + _('Worked') + ' (%d)' % n_ok,
-                     'failed': '\u2715 ' + _('Failed') + ' (%d)' % n_bad}
+                     'worked': _('Worked') + ' (%d)' % n_ok,
+                     'failed': _('Failed') + ' (%d)' % n_bad}
             for key, pl in self._bpr_pills.items():
-                if not pl.winfo_exists():
-                    continue
-                pl.config(text=texts[key])
-                if key == flt:
-                    pl.config(bg=_TC.get('accent_lo', '#1a1024'),
-                              fg=_TC.get('purple_hi', '#c891e0'),
-                              highlightbackground=_TC.get('purple',
-                                                          '#9b59b6'))
-                else:
-                    pl.config(bg=_TC['bg_3'], fg=_TC['fg_3'],
-                              highlightbackground=_TC['border_3'])
+                if pl.winfo_exists():
+                    pl.config(text=texts[key])
+            seg = getattr(self, '_bpr_seg', None)
+            if seg is not None and seg.winfo_exists():
+                seg._paint()
         except Exception:
             pass
 
@@ -13324,157 +13322,118 @@ class ExFATBuilder(_TK_BASE):
             entries = [(i, e) for i, e in enumerate(log)
                        if e.get('status') == flt]
 
-        if not log:
-            from ui.shared.ps5_kit import scroll_empty_state
-            es = scroll_empty_state(
-                self._bpr_list_frame, icon='\U0001f4cb',
-                title=_('No backport results yet'),
-                description=_('Results appear here automatically after '
-                              'each backport run.'),
-                height=260)
+        BG2 = _TC['bg_2']
+        pad_r = (0, _px(16))
+        if not log or not entries:
+            holder = _Card(self._bpr_list_frame, padding=0)
+            holder.pack(fill='x', padx=pad_r)
+            if not log:
+                es = _Empty(holder, icon='checklist',
+                            title=_('No backport results yet'),
+                            text=_('Results appear here automatically after '
+                                   'each backport run.'),
+                            action=(_('Add manually'),
+                                    self._bpr_add_manual, 'plus'),
+                            bg=BG2)
+            else:
+                es = _Empty(holder, icon='filter',
+                            title=_('No results match the current filter.'),
+                            text='', bg=BG2)
+            es.configure(height=_px(280))
             es.pack(fill='x')
-            return
-        if not entries:
-            tk.Label(self._bpr_list_frame,
-                     text=_('No results match the current filter.'),
-                     font=_TF['body'],
-                     bg=_TC['bg_1'], fg=_TC['fg_5'],
-                     pady=30).pack(fill='x')
+            holder.raise_decorations()
             return
 
         import re as _re
-        for i, entry in entries:
+        card = _Card(self._bpr_list_frame, padding=0)
+        card.pack(fill='x', padx=pad_r)
+        badge_spec = {
+            'pending': (_('Pending'), 'neutral', 'clock'),
+            'worked':  (_('Worked'), 'success', None),
+            'failed':  (_('Didn’t work'), 'danger', None),
+        }
+        for n, (i, entry) in enumerate(entries):
             game    = entry.get('game', 'Unknown')
             status  = entry.get('status', 'pending')
             orig_z  = entry.get('orig_zip', '')
             pat_z   = entry.get('pat_zip', '')
             ts      = entry.get('ts', '')
 
-            schemes = {
-                'pending': (_TC['warn'],    _TC['warn_bg'],
-                            '\u23f3 ' + _('Pending')),
-                'worked':  (_TC['success'], _TC['success_bg'],
-                            '\u2713 ' + _('Worked')),
-                'failed':  (_TC['danger'],  _TC['danger_bg'],
-                            '\u2715 ' + _('Didn\u2019t work')),
-            }
-            edge, badge_bg, badge_text = schemes.get(
-                status, schemes['pending'])
-            badge_fg = {'pending': _TC['warn_hi'],
-                        'worked': _TC['success_hi'],
-                        'failed': _TC['danger_hi']}.get(status,
-                                                        _TC['warn_hi'])
+            if n:
+                _Div(card, color=_TC['border_1']).pack(fill='x')
+            row = tk.Frame(card, bg=BG2)
+            row.pack(fill='x', padx=_px(16), pady=_px(14))
 
-            card = tk.Frame(self._bpr_list_frame, bg=_TC['bg_2'],
-                            highlightbackground=(
-                                edge if status != 'pending'
-                                else _TC['border_2']),
-                            highlightthickness=1)
-            card.pack(fill='x', pady=(0, 10))
-            strip = tk.Frame(card, bg=edge, width=3)
-            strip.pack(side='left', fill='y')
-            strip.pack_propagate(False)
-            inner = tk.Frame(card, bg=_TC['bg_2'])
-            inner.pack(side='left', fill='x', expand=True,
-                       padx=14, pady=12)
+            tile = _Rnd(row, bg=_TC['bg_3'], radius=8, surface=BG2)
+            tile.pack(side='left', anchor='n')
+            _Ico(tile, 'game', 20, _TC['fg_4'], _TC['bg_3']).pack(
+                padx=_px(12), pady=_px(12))
 
-            # Cover tile (placeholder — entries don't store a folder)
-            tile = tk.Label(inner, text='\U0001f3ae',
-                            font=(_TF['body'][0], 18),
-                            bg=_TC['bg_3'], fg=_TC['fg_6'],
-                            width=6, height=3,
-                            highlightbackground=_TC['border_3'],
-                            highlightthickness=1)
-            tile.pack(side='left', padx=(0, 14), anchor='n')
-
-            col = tk.Frame(inner, bg=_TC['bg_2'])
-            col.pack(side='left', fill='x', expand=True)
-
-            hdr = tk.Frame(col, bg=_TC['bg_2'])
-            hdr.pack(fill='x')
-            tk.Label(hdr, text=game,
-                     font=(_TF['body'][0], 11, 'bold'),
-                     bg=_TC['bg_2'], fg=_TC['fg_0'],
-                     anchor='w').pack(side='left')
-            tk.Label(hdr, text=' ' + badge_text + ' ',
-                     font=(_TF['mono_sm'][0], 8, 'bold'),
-                     bg=badge_bg, fg=badge_fg,
-                     padx=8, pady=2).pack(side='right')
+            side = tk.Frame(row, bg=BG2)
+            side.pack(side='right', anchor='n', padx=(_px(12), 0))
+            btext, btone, bicon = badge_spec.get(status, badge_spec['pending'])
+            _Badge(side, btext, btone, icon=bicon, surface=BG2).pack(anchor='e')
             if ts:
-                tk.Label(hdr, text=ts, font=_TF['mono_sm'],
-                         bg=_TC['bg_2'], fg=_TC['fg_5']
-                         ).pack(side='right', padx=(0, 10))
+                tk.Label(side, text=ts, font=_TF['caption'], bg=BG2,
+                         fg=_TC['fg_4']).pack(anchor='e', pady=(_px(6), 0))
 
-            # PPSA chip when the name carries one
+            col = tk.Frame(row, bg=BG2)
+            col.pack(side='left', fill='x', expand=True, padx=(_px(14), 0))
+            tk.Label(col, text=game, font=_TF['body_strong'], bg=BG2,
+                     fg=_TC['fg_0'], anchor='w', justify='left'
+                     ).pack(fill='x')
+
+            # Title ID when the name carries one
             m = _re.search(r'((?:CUSA|PPSA|PPLH)[-_ ]?\d{5})', game,
                            _re.IGNORECASE)
             if m:
-                tk.Label(col, text=' ' + m.group(1).upper() + ' ',
-                         font=(_TF['mono_sm'][0], 9, 'bold'),
-                         bg=_TC['accent_15'], fg=_TC['accent_hi'],
-                         padx=6, pady=1
-                         ).pack(anchor='w', pady=(4, 0))
+                tk.Label(col, text=m.group(1).upper(), font=_TF['code'],
+                         bg=BG2, fg=_TC['fg_3'], anchor='w'
+                         ).pack(fill='x', pady=(_px(2), 0))
 
-            # Zip chips — Originals / Backport with exists state
-            def _zip_row(label, path):
+            # Zip paths — Originals / Backport with exists state
+            zips = tk.Frame(col, bg=BG2)
+            zips.pack(fill='x', pady=(_px(8), 0))
+            zips.columnconfigure(1, weight=1)
+
+            def _zip_row(r, label, path):
                 if not path:
                     return
                 exists = os.path.isfile(path)
-                r = tk.Frame(col, bg=_TC['bg_2'])
-                r.pack(fill='x', pady=(6, 0))
-                tk.Label(r, text=label,
-                         font=(_TF['mono_sm'][0], 8, 'bold'),
-                         bg=_TC['bg_2'], fg=_TC['fg_5'],
-                         width=10, anchor='w').pack(side='left')
+                tk.Label(zips, text=label, font=_TF['caption'], bg=BG2,
+                         fg=_TC['fg_3'], anchor='w'
+                         ).grid(row=r, column=0, sticky='w',
+                                padx=(0, _px(12)), pady=_px(1))
+                cell = tk.Frame(zips, bg=BG2)
+                cell.grid(row=r, column=1, sticky='w', pady=_px(1))
                 disp = path
-                if len(disp) > 58:
-                    disp = '\u2026' + disp[-56:]
-                tk.Label(r, text=disp,
-                         font=_TF['mono_sm'],
-                         bg=_TC['bg_3'] if exists else _TC['danger_bg'],
-                         fg=_TC['fg_3'] if exists else _TC['danger_hi'],
-                         padx=6, pady=1, anchor='w'
-                         ).pack(side='left')
+                if len(disp) > 72:
+                    disp = '…' + disp[-70:]
+                pl = tk.Label(cell, text=disp, font=_TF['code'], bg=BG2,
+                              fg=_TC['fg_2'] if exists else _TC['danger_hi'],
+                              anchor='w')
+                pl.pack(side='left')
+                _Tip(pl, path)
                 if not exists:
-                    tk.Label(r, text=' ' + _('NOT FOUND'),
-                             font=(_TF['mono_sm'][0], 8, 'bold'),
-                             bg=_TC['bg_2'], fg=_TC['danger_hi']
-                             ).pack(side='left', padx=(6, 0))
+                    _Badge(cell, _('NOT FOUND').capitalize(), 'danger',
+                           surface=BG2).pack(side='left', padx=(_px(8), 0))
 
-            _zip_row(_('Original'), orig_z)
-            _zip_row(_('Backport'), pat_z)
+            _zip_row(0, _('Original'), orig_z)
+            _zip_row(1, _('Backport'), pat_z)
 
             # Action row
-            brow = tk.Frame(col, bg=_TC['bg_2'])
-            brow.pack(fill='x', pady=(10, 0))
-
-            def _abtn(parent, text, command, scheme='ghost'):
-                colors = {
-                    'ghost': (_TC['bg_3'], _TC['fg_2'],
-                              _TC['border_3']),
-                    'ok':    ('#1a3a1a', _TC['success_hi'],
-                              _TC['success']),
-                    'bad':   ('#3a1a1a', _TC['danger_hi'],
-                              _TC['danger']),
-                }[scheme]
-                return XButton(parent, text=text,
-                                 font=(_TF['button'][0], 9, 'bold'),
-                                 bg=colors[0], fg=colors[1],
-                                 activebackground=_TC['bg_4'],
-                                 activeforeground=colors[1],
-                                 relief='flat', bd=0, padx=12, pady=5,
-                                 cursor='hand2',
-                                 highlightbackground=colors[2],
-                                 highlightthickness=1,
-                                 command=command)
+            brow = tk.Frame(col, bg=BG2)
+            brow.pack(fill='x', pady=(_px(10), 0))
 
             if status == 'pending':
-                _abtn(brow, '\u2713  ' + _('It Worked'),
-                      lambda idx=i: self._bpr_set_result(idx, True),
-                      'ok').pack(side='left')
-                _abtn(brow, '\u2715  ' + _('Didn\u2019t Work'),
-                      lambda idx=i: self._bpr_set_result(idx, False),
-                      'bad').pack(side='left', padx=(6, 0))
+                _Btn(brow, text='✓  ' + _('It Worked'), size='sm',
+                     surface=BG2,
+                     command=lambda idx=i: self._bpr_set_result(idx, True)
+                     ).pack(side='left')
+                _Btn(brow, text='✕  ' + _('Didn’t Work'), size='sm',
+                     surface=BG2,
+                     command=lambda idx=i: self._bpr_set_result(idx, False)
+                     ).pack(side='left', padx=(_px(6), 0))
 
             def _open_path(path):
                 try:
@@ -13485,13 +13444,17 @@ class ExFATBuilder(_TK_BASE):
             zsrc = pat_z if (pat_z and os.path.isfile(pat_z)) else \
                 (orig_z if (orig_z and os.path.isfile(orig_z)) else '')
             if zsrc:
-                _abtn(brow, '\U0001f4c2  ' + _('Open Folder'),
-                      lambda pth=os.path.dirname(zsrc): _open_path(pth)
-                      ).pack(side='left',
-                             padx=(0 if status != 'pending' else 6, 0))
-                _abtn(brow, '\U0001f4e6  ' + _('Open ZIP'),
-                      lambda pth=zsrc: _open_path(pth)
-                      ).pack(side='left', padx=(6, 0))
+                _Btn(brow, text='\U0001f4c2  ' + _('Open Folder'), size='sm',
+                     variant='subtle', surface=BG2,
+                     command=lambda pth=os.path.dirname(zsrc): _open_path(pth)
+                     ).pack(side='left',
+                            padx=(0 if status != 'pending' else _px(6), 0))
+                _Btn(brow, text='\U0001f4e6  ' + _('Open ZIP'), size='sm',
+                     variant='subtle', surface=BG2,
+                     command=lambda pth=zsrc: _open_path(pth)
+                     ).pack(side='left', padx=(_px(6), 0))
+            if not brow.winfo_children():
+                brow.pack_forget()
 
     def _bpr_set_result(self, idx, worked):
         entry  = self._bpr_log[idx]
@@ -13757,12 +13720,12 @@ class ExFATBuilder(_TK_BASE):
         Selection switches to purple instead of accent-blue.
         """
         # Card backgrounds — design system tokens
-        idle_bg     = '#111111'  # COLORS['bg_2']
-        idle_border = '#222222'  # COLORS['border_2']
+        idle_bg     = COLORS['bg_2']
+        idle_border = COLORS['border_2']
         # Selected purple-tinted bg + purple border. Tk has no gradients,
         # so we use a flat purple-tinted dark color.
-        sel_bg      = '#1a1024'  # rgba(155,89,182,.10) approximation
-        sel_border  = '#9b59b6'  # COLORS['purple']
+        sel_bg      = COLORS['accent_08']
+        sel_border  = COLORS['accent']
 
         card = tk.Frame(self._bp_games_frame, bg=idle_bg,
                         highlightbackground=idle_border,
@@ -13780,11 +13743,11 @@ class ExFATBuilder(_TK_BASE):
         inner.pack(fill='x', padx=6, pady=6)
 
         # ── Cover thumbnail (48x48 small, matches mock .gcard .cover) ──
-        cover_lbl = tk.Label(inner, bg='#1a2540',
+        cover_lbl = tk.Label(inner, bg=COLORS['bg_3'],
                              width=4, height=2,
                              text='\U0001f3ae',
                              font=(FONTS['body'][0], 14),
-                             fg='#4a9eff',
+                             fg=COLORS['fg_4'],
                              highlightbackground=COLORS['border_3'],
                              highlightthickness=1)
         cover_lbl.pack(side='left', padx=(0, 8))
@@ -13812,8 +13775,8 @@ class ExFATBuilder(_TK_BASE):
         if len(title) > 28:
             title = title[:26] + '\u2026'
         title_lbl = tk.Label(info_f, text=title,
-                             font=(FONTS['body_strong'][0], 10),
-                             bg=idle_bg, fg='#ffffff', anchor='w')
+                             font=FONTS['body_strong'],
+                             bg=idle_bg, fg=COLORS['fg_0'], anchor='w')
         title_lbl.pack(fill='x')
         card._title_lbl = title_lbl
 
@@ -13837,13 +13800,13 @@ class ExFATBuilder(_TK_BASE):
         if sys_ver:
             # Tier-coded colors per the mock — low/mid/hi
             if sys_ver <= 4:
-                fw_bg, fw_fg = '#1a3a5c', '#58a6ff'
+                fw_bg, fw_fg = COLORS['bg_3'], COLORS['fg_2']
             elif sys_ver <= 7:
-                fw_bg, fw_fg = '#2a2a1a', '#e3b341'
+                fw_bg, fw_fg = COLORS['warn_bg'], COLORS['warn_hi']
             else:
-                fw_bg, fw_fg = '#3a1a1a', '#f85149'
+                fw_bg, fw_fg = COLORS['danger_bg'], COLORS['danger_hi']
             fw_lbl = tk.Label(info_f, text=' FW %d.xx+ ' % sys_ver,
-                              font=('Consolas', 7, 'bold'),
+                              font=FONTS['caption_strong'],
                               bg=fw_bg, fg=fw_fg)
             fw_lbl.pack(anchor='w', pady=(3, 0))
         card._fw_lbl = fw_lbl
@@ -13885,7 +13848,7 @@ class ExFATBuilder(_TK_BASE):
             if hasattr(c, '_sub_lbl') and c._sub_lbl is not None:
                 c._sub_lbl.configure(bg=c._sel_bg)
             if hasattr(c, '_arrow_lbl'):
-                c._arrow_lbl.configure(bg=c._sel_bg, fg='#9b59b6')
+                c._arrow_lbl.configure(bg=c._sel_bg, fg=COLORS['accent_hi'])
 
             self._bp_active_game = g
             # Pre-fill form fields and switch to the form sub-tab
@@ -13910,80 +13873,56 @@ class ExFATBuilder(_TK_BASE):
     def _build_bpr_panel(self, parent):
         """Build BP Results panel (embedded in Backports tab).
 
-        v3.6.0 pass: design-token chrome, All/Worked/Failed filter
-        pills, and card-style entries (see _bpr_render). The result
-        workflow (_bpr_set_result / _bpr_add_manual / _bpr_clear_done)
-        is untouched.
+        Design-system page: PageHeader with the list actions, an
+        All / Worked / Failed Segmented filter and the results card (see
+        _bpr_render). The result workflow (_bpr_set_result /
+        _bpr_add_manual / _bpr_clear_done / _bpr_clear_all) is untouched.
         """
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
+        from tkinter_theme import COLORS as _TC, px as _px
+        from ui.shared.widgets import (
+            PageHeader as _PH, Button as _Btn, Segmented as _Seg,
+            Scrollbar as _Sb)
+        from ui.shared.scroll import attach_scroll as _attach
 
-        body = tk.Frame(parent, bg=_TC['bg_1'])
-        body.pack(fill='both', expand=True, padx=24, pady=14)
+        BG1 = _TC['bg_1']
+        body = tk.Frame(parent, bg=BG1)
+        body.pack(fill='both', expand=True)
 
-        head = tk.Frame(body, bg=_TC['bg_1'])
-        head.pack(fill='x')
-        tk.Label(head, text='\U0001f4cb  ' + _('Backport Results'),
-                 font=(_TF['h2'][0], 14, 'bold'),
-                 bg=_TC['bg_1'], fg=_TC['fg_0']).pack(side='left')
+        legend = _('✓ Worked = keep backport zip, delete '
+                   'originals · ✕ Didn’t work = keep '
+                   'originals, delete backport zip')
+        legend = legend.replace('✓ ', '').replace('✕ ', '')
+        hdr = _PH(body, _('Backport Results'), legend)
+        hdr.pack(fill='x', padx=_px(24), pady=(_px(20), _px(16)))
 
-        def _hbtn(text, command, danger=False):
-            return XButton(head, text=text,
-                             font=(_TF['button'][0], 9),
-                             bg=_TC['bg_2'],
-                             fg=_TC['danger_hi'] if danger else _TC['fg_2'],
-                             activebackground=_TC['bg_3'],
-                             activeforeground=_TC['fg_0'],
-                             relief='flat', bd=0, padx=12, pady=6,
-                             cursor='hand2',
-                             highlightbackground=(_TC['danger']
-                                                  if danger
-                                                  else _TC['border_3']),
-                             highlightthickness=1,
-                             command=command)
+        _Btn(hdr.actions, text='\U0001f5d1  ' + _('Clear completed'),
+             command=self._bpr_clear_done).pack(side='right')
+        _Btn(hdr.actions, text='⌧  ' + _('Clear all (keep files)'),
+             icon='ban', command=self._bpr_clear_all
+             ).pack(side='right', padx=(0, _px(8)))
+        _Btn(hdr.actions, text=_('Add manually'), icon='plus',
+             command=self._bpr_add_manual
+             ).pack(side='right', padx=(0, _px(8)))
 
-        _hbtn('\U0001f5d1  ' + _('Clear completed'),
-              self._bpr_clear_done, danger=True).pack(side='right')
-        _hbtn('\u2327  ' + _('Clear all (keep files)'),
-              self._bpr_clear_all).pack(side='right', padx=(0, 6))
-        _hbtn('+  ' + _('Add manually'),
-              self._bpr_add_manual).pack(side='right', padx=(0, 6))
-
-        tk.Label(body,
-                 text=_('\u2713 Worked = keep backport zip, delete '
-                        'originals \u00b7 \u2715 Didn\u2019t work = keep '
-                        'originals, delete backport zip'),
-                 font=_TF['mono_sm'],
-                 bg=_TC['bg_1'], fg=_TC['fg_4'],
-                 anchor='w').pack(fill='x', pady=(4, 10))
-
-        # Filter pills — presentation-only view state
+        # Filter — presentation-only view state
         self._bpr_filter_var = tk.StringVar(value='all')
-        pills = tk.Frame(body, bg=_TC['bg_1'])
-        pills.pack(fill='x', pady=(0, 10))
-        self._bpr_pills = {}
-        for key, label in [('all', _('All')),
-                           ('worked', '\u2713 ' + _('Worked')),
-                           ('failed', '\u2715 ' + _('Failed'))]:
-            pl = tk.Label(pills, text=label,
-                          font=(_TF['mono_sm'][0], 9, 'bold'),
-                          bg=_TC['bg_3'], fg=_TC['fg_3'],
-                          padx=12, pady=4, cursor='hand2',
-                          highlightbackground=_TC['border_3'],
-                          highlightthickness=1)
-            pl.pack(side='left', padx=(0, 6))
-            pl.bind('<Button-1>',
-                    lambda e, k=key: (self._bpr_filter_var.set(k),
-                                      self._bpr_render()))
-            self._bpr_pills[key] = pl
+        frow = tk.Frame(body, bg=BG1)
+        frow.pack(fill='x', padx=_px(24), pady=(0, _px(12)))
+        seg = _Seg(frow, [('all', _('All')), ('worked', _('Worked')),
+                          ('failed', _('Failed'))],
+                   variable=self._bpr_filter_var,
+                   command=lambda _v: self._bpr_render(), bg=BG1)
+        seg.pack(side='left')
+        self._bpr_seg = seg
+        self._bpr_pills = dict(seg._btns)
 
-        list_outer = tk.Frame(body, bg=_TC['bg_1'])
-        list_outer.pack(fill='both', expand=True)
-        canvas = tk.Canvas(list_outer, bg=_TC['bg_1'],
-                           highlightthickness=0)
-        sb = XScrollbar(list_outer, command=canvas.yview,
-                          bg=_TC['bg_2'], troughcolor=_TC['bg_1'])
+        list_outer = tk.Frame(body, bg=BG1)
+        list_outer.pack(fill='both', expand=True, padx=(_px(24), _px(8)),
+                        pady=(0, _px(16)))
+        canvas = tk.Canvas(list_outer, bg=BG1, highlightthickness=0)
+        sb = _Sb(list_outer, command=canvas.yview, surface=BG1)
         canvas.configure(yscrollcommand=sb.set)
-        self._bpr_list_frame = tk.Frame(canvas, bg=_TC['bg_1'])
+        self._bpr_list_frame = tk.Frame(canvas, bg=BG1)
         win = canvas.create_window((0, 0), window=self._bpr_list_frame,
                                    anchor='nw')
         self._bpr_list_frame.bind('<Configure>', lambda e: (
@@ -13991,13 +13930,7 @@ class ExFATBuilder(_TK_BASE):
             canvas.itemconfig(win, width=canvas.winfo_width())))
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfig(win, width=e.width))
-        def _bpr_on_wheel(e, _c=canvas):
-            _c.yview_scroll(wheel_units(_c, e.delta), 'units')
-        canvas.bind('<Enter>',
-                    lambda _e, _c=canvas: _c.bind_all('<MouseWheel>',
-                                                      _bpr_on_wheel))
-        canvas.bind('<Leave>',
-                    lambda _e, _c=canvas: _c.unbind_all('<MouseWheel>'))
+        _attach(canvas)
         sb.pack(side='right', fill='y')
         canvas.pack(fill='both', expand=True)
         self._bpr_canvas = canvas
@@ -14766,75 +14699,97 @@ class ExFATBuilder(_TK_BASE):
                 % (len(games), orig_dir))
             return
 
+        from tkinter_theme import px as _px
+        from ui.shared.widgets import (
+            Button as _Btn, Check as _Chk, Scrollbar as _Sb,
+            Rounded as _Rnd, Divider as _Div)
+        from ui.shared.scroll import attach_scroll as _attach
+        BG0, BG1, BG2 = COLORS['bg_0'], COLORS['bg_1'], COLORS['bg_2']
+
         win = tk.Toplevel(self)
         win.title('Restore originals — select games')
-        win.configure(bg=BG)
-        win.geometry('640x520')
+        win.configure(bg=BG2)
+        win.geometry('640x560')
         win.transient(self)
 
-        tk.Label(win, text='Restore original files (multi-select)',
-                 font=(FONTS['body_strong'][0], 11),
-                 bg=BG, fg=TEXT).pack(anchor='w', padx=20, pady=(16, 2))
-        tk.Label(win,
-                 text='Each game is auto-matched to its saved originals zip by title-id.\nOnly games with a found backup can be ticked. Nothing on disk is deleted.',
-                 font=(FONTS['body'][0], 9), justify='left',
-                 bg=BG, fg=MUTED).pack(anchor='w', padx=20, pady=(0, 10))
-        tk.Label(win, text='Originals folder: %s' % orig_dir,
-                 font=(FONTS['code'][0], 8), bg=BG, fg=MUTED,
-                 wraplength=600, justify='left').pack(anchor='w', padx=20)
+        # Footer band first so it always stays visible.
+        footer_band = tk.Frame(win, bg=BG1)
+        footer_band.pack(side='bottom', fill='x')
+        _Div(footer_band, color=COLORS['border_2']).pack(fill='x')
+        footer = tk.Frame(footer_band, bg=BG1)
+        footer.pack(fill='x', padx=_px(24), pady=_px(12))
 
-        outer = tk.Frame(win, bg=BG)
-        outer.pack(fill='both', expand=True, padx=20, pady=10)
-        canvas = tk.Canvas(outer, bg=COLORS['bg_0'], highlightthickness=0)
-        sb = XScrollbar(outer, orient='vertical', command=canvas.yview)
-        inner = tk.Frame(canvas, bg=COLORS['bg_0'])
+        body = tk.Frame(win, bg=BG2)
+        body.pack(fill='both', expand=True, padx=_px(24),
+                  pady=(_px(20), _px(16)))
+        tk.Label(body, text='Restore original files (multi-select)',
+                 font=FONTS['title'], bg=BG2, fg=COLORS['fg_0'],
+                 anchor='w').pack(fill='x')
+        tk.Label(body,
+                 text='Each game is auto-matched to its saved originals zip by title-id.\nOnly games with a found backup can be ticked. Nothing on disk is deleted.',
+                 font=FONTS['body'], justify='left', anchor='w',
+                 bg=BG2, fg=COLORS['fg_2']).pack(fill='x', pady=(_px(6), _px(12)))
+        frow = tk.Frame(body, bg=BG2)
+        frow.pack(fill='x', pady=(0, _px(12)))
+        tk.Label(frow, text='Originals folder', font=FONTS['caption'],
+                 bg=BG2, fg=COLORS['fg_3']).pack(side='left')
+        tk.Label(frow, text=orig_dir, font=FONTS['code'], bg=BG2,
+                 fg=COLORS['fg_2'], anchor='w').pack(side='left',
+                                                     padx=(_px(8), 0))
+
+        outer = _Rnd(body, bg=BG0, border=COLORS['border_2'], radius=8,
+                     padding=_px(4), surface=BG2)
+        outer.pack(fill='both', expand=True)
+        canvas = tk.Canvas(outer, bg=BG0, highlightthickness=0)
+        sb = _Sb(outer, orient='vertical', command=canvas.yview, surface=BG0)
+        inner = tk.Frame(canvas, bg=BG0)
         inner.bind('<Configure>',
                    lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=inner, anchor='nw')
+        _iw = canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfig(_iw, width=e.width))
         canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side='left', fill='both', expand=True)
         sb.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        _attach(canvas)
 
         vars_ = []
-        for g, zp in matched:
-            row = tk.Frame(inner, bg=COLORS['bg_0'])
-            row.pack(fill='x', padx=6, pady=2)
+        for n, (g, zp) in enumerate(matched):
+            if n:
+                _Div(inner, color=COLORS['border_1']).pack(fill='x', padx=_px(8))
+            row = tk.Frame(inner, bg=BG0)
+            row.pack(fill='x', padx=_px(8), pady=_px(6))
             var = tk.BooleanVar(value=bool(zp))
-            cb = XCheck(row, variable=var, bg=COLORS['bg_0'],
-                                activebackground='#0a0a0a',
-                                selectcolor='#1a1a1a',
-                                state='normal' if zp else 'disabled')
-            cb.pack(side='left')
+            cb = _Chk(row, variable=var, surface=BG0,
+                      state='normal' if zp else 'disabled')
+            cb.pack(side='left', anchor='n')
             title = (g.get('title') or g.get('title_id')
                      or os.path.basename(g['folder'].rstrip('\\/')))
+            tcol = tk.Frame(row, bg=BG0)
+            tcol.pack(side='left', fill='x', expand=True, padx=(_px(6), 0))
+            tk.Label(tcol, text=title, font=FONTS['body'], justify='left',
+                     bg=BG0, fg=COLORS['fg_1'] if zp else COLORS['fg_3'],
+                     anchor='w').pack(fill='x')
             if zp:
-                lbl = f'{title!s}\n    ↳ {os.path.basename(zp)!s}'
-                fg = TEXT
+                tk.Label(tcol, text=os.path.basename(zp), font=FONTS['code'],
+                         bg=BG0, fg=COLORS['fg_3'], anchor='w').pack(fill='x')
             else:
-                lbl = '%s\n    ↳ (no matching originals zip found)' % title
-                fg = '#cc6666'
-            tk.Label(row, text=lbl, font=(FONTS['body'][0], 9), justify='left',
-                     bg=COLORS['bg_0'], fg=fg, anchor='w').pack(side='left',
-                                                           fill='x', padx=6)
+                tk.Label(tcol, text='(no matching originals zip found)',
+                         font=FONTS['caption'], bg=BG0,
+                         fg=COLORS['danger_hi'], anchor='w').pack(fill='x')
             vars_.append((var, g, zp))
-
-        footer = tk.Frame(win, bg=BG)
-        footer.pack(fill='x', padx=20, pady=(0, 16))
 
         def _toggle_all():
             any_off = any(not bv.get() for bv, _g, z in vars_ if z)
             for bv, _g, z in vars_:
                 if z:
                     bv.set(any_off)
-        XButton(footer, text='Select / clear all', font=(FONTS['body'][0], 9),
-                  bg=COLORS['bg_4'], fg=TEXT, relief='flat', bd=0,
-                  padx=12, pady=6, cursor='hand2',
-                  command=_toggle_all).pack(side='left')
+        _Btn(footer, text='Select / clear all', variant='subtle',
+             command=_toggle_all, surface=BG1).pack(side='left')
 
         tk.Label(footer, text='%d of %d have backups'
                  % (n_found, len(games)),
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='left',
-                                                            padx=12)
+                 font=FONTS['caption'], bg=BG1,
+                 fg=COLORS['fg_3']).pack(side='left', padx=_px(12))
 
         def _do_restore():
             picked = [(g, z) for bv, g, z in vars_ if z and bv.get()]
@@ -14873,15 +14828,10 @@ class ExFATBuilder(_TK_BASE):
                     % (ok_n, total_files, fail_n)))
             threading.Thread(target=worker, daemon=True).start()
 
-        XButton(footer, text='Restore selected',
-                  font=(FONTS['body_strong'][0], 10),
-                  bg='#9b59b6', fg=TEXT, relief='flat', bd=0,
-                  padx=16, pady=8, cursor='hand2',
-                  command=_do_restore).pack(side='right')
-        XButton(footer, text='Cancel', font=(FONTS['body'][0], 9),
-                  bg=COLORS['bg_4'], fg=TEXT, relief='flat', bd=0,
-                  padx=12, pady=8, cursor='hand2',
-                  command=win.destroy).pack(side='right', padx=(0, 8))
+        _Btn(footer, text='Restore selected', variant='primary',
+             command=_do_restore, surface=BG1).pack(side='right')
+        _Btn(footer, text='Cancel', command=win.destroy,
+             surface=BG1).pack(side='right', padx=(0, _px(8)))
 
     def _abp_browse_zip_dest(self, which='orig'):
         p = filedialog.askdirectory(
