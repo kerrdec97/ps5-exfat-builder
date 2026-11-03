@@ -5721,7 +5721,7 @@ class ExFATBuilder(_TK_BASE):
                 proc = subprocess.Popen(
                     robo_cmd, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True, encoding=_enc, errors='replace',
+                    text=True, encoding=('oem' if sys.platform.startswith('win') else 'utf-8'), errors='replace',
                     creationflags=_NO_WIN_FLAGS)
                 if isinstance(getattr(self, '_extract_active', None), dict):
                     self._extract_active['robo'] = proc
@@ -11030,14 +11030,15 @@ class ExFATBuilder(_TK_BASE):
                 if img_override:
                     build_env['EXFAT_IMGSIZEGB'] = img_override
 
-                # Encoding: 'mbcs' decodes using the system's active
-                # ANSI code page (CP1252 in the West, CP949 in Korea,
-                # CP932 in Japan, etc.) which matches what cmd.exe
-                # actually writes to its console. Forcing UTF-8 here
-                # used to lose non-Latin path characters and produced
-                # blank "PS1 not found at:" messages with the path
-                # mangled away.
-                _enc = 'mbcs' if sys.platform.startswith('win') else 'utf-8'
+                # Encoding: console programs (cmd.exe, PowerShell's host,
+                # robocopy) write to a pipe in the OEM code page, not the
+                # ANSI one ('mbcs'). Measured on Windows (CP1252 ANSI /
+                # CP437 OEM): robocopy's output only decodes correctly as
+                # 'oem' (tests/test_console_encoding_windows.py), so
+                # accented file names and localized summaries were being
+                # garbled (technical audit M10). Forcing UTF-8 is wrong
+                # too: it lost non-Latin path characters.
+                _enc = 'oem' if sys.platform.startswith('win') else 'utf-8'
                 try:
                     proc = subprocess.Popen(
                         'cmd.exe /d /s /c "' + cmd + '"',

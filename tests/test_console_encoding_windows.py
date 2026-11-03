@@ -46,7 +46,10 @@ class ConsoleEncodingProbe(unittest.TestCase):
                     txt = raw.decode(enc, errors='replace')
                 except LookupError:
                     continue
-                res[enc] = ('é' in txt) and ('fé.bin' in txt or NAME in txt)
+                # 'é' exists in both the ANSI and OEM code pages of a
+                # Western system ('ō' exists in neither and becomes '?').
+                res[enc] = ('Y?tei \u00e9\u00e8' in txt or 'f\u00e9.bin' in txt
+                            or NAME in txt)
             results[key] = res
         try:
             import ctypes
@@ -59,3 +62,7 @@ class ConsoleEncodingProbe(unittest.TestCase):
             json.dump(results, f, indent=2)
         print('CONSOLE-ENCODING', json.dumps(results))
         self.assertIn('cmd_echo', results)
+        # The build decodes its console output with the OEM code page; on a
+        # system where ANSI and OEM differ, robocopy must come back intact.
+        if results.get('acp') != results.get('oemcp'):
+            self.assertTrue(results['robocopy'].get('oem'), results)

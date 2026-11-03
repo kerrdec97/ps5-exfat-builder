@@ -390,6 +390,10 @@ def build_convert_tab(parent, app):
         try:
             kwargs = ({'creationflags': CREATE_NO_WINDOW}
                       if os.name == 'nt' else {})
+            # robocopy writes the OEM code page to a pipe (measured; see
+            # tests/test_console_encoding_windows.py).
+            if os.name == 'nt' and 'robocopy' in os.path.basename(str(cmd[0])).lower():
+                kwargs['encoding'] = 'oem'
             p = subprocess.Popen(cmd,
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT,
@@ -425,6 +429,10 @@ def build_convert_tab(parent, app):
         try:
             kwargs = ({'creationflags': CREATE_NO_WINDOW}
                       if os.name == 'nt' else {})
+            # robocopy writes the OEM code page to a pipe (measured; see
+            # tests/test_console_encoding_windows.py).
+            if os.name == 'nt' and 'robocopy' in os.path.basename(str(cmd[0])).lower():
+                kwargs['encoding'] = 'oem'
             p = subprocess.Popen(cmd,
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT,
