@@ -20,6 +20,7 @@ import ftplib
 import os
 import struct
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -202,7 +203,7 @@ def write_index(rows: list[tuple[int, int, str]], output: Path) -> None:
     tmp.replace(output)
 
 
-def build_index_local(root: Path, output: Path, allow_case_collisions: bool) -> int:
+def build_index_local(root: Path, output: Path, allow_case_collisions: bool, progress=None, stats_out=None) -> int:
     root = root.resolve()
     if not root.is_dir():
         print(f"error: root is not a directory: {root}", file=sys.stderr)
@@ -212,8 +213,16 @@ def build_index_local(root: Path, output: Path, allow_case_collisions: bool) -> 
     output_tmp = output.with_suffix(output.suffix + ".tmp")
     seen: dict[str, str] = {}
     rows: list[tuple[int, int, str]] = []
+    dirs_seen = 0
+    last_emit = 0.0
 
     for dirpath, dirnames, filenames in os.walk(root):
+        dirs_seen += 1
+        if progress is not None:
+            now = time.monotonic()
+            if now - last_emit >= 0.5 or dirs_seen % 200 == 0:
+                last_emit = now
+                progress(f"Scanning files ({dirs_seen} folders, {len(rows)} files)")
         dirnames.sort(key=str.lower)
         filenames.sort(key=str.lower)
         for filename in filenames:
@@ -243,6 +252,11 @@ def build_index_local(root: Path, output: Path, allow_case_collisions: bool) -> 
             ):
                 return 3
 
+    if stats_out is not None:
+        stats_out["folders"] = dirs_seen
+        stats_out["files"] = len(rows)
+    if progress is not None:
+        progress(f"Building index ({len(rows)} files)…")
     write_index(rows, output)
     print(f"indexed {len(rows)} files from {root}")
     print(f"wrote {output}")
@@ -340,14 +354,21 @@ def collect_ftp_rows(
     ftp: ftplib.FTP,
     root: str,
     allow_case_collisions: bool,
+    progress=None,
 ) -> tuple[int, list[tuple[int, int, str]]]:
     seen: dict[str, str] = {}
     rows: list[tuple[int, int, str]] = []
     dirs_seen = 0
     stack = [root]
+    last_emit = 0.0
     while stack:
         current = stack.pop()
         dirs_seen += 1
+        if progress is not None:
+            now = time.monotonic()
+            if now - last_emit >= 1.0 or dirs_seen % 100 == 0:
+                last_emit = now
+                progress(f"Scanning files ({dirs_seen} folders, {len(rows)} files)")
         try:
             entries = ftp_list_entries(ftp, current)
         except ftplib.error_perm as exc:
@@ -394,19 +415,30 @@ def upload_index_to_ftp(ftp: ftplib.FTP, root: str, output: Path) -> None:
     print(f"uploaded {remote_dst}")
 
 
-def build_index_ftp(root_url: str, output: Path, allow_case_collisions: bool, upload: bool) -> int:
+def build_index_ftp(root_url: str, output: Path, allow_case_collisions: bool, upload: bool, progress=None, stats_out=None) -> int:
     ftp: ftplib.FTP | None = None
     try:
         host, port, user, password, root = parse_ftp_root(root_url)
+        if progress is not None:
+            progress("Connecting to PS5…")
         ftp = ftplib.FTP()
         ftp.connect(host, port, timeout=30)
         ftp.login(user, password)
 
-        dirs_seen, rows = collect_ftp_rows(ftp, root, allow_case_collisions)
+        if progress is not None:
+            progress("Reading directory…")
+        dirs_seen, rows = collect_ftp_rows(ftp, root, allow_case_collisions, progress)
+        if stats_out is not None:
+            stats_out["folders"] = dirs_seen
+            stats_out["files"] = len(rows)
+        if progress is not None:
+            progress(f"Building index ({len(rows)} files)…")
         write_index(rows, output)
         print(f"indexed {len(rows)} files from {root_url} ({dirs_seen} directories)")
         print(f"wrote {output.resolve()}")
         if upload:
+            if progress is not None:
+                progress("Uploading to PS5…")
             upload_index_to_ftp(ftp, root, output.resolve())
         return 0
     except Exception as exc:

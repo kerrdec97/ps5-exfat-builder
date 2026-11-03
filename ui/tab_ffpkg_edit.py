@@ -26,9 +26,11 @@ import tempfile
 import subprocess
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
+# v4: all dialogs go through the themed AppDialog helpers (no messagebox).
+from ui.shared.app_dialog import app_confirm, app_danger, app_error, app_info, app_warning
 from ui.shared.empty_state import EmptyState
 
 from exfat_builder import *  # noqa: F401,F403
@@ -783,7 +785,7 @@ def _refresh(app):
         app.update_idletasks()
         rc, out = _run_ufs2(app, ['ls', img, path])
         if rc != 0:
-            messagebox.showerror(_('ls failed'),
+            app_error(app, _('ls failed'),
                 _('UFS2Tool ls failed:\n\n') + out)
             return
         # Diagnostic dump — write raw ls output to %TEMP% so we can
@@ -935,7 +937,7 @@ def _add_files(app):
     _invalidate_cache(app, app._fe_current)
     _refresh(app)
     if errors:
-        messagebox.showerror(_('Add failed'),
+        app_error(app, _('Add failed'),
             '\n'.join(errors[:5]) + ('\n...' if len(errors) > 5 else ''))
     else:
         parts = []
@@ -972,7 +974,7 @@ def _add_folder(app):
             diag_path = getattr(app, '_fe_diag_path', '')
             if diag_path:
                 err_msg += '\n\n' + _('Diagnostic log:\n') + diag_path
-            messagebox.showerror(_('Merge had errors'), err_msg)
+            app_error(app, _('Merge had errors'), err_msg)
         else:
             parts = []
             if stats['added']:    parts.append(_('added %d') % stats['added'])
@@ -986,7 +988,7 @@ def _add_folder(app):
     _invalidate_cache(app, app._fe_current)
     _refresh(app)
     if rc != 0:
-        messagebox.showerror(_('Add folder failed'), out)
+        app_error(app, _('Add folder failed'), out)
     else:
         app._fe_status_var.set(_('Added folder: ') + folder_name)
 
@@ -1152,7 +1154,7 @@ def _new_folder(app):
                                   _join_fs_path(app._fe_current, name)],
                             timeout=300)
         if rc != 0:
-            messagebox.showerror(_('Overwrite failed'),
+            app_error(app, _('Overwrite failed'),
                 _('Could not delete existing item:\n\n') + out)
             return
     dst = _join_fs_path(app._fe_current, name, '.keep')
@@ -1168,7 +1170,7 @@ def _new_folder(app):
     _invalidate_cache(app, app._fe_current)
     _refresh(app)
     if rc != 0:
-        messagebox.showerror(_('New folder failed'), out)
+        app_error(app, _('New folder failed'), out)
     else:
         app._fe_status_var.set(_('Created folder: ') + name)
 
@@ -1178,13 +1180,13 @@ def _replace_file(app):
         return
     sel = app._fe_listbox.curselection()
     if not sel:
-        messagebox.showwarning(_('No selection'),
+        app_warning(app, _('No selection'),
             _('Select a file to replace.'))
         return
     idx = sel[0]
     name, is_dir, _sz = app._fe_entries[idx]
     if is_dir or name == '..':
-        messagebox.showwarning(_('Not a file'),
+        app_warning(app, _('Not a file'),
             _('Select a file, not a folder.'))
         return
     src = filedialog.askopenfilename(
@@ -1198,7 +1200,7 @@ def _replace_file(app):
     _invalidate_cache(app, app._fe_current)
     _refresh(app)
     if rc != 0:
-        messagebox.showerror(_('Replace failed'), out)
+        app_error(app, _('Replace failed'), out)
     else:
         app._fe_status_var.set(_('Replaced: ') + name)
 
@@ -1219,10 +1221,11 @@ def _delete(app):
             targets.append((name, is_dir))
     if not targets:
         return
-    if not messagebox.askyesno(_('Delete'),
+    if not app_danger(app, _('Delete'),
             _('Delete %d item(s) from the image?\n\n') % len(targets) +
             '\n'.join(t[0] for t in targets[:10]) +
-            ('\n...' if len(targets) > 10 else '')):
+            ('\n...' if len(targets) > 10 else ''),
+            ok_label=_('Delete'), cancel_label=_('Cancel')):
         return
     img = app._fe_image_var.get()
     errors = []
@@ -1234,7 +1237,7 @@ def _delete(app):
     _invalidate_cache(app, app._fe_current)
     _refresh(app)
     if errors:
-        messagebox.showerror(_('Delete failed'),
+        app_error(app, _('Delete failed'),
             '\n'.join(errors[:5]) + ('\n...' if len(errors) > 5 else ''))
     else:
         app._fe_status_var.set(_('Deleted %d item(s)') % len(targets))
@@ -1245,7 +1248,7 @@ def _rename(app):
         return
     sel = app._fe_listbox.curselection()
     if not sel:
-        messagebox.showwarning(_('No selection'),
+        app_warning(app, _('No selection'),
             _('Select an item to rename.'))
         return
     idx = sel[0]
@@ -1271,7 +1274,7 @@ def _rename(app):
                                   _join_fs_path(app._fe_current, new_name)],
                             timeout=300)
         if rc != 0:
-            messagebox.showerror(_('Overwrite failed'),
+            app_error(app, _('Overwrite failed'),
                 _('Could not delete existing item:\n\n') + out)
             return
     img = app._fe_image_var.get()
@@ -1280,7 +1283,7 @@ def _rename(app):
     _invalidate_cache(app, app._fe_current)
     _refresh(app)
     if rc != 0:
-        messagebox.showerror(_('Rename failed'), out)
+        app_error(app, _('Rename failed'), out)
     else:
         app._fe_status_var.set(_('Renamed to: ') + new_name)
 
@@ -1352,7 +1355,7 @@ def _fetch_hex(app):
 def _has_image(app):
     img = app._fe_image_var.get()
     if not img or not os.path.isfile(img):
-        messagebox.showwarning(_('No image'),
+        app_warning(app, _('No image'),
             _('Browse for a .ffpkg image first.'))
         return False
     return True
@@ -1456,8 +1459,7 @@ def _ask_overwrite(app, name, is_dir, allow_apply_to_all=False,
     def _confirm_replace():
         """Replace entirely needs a separate confirmation step — it's
         the destructive choice and shouldn't be one click away."""
-        from tkinter import messagebox
-        if messagebox.askyesno(
+        if app_confirm(app,
                 _('Confirm Replace entirely'),
                 _('Are you sure?\n\n'
                   'The existing folder "%s" will be deleted, including '
@@ -1643,7 +1645,7 @@ def _apply_backport(app):
         if not src_path:
             return
         if not os.path.isdir(src_path):
-            messagebox.showerror(_('Bad folder'),
+            app_error(app, _('Bad folder'),
                 _('Selected path is not a folder.'))
             return
     elif kind == 'ffpkg':
@@ -1654,7 +1656,7 @@ def _apply_backport(app):
         if not src_path:
             return
         if os.path.abspath(src_path) == os.path.abspath(img):
-            messagebox.showerror(_('Same image'),
+            app_error(app, _('Same image'),
                 _('Source .ffpkg is the same file that is currently '
                   'open for editing. Pick a different image.'))
             return
@@ -1671,493 +1673,515 @@ def _apply_backport(app):
     # ── 3. Materialise source to a real folder on disk ──
     #    For 'folder' this is the path itself. For 'ffpkg' / 'exfat',
     #    extract the whole tree into a temp dir, which we'll clean up
-    #    at the end.
+    #    at the end. v4: this (and the pre-scan) runs on a background
+    #    thread so a big .ffpkg/.exfat source no longer freezes the UI;
+    #    the confirmation dialog is shown back on the Tk thread.
     app._fe_status_var.set(_('Preparing backport source...'))
-    app.update_idletasks()
-    try:
-        src_dir, cleanup_fn = _bp_materialize_source(app, kind, src_path)
-    except Exception as e:
-        messagebox.showerror(_('Source preparation failed'), str(e))
-        app._fe_status_var.set(_('Backport cancelled.'))
-        return
-    if not src_dir:
-        app._fe_status_var.set(_('Backport cancelled.'))
-        return
 
-    # ── 4. Pre-scan the materialised source ──
-    try:
-        items = _scan_backport_source(src_dir)
-    except Exception as e:
+    def _prep_worker():
         try:
-            cleanup_fn()
-        except Exception:
-            pass
-        messagebox.showerror(_('Scan failed'), str(e))
-        return
-    if not items:
+            src_dir, cleanup_fn = _bp_materialize_source(app, kind, src_path)
+        except Exception as e:
+            _m = str(e)
+            def _prep_fail(m=_m):
+                app_error(app, _('Source preparation failed'), m)
+                app._fe_status_var.set(_('Backport cancelled.'))
+            app.after(0, _prep_fail)
+            return
+        if not src_dir:
+            app.after(0, app._fe_status_var.set, _('Backport cancelled.'))
+            return
+        # ── 4. Pre-scan the materialised source ──
         try:
-            cleanup_fn()
-        except Exception:
-            pass
-        messagebox.showwarning(_('Empty backport'),
-            _('No files were found in the selected source.'))
-        return
-
-    # Confirmation — make it clear what will happen and where backups go.
-    img_dir  = os.path.dirname(img)
-    img_stem = os.path.splitext(os.path.basename(img))[0]
-    ts       = time.strftime('%Y%m%d-%H%M%S')
-    backup_zip = os.path.join(img_dir, '%s.backup-%s.zip' % (img_stem, ts))
-    kind_label = {
-        'folder': _('Folder'),
-        'ffpkg':  _('.ffpkg image'),
-        'exfat':  _('exFAT image'),
-    }.get(kind, kind)
-
-    # Pre-flight: need ~2× the image size free on the destination drive
-    # for the extracted dump + the rebuilt image. Warn if we don't have
-    # it (don't block — disk-free reporting is finicky on some FS types).
-    try:
-        img_size  = os.path.getsize(img)
-        free_now  = _bp_free_space(img_dir)
-        needed    = int(img_size * 2.1) + (64 * 1024 * 1024)   # +64MB slack
-        space_warn = ''
-        if free_now is not None and free_now < needed:
-            space_warn = ('\n\n' +
-                _('\u26a0  Low disk space warning: this needs about '
-                  '%s free on %s but only %s seems to be available. '
-                  'The rebuild may run out of space partway through.')
-                % (_bp_fmt_size(needed), img_dir, _bp_fmt_size(free_now)))
-    except Exception:
-        space_warn = ''
-        img_size   = 0
-
-    msg = (_('Apply backport to image (rebuild)?') + '\n\n' +
-           _('Source kind: ') + kind_label + '\n' +
-           _('Source: ') + src_path + '\n' +
-           _('Target dir inside image: ') + (app._fe_current or '/') + '\n' +
-           _('Files in backport: ') + str(len(items)) + '\n\n' +
-           _('How it works:') + '\n' +
-           _('  1. The image is fully extracted to a temp folder.') + '\n' +
-           _('  2. Your backport is copied onto the extracted dump.') + '\n' +
-           _('  3. UFS2Tool newfs rebuilds the .ffpkg from scratch') + '\n' +
-           _('     \u2014 same flags as the regular Build flow.') + '\n' +
-           _('  4. The original .ffpkg is replaced atomically.') + '\n\n' +
-           _('The complete original .ffpkg will be saved as:') + '\n' +
-           backup_zip + space_warn + '\n\n' +
-           _('Nothing is overwritten in the image until the rebuild '
-             'succeeds. If the rebuild fails, your original .ffpkg '
-             'stays as it was.'))
-    if not messagebox.askyesno(_('Apply backport (rebuild)'), msg):
-        try:
-            cleanup_fn()
-        except Exception:
-            pass
-        return
-
-    app._fe_status_var.set(_('Preparing rebuild...'))
-    app.update_idletasks()
-
-    # ── Progress dialog ──
-    prog = _RebuildProgress(app, _('Apply backport — rebuild'))
-
-    def _bg():
-        stats = {
-            'extracted_files': 0,
-            'overlay_added':   0,
-            'overlay_replaced': 0,
-            'errors':          [],
-            'rebuilt':         False,
-            'swapped':         False,
-            'extract_errors':  0,
-        }
-
-        # Working dirs:
-        #   work_dir/dump/    — extracted contents of the original image
-        #   work_dir/new.img  — rebuilt image (renamed to .ffpkg on success)
-        work_dir = tempfile.mkdtemp(prefix='ffpkg_rebuild_')
-        dump_dir = os.path.join(work_dir, 'dump')
-        new_img  = os.path.join(work_dir, 'new.ffpkg')
-
-        # Shared flag for the background poll thread so we can shut it
-        # down between stages without leaking a thread.
-        poll_state = {'stop': False, 'dir': None, 'cb': None}
-
-        def _poll_loop():
-            """Counts files+dirs under poll_state['dir'] and pushes the
-            count to whatever callback poll_state['cb'] is set to. Used
-            for the extract stage (we don't get progress from UFS2Tool
-            itself, so we just watch the disk fill up)."""
-            import time as _t
-            while not poll_state['stop']:
-                d  = poll_state['dir']
-                cb = poll_state['cb']
-                if d and cb and os.path.isdir(d):
-                    try:
-                        n_files = 0
-                        n_bytes = 0
-                        for _r, _ds, _fs in os.walk(d):
-                            n_files += len(_fs)
-                            for f in _fs:
-                                try:
-                                    n_bytes += os.path.getsize(
-                                        os.path.join(_r, f))
-                                except Exception:
-                                    pass
-                        cb(n_files, n_bytes)
-                    except Exception:
-                        pass
-                _t.sleep(0.7)
-
-        poll_thread = threading.Thread(target=_poll_loop, daemon=True,
-            name='ffpkg-rebuild-poll')
-        poll_thread.start()
-
-        def _cleanup_work():
-            try:
-                import shutil as _sh
-                _sh.rmtree(work_dir, ignore_errors=True)
-            except Exception:
-                pass
-
-        try:
-            # ── Step 1: zip the original .ffpkg as the user's safety net ──
-            app.after(0, prog.set_stage, 'backup',
-                _('Backing up original .ffpkg...'))
-            app.after(0, app._fe_status_var.set,
-                _('Backing up original .ffpkg...'))
-            try:
-                img_size_for_progress = os.path.getsize(img)
-            except Exception:
-                img_size_for_progress = 0
-            try:
-                _bp_zip_single_file(img, backup_zip,
-                    progress_cb=lambda done, total: app.after(0,
-                        prog.set_stage_progress,
-                        (done * 100.0 / total) if total else 100.0,
-                        _('%s / %s') % (_bp_fmt_size(done),
-                                        _bp_fmt_size(total))))
-            except Exception as e:
-                raise RuntimeError(
-                    _('Failed to back up original image: ') + str(e))
-            app.after(0, prog.set_stage_progress, 100.0)
-
-            # ── Step 2: extract the whole image to dump_dir ──
-            app.after(0, prog.set_stage, 'extract',
-                _('Extracting image (this can take a while)...'))
-            app.after(0, app._fe_status_var.set,
-                _('Extracting image...'))
-            os.makedirs(dump_dir, exist_ok=True)
-
-            # Estimate target size for the extract progress bar from
-            # the image size — the on-disk dump will end up slightly
-            # smaller (no filesystem overhead) but it's a reasonable
-            # ceiling for the bar.
-            ex_target_bytes = max(1, img_size_for_progress)
-            def _extract_progress_cb(n_files, n_bytes):
-                pct = (n_bytes * 100.0 / ex_target_bytes) if ex_target_bytes \
-                                                          else 0.0
-                pct = max(0.0, min(99.0, pct))   # never hit 100 here
-                app.after(0, prog.set_stage_progress, pct,
-                    _('%(files)d files extracted  •  %(bytes)s')
-                    % {'files': n_files, 'bytes': _bp_fmt_size(n_bytes)})
-
-            poll_state['dir'] = dump_dir
-            poll_state['cb']  = _extract_progress_cb
-
-            ex_rc, ex_out = _run_ufs2(app, ['extract', img, dump_dir],
-                                       timeout=3600)
-            if ex_rc != 0:
-                ex_rc, ex_out = _run_ufs2(app,
-                    ['extract', img, dump_dir, '/'], timeout=3600)
-
-            # Detach poll from extract dir before reading final count.
-            poll_state['cb'] = None
-            if ex_rc != 0:
-                raise RuntimeError(
-                    _('Image extraction failed: ') +
-                    (ex_out or '').strip()[:500])
-            # Final count for the summary dialog.
-            extracted_count = 0
-            try:
-                for _r, _d, _fs in os.walk(dump_dir):
-                    extracted_count += len(_fs)
-            except Exception:
-                pass
-            stats['extracted_files'] = extracted_count
-            stats['extract_errors']  = 0
-            if extracted_count == 0:
-                raise RuntimeError(
-                    _('Image extraction produced no files. ') +
-                    _('Cannot rebuild.'))
-            app.after(0, prog.set_stage_progress, 100.0,
-                _('%d files extracted') % extracted_count)
-
-            # ── Step 3: overlay the backport onto dump_dir ──
-            app.after(0, prog.set_stage, 'overlay',
-                _('Applying backport to extracted dump...'))
-            app.after(0, app._fe_status_var.set,
-                _('Applying backport to extracted dump...'))
-            base_fs_dir = app._fe_current or '/'
-            anchor_rel = base_fs_dir.strip('/').replace('/', os.sep)
-            anchor_abs = (os.path.join(dump_dir, anchor_rel)
-                          if anchor_rel else dump_dir)
-            try:
-                _bp_overlay_into_dump(items, anchor_abs, stats,
-                    progress_cb=lambda done, total, name: app.after(0,
-                        prog.set_stage_progress,
-                        (done * 100.0 / total) if total else 100.0,
-                        _('%(done)d / %(total)d  •  %(name)s')
-                        % {'done': done, 'total': total,
-                           'name': name[-48:]}))
-            except Exception as e:
-                raise RuntimeError(
-                    _('Overlay failed: ') + str(e))
-            app.after(0, prog.set_stage_progress, 100.0)
-
-            # ── Step 4: newfs ──
-            app.after(0, prog.set_stage, 'init',
-                _('Rebuilding .ffpkg with UFS2Tool newfs...'))
-            app.after(0, app._fe_status_var.set,
-                _('Rebuilding .ffpkg with UFS2Tool newfs...'))
-            exe = _ufs2_exe(app)
-
-            def _adv(attr, default):
-                v = getattr(app, attr, None)
-                if v is None:
-                    return default
-                try:
-                    s = v.get() if hasattr(v, 'get') else v
-                except Exception:
-                    return default
-                return (s or default)
-            block = _adv('_adv_ffpkg_block_var',   '65536')
-            frag  = _adv('_adv_ffpkg_frag_var',    '65536')
-            minfr = _adv('_adv_ffpkg_minfree_var', '0')
-            inode = _adv('_adv_ffpkg_inode_var',   '262144')
-            try:
-                if int(frag) > int(block):
-                    frag = block
-            except Exception:
-                frag = block
-
-            cmd = [exe, 'newfs',
-                   '-O', '2',
-                   '-b', block,
-                   '-f', frag,
-                   '-m', minfr,
-                   '-S', '512',
-                   '-i', inode,
-                   '-D', dump_dir,
-                   new_img]
-
-            # Stream the newfs output so we can drive the progress bar
-            # off UFS2Tool's own "%" reports rather than just guessing.
-            try:
-                p = subprocess.Popen(cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True, encoding='utf-8', errors='replace',
-                    bufsize=1,
-                    creationflags=_NO_WIN_FLAGS)
-            except Exception as e:
-                raise RuntimeError(_('newfs launch failed: ') + str(e))
-
-            captured_tail = []
-            newfs_stage = 'init'   # local — switches to 'files' when we
-                                   # see "Adding files to image"
-            try:
-                for raw in iter(p.stdout.readline, ''):
-                    line = raw.rstrip('\r\n')
-                    if not line:
-                        continue
-                    # Keep a rolling tail for the failure message.
-                    captured_tail.append(line)
-                    if len(captured_tail) > 50:
-                        del captured_tail[:-50]
-
-                    stripped = line.strip()
-
-                    # Stage transitions
-                    if 'Writing cylinder groups' in stripped:
-                        newfs_stage = 'init'
-                        app.after(0, prog.set_stage, 'init',
-                            _('Writing filesystem structure...'))
-                    elif 'Adding files to image' in stripped:
-                        newfs_stage = 'files'
-                        app.after(0, prog.set_stage, 'files',
-                            _('Copying files into image...'))
-                    elif 'Populated image with' in stripped \
-                            or 'Image created successfully' in stripped:
-                        app.after(0, prog.set_stage_progress, 100.0,
-                            _('Image created, finalising...'))
-
-                    # Percentage parsing — uses the existing UFS2Tool
-                    # output format "<stage>... NN% (...)".
-                    import re as _re
-                    m = _re.search(r'(\d{1,3})\s*%', stripped)
-                    if not m:
-                        continue
-                    raw_pct = max(0, min(100, int(m.group(1))))
-
-                    # File counts and byte progress
-                    mf = _re.search(r'\((\d+)\s*/\s*(\d+)\s+files?',
-                                     stripped)
-                    files_done = files_total = 0
-                    if mf:
-                        files_done  = int(mf.group(1))
-                        files_total = int(mf.group(2))
-                    mg = _re.search(
-                        r'([\d.]+)\s*GiB\s*/\s*([\d.]+)\s*GiB',
-                        stripped)
-                    written_gib = total_gib = 0.0
-                    if mg:
-                        written_gib = float(mg.group(1))
-                        total_gib   = float(mg.group(2))
-
-                    if newfs_stage == 'init':
-                        app.after(0, prog.set_stage_progress,
-                            float(raw_pct),
-                            _('Initialising filesystem... %d%%') % raw_pct)
-                    elif newfs_stage == 'files':
-                        # Build the detail line from whatever fields we
-                        # managed to parse.
-                        bits = []
-                        if files_total > 0:
-                            bits.append('%d / %d files'
-                                        % (files_done, files_total))
-                        if total_gib > 0:
-                            bits.append('%.2f GB / %.2f GB'
-                                        % (written_gib, total_gib))
-                        detail = '  •  '.join(bits) if bits \
-                                                   else '%d%%' % raw_pct
-                        app.after(0, prog.set_stage_progress,
-                            float(raw_pct), detail)
-            finally:
-                # Drain any remaining output and wait.
-                try:
-                    rest = p.stdout.read()
-                    if rest:
-                        captured_tail.extend(rest.splitlines())
-                except Exception:
-                    pass
-                try:
-                    rc_newfs = p.wait(timeout=60)
-                except Exception:
-                    p.kill()
-                    rc_newfs = -1
-
-            if rc_newfs != 0:
-                raise RuntimeError(
-                    _('newfs failed: ') +
-                    '\n'.join(captured_tail[-10:])[:800])
-            if not os.path.isfile(new_img) or os.path.getsize(new_img) == 0:
-                raise RuntimeError(
-                    _('newfs reported success but the output file is '
-                      'missing or empty.'))
-            stats['rebuilt'] = True
-            app.after(0, prog.set_stage_progress, 100.0,
-                _('Image built'))
-
-            # ── Step 5: atomic swap ──
-            app.after(0, prog.set_stage, 'swap',
-                _('Swapping in the rebuilt image...'))
-            app.after(0, app._fe_status_var.set,
-                _('Swapping in the rebuilt image...'))
-            try:
-                _bp_atomic_swap(new_img, img)
-                stats['swapped'] = True
-                app.after(0, prog.set_stage_progress, 100.0,
-                    _('Done.'))
-            except Exception as e:
-                raise RuntimeError(
-                    _('Could not swap in the rebuilt image: ') + str(e) +
-                    '\n\n' +
-                    _('The rebuilt image is at:\n') + new_img + '\n' +
-                    _('Your original .ffpkg is unchanged and the backup '
-                      'is at:\n') + backup_zip)
-
-        except Exception as fatal_e:
-            stats['errors'].append(str(fatal_e))
-
-        finally:
-            # Stop the poll thread.
-            poll_state['stop'] = True
-            # Keep the work dir if newfs succeeded but the swap failed
-            # so the user can manually retrieve the rebuilt image.
-            if not (stats['rebuilt'] and not stats['swapped']):
-                _cleanup_work()
+            items = _scan_backport_source(src_dir)
+        except Exception as e:
             try:
                 cleanup_fn()
             except Exception:
                 pass
-
-        def _done():
-            # Close the progress dialog first so the final messagebox
-            # doesn't end up underneath it.
+            _m = str(e)
+            def _scan_fail(m=_m):
+                app_error(app, _('Scan failed'), m)
+                app._fe_status_var.set(_('Backport cancelled.'))
+            app.after(0, _scan_fail)
+            return
+        if not items:
             try:
-                prog.close()
+                cleanup_fn()
             except Exception:
                 pass
-            _invalidate_cache(app, app._fe_current)
-            _refresh(app)
+            def _empty():
+                app_warning(app, _('Empty backport'),
+                    _('No files were found in the selected source.'))
+                app._fe_status_var.set(_('Backport cancelled.'))
+            app.after(0, _empty)
+            return
+        app.after(0, lambda: _confirm_and_run(src_dir, cleanup_fn, items))
 
-            if stats['swapped']:
-                app._fe_status_var.set(
-                    _('Backport applied: ') +
-                    _('rebuilt OK (%d files)') % stats['extracted_files'])
-            else:
-                app._fe_status_var.set(_('Backport failed.'))
+    def _confirm_and_run(src_dir, cleanup_fn, items):
+        # Confirmation — make it clear what will happen and where backups go.
+        img_dir  = os.path.dirname(img)
+        img_stem = os.path.splitext(os.path.basename(img))[0]
+        ts       = time.strftime('%Y%m%d-%H%M%S')
+        backup_zip = os.path.join(img_dir, '%s.backup-%s.zip' % (img_stem, ts))
+        kind_label = {
+            'folder': _('Folder'),
+            'ffpkg':  _('.ffpkg image'),
+            'exfat':  _('exFAT image'),
+        }.get(kind, kind)
 
-            # Final dialog
-            lines = []
-            if stats['swapped']:
-                lines.append(_('Backport applied via rebuild.'))
-                lines.append('')
-                lines.append(_('Files in rebuilt image: ') +
-                             str(stats['extracted_files']))
-                lines.append(_('Files newly added by backport: ') +
-                             str(stats['overlay_added']))
-                lines.append(_('Files replaced by backport: ') +
-                             str(stats['overlay_replaced']))
-                lines.append('')
-                lines.append(_('Original .ffpkg saved as:'))
-                lines.append(backup_zip)
-                if stats['extract_errors']:
+        # Pre-flight: need ~2× the image size free on the destination drive
+        # for the extracted dump + the rebuilt image. Warn if we don't have
+        # it (don't block — disk-free reporting is finicky on some FS types).
+        try:
+            img_size  = os.path.getsize(img)
+            free_now  = _bp_free_space(img_dir)
+            needed    = int(img_size * 2.1) + (64 * 1024 * 1024)   # +64MB slack
+            space_warn = ''
+            if free_now is not None and free_now < needed:
+                space_warn = ('\n\n' +
+                    _('\u26a0  Low disk space warning: this needs about '
+                      '%s free on %s but only %s seems to be available. '
+                      'The rebuild may run out of space partway through.')
+                    % (_bp_fmt_size(needed), img_dir, _bp_fmt_size(free_now)))
+        except Exception:
+            space_warn = ''
+            img_size   = 0
+
+        msg = (_('Apply backport to image (rebuild)?') + '\n\n' +
+               _('Source kind: ') + kind_label + '\n' +
+               _('Source: ') + src_path + '\n' +
+               _('Target dir inside image: ') + (app._fe_current or '/') + '\n' +
+               _('Files in backport: ') + str(len(items)) + '\n\n' +
+               _('How it works:') + '\n' +
+               _('  1. The image is fully extracted to a temp folder.') + '\n' +
+               _('  2. Your backport is copied onto the extracted dump.') + '\n' +
+               _('  3. UFS2Tool newfs rebuilds the .ffpkg from scratch') + '\n' +
+               _('     \u2014 same flags as the regular Build flow.') + '\n' +
+               _('  4. The original .ffpkg is replaced atomically.') + '\n\n' +
+               _('The complete original .ffpkg will be saved as a backup '
+                 '(shown below).') + '\n\n' +
+               _('Nothing is overwritten in the image until the rebuild '
+                 'succeeds. If the rebuild fails, your original .ffpkg '
+                 'stays as it was.'))
+        # Backup path goes in the dialog's detail slot (monospace), the
+        # low-space warning (if any) in its note slot.
+        if not app_confirm(app, _('Apply backport (rebuild)'), msg,
+                           detail=backup_zip,
+                           note=space_warn.strip() or None,
+                           ok_label=_('Apply backport'),
+                           cancel_label=_('Cancel')):
+            try:
+                cleanup_fn()
+            except Exception:
+                pass
+            return
+
+        app._fe_status_var.set(_('Preparing rebuild...'))
+        app.update_idletasks()
+
+        # ── Progress dialog ──
+        prog = _RebuildProgress(app, _('Apply backport — rebuild'))
+
+        def _bg():
+            stats = {
+                'extracted_files': 0,
+                'overlay_added':   0,
+                'overlay_replaced': 0,
+                'errors':          [],
+                'rebuilt':         False,
+                'swapped':         False,
+                'extract_errors':  0,
+            }
+
+            # Working dirs:
+            #   work_dir/dump/    — extracted contents of the original image
+            #   work_dir/new.img  — rebuilt image (renamed to .ffpkg on success)
+            work_dir = tempfile.mkdtemp(prefix='ffpkg_rebuild_')
+            dump_dir = os.path.join(work_dir, 'dump')
+            new_img  = os.path.join(work_dir, 'new.ffpkg')
+
+            # Shared flag for the background poll thread so we can shut it
+            # down between stages without leaking a thread.
+            poll_state = {'stop': False, 'dir': None, 'cb': None}
+
+            def _poll_loop():
+                """Counts files+dirs under poll_state['dir'] and pushes the
+                count to whatever callback poll_state['cb'] is set to. Used
+                for the extract stage (we don't get progress from UFS2Tool
+                itself, so we just watch the disk fill up)."""
+                import time as _t
+                while not poll_state['stop']:
+                    d  = poll_state['dir']
+                    cb = poll_state['cb']
+                    if d and cb and os.path.isdir(d):
+                        try:
+                            n_files = 0
+                            n_bytes = 0
+                            for _r, _ds, _fs in os.walk(d):
+                                n_files += len(_fs)
+                                for f in _fs:
+                                    try:
+                                        n_bytes += os.path.getsize(
+                                            os.path.join(_r, f))
+                                    except Exception:
+                                        pass
+                            cb(n_files, n_bytes)
+                        except Exception:
+                            pass
+                    _t.sleep(0.7)
+
+            poll_thread = threading.Thread(target=_poll_loop, daemon=True,
+                name='ffpkg-rebuild-poll')
+            poll_thread.start()
+
+            def _cleanup_work():
+                try:
+                    import shutil as _sh
+                    _sh.rmtree(work_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+            try:
+                # ── Step 1: zip the original .ffpkg as the user's safety net ──
+                app.after(0, prog.set_stage, 'backup',
+                    _('Backing up original .ffpkg...'))
+                app.after(0, app._fe_status_var.set,
+                    _('Backing up original .ffpkg...'))
+                try:
+                    img_size_for_progress = os.path.getsize(img)
+                except Exception:
+                    img_size_for_progress = 0
+                try:
+                    _bp_zip_single_file(img, backup_zip,
+                        progress_cb=lambda done, total: app.after(0,
+                            prog.set_stage_progress,
+                            (done * 100.0 / total) if total else 100.0,
+                            _('%s / %s') % (_bp_fmt_size(done),
+                                            _bp_fmt_size(total))))
+                except Exception as e:
+                    raise RuntimeError(
+                        _('Failed to back up original image: ') + str(e))
+                app.after(0, prog.set_stage_progress, 100.0)
+
+                # ── Step 2: extract the whole image to dump_dir ──
+                app.after(0, prog.set_stage, 'extract',
+                    _('Extracting image (this can take a while)...'))
+                app.after(0, app._fe_status_var.set,
+                    _('Extracting image...'))
+                os.makedirs(dump_dir, exist_ok=True)
+
+                # Estimate target size for the extract progress bar from
+                # the image size — the on-disk dump will end up slightly
+                # smaller (no filesystem overhead) but it's a reasonable
+                # ceiling for the bar.
+                ex_target_bytes = max(1, img_size_for_progress)
+                def _extract_progress_cb(n_files, n_bytes):
+                    pct = (n_bytes * 100.0 / ex_target_bytes) if ex_target_bytes \
+                                                              else 0.0
+                    pct = max(0.0, min(99.0, pct))   # never hit 100 here
+                    app.after(0, prog.set_stage_progress, pct,
+                        _('%(files)d files extracted  •  %(bytes)s')
+                        % {'files': n_files, 'bytes': _bp_fmt_size(n_bytes)})
+
+                poll_state['dir'] = dump_dir
+                poll_state['cb']  = _extract_progress_cb
+
+                ex_rc, ex_out = _run_ufs2(app, ['extract', img, dump_dir],
+                                           timeout=3600)
+                if ex_rc != 0:
+                    ex_rc, ex_out = _run_ufs2(app,
+                        ['extract', img, dump_dir, '/'], timeout=3600)
+
+                # Detach poll from extract dir before reading final count.
+                poll_state['cb'] = None
+                if ex_rc != 0:
+                    raise RuntimeError(
+                        _('Image extraction failed: ') +
+                        (ex_out or '').strip()[:500])
+                # Final count for the summary dialog.
+                extracted_count = 0
+                try:
+                    for _r, _d, _fs in os.walk(dump_dir):
+                        extracted_count += len(_fs)
+                except Exception:
+                    pass
+                stats['extracted_files'] = extracted_count
+                stats['extract_errors']  = 0
+                if extracted_count == 0:
+                    raise RuntimeError(
+                        _('Image extraction produced no files. ') +
+                        _('Cannot rebuild.'))
+                app.after(0, prog.set_stage_progress, 100.0,
+                    _('%d files extracted') % extracted_count)
+
+                # ── Step 3: overlay the backport onto dump_dir ──
+                app.after(0, prog.set_stage, 'overlay',
+                    _('Applying backport to extracted dump...'))
+                app.after(0, app._fe_status_var.set,
+                    _('Applying backport to extracted dump...'))
+                base_fs_dir = app._fe_current or '/'
+                anchor_rel = base_fs_dir.strip('/').replace('/', os.sep)
+                anchor_abs = (os.path.join(dump_dir, anchor_rel)
+                              if anchor_rel else dump_dir)
+                try:
+                    _bp_overlay_into_dump(items, anchor_abs, stats,
+                        progress_cb=lambda done, total, name: app.after(0,
+                            prog.set_stage_progress,
+                            (done * 100.0 / total) if total else 100.0,
+                            _('%(done)d / %(total)d  •  %(name)s')
+                            % {'done': done, 'total': total,
+                               'name': name[-48:]}))
+                except Exception as e:
+                    raise RuntimeError(
+                        _('Overlay failed: ') + str(e))
+                app.after(0, prog.set_stage_progress, 100.0)
+
+                # ── Step 4: newfs ──
+                app.after(0, prog.set_stage, 'init',
+                    _('Rebuilding .ffpkg with UFS2Tool newfs...'))
+                app.after(0, app._fe_status_var.set,
+                    _('Rebuilding .ffpkg with UFS2Tool newfs...'))
+                exe = _ufs2_exe(app)
+
+                def _adv(attr, default):
+                    v = getattr(app, attr, None)
+                    if v is None:
+                        return default
+                    try:
+                        s = v.get() if hasattr(v, 'get') else v
+                    except Exception:
+                        return default
+                    return (s or default)
+                block = _adv('_adv_ffpkg_block_var',   '65536')
+                frag  = _adv('_adv_ffpkg_frag_var',    '65536')
+                minfr = _adv('_adv_ffpkg_minfree_var', '0')
+                inode = _adv('_adv_ffpkg_inode_var',   '262144')
+                try:
+                    if int(frag) > int(block):
+                        frag = block
+                except Exception:
+                    frag = block
+
+                cmd = [exe, 'newfs',
+                       '-O', '2',
+                       '-b', block,
+                       '-f', frag,
+                       '-m', minfr,
+                       '-S', '512',
+                       '-i', inode,
+                       '-D', dump_dir,
+                       new_img]
+
+                # Stream the newfs output so we can drive the progress bar
+                # off UFS2Tool's own "%" reports rather than just guessing.
+                try:
+                    p = subprocess.Popen(cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True, encoding='utf-8', errors='replace',
+                        bufsize=1,
+                        creationflags=_NO_WIN_FLAGS)
+                except Exception as e:
+                    raise RuntimeError(_('newfs launch failed: ') + str(e))
+
+                captured_tail = []
+                newfs_stage = 'init'   # local — switches to 'files' when we
+                                       # see "Adding files to image"
+                try:
+                    for raw in iter(p.stdout.readline, ''):
+                        line = raw.rstrip('\r\n')
+                        if not line:
+                            continue
+                        # Keep a rolling tail for the failure message.
+                        captured_tail.append(line)
+                        if len(captured_tail) > 50:
+                            del captured_tail[:-50]
+
+                        stripped = line.strip()
+
+                        # Stage transitions
+                        if 'Writing cylinder groups' in stripped:
+                            newfs_stage = 'init'
+                            app.after(0, prog.set_stage, 'init',
+                                _('Writing filesystem structure...'))
+                        elif 'Adding files to image' in stripped:
+                            newfs_stage = 'files'
+                            app.after(0, prog.set_stage, 'files',
+                                _('Copying files into image...'))
+                        elif 'Populated image with' in stripped \
+                                or 'Image created successfully' in stripped:
+                            app.after(0, prog.set_stage_progress, 100.0,
+                                _('Image created, finalising...'))
+
+                        # Percentage parsing — uses the existing UFS2Tool
+                        # output format "<stage>... NN% (...)".
+                        import re as _re
+                        m = _re.search(r'(\d{1,3})\s*%', stripped)
+                        if not m:
+                            continue
+                        raw_pct = max(0, min(100, int(m.group(1))))
+
+                        # File counts and byte progress
+                        mf = _re.search(r'\((\d+)\s*/\s*(\d+)\s+files?',
+                                         stripped)
+                        files_done = files_total = 0
+                        if mf:
+                            files_done  = int(mf.group(1))
+                            files_total = int(mf.group(2))
+                        mg = _re.search(
+                            r'([\d.]+)\s*GiB\s*/\s*([\d.]+)\s*GiB',
+                            stripped)
+                        written_gib = total_gib = 0.0
+                        if mg:
+                            written_gib = float(mg.group(1))
+                            total_gib   = float(mg.group(2))
+
+                        if newfs_stage == 'init':
+                            app.after(0, prog.set_stage_progress,
+                                float(raw_pct),
+                                _('Initialising filesystem... %d%%') % raw_pct)
+                        elif newfs_stage == 'files':
+                            # Build the detail line from whatever fields we
+                            # managed to parse.
+                            bits = []
+                            if files_total > 0:
+                                bits.append('%d / %d files'
+                                            % (files_done, files_total))
+                            if total_gib > 0:
+                                bits.append('%.2f GB / %.2f GB'
+                                            % (written_gib, total_gib))
+                            detail = '  •  '.join(bits) if bits \
+                                                       else '%d%%' % raw_pct
+                            app.after(0, prog.set_stage_progress,
+                                float(raw_pct), detail)
+                finally:
+                    # Drain any remaining output and wait.
+                    try:
+                        rest = p.stdout.read()
+                        if rest:
+                            captured_tail.extend(rest.splitlines())
+                    except Exception:
+                        pass
+                    try:
+                        rc_newfs = p.wait(timeout=60)
+                    except Exception:
+                        p.kill()
+                        rc_newfs = -1
+
+                if rc_newfs != 0:
+                    raise RuntimeError(
+                        _('newfs failed: ') +
+                        '\n'.join(captured_tail[-10:])[:800])
+                if not os.path.isfile(new_img) or os.path.getsize(new_img) == 0:
+                    raise RuntimeError(
+                        _('newfs reported success but the output file is '
+                          'missing or empty.'))
+                stats['rebuilt'] = True
+                app.after(0, prog.set_stage_progress, 100.0,
+                    _('Image built'))
+
+                # ── Step 5: atomic swap ──
+                app.after(0, prog.set_stage, 'swap',
+                    _('Swapping in the rebuilt image...'))
+                app.after(0, app._fe_status_var.set,
+                    _('Swapping in the rebuilt image...'))
+                try:
+                    _bp_atomic_swap(new_img, img)
+                    stats['swapped'] = True
+                    app.after(0, prog.set_stage_progress, 100.0,
+                        _('Done.'))
+                except Exception as e:
+                    raise RuntimeError(
+                        _('Could not swap in the rebuilt image: ') + str(e) +
+                        '\n\n' +
+                        _('The rebuilt image is at:\n') + new_img + '\n' +
+                        _('Your original .ffpkg is unchanged and the backup '
+                          'is at:\n') + backup_zip)
+
+            except Exception as fatal_e:
+                stats['errors'].append(str(fatal_e))
+
+            finally:
+                # Stop the poll thread.
+                poll_state['stop'] = True
+                # Keep the work dir if newfs succeeded but the swap failed
+                # so the user can manually retrieve the rebuilt image.
+                if not (stats['rebuilt'] and not stats['swapped']):
+                    _cleanup_work()
+                try:
+                    cleanup_fn()
+                except Exception:
+                    pass
+
+            def _done():
+                # Close the progress dialog first so the final messagebox
+                # doesn't end up underneath it.
+                try:
+                    prog.close()
+                except Exception:
+                    pass
+                _invalidate_cache(app, app._fe_current)
+                _refresh(app)
+
+                if stats['swapped']:
+                    app._fe_status_var.set(
+                        _('Backport applied: ') +
+                        _('rebuilt OK (%d files)') % stats['extracted_files'])
+                else:
+                    app._fe_status_var.set(_('Backport failed.'))
+
+                # Final dialog
+                lines = []
+                if stats['swapped']:
+                    lines.append(_('Backport applied via rebuild.'))
                     lines.append('')
-                    lines.append(_('Note: %d extraction warning(s) — '
-                                   'usually harmless but flagging in '
-                                   'case the rebuild misses content.')
-                                 % stats['extract_errors'])
-                messagebox.showinfo(_('Backport applied'),
-                    '\n'.join(lines))
-            else:
-                lines.append(_('Backport failed.'))
-                lines.append('')
-                lines.append(_('Your original .ffpkg is unchanged.'))
-                lines.append(_('Backup of the original (just in case):'))
-                lines.append(backup_zip)
-                if stats['rebuilt'] and not stats['swapped']:
+                    lines.append(_('Files in rebuilt image: ') +
+                                 str(stats['extracted_files']))
+                    lines.append(_('Files newly added by backport: ') +
+                                 str(stats['overlay_added']))
+                    lines.append(_('Files replaced by backport: ') +
+                                 str(stats['overlay_replaced']))
                     lines.append('')
-                    lines.append(_('A rebuilt image was produced but '
-                                   'could not be swapped into place. '
-                                   'It is at:'))
-                    lines.append(new_img)
-                if stats['errors']:
+                    lines.append(_('Original .ffpkg saved as:'))
+                    lines.append(backup_zip)
+                    if stats['extract_errors']:
+                        lines.append('')
+                        lines.append(_('Note: %d extraction warning(s) — '
+                                       'usually harmless but flagging in '
+                                       'case the rebuild misses content.')
+                                     % stats['extract_errors'])
+                    app_info(app, _('Backport applied'),
+                        '\n'.join(lines))
+                else:
+                    lines.append(_('Backport failed.'))
                     lines.append('')
-                    lines.append(_('First errors:'))
-                    for e in stats['errors'][:5]:
-                        lines.append('  - ' + e)
-                    if len(stats['errors']) > 5:
-                        lines.append('  ... (%d more)'
-                                     % (len(stats['errors']) - 5))
-                messagebox.showerror(_('Backport failed'),
-                    '\n'.join(lines))
+                    lines.append(_('Your original .ffpkg is unchanged.'))
+                    lines.append(_('Backup of the original (just in case):'))
+                    lines.append(backup_zip)
+                    if stats['rebuilt'] and not stats['swapped']:
+                        lines.append('')
+                        lines.append(_('A rebuilt image was produced but '
+                                       'could not be swapped into place. '
+                                       'It is at:'))
+                        lines.append(new_img)
+                    if stats['errors']:
+                        lines.append('')
+                        lines.append(_('First errors:'))
+                        for e in stats['errors'][:5]:
+                            lines.append('  - ' + e)
+                        if len(stats['errors']) > 5:
+                            lines.append('  ... (%d more)'
+                                         % (len(stats['errors']) - 5))
+                    app_error(app, _('Backport failed'),
+                        '\n'.join(lines))
 
-        app.after(0, _done)
+            app.after(0, _done)
 
-    threading.Thread(target=_bg, daemon=True,
-                     name='ffpkg-apply-backport').start()
+        threading.Thread(target=_bg, daemon=True,
+                         name='ffpkg-apply-backport').start()
+    threading.Thread(target=_prep_worker, daemon=True,
+                     name='ffpkg-bp-prep').start()
 
 
 def _scan_backport_source(src_dir):
@@ -2685,6 +2709,34 @@ def _bp_extract_ffpkg_to_temp(app, ffpkg_path):
         # specific file path. So we do a recursive walk via `ls` and
         # extract each file individually. That's also how the existing
         # hex-preview path uses it.
+        # v4: try the shared mount+robocopy engine first (fast, handles
+        # big files); fall back to the per-file walk if Dokan/UFS2Tool
+        # mount is unavailable.
+        def _mc_log(s):
+            try:
+                app._log('[BP-PREP] ' + s)
+            except Exception:
+                pass
+
+        def _mc_prog(pct, status, eta):
+            try:
+                app.after(0, app._fe_status_var.set,
+                          _('Preparing backport source... ') + (status or ''))
+            except Exception:
+                pass
+
+        try:
+            _mc = app._ffpkg_mount_copy_extract(ffpkg_path, tmp,
+                                                _mc_log, _mc_prog)
+        except Exception as _mce:
+            _mc = {'ok': False, 'error': repr(_mce)}
+        if _mc.get('ok'):
+            return tmp, _cleanup
+        _mc_log('mount-copy unavailable (%s) — falling back to per-file '
+                'UFS2Tool extraction.\n'
+                % (_mc.get('error') or
+                   ('Dokan missing' if _mc.get('dokan_missing') else
+                    'rc=%s' % _mc.get('rc'))))
         stats = {'files': 0, 'errors': []}
         _ffpkg_extract_walk(app, ffpkg_path, '/', tmp, stats)
         if not stats['files']:
@@ -3030,11 +3082,11 @@ def _compare_ffpkgs(app):
     if not b:
         return
     if os.path.abspath(a) == os.path.abspath(b):
-        messagebox.showerror(_('Same file'),
+        app_error(app, _('Same file'),
             _('Both picks are the same file. Choose two different .ffpkgs.'))
         return
 
-    if not messagebox.askyesno(_('Compare ffpkgs'),
+    if not app_confirm(app, _('Compare ffpkgs'),
         _('This will extract BOTH images to temp folders and walk every '
           'file in each, comparing sizes, hashes, and modes. It can take '
           'a while for large games (several minutes).\n\n') +
@@ -3098,7 +3150,7 @@ def _compare_ffpkgs(app):
 
             app.after(0, app._fe_status_var.set,
                 _('Compare report saved.'))
-            app.after(0, lambda: messagebox.showinfo(
+            app.after(0, lambda: app_info(app, 
                 _('Compare done'),
                 _('Report written to:\n') + report_path + '\n\n' +
                 _('Open it and look for sections marked "ONLY IN A", '
@@ -3108,7 +3160,7 @@ def _compare_ffpkgs(app):
         except Exception as e:
             app.after(0, app._fe_status_var.set,
                 _('Compare failed.'))
-            app.after(0, lambda e=e: messagebox.showerror(
+            app.after(0, lambda e=e: app_error(app, 
                 _('Compare failed'), str(e)))
         finally:
             try:

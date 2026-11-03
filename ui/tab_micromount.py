@@ -26,7 +26,9 @@ import socket
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
+
+from ui.shared.app_dialog import app_info, app_warning, app_error, app_confirm
 
 from tkinter_theme import COLORS, FONTS
 
@@ -1843,7 +1845,7 @@ def _save_locally(app):
 def _load_from_ps5(app):
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab first.')
         return
     _set_status(app, 'Fetching config from PS5\u2026', ACCENT)
@@ -1866,13 +1868,13 @@ def _load_from_ps5(app):
             if '550' in err or 'no such' in err.lower():
                 app.after(0, _set_status, app,
                     'No config on PS5 yet \u2014 push to create it', WARNING)
-                app.after(0, messagebox.showinfo, 'Not on PS5',
+                app.after(0, lambda *_a: app_info(app, *_a), 'Not on PS5',
                     REMOTE_CONFIG_PATH + ' does not exist on the PS5.\n\n'
                     'Edit the form locally and click "Push to PS5" to create it.')
             else:
                 short, title, body = _friendly_ftp_error('Load', e)
                 app.after(0, _set_status, app, short, DANGER)
-                app.after(0, messagebox.showerror, title, body)
+                app.after(0, lambda *_a: app_error(app, *_a), title, body)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -1892,7 +1894,7 @@ def _on_loaded(app, text):
 def _push_to_ps5(app):
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab first.')
         return
 
@@ -1909,12 +1911,12 @@ def _push_to_ps5(app):
             if n < 0:
                 raise ValueError('negative')
         except ValueError:
-            messagebox.showwarning('Invalid value',
+            app_warning(app, 'Invalid value',
                 '%s must be a non-negative integer. Got: %r' % (k, v))
             return
 
     ini_text = _render_ini(data)
-    if not messagebox.askyesno('Push to PS5',
+    if not app_confirm(app, 'Push to PS5',
             'Write %d bytes to:\n%s\n\nContinue?'
             % (len(ini_text), REMOTE_CONFIG_PATH)):
         return
@@ -1946,7 +1948,7 @@ def _push_to_ps5(app):
         except Exception as e:
             short, title, body = _friendly_ftp_error('Push', e)
             app.after(0, _set_status, app, short, DANGER)
-            app.after(0, messagebox.showerror, title, body)
+            app.after(0, lambda *_a: app_error(app, *_a), title, body)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -1963,14 +1965,14 @@ def _send_payload(app):
         elf_path = str(app._settings.get('mm_payload_path', '')).strip()
 
     if not elf_path or not os.path.isfile(elf_path):
-        messagebox.showwarning('Locate ELF',
+        app_warning(app, 'Locate ELF',
             'Pick the micromount.elf file first using the Browse button '
             'on the Payload section.')
         return
 
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab first.')
         return
 
@@ -1987,7 +1989,7 @@ def _send_payload(app):
     except (ValueError, TypeError):
         port = 9021
     if not (1 <= port <= 65535):
-        messagebox.showwarning('Invalid port', 'Payload port must be 1\u201365535.')
+        app_warning(app, 'Invalid port', 'Payload port must be 1\u201365535.')
         return
 
     app._settings['mm_payload_port'] = port
@@ -2032,7 +2034,7 @@ def _send_payload(app):
                         'must be running before you send an ELF.\n\n'
                         'Start your payload host on the PS5, then try again.')
             app.after(0, _set_status, app, short, DANGER)
-            app.after(0, messagebox.showerror, title, body)
+            app.after(0, lambda *_a: app_error(app, *_a), title, body)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -2040,7 +2042,7 @@ def _send_payload(app):
 def _fetch_debug_log(app):
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab first.')
         return
     _set_status(app, 'Fetching debug.log from PS5\u2026', ACCENT)
@@ -2064,13 +2066,13 @@ def _fetch_debug_log(app):
             err = str(e)
             if '550' in err or 'no such' in err.lower():
                 app.after(0, _set_status, app, 'No debug.log on PS5 yet', WARNING)
-                app.after(0, messagebox.showinfo, 'No log yet',
+                app.after(0, lambda *_a: app_info(app, *_a), 'No log yet',
                     REMOTE_DEBUG_LOG + ' does not exist.\n\n'
                     'MicroMount has not run yet, or debug=0 in the config.')
             else:
                 short, title, body = _friendly_ftp_error('Fetch', e)
                 app.after(0, _set_status, app, short, DANGER)
-                app.after(0, messagebox.showerror, title, body)
+                app.after(0, lambda *_a: app_error(app, *_a), title, body)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -2097,7 +2099,7 @@ def _show_log_window(app, text):
                 with open(p, 'w', encoding='utf-8') as f:
                     f.write(text)
             except Exception as e:
-                messagebox.showerror('Save failed', str(e))
+                app_error(app, 'Save failed', str(e))
 
     tk.Button(bar, text='Save as\u2026', command=_save_as,
               bg=SURFACE2, fg=TEXT, font=('Segoe UI', 9),

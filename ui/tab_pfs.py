@@ -26,9 +26,13 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
+from ui.shared.app_dialog import app_confirm, app_error, app_info, app_warning
 from tkinter_theme import COLORS, FONTS
+# i18n: the monolith owns the translation table. Only the page head goes
+# through it here; the rest of this tab's copy is left as-is.
+from exfat_builder import _
 from ui.shared.page_head import (
     make_themed_button, info_banner, page_head, field_block)
 from ui.shared.scroll import attach_scroll
@@ -60,8 +64,7 @@ def _check_space_or_warn(out_dir, needed_bytes, parent):
     # PFS output is usually similar size or smaller, but leave headroom.
     # Warn if free space is less than ~95% of the source (worst case: no compression).
     if free < needed_bytes * 0.95:
-        from tkinter import messagebox
-        return messagebox.askyesno(
+        return app_confirm(parent,
             'Low disk space',
             'The output drive has %s free, but the source is %s.\n\n'
             'PFS is usually similar size or smaller, but if this game '
@@ -231,8 +234,8 @@ def build_pfs_tab(parent, app):
 
     # ── Page head ────────────────────────────────────────────────────
     head = page_head(inner, '\U0001f5dc',
-                     'Build PFS Image',
-                     'Pack a game dump into a .ffpfs / .ffpfsc image for ShadowMount+ / MicroMount.')
+                     _('Build PFS image'),
+                     _('Pack a game dump into a .ffpfs / .ffpfsc image for ShadowMount+ / MicroMount.'))
     head.pack(fill='x', padx=24, pady=(14, 8))
 
     info_banner(inner,
@@ -732,13 +735,13 @@ def build_pfs_tab(parent, app):
         outdir = outdir_var.get().strip()
         name   = name_var.get().strip()
         if not src or not os.path.isdir(src):
-            messagebox.showerror('Source missing', 'Pick a valid game dump folder.')
+            app_error(parent, 'Source missing', 'Pick a valid game dump folder.')
             return None
         if not outdir or not os.path.isdir(outdir):
-            messagebox.showerror('Output folder missing', 'Pick an output folder.')
+            app_error(parent, 'Output folder missing', 'Pick an output folder.')
             return None
         if not name:
-            messagebox.showerror('Output name missing', 'Set an output filename.')
+            app_error(parent, 'Output name missing', 'Set an output filename.')
             return None
         # Output extension follows the chosen format.
         fmt = fmt_var.get()
@@ -752,7 +755,7 @@ def build_pfs_tab(parent, app):
             name += want_ext
         game_root = _find_game_root(src)
         if game_root is None:
-            if not messagebox.askyesno('No game files found',
+            if not app_confirm(parent, 'No game files found',
                     'sce_sys/param.json was not found in this folder or one level '
                     'down.\n\nThe resulting image may not mount on the PS5.\n\n'
                     'Continue anyway?'):
@@ -776,7 +779,7 @@ def build_pfs_tab(parent, app):
             pass
         if strays:
             _shown = '\n'.join('  \u2022 ' + s for s in strays[:6])
-            messagebox.showerror('Image files in the dump',
+            app_error(parent, 'Image files in the dump',
                 'The dump folder contains image file(s) that should not be '
                 'packed:\n\n%s\n\nThese are usually leftover builds. Packing '
                 'them bloats the image (or crashes on a non-ASCII name). '
@@ -789,7 +792,7 @@ def build_pfs_tab(parent, app):
             _src_abs = os.path.abspath(game_root)
             _out_abs = os.path.abspath(out_path)
             if os.path.commonpath([_src_abs, _out_abs]) == _src_abs:
-                messagebox.showerror('Output inside the dump',
+                app_error(parent, 'Output inside the dump',
                     'The output would be written inside the source dump '
                     'folder:\n\n%s\n\nThat image would get packed into your '
                     'next build. Choose an output folder outside the dump.'
@@ -817,7 +820,7 @@ def build_pfs_tab(parent, app):
 
     def _add_to_queue():
         if queue_state['running']:
-            messagebox.showinfo('Queue running',
+            app_info(parent, 'Queue running',
                 'The queue is currently building. Add jobs after it finishes, '
                 'or pause first.')
             return
@@ -827,7 +830,7 @@ def build_pfs_tab(parent, app):
         # Warn on duplicate output path
         for j in queue:
             if os.path.normpath(j['out_path']) == os.path.normpath(job['out_path']):
-                if not messagebox.askyesno('Already queued',
+                if not app_confirm(parent, 'Already queued',
                         job['name'] + ' is already in the queue. Add again?'):
                     return
                 break
@@ -854,7 +857,11 @@ def build_pfs_tab(parent, app):
         # Live file-size poller: while a step is writing, watch the target
         # file grow on disk and show it in the detail line. mkpfs goes silent
         # during the long write phase, so this gives real-time feedback.
-        poll = {'target': None, 'label': '', 'total': 0, 'on': True}
+        # The poller backs off while mkpfs itself is reporting progress so
+        # the two never fight over the detail line.
+        import time as _poll_time
+        poll = {'target': None, 'label': '', 'total': 0, 'on': True,
+                '_last_progress_ts': 0.0}
 
         def _poll_size():
             if not poll['on']:
@@ -863,6 +870,12 @@ def build_pfs_tab(parent, app):
             if tgt:
                 sz = _live_file_size(tgt)
                 if sz:
+                    # mkpfs reported progress recently -> it owns the detail
+                    # line; just keep polling without overwriting it.
+                    _since = _poll_time.time() - poll['_last_progress_ts']
+                    if _since < 3.0:
+                        parent.after(1000, _poll_size)
+                        return
                     if poll['total']:
                         pct = min(99, int(sz * 100 / poll['total']))
                         prog_b.set_detail('%s  %s / ~%s  (%d%%)'
@@ -910,6 +923,7 @@ def build_pfs_tab(parent, app):
                         'Reading source files\u2026'))
 
             def _on_progress(phase, pct, total, detail):
+                poll['_last_progress_ts'] = _poll_time.time()
                 parent.after(0, lambda ph=phase, p=pct, d=detail:
                     prog_b.update(ph, p, d))
 
@@ -1102,7 +1116,7 @@ def build_pfs_tab(parent, app):
         if not job:
             return
         if os.path.exists(job['out_path']):
-            if not messagebox.askyesno('Overwrite',
+            if not app_confirm(parent, 'Overwrite',
                     job['out_path'] + '\n\nalready exists. Overwrite?'):
                 return
         # Free-space check
@@ -1110,7 +1124,7 @@ def build_pfs_tab(parent, app):
             need = _get_folder_size(job['game_root'])
             free = _free_space(job['outdir'])
             if free is not None and free < need * 0.95:
-                if not messagebox.askyesno('Low disk space',
+                if not app_confirm(parent, 'Low disk space',
                         'Output drive free: %s\nDump size: %s\n\n'
                         'You may run out of space. Continue anyway?'
                         % (_fmt_size(free), _fmt_size(need))):
@@ -1131,9 +1145,9 @@ def build_pfs_tab(parent, app):
             except Exception:
                 pass
             if ok:
-                messagebox.showinfo('Done', 'PFS image written:\n' + job['out_path'])
+                app_info(parent, 'Done', 'PFS image written:\n' + job['out_path'])
             else:
-                messagebox.showerror('Build failed',
+                app_error(parent, 'Build failed',
                     'The build did not complete. Check the OUTPUT LOG.')
         _build_job(job, _finish)
 
@@ -1148,7 +1162,7 @@ def build_pfs_tab(parent, app):
 
     def _clear_queue():
         if queue_state['running']:
-            if not messagebox.askyesno('Stop queue',
+            if not app_confirm(parent, 'Stop queue',
                     'A build is running. Stop after the current job and clear '
                     'the rest?'):
                 return
@@ -1165,7 +1179,7 @@ def build_pfs_tab(parent, app):
             return
         pending = [j for j in queue if j['status'] in ('queued', 'failed')]
         if not pending:
-            messagebox.showinfo('Queue empty',
+            app_info(parent, 'Queue empty',
                 'Add some jobs to the queue first.')
             return
         # Reset failed back to queued for a retry run
@@ -1223,32 +1237,37 @@ def build_pfs_tab(parent, app):
         # Shutdown if the user armed the per-queue checkbox OR the global
         # PFS shutdown setting is on.
         armed = qsd_var.get()
+        _shutdown_fired = False
         if armed:
-            # Use the app's shutdown machinery if available, else a direct call
             try:
-                # Temporarily mimic the trigger: respect global action/delay
-                action = app._settings.get('shutdown_action', 'shutdown')
-                if action == 'none':
-                    action = 'shutdown'
-                delay = int(app._settings.get('shutdown_delay', 60))
-                if hasattr(app, '_shutdown_countdown') and delay > 0:
-                    labels = {'shutdown': 'Shut down', 'restart': 'Restart',
-                              'sleep': 'Sleep'}
-                    app._shutdown_countdown(action, labels.get(action, action), delay)
-                elif hasattr(app, '_execute_shutdown'):
-                    app._execute_shutdown(action)
+                # Route through the app's single shutdown path so the global
+                # action / delay / countdown all apply: force the PFS trigger on.
+                _prev = app._settings.get('shutdown_on_pfs', False)
+                app._settings['shutdown_on_pfs'] = True
+                app._trigger_shutdown('pfs')
+                app._settings['shutdown_on_pfs'] = _prev
+                # Did it actually arm something? (action 'none' = no-op, so
+                # the completion dialog should still be shown.)
+                _sd_action = app._settings.get('shutdown_action', 'none')
+                _shutdown_fired = _sd_action != 'none'
             except Exception as e:
                 app._log('[PFS] Shutdown error: ' + str(e) + '\n')
         else:
             try:
                 app._trigger_shutdown('pfs')
+                _sd_action = app._settings.get('shutdown_action', 'none')
+                _sd_on_pfs = app._settings.get('shutdown_on_pfs', False)
+                _shutdown_fired = _sd_action != 'none' and _sd_on_pfs
             except Exception:
                 pass
+        # Don't pop a modal on top of a shutdown countdown — the dialog
+        # would block the Tk loop and the countdown with it.
+        if not _shutdown_fired:
             if failed == 0:
-                messagebox.showinfo('Queue complete',
+                app_info(parent, 'Queue complete',
                     'All %d PFS image(s) built successfully.' % done)
             else:
-                messagebox.showwarning('Queue complete',
+                app_warning(parent, 'Queue complete',
                     '%d built, %d failed. Check the OUTPUT LOG.' % (done, failed))
 
     _refresh_queue()
@@ -1460,17 +1479,17 @@ def build_pfs_tab(parent, app):
         outdir = outdir_c_var.get().strip()
         name   = name_c_var.get().strip()
         if not src or not os.path.isfile(src):
-            messagebox.showerror('Source missing', 'Pick a valid .exfat or .ffpkg image.')
+            app_error(parent, 'Source missing', 'Pick a valid .exfat or .ffpkg image.')
             return
         ext = os.path.splitext(src)[1].lower()
         if ext not in ('.exfat', '.ffpkg'):
-            messagebox.showerror('Unsupported', 'Source must be a .exfat or .ffpkg image.')
+            app_error(parent, 'Unsupported', 'Source must be a .exfat or .ffpkg image.')
             return
         if not outdir or not os.path.isdir(outdir):
-            messagebox.showerror('Output folder missing', 'Pick an output folder.')
+            app_error(parent, 'Output folder missing', 'Pick an output folder.')
             return
         if not name:
-            messagebox.showerror('Output name missing', 'Set an output filename.')
+            app_error(parent, 'Output name missing', 'Set an output filename.')
             return
         if name.lower().endswith('.ffpfs'):
             name = name[:-6] + '.ffpfsc'
@@ -1489,7 +1508,7 @@ def build_pfs_tab(parent, app):
 
         if os.path.exists(out_path):
             if not cq_state['running']:
-                if not messagebox.askyesno('Overwrite',
+                if not app_confirm(parent, 'Overwrite',
                         out_path + '\n\nalready exists. Overwrite?'):
                     return
             try:
@@ -1504,7 +1523,7 @@ def build_pfs_tab(parent, app):
             src_size = os.path.getsize(src)
             free = _free_space(outdir)
             if free is not None and free < src_size and not cq_state['running']:
-                if not messagebox.askyesno('Low disk space',
+                if not app_confirm(parent, 'Low disk space',
                         'Output drive free: %s\nSource image: %s\n\n'
                         'The .ffpfsc is usually a bit smaller than the '
                         'source, but a poorly-compressing game may not '
@@ -1530,7 +1549,7 @@ def build_pfs_tab(parent, app):
             if will_copy:
                 free_t = _free_space(_check_dir)
                 if free_t is not None and free_t < src_size and not cq_state['running']:
-                    if not messagebox.askyesno('Low disk space (temp)',
+                    if not app_confirm(parent, 'Low disk space (temp)',
                             'Staging needs a temporary copy of the source on the '
                             'temp drive (%s).\n\nTemp free: %s\nSource image: %s\n\n'
                             'Tip: put the temp folder on the SAME drive as the '
@@ -1578,7 +1597,7 @@ def build_pfs_tab(parent, app):
                     parent.after(0, lambda e=e: (
                         prog_c.fail(), btn_c.config(state='normal'),
                         prog_c.set_status('Cannot create work folder', error=True),
-                        messagebox.showerror('Error', str(e))))
+                        app_error(parent, 'Error', str(e))))
                     return
 
                 _log('Packing the %s as the nested image inside the '
@@ -1597,8 +1616,11 @@ def build_pfs_tab(parent, app):
                 except Exception:
                     _cc = 1
                 _cc = max(1, _cc)
+                import time as _t_pack
+                _c_last_progress_ts = [0.0]   # last mkpfs progress callback
 
                 def _on_progress(phase, pct, total, detail):
+                    _c_last_progress_ts[0] = _t_pack.time()
                     parent.after(0, lambda ph=phase, p=pct, d=detail:
                         prog_c.update(ph, p, d))
 
@@ -1712,7 +1734,6 @@ def build_pfs_tab(parent, app):
                 _log('Pack \u2014 mkpfs ' + ' '.join(argv2))
                 parent.after(0, lambda: prog_c.update('prep', 100,
                     'Packing into .ffpfsc\u2026'))
-                import time as _t_pack
                 _pack_started = _t_pack.time()
                 # Live activity poller. mkpfs doesn't report a % while writing a
                 # single huge file, so watch the output grow and surface bytes
@@ -1724,23 +1745,40 @@ def build_pfs_tab(parent, app):
                 except Exception:
                     _src_total = 0
                 def _poll_convert():
+                    _samples = []        # (t, bytes) over a sliding window
+                    _WINDOW = 12.0       # seconds of history for the rate
                     while _poll_c['on']:
                         try:
                             cur = (os.path.getsize(out_path)
                                    if os.path.exists(out_path) else 0)
                             if cur > 0:                      # write has started
-                                el = max(0.001, _t_pack.time() - _pack_started)
-                                rate = cur / el
-                                bits = ['%s written' % _fmt_size(cur),
-                                        '%.0f MB/s' % (rate / 1048576),
-                                        'elapsed %dm%02ds' % (int(el) // 60, int(el) % 60)]
-                                if rate > 0 and _src_total and cur < _src_total:
-                                    eta = (_src_total - cur) / rate
-                                    bits.append('~%dm%02ds left (est.)'
-                                                % (int(eta) // 60, int(eta) % 60))
-                                _m = 'Writing \u00b7 ' + '  \u00b7  '.join(bits)
-                                parent.after(0, lambda mm=_m: (
-                                    prog_c.set_status(mm) if _poll_c['on'] else None))
+                                # Back off while mkpfs is reporting its own
+                                # progress (it owns the bar/detail then); only
+                                # take over once it has gone quiet.
+                                _since = _t_pack.time() - _c_last_progress_ts[0]
+                                if _since >= 3.0:
+                                    now_t = _t_pack.time()
+                                    _samples.append((now_t, cur))
+                                    # keep only the recent window
+                                    _samples = [(t, b) for t, b in _samples
+                                                if now_t - t <= _WINDOW]
+                                    el = max(0.001, now_t - _pack_started)
+                                    if len(_samples) >= 2:
+                                        dt = _samples[-1][0] - _samples[0][0]
+                                        db = _samples[-1][1] - _samples[0][1]
+                                        rate = db / max(0.001, dt)
+                                    else:
+                                        rate = cur / el
+                                    bits = ['%s written' % _fmt_size(cur),
+                                            '%.0f MB/s' % (rate / 1048576),
+                                            'elapsed %dm%02ds' % (int(el) // 60, int(el) % 60)]
+                                    if rate > 0 and _src_total and cur < _src_total:
+                                        eta = (_src_total - cur) / rate
+                                        bits.append('~%dm%02ds left (est.)'
+                                                    % (int(eta) // 60, int(eta) % 60))
+                                    _m = 'Writing \u00b7 ' + '  \u00b7  '.join(bits)
+                                    parent.after(0, lambda mm=_m: (
+                                        prog_c.set_detail(mm) if _poll_c['on'] else None))
                         except Exception:
                             pass
                         _t_pack.sleep(2)
@@ -1812,14 +1850,14 @@ def build_pfs_tab(parent, app):
                                 msg += 'Size:   %s\n' % _fmt_size(_o)
                             if _del:
                                 msg += 'Source image deleted \u2014 freed %s\n' % _fmt_size(_fr)
-                            messagebox.showinfo('Convert complete', msg)
+                            app_info(parent, 'Convert complete', msg)
                     outcome['ok'] = True
                     parent.after(0, _done_c)
                 elif disk_full['hit']:
                     parent.after(0, lambda: (
                         prog_c.fail(), btn_c.config(state='normal'),
                         prog_c.set_status('Out of disk space', error=True),
-                        (messagebox.showerror('Out of disk space',
+                        (app_error(parent, 'Out of disk space',
                             'Ran out of space during conversion. Free space or pick '
                             'another work/output drive.')
                          if not cq_state['running'] else None)))
@@ -1827,7 +1865,7 @@ def build_pfs_tab(parent, app):
                     parent.after(0, lambda: (
                         prog_c.fail(), btn_c.config(state='normal'),
                         prog_c.set_status('Failed (rc=%d) \u2014 see OUTPUT LOG' % rc, error=True),
-                        (messagebox.showerror('Failed',
+                        (app_error(parent, 'Failed',
                             'mkpfs exited with code %d.\n\nCheck OUTPUT LOG.' % rc)
                          if not cq_state['running'] else None)))
                     try:
@@ -1840,7 +1878,7 @@ def build_pfs_tab(parent, app):
                 parent.after(0, lambda e=e: (
                     prog_c.fail(), btn_c.config(state='normal'),
                     prog_c.set_status('Error: ' + str(e)[:60], error=True),
-                    (messagebox.showerror('Convert error', str(e))
+                    (app_error(parent, 'Convert error', str(e))
                      if not cq_state['running'] else None)))
             finally:
                 state_c['busy'] = False
@@ -1966,13 +2004,13 @@ def build_pfs_tab(parent, app):
         outdir = outdir_c_var.get().strip()
         name   = name_c_var.get().strip()
         if not src or not os.path.isfile(src):
-            messagebox.showerror('Source missing', 'Pick a valid .exfat or .ffpkg image.')
+            app_error(parent, 'Source missing', 'Pick a valid .exfat or .ffpkg image.')
             return
         if os.path.splitext(src)[1].lower() not in ('.exfat', '.ffpkg'):
-            messagebox.showerror('Unsupported', 'Source must be a .exfat or .ffpkg image.')
+            app_error(parent, 'Unsupported', 'Source must be a .exfat or .ffpkg image.')
             return
         if not outdir or not os.path.isdir(outdir):
-            messagebox.showerror('Output folder missing', 'Pick an output folder.')
+            app_error(parent, 'Output folder missing', 'Pick an output folder.')
             return
         if not name:
             name = os.path.splitext(os.path.basename(src))[0]
@@ -2044,7 +2082,7 @@ def build_pfs_tab(parent, app):
             _cq_render()
             done   = sum(1 for j in convert_queue if j['status'] == 'done')
             failed = sum(1 for j in convert_queue if j['status'] == 'failed')
-            messagebox.showinfo('Convert queue',
+            app_info(parent, 'Convert queue',
                 'Queue finished.\n\n%d converted, %d failed.' % (done, failed))
             try:
                 app._trigger_shutdown('pfs')
@@ -2067,7 +2105,7 @@ def build_pfs_tab(parent, app):
         if cq_state['running'] or state_c['busy']:
             return
         if not any(j['status'] in ('queued', 'failed') for j in convert_queue):
-            messagebox.showinfo('Convert queue', 'Nothing queued to convert.')
+            app_info(parent, 'Convert queue', 'Nothing queued to convert.')
             return
         for j in convert_queue:
             if j['status'] == 'failed':
@@ -2149,16 +2187,16 @@ def build_pfs_tab(parent, app):
         src    = src_e_var.get().strip()
         outdir = outdir_e_var.get().strip()
         if not src or not os.path.isfile(src):
-            messagebox.showerror('Source missing', 'Pick a valid .ffpfs or .ffpfsc image.')
+            app_error(parent, 'Source missing', 'Pick a valid .ffpfs or .ffpfsc image.')
             return
         if not outdir or not os.path.isdir(outdir):
-            messagebox.showerror('Folder missing', 'Pick a destination folder.')
+            app_error(parent, 'Folder missing', 'Pick a destination folder.')
             return
         stem = os.path.splitext(os.path.basename(src))[0]
         dest = os.path.normpath(os.path.join(outdir, stem))
         overwrite = False
         if os.path.exists(dest):
-            if not messagebox.askyesno('Folder exists',
+            if not app_confirm(parent, 'Folder exists',
                     dest + '\n\nalready exists. Overwrite its contents?'):
                 return
             overwrite = True
@@ -2184,7 +2222,7 @@ def build_pfs_tab(parent, app):
                     parent.after(0, lambda: (
                         prog_e.fail(), btn_e.config(state='normal'),
                         prog_e.set_status('mkpfs not available', error=True),
-                        messagebox.showerror('mkpfs not available',
+                        app_error(parent, 'mkpfs not available',
                             'mkpfs is not bundled in this build.')))
                     return
                 argv = ['unpack', src, dest]
@@ -2204,7 +2242,7 @@ def build_pfs_tab(parent, app):
                     parent.after(0, lambda: (
                         prog_e.done(), btn_e.config(state='normal'),
                         prog_e.set_status('Extracted %d files  \u00b7  %s' % (n, _fmt_size(sz))),
-                        messagebox.showinfo('Extraction complete',
+                        app_info(parent, 'Extraction complete',
                             'Extracted to:\n' + dest +
                             '\n\n%d files  \u00b7  %s\n\n'
                             'Edit the files, then rebuild from the Build tab.' % (n, _fmt_size(sz)))))
@@ -2212,20 +2250,20 @@ def build_pfs_tab(parent, app):
                     parent.after(0, lambda: (
                         prog_e.fail(), btn_e.config(state='normal'),
                         prog_e.set_status('Out of disk space', error=True),
-                        messagebox.showerror('Out of disk space',
+                        app_error(parent, 'Out of disk space',
                             'The drive ran out of space during extraction.')))
                 else:
                     parent.after(0, lambda: (
                         prog_e.fail(), btn_e.config(state='normal'),
                         prog_e.set_status('Extraction failed (rc=%d)' % rc, error=True),
-                        messagebox.showerror('Extraction failed',
+                        app_error(parent, 'Extraction failed',
                             'mkpfs exited with code %d.\n\nCheck OUTPUT LOG.' % rc)))
             except Exception as e:
                 _log('Extract error: ' + str(e))
                 parent.after(0, lambda e=e: (
                     prog_e.fail(), btn_e.config(state='normal'),
                     prog_e.set_status('Error: ' + str(e)[:60], error=True),
-                    messagebox.showerror('Extract error', str(e))))
+                    app_error(parent, 'Extract error', str(e))))
             finally:
                 state_e['busy'] = False
 
@@ -2470,11 +2508,18 @@ class _ProgressBlock:
         overall = int(entry[0] + (pct / 100.0) * (entry[1] - entry[0]))
         overall = max(0, min(100, overall))
         self._pbar['value'] = overall
-        self._pct_lbl.config(text='%d%%' % overall)
+        # Only touch the widgets when the text actually changes — mkpfs can
+        # fire many callbacks per second and each config() is a redraw.
+        new_pct_text = '%d%%' % overall
+        if self._pct_lbl.cget('text') != new_pct_text:
+            self._pct_lbl.config(text=new_pct_text)
 
         # Clean detail text
+        # (same dedupe for the StringVar: every set() fires a trace/redraw)
         clean = str(detail).replace(phase, '').strip().lstrip('@').strip()
-        self._detail_var.set(clean if clean else detail)
+        new_detail = clean if clean else detail
+        if self._detail_var.get() != new_detail:
+            self._detail_var.set(new_detail)
 
     def set_status(self, msg, error=False):
         self._detail_var.set(msg)

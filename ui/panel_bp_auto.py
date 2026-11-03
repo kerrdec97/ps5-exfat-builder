@@ -430,6 +430,15 @@ def _build_sdk_and_fakelib(parent, app):
              font=FONTS['meta'],
              bg=COLORS['bg_1'], fg=COLORS['fg_5']
              ).pack(side='left', padx=(10, 0))
+    tk.Label(parent,
+             text=_('\u2139  Set this to YOUR PS5\u2019s firmware \u2014 not the '
+                    'game\u2019s detected SDK. Example: on firmware 5.50, '
+                    'choose 5. Picking the wrong target can stop the game '
+                    'booting.'),
+             font=FONTS['meta'],
+             bg=COLORS['bg_1'], fg=COLORS['fg_4'],
+             anchor='w', justify='left', wraplength=720
+             ).pack(fill='x', pady=(0, 8))
 
     # Fakelib row
     fl_row = tk.Frame(parent, bg=COLORS['bg_1'])
@@ -473,11 +482,12 @@ def _build_sdk_and_fakelib(parent, app):
         app._abp_fakelib_path_row.pack(fill='x', pady=(2, 0))
 
     tk.Label(parent,
-             text=_('Optional — provides .sprx/.prx stub libraries for the '
-                    'target firmware'),
+             text=_('Most games: leave as None. Optional \u2014 only needed '
+                    'when a game requires .sprx/.prx stub libraries for the '
+                    'target firmware.'),
              font=FONTS['meta'],
              bg=COLORS['bg_1'], fg=COLORS['fg_5'],
-             anchor='w'
+             anchor='w', justify='left', wraplength=720
              ).pack(fill='x', pady=(0, 10))
 
 
@@ -511,6 +521,19 @@ def _build_action_row(parent, app):
               highlightbackground=COLORS['warn'],
               highlightthickness=1,
               command=app._abp_restore
+              ).pack(side='left', padx=(8, 0))
+
+    tk.Button(row, text='\u21a9\u21a9  ' + _('Restore multiple\u2026'),
+              font=(FONTS['button'][0], 10),
+              bg=COLORS['bg_2'], fg=COLORS['warn_hi'],
+              activebackground=COLORS['bg_3'],
+              activeforeground=COLORS['warn_hi'],
+              relief='flat', bd=0,
+              padx=14, pady=10,
+              cursor='hand2',
+              highlightbackground=COLORS['warn'],
+              highlightthickness=1,
+              command=app._abp_restore_multi
               ).pack(side='left', padx=(8, 0))
 
 

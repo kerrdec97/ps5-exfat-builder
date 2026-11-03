@@ -46,13 +46,14 @@ NEW attributes for transfer panel (visual only this iteration):
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 from tkinter_theme import COLORS, FONTS
 
 from exfat_builder import *  # noqa: F401,F403
 from exfat_builder import _, save_settings
 
+from ui.shared.app_dialog import app_info, app_error, app_danger
 from ui.shared.cards import Card
 from ui.shared.ps5_kit import StatStrip
 
@@ -140,7 +141,7 @@ def _build_subtab_bar(parent, app):
         btn._underline = underline
         return btn
 
-    app._ftp_sub_upload_btn  = _make_subtab('\u2191  ' + _('Quick Upload'),
+    app._ftp_sub_upload_btn  = _make_subtab('\u2191  ' + _('Send to PS5'),
                                              'upload')
     app._ftp_sub_browser_btn = _make_subtab('\U0001f4c2  ' + _('PS5 Browser'),
                                              'browser')
@@ -525,63 +526,39 @@ def _build_browser_subtab(parent, app):
     before this runs — needed because the connection bar already references
     `_br_status`.
     """
-
-    # ── Workspace: top = panes, bottom = transfers ──
-    # We use grid so the transfers panel has a fixed height and the panes
-    # row expands.
     ws = tk.Frame(parent, bg=COLORS['bg_1'])
     ws.pack(fill='both', expand=True)
-    ws.grid_rowconfigure(0, weight=0)   # stats strip
-    ws.grid_rowconfigure(1, weight=1)   # panes
-    ws.grid_rowconfigure(2, weight=0)   # transfers
+    ws.grid_rowconfigure(0, weight=0)
+    ws.grid_rowconfigure(1, weight=3)
+    ws.grid_rowconfigure(2, weight=1)
+    ws.grid_rowconfigure(3, weight=0)
     ws.grid_columnconfigure(0, weight=1)
-
-    # ── Stats strip (v3.6.0 PS5 pass) ──
-    # Connection summary · current PS5 path · listed files · selection ·
-    # upload queue. All values mirror state the existing callbacks
-    # already maintain — no new FTP traffic.
-    _build_browser_strip(ws, app).grid(row=0, column=0, sticky='ew',
-                                       padx=16, pady=(12, 8))
-
-    # ── Top — panes container ──
+    _build_browser_strip(ws, app).grid(row=0, column=0, sticky='ew', padx=16, pady=(12, 8))
     panes_row = tk.Frame(ws, bg=COLORS['bg_1'])
-    panes_row.grid(row=1, column=0, sticky='nsew',
-                   padx=16, pady=(0, 8))
+    panes_row.grid(row=1, column=0, sticky='nsew', padx=16, pady=(0, 8))
     panes_row.grid_columnconfigure(0, weight=1, uniform='pane')
     panes_row.grid_columnconfigure(1, weight=0)
     panes_row.grid_columnconfigure(2, weight=1, uniform='pane')
     panes_row.grid_rowconfigure(0, weight=1)
-
     _build_local_pane(panes_row, app).grid(row=0, column=0, sticky='nsew')
     _build_divider(panes_row, app).grid(row=0, column=1, sticky='ns', padx=10)
     _build_remote_pane(panes_row, app).grid(row=0, column=2, sticky='nsew')
-
-    # ── Bottom — transfers panel ──
-    _build_xfers_panel(ws, app).grid(row=2, column=0, sticky='ew',
-                                      padx=16, pady=(0, 12))
+    _build_xfers_panel(ws, app).grid(row=2, column=0, sticky='nsew', padx=16, pady=(0, 12))
+    _build_diagnostics_panel(ws, app).grid(row=3, column=0, sticky='ew', padx=16, pady=(0, 12))
 
 
 def _build_browser_strip(parent, app):
     """Compact stats strip above the dual panes (v3.6.0 PS5 pass)."""
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    strip = StatStrip(card,
-                      [(_('Connection'), 'conn'),
-                       (_('Current Path'), 'path'),
-                       (_('Files'), 'files'),
-                       (_('Selected'), 'sel'),
-                       (_('Upload Queue'), 'queue')])
+    card = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    strip = StatStrip(card, [(_('Connection'), 'conn'), (_('Current Path'), 'path'), (_('Files'), 'files'), (_('Selected'), 'sel'), (_('Free'), 'free'), (_('Upload Queue'), 'queue')])
     strip.pack(fill='x', padx=18, pady=10)
     app._ftp_browser_strip = strip
     app._ftp_conn_cells.append((strip, 'conn'))
     strip.set('conn', _('OFFLINE'), warn=True)
     strip.set('queue', '0')
-
     def _trim(p, n=30):
         p = p or ''
-        return ('\u2026' + p[-(n - 1):]) if len(p) > n else (p or '\u2014')
-
+        return '…' + p[-(n - 1):] if len(p) > n else p or '—'
     def _sync_path(*_a):
         try:
             strip.set('path', _trim(app._br_path.get().strip()))
@@ -589,15 +566,13 @@ def _build_browser_strip(parent, app):
             pass
     app._br_path.trace_add('write', _sync_path)
     _sync_path()
-
     def _sync_sel(*_a):
         try:
             txt = app._br_sel_info.get().strip()
-            strip.set('sel', txt[:24] if txt else '\u2014')
+            strip.set('sel', txt[:24] if txt else '—')
         except Exception:
             pass
     app._br_sel_info.trace_add('write', _sync_sel)
-
     def _poll():
         try:
             if not card.winfo_exists():
@@ -606,10 +581,24 @@ def _build_browser_strip(parent, app):
             return
         try:
             strip.set('files', str(len(getattr(app, '_br_entries', []) or [])))
-            active = 1 if getattr(app, '_xfer_active_row', None) else 0
-            strip.set('queue',
-                      ('1 ' + _('ACTIVE')) if active else '0',
-                      ok=bool(active))
+            try:
+                fr = (app._br_free.get() or '').strip()
+                if fr.lower().startswith('free:'):
+                    fr = fr.split(':', 1)[1].strip()
+                strip.set('free', fr or '—')
+            except Exception:
+                pass
+            q = getattr(app, '_tq_queue', None)
+            if q is not None:
+                c = q.counts()
+                active = c.get('uploading', 0)
+                queued = c.get('queued', 0)
+                if active or queued:
+                    strip.set('queue', '%d ' % (active + queued) + _('ACTIVE'), ok=True)
+                else:
+                    strip.set('queue', '0', ok=False)
+            else:
+                strip.set('queue', '0', ok=False)
         except Exception:
             pass
         try:
@@ -701,27 +690,52 @@ def _build_local_pane(parent, app):
 
 
 def _build_divider(parent, app):
-    """Vertical divider between panes with → / ← transfer arrows."""
-    div = tk.Frame(parent, bg=COLORS['bg_1'])
+    """Vertical divider between panes with → / ← transfer arrows.
 
-    # Center the arrows vertically
+    The → button shows a live count of selected local items (e.g.
+    "→ 3"), making it discoverable that multiple files can be
+    Ctrl/Shift-selected and queued at once."""
+    div = tk.Frame(parent, bg=COLORS['bg_1'])
     spacer_top = tk.Frame(div, bg=COLORS['bg_1'])
     spacer_top.pack(fill='both', expand=True)
-
     arrows = tk.Frame(div, bg=COLORS['bg_1'])
     arrows.pack()
-
-    _accent_btn(arrows, '\u2192',
-                command=lambda: _xfer_to_remote(app)
-                ).pack(pady=4)
-    _ghost_btn(arrows, '\u2190',
-               command=lambda: _xfer_to_local(app)
-               ).pack(pady=4)
-
+    app._xfer_to_remote_btn = _accent_btn(arrows, '→', command=(lambda: _xfer_to_remote(app)))
+    app._xfer_to_remote_btn.pack(pady=4)
+    _attach_tooltip(app._xfer_to_remote_btn, 'Queue selected local file(s) for upload. Tip: Ctrl/Shift-click to select several — each is queued as its own transfer.')
+    _ghost_btn(arrows, '←', command=(lambda: _xfer_to_local(app))).pack(pady=4)
+    app._xfer_hint_var = tk.StringVar(value=_('Ctrl/Shift-select'))
+    tk.Label(arrows, textvariable=app._xfer_hint_var, font=(FONTS['mono_sm'][0], 8), bg=COLORS['bg_1'], fg=COLORS['fg_5'], wraplength=70, justify='center').pack(pady=(2, 0))
     spacer_bot = tk.Frame(div, bg=COLORS['bg_1'])
     spacer_bot.pack(fill='both', expand=True)
-
     return div
+
+
+def _xfer_update_count(app):
+    """Refresh the → button label + caption with the local selection
+    count. Called from _lp_update_status on every selection change."""
+    try:
+        n = len(_lp_selected_paths(app))
+    except Exception:
+        n = 0
+    try:
+        btn = getattr(app, '_xfer_to_remote_btn', None)
+        if btn is not None:
+            btn.configure(text='→  %d' % n if n else '→')
+    except Exception:
+        pass
+    try:
+        hint = getattr(app, '_xfer_hint_var', None)
+        if hint is not None:
+            if n > 1:
+                hint.set(_('queue %d') % n)
+                return
+            if n == 1:
+                hint.set(_('queue 1'))
+                return
+            hint.set(_('Ctrl/Shift-select'))
+    except Exception:
+        return
 
 
 def _build_remote_pane(parent, app):
@@ -730,237 +744,242 @@ def _build_remote_pane(parent, app):
     Uses the existing `_br_*` attributes and callbacks. The Listbox is
     `_br_listbox` so all existing callbacks keep working.
     """
-    pane = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_3'],
-                    highlightthickness=1)
-
-    # Head — label + path input + home button
+    pane = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_3'], highlightthickness=1)
     head = tk.Frame(pane, bg=COLORS['bg_3'])
     head.pack(fill='x')
     head_inner = tk.Frame(head, bg=COLORS['bg_3'])
     head_inner.pack(fill='x', padx=10, pady=8)
-    tk.Label(head_inner, text=_('PS5'),
-             font=(FONTS['eyebrow'][0], 9, 'bold'),
-             bg=COLORS['bg_3'], fg=COLORS['fg_2']
-             ).pack(side='left', padx=(0, 8))
-    _dark_entry(head_inner, app._br_path, readonly=False
-                ).pack(side='left', fill='x', expand=True)
-    _icon_btn(head_inner, '\u2302', tooltip='Home',
-              command=lambda: app._br_load('/data/etaHEN/games/')
-              ).pack(side='left', padx=(4, 0))
-
-    # Bind Enter on path entry
-    head_inner.winfo_children()[1].winfo_children()[0].bind(
-        '<Return>', lambda e: app._br_load(app._br_path.get()))
-
-    # Toolbar — uses existing _br_* callbacks
+    tk.Label(head_inner, text=_('PS5'), font=(FONTS['eyebrow'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_2']).pack(side='left', padx=(0, 8))
+    _dark_entry(head_inner, app._br_path, readonly=False).pack(side='left', fill='x', expand=True)
+    _icon_btn(head_inner, '⌂', tooltip='Home', command=(lambda: app._br_load('/data/etaHEN/games/'))).pack(side='left', padx=(4, 0))
+    head_inner.winfo_children()[1].winfo_children()[0].bind('<Return>', lambda e: app._br_load(app._br_path.get()))
+    chips = tk.Frame(pane, bg=COLORS['bg_2'])
+    chips.pack(fill='x', padx=10, pady=(6, 0))
+    for _label, _path in (_('Root'), '/'), (_('Data'), '/data'), (_('User'), '/user'), (_('USB0'), '/mnt/usb0'), (_('Games'), '/data/etaHEN/games/'):
+        _path_chip(chips, _label, command=(lambda p=_path: app._br_load(p))).pack(side='left', padx=(0, 4))
     tb = tk.Frame(pane, bg=COLORS['bg_2'])
     tb.pack(fill='x', padx=10, pady=(4, 4))
-    _icon_btn(tb, '\u2191', tooltip='Up one dir',
-              command=app._br_go_up
-              ).pack(side='left', padx=2)
-    _icon_btn(tb, '\u21bb', tooltip='Refresh',
-              command=lambda: app._br_load(app._br_path.get())
-              ).pack(side='left', padx=2)
-    _icon_btn(tb, '\U0001f4c1+', tooltip='New folder',
-              command=app._br_new_folder
-              ).pack(side='left', padx=2)
-    _icon_btn(tb, '\U0001f5d1', tooltip='Delete', danger=True,
-              command=app._br_delete
-              ).pack(side='left', padx=2)
-    _icon_btn(tb, '\u270e', tooltip='Rename',
-              command=app._br_rename
-              ).pack(side='left', padx=2)
-
-    # File list — uses _br_listbox (legacy attribute)
+    _icon_btn(tb, '↑', tooltip='Up one dir', command=app._br_go_up).pack(side='left', padx=2)
+    _icon_btn(tb, '↻', tooltip='Refresh', command=(lambda: app._br_load(app._br_path.get()))).pack(side='left', padx=2)
+    _icon_btn(tb, '📁+', tooltip='New folder', command=app._br_new_folder).pack(side='left', padx=2)
+    _icon_btn(tb, '🗑', tooltip='Delete', danger=True, command=app._br_delete).pack(side='left', padx=2)
+    _icon_btn(tb, '✎', tooltip='Rename', command=app._br_rename).pack(side='left', padx=2)
     list_outer = tk.Frame(pane, bg=COLORS['bg_2'])
     list_outer.pack(fill='both', expand=True, padx=10, pady=(0, 4))
-
-    app._br_listbox = tk.Listbox(list_outer,
-                                  font=FONTS['mono_sm'],
-                                  bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                                  selectbackground=COLORS['accent'],
-                                  selectforeground=COLORS['fg_0'],
-                                  activestyle='none',
-                                  relief='flat', bd=4,
-                                  selectmode='extended',
-                                  highlightthickness=0)
-    sb = tk.Scrollbar(list_outer, command=app._br_listbox.yview,
-                      bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
+    app._br_listbox = tk.Listbox(list_outer, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectbackground=COLORS['accent'], selectforeground=COLORS['fg_0'], activestyle='none', relief='flat', bd=4, selectmode='extended', highlightthickness=0)
+    sb = tk.Scrollbar(list_outer, command=app._br_listbox.yview, bg=COLORS['bg_3'], troughcolor=COLORS['bg_2'])
     app._br_listbox.configure(yscrollcommand=sb.set)
     sb.pack(side='right', fill='y')
     app._br_listbox.pack(fill='both', expand=True)
-    app._br_listbox.bind('<Double-Button-1>', lambda e: app._br_nav())
-    app._br_listbox.bind('<Button-3>',        lambda e: app._br_ctx(e))
+    app._br_listbox.bind('<Double-Button-1>', lambda e: app._br_nav(e))
+    app._br_listbox.bind('<Button-3>', lambda e: app._br_ctx(e))
     app._br_listbox.bind('<<ListboxSelect>>', lambda e: app._br_update_sel())
-
-    # Foot — selection info
     foot = tk.Frame(pane, bg=COLORS['bg_3'])
     foot.pack(fill='x', side='bottom')
-    tk.Label(foot, textvariable=app._br_sel_info,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-             anchor='w'
-             ).pack(side='left', padx=10, pady=4)
-
+    tk.Label(foot, textvariable=app._br_sel_info, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_4'], anchor='w').pack(side='left', padx=10, pady=4)
     return pane
 
 
 def _build_xfers_panel(parent, app):
-    """Transfers panel at the bottom of the workspace.
+    """Transfers panel — a real, model-driven upload queue (Phase 1).
 
-    Visual scaffold this iteration. Wiring an actual transfer queue
-    would require modifying the FTP worker logic, which is out of scope
-    for a UI refactor turn. The active single upload (driven by Quick
-    Upload) IS reflected here via traces on _ftptab_status_var.
-    """
-    panel = tk.Frame(parent, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1)
-
-    # Head
-    head = tk.Frame(panel, bg=COLORS['bg_2'])
-    head.pack(fill='x')
-    head_inner = tk.Frame(head, bg=COLORS['bg_2'])
+    Renders one row per queue item (from ui.tq_model via the backend
+    dispatcher): name, route, per-item progress bar + %/speed, a state
+    badge, and a per-item Cancel. Serial dispatch — one active at a time.
+    No pause/resume/persistence (deferred). Pause all is intentionally
+    disabled this phase with an explanatory tooltip."""
+    panel = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_3'], highlightthickness=1)
+    head_inner = tk.Frame(panel, bg=COLORS['bg_2'])
     head_inner.pack(fill='x', padx=14, pady=10)
-
-    tk.Label(head_inner, text=_('Transfers'),
-             font=(FONTS['body'][0], 11, 'bold'),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0']
-             ).pack(side='left')
-
-    app._xfers_stats_var = tk.StringVar(
-        value=_('No transfers yet'))
-    tk.Label(head_inner, textvariable=app._xfers_stats_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(12, 0))
-
-    # Right action buttons (decorative this iteration)
-    _ghost_btn(head_inner, _('Pause all'),
-               command=lambda: None  # no callback wiring this iteration
-               ).pack(side='right', padx=(4, 0))
-    _ghost_btn(head_inner, _('Clear completed'),
-               command=lambda: _xfers_clear(app)
-               ).pack(side='right')
-
+    tk.Label(head_inner, text=_('Transfers'), font=(FONTS['body'][0], 11, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
+    app._xfers_stats_var = tk.StringVar(value=_('No transfers yet'))
+    tk.Label(head_inner, textvariable=app._xfers_stats_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
+    pause_btn = _ghost_btn(head_inner, _('Pause all'), command=(lambda: None))
+    try:
+        pause_btn.configure(state='disabled', cursor='arrow')
+    except Exception:
+        pass
+    pause_btn.pack(side='right', padx=(4, 0))
+    _attach_tooltip(pause_btn, 'Pausing an in-flight transfer is a later phase (it needs mid-stream suspend/resume). Use per-item Cancel for now.')
+    _ghost_btn(head_inner, _('Clear completed'), command=(lambda: app._tq_clear_completed())).pack(side='right')
     tk.Frame(panel, bg=COLORS['border_2'], height=1).pack(fill='x')
-
-    # List area — capped height
     app._xfers_list_frame = tk.Frame(panel, bg=COLORS['bg_2'])
     app._xfers_list_frame.pack(fill='x', padx=14, pady=(8, 12))
-
-    # Empty state
-    app._xfers_empty_lbl = tk.Label(app._xfers_list_frame,
-        text=_('Use the \u2192 arrow above to start an upload, or use the '
-               'Quick Upload sub-tab.'),
-        font=FONTS['mono_sm'],
-        bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-        pady=12)
+    app._xfers_empty_lbl = tk.Label(app._xfers_list_frame, text=_('Select one or more local files (Ctrl/Shift-click), then press → to queue them. Each uploads in turn.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], pady=12)
     app._xfers_empty_lbl.pack()
-
-    # Mirror the active Quick-Upload transfer into the panel via
-    # _ftptab_status_var trace
-    def _sync_xfer(*_a):
-        try:
-            txt = app._ftptab_status_var.get().strip()
-            if not txt:
-                return
-            _xfers_show_active(app, txt)
-        except Exception:
-            pass
-    app._ftptab_status_var.trace_add('write', _sync_xfer)
-
+    app._tq_rows = {}
     return panel
 
 
-def _xfers_show_active(app, status_text):
-    """Render the active Quick-Upload transfer as a row in the xfers panel."""
-    # Clear empty state
-    if app._xfers_empty_lbl is not None:
+# Badge text + COLORS key per queue state (ui.tq_model states).
+_TQ_STATE_STYLE = {'queued': ('Queued', 'fg_4'), 'uploading': ('Uploading', 'accent_hi'), 'done': ('Done ✓', 'success'), 'failed': ('Failed', 'danger_hi'), 'cancelled': ('Cancelled', 'fg_5')}
+
+
+def _tq_fmt_size(nbytes):
+    try:
+        n = float(nbytes)
+    except Exception:
+        return ''
+    for unit in 'B', 'KB', 'MB', 'GB', 'TB':
+        if n < 1024 or unit == 'TB':
+            return '%.0f %s' % (n, unit) if unit == 'B' else '%.1f %s' % (n, unit)
+        n /= 1024.0
+    return ''
+
+
+def _tq_render_panel(app, snapshot, counts):
+    """Render the queue snapshot into the transfers panel. Called from the
+    backend via self.after (so it runs on the Tk thread). Updates rows in
+    place; creates/removes rows as the queue changes."""
+    lst = getattr(app, '_xfers_list_frame', None)
+    if lst is None:
+        return
+    rows = getattr(app, '_tq_rows', None)
+    if rows is None:
+        rows = app._tq_rows = {}
+    live_q = getattr(app, '_tq_queue', None)
+    live_empty = True
+    if live_q is not None:
         try:
-            app._xfers_empty_lbl.destroy()
+            live_empty = live_q.is_empty
+        except Exception:
+            live_empty = not snapshot
+    if not snapshot and live_empty:
+        for rid, r in list(rows.items()):
+            try: r['row'].destroy()
+            except Exception:
+                pass
+            rows.pop(rid, None)
+        if getattr(app, '_xfers_empty_lbl', None) is None:
+            app._xfers_empty_lbl = tk.Label(lst, text=_('No transfers yet.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], pady=12)
+            app._xfers_empty_lbl.pack()
+        try:
+            app._xfers_stats_var.set(_('No transfers yet'))
+        except Exception:
+            pass
+        return
+    if not snapshot and not live_empty:
+        try:
+            snapshot = live_q.snapshot()
+            counts = live_q.counts()
+        except Exception:
+            snapshot = snapshot or []
+    if getattr(app, '_xfers_empty_lbl', None) is not None:
+        try: app._xfers_empty_lbl.destroy()
         except Exception:
             pass
         app._xfers_empty_lbl = None
-
-    # Reuse the same row if it already exists; otherwise create
-    if hasattr(app, '_xfer_active_row') and app._xfer_active_row is not None:
-        try:
-            app._xfer_active_status_var.set(status_text)
-            return
-        except Exception:
-            pass
-
     try:
-        app._xfers_stats_var.set('1 ' + _('active transfer'))
+        active = counts.get('uploading', 0)
+        queued = counts.get('queued', 0)
+        done = counts.get('done', 0)
+        failed = counts.get('failed', 0)
+        cancelled = counts.get('cancelled', 0)
+        parts = []
+        if active:
+            parts.append('%d active' % active)
+        if queued:
+            parts.append('%d queued' % queued)
+        if done:
+            parts.append('%d done' % done)
+        if failed:
+            parts.append('%d failed' % failed)
+        if cancelled:
+            parts.append('%d cancelled' % cancelled)
+        app._xfers_stats_var.set('  •  '.join(parts) if parts else _('No transfers yet'))
     except Exception:
         pass
+    seen = set()
+    for snap in snapshot:
+        rid = snap['id']
+        seen.add(rid)
+        if rid in rows:
+            _tq_update_row(app, rows[rid], snap)
+        else:
+            rows[rid] = _tq_build_row(app, lst, snap)
+    for rid in list(rows.keys()):
+        if rid not in seen:
+            try: rows[rid]['row'].destroy()
+            except Exception:
+                pass
+            rows.pop(rid, None)
 
-    row = tk.Frame(app._xfers_list_frame, bg=COLORS['bg_3'])
+
+def _tq_build_row(app, parent, snap):
+    """Create a row widget set for one queue item; returns its registry dict."""
+    row = tk.Frame(parent, bg=COLORS['bg_3'])
     row.pack(fill='x', pady=2)
     inner = tk.Frame(row, bg=COLORS['bg_3'])
-    inner.pack(fill='x', padx=10, pady=8)
-
-    tk.Label(inner, text='\u2191',
-             font=(FONTS['body'][0], 14, 'bold'),
-             bg=COLORS['bg_3'], fg=COLORS['accent']
-             ).pack(side='left', padx=(0, 10))
-
-    name_col = tk.Frame(inner, bg=COLORS['bg_3'])
-    name_col.pack(side='left', fill='x', expand=True)
-    local = app._ftptab_local_var.get() if hasattr(app, '_ftptab_local_var') else ''
-    remote = app._ftptab_remote_var.get() if hasattr(app, '_ftptab_remote_var') else ''
-    tk.Label(name_col, text=os.path.basename(local) or _('(unknown file)'),
-             font=(FONTS['body'][0], 10, 'bold'),
-             bg=COLORS['bg_3'], fg=COLORS['fg_0'],
-             anchor='w'
-             ).pack(fill='x')
-    tk.Label(name_col, text=os.path.dirname(local) + '  \u2192  ' + remote,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-             anchor='w'
-             ).pack(fill='x', pady=(2, 0))
-
-    app._xfer_active_status_var = tk.StringVar(value=status_text)
-    tk.Label(inner, textvariable=app._xfer_active_status_var,
-             font=(FONTS['mono_sm'][0], 9, 'bold'),
-             bg=COLORS['bg_3'], fg=COLORS['accent_hi']
-             ).pack(side='right', padx=(8, 0))
-
-    # Cancel button — drives main file's _cancel_ftp_upload, which sets
-    # _ftp_cancel = True; the upload worker checks it on each chunk.
-    tk.Button(inner, text=_('Cancel'),
-              font=(FONTS['button'][0], 9, 'bold'),
-              bg=COLORS['danger'], fg=COLORS['fg_0'],
-              activebackground=COLORS['danger_hi'],
-              activeforeground=COLORS['fg_0'],
-              relief='flat', bd=0,
-              padx=12, pady=4,
-              cursor='hand2',
-              command=app._cancel_ftp_upload
-              ).pack(side='right', padx=(8, 0))
-
-    app._xfer_active_row = row
+    inner.pack(fill='x', padx=10, pady=6)
+    tk.Label(inner, text='↑', font=(FONTS['body'][0], 13, 'bold'), bg=COLORS['bg_3'], fg=COLORS['accent']).pack(side='left', padx=(0, 10))
+    col = tk.Frame(inner, bg=COLORS['bg_3'])
+    col.pack(side='left', fill='x', expand=True)
+    top = tk.Frame(col, bg=COLORS['bg_3'])
+    top.pack(fill='x')
+    folder_tag = '  [folder]' if snap.get('is_folder') else ''
+    tk.Label(top, text=snap['name'] + folder_tag, font=(FONTS['body'][0], 10, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w').pack(side='left')
+    size_lbl = tk.Label(top, text=_tq_fmt_size(snap.get('size', 0)), font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5'], anchor='e')
+    size_lbl.pack(side='right')
+    tk.Label(col, text='→  ' + (snap.get('remote_display') or ''), font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', pady=(1, 3))
+    bar_wrap = tk.Frame(col, bg=COLORS['bg_3'])
+    bar_wrap.pack(fill='x')
+    canvas = tk.Canvas(bar_wrap, height=6, bg=COLORS['bg_1'], highlightthickness=0, bd=0)
+    canvas.pack(fill='x', side='top')
+    bar = canvas.create_rectangle(0, 0, 0, 6, fill=COLORS['accent'], width=0)
+    meta_var = tk.StringVar(value='')
+    tk.Label(col, textvariable=meta_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_5'], anchor='w').pack(fill='x', pady=(2, 0))
+    badge_var = tk.StringVar(value='')
+    badge = tk.Label(inner, textvariable=badge_var, font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_4'])
+    badge.pack(side='right', padx=(8, 0))
+    cancel_btn = tk.Button(inner, text=_('Cancel'), font=(FONTS['button'][0], 9, 'bold'), bg=COLORS['danger'], fg=COLORS['fg_0'], activebackground=COLORS['danger_hi'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=10, pady=3, cursor='hand2', command=(lambda _id=snap['id']: app._tq_cancel_item(_id)))
+    cancel_btn.pack(side='right', padx=(8, 0))
+    reg = {'row': row, 'canvas': canvas, 'bar': bar, 'meta_var': meta_var, 'badge': badge, 'badge_var': badge_var, 'cancel_btn': cancel_btn}
+    _tq_update_row(app, reg, snap)
+    return reg
 
 
-def _xfers_clear(app):
-    """Remove all rows from the transfers panel."""
-    if app._xfers_list_frame is None:
-        return
-    for w in app._xfers_list_frame.winfo_children():
-        w.destroy()
-    app._xfer_active_row = None
+def _tq_update_row(app, reg, snap):
+    """Update an existing row's progress bar, meta line, badge, and the
+    Cancel button's enabled state from a fresh snapshot."""
+    state = snap['state']
+    pct = snap.get('percent', 0)
     try:
-        app._xfers_stats_var.set(_('No transfers yet'))
+        w = reg['canvas'].winfo_width() or 1
+        reg['canvas'].coords(reg['bar'], 0, 0, int(w * pct / 100), 6)
+        fill = COLORS['success'] if state == 'done' else COLORS.get('danger', '#e05050') if state in ('failed',) else COLORS['fg_5'] if state == 'cancelled' else COLORS['accent']
+        reg['canvas'].itemconfig(reg['bar'], fill=fill)
     except Exception:
         pass
-    app._xfers_empty_lbl = tk.Label(app._xfers_list_frame,
-        text=_('No transfers yet.'),
-        font=FONTS['mono_sm'],
-        bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-        pady=12)
-    app._xfers_empty_lbl.pack()
+    try:
+        if state == 'uploading':
+            spd = snap.get('speed_mbs', 0.0)
+            reg['meta_var'].set('%d%%  •  %.1f MB/s' % (pct, spd))
+        elif state == 'done':
+            reg['meta_var'].set('100%%  •  %s' % _tq_fmt_size(snap.get('size', 0)))
+        elif state == 'failed':
+            reg['meta_var'].set('Failed: ' + (snap.get('error') or 'unknown')[:60])
+        elif state == 'cancelled':
+            reg['meta_var'].set('Cancelled')
+        else:
+            reg['meta_var'].set('Waiting…')
+    except Exception:
+        pass
+    try:
+        label, color_key = _TQ_STATE_STYLE.get(state, (state, 'fg_4'))
+        reg['badge_var'].set(label)
+        reg['badge'].configure(fg=COLORS.get(color_key, COLORS['fg_4']))
+    except Exception:
+        pass
+    try:
+        if state in ('queued', 'uploading'):
+            reg['cancel_btn'].configure(state='normal', cursor='hand2')
+            if not reg['cancel_btn'].winfo_ismapped():
+                reg['cancel_btn'].pack(side='right', padx=(8, 0))
+                return
+        else:
+            reg['cancel_btn'].pack_forget()
+    except Exception:
+        return
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1081,6 +1100,11 @@ def _lp_update_status(app):
     sel_paths = _lp_selected_paths(app)
     n_sel = len(sel_paths)
     sel_size = sum(sz for _p, is_dir, sz in sel_paths if not is_dir)
+    # keep the → button label / caption in sync with the selection
+    try:
+        _xfer_update_count(app)
+    except Exception:
+        pass
     if n_sel:
         app._lp_status.set('%d %s \u00b7 %d %s \u00b7 %s' % (
             n_total, _('items'),
@@ -1102,7 +1126,7 @@ def _lp_new_folder(app):
         os.makedirs(os.path.join(app._lp_path.get(), name), exist_ok=False)
         _lp_load(app)
     except Exception as e:
-        messagebox.showerror(_('Could not create folder'), str(e))
+        app_error(app, _('Could not create folder'), str(e))
 
 
 def _lp_delete(app):
@@ -1110,8 +1134,9 @@ def _lp_delete(app):
     sel = _lp_selected_paths(app)
     if not sel:
         return
-    if not messagebox.askyesno(_('Delete'),
-        _('Delete %d item(s)? This cannot be undone.') % len(sel)):
+    if not app_danger(app, _('Delete'),
+        _('Delete %d item(s)? This cannot be undone.') % len(sel),
+        ok_label=_('Delete'), cancel_label=_('Cancel')):
         return
     import shutil
     errors = []
@@ -1124,7 +1149,7 @@ def _lp_delete(app):
         except Exception as e:
             errors.append('%s: %s' % (os.path.basename(path), str(e)))
     if errors:
-        messagebox.showerror(_('Delete errors'), '\n'.join(errors))
+        app_error(app, _('Delete errors'), '\n'.join(errors))
     _lp_load(app)
 
 
@@ -1146,39 +1171,26 @@ def _lp_rename(app):
         os.rename(path, os.path.join(os.path.dirname(path), new_name))
         _lp_load(app)
     except Exception as e:
-        messagebox.showerror(_('Rename failed'), str(e))
+        app_error(app, _('Rename failed'), str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # TRANSFER ARROWS — between panes
 # ─────────────────────────────────────────────────────────────────────────
 def _xfer_to_remote(app):
-    """Upload local-pane selection to the remote-pane current path.
+    """Queue the local-pane selection for upload to the remote-pane path.
 
-    Reuses the legacy `_ftptab_*` upload form: pre-fills the local + remote
-    fields, then calls `_ftptab_start_upload`. Single-file at a time
-    (matches the existing capability).
+    Phase 1: enqueues EVERY selected item into the transfer queue (no more
+    one-file-at-a-time prompt). Each becomes its own queue item; the serial
+    dispatcher uploads them one at a time with per-item progress + cancel.
     """
     sel = _lp_selected_paths(app)
     if not sel:
-        messagebox.showinfo(_('No selection'),
-                            _('Select one or more files in the Local '
-                              'pane first.'))
+        app_info(app, _('No selection'), _('Select one or more files in the Local pane first.'))
         return
-    # If multiple selected, prompt that only the first will be uploaded
-    if len(sel) > 1:
-        if not messagebox.askyesno(_('Multiple files'),
-            _('Quick Upload supports one file at a time. Upload only "%s" '
-              'now?') % os.path.basename(sel[0][0])):
-            return
-
-    local_path, is_dir, _sz = sel[0]
     remote_path = app._br_path.get()
-
-    app._ftptab_local_var.set(local_path.replace('/', os.sep))
-    app._ftptab_remote_var.set(remote_path)
-    app._ftptab_is_folder.set(is_dir)
-    app._ftptab_start_upload()
+    specs = [(local_path, remote_path, bool(is_dir)) for local_path, is_dir, _sz in sel]
+    app._tq_enqueue_many(specs)
 
 
 def _xfer_to_local(app):
@@ -1189,13 +1201,13 @@ def _xfer_to_local(app):
     monkey-patching `filedialog.askdirectory` for the scope of this call.
     """
     if not app._br_listbox.curselection():
-        messagebox.showinfo(_('No selection'),
+        app_info(app, _('No selection'),
                             _('Select one or more files in the PS5 pane '
                               'first.'))
         return
     dest = app._lp_path.get()
     if not os.path.isdir(dest):
-        messagebox.showerror(_('Invalid local directory'),
+        app_error(app, _('Invalid local directory'),
                              _('Local pane path is invalid.'))
         return
 
@@ -1284,6 +1296,16 @@ def _ghost_btn(parent, text, command):
                      command=command)
 
 
+def _diag_btn(parent, text, command, primary=False):
+    """Compact button for the diagnostics toolbar group — ~20% smaller than
+    the standard buttons so results, not controls, draw the eye. `primary`
+    gives the single accent fill; the rest are bordered ghost-style so the
+    three read as one unified action group."""
+    if primary:
+        return tk.Button(parent, text=text, font=(FONTS['button'][0], 8, 'bold'), bg=COLORS['accent'], fg=COLORS['fg_0'], activebackground=COLORS['accent_hi'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=9, pady=3, cursor='hand2', command=command)
+    return tk.Button(parent, text=text, font=(FONTS['button'][0], 8), bg=COLORS['bg_2'], fg=COLORS['fg_2'], activebackground=COLORS['bg_3'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=9, pady=3, cursor='hand2', highlightbackground=COLORS['border_3'], highlightthickness=1, command=command)
+
+
 def _accent_btn(parent, text, command):
     return tk.Button(parent, text=text,
                      font=(FONTS['button'][0], 9, 'bold'),
@@ -1294,6 +1316,13 @@ def _accent_btn(parent, text, command):
                      padx=12, pady=6,
                      cursor='hand2',
                      command=command)
+
+
+def _path_chip(parent, text, command):
+    """Small bordered quick-jump chip for the remote-pane mount bar
+    (Root / Data / User / USB0 / Games). Navigation only — never writes,
+    so no protected-path guard is involved."""
+    return tk.Button(parent, text=text, font=(FONTS['button'][0], 8, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_3'], activebackground=COLORS['accent'], activeforeground=COLORS['fg_0'], relief='flat', bd=0, padx=10, pady=3, cursor='hand2', highlightbackground=COLORS['border_3'], highlightthickness=1, command=command)
 
 
 def _icon_btn(parent, glyph, tooltip='', command=None,
@@ -1313,3 +1342,219 @@ def _icon_btn(parent, glyph, tooltip='', command=None,
                     cursor='hand2',
                     command=command)
     return btn
+
+
+def _build_diagnostics_panel(parent, app):
+    """Compact connection-health card. One header row (title + status +
+    button cluster), one inline status row (reachable/RTT/server/destination/
+    writable + FEAT mini-badges), and an expandable 'Advanced Details' block
+    that holds protocol flags, the throughput sample, the destination note,
+    and detector evidence. Collapsed by default so the file browser and
+    transfer queue keep the vertical space.
+
+    Every app._ftpdiag_* / app._ftpspeed_* attribute the backend render
+    methods write is preserved here verbatim — only the layout changed."""
+    panel = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_3'], highlightthickness=1)
+    SEP = '·'
+    head_inner = tk.Frame(panel, bg=COLORS['bg_2'])
+    head_inner.pack(fill='x', padx=12, pady=(6, 5))
+    tk.Label(head_inner, text='🔎  ' + _('Connection Diagnostics'), font=(FONTS['body'][0], 10, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
+    app._ftpdiag_status = tk.StringVar(value=_('Not run yet'))
+    tk.Label(head_inner, textvariable=app._ftpdiag_status, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(10, 0))
+    btnbar = tk.Frame(head_inner, bg=COLORS['bg_2'])
+    btnbar.pack(side='right')
+    app._ftpdiag_btn = _diag_btn(btnbar, _('Run Diagnostics'), command=app._ftpdiag_run, primary=True)
+    app._ftpdiag_btn.pack(side='left')
+    app._ftpspeed_btn = _diag_btn(btnbar, _('Run Speed Test'), command=app._ftpspeed_run)
+    app._ftpspeed_btn.pack(side='left', padx=(4, 0))
+    app._ftpdiag_webui_btn = _diag_btn(btnbar, '🌐  ' + _('Open Web UI'), command=(lambda: _ftpdiag_open_webui(app)))
+    tk.Frame(panel, bg=COLORS['border_2'], height=1).pack(fill='x')
+    status = tk.Frame(panel, bg=COLORS['bg_2'])
+    status.pack(fill='x', padx=12, pady=(6, 5))
+    def _field(parent_, caption):
+        """Inline 'CAPTION value' on a single baseline. Returns (var, lbl)."""
+        cell = tk.Frame(parent_, bg=COLORS['bg_2'])
+        cell.pack(side='left')
+        tk.Label(cell, text=caption, font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 4))
+        var = tk.StringVar(value='—')
+        lbl = tk.Label(cell, textvariable=var, font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_2'])
+        lbl.pack(side='left')
+        return cell, var, lbl
+    def _sep():
+        tk.Label(status, text='  %s  ' % SEP, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_6'] if 'fg_6' in COLORS else COLORS['fg_5']).pack(side='left')
+    _c, app._ftpdiag_reach_var, app._ftpdiag_reach_lbl = _field(status, _('REACHABLE'))
+    _sep()
+    _c, app._ftpdiag_rtt_var, _rtt_lbl = _field(status, _('RTT'))
+    _sep()
+    _c, app._ftpdiag_server_var, app._ftpdiag_server_lbl = _field(status, _('SERVER'))
+    app._ftpdiag_server_lbl.bind('<Button-1>', lambda e: _ftpdiag_open_webui(app) if getattr(app, '_ftpdiag_server_clickable', False) else None)
+    _sep()
+    dest_cell = tk.Frame(status, bg=COLORS['bg_2'])
+    dest_cell.pack(side='left')
+    tk.Label(dest_cell, text=_('DEST'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 4))
+    app._ftpdiag_dest_dot = tk.Frame(dest_cell, bg=COLORS['fg_5'], width=9, height=9)
+    app._ftpdiag_dest_dot.pack(side='left', padx=(0, 5), pady=(0, 1))
+    app._ftpdiag_dest_dot.pack_propagate(False)
+    app._ftpdiag_dest_var = tk.StringVar(value='—')
+    app._ftpdiag_dest_lbl = tk.Label(dest_cell, textvariable=app._ftpdiag_dest_var, font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_2'])
+    app._ftpdiag_dest_lbl.pack(side='left')
+    _sep()
+    _c, app._ftpdiag_write_var, app._ftpdiag_write_lbl = _field(status, _('WRITABLE'))
+    feat = tk.Frame(status, bg=COLORS['bg_2'])
+    feat.pack(side='left', padx=(16, 0))
+    tk.Label(feat, text=_('FEAT'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 5))
+    app._ftpdiag_feat_chips = {}
+    _feat_help = {'mlsd': 'MLSD — modern machine-readable directory listings', 'rest': 'REST — transfer resume is supported', 'size': 'SIZE — server can report exact file sizes', 'mdtm': 'MDTM — server reports file modification times', 'utf8': 'UTF8 — Unicode filenames are supported', 'xcrypt': 'XCRYPT — optional encrypted transfers (zftpd; slower, off by default)'}
+    for key, text in ('mlsd', 'MLSD'), ('rest', 'REST'), ('size', 'SIZE'), ('mdtm', 'MDTM'), ('utf8', 'UTF8'), ('xcrypt', 'XCRYPT'):
+        chip = tk.Label(feat, text=text, font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_5'], padx=6, pady=2, cursor='question_arrow')
+        chip.pack(side='left', padx=(0, 4))
+        _attach_tooltip(chip, _feat_help[key])
+        app._ftpdiag_feat_chips[key] = chip
+    app._ftpdiag_adv_open = False
+    app._ftpdiag_adv_toggle = tk.Label(status, text='▶  ' + _('Advanced Details'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_3'], fg=COLORS['fg_3'], padx=8, pady=2, cursor='hand2')
+    app._ftpdiag_adv_toggle.pack(side='right')
+    app._ftpdiag_adv_toggle.bind('<Button-1>', lambda e: _ftpdiag_toggle_adv(app))
+    app._ftpdiag_adv_toggle.bind('<Enter>', lambda e: app._ftpdiag_adv_toggle.configure(bg=COLORS['accent'], fg=COLORS['fg_0']))
+    app._ftpdiag_adv_toggle.bind('<Leave>', lambda e: app._ftpdiag_adv_toggle.configure(bg=COLORS['bg_3'], fg=COLORS['fg_3']))
+    adv = tk.Frame(panel, bg=COLORS['bg_2'])
+    app._ftpdiag_adv_frame = adv
+    adv_inner = tk.Frame(adv, bg=COLORS['bg_2'])
+    adv_inner.pack(fill='x', padx=12, pady=(0, 8))
+    proto = tk.Frame(adv_inner, bg=COLORS['bg_2'])
+    proto.pack(fill='x', pady=(0, 0))
+    tk.Label(proto, text=_('PROTOCOL'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 8))
+    _c, app._ftpdiag_pasv_var, app._ftpdiag_pasv_lbl = _field(proto, _('PASSIVE'))
+    tk.Label(proto, text='  %s  ' % SEP, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left')
+    _c, app._ftpdiag_bin_var, app._ftpdiag_bin_lbl = _field(proto, _('BINARY'))
+    tk.Label(proto, text='  %s  ' % SEP, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left')
+    _c, app._ftpdiag_copy_var, app._ftpdiag_copy_lbl = _field(proto, _('SERVER-SIDE COPY'))
+    thr = tk.Frame(adv_inner, bg=COLORS['bg_2'])
+    thr.pack(fill='x', pady=(4, 0))
+    tk.Label(thr, text=_('THROUGHPUT'), font=(FONTS['eyebrow'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(0, 8))
+    _c, app._ftpspeed_up_var, _l = _field(thr, _('UPLOAD'))
+    tk.Label(thr, text='  %s  ' % SEP, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left')
+    _c, app._ftpspeed_dn_var, _l = _field(thr, _('DOWNLOAD'))
+    app._ftpspeed_status = tk.StringVar(value=_('Not run yet'))
+    tk.Label(thr, textvariable=app._ftpspeed_status, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left', padx=(10, 0))
+    app._ftpdiag_dest_note = tk.StringVar(value='')
+    app._ftpdiag_dest_note_lbl = tk.Label(adv_inner, textvariable=app._ftpdiag_dest_note, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w', justify='left', wraplength=1100)
+    app._ftpdiag_dest_note_lbl.pack(fill='x', pady=(4, 0))
+    app._ftpdiag_evidence = tk.StringVar(value='')
+    app._ftpdiag_evidence_lbl = tk.Label(adv_inner, textvariable=app._ftpdiag_evidence, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=1100)
+    app._ftpdiag_evidence_lbl.pack(fill='x', pady=(2, 0))
+    def _live_dest(*_a):
+        try:
+            key, label, note, tone = app._ps5_dest_class(app._br_path.get())
+            app._ftpdiag_dest_var.set(label)
+            app._ftpdiag_dest_note.set(note)
+            _tone_color(app._ftpdiag_dest_lbl, tone)
+            _dot_color(app._ftpdiag_dest_dot, tone)
+        except Exception:
+            pass
+    try:
+        app._br_path.trace_add('write', _live_dest)
+        _live_dest()
+    except Exception:
+        pass
+    return panel
+
+
+def _ftpdiag_toggle_adv(app):
+    """Expand / collapse the Advanced Details frame."""
+    frame = getattr(app, '_ftpdiag_adv_frame', None)
+    toggle = getattr(app, '_ftpdiag_adv_toggle', None)
+    if frame is None:
+        return
+    opening = not getattr(app, '_ftpdiag_adv_open', False)
+    try:
+        if opening:
+            frame.pack(fill='x', after=app._ftpdiag_adv_toggle.master)
+            if toggle is not None:
+                toggle.configure(text='▼  ' + _('Advanced Details'))
+        else:
+            frame.pack_forget()
+            if toggle is not None:
+                toggle.configure(text='▶  ' + _('Advanced Details'))
+    except Exception:
+        pass
+    app._ftpdiag_adv_open = opening
+
+
+def _tone_color(lbl, tone):
+    """Color a result label by tone: ok/warn/bad/muted."""
+    try:
+        if tone == 'ok':
+            lbl.configure(fg=COLORS['success'])
+        elif tone == 'warn':
+            lbl.configure(fg=COLORS.get('warning', '#e0a020'))
+        elif tone == 'bad':
+            lbl.configure(fg=COLORS.get('danger', '#e05050'))
+        else:
+            lbl.configure(fg=COLORS['fg_4'])
+    except Exception:
+        pass
+
+
+def _dot_color(dot, tone):
+    """Colour a small status-dot Frame by tone: ok=green, warn=amber,
+    bad=red, muted/other=grey. Mirrors the connection-pill dot style."""
+    try:
+        if tone == 'ok':
+            dot.configure(bg=COLORS['success'])
+        elif tone == 'warn':
+            dot.configure(bg=COLORS.get('warning', '#e0a020'))
+        elif tone == 'bad':
+            dot.configure(bg=COLORS.get('danger', '#e05050'))
+        else:
+            dot.configure(bg=COLORS['fg_5'])
+    except Exception:
+        pass
+
+
+def _attach_tooltip(widget, text):
+    """Lightweight hover tooltip. Creates a borderless Toplevel near the
+    widget on <Enter> and destroys it on <Leave>. No external deps."""
+    state = {'tip': None}
+    def _show(_e=None):
+        if state['tip'] is not None or not text:
+            return
+        try:
+            x = widget.winfo_rootx() + 12
+            y = widget.winfo_rooty() + widget.winfo_height() + 6
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry('+%d+%d' % (x, y))
+            frm = tk.Frame(tip, bg=COLORS['bg_0'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+            frm.pack()
+            tk.Label(frm, text=text, justify='left', font=FONTS['mono_sm'], bg=COLORS['bg_0'], fg=COLORS['fg_2'], padx=8, pady=5, wraplength=320).pack()
+            state['tip'] = tip
+        except Exception:
+            state['tip'] = None
+    def _hide(_e=None):
+        tip = state['tip']
+        state['tip'] = None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
+    try:
+        widget.bind('<Enter>', _show)
+        widget.bind('<Leave>', _hide)
+        widget.bind('<Destroy>', _hide)
+    except Exception:
+        return
+
+
+def _ftpdiag_open_webui(app):
+    """Open the detected ZHTTP web UI in the default browser (local only)."""
+    import webbrowser
+    url = getattr(app, '_ftpdiag_webui_url', None)
+    if not url:
+        ip = app._ftp_ip_var.get().strip()
+        port = app._ftp_port_var.get().strip() or '2121'
+        url = f"http://{ip!s}:{port!s}/"
+    try:
+        webbrowser.open(url)
+    except Exception:
+        return

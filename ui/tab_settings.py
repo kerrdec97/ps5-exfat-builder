@@ -40,6 +40,7 @@ from exfat_builder import _, save_settings, LeftRail
 from ui.shared.cards import SettingsCard, settings_row, StatusPill
 from ui.shared.forms import SegmentedToggle
 from ui.shared.scroll import attach_scroll
+from ui.shared.empty_state import EmptyState
 
 
 def build_settings_tab(parent, app):
@@ -596,42 +597,61 @@ def _build_build(body, app):
     # ── EXPERIMENTAL card (OFF by default; easy to remove) ──
     # Remove this whole card + ui/experimental_mkpfs.py + the pipeline branch
     # to fully revert the external mkpfs-compatible tool path.
-    card_exp = SettingsCard(body, title=_('Experimental'))
+    card_exp = SettingsCard(body, title=_('PFS convert backend'))
     card_exp.pack(fill='x', pady=(0, 14))
 
     _r, ctrl, _act = settings_row(card_exp.body,
-        _('Use external mkpfs-compatible tool'),
-        description=_('Use an external mkpfs-compatible tool for testing '
-                      'alternative PFS packers. This is optional, off by '
-                      'default, and only applies to supported test routes '
-                      'such as existing .exfat \u2192 .ffpfsc. Stable bundled '
-                      'mkpfs remains the default.'),
+        _('Backend'),
+        description=_('Two backends are available for the image \u2192 '
+                      '.ffpfsc convert/compression stage. Lazy_MkPFS (by '
+                      'Nazky) is the default. MkPFS (by PSBrew) is bundled '
+                      'and selectable but EXPERIMENTAL \u2014 it additionally '
+                      'supports OSFMount-free extract/verify; validate it on '
+                      'your own images/console before relying on it. If the '
+                      'chosen backend fails, the tool can fall back to the '
+                      'other. This only affects the image \u2192 .ffpfsc '
+                      'convert stage; the folder \u2192 exFAT/ffpkg build '
+                      'stage is unchanged.'),
         with_divider=False)
-    if not hasattr(app, '_exp_mkpfs_var'):
-        app._exp_mkpfs_var = tk.BooleanVar(
-            value=app._settings.get('experimental_mkpfs_enabled', False))
+    if not hasattr(app, '_pfs_backend_var'):
+        app._pfs_backend_var = tk.StringVar(
+            value=str(app._settings.get('pfs_backend', 'lazy')).strip().lower()
+            or 'lazy')
 
-    def _save_exp_mkpfs_pref():
-        app._settings['experimental_mkpfs_enabled'] = bool(
-            app._exp_mkpfs_var.get())
+    def _save_pfs_backend():
+        val = (app._pfs_backend_var.get() or 'lazy').strip().lower()
+        if val not in ('lazy', 'mkpfs'):
+            val = 'lazy'
+        app._settings['pfs_backend'] = val
         try:
             save_settings(app._settings)
         except Exception:
             pass
 
-    tk.Checkbutton(ctrl, text=_('Use external mkpfs-compatible tool'),
-                   variable=app._exp_mkpfs_var,
-                   font=FONTS['body'],
-                   bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-                   activebackground=COLORS['bg_2'],
-                   activeforeground=COLORS['fg_1'],
-                   selectcolor=COLORS['bg_4'], cursor='hand2',
-                   command=_save_exp_mkpfs_pref).pack(side='left')
+    _be_seg = tk.Frame(ctrl, bg=COLORS['bg_2'])
+    _be_seg.pack(side='left')
+    for _val, _lbl in (('lazy', _('Lazy_MkPFS by Nazky (Default)')),
+                       ('mkpfs', _('MkPFS by PSBrew (Experimental \u2014 native, '
+                                   'OSFMount-free extract/verify)'))):
+        tk.Radiobutton(_be_seg, text=_lbl,
+                       variable=app._pfs_backend_var, value=_val,
+                       font=FONTS['body'],
+                       bg=COLORS['bg_2'], fg=COLORS['fg_3'],
+                       activebackground=COLORS['bg_2'],
+                       activeforeground=COLORS['fg_1'],
+                       selectcolor=COLORS['bg_4'], cursor='hand2',
+                       command=_save_pfs_backend).pack(anchor='w', pady=(0, 2))
 
     _r2, ctrl2, _act2 = settings_row(card_exp.body,
-        _('External mkpfs tool folder'),
-        description=_('Select the folder containing the external '
-                      'mkpfs-compatible tool or launcher.'),
+        _('Override Lazy_MkPFS folder (Advanced)'),
+        description=_('Lazy_MkPFS is bundled with the app and used by default '
+                      '\u2014 you do not need to set anything here. Leave this '
+                      'empty to use the bundled copy. Power users can point '
+                      'this at a different Lazy_MkPFS checkout (a folder '
+                      'containing main_file.py) to override the bundled one; '
+                      'if the override is missing or invalid the app falls '
+                      'back to the bundled copy, and if that fails, to '
+                      'current mkpfs.'),
         with_divider=False)
     if not hasattr(app, '_exp_mkpfs_dir_var'):
         app._exp_mkpfs_dir_var = tk.StringVar(
@@ -654,7 +674,7 @@ def _build_build(body, app):
 
     def _browse_exp_dir():
         d = filedialog.askdirectory(
-            title=_('Select the external mkpfs tool folder'))
+            title=_('Select a Lazy_MkPFS folder to override the bundled copy'))
         if d:
             app._exp_mkpfs_dir_var.set(d)
             _save_exp_dir()
@@ -716,21 +736,13 @@ def _build_logs(body, app):
             if not files:
                 es = tk.Frame(table_holder, bg=COLORS['bg_2'],
                               highlightbackground=COLORS['border_2'],
-                              highlightthickness=1)
+                              highlightthickness=1, height=200)
                 es.pack(fill='x')
-                tk.Label(es, text='\U0001f4c4',
-                         font=('Segoe UI', 26),
-                         bg=COLORS['bg_2'], fg=COLORS['fg_6']
-                         ).pack(pady=(22, 4))
-                tk.Label(es, text=_('No logs available'),
-                         font=(FONTS['body'][0], 10, 'bold'),
-                         bg=COLORS['bg_2'], fg=COLORS['fg_2']
-                         ).pack()
-                tk.Label(es,
-                         text=_('Build activity will appear here.'),
-                         font=FONTS['mono_sm'],
-                         bg=COLORS['bg_2'], fg=COLORS['fg_5']
-                         ).pack(pady=(2, 22))
+                es.pack_propagate(False)
+                EmptyState(es, icon='\U0001f4c4',
+                           title=_('No logs available'),
+                           description=_('Build activity will appear here.'),
+                           bg='bg_2').pack(fill='both', expand=True)
                 return
             tk.Label(table_holder, text=_('RECENT LOGS'),
                      font=(FONTS['mono_sm'][0], 8, 'bold'),
@@ -1219,7 +1231,8 @@ def _build_shutdown(body, app):
     app._build_shutdown_section(body)
 
     # The vars exist only after the delegated builder ran.
-    triggers = [('_shutdown_on_exfat_var', 'exFAT'),
+    triggers = [('_shutdown_on_unibuild_var', 'Build tab'),
+                ('_shutdown_on_exfat_var', 'exFAT'),
                 ('_shutdown_on_ffpkg_var', 'ffpkg'),
                 ('_shutdown_on_backport_var', _('Backport')),
                 ('_shutdown_on_ftp_var', 'FTP'),

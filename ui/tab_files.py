@@ -39,6 +39,7 @@ from exfat_builder import _
 # (not re-exported either). Pull them in explicitly here so the
 # apply-backport helpers below have what they need.
 from exfat_builder import _NO_WIN_FLAGS, extract_ufs2tool
+from ui.shared.app_dialog import app_warning, app_error, app_confirm, app_success
 import subprocess
 import tempfile
 
@@ -801,7 +802,7 @@ def _extract_selected(app):
     if is_dir or name == '..':
         return
     full_path = os.path.join(app._fm_current_dir, name)
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog
     dest = filedialog.asksaveasfilename(
         title='Extract to...', initialfile=name)
     if not dest:
@@ -811,7 +812,7 @@ def _extract_selected(app):
         shutil.copyfile(full_path, dest)
         app._fm_status_var.set('Extracted: ' + dest)
     except Exception as e:
-        messagebox.showerror('Extract failed', str(e))
+        app_error(app, 'Extract failed', str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -906,15 +907,15 @@ def _apply_backport(app):
     import shutil
     import threading
     import time as _time
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog
 
     # ── Guard: must have a mounted image ──
     if not getattr(app, '_fm_drive', None):
-        messagebox.showwarning(_('Not mounted'),
+        app_warning(app, _('Not mounted'),
             _('Mount an image first.'))
         return
     if not getattr(app, '_fm_current_dir', None):
-        messagebox.showwarning(_('Not mounted'),
+        app_warning(app, _('Not mounted'),
             _('Mount an image first.'))
         return
 
@@ -930,7 +931,7 @@ def _apply_backport(app):
         if not src_path:
             return
         if not os.path.isdir(src_path):
-            messagebox.showerror(_('Bad folder'),
+            app_error(app, _('Bad folder'),
                 _('Selected path is not a folder.'))
             return
     elif kind == 'ffpkg':
@@ -951,7 +952,7 @@ def _apply_backport(app):
         img_src_check = _bp_find_image_source_path(app)
         if img_src_check and os.path.abspath(src_path) == \
                 os.path.abspath(img_src_check):
-            messagebox.showerror(_('Same image'),
+            app_error(app, _('Same image'),
                 _('Source image is the same file that is currently '
                   'mounted. Pick a different image.'))
             return
@@ -964,7 +965,7 @@ def _apply_backport(app):
     try:
         src_dir, cleanup_fn = _bp_materialize_source(app, kind, src_path)
     except Exception as e:
-        messagebox.showerror(_('Source preparation failed'), str(e))
+        app_error(app, _('Source preparation failed'), str(e))
         app._fm_status_var.set(_('Backport cancelled.'))
         return
     if not src_dir:
@@ -979,14 +980,14 @@ def _apply_backport(app):
             cleanup_fn()
         except Exception:
             pass
-        messagebox.showerror(_('Scan failed'), str(e))
+        app_error(app, _('Scan failed'), str(e))
         return
     if not items:
         try:
             cleanup_fn()
         except Exception:
             pass
-        messagebox.showwarning(_('Empty backport'),
+        app_warning(app, _('Empty backport'),
             _('No files were found in the selected source.'))
         return
 
@@ -1024,7 +1025,7 @@ def _apply_backport(app):
            backup_zip + '\n\n' +
            _('Nothing on the drive is deleted. New files are added; '
              'existing files are replaced (with backup).'))
-    if not messagebox.askyesno(_('Apply backport'), msg):
+    if not app_confirm(app, _('Apply backport'), msg):
         try:
             cleanup_fn()
         except Exception:
@@ -1046,7 +1047,7 @@ def _apply_backport(app):
         try:
             os.makedirs(backup_dir, exist_ok=True)
         except Exception as e:
-            app.after(0, messagebox.showerror,
+            app.after(0, lambda *_a: app_error(app, *_a),
                 _('Backup folder failed'),
                 _('Could not create backup folder:\n') + str(e))
             app.after(0, app._fm_status_var.set, _('Backport cancelled.'))
@@ -1153,10 +1154,10 @@ def _apply_backport(app):
                 if len(stats['errors']) > 5:
                     lines.append('  ... (%d more)' % (len(stats['errors']) - 5))
             if stats['failed']:
-                messagebox.showwarning(_('Backport finished with errors'),
+                app_warning(app, _('Backport finished with errors'),
                     '\n'.join(lines))
             else:
-                messagebox.showinfo(_('Backport applied'),
+                app_success(app, _('Backport applied'),
                     '\n'.join(lines))
             # Clean up any temp dir that held the materialised source.
             try:

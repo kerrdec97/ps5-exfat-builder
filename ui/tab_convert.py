@@ -38,13 +38,24 @@ import subprocess
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
 from ui.shared.page_head import (
     make_themed_button, info_banner, page_head, field_block)
 from ui.shared.hero import GameHero
 from ui.shared.scroll import attach_scroll
+from ui.shared.app_dialog import app_error, app_confirm, app_success
+
+# i18n hook. The monolith owns the translation table; the tab module falls
+# back to identity so it can be imported (e.g. by tests) without the GUI.
+# Only the few NEW user-facing strings added in v4 go through it here —
+# the pre-existing copy on this tab is left as-is.
+try:
+    from exfat_builder import _
+except Exception:
+    def _(text):
+        return text
 
 
 # v3.6.x: OSFMount attach timeout for the exFAT → ffpkg convert. A healthy
@@ -115,8 +126,8 @@ def build_convert_tab(parent, app):
 
     # ── Page head with badge ──
     head = page_head(inner, '\U0001f4bf',
-                     'Convert images',
-                     'Convert between .exfat and .ffpkg.')
+                     _('Convert images'),
+                     _('Convert between .exfat and .ffpkg.'))
     head.pack(fill='x', padx=24, pady=(14, 12))
 
     # v3.6.3: cross-reference so users wanting a compressed .ffpfsc don't get
@@ -132,19 +143,35 @@ def build_convert_tab(parent, app):
         try:
             app._force_dismount_all()
         except Exception as e:
-            messagebox.showerror('Force Dismount failed', str(e))
+            app_error(parent, 'Force Dismount failed', str(e))
 
     fd_btn = make_themed_button(head,
                                   '\u26a0  Force Dismount',
                                   command=_force_dismount,
                                   kind='ghost')
-    fd_btn.pack(side='right', padx=(8, 0))
+    # v4: tucked behind an "Advanced" toggle so the page head stays calm.
+    _fd_shown = {'on': False}
+
+    def _toggle_fd():
+        if _fd_shown['on']:
+            fd_btn.pack_forget()
+            _fd_shown['on'] = False
+            _adv_btn.config(text='\u2699  Advanced')
+        else:
+            fd_btn.pack(side='right', padx=(8, 0))
+            _fd_shown['on'] = True
+            _adv_btn.config(text='\u2699  Advanced \u25be')
+
+    _adv_btn = make_themed_button(head, '\u2699  Advanced',
+                                  command=_toggle_fd, kind='ghost')
+    _adv_btn.pack(side='right', padx=(8, 0))
 
     # ── Info banner ──
-    banner = info_banner(inner,
-        'Conversion mounts the source via OSFMount, runs UFS2Tool '
-        'newfs against the mount point, then unmounts. Output goes '
-        'to the global OUTPUT LOG (click at the bottom to expand).')
+    banner = info_banner(inner, _(
+        'Converts a game image between exFAT and ffpkg formats. Progress '
+        'appears in the OUTPUT LOG (click the bar at the bottom to expand). '
+        '(Mechanics: the source is mounted via OSFMount, rebuilt with '
+        'UFS2Tool, then unmounted \u2014 nothing on your console is touched.)'))
     banner.pack(fill='x', padx=24, pady=(0, 14))
 
     # ── Selected-image hero (v3.6.0 pass) ──
@@ -199,11 +226,83 @@ def build_convert_tab(parent, app):
             pass
     app._conv_update_hero = _update_hero
 
+    # ── Step 1: direction selector (segmented) ──
+    # One card at a time is shown below; the selector swaps them.
+    _conv_dir = {'val': 'e2f'}
+
+    dir_card = tk.Frame(inner, bg=COLORS['bg_2'],
+                        highlightbackground=COLORS['border_2'],
+                        highlightthickness=1)
+    dir_card.pack(fill='x', padx=24, pady=(0, 14), after=banner)
+    _dh = tk.Frame(dir_card, bg=COLORS['bg_2'])
+    _dh.pack(fill='x', padx=24, pady=(16, 14))
+    tk.Label(_dh, text='1.  Conversion direction',
+             font=(FONTS['h3'][0], 12, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        anchor='w', pady=(0, 8))
+    _seg = tk.Frame(_dh, bg=COLORS['bg_1'])
+    _seg.pack(side='left')
+
+    _conv_seg_btns = {}
+
+    def _seg_btn(key, label):
+        b = tk.Label(_seg, text=label, font=(FONTS['body'][0], 10, 'bold'),
+                     bg=COLORS['bg_1'], fg=COLORS['fg_4'],
+                     padx=14, pady=7, cursor='hand2')
+        b.pack(side='left', padx=2, pady=2)
+        b.bind('<Button-1>', lambda _e, k=key: _set_direction(k))
+        _conv_seg_btns[key] = b
+        return b
+
+    _seg_btn('e2f', 'Create FFPKG from exFAT')
+    _seg_btn('f2e', 'Create exFAT from FFPKG')
+
+    _conv_hdr = tk.Frame(_dh, bg=COLORS['bg_2'])
+    _conv_hdr.pack(side='left', padx=(18, 0))
+    tk.Label(_conv_hdr, text='Converting', font=FONTS['meta'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
+             ).pack(anchor='w')
+    _conv_dir_var = tk.StringVar(value='exFAT  \u2192  FFPKG')
+    tk.Label(_conv_hdr, textvariable=_conv_dir_var,
+             font=(FONTS['h3'][0], 14, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w'
+             ).pack(
+        anchor='w')
+
+    def _set_direction(key):
+        # Highlight the chosen segment, update the header, swap the card.
+        _conv_dir['val'] = key
+        for k, b in _conv_seg_btns.items():
+            if k == key:
+                b.config(bg=COLORS['accent_08'], fg=COLORS['accent_hi'])
+            else:
+                b.config(bg=COLORS['bg_1'], fg=COLORS['fg_4'])
+        _conv_dir_var.set('exFAT  \u2192  FFPKG' if key == 'e2f'
+                          else 'FFPKG  \u2192  exFAT')
+        # Cards are registered on `app` once built (below).
+        try:
+            _e2f = getattr(app, '_conv_card_e2f', None)
+            _f2e = getattr(app, '_conv_card_f2e', None)
+            if key == 'e2f':
+                if _f2e is not None:
+                    _f2e.pack_forget()
+                if _e2f is not None:
+                    _e2f.pack(fill='x', padx=24, pady=(0, 14), after=dir_card)
+            else:
+                if _e2f is not None:
+                    _e2f.pack_forget()
+                if _f2e is not None:
+                    _f2e.pack(fill='x', padx=24, pady=(0, 14), after=dir_card)
+        except Exception:
+            pass
+    app._conv_set_direction = _set_direction
+
     # ── Conversion card ──
     card_outer = tk.Frame(inner, bg=COLORS['bg_2'],
                            highlightbackground=COLORS['border_2'],
                            highlightthickness=1)
     card_outer.pack(fill='x', padx=24, pady=(0, 14))
+    app._conv_card_e2f = card_outer
 
     # Card head
     chead = tk.Frame(card_outer, bg=COLORS['bg_2'])
@@ -252,9 +351,15 @@ def build_convert_tab(parent, app):
         if p:
             e2f_outdir.set(p)
 
+    tk.Label(body, text='2.  Source image', font=(FONTS['h3'][0], 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        fill='x', pady=(0, 6))
     field_block(body, 'Source .exfat',
                  var=e2f_src, on_browse=_browse_src,
                  hint='the image to convert')
+    tk.Label(body, text='3.  Output', font=(FONTS['h3'][0], 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        fill='x', pady=(12, 6))
     field_block(body, 'Output folder',
                  var=e2f_outdir, on_browse=_browse_outdir,
                  hint='where the .ffpkg will be written')
@@ -273,8 +378,11 @@ def build_convert_tab(parent, app):
     e2f_src.trace_add('write', _on_e2f_src)
 
     # ── Action row: Convert button + status + progress bar ──
+    tk.Label(body, text='4.  Convert', font=(FONTS['h3'][0], 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        fill='x', pady=(14, 6))
     action_row = tk.Frame(body, bg=COLORS['bg_2'])
-    action_row.pack(fill='x', pady=(18, 0))
+    action_row.pack(fill='x', pady=(0, 0))
 
     convert_btn = make_themed_button(
         action_row,
@@ -427,22 +535,22 @@ def build_convert_tab(parent, app):
         outdir = e2f_outdir.get().strip()
         name = e2f_name.get().strip()
         if not src or not os.path.isfile(src):
-            messagebox.showerror('Source missing',
+            app_error(parent, 'Source missing',
                 'Pick a valid .exfat source image.')
             return
         if not outdir or not os.path.isdir(outdir):
-            messagebox.showerror('Output folder missing',
+            app_error(parent, 'Output folder missing',
                 'Pick an output folder.')
             return
         if not name:
-            messagebox.showerror('Output name missing',
+            app_error(parent, 'Output name missing',
                 'Set an output filename.')
             return
         if not name.lower().endswith('.ffpkg'):
             name = name + '.ffpkg'
         out_path = os.path.join(outdir, name)
         if os.path.exists(out_path):
-            if not messagebox.askyesno('Overwrite',
+            if not app_confirm(parent, 'Overwrite',
                     out_path + '\n\nalready exists. Overwrite?'):
                 return
             try:
@@ -478,7 +586,7 @@ def build_convert_tab(parent, app):
             if not ufs2:
                 parent.after(0, prog.close)
                 parent.after(0, lambda: _set_busy_e2f(False, 'Failed.'))
-                parent.after(0, lambda: messagebox.showerror(
+                parent.after(0, lambda: app_error(parent, 
                     'UFS2Tool not available',
                     'UFS2Tool could not be extracted. Conversion '
                     'aborted.'))
@@ -496,7 +604,7 @@ def build_convert_tab(parent, app):
                 _log('OSFMount not found.')
                 parent.after(0, prog.close)
                 parent.after(0, lambda: _set_busy_e2f(False, 'Failed.'))
-                parent.after(0, lambda: messagebox.showerror(
+                parent.after(0, lambda: app_error(parent, 
                     'OSFMount missing',
                     'OSFMount is required to convert exFAT to ffpkg.\n'
                     'Configure its path under Settings.'))
@@ -550,7 +658,7 @@ def build_convert_tab(parent, app):
                 parent.after(0, prog.close)
                 parent.after(0, lambda:
                     _set_busy_e2f(False, 'Mount timed out.'))
-                parent.after(0, lambda: messagebox.showerror(
+                parent.after(0, lambda: app_error(parent, 
                     'Mounting timed out',
                     'OSFMount didn\'t finish attaching the source image '
                     'within %d seconds, so the conversion was stopped.\n\n'
@@ -675,7 +783,7 @@ def build_convert_tab(parent, app):
 
             parent.after(0, prog.close)
             parent.after(0, lambda: _set_busy_e2f(False, 'Done \u2713'))
-            parent.after(0, lambda: messagebox.showinfo(
+            parent.after(0, lambda: app_success(parent, 
                 'Convert complete',
                 'Wrote:\n' + out_path))
             # v3.6.2: occasional support nudge (frequency-gated).
@@ -696,6 +804,7 @@ def build_convert_tab(parent, app):
                          highlightbackground=COLORS['border_2'],
                          highlightthickness=1)
     f2e_card.pack(fill='x', padx=24, pady=(0, 14))
+    app._conv_card_f2e = f2e_card
 
     f2e_chead = tk.Frame(f2e_card, bg=COLORS['bg_2'])
     f2e_chead.pack(fill='x', padx=24, pady=(18, 14))
@@ -737,9 +846,16 @@ def build_convert_tab(parent, app):
         if p:
             f2e_outdir.set(p)
 
+    tk.Label(f2e_body, text='2.  Source image',
+             font=(FONTS['h3'][0], 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        fill='x', pady=(0, 6))
     field_block(f2e_body, 'Source .ffpkg',
                  var=f2e_src, on_browse=_f2e_browse_src,
                  hint='the image to convert')
+    tk.Label(f2e_body, text='3.  Output', font=(FONTS['h3'][0], 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        fill='x', pady=(12, 6))
     field_block(f2e_body, 'Output folder',
                  var=f2e_outdir, on_browse=_f2e_browse_outdir,
                  hint='where the .exfat will be written')
@@ -756,8 +872,14 @@ def build_convert_tab(parent, app):
         _update_hero(f2e_src.get().strip(), 'ffpkg', 'exFAT')
     f2e_src.trace_add('write', _on_f2e_src)
 
+    # Both cards exist now — show the default direction (exFAT → ffpkg).
+    _set_direction('e2f')
+
+    tk.Label(f2e_body, text='4.  Convert', font=(FONTS['h3'][0], 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
+        fill='x', pady=(14, 6))
     f2e_action_row = tk.Frame(f2e_body, bg=COLORS['bg_2'])
-    f2e_action_row.pack(fill='x', pady=(18, 0))
+    f2e_action_row.pack(fill='x', pady=(0, 0))
 
     f2e_btn = make_themed_button(
         f2e_action_row,
@@ -815,15 +937,15 @@ def build_convert_tab(parent, app):
         outdir = f2e_outdir.get().strip()
         name = f2e_name.get().strip()
         if not src or not os.path.isfile(src):
-            messagebox.showerror('Source missing',
+            app_error(parent, 'Source missing',
                 'Pick a valid .ffpkg source image.')
             return
         if not outdir or not os.path.isdir(outdir):
-            messagebox.showerror('Output folder missing',
+            app_error(parent, 'Output folder missing',
                 'Pick an output folder.')
             return
         if not name:
-            messagebox.showerror('Output name missing',
+            app_error(parent, 'Output name missing',
                 'Set an output filename.')
             return
         if not name.lower().endswith('.exfat'):
@@ -832,12 +954,12 @@ def build_convert_tab(parent, app):
         # Safety: never let the output path equal the source — we'd
         # delete the source as part of the overwrite step below.
         if os.path.abspath(out_path) == os.path.abspath(src):
-            messagebox.showerror('Invalid output',
+            app_error(parent, 'Invalid output',
                 'Output path is the same as the source. '
                 'Pick a different name or folder.')
             return
         if os.path.exists(out_path):
-            if not messagebox.askyesno('Overwrite',
+            if not app_confirm(parent, 'Overwrite',
                     out_path + '\n\nalready exists. Overwrite?'):
                 return
             try:
@@ -871,7 +993,7 @@ def build_convert_tab(parent, app):
             if not ufs2:
                 parent.after(0, prog.close)
                 parent.after(0, lambda: _set_busy_f2e(False, 'Failed.'))
-                parent.after(0, lambda: messagebox.showerror(
+                parent.after(0, lambda: app_error(parent, 
                     'UFS2Tool not available',
                     'UFS2Tool could not be extracted. Conversion '
                     'aborted.'))
@@ -887,7 +1009,7 @@ def build_convert_tab(parent, app):
                 _log('OSFMount not found.')
                 parent.after(0, prog.close)
                 parent.after(0, lambda: _set_busy_f2e(False, 'Failed.'))
-                parent.after(0, lambda: messagebox.showerror(
+                parent.after(0, lambda: app_error(parent, 
                     'OSFMount missing',
                     'OSFMount is required to convert ffpkg to exFAT.\n'
                     'Configure its path under Settings.'))
@@ -1022,7 +1144,7 @@ def build_convert_tab(parent, app):
                             parent.after(0, prog.close)
                             parent.after(0, lambda:
                                 _set_busy_f2e(False, 'File(s) over 4 GB.'))
-                            parent.after(0, lambda m=_msg: messagebox.showerror(
+                            parent.after(0, lambda m=_msg: app_error(parent, 
                                 _('Cannot extract \u2014 files over 4 GB'),
                                 _(m)))
                             return
@@ -1034,7 +1156,7 @@ def build_convert_tab(parent, app):
                             parent.after(0, lambda:
                                 _set_busy_f2e(False, 'Dokan required.'))
                             def _ask_dokan():
-                                if messagebox.askyesno(_('Dokan required'),
+                                if app_confirm(parent, _('Dokan required'),
                                     _('Extracting a large .ffpkg mounts it as '
                                       'a drive, which needs the free Dokan '
                                       'driver.\n\nOpen the download page now?')):
@@ -1243,7 +1365,7 @@ def build_convert_tab(parent, app):
                 parent.after(0, prog.close)
                 parent.after(0, lambda:
                     _set_busy_f2e(False, 'Done \u2713'))
-                parent.after(0, lambda: messagebox.showinfo(
+                parent.after(0, lambda: app_success(parent, 
                     'Convert complete',
                     'Wrote:\n' + out_path))
                 def _nudge_cv2():
@@ -1259,7 +1381,7 @@ def build_convert_tab(parent, app):
                 parent.after(0, prog.close)
                 parent.after(0, lambda e=e:
                     _set_busy_f2e(False, 'Failed.'))
-                parent.after(0, lambda e=e: messagebox.showerror(
+                parent.after(0, lambda e=e: app_error(parent, 
                     'ffpkg → exFAT failed', str(e)))
                 # Best-effort cleanup of half-finished output file.
                 try:

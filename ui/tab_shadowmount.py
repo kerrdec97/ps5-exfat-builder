@@ -22,7 +22,9 @@ import socket
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
+
+from ui.shared.app_dialog import app_info, app_warning, app_error, app_confirm, app_danger
 
 # Theme is always loaded by the app on startup (see exfat_builder.py:636).
 # Use the real token names from tkinter_theme.COLORS — no fallback layer.
@@ -271,7 +273,7 @@ _SECTIONS = [
     ('kstuff',    '\u23f8', 'Kstuff pause',        'delays around game exec/exit',           6, 'purple'),
     ('mount',     '\U0001f4be', 'Mount options',  'read-only, backends, install flow',       5, 'accent'),
     ('scan',      '\U0001f50d', 'Scanning',       'where ShadowMount+ looks, how often',     4, 'accent'),
-    ('fakelib',   '\U0001f4e6', 'Fakelib overlays','sandbox library injection',              5, 'purple'),
+    ('fakelib',   '\U0001f4e6', 'Fakelib Manager','manage library overlays (.prx/.sprx)',  5, 'purple'),
     ('per_image', '\U0001f4d0', 'Per-image overrides','force RO/RW or sector size by file', 1, 'warn'),
     ('advanced',  '\u2699',  'Advanced',          'logging, sector sizes',                   7, 'fg_4'),
     ('payload',   '\U0001f4e1', 'Payload',        'send shadowmountplus.elf · TCP 9021',     2, 'purple'),
@@ -1281,10 +1283,346 @@ def _build_scan_section(parent, app):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Fakelib Manager (v4, Phase 1) — global overlay folder on the PS5
+# ════════════════════════════════════════════════════════════════════
+FAKELIB_DIR = '/data/shadowmount/fakelib'
+FAKELIB_DISABLED = FAKELIB_DIR + '/disabled'
+FAKELIB_EXTS = ('.prx', '.sprx')
+FAKELIB_REJECT_EXT = ('.exfat', '.ffpkg', '.ffpfs', '.ffpfsc')
+FAKELIB_SKIP_SUFFIX = ('.uploading', '.replacing.bak')
+
+
+def _fl_fmt_size(n):
+    try:
+        n = float(n)
+    except Exception:
+        return '—'
+    for u in 'B', 'KB', 'MB', 'GB':
+        if n < 1024:
+            return '%d %s' % (int(n), u) if u == 'B' else '%.1f %s' % (n, u)
+        n /= 1024
+    return '%.1f TB' % n
+
+def _fl_fmt_date(s):
+    if not s:
+        return '—'
+    s = str(s).strip().split()[-1]
+    if len(s) >= 12 and s[:8].isdigit():
+        return f"{s[0:4]!s}-{s[4:6]!s}-{s[6:8]!s} {s[8:10]!s}:{s[10:12]!s}"
+    if len(s) >= 8 and s[:8].isdigit():
+        return f"{s[0:4]!s}-{s[4:6]!s}-{s[6:8]!s}"
+    return s
+
+def _fakelib_log(app, msg, ok=True):
+    try:
+        app._log('[Fakelib] ' + msg + '\n')
+    except Exception:
+        pass
+    try:
+        app._fakelib_status_var.set(msg)
+    except Exception:
+        pass
+
+def _fakelib_validate(app, local_path):
+    """Return (ok, warn, message). ok=False → hard reject. warn=True → allowed
+    only after user confirmation."""
+    base = os.path.basename(local_path)
+    low = base.lower()
+    norm = local_path.replace('\\', '/').lower()
+    if os.path.isdir(local_path):
+        return False, False, 'Folders cannot be deployed as overlays. Select a single .prx or .sprx library file.'
+    if low == 'eboot.bin':
+        return False, False, 'eboot.bin cannot be replaced via fakelib overlays — it lives inside the image. Use the normal rebuild workflow.'
+    if 'sce_sys' in norm.split('/'):
+        return False, False, 'sce_sys files cannot be deployed as overlays.'
+    if low.endswith(FAKELIB_REJECT_EXT):
+        return False, False, 'Image files (.exfat / .ffpkg / .ffpfs / .ffpfsc) cannot be deployed as overlays. Fakelib Manager only handles library files.'
+    if not low.endswith(FAKELIB_EXTS):
+        return False, False, 'Only .prx / .sprx library overlays are accepted. "%s" is not a supported file.' % base
+    try:
+        with open(local_path, 'rb') as f:
+            magic = f.read(4)
+        readable = True
+    except Exception:
+        magic = b''
+        readable = False
+    is_elf_self = magic == b'\x7fELF' or magic in (b'O\x15=\x1d', b'T\x14\xf5\xee')
+    if not readable:
+        return True, True, 'Could not read "%s" to confirm it is an ELF/SELF library. Upload it as an overlay anyway?' % base
+    if not is_elf_self:
+        return True, True, '"%s" does not have an ELF/SELF header, so it may not be a valid library. Upload it as an overlay anyway?' % base
+    return True, False, ''
+
+def _fakelib_list_dir(app, ftp, path):
+    """List supported library files under `path`. Tries MLSD, falls back to
+    NLST + SIZE + MDTM. Returns [(name, size, mtime_str)]. Skips dirs and
+    temp/backup files."""
+    out = []
+    seen = set()
+    try:
+        for name, facts in ftp.mlsd(path):
+            if name in ('.', '..'):
+                continue
+            if facts.get('type') in ('dir', 'cdir', 'pdir'):
+                continue
+            low = name.lower()
+            if low.endswith(FAKELIB_SKIP_SUFFIX) or not low.endswith(FAKELIB_EXTS):
+                continue
+            out.append((name, facts.get('size'), facts.get('modify')))
+            seen.add(name)
+        return out
+    except Exception:
+        pass
+    try:
+        names = ftp.nlst(path)
+    except Exception:
+        return out
+    for raw in names:
+        name = raw.rsplit('/', 1)[-1]
+        if name in ('.', '..') or name in seen:
+            continue
+        low = name.lower()
+        if low.endswith(FAKELIB_SKIP_SUFFIX) or not low.endswith(FAKELIB_EXTS):
+            continue
+        full = path.rstrip('/') + '/' + name
+        size = None
+        mtime = None
+        try:
+            size = ftp.size(full)
+        except Exception:
+            pass
+        try:
+            mtime = ftp.sendcmd('MDTM ' + full)
+        except Exception:
+            pass
+        out.append((name, size, mtime))
+    return out
+
+def _fakelib_refresh(app):
+    if getattr(app, '_fakelib_busy', False):
+        return
+    app._fakelib_busy = True
+    _fakelib_log(app, 'Listing %s …' % FAKELIB_DIR)
+    def worker():
+        ftp = None
+        try:
+            ftp = app._ftp_connect()
+            enabled = _fakelib_list_dir(app, ftp, FAKELIB_DIR)
+            disabled = _fakelib_list_dir(app, ftp, FAKELIB_DISABLED)
+            entries = []
+            for name, size, mtime in enabled:
+                entries.append({'name': name, 'enabled': True, 'size': size, 'mtime': mtime, 'path': FAKELIB_DIR + '/' + name})
+            for name, size, mtime in disabled:
+                entries.append({'name': name, 'enabled': False, 'size': size, 'mtime': mtime, 'path': FAKELIB_DISABLED + '/' + name})
+            entries.sort(key=(lambda e: e['name'].lower()))
+            app.after(0, _fakelib_render, app, entries)
+            app.after(0, _fakelib_log, app, 'Listed %d overlay(s).' % len(entries))
+        except Exception as e:
+            app.after(0, _fakelib_render, app, None)
+            app.after(0, _fakelib_log, app, 'List failed: %s' % e, False)
+        finally:
+            try:
+                if ftp is not None:
+                    ftp.quit()
+            except Exception:
+                pass
+            app._fakelib_busy = False
+    threading.Thread(target=worker, daemon=True).start()
+
+def _fakelib_render(app, entries):
+    frame = getattr(app, '_fakelib_list_frame', None)
+    if frame is None or not frame.winfo_exists():
+        return
+    for w in frame.winfo_children():
+        w.destroy()
+    if entries is None:
+        tk.Label(frame, text='Could not list the fakelib folder. Check the PS5 connection and try Refresh.', bg=_BG_CARD, fg=_DANGER, font=_F_MONO, anchor='w', justify='left').pack(fill='x', padx=14, pady=8)
+        return
+    app._fakelib_entries = entries
+    if not entries:
+        tk.Label(frame, text='No .prx / .sprx overlays in %s yet. Use "Add library…" to deploy one.' % FAKELIB_DIR, bg=_BG_CARD, fg=_FG_MUTED, font=_F_MONO, anchor='w', justify='left').pack(fill='x', padx=14, pady=8)
+    n_en = 0
+    for e in entries:
+        if e['enabled']:
+            n_en += 1
+        _fakelib_render_row(app, frame, e)
+    try:
+        app._fakelib_status_var.set('%d overlay(s) · %d enabled · %d disabled' % (len(entries), n_en, len(entries) - n_en))
+    except Exception:
+        pass
+
+def _fakelib_render_row(app, parent, e):
+    row = tk.Frame(parent, bg=_BG_CARD)
+    row.pack(fill='x', padx=10, pady=1)
+    mark = '☑' if e['enabled'] else '☐'
+    chk = tk.Label(row, text=mark, bg=_BG_CARD, fg=_PURPLE if e['enabled'] else _FG_DIM, font=_F_BODY, cursor='hand2', width=2)
+    chk.pack(side='left')
+    chk.bind('<Button-1>', lambda _ev, en=e: _fakelib_toggle(app, en))
+    name_txt = e['name'] + ('' if e['enabled'] else '   (disabled)')
+    tk.Label(row, text=name_txt, bg=_BG_CARD, fg=_FG if e['enabled'] else _FG_MUTED, font=_F_BODY, anchor='w').pack(side='left', padx=(4, 0))
+    tk.Button(row, text='Remove', command=(lambda en=e: _fakelib_remove(app, en)), font=_F_META, bg=_BG_CARD, fg=_DANGER, activebackground=_BG_ROW_HOV, activeforeground=_DANGER, relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0).pack(side='right')
+    tk.Button(row, text='Replace', command=(lambda en=e: _fakelib_replace(app, en)), font=_F_META, bg=_BG_CARD, fg=_ACCENT, activebackground=_BG_ROW_HOV, activeforeground=_ACCENT, relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0).pack(side='right', padx=(0, 4))
+    tk.Label(row, text=_fl_fmt_date(e['mtime']), bg=_BG_CARD, fg=_FG_DIM, font=_F_META, width=16, anchor='e').pack(side='right', padx=6)
+    tk.Label(row, text=_fl_fmt_size(e['size']), bg=_BG_CARD, fg=_FG_MUTED, font=_F_META, width=9, anchor='e').pack(side='right')
+
+def _fakelib_add(app):
+    if getattr(app, '_fakelib_busy', False):
+        _fakelib_log(app, 'Busy — wait for the current operation.')
+        return
+    path = filedialog.askopenfilename(title='Select a .prx / .sprx library overlay', filetypes=[('PS5 libraries', '*.prx *.sprx'), ('All files', '*.*')])
+    if not path:
+        return
+    ok, warn, msg = _fakelib_validate(app, path)
+    if not ok:
+        app_warning(app, 'Unsupported file', msg)
+        _fakelib_log(app, 'Rejected %s' % os.path.basename(path), False)
+        return
+    if warn and not app_confirm(app, 'Confirm upload', msg):
+        return
+    name = os.path.basename(path)
+    app._fakelib_busy = True
+    _fakelib_log(app, f"Uploading {name!s} → {FAKELIB_DIR!s} …")
+    def done(ok_, final, err):
+        app._fakelib_busy = False
+        if ok_:
+            _fakelib_log(app, 'Uploaded %s' % name)
+            _fakelib_refresh(app)
+            return
+        _fakelib_log(app, f"Upload FAILED ({err!s}) — existing file (if any) left intact: {name!s}", False)
+        app_error(app, 'Upload failed', f"Could not upload {name!s}:\n{err!s}\n\nAny existing overlay of the same name was left untouched.")
+    app._ftp_upload_to(path, FAKELIB_DIR, name, None, done)
+
+def _fakelib_replace(app, entry):
+    if getattr(app, '_fakelib_busy', False):
+        _fakelib_log(app, 'Busy — wait for the current operation.')
+        return
+    path = filedialog.askopenfilename(title='Select replacement for %s' % entry['name'], filetypes=[('PS5 libraries', '*.prx *.sprx'), ('All files', '*.*')])
+    if not path:
+        return
+    ok, warn, msg = _fakelib_validate(app, path)
+    if not ok:
+        app_warning(app, 'Unsupported file', msg)
+        return
+    if warn and not app_confirm(app, 'Confirm replace', msg):
+        return
+    target_dir = FAKELIB_DIR if entry['enabled'] else FAKELIB_DISABLED
+    app._fakelib_busy = True
+    _fakelib_log(app, 'Replacing %s …' % entry['name'])
+    def done(ok_, final, err):
+        app._fakelib_busy = False
+        if ok_:
+            _fakelib_log(app, 'Replaced %s' % entry['name'])
+            _fakelib_refresh(app)
+            return
+        _fakelib_log(app, f"Replace FAILED ({err!s}) — original left intact: {entry['name']!s}", False)
+        app_error(app, 'Replace failed', f"Could not replace {entry['name']!s}:\n{err!s}\n\nThe original overlay was left intact.")
+    app._ftp_upload_to(path, target_dir, entry['name'], None, done)
+
+def _fakelib_remove(app, entry):
+    if getattr(app, '_fakelib_busy', False):
+        _fakelib_log(app, 'Busy — wait for the current operation.')
+        return
+    if not app_danger(app, 'Remove overlay', 'Delete this overlay from the PS5?\n\nThis cannot be undone.', detail=entry['path'], ok_label='Remove', cancel_label='Cancel'):
+        return
+    app._fakelib_busy = True
+    _fakelib_log(app, 'Removing %s …' % entry['name'])
+    def worker():
+        ftp = None
+        try:
+            ftp = app._ftp_connect()
+            ftp.delete(entry['path'])
+            app.after(0, _fakelib_log, app, 'Removed %s' % entry['name'])
+            app.after(0, _fakelib_refresh, app)
+        except Exception as e:
+            app.after(0, _fakelib_log, app, f"Remove FAILED: {entry['name']!s} ({e!s})", False)
+            app.after(0, lambda *_a: app_error(app, *_a), 'Remove failed', f"Could not delete {entry['name']!s}:\n{e!s}")
+        finally:
+            try:
+                if ftp is not None:
+                    ftp.quit()
+            except Exception:
+                pass
+            app._fakelib_busy = False
+    threading.Thread(target=worker, daemon=True).start()
+
+def _fakelib_toggle(app, entry):
+    if getattr(app, '_fakelib_busy', False):
+        _fakelib_log(app, 'Busy — wait for the current operation.')
+        return
+    app._fakelib_busy = True
+    enabling = not entry['enabled']
+    name = entry['name']
+    _fakelib_log(app, ('Enabling ' if enabling else 'Disabling ') + name + ' …')
+    def worker():
+        ftp = None
+        try:
+            ftp = app._ftp_connect()
+            if enabling:
+                src = FAKELIB_DISABLED + '/' + name
+                dst = FAKELIB_DIR + '/' + name
+            else:
+                app._ftp_makedirs(ftp, FAKELIB_DISABLED)
+                src = FAKELIB_DIR + '/' + name
+                dst = FAKELIB_DISABLED + '/' + name
+            ftp.rename(src, dst)
+            app.after(0, _fakelib_log, app, ('Enabled ' if enabling else 'Disabled ') + name)
+            app.after(0, _fakelib_refresh, app)
+        except Exception as e:
+            app.after(0, _fakelib_log, app, f"Toggle FAILED: {name!s} ({e!s})", False)
+            app.after(0, lambda *_a: app_error(app, *_a), 'Enable/Disable failed', f"Could not move {name!s}:\n{e!s}")
+        finally:
+            try:
+                if ftp is not None:
+                    ftp.quit()
+            except Exception:
+                pass
+            app._fakelib_busy = False
+    threading.Thread(target=worker, daemon=True).start()
+
+def _build_fakelib_manager(parent, app):
+    """Phase 1 Fakelib Manager UI — banner, library table, actions, config
+    lives below (the existing SettingRows). Global overlay only."""
+    app._fakelib_busy = False
+    if not hasattr(app, '_fakelib_status_var'):
+        app._fakelib_status_var = tk.StringVar(value='')
+    banner = tk.Frame(parent, bg=_WARN_BG, highlightthickness=1, highlightbackground=_WARN)
+    banner.pack(fill='x', padx=14, pady=(12, 8))
+    tk.Label(banner, text='⚠ Fakelib Manager only manages library overlays.\n\nIt cannot replace:\n  • eboot.bin\n  • game content\n  • files inside images\n\nUse normal rebuild workflows for those.', bg=_WARN_BG, fg=_WARN, font=_F_MONO, justify='left', anchor='w').pack(fill='x', padx=12, pady=8)
+    scope = tk.Frame(parent, bg=_BG_CARD)
+    scope.pack(fill='x', padx=14, pady=(2, 6))
+    tk.Label(scope, text='Scope:', bg=_BG_CARD, fg=_FG_MUTED, font=_F_LABEL).pack(side='left')
+    tk.Label(scope, text='◉ Global overlay', bg=_BG_CARD, fg=_FG, font=_F_BODY).pack(side='left', padx=(8, 14))
+    tk.Label(scope, text='○ Per-game — planned', bg=_BG_CARD, fg=_FG_DIM, font=_F_BODY).pack(side='left')
+    fr = tk.Frame(parent, bg=_BG_CARD)
+    fr.pack(fill='x', padx=14, pady=(0, 4))
+    tk.Label(fr, text='Folder: ' + FAKELIB_DIR, bg=_BG_CARD, fg=_FG_MUTED, font=_F_MONO, anchor='w').pack(side='left')
+    tk.Button(fr, text='↻ Refresh', command=(lambda: _fakelib_refresh(app)), font=_F_META, bg=_BG_CARD_HEAD, fg=_FG, activebackground=_BG_ROW_HOV, activeforeground=_FG, relief='flat', bd=0, padx=10, pady=3, cursor='hand2', highlightthickness=1, highlightbackground=_BORDER_STRG).pack(side='right')
+    list_wrap = tk.Frame(parent, bg=_BG_CARD, highlightthickness=1, highlightbackground=_BORDER)
+    list_wrap.pack(fill='x', padx=14, pady=(0, 6))
+    app._fakelib_list_frame = tk.Frame(list_wrap, bg=_BG_CARD)
+    app._fakelib_list_frame.pack(fill='x', pady=4)
+    tk.Label(app._fakelib_list_frame, text='Press Refresh to list overlays on the PS5.', bg=_BG_CARD, fg=_FG_DIM, font=_F_MONO, anchor='w').pack(fill='x', padx=14, pady=6)
+    act = tk.Frame(parent, bg=_BG_CARD)
+    act.pack(fill='x', padx=14, pady=(0, 4))
+    tk.Button(act, text='+ Add library…', command=(lambda: _fakelib_add(app)), font=_F_BUTTON, bg=_PURPLE, fg='#ffffff', activebackground=_PURPLE, activeforeground='#ffffff', relief='flat', bd=0, padx=14, pady=6, cursor='hand2', highlightthickness=0).pack(side='left')
+    tk.Label(act, textvariable=app._fakelib_status_var, bg=_BG_CARD, fg=_ACCENT, font=_F_META, anchor='w').pack(side='left', padx=(12, 0))
+    tk.Label(parent, text='ℹ Changes may require remounting the game or restarting the title before they take effect.', bg=_BG_CARD, fg=_FG_DIM, font=_F_META, anchor='w', justify='left').pack(fill='x', padx=14, pady=(2, 4))
+
+
+# ════════════════════════════════════════════════════════════════════
 # Fakelib overlays section
 # ════════════════════════════════════════════════════════════════════
 def _build_fakelib_section(parent, app):
     on_change = lambda k, v: _on_smp_change(app, k, v)
+
+    # Phase 1 Fakelib Manager (banner, library table, actions) sits above
+    # the existing overlay config rows.
+    _build_fakelib_manager(parent, app)
+    # divider + sub-heading for the config rows below
+    tk.Frame(parent, bg=_BORDER, height=1).pack(fill='x', padx=14,
+                                                pady=(14, 6))
+    tk.Label(parent, text='OVERLAY CONFIG', bg=_BG_CARD, fg=_FG_DIM,
+             font=_F_META, anchor='w').pack(fill='x', padx=14, pady=(0, 2))
 
     _register_row(app, 'backport_fakelib',
         SettingRow(parent,
@@ -2678,7 +3016,7 @@ def _save_locally(app):
 
 
 def _reset_defaults(app):
-    if not messagebox.askyesno('Reset',
+    if not app_confirm(app, 'Reset',
             'Reset all ShadowMountPlus fields to documented defaults?\n\n'
             'This clears your custom values in the form but does NOT '
             'overwrite the config on the PS5.'):
@@ -2700,7 +3038,7 @@ def _reset_defaults(app):
 def _load_from_ps5(app):
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab (or Settings) first.')
         return
 
@@ -2727,7 +3065,7 @@ def _load_from_ps5(app):
             if '550' in err or 'no such' in err.lower():
                 app.after(0, _set_status, app,
                     'No config on PS5 yet \u2014 push to create it', WARNING)
-                app.after(0, messagebox.showinfo, 'Not on PS5',
+                app.after(0, lambda *_a: app_info(app, *_a), 'Not on PS5',
                     REMOTE_CONFIG_PATH + ' does not exist on the PS5.\n\n'
                     'This is normal if ShadowMountPlus has never been run. '
                     'Edit the form locally and click \u201cPush to PS5\u201d '
@@ -2735,7 +3073,7 @@ def _load_from_ps5(app):
             else:
                 short, title, body = _friendly_ftp_error('Load', e)
                 app.after(0, _set_status, app, short, DANGER)
-                app.after(0, messagebox.showerror, title, body)
+                app.after(0, lambda *_a: app_error(app, *_a), title, body)
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -2756,7 +3094,7 @@ def _on_loaded(app, text):
 def _push_to_ps5(app):
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab (or Settings) first.')
         return
 
@@ -2773,7 +3111,7 @@ def _push_to_ps5(app):
             if n < 0 or n > 3600:
                 raise ValueError('out of range')
         except ValueError:
-            messagebox.showwarning('Invalid value',
+            app_warning(app, 'Invalid value',
                 '%s must be a whole number in 0\u20133600. Got: %r' % (k, v))
             return
     # Validate kstuff_delay per-line
@@ -2782,7 +3120,7 @@ def _push_to_ps5(app):
         if not t or t.startswith('#'):
             continue
         if ':' not in t:
-            messagebox.showwarning('Invalid kstuff_delay rule',
+            app_warning(app, 'Invalid kstuff_delay rule',
                 'Expected TITLEID:SECONDS, got: %r' % t)
             return
         tid, _, sec = t.partition(':')
@@ -2791,12 +3129,12 @@ def _push_to_ps5(app):
             if n < 0 or n > 3600:
                 raise ValueError()
         except Exception:
-            messagebox.showwarning('Invalid kstuff_delay rule',
+            app_warning(app, 'Invalid kstuff_delay rule',
                 'Seconds must be 0\u20133600, got: %r in rule %r' % (sec, t))
             return
 
     ini_text = _render_ini(data)
-    if not messagebox.askyesno('Push to PS5',
+    if not app_confirm(app, 'Push to PS5',
             'Write %d bytes to:\n%s\n\nContinue?'
             % (len(ini_text), REMOTE_CONFIG_PATH)):
         return
@@ -2820,7 +3158,30 @@ def _push_to_ps5(app):
                 except Exception:
                     pass
                 buf = io.BytesIO(ini_text.encode('utf-8'))
-                ftp.storbinary('STOR ' + REMOTE_CONFIG_PATH, buf)
+                # v4: stage to a sibling file, then rename into place so a
+                # dropped connection never leaves a half-written config.
+                _staged = REMOTE_CONFIG_PATH + '.new'
+                ftp.storbinary('STOR ' + _staged, buf)
+                try:
+                    try:
+                        ftp.rename(_staged, REMOTE_CONFIG_PATH)
+                    except Exception:
+                        # Some FTP servers refuse to rename over an existing
+                        # file: delete the old one first, then retry.
+                        try:
+                            ftp.delete(REMOTE_CONFIG_PATH)
+                        except Exception:
+                            pass
+                        ftp.rename(_staged, REMOTE_CONFIG_PATH)
+                except Exception:
+                    # Rename unsupported entirely: fall back to a direct
+                    # STOR of the final path (old behaviour) and tidy up.
+                    buf.seek(0)
+                    ftp.storbinary('STOR ' + REMOTE_CONFIG_PATH, buf)
+                    try:
+                        ftp.delete(_staged)
+                    except Exception:
+                        pass
             finally:
                 try:
                     ftp.quit()
@@ -2831,7 +3192,7 @@ def _push_to_ps5(app):
         except Exception as e:
             short, title, body = _friendly_ftp_error('Push', e)
             app.after(0, _set_status, app, short, DANGER)
-            app.after(0, messagebox.showerror, title, body)
+            app.after(0, lambda *_a: app_error(app, *_a), title, body)
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -2856,14 +3217,14 @@ def _send_payload(app):
         elf_path = str(app._settings.get('smp_payload_path', '')).strip()
 
     if not elf_path or not os.path.isfile(elf_path):
-        messagebox.showwarning('Locate ELF',
+        app_warning(app, 'Locate ELF',
             'Pick the shadowmountplus.elf file first using the Browse '
             'button on the Payload section.')
         return
 
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab (or Settings) first.')
         return
 
@@ -2888,7 +3249,7 @@ def _send_payload(app):
     except (ValueError, TypeError):
         port = 9021
     if not (1 <= port <= 65535):
-        messagebox.showwarning('Invalid port',
+        app_warning(app, 'Invalid port',
             'Payload port must be 1\u201365535.')
         return
 
@@ -2941,14 +3302,14 @@ def _send_payload(app):
                         'listening on that port before you can send an ELF.\n\n'
                         'Start your payload host on the PS5, then try again.')
             app.after(0, _set_status, app, short, DANGER)
-            app.after(0, messagebox.showerror, title, body)
+            app.after(0, lambda *_a: app_error(app, *_a), title, body)
     threading.Thread(target=worker, daemon=True).start()
 
 
 def _fetch_debug_log(app):
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab (or Settings) first.')
         return
 
@@ -2974,7 +3335,7 @@ def _fetch_debug_log(app):
             if '550' in err or 'no such' in err.lower():
                 app.after(0, _set_status, app,
                     'No debug.log on PS5 yet', WARNING)
-                app.after(0, messagebox.showinfo, 'No log yet',
+                app.after(0, lambda *_a: app_info(app, *_a), 'No log yet',
                     REMOTE_DEBUG_LOG + ' does not exist on the PS5.\n\n'
                     'Either ShadowMountPlus has not run yet, or debug logging '
                     'is disabled (set debug=1 in the Advanced section and '
@@ -2982,7 +3343,7 @@ def _fetch_debug_log(app):
             else:
                 short, title, body = _friendly_ftp_error('Fetch', e)
                 app.after(0, _set_status, app, short, DANGER)
-                app.after(0, messagebox.showerror, title, body)
+                app.after(0, lambda *_a: app_error(app, *_a), title, body)
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -3008,7 +3369,7 @@ def _show_log_window(app, text):
                 with open(p, 'w', encoding='utf-8') as f:
                     f.write(text)
             except Exception as e:
-                messagebox.showerror('Save failed', str(e))
+                app_error(app, 'Save failed', str(e))
 
     tk.Button(bar, text='Save as...', command=_save_as,
               bg=SURFACE2, fg=TEXT, font=('Segoe UI', 9),
@@ -3089,11 +3450,11 @@ def _stop_shadowmount(app):
     """
     ip = app._ftp_ip_var.get().strip()
     if not ip:
-        messagebox.showwarning('No IP',
+        app_warning(app, 'No IP',
             'Set the PS5 IP address in the FTP tab (or Settings) first.')
         return
 
-    if not messagebox.askyesno('Stop ShadowMountPlus',
+    if not app_confirm(app, 'Stop ShadowMountPlus',
             'This will tell ShadowMountPlus to release ALL mounted games '
             'so you can safely unplug your USB / nvme enclosure.\n\n'
             'The app will watch the PS5 kernel log and only report '
@@ -3216,7 +3577,7 @@ def _stop_shadowmount(app):
         except Exception as e:
             short, title, body = _friendly_ftp_error('Stop', e)
             app.after(0, _set_status, app, short, DANGER)
-            app.after(0, messagebox.showerror, title, body)
+            app.after(0, lambda *_a: app_error(app, *_a), title, body)
         finally:
             # Always release the temporary klog socket — confirmation,
             # timeout, klog loss, and FTP error all land here. The Klog
@@ -3235,7 +3596,7 @@ def _on_stop_confirmed(app):
     _set_status(app,
         'ShadowMountPlus cleanup confirmed \u2713 \u2014 safe to unplug',
         SUCCESS)
-    messagebox.showinfo('Safe to unplug',
+    app_info(app, 'Safe to unplug',
         'ShadowMountPlus cleanup confirmed. It is now safe to unplug '
         'the drive.\n\n'
         'To resume auto-mounting later:\n'
@@ -3256,7 +3617,7 @@ def _on_stop_unconfirmed(app, reason):
         'STOP sent \u2014 cleanup NOT confirmed. Do not unplug yet.',
         WARNING)
     if reason == 'no_klog':
-        messagebox.showwarning('STOP sent — not confirmed',
+        app_warning(app, 'STOP sent — not confirmed',
             'STOP signal sent, but cleanup could not be confirmed '
             'because klog is unavailable.\n\n'
             'Wait at least 5 seconds per mounted game and make sure the '
@@ -3266,7 +3627,7 @@ def _on_stop_unconfirmed(app, reason):
         if reason == 'klog_lost':
             extra = ('\n\n(The klog connection dropped while waiting, so '
                      'confirmation may have been missed.)')
-        messagebox.showwarning('STOP sent — not confirmed',
+        app_warning(app, 'STOP sent — not confirmed',
             'STOP signal sent, but ShadowMountPlus cleanup was not '
             'confirmed.\n\n'
             'ShadowMountPlus may not be running, may have crashed, or '

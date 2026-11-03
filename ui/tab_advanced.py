@@ -44,6 +44,9 @@ from tkinter import ttk
 from tkinter_theme import COLORS, FONTS
 
 from exfat_builder import *  # noqa: F401,F403
+from ui.shared.app_dialog import (
+    app_confirm, app_error, app_info, app_question, app_warning,
+)
 from exfat_builder import _, save_settings, SubTabBar, Tooltip
 from ui.shared.scroll import attach_scroll
 
@@ -206,13 +209,15 @@ def build_advanced_tab(parent, app):
     # bottom. The scrollregion is recomputed on every <Configure> of
     # the inner frame, so adding cards never pushes content off-screen.
     app._adv_v2_panes = {}
-    for key in ('params', 'post', 'lang'):
+    for key in ('params', 'post', 'lang', 'ampr', 'dlc'):
         pane = tk.Frame(body, bg=COLORS['bg_1'])
         app._adv_v2_panes[key] = pane
 
     _build_params_pane(_scroll_host(app._adv_v2_panes['params']), app)
     _build_post_pane(_scroll_host(app._adv_v2_panes['post']), app)
     _build_lang_pane(_scroll_host(app._adv_v2_panes['lang']), app)
+    _build_ampr_pane(_scroll_host(app._adv_v2_panes['ampr']), app)
+    _build_dlc_pane(_scroll_host(app._adv_v2_panes['dlc']), app)
 
     # Show last-used sub-tab
     last = app._settings.get('adv_active_subtab', 'params')
@@ -266,6 +271,8 @@ def _build_subtab_bar(parent, app):
         ('params', '\U0001f527', _('Build Parameters')),
         ('post',   '\U0001f680', _('Post-Build')),
         ('lang',   '\U0001f310', _('Language Stripper')),
+        ('ampr',   '\U0001f5c2', _('AMPR Index')),
+        ('dlc',    '\U0001f5c3', _('DLC-emu')),
     ]
     for key, icon, label in tabs:
         btn = _pill_tab(bar, key, icon, label, app)
@@ -721,6 +728,1185 @@ def _build_post_pane(parent, app):
         severity='danger')
 
 
+def _build_ampr_pane(parent, app):
+    """AMPR Index Builder (issue #43): a thin UI wrapper around the existing
+    ui.build_ampr_index engine (build_index_local / build_index_ftp). Nothing
+    new is computed here — it exposes the tool that already runs
+    automatically during a Build (gated on fakelib/libSceAmpr.sprx) so users
+    can generate ampr_emu.index for an existing dump folder, or push one to a
+    connected PS5 over FTP. No build, format, or engine changes."""
+    import threading as _thr
+    from tkinter import filedialog
+
+    parent.columnconfigure(0, weight=1)
+    parent.rowconfigure(0, weight=1)
+
+    card_outer = tk.Frame(parent, bg=COLORS['bg_2'],
+                          highlightbackground=COLORS['border_2'],
+                          highlightthickness=1)
+    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, 12))
+
+    head = tk.Frame(card_outer, bg=COLORS['bg_2'])
+    head.pack(fill='x', padx=14, pady=(12, 4))
+    tk.Label(head, text='\U0001f5c2',
+             font=('Segoe UI', 14),
+             bg=COLORS['bg_2'], fg=COLORS['purple']
+             ).pack(side='left', padx=(0, 8))
+    title_col = tk.Frame(head, bg=COLORS['bg_2'])
+    title_col.pack(side='left', fill='x', expand=True)
+    tk.Label(title_col, text=_('AMPR Index Builder'),
+             font=('Segoe UI', 11, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
+             ).pack(anchor='w')
+    tk.Label(title_col,
+             text=_('Generate ampr_emu.index for an APR title — for an '
+                    'existing dump folder, or a connected PS5. Builds run '
+                    'automatically too (when fakelib/libSceAmpr.sprx is '
+                    'present); this is the manual entry point.'),
+             font=FONTS['mono_sm'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w',
+             justify='left', wraplength=720
+             ).pack(anchor='w')
+
+    body = tk.Frame(card_outer, bg=COLORS['bg_2'])
+    body.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+
+    # Stat cells: files indexed / index size / output
+    top = tk.Frame(body, bg=COLORS['bg_2'])
+    top.pack(fill='x', pady=(4, 8))
+    for i in range(3):
+        top.grid_columnconfigure(i, weight=1, uniform='amprtop')
+
+    def _cell(col, caption, fg):
+        cell = tk.Frame(top, bg=COLORS['bg_3'],
+                        highlightbackground=COLORS['border_2'],
+                        highlightthickness=1)
+        cell.grid(row=0, column=col, sticky='ew',
+                  padx=(0 if col == 0 else 10, 0))
+        tk.Label(cell, text=caption.upper(),
+                 font=(FONTS['mono_sm'][0], 8, 'bold'),
+                 bg=COLORS['bg_3'], fg=COLORS['fg_5']
+                 ).pack(anchor='w', padx=12, pady=(9, 0))
+        v = tk.Label(cell, text='—',
+                     font=(FONTS['h2'][0], 13, 'bold'),
+                     bg=COLORS['bg_3'], fg=fg, anchor='w')
+        v.pack(fill='x', padx=12, pady=(2, 9))
+        return v
+
+    c_files = _cell(0, _('Files Indexed'), COLORS['purple_hi'])
+    c_size = _cell(1, _('Index Size'), COLORS['accent_hi'])
+    c_out = _cell(2, _('Output'), COLORS['fg_1'])
+
+    status_var = tk.StringVar(value=_('Idle.'))
+    tk.Label(body, textvariable=status_var,
+             font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'],
+             anchor='w', justify='left', wraplength=720
+             ).pack(fill='x', pady=(2, 8))
+
+    busy = {'on': False}
+
+    def _set_busy(on):
+        busy['on'] = on
+        _state = 'disabled' if on else 'normal'
+        for b in (btn_folder, btn_ps5):
+            try:
+                b.configure(state=_state)
+            except Exception:
+                pass
+
+    def _reset_cells():
+        for v in (c_files, c_size, c_out):
+            v.configure(text='—')
+
+    def _fmt_bytes(n):
+        try:
+            n = int(n)
+        except Exception:
+            return '—'
+        if n >= 1048576:
+            return '%.1f MB' % (n / 1048576.0)
+        if n >= 1024:
+            return '%.0f KB' % (n / 1024.0)
+        return '%d B' % n
+
+    def _generate_from_folder():
+        if busy['on']:
+            return
+        folder = filedialog.askdirectory(
+            title=_('Select the app0 / dump folder to index'))
+        if not folder:
+            return
+        # Gate on the same marker the automatic build path uses.
+        sprx = os.path.join(folder, 'fakelib', 'libSceAmpr.sprx')
+        if not os.path.isfile(sprx):
+            if not app_confirm(app,
+                    _('Not an APR title?'),
+                    _('This folder has no fakelib/libSceAmpr.sprx, so it does '
+                      'not appear to be an APR title.\n\n'
+                      'Generate ampr_emu.index anyway?')):
+                return
+
+        _reset_cells()
+        _set_busy(True)
+        status_var.set(_('Generating ampr_emu.index in %s…') % folder)
+
+        def _progress(msg):
+            # Called from the worker thread by the engine — marshal to the
+            # UI thread.
+            try:
+                app.after(0, lambda m=msg: status_var.set(m))
+            except Exception:
+                pass
+
+        def _work():
+            from pathlib import Path
+            import time as _time
+            out = Path(folder) / 'ampr_emu.index'
+            rc = 1
+            err = ''
+            stats = {}
+            t0 = _time.monotonic()
+            try:
+                from ui.build_ampr_index import build_index_local
+                rc = build_index_local(Path(folder), out, True,
+                                       progress=_progress, stats_out=stats)
+            except Exception as e:
+                err = str(e)
+
+            def _done():
+                _set_busy(False)
+                if rc == 0 and out.is_file():
+                    try:
+                        sz = out.stat().st_size
+                    except Exception:
+                        sz = 0
+                    _el = int(round(_time.monotonic() - t0))
+                    _el_str = '%dm %02ds' % (_el // 60, _el % 60) if _el >= 60 else '%ds' % _el
+                    _folders = stats.get('folders')
+                    _files = stats.get('files')
+                    c_size.configure(text=_fmt_bytes(sz))
+                    c_out.configure(text=str(out))
+                    status_var.set(
+                        _('Complete — %s files indexed in %s.')
+                        % (_files if _files is not None else '?', _el_str))
+                    try:
+                        app._log('[AMPR] Manual index written: %s '
+                                 '(%s folders, %s files, %d bytes, %s)\n'
+                                 % (out, _folders, _files, sz, _el_str))
+                    except Exception:
+                        pass
+                    app_info(app,
+                        _('AMPR index created'),
+                        _('Wrote ampr_emu.index.\n\n'
+                          'Folders indexed:  %s\n'
+                          'Files indexed:    %s\n'
+                          'Elapsed:          %s\n'
+                          'Output:           %s')
+                        % (_folders if _folders is not None else '—',
+                           _files if _files is not None else '—',
+                           _el_str, out))
+                else:
+                    status_var.set(_('Index generation failed (rc=%s)%s.')
+                                   % (rc, (' — ' + err) if err else ''))
+                    app_error(app,
+                        _('AMPR index failed'),
+                        _('Could not generate the index (rc=%s).%s')
+                        % (rc, ('\n\n' + err) if err else ''))
+            app.after(0, _done)
+
+        _thr.Thread(target=_work, daemon=True).start()
+
+    def _generate_from_ps5():
+        if busy['on']:
+            return
+        ip = ''
+        port = '2121'
+        try:
+            ip = (app._ftp_ip_var.get() or '').strip()
+            port = (app._ftp_port_var.get() or '2121').strip()
+        except Exception:
+            pass
+        if not ip:
+            app_warning(app,
+                _('No PS5 connection'),
+                _('Set the PS5 FTP IP in the PS5 tab first.'))
+            return
+
+        # Start the picker where the user already is: the PS5 Browser's
+        # current folder if it has one, else the configured FTP path.
+        # The picker itself (app._ampr_pick_ps5_folder) opens its own
+        # short-lived FTP connection and validates the choice is a real
+        # app0 folder (eboot.bin / sce_sys present) before returning.
+        default_path = '/'
+        try:
+            _br = getattr(app, '_br_path', None)
+            _brp = _br.get().strip() if _br is not None else ''
+            if _brp and _brp != '/':
+                default_path = _brp
+            else:
+                default_path = (app._ftp_path_var.get() or '/').strip() or '/'
+        except Exception:
+            default_path = '/'
+
+        # Modal picker — returns the validated app0 path or None. All the
+        # browsing happens one level at a time; nothing recursive runs
+        # until the user confirms below.
+        game_path = app._ampr_pick_ps5_folder(default_path)
+        if not game_path:
+            return
+        game_path = game_path.strip()
+
+        if not app_confirm(app,
+                _('Generate and upload?'),
+                _('Build ampr_emu.index from:\n  ftp://%s:%s%s\n\n'
+                  'and upload it to that folder on the PS5?')
+                % (ip, port, game_path)):
+            return
+
+        _reset_cells()
+        _set_busy(True)
+        status_var.set(_('Indexing PS5 over FTP…'))
+
+        def _progress(msg):
+            # Engine progress callback — arrives on the worker thread. The
+            # engine reports every N files / folders so a long walk over a
+            # wrong (too broad) root is visible rather than a silent hang;
+            # the app0 check above is what prevents that walk in the first
+            # place.
+            try:
+                app.after(0, lambda m=msg: status_var.set(m))
+            except Exception:
+                pass
+
+        def _probe_app0(host, prt, path):
+            """Shallow one-level FTP listing of `path`. Returns
+            (is_app0, n_child_dirs, listed, error). `is_app0` is True when the
+            folder directly contains eboot.bin or sce_sys. Never raises — used
+            to confirm a game app0 folder was chosen before the recursive walk,
+            so a broad parent (e.g. /data/etaHEN/games) is not scanned whole."""
+            import ftplib as _ftplib
+            f = None
+            names = set()
+            n_dirs = 0
+            listed = False
+            try:
+                f = _ftplib.FTP()
+                f.connect(str(host), int(prt), timeout=15)
+                f.login()
+                try:
+                    for nm, facts in f.mlsd(path):
+                        if nm in ('.', '..'):
+                            continue
+                        listed = True
+                        names.add(nm.lower())
+                        if (facts.get('type', '') or '').lower() == 'dir':
+                            n_dirs += 1
+                except _ftplib.all_errors:
+                    # No MLSD — fall back to a plain NLST (names only).
+                    try:
+                        for r in f.nlst(path):
+                            nm = r.rsplit('/', 1)[-1]
+                            if nm in ('', '.', '..'):
+                                continue
+                            listed = True
+                            names.add(nm.lower())
+                    except _ftplib.all_errors:
+                        pass
+                is_app0 = 'eboot.bin' in names or 'sce_sys' in names
+                return is_app0, n_dirs, listed, ''
+            except Exception as _e:
+                return False, 0, listed, str(_e)
+            finally:
+                if f is not None:
+                    try:
+                        f.quit()
+                    except Exception:
+                        try:
+                            f.close()
+                        except Exception:
+                            pass
+
+        def _work():
+            from pathlib import Path
+            import tempfile as _tf
+            import time as _time
+            rc = 1
+            err = ''
+            stats = {}
+            t0 = _time.monotonic()
+            out = Path(_tf.gettempdir()) / 'ampr_emu.index'
+
+            # Defence in depth: the picker already validated the folder, but
+            # re-check right before the recursive walk (the user may have
+            # typed a path, or the console contents may have changed) so a
+            # broad parent folder is never indexed by mistake. This is one
+            # shallow listing — not the recursive walk.
+            _progress(_('Checking folder…'))
+            _is_app0, _n_dirs, _listed, _verr = _probe_app0(ip, port, game_path)
+            if not _is_app0:
+                def _bad():
+                    _set_busy(False)
+                    if not _listed:
+                        status_var.set(
+                            _('Could not read %s on the PS5.') % game_path)
+                        app_error(app,
+                            _('Cannot read PS5 folder'),
+                            _('Could not list this folder on the PS5:\n  %s\n\n%s')
+                            % (game_path, _verr or _('The folder was empty or unreadable.')))
+                        return
+                    status_var.set(
+                        _('Not a game app0 folder — nothing indexed.'))
+                    app_error(app,
+                        _('Not a game app0 folder'),
+                        _('This looks like a parent folder, not a game app0 '
+                          'folder. Open the game folder first.\n\n'
+                          'No eboot.bin or sce_sys was found in:\n  %s\n\n'
+                          '%d subfolder(s) present. Browse into the specific '
+                          'game first, then try again.')
+                        % (game_path, _n_dirs))
+                app.after(0, _bad)
+                return
+            try:
+                from ui.build_ampr_index import build_index_ftp
+                root_url = f'ftp://{ip!s}:{port!s}{game_path!s}'
+                rc = build_index_ftp(root_url, out, True, True,
+                                     progress=_progress, stats_out=stats)
+            except Exception as e:
+                err = str(e)
+
+            def _done():
+                _set_busy(False)
+                if rc == 0:
+                    try:
+                        sz = out.stat().st_size if out.is_file() else 0
+                    except Exception:
+                        sz = 0
+                    _el = int(round(_time.monotonic() - t0))
+                    _el_str = '%dm %02ds' % (_el // 60, _el % 60) if _el >= 60 else '%ds' % _el
+                    _folders = stats.get('folders')
+                    _files = stats.get('files')
+                    c_size.configure(text=_fmt_bytes(sz))
+                    c_out.configure(text=_('PS5: %s') % game_path)
+                    status_var.set(
+                        _('Complete — %s files indexed in %s.')
+                        % (_files if _files is not None else '?', _el_str))
+                    try:
+                        app._log(f'[AMPR] Index uploaded to PS5 '
+                                 f'{ip!s}{game_path!s} ({_folders!s} folders, '
+                                 f'{_files!s} files, {_el_str!s})\n')
+                    except Exception:
+                        pass
+                    app_info(app,
+                        _('AMPR index uploaded'),
+                        _('Uploaded ampr_emu.index to the PS5.\n\n'
+                          'Folders indexed:  %s\n'
+                          'Files indexed:    %s\n'
+                          'Elapsed:          %s\n'
+                          'Output:           ftp://%s:%s%s')
+                        % (_folders if _folders is not None else '—',
+                           _files if _files is not None else '—',
+                           _el_str, ip, port, game_path))
+                else:
+                    status_var.set(_('PS5 index failed (rc=%s)%s.')
+                                   % (rc, (' — ' + err) if err else ''))
+                    app_error(app,
+                        _('AMPR index failed'),
+                        _('Could not index the PS5 (rc=%s).%s')
+                        % (rc, ('\n\n' + err) if err else ''))
+            app.after(0, _done)
+
+        _thr.Thread(target=_work, daemon=True).start()
+
+    btn_row = tk.Frame(body, bg=COLORS['bg_2'])
+    btn_row.pack(fill='x', pady=(2, 2))
+    btn_folder = tk.Button(btn_row, text='\U0001f4c1  ' + _('Generate From Folder'),
+                           command=_generate_from_folder,
+                           font=(FONTS['button'][0], 10),
+                           bg=COLORS['accent'], fg='#ffffff',
+                           activebackground=COLORS['accent'],
+                           activeforeground='#ffffff',
+                           relief='flat', bd=0, padx=16, pady=8,
+                           cursor='hand2', highlightthickness=0)
+    btn_folder.pack(side='left', padx=(0, 8))
+    btn_ps5 = tk.Button(btn_row,
+                        text='\U0001f4e1  ' + _('Generate From Connected PS5'),
+                        command=_generate_from_ps5,
+                        font=(FONTS['button'][0], 10),
+                        bg=COLORS['bg_3'], fg=COLORS['fg_1'],
+                        activebackground=COLORS['bg_4'],
+                        activeforeground=COLORS['fg_0'],
+                        relief='flat', bd=0, padx=16, pady=8,
+                        cursor='hand2', highlightthickness=1,
+                        highlightbackground=COLORS['border_2'])
+    btn_ps5.pack(side='left')
+
+
+def _build_dlc_pane(parent, app):
+    """DLC-emu INI builder/editor (Phase 1). A thin Advanced tool that
+    creates/edits /app0/dlc_emu.ini for a chosen app0 folder. Models the file
+    as an ORDERED ENTRY LIST (repeated [SECTION] headers) via ui.dlc_emu_ini
+    — never configparser. Phase 1 writes only into the app0 folder (same
+    proven path as the AMPR tool); it never edits images or auto-injects
+    anything. Module copy is a separate, explicit, confirmed action that
+    copies from a user-selected dlc_emu package (modules are NOT bundled)."""
+    import threading as _thr
+    import os as _os
+    from tkinter import filedialog, simpledialog
+    from ui import dlc_emu_ini as _D
+    parent.columnconfigure(0, weight=1)
+    parent.rowconfigure(0, weight=1)
+    card_outer = tk.Frame(parent, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    card_outer.grid(row=0, column=0, sticky='nsew', pady=(0, 12))
+    head = tk.Frame(card_outer, bg=COLORS['bg_2'])
+    head.pack(fill='x', padx=14, pady=(12, 4))
+    tk.Label(head, text='🗃', font=('Segoe UI', 14), bg=COLORS['bg_2'], fg=COLORS['purple']).pack(side='left', padx=(0, 8))
+    title_col = tk.Frame(head, bg=COLORS['bg_2'])
+    title_col.pack(side='left', fill='x', expand=True)
+    tk.Label(title_col, text=_('DLC-emu'), font=('Segoe UI', 11, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(anchor='w')
+    tk.Label(title_col, text=_('Build / edit /app0/dlc_emu.ini for a game dump folder. Phase 1 writes only into the app0 folder (packed by your normal build); it never edits images. PSAC is the recommended entry type for most add-on content; every other type stays available for special cases.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w', justify='left', wraplength=760).pack(anchor='w')
+    tk.Label(head, text=_('PHASE 1'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['warn_bg'], fg=COLORS['warn'], padx=8, pady=2, highlightbackground=COLORS['warn'], highlightthickness=1).pack(side='right')
+    body = tk.Frame(card_outer, bg=COLORS['bg_2'])
+    body.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+    state = {'entries': [], 'app0': ''}
+    folder_var = tk.StringVar(value='')
+    try:
+        _prefill = ''
+        for _attr in '_sdkfix_src_var', '_dumps_src_var':
+            try:
+                _v = (getattr(app, _attr).get() or '').strip()
+            except Exception:
+                _v = ''
+            if _v and _os.path.isdir(_v):
+                _prefill = _v
+                break
+        if _prefill:
+            folder_var.set(_prefill)
+    except Exception:
+        pass
+    row1 = tk.Frame(body, bg=COLORS['bg_2'])
+    row1.pack(fill='x', pady=(4, 4))
+    tk.Label(row1, text=_('app0 folder:'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 6))
+    folder_entry = tk.Entry(row1, textvariable=folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+    folder_entry.pack(side='left', fill='x', expand=True, padx=(0, 6))
+    folder_status = tk.StringVar(value='')
+    tk.Label(body, textvariable=folder_status, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', pady=(0, 6))
+    strip = tk.Frame(body, bg=COLORS['bg_2'])
+    strip.pack(fill='x', pady=(0, 6))
+    count_var = tk.StringVar(value=_('Entries: 0 / %d') % _D.MAX_ENTRIES)
+    size_var = tk.StringVar(value=_('Size: 0 B / 32 KiB'))
+    tk.Label(strip, textvariable=count_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['accent_hi']).pack(side='left', padx=(0, 18))
+    tk.Label(strip, textvariable=size_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['purple_hi']).pack(side='left')
+    list_wrap = tk.Frame(body, bg=COLORS['bg_1'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    list_wrap.pack(fill='both', expand=True, pady=(0, 6))
+    list_canvas = tk.Canvas(list_wrap, bg=COLORS['bg_1'], highlightthickness=0, height=240)
+    list_sb = tk.Scrollbar(list_wrap, command=list_canvas.yview, bg=COLORS['bg_2'])
+    list_canvas.configure(yscrollcommand=list_sb.set)
+    list_frame = tk.Frame(list_canvas, bg=COLORS['bg_1'])
+    _win = list_canvas.create_window((0, 0), window=list_frame, anchor='nw')
+    list_frame.bind('<Configure>', lambda e: (list_canvas.configure(scrollregion=list_canvas.bbox('all')), list_canvas.itemconfig(_win, width=list_canvas.winfo_width())))
+    list_canvas.bind('<Configure>', lambda e: list_canvas.itemconfig(_win, width=e.width))
+    def _dlc_wheel(e, _c=list_canvas):
+        _c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+    list_canvas.bind('<Enter>', lambda _e, _c=list_canvas: _c.bind_all('<MouseWheel>', _dlc_wheel))
+    list_canvas.bind('<Leave>', lambda _e, _c=list_canvas: _c.unbind_all('<MouseWheel>'))
+    list_sb.pack(side='right', fill='y')
+    list_canvas.pack(side='left', fill='both', expand=True)
+    valid_var = tk.StringVar(value='')
+    valid_lbl = tk.Label(body, textvariable=valid_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w', justify='left', wraplength=760)
+    valid_lbl.pack(fill='x', pady=(0, 6))
+    _ENTRY_FIELDS = [*('content_id', 'label', 'mount_point', 'entitlement_key', 'service_label', 'download_status')]
+    def _recompute():
+        n = len(state['entries'])
+        count_var.set(_('Entries: %d / %d') % (n, _D.MAX_ENTRIES))
+        sz = _D.ini_byte_size(state['entries'])
+        size_var.set(_('Size: %d B / 32 KiB') % sz)
+        def _mx(p):
+            try:
+                base = state['app0']
+                rel = p[len('/app0/'):] if p.startswith('/app0/') else p.lstrip('/')
+                return bool(base) and _os.path.isdir(_os.path.join(base, rel))
+            except Exception:
+                return True
+        errs, warns = _D.validate_all(state['entries'], mount_exists=_mx if state['app0'] else None)
+        if errs:
+            valid_lbl.configure(fg=COLORS.get('danger_hi', '#e0584b'))
+            valid_var.set(_('%d error(s): ') % len(errs) + ' | '.join(errs[:6]) + (' …' if len(errs) > 6 else ''))
+        elif warns:
+            valid_lbl.configure(fg=COLORS['warn'])
+            valid_var.set(_('%d warning(s): ') % len(warns) + ' | '.join(warns[:6]) + (' …' if len(warns) > 6 else ''))
+        else:
+            valid_lbl.configure(fg=COLORS.get('success_hi', '#4caf50'))
+            valid_var.set(_('✓ Valid — %d entr%s, %d bytes.') % (n, 'y' if n == 1 else 'ies', sz))
+    def _render_entries():
+        for w in list_frame.winfo_children():
+            w.destroy()
+        if not state['entries']:
+            tk.Label(list_frame, text=_('No entries yet. Click "Add entry" to begin, or load an existing dlc_emu.ini.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack(anchor='w', padx=12, pady=12)
+            _recompute()
+        else:
+            for i, e in enumerate(state['entries']):
+                _make_entry_row(i, e)
+            _recompute()
+    _ADV_FIELDS = [*('label', 'entitlement_label', 'service_label', 'entitlement_key', 'download_status', 'active_flag', 'active_date', 'inactive_date', 'use_count', 'use_limit', 'consumable')]
+    def _entry_status(entry):
+        """(text, kind) for the simple-card status line. kind in
+        'ok'|'warn'. Pure function of the entry + its provenance."""
+        issues = _D.validate_entry(entry)
+        err = [m for sev, m in issues if sev == 'error']
+        if err:
+            return '⚠ ' + err[0], 'warn'
+        if getattr(entry, 'placeholder', False):
+            return _('⚠ Review — placeholder ID'), 'warn'
+        sec = (entry.section or '').upper()
+        if sec in ('PSAC', 'PSAL') and (entry.get('download_status', 'INSTALLED') == 'INSTALLED' and not entry.get('mount_point', '')):
+            return _('⚠ No addcont folder detected'), 'warn'
+        return _('✓ Ready'), 'ok'
+    def _badge_text(entry):
+        conf = getattr(entry, 'confidence', None)
+        src = getattr(entry, 'source', None)
+        if not conf:
+            return _('MANUAL'), 'manual'
+        label = {'high': 'HIGH', 'medium': 'MEDIUM', 'low': 'LOW'}.get(conf, conf.upper())
+        return f"{label!s} — {src or ''!s}", conf
+    def _make_entry_row(i, entry):
+        row = tk.Frame(list_frame, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+        row.pack(fill='x', padx=8, pady=4)
+        topr = tk.Frame(row, bg=COLORS['bg_2'])
+        topr.pack(fill='x', padx=8, pady=(6, 2))
+        tk.Label(topr, text='#%d' % (i + 1), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left', padx=(0, 8))
+        sec_var = tk.StringVar(value=entry.section)
+        sec_menu = tk.OptionMenu(topr, sec_var, *_D.SECTION_TYPES, command=(lambda v, _i=i: _set_section(_i, v)))
+        try:
+            sec_menu.configure(font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, highlightthickness=0)
+        except Exception:
+            pass
+        sec_menu.pack(side='left', padx=(0, 8))
+        btxt, bkind = _badge_text(entry)
+        _badge_fg = {'high': COLORS.get('success_hi', '#4caf50'), 'medium': COLORS['accent_hi'], 'low': COLORS['warn'], 'manual': COLORS['fg_5']}.get(bkind, COLORS['fg_5'])
+        tk.Label(topr, text=btxt, font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=_badge_fg).pack(side='left', padx=(2, 0))
+        def _mini(txt, cmd):
+            return tk.Button(topr, text=txt, command=cmd, font=(FONTS['mono_sm'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_2'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=8, pady=2, cursor='hand2', highlightthickness=0)
+        _mini('✕', lambda _i=i: _remove(_i)).pack(side='right')
+        _mini('⧉', lambda _i=i: _duplicate(_i)).pack(side='right', padx=(0, 4))
+        _mini('↓', lambda _i=i: _move(_i, 1)).pack(side='right', padx=(0, 4))
+        _mini('↑', lambda _i=i: _move(_i, -1)).pack(side='right', padx=(0, 4))
+        simple = tk.Frame(row, bg=COLORS['bg_2'])
+        simple.pack(fill='x', padx=8, pady=(0, 4))
+        simple.grid_columnconfigure(1, weight=1)
+        tk.Label(simple, text=_('Content ID:'), font=(FONTS['mono_sm'][0], 9), bg=COLORS['bg_2'], fg=COLORS['fg_4']).grid(row=0, column=0, sticky='e', padx=(0, 6), pady=2)
+        cid_var = tk.StringVar(value=entry.get('content_id', ''))
+        cid_ent = tk.Entry(simple, textvariable=cid_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+        cid_ent.grid(row=0, column=1, sticky='ew', padx=(0, 8), pady=2)
+        status_lbl = tk.Label(simple, font=(FONTS['mono_sm'][0], 9), bg=COLORS['bg_2'], anchor='w')
+        status_lbl.grid(row=1, column=1, sticky='w', padx=(0, 8))
+        mount_lbl = tk.Label(simple, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
+        mount_lbl.grid(row=2, column=1, sticky='w', padx=(0, 8))
+        src_lbl = tk.Label(simple, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
+        src_lbl.grid(row=3, column=1, sticky='w', padx=(0, 8), pady=(0, 2))
+        def _refresh_simple():
+            stext, skind = _entry_status(entry)
+            status_lbl.configure(text=_('Status:  ') + stext, fg=COLORS.get('success_hi', '#4caf50') if skind == 'ok' else COLORS['warn'])
+            mp = entry.get('mount_point', '')
+            mount_lbl.configure(text=_('Mount:  ') + (mp if mp else _('No mount path detected')))
+            src = getattr(entry, 'source', None)
+            src_lbl.configure(text=_('Source:  ') + (src if src else _('manual')))
+        def _on_cid(*_a, _i=i, _v=cid_var):
+            _set_field(_i, 'content_id', _v.get())
+            _refresh_simple()
+        cid_var.trace_add('write', _on_cid)
+        _refresh_simple()
+        adv_state = {'open': False, 'frame': None}
+        adv_bar = tk.Frame(row, bg=COLORS['bg_2'])
+        adv_bar.pack(fill='x', padx=8, pady=(0, 6))
+        adv_btn = tk.Label(adv_bar, text=_('Advanced ▾'), cursor='hand2', font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['accent_hi'])
+        adv_btn.pack(side='left')
+        def _build_adv(parent_):
+            grid = tk.Frame(parent_, bg=COLORS['bg_2'])
+            for ci in range(2):
+                grid.grid_columnconfigure(ci * 2 + 1, weight=1, uniform='dlcf')
+            for fi, fld in enumerate(_ADV_FIELDS):
+                r, c = divmod(fi, 2)
+                tk.Label(grid, text=fld, font=(FONTS['mono_sm'][0], 8), bg=COLORS['bg_2'], fg=COLORS['fg_5']).grid(row=r, column=c * 2, sticky='e', padx=(0, 4), pady=2)
+                if fld == 'download_status':
+                    dv = tk.StringVar(value=entry.get(fld, ''))
+                    dm = tk.OptionMenu(grid, dv, '', *_D.DOWNLOAD_STATUSES, command=(lambda v, _i=i, _f=fld: (_set_field(_i, _f, v), _refresh_simple())))
+                    try:
+                        dm.configure(font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], relief='flat', bd=0, highlightthickness=1, highlightbackground=COLORS['border_2'])
+                    except Exception:
+                        pass
+                    dm.grid(row=r, column=c * 2 + 1, sticky='ew', padx=(0, 12), pady=2)
+                else:
+                    fv = tk.StringVar(value=entry.get(fld, ''))
+                    ent = tk.Entry(grid, textvariable=fv, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+                    ent.grid(row=r, column=c * 2 + 1, sticky='ew', padx=(0, 12), pady=2)
+                    fv.trace_add('write', lambda *_a, _i=i, _f=fld, _v=fv: (_set_field(_i, _f, _v.get()), _refresh_simple()))
+            return grid
+        def _toggle_adv(_e=None):
+            if adv_state['open']:
+                if adv_state['frame'] is not None:
+                    adv_state['frame'].pack_forget()
+                    adv_state['frame'].destroy()
+                    adv_state['frame'] = None
+                adv_state['open'] = False
+                adv_btn.configure(text=_('Advanced ▾'))
+            else:
+                f = _build_adv(row)
+                f.pack(fill='x', padx=8, pady=(0, 6))
+                adv_state['frame'] = f
+                adv_state['open'] = True
+                adv_btn.configure(text=_('Advanced ▴'))
+        adv_btn.bind('<Button-1>', _toggle_adv)
+    def _set_section(i, v):
+        if 0 <= i < len(state['entries']):
+            state['entries'][i].section = v
+            _recompute()
+
+    def _set_field(i, f, v):
+        if 0 <= i < len(state['entries']):
+            state['entries'][i].set(f, v)
+            _recompute()
+
+    def _add():
+        if len(state['entries']) >= _D.MAX_ENTRIES:
+            app_warning(app, _('Limit reached'), _('Maximum %d entries.') % _D.MAX_ENTRIES)
+        else:
+            state['entries'].append(_D.DlcEntry('PSAC', {}))
+            _render_entries()
+    def _remove(i):
+        if 0 <= i < len(state['entries']):
+            del state['entries'][i]
+            _render_entries()
+
+    def _duplicate(i):
+        if 0 <= i < len(state['entries']):
+            state['entries'].insert(i + 1, state['entries'][i].copy())
+            _render_entries()
+
+    def _move(i, delta):
+        j = i + delta
+        if 0 <= i < len(state['entries']):
+            if 0 <= j < len(state['entries']):
+                state['entries'][i], state['entries'][j] = \
+                    state['entries'][j], state['entries'][i]
+                _render_entries()
+
+    def _set_folder(path):
+        state['app0'] = path
+        ini = _os.path.join(path, 'dlc_emu.ini') if path else ''
+        if path and _os.path.isdir(path):
+            if ini and _os.path.isfile(ini):
+                folder_status.set(_('dlc_emu.ini found — loaded.'))
+                return
+            folder_status.set(_('No dlc_emu.ini yet — starting fresh.'))
+        else:
+            folder_status.set('')
+    def _browse_folder():
+        p = filedialog.askdirectory(title=_('Select the app0 / dump folder'))
+        if not p:
+            return
+        folder_var.set(p)
+        _load_from_folder(p)
+    def _load_from_folder(path):
+        _set_folder(path)
+        ini = _os.path.join(path, 'dlc_emu.ini')
+        if _os.path.isfile(ini):
+            try:
+                with open(ini, 'r', encoding='utf-8', errors='replace') as f:
+                    state['entries'] = _D.parse_ini(f.read())
+            except Exception as e:
+                app_error(app, _('Load failed'), str(e))
+                state['entries'] = []
+        _render_entries()
+    tk.Button(row1, text=_('Browse'), command=_browse_folder, font=(FONTS['button'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=12, pady=4, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left')
+    def _preview():
+        text_ini = _D.emit_ini(state['entries'])
+        win = tk.Toplevel(parent)
+        win.title(_('dlc_emu.ini preview'))
+        win.configure(bg=COLORS['bg_1'])
+        txt = tk.Text(win, wrap='none', font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_1'], width=80, height=30, insertbackground=COLORS['fg_1'])
+        txt.pack(fill='both', expand=True, padx=10, pady=10)
+        txt.insert('1.0', text_ini)
+        txt.configure(state='disabled')
+    def _confirm_and_save(dest_path, into_app0):
+        errs, warns = _D.validate_all(state['entries'])
+        if errs and not app_confirm(app, _('Validation errors'), _('There are %d error(s):\n\n%s\n\nSave anyway?') % (len(errs), '\n'.join(errs[:10]))):
+            return
+        risky = sum(1 for e in state['entries'] if getattr(e, 'confidence', None) == 'low' or getattr(e, 'placeholder', False))
+        if risky and not app_confirm(app, _('Low-confidence entries'), _('Some entries are low-confidence or use placeholder IDs. They may not unlock real DLC unless corrected. Save anyway?')):
+            return
+        try:
+            if _os.path.isfile(dest_path):
+                bak = dest_path + '.bak'
+                try:
+                    import shutil as _sh
+                    _sh.copy2(dest_path, bak)
+                    app._log('[DLC] Backed up existing dlc_emu.ini -> %s\n' % bak)
+                except Exception as e:
+                    app._log('[DLC] Backup failed (%s) — aborting save.\n' % e)
+                    app_error(app, _('Backup failed'), _('Could not back up the existing file. Nothing was written.\n\n%s') % e)
+                    return
+            with open(dest_path, 'w', encoding='utf-8', newline='') as f:
+                f.write(_D.emit_ini(state['entries']))
+            app._log('[DLC] Wrote %s (%d entries)\n' % (dest_path, len(state['entries'])))
+            app_info(app, _('Saved'), _('Wrote dlc_emu.ini:\n%s') % dest_path)
+        except Exception as e:
+            app_error(app, _('Save failed'), str(e))
+    def _save_to_app0():
+        path = folder_var.get().strip()
+        if not path or not _os.path.isdir(path):
+            app_warning(app, _('No folder'), _('Select a valid app0 folder first.'))
+        else:
+            state['app0'] = path
+            _confirm_and_save(_os.path.join(path, 'dlc_emu.ini'), True)
+    def _export_copy():
+        p = filedialog.asksaveasfilename(title=_('Export dlc_emu.ini copy'), defaultextension='.ini', initialfile='dlc_emu.ini', filetypes=[('INI', '*.ini'), (_('All files'), '*.*')])
+        if not p:
+            return
+        _confirm_and_save(p, False)
+    def _scan_eboot():
+        p = filedialog.askopenfilename(title=_('Select a binary (e.g. eboot.bin) to scan for DLC codes'))
+        if not p:
+            return
+        prefix = simpledialog.askstring(_('content_id prefix'), _('Prefix for generated PSAC content_ids\n(20 chars, e.g. UP9000-PPSA01234_00-):'), initialvalue='UP9000-PPSA01234_00-')
+        if not prefix:
+            return
+        def _work():
+            found = []
+            err = ''
+            try:
+                found = _D.scan_binary_for_codes(p, content_prefix=prefix)
+            except Exception as e:
+                err = str(e)
+            def _done():
+                if err:
+                    app_error(app, _('Scan failed'), err)
+                elif not found:
+                    app_info(app, _('No codes'), _('No DLC codes found in that file.'))
+                elif app_confirm(app, _('Add codes?'), _('Found %d unique code(s). Add them as PSAC entries?') % len(found)):
+                    state['entries'].extend(found)
+                    _render_entries()
+            app.after(0, _done)
+        _thr.Thread(target=_work, daemon=True).start()
+    def _copy_modules():
+        pkg = filedialog.askdirectory(title=_('Select the downloaded dlc_emu package folder (contains log/ and nolog/)'))
+        if not pkg:
+            return
+        variant = {'v': None}
+        dlg = tk.Toplevel(parent)
+        dlg.title(_('Module variant'))
+        dlg.configure(bg=COLORS['bg_1'])
+        tk.Label(dlg, text=_('Which module build do you want to copy?'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(padx=16, pady=(14, 8))
+        var = tk.StringVar(value='nolog')
+        for val, lab in ('nolog', _('nolog (no logging — recommended)')), ('log', _('log (writes /app0/dlc_emu.log)')):
+            tk.Radiobutton(dlg, text=lab, value=val, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_3'], activebackground=COLORS['bg_1'], highlightthickness=0).pack(anchor='w', padx=24)
+        def _ok():
+            variant['v'] = var.get()
+            dlg.destroy()
+        tk.Button(dlg, text=_('Continue'), command=_ok, font=(FONTS['button'][0], 9), bg=COLORS['accent'], fg='#ffffff', relief='flat', bd=0, padx=14, pady=6, cursor='hand2').pack(pady=12)
+        dlg.transient(parent)
+        dlg.grab_set()
+        parent.wait_window(dlg)
+        if not variant['v']:
+            return
+        app0 = folder_var.get().strip()
+        if not app0 or not _os.path.isdir(app0):
+            app_warning(app, _('No folder'), _('Select a valid app0 folder first (modules copy into it).'))
+        else:
+            srcdir = _os.path.join(pkg, variant['v'])
+            if not _os.path.isdir(srcdir):
+                app_error(app, _('Package not found'), _('No "%s" folder inside the selected package.') % variant['v'])
+            else:
+                dstdir = _os.path.join(app0, 'fakelib')
+                mods = [f for f in _os.listdir(srcdir) if f.lower().endswith(('.sprx', '.prx'))]
+                if not mods:
+                    app_error(app, _('No modules'), _('No .sprx/.prx files in %s.') % srcdir)
+                else:
+                    if not app_confirm(app, _('Copy modules?'), _('Copy %d module(s) from:\n  %s\n\ninto:\n  %s\n\nExisting same-named modules will be backed up (.bak). Continue?') % (len(mods), srcdir, dstdir)):
+                        return
+                    def _work():
+                        import shutil as _sh
+                        copied = 0
+                        err = ''
+                        try:
+                            _os.makedirs(dstdir, exist_ok=True)
+                            for m in mods:
+                                s = _os.path.join(srcdir, m)
+                                d = _os.path.join(dstdir, m)
+                                if _os.path.isfile(d):
+                                    try:
+                                        _sh.copy2(d, d + '.bak')
+                                    except Exception:
+                                        pass
+                                _sh.copy2(s, d)
+                                copied += 1
+                        except Exception as e:
+                            err = str(e)
+                        def _done():
+                            if err:
+                                app_error(app, _('Copy failed'), err)
+                            else:
+                                app._log('[DLC] Copied %d %s module(s) into %s\n' % (copied, variant['v'], dstdir))
+                                app_info(app, _('Modules copied'), _('Copied %d %s module(s) into:\n%s') % (copied, variant['v'], dstdir))
+                        app.after(0, _done)
+                    _thr.Thread(target=_work, daemon=True).start()
+    def _auto_find():
+        path = folder_var.get().strip()
+        if not path or not _os.path.isdir(path):
+            app_warning(app, _('No folder'), _('Select a valid app0 folder first.'))
+        else:
+            state['app0'] = path
+            def _work():
+                sugg, info = [], {}
+                err = ''
+                try:
+                    sugg, info = _D.auto_find_suggestions(path, scan_eboot=True, existing_entries=state['entries'])
+                except Exception as e:
+                    err = str(e)
+                def _done():
+                    if err:
+                        app_error(app, _('Auto Find failed'), err)
+                    elif not sugg:
+                        note = ' '.join(info.get('notes', [])) or _('No local DLC metadata found. Add entries manually.')
+                        app_info(app, _('Auto Find'), note)
+                    else:
+                        _show_suggestions(sugg, info)
+                app.after(0, _done)
+            _thr.Thread(target=_work, daemon=True).start()
+    def _show_suggestions(sugg, info):
+        win = tk.Toplevel(parent)
+        win.title(_('Suggested DLC entries'))
+        win.configure(bg=COLORS['bg_1'])
+        hdr = tk.Label(win, text=_('Found %d suggestion(s). Tick the ones to add, then Apply selected.') % len(sugg), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_1'], anchor='w', justify='left', wraplength=620)
+        hdr.pack(fill='x', padx=12, pady=(12, 4))
+        if info.get('prefix_placeholder'):
+            tk.Label(win, text=_('Note: content-id prefix is a placeholder (%s) — no CONTENT_ID/param.json id was found. Edit if needed.') % info.get('prefix', ''), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['warn'], anchor='w', justify='left', wraplength=620).pack(fill='x', padx=12, pady=(0, 4))
+        if not info.get('addcont'):
+            tk.Label(win, text=_('No addcont folders found. DLC-emu exposes ownership but does not create DLC files. Mount paths must already exist.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['warn'], anchor='w', justify='left', wraplength=620).pack(fill='x', padx=12, pady=(0, 6))
+        wrap = tk.Frame(win, bg=COLORS['bg_1'])
+        wrap.pack(fill='both', expand=True, padx=12, pady=(0, 8))
+        cv = tk.Canvas(wrap, bg=COLORS['bg_1'], highlightthickness=0, width=620, height=320)
+        sb = tk.Scrollbar(wrap, command=cv.yview, bg=COLORS['bg_2'])
+        cv.configure(yscrollcommand=sb.set)
+        inner = tk.Frame(cv, bg=COLORS['bg_1'])
+        win_id = cv.create_window((0, 0), window=inner, anchor='nw')
+        inner.bind('<Configure>', lambda e: (cv.configure(scrollregion=cv.bbox('all')), cv.itemconfig(win_id, width=cv.winfo_width())))
+        cv.bind('<Configure>', lambda e: cv.itemconfig(win_id, width=e.width))
+        def _sw(e, _c=cv):
+            _c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        cv.bind('<Enter>', lambda _e, _c=cv: _c.bind_all('<MouseWheel>', _sw))
+        cv.bind('<Leave>', lambda _e, _c=cv: _c.unbind_all('<MouseWheel>'))
+        sb.pack(side='right', fill='y')
+        cv.pack(side='left', fill='both', expand=True)
+        _conf_color = {'high': COLORS.get('success_hi', '#4caf50'), 'medium': COLORS['accent_hi'], 'low': COLORS['warn']}
+        checks = []
+        for s in sugg:
+            rowf = tk.Frame(inner, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+            rowf.pack(fill='x', padx=4, pady=3)
+            var = tk.IntVar(value=1 if s.confidence in ('high', 'medium') else 0)
+            checks.append((var, s))
+            tk.Checkbutton(rowf, variable=var, bg=COLORS['bg_2'], activebackground=COLORS['bg_2'], selectcolor=COLORS['bg_4'], highlightthickness=0).pack(side='left', padx=(6, 4))
+            tk.Label(rowf, text=s.confidence.upper(), font=(FONTS['mono_sm'][0], 8, 'bold'), bg=COLORS['bg_2'], fg=_conf_color.get(s.confidence, COLORS['fg_3']), width=7).pack(side='left')
+            cid = s.entry.get('content_id', '')
+            mp = s.entry.get('mount_point', '')
+            txt = f"{s.entry.section!s}  [{cid!s}]  {s.source!s}{'  -> ' + mp if mp else ''!s}"
+            tk.Label(rowf, text=txt, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w', justify='left').pack(side='left', fill='x', expand=True, padx=(6, 8), pady=4)
+        btnr = tk.Frame(win, bg=COLORS['bg_1'])
+        btnr.pack(fill='x', padx=12, pady=(0, 12))
+        def _apply_selected():
+            added = 0
+            for var, s in checks:
+                if var.get():
+                    state['entries'].append(s.entry.copy())
+                    added += 1
+            win.destroy()
+            if added:
+                _render_entries()
+                try:
+                    app._log('[DLC] Auto Find added %d entr%s\n' % (added, 'y' if added == 1 else 'ies'))
+                except Exception:
+                    pass
+        tk.Button(btnr, text=_('Apply selected'), command=_apply_selected, font=(FONTS['button'][0], 10), bg=COLORS['accent'], fg='#ffffff', relief='flat', bd=0, padx=16, pady=8, cursor='hand2').pack(side='left')
+        tk.Button(btnr, text=_('Cancel'), command=win.destroy, font=(FONTS['button'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], relief='flat', bd=0, padx=16, pady=8, cursor='hand2').pack(side='left', padx=(8, 0))
+        win.transient(parent)
+    def _import_pack():
+        from tkinter import filedialog as _fd
+        choice = app_question(app, _('Import from'), _('Import from a ZIP file? (No = pick a folder instead)'))
+        if choice == 'yes':
+            pkg = _fd.askopenfilename(title=_('Select dlc_emu pack (.zip)'), filetypes=[('ZIP', '*.zip'), (_('All files'), '*.*')])
+        else:
+            pkg = _fd.askdirectory(title=_('Select dlc_emu pack folder'))
+        if not pkg:
+            return
+        def _work():
+            ini_txt = None
+            mods = {}
+            err = ''
+            try:
+                ini_txt = _D.find_ini_in_package(pkg)
+                mods = _D.find_modules_in_package(pkg)
+            except Exception as e:
+                err = str(e)
+            def _done():
+                if err:
+                    app_error(app, _('Import failed'), err)
+                elif not ini_txt:
+                    app_warning(app, _('No INI found'), _('No dlc_emu.ini was found in that package.'))
+                else:
+                    imported = _D.parse_ini(ini_txt)
+                    nmods = sum(len(v) for k, v in mods.items() if k != '__zip__')
+                    if not app_confirm(app, _('Import entries?'), _('Found %d entr%s in the package%s.\n\nAdd them to the editor? (You can then preview and save to app0.)') % (len(imported), 'y' if len(imported) == 1 else 'ies', _(' and %d module file(s)') % nmods if nmods else '')):
+                        return
+                    have = {e.get('content_id', '') for e in state['entries']}
+                    added = 0
+                    for e in imported:
+                        if e.get('content_id', '') not in have:
+                            state['entries'].append(e.copy())
+                            added += 1
+                    _render_entries()
+                    try:
+                        app._log('[DLC] Imported %d entr%s from pack %s\n' % (added, 'y' if added == 1 else 'ies', pkg))
+                    except Exception:
+                        pass
+                    if nmods:
+                        app_info(app, _('Entries imported'), _('Added %d entr%s. The package also contains module files — use "Copy replacement modules" to install them (separate, confirmed step).') % (added, 'y' if added == 1 else 'ies'))
+            app.after(0, _done)
+        _thr.Thread(target=_work, daemon=True).start()
+    def _serialstation_lookup():
+        """Open a dialog to search the SerialStation API by game name or Title ID,
+        then import selected content_ids as PSAL DlcEntry candidates."""
+        import urllib.request
+        import urllib.parse
+        import urllib.error
+        import json as _json
+        _SS_BASE = 'https://api.serialstation.com/v1'
+        _SS_GAMES = _SS_BASE + '/games/'
+        _SS_CIDS = _SS_BASE + '/content-ids/'
+        _UA = 'exFAT-Builder-DLC/1.0'
+        def _get_json(url, params, timeout=15):
+            full = url + ('?' + urllib.parse.urlencode(params) if params else '')
+            req = urllib.request.Request(full, headers={'User-Agent': _UA, 'Accept': 'application/json'})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return _json.loads(resp.read().decode('utf-8'))
+            except urllib.error.HTTPError as exc:
+                raise OSError('HTTP %s from SerialStation' % exc.code)
+            except Exception as exc:
+                raise OSError('SerialStation request failed: %s' % exc)
+        def _search_games(name, limit=100):
+            data = _get_json(_SS_GAMES, {'name': name, 'limit': limit})
+            return data.get('items', []) if isinstance(data, dict) else []
+        def _get_content_ids(title_id, limit=100, max_pages=200):
+            import time as _time
+            all_items, offset = [], 0
+            for _ in range(max_pages):
+                data = _get_json(_SS_CIDS, {'title_id': title_id, 'limit': limit, 'offset': offset})
+                items = data.get('items', []) if isinstance(data, dict) else []
+                all_items.extend(items)
+                if len(items) < limit:
+                    break
+                offset += limit
+                _time.sleep(0.15)
+            return all_items
+        dlg = tk.Toplevel(parent)
+        dlg.title(_('SerialStation Lookup'))
+        dlg.configure(bg=COLORS['bg_1'])
+        dlg.geometry('700x520')
+        dlg.resizable(True, True)
+        dlg.transient(parent)
+        tk.Label(dlg, text='🔗  ' + _('SerialStation Lookup'), font=(FONTS['button'][0], 13, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w', padx=16, pady=(16, 2))
+        tk.Label(dlg, text=_('Enter a game name or Title ID (e.g. PPSA04930). Results are unverified candidates — review before saving.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=660).pack(anchor='w', padx=16, pady=(0, 10))
+        q_row = tk.Frame(dlg, bg=COLORS['bg_1'])
+        q_row.pack(fill='x', padx=16)
+        q_entry = tk.Entry(q_row, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+        q_entry.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        q_entry.focus_set()
+        try:
+            _ppsa_guess = _D.detect_ppsa(app0=(folder_var.get() or '').strip() or state.get('app0', ''), entries=state.get('entries', []), extra=[getattr(app, '_dlc_mounted_title_id', ''), getattr(app, '_mounted_title_id', '')])
+            if _ppsa_guess and not q_entry.get().strip():
+                q_entry.insert(0, _ppsa_guess)
+                q_entry.icursor('end')
+        except Exception:
+            pass
+        status_var = tk.StringVar(value='')
+        tk.Label(dlg, textvariable=status_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', padx=16, pady=(6, 0))
+        games_frame = tk.Frame(dlg, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+        games_frame.pack(fill='x', padx=16, pady=(6, 0))
+        tk.Label(games_frame, text=_('Games (select one, then Import):'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=8, pady=(6, 2))
+        games_lb = tk.Listbox(games_frame, bg=COLORS['bg_3'], fg=COLORS['fg_1'], selectbackground=COLORS['accent'], selectforeground='#ffffff', font=FONTS['mono_sm'], relief='flat', highlightthickness=0, height=5, activestyle='none')
+        games_lb.pack(fill='x', padx=8, pady=(0, 8))
+        cid_outer = tk.Frame(dlg, bg=COLORS['bg_1'])
+        cid_outer.pack(fill='both', expand=True, padx=16, pady=(6, 0))
+        tk.Label(cid_outer, text=_('Content IDs (tick to import):'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(anchor='w')
+        cid_wrap = tk.Frame(cid_outer, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+        cid_wrap.pack(fill='both', expand=True)
+        cid_canvas = tk.Canvas(cid_wrap, bg=COLORS['bg_2'], highlightthickness=0, height=160)
+        cid_sb = tk.Scrollbar(cid_wrap, command=cid_canvas.yview, bg=COLORS['bg_3'])
+        cid_canvas.configure(yscrollcommand=cid_sb.set)
+        cid_inner = tk.Frame(cid_canvas, bg=COLORS['bg_2'])
+        _cid_win = cid_canvas.create_window((0, 0), window=cid_inner, anchor='nw')
+        cid_inner.bind('<Configure>', lambda e: (cid_canvas.configure(scrollregion=cid_canvas.bbox('all')), cid_canvas.itemconfig(_cid_win, width=cid_canvas.winfo_width())))
+        cid_canvas.bind('<Configure>', lambda e: cid_canvas.itemconfig(_cid_win, width=e.width))
+        def _cid_wheel(ev, _c=cid_canvas):
+            _c.yview_scroll(int(-1 * (ev.delta / 120)), 'units')
+        cid_canvas.bind('<Enter>', lambda _e, _c=cid_canvas: _c.bind_all('<MouseWheel>', _cid_wheel))
+        cid_canvas.bind('<Leave>', lambda _e, _c=cid_canvas: _c.unbind_all('<MouseWheel>'))
+        cid_sb.pack(side='right', fill='y')
+        cid_canvas.pack(side='left', fill='both', expand=True)
+        _ss = {'game_rows': [], 'cid_checks': []}
+        def _clear_cids():
+            for w in cid_inner.winfo_children():
+                w.destroy()
+            _ss['cid_checks'].clear()
+        def _populate_cids(items):
+            _clear_cids()
+            if not items:
+                tk.Label(cid_inner, text=_('No content IDs found for this title.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(anchor='w', padx=10, pady=8)
+            else:
+                have = {e.get('content_id', '') for e in state['entries']}
+                for it in items:
+                    cid = (it.get('content_id') or '').strip()
+                    name = (it.get('name') or '').strip()
+                    if not cid:
+                        continue
+                    already = cid in have
+                    var = tk.IntVar(value=0 if already else 1)
+                    row = tk.Frame(cid_inner, bg=COLORS['bg_2'])
+                    row.pack(fill='x', padx=4, pady=1)
+                    tk.Checkbutton(row, variable=var, bg=COLORS['bg_2'], activebackground=COLORS['bg_2'], selectcolor=COLORS['bg_4'], highlightthickness=0).pack(side='left')
+                    lbl = ('[already loaded]  ' if already else '') + cid
+                    if name:
+                        lbl += '  —  ' + name
+                    tk.Label(row, text=lbl, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_4'] if already else COLORS['fg_1'], anchor='w').pack(side='left', fill='x', expand=True, padx=(4, 8))
+                    _ss['cid_checks'].append((var, cid, name, already))
+        def _fetch_cids(title_id):
+            status_var.set(_('Fetching content IDs for %s …') % title_id)
+            dlg.update_idletasks()
+            def _work():
+                items, err = [], ''
+                try:
+                    items = _get_content_ids(title_id)
+                except OSError as exc:
+                    err = str(exc)
+                def _done():
+                    if err:
+                        status_var.set(_('Error: ') + err)
+                        _clear_cids()
+                    else:
+                        status_var.set(_('Found %d content ID(s) for %s. Tick the ones you own, then Import.') % (len(items), title_id))
+                        _populate_cids(items)
+                dlg.after(0, _done)
+            import threading as _thr2
+            _thr2.Thread(target=_work, daemon=True).start()
+        def _on_game_select(_event=None):
+            sel = games_lb.curselection()
+            if not sel:
+                return
+            idx = sel[0]
+            if idx >= len(_ss['game_rows']):
+                return
+            title_id = _ss['game_rows'][idx][1]
+            _fetch_cids(title_id)
+        games_lb.bind('<<ListboxSelect>>', _on_game_select)
+        def _do_search(_event=None):
+            q = q_entry.get().strip()
+            if not q:
+                return
+            games_lb.delete(0, 'end')
+            _clear_cids()
+            _ss['game_rows'].clear()
+            status_var.set(_('Searching …'))
+            dlg.update_idletasks()
+            import re as _re3
+            if _re3.match('^[A-Za-z]{4}[0-9]{5}$', q.strip()):
+                tid = q.strip().upper()
+                _ss['game_rows'].append((tid, tid))
+                games_lb.insert('end', tid + '  (direct Title ID)')
+                games_lb.selection_set(0)
+                _fetch_cids(tid)
+            else:
+                def _work():
+                    games, err = [], ''
+                    try:
+                        games = _search_games(q)
+                    except OSError as exc:
+                        err = str(exc)
+                    def _done():
+                        if err:
+                            status_var.set(_('Error: ') + err)
+                        elif not games:
+                            status_var.set(_('No games found for “%s”.') % q)
+                        else:
+                            for g in games:
+                                gname = g.get('name', '')
+                                for tid in g.get('title_ids') or []:
+                                    label = f"{gname!s}  ({tid!s})"
+                                    _ss['game_rows'].append((gname, tid))
+                                    games_lb.insert('end', label)
+                            status_var.set(_('Found %d title(s). Select one to load its content IDs.') % len(_ss['game_rows']))
+                    dlg.after(0, _done)
+                import threading as _thr2
+                _thr2.Thread(target=_work, daemon=True).start()
+        tk.Button(q_row, text=_('Search'), command=_do_search, font=(FONTS['button'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=12, pady=5, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left')
+        q_entry.bind('<Return>', _do_search)
+        btn_row = tk.Frame(dlg, bg=COLORS['bg_1'])
+        btn_row.pack(fill='x', padx=16, pady=10)
+        def _do_import():
+            to_add = [(cid, name) for var, cid, name, already in _ss['cid_checks'] if var.get() and not already]
+            if not to_add:
+                app_info(app, _('Nothing to import'), _('No new content IDs are ticked.'), parent=dlg)
+            else:
+                have = {e.get('content_id', '') for e in state['entries']}
+                added = 0
+                for cid, name in to_add:
+                    if cid in have:
+                        continue
+                    entry = _D.DlcEntry('PSAL', {'content_id': cid})
+                    try:
+                        entry.confidence = 'unverified'
+                        entry.source = 'SerialStation'
+                        if name:
+                            entry.source = 'SerialStation — ' + name
+                    except Exception:
+                        pass
+                    state['entries'].append(entry)
+                    have.add(cid)
+                    added += 1
+                dlg.destroy()
+                if added:
+                    _render_entries()
+                    try:
+                        app._log('[DLC] SerialStation imported %d content ID(s)\n' % added)
+                    except Exception:
+                        pass
+        tk.Button(btn_row, text=_('Import selected'), command=_do_import, font=(FONTS['button'][0], 10), bg=COLORS['accent'], fg='#ffffff', activebackground=COLORS['accent'], activeforeground='#ffffff', relief='flat', bd=0, padx=16, pady=8, cursor='hand2', highlightthickness=0).pack(side='left')
+        tk.Button(btn_row, text=_('Close'), command=dlg.destroy, font=(FONTS['button'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=14, pady=8, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left', padx=(8, 0))
+    top_actions = tk.Frame(body, bg=COLORS['bg_2'])
+    top_actions.pack(fill='x', pady=(2, 6))
+    tk.Button(top_actions, text='🔎  ' + _('Auto Find DLC Entries'), command=_auto_find, font=(FONTS['button'][0], 10), bg=COLORS['accent'], fg='#ffffff', activebackground=COLORS['accent'], activeforeground='#ffffff', relief='flat', bd=0, padx=16, pady=9, cursor='hand2', highlightthickness=0).pack(side='left', padx=(0, 6))
+    tk.Button(top_actions, text='🔗  ' + _('SerialStation Lookup…'), command=_serialstation_lookup, font=(FONTS['button'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=16, pady=9, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left', padx=(0, 6))
+    tk.Button(top_actions, text='📥  ' + _('Import DLC-emu Pack…'), command=_import_pack, font=(FONTS['button'][0], 10), bg=COLORS['bg_3'], fg=COLORS['fg_1'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=16, pady=9, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2']).pack(side='left')
+    btns = tk.Frame(body, bg=COLORS['bg_2'])
+    btns.pack(fill='x', pady=(2, 2))
+    def _abtn(txt, cmd, primary=False):
+        return tk.Button(btns, text=txt, command=cmd, font=(FONTS['button'][0], 10), bg=COLORS['accent'] if primary else COLORS['bg_3'], fg='#ffffff' if primary else COLORS['fg_1'], activebackground=COLORS['accent'] if primary else COLORS['bg_4'], activeforeground='#ffffff' if primary else COLORS['fg_0'], relief='flat', bd=0, padx=14, pady=8, cursor='hand2', highlightthickness=0 if primary else 1, highlightbackground=COLORS['border_2'])
+    _abtn('+  ' + _('Add entry'), _add).pack(side='left', padx=(0, 6))
+    _abtn('👁  ' + _('Preview INI'), _preview).pack(side='left', padx=(0, 6))
+    _abtn('💾  ' + _('Save to app0'), _save_to_app0, primary=True).pack(side='left', padx=(0, 6))
+    _abtn('⬇  ' + _('Export copy…'), _export_copy).pack(side='left', padx=(0, 6))
+    btns2 = tk.Frame(body, bg=COLORS['bg_2'])
+    btns2.pack(fill='x', pady=(6, 0))
+    def _abtn2(txt, cmd):
+        return tk.Button(btns2, text=txt, command=cmd, font=(FONTS['button'][0], 9), bg=COLORS['bg_3'], fg=COLORS['fg_2'], activebackground=COLORS['bg_4'], relief='flat', bd=0, padx=12, pady=6, cursor='hand2', highlightthickness=1, highlightbackground=COLORS['border_2'])
+    _abtn2('🔍  ' + _('Scan eboot for codes…'), _scan_eboot).pack(side='left', padx=(0, 6))
+    _abtn2('📦  ' + _('Copy replacement modules…'), _copy_modules).pack(side='left')
+    tk.Label(body, text=_('Required runtime files — DLC-emu only works when BOTH are installed\n✓  dlc_emu.ini — created by “Save to app0” (contains the DLC configuration)\n✓  Runtime SPRX modules (libSceAppContent.sprx, libSceGameUpdate.sprx, libSceNpEntitlementAccess.sprx) — installed by “Copy replacement modules…”\nThe INI tells DLC-emu what DLC exists. The SPRX modules make the game use that configuration. Both are required.'), font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], justify='left', anchor='w', wraplength=760).pack(fill='x', anchor='w', pady=(10, 2))
+    _init_folder = folder_var.get().strip()
+    if _init_folder and _os.path.isdir(_init_folder):
+        _load_from_folder(_init_folder)
+        return
+    _render_entries()
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Language Stripper pane (v2.9.0) — banner + radios + browse + chips
 # ─────────────────────────────────────────────────────────────────────
@@ -1047,13 +2233,12 @@ def _lang_scan(app):
     if fn:
         try:
             fn()
+            return
         except Exception as e:
-            from tkinter import messagebox
-            messagebox.showerror('Scan failed', str(e))
-    else:
-        from tkinter import messagebox
-        messagebox.showinfo('Not available',
-            'Language scan not implemented yet in this build.')
+            app_error(app, 'Scan failed', str(e))
+            return
+    app_info(app, 'Not available',
+        'Language scan not implemented yet in this build.')
 
 
 def _lang_quick_keep(app, codes):
@@ -1086,8 +2271,7 @@ def _lang_strip(app):
     if fn:
         try: fn()
         except Exception as e:
-            from tkinter import messagebox
-            messagebox.showerror('Strip failed', str(e))
+            app_error(app, 'Strip failed', str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1397,7 +2581,7 @@ def _setting_row(parent, app, label, kind, var=None,
 
     # Column 2: control
     ctrl_col = tk.Frame(row, bg=COLORS['bg_2'])
-    ctrl_col.pack(side='left', padx=(12, 12))
+    ctrl_col.pack(side='right', padx=(12, 0))
     ctrl_widget = None
 
     if kind == 'select':
@@ -1519,42 +2703,37 @@ def _setting_row(parent, app, label, kind, var=None,
         lock_pill.pack(side='left', padx=(6, 0))
         ctrl_widget = lock_pill
 
-    # Column 3: default indicator (right-aligned)
-    def_col = tk.Frame(row, bg=COLORS['bg_2'], width=120)
-    def_col.pack(side='right')
-    def_col.pack_propagate(False)
+    # Column 3: inline "Restore default" badge — only shown when the
+    # value differs from its default (sits just left of the control)
     if default is not None and var is not None:
+        def_inline = tk.Frame(row, bg=COLORS['bg_2'])
+        def_inline.pack(side='right', padx=(0, 4))
+
         def _update_def_indicator(*_a):
             try:
                 cur = var.get()
             except Exception:
                 return
-            cur_s = str(cur)
-            def_s = str(default)
-            for w in def_col.winfo_children():
+            for w in def_inline.winfo_children():
                 w.destroy()
-            if cur_s == def_s:
-                tk.Label(def_col,
-                         text=_('default: ') + def_s,
-                         font=(FONTS['mono_sm'][0], 9),
-                         bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                         anchor='e').pack(side='right')
-            else:
-                # Off-default — clickable revert badge
-                def_btn = tk.Label(def_col,
-                    text='\u21bb  ' + _('default ') + def_s,
-                    font=(FONTS['mono_sm'][0], 9, 'bold'),
-                    bg=COLORS['bg_2'], fg=COLORS['warn_hi'],
-                    cursor='hand2', anchor='e')
-                def_btn.pack(side='right')
-                def _revert(_e=None):
-                    var.set(default)
-                    try:
-                        _save_handler()
-                    except Exception:
-                        pass
-                    _update_def_indicator()
-                def_btn.bind('<Button-1>', _revert)
+            if str(cur) == str(default):
+                return
+            # Off-default — clickable revert badge
+            badge = tk.Label(def_inline,
+                text='\u21bb  ' + _('Restore default') + ' (' + str(default) + ')',
+                font=(FONTS['mono_sm'][0], 9, 'bold'),
+                bg=COLORS['warn_bg'], fg=COLORS['warn'],
+                padx=8, pady=2, cursor='hand2',
+                highlightbackground=COLORS['warn'], highlightthickness=1)
+            badge.pack(side='right')
+            def _revert(_e=None):
+                var.set(default)
+                try:
+                    _save_handler()
+                except Exception:
+                    pass
+                _update_def_indicator()
+            badge.bind('<Button-1>', _revert)
         _update_def_indicator()
         try:
             var.trace_add('write', _update_def_indicator)
@@ -1839,8 +3018,7 @@ def _build_help_card(parent, app):
 # Toolbar actions: Reset all + Save parameters + Run benchmark
 # ─────────────────────────────────────────────────────────────────────
 def _reset_all(app):
-    from tkinter import messagebox
-    if not messagebox.askyesno('Reset all',
+    if not app_confirm(app, 'Reset all',
             'Restore every Advanced setting to its default?'):
         return
     defaults = {
@@ -1875,8 +3053,7 @@ def _save_params(app):
         app._save_adv_params()
         app._set_status(_('Saved.'), COLORS['success'])
     except Exception as e:
-        from tkinter import messagebox
-        messagebox.showerror('Save failed', str(e))
+        app_error(app, 'Save failed', str(e))
 
 
 def _run_benchmark(app, bench_pill):

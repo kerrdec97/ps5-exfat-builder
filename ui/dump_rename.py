@@ -41,6 +41,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
+from ui.shared.empty_state import EmptyState
 
 from exfat_builder import _, _load_cover_image
 
@@ -148,7 +149,6 @@ class DumpRenameTab:
                 app._dumps_pbar.stop()
             except Exception:
                 pass
-            app._dumps_scanning = False
             if found:
                 app._dumps_status_var.set(
                     _('%d dump(s) found.') % found)
@@ -403,14 +403,14 @@ class DumpRenameTab:
                           lambda e: self._canvas.unbind_all('<MouseWheel>'))
 
         # Empty-state placeholder
-        self._empty_label = tk.Label(
-            self._list_inner,
-            text=_('No dumps scanned yet. Pick a source folder and click '
-                   'Scan.'),
-            font=FONTS['mono_sm'],
-            bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-            padx=14, pady=24, justify='left')
-        self._empty_label.pack(anchor='w')
+        self._empty_label = tk.Frame(self._list_inner, bg=COLORS['bg_3'],
+                                     height=260)
+        self._empty_label.pack(fill='x')
+        self._empty_label.pack_propagate(False)
+        EmptyState(self._empty_label, icon='\U0001f4e6',
+                   title=_('No dumps scanned yet'),
+                   description=_('Pick a source folder and click Scan.'),
+                   bg='bg_3').pack(fill='both', expand=True)
 
     def _build_footer(self, parent):
         foot = tk.Frame(parent, bg=COLORS['bg_1'])
@@ -519,13 +519,14 @@ class DumpRenameTab:
         model = list(self.app._dumps_model)
 
         if not items:
-            tk.Label(self._list_inner,
-                     text=_('No dumps scanned yet. Pick a source folder '
-                            'and click Scan.'),
-                     font=FONTS['mono_sm'],
-                     bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-                     padx=14, pady=24, justify='left'
-                     ).pack(anchor='w')
+            holder = tk.Frame(self._list_inner, bg=COLORS['bg_3'],
+                              height=260)
+            holder.pack(fill='x')
+            holder.pack_propagate(False)
+            EmptyState(holder, icon='\U0001f4e6',
+                       title=_('No dumps scanned yet'),
+                       description=_('Pick a source folder and click Scan.'),
+                       bg='bg_3').pack(fill='both', expand=True)
             self._refresh_kpi()
             return
 

@@ -49,6 +49,7 @@ from ui.shared.scroll import attach_scroll
 
 def build_y2jb_tab(parent, app):
     parent.configure(bg=COLORS['bg_1'])
+    app._y2jb_gated_buttons = []
 
     # ── Page head ──
     head = tk.Frame(parent, bg=COLORS['bg_1'])
@@ -323,6 +324,13 @@ def build_y2jb_tab(parent, app):
             lambda e, k=key: (app._y2jb_subtabs.show(k), _remember(k)),
             add='+')
 
+    # Gate the install buttons on a non-empty PS5 IP
+    try:
+        app._y2jb_ps5_ip.trace_add('write', app._y2jb_refresh_gating)
+    except Exception:
+        pass
+    app._y2jb_refresh_gating()
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Install sub-tab — region cards (v3.6.0 PS5 pass)
@@ -436,6 +444,7 @@ def _build_install_cards(parent, app):
                             'PS5.') % region)
         except Exception:
             pass
+        app._y2jb_register_gated_button(ibtn)
 
     # Re-check existing paths on load (same as the legacy builder)
     for r in ('USA', 'EU', 'JP'):

@@ -36,6 +36,7 @@ from tkinter_theme import COLORS, FONTS
 from exfat_builder import *  # noqa: F401,F403
 from exfat_builder import _
 from ui.shared.scroll import attach_scroll
+from ui.shared.app_dialog import app_info, app_error
 
 
 def build_history_tab(parent, app):
@@ -407,14 +408,14 @@ def _detect_kind(entry):
 
 def _export_csv(app):
     """Export history to CSV via file dialog."""
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog
     try:
         with open(app._history_path(), 'r') as f:
             history = json.load(f)
     except Exception:
         history = []
     if not history:
-        messagebox.showinfo(_('Export CSV'),
+        app_info(app, _('Export CSV'),
                             _('No history to export.'))
         return
     path = filedialog.asksaveasfilename(
@@ -438,11 +439,11 @@ def _export_csv(app):
                             'yes' if h.get('success', True) else 'no',
                             h.get('output', ''),
                             h.get('folder', '')])
-        messagebox.showinfo(_('Export CSV'),
+        app_info(app, _('Export CSV'),
                             _('Saved %d entries to %s') %
                             (len(history), os.path.basename(path)))
     except Exception as e:
-        messagebox.showerror(_('Export CSV'), str(e))
+        app_error(app, _('Export CSV'), str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────

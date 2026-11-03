@@ -92,20 +92,20 @@ def _build_page_head(body, app):
     app._lib_stat_games_var = tk.StringVar(value='0')
     app._lib_stat_folders_var = tk.StringVar(value='0')
 
-    def _badge(var, suffix):
+    def _badge(var, suffix, accent):
         f = tk.Frame(head, bg=COLORS['bg_2'],
                      highlightbackground=COLORS['border_2'],
                      highlightthickness=1)
         f.pack(side='left', padx=(10, 0))
         tk.Label(f, textvariable=var,
                  font=(FONTS['mono_sm'][0], 9, 'bold'),
-                 bg=COLORS['bg_2'], fg=COLORS['fg_0']
+                 bg=COLORS['bg_2'], fg=accent
                  ).pack(side='left', padx=(8, 2), pady=2)
         tk.Label(f, text=suffix, font=FONTS['mono_sm'],
                  bg=COLORS['bg_2'], fg=COLORS['fg_4']
                  ).pack(side='left', padx=(0, 8), pady=2)
-    _badge(app._lib_stat_games_var, _('games'))
-    _badge(app._lib_stat_folders_var, _('folders'))
+    _badge(app._lib_stat_games_var, _('games'), COLORS['accent_hi'])
+    _badge(app._lib_stat_folders_var, _('folders'), COLORS['warn_hi'])
 
     # Right-aligned actions
     _btn(head, '\U0001f528  Build All',

@@ -52,7 +52,7 @@ class NavItem(tk.Frame):
         self._compact = False
 
         # accent bar on the left edge — shown only when active
-        self._bar = tk.Frame(self, bg=get_color("bg_1"), width=3)
+        self._bar = tk.Frame(self, bg=get_color("bg_1"), width=4)
         self._bar.pack(side="left", fill="y")
 
         self._inner = tk.Frame(self, bg=get_color("bg_1"))
@@ -101,7 +101,8 @@ class NavItem(tk.Frame):
                 pass
             if self._icon:
                 self._icon.pack_configure(
-                    padx=SPACING["sm"], pady=SPACING["sm"])
+                    side="left", fill="x", expand=True,
+                    padx=SPACING["xs"], pady=SPACING["sm"])
         else:
             # Restore icon padding, then re-show the label after it.
             if self._icon:
@@ -133,10 +134,10 @@ class NavItem(tk.Frame):
 
     def _render(self):
         if self._active:
-            bg = get_color("accent_08")       # theme 'active' fill convention
+            bg = get_color("accent_15")       # theme 'active' fill convention
             fg = get_color("accent_hi")
             bar = get_color("accent")
-            icon_fg = get_color("accent")
+            icon_fg = get_color("accent_hi")
             font = get_font("body_b")
         else:
             bg = get_color("bg_1")

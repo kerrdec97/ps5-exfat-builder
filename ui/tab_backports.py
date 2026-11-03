@@ -41,8 +41,10 @@ from ui.shared.cards import GameCard, build_subtabs
 
 # Star-import for legacy theme constants used by inner panel builders
 from exfat_builder import *  # noqa: F401,F403
+from ui.shared.app_dialog import app_confirm, app_error, app_info, app_warning
 from exfat_builder import _, _load_cover_image
 from ui.shared.scroll import attach_scroll
+from ui.shared.empty_state import EmptyState
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -100,6 +102,10 @@ def build_backports_tab(parent, app):
             lambda f: _build_games_subtab(f, app)),
         ('auto',    '\u2699  ' + _('Auto Backport'),
             lambda f: _build_auto_subtab(f, app)),
+        ('sdkfixer', '\U0001f527  ' + _('SDK Fixer'),
+            lambda f: _build_sdkfixer_subtab(f, app)),
+        ('batchsdk', '\U0001f4e6  ' + _('Batch SDK Retag'),
+            lambda f: _build_batchsdk_subtab(f, app)),
         ('results', '\U0001f4cb  ' + _('Results'),
             lambda f: _build_results_subtab(f, app)),
     ]
@@ -146,6 +152,37 @@ def _widget_alive(w):
         return bool(w.winfo_exists())
     except Exception:
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SUB-TAB 3: RESULTS — ✅/❌ tracking pane (existing builder)
+# ─────────────────────────────────────────────────────────────────────────
+def _build_results_subtab(parent, app):
+    """Build the Backports Results sub-tab.
+
+    Restored wrapper (v3.6.5 fix): this function's body had been orphaned
+    as unreachable code after `return b` inside the nested `_sdkfix_btn`
+    helper during the sub-tab refactor, so the `('results', …,
+    lambda f: _build_results_subtab(f, app))` registration raised a
+    NameError that `build_subtabs` swallowed to stderr — leaving the
+    Results tab blank with no in-app log. The real Results panel
+    (`app._build_bpr_panel` / `app._bpr_render`, including its empty-state)
+    was always intact; it just never got built. This wrapper restores the
+    wiring; nothing in the panel or its data path changed.
+    """
+    parent.configure(bg=COLORS['bg_1'])
+    app._bp_results_frame = tk.Frame(parent, bg=COLORS['bg_1'])
+    app._bp_results_frame.pack(fill='both', expand=True)
+    try:
+        app._build_bpr_panel(app._bp_results_frame)
+    except Exception as e:
+        tk.Label(app._bp_results_frame,
+                 text=_('Could not load Results pane:') +
+                      '\n\n' + str(e),
+                 font=FONTS['mono_sm'],
+                 bg=COLORS['bg_1'], fg=COLORS.get('err', '#e0584b'),
+                 wraplength=720, justify='left'
+                 ).pack(padx=24, pady=24, anchor='nw')
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -424,23 +461,838 @@ def _build_auto_subtab(parent, app):
         pass
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# SUB-TAB 3: RESULTS — ✅/❌ tracking pane (existing builder)
-# ─────────────────────────────────────────────────────────────────────────
-def _build_results_subtab(parent, app):
+def _build_advfixes_subtab(parent, app):
     parent.configure(bg=COLORS['bg_1'])
-    app._bp_results_frame = tk.Frame(parent, bg=COLORS['bg_1'])
-    app._bp_results_frame.pack(fill='both', expand=True)
+    from ui import audio_fix_scan as afs
+    if not hasattr(app, '_afx_folder_var'):
+        app._afx_folder_var = tk.StringVar(value='')
+    if not hasattr(app, '_afx_whole_var'):
+        app._afx_whole_var = tk.BooleanVar(value=False)
+    app._afx_last_result = None
+    wrap = tk.Frame(parent, bg=COLORS['bg_1'])
+    wrap.pack(fill='both', expand=True, padx=16, pady=12)
+    tk.Label(wrap, text='🔍  ' + _('Advanced Fixes — read-only diagnostics'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    tk.Label(wrap, text=_('Read-only. Evidence hierarchy (strongest first):\n  1. CONFIRMED PROFILE (DBS, SM2) — console-backed, patch-eligible (Channel-Config scan)\n  2. TWIN-BRANCH / API-context — strong lead, report-only (Channel-Config scan)\n  3. LEGACY structural fields (0C F1 63 2D) — NOT a confirmed fix, report-only (Scan Audio Fix Candidates)\n  4. Loose clusters — noise, report-only\nOnly a CONFIRMED PROFILE is ever patch-eligible. Use “Scan Channel-Config” as the primary scanner.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=760).pack(anchor='w', pady=(2, 12))
+    fr = tk.Frame(wrap, bg=COLORS['bg_1'])
+    fr.pack(fill='x', pady=(0, 6))
+    tk.Label(fr, text=_('Dump folder:'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 8))
+    ent = tk.Entry(fr, textvariable=app._afx_folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+    ent.pack(side='left', fill='x', expand=True, padx=(0, 8))
+    def _browse():
+        d = filedialog.askdirectory(title=_('Select the PS5 dump folder'))
+        if d:
+            app._afx_folder_var.set(d)
+    _btn(fr, _('Browse…'), _browse, kind='ghost').pack(side='left')
+    scope = tk.Frame(wrap, bg=COLORS['bg_1'])
+    scope.pack(fill='x', pady=(0, 8))
+    tk.Checkbutton(scope, text=_('Also scan all .bin/.prx/.sprx in the whole folder'), variable=app._afx_whole_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left')
+    tk.Label(scope, text=_('  (default: eboot.bin + prx/ + sce_module/ + fakelib/)'), font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack(side='left')
+    summary_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    summary_card.pack(fill='x', pady=(6, 8))
+    summary_var = tk.StringVar(value=_('No scan run yet.'))
+    tk.Label(summary_card, text=_('Summary'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(summary_card, textvariable=summary_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], justify='left', anchor='w', wraplength=760).pack(anchor='w', fill='x', padx=12, pady=(0, 10))
+    prv_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    tk.Label(prv_card, text=_('Profile-relative validation'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    prv_verdict_var = tk.StringVar(value='')
+    prv_verdict_lbl = tk.Label(prv_card, textvariable=prv_verdict_var, font=(FONTS['mono_sm'][0], 11, 'bold'), bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w')
+    prv_verdict_lbl.pack(anchor='w', padx=12, pady=(0, 2))
+    prv_body_var = tk.StringVar(value='')
+    tk.Label(prv_card, textvariable=prv_body_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], justify='left', anchor='w', wraplength=760).pack(anchor='w', fill='x', padx=12, pady=(0, 6))
+    prv_patch_lbl = tk.Label(prv_card, text=_('Patch recommendation: NO — requires real console test'), font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w')
+    prv_patch_lbl.pack(anchor='w', padx=12, pady=(0, 8))
+    app._afx_prv_card = prv_card
+    app._afx_prv_verdict_var = prv_verdict_var
+    app._afx_prv_verdict_lbl = prv_verdict_lbl
+    app._afx_prv_body_var = prv_body_var
+    table_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    tk.Label(table_card, text=_('Scan report'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    table_holder = tk.Frame(table_card, bg=COLORS['bg_3'])
+    table_holder.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+    table_scroll = tk.Scrollbar(table_holder, orient='vertical')
+    table_scroll.pack(side='right', fill='y')
+    table_txt = tk.Text(table_holder, height=8, bg=COLORS['bg_3'], fg=COLORS['fg_2'], font=FONTS['mono_sm'], relief='flat', wrap='none', highlightthickness=0, yscrollcommand=table_scroll.set)
+    table_txt.pack(side='left', fill='both', expand=True)
+    table_scroll.configure(command=table_txt.yview)
+    table_txt.configure(state='disabled')
+    def _set_table(text):
+        table_txt.configure(state='normal')
+        table_txt.delete('1.0', 'end')
+        table_txt.insert('1.0', text)
+        table_txt.configure(state='disabled')
+    footer_note = tk.Label(wrap, text=_('Candidate audio-fix data fields. Read-only scan — no files are modified and no audio fix is guaranteed.'), font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_5'], justify='left', wraplength=760)
+    footer_note.pack(side='bottom', anchor='w', pady=(8, 0))
+    btns = tk.Frame(wrap, bg=COLORS['bg_1'])
+    btns.pack(side='bottom', fill='x', pady=(2, 0))
+    def _run_scan():
+        folder = app._afx_folder_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            summary_var.set(_('Select a valid dump folder first.'))
+        else:
+            summary_var.set(_('Scanning (read-only)…'))
+            _set_table('')
+            def _work():
+                try:
+                    res = afs.scan_dump(folder, whole_folder=bool(app._afx_whole_var.get()))
+                except Exception as e:
+                    _msg = str(e)
+                    app.after(0, lambda m=_msg: summary_var.set(_('Scan error: ') + m))
+                    return
+                def _done():
+                    app._afx_last_result = res
+                    app._afx_last_scan_kind = 'field'
+                    s = res['summary']
+                    warn = '  ⚠ ' + '; '.join(s['warnings']) if s['warnings'] else ''
+                    bc = s['by_confidence']
+                    prv = s.get('profile_relative_validation')
+                    if prv:
+                        pr_matched = prv['exact'] + prv['near']
+                        pr_total = pr_matched + prv['missing']
+                        prof_lines = _('Profile-relative matches: %d/%d\nValidation verdict: %s (delta %s)\n') % (pr_matched, pr_total, prv['verdict'], prv['delta'])
+                    else:
+                        prof_lines = _('Profile-relative matches: — (no profile relocation found)\n')
+                    summary_var.set(_('LEGACY field scan (0C F1 63 2D) — report-only\nTier: LEGACY_F1_FIELD   (NOT a confirmed audio fix)\nFiles raw-scanned: %d   Skipped (unreadable): %d\nLegacy fields matched (absolute): %d/%d\n%sUnpatched: %d   Already patched: %d\nConfidence: HIGH=%d STRUCTURAL=%d MEDIUM=%d LOW=%d SKIP=%d\nPatch recommendation: NO — legacy marker. Run the channel-config scan for confirmed-profile detection.%s') % (s['files_raw_scanned'], s['files_skipped'], s['known_offsets_matched'], s['known_offsets_total'], prof_lines, s['unpatched'], s['already_patched'], bc.get('HIGH', 0), bc.get('STRUCTURAL', 0), bc.get('MEDIUM', 0), bc.get('LOW', 0), bc.get('SKIP', 0), warn))
+                    prv = s.get('profile_relative_validation')
+                    if prv:
+                        verdict = prv['verdict']
+                        vcolor = COLORS['teal']
+                        if verdict in ('NO_RELOCATION',):
+                            vcolor = COLORS.get('fg_5', COLORS['fg_4'])
+                        elif verdict in ('PARTIAL_STRUCTURAL',):
+                            vcolor = COLORS.get('amber', COLORS['teal'])
+                        try:
+                            app._afx_prv_verdict_lbl.configure(fg=vcolor)
+                        except Exception:
+                            pass
+                        app._afx_prv_verdict_var.set(verdict)
+                        pred_lines = []
+                        for p in prv['predictions']:
+                            if p['kind'] == 'exact':
+                                pred_lines.append(f"  {p['profile_offset']!s} + delta = {p['predicted']!s}   exact")
+                            elif p['kind'] == 'near':
+                                pred_lines.append('  %s + delta = %s   near %s (%s%d)' % (p['profile_offset'], p['predicted'], p['matched'], '+' if (p['delta_off'] or 0) >= 0 else '', p['delta_off']))
+                            else:
+                                pred_lines.append(f"  {p['profile_offset']!s} + delta = {p['predicted']!s}   MISSING")
+                        app._afx_prv_body_var.set(_('Profile: %s\nAnchor:  %s → %s\nDelta:   %s\nMatches: exact %d   near %d   missing %d\n%s') % (prv.get('profile_name') or '?', prv['anchor_profile'], prv['anchor_found'], prv['delta'], prv['exact'], prv['near'], prv['missing'], '\n'.join(pred_lines)))
+                        try:
+                            app._afx_prv_card.pack(fill='x', pady=(0, 8), after=summary_card)
+                        except Exception:
+                            app._afx_prv_card.pack(fill='x', pady=(0, 8))
+                    else:
+                        try:
+                            app._afx_prv_card.pack_forget()
+                        except Exception:
+                            pass
+                    try:
+                        _set_table(afs.export_txt(res))
+                    except Exception:
+                        _set_table(_('(could not render table)'))
+                    try:
+                        has_candidates = s['candidates_found'] > 0
+                        if has_candidates:
+                            app._afx_testpatch_btn.pack(side='left', padx=(8, 0))
+                        else:
+                            app._afx_testpatch_btn.pack_forget()
+                    except Exception:
+                        pass
+                    try:
+                        app._afx_selector_btn.pack_forget()
+                    except Exception:
+                        pass
+                app.after(0, _done)
+            threading.Thread(target=_work, daemon=True).start()
+    def _export(kind):
+        ext = '.json' if kind == 'json' else '.txt'
+        chan = getattr(app, '_afx_last_channel_result', None)
+        field = getattr(app, '_afx_last_result', None)
+        which = getattr(app, '_afx_last_scan_kind', None)
+        if which == 'channel' and chan:
+            from ui import audio_channel_scan as _mod
+            res = chan
+        elif which == 'field' and field:
+            from ui import audio_fix_scan as _mod
+            res = field
+        elif chan:
+            from ui import audio_channel_scan as _mod
+            res = chan
+        elif field:
+            from ui import audio_fix_scan as _mod
+            res = field
+        else:
+            summary_var.set(_('Run a scan first, then export.'))
+            return
+        path = filedialog.asksaveasfilename(title=_('Export scan report'), defaultextension=ext, filetypes=[('JSON', '*.json')] if kind == 'json' else [('Text', '*.txt')])
+        if not path:
+            return
+        try:
+            content = _mod.export_json(res) if kind == 'json' else _mod.export_txt(res)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            summary_var.set(_('Report exported: ') + path)
+        except Exception as e:
+            summary_var.set(_('Export failed: ') + str(e))
+    def _run_channel_scan():
+        folder = app._afx_folder_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            summary_var.set(_('Select a valid dump folder first.'))
+        else:
+            summary_var.set(_('Scanning channel-config (read-only)…'))
+            _set_table('')
+            def _work():
+                try:
+                    from ui import audio_channel_scan as acs
+                    res = acs.scan_dump(folder, whole_folder=bool(app._afx_whole_var.get()))
+                except Exception as e:
+                    _msg = str(e)
+                    app.after(0, lambda m=_msg: summary_var.set(_('Channel scan error: ') + m))
+                    return
+                def _done():
+                    from ui import audio_channel_scan as acs
+                    app._afx_last_channel_result = res
+                    app._afx_last_scan_kind = 'channel'
+                    s = res['summary']
+                    tier = s.get('tier', 'NO_MATCH')
+                    cpm = s.get('confirmed_profile_matches', [])
+                    if cpm:
+                        m = cpm[0]
+                        state = _('UNPATCHED — patch-eligible') if m['any_unpatched'] else _('already patched')
+                        head = _('Channel-config scan — Tier: %s\nCONFIRMED PROFILE: %s (%s)\nStatus: %s\nPatch eligible: %s   Twin-branch matches: %d   Loose leads: %d') % (tier, m['profile_id'], m['app_ver'], state, _('YES') if s['patch_eligible'] else _('NO'), s.get('twin_branches_found', 0), s['loose_leads_found'])
+                    elif tier == 'TWIN_BRANCH_MATCH':
+                        region = ''
+                        vals = ''
+                        for fr in res['files']:
+                            if fr.get('twin_branches'):
+                                tb0 = fr['twin_branches'][0]
+                                inv0 = tb0.get('investigation') or {}
+                                region = f"{inv0.get('region_start', '?')!s}..{inv0.get('region_end', '?')!s}"
+                                pairs = inv0.get('channel_value_pairs') or []
+                                if pairs:
+                                    vals = ' / '.join('%s(%dch)' % (p['imm'], p['channels']) for p in pairs)
+                                break
+                        head = _('Channel-config scan — PRIMARY INVESTIGATION TARGET\nRegion: %s   Encoding: IMM_SHIFTED_8\nValues: %s\nTier: TWIN_BRANCH_MATCH   Patch eligible: NO (no confirmed profile)\nLoose leads: %d (see JSON export — not patch targets)') % (region or '?', vals or '(install capstone for values)', s['loose_leads_found'])
+                    else:
+                        head = _('Channel-config scan — Tier: %s\nNo confirmed profile, no twin-branch.\nLoose leads: %d — hidden by default, NOT patch targets. Use Export JSON.\nPatch eligible: NO') % (tier, s['loose_leads_found'])
+                    summary_var.set(head)
+                    try:
+                        app._afx_prv_card.pack_forget()
+                    except Exception:
+                        pass
+                    try:
+                        _set_table(acs.export_txt(res))
+                    except Exception:
+                        _set_table(_('(could not render channel report)'))
+                    try:
+                        app._afx_testpatch_btn.pack_forget()
+                    except Exception:
+                        pass
+                    try:
+                        sel = _find_selector_for_patch(res)
+                        if sel is not None:
+                            app._afx_selector = sel
+                            app._afx_selector_btn.pack_forget()
+                        else:
+                            app._afx_selector_btn.pack_forget()
+                    except Exception:
+                        try:
+                            app._afx_selector_btn.pack_forget()
+                            return
+                        except Exception:
+                            return
+                app.after(0, _done)
+            threading.Thread(target=_work, daemon=True).start()
+    _btn(btns, '🎵  ' + _('Scan Channel-Config'), _run_channel_scan, kind='primary').pack(side='left', padx=(0, 8))
+    _btn(btns, '📜  ' + _('Legacy Field Scan'), _run_scan, kind='ghost').pack(side='left', padx=(0, 8))
+    _btn(btns, _('Export .txt'), lambda: _export('txt'), kind='ghost').pack(side='left', padx=(0, 6))
+    _btn(btns, _('Export .json'), lambda: _export('json'), kind='ghost').pack(side='left', padx=(0, 6))
+    testpatch_btn = _btn(btns, _('Create Test Patch…'), lambda: _open_testpatch_dialog(app, afs), kind='ghost')
+    app._afx_testpatch_btn = testpatch_btn
+    selector_btn = _btn(btns, '⚠  ' + _('Create Experimental Selector Test Patch…'), lambda: _open_selector_patch_dialog(app), kind='ghost')
+    app._afx_selector_btn = selector_btn
+    table_card.pack(fill='both', expand=True, pady=(0, 8))
+
+
+def _find_selector_for_patch(channel_result):
+    """Return {file_path, value_offset, region, ...} for a twin-branch selector
+    that spans BOTH 8 and 12 channels (firmware-compat shape), or None. The
+    value_offset is the 12-branch value byte (0xC00's 0x0C). Gates the
+    EXPERIMENTAL selector test-patch button."""
+    for fr in channel_result.get('files', []):
+        for tb in fr.get('twin_branches', []):
+            inv = tb.get('investigation') or {}
+            pairs = inv.get('channel_value_pairs') or []
+            chans = set(p['channels'] for p in pairs) or set(inv.get('channel_values') or [])
+            if 8 in chans and (12 in chans and tb.get('encoding') == 'IMM_SHIFTED_8'):
+                tv = tb.get('twelve_value_offset')
+                voff = int(tv, 16) if tv else int(tb['twelve_offset'], 16) + 2
+                return {'file_path': fr['file_path'], 'file_name': fr['file_name'], 'value_offset': voff, 'region': f"{inv.get('region_start', '?')!s}..{inv.get('region_end', '?')!s}", 'pairs': pairs}
+
+
+def _open_selector_patch_dialog(app):
+    """Gated EXPERIMENTAL selector test-patch dialog. Patches ONLY the detected
+    selector's 12-value byte (0xC00->0x800) on a COPY. Original never written.
+    Testing-eligible only; never creates a confirmed profile."""
+    sel = getattr(app, '_afx_selector', None)
+    if not sel:
+        return
+    dump_folder = app._afx_folder_var.get().strip()
+    dlg = tk.Toplevel(app)
+    dlg.title(_('Experimental Selector Test Patch'))
+    dlg.configure(bg=COLORS['bg_1'])
+    dlg.transient(app)
+    dlg.grab_set()
+    dlg.geometry('640x560')
+    pad = tk.Frame(dlg, bg=COLORS['bg_1'])
+    pad.pack(fill='both', expand=True, padx=16, pady=14)
+    tk.Label(pad, text=_('Experimental Selector Test Patch'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    warn = tk.Frame(pad, bg=COLORS.get('teal_bg', COLORS['bg_2']), highlightbackground=COLORS.get('amber', COLORS['border_2']), highlightthickness=1)
+    warn.pack(fill='x', pady=(8, 12))
+    tk.Label(warn, text=_('⚠  EXPERIMENTAL\nThis is NOT a confirmed fix.\nThis creates a patched COPY for console testing only.\nAudio may remain broken. Game may behave identically.\nThe original file is never modified.\nThis selector resembles the DBS/SM2 channel selector but is NOT a confirmed profile for this title. A successful test does NOT by itself create a confirmed profile.'), font=FONTS['mono_sm'], bg=COLORS.get('teal_bg', COLORS['bg_2']), fg=COLORS['fg_1'], justify='left', wraplength=580).pack(anchor='w', padx=10, pady=8)
+    tk.Label(pad, text=_('Target (detected channel selector):\n  File:   %s\n  Region: %s\n  Change: 0xC00 → 0x800  (12ch → 8ch) at value byte 0x%X\n  Other branches (1ch/2ch/8ch) are left untouched.') % (sel['file_name'], sel['region'], sel['value_offset']), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], justify='left').pack(anchor='w', pady=(0, 10))
+    ack1 = tk.BooleanVar(value=False)
+    ack2 = tk.BooleanVar(value=False)
+    ack3 = tk.BooleanVar(value=False)
+    ack4 = tk.BooleanVar(value=False)
+    holder = {}
+    def _gate(*_a):
+        ok = ack1.get() and (ack2.get() and (ack3.get() and ack4.get()))
+        b = holder.get('btn')
+        if b is not None:
+            try:
+                b.configure(state='normal' if ok else 'disabled')
+            except Exception:
+                pass
+    for var, label in (ack1, _('I understand this is EXPERIMENTAL and NOT a confirmed fix')), (ack2, _('I understand audio may remain broken / behavior may be unchanged')), (ack3, _('Patch a COPY, not the original')), (ack4, _('This test result does not by itself create a confirmed profile')):
+        tk.Checkbutton(pad, text=label, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=_gate).pack(anchor='w', pady=1)
+    status = tk.StringVar(value='')
+    tk.Label(pad, textvariable=status, font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=580).pack(anchor='w', pady=(6, 0))
+    row = tk.Frame(pad, bg=COLORS['bg_1'])
+    row.pack(fill='x', pady=(10, 0))
+    def _do():
+        from ui import audio_fix_patch as PP
+        if not dump_folder or not os.path.isdir(dump_folder):
+            status.set(_('Dump folder is not valid.'))
+            return
+        r = PP.create_selector_test_patch(dump_folder, sel['file_path'],
+                                          sel['value_offset'])
+        app._afx_selector_result = r
+        if r['ok']:
+            status.set(_('Experimental patch created.\n'
+                         'Patched COPY: %s\n'
+                         'Original untouched: %s\n'
+                         'Change: %s\n'
+                         'Test this copy on a lower-firmware console.')
+                       % (r['copy'],
+                          _('YES') if r['original_untouched'] else _('NO (!)'),
+                          r['change']))
+            if app_confirm(app,
+                           _('Export patch report?'),
+                           _('Save an EXPERIMENTAL selector patch report for the console test?')):
+                path = filedialog.asksaveasfilename(
+                    title=_('Export selector patch report'),
+                    defaultextension='.txt',
+                    filetypes=[('Text', '*.txt'), ('JSON', '*.json')])
+                if path:
+                    try:
+                        content = (PP.export_selector_report_json(r)
+                                   if path.lower().endswith('.json')
+                                   else PP.export_selector_report_txt(r))
+                        with open(path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        status.set(status.get() + '\n'
+                                   + _('Report exported: ') + path)
+                    except Exception as e:
+                        status.set(_('Report export failed: ') + str(e))
+        else:
+            status.set(_('Patch refused / failed: %s')
+                       % (r.get('error') or 'unknown'))
+    btn = _btn(row, _('Create Patched Copy'), _do, kind='primary')
+    btn.configure(state='disabled')
+    btn.pack(side='left', padx=(0, 8))
+    holder['btn'] = btn
+    _btn(row, _('Cancel'), dlg.destroy, kind='ghost').pack(side='left')
+    _gate()
+
+
+def _open_testpatch_dialog(app, afs):
+    """Gated 'Unconfirmed Test Patch' dialog. Lets the user select candidates,
+    requires three acknowledgements, and creates a PATCHED COPY (never touches
+    the original). STRUCTURAL is offered as 'test patch available' — never
+    called a confirmed fix.
+    """
+    res = getattr(app, '_afx_last_result', None)
+    if not res:
+        return
+    cands = []
+    for fr in res['files']:
+        for c in fr['candidates']:
+            if c['state'] == 'unpatched' and c['confidence'] in ('HIGH', 'STRUCTURAL', 'MEDIUM'):
+                cands.append({'file_path': c['file_path'], 'file_name': c['file_name'], 'offset': c['offset'], 'offset_hex': c['offset_hex'], 'confidence': c['confidence'], 'leading_byte': c['leading_byte']})
+    if not cands:
+        app_info(app, _('No patchable candidates'), _('There are no unpatched candidate fields to create a test patch from.'))
+        return
+    dump_folder = app._afx_folder_var.get().strip()
+    dlg = tk.Toplevel(app)
+    dlg.title(_('Unconfirmed Test Patch'))
+    dlg.configure(bg=COLORS['bg_1'])
+    dlg.transient(app)
+    dlg.grab_set()
+    dlg.geometry('640x620')
+    pad = tk.Frame(dlg, bg=COLORS['bg_1'])
+    pad.pack(fill='both', expand=True, padx=16, pady=14)
+    tk.Label(pad, text=_('Unconfirmed Test Patch'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    warn = tk.Frame(pad, bg=COLORS.get('teal_bg', COLORS['bg_2']), highlightbackground=COLORS.get('amber', COLORS['border_2']), highlightthickness=1)
+    warn.pack(fill='x', pady=(8, 12))
+    tk.Label(warn, text=_('⚠  LEGACY TEST PATCH — UNCONFIRMED. These are the historical 0C F1 63 2D fields. Patching exactly this pattern did NOT fix audio on console (DBS), and these fields were ABSENT from the DBS real working diff. This is a LEGACY MARKER, not a confirmed fix. Use the channel-config scan for confirmed-profile detection. The original file is never modified — a patched COPY is created. Only proceed to gather your own console evidence.'), font=FONTS['mono_sm'], bg=COLORS.get('teal_bg', COLORS['bg_2']), fg=COLORS['fg_1'], justify='left', wraplength=580).pack(anchor='w', padx=10, pady=8)
+    tk.Label(pad, text=_('Available test patches:'), font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(anchor='w')
+    tk.Label(pad, text=_('STRUCTURAL = relocated profile match (selected). MEDIUM = heuristic only (off by default).'), font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack(anchor='w', pady=(0, 4))
+    list_card = tk.Frame(pad, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    list_card.pack(fill='both', expand=True, pady=(0, 10))
+    cand_vars = []
+    for c in cands:
+        default_on = c['confidence'] in ('HIGH', 'STRUCTURAL')
+        v = tk.BooleanVar(value=default_on)
+        cand_vars.append((v, c))
+        row = tk.Frame(list_card, bg=COLORS['bg_2'])
+        row.pack(fill='x', padx=8, pady=1)
+        tk.Checkbutton(row, text=f"{c['confidence']!s:11} {c['offset_hex']!s}   {c['leading_byte'][2:]!s} → 08   ({c['file_name']!s})", variable=v, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, anchor='w').pack(anchor='w', fill='x')
+    tk.Label(pad, text=_('Required acknowledgements:'), font=(FONTS['mono_sm'][0], 10, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(anchor='w')
+    ack1 = tk.BooleanVar(value=False)
+    ack2 = tk.BooleanVar(value=False)
+    ack3 = tk.BooleanVar(value=False)
+    create_btn_holder = {}
+    def _update_gate(*_a):
+        ok = ack1.get() and (ack2.get() and (ack3.get() and any(v.get() for v, _c in cand_vars)))
+        b = create_btn_holder.get('btn')
+        if b is not None:
+            try:
+                b.configure(state='normal' if ok else 'disabled')
+            except Exception:
+                pass
+    for var, label in (ack1, _('I understand this is unconfirmed and may not fix audio')), (ack2, _('Create a .bak backup first')), (ack3, _('Patch a COPY, not the original')):
+        tk.Checkbutton(pad, text=label, variable=var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=_update_gate).pack(anchor='w', pady=1)
+    status_var = tk.StringVar(value='')
+    tk.Label(pad, textvariable=status_var, font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=580).pack(anchor='w', pady=(6, 0))
+    btn_row = tk.Frame(pad, bg=COLORS['bg_1'])
+    btn_row.pack(fill='x', pady=(10, 0))
+    def _do_create():
+        from ui import audio_fix_patch as PP
+        selected = [c for v, c in cand_vars if v.get()]
+        if not selected:
+            return
+        by_file = {}
+        for c in selected:
+            by_file.setdefault(c['file_path'], []).append(int(c['offset']))
+        if not dump_folder or not os.path.isdir(dump_folder):
+            status_var.set(_('Dump folder is not valid.'))
+        else:
+            results = []
+            for fpath, offs in by_file.items():
+                r = PP.create_test_patch(dump_folder, fpath, sorted(offs))
+                results.append(r)
+            app._afx_testpatch_results = results
+            total_patched = sum(r['patched_count'] for r in results)
+            total_refused = sum(r['refused_count'] for r in results)
+            untouched = all(r['original_untouched'] for r in results)
+            copies = [r['copy'] for r in results if r.get('copy')]
+            msg = _('Test patch complete.\nPatched sites: %d   Refused: %d\nOriginal(s) untouched: %s\nPatched copy/copies:\n%s') % (total_patched, total_refused, _('YES') if untouched else _('NO (!)'), '\n'.join('  ' + c for c in copies))
+            status_var.set(msg)
+            if app_confirm(app, _('Export patch report?'), _('Save a TEST PATCH report (unconfirmed) for the console test?')):
+                path = filedialog.asksaveasfilename(title=_('Export patch report'), defaultextension='.txt', filetypes=[('Text', '*.txt'), ('JSON', '*.json')])
+                if path:
+                    try:
+                        if path.lower().endswith('.json'):
+                            content = '[\n' + ',\n'.join(PP.export_patch_report_json(r) for r in results) + '\n]'
+                        else:
+                            content = '\n\n============================================================\n\n'.join(PP.export_patch_report_txt(r) for r in results)
+                        with open(path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        status_var.set(status_var.get() + '\n' + _('Report exported: ') + path)
+                    except Exception as e:
+                        status_var.set(_('Report export failed: ') + str(e))
+    create_btn = _btn(btn_row, _('Create Patched Copy'), _do_create, kind='primary')
+    create_btn.configure(state='disabled')
+    create_btn.pack(side='left', padx=(0, 8))
+    create_btn_holder['btn'] = create_btn
+    _btn(btn_row, _('Cancel'), dlg.destroy, kind='ghost').pack(side='left')
+    for v, _c in cand_vars:
+        v.trace_add('write', _update_gate)
+    _update_gate()
+
+
+def _build_switcher_subtab(parent, app):
+    parent.configure(bg=COLORS['bg_1'])
+    from ui import backport_profiles as bpm
+    if not hasattr(app, '_bsw_mode_var'):
+        app._bsw_mode_var = tk.StringVar(value='build')
+    if not hasattr(app, '_bsw_folder_var'):
+        app._bsw_folder_var = tk.StringVar(value='')
+    if not hasattr(app, '_bsw_target_var'):
+        app._bsw_target_var = tk.StringVar(value='4')
+    if not hasattr(app, '_bsw_state_var'):
+        app._bsw_state_var = tk.StringVar(value='Select a game folder.')
+    wrap = tk.Frame(parent, bg=COLORS['bg_1'])
+    wrap.pack(fill='both', expand=True, padx=16, pady=12)
+    tk.Label(wrap, text='🔄  ' + _('Backport Target Switcher'), font=(FONTS['button'][0], 14, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(anchor='w')
+    tk.Label(wrap, text=_('Safely build, swap, or remove a backport. Swap and Remove always restore verified original files first — no patching over patched files.'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left', wraplength=720).pack(anchor='w', pady=(2, 12))
+    mode_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    mode_card.pack(fill='x', pady=(0, 10))
+    tk.Label(mode_card, text=_('Mode'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    for val, lab in ('build', _('Build new backport from clean / original files')), ('swap', _('Swap existing backport to another target')), ('remove', _('Remove backport / restore defaults')):
+        tk.Radiobutton(mode_card, text=lab, value=val, variable=app._bsw_mode_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_2'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0, command=(lambda: _bsw_refresh_state(app, bpm))).pack(anchor='w', padx=14, pady=1)
+    tk.Frame(mode_card, bg=COLORS['bg_2'], height=6).pack()
+    fr = tk.Frame(wrap, bg=COLORS['bg_1'])
+    fr.pack(fill='x', pady=(0, 8))
+    tk.Label(fr, text=_('Game folder / image:'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 8))
+    ent = tk.Entry(fr, textvariable=app._bsw_folder_var, font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_1'], insertbackground=COLORS['fg_1'], relief='flat', highlightthickness=1, highlightbackground=COLORS['border_2'])
+    ent.pack(side='left', fill='x', expand=True, padx=(0, 8))
+    def _browse():
+        d = filedialog.askdirectory(title=_('Select the PS5 game root folder'))
+        if d:
+            app._bsw_folder_var.set(d)
+            _bsw_refresh_state(app, bpm)
+    _btn(fr, _('Browse…'), _browse, kind='ghost').pack(side='left')
+    state_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    state_card.pack(fill='x', pady=(2, 10))
+    tk.Label(state_card, text=_('Current detected state'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    tk.Label(state_card, textvariable=app._bsw_state_var, font=FONTS['mono_sm'], bg=COLORS['bg_2'], fg=COLORS['fg_2'], justify='left', anchor='w', wraplength=720).pack(anchor='w', fill='x', padx=12, pady=(0, 10))
+    tr = tk.Frame(wrap, bg=COLORS['bg_1'])
+    tr.pack(fill='x', pady=(0, 8))
+    tk.Label(tr, text=_('New target firmware:'), font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 8))
+    for val, lab in ('4', '4.xx'), ('5', '5.xx'), ('7', '7.xx'), ('10', '10.xx'):
+        tk.Radiobutton(tr, text=lab, value=val, variable=app._bsw_target_var, font=FONTS['mono_sm'], bg=COLORS['bg_1'], fg=COLORS['fg_2'], selectcolor=COLORS['bg_4'], activebackground=COLORS['bg_1'], activeforeground=COLORS['teal'], highlightthickness=0, bd=0).pack(side='left', padx=(0, 10))
+    prev_card = tk.Frame(wrap, bg=COLORS['bg_2'], highlightbackground=COLORS['border_2'], highlightthickness=1)
+    prev_card.pack(fill='both', expand=True, pady=(2, 10))
+    tk.Label(prev_card, text=_('Preview (dry-run — nothing is changed)'), font=(FONTS['mono_sm'][0], 9, 'bold'), bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(anchor='w', padx=10, pady=(8, 2))
+    prev_txt = tk.Text(prev_card, height=9, bg=COLORS['bg_3'], fg=COLORS['fg_2'], font=FONTS['mono_sm'], relief='flat', wrap='word', highlightthickness=0)
+    prev_txt.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+    prev_txt.configure(state='disabled')
+    app._bsw_prev_txt = prev_txt
+    btns = tk.Frame(wrap, bg=COLORS['bg_1'])
+    btns.pack(fill='x', pady=(2, 0))
+    def _set_preview(text):
+        try:
+            prev_txt.configure(state='normal')
+            prev_txt.delete('1.0', 'end')
+            prev_txt.insert('1.0', text)
+            prev_txt.configure(state='disabled')
+        except Exception:
+            pass
+    app._bsw_set_preview = _set_preview
+    def _do_preview():
+        folder = app._bsw_folder_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            _set_preview(_('Select a valid game folder first.'))
+        else:
+            mode = app._bsw_mode_var.get()
+            target = app._bsw_target_var.get() if mode in ('build', 'swap') else None
+            try:
+                tid = _bsw_title_id(folder)
+                base_dir = _bsw_base_dir(app, folder)
+                plan = bpm.preview_changes(mode, folder, tid, target, base_dir=base_dir)
+            except Exception as e:
+                _set_preview(_('Preview error: ') + str(e))
+                return
+            lines = []
+            lines.append('Mode: %s' % mode)
+            if plan.get('new_target'):
+                lines.append('New target: %s' % plan['new_target'])
+            st = plan.get('state', {})
+            lines.append('Managed: %s' % ('yes' if st.get('managed') else 'no (unmanaged)'))
+            if st.get('current_target'):
+                lines.append('Current target: %s' % st['current_target'])
+            lines.append('Backup verified: %s' % ('yes' if st.get('backup_verified') else 'no'))
+            lines.append('')
+            lines.append('Planned steps:')
+            for i, s in enumerate(plan.get('steps', []), 1):
+                lines.append('  %d. %s' % (i, s))
+            if plan.get('blockers'):
+                lines.append('')
+                lines.append('⚠ BLOCKERS (will refuse):')
+                for b in plan['blockers']:
+                    lines.append('  • ' + b)
+            lines.append('')
+            lines.append('Result: %s' % ('SAFE to run' if plan.get('safe') else 'BLOCKED — resolve blockers first'))
+            _set_preview('\n'.join(lines))
+    _btn(btns, '👁  ' + _('Preview Changes'), _do_preview, kind='ghost').pack(side='left', padx=(0, 8))
+    _btn(btns, '▶  ' + _('Start'), lambda: _bsw_start(app, bpm), kind='primary').pack(side='left')
+    _bsw_refresh_state(app, bpm)
+
+
+def _bsw_title_id(folder):
     try:
-        app._build_bpr_panel(app._bp_results_frame)
-    except Exception as e:
-        tk.Label(app._bp_results_frame,
-                 text=_('Could not load Results pane:') +
-                      '\n\n' + str(e),
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_1'], fg=COLORS.get('err', '#e0584b'),
-                 wraplength=720, justify='left'
-                 ).pack(padx=24, pady=24, anchor='nw')
+        _t, tid, _v = get_game_info(folder)
+        return tid or ''
+    except Exception:
+        return ''
+
+
+def _bsw_base_dir(app, folder):
+    try:
+        od = (app._settings.get('abp_zip_orig_dest', '') or '').strip()
+        if od and os.path.isdir(od):
+            return os.path.join(od, 'BackportBackup')
+    except Exception:
+        pass
+    return os.path.join(os.path.dirname(os.path.normpath(folder)), 'BackportBackup')
+
+
+def _bsw_refresh_state(app, bpm):
+    folder = app._bsw_folder_var.get().strip()
+    if not folder or not os.path.isdir(folder):
+        app._bsw_state_var.set(_('Select a valid game folder.'))
+    else:
+        try:
+            tid = _bsw_title_id(folder)
+            base_dir = _bsw_base_dir(app, folder)
+            st = bpm.detect_state(folder, tid, base_dir=base_dir)
+        except Exception as e:
+            app._bsw_state_var.set(_('State error: ') + str(e))
+            return
+        if not st['managed']:
+            msg = _('Unmanaged backport (no manifest).') + '\n' + _('Target: unknown · Manifest: not found · ') + _('Target switching requires a clean source + Build. ') + _('Use Legacy Restore (Auto Backport tab) for manual restore.')
+        else:
+            msg = _('Target: %s') % (st.get('current_target') or _('clean/none')) + '\n' + _('Manifest: found · Originals backup: %s · Restore safety: %s') % (_('present') if st.get('originals_present') else _('missing'), _('OK') if st.get('backup_verified') else _('FAILED'))
+            if not st.get('backup_verified'):
+                msg += '\n⚠ ' + st.get('verify_reason', '')
+        app._bsw_state_var.set(msg)
+
+
+def _bsw_start(app, bpm):
+    """Run the selected mode. Swap/Remove enforce restore->verify first.
+
+    Heavy lifting (patching) is delegated to the existing engine
+    (_abp_run via the Auto Backport tab); here we enforce the safe ordering
+    and the manifest bookkeeping. To keep this change self-contained and
+    safe, Start performs the NON-patching safe operations directly (restore,
+    verify, manifest update) and, for steps that require patching, routes the
+    user to the Auto Backport tab with the folder/target pre-filled.
+    """
+    folder = app._bsw_folder_var.get().strip()
+    if not folder or not os.path.isdir(folder):
+        app_warning(app, _('No folder'), _('Select a valid game folder first.'))
+        return
+    mode = app._bsw_mode_var.get()
+    target = app._bsw_target_var.get()
+    tid = _bsw_title_id(folder)
+    base_dir = _bsw_base_dir(app, folder)
+    plan = bpm.preview_changes(mode, folder, tid, target if mode in ('build', 'swap') else None, base_dir=base_dir)
+    if not plan.get('safe'):
+        app_error(app, _('Cannot proceed'), _('This operation is blocked:\n\n') + '\n'.join('• ' + b for b in plan.get('blockers', [])))
+        return
+    if not app_confirm(app, _('Confirm %s') % mode, _('About to run "%s" on:\n%s\n\nProceed?') % (mode, folder)):
+        return
+    mpath = bpm.manifest_path_for(folder, tid, base_dir=base_dir)
+    manifest = bpm.read_manifest(mpath)
+    def _log(m):
+        try:
+            app._abp_log_line(m.rstrip('\n'), 'info')
+        except Exception:
+            pass
+    if mode == 'remove':
+        ok, reason, _n = bpm.restore_originals(manifest, folder, base_dir=base_dir, log=_log)
+        if not ok:
+            app_error(app, _('Restore refused'), reason)
+            return
+        cok, creason, _mm = bpm.verify_clean(manifest, folder)
+        manifest['current_target'] = None
+        bpm.write_manifest(mpath, manifest)
+        _bsw_refresh_state(app, bpm)
+        app_info(app, _('Backport removed'), _('Originals restored and managed patched state cleared.\n%s') % (creason if cok else _('Note: ') + creason))
+        return
+    if mode == 'swap':
+        ok, reason, _n = bpm.restore_originals(manifest, folder, base_dir=base_dir, log=_log)
+        if not ok:
+            app_error(app, _('Restore refused'), reason)
+            return
+        cok, creason, _mm = bpm.verify_clean(manifest, folder)
+        if not cok and not app_confirm(app, _('Clean check warning'), creason + '\n\n' + _('Continue patching anyway?')):
+            return
+        bpm.write_manifest(mpath, manifest)
+    try:
+        app._abp_game_var.set(folder)
+    except Exception:
+        pass
+    try:
+        app._abp_sdk_var.set(str(target))
+    except Exception:
+        pass
+    try:
+        app._bp_subtab_activate('auto')
+    except Exception:
+        pass
+    app_info(app, _('Ready to patch'), _('Originals are verified/clean and the Auto Backport tab is pre-filled with this folder and target %s.\n\nClick "Run" there to apply the target. A managed manifest will be written automatically on completion.') % bpm.normalize_fw(target))
+
+
+def _build_sdkfixer_subtab(parent, app):
+    parent.configure(bg=COLORS['bg_1'])
+    if not hasattr(app, '_sdkfix_src_var'):
+        app._sdkfix_src_var = tk.StringVar()
+    if not hasattr(app, '_sdkfix_tgt_var'):
+        app._sdkfix_tgt_var = tk.StringVar(value='5')
+    if not hasattr(app, '_sdkfix_out_mode_var'):
+        app._sdkfix_out_mode_var = tk.StringVar(value='copy')
+    if not hasattr(app, '_sdkfix_status_var'):
+        app._sdkfix_status_var = tk.StringVar(value='')
+    app._sdkfix_running = getattr(app, '_sdkfix_running', False)
+    body = tk.Frame(parent, bg=COLORS['bg_1'])
+    body.pack(fill='both', expand=True)
+    pad = 24
+    head = tk.Frame(body, bg=COLORS['bg_1'])
+    head.pack(fill='x', padx=pad, pady=(16, 4))
+    tk.Label(head, text='🔧  ' + _('SDK Fixer'), font=(FONTS['h2'][0], 15, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
+    tk.Label(head, text=_('Change only the SDK marker in a folder’s executables.'), font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
+    warn = tk.Frame(body, bg=COLORS.get('bg_2', '#1a1426'), highlightbackground=COLORS.get('warn', '#d6a13a'), highlightthickness=1)
+    warn.pack(fill='x', padx=pad, pady=(6, 12))
+    tk.Label(warn, text=_('⚠ SDK Fixer only changes SDK markers. It does not apply normal backport patches, fakelib, or libc patches. Use this only when the game already works and only the SDK marker needs changing.'), font=FONTS['body'], bg=COLORS.get('bg_2', '#1a1426'), fg=COLORS.get('warn', '#d6a13a'), wraplength=860, justify='left').pack(anchor='w', padx=12, pady=8)
+    _sdkfix_label(body, _('Source folder'), _('Backport files — eboot.bin / .prx / .sprx / sce_module / fakelib. param.json is not required.'), pad)
+    srow = tk.Frame(body, bg=COLORS['bg_1'])
+    srow.pack(fill='x', padx=pad, pady=(0, 10))
+    ent = tk.Entry(srow, textvariable=app._sdkfix_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
+    ent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
+    ent.bind('<FocusOut>', lambda e: app._sdkfix_scan_folder())
+    ent.bind('<Return>', lambda e: app._sdkfix_scan_folder())
+    _sdkfix_btn(srow, _('Browse'), app._sdkfix_browse_src, primary=False).pack(side='left')
+    strip = tk.Frame(body, bg=COLORS['bg_0'], highlightbackground=COLORS.get('border_2', '#241d33'), highlightthickness=1)
+    strip.pack(fill='x', padx=pad, pady=(0, 12))
+    inner = tk.Frame(strip, bg=COLORS['bg_0'])
+    inner.pack(fill='x', padx=14, pady=10)
+    def _cell(col_parent, caption):
+        c = tk.Frame(col_parent, bg=COLORS['bg_0'])
+        c.pack(side='left', expand=True, fill='x')
+        tk.Label(c, text=caption, font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=COLORS['fg_4']).pack(anchor='w')
+        v = tk.Label(c, text='—', font=(FONTS['body'][0], 12, 'bold'), bg=COLORS['bg_0'], fg=COLORS['fg_1'])
+        v.pack(anchor='w')
+        return v
+    app._sdkfix_det_type = _cell(inner, _('FOLDER TYPE'))
+    app._sdkfix_det_sdk = _cell(inner, _('DETECTED SDK'))
+    app._sdkfix_det_files = _cell(inner, _('FILES TO PATCH'))
+    _sdkfix_label(body, _('Target SDK'), _('4 = firmware 4.xx · 5 = firmware 5.xx · 7 = firmware 7.xx, etc.'), pad)
+    trow = tk.Frame(body, bg=COLORS['bg_1'])
+    trow.pack(fill='x', padx=pad, pady=(0, 12))
+    om = tk.OptionMenu(trow, app._sdkfix_tgt_var, *[str(n) for n in range(1, 11)])
+    try:
+        om.config(font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], activebackground=COLORS.get('bg_2', '#1a1426'), activeforeground=COLORS['fg_0'], relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'), width=6)
+        om['menu'].config(bg=COLORS['bg_0'], fg=COLORS['fg_1'])
+    except Exception:
+        pass
+    om.pack(side='left')
+    _sdkfix_label(body, _('Output mode'), '', pad)
+    orow = tk.Frame(body, bg=COLORS['bg_1'])
+    orow.pack(fill='x', padx=pad, pady=(0, 12))
+    for val, label in ('copy', _('Save as new copy (safe, default)')), ('overwrite', _('Overwrite selected folder')):
+        rb = tk.Radiobutton(orow, text=label, value=val, variable=app._sdkfix_out_mode_var, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_1'], selectcolor=COLORS['bg_0'], activebackground=COLORS['bg_1'], activeforeground=COLORS['fg_0'], highlightthickness=0, anchor='w')
+        rb.pack(side='left', padx=(0, 18))
+    arow = tk.Frame(body, bg=COLORS['bg_1'])
+    arow.pack(fill='x', padx=pad, pady=(4, 8))
+    _sdkfix_btn(arow, '🔍  ' + _('Preview (dry-run)'), app._sdkfix_preview, primary=False).pack(side='left')
+    app._sdkfix_run_btn = _sdkfix_btn(arow, '⚡  ' + _('Run SDK Fix'), app._sdkfix_run, primary=True)
+    app._sdkfix_run_btn.pack(side='left', padx=(10, 0))
+    tk.Label(body, textvariable=app._sdkfix_status_var, font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS.get('accent', '#b07ad6')).pack(anchor='w', padx=pad, pady=(8, 2))
+    prog = tk.Canvas(body, height=12, bg=COLORS['bg_0'], highlightthickness=0)
+    prog.pack(fill='x', padx=pad, pady=(0, 6))
+    app._sdkfix_prog_cv = prog
+    app._sdkfix_prog_rect = prog.create_rectangle(0, 0, 0, 12, fill=COLORS.get('accent', '#b07ad6'), width=0)
+    tk.Label(body, text=_('Detailed output appears in the OUTPUT LOG at the bottom of the window.'), font=(FONTS['body'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(anchor='w', padx=pad, pady=(0, 18))
+
+
+def _build_batchsdk_subtab(parent, app):
+    """Batch SDK Retag — patch every backport ZIP in a source folder to a
+    chosen target SDK, writing retagged copies to an output folder. Reuses
+    the same SDK-only pipeline as SDK Fixer (fakelib OFF, libc patch OFF).
+    Source folder is never modified. Only the 'FW Nxx' filename tag changes.
+    """
+    parent.configure(bg=COLORS['bg_1'])
+    if not hasattr(app, '_batchsdk_src_var'):
+        app._batchsdk_src_var = tk.StringVar()
+    if not hasattr(app, '_batchsdk_out_var'):
+        app._batchsdk_out_var = tk.StringVar()
+    if not hasattr(app, '_batchsdk_tgt_var'):
+        app._batchsdk_tgt_var = tk.StringVar(value='6')
+    if not hasattr(app, '_batchsdk_status_var'):
+        app._batchsdk_status_var = tk.StringVar(value='')
+    app._batchsdk_running = getattr(app, '_batchsdk_running', False)
+    pad = 24
+    body = tk.Frame(parent, bg=COLORS['bg_1'])
+    body.pack(fill='both', expand=True)
+    head = tk.Frame(body, bg=COLORS['bg_1'])
+    head.pack(fill='x', padx=pad, pady=(16, 4))
+    tk.Label(head, text='📦  ' + _('Batch SDK Retag'), font=(FONTS['h2'][0], 15, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_0']).pack(side='left')
+    tk.Label(head, text=_('Change the SDK marker across a whole folder of backport zips.'), font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4']).pack(side='left', padx=(12, 0))
+    warn = tk.Frame(body, bg=COLORS.get('bg_2', '#1a1426'), highlightbackground=COLORS.get('warn', '#d6a13a'), highlightthickness=1)
+    warn.pack(fill='x', padx=pad, pady=(6, 12))
+    tk.Label(warn, text=_('⚠ Batch SDK Retag only changes SDK markers inside each zip’s eboot. It does not apply normal backport patches, fakelib, or libc patches. The source folder is never modified — retagged copies are written to the output folder.'), font=FONTS['body'], bg=COLORS.get('bg_2', '#1a1426'), fg=COLORS.get('warn', '#d6a13a'), wraplength=860, justify='left').pack(anchor='w', padx=12, pady=8)
+    _sdkfix_label(body, _('Source folder (backport zips)'), _('A folder containing backport zips, e.g. “FW 7xx PPSA21382 Tomba! (01.003.000) backport files.zip”.'), pad)
+    srow = tk.Frame(body, bg=COLORS['bg_1'])
+    srow.pack(fill='x', padx=pad, pady=(0, 10))
+    sent = tk.Entry(srow, textvariable=app._batchsdk_src_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
+    sent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
+    sent.bind('<Return>', lambda e: app._batchsdk_scan())
+    _sdkfix_btn(srow, _('Browse'), app._batchsdk_browse_src, primary=False).pack(side='left')
+    _sdkfix_label(body, _('Output folder'), _('Retagged zips are written here. Must be different from the source folder.'), pad)
+    orow = tk.Frame(body, bg=COLORS['bg_1'])
+    orow.pack(fill='x', padx=pad, pady=(0, 10))
+    oent = tk.Entry(orow, textvariable=app._batchsdk_out_var, font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], insertbackground=COLORS.get('accent', '#b07ad6'), relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'))
+    oent.pack(side='left', fill='x', expand=True, ipady=6, padx=(0, 8))
+    _sdkfix_btn(orow, _('Browse'), app._batchsdk_browse_out, primary=False).pack(side='left')
+    _sdkfix_label(body, _('Target SDK'), _('Any direction. 6 = firmware 6.xx, 7 = firmware 7.xx, etc. Each zip’s filename “FW Nxx” tag is updated to match.'), pad)
+    trow = tk.Frame(body, bg=COLORS['bg_1'])
+    trow.pack(fill='x', padx=pad, pady=(0, 8))
+    om = tk.OptionMenu(trow, app._batchsdk_tgt_var, *[str(n) for n in range(1, 11)])
+    try:
+        om.config(font=FONTS['body'], bg=COLORS['bg_0'], fg=COLORS['fg_1'], activebackground=COLORS.get('bg_2', '#1a1426'), activeforeground=COLORS['fg_0'], relief='flat', highlightthickness=1, highlightbackground=COLORS.get('border_3', '#2c2438'), width=6)
+        om['menu'].config(bg=COLORS['bg_0'], fg=COLORS['fg_1'])
+    except Exception:
+        pass
+    om.pack(side='left')
+    arow = tk.Frame(body, bg=COLORS['bg_1'])
+    arow.pack(fill='x', padx=pad, pady=(4, 8))
+    _sdkfix_btn(arow, '🔍  ' + _('Scan'), app._batchsdk_scan, primary=False).pack(side='left')
+    app._batchsdk_run_btn = _sdkfix_btn(arow, '⚡  ' + _('Run Batch Retag'), app._batchsdk_run, primary=True)
+    app._batchsdk_run_btn.pack(side='left', padx=(10, 0))
+    _sdkfix_label(body, _('Preview'), _('Detected current SDK and the planned action per zip. Scan first to populate.'), pad)
+    tblf = tk.Frame(body, bg=COLORS['bg_0'], highlightbackground=COLORS.get('border_2', '#241d33'), highlightthickness=1)
+    tblf.pack(fill='both', expand=True, padx=pad, pady=(0, 10))
+    cols = 'zip', 'cur', 'action'
+    tree = ttk.Treeview(tblf, columns=cols, show='headings', height=8)
+    tree.heading('zip', text=_('Zip'))
+    tree.heading('cur', text=_('Current SDK'))
+    tree.heading('action', text=_('Status'))
+    tree.column('zip', width=420, anchor='w')
+    tree.column('cur', width=110, anchor='center')
+    tree.column('action', width=230, anchor='w')
+    vsb = ttk.Scrollbar(tblf, orient='vertical', command=tree.yview)
+    tree.configure(yscrollcommand=vsb.set)
+    tree.pack(side='left', fill='both', expand=True)
+    vsb.pack(side='right', fill='y')
+    app._batchsdk_tree = tree
+    tk.Label(body, textvariable=app._batchsdk_status_var, font=(FONTS['body'][0], 11, 'bold'), bg=COLORS['bg_1'], fg=COLORS.get('accent', '#b07ad6')).pack(anchor='w', padx=pad, pady=(4, 2))
+    prog = tk.Canvas(body, height=12, bg=COLORS['bg_0'], highlightthickness=0)
+    prog.pack(fill='x', padx=pad, pady=(0, 6))
+    app._batchsdk_prog_cv = prog
+    app._batchsdk_prog_rect = prog.create_rectangle(0, 0, 0, 12, fill=COLORS.get('accent', '#b07ad6'), width=0)
+    logf = tk.Frame(body, bg=COLORS['bg_0'], highlightbackground=COLORS.get('border_2', '#241d33'), highlightthickness=1)
+    logf.pack(fill='both', expand=True, padx=pad, pady=(0, 18))
+    logw = tk.Text(logf, height=7, bg=COLORS['bg_0'], fg=COLORS['fg_1'], relief='flat', wrap='word', font=(FONTS['body'][0], 9), state='disabled', insertbackground=COLORS.get('accent', '#b07ad6'))
+    lvsb = ttk.Scrollbar(logf, orient='vertical', command=logw.yview)
+    logw.configure(yscrollcommand=lvsb.set)
+    logw.pack(side='left', fill='both', expand=True)
+    lvsb.pack(side='right', fill='y')
+    app._batchsdk_log_widget = logw
+
+
+def _sdkfix_label(parent, title, sub, pad):
+    box = tk.Frame(parent, bg=COLORS['bg_1'])
+    box.pack(fill='x', padx=pad, pady=(2, 2))
+    tk.Label(box, text=title, font=(FONTS['body'][0], 11, 'bold'), bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(anchor='w')
+    if sub:
+        tk.Label(box, text=sub, font=(FONTS['body'][0], 9), bg=COLORS['bg_1'], fg=COLORS['fg_4'], justify='left').pack(anchor='w')
+
+
+def _sdkfix_btn(parent, text, cmd, primary=False):
+    bg = COLORS.get('accent', '#b07ad6') if primary else COLORS.get('bg_2', '#1a1426')
+    fg = '#ffffff' if primary else COLORS['fg_1']
+    b = tk.Button(parent, text=text, command=cmd, font=FONTS['body'], bg=bg, fg=fg, activebackground=bg, activeforeground=fg, relief='flat', bd=0, padx=16, pady=8, cursor='hand2', highlightthickness=0)
+    return b
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -636,13 +1488,14 @@ def _refresh_grid(app):
 
     games = list(getattr(app, '_bp_games_list', []))
     if not games:
-        tk.Label(grid,
-                 text=_('No games scanned yet.\nAdd a folder and '
-                        'click Scan to find PS5 game dumps.'),
-                 font=FONTS['body'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_5'],
-                 justify='center', pady=40
-                 ).pack(expand=True)
+        holder = tk.Frame(grid, bg=COLORS['bg_1'], height=300)
+        holder.pack(fill='x', pady=20)
+        holder.pack_propagate(False)
+        EmptyState(holder, icon='\U0001f4e6',
+                   title=_('No games scanned yet'),
+                   description=_('Add a folder and click Scan to find '
+                                 'PS5 game dumps.')
+                   ).pack(fill='both', expand=True)
         _refresh_games_stats(app)
         return
 
@@ -662,12 +1515,13 @@ def _refresh_grid(app):
 
     visible = [g for g in games if _matches(g)]
     if not visible:
-        tk.Label(grid,
-                 text=_('No games match the current filter.'),
-                 font=FONTS['body'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_5'],
-                 pady=40
-                 ).pack(expand=True)
+        holder = tk.Frame(grid, bg=COLORS['bg_1'], height=300)
+        holder.pack(fill='x', pady=20)
+        holder.pack_propagate(False)
+        EmptyState(holder, icon='\U0001f50d',
+                   title=_('No matches'),
+                   description=_('No games match the current filter.')
+                   ).pack(fill='both', expand=True)
         _refresh_games_stats(app)
         return
 
@@ -901,11 +1755,10 @@ def _process_single(app, game):
     """Run the auto-backport flow for a single game card. Same
     mechanism as the queue path (temporary _lib_games swap around the
     existing _lib_backport_all) — just a one-game list."""
-    import tkinter.messagebox as _mb
-    if not _mb.askyesno(_('Process backport'),
-                        _('Run auto-backport on "%s"?')
-                        % (game.get('title') or
-                           os.path.basename(game.get('folder', '')))):
+    if not app_confirm(app, _('Process backport'),
+                       _('Run auto-backport on "%s"?')
+                       % (game.get('title') or
+                          os.path.basename(game.get('folder', '')))):
         return
     try:
         app._bp_subtab_activate('auto')
@@ -1038,8 +1891,7 @@ def _process_queue(app):
     """
     if not app._bp_queue:
         return
-    import tkinter.messagebox as _mb
-    if not _mb.askyesno(_('Process backport queue'),
+    if not app_confirm(app, _('Process backport queue'),
                         _('Run auto-backport on %d game(s)?\n\n'
                           'You\'ll be asked for the backup folder and '
                           'target SDK next. The games run sequentially '

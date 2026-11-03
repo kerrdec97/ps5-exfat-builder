@@ -1,5 +1,9 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, simpledialog
+from tkinter import filedialog, ttk, simpledialog
+from ui.shared.app_dialog import (
+    app_choose3, app_confirm, app_danger, app_error, app_info,
+    app_success, app_warning,
+)
 import subprocess
 import threading
 import os
@@ -12,6 +16,8 @@ import time
 import re
 import struct
 import json
+
+sys.modules.setdefault('exfat_builder', sys.modules[__name__])
 
 # ── tkinterdnd2 — optional, enables drag & drop of folders ──
 try:
@@ -59,7 +65,7 @@ def _silent_startupinfo():
     except Exception:
         return None
 
-APP_VERSION = '3.6.4'
+APP_VERSION = '4.0.2'
 KOFI_URL = 'https://ko-fi.com/deckerr9746220'
 
 # Bundled tutorial HTML — fallback when offline
@@ -120,17 +126,41 @@ def _migrate_settings(data):
 
 def load_settings():
     try:
-        with open(_settings_path(), 'r') as f:
+        with open(_settings_path(), 'r', encoding='utf-8') as f:
             return _migrate_settings(json.load(f))
+    except FileNotFoundError:
+        return {}
     except Exception:
+        try:
+            p = _settings_path()
+            if os.path.isfile(p):
+                os.replace(p, p + '.corrupt')
+        except Exception:
+            pass
         return {}
 
 def save_settings(data):
+    path = _settings_path()
+    tmp = path + '.tmp'
     try:
-        with open(_settings_path(), 'w') as f:
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
-    except Exception:
-        pass
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, path)
+    except Exception as e:
+        try:
+            sys.stderr.write(f"save_settings failed: {e!r}\n")
+        except Exception:
+            pass
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
 
 # ── SFO Parser ───────────────────────────────────────────────────────────────
 def parse_sfo(path):
@@ -300,6 +330,104 @@ def sanitize_filename(name):
     # ── Final safety: cap length, and never return an empty string ──
     name = name[:80]
     return name or 'game'
+
+_NON_GAME_DIRS = {
+    'sce_sys', 'sce_module', 'fakelib', 'image',
+    '$recycle.bin', 'system volume information', '__macosx',
+}
+
+def resolve_game_root_deep(folder, max_depth=5, max_dirs=4000,
+                           should_cancel=None, log=None):
+    """Breadth-first search for the real game root (folder containing
+    eboot.bin) at or beneath `folder`.
+
+    SAFE BY DESIGN — never walks a whole drive forever:
+      - stops descending past `max_depth` levels below `folder`
+      - stops after scanning `max_dirs` folders (sets truncated=True)
+      - prunes obvious non-game / OS-junk dirs and hidden dot-dirs
+      - cancel-safe: if should_cancel() returns True, stops early
+
+    Resolution does NOT change anything about how the build runs; it only
+    finds the correct source PATH to hand to the existing pipeline.
+
+    Returns a dict:
+      {'root': <path|None>,        # the single resolved root, if exactly one
+       'candidates': [<path>...],  # all folders found containing eboot.bin
+       'scanned': <int>,           # folders examined
+       'truncated': <bool>,        # hit max_dirs before finishing
+       'depth_capped': <bool>}     # hit max_depth somewhere
+    """
+    out = {'root': None, 'candidates': [], 'scanned': 0,
+           'truncated': False, 'depth_capped': False}
+    try:
+        if not folder or not os.path.isdir(folder):
+            return out
+        base = os.path.normpath(folder)
+    except Exception:
+        return out
+
+    def _log(msg):
+        if callable(log):
+            try:
+                log(msg)
+            except Exception:
+                pass
+
+    try:
+        if os.path.isfile(os.path.join(base, 'eboot.bin')):
+            out['root'] = base
+            out['candidates'] = [base]
+            out['scanned'] = 1
+            return out
+    except Exception:
+        pass
+
+    seen_candidates = set()
+    queue = [(base, 0)]
+    scanned = 0
+    while queue:
+        if callable(should_cancel) and should_cancel():
+            _log('[DETECT] Scan cancelled.\n')
+            break
+        path, depth = queue.pop(0)
+        scanned += 1
+        if scanned > max_dirs:
+            out['truncated'] = True
+            _log('[DETECT] Scan limit reached (%d folders) — stopping.\n'
+                 % max_dirs)
+            break
+        try:
+            if depth > 0 and os.path.isfile(os.path.join(path, 'eboot.bin')):
+                norm = os.path.normpath(path)
+                if norm not in seen_candidates:
+                    seen_candidates.add(norm)
+                    out['candidates'].append(norm)
+                    _log('[DETECT] Found candidate game root: %s\n' % norm)
+                continue
+        except Exception:
+            pass
+        if depth >= max_depth:
+            out['depth_capped'] = True
+            continue
+        try:
+            for sub in os.scandir(path):
+                try:
+                    if not sub.is_dir():
+                        continue
+                    nm = sub.name.lower()
+                    if nm.startswith('.'):
+                        continue
+                    if nm in _NON_GAME_DIRS:
+                        continue
+                    queue.append((sub.path, depth + 1))
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    out['scanned'] = scanned
+    if len(out['candidates']) == 1:
+        out['root'] = out['candidates'][0]
+    return out
 
 def get_game_info(folder):
     folder = os.path.normpath(folder)
@@ -647,11 +775,21 @@ def cleanup_ufs2tool():
 
 def clear_temp_folder(base_dir):
     removed, failed, size = 0, 0, 0
+    _now = time.time()
+    _MIN_AGE = 86400
+    for_kept = 0
     try:
         for entry in os.scandir(base_dir):
             if entry.name.startswith('exfat_builder_'):
                 try:
                     if entry.is_dir():
+                        try:
+                            _age = _now - entry.stat().st_mtime
+                        except Exception:
+                            _age = _MIN_AGE + 1
+                        if _age < _MIN_AGE:
+                            for_kept += 1
+                            continue
                         # sum size
                         for root, dirs, files in os.walk(entry.path):
                             for fn in files:
@@ -674,6 +812,7 @@ def is_admin():
         return False
 
 def relaunch_as_admin():
+    from tkinter import messagebox
     script = os.path.abspath(sys.argv[0])
     params = ' '.join('"' + a + '"' for a in sys.argv[1:])
     try:
@@ -1798,6 +1937,199 @@ STEPS = {
 }
 
 
+def _volume_filesystem(path):
+    """Return the filesystem type of the volume holding `path` on Windows.
+
+    Returns one of 'NTFS', 'exFAT', 'FAT32', 'FAT', 'network', or 'unknown'.
+    UNC paths (\\\\server\\share) and anything we can't resolve return
+    'network'/'unknown'. No-op ('unknown') on non-Windows. Never raises.
+
+    Used by the large-PFS pre-flight guard: the giant mkpfs ".tmp" follows the
+    *effective* output path (pack_out), so we must classify whichever drive
+    that resolves to — which may be the user's Temp drive after redirection,
+    not the original output drive.
+    """
+    try:
+        if os.name != 'nt' or not path:
+            return 'unknown'
+        import ctypes
+        ap = os.path.abspath(path)
+        if ap.startswith('\\\\') or ap.startswith('//'):
+            return 'network'
+        drive = os.path.splitdrive(ap)[0]
+        if not drive:
+            return 'unknown'
+        root = drive + os.sep
+        try:
+            dtype = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+            if dtype == 4:
+                return 'network'
+        except Exception:
+            pass
+        fs_buf = ctypes.create_unicode_buffer(261)
+        vol_buf = ctypes.create_unicode_buffer(261)
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(root),
+            vol_buf, ctypes.sizeof(vol_buf),
+            None, None, None,
+            fs_buf, ctypes.sizeof(fs_buf))
+        if not ok:
+            return 'unknown'
+        fs = (fs_buf.value or '').strip()
+        fs_up = fs.upper()
+        if fs_up == 'NTFS':
+            return 'NTFS'
+        if fs_up == 'EXFAT':
+            return 'exFAT'
+        if fs_up == 'FAT32':
+            return 'FAT32'
+        if fs_up.startswith('FAT'):
+            return 'FAT'
+        return fs or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def _is_cloud_synced_path(path):
+    """Heuristic: does this path look like a cloud-synced folder (OneDrive,
+    Google Drive, Dropbox, iCloud)? Such folders can reject or stall very
+    large writes. Best-effort substring match; never raises."""
+    try:
+        p = os.path.abspath(path).lower()
+    except Exception:
+        return False
+    markers = ('onedrive', 'google drive', 'googledrive', 'dropbox',
+               'iclouddrive', 'icloud drive', 'creative cloud')
+    return any(m in p for m in markers)
+
+
+def _free_space(path):
+    """Free bytes on the volume holding `path`, or -1 if unknown."""
+    try:
+        return shutil.disk_usage(os.path.abspath(path)).free
+    except Exception:
+        try:
+            d = os.path.splitdrive(os.path.abspath(path))[0] + os.sep
+            return shutil.disk_usage(d).free
+        except Exception:
+            return -1
+
+
+_PFS_LARGE_WARN_BYTES = 4294967296
+_PFS_OUTPUT_FREE_MULT = 1.5
+
+
+def _pfs_preflight_check(self, *, source_path, output_path, pack_out,
+                         redirection_active, est_output_bytes=None,
+                         log=None):
+    """Pre-flight guard for large PFS/PFSC stream packs.
+
+    MUST be called AFTER pack_out (redirection decision) is resolved and
+    BEFORE run_mkpfs, because mkpfs writes its ".tmp" as pack_out + ".tmp" —
+    i.e. the huge temp file follows pack_out, NOT the original output path.
+
+    Checks the FILESYSTEM and FREE SPACE of BOTH:
+      * the final output directory (where the finished .ffpfsc lands), and
+      * the effective staging directory (dirname(pack_out)) where the .tmp is
+        actually written.
+
+    Policy:
+      * FAT32 on either target -> HARD REFUSE (returns (False, msg)).
+      * exFAT / network / cloud on either target -> WARN, allow.
+      * Insufficient free space (est_output * 1.5) on either target -> REFUSE.
+
+    Returns (ok: bool, message: str). When ok is False the caller must abort
+    the pack and surface `message` as a normal build failure.
+    """
+    def _log(m):
+        if log:
+            try:
+                log(m)
+            except Exception:
+                pass
+
+    out_dir = os.path.dirname(os.path.abspath(output_path)) or os.path.abspath(output_path)
+    tmp_path = pack_out + '.tmp'
+    stage_dir = os.path.dirname(os.path.abspath(pack_out)) or os.path.abspath(pack_out)
+
+    out_fs = _volume_filesystem(out_dir)
+    stage_fs = _volume_filesystem(stage_dir)
+    out_free = _free_space(out_dir)
+    stage_free = _free_space(stage_dir)
+
+    try:
+        src_sz = os.path.getsize(source_path)
+    except Exception:
+        src_sz = 0
+
+    est_out = int(est_output_bytes) if est_output_bytes else src_sz
+
+    def _fs_free(n):
+        try:
+            return self._fmt_size(n) if n >= 0 else 'unknown'
+        except Exception:
+            return str(n)
+
+    _log('[PREFLIGHT] PFS build pre-flight\n')
+    _log('[PREFLIGHT]   source size:        %s\n' % _fs_free(src_sz))
+    _log('[PREFLIGHT]   estimated output:   %s\n' % _fs_free(est_out))
+    _log('[PREFLIGHT]   final output path:  %s\n' % output_path)
+    _log('[PREFLIGHT]   output filesystem:  '
+         f'{out_fs!s} (free {_fs_free(out_free)!s})\n')
+    _log('[PREFLIGHT]   redirection active: %s\n'
+         % ('true' if redirection_active else 'false'))
+    _log('[PREFLIGHT]   effective pack_out: %s\n' % pack_out)
+    _log('[PREFLIGHT]   tmp path:           %s\n' % tmp_path)
+    _log('[PREFLIGHT]   tmp filesystem:     '
+         f'{stage_fs!s} (free {_fs_free(stage_free)!s})\n')
+
+    fat32_targets = []
+    if out_fs == 'FAT32':
+        fat32_targets.append('output drive (%s)' % out_dir)
+    if redirection_active and stage_fs == 'FAT32':
+        fat32_targets.append('temp/staging drive (%s)' % stage_dir)
+    if fat32_targets:
+        msg = 'Output drive is FAT32 and cannot store files over 4GB. Choose a local NTFS drive.'
+        _log('[PREFLIGHT] REFUSED: FAT32 detected on '
+             f'{", ".join(fat32_targets)!s}. {msg!s}\n')
+        return False, msg
+
+    needed = int(est_out * _PFS_OUTPUT_FREE_MULT) if est_out else 0
+    if needed:
+        if out_free >= 0 and out_free < needed:
+            msg = ('Not enough free space on the output drive. Need about '
+                   f'{self._fmt_size(needed)!s} (estimated output ×1.5) but only '
+                   f'{self._fmt_size(out_free)!s} is free. Free up space or choose another local NTFS drive.')
+            _log('[PREFLIGHT] REFUSED: low output free space. %s\n' % msg)
+            return False, msg
+        if redirection_active and stage_free >= 0 and stage_free < needed:
+            msg = ('Not enough free space on the temp/staging drive. Need about '
+                   f'{self._fmt_size(needed)!s} but only '
+                   f'{self._fmt_size(stage_free)!s} is free. Point Temp at a drive with more space, or disable the Temp redirection.')
+            _log('[PREFLIGHT] REFUSED: low staging free space. %s\n' % msg)
+            return False, msg
+
+    large = (est_out >= _PFS_LARGE_WARN_BYTES
+             or src_sz >= _PFS_LARGE_WARN_BYTES)
+    warn_msg = 'Large PFSC builds are safest on local NTFS. This path is exFAT/network/cloud-synced and may reject large temporary writes.'
+    warned = False
+    for label, d, fs in (('output', out_dir, out_fs),
+                         ('temp/staging', stage_dir, stage_fs)):
+        if label == 'temp/staging' and not redirection_active:
+            continue
+        is_risky = (fs in ('exFAT', 'FAT', 'network')
+                    or _is_cloud_synced_path(d))
+        if is_risky and large:
+            _log('[PREFLIGHT] WARNING: '
+                 f'{label!s} path is {fs!s}'
+                 f'{" (cloud-synced)" if _is_cloud_synced_path(d) else ""!s} — '
+                 f'{warn_msg!s}\n')
+            warned = True
+    if warned:
+        return True, warn_msg
+    return True, ''
+
+
 def _pfs_pack_tuning(settings):
     """v3.6.2: return (zlib_level, cpu_count) for an mkpfs 'pack file' run.
 
@@ -2157,7 +2489,57 @@ class LeftRail:
             self.show(self._sections[0][0])
 
 
+class _TQCancelled(Exception):
+    """Raised inside the transfer-queue transport when an item's cancel flag
+    is observed mid-upload. Caught by the dispatcher to mark the item
+    cancelled and advance to the next queued item."""
+    pass
+
+
 class ExFATBuilder(_TK_BASE):
+    @staticmethod
+    def _scrub_private_paths(text):
+        """v4.0.0 (trust): replace private home/temp path prefixes in text with
+        portable placeholders BEFORE a diagnostic report is written, so a
+        publicly-shared report doesn't leak the user's Windows/Unix username or
+        full home path. Enough path shape is kept for debugging — only the
+        identity-bearing prefix is masked. Applied to diagnostic reports only,
+        never to the live Output Log shown in the app.
+
+          C:\\Users\\<name>\\...           -> %USERPROFILE%\\...
+          C:/Users/<name>/...           -> %USERPROFILE%/...
+          C:\\Users\\<name>             -> %USERPROFILE%   (bare, no trailing sep)
+          /home/<name>/...              -> $HOME/...
+          /Users/<name>/...  (macOS)    -> $HOME/...
+          <actual temp dir>             -> %TEMP%
+          ftp://user:pass@host          -> ftp://<redacted>@host
+
+        Drive letters other than C: are handled too (D:\\Users\\..., etc.).
+        """
+        if not text:
+            return text
+        import re as _re
+        s = text
+        s = _re.sub(r'(ftps?://)[^/@\s:]+:[^/@\s]+@',
+                    r'\1<redacted>@', s, flags=_re.IGNORECASE)
+        s = _re.sub(r'[A-Za-z]:\\Users\\[^\\/:*?"<>|\r\n]+',
+                    '%USERPROFILE%', s)
+        s = _re.sub(r'[A-Za-z]:/Users/[^\\/:*?"<>|\r\n]+',
+                    '%USERPROFILE%', s)
+        s = _re.sub(r'/home/[^/\s:]+', '$HOME', s)
+        s = _re.sub(r'/Users/[^/\s:]+', '$HOME', s)
+        try:
+            import tempfile as _tf
+            _tmp = _tf.gettempdir()
+            if _tmp and len(_tmp) > 3:
+                for _variant in {_tmp, _tmp.replace('\\', '/'),
+                                 _tmp.replace('/', '\\')}:
+                    if _variant:
+                        s = s.replace(_variant, '%TEMP%')
+        except Exception:
+            pass
+        return s
+
     @staticmethod
     def _redact_settings(settings):
         """Return a copy of settings with any sensitive values masked.
@@ -2209,6 +2591,10 @@ class ExFATBuilder(_TK_BASE):
             log_text = self.log_box.get('1.0', 'end-1c')
         except Exception:
             log_text = '(output log unavailable)'
+        try:
+            log_text = self._scrub_private_paths(log_text)
+        except Exception:
+            pass
 
         try:
             win_ver = '%s %s (%s)' % (_plat.system(),
@@ -2233,6 +2619,13 @@ class ExFATBuilder(_TK_BASE):
                                     self._fmt_size(vm.available)))
             except Exception:
                 pass
+            try:
+                from ui.mkpfs_runner import mkpfs_version, mkpfs_supports_deep_unpack
+                sys_lines.append('MkPFS:     '
+                    f'{mkpfs_version() or "(not available)"!s} (OSFMount-free capable: '
+                    f'{"yes" if mkpfs_supports_deep_unpack() else "no"!s})')
+            except Exception:
+                sys_lines.append('MkPFS:     (unknown)')
             sys_info = '\n'.join(sys_lines)
         except Exception:
             sys_info = '(system info unavailable)'
@@ -2294,6 +2687,11 @@ class ExFATBuilder(_TK_BASE):
 
         # Last error/traceback, if captured.
         last_err = getattr(self, '_last_error_text', None) or '(none recorded)'
+        try:
+            build_summary = self._scrub_private_paths(build_summary)
+            last_err = self._scrub_private_paths(last_err)
+        except Exception:
+            pass
 
         report = (
             'exFAT Image Builder \u2014 Diagnostic Report\n'
@@ -2362,7 +2760,7 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
             try:
-                messagebox.showerror('Report a Problem',
+                app_error(self, 'Report a Problem',
                     'Could not create diagnostic report.\n\n'
                     'The error has been written to the Output Log. You can '
                     'still copy the log contents manually and send them when '
@@ -3067,6 +3465,31 @@ class ExFATBuilder(_TK_BASE):
         except Exception:
             pass
 
+    def report_callback_exception(self, exc, val, tb):
+        try:
+            import traceback as _tbmod
+            text = ''.join(_tbmod.format_exception(exc, val, tb))
+        except Exception:
+            try:
+                text = f"{getattr(exc, '__name__', exc)!s}: {val!s}\n"
+            except Exception:
+                text = 'unprintable callback exception\n'
+        try:
+            self._log('[UNCAUGHT] Unhandled error in a UI handler:\n%s'
+                      % text,
+                      'error')
+        except Exception:
+            pass
+        try:
+            self._log_to_file('[UNCAUGHT] %s' % text)
+        except Exception:
+            pass
+        try:
+            self._set_status('Internal error — details in the Output Log (please report this)',
+                             '#ff5555')
+        except Exception:
+            pass
+
     def _on_close(self):
         # v3.6.2: if a build is mid-flight, give the user a context-aware
         # confirmation. The wording depends on whether PFS compression has
@@ -3087,11 +3510,15 @@ class ExFATBuilder(_TK_BASE):
                        'temporary files may still need cleanup.\n\n'
                        'Close anyway?')
             try:
-                if not messagebox.askyesno('Build in progress', msg):
+                from ui.shared.app_dialog import app_confirm
+                if not app_confirm(self, 'Build in progress', msg,
+                                   ok_label='Close anyway',
+                                   cancel_label='Keep building'):
                     return
             except Exception:
                 pass
             self._close_confirmed_during_build = True
+            self._close_popup_shown = True
         # v3.6.0: one-time support popup before the real close path.
         # Both buttons proceed to exit; "Open Ko-fi" also opens the
         # browser. Fully guarded — any failure falls through to a
@@ -3127,6 +3554,27 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
             save_settings(self._settings)
+        except Exception:
+            pass
+        try:
+            _ea = getattr(self, '_extract_active', None)
+            if _ea:
+                for _k in ('robo', 'mount'):
+                    _p = _ea.get(_k)
+                    if _p is not None and _p.poll() is None:
+                        try:
+                            _p.terminate()
+                        except Exception:
+                            pass
+                _exe = _ea.get('exe')
+                _drv = _ea.get('drive')
+                if _exe and _drv:
+                    try:
+                        subprocess.run([_exe, 'umount_udf', _drv],
+                                       capture_output=True, timeout=10,
+                                       creationflags=_NO_WIN_FLAGS)
+                    except Exception:
+                        pass
         except Exception:
             pass
         cleanup_scripts()
@@ -3455,6 +3903,8 @@ class ExFATBuilder(_TK_BASE):
         self._lib_games       = []   # list of dicts
         self._lib_cards       = []   # tk widgets
         self._lib_filter      = ''
+        self._lib_enrich_cache = {}
+        self._lib_scan_gen = 0
         # Recently used game folders (last 10)
         self._recent_folders  = self._settings.get('recent_folders', [])
         # Theme
@@ -3647,7 +4097,14 @@ class ExFATBuilder(_TK_BASE):
         self._tab_extract_frame = None
 
         # ── Global output log (visible across all tabs) ──
-        self._ps5_status_frame = tk.Frame(self, bg='#0d0d0d')
+        self._app_header_frame = tk.Frame(self, bg=COLORS['bg_2'])
+        self._app_header_frame.pack(side='top', fill='x')
+        try:
+            self._build_app_header(self._app_header_frame)
+        except Exception:
+            self._app_header_frame.pack_forget()
+
+        self._ps5_status_frame = tk.Frame(self, bg=COLORS['bg_0'])
         self._ps5_status_frame.pack(side='bottom', fill='x')
         self._build_ps5_status_bar(self._ps5_status_frame)
 
@@ -3735,11 +4192,11 @@ class ExFATBuilder(_TK_BASE):
             # SYSTEM STATUS — pinned footer (real text only, no controls).
             footer = sidebar.footer()
             self._sidebar_status_lbl = tk.Label(
-                footer, text=_('SYSTEM STATUS'), bg=BG, fg='#5d5775',
-                font=('Segoe UI', 8, 'bold'), anchor='w')
+                footer, text=_('SYSTEM STATUS'), bg=BG, fg=COLORS['fg_5'],
+                font=(FONTS['eyebrow'][0], 8, 'bold'), anchor='w')
             self._sidebar_status_lbl.pack(fill='x', padx=12, pady=(8, 2))
             tk.Label(footer, text='exFAT Image Builder v' + APP_VERSION,
-                     bg=BG, fg=MUTED, font=('Segoe UI', 8),
+                     bg=BG, fg=COLORS['fg_4'], font=FONTS['meta'],
                      anchor='w').pack(fill='x', padx=12, pady=(0, 10))
 
             self._sidebar = sidebar
@@ -4115,6 +4572,11 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
 
+        try:
+            self._update_header_section(key)
+        except Exception:
+            pass
+
     # ══════════════════════════════════════════════════════════════════════════
     # MY IMAGES TAB
     # ══════════════════════════════════════════════════════════════════════════
@@ -4389,10 +4851,7 @@ class ExFATBuilder(_TK_BASE):
         # that at 2 GB, so very large packaged files can't be extracted
         # directly. Mounting streams on demand and has no such limit.
         tk.Label(parent,
-            text=_('Tip: extract pulls each file into memory (2 GB cap per '
-                   'file). If a game has a file larger than that, use '
-                   '\u201cMount as drive\u201d to browse it and copy files out '
-                   'in Explorer (needs the free Dokan driver).'),
+            text=_('Tip: extract mounts the image read-only and copies files out (needs the free Dokan driver). A single file of 4 GB or larger can’t be extracted — the bundled mount driver can’t serve a file past the 4 GB boundary, so extraction stops before copying it. Use “Mount as drive” to browse the image and copy smaller files out in Explorer; the same per-file limit applies there too.'),
             font=FONTS['mono_sm'], bg=BG, fg=COLORS['fg_5'],
             wraplength=920, justify='left', anchor='w'
             ).pack(fill='x', padx=24, pady=(0, 6))
@@ -4545,13 +5004,13 @@ class ExFATBuilder(_TK_BASE):
 
         img_path = self._ffpkg_extract_file_var.get().strip().replace('/', '\\')
         if not img_path or not os.path.isfile(img_path):
-            messagebox.showerror(_('No image'),
+            app_error(self, _('No image'),
                 _('Pick a .ffpkg image to mount first.'))
             return
 
         # Pre-flight: the Dokan driver must be present.
         if not self._find_dokan_driver():
-            if messagebox.askyesno(_('Dokan v2 required'),
+            if app_confirm(self, _('Dokan v2 required'),
                 _('Mounting a .ffpkg as a drive needs the Dokan v2 driver, '
                   'which doesn\'t appear to be installed (or the install is '
                   'incomplete).\n\nIt\'s a small, free, one-time install — '
@@ -4569,12 +5028,12 @@ class ExFATBuilder(_TK_BASE):
                 temp_dir = self._settings.get('temp_dir') or None
                 self._ffpkg_ufs2_exe = extract_ufs2tool(temp_dir)
             except Exception as e:
-                messagebox.showerror(_('UFS2Tool extraction failed'), str(e))
+                app_error(self, _('UFS2Tool extraction failed'), str(e))
                 return
 
         drive = self._ffpkg_pick_free_drive()
         if not drive:
-            messagebox.showerror(_('No free drive letter'),
+            app_error(self, _('No free drive letter'),
                 _('All drive letters are in use. Free one up and retry.'))
             return
 
@@ -4678,7 +5137,7 @@ class ExFATBuilder(_TK_BASE):
         self._ffpkg_extract_log_line('\n[FAIL] Mount failed: ' + reason + '\n')
         low = reason.lower()
         if 'dokan' in low or 'driver' in low:
-            if messagebox.askyesno(_('Dokan v2 required'),
+            if app_confirm(self, _('Dokan v2 required'),
                 _('The mount failed because the Dokan driver is missing or '
                   'the wrong version. This tool needs Dokan v2 (the older v1 '
                   'is not compatible).\n\nOpen the Dokan download page now?')):
@@ -4686,7 +5145,7 @@ class ExFATBuilder(_TK_BASE):
                 webbrowser.open(
                     'https://github.com/dokan-dev/dokany/releases/latest')
         else:
-            messagebox.showerror(_('Mount failed'),
+            app_error(self, _('Mount failed'),
                 _('Could not mount the image.\n\n') + reason)
 
     def _run_ffpkg_unmount(self):
@@ -4770,7 +5229,8 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
 
-    def _ffpkg_mount_copy_extract(self, img_path, dest, log, progress):
+    def _ffpkg_mount_copy_extract(self, img_path, dest, log, progress,
+                                  cancel_check=None):
         """Blocking engine (run on a worker thread): extract a .ffpkg to a
         folder by mounting it read-only (UFS2Tool mount_udf / Dokan) and
         robocopying the mounted drive to dest, then unmounting.
@@ -4859,6 +5319,9 @@ class ExFATBuilder(_TK_BASE):
                 log('[ERROR] Mount failed: ' + summary['error'] + '\n')
                 return summary
 
+            self._extract_active = {'mount': mount_proc, 'robo': None,
+                                    'drive': drive, 'exe': exe}
+            _cancelled = False
             log('[EXTRACT] Mounted at ' + drive + '. Sizing contents...\n')
 
             # Total size for progress (denominator for the dest-size poll).
@@ -4875,6 +5338,9 @@ class ExFATBuilder(_TK_BASE):
             oversize = []                       # [(name, size), ...]
             try:
                 for root, dirs, files in os.walk(drive + '\\'):
+                    if cancel_check is not None and cancel_check():
+                        _cancelled = True
+                        break
                     for fn in files:
                         try:
                             sz = os.path.getsize(
@@ -4886,6 +5352,11 @@ class ExFATBuilder(_TK_BASE):
                             pass
             except Exception:
                 pass
+            if _cancelled:
+                summary['cancelled'] = True
+                summary['error'] = 'Cancelled by user'
+                log('[EXTRACT] Cancelled before the copy started.\n')
+                return summary
             if total_bytes:
                 log('[EXTRACT] Total: %.2f GB to copy\n'
                     % (total_bytes / 1024**3))
@@ -4903,7 +5374,22 @@ class ExFATBuilder(_TK_BASE):
                     log('  - %s  (%.1f GB)\n' % (_nm, _sz / 1024**3))
                 return summary
 
+            _made_dest = not os.path.isdir(dest)
             os.makedirs(dest, exist_ok=True)
+
+            try:
+                _free = shutil.disk_usage(dest).free
+                _need = int(total_bytes * 1.03)
+                if total_bytes and _free < _need:
+                    summary['error'] = (
+                        'Not enough free space to extract. Needs about %.2f GB but only %.2f GB is free on the destination drive.'
+                        % (_need / 1024**3, _free / 1024**3))
+                    summary['insufficient_space'] = True
+                    log('[ERROR] Insufficient free space: need ~%.2f GB, have %.2f GB. Aborting before copy.\n'
+                        % (_need / 1024**3, _free / 1024**3))
+                    return summary
+            except Exception:
+                pass
 
             # Dest-size poller — robocopy /NP prints no percentages, so
             # progress comes from watching the destination grow.
@@ -4945,13 +5431,40 @@ class ExFATBuilder(_TK_BASE):
                     stderr=subprocess.STDOUT,
                     text=True, encoding=_enc, errors='replace',
                     creationflags=_NO_WIN_FLAGS)
+                if isinstance(getattr(self, '_extract_active', None), dict):
+                    self._extract_active['robo'] = proc
                 for line in proc.stdout:
+                    if not _cancelled and cancel_check is not None:
+                        try:
+                            if cancel_check():
+                                _cancelled = True
+                                log('[EXTRACT] Cancel requested — stopping robocopy…\n')
+                                try:
+                                    proc.terminate()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                     if line.strip():
                         log(line if line.endswith('\n') else line + '\n')
                 rc = proc.wait()
             finally:
                 run['on'] = False
             summary['rc'] = rc
+
+            if _cancelled:
+                summary['cancelled'] = True
+                summary['error'] = 'Cancelled by user'
+                if _made_dest:
+                    try:
+                        shutil.rmtree(dest, ignore_errors=True)
+                        log('[EXTRACT] Removed the partial extraction at '
+                            + dest + '\n')
+                    except Exception:
+                        pass
+                else:
+                    log('[EXTRACT] Destination existed before this extract — leaving its files in place; some copied in this run may be partial.\n')
+                return summary
 
             # robocopy: 0-7 = success (1 = files copied), >=8 = failure
             if rc >= 8:
@@ -5007,6 +5520,11 @@ class ExFATBuilder(_TK_BASE):
                     if not os.path.exists(drive + '\\'):
                         break
                     _t.sleep(0.25)
+            try:
+                if getattr(self, '_extract_active', None) is not None:
+                    self._extract_active = None
+            except Exception:
+                pass
 
     def _run_ffpkg_extract(self):
         """Worker entry — validates inputs, kicks off UFS2Tool.exe extract."""
@@ -5015,11 +5533,11 @@ class ExFATBuilder(_TK_BASE):
         out_name = self._ffpkg_extract_name_var.get().strip()
 
         if not img_path or not os.path.isfile(img_path):
-            messagebox.showwarning(_('Missing'),
+            app_warning(self, _('Missing'),
                 _('Please select a valid .ffpkg image.'))
             return
         if not out_dir:
-            messagebox.showwarning(_('Missing'),
+            app_warning(self, _('Missing'),
                 _('Please select an output directory.'))
             return
         if not out_name:
@@ -5027,7 +5545,7 @@ class ExFATBuilder(_TK_BASE):
             self._ffpkg_extract_name_var.set(out_name)
         dest = os.path.join(out_dir, out_name)
         if os.path.exists(dest):
-            if not messagebox.askyesno(_('Folder exists'),
+            if not app_confirm(self, _('Folder exists'),
                     _('Output folder already exists:\n') + dest +
                     _('\n\nFiles will be merged/overwritten. Continue?')):
                 return
@@ -5038,7 +5556,7 @@ class ExFATBuilder(_TK_BASE):
                 self._ffpkg_ufs2_exe = extract_ufs2tool(
                     self._settings.get('temp_dir') or None)
         except Exception as e:
-            messagebox.showerror(_('UFS2Tool extraction failed'), str(e))
+            app_error(self, _('UFS2Tool extraction failed'), str(e))
             return
 
         # UI state
@@ -5104,7 +5622,7 @@ class ExFATBuilder(_TK_BASE):
                 '[OK] %d files \u00b7 %s\n' % (n, sz_str))
             self._ffpkg_extract_log_line('[OK] Files at: ' + dest + '\n')
             try:
-                messagebox.showinfo(_('Extraction complete'),
+                app_info(self, _('Extraction complete'),
                     _('Extracted to:\n%s\n\n%d files \u00b7 %s '
                       '(robocopy rc=%s)') % (dest, n, sz_str, rc))
             except Exception:
@@ -5115,7 +5633,7 @@ class ExFATBuilder(_TK_BASE):
             self._ffpkg_extract_log_line(
                 '\n[FAIL] Extraction failed: %s\n' % err)
             if summary.get('dokan_missing'):
-                if messagebox.askyesno(_('Dokan required'),
+                if app_confirm(self, _('Dokan required'),
                         _('Extracting a .ffpkg to a folder mounts it as a '
                           'drive, which needs the free Dokan driver (the '
                           'same one Mount-as-drive uses).\n\nOpen the Dokan '
@@ -5124,7 +5642,7 @@ class ExFATBuilder(_TK_BASE):
                     webbrowser.open(
                         'https://github.com/dokan-dev/dokany/releases/latest')
             else:
-                messagebox.showerror(_('Extract failed'),
+                app_error(self, _('Extract failed'),
                     _('Extraction failed:\n\n') + err +
                     _('\n\nSee the OUTPUT LOG for details.'))
         self._ffpkg_extract_btn.config(state='normal',
@@ -5179,7 +5697,7 @@ class ExFATBuilder(_TK_BASE):
         if not name.lower().endswith('.exfat'):
             name += '.exfat'
         if not game:
-            messagebox.showwarning('Missing', 'Please select a game folder.')
+            app_warning(self, 'Missing', 'Please select a game folder.')
             return
         # Step 42 (v2.5.8): final safety net. If the game folder field
         # was set by some path that bypassed the resolver (legacy queue
@@ -5195,19 +5713,19 @@ class ExFATBuilder(_TK_BASE):
             game = resolved
             self.game_folder.set(game)
         if not odir:
-            messagebox.showwarning('Missing', 'Please select an output directory.')
+            app_warning(self, 'Missing', 'Please select an output directory.')
             return
         # ── Duplicate detection ──
         for existing in self._queue:
             if os.path.normpath(existing.game_folder) == os.path.normpath(game):
-                if not messagebox.askyesno('Duplicate detected',
+                if not app_confirm(self, 'Duplicate detected',
                         'This game folder is already in the queue:\n' + game +
                         '\n\nAdd it again anyway?'):
                     return
                 break
         out_path = os.path.join(odir, name)
         if os.path.isfile(out_path):
-            if not messagebox.askyesno('File exists',
+            if not app_confirm(self, 'File exists',
                     'Output file already exists:\n' + out_path +
                     '\n\nIt will be overwritten. Continue?'):
                 return
@@ -5218,7 +5736,7 @@ class ExFATBuilder(_TK_BASE):
             if game_size > 0 and free < game_size * 1.05:
                 free_gb = free / (1024**3)
                 need_gb = game_size / (1024**3)
-                if not messagebox.askyesno('Low disk space',
+                if not app_confirm(self, 'Low disk space',
                         'Output drive may not have enough space.\n\n'
                         'Estimated needed: %.1f GB\nFree: %.1f GB\n\nContinue anyway?' % (need_gb, free_gb)):
                     return
@@ -5244,8 +5762,915 @@ class ExFATBuilder(_TK_BASE):
         self._detected_title = self._detected_title_id = self._detected_version = None
         self._set_status(str(len(self._queue)) + ' item(s) in queue', ACCENT)
 
+    def _ps5_dest_class(self, path=None):
+        """Classify a remote path as internal / external / unknown.
+
+        Pure string heuristic on the path prefix — issues no FTP traffic.
+        Returns (key, label, note, tone) where tone is 'warn'|'ok'|'muted'.
+        Wording is fixed per spec and deliberately makes no speed promise.
+        """
+        p = (path if path is not None else (self._br_path.get() or '')).strip()
+        low = p.lower()
+
+        if (low.startswith('/mnt/usb') or low.startswith('/mnt/ext')
+                or low.startswith('/mnt/sandisk') or low.startswith('/mnt/extusb')):
+            return ('external', 'External USB / exFAT',
+                    'External USB/exFAT is usually the fastest target.', 'ok')
+        if (low.startswith('/data') or low.startswith('/mnt/sandbox')
+                or low.startswith('/system') or low.startswith('/user')):
+            return ('internal', 'Internal PS5 storage',
+                    'Internal PS5 storage may be slower on older firmware.', 'warn')
+        return ('unknown', 'Unknown location',
+                'Destination type could not be determined from the path.', 'muted')
+
+    def _ftp_probe_feat(self, ftp):
+        """Return a dict of FEAT capabilities. Never raises.
+
+        Keys: mlsd, rest, size, mdtm, utf8, xcrypt (bool) plus 'raw' (text)
+        and 'copy' (CPFR/CPTO/COPY advertised in FEAT/HELP, bool).
+        """
+        caps = {'mlsd': False, 'rest': False, 'size': False, 'mdtm': False,
+                'utf8': False, 'xcrypt': False, 'copy': False, 'raw': ''}
+        raw = ''
+        try:
+            raw = ftp.sendcmd('FEAT')
+        except Exception:
+            raw = ''
+        caps['raw'] = raw
+        up = raw.upper()
+
+        caps['mlsd'] = (' MLSD' in up) or ('\nMLSD' in up) or up.strip().endswith('MLSD')
+        caps['rest'] = ('REST STREAM' in up) or (' REST' in up)
+        caps['size'] = (' SIZE' in up) or ('\nSIZE' in up)
+        caps['mdtm'] = (' MDTM' in up) or ('\nMDTM' in up)
+        caps['utf8'] = 'UTF8' in up
+        caps['xcrypt'] = 'XCRYPT' in up
+        if 'CPFR' in up or 'CPTO' in up or ' COPY' in up:
+            caps['copy'] = True
+
+        if 'MLST' in up:
+            caps['mlsd'] = caps['mlsd'] or True
+        return caps
+
+    def _ftp_test_passive(self, ftp):
+        """True if the server opens a passive data channel. Restores mode."""
+        try:
+            ftp.set_pasv(True)
+
+            try:
+                ftp.sendcmd('PASV')
+                return True
+            except Exception:
+                ftp.voidcmd('EPSV')
+                return True
+        except Exception:
+            return False
+
+    def _ftp_test_binary(self, ftp):
+        """True if TYPE I is accepted."""
+        try:
+            resp = ftp.voidcmd('TYPE I')
+            return str(resp).startswith('2')
+        except Exception:
+            return False
+
+    def _ftp_test_writable(self, ftp, remote_dir):
+        """Create a tiny temp file in remote_dir, then delete it.
+
+        Returns (ok, cleaned, detail). `ok` = STOR succeeded; `cleaned` =
+        temp file removed. If ok but not cleaned, detail names the leftover
+        so the caller can warn loudly (guardrail: warn on cleanup failure).
+        """
+        import io
+        base = (remote_dir or '/').rstrip('/') or ''
+
+        fname = '.exfatbuilder_wtest_%d.tmp' % int(time.time())
+        remote_path = base + '/' + fname
+        payload = b'exfat-builder writable test\n'
+        try:
+            ftp.storbinary('STOR ' + remote_path, io.BytesIO(payload))
+        except Exception as e:
+            return False, True, 'write denied: ' + str(e)
+
+        try:
+            ftp.delete(remote_path)
+            return True, True, 'ok'
+        except Exception as e:
+            return (True, False,
+                    'WROTE but could NOT delete leftover: '
+                    f'{remote_path!s} ({e!s})')
+
+    def _ftp_probe_zhttp(self, ip, port, timeout=3):
+        """Best-effort: is a zftpd ZHTTP web UI answering on the FTP port?
+
+        Performs ONE http GET to http://ip:port/ and looks for zftpd web-UI
+        fingerprints. Returns (present, url, evidence). Never raises.
+        """
+        url = 'http://%s:%d/' % (ip, port)
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={'User-Agent': 'exfat-builder-diag'})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read(4096).decode('utf-8', 'replace')
+                server_hdr = r.headers.get('Server') or ''
+        except Exception:
+            return (False, url, '')
+        low = body.lower()
+        ev = []
+        if 'zftpd' in low or 'zftpd' in server_hdr.lower():
+            ev.append('zftpd marker in HTTP response')
+        if 'zftpd-logo' in low:
+            ev.append('zftpd-logo asset present')
+
+        looks_html = ('<html' in low) or ('<!doctype html' in low)
+        if ev:
+            return (True, url, '; '.join(ev))
+        if looks_html and server_hdr:
+            return (True, url, 'HTTP server on FTP port (%s)' % server_hdr.strip())
+        if looks_html:
+            return (True, url, 'HTTP page served on FTP port')
+        return (False, url, '')
+
+    def _ftp_detect_server(self, caps, welcome, zhttp_present, zhttp_ev):
+        """Classify the server from FEAT caps + welcome + ZHTTP probe.
+
+        Returns (label, confidence, evidence_list). Always best-effort; the
+        fallback is 'Unknown'. zftpd's 220 banner and SYST are generic, so we
+        rely on FEAT XCRYPT, ZHTTP-on-FTP-port, and CPFR/CPTO/COPY.
+        """
+        evidence = []
+        zftpd_score = 0
+        if caps.get('xcrypt'):
+            zftpd_score += 2
+            evidence.append('FEAT advertises XCRYPT (zftpd extension)')
+        if zhttp_present:
+            zftpd_score += 2
+            evidence.append('ZHTTP web UI responded on FTP port'
+                            + ((' — ' + zhttp_ev) if zhttp_ev else ''))
+        if caps.get('copy'):
+            zftpd_score += 2
+            evidence.append('Server-side copy (CPFR/CPTO/COPY) advertised')
+
+        if caps.get('mlsd') and caps.get('utf8') and caps.get('rest'):
+            evidence.append('MLSD + UTF8 + REST all present (consistent with zftpd)')
+            zftpd_score += 1
+        wl = (welcome or '').lower()
+        if 'zftpd' in wl:
+            zftpd_score += 3
+            evidence.append('Welcome banner names zftpd')
+
+        if zftpd_score >= 2:
+            conf = 'likely' if zftpd_score < 4 else 'very likely'
+            return ('zftpd', conf, evidence)
+
+        if not evidence:
+            evidence.append('No zftpd-specific markers (no XCRYPT, no ZHTTP, no server-side copy)')
+        return ('Unknown / generic FTP', 'n/a', evidence)
+
+    def _ftpdiag_run(self):
+        """Run the full Phase-1+2 diagnostic battery on a worker thread and
+        push results into the diagnostics panel via _ftpdiag_render."""
+        import socket
+        ip = self._ftp_ip_var.get().strip()
+        port = int(self._ftp_port_var.get().strip() or '2121')
+        remote_dir = (self._br_path.get().strip()
+                      or self._ftp_path_var.get().strip()
+                      or '/data/etaHEN/games/')
+
+        try:
+            self._ftpdiag_status.set('Running diagnostics…')
+            self._ftpdiag_btn.config(state='disabled')
+        except Exception:
+            pass
+
+        def worker():
+            res = {'reachable': False, 'rtt_ms': None,
+                   'caps': {'mlsd': False, 'rest': False, 'size': False,
+                            'mdtm': False, 'utf8': False, 'xcrypt': False,
+                            'copy': False, 'raw': ''},
+                   'passive': False, 'binary': False,
+                   'writable': None, 'writable_clean': True, 'writable_detail': '',
+                   'dest': self._ps5_dest_class(remote_dir),
+                   'server': ('Unknown / generic FTP', 'n/a', []),
+                   'zhttp': (False, '', ''),
+                   'welcome': '', 'error': ''}
+
+            if not ip:
+                res['error'] = 'No PS5 IP address set. Enter it in Settings.'
+                self.after(0, self._ftpdiag_render, res)
+                return
+
+            try:
+                t0 = time.time()
+                s = socket.create_connection((ip, port), timeout=5)
+                res['rtt_ms'] = int((time.time() - t0) * 1000)
+                s.close()
+                res['reachable'] = True
+            except Exception as e:
+                res['error'] = 'Not reachable at %s:%d (%s)' % (ip, port, e)
+                self.after(0, self._ftpdiag_render, res)
+                return
+
+            ftp = None
+            try:
+                import ftplib
+                ftp = ftplib.FTP()
+                ftp.connect(ip, port, timeout=10)
+                try:
+                    res['welcome'] = ftp.getwelcome() or ''
+                except Exception:
+                    res['welcome'] = ''
+                ftp.login()
+                res['caps'] = self._ftp_probe_feat(ftp)
+                res['passive'] = self._ftp_test_passive(ftp)
+                res['binary'] = self._ftp_test_binary(ftp)
+                ok, cleaned, detail = self._ftp_test_writable(ftp, remote_dir)
+                res['writable'] = ok
+                res['writable_clean'] = cleaned
+                res['writable_detail'] = detail
+            except Exception as e:
+                res['error'] = 'FTP probe error: ' + str(e)
+            finally:
+                try:
+                    if ftp is not None:
+                        ftp.quit()
+                except Exception:
+                    try:
+                        if ftp is not None:
+                            ftp.close()
+                    except Exception:
+                        pass
+
+            try:
+                res['zhttp'] = self._ftp_probe_zhttp(ip, port)
+            except Exception:
+                res['zhttp'] = (False, '', '')
+
+            res['server'] = self._ftp_detect_server(
+                res['caps'], res['welcome'],
+                res['zhttp'][0], res['zhttp'][2])
+
+            self.after(0, self._ftpdiag_render, res)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ftpdiag_evidence_tags(self, evidence):
+        """Condense the detector's verbose evidence phrases into short,
+        scannable tags (e.g. 'XCRYPT · ZHTTP · server-copy'). Keeps the
+        signal of *which* markers fired without the long sentences. The
+        full phrases still drive detection in _ftp_detect_server; this only
+        affects the one-line display."""
+        tags = []
+        for item in (evidence or []):
+            low = item.lower()
+            if 'no zftpd' in low or 'no xcrypt' in low or low.startswith('no '):
+                tag = 'no zftpd markers'
+            elif 'xcrypt' in low:
+                tag = 'XCRYPT'
+            elif 'zhttp' in low or 'web ui' in low:
+                tag = 'ZHTTP'
+            elif 'copy' in low:
+                tag = 'server-copy'
+            elif 'mlsd' in low and 'utf8' in low:
+                tag = 'feature-set'
+            elif 'banner' in low:
+                tag = 'banner'
+            else:
+                tag = item.split('(')[0].strip()[:18]
+            if tag and tag not in tags:
+                tags.append(tag)
+        return ' · '.join(tags) if tags else '—'
+
+    def _ftpdiag_render(self, res):
+        """Update the diagnostics panel widgets from a result dict produced
+        by _ftpdiag_run's worker. Runs on the Tk thread. Fully defensive:
+        any missing widget is skipped so this never crashes the tab."""
+        from ui.tab_ftp import _tone_color
+
+        def _set(var_name, value):
+            v = getattr(self, var_name, None)
+            if v is not None:
+                try: v.set(value)
+                except Exception: pass
+
+        def _tone(lbl_name, tone):
+            lbl = getattr(self, lbl_name, None)
+            if lbl is not None:
+                _tone_color(lbl, tone)
+
+        try:
+            self._ftpdiag_btn.config(state='normal')
+        except Exception:
+            pass
+
+        err = res.get('error') or ''
+
+        if res.get('reachable'):
+            _set('_ftpdiag_reach_var', 'Yes ✓')
+            _tone('_ftpdiag_reach_lbl', 'ok')
+        else:
+            _set('_ftpdiag_reach_var', 'No ✗')
+            _tone('_ftpdiag_reach_lbl', 'bad')
+        rtt = res.get('rtt_ms')
+        _set('_ftpdiag_rtt_var', ('%d ms' % rtt) if rtt is not None else '—')
+
+        if not res.get('reachable'):
+            for nm in ('_ftpdiag_pasv_var', '_ftpdiag_bin_var',
+                       '_ftpdiag_write_var', '_ftpdiag_server_var',
+                       '_ftpdiag_copy_var'):
+                _set(nm, '—')
+            _set('_ftpdiag_status', err or 'Not reachable')
+
+            self._ftpdiag_apply_dest(res.get('dest'))
+            self._ftpdiag_apply_feat({})
+            self._ftpdiag_hide_webui()
+            return
+
+        label, conf, evidence = res.get('server', ('Unknown / generic FTP', 'n/a', []))
+        if label == 'zftpd':
+            _set('_ftpdiag_server_var', f'{label!s} ({conf!s})')
+            _tone('_ftpdiag_server_lbl', 'ok')
+        else:
+            _set('_ftpdiag_server_var', label)
+            _tone('_ftpdiag_server_lbl', 'muted')
+        if evidence:
+            _set('_ftpdiag_evidence', 'Evidence: ' + self._ftpdiag_evidence_tags(evidence))
+        else:
+            _set('_ftpdiag_evidence', '')
+
+        if res.get('passive'):
+            _set('_ftpdiag_pasv_var', 'Yes ✓'); _tone('_ftpdiag_pasv_lbl', 'ok')
+        else:
+            _set('_ftpdiag_pasv_var', 'No ✗'); _tone('_ftpdiag_pasv_lbl', 'bad')
+
+        if res.get('binary'):
+            _set('_ftpdiag_bin_var', 'Yes ✓'); _tone('_ftpdiag_bin_lbl', 'ok')
+        else:
+            _set('_ftpdiag_bin_var', 'No ✗'); _tone('_ftpdiag_bin_lbl', 'bad')
+
+        w = res.get('writable')
+        if w is True and res.get('writable_clean', True):
+            _set('_ftpdiag_write_var', 'Yes ✓'); _tone('_ftpdiag_write_lbl', 'ok')
+        elif w is True and not res.get('writable_clean', True):
+            _set('_ftpdiag_write_var', 'Yes ⚠ cleanup failed')
+            _tone('_ftpdiag_write_lbl', 'warn')
+            try:
+                app_warning(self,
+                    'Writable test — cleanup failed',
+                    'The writable-path test wrote a temp file but could not delete it. Please remove it manually:\n\n'
+                    + (res.get('writable_detail') or ''))
+            except Exception:
+                pass
+        elif w is False:
+            _set('_ftpdiag_write_var', 'No ✗'); _tone('_ftpdiag_write_lbl', 'bad')
+        else:
+            _set('_ftpdiag_write_var', '—')
+
+        self._ftpdiag_apply_feat(res.get('caps') or {})
+
+        caps = res.get('caps') or {}
+        if caps.get('copy'):
+            _set('_ftpdiag_copy_var', 'Supported ✓')
+            _tone('_ftpdiag_copy_lbl', 'ok')
+        else:
+            _set('_ftpdiag_copy_var', 'Not detected')
+            _tone('_ftpdiag_copy_lbl', 'muted')
+
+        self._ftpdiag_apply_dest(res.get('dest'))
+
+        zpresent, zurl, zev = res.get('zhttp', (False, '', ''))
+        if zpresent:
+            self._ftpdiag_webui_url = zurl
+            self._ftpdiag_show_webui()
+        else:
+            self._ftpdiag_hide_webui()
+
+        if err:
+            _set('_ftpdiag_status', 'Done (with notes): ' + err)
+        else:
+            _set('_ftpdiag_status', 'Done ✓')
+
+    _SPEEDTEST_BYTES = 16777216
+
+    def _ftpspeed_run(self):
+        """Run an upload+download throughput sample on a worker thread and
+        push the result into the panel via _ftpspeed_render."""
+        import socket
+        ip = self._ftp_ip_var.get().strip()
+        port = int(self._ftp_port_var.get().strip() or '2121')
+        remote_dir = (self._br_path.get().strip()
+                      or self._ftp_path_var.get().strip()
+                      or '/data/etaHEN/games/')
+        try:
+            self._ftpspeed_status.set('Running speed test…')
+            self._ftpspeed_btn.config(state='disabled')
+            self._ftpspeed_up_var.set('…')
+            self._ftpspeed_dn_var.set('…')
+        except Exception:
+            pass
+
+        def _mbps(nbytes, secs):
+            if secs <= 0:
+                return None
+            return nbytes / 1048576.0 / secs
+
+        def worker():
+            res = {'up': None, 'dn': None, 'error': '',
+                   'cleaned': True, 'leftover': '', 'size': self._SPEEDTEST_BYTES}
+            if not ip:
+                res['error'] = 'No PS5 IP address set.'
+                self.after(0, self._ftpspeed_render, res)
+                return
+
+            try:
+                import os as _os; import io
+                block = _os.urandom(1048576)
+                reps = self._SPEEDTEST_BYTES // len(block)
+                payload = block * reps
+            except Exception as e:
+                res['error'] = 'payload alloc failed: ' + str(e)
+                self.after(0, self._ftpspeed_render, res)
+                return
+
+            base = (remote_dir or '/').rstrip('/') or ''
+            fname = '.exfatbuilder_speedtest_%d.bin' % int(time.time())
+            remote_path = base + '/' + fname
+
+            ftp = None
+            wrote = False
+            try:
+                import ftplib
+                ftp = ftplib.FTP()
+                ftp.connect(ip, port, timeout=15)
+                ftp.login()
+                try:
+                    ftp.voidcmd('TYPE I')
+                except Exception:
+                    pass
+
+                t0 = time.time()
+                ftp.storbinary('STOR ' + remote_path, io.BytesIO(payload))
+                up_secs = time.time() - t0
+                wrote = True
+                res['up'] = _mbps(len(payload), up_secs)
+
+                counter = {'n': 0}
+                def _sink(chunk):
+                    counter['n'] += len(chunk)
+                t1 = time.time()
+                ftp.retrbinary('RETR ' + remote_path, _sink)
+                dn_secs = time.time() - t1
+                res['dn'] = _mbps(counter['n'], dn_secs)
+            except Exception as e:
+                res['error'] = str(e)
+            finally:
+                if wrote and ftp is not None:
+                    try:
+                        ftp.delete(remote_path)
+                    except Exception as e:
+                        res['cleaned'] = False
+                        res['leftover'] = f'{remote_path!s} ({e!s})'
+                try:
+                    if ftp is not None:
+                        ftp.quit()
+                except Exception:
+                    try:
+                        if ftp is not None:
+                            ftp.close()
+                    except Exception:
+                        pass
+
+            self.after(0, self._ftpspeed_render, res)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ftpspeed_render(self, res):
+        """Render speed-test results. Honest labelling: a measured sample,
+        never a promise. Warns loudly if the temp file could not be removed."""
+        def _set(name, value):
+            v = getattr(self, name, None)
+            if v is not None:
+                try: v.set(value)
+                except Exception: pass
+
+        try:
+            self._ftpspeed_btn.config(state='normal')
+        except Exception:
+            pass
+
+        up = res.get('up')
+        dn = res.get('dn')
+        _set('_ftpspeed_up_var', ('%.0f MB/s' % up) if up else '—')
+        _set('_ftpspeed_dn_var', ('%.0f MB/s' % dn) if dn else '—')
+
+        err = res.get('error') or ''
+        if not res.get('cleaned', True):
+            try:
+                app_warning(self,
+                    'Speed test — cleanup failed',
+                    'The speed test wrote a temp file but could not delete it. Please remove it manually:\n\n'
+                    + (res.get('leftover') or ''))
+            except Exception:
+                pass
+            _set('_ftpspeed_status', 'Done ⚠ cleanup failed (see warning)')
+        elif err:
+            _set('_ftpspeed_status', 'Could not complete: ' + err)
+        else:
+            _set('_ftpspeed_status', 'Measured this run — not a guarantee')
+
+    def _ftpdiag_apply_feat(self, caps):
+        chips = getattr(self, '_ftpdiag_feat_chips', None)
+        if not chips:
+            return
+        for key, chip in chips.items():
+            on = bool(caps.get(key))
+            try:
+                if on:
+                    chip.configure(bg=COLORS['success_bg'], fg=COLORS['success_hi'])
+                else:
+                    chip.configure(bg=COLORS['bg_3'], fg=COLORS['fg_5'])
+            except Exception:
+                pass
+
+    def _ftpdiag_apply_dest(self, dest):
+        if not dest:
+            return
+        from ui.tab_ftp import _tone_color, _dot_color
+        try:
+            key, label, note, tone = dest
+            if getattr(self, '_ftpdiag_dest_var', None) is not None:
+                self._ftpdiag_dest_var.set(label)
+            if getattr(self, '_ftpdiag_dest_note', None) is not None:
+                self._ftpdiag_dest_note.set(note)
+            if getattr(self, '_ftpdiag_dest_lbl', None) is not None:
+                _tone_color(self._ftpdiag_dest_lbl, tone)
+
+            if getattr(self, '_ftpdiag_dest_dot', None) is not None:
+                _dot_color(self._ftpdiag_dest_dot, tone)
+        except Exception:
+            pass
+
+    def _ftpdiag_show_webui(self):
+        btn = getattr(self, '_ftpdiag_webui_btn', None)
+        if btn is not None:
+            try:
+                if not btn.winfo_ismapped():
+                    btn.pack(side='left', padx=(0, 0))
+            except Exception:
+                pass
+        lbl = getattr(self, '_ftpdiag_server_lbl', None)
+        if lbl is not None:
+            try:
+                lbl.configure(cursor='hand2')
+            except Exception:
+                pass
+        self._ftpdiag_server_clickable = True
+
+    def _ftpdiag_hide_webui(self):
+        btn = getattr(self, '_ftpdiag_webui_btn', None)
+        if btn is not None:
+            try:
+                btn.pack_forget()
+            except Exception:
+                pass
+        lbl = getattr(self, '_ftpdiag_server_lbl', None)
+        if lbl is not None:
+            try:
+                lbl.configure(cursor='')
+            except Exception:
+                pass
+        self._ftpdiag_server_clickable = False
+
+    def _br_caps(self):
+        """Lazily probe + cache FEAT caps on the active browser connection.
+
+        Returns the caps dict, or None if no connection. Cached on
+        self._br_feat_caps so we don't FEAT on every navigation.
+        """
+        cached = getattr(self, '_br_feat_caps', None)
+        if cached is not None:
+            return cached
+        try:
+            ftp = self._br_ftp[0]
+            if ftp is None:
+                return None
+            caps = self._ftp_probe_feat(ftp)
+            self._br_feat_caps = caps
+            return caps
+        except Exception:
+            return None
+
+    def _br_list_mlsd(self, ftp, path):
+        """Return list of (name, is_dir, size) via MLSD, or raise on failure.
+
+        Parses standard MLSD facts (type=/size=). Skips cdir/pdir entries.
+        """
+        entries = []
+        ftp.cwd(path)
+        for name, facts in ftp.mlsd():
+            if not name or name in ('.', '..'):
+                continue
+            t = (facts.get('type') or '').lower()
+            if t in ('cdir', 'pdir'):
+                continue
+            is_dir = (t == 'dir')
+            try:
+                sz = int(facts.get('size', '0') or '0')
+            except Exception:
+                sz = 0
+            entries.append((name, is_dir, sz))
+        return entries
+
+    def _tq_ensure(self):
+        """Lazily create the queue model + dispatcher state. Safe to call
+        from any enqueue path."""
+        if getattr(self, '_tq_queue', None) is None:
+            from ui.tq_model import TransferQueue
+            self._tq_queue = TransferQueue()
+            self._tq_worker_alive = False
+            self._tq_worker_lock = threading.Lock()
+        return self._tq_queue
+
+    def _tq_enqueue(self, local_path, remote_dir, is_folder=False,
+                    _skip_guard=False):
+        """Add one upload to the queue and make sure the dispatcher is
+        running. Returns the created item (or None on bad input)."""
+        from ui.tq_model import TransferItem
+        q = self._tq_ensure()
+        if not local_path or not os.path.exists(local_path):
+            try:
+                app_error(self, 'Not found',
+                          'Path not found:\n' + str(local_path))
+            except Exception:
+                pass
+            return None
+
+        if not _skip_guard and not self._br_guard_write(remote_dir, 'upload into'):
+            return None
+        ip = self._ftp_ip_var.get().strip()
+        if not ip:
+            try:
+                app_warning(self, 'No IP',
+                            'Enter your PS5 IP in Settings before queueing uploads.')
+            except Exception:
+                pass
+            return None
+
+        try:
+            if is_folder:
+                total = 0
+                for root, _dirs, files in os.walk(local_path):
+                    for fn in files:
+                        try:
+                            total += os.path.getsize(os.path.join(root, fn))
+                        except Exception:
+                            pass
+                size = total
+            else:
+                size = os.path.getsize(local_path)
+        except Exception:
+            size = 0
+        item = TransferItem(local_path, remote_dir or '/data/etaHEN/games/',
+                            is_folder=is_folder, size=size)
+        q.enqueue(item)
+        self._tq_render()
+        self._tq_start_worker()
+        return item
+
+    def _tq_enqueue_many(self, specs):
+        """specs: iterable of (local_path, remote_dir, is_folder). Enqueues
+        all valid ones; returns the list of created items."""
+        specs = list(specs)
+        for rd in {rd for _lp, rd, _isf in specs}:
+            if not self._br_guard_write(rd, 'upload into'):
+                return []
+        created = []
+        for lp, rd, isf in specs:
+            it = self._tq_enqueue(lp, rd, isf, _skip_guard=True)
+            if it is not None:
+                created.append(it)
+        return created
+
+    def _tq_start_worker(self):
+        """Ensure exactly ONE dispatcher thread is running. Re-entrant
+        uploads through the FTP tab are prevented here: a second call while
+        the worker is alive is a no-op; new items are simply picked up by
+        the already-running drain loop."""
+        with self._tq_worker_lock:
+            if self._tq_worker_alive:
+                return
+            self._tq_worker_alive = True
+        threading.Thread(target=self._tq_drain, daemon=True).start()
+
+    def _tq_drain(self):
+        from ui.tq_model import UPLOADING, DONE, FAILED, CANCELLED
+        q = self._tq_queue
+        try:
+            while True:
+                item = q.next_queued()
+                if item is None:
+                    break
+
+                if item.cancel_requested:
+                    item.state = CANCELLED
+                    self.after(0, self._tq_render)
+                    continue
+                item.state = UPLOADING
+                q.active_id = item.id
+                self.after(0, self._tq_render)
+                try:
+                    self._tq_upload_item(item)
+                    item.state = CANCELLED if item.cancel_requested else DONE
+                except _TQCancelled:
+                    item.state = CANCELLED
+                except Exception as e:
+                    item.state = FAILED
+                    item.error = str(e)
+                q.active_id = None
+                self.after(0, self._tq_render)
+        finally:
+            with self._tq_worker_lock:
+                self._tq_worker_alive = False
+
+            if q.has_pending:
+                self._tq_start_worker()
+
+    def _tq_upload_item(self, item):
+        """Upload one queue item using the same storbinary transport as the
+        Quick-Upload tab. Raises _TQCancelled if the item's cancel flag is
+        set mid-transfer. Updates item.sent / item.speed_mbs as it goes and
+        marshals a panel refresh via self.after."""
+        import ftplib
+        local = item.local_path
+        remote_dir = item.remote_dir
+        ftp = self._ftp_connect()
+        try:
+            _mkd_done = set()
+
+            def ensure_dir(ftp, path):
+                if path in _mkd_done:
+                    return
+                parts = path.strip('/').split('/')
+                cur = ''
+                for part in parts:
+                    if not part:
+                        continue
+                    cur += '/' + part
+                    if cur in _mkd_done:
+                        continue
+                    try:
+                        ftp.mkd(cur)
+                    except Exception:
+                        pass
+                    _mkd_done.add(cur)
+                _mkd_done.add(path)
+
+            last_paint = [0.0]
+            window = []
+
+            inflight = {'remote': None}
+
+            def _note_progress(total_sent, total_size, start_t):
+                now = time.time()
+                window.append((now, total_sent))
+                cutoff = now - 5.0
+                while len(window) > 1 and window[0][0] < cutoff:
+                    window.pop(0)
+                dt = window[-1][0] - window[0][0]
+                db = window[-1][1] - window[0][1]
+                item.sent = total_sent
+                item.speed_mbs = (db / 1024 / 1024 / dt) if dt > 0 else 0.0
+                if now - last_paint[0] >= 0.25:
+                    last_paint[0] = now
+                    self.after(0, self._tq_render)
+
+            if item.is_folder:
+                all_files = []
+                for root, _dirs, files in os.walk(local):
+                    for fn in files:
+                        all_files.append(os.path.join(root, fn))
+                total_bytes = item.size or sum(os.path.getsize(f)
+                                               for f in all_files)
+                sent_bytes = [0]
+                start_t = time.time()
+                folder_name = os.path.basename(local.rstrip('\\/'))
+                for local_path in all_files:
+                    if item.cancel_requested:
+                        raise _TQCancelled()
+                    rel = os.path.relpath(local_path, os.path.dirname(local))
+                    remote_path = (remote_dir.rstrip('/') + '/'
+                                   + folder_name + '/'
+                                   + rel.replace('\\', '/'))
+                    remote_parent = '/'.join(remote_path.split('/')[:-1])
+                    ensure_dir(ftp, remote_parent)
+
+                    def prog(block, _tb=total_bytes, _st=start_t):
+                        if item.cancel_requested:
+                            raise _TQCancelled()
+                        sent_bytes[0] += len(block)
+                        _note_progress(sent_bytes[0], _tb, _st)
+
+                    inflight['remote'] = remote_path
+                    with open(local_path, 'rb') as f:
+                        ftp.storbinary('STOR ' + remote_path, f,
+                                       blocksize=65536, callback=prog)
+                    inflight['remote'] = None
+                item.sent = total_bytes
+            else:
+                filename = os.path.basename(local)
+                remote_path = remote_dir.rstrip('/') + '/' + filename
+                ensure_dir(ftp, remote_dir)
+                file_size = item.size or os.path.getsize(local)
+                uploaded = [0]
+                start_t = time.time()
+
+                def prog(block, _fs=file_size, _st=start_t):
+                    if item.cancel_requested:
+                        raise _TQCancelled()
+                    uploaded[0] += len(block)
+                    _note_progress(uploaded[0], _fs, _st)
+
+                inflight['remote'] = remote_path
+                with open(local, 'rb') as f:
+                    ftp.storbinary('STOR ' + remote_path, f,
+                                   blocksize=65536, callback=prog)
+                inflight['remote'] = None
+                item.sent = file_size
+
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                ftp.close()
+            except Exception:
+                pass
+
+            _rp = inflight.get('remote')
+            if _rp:
+                try:
+                    _c2 = self._ftp_connect()
+                    try:
+                        _c2.delete(_rp)
+                        self._log('[FTP] Removed the partial remote file after cancel/failure: %s\n'
+                                  % _rp)
+                    finally:
+                        try:
+                            _c2.quit()
+                        except Exception:
+                            try:
+                                _c2.close()
+                            except Exception:
+                                pass
+                except Exception as _de:
+                    self._log('[FTP] Could not remove the partial remote file '
+                              f'{_rp!s} ({_de!s}) — it may remain on the PS5.\n')
+            raise
+
+    def _tq_cancel_item(self, item_id):
+        """Request cancel of a queued or in-flight item. The worker observes
+        the flag on the next chunk (in-flight) or skips it (still queued)."""
+        q = getattr(self, '_tq_queue', None)
+        if q is None:
+            return
+        it = q.get(item_id)
+        if it is None or it.is_terminal:
+            return
+        it.request_cancel()
+        from ui.tq_model import QUEUED, CANCELLED
+        if it.state == QUEUED:
+            it.state = CANCELLED
+        self._tq_render()
+
+    def _tq_clear_completed(self):
+        q = getattr(self, '_tq_queue', None)
+        if q is None:
+            return
+        q.clear_completed()
+        self._tq_render()
+
+    def _tq_render(self):
+        """Push the current queue snapshot into the transfers panel. Defined
+        to call into ui.tab_ftp's renderer, which owns the row widgets."""
+        try:
+            from ui.tab_ftp import _tq_render_panel
+        except Exception:
+            return
+        q = getattr(self, '_tq_queue', None)
+        snapshot = q.snapshot() if q is not None else []
+        counts = q.counts() if q is not None else {}
+        try:
+            _tq_render_panel(self, snapshot, counts)
+        except Exception:
+            pass
+
     def _br_connect(self):
         self._br_status.set('Connecting...')
+        self._br_feat_caps = None
         def worker():
             try:
                 ftp = self._ftp_connect()
@@ -5279,9 +6704,57 @@ class ExFATBuilder(_TK_BASE):
         menu.add_command(label='\u2702  Rename',       command=self._br_rename)
         menu.add_command(label='\u2702\ufe0f  Cut',    command=self._br_cut)
         menu.add_command(label='\u27a1  Move to...',   command=self._br_move_to)
+        menu.add_command(label='\U0001f4cb  Copy path',
+                         command=lambda: self._br_copy_path(remote))
         menu.add_separator()
         menu.add_command(label='\U0001f5d1  Delete',   command=self._br_delete)
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _br_copy_path(self, remote_path):
+        """Copy the full remote (PS5) path of the right-clicked item to the
+        OS clipboard. Deliberately separate from `_br_clipboard`, which is
+        the cut/paste move-buffer — Copy path is a pure convenience and must
+        not disturb a pending Cut."""
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(remote_path)
+            self._br_status.set('Path copied: ' + remote_path)
+        except Exception:
+            pass
+
+    _BR_PROTECTED = ('/system', '/system_ex', '/preinst', '/preinst2',
+                     '/mini-syscore', '/sandcastle', '/update', '/dev',
+                     '/proc')
+
+    @staticmethod
+    def _br_is_protected(path):
+        """True if `path` is, or lives under, a protected system directory."""
+        if not path:
+            return False
+        p = '/' + path.strip().strip('/')
+        low = p.lower()
+        for prot in ExFATBuilder._BR_PROTECTED:
+            if low == prot or low.startswith(prot + '/'):
+                return True
+        return False
+
+    def _br_guard_write(self, target_path, action='modify'):
+        """Warn before a write/destructive op that targets a protected
+        path. Returns True to proceed, False to abort. Warn-only: the user
+        can choose to continue. Navigation/read never calls this."""
+        if not self._br_is_protected(target_path):
+            return True
+        try:
+            return app_confirm(
+                self,
+                'Protected system path',
+                'The target is a protected PS5 system directory:\n\n    '
+                f'{target_path!s}\n\nModifying system partitions ('
+                f'{", ".join(self._BR_PROTECTED[:4])!s} ...) can BRICK your console. This is almost never what you want.\n\nContinue with "'
+                f'{action!s}" anyway?',
+                icon='warning', default='no', parent=self)
+        except Exception:
+            return False
 
     def _br_cur(self):
         return self._br_path.get().rstrip('/')
@@ -5289,7 +6762,7 @@ class ExFATBuilder(_TK_BASE):
     def _br_cut(self):
         sel = self._br_selected()
         if not sel:
-            messagebox.showwarning('No selection', 'Select items to move.')
+            app_warning(self, 'No selection', 'Select items to move.')
             return
         paths = [(self._br_cur() + '/' + name, is_dir) for name, is_dir, _ in sel]
         self._br_clipboard[0] = ('move', paths)
@@ -5299,17 +6772,23 @@ class ExFATBuilder(_TK_BASE):
     def _br_delete(self):
         sel = self._br_selected()
         if not sel:
-            messagebox.showwarning('No selection', 'Select files or folders to delete.')
+            app_warning(self, 'No selection', 'Select files or folders to delete.')
             return
         names = [name for name, _, _ in sel]
-        if not messagebox.askyesno('Delete from PS5',
+        cur = self._br_cur()
+        for nm in names:
+            if not self._br_guard_write(cur + '/' + nm, 'delete'):
+                return
+        if not app_confirm(self, 'Delete from PS5',
                 'Permanently delete %d item(s) from PS5?\n\n%s%s' % (
                     len(names), '\n'.join(names[:8]),
                     '\n...' if len(names) > 8 else '')):
             return
         def _rmd(ftp, path):
             lines = []
-            try: ftp.retrlines('LIST ' + path, lines.append)
+            try:
+                ftp.cwd(path)
+                ftp.retrlines('LIST', lines.append)
             except Exception: pass
             for line in lines:
                 parts = line.split()
@@ -5335,7 +6814,7 @@ class ExFATBuilder(_TK_BASE):
                     errors.append(name + ': ' + str(e))
             self.after(0, self._br_load, self._br_path.get())
             if errors:
-                self.after(0, messagebox.showerror,
+                self.after(0, lambda *_a: app_error(self, *_a),
                            'Some deletions failed', '\n'.join(errors))
             else:
                 self.after(0, self._br_status.set,
@@ -5351,6 +6830,7 @@ class ExFATBuilder(_TK_BASE):
         self._br_ftp[0] = None
         self._br_listbox.delete(0, 'end')
         self._br_entries = []
+        self._br_feat_caps = None
         self._br_status.set('Disconnected')
         self._br_free.set('')
 
@@ -5358,7 +6838,7 @@ class ExFATBuilder(_TK_BASE):
         sel = self._br_selected()
         files_only = [(n, sz) for n, is_dir, sz in sel if not is_dir]
         if not files_only:
-            messagebox.showwarning('Files only', 'Select files (not folders) to download.')
+            app_warning(self, 'Files only', 'Select files (not folders) to download.')
             return
         save_dir = filedialog.askdirectory(title='Save downloaded files to...')
         if not save_dir: return
@@ -5375,7 +6855,7 @@ class ExFATBuilder(_TK_BASE):
                 except Exception as e:
                     errors.append(name + ': ' + str(e))
             if errors:
-                self.after(0, messagebox.showerror, 'Download errors', '\n'.join(errors))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Download errors', '\n'.join(errors))
                 self.after(0, self._br_status.set, 'Download finished with errors')
             else:
                 self.after(0, self._br_status.set,
@@ -5414,8 +6894,39 @@ class ExFATBuilder(_TK_BASE):
         def worker():
             try:
                 ftp   = self._br_ensure()
+                caps = self._br_caps()
+                if caps and caps.get('mlsd'):
+                    try:
+                        entries = self._br_list_mlsd(ftp, p)
+                        free_str = ''
+                        try:
+                            free_str = 'Free: ' + ftp.sendcmd('SITE AVAIL')
+                        except Exception:
+                            pass
+                        self.after(0, self._br_show_entries, entries, p,
+                                   free_str, 'MLSD')
+                        return
+                    except Exception:
+                        pass
                 lines = []
-                ftp.retrlines('LIST ' + p, lines.append)
+                try:
+                    ftp.cwd(p)
+                    ftp.retrlines('LIST', lines.append)
+                except Exception as list_err:
+                    if p != '/':
+                        lines = []
+                        ftp.cwd('/')
+                        ftp.retrlines('LIST', lines.append)
+                        free_str = ''
+                        try:
+                            free_str = 'Free: ' + ftp.sendcmd('SITE AVAIL')
+                        except Exception:
+                            pass
+                        self.after(0, self._br_show, lines, '/', free_str)
+                        self.after(0, self._br_status.set,
+                                   '%s not found — showing / instead' % p)
+                        return
+                    raise list_err
                 # Try to get free space
                 free_str = ''
                 try:
@@ -5432,13 +6943,15 @@ class ExFATBuilder(_TK_BASE):
         """Move selected items to a typed destination path."""
         sel = self._br_selected()
         if not sel:
-            messagebox.showwarning('No selection', 'Select items to move.')
+            app_warning(self, 'No selection', 'Select items to move.')
             return
         dest = simpledialog.askstring(
             'Move to', 'Destination path on PS5:',
             initialvalue=self._br_cur(), parent=self)
         if not dest: return
         dest = dest.rstrip('/')
+        if not self._br_guard_write(dest, 'move into'):
+            return
         def worker():
             errors = []
             ftp = self._br_ensure()
@@ -5458,17 +6971,31 @@ class ExFATBuilder(_TK_BASE):
                     errors.append(name + ': ' + str(e))
             self.after(0, self._br_load, self._br_path.get())
             if errors:
-                self.after(0, messagebox.showerror, 'Move failed', '\n'.join(errors))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Move failed', '\n'.join(errors))
             else:
                 self.after(0, self._br_status.set,
                            str(len(sel)) + ' item(s) moved to ' + dest)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _br_nav(self):
-        sel = self._br_listbox.curselection()
-        if not sel or sel[0] >= len(self._br_entries): return
-        name, is_dir, _ = self._br_entries[sel[0]]
-        if not is_dir: return
+    def _br_nav(self, event=None):
+        lb = self._br_listbox
+        if event is not None:
+            idx = lb.nearest(event.y)
+            if idx is None or idx < 0:
+                return
+            lb.selection_clear(0, 'end')
+            lb.selection_set(idx)
+            lb.activate(idx)
+        else:
+            sel = lb.curselection()
+            if not sel:
+                return
+            idx = sel[0]
+        if idx >= len(self._br_entries):
+            return
+        name, is_dir, _ = self._br_entries[idx]
+        if not is_dir:
+            return
         if name == '..':
             self._br_go_up()
         else:
@@ -5478,21 +7005,25 @@ class ExFATBuilder(_TK_BASE):
         name = simpledialog.askstring('New folder', 'Folder name:', parent=self)
         if not name: return
         remote = self._br_cur() + '/' + name
+        if not self._br_guard_write(remote, 'create folder'):
+            return
         def worker():
             try:
                 ftp = self._br_ensure()
                 ftp.mkd(remote)
                 self.after(0, self._br_load, self._br_path.get())
             except Exception as e:
-                self.after(0, messagebox.showerror, 'Error', str(e))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Error', str(e))
         threading.Thread(target=worker, daemon=True).start()
 
     def _br_paste(self):
         if not self._br_clipboard[0]:
-            messagebox.showwarning('Nothing to paste', 'Cut some files first.')
+            app_warning(self, 'Nothing to paste', 'Cut some files first.')
             return
         action, items = self._br_clipboard[0]
         dest = self._br_cur()
+        if not self._br_guard_write(dest, 'paste into'):
+            return
         def worker():
             errors = []
             ftp = self._br_ensure()
@@ -5506,7 +7037,7 @@ class ExFATBuilder(_TK_BASE):
             self._br_clipboard[0] = None
             self.after(0, self._br_load, self._br_path.get())
             if errors:
-                self.after(0, messagebox.showerror, 'Move failed', '\n'.join(errors))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Move failed', '\n'.join(errors))
             else:
                 self.after(0, self._br_status.set,
                            str(len(items)) + ' item(s) moved to ' + dest)
@@ -5515,10 +7046,10 @@ class ExFATBuilder(_TK_BASE):
     def _br_rename(self):
         sel = self._br_selected()
         if not sel:
-            messagebox.showwarning('No selection', 'Select a file or folder to rename.')
+            app_warning(self, 'No selection', 'Select a file or folder to rename.')
             return
         if len(sel) > 1:
-            messagebox.showwarning('Too many', 'Select only one item to rename.')
+            app_warning(self, 'Too many', 'Select only one item to rename.')
             return
         name, _, _ = sel[0]
         new_name = simpledialog.askstring('Rename', 'New name:',
@@ -5526,6 +7057,8 @@ class ExFATBuilder(_TK_BASE):
         if not new_name or new_name == name: return
         old_p = self._br_cur() + '/' + name
         new_p = self._br_cur() + '/' + new_name
+        if not self._br_guard_write(old_p, 'rename'):
+            return
         def worker():
             try:
                 ftp = self._br_ensure()
@@ -5533,7 +7066,7 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._br_load, self._br_path.get())
                 self.after(0, self._br_status.set, 'Renamed: ' + name + ' \u2192 ' + new_name)
             except Exception as e:
-                self.after(0, messagebox.showerror, 'Rename failed', str(e))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Rename failed', str(e))
         threading.Thread(target=worker, daemon=True).start()
 
     def _br_selected(self):
@@ -5546,11 +7079,6 @@ class ExFATBuilder(_TK_BASE):
         return result
 
     def _br_show(self, lines, p, free_str):
-        self._br_listbox.delete(0, 'end')
-        self._br_entries = []
-        self._br_path.set(p)
-        if free_str:
-            self._br_free.set(free_str)
         parsed = []
         for line in lines:
             parts = line.split()
@@ -5561,6 +7089,18 @@ class ExFATBuilder(_TK_BASE):
             except: sz = 0
             if name not in ('.', '..'):
                 parsed.append((name, is_dir, sz))
+        self._br_show_entries(parsed, p, free_str, 'LIST')
+
+    def _br_show_entries(self, entries, p, free_str, source='LIST'):
+        """Render a pre-parsed list of (name, is_dir, size) into the
+        remote pane. Shared by the LIST and MLSD listing paths so both
+        display identically. `source` is informational only."""
+        self._br_listbox.delete(0, 'end')
+        self._br_entries = []
+        self._br_path.set(p)
+        if free_str:
+            self._br_free.set(free_str)
+        parsed = list(entries or [])
         parsed.sort(key=lambda x: (not x[1], x[0].lower()))
         if p != '/':
             self._br_entries.append(('..', True, 0))
@@ -5570,7 +7110,7 @@ class ExFATBuilder(_TK_BASE):
             icon = '\U0001f4c1  ' if is_dir else '\U0001f4be  '
             sz_str = self._br_fmt(sz, is_dir)
             self._br_listbox.insert('end',
-                '%-3s%-42s %12s' % (icon, name, sz_str))
+                f'{icon!s:3}{name!s:42} {sz_str!s:>12}')
         self._br_status.set('%d items in %s' % (len(parsed), p))
         self._br_sel_info.set('')
 
@@ -5585,22 +7125,22 @@ class ExFATBuilder(_TK_BASE):
             ('  —  ' + self._br_fmt(total, False) if total else ''))
 
     def _br_upload_here(self):
-        """Upload a file or folder to the current directory."""
-        choice = messagebox.askyesnocancel(
-            'Upload', 'What do you want to upload?\n\nYes = File\nNo = Folder\nCancel = Abort')
+        """Queue a file or folder for upload to the current directory.
+
+        Phase 1: enqueues into the transfer queue (serial dispatcher) rather
+        than driving the single-shot Quick-Upload worker."""
+        choice = app_choose3(
+            self, 'Upload',
+            'What do you want to upload to this folder?',
+            ok_label='File', alt_label='Folder', cancel_label='Cancel')
         if choice is None: return
         if choice:
             local = filedialog.askopenfilename(title='Select file to upload')
         else:
             local = filedialog.askdirectory(title='Select folder to upload')
         if not local: return
-        # Reuse the FTP upload tab logic with current remote path
-        self._ftptab_local_var.set(local.replace('/', '\\'))
-        self._ftptab_remote_var.set(self._br_path.get())
-        self._ftptab_is_folder.set(not choice)
-        self._switch_tab('ftp')
-        self._ftp_switch_sub('upload')
-        self._ftptab_start_upload()
+        local = local.replace('/', '\\')
+        self._tq_enqueue(local, self._br_path.get(), is_folder=not choice)
 
     def _browse_extract_file(self):
         p = filedialog.askopenfilename(
@@ -5747,7 +7287,7 @@ class ExFATBuilder(_TK_BASE):
                         continue
                     found.append(eboot_root)
             except Exception as e:
-                self.after(0, messagebox.showerror, 'Scan error', str(e))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Scan error', str(e))
                 return
 
             self.after(0, self._multi_add_confirm, found, skipped, odir)
@@ -5772,7 +7312,7 @@ class ExFATBuilder(_TK_BASE):
         self._settings['temp_dir'] = p
         save_settings(self._settings)
         self._refresh_temp_size()
-        messagebox.showinfo('Temp folder set',
+        app_info(self, 'Temp folder set',
             'Temp folder set to:\n' + p +
             '\n\nThis will take effect on next launch.')
 
@@ -5792,7 +7332,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _build_single(self, index):
         if self._building:
-            messagebox.showwarning('Busy', 'A build is already in progress.')
+            app_warning(self, 'Busy', 'A build is already in progress.')
             return
         if 0 <= index < len(self._queue):
             self._queue[index].status = 'waiting'
@@ -5844,20 +7384,21 @@ class ExFATBuilder(_TK_BASE):
 
     def _clear_queue(self):
         if self._building:
-            messagebox.showwarning('Building', 'Cannot clear queue while building.')
+            app_warning(self, 'Building', 'Cannot clear queue while building.')
             return
         self._queue.clear()
         self._render_queue()
 
     def _clear_temp(self):
         base = self._settings.get('temp_dir') or tempfile.gettempdir()
-        if not messagebox.askyesno('Clear temp files',
+        if not app_danger(self, 'Clear temp files',
                 'This will delete all exfat_builder_* folders in:\n' + base +
-                '\n\nAny active build will be interrupted. Continue?'):
+                '\n\nAny active build will be interrupted. Continue?',
+                ok_label='Clear temp files', cancel_label='Cancel'):
             return
         # Don\'t delete the currently active temp dir if building
         if self._building:
-            messagebox.showwarning('Building',
+            app_warning(self, 'Building',
                 'Cannot clear temp while a build is in progress.')
             return
         ok, result, size = clear_temp_folder(base)
@@ -5866,9 +7407,9 @@ class ExFATBuilder(_TK_BASE):
             msg = ('Removed %d folder(s), freed %.1f MB' % (result, freed)
                    if result > 0 else 'No temp folders found to remove')
             self._set_status(msg, SUCCESS)
-            messagebox.showinfo('Temp cleared', msg)
+            app_success(self, 'Temp cleared', msg)
         else:
-            messagebox.showerror('Error', 'Failed to clear temp:\n' + str(result))
+            app_error(self, 'Error', 'Failed to clear temp:\n' + str(result))
         self._refresh_temp_size()
 
     def _detect_game_info(self, folder):
@@ -5990,7 +7531,7 @@ class ExFATBuilder(_TK_BASE):
             self._extract_status_var.set('Complete! Extracted to: ' + info)
             self._extract_eta_var.set('Finished in %dm %02ds' % (m, s))
             self._elog('\n[OK] Extraction complete: ' + info + '\n')
-            if messagebox.askyesno('Extraction complete',
+            if app_confirm(self, 'Extraction complete',
                     'Image extracted successfully!\n\n' + info +
                     '\n\nOpen output folder?'):
                 try: os.startfile(info)
@@ -6006,7 +7547,7 @@ class ExFATBuilder(_TK_BASE):
         else:
             self._extract_status_var.set('Extraction failed')
             self._elog('\n[ERROR] ' + info + '\n')
-            messagebox.showerror('Extraction failed', info)
+            app_error(self, 'Extraction failed', info)
 
     def _ffpkg_activate_dot(self, index):
         # Step 9 (v2.1.1): forward to the new StagedProgressBar widget
@@ -6039,15 +7580,15 @@ class ExFATBuilder(_TK_BASE):
         if not name.lower().endswith('.ffpkg'):
             name += '.ffpkg'
         if not game:
-            messagebox.showwarning('Missing', 'Please select a game folder.')
+            app_warning(self, 'Missing', 'Please select a game folder.')
             return
         if not odir:
-            messagebox.showwarning('Missing', 'Please select an output directory.')
+            app_warning(self, 'Missing', 'Please select an output directory.')
             return
         # Duplicate check
         for existing in self._ffpkg_queue:
             if os.path.normpath(existing['folder']) == os.path.normpath(game):
-                if not messagebox.askyesno('Duplicate',
+                if not app_confirm(self, 'Duplicate',
                         'This folder is already in the queue. Add again?'):
                     return
                 break
@@ -6107,12 +7648,12 @@ class ExFATBuilder(_TK_BASE):
             except FileNotFoundError:
                 pass
             except Exception as e:
-                self.after(0, messagebox.showerror,
+                self.after(0, lambda *_a: app_error(self, *_a),
                            '.NET Check Error', 'Could not run dotnet:\n' + str(e))
                 return
 
             if found:
-                self.after(0, messagebox.showinfo,
+                self.after(0, lambda *_a: app_info(self, *_a),
                            '\u2713 .NET 8 Found',
                            '.NET 8 Runtime is installed and ready.\n\n'
                            + version +
@@ -6153,7 +7694,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _ffpkg_clear_queue(self):
         if self._ffpkg_building:
-            messagebox.showwarning('Building', 'Cannot clear queue while building.')
+            app_warning(self, 'Building', 'Cannot clear queue while building.')
             return
         self._ffpkg_queue.clear()
         self._ffpkg_render_queue()
@@ -6360,7 +7901,7 @@ class ExFATBuilder(_TK_BASE):
             # Auto-upload if enabled
             if self._ftp_auto_var.get() and self._ftp_ip_var.get().strip() \
                     and not getattr(self, '_unified_active', False):
-                if messagebox.askyesno('FTP Upload',
+                if app_confirm(self, 'FTP Upload',
                         'ffpkg built!\n\nUpload to PS5 now?\n' + out_path):
                     self._ftp_upload_file(out_path,
                         on_done=lambda: self._ffpkg_process_next(indices, pos+1))
@@ -6378,7 +7919,7 @@ class ExFATBuilder(_TK_BASE):
                 self._ffpkg_log('[UNIBUILD] ffpkg build failed \u2014 continuing queue\n')
                 self._ffpkg_process_next(indices, pos + 1)
                 return
-            if messagebox.askyesno('Build failed',
+            if app_confirm(self, 'Build failed',
                     'ffpkg build failed for:\n' + out_path +
                     '\n\nContinue with remaining items?'):
                 self._ffpkg_process_next(indices, pos + 1)
@@ -6395,7 +7936,7 @@ class ExFATBuilder(_TK_BASE):
             self._ffpkg_log('[UNIBUILD] ffpkg error: %s \u2014 continuing queue\n' % msg)
             self._ffpkg_process_next(indices, pos + 1)
             return
-        if messagebox.askyesno('Error', 'UFS2Tool error:\n' + msg +
+        if app_confirm(self, 'Error', 'UFS2Tool error:\n' + msg +
                 '\n\nContinue with remaining items?'):
             self._ffpkg_process_next(indices, pos + 1)
         else:
@@ -6434,25 +7975,28 @@ class ExFATBuilder(_TK_BASE):
             self._set_status('ffpkg: %d image(s) built \u2713' % len(indices), SUCCESS)
             self._ffpkg_render_queue()
             self._trigger_shutdown('ffpkg')  # before messagebox blocks
-            messagebox.showinfo('ffpkg Complete',
-                '%d ffpkg image(s) built successfully!' % len(indices))
-            # Hand-off to Convert (ffpkg -> .ffpfsc) when a single image was built.
-            try:
-                if len(indices) == 1 and hasattr(self, '_pfs_open_convert_with') \
-                        and not self._pipeline_to_pfs_enabled():
-                    _bi = self._ffpkg_queue[indices[0]]
-                    _bp = os.path.join(_bi['odir'], _bi['name'])
-                    if _bp.lower().endswith(('.ffpkg', '.exfat')) \
-                            and os.path.isfile(_bp):
-                        if messagebox.askyesno('Convert to .ffpfsc?',
-                                'Image built:\n%s\n\nConvert it to a .ffpfsc now?\n\n'
-                                'Building ffpkg/exFAT first, then converting, mounts '
-                                'far more reliably than building straight from a '
-                                'dump.' % _bp):
-                            self._switch_tab('pfs')
-                            self._pfs_open_convert_with(_bp)
-            except Exception:
-                pass
+            _sd_action = self._settings.get('shutdown_action', 'none')
+            _sd_on_ffpkg = self._settings.get('shutdown_on_ffpkg', False)
+            if _sd_action == 'none' or not _sd_on_ffpkg:
+                app_info(self, 'ffpkg Complete',
+                    '%d ffpkg image(s) built successfully!' % len(indices))
+                # Hand-off to Convert (ffpkg -> .ffpfsc) when a single image was built.
+                try:
+                    if len(indices) == 1 and hasattr(self, '_pfs_open_convert_with') \
+                            and not self._pipeline_to_pfs_enabled():
+                        _bi = self._ffpkg_queue[indices[0]]
+                        _bp = os.path.join(_bi['odir'], _bi['name'])
+                        if _bp.lower().endswith(('.ffpkg', '.exfat')) \
+                                and os.path.isfile(_bp):
+                            if app_confirm(self, 'Convert to .ffpfsc?',
+                                    'Image built:\n%s\n\nConvert it to a .ffpfsc now?\n\n'
+                                    'Building ffpkg/exFAT first, then converting, mounts '
+                                    'far more reliably than building straight from a '
+                                    'dump.' % _bp):
+                                self._switch_tab('pfs')
+                                self._pfs_open_convert_with(_bp)
+                except Exception:
+                    pass
             return
         idx  = indices[pos]
         item = self._ffpkg_queue[idx]
@@ -6603,7 +8147,7 @@ class ExFATBuilder(_TK_BASE):
         waiting = [i for i, it in enumerate(self._ffpkg_queue)
                    if it['status'] == 'waiting']
         if not waiting:
-            messagebox.showwarning('Nothing to build',
+            app_warning(self, 'Nothing to build',
                 'No waiting items in the ffpkg queue.')
             return
         # Ensure UFS2Tool is extracted
@@ -6612,7 +8156,7 @@ class ExFATBuilder(_TK_BASE):
                 temp_dir = self._settings.get('temp_dir') or None
                 self._ffpkg_ufs2_exe = extract_ufs2tool(temp_dir)
             except Exception as e:
-                messagebox.showerror('UFS2Tool extraction failed', str(e))
+                app_error(self, 'UFS2Tool extraction failed', str(e))
                 return
         self._ffpkg_building = True
         self._ffpkg_build_btn.config(state='disabled', text='Building...')
@@ -6940,7 +8484,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _fm_add_file(self):
         if not self._fm_drive:
-            messagebox.showwarning('Not mounted', 'Mount an image first.')
+            app_warning(self, 'Not mounted', 'Mount an image first.')
             return
         files = filedialog.askopenfilenames(title='Select file(s) to add')
         if not files:
@@ -6971,7 +8515,7 @@ class ExFATBuilder(_TK_BASE):
                 shutil.copy2(src, dst)
                 added += 1
             except Exception as e:
-                messagebox.showerror('Copy failed',
+                app_error(self, 'Copy failed',
                     'Failed to copy ' + os.path.basename(src) + ':\n' + str(e))
         self._fm_refresh()
         parts = []
@@ -6981,7 +8525,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _fm_add_folder(self):
         if not self._fm_drive:
-            messagebox.showwarning('Not mounted', 'Mount an image first.')
+            app_warning(self, 'Not mounted', 'Mount an image first.')
             return
         src_folder = filedialog.askdirectory(title='Select folder to copy into image')
         if not src_folder:
@@ -6999,7 +8543,7 @@ class ExFATBuilder(_TK_BASE):
                 all_files.append((src_path, dst_path, fn))
 
         if not all_files:
-            messagebox.showinfo('Empty folder', 'The selected folder contains no files.')
+            app_info(self, 'Empty folder', 'The selected folder contains no files.')
             return
 
         # Check for any conflicts upfront
@@ -7010,7 +8554,7 @@ class ExFATBuilder(_TK_BASE):
                    '\n'.join(os.path.basename(d) for _, d, _ in conflicts[:8]) +
                    ('\n...' if len(conflicts) > 8 else '') +
                    '\n\nOverwrite all existing files?')
-            ans = messagebox.askyesnocancel('Files exist', msg)
+            ans = app_choose3(self, 'Files exist', msg)
             if ans is None:
                 return   # Cancel
             overwrite_all = ans
@@ -7035,7 +8579,7 @@ class ExFATBuilder(_TK_BASE):
         if skipped: parts.append(str(skipped) + ' skipped')
         self._fm_status_var.set('  •  '.join(parts) if parts else 'Done')
         if errors:
-            messagebox.showerror('Some files failed',
+            app_error(self, 'Some files failed',
                 str(len(errors)) + ' file(s) could not be copied:\n\n' +
                 '\n'.join(errors[:10]))
 
@@ -7076,12 +8620,12 @@ class ExFATBuilder(_TK_BASE):
     def _fm_delete(self):
         sels = self._fm_listbox.curselection()
         if not sels:
-            messagebox.showwarning('No selection', 'Select file(s) or folder(s) to delete.')
+            app_warning(self, 'No selection', 'Select file(s) or folder(s) to delete.')
             return
         names = [self._fm_entries[i][0] for i in sels if self._fm_entries[i][0] != '..']
         if not names:
             return
-        if not messagebox.askyesno('Delete',
+        if not app_confirm(self, 'Delete',
                 'Delete ' + str(len(names)) + ' item(s)?\n\n' +
                 '\n'.join(names[:10]) +
                 ('\n...' if len(names) > 10 else '') +
@@ -7099,14 +8643,14 @@ class ExFATBuilder(_TK_BASE):
                 errors.append(name + ': ' + str(e))
         self._fm_refresh()
         if errors:
-            messagebox.showerror('Some deletions failed', '\n'.join(errors))
+            app_error(self, 'Some deletions failed', '\n'.join(errors))
         else:
             self._fm_status_var.set('Deleted ' + str(len(names)) + ' item(s)')
 
     def _fm_dismount(self):
         if not self._fm_drive or not self._fm_osf:
             return
-        if not messagebox.askyesno('Dismount',
+        if not app_confirm(self, 'Dismount',
                 'Dismount the image?\n\nMake sure all file operations are complete.'):
             return
         self._fm_dismount_btn.config(state='disabled', text='Dismounting...')
@@ -7188,14 +8732,14 @@ class ExFATBuilder(_TK_BASE):
     def _fm_mount(self):
         img = self._fm_image_var.get().strip()
         if not img:
-            messagebox.showwarning('No image', 'Please select an exFAT image first.')
+            app_warning(self, 'No image', 'Please select an exFAT image first.')
             return
         if not os.path.isfile(img):
-            messagebox.showerror('Not found', 'Image file not found:\n' + img)
+            app_error(self, 'Not found', 'Image file not found:\n' + img)
             return
         osf = self._fm_find_osf()
         if not osf:
-            messagebox.showerror('OSFMount not found',
+            app_error(self, 'OSFMount not found',
                 'Please install OSFMount from:\n'
                 'https://www.osforensics.com/tools/mount-disk-images.html')
             return
@@ -7213,7 +8757,7 @@ class ExFATBuilder(_TK_BASE):
             if not free:
                 raise Exception('No free drive letters')
         except Exception as e:
-            messagebox.showerror('Error', str(e))
+            app_error(self, 'Error', str(e))
             return
 
         self._fm_status_var.set('Mounting...')
@@ -7227,7 +8771,7 @@ class ExFATBuilder(_TK_BASE):
 
         if result.returncode != 0:
             self._fm_status_var.set('Mount failed')
-            messagebox.showerror('Mount failed',
+            app_error(self, 'Mount failed',
                 result.stderr or result.stdout or 'Unknown error')
             return
 
@@ -7250,7 +8794,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _fm_new_folder(self):
         if not self._fm_drive:
-            messagebox.showwarning('Not mounted', 'Mount an image first.')
+            app_warning(self, 'Not mounted', 'Mount an image first.')
             return
         name = tk.simpledialog.askstring('New folder', 'Folder name:',
                                           parent=self)
@@ -7260,7 +8804,7 @@ class ExFATBuilder(_TK_BASE):
             os.makedirs(os.path.join(self._fm_current_dir, name), exist_ok=True)
             self._fm_refresh()
         except Exception as e:
-            messagebox.showerror('Error', str(e))
+            app_error(self, 'Error', str(e))
 
     def _fm_overwrite_dialog(self, filename, show_all_options):
         """Ask user what to do when a file already exists. Returns:
@@ -7370,15 +8914,15 @@ class ExFATBuilder(_TK_BASE):
                     except Exception:
                         pass
         except Exception as e:
-            messagebox.showerror('Error reading directory', str(e))
+            app_error(self, 'Error reading directory', str(e))
 
     def _fm_replace_file(self):
         path, is_dir = self._fm_selected_path()
         if not path:
-            messagebox.showwarning('No selection', 'Select a file to replace.')
+            app_warning(self, 'No selection', 'Select a file to replace.')
             return
         if is_dir:
-            messagebox.showwarning('Is a folder', 'Select a file, not a folder.')
+            app_warning(self, 'Is a folder', 'Select a file, not a folder.')
             return
         src = filedialog.askopenfilename(
             title='Select replacement file',
@@ -7390,7 +8934,7 @@ class ExFATBuilder(_TK_BASE):
             self._fm_refresh()
             self._fm_status_var.set('Replaced: ' + os.path.basename(path))
         except Exception as e:
-            messagebox.showerror('Replace failed', str(e))
+            app_error(self, 'Replace failed', str(e))
 
     def _fm_selected_path(self):
         sel = self._fm_listbox.curselection()
@@ -7490,8 +9034,7 @@ class ExFATBuilder(_TK_BASE):
             })
 
         if not drives:
-            messagebox.showinfo(
-                'No drives',
+            app_info(self, 'No drives',
                 'No virtual drives found to dismount.\n\n'
                 '(System drives and physical disks are intentionally '
                 'hidden — they can\'t be dismounted while Windows is '
@@ -7612,15 +9155,13 @@ class ExFATBuilder(_TK_BASE):
             # drive or has a Windows folder.
             for letter in picks:
                 if letter == sys_letter:
-                    messagebox.showerror(
-                        'Cannot dismount',
+                    app_error(self, 'Cannot dismount',
                         'Refusing to dismount %s: — it\'s your system '
                         'drive.' % letter)
                     return
                 try:
                     if _os.path.isdir(letter + ':\\Windows\\System32'):
-                        messagebox.showerror(
-                            'Cannot dismount',
+                        app_error(self, 'Cannot dismount',
                             ('Refusing to dismount %s: — looks like '
                              'a Windows install (contains '
                              '\\Windows\\System32).') % letter)
@@ -7670,7 +9211,7 @@ class ExFATBuilder(_TK_BASE):
         if failed:
             msg += 'Failed: %s' % ', '.join(l + ':' for l in failed)
         if msg:
-            messagebox.showinfo('Force Dismount', msg.strip())
+            app_info(self, 'Force Dismount', msg.strip())
 
     def _dismount_drive_robust(self, letter, max_wait_seconds=30):
         """Robustly dismount a drive letter. Tries, in order:
@@ -7989,6 +9530,11 @@ class ExFATBuilder(_TK_BASE):
             self._ftp_sub_upload_frame.pack_forget()
             _paint(self._ftp_sub_browser_btn, True)
             _paint(self._ftp_sub_upload_btn, False)
+            try:
+                if getattr(self, '_tq_queue', None) is not None:
+                    self._tq_render()
+            except Exception:
+                pass
 
     def _ftptab_browse(self):
         if self._ftptab_is_folder.get():
@@ -8017,7 +9563,7 @@ class ExFATBuilder(_TK_BASE):
             else:
                 self._ftptab_status_var.set('Upload failed')
                 self._ftptab_log_write('\n[ERROR] ' + info + '\n')
-                messagebox.showerror('Upload failed', info)
+                app_error(self, 'Upload failed', info)
 
     def _ftptab_log_write(self, text):
         self._ftptab_log.config(state='normal')
@@ -8042,14 +9588,14 @@ class ExFATBuilder(_TK_BASE):
         is_folder  = self._ftptab_is_folder.get()
 
         if not local:
-            messagebox.showwarning('Missing', 'Please select a file or folder to upload.')
+            app_warning(self, 'Missing', 'Please select a file or folder to upload.')
             return
         if not os.path.exists(local):
-            messagebox.showerror('Not found', 'Path not found:\n' + local)
+            app_error(self, 'Not found', 'Path not found:\n' + local)
             return
         ip = self._ftp_ip_var.get().strip()
         if not ip:
-            messagebox.showwarning('No IP',
+            app_warning(self, 'No IP',
                 'Enter your PS5 IP in the Build tab Settings → PS5 FTP UPLOAD.')
             return
 
@@ -8207,8 +9753,9 @@ class ExFATBuilder(_TK_BASE):
             return ''
         return val
 
-    def _get_folder_size(self, folder):
+    def _get_folder_size(self, folder, stale_check=None):
         total = 0
+        _n = 0
         try:
             stack = [folder]
             while stack:
@@ -8216,6 +9763,13 @@ class ExFATBuilder(_TK_BASE):
                 try:
                     with os.scandir(current) as it:
                         for entry in it:
+                            _n += 1
+                            if stale_check is not None and (_n & 511) == 0:
+                                try:
+                                    if stale_check():
+                                        return total
+                                except Exception:
+                                    pass
                             try:
                                 if entry.is_file(follow_symlinks=False):
                                     total += entry.stat(follow_symlinks=False).st_size
@@ -8325,14 +9879,23 @@ class ExFATBuilder(_TK_BASE):
             m = re.search(r'logical volume on ([A-Z]:)', line)
             if m:
                 self._mounted_drive = m.group(1)
+                if getattr(self, '_copy_start_free', None) is None:
+                    try:
+                        usage = shutil.disk_usage(self._mounted_drive + '\\')
+                        self._image_total_gb  = usage.total / (1024 ** 3)
+                        self._copy_start_free = usage.free
+                        self._copy_start_time = time.time()
+                    except Exception:
+                        pass
 
         # ── When copy phase starts, snapshot free space and begin polling ──
         if '[3/4]' in line and self._mounted_drive and self._drive_poll_id is None:
             try:
                 usage = shutil.disk_usage(self._mounted_drive + '\\')
                 self._image_total_gb  = usage.total / (1024 ** 3)
-                self._copy_start_free = usage.free
-                self._copy_start_time = time.time()
+                if getattr(self, '_copy_start_free', None) is None:
+                    self._copy_start_free = usage.free
+                    self._copy_start_time = time.time()
             except Exception:
                 pass
             # Count source files in background so we know the target
@@ -8373,6 +9936,56 @@ class ExFATBuilder(_TK_BASE):
     def _history_path(self):
         return os.path.join(os.path.expanduser('~'), '.exfat_builder_history.json')
 
+    def _build_output_is_empty(self, out_path):
+        """#62 guard (v4.0.0-rc3): decide whether a build that *exited 0*
+        actually produced a real image, or an empty / metadata-only one.
+
+        Motivated by GitHub issue #62 (v3.6.4): the image was created,
+        mounted and formatted, then every file failed to copy (the report
+        showed robocopy ERROR 87 with 0 files copied) and the mounted image
+        ended at ~1.5 MB. The build process can still exit 0 in that state,
+        so a "Complete!" can be shown for an image that contains nothing.
+
+        This check runs on the BUILD copy path only, and runs even when the
+        user has disabled full verification in Advanced settings, so an
+        empty image can never be silently reported as a success.
+
+        Returns (is_empty, reason). is_empty is True only when we are
+        confident the output is not a usable image. On any uncertainty we
+        return False (do not block a build we cannot prove is bad).
+        """
+        reasons = []
+
+        try:
+            copied = int(getattr(self, '_robocopy_file_count', 0) or 0)
+            src_total = int(getattr(self, '_source_file_count', 0) or 0)
+            if src_total > 0 and copied == 0:
+                reasons.append('0 of %d source files copied' % src_total)
+        except Exception:
+            pass
+
+        try:
+            ok, msg = self._verify_image_file_only(out_path)
+            if not ok:
+                reasons.append('image sanity check failed: %s' % msg)
+        except Exception:
+            pass
+
+        try:
+            tail = getattr(self, '_build_log_tail', None) or []
+            for ln in tail:
+                low = ln.lower()
+                if ('error 87' in low or 'errno 87' in low
+                        or 'the parameter is incorrect' in low):
+                    reasons.append('copy failure in log: %s' % ln.strip())
+                    break
+        except Exception:
+            pass
+
+        if reasons:
+            return True, '; '.join(reasons)
+        return False, ''
+
     def _item_done(self, returncode, idx, indices, pos, out_path):
         elapsed = time.time() - self._start_time if self._start_time else 0
         m, s = int(elapsed // 60), int(elapsed % 60)
@@ -8382,6 +9995,33 @@ class ExFATBuilder(_TK_BASE):
         gm, gs = int(game_elapsed // 60), int(game_elapsed % 60)
 
         if returncode == 0:
+            try:
+                _empty, _why = self._build_output_is_empty(out_path)
+            except Exception:
+                _empty, _why = False, ''
+            if _empty:
+                self._log('[COPY] Copy failed or produced an empty image; rejecting output. Please attach diagnostics.\n')
+                self._log('[COPY] Reason: %s\n' % _why)
+                try:
+                    if out_path and os.path.isfile(out_path):
+                        for _w in range(10):
+                            try:
+                                os.remove(out_path)
+                                self._log('[COPY] Removed partial output: %s\n'
+                                          % out_path)
+                                break
+                            except Exception:
+                                time.sleep(0.5)
+                except Exception as _e:
+                    self._log('[COPY] Could not remove partial output: %s\n'
+                              % _e)
+                try:
+                    self._stop_drive_poll()
+                except Exception:
+                    pass
+                self._copy_done = False
+                self._flush_active = False
+                return self._item_done(1, idx, indices, pos, out_path)
             # v3.6.2: copy/finalize is fully done — tear down the drive
             # poll and the finalize bridge so neither can re-emit a stale
             # frame, then show a clear completion status.
@@ -8470,7 +10110,7 @@ class ExFATBuilder(_TK_BASE):
                 # v3.0.0: OUTPUT LOG no longer auto-opens. The error
                 # dialog above carries the gist; the user can click
                 # the OUTPUT LOG toggle for the full text.
-                if messagebox.askyesno('Item failed', msg):
+                if app_confirm(self, 'Item failed', msg):
                     self._check_pause_then_next(indices, pos + 1)
                 else:
                     self._building = False
@@ -8531,7 +10171,7 @@ class ExFATBuilder(_TK_BASE):
             self._log('[UNIBUILD] item error: %s \u2014 continuing queue\n' % msg)
             self._process_next(indices, pos + 1)
             return
-        if messagebox.askyesno('Error',
+        if app_confirm(self, 'Error',
                 'Error running make_image.bat:\n' + msg + '\n\nContinue?'):
             self._process_next(indices, pos + 1)
         else:
@@ -8564,7 +10204,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _multi_add_confirm(self, folders, skipped, odir):
         if not folders:
-            messagebox.showwarning('No games found',
+            app_warning(self, 'No games found',
                 'No valid PS5 game folders found.\n\n'
                 'Make sure the folder you selected contains '
                 'game dump subfolders with eboot.bin inside.')
@@ -8581,7 +10221,7 @@ class ExFATBuilder(_TK_BASE):
         msg += '\n\nOutput directory: ' + odir
         msg += '\n\nAdd all to queue?'
 
-        if not messagebox.askyesno('Add multiple games', msg):
+        if not app_confirm(self, 'Add multiple games', msg):
             return
 
         added = 0
@@ -8600,7 +10240,7 @@ class ExFATBuilder(_TK_BASE):
 
         self._render_queue()
         self._set_status('Added %d game(s) to queue' % added, SUCCESS)
-        messagebox.showinfo('Added to queue',
+        app_info(self, 'Added to queue',
             '%d game(s) added to the build queue.\n\n'
             'Click Build All to start.' % added)
 
@@ -8777,7 +10417,7 @@ class ExFATBuilder(_TK_BASE):
             _sd_action = self._settings.get('shutdown_action', 'none')
             _sd_on_exfat = self._settings.get('shutdown_on_exfat', False)
             if _sd_action == 'none' or not _sd_on_exfat:
-                messagebox.showinfo('Complete',
+                app_info(self, 'Complete',
                     str(len(indices)) + ' image(s) built successfully!')
                 # Hand-off: exFAT/ffpkg -> .ffpfsc mounts far more reliably than
                 # a direct dump build. If a single image was built, offer to jump
@@ -8789,7 +10429,7 @@ class ExFATBuilder(_TK_BASE):
                         _bp = os.path.join(_bi.output_dir, _bi.output_name)
                         if _bp.lower().endswith(('.exfat', '.ffpkg')) \
                                 and os.path.isfile(_bp):
-                            if messagebox.askyesno('Convert to .ffpfsc?',
+                            if app_confirm(self, 'Convert to .ffpfsc?',
                                     'Image built:\n%s\n\nConvert it to a .ffpfsc now?\n\n'
                                     'Building exFAT/ffpkg first, then converting, mounts '
                                     'far more reliably than building straight from a '
@@ -8813,6 +10453,24 @@ class ExFATBuilder(_TK_BASE):
         retries_arg  = self._adv_retries_var.get().strip() or '3'
         rwait_arg    = self._adv_retry_wait_var.get().strip() or '3'
         excl_hidden  = '1' if self._adv_excl_hidden_var.get() else '0'
+        try:
+            _gf = item.game_folder
+            if _gf and os.path.isdir(_gf) and not os.path.isfile(
+                    os.path.join(_gf, 'eboot.bin')):
+                self._log('[PRE] eboot.bin not in selected folder — scanning for the real game root…\n')
+                _res = resolve_game_root_deep(
+                    _gf, log=lambda m: self._log(m))
+                if _res.get('root'):
+                    item.game_folder = _res['root']
+                    self._log('[PRE] Using resolved game root: %s\n'
+                              % _res['root'])
+                elif len(_res.get('candidates', [])) > 1:
+                    self._log('[PRE] Multiple possible game roots found (%d); leaving the selected folder unchanged so the existing check can report it.\n'
+                              % len(_res['candidates']))
+                else:
+                    self._log('[PRE] No deeper eboot.bin found; leaving the selected folder unchanged.\n')
+        except Exception:
+            pass
         # v3.0.0: per-item override beats global Advanced override.
         # Lets the user bump just one problem game (e.g. Gear Club
         # Unlimited needed +1 GB over auto) without forcing that
@@ -8830,6 +10488,14 @@ class ExFATBuilder(_TK_BASE):
                       '%s GB\n' % img_override)
         else:
             img_override = self._adv_img_size_var.get().strip()
+        for _w1p in (self._bat_path, out_path, item.game_folder, osf_path):
+            if _w1p and '"' in _w1p:
+                raise RuntimeError(
+                    'A path argument contains a quote character (") which cannot be passed to the build script safely:\n%s\n\nRename the folder/file to remove the quote and retry.'
+                    % _w1p)
+            if _w1p and '%' in _w1p:
+                self._log('[WARN] Path contains a %% character; if the build fails oddly, rename this folder: %s\n'
+                          % _w1p)
         cmd = ('"' + self._bat_path + '" "' + out_path + '" "'
                + item.game_folder + '" "' + osf_path + '" "'
                + cluster_arg + '" "' + sector_arg + '" "' + threads_arg
@@ -8967,7 +10633,8 @@ class ExFATBuilder(_TK_BASE):
                 _enc = 'mbcs' if sys.platform.startswith('win') else 'utf-8'
                 try:
                     proc = subprocess.Popen(
-                        cmd, shell=True, cwd=bat_dir,
+                        'cmd.exe /d /s /c "' + cmd + '"',
+                        shell=False, cwd=bat_dir,
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, encoding=_enc, errors='replace',
                         env=build_env,
@@ -9292,8 +10959,7 @@ class ExFATBuilder(_TK_BASE):
                     self._log('[INFO] Set custom size for %s: '
                               '%d GB\n' % (display, val))
                 except Exception:
-                    messagebox.showerror(
-                        'Invalid size',
+                    app_error(self, 'Invalid size',
                         'Image size must be a whole number of GB '
                         'between 1 and 4096.\n\n'
                         '  Examples: 24, 24G, 24 GB, 24gb\n\n'
@@ -9555,13 +11221,13 @@ class ExFATBuilder(_TK_BASE):
         out_name = self._extract_name_var.get().strip()
 
         if not img_path:
-            messagebox.showwarning('Missing', 'Please select an exFAT image file.')
+            app_warning(self, 'Missing', 'Please select an exFAT image file.')
             return
         if not os.path.isfile(img_path):
-            messagebox.showerror('Not found', 'Image file not found:\n' + img_path)
+            app_error(self, 'Not found', 'Image file not found:\n' + img_path)
             return
         if not out_dir:
-            messagebox.showwarning('Missing', 'Please select an output directory.')
+            app_warning(self, 'Missing', 'Please select an output directory.')
             return
         if not out_name:
             out_name = os.path.splitext(os.path.basename(img_path))[0]
@@ -9569,7 +11235,7 @@ class ExFATBuilder(_TK_BASE):
 
         dest_folder = os.path.join(out_dir, out_name)
         if os.path.exists(dest_folder):
-            if not messagebox.askyesno('Folder exists',
+            if not app_confirm(self, 'Folder exists',
                     'Output folder already exists:\n' + dest_folder +
                     '\n\nFiles will be merged/overwritten. Continue?'):
                 return
@@ -9589,7 +11255,7 @@ class ExFATBuilder(_TK_BASE):
         # outside Program Files and the modern .exe-only layout.
         osf = self._find_osfmount()
         if not osf:
-            messagebox.showerror('OSFMount not found',
+            app_error(self, 'OSFMount not found',
                 'Could not find OSFMount.\n'
                 'Please install OSFMount from:\n'
                 'https://www.osforensics.com/tools/mount-disk-images.html\n\n'
@@ -9706,6 +11372,8 @@ class ExFATBuilder(_TK_BASE):
 
                 def _extract_poll():
                     import time as _tp
+                    self.after(0, self._extract_eta_var.set,
+                               _('Starting… · preparing copy'))
                     while run['on']:
                         try:
                             cur = self._get_folder_size(dest_folder)
@@ -9715,12 +11383,22 @@ class ExFATBuilder(_TK_BASE):
                                    if total_bytes[0] else 0)
                             el_str = 'Elapsed: %dm %02ds' % (
                                 int(el // 60), int(el % 60))
-                            if rate > 0 and total_bytes[0] and cur < total_bytes[0]:
+                            if cur <= 0 or rate <= 0:
+                                self.after(0, self._update_extract_bar, pct)
+                                self.after(0, self._extract_eta_var.set,
+                                           f'{el_str!s}  —  '
+                                           f'{_("Starting…")!s}')
+                                _tp.sleep(2)
+                                continue
+                            if total_bytes[0] and cur < total_bytes[0]:
                                 left = (total_bytes[0] - cur) / rate
-                                eta = '~%dm %02ds left' % (
-                                    int(left) // 60, int(left) % 60)
+                                if cur / total_bytes[0] >= 0.97:
+                                    eta = _('Almost done')
+                                else:
+                                    eta = '~%dm %02ds left' % (
+                                        int(left) // 60, int(left) % 60)
                             else:
-                                eta = 'Almost done'
+                                eta = _('Almost done')
                             self.after(0, self._update_extract_bar, pct)
                             self.after(0, self._extract_eta_var.set,
                                        '%s  \u2014  %s  \u00b7  %.0f MB/s'
@@ -9774,12 +11452,12 @@ class ExFATBuilder(_TK_BASE):
         if self._building:
             return
         if not self._queue:
-            messagebox.showwarning('Empty queue',
+            app_warning(self, 'Empty queue',
                 'Add at least one game to the queue first.')
             return
         waiting = [i for i, q in enumerate(self._queue) if q.status == 'waiting']
         if not waiting:
-            messagebox.showinfo('All done',
+            app_info(self, 'All done',
                 'All queued items have already been built.')
             return
 
@@ -9840,7 +11518,7 @@ class ExFATBuilder(_TK_BASE):
             msg = 'Pre-build checklist found the following:\n\n'
             msg += '\n'.join('\u2022 ' + s for s in issues)
             msg += '\n\nContinue anyway?'
-            if not messagebox.askyesno('Pre-build checklist', msg):
+            if not app_confirm(self, 'Pre-build checklist', msg):
                 return
 
         # ── Estimated total time ──
@@ -9861,7 +11539,7 @@ class ExFATBuilder(_TK_BASE):
             msg = ('Build All — %d game(s)  •  %.1f GB total\n\n'
                    'Estimated time: ~%s\n\n'
                    'Start building?' % (len(waiting), total_gb, est_str))
-            if not messagebox.askyesno('Ready to build', msg):
+            if not app_confirm(self, 'Ready to build', msg):
                 return
 
         self._building = True
@@ -10048,6 +11726,7 @@ class ExFATBuilder(_TK_BASE):
             return
         self._update_bar_visual(pct)
         self._pct_var.set(str(int(pct)) + '%')
+        self._stop_indeterminate_pulse()
         if step_text is not None:
             self._step_label_var.set(step_text)
         if eta_text is not None:
@@ -10058,10 +11737,88 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
 
+    def _set_progress_text_only(self, step_text=None, eta_text=None):
+        """Update the progress labels WITHOUT moving the bar. Used when the
+        backend reported a detail (e.g. file count or current file) but no
+        trustworthy overall percentage — we refresh the text and leave the
+        bar where it legitimately is rather than inventing a position."""
+        if threading.get_ident() != getattr(self, '_tk_thread_id', None):
+            try:
+                self.after(0, self._set_progress_text_only,
+                           step_text, eta_text)
+            except Exception:
+                pass
+            return
+        self._stop_indeterminate_pulse()
+        if step_text is not None:
+            self._step_label_var.set(step_text)
+        if eta_text is not None:
+            self._eta_var.set(eta_text)
+        if getattr(self, '_unified_active', False) and getattr(self, '_unified_progress', None):
+            try:
+                self._unified_progress(self._current_pct, step_text, eta_text)
+            except Exception:
+                pass
+
+    def _set_indeterminate_progress(self, message):
+        """Honest 'backend is running but we have no number' state. Instead of
+        faking forward movement or freezing on a stale value, show `message`
+        and animate a marquee band across the bar so the user can see the app
+        is alive. The pulse is cancelled the instant real progress resumes (or
+        the build ends)."""
+        if threading.get_ident() != getattr(self, '_tk_thread_id', None):
+            try:
+                self.after(0, self._set_indeterminate_progress, message)
+            except Exception:
+                pass
+            return
+        try:
+            self._step_label_var.set(message)
+            self._pct_var.set('')
+            self._eta_var.set('')
+        except Exception:
+            pass
+        if not getattr(self, '_indet_active', False):
+            self._indet_active = True
+            self._indet_pos = 0
+            self._indet_pulse()
+
+    def _indet_pulse(self):
+        """One frame of the indeterminate marquee band."""
+        if not getattr(self, '_indet_active', False):
+            return
+        try:
+            band = max(40, int(self._bar_width * 0.18))
+            x = self._indet_pos
+            self._bar_canvas.coords(self._bar_rect, x, 0, x + band, 20)
+            self._bar_canvas.itemconfig(self._bar_rect, fill=ACCENT)
+            step = max(6, int(self._bar_width * 0.03))
+            self._indet_pos += step
+            if self._indet_pos > self._bar_width:
+                self._indet_pos = -band
+        except Exception:
+            pass
+        try:
+            self._indet_after_id = self.after(60, self._indet_pulse)
+        except Exception:
+            pass
+
+    def _stop_indeterminate_pulse(self):
+        """Cancel the marquee pulse, if running. Called when real progress
+        resumes or the build completes/fails."""
+        if getattr(self, '_indet_active', False):
+            self._indet_active = False
+            try:
+                if getattr(self, '_indet_after_id', None) is not None:
+                    self.after_cancel(self._indet_after_id)
+                    self._indet_after_id = None
+            except Exception:
+                pass
+
     def _show_ps5_browser(self):
         ip = self._ftp_ip_var.get().strip()
         if not ip:
-            messagebox.showwarning('No IP', 'Enter your PS5 IP address in Settings first.')
+            app_warning(self, 'No IP', 'Enter your PS5 IP address in Settings first.')
             return
 
         win = tk.Toplevel(self)
@@ -10223,7 +11980,8 @@ class ExFATBuilder(_TK_BASE):
                 try:
                     ftp  = _ensure_ftp()
                     lines = []
-                    ftp.retrlines('LIST ' + p, lines.append)
+                    ftp.cwd(p)
+                    ftp.retrlines('LIST', lines.append)
                     # Try get free space via SITE commands (may not work on PS5)
                     free_str = ''
                     try:
@@ -10320,17 +12078,17 @@ class ExFATBuilder(_TK_BASE):
                     ftp.mkd(remote)
                     win.after(0, _load, path_var.get())
                 except Exception as e:
-                    win.after(0, messagebox.showerror, 'Error', str(e))
+                    win.after(0, lambda *_a: app_error(self, *_a), 'Error', str(e))
             threading.Thread(target=worker, daemon=True).start()
 
         # ── Rename ──
         def _rename():
             sel = _get_selected()
             if not sel:
-                messagebox.showwarning('No selection', 'Select a file or folder to rename.', parent=win)
+                app_warning(self, 'No selection', 'Select a file or folder to rename.', parent=win)
                 return
             if len(sel) > 1:
-                messagebox.showwarning('Too many', 'Select only one item to rename.', parent=win)
+                app_warning(self, 'Too many', 'Select only one item to rename.', parent=win)
                 return
             name, is_dir, _ = sel[0]
             new_name = simpledialog.askstring('Rename', 'New name:', initialvalue=name, parent=win)
@@ -10344,14 +12102,14 @@ class ExFATBuilder(_TK_BASE):
                     win.after(0, _load, path_var.get())
                     win.after(0, status_var.set, 'Renamed: ' + name + ' → ' + new_name)
                 except Exception as e:
-                    win.after(0, messagebox.showerror, 'Rename failed', str(e))
+                    win.after(0, lambda *_a: app_error(self, *_a), 'Rename failed', str(e))
             threading.Thread(target=worker, daemon=True).start()
 
         # ── Cut (move) ──
         def _cut():
             sel = _get_selected()
             if not sel:
-                messagebox.showwarning('No selection', 'Select items to move.', parent=win)
+                app_warning(self, 'No selection', 'Select items to move.', parent=win)
                 return
             paths = [(_current_path() + '/' + name, is_dir) for name, is_dir, _ in sel]
             clipboard[0] = ('move', paths)
@@ -10369,7 +12127,7 @@ class ExFATBuilder(_TK_BASE):
         # ── Paste (move) ──
         def _paste():
             if not clipboard[0]:
-                messagebox.showwarning('Nothing to paste', 'Cut some files first.', parent=win)
+                app_warning(self, 'Nothing to paste', 'Cut some files first.', parent=win)
                 return
             action, items = clipboard[0]
             dest = _current_path()
@@ -10387,7 +12145,7 @@ class ExFATBuilder(_TK_BASE):
                     clipboard[0] = None
                     win.after(0, _load, path_var.get())
                     if errors:
-                        win.after(0, messagebox.showerror, 'Some moves failed',
+                        win.after(0, lambda *_a: app_error(self, *_a), 'Some moves failed',
                                    '\n'.join(errors))
                     else:
                         win.after(0, status_var.set,
@@ -10398,10 +12156,10 @@ class ExFATBuilder(_TK_BASE):
         def _delete():
             sel = _get_selected()
             if not sel:
-                messagebox.showwarning('No selection', 'Select files or folders to delete.', parent=win)
+                app_warning(self, 'No selection', 'Select files or folders to delete.', parent=win)
                 return
             names = [name for name, _, _ in sel]
-            if not messagebox.askyesno('Delete from PS5',
+            if not app_confirm(self, 'Delete from PS5',
                     'Permanently delete %d item(s) from PS5?\n\n%s%s' % (
                         len(names),
                         '\n'.join(names[:8]),
@@ -10422,7 +12180,7 @@ class ExFATBuilder(_TK_BASE):
                         errors.append(name + ': ' + str(e))
                 win.after(0, _load, path_var.get())
                 if errors:
-                    win.after(0, messagebox.showerror, 'Some deletions failed',
+                    win.after(0, lambda *_a: app_error(self, *_a), 'Some deletions failed',
                                '\n'.join(errors))
                 else:
                     win.after(0, status_var.set,
@@ -10433,7 +12191,8 @@ class ExFATBuilder(_TK_BASE):
             """Recursively delete a directory over FTP."""
             lines = []
             try:
-                ftp.retrlines('LIST ' + path, lines.append)
+                ftp.cwd(path)
+                ftp.retrlines('LIST', lines.append)
             except Exception:
                 pass
             for line in lines:
@@ -10452,11 +12211,11 @@ class ExFATBuilder(_TK_BASE):
         def _download():
             sel = _get_selected()
             if not sel:
-                messagebox.showwarning('No selection', 'Select a file to download.', parent=win)
+                app_warning(self, 'No selection', 'Select a file to download.', parent=win)
                 return
             files_only = [(name, sz) for name, is_dir, sz in sel if not is_dir]
             if not files_only:
-                messagebox.showwarning('Files only', 'Select files (not folders) to download.', parent=win)
+                app_warning(self, 'Files only', 'Select files (not folders) to download.', parent=win)
                 return
             save_dir = filedialog.askdirectory(title='Save downloaded files to...', parent=win)
             if not save_dir: return
@@ -10474,7 +12233,7 @@ class ExFATBuilder(_TK_BASE):
                     except Exception as e:
                         errors.append(name + ': ' + str(e))
                 if errors:
-                    win.after(0, messagebox.showerror, 'Download errors', '\n'.join(errors))
+                    win.after(0, lambda *_a: app_error(self, *_a), 'Download errors', '\n'.join(errors))
                     win.after(0, status_var.set, 'Download finished with errors')
                 else:
                     win.after(0, status_var.set,
@@ -10781,7 +12540,7 @@ class ExFATBuilder(_TK_BASE):
                 pass
 
     def _img_delete(self, entry):
-        if not messagebox.askyesno('Delete image',
+        if not app_confirm(self, 'Delete image',
                 'Delete this image?\n\n' + entry['name'] +
                 '\n\nThis cannot be undone.'):
             return
@@ -10789,7 +12548,7 @@ class ExFATBuilder(_TK_BASE):
             os.remove(entry['path'])
             self._img_scan()
         except Exception as e:
-            messagebox.showerror('Delete failed', str(e))
+            app_error(self, 'Delete failed', str(e))
 
     def _img_update_sel(self, event=None):
         # Step 15 (v2.1.7): driven by _img_selected_idx (set of indices)
@@ -10823,15 +12582,15 @@ class ExFATBuilder(_TK_BASE):
                  for i in sorted(idx_set)
                  if 0 <= i < len(self._img_entries)]
         if not paths:
-            messagebox.showwarning('Nothing selected',
+            app_warning(self, 'Nothing selected',
                 'Click one or more cards to select. Click again to deselect.')
             return
         ip = self._ftp_ip_var.get().strip()
         if not ip:
-            messagebox.showwarning('No PS5 IP',
+            app_warning(self, 'No PS5 IP',
                 'Enter your PS5 IP address in Settings first.')
             return
-        if not messagebox.askyesno('Batch upload',
+        if not app_confirm(self, 'Batch upload',
                 'Upload %d image(s) to PS5?\n\n%s' % (
                     len(paths), '\n'.join(os.path.basename(p) for p in paths[:6]) +
                     ('\n...' if len(paths) > 6 else ''))):
@@ -10848,7 +12607,7 @@ class ExFATBuilder(_TK_BASE):
             self._set_status(
                 'Batch upload complete: %d image(s)' % self._img_batch_total,
                 SUCCESS)
-            messagebox.showinfo('Batch upload complete',
+            app_info(self, 'Batch upload complete',
                 '%d image(s) uploaded to PS5 successfully!' % self._img_batch_total)
             return
         path = self._img_batch_queue.pop(0)
@@ -10878,7 +12637,7 @@ class ExFATBuilder(_TK_BASE):
     # ── Queue save / load ─────────────────────────────────────────────────────
     def _queue_save(self):
         if not self._queue:
-            messagebox.showwarning('Empty queue', 'Nothing in queue to save.')
+            app_warning(self, 'Empty queue', 'Nothing in queue to save.')
             return
         path = filedialog.asksaveasfilename(
             title='Save queue',
@@ -10899,7 +12658,7 @@ class ExFATBuilder(_TK_BASE):
                 json.dump(data, f, indent=2)
             self._set_status('Queue saved: ' + os.path.basename(path), SUCCESS)
         except Exception as e:
-            messagebox.showerror('Save failed', str(e))
+            app_error(self, 'Save failed', str(e))
 
     def _queue_load(self):
         path = filedialog.askopenfilename(
@@ -10925,16 +12684,16 @@ class ExFATBuilder(_TK_BASE):
             self._render_queue()
             self._set_status('Loaded %d item(s) from queue file' % loaded, SUCCESS)
             if loaded < len(data):
-                messagebox.showwarning('Some items skipped',
+                app_warning(self, 'Some items skipped',
                     '%d item(s) skipped because the game folder no longer exists.'
                     % (len(data) - loaded))
         except Exception as e:
-            messagebox.showerror('Load failed', str(e))
+            app_error(self, 'Load failed', str(e))
 
     # ── Library Build All ─────────────────────────────────────────────────────
     def _lib_build_all(self):
         if not self._lib_games:
-            messagebox.showwarning('No games',
+            app_warning(self, 'No games',
                 'Scan your library first — no games loaded yet.')
             return
         odir = self.output_dir.get().strip()
@@ -10970,7 +12729,7 @@ class ExFATBuilder(_TK_BASE):
         self._set_status(
             'Added %d game(s) from library to queue' % added, SUCCESS)
         if added:
-            messagebox.showinfo('Added to queue',
+            app_info(self, 'Added to queue',
                 '%d game(s) added to the Build queue.\n\n'
                 'Click Build All to start building.' % added)
 
@@ -11058,7 +12817,8 @@ class ExFATBuilder(_TK_BASE):
                     ftp_ok = True   # connection established — we're online
                     remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
                     lines = []
-                    ftp.retrlines('LIST ' + remote_dir, lines.append)
+                    ftp.cwd(remote_dir)
+                    ftp.retrlines('LIST', lines.append)
                     ftp.quit()
                     for line in lines:
                         parts = line.split()
@@ -11696,11 +13456,11 @@ class ExFATBuilder(_TK_BASE):
                         os.remove(orig_z)
                         self._log('[BPR] Deleted originals zip: %s\n' % orig_z)
                     except Exception as e:
-                        messagebox.showwarning('Delete failed',
+                        app_warning(self, 'Delete failed',
                             'Could not delete originals zip:\n%s\n\n%s' % (orig_z, e))
                 else:
                     self._log('[BPR] Originals zip already gone: %s\n' % orig_z)
-            messagebox.showinfo('Marked as worked ✅',
+            app_info(self, 'Marked as worked ✅',
                 'Backport zip kept.\n' +
                 ('Originals zip deleted.' if orig_z and os.path.isfile(orig_z)
                  else 'Originals zip was already missing.'))
@@ -11712,11 +13472,11 @@ class ExFATBuilder(_TK_BASE):
                         os.remove(pat_z)
                         self._log('[BPR] Deleted backport zip: %s\n' % pat_z)
                     except Exception as e:
-                        messagebox.showwarning('Delete failed',
+                        app_warning(self, 'Delete failed',
                             'Could not delete backport zip:\n%s\n\n%s' % (pat_z, e))
                 else:
                     self._log('[BPR] Backport zip already gone: %s\n' % pat_z)
-            messagebox.showinfo('Marked as didn\'t work ❌',
+            app_info(self, 'Marked as didn\'t work ❌',
                 'Originals zip kept.\n' +
                 ('Backport zip deleted.' if pat_z and os.path.isfile(pat_z)
                  else 'Backport zip was already missing.'))
@@ -11768,6 +13528,28 @@ class ExFATBuilder(_TK_BASE):
         self._bpr_log = [e for e in self._bpr_log if e.get('status') == 'pending']
         self._bpr_save()
         self._bpr_render()
+
+    def _bpr_clear_all(self):
+        """Clear the ENTIRE results list without deleting any files on disk.
+
+        This only empties the tracking list (self._bpr_log). It never touches
+        the originals/backport zips referenced by the entries — those stay on
+        disk. (Per-entry file cleanup still happens, as before, only when a
+        user explicitly marks an entry worked/failed via _bpr_set_result.)
+        """
+        if not self._bpr_log:
+            return
+        if not app_confirm(self, _('Clear all results'),
+                _('Remove all %d entries from the results list?\n\nThis only clears the list — your saved originals and backport zips on disk are NOT deleted.')
+                % len(self._bpr_log)):
+            return
+        self._bpr_log = []
+        self._bpr_save()
+        self._bpr_render()
+        try:
+            self._log('[BPR] Cleared results list (no files deleted).\n')
+        except Exception:
+            pass
 
     def _build_backports_tab(self, parent):
         # Carved out in Step 1 — see ui/tab_backports.py
@@ -12120,6 +13902,8 @@ class ExFATBuilder(_TK_BASE):
 
         _hbtn('\U0001f5d1  ' + _('Clear completed'),
               self._bpr_clear_done, danger=True).pack(side='right')
+        _hbtn('\u2327  ' + _('Clear all (keep files)'),
+              self._bpr_clear_all).pack(side='right', padx=(0, 6))
         _hbtn('+  ' + _('Add manually'),
               self._bpr_add_manual).pack(side='right', padx=(0, 6))
 
@@ -12166,9 +13950,13 @@ class ExFATBuilder(_TK_BASE):
             canvas.itemconfig(win, width=canvas.winfo_width())))
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfig(win, width=e.width))
-        canvas.bind('<MouseWheel>',
-                    lambda e: canvas.yview_scroll(
-                        int(-1 * (e.delta / 120)), 'units'))
+        def _bpr_on_wheel(e, _c=canvas):
+            _c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        canvas.bind('<Enter>',
+                    lambda _e, _c=canvas: _c.bind_all('<MouseWheel>',
+                                                      _bpr_on_wheel))
+        canvas.bind('<Leave>',
+                    lambda _e, _c=canvas: _c.unbind_all('<MouseWheel>'))
         sb.pack(side='right', fill='y')
         canvas.pack(fill='both', expand=True)
         self._bpr_canvas = canvas
@@ -12635,7 +14423,7 @@ class ExFATBuilder(_TK_BASE):
         """
         game = self._abp_get_game_folder()
         if not game or not os.path.isdir(game):
-            messagebox.showwarning('No game', 'Select a game folder first.')
+            app_warning(self, 'No game', 'Select a game folder first.')
             return
         self._abp_sdk_force_next = True
         self._abp_detect_sdk()
@@ -12767,7 +14555,7 @@ class ExFATBuilder(_TK_BASE):
         """Restore original files by extracting from the originals zip."""
         game = self._abp_game_var.get().strip()
         if not game or not os.path.isdir(game):
-            messagebox.showwarning('No game folder',
+            app_warning(self, 'No game folder',
                 'Select the game folder first.')
             return
 
@@ -12779,7 +14567,7 @@ class ExFATBuilder(_TK_BASE):
         if not zip_path:
             return
 
-        if not messagebox.askyesno('Restore originals',
+        if not app_confirm(self, 'Restore originals',
                 'Restore from:\n%s\n\nBack to:\n%s\n\n'
                 'This will overwrite the current (patched) files.'
                 % (zip_path, game)):
@@ -12800,15 +14588,259 @@ class ExFATBuilder(_TK_BASE):
                     except Exception as e:
                         errors.append(member.filename + ': ' + str(e))
         except Exception as e:
-            messagebox.showerror('Restore failed', str(e))
+            app_error(self, 'Restore failed', str(e))
             return
 
         if errors:
-            messagebox.showwarning('Restore complete with errors',
+            app_warning(self, 'Restore complete with errors',
                 '%d restored.\n\nErrors:\n' % restored + '\n'.join(errors[:10]))
         else:
-            messagebox.showinfo('Restore complete',
+            app_info(self, 'Restore complete',
                 '%d file(s) restored to original state ✓' % restored)
+
+    def _abp_find_originals_zip(self, game_folder, orig_dir):
+        """Find the originals zip that matches a game, by TITLE_ID.
+
+        Matching key is the PPSA/CUSA/PPSB title-id read from the game's
+        param.sfo — the same identifier that leads every originals-zip
+        filename (see _sfo_zip_prefix). This is the strongest, most reliable
+        match: titles/versions can vary in punctuation but the title-id is
+        exact. Returns the absolute path to the best-matching
+        '... original files.zip', or None.
+        """
+        if not orig_dir or not os.path.isdir(orig_dir):
+            return None
+        info = self._read_sfo_info(game_folder) or {}
+        title_id = (info.get('TITLE_ID', '') or '').strip().upper()
+
+        if not title_id:
+            import re as _r
+            m = _r.search(r'((?:PPSA|CUSA|PPSB)\d+)',
+                          os.path.basename(game_folder.rstrip('\\/')),
+                          _r.IGNORECASE)
+            if m:
+                title_id = m.group(1).upper()
+        if not title_id:
+            return None
+
+        cand = []
+        try:
+            for fn in os.listdir(orig_dir):
+                low = fn.lower()
+                if not low.endswith('.zip'):
+                    continue
+                if 'original files' not in low:
+                    continue
+                if title_id.lower() in low:
+                    cand.append(fn)
+        except Exception:
+            return None
+        if not cand:
+            return None
+
+        cand.sort(key=lambda f: os.path.getmtime(os.path.join(orig_dir, f)),
+                  reverse=True)
+        return os.path.join(orig_dir, cand[0])
+
+    def _abp_restore_one_zip(self, game_folder, zip_path):
+        """Restore a single game from a single originals zip. Returns (ok,
+        restored_count, error_str_or_None). Shared by single and multi flows."""
+        import zipfile as _zf, shutil as _sh
+        restored = 0
+        try:
+            with _zf.ZipFile(zip_path, 'r') as zf:
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    dst = os.path.join(
+                        game_folder, member.filename.replace('/', os.sep))
+                    try:
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        with zf.open(member) as src_f, open(dst, 'wb') as dst_f:
+                            _sh.copyfileobj(src_f, dst_f)
+                        restored += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            return False, restored, str(e)
+        return True, restored, None
+
+    def _abp_restore_multi(self):
+        """Restore original files for MULTIPLE games at once.
+
+        Lists candidate games with a checkbox and auto-matches each to its
+        saved originals zip (by title-id, in the configured originals-zip
+        folder). The user ticks which games to restore and confirms; only
+        games with a found backup are restorable. Nothing is deleted — the
+        patched game files are overwritten with their originals.
+
+        Candidate games are gathered from BOTH the Backports "Games" sub-tab
+        scan (_bp_games_list) AND the Library scan (_lib_games), de-duplicated
+        by folder, so this works regardless of which tab populated the list.
+        """
+        seen = set()
+        games = []
+        for src in (getattr(self, '_bp_games_list', None) or [],
+                    getattr(self, '_lib_games', None) or []):
+            for g in src:
+                folder = (g or {}).get('folder', '')
+                key = os.path.normcase(os.path.abspath(folder)) if folder else ''
+                if not folder or not os.path.isdir(folder) or key in seen:
+                    continue
+                seen.add(key)
+                games.append(g)
+
+        if not games:
+            app_warning(self, 'No games',
+                'No scanned games found to restore.\n\nScan a folder first — either in the Backports → Games sub-tab, or in the Library tab — then try again.')
+            return
+
+        orig_dir = ''
+        v = getattr(self, '_abp_zip_orig_var', None)
+        if v is not None:
+            try:
+                orig_dir = (v.get() or '').strip()
+            except Exception:
+                orig_dir = ''
+        if not orig_dir:
+            orig_dir = self._settings.get('abp_zip_orig_dest', '').strip()
+        if orig_dir:
+            orig_dir = orig_dir.replace('/', '\\')
+        if not orig_dir or not os.path.isdir(orig_dir):
+            orig_dir = filedialog.askdirectory(
+                title='Select the folder that holds your "original files" zips')
+            if not orig_dir:
+                return
+            orig_dir = orig_dir.replace('/', '\\')
+
+        matched = []
+        for g in games:
+            zp = self._abp_find_originals_zip(g['folder'], orig_dir)
+            matched.append((g, zp))
+
+        n_found = sum(1 for _g, z in matched if z)
+        if n_found == 0:
+            app_warning(self, 'No backups found',
+                'None of the %d game(s) had a matching "original files" zip in:\n%s\n\nCheck that this is the right folder.'
+                % (len(games), orig_dir))
+            return
+
+        win = tk.Toplevel(self)
+        win.title('Restore originals — select games')
+        win.configure(bg=BG)
+        win.geometry('640x520')
+        win.transient(self)
+
+        tk.Label(win, text='Restore original files (multi-select)',
+                 font=('Segoe UI', 13, 'bold'),
+                 bg=BG, fg=TEXT).pack(anchor='w', padx=20, pady=(16, 2))
+        tk.Label(win,
+                 text='Each game is auto-matched to its saved originals zip by title-id.\nOnly games with a found backup can be ticked. Nothing on disk is deleted.',
+                 font=('Segoe UI', 9), justify='left',
+                 bg=BG, fg=MUTED).pack(anchor='w', padx=20, pady=(0, 10))
+        tk.Label(win, text='Originals folder: %s' % orig_dir,
+                 font=('Consolas', 8), bg=BG, fg=MUTED,
+                 wraplength=600, justify='left').pack(anchor='w', padx=20)
+
+        outer = tk.Frame(win, bg=BG)
+        outer.pack(fill='both', expand=True, padx=20, pady=10)
+        canvas = tk.Canvas(outer, bg='#0a0a0a', highlightthickness=0)
+        sb = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        inner = tk.Frame(canvas, bg='#0a0a0a')
+        inner.bind('<Configure>',
+                   lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+
+        vars_ = []
+        for g, zp in matched:
+            row = tk.Frame(inner, bg='#0a0a0a')
+            row.pack(fill='x', padx=6, pady=2)
+            var = tk.BooleanVar(value=bool(zp))
+            cb = tk.Checkbutton(row, variable=var, bg='#0a0a0a',
+                                activebackground='#0a0a0a',
+                                selectcolor='#1a1a1a',
+                                state='normal' if zp else 'disabled')
+            cb.pack(side='left')
+            title = (g.get('title') or g.get('title_id')
+                     or os.path.basename(g['folder'].rstrip('\\/')))
+            if zp:
+                lbl = f'{title!s}\n    ↳ {os.path.basename(zp)!s}'
+                fg = TEXT
+            else:
+                lbl = '%s\n    ↳ (no matching originals zip found)' % title
+                fg = '#cc6666'
+            tk.Label(row, text=lbl, font=('Segoe UI', 9), justify='left',
+                     bg='#0a0a0a', fg=fg, anchor='w').pack(side='left',
+                                                           fill='x', padx=6)
+            vars_.append((var, g, zp))
+
+        footer = tk.Frame(win, bg=BG)
+        footer.pack(fill='x', padx=20, pady=(0, 16))
+
+        def _toggle_all():
+            any_off = any(not bv.get() for bv, _g, z in vars_ if z)
+            for bv, _g, z in vars_:
+                if z:
+                    bv.set(any_off)
+        tk.Button(footer, text='Select / clear all', font=('Segoe UI', 9),
+                  bg='#2a2a2a', fg=TEXT, relief='flat', bd=0,
+                  padx=12, pady=6, cursor='hand2',
+                  command=_toggle_all).pack(side='left')
+
+        tk.Label(footer, text='%d of %d have backups'
+                 % (n_found, len(games)),
+                 font=('Segoe UI', 9), bg=BG, fg=MUTED).pack(side='left',
+                                                            padx=12)
+
+        def _do_restore():
+            picked = [(g, z) for bv, g, z in vars_ if z and bv.get()]
+            if not picked:
+                app_info(self, 'Nothing selected',
+                         'Tick at least one game with a found backup.')
+                return
+            if not app_confirm(self, 'Restore originals',
+                    'Restore original files for %d game(s)?\n\nThis overwrites the current (patched) files in each game folder with the originals from its zip. No zips are deleted.'
+                    % len(picked)):
+                return
+            win.destroy()
+
+            def worker():
+                ok_n = 0
+                fail_n = 0
+                total_files = 0
+                for g, z in picked:
+                    title = g.get('title') or os.path.basename(
+                        g['folder'].rstrip('\\/'))
+                    self.after(0, self._log, '[RESTORE] '
+                               f'{title!s} ← {os.path.basename(z)!s}\n')
+                    ok, n, err = self._abp_restore_one_zip(g['folder'], z)
+                    if ok:
+                        ok_n += 1
+                        total_files += n
+                        self.after(0, self._log,
+                                   '[RESTORE] ✓ %s — %d file(s)\n'
+                                   % (title, n))
+                    else:
+                        fail_n += 1
+                        self.after(0, self._log, '[RESTORE] ✗ '
+                                   f'{title!s} — {err!s}\n')
+                self.after(0, lambda: app_info(self, 'Restore complete',
+                    '%d game(s) restored ✓  (%d file(s))\n%d failed'
+                    % (ok_n, total_files, fail_n)))
+            threading.Thread(target=worker, daemon=True).start()
+
+        tk.Button(footer, text='Restore selected',
+                  font=('Segoe UI', 10, 'bold'),
+                  bg='#9b59b6', fg=TEXT, relief='flat', bd=0,
+                  padx=16, pady=8, cursor='hand2',
+                  command=_do_restore).pack(side='right')
+        tk.Button(footer, text='Cancel', font=('Segoe UI', 9),
+                  bg='#2a2a2a', fg=TEXT, relief='flat', bd=0,
+                  padx=12, pady=8, cursor='hand2',
+                  command=win.destroy).pack(side='right', padx=(0, 8))
 
     def _abp_browse_zip_dest(self, which='orig'):
         p = filedialog.askdirectory(
@@ -12876,6 +14908,1533 @@ class ExFATBuilder(_TK_BASE):
         except Exception:
             pass
 
+    def _abp_load_bp_processor(self):
+        """Load PS5ELFProcessor from the bundled Backport.py using the EXACT
+        same import the full backport uses (proven to work in the frozen
+        build). Returns (processor, None) on success or (None, error_str).
+
+        Importing `from Backport import PS5ELFProcessor` is reliable because
+        `Backport` is a unique top-level name; importing `src.*` directly is
+        fragile under PyInstaller (a baked-in/shadowing `src` can win). We
+        also clear any stale `src`/`Backport` modules so a second call after
+        a different extract dir doesn't resolve against a deleted path."""
+        try:
+            bp_path, bp_tmp = extract_backport(
+                self._settings.get('temp_dir') or None)
+            for p in (bp_tmp, os.path.join(bp_tmp, 'src')):
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+            src_dir = os.path.join(bp_tmp, 'src')
+            required = ['Archive.py', 'decrypt_fself.py', 'make_fself.py',
+                        'ps5_sdk_version_patcher.py']
+            missing = [f for f in required
+                       if not os.path.isfile(os.path.join(src_dir, f))]
+            if missing:
+                return None, 'Missing bundled modules: ' + ', '.join(missing)
+            for mod in ('Backport', 'src', 'src.Archive', 'src.make_fself',
+                        'src.decrypt_fself', 'src.ps5_sdk_version_patcher'):
+                if mod in sys.modules:
+                    del sys.modules[mod]
+            from Backport import PS5ELFProcessor
+            return PS5ELFProcessor(use_colors=False), None
+        except Exception as e:
+            import traceback
+            return None, (type(e).__name__ + ': ' + str(e)
+                          + '\n'
+                          + traceback.format_exc(limit=3))
+
+    def _abp_supported_sdk_pairs(self):
+        """Return the dict of supported SDK pairs via the proper Backport
+        pipeline, or None if it can't be loaded (error stored for display)."""
+        proc, err = self._abp_load_bp_processor()
+        if proc is None:
+            self._abp_bp_load_error = err or ''
+            return None
+        try:
+            return proc.get_supported_sdk_pairs()
+        except Exception as e:
+            self._abp_bp_load_error = type(e).__name__ + ': ' + str(e)
+            return None
+
+    @staticmethod
+    def _abp_crosses_sdk6(cur, tgt):
+        """True if moving cur→tgt crosses the SDK-6 libc/fakelib boundary
+        (one side ≤6, the other >6)."""
+        try:
+            return (int(cur) <= 6) != (int(tgt) <= 6)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _abp_is_executable_file(path):
+        """True if the file is a PS5 ELF/SELF executable (the files the SDK
+        pipeline operates on). Magic check first — the exact same magics the
+        Backport pipeline uses (b'\\x7FELF', b'\\x4F\\x15\\x3D\\x1D',
+        b'\\x54\\x14\\xF5\\xEE'). Falls back to the well-known PS5 executable
+        filenames/extensions when the 4-byte magic can't be read (locked
+        file, or a long Windows path that open() can't reach without
+        long-path support) so a clearly-patchable folder is never mis-read
+        as empty. '.bak' backups are never treated as executables (matches
+        the Backport pipeline, and stops overwrite-mode backups being
+        re-detected on a second run)."""
+        name = os.path.basename(path).lower()
+        if name.endswith('.bak'):
+            return False
+        try:
+            with open(path, 'rb') as f:
+                magic = f.read(4)
+        except Exception:
+            magic = b''
+        if magic == b'\x7FELF' or magic in (b'\x4F\x15\x3D\x1D',
+                                            b'\x54\x14\xF5\xEE'):
+            return True
+        if name == 'eboot.bin':
+            return True
+        return name.endswith(('.prx', '.sprx', '.self', '.elf'))
+
+    def _abp_scan_executables(self, folder):
+        """Return (exec_relpaths, skipped_relpaths) under folder, skipping
+        any 'decrypted' and 'fakelib' dirs. exec = ELF/SELF; skipped =
+        everything else (param.json, param.sfo, assets, etc.)."""
+        execs, skipped = [], []
+        for root, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs
+                       if d.lower() not in ('decrypted', 'fakelib')]
+            for fn in files:
+                rel = os.path.relpath(os.path.join(root, fn), folder)
+                if self._abp_is_executable_file(os.path.join(root, fn)):
+                    execs.append(rel)
+                else:
+                    skipped.append(rel)
+        return sorted(execs), sorted(skipped)
+
+    @staticmethod
+    def _abp_file_sha(path):
+        import hashlib
+        try:
+            h = hashlib.sha256()
+            with open(path, 'rb') as f:
+                for chunk in iter(lambda: f.read(1048576), b''):
+                    h.update(chunk)
+            return h.hexdigest()
+        except Exception:
+            return None
+
+    def _abp_find_libc(self, folder):
+        """Return the path to libc.prx under folder, or None."""
+        for root, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs if d.lower() != 'decrypted']
+            for fn in files:
+                if fn.lower() == 'libc.prx':
+                    return os.path.join(root, fn)
+        return None
+
+    def _abp_classify_sdk_folder(self, folder):
+        """Classify a folder for SDK-only mode (v3.6.5 detection fix).
+
+        SDK-only must NOT depend on param.json/param.sfo: backport-files
+        folders often contain only patched executables (eboot.bin, .prx,
+        .sprx, sce_module, fakelib). This returns enough to drive both the
+        full-dump (Case A) and executable-only (Case B) flows.
+
+        Returns dict:
+          cur          int|None  — current SDK from metadata (None if absent
+                                    or unreadable). NOTE: this reads
+                                    param.json/param.sfo only; it is a
+                                    display proxy, NOT where the patch lands.
+          meta_present bool       — param.json or param.sfo found anywhere
+          execs        [relpath]  — patchable ELF/SELF files (eboot/.prx/...)
+          skipped      [relpath]  — non-executable files (left unchanged)
+          folder_type  str        — 'full'     metadata present (Case A)
+                                     'execonly' no metadata, execs exist (B)
+                                     'empty'    nothing patchable (fail)
+        """
+        cur = None
+        try:
+            cur = self._read_sdk_from_folder(folder)
+        except Exception:
+            cur = None
+        meta_present = False
+        try:
+            meta_present = (bool(find_sfo(folder))
+                            or bool(find_meta_file(folder, ['param.json'])))
+        except Exception:
+            meta_present = cur is not None
+        execs, skipped = self._abp_scan_executables(folder)
+        if not execs:
+            folder_type = 'empty'
+        elif meta_present:
+            folder_type = 'full'
+        else:
+            folder_type = 'execonly'
+        return {'cur': cur, 'meta_present': meta_present,
+                'execs': execs, 'skipped': skipped,
+                'folder_type': folder_type}
+
+    def _sdkfix_diag_scan(self, folder, limit=12):
+        """Return a short human-readable diagnostic of what a scan saw under
+        `folder`: how many files were walked and the first few with their
+        4-byte magic in hex. Used so an 'empty' result is self-explaining
+        (current build vs. unreadable magic vs. genuinely no executables)."""
+        lines = []
+        total = 0
+        try:
+            for root, dirs, files in os.walk(folder):
+                dirs[:] = [d for d in dirs
+                           if d.lower() not in ('decrypted', 'fakelib')]
+                for fn in files:
+                    total += 1
+                    if len(lines) < limit:
+                        p = os.path.join(root, fn)
+                        try:
+                            with open(p, 'rb') as f:
+                                mg = f.read(4)
+                            mgs = ' '.join('%02X' % b for b in mg) or '(empty)'
+                        except Exception as e:
+                            mgs = '(unreadable: %s)' % e.__class__.__name__
+                        rel = os.path.relpath(p, folder)
+                        lines.append(f'     {rel!s}  [{mgs!s}]')
+        except Exception as e:
+            lines.append('     (scan error: %r)' % e)
+        return total, lines
+
+    def _sdkfix_log_line(self, text, tag='ok'):
+        """Write a line to the global OUTPUT LOG (same surface as the rest
+        of the app). Safe from worker threads."""
+        prefix = {'ok': '[OK]   ', 'err': '[ERR]  ', 'warn': '[WARN] ',
+                  'info': '[INFO] ', 'debug': '[DBG]  '}.get(tag, '')
+        try:
+            self._log(prefix + text + '\n')
+        except Exception:
+            pass
+
+    def _sdkfix_clear_log(self):
+        try:
+            self._log_clear()
+        except Exception:
+            pass
+
+    def _sdkfix_status(self, text):
+        try:
+            self._sdkfix_status_var.set(text)
+        except Exception:
+            pass
+
+    def _sdkfix_set_progress(self, pct, colour='#b07ad6'):
+        try:
+            w = self._sdkfix_prog_cv.winfo_width() or 400
+            self._sdkfix_prog_cv.coords(
+                self._sdkfix_prog_rect, 0, 0, int(w * pct / 100), 12)
+            self._sdkfix_prog_cv.itemconfig(
+                self._sdkfix_prog_rect, fill=colour)
+        except Exception:
+            pass
+
+    def _sdkfix_output_name(self, game, tgt):
+        """Build the save-as-new-copy folder name from the SELECTED FOLDER
+        name (never param.sfo). Strips firmware-band markers (4xx/4.xx/
+        [4xx]/_4xx/-4.xx…), bracketed PPSA/version tokens, a trailing
+        '- Copy', and any prior 'SDK N', then appends 'SDK <tgt>'. Validated
+        against the design's examples (e.g. 'ForzaHorizon_4xx' → 'ForzaHorizon
+        SDK 5'; 'TokyoXtremeRacer_4xx[PPSA32236][01.003.003] - Copy' →
+        'TokyoXtremeRacer SDK 5')."""
+        import re as _re
+        name = os.path.basename(game.rstrip('\\/'))
+
+        name = _re.sub(r'\s*-\s*Copy(\s*\(\d+\))?\s*$', '', name,
+                       flags=_re.IGNORECASE)
+
+        name = _re.sub(r'\[(?:PPSA|CUSA|PPSB)\d+\]', '', name,
+                       flags=_re.IGNORECASE)
+        name = _re.sub(r'\[\d+\.\d+[\d.]*\]', '', name)
+        name = _re.sub(r'\((?:PPSA|CUSA|PPSB)\d+\)', '', name,
+                       flags=_re.IGNORECASE)
+        name = _re.sub(r'\(\d+\.\d+[\d.]*\)', '', name)
+
+        name = _re.sub(r'[\[\(]\s*\d+\.?xx\s*[\]\)]', ' ', name,
+                       flags=_re.IGNORECASE)
+        name = _re.sub(r'[\s_\-]+\d+\.?xx\b', ' ', name, flags=_re.IGNORECASE)
+        name = _re.sub(r'\bv?\d+\.?xx\b', ' ', name, flags=_re.IGNORECASE)
+
+        name = _re.sub(r'[\s_\-]*SDK\s*\d+(\s*fix)?\s*$', '', name,
+                       flags=_re.IGNORECASE)
+
+        name = _re.sub(r'[\[\]\(\)\{\}]', ' ', name)
+        name = _re.sub(r'[_]+', ' ', name)
+        name = _re.sub(r'\s*-\s*$', '', name)
+        name = _re.sub(r'\s+', ' ', name).strip(' -_.')
+        if not name:
+            name = 'Game'
+        return '%s SDK %d' % (name, tgt)
+
+    def _sdkfix_browse_src(self):
+        p = filedialog.askdirectory(
+            title='Select folder of backport files (eboot.bin / .prx / …)')
+        if p:
+            p = p.replace('/', '\\')
+            try:
+                self._sdkfix_src_var.set(p)
+            except Exception:
+                pass
+            self._sdkfix_scan_folder()
+
+    def _sdkfix_scan_folder(self):
+        """Classify the selected folder in a background thread and update the
+        detected strip (folder type / current SDK / files to patch)."""
+        folder = ''
+        try:
+            folder = (self._sdkfix_src_var.get() or '').strip()
+        except Exception:
+            folder = ''
+        if not folder or not os.path.isdir(folder):
+            self._sdkfix_set_detected('—', '—', '—')
+            return
+        self._sdkfix_set_detected('scanning…', '…', '…')
+
+        def work():
+            try:
+                info = self._abp_classify_sdk_folder(folder)
+            except Exception:
+                self.after(0, self._sdkfix_set_detected, '—', '—', '—')
+                return
+            cur, ft = info['cur'], info['folder_type']
+            if ft == 'empty':
+                ftxt = _('No executables found')
+            elif ft == 'full':
+                ftxt = _('Full dump')
+            else:
+                ftxt = _('Backport files')
+            curtxt = str(cur) if cur is not None else _('Unknown')
+            self.after(0, self._sdkfix_set_detected,
+                       ftxt, curtxt, str(len(info['execs'])))
+            self.after(0, self._sdkfix_log_line,
+                       _('[SDK Fixer] scan: %s — %d executable(s) detected, current SDK %s')
+                       % (ft, len(info['execs']),
+                          str(cur) if cur is not None else _('Unknown')),
+                       'info' if info['execs'] else 'warn')
+            if not info['execs']:
+                total, sample = self._sdkfix_diag_scan(folder)
+                self.after(0, self._sdkfix_log_line,
+                           _('[SDK Fixer] %d file(s) walked; none matched a PS5 ELF/SELF executable. First files seen:')
+                           % total,
+                           'warn')
+                for ln in sample:
+                    self.after(0, self._sdkfix_log_line, ln, 'debug')
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sdkfix_set_detected(self, ftype, cur, nfiles):
+        for attr, val in (('_sdkfix_det_type', ftype),
+                          ('_sdkfix_det_sdk', cur),
+                          ('_sdkfix_det_files', nfiles)):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.config(text=val)
+                except Exception:
+                    pass
+
+    def _sdkfix_resolve_target(self):
+        """Return (tgt:int, pairs) or (None, None) after showing an error."""
+        try:
+            tgt_raw = (self._sdkfix_tgt_var.get() or '').strip()
+        except Exception:
+            tgt_raw = ''
+
+        import re as _re
+        m = _re.search(r'(\d+)', tgt_raw)
+        if not m:
+            app_warning(self, _('Invalid SDK'),
+                        _('Select a numeric target SDK.'))
+            return None, None
+        tgt = int(m.group(1))
+        pairs = self._abp_supported_sdk_pairs()
+        if pairs is None:
+            detail = getattr(self, '_abp_bp_load_error', '') or ''
+            app_error(self, _('Pipeline unavailable'),
+                      _('The SDK patch pipeline could not be loaded, so SDK Fixer cannot run. Nothing was changed.')
+                      + (('\n\nDetails:\n' + detail) if detail else ''))
+            return None, None
+        if tgt not in pairs:
+            app_warning(self, _('Unsupported target SDK'),
+                        _('Target SDK %d is not a supported pair. Supported: %s')
+                        % (tgt, ', '.join(str(k) for k in sorted(pairs))))
+            return None, None
+        return tgt, pairs
+
+    def _sdkfix_preview(self):
+        """Dry-run: show folder type, current SDK (or Unknown), target,
+        output mode + output name, files to patch/skip, and the safety
+        notices. Writes nothing."""
+        if getattr(self, '_sdkfix_running', False):
+            return
+        folder = ''
+        try:
+            folder = (self._sdkfix_src_var.get() or '').strip()
+        except Exception:
+            folder = ''
+        if not folder or not os.path.isdir(folder):
+            app_warning(self, _('No folder'),
+                        _('Select a source folder first.'))
+            return
+
+        self._sdkfix_clear_log()
+        self._sdkfix_log_line(_('— SDK Fixer preview (dry-run) — no files will be changed —'),
+                              'info')
+        self._sdkfix_log_line(_('Source folder: ') + folder, 'info')
+
+        info = self._abp_classify_sdk_folder(folder)
+        cur, ft = info['cur'], info['folder_type']
+        execs, skipped = info['execs'], info['skipped']
+
+        if ft == 'empty':
+            if info['meta_present']:
+                self._sdkfix_log_line(_('No patchable executable files found in this folder. Nothing to patch.'),
+                                      'err')
+            else:
+                self._sdkfix_log_line(_('No param metadata or patchable executable files found.'),
+                                      'err')
+            total, sample = self._sdkfix_diag_scan(folder)
+            self._sdkfix_log_line(_('%d file(s) walked; none matched a PS5 ELF/SELF executable (eboot.bin / .prx / .sprx / .self / .elf). First files seen:')
+                                  % total,
+                                  'warn')
+            for ln in sample:
+                self._sdkfix_log_line(ln, 'debug')
+            self._sdkfix_log_line(_('Preview complete. Nothing was changed.'),
+                                  'info')
+            return
+
+        if ft == 'full' and cur is not None:
+            self._sdkfix_log_line(_('Folder type: Full dump'), 'ok')
+            self._sdkfix_log_line(_('Current SDK: %d') % cur, 'ok')
+        else:
+            self._sdkfix_log_line(_('Folder type: Backport files / executable-only'),
+                                  'warn')
+            self._sdkfix_log_line(_('Current SDK: Unknown'), 'warn')
+            self._sdkfix_log_line(
+                _('⚠ Current SDK could not be detected because this folder does not contain normal game metadata. You can still continue using the selected target SDK, but please confirm this is the correct folder.'),
+                'warn')
+
+        tgt, pairs = self._sdkfix_resolve_target()
+        if tgt is None:
+            return
+        self._sdkfix_log_line(_('Target SDK: %d') % tgt, 'ok')
+
+        if cur is not None and cur == tgt:
+            self._sdkfix_log_line(
+                _('This folder already reports SDK %d — running SDK Fixer would change nothing. No patch is needed.')
+                % tgt, 'warn')
+
+        if cur is not None:
+            if self._abp_crosses_sdk6(cur, tgt):
+                self._sdkfix_log_line(
+                    _('⚠ This crosses the SDK 6 libc/fakelib boundary. SDK Fixer may not be enough for this title.'),
+                    'warn')
+            else:
+                self._sdkfix_log_line(_('Crosses SDK 6 boundary: no'), 'ok')
+        else:
+            self._sdkfix_log_line(_('Crosses SDK 6 boundary: unknown (current SDK not detected)'),
+                                  'warn')
+
+        try:
+            mode = self._sdkfix_out_mode_var.get()
+        except Exception:
+            mode = 'copy'
+        if mode == 'overwrite':
+            self._sdkfix_log_line(_('Output mode: OVERWRITE selected folder (.bak backups will be made)'),
+                                  'warn')
+            self._sdkfix_log_line(_('Output folder: ') + folder, 'info')
+        else:
+            out_name = self._sdkfix_output_name(folder, tgt)
+            self._sdkfix_log_line(_('Output mode: Save as new copy (source kept)'),
+                                  'ok')
+            self._sdkfix_log_line(_('Output folder name: ') + out_name, 'ok')
+
+        self._sdkfix_log_line(_('Executables that would be patched: %d')
+                              % len(execs), 'info')
+        for rel in execs[:200]:
+            self._sdkfix_log_line('   • ' + rel, 'ok')
+        self._sdkfix_log_line(_('Files that would be left unchanged: %d (param.json, param.sfo, assets, etc.)')
+                              % len(skipped), 'info')
+        self._sdkfix_log_line(_('fakelib: DISABLED (by design)'), 'ok')
+        self._sdkfix_log_line(_('libc patch: DISABLED (by design)'), 'ok')
+        if os.path.isdir(os.path.join(folder, 'fakelib')):
+            self._sdkfix_log_line(_('Existing fakelib/ folder detected — it will be left untouched.'),
+                                  'info')
+        self._sdkfix_log_line(_('Preview complete. No files were changed.'),
+                              'info')
+
+    def _sdkfix_run(self):
+        """Execute the SDK fix via the proper pipeline, then verify. Own
+        completion flow — never calls _abp_done / shutdown / zip-pair. On any
+        failure, success is NOT reported (copy mode: source untouched and the
+        half-written copy is removed; overwrite mode: executables restored
+        from the backup snapshot and .bak files preserved)."""
+        if getattr(self, '_sdkfix_running', False):
+            return
+        folder = ''
+        try:
+            folder = (self._sdkfix_src_var.get() or '').strip()
+        except Exception:
+            folder = ''
+        if not folder or not os.path.isdir(folder):
+            app_warning(self, _('No folder'),
+                        _('Select a source folder first.'))
+            return
+
+        info = self._abp_classify_sdk_folder(folder)
+        cur, ft = info['cur'], info['folder_type']
+        if ft == 'empty':
+            total, sample = self._sdkfix_diag_scan(folder)
+            self._sdkfix_log_line(_('[SDK Fixer] Nothing to patch — %d file(s) walked, 0 matched a PS5 ELF/SELF executable. First files seen:')
+                                  % total,
+                                  'warn')
+            for ln in sample:
+                self._sdkfix_log_line(ln, 'debug')
+            if info['meta_present']:
+                app_error(self, _('Nothing to patch'),
+                          _('No patchable executable files (eboot.bin, .prx, .sprx) were found in this folder.\nNothing was changed. (See the OUTPUT LOG for the files that were scanned.)'))
+            else:
+                app_error(self, _('Nothing to patch'),
+                          _('No param metadata or patchable executable files found.\nSelect a backport-files folder or a game dump. Nothing was changed. (See the OUTPUT LOG for the files that were scanned.)'))
+            return
+
+        tgt, pairs = self._sdkfix_resolve_target()
+        if tgt is None:
+            return
+
+        if cur is not None and cur == tgt:
+            app_info(self, _('Already SDK %d') % tgt,
+                     _('This folder already reports SDK %d, so there is nothing to change.\n\nNo patch was run and no files were modified.')
+                     % tgt)
+            self._sdkfix_clear_log()
+            self._sdkfix_log_line(_('SDK Fixer: folder already reports SDK %d — no patch needed, nothing modified.')
+                                  % tgt,
+                                  'info')
+            self._sdkfix_status(_('○ Already SDK %d — nothing to do') % tgt)
+            return
+
+        if cur is None:
+            if not app_confirm(self, _('Current SDK unknown'),
+                    _('Current SDK could not be detected because this folder does not contain normal game metadata. You can still continue using the selected target SDK %d, but please confirm this is the correct folder.\n\nContinue?')
+                    % tgt,
+                    icon='warning'):
+                return
+
+        if cur is not None and self._abp_crosses_sdk6(cur, tgt):
+            if not app_confirm(self, _('Crosses SDK 6 boundary'),
+                    _('Going from SDK %d to SDK %d crosses the SDK 6 libc/fakelib boundary.\n\nSDK Fixer may not be enough for this title — it might not boot.\n\nContinue anyway?')
+                    % (cur, tgt),
+                    icon='warning'):
+                return
+
+        try:
+            mode = self._sdkfix_out_mode_var.get()
+        except Exception:
+            mode = 'copy'
+        overwrite = (mode == 'overwrite')
+        out_dir = None
+        if overwrite:
+            if not app_confirm(self, _('Overwrite folder'),
+                    _('OVERWRITE mode will modify the selected folder directly:\n%s\n\nA .bak backup of each changed executable will be made first (a file is skipped if its backup cannot be created). Continue?')
+                    % folder,
+                    icon='warning'):
+                return
+        else:
+            out_name = self._sdkfix_output_name(folder, tgt)
+            parent = os.path.dirname(folder.rstrip('\\/'))
+            out_dir = os.path.join(parent, out_name)
+            if os.path.exists(out_dir):
+                if not app_confirm(self, _('Output exists'),
+                        _('Output folder already exists:\n%s\n\nOverwrite it?\n(Choose No to create a uniquely-named folder.)')
+                        % out_dir):
+                    n = 2
+                    while os.path.exists('%s (%d)' % (out_dir, n)):
+                        n += 1
+                    out_dir = '%s (%d)' % (out_dir, n)
+
+        src_base = os.path.basename(folder.rstrip('\\/'))
+        backup_dir = tempfile.mkdtemp(prefix='exfat_builder_sdkfix_')
+
+        self._sdkfix_running = True
+        try:
+            self._sdkfix_run_btn.config(state='disabled', text=_('Running…'))
+        except Exception:
+            pass
+        self._sdkfix_set_progress(0)
+        self._sdkfix_clear_log()
+
+        def worker():
+            import shutil as _sh
+            ok = False
+            try:
+                self._sdkfix_status_set = self._sdkfix_status
+                self.after(0, self._sdkfix_status, _('Patching SDK marker…'))
+                self.after(0, self._sdkfix_log_line,
+                           _('— SDK Fixer — fakelib OFF, libc patch OFF —'),
+                           'info')
+                self.after(0, self._sdkfix_log_line,
+                           _('Current SDK %s → target SDK %d')
+                           % (str(cur) if cur is not None
+                              else _('Unknown'), tgt),
+                           'info')
+
+                libc_repl = b'IWIBBdTHit4#A#B'
+                pre_libc = self._abp_find_libc(folder)
+                pre_libc_has_repl = False
+                if pre_libc:
+                    try:
+                        with open(pre_libc, 'rb') as _lf:
+                            pre_libc_has_repl = libc_repl in _lf.read()
+                    except Exception:
+                        pre_libc_has_repl = False
+                pre_has_fakelib = os.path.isdir(
+                    os.path.join(folder, 'fakelib'))
+
+                self.after(0, self._sdkfix_log_line,
+                           _('Backing up originals…'), 'info')
+                originals_dir = os.path.join(backup_dir, 'originals')
+                os.makedirs(originals_dir, exist_ok=True)
+                orig_exec_sha = {}
+                for rel in self._abp_scan_executables(folder)[0]:
+                    s = os.path.join(folder, rel)
+                    d = os.path.join(originals_dir, rel)
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    _sh.copy2(s, d)
+                    orig_exec_sha[rel] = self._abp_file_sha(s)
+                self.after(0, self._sdkfix_set_progress, 10)
+
+                processor, load_err = self._abp_load_bp_processor()
+                if processor is None:
+                    raise RuntimeError(_('SDK patch pipeline could not be loaded: ')
+                                       + (load_err or '?'))
+                self.after(0, self._sdkfix_log_line,
+                           _('SDK patch pipeline loaded.'), 'ok')
+
+                patched_dir = os.path.join(backup_dir, 'patched')
+                os.makedirs(patched_dir, exist_ok=True)
+                self.after(0, self._sdkfix_set_progress, 20)
+
+                self.after(0, self._sdkfix_log_line,
+                           _('Patching SDK marker in executables…'), 'info')
+                results = processor.decrypt_and_sign_pipeline(
+                    input_dir=folder,
+                    output_dir=patched_dir,
+                    sdk_pair=tgt,
+                    paid=0x3100000000000002,
+                    ptype=1,
+                    fakelib_source=None,
+                    create_backup=True,
+                    overwrite=True,
+                    apply_libc_patch=False,
+                    auto_revert_for_high_sdk=False,
+                    verbose=True,
+                    save_to_config=False)
+                self.after(0, self._sdkfix_set_progress, 70)
+
+                dest_root = folder if overwrite else out_dir
+                if not overwrite:
+                    self.after(0, self._sdkfix_log_line,
+                               _('Creating patched copy at: ') + out_dir,
+                               'info')
+                    if os.path.exists(out_dir):
+                        _sh.rmtree(out_dir, ignore_errors=True)
+                    _sh.copytree(folder, out_dir)
+
+                changed = []
+                bak_made = []
+                bak_skipped = []
+                for p_root, p_dirs, p_files in os.walk(patched_dir):
+                    p_dirs[:] = [d for d in p_dirs
+                                 if d.lower() not in ('decrypted', 'working')]
+                    for p_fn in p_files:
+                        p_src = os.path.join(p_root, p_fn)
+                        p_rel = os.path.relpath(p_src, patched_dir)
+                        parts = p_rel.replace('/', '\\').split('\\')
+                        if parts and parts[0] == src_base:
+                            p_rel = (os.path.join(*parts[1:]) if len(parts) > 1
+                                     else parts[0])
+                        if p_rel not in orig_exec_sha:
+                            continue
+                        p_dest = os.path.join(dest_root, p_rel)
+                        if overwrite and os.path.isfile(p_dest):
+                            bak = p_dest + '.bak'
+                            if not os.path.exists(bak):
+                                try:
+                                    _sh.copy2(p_dest, bak)
+                                    bak_made.append(p_rel)
+                                except Exception:
+                                    bak_skipped.append(p_rel)
+                                    self.after(0, self._sdkfix_log_line,
+                                               _('SKIPPED (no backup could be made): ')
+                                               + p_rel,
+                                               'warn')
+                                    continue
+                        os.makedirs(os.path.dirname(p_dest), exist_ok=True)
+                        _sh.copy2(p_src, p_dest)
+                        new_sha = self._abp_file_sha(p_src)
+                        if new_sha is not None and \
+                                new_sha != orig_exec_sha.get(p_rel):
+                            changed.append(p_rel)
+                            self.after(0, self._sdkfix_log_line,
+                                       _('patched: ') + p_rel, 'ok')
+                        else:
+                            self.after(0, self._sdkfix_log_line,
+                                       _('unchanged (skipped by patcher): ')
+                                       + p_rel,
+                                       'warn')
+                if overwrite and bak_made:
+                    self.after(0, self._sdkfix_log_line,
+                               _('  .bak backups created: %d') % len(bak_made),
+                               'ok')
+                self.after(0, self._sdkfix_set_progress, 85)
+
+                self.after(0, self._sdkfix_log_line, _('Verifying…'), 'info')
+                verify_errors = []
+
+                try:
+                    sign = (results.get('signing', {}) if isinstance(
+                        results, dict) else {})
+                    sign_ok = sign.get('successful', 0)
+                    sign_fail = sign.get('failed', 0)
+                except Exception:
+                    sign_ok, sign_fail = 0, 0
+                if sign_fail:
+                    verify_errors.append(
+                        _('pipeline reported %d signing failure(s)')
+                        % sign_fail)
+
+                self.after(0, self._sdkfix_log_line,
+                           _('  note: param.json/param.sfo intentionally not rewritten — metadata still shows the old SDK'),
+                           'info')
+
+                post_has_fakelib = os.path.isdir(
+                    os.path.join(dest_root, 'fakelib'))
+                if post_has_fakelib and not pre_has_fakelib:
+                    verify_errors.append(_('a fakelib/ folder was added'))
+                else:
+                    self.after(0, self._sdkfix_log_line,
+                               _('  no fakelib added ✓'), 'ok')
+
+                post_libc = self._abp_find_libc(dest_root)
+                post_libc_has_repl = False
+                if post_libc:
+                    try:
+                        with open(post_libc, 'rb') as _lf:
+                            post_libc_has_repl = libc_repl in _lf.read()
+                    except Exception:
+                        post_libc_has_repl = False
+                if post_libc is None:
+                    self.after(0, self._sdkfix_log_line,
+                               _('  libc.prx: none present'), 'ok')
+                elif post_libc_has_repl and not pre_libc_has_repl:
+                    verify_errors.append(
+                        _('libc patch was applied (should be disabled)'))
+                else:
+                    self.after(0, self._sdkfix_log_line,
+                               _('  libc patch not applied ✓ (SDK marker updated)'),
+                               'ok')
+
+                meta_changed = False
+                for meta in ('param.json', 'param.sfo'):
+                    for sub in ('sce_sys', ''):
+                        s = os.path.join(folder, sub, meta)
+                        d = os.path.join(dest_root, sub, meta)
+                        if os.path.isfile(s) and os.path.isfile(d):
+                            if self._abp_file_sha(s) != self._abp_file_sha(d):
+                                meta_changed = True
+                if meta_changed:
+                    verify_errors.append(_('param.json/param.sfo changed'))
+                else:
+                    self.after(0, self._sdkfix_log_line,
+                               _('  param.json/param.sfo unchanged ✓'), 'ok')
+
+                if not overwrite and not (out_dir and os.path.isdir(out_dir)):
+                    verify_errors.append(_('output folder was not created'))
+
+                if verify_errors:
+                    for e in verify_errors:
+                        self.after(0, self._sdkfix_log_line,
+                                   _('  verification FAILED: ') + e, 'err')
+                    raise RuntimeError(_('Verification failed: ')
+                                       + '; '.join(verify_errors))
+
+                if not changed:
+                    ok = True
+                    cur_txt = str(cur) if cur is not None else _('Unknown')
+                    self.after(0, self._sdkfix_set_progress, 100, '#d6a13a')
+                    self.after(0, self._sdkfix_log_line,
+                               _('No executable bytes changed. The files may already match SDK %d, or this SDK needs no changes for this folder. (current SDK %s)')
+                               % (tgt, cur_txt),
+                               'warn')
+                    if not overwrite:
+                        try:
+                            if out_dir and os.path.isdir(out_dir):
+                                _sh.rmtree(out_dir, ignore_errors=True)
+                                self.after(0, self._sdkfix_log_line,
+                                           _('Copied output removed (identical to the source): ')
+                                           + out_dir,
+                                           'info')
+                        except Exception:
+                            pass
+                        self.after(0, self._sdkfix_log_line,
+                                   _('SDK Fixer completed with no changes. The files may already match SDK %d. Source folder was left intact.')
+                                   % tgt,
+                                   'ok')
+                    else:
+                        removed = 0
+                        for rel in bak_made:
+                            try:
+                                bp = os.path.join(dest_root, rel) + '.bak'
+                                if os.path.isfile(bp):
+                                    os.remove(bp)
+                                    removed += 1
+                            except Exception:
+                                pass
+                        if removed:
+                            self.after(0, self._sdkfix_log_line,
+                                       _('Removed %d unused .bak backup(s) — no file was changed.')
+                                       % removed,
+                                       'info')
+                        self.after(0, self._sdkfix_log_line,
+                                   _('SDK Fixer completed with no changes. The files may already match SDK %d. No files were modified.')
+                                   % tgt,
+                                   'ok')
+                    self.after(0, self._sdkfix_status,
+                               _('○ No changes needed — files may already be SDK %d')
+                               % tgt)
+                else:
+                    ok = True
+                    self.after(0, self._sdkfix_set_progress, 100, '#27ae60')
+                    self.after(0, self._sdkfix_log_line,
+                               _('  %d executable(s) patched to SDK %d ✓ (pipeline signed %d)')
+                               % (len(changed), tgt, sign_ok),
+                               'ok')
+                    cur_txt = str(cur) if cur is not None else _('Unknown')
+                    self.after(0, self._sdkfix_log_line,
+                               _('SDK Fixer complete. SDK %s → %d.')
+                               % (cur_txt, tgt),
+                               'ok')
+                    if not overwrite:
+                        self.after(0, self._sdkfix_log_line,
+                                   _('Patched copy: ') + out_dir, 'ok')
+                        self.after(0, self._sdkfix_status,
+                                   _('✓ Done — patched copy created'))
+                    else:
+                        self.after(0, self._sdkfix_status,
+                                   _('✓ Done — folder patched (.bak backups kept)'))
+
+            except Exception as e:
+                self.after(0, self._sdkfix_log_line,
+                           _('SDK Fixer FAILED: ') + str(e), 'err')
+                if overwrite:
+                    try:
+                        self.after(0, self._sdkfix_log_line,
+                                   _('Restoring originals…'), 'warn')
+                        od = os.path.join(backup_dir, 'originals')
+                        for r, _d, fs in os.walk(od):
+                            for fn in fs:
+                                srcb = os.path.join(r, fn)
+                                relb = os.path.relpath(srcb, od)
+                                _sh.copy2(srcb, os.path.join(folder, relb))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        if out_dir and os.path.isdir(out_dir):
+                            _sh.rmtree(out_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+                self.after(0, self._sdkfix_set_progress, 0, '#d9534f')
+                self.after(0, self._sdkfix_status, _('✗ Failed — see log'))
+            finally:
+                self._sdkfix_running = False
+                try:
+                    self.after(0, lambda: self._sdkfix_run_btn.config(
+                        state='normal', text='⚡  ' + _('Run SDK Fix')))
+                except Exception:
+                    pass
+                if not ok and overwrite:
+                    self.after(0, self._sdkfix_log_line,
+                               _('Source executables restored; .bak backups preserved.'),
+                               'warn')
+                elif not ok:
+                    self.after(0, self._sdkfix_log_line,
+                               _('Source folder left intact.'), 'warn')
+                try:
+                    _sh = __import__('shutil')
+                    _sh.rmtree(backup_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    _BATCHSDK_ORBI_MAGIC = b'ORBI'
+
+    @staticmethod
+    def _batchsdk_ps5_pair_map():
+        """Return {ps5_raw_value: sdk_pair_number} from the bundled patcher's
+        SDK_VERSION_PAIRS, so a raw eboot SDK field can be mapped back to a
+        human SDK number. Loaded from the same embedded Backport source the
+        patch pipeline uses (single source of truth). Returns {} on failure —
+        callers then report the current SDK as Unknown, never guess."""
+        cache = getattr(ExFATBuilder, '_batchsdk_pair_cache', None)
+        if cache is not None:
+            return cache
+        pairs = {}
+        try:
+            import re as _re
+            import base64 as _b64
+            import ast as _ast
+            with open(os.path.abspath(__file__), 'r', encoding='utf-8',
+                      errors='replace') as _sf:
+                _src = _sf.read()
+            _m = _re.search(r"_SRC_PATCHER_B64\s*=\s*(\"[^\"]*\"|'[^']*')",
+                            _src, _re.S)
+            if _m:
+                _txt = _b64.b64decode(
+                    _ast.literal_eval(_m.group(1).strip())
+                ).decode(
+                    'utf-8', 'replace')
+                _tm = _re.search(r'SDK_VERSION_PAIRS\s*=\s*\{(.*?)\}',
+                                 _txt, _re.S)
+                if _tm:
+                    for _pm in _re.finditer(
+                            r'(\d+)\s*:\s*\(\s*(0x[0-9A-Fa-f]+)\s*,',
+                            _tm.group(1)):
+                        pairs[int(_pm.group(2), 16)] = int(_pm.group(1))
+        except Exception:
+            pairs = {}
+        try:
+            ExFATBuilder._batchsdk_pair_cache = pairs
+        except Exception:
+            pass
+        return pairs
+
+    @classmethod
+    def _batchsdk_read_eboot_sdk(cls, eboot_path):
+        """Read the current SDK-pair number from an eboot's SceKernelProcess-
+        Param (the field the bundled patcher rewrites). Returns an int SDK
+        number, or None if no valid procparam is found. Never raises.
+
+        The eboot is byte-scanned for the 'ORBI' magic, but a raw byte match
+        is NOT trusted on its own: the word 'FORBIDDEN' (and any '…ORBI…'
+        string) contains those bytes and produces false positives — real
+        RoadCraft/Dungeons/Jurassic eboots hit exactly this. Each candidate is
+        validated as a genuine SceKernelProcessParam by requiring the u64
+        `size` field (which sits 8 bytes BEFORE the magic) to equal 0x60, the
+        known struct size. This mirrors what the bundled SDKVersionPatcher
+        resolves via the PT_SCE_PROCPARAM program header (magic at struct
+        base +0x8, PS4 SDK at +0x10, PS5 SDK at +0x14) — the PS5 field at
+        struct-base +0x14 is identically magic +0xC. Only that validated
+        field is read, so the 'FORBIDDEN' matches are skipped."""
+        try:
+            with open(eboot_path, 'rb') as f:
+                data = f.read()
+        except Exception:
+            return None
+        import struct as _st
+        pair_map = cls._batchsdk_ps5_pair_map()
+        start = 0
+        n = len(data)
+        while True:
+            idx = data.find(cls._BATCHSDK_ORBI_MAGIC, start)
+            if idx < 0:
+                break
+            start = idx + 1
+            base = idx - 8
+            if base < 0:
+                continue
+            try:
+                size = _st.unpack_from('<Q', data, base)[0]
+            except Exception:
+                continue
+            if size != 0x60:
+                continue
+
+            pos = idx + 12
+            if pos + 4 > n:
+                continue
+            try:
+                raw = _st.unpack_from('<I', data, pos)[0]
+            except Exception:
+                continue
+            if raw in pair_map:
+                return pair_map[raw]
+
+            major = (raw >> 24) & 0xFF
+            if 1 <= major <= 10 and (raw & 0x00FF0000) == 0:
+                return major
+
+        return None
+
+    @classmethod
+    def _batchsdk_find_eboot(cls, root):
+        """Return the path to eboot.bin under root (root itself or one level
+        down — some zips wrap the payload in a subfolder), or None."""
+        direct = os.path.join(root, 'eboot.bin')
+        if os.path.isfile(direct):
+            return direct
+        try:
+            for entry in os.scandir(root):
+                if entry.is_dir():
+                    sub = os.path.join(entry.path, 'eboot.bin')
+                    if os.path.isfile(sub):
+                        return sub
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _batchsdk_retag_name(zip_name, tgt):
+        """Rewrite ONLY the 'FW Nxx' band tag in a zip filename to the target
+        SDK, leaving everything else identical. Matches 'FW 7xx', 'FW7xx',
+        'FW 7.xx' (any digits, any case). If no FW tag is present, prepends
+        'FW <tgt>xx ' so the output is still tagged. The '.zip' extension is
+        preserved. Examples:
+          'FW 7xx PPSA21382 Tomba! (01.003.000) backport files.zip'
+            -> 'FW 6xx PPSA21382 Tomba! (01.003.000) backport files.zip'
+          'PPSA00001 Game backport files.zip'
+            -> 'FW 6xx PPSA00001 Game backport files.zip'"""
+        import re as _re
+        base = zip_name
+        ext = ''
+        if base.lower().endswith('.zip'):
+            ext = base[-4:]
+            base = base[:-4]
+        new_tag = 'FW %dxx' % tgt
+
+        pat = _re.compile(r'FW\s*\d+\.?xx', _re.IGNORECASE)
+        if pat.search(base):
+            new_base = pat.sub(new_tag, base, count=1)
+        else:
+            new_base = new_tag + ' ' + base
+        return new_base + ext
+
+    def _batchsdk_log(self, text, tag='ok'):
+        """Append a line to the Batch SDK Retag log (its own Text widget),
+        falling back to the global session log if the widget is absent."""
+        w = getattr(self, '_batchsdk_log_widget', None)
+        if w is not None:
+            try:
+                w.configure(state='normal')
+                w.insert('end', text + '\n')
+                w.see('end')
+                w.configure(state='disabled')
+                return
+            except Exception:
+                pass
+        try:
+            self._log(text + '\n')
+        except Exception:
+            pass
+
+    def _batchsdk_clear_log(self):
+        w = getattr(self, '_batchsdk_log_widget', None)
+        if w is not None:
+            try:
+                w.configure(state='normal')
+                w.delete('1.0', 'end')
+                w.configure(state='disabled')
+            except Exception:
+                pass
+
+    def _batchsdk_status(self, text):
+        try:
+            self._batchsdk_status_var.set(text)
+        except Exception:
+            pass
+
+    def _batchsdk_set_progress(self, pct):
+        cv = getattr(self, '_batchsdk_prog_cv', None)
+        rect = getattr(self, '_batchsdk_prog_rect', None)
+        if cv is None or rect is None:
+            return
+        try:
+            w = cv.winfo_width() or 1
+            cv.coords(rect, 0, 0, int(w * max(0, min(100, pct)) / 100.0), 12)
+        except Exception:
+            pass
+
+    def _batchsdk_list_zips(self, folder):
+        """Return a sorted list of .zip paths directly under folder."""
+        out = []
+        try:
+            for entry in os.scandir(folder):
+                if entry.is_file() and entry.name.lower().endswith('.zip'):
+                    out.append(entry.path)
+        except Exception:
+            pass
+        return sorted(out, key=lambda p: os.path.basename(p).lower())
+
+    def _batchsdk_browse_src(self):
+        p = filedialog.askdirectory(
+            title=_('Select a folder of backport ZIPs'))
+        if p:
+            p = p.replace('/', os.sep)
+            try:
+                self._batchsdk_src_var.set(p)
+            except Exception:
+                pass
+            self._batchsdk_scan()
+
+    def _batchsdk_browse_out(self):
+        p = filedialog.askdirectory(
+            title=_('Select the output folder for retagged ZIPs'))
+        if p:
+            p = p.replace('/', os.sep)
+            try:
+                self._batchsdk_out_var.set(p)
+            except Exception:
+                pass
+
+    def _batchsdk_resolve_target(self):
+        """Return (tgt:int, pairs) or (None, None). Validates against the
+        SAME supported-pair set the patcher exposes."""
+        try:
+            tgt_raw = (self._batchsdk_tgt_var.get() or '').strip()
+        except Exception:
+            tgt_raw = ''
+        import re as _re
+        m = _re.search(r'(\d+)', tgt_raw)
+        if not m:
+            app_warning(self, _('Invalid SDK'),
+                        _('Select a numeric target SDK.'))
+            return None, None
+        tgt = int(m.group(1))
+        pairs = self._abp_supported_sdk_pairs()
+        if pairs is None:
+            detail = getattr(self, '_abp_bp_load_error', '') or ''
+            app_error(self, _('Pipeline unavailable'),
+                      _('The SDK patch pipeline could not be loaded, so Batch SDK Retag cannot run. Nothing was changed.')
+                      + (('\n\nDetails:\n' + detail) if detail else ''))
+            return None, None
+        if tgt not in pairs:
+            app_warning(self, _('Unsupported target SDK'),
+                        _('Target SDK %d is not a supported pair. Supported: %s')
+                        % (tgt, ', '.join(str(k) for k in sorted(pairs))))
+            return None, None
+        return tgt, pairs
+
+    def _batchsdk_scan(self):
+        """Populate the preview table: each zip with its detected current SDK
+        (read from the eboot ORBI field) and a planned action, WITHOUT
+        changing anything. Runs in a background thread."""
+        try:
+            src = (self._batchsdk_src_var.get() or '').strip()
+        except Exception:
+            src = ''
+        tree = getattr(self, '_batchsdk_tree', None)
+        if tree is not None:
+            try:
+                for iid in tree.get_children():
+                    tree.delete(iid)
+            except Exception:
+                pass
+        if not src or not os.path.isdir(src):
+            self._batchsdk_status(_('Select a valid source folder.'))
+            return
+        zips = self._batchsdk_list_zips(src)
+        if not zips:
+            self._batchsdk_status(_('No .zip files found in that folder.'))
+            return
+
+        try:
+            import re as _re
+            _tm = _re.search(r'(\d+)', self._batchsdk_tgt_var.get() or '')
+            tgt = int(_tm.group(1)) if _tm else None
+        except Exception:
+            tgt = None
+        self._batchsdk_status(_('Scanning %d zip(s)…') % len(zips))
+
+        def work():
+            import zipfile as _zip
+            import tempfile as _tmp
+            import shutil as _sh
+            rows = []
+            for zp in zips:
+                name = os.path.basename(zp)
+                cur = None
+                action = _('patch')
+                tmpd = None
+                try:
+                    tmpd = _tmp.mkdtemp(prefix='exfat_builder_bsdk_scan_')
+
+                    with _zip.ZipFile(zp) as zf:
+                        members = [m for m in zf.namelist()
+                                   if os.path.basename(m).lower()
+                                   == 'eboot.bin']
+                        if not members:
+                            action = _('skip — no eboot.bin')
+                        else:
+
+                            members.sort(key=lambda m: m.count('/'))
+                            zf.extract(members[0], tmpd)
+                            ebp = os.path.join(tmpd, members[0])
+                            cur = self._batchsdk_read_eboot_sdk(ebp)
+                            if cur is None:
+                                action = _('skip — no SDK field')
+                            elif tgt is not None and cur == tgt:
+                                action = _('skip — already SDK %d') % tgt
+                except Exception as e:
+                    action = _('skip — read error (%s)') % type(e).__name__
+                finally:
+                    if tmpd:
+                        _sh.rmtree(tmpd, ignore_errors=True)
+                rows.append((name,
+                             str(cur) if cur is not None else _('Unknown'),
+                             action))
+            self.after(0, self._batchsdk_fill_tree, rows)
+            self.after(0, self._batchsdk_status,
+                       _('Scanned %d zip(s). Review, then Run.') % len(rows))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _batchsdk_fill_tree(self, rows):
+        tree = getattr(self, '_batchsdk_tree', None)
+        if tree is None:
+            return
+        try:
+
+            try:
+                tree.tag_configure('bsdk_wait', foreground='#8a7fa8')
+                tree.tag_configure('bsdk_busy', foreground='#b07ad6')
+                tree.tag_configure('bsdk_ok', foreground='#4caf7d')
+                tree.tag_configure('bsdk_skip', foreground='#d6a13a')
+                tree.tag_configure('bsdk_fail', foreground='#d66a6a')
+            except Exception:
+                pass
+            for iid in tree.get_children():
+                tree.delete(iid)
+
+            self._batchsdk_row_iid = {}
+            for name, cur, action in rows:
+                iid = tree.insert('', 'end', values=(name, cur, action))
+                self._batchsdk_row_iid[name] = iid
+        except Exception:
+            pass
+
+    def _batchsdk_set_row(self, name, cur=None, action=None, state=None):
+        """Update one preview row live during a run. `name` is the zip base-
+        name; `cur` (e.g. '7→6' or '7'), `action` (e.g. '⏳ patching'), and
+        `state` (colour tag key: wait/busy/ok/skip/fail) are each optional and
+        only applied when provided. Safe if the row/tree is gone."""
+        tree = getattr(self, '_batchsdk_tree', None)
+        mapping = getattr(self, '_batchsdk_row_iid', None)
+        if tree is None or not mapping:
+            return
+        iid = mapping.get(name)
+        if not iid:
+            return
+        try:
+            if cur is not None:
+                tree.set(iid, 'cur', cur)
+            if action is not None:
+                tree.set(iid, 'action', action)
+            if state is not None:
+                tree.item(iid, tags=('bsdk_' + state,))
+
+            if state in ('busy',):
+                try:
+                    tree.see(iid)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _batchsdk_run(self):
+        """Batch-patch every zip in the source folder to the target SDK,
+        writing retagged zips to the output folder. Source is never touched.
+        Own worker + completion. Skips (and logs) zips with no eboot / no SDK
+        field / already at target; boundary-crossing zips are patched with a
+        warning logged. A summary is written at the end."""
+        if getattr(self, '_batchsdk_running', False):
+            return
+        try:
+            src = (self._batchsdk_src_var.get() or '').strip()
+        except Exception:
+            src = ''
+        try:
+            out = (self._batchsdk_out_var.get() or '').strip()
+        except Exception:
+            out = ''
+        if not src or not os.path.isdir(src):
+            app_warning(self, _('No source folder'),
+                        _('Select a valid source folder of backport zips.'))
+            return
+        if not out:
+            app_warning(self, _('No output folder'),
+                        _('Select an output folder for the retagged zips.'))
+            return
+        zips = self._batchsdk_list_zips(src)
+        if not zips:
+            app_warning(self, _('No zips'),
+                        _('No .zip files were found in the source folder.'))
+            return
+        tgt, pairs = self._batchsdk_resolve_target()
+        if tgt is None:
+            return
+
+        try:
+            if os.path.abspath(src) == os.path.abspath(out):
+                app_warning(self, _('Same folder'),
+                            _('The output folder must be different from the source folder so the original zips are never overwritten.'))
+                return
+        except Exception:
+            pass
+        try:
+            os.makedirs(out, exist_ok=True)
+        except Exception as e:
+            app_error(self, _('Output folder'),
+                      _('Could not create the output folder:\n%s') % e)
+            return
+
+        self._batchsdk_running = True
+        try:
+            self._batchsdk_run_btn.config(state='disabled',
+                                          text=_('Running…'))
+        except Exception:
+            pass
+        self._batchsdk_clear_log()
+        self._batchsdk_set_progress(0)
+
+        seed_rows = [(os.path.basename(zp), _('—'), _('… queued'))
+                     for zp in zips]
+        self._batchsdk_fill_tree(seed_rows)
+        for _sn, _sc, _sa in seed_rows:
+            self._batchsdk_set_row(_sn, state='wait')
+        self._batchsdk_log(
+            _('— Batch SDK Retag — fakelib OFF, libc patch OFF — target SDK %d —')
+            % tgt, 'info')
+
+        def worker():
+            import zipfile as _zip
+            import tempfile as _tmp
+            import shutil as _sh
+            patched = 0
+            skipped = 0
+            failed = 0
+            total = len(zips)
+            try:
+                processor, load_err = self._abp_load_bp_processor()
+                if processor is None:
+                    self.after(0, self._batchsdk_log,
+                               _('SDK patch pipeline could not be loaded: ')
+                               + (load_err or '?'),
+                               'err')
+                    self.after(0, lambda *_a: app_error(self, *_a),
+                               _('Pipeline unavailable'),
+                               _('The SDK patch pipeline could not be loaded. Nothing was changed.'))
+
+                    return
+                self.after(0, self._batchsdk_log,
+                           _('SDK patch pipeline loaded.'), 'ok')
+
+                for i, zp in enumerate(zips):
+                    name = os.path.basename(zp)
+                    self.after(0, self._batchsdk_status,
+                               _('%d/%d  ·  ✅%d ⏭%d ❌%d  ·  %s')
+                               % (i + 1, total, patched, skipped, failed,
+                                  name))
+                    self.after(0, self._batchsdk_set_progress,
+                               int(i * 100.0 / total))
+                    self.after(0, self._batchsdk_set_row, name, None,
+                               '⏳ ' + _('patching…'), 'busy')
+                    work_root = None
+                    try:
+
+                        _bsdk_tmp = self._settings.get('temp_dir') or None
+                        try:
+                            with _zip.ZipFile(zp) as _zsz:
+                                _need = sum(_zi.file_size
+                                            for _zi in _zsz.infolist())
+                            _tgt = _bsdk_tmp or _tmp.gettempdir()
+                            _free = _sh.disk_usage(_tgt).free
+                            if _need and _free < int(_need * 1.05):
+                                failed += 1
+                                self.after(0, self._batchsdk_log,
+                                           _('FAIL  %s — not enough free space in the Temp folder (need ~%.1f GB, have %.1f GB)')
+                                           % (name, _need / 1024**3,
+                                              _free / 1024**3),
+                                           'err')
+                                self.after(0, self._batchsdk_set_row, name,
+                                           _('—'),
+                                           '❌ ' + _('no temp space'),
+                                           'fail')
+                                continue
+                        except Exception:
+                            pass
+                        work_root = _tmp.mkdtemp(
+                            prefix='exfat_builder_bsdk_', dir=_bsdk_tmp)
+                        ex_dir = os.path.join(work_root, 'extract')
+                        os.makedirs(ex_dir, exist_ok=True)
+                        with _zip.ZipFile(zp) as zf:
+                            try:
+                                zf.extractall(ex_dir)
+                            except (OSError, FileNotFoundError) as _ze:
+                                skipped += 1
+                                self.after(0, self._batchsdk_log,
+                                           _('SKIP  %s — could not extract (path may be too long; enable Windows long paths or use a shorter Temp folder): %s')
+                                           % (name, _ze),
+                                           'warn')
+                                self.after(0, self._batchsdk_set_row, name,
+                                           _('—'),
+                                           '⏭ ' + _('skipped — extract failed'),
+                                           'skip')
+                                continue
+                        ebp = self._batchsdk_find_eboot(ex_dir)
+                        if not ebp:
+                            skipped += 1
+                            self.after(0, self._batchsdk_log,
+                                       _('SKIP  %s — no eboot.bin') % name,
+                                       'warn')
+                            self.after(0, self._batchsdk_set_row, name,
+                                       _('—'),
+                                       '⏭ ' + _('skipped — no eboot'),
+                                       'skip')
+                            continue
+                        cur = self._batchsdk_read_eboot_sdk(ebp)
+                        if cur is None:
+                            skipped += 1
+                            self.after(0, self._batchsdk_log,
+                                       _('SKIP  %s — no readable SDK field')
+                                       % name,
+                                       'warn')
+                            self.after(0, self._batchsdk_set_row, name,
+                                       _('Unknown'),
+                                       '⏭ ' + _('skipped — no SDK field'),
+                                       'skip')
+                            continue
+                        if cur == tgt:
+                            skipped += 1
+                            self.after(0, self._batchsdk_log,
+                                       _('SKIP  %s — eboot already SDK %d (other executables not checked)')
+                                       % (name, tgt),
+                                       'info')
+                            self.after(0, self._batchsdk_set_row, name,
+                                       str(cur),
+                                       '⏭ ' + _('skipped — eboot SDK %d')
+                                       % tgt,
+                                       'skip')
+                            continue
+
+                        self.after(0, self._batchsdk_set_row, name,
+                                   '%d→%d' % (cur, tgt), None, 'busy')
+                        if self._abp_crosses_sdk6(cur, tgt):
+                            self.after(0, self._batchsdk_log,
+                                       _('WARN  %s — SDK %d→%d crosses the SDK 6 boundary; may not boot')
+                                       % (name, cur, tgt),
+                                       'warn')
+
+                        patch_input = os.path.dirname(ebp)
+                        patched_dir = os.path.join(work_root, 'patched')
+                        os.makedirs(patched_dir, exist_ok=True)
+                        processor.decrypt_and_sign_pipeline(
+                            input_dir=patch_input,
+                            output_dir=patched_dir,
+                            sdk_pair=tgt,
+                            paid=0x3100000000000002,
+                            ptype=1,
+                            fakelib_source=None,
+                            create_backup=False,
+                            overwrite=True,
+                            apply_libc_patch=False,
+                            auto_revert_for_high_sdk=False,
+                            verbose=False,
+                            save_to_config=False)
+
+                        orig_execs = set(
+                            self._abp_scan_executables(patch_input)[0])
+                        applied = 0
+                        for p_root, p_dirs, p_files in os.walk(patched_dir):
+                            p_dirs[:] = [d for d in p_dirs
+                                         if d.lower() not in
+                                         ('decrypted', 'working')]
+                            for p_fn in p_files:
+                                p_src = os.path.join(p_root, p_fn)
+                                p_rel = os.path.relpath(p_src, patched_dir)
+                                parts = p_rel.replace('/', os.sep).split(
+                                    os.sep)
+                                base_name = os.path.basename(
+                                    patch_input.rstrip('\\/'))
+                                if parts and parts[0] == base_name:
+                                    p_rel = (os.path.join(*parts[1:])
+                                             if len(parts) > 1 else parts[0])
+                                if p_rel not in orig_execs:
+                                    continue
+                                dest = os.path.join(patch_input, p_rel)
+                                os.makedirs(os.path.dirname(dest),
+                                            exist_ok=True)
+                                _sh.copy2(p_src, dest)
+                                applied += 1
+
+                        if applied == 0:
+                            skipped += 1
+                            self.after(0, self._batchsdk_log,
+                                       _('SKIP  %s — patcher made no change')
+                                       % name,
+                                       'warn')
+                            self.after(0, self._batchsdk_set_row, name,
+                                       '%d→%d' % (cur, tgt),
+                                       '⏭ ' + _('skipped — no change'),
+                                       'skip')
+                            continue
+
+                        out_name = self._batchsdk_retag_name(name, tgt)
+                        out_path = os.path.join(out, out_name)
+                        if os.path.abspath(out_path) == os.path.abspath(zp):
+                            out_path = os.path.join(
+                                out, '_retagged_' + out_name)
+                        tmp_zip = out_path + '.part'
+                        with _zip.ZipFile(tmp_zip, 'w',
+                                          _zip.ZIP_DEFLATED) as zf:
+                            for w_root, _wd, w_files in os.walk(ex_dir):
+                                for wf in w_files:
+                                    fp = os.path.join(w_root, wf)
+                                    arc = os.path.relpath(fp, ex_dir)
+                                    zf.write(fp, arc)
+                        if os.path.exists(out_path):
+                            os.remove(out_path)
+                        os.replace(tmp_zip, out_path)
+                        patched += 1
+                        self.after(0, self._batchsdk_log,
+                                   _('OK    %s → %s  (SDK %d→%d, %d file[s])')
+                                   % (name, out_name, cur, tgt, applied),
+                                   'ok')
+                        self.after(0, self._batchsdk_set_row, name,
+                                   '%d→%d' % (cur, tgt),
+                                   '✅ ' + _('done'), 'ok')
+                    except Exception as e:
+                        failed += 1
+                        self.after(0, self._batchsdk_log,
+                                   _('FAIL  %s — %s: %s')
+                                   % (name, type(e).__name__, e),
+                                   'err')
+                        self.after(0, self._batchsdk_set_row, name, None,
+                                   '❌ ' + _('failed'), 'fail')
+                    finally:
+                        if work_root:
+                            _sh.rmtree(work_root, ignore_errors=True)
+
+                self.after(0, self._batchsdk_set_progress, 100)
+                self.after(0, self._batchsdk_log,
+                           _('—— Summary: %d patched, %d skipped, %d failed (of %d) ——')
+                           % (patched, skipped, failed, total),
+                           'info')
+                self.after(0, self._batchsdk_status,
+                           _('Done — %d patched, %d skipped, %d failed.')
+                           % (patched, skipped, failed))
+            finally:
+                self._batchsdk_running = False
+                try:
+                    self.after(0, lambda: self._batchsdk_run_btn.config(
+                        state='normal',
+                        text='⚡  ' + _('Run Batch Retag')))
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _abp_run(self):
         if self._abp_running:
             return
@@ -12884,16 +16443,16 @@ class ExFATBuilder(_TK_BASE):
         fakelib_src = self._abp_fakelib_path.get().strip() or None
 
         if not game or not os.path.isdir(game):
-            messagebox.showwarning('No game folder',
+            app_warning(self, 'No game folder',
                 'Select a PS5 game root folder first.')
             return
         if not sdk.isdigit():
-            messagebox.showwarning('Invalid SDK', 'Enter a numeric SDK version.')
+            app_warning(self, 'Invalid SDK', 'Enter a numeric SDK version.')
             return
 
         # Check eboot.bin
         if not os.path.isfile(os.path.join(game, 'eboot.bin')):
-            messagebox.showwarning('Not a game folder',
+            app_warning(self, 'Not a game folder',
                 'eboot.bin not found.\nSelect the game root folder '
                 '(the folder containing eboot.bin).')
             return
@@ -12901,7 +16460,7 @@ class ExFATBuilder(_TK_BASE):
         try:
             sdk_int = int(sdk)
         except (ValueError, TypeError):
-            messagebox.showwarning('Invalid Target SDK',
+            app_warning(self, 'Invalid Target SDK',
                 'Target SDK must be a number between 1 and 10.\n'
                 'Got: %r\n\n'
                 'Resetting to default (4).' % sdk)
@@ -12917,7 +16476,7 @@ class ExFATBuilder(_TK_BASE):
         # instead of letting the pipeline raise the cryptic "Pair number
         # must be between 1 and 10" error mid-run.
         if sdk_int < 1 or sdk_int > 10:
-            messagebox.showwarning('Target SDK out of range',
+            app_warning(self, 'Target SDK out of range',
                 'Target SDK %d is outside the supported range [1, 10].\n\n'
                 'The SDK patcher only knows version pairs 1 through 10.\n'
                 'Clamping to %d.' % (sdk_int, max(1, min(10, sdk_int))))
@@ -12934,7 +16493,7 @@ class ExFATBuilder(_TK_BASE):
         # Use a temp dir for originals/patched — zips are the permanent backup
         backup_dir = tempfile.mkdtemp(prefix='exfat_builder_abp_')
 
-        if not messagebox.askyesno('Apply Auto Backport',
+        if not app_confirm(self, 'Apply Auto Backport',
                 'Game folder: %s\n\n'
                 'Target SDK: %d\n'
                 'Fakelib: %s\n\n'
@@ -13730,6 +17289,11 @@ class ExFATBuilder(_TK_BASE):
                      else game_base
         self._log('[ZIP] Prefix: %s\n' % zip_prefix)
 
+        try:
+            _fw_tag = ('FW %dxx ' % int(sdk_int)) if sdk_int else ''
+        except (TypeError, ValueError):
+            _fw_tag = ''
+
         def _get_dest(var_name, label):
             # Step 47 (v2.6.1): consult the live Tk StringVar FIRST.
             # The form lets users browse OR type a path into the entry,
@@ -13762,7 +17326,7 @@ class ExFATBuilder(_TK_BASE):
                 if not dest:
                     return None
                 dest = dest.replace('/', '\\')
-                if messagebox.askyesno('Save location?',
+                if app_confirm(self, 'Save location?',
                         'Save\n"%s"\nas default for %s zips?' % (dest, label)):
                     self._settings[var_name] = dest
                     save_settings(self._settings)
@@ -13934,7 +17498,7 @@ class ExFATBuilder(_TK_BASE):
                 # ── Backported zip ──
                 pat_dest = _get_dest('abp_zip_pat_dest', 'backported files')
                 if pat_dest:
-                    pat_name = '%s backport files.zip' % zip_prefix
+                    pat_name = f'{_fw_tag!s}{zip_prefix!s} backport files.zip'
                     pat_zip  = os.path.join(pat_dest, pat_name)
                     self.after(0, self._abp_status_var.set,
                                'Saving backport zip...')
@@ -13953,6 +17517,15 @@ class ExFATBuilder(_TK_BASE):
                                zip_prefix,
                                orig_zip if orig_dest else '',
                                pat_zip if pat_dest else '')
+                try:
+                    if game_folder and orig_dest and orig_zip and \
+                            os.path.isfile(orig_zip):
+                        self._abp_write_managed_manifest(
+                            game_folder, sdk_int, orig_zip)
+                except Exception as _mm_err:
+                    self.after(0, self._abp_log_line,
+                               'ℹ Profile manifest not written: %s'
+                               % _mm_err, 'warn')
                 self.after(0, self._abp_done, True)
 
             except Exception as e:
@@ -13961,6 +17534,68 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._abp_done, True)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _abp_write_managed_manifest(self, game_folder, sdk_int, orig_zip):
+        """Write/update a Backport Profile Manager manifest for a completed
+        backport (v3.6.8, additive). Reuses the originals zip that _abp_zip_
+        backups just produced as the managed backup source. The manifest lets
+        the Backport Target Switcher do safe restore->verify->re-patch swaps.
+
+        Best-effort and GUI-safe: scheduled work only logs; never raises into
+        the backport flow.
+        """
+        try:
+            from ui import backport_profiles as _bpm
+        except Exception:
+            return
+        try:
+            title, title_id, _ver = get_game_info(game_folder)
+        except Exception:
+            title, title_id = '', ''
+        try:
+            base_dir = os.path.join(os.path.dirname(orig_zip), 'BackportBackup')
+            mpath = _bpm.manifest_path_for(game_folder, title_id,
+                                           base_dir=base_dir)
+            manifest = _bpm.read_manifest(mpath) or _bpm.new_manifest(
+                game_folder, title_id, title, APP_VERSION)
+            root = _bpm.backup_root_for(game_folder, title_id, base_dir)
+            try:
+                file_hashes = {}
+                import zipfile as _zf
+                with _zf.ZipFile(orig_zip, 'r') as zf:
+                    for nm in zf.namelist():
+                        if nm.endswith('/'):
+                            continue
+                        try:
+                            import hashlib as _hl
+                            h = _hl.sha256()
+                            with zf.open(nm) as fh:
+                                while True:
+                                    c = fh.read(1048576)
+                                    if not c:
+                                        break
+                                    h.update(c)
+                            file_hashes[nm] = h.hexdigest()
+                        except Exception:
+                            pass
+            except Exception:
+                file_hashes = {}
+            manifest['originals'] = {
+                'zip': (os.path.relpath(orig_zip, root).replace(os.sep, '/')
+                        if orig_zip.startswith(root) else orig_zip),
+                'zip_abs': orig_zip,
+                'zip_sha256': _bpm.sha256_file(orig_zip),
+                'files': file_hashes,
+                'snapshot_at': _bpm._now(),
+            }
+            _bpm.record_target_built(manifest, sdk_int, APP_VERSION)
+            if _bpm.write_manifest(mpath, manifest):
+                self.after(0, self._abp_log_line, '🗂 Profile manifest written: target '
+                           f'{_bpm.normalize_fw(sdk_int)!s} · {mpath!s}',
+                           'ok')
+        except Exception as e:
+            self.after(0, self._abp_log_line,
+                       'ℹ Profile manifest not written: %s' % e, 'warn')
 
     def _abp_done(self, success):
         self._abp_running = False
@@ -14287,6 +17922,7 @@ class ExFATBuilder(_TK_BASE):
                         'them back. Backups are created on the PS5. Make sure '
                         'you\'re in the PS5 Settings menu (not in YouTube) before '
                         'running.')
+        self._y2jb_register_gated_button(ab_btn)
         tk.Label(ftp_btn_row,
                  text='  \u2190 Stay in PS5 Settings menu before clicking this!',
                  font=('Segoe UI', 8), bg=SURFACE2, fg='#aa4444').pack(side='left')
@@ -14365,6 +18001,7 @@ class ExFATBuilder(_TK_BASE):
                            'for the selected region. This is required for '
                            'non-jailbroken / soft-jailbroken consoles to load '
                            'the autoloader.')
+        self._y2jb_register_gated_button(place_btn)
 
         self._y2jb_dat_status = tk.StringVar(value='')
         tk.Label(dat_body, textvariable=self._y2jb_dat_status,
@@ -14424,12 +18061,14 @@ class ExFATBuilder(_TK_BASE):
                   activebackground=BORDER, relief='flat', bd=0,
                   padx=12, pady=4, cursor='hand2',
                   command=self._y2jb_browse_icon).pack(side='left', padx=(6, 0))
-        tk.Button(ico_file_row,
+        icon_upload_btn = tk.Button(ico_file_row,
                   text='\U0001f5bc  Upload Icon to PS5',
                   font=('Segoe UI', 9, 'bold'), bg='#3a2a5a', fg=TEXT,
                   activebackground='#5a3a8a', relief='flat', bd=0,
                   padx=14, pady=4, cursor='hand2',
-                  command=self._y2jb_upload_icon).pack(side='left', padx=(8, 0))
+                  command=self._y2jb_upload_icon)
+        icon_upload_btn.pack(side='left', padx=(8, 0))
+        self._y2jb_register_gated_button(icon_upload_btn)
 
         # Warning about icon size
         tk.Label(ico_body,
@@ -14440,6 +18079,66 @@ class ExFATBuilder(_TK_BASE):
 
         self._y2jb_icon_status = tk.StringVar(value='')
         tk.Label(ico_body, textvariable=self._y2jb_icon_status,
+                 font=('Segoe UI', 8), bg=SURFACE2, fg=SUCCESS,
+                 anchor='w').pack(fill='x')
+
+        art_outer = tk.Frame(parent, bg=SURFACE2,
+                             highlightbackground=BORDER, highlightthickness=1)
+        art_outer.pack(fill='x', padx=24, pady=(0, 12))
+        art_body = tk.Frame(art_outer, bg=SURFACE2)
+        art_body.pack(fill='x', padx=14, pady=10)
+        tk.Label(art_body,
+                 text='Upload a full art set from a local folder. Sends pic0.png / pic0.dds / pic1.dds / pic2.dds (and icon0.png if present) to /user/appmeta/<TitleID>/, and icon0.png / pic0.png to /user/catalog_downloader/appmeta/<TitleID>/. Overwrite only — missing files are skipped.',
+                 font=('Segoe UI', 8), bg=SURFACE2, fg=MUTED,
+                 anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
+
+        art_reg_row = tk.Frame(art_body, bg=SURFACE2)
+        art_reg_row.pack(fill='x', pady=(0, 6))
+        tk.Label(art_reg_row, text='Region(s):',
+                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 width=12, anchor='w').pack(side='left')
+        self._y2jb_art_regions = {}
+        for reg in ('USA', 'EU', 'JP'):
+            var = tk.BooleanVar(value=True)
+            self._y2jb_art_regions[reg] = var
+            tk.Checkbutton(art_reg_row,
+                           text=f'{reg!s}  ({self.Y2JB_REGION_IDS[reg]!s})',
+                           variable=var,
+                           font=('Segoe UI', 8), bg=SURFACE2, fg=TEXT,
+                           selectcolor=BG, activebackground=SURFACE2,
+                           cursor='hand2').pack(side='left', padx=(0, 14))
+
+        self._y2jb_art_dir = tk.StringVar()
+        art_file_row = tk.Frame(art_body, bg=SURFACE2)
+        art_file_row.pack(fill='x', pady=(0, 8))
+        tk.Label(art_file_row, text='Art folder:',
+                 font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
+                 width=20, anchor='w').pack(side='left')
+        art_ef = tk.Frame(art_file_row, bg=FIELD_BG,
+                          highlightbackground=BORDER, highlightthickness=1)
+        art_ef.pack(side='left', fill='x', expand=True)
+        tk.Entry(art_ef, textvariable=self._y2jb_art_dir,
+                 font=('Consolas', 9), bg=FIELD_BG, fg=FIELD_FG,
+                 insertbackground=FIELD_FG,
+                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
+                 relief='flat', bd=4, state='readonly').pack(fill='x')
+        tk.Button(art_file_row, text='Browse',
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, relief='flat', bd=0,
+                  padx=12, pady=4, cursor='hand2',
+                  command=self._y2jb_browse_art_dir).pack(side='left',
+                                                          padx=(6, 0))
+        art_upload_btn = tk.Button(art_file_row,
+                  text='\U0001f5bc  Upload Art Set to PS5',
+                  font=('Segoe UI', 9, 'bold'), bg='#3a2a5a', fg=TEXT,
+                  activebackground='#5a3a8a', relief='flat', bd=0,
+                  padx=14, pady=4, cursor='hand2',
+                  command=self._y2jb_upload_art_set)
+        art_upload_btn.pack(side='left', padx=(8, 0))
+        self._y2jb_register_gated_button(art_upload_btn)
+
+        self._y2jb_art_status = tk.StringVar(value='')
+        tk.Label(art_body, textvariable=self._y2jb_art_status,
                  font=('Segoe UI', 8), bg=SURFACE2, fg=SUCCESS,
                  anchor='w').pack(fill='x')
 
@@ -14781,13 +18480,13 @@ class ExFATBuilder(_TK_BASE):
             name = name_var.get().strip()
             path = path_var.get().strip()
             if not name:
-                messagebox.showwarning('Missing', 'Please enter a name.', parent=win)
+                app_warning(self, 'Missing', 'Please enter a name.', parent=win)
                 return
             if not path:
-                messagebox.showwarning('Missing', 'Please select a payload file.', parent=win)
+                app_warning(self, 'Missing', 'Please select a payload file.', parent=win)
                 return
             if not path.lower().endswith(('.elf', '.bin', '.jar')):
-                messagebox.showwarning('Invalid file',
+                app_warning(self, 'Invalid file',
                     'Only .elf, .bin and .jar files are supported.', parent=win)
                 return
             entry = {'name': name, 'path': path, 'notes': notes_var.get().strip()}
@@ -14837,7 +18536,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _pl_delete(self, idx):
         name = self._pl_payloads[idx].get('name', 'this payload')
-        if not messagebox.askyesno('Delete payload',
+        if not app_confirm(self, 'Delete payload',
                 'Remove "%s" from the payload manager?\n\n'
                 '(The file itself will not be deleted)' % name):
             return
@@ -14852,7 +18551,7 @@ class ExFATBuilder(_TK_BASE):
         name = pl.get('name', os.path.basename(path))
 
         if not os.path.isfile(path):
-            messagebox.showerror('File not found',
+            app_error(self, 'File not found',
                 'Payload file not found:\n' + path +
                 '\n\nEdit the payload to update the file path.')
             return
@@ -14860,13 +18559,13 @@ class ExFATBuilder(_TK_BASE):
         ip   = self._pl_ip_var.get().strip()
         port = self._pl_port_var.get().strip()
         if not ip:
-            messagebox.showwarning('No IP',
+            app_warning(self, 'No IP',
                 'Enter your PS5 IP address in the connection bar above.')
             return
         try:
             port = int(port)
         except ValueError:
-            messagebox.showwarning('Invalid port', 'Port must be a number.')
+            app_warning(self, 'Invalid port', 'Port must be a number.')
             return
 
         self._pl_save_conn()
@@ -14915,7 +18614,7 @@ class ExFATBuilder(_TK_BASE):
         else:
             self._pl_status_var.set('\u2717 Send failed: ' + info)
             self._ps5_activity_log('error', 'Payload send failed: ' + info)
-            messagebox.showerror('Send failed',
+            app_error(self, 'Send failed',
                 'Failed to send payload to PS5:\n\n' + info +
                 '\n\nCheck:\n'
                 '\u2022 PS5 is on and jailbroken\n'
@@ -14939,7 +18638,7 @@ class ExFATBuilder(_TK_BASE):
         """Load autoload.txt into the editor and refresh the ELF file list."""
         folder = self._al_dir_var.get().strip()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning('Autoloader', 'Select a valid ps5_autoloader folder first.')
+            app_warning(self, 'Autoloader', 'Select a valid ps5_autoloader folder first.')
             return
         # Load autoload.txt
         txt_path = os.path.join(folder, 'autoload.txt')
@@ -15027,7 +18726,7 @@ class ExFATBuilder(_TK_BASE):
         if not folder:
             return
         fpath = os.path.join(folder, filename)
-        if not messagebox.askyesno('Delete payload',
+        if not app_confirm(self, 'Delete payload',
                 'Permanently delete %s from the folder?\n\nThis cannot be undone.' % filename,
                 icon='warning'):
             return
@@ -15052,7 +18751,7 @@ class ExFATBuilder(_TK_BASE):
             self._al_refresh_files()
             self._al_status_var.set('\u2713 Deleted: ' + filename)
         except Exception as e:
-            messagebox.showerror('Delete failed', str(e))
+            app_error(self, 'Delete failed', str(e))
 
     def _al_insert_filename(self, filename):
         """Insert a filename at the current cursor position in the editor."""
@@ -15091,7 +18790,7 @@ class ExFATBuilder(_TK_BASE):
         and append its name to the editor."""
         folder = self._al_dir_var.get().strip()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning('Autoloader', 'Load a ps5_autoloader folder first.')
+            app_warning(self, 'Autoloader', 'Load a ps5_autoloader folder first.')
             return
         src = filedialog.askopenfilename(
             title='Select payload to add',
@@ -15107,7 +18806,7 @@ class ExFATBuilder(_TK_BASE):
         dst   = os.path.join(folder, fname)
         # Warn if file already exists
         if os.path.isfile(dst):
-            if not messagebox.askyesno('Autoloader',
+            if not app_confirm(self, 'Autoloader',
                     '%s already exists in the folder.\nOverwrite?' % fname):
                 return
         try:
@@ -15118,13 +18817,13 @@ class ExFATBuilder(_TK_BASE):
             self._al_refresh_files()
             self._al_status_var.set('\u2713 Added %s to folder and autoload.txt' % fname)
         except Exception as e:
-            messagebox.showerror('Autoloader', 'Failed to copy file:\n' + str(e))
+            app_error(self, 'Autoloader', 'Failed to copy file:\n' + str(e))
 
     def _al_save(self):
         """Save the text editor content back to autoload.txt with Unix line endings."""
         folder = self._al_dir_var.get().strip()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning('Autoloader', 'Load a ps5_autoloader folder first.')
+            app_warning(self, 'Autoloader', 'Load a ps5_autoloader folder first.')
             return
         content = self._al_text.get('1.0', 'end-1c')
         # Normalise to Unix LF and strip excessive blank lines
@@ -15138,7 +18837,7 @@ class ExFATBuilder(_TK_BASE):
                 f.write(content)
             self._al_status_var.set('\u2713 Saved to %s' % txt_path)
         except Exception as e:
-            messagebox.showerror('Autoloader', 'Save failed:\n' + str(e))
+            app_error(self, 'Autoloader', 'Save failed:\n' + str(e))
 
     # ══════════════════════════════════════════════════════════════════════════
     # KLOG MONITOR TAB
@@ -15158,12 +18857,12 @@ class ExFATBuilder(_TK_BASE):
         ip   = self._klog_ip_var.get().strip()
         port = self._klog_port_var.get().strip()
         if not ip:
-            messagebox.showwarning('No IP', 'Enter the PS5 IP address.')
+            app_warning(self, 'No IP', 'Enter the PS5 IP address.')
             return
         try:
             port = int(port)
         except ValueError:
-            messagebox.showwarning('Invalid port', 'Port must be a number.')
+            app_warning(self, 'Invalid port', 'Port must be a number.')
             return
 
         self._klog_save_settings()
@@ -15332,7 +19031,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _klog_export(self):
         if not self._klog_lines:
-            messagebox.showwarning('Nothing to export', 'No log data to export.')
+            app_warning(self, 'Nothing to export', 'No log data to export.')
             return
         path = filedialog.asksaveasfilename(
             title='Export klog',
@@ -15351,7 +19050,7 @@ class ExFATBuilder(_TK_BASE):
             self._klog_status_var.set('Exported: ' + os.path.basename(path))
             self._klog_status_lbl.config(fg=SUCCESS)
         except Exception as e:
-            messagebox.showerror('Export failed', str(e))
+            app_error(self, 'Export failed', str(e))
 
     # ══════════════════════════════════════════════════════════════════════════
     # ADVANCED USERS TAB
@@ -15996,7 +19695,7 @@ class ExFATBuilder(_TK_BASE):
     def _ls_scan_batch(self):
         base = self._ls_game_var.get().strip()
         if not base or not os.path.isdir(base):
-            messagebox.showwarning('No folder', 'Select a folder first.')
+            app_warning(self, 'No folder', 'Select a folder first.')
             return
         self._ls_status_var.set('Scanning for games...')
         for w in self._ls_check_frame.winfo_children():
@@ -16032,11 +19731,11 @@ class ExFATBuilder(_TK_BASE):
 
         # All known 2-letter language codes
         valid_2letter = {
-            'en','ja','fr','de','es','it','pt','ru','ko','zh',
-            'ar','pl','nl','sv','tr','da','fi','no','cs','hu',
-            'ro','sk','uk','vi','th','id','el','he','hr','bg',
-            'af','ca','cy','et','eu','gl','lt','lv','ms',
-            'nb','sl','sq','sr',
+            'af','ar','bg','ca','cs','cy','da','de','el','en',
+            'es','et','eu','fi','fr','gl','he','hr','hu','id',
+            'it','ja','ko','lt','lv','ms','nb','nl','no','pl',
+            'pt','ro','ru','sk','sl','sq','sr','sv','th','tr',
+            'uk','vi','zh',
         }
 
         # BCP-47 locale folder pattern (en-US, zh-Hant, pt-BR etc.)
@@ -16045,10 +19744,10 @@ class ExFATBuilder(_TK_BASE):
             r'[a-z]{2}-[A-Z][a-z]+|[a-z]{2}-\d{3}|[a-z]{2})$')
 
         lang_container_dirs = {
-            'localization','locale','locales','lang','language','languages',
-            'audio','speech','voices','vo','subtitles','text','strings',
-            'l10n','i18n','translation','translations','movie','movies',
-            'video','videos','cutscenes','cinema','fmv',
+            'vo','fmv','i18n','l10n','lang','text','audio','movie','video',
+            'cinema','locale','movies','speech','videos','voices','locales',
+            'strings','language','cutscenes','languages','subtitles',
+            'translation','localization','translations',
         }
 
         lang_codes = '|'.join(sorted(valid_2letter, key=len, reverse=True))
@@ -16175,7 +19874,7 @@ class ExFATBuilder(_TK_BASE):
     def _ls_scan(self):
         game = self._ls_game_var.get().strip()
         if not game or not os.path.isdir(game):
-            messagebox.showwarning('No folder', 'Select a game folder first.')
+            app_warning(self, 'No folder', 'Select a game folder first.')
             return
         self._ls_status_var.set('Scanning...')
         self.update_idletasks()
@@ -16418,16 +20117,16 @@ class ExFATBuilder(_TK_BASE):
     def _ls_strip(self):
         """Backup then delete unchecked items."""
         if not self._ls_check_vars:
-            messagebox.showwarning('Nothing scanned', 'Scan a game folder first.')
+            app_warning(self, 'Nothing scanned', 'Scan a game folder first.')
             return
         to_delete = [p for p, v in self._ls_check_vars.items() if not v.get()]
         to_keep   = [p for p, v in self._ls_check_vars.items() if v.get()]
 
         if not to_delete:
-            messagebox.showinfo('Nothing to delete', 'All languages are checked to keep.')
+            app_info(self, 'Nothing to delete', 'All languages are checked to keep.')
             return
         if not to_keep:
-            if not messagebox.askyesno('Delete ALL?',
+            if not app_confirm(self, 'Delete ALL?',
                     'You are deleting ALL detected language files.\nThis may break the game.\n\nAre you sure?'):
                 return
 
@@ -16454,7 +20153,7 @@ class ExFATBuilder(_TK_BASE):
         if not backup_dest:
             return
 
-        if not messagebox.askyesno('Confirm Strip',
+        if not app_confirm(self, 'Confirm Strip',
                 '⚠ This will permanently delete %d file(s)/folder(s) '
                 '(saving ~%s):\n\n%s\n\n'
                 'A backup zip will be saved to:\n%s\n\n'
@@ -16505,7 +20204,7 @@ class ExFATBuilder(_TK_BASE):
         msg = 'Stripped %d item(s), backed up %d.' % (deleted, backed_up)
         if failed:
             msg += '\n\nFailed:\n' + '\n'.join(failed[:5])
-        messagebox.showinfo('Strip complete', msg)
+        app_info(self, 'Strip complete', msg)
         self._ls_status_var.set('Done — %d deleted, %d failed' % (deleted, len(failed)))
 
 
@@ -16812,10 +20511,12 @@ class ExFATBuilder(_TK_BASE):
                  font=('Segoe UI', 9), bg=SURFACE2, fg=MUTED,
                  anchor='w').pack(anchor='w', pady=(4, 4))
 
+        self._shutdown_on_unibuild_var = tk.BooleanVar(
+            value=self._settings.get('shutdown_on_unibuild', False))
         self._shutdown_on_exfat_var    = tk.BooleanVar(
-            value=self._settings.get('shutdown_on_exfat', True))
+            value=self._settings.get('shutdown_on_exfat', False))
         self._shutdown_on_ffpkg_var    = tk.BooleanVar(
-            value=self._settings.get('shutdown_on_ffpkg', True))
+            value=self._settings.get('shutdown_on_ffpkg', False))
         self._shutdown_on_backport_var = tk.BooleanVar(
             value=self._settings.get('shutdown_on_backport', False))
         self._shutdown_on_ftp_var      = tk.BooleanVar(
@@ -16826,6 +20527,7 @@ class ExFATBuilder(_TK_BASE):
         triggers_row = tk.Frame(inner, bg=SURFACE2)
         triggers_row.pack(fill='x')
         for var, lbl in [
+            (self._shutdown_on_unibuild_var, 'Build tab queue finished'),
             (self._shutdown_on_exfat_var,    'exFAT queue finished'),
             (self._shutdown_on_ffpkg_var,    'ffpkg queue finished'),
             (self._shutdown_on_backport_var, 'Backport finished'),
@@ -16847,6 +20549,7 @@ class ExFATBuilder(_TK_BASE):
     def _save_shutdown_settings(self):
         self._settings['shutdown_action']       = self._shutdown_action_var.get()
         self._settings['shutdown_delay']        = int(self._shutdown_delay_var.get() or 60)
+        self._settings['shutdown_on_unibuild']  = self._shutdown_on_unibuild_var.get()
         self._settings['shutdown_on_exfat']     = self._shutdown_on_exfat_var.get()
         self._settings['shutdown_on_ffpkg']     = self._shutdown_on_ffpkg_var.get()
         self._settings['shutdown_on_backport']  = self._shutdown_on_backport_var.get()
@@ -17250,6 +20953,13 @@ class ExFATBuilder(_TK_BASE):
                           tooltip='Open folder',
                           command=lambda p=output_dir: os.startfile(p)
                           ).pack(side='left', padx=1)
+            _ttl_for_log = (entry.get('title')
+                            or entry.get('title_id') or '')
+            _icon_btn(actions, '\U0001f4c4',
+                      tooltip='View log',
+                      command=lambda t=_ttl_for_log, o=output_dir:
+                          self._history_view_log(t, o)
+                      ).pack(side='left', padx=1)
             # ↻ Re-queue
             if folder and os.path.isdir(folder):
                 _icon_btn(actions, '\u21bb',
@@ -17267,8 +20977,52 @@ class ExFATBuilder(_TK_BASE):
             tk.Frame(list_frame, bg=_TC['border_2'], height=1
                      ).pack(fill='x')
 
+    def _history_view_log(self, title, output_dir):
+        """v4.0.0 Phase 2: open the build log for a history entry. Build logs
+        are saved as '{timestamp}_{game}{_FAILED}.log' in the logs dir; we open
+        the newest one whose name contains this game's title/id. If none match
+        (or we can't tell), open the logs folder so the user can find it. No
+        backend change — reuses the existing logs directory."""
+        import os as _os
+        try:
+            logs_dir = self._get_logs_dir()
+        except Exception:
+            logs_dir = _os.path.join(_os.path.expanduser('~'),
+                                     'exfat_builder_logs')
+        best = None
+        try:
+            key = ''.join(ch for ch in (title or '') if ch.isalnum()
+                          ).lower()
+            if key and _os.path.isdir(logs_dir):
+                cands = []
+                for fn in _os.listdir(logs_dir):
+                    if not fn.lower().endswith('.log'):
+                        continue
+                    norm = ''.join(ch for ch in fn if ch.isalnum()).lower()
+                    if key and key in norm:
+                        full = _os.path.join(logs_dir, fn)
+                        try:
+                            cands.append((_os.path.getmtime(full), full))
+                        except Exception:
+                            pass
+                if cands:
+                    cands.sort(reverse=True)
+                    best = cands[0][1]
+        except Exception:
+            best = None
+        target = best if best else logs_dir
+        try:
+            if _os.path.exists(target):
+                _os.startfile(target)
+            else:
+                app_info(self, 'View log',
+                         'No log file found yet. Build logs are saved to:\n\n%s'
+                         % logs_dir)
+        except Exception as e:
+            app_error(self, 'View log', str(e))
+
     def _history_clear(self):
-        if messagebox.askyesno('Clear history',
+        if app_confirm(self, 'Clear history',
                 'Delete all build history? This cannot be undone.'):
             try:
                 import os as _os
@@ -17296,6 +21050,61 @@ class ExFATBuilder(_TK_BASE):
         self._y2jb_log.delete('1.0', 'end')
         self._y2jb_log.config(state='disabled')
 
+    def _y2jb_conn_ready(self):
+        """True when the one required connection detail (PS5 IP) is set.
+        The FTP/DPI ports default to 2121/12800 so they're always valid;
+        the IP is the field the user must supply."""
+        try:
+            return bool(self._y2jb_ps5_ip.get().strip())
+        except Exception:
+            return False
+
+    def _y2jb_register_gated_button(self, btn):
+        """Register a console-touching action button for enable/disable, and
+        attach a hint tooltip that appears only while the button is disabled
+        ("Enter a PS5 IP..."). Call this AFTER any action tooltip already
+        attached to the same button: the hint tooltip must be created last so
+        that, while disabled, it wins (equal-delay Tk timers fire in creation
+        order). While enabled its text is empty, so it never shows and the
+        button's own action tooltip is unaffected."""
+        if not hasattr(self, '_y2jb_gated_buttons'):
+            self._y2jb_gated_buttons = []
+        try:
+            tip = Tooltip(btn, '')
+        except Exception:
+            tip = None
+        self._y2jb_gated_buttons.append((btn, tip))
+        ready = self._y2jb_conn_ready()
+        try:
+            btn.config(state='normal' if ready else 'disabled')
+        except Exception:
+            pass
+        if tip is not None:
+            try:
+                tip.text = '' if ready else _(
+                    'Enter a PS5 IP on the Connection tab to enable this action.')
+            except Exception:
+                pass
+
+    def _y2jb_refresh_gating(self, *_a):
+        """Enable/disable every registered console-touching button based on
+        connection readiness, and show/hide each button's disabled-state hint
+        tooltip. Wired to a trace on the PS5 IP var and called once after the
+        tab is built."""
+        ready = self._y2jb_conn_ready()
+        hint = _('Enter a PS5 IP on the Connection tab to enable this action.')
+        for item in getattr(self, '_y2jb_gated_buttons', []):
+            btn, tip = item if isinstance(item, tuple) else (item, None)
+            try:
+                btn.config(state='normal' if ready else 'disabled')
+            except Exception:
+                pass
+            if tip is not None:
+                try:
+                    tip.text = '' if ready else hint
+                except Exception:
+                    pass
+
     def _y2jb_check_pkg(self, region):
         path = self._y2jb_pkg_paths[region].get()
         if not path or not os.path.isfile(path):
@@ -17317,7 +21126,7 @@ class ExFATBuilder(_TK_BASE):
         ip   = self._y2jb_ps5_ip.get().strip()
         port = int(self._y2jb_ftp_port.get().strip() or '2121')
         if not ip:
-            messagebox.showwarning('Y2JB', 'Enter a PS5 IP address first.')
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
             return
         def worker():
             try:
@@ -17338,7 +21147,7 @@ class ExFATBuilder(_TK_BASE):
         ip   = self._y2jb_ps5_ip.get().strip()
         port = int(self._y2jb_dpi_port.get().strip() or '12800')
         if not ip:
-            messagebox.showwarning('Y2JB', 'Enter a PS5 IP address first.')
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
             return
         def worker():
             self.after(0, self._y2jb_log_write,
@@ -17385,13 +21194,13 @@ class ExFATBuilder(_TK_BASE):
     def _y2jb_install_pkg(self, region):
         pkg_path = self._y2jb_pkg_paths[region].get().strip()
         if not pkg_path or not os.path.isfile(pkg_path):
-            messagebox.showwarning('Y2JB',
+            app_warning(self, 'Y2JB',
                 'No %s PKG file selected.\nBrowse for the PKG file first.' % region)
             return
         ip       = self._y2jb_ps5_ip.get().strip()
         dpi_port = self._y2jb_dpi_port.get().strip() or '12800'
         if not ip:
-            messagebox.showwarning('Y2JB', 'Enter a PS5 IP address first.')
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
             return
 
         self._y2jb_clear_log()
@@ -17482,7 +21291,7 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._y2jb_set_progress, 0, 'Failed', '')
                 self.after(0, self._y2jb_log_write,
                            '\n[Y2JB] \u2717 Error: %s\n' % str(e))
-                self.after(0, messagebox.showerror, 'Y2JB Install Failed',
+                self.after(0, lambda *_a: app_error(self, *_a), 'Y2JB Install Failed',
                            'Failed to send %s PKG:\n\n%s\n\n'
                            'Make sure etaHEN is running with Direct Package\n'
                            'Installer V2 enabled in Services.' % (region, str(e)))
@@ -17507,7 +21316,7 @@ class ExFATBuilder(_TK_BASE):
         import ftplib
         dat_file = self._y2jb_dat_path.get().strip()
         if not dat_file or not os.path.isfile(dat_file):
-            messagebox.showwarning('Y2JB', 'Select a download0.dat file first.')
+            app_warning(self, 'Y2JB', 'Select a download0.dat file first.')
             return
         region = getattr(self, '_y2jb_dat_region', tk.StringVar(value='USA')).get()
         DAT_PATHS = {
@@ -17520,7 +21329,7 @@ class ExFATBuilder(_TK_BASE):
         ip   = self._y2jb_ps5_ip.get().strip()
         port = int(self._y2jb_ftp_port.get().strip() or '2121')
         if not ip:
-            messagebox.showwarning('Y2JB', 'Enter a PS5 IP address first.')
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
             return
         self._y2jb_dat_status.set('Connecting...')
         self._y2jb_log_write('[Y2JB] Placing download0.dat for %s region\n' % region)
@@ -17542,12 +21351,12 @@ class ExFATBuilder(_TK_BASE):
                 msg = '\u2713 download0.dat placed at %s' % remote_path
                 self.after(0, self._y2jb_dat_status.set, msg)
                 self.after(0, self._y2jb_log_write, '[Y2JB] ' + msg + '\n')
-                self.after(0, messagebox.showinfo, 'Y2JB',
+                self.after(0, lambda *_a: app_info(self, *_a), 'Y2JB',
                            'download0.dat placed successfully!\n\nPath: ' + remote_path)
             except Exception as e:
                 self.after(0, self._y2jb_dat_status.set, '\u2717 Failed: ' + str(e))
                 self.after(0, self._y2jb_log_write, '[Y2JB] Error: %s\n' % str(e))
-                self.after(0, messagebox.showerror, 'Y2JB Error', str(e))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Y2JB Error', str(e))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -17563,7 +21372,7 @@ class ExFATBuilder(_TK_BASE):
         import ftplib
         icon_file = self._y2jb_icon_path.get().strip()
         if not icon_file or not os.path.isfile(icon_file):
-            messagebox.showwarning('Y2JB', 'Select an icon0.png file first.')
+            app_warning(self, 'Y2JB', 'Select an icon0.png file first.')
             return
 
         # Validate it is a PNG and 512x512
@@ -17572,7 +21381,7 @@ class ExFATBuilder(_TK_BASE):
             with open(icon_file, 'rb') as _f:
                 sig = _f.read(8)
             if sig != b'\x89PNG\r\n\x1a\n':
-                messagebox.showwarning('Y2JB', 'Selected file is not a valid PNG.')
+                app_error(self, 'Y2JB', 'Selected file is not a valid PNG.')
                 return
             with open(icon_file, 'rb') as _f:
                 _f.read(8)           # skip signature
@@ -17583,23 +21392,23 @@ class ExFATBuilder(_TK_BASE):
                 w = struct.unpack('>I', _f.read(4))[0]
                 h = struct.unpack('>I', _f.read(4))[0]
             if w != 512 or h != 512:
-                messagebox.showwarning('Y2JB',
+                app_error(self, 'Y2JB',
                     'Icon must be exactly 512x512 pixels.\n'
                     'Your image is %dx%d.' % (w, h))
                 return
         except Exception as e:
-            messagebox.showwarning('Y2JB', 'Could not read PNG info: %s' % e)
+            app_error(self, 'Y2JB', 'Could not read PNG info: %s' % e)
             return
 
         selected = [r for r, v in self._y2jb_icon_regions.items() if v.get()]
         if not selected:
-            messagebox.showwarning('Y2JB', 'Select at least one region.')
+            app_warning(self, 'Y2JB', 'Select at least one region.')
             return
 
         ip   = self._y2jb_ps5_ip.get().strip()
         port = int(self._y2jb_ftp_port.get().strip() or '2121')
         if not ip:
-            messagebox.showwarning('Y2JB', 'Enter a PS5 IP address first.')
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
             return
 
         ICON_PATHS = {
@@ -17633,14 +21442,14 @@ class ExFATBuilder(_TK_BASE):
                 ftp.quit()
                 msg = '\u2713 Icon uploaded for: %s' % ', '.join(ok)
                 self.after(0, self._y2jb_icon_status.set, msg)
-                self.after(0, messagebox.showinfo, 'Y2JB',
+                self.after(0, lambda *_a: app_info(self, *_a), 'Y2JB',
                            'icon0.png uploaded successfully!\n\n'
                            + '\n'.join(ICON_PATHS[r] for r in ok)
                            + '\n\nRestart the PS5 or re-launch YouTube for the icon to refresh.')
             except Exception as e:
                 self.after(0, self._y2jb_icon_status.set, '\u2717 Failed: ' + str(e))
                 self.after(0, self._y2jb_log_write, '[Y2JB] Icon upload error: %s\n' % str(e))
-                self.after(0, messagebox.showerror, 'Y2JB Error', str(e))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Y2JB Error', str(e))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -17655,6 +21464,127 @@ class ExFATBuilder(_TK_BASE):
         'EU':  'PPSA01651',   # YouTube EU  (EP4381)
         'JP':  'PPSA01652',   # YouTube JP  (JP4381)
     }
+
+    def _y2jb_browse_art_dir(self):
+        """Pick a local folder containing the art files to upload."""
+        p = filedialog.askdirectory(
+            title='Select folder with icon0.png / pic0.png / pic*.dds')
+        if p:
+            self._y2jb_art_dir.set(p.replace('/', '\\'))
+
+    _Y2JB_ART_PLAN = {
+        '/user/appmeta/%s/': ['pic0.png', 'pic0.dds', 'pic1.dds', 'pic2.dds',
+                              'icon0.png'],
+        '/user/catalog_downloader/appmeta/%s/': ['icon0.png', 'pic0.png'],
+    }
+
+    def _y2jb_upload_art_set(self):
+        """Upload a set of art files from a local folder to BOTH appmeta
+        locations for the selected region(s). Overwrite only; skip missing;
+        per-file logging; passive + binary FTP."""
+        import ftplib
+        folder = self._y2jb_art_dir.get().strip()
+        if not folder or not os.path.isdir(folder):
+            app_warning(self, 'Y2JB', 'Select an art folder first.')
+            return
+
+        selected = [r for r, v in self._y2jb_art_regions.items() if v.get()]
+        if not selected:
+            app_warning(self, 'Y2JB', 'Select at least one region.')
+            return
+
+        ip = self._y2jb_ps5_ip.get().strip()
+        port = int(self._y2jb_ftp_port.get().strip() or '2121')
+        if not ip:
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
+            return
+
+        all_names = set()
+        for names in self._Y2JB_ART_PLAN.values():
+            all_names.update(names)
+        present = {n: os.path.join(folder, n)
+                   for n in all_names
+                   if os.path.isfile(os.path.join(folder, n))}
+        missing = sorted(all_names - set(present))
+
+        self._y2jb_art_status.set('Connecting...')
+        self._y2jb_log_write('[Y2JB] Art-set upload to region(s): %s\n'
+                             % ', '.join(selected))
+        for n in missing:
+            self._y2jb_log_write(
+                '[Y2JB] ○ %s not in source folder — skipped\n' % n)
+
+        def worker():
+            uploaded = 0
+            failed = 0
+            try:
+                ftp = ftplib.FTP()
+                ftp.connect(ip, port, timeout=15)
+                ftp.login()
+
+                try:
+                    ftp.set_pasv(True)
+                except Exception:
+                    pass
+                try:
+                    ftp.voidcmd('TYPE I')
+                except Exception:
+                    pass
+
+                for reg in selected:
+                    tid = self.Y2JB_REGION_IDS.get(reg)
+                    if not tid:
+                        continue
+                    for tmpl, names in self._Y2JB_ART_PLAN.items():
+                        remote_dir = (tmpl % tid).rstrip('/')
+
+                        try:
+                            ftp.mkd(remote_dir)
+                        except Exception:
+                            pass
+                        for name in names:
+                            local = present.get(name)
+                            if not local:
+                                continue
+                            remote_path = remote_dir + '/' + name
+                            try:
+                                nbytes = os.path.getsize(local)
+                            except Exception:
+                                nbytes = -1
+                            try:
+                                with open(local, 'rb') as f:
+                                    ftp.storbinary('STOR ' + remote_path, f)
+                                uploaded += 1
+                                self.after(
+                                    0, self._y2jb_log_write, '[Y2JB] ✓ '
+                                    f'{name!s} → {remote_path!s} ('
+                                    f'{("%d bytes" % nbytes) if nbytes >= 0 else "size unknown"!s})\n')
+                            except Exception as e:
+                                failed += 1
+                                self.after(
+                                    0, self._y2jb_log_write, '[Y2JB] ✗ '
+                                    f'{name!s} → {remote_path!s} FAILED: {e!s}\n')
+                try:
+                    ftp.quit()
+                except Exception:
+                    pass
+
+                summary = ('✓ Art set: %d uploaded, %d skipped, %d failed'
+                           % (uploaded, len(missing), failed))
+                self.after(0, self._y2jb_art_status.set, summary)
+                self.after(0, self._y2jb_log_write, '[Y2JB] ' + summary + '\n')
+                self.after(
+                    0, lambda *_a: app_info(self, *_a), 'Y2JB',
+                    'Art-set upload finished.\n\nUploaded: %d\nSkipped (missing locally): %d\nFailed: %d\n\nNo remote files were deleted. Restart the PS5 or re-launch the app for art to refresh.'
+                    % (uploaded, len(missing), failed))
+            except Exception as e:
+                self.after(0, self._y2jb_art_status.set,
+                           '✗ Failed: ' + str(e))
+                self.after(0, self._y2jb_log_write,
+                           '[Y2JB] Art-set upload error: %s\n' % str(e))
+                self.after(0, lambda *_a: app_error(self, *_a), 'Y2JB Error', str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _y2jb_verify_param(self, path):
         """Read param.json back and return (ok, reason). v3.0.0."""
@@ -17869,12 +21799,17 @@ class ExFATBuilder(_TK_BASE):
     def _y2jb_patch_local(self):
         folder = self._y2jb_patch_dir.get().strip()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning('Y2JB', 'Select a folder first.')
+            app_warning(self, 'Y2JB', 'Select a folder first.')
             return
         # Region & title ID from the single source of truth.
         region = getattr(self, '_y2jb_patch_region',
                           tk.StringVar(value='USA')).get()
         title_id = self.Y2JB_REGION_IDS.get(region, 'PPSA01650')
+        if not app_confirm(self, 'Y2JB — Patch Local Files',
+                'Patch the local '
+                f'{region!s} ({title_id!s}) files in:\n\n{folder!s}\n\nThis edits param.json / app.db / appinfo.db on your PC to block YouTube updates. A backup (.bak) is written next to each file before it is changed.\n\nContinue?',
+                ok_label='Patch files'):
+            return
 
         self._y2jb_clear_log()
         self._y2jb_patch_status.set('')
@@ -18057,8 +21992,7 @@ class ExFATBuilder(_TK_BASE):
         # "info" dialog even when 0 rows matched, which the user
         # could easily misread as success.
         if verify_failures:
-            messagebox.showerror(
-                'Y2JB — patches NOT applied',
+            app_error(self, 'Y2JB — patches NOT applied',
                 ('%s (%s) patch produced verification failures:\n\n%s'
                  '\n\nThe files on disk are in an indeterminate '
                  'state. Restore the .bak files (rename them back '
@@ -18066,7 +22000,7 @@ class ExFATBuilder(_TK_BASE):
                  'again with the correct region selected.'
                  % (region, title_id, summary)))
         else:
-            messagebox.showinfo('Y2JB Patch Complete',
+            app_info(self, 'Y2JB Patch Complete',
                 '%s (%s) patch results:\n\n%s\n\nBackups created '
                 'with .bak extension.'
                 % (region, title_id, summary))
@@ -18081,9 +22015,9 @@ class ExFATBuilder(_TK_BASE):
         ip   = self._y2jb_ps5_ip.get().strip()
         port = int(self._y2jb_ftp_port.get().strip() or '2121')
         if not ip:
-            messagebox.showwarning('Y2JB', 'Enter a PS5 IP address first.')
+            app_warning(self, 'Y2JB', 'Enter a PS5 IP address first.')
             return
-        if not messagebox.askyesno('Y2JB Auto-Block',
+        if not app_confirm(self, 'Y2JB Auto-Block',
                 'This will patch ALL 3 files for %s (%s) directly on your PS5:\n\n'
                 '  • param.json  — contentVersion + versionFileUri\n'
                 '  • appinfo.db  — VERSION_FILE_URI + CONTENT_VERSION\n'
@@ -18388,7 +22322,7 @@ class ExFATBuilder(_TK_BASE):
                                     and ai_status[0] != '\u2713'
                                     and ap_status[0] != '\u2713')
                 if nothing_patched:
-                    self.after(0, messagebox.showerror,
+                    self.after(0, lambda *_a: app_error(self, *_a),
                         'Y2JB — nothing patched',
                         ('No patches were applied for %s (%s).\n\n%s'
                          '\n\nLikely causes:\n'
@@ -18398,7 +22332,7 @@ class ExFATBuilder(_TK_BASE):
                          'not commit writes'
                          % (region, title_id, summary)))
                 elif verify_failures:
-                    self.after(0, messagebox.showerror,
+                    self.after(0, lambda *_a: app_error(self, *_a),
                         'Y2JB — patches NOT applied to all files',
                         ('Some files reported verification failures. '
                          'The .bak files on your PS5 can be renamed '
@@ -18407,7 +22341,7 @@ class ExFATBuilder(_TK_BASE):
                          % (region, title_id, summary,
                             '\n  \u2022 '.join(verify_failures))))
                 else:
-                    self.after(0, messagebox.showinfo,
+                    self.after(0, lambda *_a: app_info(self, *_a),
                         'Y2JB Auto-Block',
                         '\u2713 ' + msg
                         + '\n\nEvery patch was verified by reading '
@@ -18417,7 +22351,7 @@ class ExFATBuilder(_TK_BASE):
                            '\u2717 Failed: ' + str(e))
                 self.after(0, self._y2jb_log_write,
                            '[Y2JB] Error: %s\n' % str(e))
-                self.after(0, messagebox.showerror,
+                self.after(0, lambda *_a: app_error(self, *_a),
                            'Y2JB FTP Error', str(e))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -18569,7 +22503,7 @@ class ExFATBuilder(_TK_BASE):
                 import base64 as _b64
                 html_bytes = _b64.b64decode(_TUTORIAL_HTML_B64)
             except Exception:
-                messagebox.showwarning('Tutorial not available',
+                app_warning(self, 'Tutorial not available',
                     'Could not load the tutorial file.')
                 return
         try:
@@ -18580,7 +22514,7 @@ class ExFATBuilder(_TK_BASE):
             tmp.close()
             webbrowser.open('file:///' + tmp.name.replace('\\', '/'))
         except Exception as e:
-            messagebox.showerror('Error', str(e))
+            app_error(self, 'Error', str(e))
 
     def _build_library_tab(self, parent):
         # Step 40 (v2.5.4): Library tab now hosts two sub-tabs —
@@ -18700,7 +22634,7 @@ class ExFATBuilder(_TK_BASE):
         if affected:
             msg += '\n\n%d game%s currently shown from this folder will be hidden.' % (
                 affected, '' if affected == 1 else 's')
-        if not messagebox.askyesno('Remove scan folder', msg):
+        if not app_confirm(self, 'Remove scan folder', msg):
             return
         self._lib_folders.pop(idx)
         self._settings['lib_folders'] = self._lib_folders
@@ -18715,7 +22649,7 @@ class ExFATBuilder(_TK_BASE):
 
     def _lib_scan(self):
         if not self._lib_folders:
-            messagebox.showwarning('No folders',
+            app_warning(self, 'No folders',
                 'Add at least one scan folder first.')
             return
         self._lib_status_var.set('Counting folders...')
@@ -18728,7 +22662,24 @@ class ExFATBuilder(_TK_BASE):
                                        before=self._lib_canvas.master)
         self._lib_set_scan_progress(0, 0, 0)
 
+        self._lib_scan_gen += 1
+        my_gen = self._lib_scan_gen
+
+        def _lib_sig(wrapper, eboot_root):
+            try:
+                wm = os.path.getmtime(wrapper)
+            except Exception:
+                wm = 0
+            eb = os.path.join(eboot_root, 'eboot.bin')
+            try:
+                em = os.path.getmtime(eb)
+            except Exception:
+                em = 0
+            return (round(wm, 2), eboot_root, round(em, 2))
+
         def worker():
+            import time as _time
+            _t_disc = _time.time()
             # First pass — count total subfolders so we can show progress
             total_entries = 0
             for base in self._lib_folders:
@@ -18750,9 +22701,10 @@ class ExFATBuilder(_TK_BASE):
                         if not entry.is_dir():
                             continue
                         if (entry.name.lower() in {
-                                '$recycle.bin', 'system volume information',
-                                '$sysreset', '$windows.~bt', '$windows.~ws',
-                                'recovery', 'recycler', 'found.000', 'lost+found'}
+                                '$sysreset', 'found.000', 'lost+found',
+                                '$windows.~bt', '$windows.~ws', 'recovery',
+                                'recycler', '$recycle.bin',
+                                'system volume information'}
                                 or entry.name.startswith('.')):
                             continue
                         folder = entry.path
@@ -18816,52 +22768,91 @@ class ExFATBuilder(_TK_BASE):
                                 if m:
                                     title_id = m.group(1).upper()
                                     break
-                        cover   = self._load_cover_art(eboot_root)
-                        size    = self._get_folder_size(folder)
-                        sfo_inf = self._read_sfo_info(eboot_root)
-                        sdk_v   = sfo_inf.get('SYSTEM_VER', 0) if sfo_inf else 0
-                        # Deep fallback: if shallow SFO/JSON didn't yield a
-                        # version, walk the folder for any param.json/sfo —
-                        # catches DLPSGAME-style nested dumps where the
-                        # meta files live a few levels under eboot.
-                        if not sdk_v:
-                            try:
-                                deep = ExFATBuilder._read_sdk_from_folder(folder)
-                                if deep:
-                                    sdk_v = deep
-                            except Exception as _e:
-                                try:
-                                    self._log(
-                                        '[SCAN] Deep SDK probe failed for %s: %r\n'
-                                        % (folder, _e))
-                                except Exception:
-                                    pass
-                            if not sdk_v:
-                                try:
-                                    deep = ExFATBuilder._read_sdk_from_folder(eboot_root)
-                                    if deep:
-                                        sdk_v = deep
-                                except Exception as _e:
-                                    try:
-                                        self._log(
-                                            '[SCAN] Deep SDK probe failed for %s: %r\n'
-                                            % (eboot_root, _e))
-                                    except Exception:
-                                        pass
                         games.append({
                             'folder':     eboot_root,
+                            'wrapper':    folder,
                             'title':      title or title_id or os.path.basename(folder),
                             'title_id':   title_id or '',
                             'version':    version or '',
-                            'cover':      cover,
-                            'size':       size,
-                            'system_ver': sdk_v,
+                            'cover':      None,
+                            'size':       0,
+                            'system_ver': 0,
+                            '_enriched':  False,
                         })
                 except Exception:
                     pass
 
             games.sort(key=lambda g: g['title'].lower())
+            try:
+                self._log('[LIBRARY] discovery pass: %d games from %d folders in %.2fs\n'
+                          % (len(games), scanned, _time.time() - _t_disc))
+            except Exception:
+                pass
+
+            if my_gen != self._lib_scan_gen:
+                return
+
             self.after(0, self._lib_scan_done, games)
+
+            _t_enr = _time.time()
+            _time.sleep(0.05)
+            cache = self._lib_enrich_cache
+            hits = misses = 0
+            done = 0
+            for g in games:
+                if my_gen != self._lib_scan_gen:
+                    return
+                wrapper = g.get('wrapper') or g['folder']
+                eboot_root = g['folder']
+                sig = _lib_sig(wrapper, eboot_root)
+                ent = cache.get(wrapper)
+                if ent and ent.get('sig') == sig:
+                    g['size'] = ent.get('size', 0)
+                    g['cover'] = ent.get('cover')
+                    g['system_ver'] = ent.get('system_ver', 0)
+                    hits += 1
+                else:
+                    try:
+                        cover = self._load_cover_art(eboot_root)
+                    except Exception:
+                        cover = None
+                    try:
+                        size = self._get_folder_size(wrapper)
+                    except Exception:
+                        size = 0
+                    sdk_v = 0
+                    try:
+                        sfo_inf = self._read_sfo_info(eboot_root)
+                        sdk_v = sfo_inf.get('SYSTEM_VER', 0) if sfo_inf else 0
+                    except Exception:
+                        sdk_v = 0
+                    if not sdk_v:
+                        for probe_dir in (wrapper, eboot_root):
+                            try:
+                                deep = ExFATBuilder._read_sdk_from_folder(probe_dir)
+                                if deep:
+                                    sdk_v = deep
+                                    break
+                            except Exception:
+                                pass
+                    g['size'] = size
+                    g['cover'] = cover
+                    g['system_ver'] = sdk_v
+                    cache[wrapper] = {'sig': sig, 'size': size,
+                                      'cover': cover, 'system_ver': sdk_v}
+                    misses += 1
+                g['_enriched'] = True
+                done += 1
+                if done % 6 == 0 and my_gen == self._lib_scan_gen:
+                    self.after(0, self._lib_apply_filter)
+
+            try:
+                self._log('[LIBRARY] enrichment pass: %d games in %.2fs (cache hit %d / miss %d)\n'
+                          % (done, _time.time() - _t_enr, hits, misses))
+            except Exception:
+                pass
+            if my_gen == self._lib_scan_gen:
+                self.after(0, self._lib_reconcile_after_enrich)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -18881,27 +22872,40 @@ class ExFATBuilder(_TK_BASE):
         except Exception:
             pass
 
+    def _lib_dedupe(self, games):
+        if not games:
+            return games
+
+        def _better(a, b):
+            sa, sb = (a.get('size', 0) or 0), (b.get('size', 0) or 0)
+            if sa != sb:
+                return sa > sb
+            wa = a.get('wrapper') or a.get('folder') or ''
+            wb = b.get('wrapper') or b.get('folder') or ''
+            da, db = wa.count(os.sep), wb.count(os.sep)
+            if da != db:
+                return da < db
+            ea = (a.get('folder') or '').count(os.sep) - da
+            eb = (b.get('folder') or '').count(os.sep) - db
+            return ea < eb
+
+        best_by_id = {}
+        no_id = []
+        for g in games:
+            tid = (g.get('title_id') or '').upper().replace('-', '')
+            if not tid:
+                no_id.append(g)
+                continue
+            cur = best_by_id.get(tid)
+            if cur is None or _better(g, cur):
+                best_by_id[tid] = g
+        out = list(best_by_id.values()) + no_id
+        out.sort(key=lambda g: (g.get('title') or
+                                g.get('title_id') or '').lower())
+        return out
+
     def _lib_scan_done(self, games):
-        # Step 29 (v2.2.10): dedupe by title_id, keeping the LARGEST
-        # entry. Backport residue, partial decrypts, and other
-        # non-playable subfolders that share a PPSA with a real dump
-        # show as duplicate cards with much smaller sizes. Users want
-        # only the playable copy.
-        if games:
-            best_by_id = {}
-            no_id = []
-            for g in games:
-                tid = (g.get('title_id') or '').upper().replace('-', '')
-                if not tid:
-                    no_id.append(g)
-                    continue
-                cur = best_by_id.get(tid)
-                if cur is None or g.get('size', 0) > cur.get('size', 0):
-                    best_by_id[tid] = g
-            games = list(best_by_id.values()) + no_id
-            # Preserve original sort order roughly by re-sorting on title
-            games.sort(key=lambda g: (g.get('title') or
-                                       g.get('title_id') or '').lower())
+        games = self._lib_dedupe(games)
 
         self._lib_games = games
         # Fill bar to 100% and hide after a moment
@@ -18932,6 +22936,28 @@ class ExFATBuilder(_TK_BASE):
                 _('Last scan: ') + time.strftime('%d/%m/%Y %H:%M'))
         self._lib_apply_filter()
 
+    def _lib_reconcile_after_enrich(self):
+        try:
+            self._lib_games = self._lib_dedupe(self._lib_games)
+        except Exception:
+            pass
+        n_games = len(self._lib_games)
+        n_folders = len(self._lib_folders)
+        try:
+            self._lib_status_var.set(
+                str(n_games) + ' game(s) found across ' +
+                str(n_folders) + ' folder(s)')
+        except Exception:
+            pass
+        if hasattr(self, '_lib_count_var'):
+            self._lib_count_var.set(
+                '%d game%s \u00b7 %d folder%s' %
+                (n_games, '' if n_games == 1 else 's',
+                 n_folders, '' if n_folders == 1 else 's'))
+        if hasattr(self, '_lib_stat_games_var'):
+            self._lib_stat_games_var.set(str(n_games))
+        self._lib_apply_filter()
+
     def _lib_apply_filter(self):
         query = self._lib_search_var.get().lower().strip() \
             if hasattr(self, '_lib_search_var') else ''
@@ -18946,28 +22972,44 @@ class ExFATBuilder(_TK_BASE):
         else:
             self._lib_render_grid(filtered)
 
+    def _lib_empty_state(self, parent):
+        """Presentation-only centered empty state for the grid/list area
+        when there are no games to show. No logic — just a friendlier
+        placeholder than a bare label."""
+        wrap = tk.Frame(parent, bg=COLORS['bg_1'])
+        wrap.pack(fill='x', pady=48)
+        tk.Label(wrap, text='\U0001f4c1', font=('Segoe UI', 30),
+                 bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack()
+        tk.Label(wrap, text=_('No games to show'),
+                 font=(FONTS['h3'][0], 13, 'bold'),
+                 bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(pady=(10, 2))
+        tk.Label(wrap,
+                 text=_('Add a folder of PS5 dumps, then Scan to populate your library.'),
+                 font=FONTS['meta'], bg=COLORS['bg_1'],
+                 fg=COLORS['fg_4']).pack()
+
     def _lib_render_list(self, games=None):
         if games is None:
             games = self._lib_games
         for w in self._lib_grid_frame.winfo_children():
             w.destroy()
         if not games:
-            tk.Label(self._lib_grid_frame, text='No games found',
-                     font=('Segoe UI', 11), bg=BG, fg=MUTED,
-                     pady=40).pack()
+            self._lib_empty_state(self._lib_grid_frame)
             return
         for i, game in enumerate(games):
-            row_bg = QUEUE_ODD if i % 2 == 0 else QUEUE_EVEN
-            row = tk.Frame(self._lib_grid_frame, bg=row_bg, cursor='hand2')
-            row.pack(fill='x')
+            row_bg = COLORS['bg_2'] if i % 2 == 0 else COLORS['bg_3']
+            row = tk.Frame(self._lib_grid_frame, bg=row_bg, cursor='hand2',
+                           highlightbackground=COLORS['border_2'],
+                           highlightthickness=1)
+            row.pack(fill='x', pady=1)
 
             # Cover thumbnail (small)
-            thumb_lbl = tk.Label(row, bg=row_bg, text='\U0001f3ae',
-                                  font=('Segoe UI', 14), fg='#333333',
+            thumb_lbl = tk.Label(row, bg=COLORS['bg_4'], text='\U0001f3ae',
+                                  font=('Segoe UI', 14), fg=COLORS['fg_5'],
                                   width=4, height=2)
-            thumb_lbl.pack(side='left', padx=(8, 6), pady=4)
+            thumb_lbl.pack(side='left', padx=(10, 10), pady=6)
             if game.get('cover'):
-                def load_thumb(path=game['cover'], lbl=thumb_lbl, bg=row_bg):
+                def load_thumb(path=game['cover'], lbl=thumb_lbl):
                     try:
                         img = _load_cover_image(path, target=40)
                         if img is None:
@@ -18984,13 +23026,14 @@ class ExFATBuilder(_TK_BASE):
             info_col = tk.Frame(row, bg=row_bg)
             info_col.pack(side='left', fill='x', expand=True, pady=6)
             tk.Label(info_col, text=game['title'],
-                     font=('Segoe UI', 9, 'bold'), bg=row_bg, fg=TEXT,
+                     font=(FONTS['body'][0], 10, 'bold'),
+                     bg=row_bg, fg=COLORS['fg_0'],
                      anchor='w').pack(anchor='w')
             meta = game['title_id']
             if game['version']:
-                meta += '  v' + game['version']
+                meta += '  \u00b7  v' + game['version']
             tk.Label(info_col, text=meta,
-                     font=('Segoe UI', 8), bg=row_bg, fg=INFO_FG,
+                     font=FONTS['meta'], bg=row_bg, fg=COLORS['fg_4'],
                      anchor='w').pack(anchor='w')
 
             # Size
@@ -18999,8 +23042,8 @@ class ExFATBuilder(_TK_BASE):
                       if game['size'] >= 1024**3
                       else '%d MB' % (game['size'] // 1024**2))
                 tk.Label(row, text=sz,
-                         font=('Segoe UI', 8), bg=row_bg, fg='#444444',
-                         anchor='e').pack(side='right', padx=12)
+                         font=FONTS['mono_sm'], bg=row_bg, fg=COLORS['fg_3'],
+                         anchor='e').pack(side='right', padx=14)
 
             # Bind click / right-click to context menu
             def _bind_ctx(widgets, g=game):
@@ -19016,10 +23059,7 @@ class ExFATBuilder(_TK_BASE):
         for w in self._lib_grid_frame.winfo_children():
             w.destroy()
         if not games:
-            tk.Label(self._lib_grid_frame,
-                     text='No games found',
-                     font=('Segoe UI', 11), bg=BG, fg=MUTED,
-                     pady=40).pack()
+            self._lib_empty_state(self._lib_grid_frame)
             return
         try:
             canvas_w = self._lib_canvas.winfo_width()
@@ -19199,18 +23239,17 @@ class ExFATBuilder(_TK_BASE):
         menu.add_command(label='\U0001f3ae  ' + game['title'],
                          state='disabled', font=('Segoe UI', 9, 'bold'))
         menu.add_separator()
-        menu.add_command(label='\u2795  Add to exFAT Queue',
+        menu.add_command(label='\U0001f528  Build',
                          command=lambda: self._lib_quick_add(game))
-        menu.add_command(label='\u2795  Add to ffpkg Queue',
-                         command=lambda: self._lib_quick_add_ffpkg(game))
-        menu.add_command(label='\U0001f4cb  View details',
+        menu.add_command(label='\u26a1  Backport',
+                         command=lambda: self._lib_auto_backport(game))
+        menu.add_command(label='\U0001f4c2  Open Folder',
+                         command=lambda: self._open_folder(game['folder']))
+        menu.add_command(label='\U0001f4cb  Details',
                          command=lambda: self._lib_show_detail(game))
         menu.add_separator()
-        menu.add_command(label='\u26a1  Auto Backport',
-                         command=lambda: self._lib_auto_backport(game))
-        menu.add_separator()
-        menu.add_command(label='\U0001f4c2  Open folder',
-                         command=lambda: self._open_folder(game['folder']))
+        menu.add_command(label='\u2795  Add to ffpkg Queue',
+                         command=lambda: self._lib_quick_add_ffpkg(game))
         menu.add_command(label='\U0001f5d1  Remove from library',
                          command=lambda: self._lib_remove_game(game))
         menu.tk_popup(event.x_root, event.y_root)
@@ -19220,7 +23259,7 @@ class ExFATBuilder(_TK_BASE):
         games = [g for g in getattr(self, '_lib_games', [])
                  if os.path.isdir(g.get('folder', ''))]
         if not games:
-            messagebox.showwarning('No games',
+            app_warning(self, 'No games',
                 'No games found in library. Add a folder and scan first.')
             return
 
@@ -19323,13 +23362,13 @@ class ExFATBuilder(_TK_BASE):
         try:
             sdk_int = int(sdk_var.get())
         except (ValueError, TypeError):
-            messagebox.showwarning('Invalid Target SDK',
+            app_warning(self, 'Invalid Target SDK',
                 'Target SDK must be a number between 1 and 10.\n'
                 'Got: %r\n\nUsing default (4).' % sdk_var.get())
             sdk_int = 4
         # Clamp to SDKVersionPatcher's supported range [1,10]
         if sdk_int < 1 or sdk_int > 10:
-            messagebox.showwarning('Target SDK out of range',
+            app_warning(self, 'Target SDK out of range',
                 'Target SDK %d is outside the supported range [1, 10].\n'
                 'Clamping to %d.' % (sdk_int, max(1, min(10, sdk_int))))
             sdk_int = max(1, min(10, sdk_int))
@@ -19338,7 +23377,7 @@ class ExFATBuilder(_TK_BASE):
 
         fakelib_src = self._settings.get('abp_fakelib', '').strip() or None
 
-        if not messagebox.askyesno('Backport All',
+        if not app_confirm(self, 'Backport All',
                 'Backport %d game(s) with SDK %d?\n\n%s\n\n'
                 '%s\n\n'
                 'This will run sequentially — may take a long time.'
@@ -19590,8 +23629,12 @@ class ExFATBuilder(_TK_BASE):
                                         extra_files=_orig_extras, excl=['fakelib'])
                                 _glog('📦 Originals zip saved')
                             if pat_dest and os.path.isdir(pat_dest):
+                                try:
+                                    _fw_tag = ('FW %dxx ' % int(sdk_int)) if sdk_int else ''
+                                except (TypeError, ValueError):
+                                    _fw_tag = ''
                                 saved_pat = os.path.join(
-                                    pat_dest, self._apply_name_case(prefix) + ' backport files.zip')
+                                    pat_dest, _fw_tag + self._apply_name_case(prefix) + ' backport files.zip')
                                 _zf_dir(patched_dir, saved_pat)
                                 _glog('📦 Backport zip saved')
 
@@ -19620,7 +23663,7 @@ class ExFATBuilder(_TK_BASE):
                     % (ok_count, fail_count))
                 self._log('[BACKPORT ALL] Complete — %d done, %d failed\n'
                           % (ok_count, fail_count))
-                messagebox.showinfo('Backport All complete',
+                app_info(self, 'Backport All complete',
                     '%d game(s) backported ✓\n%d failed'
                     % (ok_count, fail_count))
             self.after(0, finish)
@@ -19638,6 +23681,25 @@ class ExFATBuilder(_TK_BASE):
         self._abp_game_var.set(game['folder'])
         self.after(300, self._abp_detect_sdk)
     def _lib_quick_add(self, game):
+        folder = (game or {}).get('folder', '')
+        if not folder or not os.path.isdir(folder):
+            app_error(self, 'Build',
+                      'That game folder no longer exists:\n\n%s' % folder)
+            return
+        hook = getattr(self, '_uq_load_folder_and_add', None)
+        if callable(hook):
+            try:
+                self._switch_tab('build')
+            except Exception:
+                pass
+            try:
+                hook(folder)
+                self._set_status('Added to Build queue: '
+                                 + (game.get('title') or game.get('title_id')
+                                    or os.path.basename(folder)), SUCCESS)
+            except Exception as e:
+                app_error(self, 'Build', str(e))
+            return
         odir = self.output_dir.get().strip()
         if not odir:
             odir = filedialog.askdirectory(title='Select output directory for ' + game['title'])
@@ -19832,16 +23894,320 @@ class ExFATBuilder(_TK_BASE):
         from ui.tab_dump_rename import build_dump_rename_tab
         build_dump_rename_tab(parent, self)
 
+    def _dumps_find_eboot_root(self, path):
+        """Return the folder that actually holds eboot.bin for `path`:
+        either `path` itself, or a single child wrapper folder. Returns
+        None if no eboot.bin is found and the name doesn't look like a
+        PS5 title id."""
+        try:
+            if os.path.isfile(os.path.join(path, 'eboot.bin')):
+                return path
+            for sub in os.scandir(path):
+                if sub.is_dir() and os.path.isfile(
+                        os.path.join(sub.path, 'eboot.bin')):
+                    return sub.path
+        except Exception:
+            pass
+        if re.search(r'(?:PPSA|CUSA|PPLH)\d{5}',
+                     os.path.basename(path), re.IGNORECASE):
+            return path
+        return None
+
+    def _dumps_proposed_name(self, model):
+        """Build the proposed name for one dump per the active preset.
+        Reuses sanitize_filename so naming stays identical to the rest of
+        the app. Returns a name WITHOUT extension (dumps are folders)."""
+        preset = 'ppsa_title_v'
+        try:
+            preset = self._dumps_naming_preset_var.get() or 'ppsa_title_v'
+        except Exception:
+            pass
+        title = model.get('title') or ''
+        title_id = model.get('title_id') or ''
+        version = model.get('version') or ''
+        try:
+            if (getattr(self, '_dumps_uppercase_id_var', None)
+                    and self._dumps_uppercase_id_var.get()
+                    and title_id):
+                title_id = title_id.upper()
+        except Exception:
+            pass
+        parts = []
+        if title_id:
+            parts.append(title_id)
+        if preset in ('ppsa_title', 'ppsa_title_v') and title and title != title_id:
+            parts.append(title)
+        if not parts:
+            return ''
+        name = ' '.join(parts)
+        if preset == 'ppsa_title_v' and version:
+            name = name + ' (' + version + ')'
+        try:
+            sanitize = (not hasattr(self, '_dumps_sanitize_var')) or \
+                self._dumps_sanitize_var.get()
+        except Exception:
+            sanitize = True
+        if sanitize:
+            name = sanitize_filename(name)
+            name = name.rstrip(' .')
+        return name
+
+    def _dumps_regenerate_names(self):
+        """Recompute the proposed-name StringVar for every scanned dump
+        from its model dict, per the active naming preset. Safe to call
+        from the UI thread; does not touch disk."""
+        items = getattr(self, '_dumps_items', None) or []
+        model = getattr(self, '_dumps_model', None) or []
+        for i, item in enumerate(items):
+            try:
+                full, name_var, chk_var, size_var, status_var = item
+            except Exception:
+                continue
+            m = model[i] if i < len(model) else {}
+            proposed = self._dumps_proposed_name(m)
+            try:
+                name_var.set(proposed)
+            except Exception:
+                pass
+            try:
+                if not proposed:
+                    status_var.set(_('No PPSA found'))
+                elif proposed == os.path.basename(full):
+                    status_var.set(_('Already named'))
+                else:
+                    status_var.set(_('Ready'))
+            except Exception:
+                pass
+
+    def _dumps_scan(self):
+        """Scan the chosen source folder for PS5 dumps on a worker thread.
+        Populates app._dumps_items (5-tuples) and app._dumps_model (dicts),
+        then schedules _dumps_scan_done(found) on the UI thread. Reuses the
+        unchanged get_game_info engine for detection."""
+        try:
+            src = (self._dumps_src_var.get() or '').strip()
+        except Exception:
+            src = ''
+        if not src or not os.path.isdir(src):
+            self._dumps_status_var.set(_('Select a valid source folder.'))
+            return
+        if getattr(self, '_dumps_scanning', False):
+            return
+        try:
+            self._settings['dumps_last_src'] = src
+        except Exception:
+            pass
+        self._dumps_items = []
+        self._dumps_model = []
+        self._dumps_iid_to_idx = {}
+        self._dumps_scanning = True
+        try:
+            self._dumps_pbar.configure(mode='indeterminate')
+            self._dumps_pbar.start(12)
+        except Exception:
+            pass
+        self._dumps_status_var.set(_('Scanning…'))
+        self._dumps_scan_gen = getattr(self, '_dumps_scan_gen', 0) + 1
+        _my_gen = self._dumps_scan_gen
+
+        def worker():
+            import time as _time
+            found = 0
+            _t_meta = _time.time()
+            try:
+                entries = sorted(os.scandir(src), key=lambda e: e.name.lower())
+            except Exception as e:
+                self.after(0, self._dumps_status_var.set,
+                           _('Scan failed:') + ' ' + str(e))
+                self._dumps_scanning = False
+                self.after(0, getattr(self, '_dumps_scan_done', lambda *_a: None), 0)
+                return
+            _size_jobs = []
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                eboot_root = self._dumps_find_eboot_root(entry.path)
+                if not eboot_root:
+                    continue
+                try:
+                    title, title_id, version = get_game_info(eboot_root)
+                except Exception:
+                    title, title_id, version = ('', '', '')
+                if not title_id:
+                    for cand in (entry.name, os.path.basename(eboot_root)):
+                        m = re.search(r'((?:PPSA|CUSA|PPLH)\d{5})',
+                                      cand, re.IGNORECASE)
+                        if m:
+                            title_id = m.group(1).upper()
+                            break
+                model = {'full': entry.path, 'eboot_root': eboot_root,
+                         'title': title, 'title_id': title_id,
+                         'version': version, 'size_bytes': 0}
+
+                def _add(entry_path=entry.path, model=model):
+                    name_var = tk.StringVar()
+                    chk_var = tk.BooleanVar(value=True)
+                    size_var = tk.StringVar(value=_('calculating…'))
+                    status_var = tk.StringVar(value='')
+                    self._dumps_items.append(
+                        (entry_path, name_var, chk_var, size_var, status_var))
+                    self._dumps_model.append(model)
+                    idx = len(self._dumps_items) - 1
+                    self._dumps_iid_to_idx[entry_path] = idx
+                    _size_jobs.append((entry_path, size_var, model))
+                self.after(0, _add)
+                found += 1
+            try:
+                self._log('[DUMP_RENAME] metadata scan: %d folders in %.2fs\n'
+                          % (found, _time.time() - _t_meta))
+            except Exception:
+                pass
+            if _my_gen != getattr(self, '_dumps_scan_gen', _my_gen):
+                return
+            self.after(0, getattr(self, '_dumps_scan_done', lambda *_a: None), found)
+            _t_size = _time.time()
+            _done = 0
+            try:
+                _time.sleep(0.05)
+                for entry_path, size_var, model in list(_size_jobs):
+                    if _my_gen != getattr(self, '_dumps_scan_gen', _my_gen):
+                        try:
+                            self._log('[DUMP_RENAME] size pass superseded by a newer scan — stopping.\n')
+                        except Exception:
+                            pass
+                        return
+                    try:
+                        size_bytes = self._get_folder_size(entry_path)
+                    except Exception:
+                        size_bytes = 0
+                    if size_bytes >= 1073741824:
+                        size_str = '%.2f GB' % (size_bytes / 1073741824)
+                    elif size_bytes:
+                        size_str = '%.0f MB' % (size_bytes / 1048576)
+                    else:
+                        size_str = '—'
+
+                    def _set(sv=size_var, s=size_str, m=model, b=size_bytes,
+                             g=_my_gen):
+                        if g != getattr(self, '_dumps_scan_gen', g):
+                            return
+                        try:
+                            sv.set(s)
+                        except Exception:
+                            pass
+                        m['size_bytes'] = b
+                    self.after(0, _set)
+                    _done += 1
+                    if _done % 4 == 0:
+                        _time.sleep(0.01)
+                try:
+                    self._log('[DUMP_RENAME] size pass: %d folders in %.2fs\n'
+                              % (_done, _time.time() - _t_size))
+                except Exception:
+                    pass
+            finally:
+                if _my_gen == getattr(self, '_dumps_scan_gen', _my_gen):
+                    self._dumps_scanning = False
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dumps_apply(self):
+        """Rename every checked dump to its proposed name (in-place, or into
+        app._dumps_dst_var if set). Runs on a worker thread; updates each
+        row's status var. Never overwrites an existing target."""
+        items = getattr(self, '_dumps_items', None) or []
+        model = getattr(self, '_dumps_model', None) or []
+        if not items:
+            self._dumps_status_var.set(_('Nothing to rename — scan first.'))
+            return
+        if getattr(self, '_dumps_scanning', False):
+            self._dumps_status_var.set(_('Still scanning — please wait.'))
+            return
+        try:
+            dst_root = (self._dumps_dst_var.get() or '').strip()
+        except Exception:
+            dst_root = ''
+        jobs = []
+        for i, item in enumerate(items):
+            try:
+                full, name_var, chk_var, size_var, status_var = item
+            except Exception:
+                continue
+            if not chk_var.get():
+                continue
+            proposed = (name_var.get() or '').strip().rstrip(' .')
+            if not proposed:
+                try: status_var.set(_('Skipped — no name'))
+                except Exception: pass
+                continue
+            jobs.append((full, proposed, status_var))
+        if not jobs:
+            self._dumps_status_var.set(_('No dumps selected.'))
+            return
+        self._dumps_status_var.set(
+            _('Renaming %d dump(s)…') % len(jobs))
+
+        def worker():
+            ok = 0
+            errors = 0
+            for full, proposed, status_var in jobs:
+                try:
+                    parent = dst_root if dst_root else os.path.dirname(full)
+                    target = os.path.join(parent, proposed)
+                    if os.path.normcase(os.path.normpath(target)) == \
+                            os.path.normcase(os.path.normpath(full)):
+                        self.after(0, status_var.set, _('Already named'))
+                        ok += 1
+                        continue
+                    if os.path.exists(target):
+                        self.after(0, status_var.set,
+                                   _('Skipped — target exists'))
+                        errors += 1
+                        continue
+                    if dst_root:
+                        os.makedirs(dst_root, exist_ok=True)
+                        shutil.move(full, target)
+                    else:
+                        os.rename(full, target)
+                    self.after(0, status_var.set, _('Renamed'))
+                    ok += 1
+                except Exception as e:
+                    self.after(0, status_var.set, _('Error:') + ' ' + str(e))
+                    errors += 1
+            msg = _('Renamed %d dump(s).') % ok
+            if errors:
+                msg += '  ' + _('%d skipped/failed.') % errors
+            self.after(0, self._dumps_status_var.set, msg)
+            self.after(300, self._dumps_scan)
+        threading.Thread(target=worker, daemon=True).start()
+
     def _add_to_queue_from_path(self, folder):
-        """Add a game folder to the exFAT build queue."""
+        """Add a game folder to the Build queue and show the Build tab.
+
+        v4.0.0 Phase 2: routes through the unified Build tab add path
+        (_uq_load_folder_and_add) so a requeue gets the same source
+        detection AND the R-1 overwrite protection as a normal build. Falls
+        back to the legacy exFAT queue only if the unified hook is absent.
+        """
         try:
             self._switch_tab('build')
+        except Exception:
+            pass
+        hook = getattr(self, '_uq_load_folder_and_add', None)
+        if callable(hook):
+            try:
+                hook(folder)
+                self._log('[QUEUE] Requeued to Build: %s\n'
+                          % os.path.basename(folder))
+            except Exception as e:
+                app_error(self, 'Queue error', str(e))
+            return
+        try:
             self._game_var.set(folder)
             self._on_game_browse_done(folder)
             self._add_to_queue()
             self._log('[DUMPS] Added to exFAT queue: %s\n' % os.path.basename(folder))
         except Exception as e:
-            messagebox.showerror('Queue error', str(e))
+            app_error(self, 'Queue error', str(e))
 
 
     def _apply_name_case(self, name):
@@ -19943,7 +24309,124 @@ class ExFATBuilder(_TK_BASE):
         except Exception as e:
             return False, 'sanity check errored: ' + str(e)
 
+    def _verify_image_mkpfs_native(self, out_path, src_folder):
+        """Stage 3: verify a built image with MkPFS natively (no OSFMount).
+
+        Returns a tri-state ``(ok, done, msg)``:
+          * ``done is False`` -> the native path did not produce a verdict. Use
+            the existing OSFMount verify. This covers: Lazy backend, MkPFS
+            lacking the capability, the image not being present yet, MkPFS
+            failing to EXECUTE (couldn't start / exception), or an unsupported
+            command form (argparse/usage error). OSFMount stays the fallback.
+          * ``done is True``  -> MkPFS executed and reached a verdict:
+              - ``ok is True``  : the image verified (rc=0). OSFMount not used.
+              - ``ok is False`` : the image did NOT verify (clean negative
+                verdict). This is surfaced to the user and is **deliberately not
+                ** followed by an OSFMount fallback — OSFMount's weaker
+                file-count walk could pass on an image the stronger content
+                verifier rejected, masking a real integrity problem.
+
+        Gating mirrors the extract path: native verify runs only when the
+        selected backend is 'mkpfs' AND ``mkpfs_supports_deep_unpack()`` is True.
+
+        Tool-failure vs verdict: MkPFS 0.0.9 `verify` returns rc=0 on pass and
+        rc!=0 on BOTH a real failure and an execution error. We disambiguate by
+        (a) confirming the image exists before running (so "file not found" is
+        not an applicability case) and (b) scanning MkPFS's output for
+        usage/argparse/Errno-2 signatures, which indicate the tool could not run
+        rather than a negative verdict. Only tool failures fall back to
+        OSFMount; genuine negative verdicts are surfaced.
+        """
+        try:
+            backend = (str(self._settings.get('pfs_backend', 'lazy'))
+                       .strip().lower()
+                       or 'lazy')
+        except Exception:
+            backend = 'lazy'
+        if backend != 'mkpfs':
+            return True, False, ''
+
+        try:
+            from ui.mkpfs_runner import (run_mkpfs, mkpfs_version,
+                                         mkpfs_supports_deep_unpack,
+                                         classify_verify_result, VerifyResult)
+        except Exception:
+            return True, False, ''
+
+        ver = mkpfs_version() or '(unknown)'
+        cap = False
+        try:
+            cap = bool(mkpfs_supports_deep_unpack())
+        except Exception:
+            cap = False
+
+        self._log('[VERIFY] PFS backend selected: %s\n' % backend)
+        self._log('[VERIFY] MkPFS version: %s\n' % ver)
+        self._log('[VERIFY] Native verify supported: %s\n'
+                  % ('yes' if cap else 'no'))
+
+        if not cap:
+            self._log('[VERIFY] OSFMount: native verify unavailable in this MkPFS build — using existing OSFMount verify.\n')
+            return True, False, ''
+
+        if not out_path or not os.path.isfile(out_path):
+            self._log('[VERIFY] Output not present yet — deferring to OSFMount verify for detailed reporting.\n')
+            return True, False, ''
+
+        argv = ['verify', out_path]
+        if src_folder and os.path.isdir(src_folder):
+            argv += ['--source-dir', src_folder]
+        self._log('[VERIFY] OSFMount: SKIPPED for this run — using mkpfs verify (native, mount-free).\n')
+        self._log('[VERIFY] Command: mkpfs %s\n' % ' '.join(argv))
+
+        _last = {'line': ''}
+        _all_lines = []
+
+        def _vlog(line):
+            s = str(line).rstrip()
+            if s:
+                _last['line'] = s
+                _all_lines.append(s)
+                self._log('[VERIFY] mkpfs: %s\n' % s)
+
+        try:
+            rc = run_mkpfs(argv, log_cb=_vlog)
+        except Exception as e:
+            self._log('[VERIFY] Native verify could not execute (%r) — falling back to OSFMount verify.\n'
+                      % e)
+            return True, False, ''
+
+        if rc == 0:
+            self._log('[VERIFY] Native verify PASSED (mkpfs verify rc=0). OSFMount was not used.\n')
+            tail = (' — %s' % _last['line']) if _last['line'] else ''
+            return (True, True, 'Verified ✓ via MkPFS '
+                    f'{ver!s} (native, no OSFMount){tail!s}')
+
+        _blob = '\n'.join(_all_lines)
+        _verdict = classify_verify_result(rc, _blob)
+        tail = (' — %s' % _last['line']) if _last['line'] else ''
+        if _verdict == VerifyResult.TOOL_ERROR:
+            self._log('[VERIFY] Native verify could not run this command on the bundled MkPFS (rc='
+                      f'{rc!s}){tail!s} — falling back to OSFMount verify.\n')
+            return True, False, ''
+
+        self._log('[VERIFY] Native verify FAILED (mkpfs verify rc='
+                  f'{rc!s}){tail!s}. The image did NOT verify. NOT falling back to OSFMount — a genuine verification failure must not be masked by the weaker mount-walk check.\n')
+        return (False, True, 'MkPFS verification FAILED (rc='
+                f'{rc!s}){tail!s}. MkPFS checks image structure and payload against the source; this is a genuine failure, not a tool error. Rebuild the image. (OSFMount fallback was intentionally NOT used so a real problem is not hidden by the weaker file-count check.)')
+
     def _verify_image(self, out_path, src_folder):
+        try:
+            _v_ok, _v_done, _v_msg = self._verify_image_mkpfs_native(
+                out_path, src_folder)
+            if _v_done:
+                return _v_ok, _v_msg
+        except Exception as _ve:
+            try:
+                self._log('[VERIFY] Native MkPFS verify raised (%r) — falling back to OSFMount verify.\n'
+                          % _ve)
+            except Exception:
+                pass
         osf = self._find_osfmount()
         if not osf:
             return True, 'OSFMount not found — skipping verify'
@@ -20436,7 +24919,8 @@ class ExFATBuilder(_TK_BASE):
             # v3.6.2: occasional, frequency-gated support nudge (never every
             # build). Only when the whole queue is finished, so it can't
             # interrupt a multi-item run.
-            if pos >= len(indices) - 1:
+            if pos >= len(indices) - 1 and not \
+                    getattr(self, '_unified_active', False):
                 def _nudge():
                     try:
                         from ui.release_notes import note_successful_operation
@@ -20475,7 +24959,7 @@ class ExFATBuilder(_TK_BASE):
             is_last = (pos >= len(indices) - 1)
             single_item = (len(indices) == 1)
             if single_item and is_last:
-                messagebox.showwarning('Verification failed',
+                app_warning(self, 'Verification failed',
                     'Build completed but verification found an issue:\n\n'
                     + msg +
                     '\n\nThe image may be incomplete.')
@@ -20522,7 +25006,7 @@ class ExFATBuilder(_TK_BASE):
 
         if self._ftp_auto_var.get() and self._ftp_ip_var.get().strip() \
                 and not getattr(self, '_unified_active', False):
-            if messagebox.askyesno('FTP Upload',
+            if app_confirm(self, 'FTP Upload',
                     'Build complete!\n\nUpload to PS5 now?\n' + out_path):
                 self._ftp_upload_file(out_path,
                     on_done=lambda: self._process_next(indices, pos + 1))
@@ -20718,7 +25202,11 @@ class ExFATBuilder(_TK_BASE):
     def _pipeline_convert_then_next(self, image_path, on_continue,
                                     delete_source_on_success=True,
                                     explicit_output_path=None,
-                                    allow_experimental=False):
+                                    allow_experimental=False,
+                                    backend=None,
+                                    cancel_check=None,
+                                    zlib_backend=None,
+                                    notify_on_cancel=False):
         """Pipeline step: pack image_path (.exfat/.ffpkg) into a .ffpfsc beside
         it, then call on_continue() on the main thread. The pack runs in a
         background thread so the UI stays responsive and the queue stays
@@ -20727,7 +25215,20 @@ class ExFATBuilder(_TK_BASE):
         delete_source_on_success: True for throwaway build intermediates (the
         image is deleted on success to free space). MUST be False when
         image_path is a USER-SELECTED source (or a hard link / staged copy
-        standing in for one) — the user's original must never be deleted."""
+        standing in for one) — the user's original must never be deleted.
+
+        backend: which ffpfsc convert backend to use for THIS job —
+        'lazy' (Lazy_MkPFS, preferred/default) or 'mkpfs' (stock, fallback).
+        Captured per-job at queue time and passed in here so changing the UI
+        selector after queueing never mutates a queued job. When None, the
+        app default (settings 'pfs_backend', itself defaulting to 'lazy') is
+        used. Lazy is only attempted when backend resolves to 'lazy' AND
+        allow_experimental is True AND there is an explicit_output_path AND
+        the source is .exfat/.ffpkg; any Lazy failure falls back to stock
+        mkpfs, EXCEPT a user cancel, which aborts with no fallback.
+
+        cancel_check: optional callable() -> bool polled during a Lazy run so
+        a user cancel stops Lazy without falling back to stock mkpfs."""
         if explicit_output_path:
             ffpfsc = os.path.normpath(explicit_output_path)
             title  = os.path.splitext(os.path.basename(ffpfsc))[0]
@@ -20736,50 +25237,152 @@ class ExFATBuilder(_TK_BASE):
             title  = os.path.splitext(os.path.basename(image_path))[0]
 
         def _worker():
+            _conv_cancelled = {'v': False}
             try:
-                # ── EXPERIMENTAL (OFF by default): existing .exfat -> .ffpfsc
-                # only. Gated on allow_experimental (set ONLY by the
-                # existing-image dispatch) AND the settings toggle. Any
-                # failure falls through to the stable mkpfs path below.
-                # Remove this whole block + ui/experimental_mkpfs.py + the
-                # two settings keys to fully revert.
+                _backend = (backend
+                            or (self._settings or {}).get('pfs_backend')
+                            or 'lazy')
                 try:
-                    _exp_on = bool((self._settings or {}).get(
-                        'experimental_mkpfs_enabled', False))
+                    _backend = str(_backend).strip().lower()
                 except Exception:
-                    _exp_on = False
-                _is_exfat_src = str(image_path).lower().endswith('.exfat')
-                if allow_experimental and _exp_on and _is_exfat_src \
+                    _backend = 'lazy'
+                _src_ext = os.path.splitext(str(image_path))[1].lower()
+                _lazy_src_ok = _src_ext in ('.exfat', '.ffpkg')
+                if _backend == 'lazy' and allow_experimental \
+                        and _lazy_src_ok \
                         and explicit_output_path:
                     try:
-                        from ui.experimental_mkpfs import \
-                            run_experimental_mkpfs
-                        _lvl, _cpu = _pfs_pack_tuning(self._settings)
+                        from ui.experimental_mkpfs import (
+                            run_lazy_mkpfs, RESULT_OK, RESULT_CANCELLED)
+                        try:
+                            _lvl = int(self._settings.get(
+                                'pfs_compression_level', 9))
+                            _lvl = max(1, min(9, _lvl))
+                        except Exception:
+                            _lvl = 9
+                        try:
+                            _user_cpu = int(self._settings.get(
+                                'pfs_lazy_cpu_count', 0) or 0)
+                        except Exception:
+                            _user_cpu = 0
+                        _cpu = _user_cpu if _user_cpu > 0 else None
+                        _zbe = (zlib_backend
+                                or (self._settings or {}).get(
+                                    'pfs_lazy_zlib_backend')
+                                or 'zlib')
+                        try:
+                            _zbe = str(_zbe).strip().lower()
+                        except Exception:
+                            _zbe = 'zlib'
+                        if _zbe not in ('zlib', 'isa-l'):
+                            _zbe = 'zlib'
                         _tmp = (self._settings.get('temp_dir') or '').strip()
                         if os.path.exists(ffpfsc):
                             try:
                                 os.remove(ffpfsc)
                             except Exception:
                                 pass
-                        _ok_exp = run_experimental_mkpfs(
+                        try:
+                            from ui.progress_state import (ProgressState,
+                                                           parse_backend_line)
+                            _pstate = ProgressState('Compressing')
+                        except Exception:
+                            _pstate = None
+                        _lazy_prog = {'last': time.monotonic(),
+                                      'indet': False, 'stop': False}
+
+                        def _lazy_progress_cb(frag, _st=_pstate,
+                                              _g=_lazy_prog):
+                            if _st is None:
+                                return
+                            try:
+                                if parse_backend_line(frag, _st):
+                                    _g['last'] = time.monotonic()
+                                    _g['indet'] = False
+                                    if not getattr(
+                                            self, '_pfs_compression_started',
+                                            False):
+                                        self._pfs_compression_started = True
+                                        _hbstop = getattr(
+                                            self, '_uq_heartbeat_stop', None)
+                                        if _hbstop:
+                                            self.after(0, _hbstop)
+                                    main = _st.main_line('Compressing')
+                                    sec = _st.secondary_line()
+                                    if _st.current_file:
+                                        sec = ((sec + '   \u2022   ')
+                                               if sec
+                                               else '') + _st.current_file
+                                    pct = _st.percent
+                                    if pct is not None:
+                                        self.after(
+                                            0, self._set_progress,
+                                            pct, main, sec)
+                                    else:
+                                        self.after(
+                                            0, self._set_progress_text_only,
+                                            main, sec)
+                            except Exception:
+                                pass
+
+                        def _lazy_watchdog(_g=_lazy_prog):
+                            if _g['stop']:
+                                return
+                            try:
+                                quiet = time.monotonic() - _g['last']
+                                if quiet > 4.0 and not _g['indet']:
+                                    _g['indet'] = True
+                                    self._set_indeterminate_progress(
+                                        'Compressing image \u2014 backend running, waiting for progress information\u2026')
+                            except Exception:
+                                pass
+                            if not _g['stop']:
+                                self.after(1000, _lazy_watchdog)
+
+                        try:
+                            self.after(1500, _lazy_watchdog)
+                        except Exception:
+                            pass
+
+                        _res = run_lazy_mkpfs(
                             self, image_path, ffpfsc,
                             compression_level=_lvl, cpu_count=_cpu,
-                            temp_folder=_tmp, log=self._log)
-                        if _ok_exp:
-                            # run_experimental_mkpfs already did the output
-                            # plausibility checks; the produced file lands at
-                            # the SAME final path stable output would, so it
-                            # flows through the identical downstream
-                            # verification the queue runs on every build.
-                            # Continue the pipeline.
-                            self.after(0, on_continue)
+                            temp_folder=_tmp, log=self._log,
+                            cancel_check=cancel_check, zlib_backend=_zbe,
+                            progress_cb=_lazy_progress_cb)
+                        _lazy_prog['stop'] = True
+                        if _res == RESULT_OK:
+                            try:
+                                self._log('[PIPELINE] ffpfsc backend used: Lazy_MkPFS\n')
+                            except Exception:
+                                pass
+                            if delete_source_on_success:
+                                try:
+                                    if os.path.isfile(image_path):
+                                        os.remove(image_path)
+                                except Exception:
+                                    pass
                             return
-                        # _ok_exp False already logged the fallback reason.
+                        if _res == RESULT_CANCELLED:
+                            if not notify_on_cancel:
+                                _conv_cancelled['v'] = True
+                            try:
+                                self._log('[PIPELINE] Build cancelled during Lazy_MkPFS \u2014 no fallback.\n')
+                            except Exception:
+                                pass
+                            return
+                        try:
+                            self._log('[PIPELINE] Falling back to stock mkpfs for this job.\n')
+                        except Exception:
+                            pass
                     except Exception as _e:
-                        self._log('[EXPERIMENTAL] external mkpfs-compatible '
-                                  'tool errored (%s) \u2014 falling back to '
-                                  'stable mkpfs\n' % _e)
-                # ── end experimental block ──
+                        self._log('[LAZY] Lazy_MkPFS errored (%s) \u2014 falling back to stable mkpfs\n'
+                                  % _e)
+                elif _backend == 'mkpfs':
+                    try:
+                        self._log('[PIPELINE] ffpfsc backend (per job): MkPFS (PSBrew) selected.\n')
+                    except Exception:
+                        pass
                 from ui.mkpfs_runner import run_mkpfs, mkpfs_version
                 if not mkpfs_version():
                     self._log('[PIPELINE] mkpfs not available \u2014 skipping '
@@ -20891,6 +25494,42 @@ class ExFATBuilder(_TK_BASE):
                         self._log('[PIPELINE] Writing .ffpfsc to Temp drive '
                                   'during compression, then moving next to the '
                                   'source (splits read/write across disks)\n')
+
+                try:
+                    _pf_ok, _pf_msg = _pfs_preflight_check(
+                        self,
+                        source_path=image_path,
+                        output_path=ffpfsc,
+                        pack_out=pack_out,
+                        redirection_active=bool(moved_from),
+                        est_output_bytes=None,
+                        log=self._log)
+                except Exception as _pf_err:
+                    self._log('[PREFLIGHT] guard error (continuing): %s\n'
+                              % _pf_err)
+                    _pf_ok, _pf_msg = True, ''
+                if not _pf_ok:
+                    try:
+                        if moved_from and os.path.exists(moved_from):
+                            os.remove(moved_from)
+                    except Exception:
+                        pass
+                    self._log('[PIPELINE] Build aborted by pre-flight: %s\n'
+                              % _pf_msg)
+                    self.after(0, self._set_status,
+                               'Build failed: ' + _pf_msg, '#ff5555')
+                    try:
+                        self.after(0, lambda m=_pf_msg: app_error(self,
+                                   'Cannot build .ffpfsc', m))
+                    except Exception:
+                        pass
+                    return
+                if _pf_msg:
+                    try:
+                        self.after(0, lambda m=_pf_msg: app_warning(self,
+                                   'Large build \u2014 drive warning', m))
+                    except Exception:
+                        pass
 
                 argv += [image_path, pack_out]
                 self._log('[PIPELINE] Converting to .ffpfsc: %s\n' % title)
@@ -21040,9 +25679,19 @@ class ExFATBuilder(_TK_BASE):
                         time.sleep(2)
                 threading.Thread(target=_poll, daemon=True).start()
 
+                self._pfs_last_einval = False
+
+                def _pipe_log(l):
+                    s = str(l)
+                    low = s.lower()
+                    if 'errno 22' in low or 'invalid argument' in low:
+                        self._pfs_last_einval = True
+                    self._log('[PIPELINE] ' + s + '\n')
+
                 rc = run_mkpfs(argv,
-                               log_cb=lambda l: self._log('[PIPELINE] ' + str(l) + '\n'),
-                               progress_cb=_on_pack_progress)
+                               log_cb=_pipe_log,
+                               progress_cb=_on_pack_progress,
+                               cancel_check=cancel_check)
 
                 # v3.6.2: robustness retry. mkpfs 0.0.6 compresses blocks in
                 # a multiprocessing Pool; on Windows, very large single files
@@ -21053,7 +25702,13 @@ class ExFATBuilder(_TK_BASE):
                 # slower but it eliminates the multiprocessing path entirely
                 # and bounds memory. For a big, mostly-incompressible game
                 # image the squeeze isn't the long pole anyway.
-                if rc != 0 and cpu > 1:
+                _stock_cancelled = False
+                try:
+                    _stock_cancelled = bool(cancel_check is not None
+                                            and cancel_check())
+                except Exception:
+                    _stock_cancelled = False
+                if rc != 0 and cpu > 1 and not _stock_cancelled:
                     self._log('[PIPELINE] Parallel pack failed (rc=%s). '
                               'Retrying single-core for reliability\u2026\n' % rc)
                     self.after(0, self._set_status,
@@ -21074,10 +25729,29 @@ class ExFATBuilder(_TK_BASE):
                         retry_argv += ['--cpu-count', '1']
                     self._log('[PIPELINE] mkpfs CPU count: 1 (retry)\n')
                     rc = run_mkpfs(retry_argv,
-                                   log_cb=lambda l: self._log('[PIPELINE] '
-                                                              + str(l) + '\n'),
-                                   progress_cb=_on_pack_progress)
+                                   log_cb=_pipe_log,
+                                   progress_cb=_on_pack_progress,
+                                   cancel_check=cancel_check)
                 poll['on'] = False
+
+                try:
+                    _stock_cancelled = bool(cancel_check is not None
+                                            and cancel_check())
+                except Exception:
+                    _stock_cancelled = False
+                if _stock_cancelled:
+                    for _p in (pack_out, ffpfsc):
+                        try:
+                            if _p and os.path.exists(_p):
+                                os.remove(_p)
+                        except Exception:
+                            pass
+                    if not notify_on_cancel:
+                        _conv_cancelled['v'] = True
+                    self._log('[PIPELINE] Build cancelled during stock mkpfs \u2014 partial output removed, source image kept. No fallback.\n')
+                    self.after(0, self._set_status,
+                               'Build cancelled', WARNING)
+                    return
 
                 # If we wrote the .ffpfsc to the Temp drive, move it next to
                 # the source now (cross-drive copy of the compressed file).
@@ -21193,15 +25867,30 @@ class ExFATBuilder(_TK_BASE):
                         self.after(0, self._set_status,
                                    'Pipeline: %s \u2192 .ffpfsc \u2713' % title, SUCCESS)
                 if (rc != 0 or not fresh) and not suspect_tiny:
-                    self._log('[PIPELINE] Convert FAILED for %s (rc=%s) \u2014 '
-                              'keeping the image.\n' % (title, rc))
-                    self.after(0, self._set_status,
-                               'Pipeline: convert failed for %s \u2014 image kept'
-                               % title, DANGER)
+                    _einval = bool(self.__dict__.get('_pfs_last_einval'))
+                    if _einval:
+                        _msg = 'Disk rejected a large write while creating the PFSC temporary file. Check output/temp drive format and free space. Use local NTFS for large builds.'
+                        self._log('[PIPELINE] Convert FAILED for '
+                                  f'{title!s} (rc={rc!s}, OSError 22 / disk rejected write). {_msg!s}\n')
+                        self.after(0, self._set_status,
+                                   'Build failed: disk rejected large write \u2014 use local NTFS',
+                                   '#ff5555')
+                        try:
+                            self.after(0, lambda m=_msg: app_error(self,
+                                       'Disk rejected large write', m))
+                        except Exception:
+                            pass
+                    else:
+                        self._log('[PIPELINE] Convert FAILED for '
+                                  f'{title!s} (rc={rc!s}) \u2014 keeping the image.\n')
+                        self.after(0, self._set_status,
+                                   'Pipeline: convert failed for %s \u2014 image kept'
+                                   % title, DANGER)
             except Exception as ex:
                 self._log('[PIPELINE] Error: %s\n' % ex)
             finally:
-                self.after(0, on_continue)
+                if not _conv_cancelled['v']:
+                    self.after(0, on_continue)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -21244,9 +25933,9 @@ class ExFATBuilder(_TK_BASE):
         try:
             logs = [f for f in os.listdir(d) if f.endswith('.log')]
             if not logs:
-                messagebox.showinfo('No logs', 'No log files found.')
+                app_info(self, 'No logs', 'No log files found.')
                 return
-            if not messagebox.askyesno('Clear logs',
+            if not app_confirm(self, 'Clear logs',
                     'Delete %d log file(s) from:\n%s\n\nThis cannot be undone.' % (
                         len(logs), d)):
                 return
@@ -21255,7 +25944,7 @@ class ExFATBuilder(_TK_BASE):
             self._refresh_logs_count()
             self._set_status('Cleared %d log(s)' % len(logs), SUCCESS)
         except Exception as e:
-            messagebox.showerror('Error', str(e))
+            app_error(self, 'Error', str(e))
 
     def _export_log(self, out_path, failed=False):
         """Save build log to dedicated logs folder."""
@@ -21280,7 +25969,7 @@ class ExFATBuilder(_TK_BASE):
     def _show_installed_games(self):
         ip = self._ftp_ip_var.get().strip()
         if not ip:
-            messagebox.showwarning('No IP', 'Enter your PS5 IP address in Settings first.')
+            app_warning(self, 'No IP', 'Enter your PS5 IP address in Settings first.')
             return
         remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
 
@@ -21336,7 +26025,8 @@ class ExFATBuilder(_TK_BASE):
                     # Get storage free space
                     try:
                         lines = []
-                        ftp.retrlines('LIST ' + remote_dir, lines.append)
+                        ftp.cwd(remote_dir)
+                        ftp.retrlines('LIST', lines.append)
                         # Parse .exfat files
                         games = []
                         for line in lines:
@@ -21378,22 +26068,6 @@ class ExFATBuilder(_TK_BASE):
                 listbox.insert('end', '\U0001f4be  %-50s %s' % (name, sz_str))
 
         _load()
-
-
-
-        if pct is not None:
-            if kind == 'step':
-                self._set_progress(pct, extra,
-                    self._format_eta(elapsed, pct) if pct > 0 else '')
-            elif kind == 'robo_eta':
-                es = 'Elapsed: %dm %02ds' % (int(elapsed // 60), int(elapsed % 60))
-                self._set_progress(pct, None,
-                    es + '  \u2014  ' + extra if extra
-                    else self._format_eta(elapsed, pct))
-            else:
-                self._set_progress(pct, None, self._format_eta(elapsed, pct))
-        elif self._current_pct > 0 and self._start_time:
-            self._eta_var.set(self._format_eta(elapsed, self._current_pct))
 
     # ── Real-time drive polling ────────────────────────────────────────────────
     def _maybe_kick_dest_walk(self):
@@ -21698,11 +26372,9 @@ class ExFATBuilder(_TK_BASE):
 
             file_count_str = ''
             if live_copied > 0 and src_total > 0 and live_copied <= src_total:
-                pct_files = int(100 * live_copied / src_total)
-                file_count_str = '%s / %s files (%d%%)' % (
-                    '{:,}'.format(live_copied),
-                    '{:,}'.format(src_total),
-                    pct_files)
+                file_count_str = (
+                    f"{'{:,}'.format(live_copied)!s} / "
+                    f"{'{:,}'.format(src_total)!s} files")
             elif live_copied > 0:
                 file_count_str = '%s files copied' % '{:,}'.format(live_copied)
             elif src_total > 0:
@@ -21719,8 +26391,6 @@ class ExFATBuilder(_TK_BASE):
             elapsed_str = 'Elapsed: %dm %02ds' % (
                 int(elapsed_total // 60), int(elapsed_total % 60))
             parts = [elapsed_str]
-            if file_count_str:
-                parts.append(file_count_str)
             if written_gb > 0.01:
                 parts.append('%.2f GB written' % written_gb)
             if remaining_gb > 0.01:
@@ -21729,6 +26399,8 @@ class ExFATBuilder(_TK_BASE):
                 parts.append('%.1f MB/s' % speed_mbs)
             if eta_str:
                 parts.append(eta_str)
+            if file_count_str:
+                parts.append(file_count_str)
             self._eta_var.set('  \u2022  '.join(parts))
 
             # v3.6.2: push structured copy-phase telemetry to the
@@ -21782,6 +26454,365 @@ class ExFATBuilder(_TK_BASE):
         ftp.connect(ip, port, timeout=10)
         ftp.login()
         return ftp
+
+    def _ampr_pick_ps5_folder(self, start_path='/'):
+        """Modal PS5 folder picker for the AMPR indexer.
+
+        Browses the console over FTP (folders only), lets the user drill into a
+        game's app0 folder, validates that the chosen folder directly contains
+        eboot.bin / sce_sys, and returns the selected path string — or None if
+        cancelled. Uses its OWN short-lived FTP connection (via _ftp_connect),
+        never the PS5 Browser's shared connection, so the Browser tab is
+        untouched. All listings are a single level deep (no recursion): the
+        recursive walk only happens later, in build_index_ftp, on the accepted
+        path.
+        """
+        ip = self._ftp_ip_var.get().strip()
+        if not ip:
+            app_warning(self, _('No PS5 connection'),
+                        _('Set the PS5 FTP IP in the PS5 tab first.'))
+            return None
+
+        result = [None]
+        entries = []
+        ftp_ref = [None]
+
+        win = tk.Toplevel(self)
+        win.title(_('Select PS5 game folder') + ' — ' + ip)
+        win.geometry('640x540')
+        win.configure(bg=BG)
+        win.transient(self)
+
+        cur_path = tk.StringVar(value=(start_path or '/').strip() or '/')
+        status_var = tk.StringVar(value='')
+
+        def _norm(p):
+            parts = [seg for seg in (p or '').strip().split('/') if seg]
+            return '/' + '/'.join(parts) if parts else '/'
+
+        def _ensure():
+            try:
+                if ftp_ref[0]:
+                    ftp_ref[0].voidcmd('NOOP')
+                    return ftp_ref[0]
+            except Exception:
+                ftp_ref[0] = None
+            ftp_ref[0] = self._ftp_connect()
+            return ftp_ref[0]
+
+        def _list_dirs(path):
+            """One level deep. Returns (sorted_dir_names, error_str)."""
+            try:
+                ftp = _ensure()
+                try:
+                    rows = self._br_list_mlsd(ftp, path)
+                except Exception:
+                    lines = []
+                    ftp.cwd(path)
+                    ftp.retrlines('LIST', lines.append)
+                    rows = []
+                    for ln in lines:
+                        parts = ln.split()
+                        if len(parts) < 9:
+                            continue
+                        nm = ' '.join(parts[8:])
+                        if nm in ('.', '..'):
+                            continue
+                        rows.append((nm, ln.startswith('d'), 0))
+                dirs = sorted((nm for nm, is_dir, _ in rows if is_dir),
+                              key=lambda s: s.lower())
+                return dirs, ''
+            except Exception as e:
+                return [], str(e)
+
+        def _names_in(path):
+            """Shallow set of entry names (lowercased) in `path`, for app0
+            validation. Returns (names_set, listed_bool, error_str)."""
+            try:
+                ftp = _ensure()
+                names = set()
+                try:
+                    for nm, is_dir, _ in self._br_list_mlsd(ftp, path):
+                        names.add(nm.lower())
+                except Exception:
+                    lines = []
+                    ftp.cwd(path)
+                    ftp.retrlines('LIST', lines.append)
+                    for ln in lines:
+                        parts = ln.split()
+                        if len(parts) >= 9:
+                            nm = ' '.join(parts[8:])
+                            if nm not in ('.', '..'):
+                                names.add(nm.lower())
+                return names, bool(names), ''
+            except Exception as e:
+                return set(), False, str(e)
+
+        def _refresh(*_a):
+            p = _norm(cur_path.get())
+            cur_path.set(p)
+            status_var.set(_('Listing %s…') % p)
+            win.update_idletasks()
+            dirs, err = _list_dirs(p)
+            lb.delete(0, 'end')
+            del entries[:]
+            for d in dirs:
+                entries.append(d)
+                lb.insert('end', '📁  ' + d)
+            if err:
+                status_var.set(_('Error: %s') % err)
+            else:
+                status_var.set(_('%d folder(s) in %s') % (len(dirs), p))
+
+        def _enter(name):
+            base = cur_path.get().rstrip('/')
+            cur_path.set(base + '/' + name if base else '/' + name)
+            _refresh()
+
+        def _on_dbl(ev):
+            idx = lb.nearest(ev.y)
+            if idx is None or idx < 0 or idx >= len(entries):
+                return
+            lb.selection_clear(0, 'end')
+            lb.selection_set(idx)
+            _enter(entries[idx])
+
+        def _up():
+            cur = cur_path.get().rstrip('/')
+            parent = '/'.join(cur.split('/')[:-1]) or '/'
+            cur_path.set(parent)
+            _refresh()
+
+        def _goto(path):
+            cur_path.set(path)
+            _refresh()
+
+        def _select():
+            p = _norm(cur_path.get())
+            status_var.set(_('Checking %s…') % p)
+            win.update_idletasks()
+            names, listed, err = _names_in(p)
+            if err and not listed:
+                status_var.set(_('Cannot read %s — %s') % (p, err))
+                return
+            if not ('eboot.bin' in names or 'sce_sys' in names):
+                status_var.set(
+                    _('This looks like a parent folder, not a game app0 folder. Open the game folder first.')
+                )
+                return
+            result[0] = p
+            _close()
+
+        def _close(*_a):
+            try:
+                if ftp_ref[0]:
+                    try:
+                        ftp_ref[0].quit()
+                    except Exception:
+                        ftp_ref[0].close()
+            except Exception:
+                pass
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            win.destroy()
+
+        hdr = tk.Frame(win, bg=BG)
+        hdr.pack(fill='x', padx=16, pady=(12, 6))
+        tk.Label(hdr, text=_('Select PS5 game folder'),
+                 font=('Segoe UI', 13, 'bold'), bg=BG, fg=TEXT).pack(side='left')
+        tk.Label(hdr, textvariable=status_var,
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='right')
+
+        path_row = tk.Frame(win, bg=BG)
+        path_row.pack(fill='x', padx=16, pady=(0, 6))
+        tk.Button(path_row, text='↑ ' + _('Up'), command=_up,
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=5,
+                  cursor='hand2', highlightthickness=0).pack(side='left')
+        path_entry = tk.Entry(path_row, textvariable=cur_path,
+                              font=('Consolas', 10), bg=SURFACE2, fg=TEXT,
+                              insertbackground=TEXT, relief='flat',
+                              highlightthickness=1, highlightbackground=BORDER)
+        path_entry.pack(side='left', fill='x', expand=True, padx=(8, 8), ipady=4)
+        path_entry.bind('<Return>', _refresh)
+        tk.Button(path_row, text=_('Go'), command=_refresh,
+                  font=('Segoe UI', 9), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=12, pady=5,
+                  cursor='hand2', highlightthickness=0).pack(side='left')
+
+        roots_row = tk.Frame(win, bg=BG)
+        roots_row.pack(fill='x', padx=16, pady=(0, 6))
+        tk.Label(roots_row, text=_('Jump to:'),
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED).pack(side='left',
+                                                              padx=(0, 6))
+        for _lbl in ('/data/etaHEN/games', '/mnt', '/mnt/data', '/user/app'):
+            tk.Button(roots_row, text=_lbl,
+                      command=lambda p=_lbl: _goto(p),
+                      font=('Consolas', 8), bg=SURFACE2, fg=TEXT,
+                      activebackground=BORDER, activeforeground=TEXT,
+                      relief='flat', bd=0, padx=8, pady=3,
+                      cursor='hand2', highlightthickness=0).pack(side='left',
+                                                                 padx=(0, 4))
+
+        list_wrap = tk.Frame(win, bg=BG)
+        list_wrap.pack(fill='both', expand=True, padx=16, pady=(0, 6))
+        sb = tk.Scrollbar(list_wrap, orient='vertical')
+        lb = tk.Listbox(list_wrap, font=('Consolas', 10),
+                        bg=SURFACE2, fg=TEXT, selectmode='browse',
+                        activestyle='none', relief='flat',
+                        highlightthickness=1, highlightbackground=BORDER,
+                        selectbackground=ACCENT, selectforeground='#ffffff',
+                        yscrollcommand=sb.set)
+        sb.config(command=lb.yview)
+        sb.pack(side='right', fill='y')
+        lb.pack(side='left', fill='both', expand=True)
+        lb.bind('<Double-Button-1>', _on_dbl)
+
+        tk.Label(win,
+                 text=_('Double-click a folder to open it. Choose the game’s app0 folder — the one containing eboot.bin / sce_sys.'),
+                 font=('Segoe UI', 8), bg=BG, fg=MUTED, justify='left',
+                 wraplength=600).pack(fill='x', padx=16, pady=(0, 4))
+
+        btn_row = tk.Frame(win, bg=BG)
+        btn_row.pack(fill='x', padx=16, pady=(0, 12))
+        tk.Button(btn_row, text=_('Select this folder'), command=_select,
+                  font=('Segoe UI', 10, 'bold'), bg=ACCENT, fg='#ffffff',
+                  activebackground=ACCENT, activeforeground='#ffffff',
+                  relief='flat', bd=0, padx=16, pady=8,
+                  cursor='hand2', highlightthickness=0).pack(side='left')
+        tk.Button(btn_row, text=_('Cancel'), command=_close,
+                  font=('Segoe UI', 10), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=16, pady=8,
+                  cursor='hand2', highlightthickness=0).pack(side='right')
+        tk.Button(btn_row, text=_('Refresh'), command=_refresh,
+                  font=('Segoe UI', 10), bg=SURFACE2, fg=TEXT,
+                  activebackground=BORDER, activeforeground=TEXT,
+                  relief='flat', bd=0, padx=16, pady=8,
+                  cursor='hand2', highlightthickness=0).pack(side='right',
+                                                             padx=(0, 8))
+
+        win.protocol('WM_DELETE_WINDOW', _close)
+        try:
+            win.update_idletasks()
+            win.grab_set()
+        except Exception:
+            pass
+        _refresh()
+        self.wait_window(win)
+        return result[0]
+
+    def _ftp_makedirs(self, ftp, remote_dir):
+        """Best-effort create a remote directory chain. Ignores 'already
+        exists' errors. `ftp` is an open ftplib.FTP."""
+        parts = [p for p in remote_dir.strip('/').split('/') if p]
+        cur = ''
+        for p in parts:
+            cur += '/' + p
+            try:
+                ftp.mkd(cur)
+            except Exception:
+                pass
+
+    def _ftp_exists(self, ftp, remote_path):
+        """True if a remote FILE exists. Tries SIZE (files only), falls back
+        to listing the parent directory."""
+        try:
+            ftp.size(remote_path)
+            return True
+        except Exception:
+            pass
+        try:
+            parent, base = remote_path.rsplit('/', 1)
+            names = [n.rsplit('/', 1)[-1] for n in ftp.nlst(parent or '/')]
+            return base in names
+        except Exception:
+            return False
+
+    def _ftp_upload_to(self, local_path, remote_dir, remote_name=None,
+                       progress_cb=None, done_cb=None):
+        """Background-upload a single file to an EXPLICIT remote dir, safely.
+
+        Unlike `_ftp_upload_file`, this does NOT switch tabs and does NOT
+        hardcode the remote path — the caller passes both. Safe-swap order:
+          1. upload to `<name>.uploading` (an existing final file is NOT
+             touched yet),
+          2. only after the upload fully succeeds, move the existing final
+             aside to `<name>.replacing.bak`, rename temp -> final, then
+             delete the backup,
+          3. on any failure the temp is removed and the existing final file
+             is left intact (restored from backup if the final rename
+             failed mid-swap).
+        Runs on a worker thread; `progress_cb(pct)` and
+        `done_cb(ok, final_path, error)` are marshalled to the UI thread."""
+        import os as _os
+        name = remote_name or _os.path.basename(local_path)
+        rdir = remote_dir.rstrip('/')
+        final = rdir + '/' + name
+        temp = final + '.uploading'
+        bak = final + '.replacing.bak'
+
+        def _done(ok, err):
+            if done_cb:
+                self.after(0, done_cb, ok, final, err)
+
+        def worker():
+            ftp = None
+            moved_aside = False
+            try:
+                ftp = self._ftp_connect()
+                self._ftp_makedirs(ftp, rdir)
+
+                total = _os.path.getsize(local_path)
+                sent = [0]
+                with open(local_path, 'rb') as fh:
+                    def _cb(block):
+                        sent[0] += len(block)
+                        if progress_cb and total:
+                            self.after(0, progress_cb,
+                                       min(100, sent[0] * 100 // total))
+                    ftp.storbinary('STOR ' + temp, fh, 65536, callback=_cb)
+
+                if self._ftp_exists(ftp, final):
+                    try:
+                        ftp.delete(bak)
+                    except Exception:
+                        pass
+                    ftp.rename(final, bak)
+                    moved_aside = True
+                try:
+                    ftp.rename(temp, final)
+                except Exception:
+                    if moved_aside:
+                        try:
+                            ftp.rename(bak, final)
+                        except Exception:
+                            pass
+                    raise
+                if moved_aside:
+                    try:
+                        ftp.delete(bak)
+                    except Exception:
+                        pass
+                _done(True, None)
+            except Exception as e:
+                try:
+                    if ftp is not None:
+                        ftp.delete(temp)
+                except Exception:
+                    pass
+                _done(False, str(e))
+            finally:
+                try:
+                    if ftp is not None:
+                        ftp.quit()
+                except Exception:
+                    pass
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ftp_test(self):
         self._save_ftp_settings()
@@ -21947,7 +26978,7 @@ class ExFATBuilder(_TK_BASE):
             self._ftp_status_lbl.config(fg=DANGER)
             self._set_status('FTP upload failed', DANGER)
             self._log('[FTP] Error: ' + info + '\n')
-            messagebox.showerror('FTP Upload Failed',
+            app_error(self, 'FTP Upload Failed',
                 'Failed to upload to PS5:\n\n' + info +
                 '\n\nCheck your IP, port, and that the PS5 FTP server is running.')
         if on_done:
@@ -22126,13 +27157,13 @@ class ExFATBuilder(_TK_BASE):
         # Belt-and-braces: strip any v/V prefix that snuck through so we
         # never produce 'vV2.7.0' style display strings.
         clean = str(version).strip().lstrip('vV').strip()
-        ans = messagebox.askyesnocancel(
-            'Update available',
+        ans = app_choose3(
+            self, 'Update available',
             'v' + clean + ' is available!\n\n'
-            'Current version: v' + APP_VERSION + '\n\n'
-            'Yes  = Download and install automatically\n'
-            'No   = Open GitHub releases page\n'
-            'Cancel = Remind me later')
+            'Current version: v' + APP_VERSION,
+            ok_label='Download & install',
+            alt_label='Open releases page',
+            cancel_label='Remind me later')
         if ans is True:
             self._auto_update(clean, dl_url)
         elif ans is False:
@@ -22429,7 +27460,7 @@ class ExFATBuilder(_TK_BASE):
                         os.remove(tmp_path)
                 except Exception:
                     pass
-                win.after(0, messagebox.showerror, 'Update failed',
+                win.after(0, lambda *_a: app_error(self, *_a), 'Update failed',
                           str(e) + '\n\nVisit GitHub to download manually.')
 
         threading.Thread(target=worker, daemon=True).start()
@@ -22479,36 +27510,121 @@ class ExFATBuilder(_TK_BASE):
             TRACK      = '#1e1e1e'
         self._settings['theme'] = self._theme_var.get()
         save_settings(self._settings)
-        messagebox.showinfo('Theme changed',
+        app_info(self, 'Theme changed',
             'Theme will apply fully on next launch.\n'
             'Some elements update immediately.')
         self.configure(bg=BG)
 
-    def _build_ps5_status_bar(self, parent):
-        """Persistent PS5 connection + queue status bar."""
-        bar = tk.Frame(parent, bg='#0d0d0d',
-                       highlightbackground=BORDER, highlightthickness=1)
+    _HEADER_SECTION_NAMES = {
+        'home': 'Home',
+        'unibuild': 'Build',
+        'extract': 'Extract',
+        'edit': 'Edit',
+        'library': 'Library',
+        'ps5': 'PS5',
+        'convert': 'Convert',
+        'dumps': 'Dump Rename',
+        'backports': 'Backports',
+        'advanced': 'Advanced',
+        'hist': 'History',
+        'settings': 'Settings',
+        'about': 'Credits',
+        'report': 'Report Issue',
+    }
+
+    def _build_app_header(self, parent):
+        """Build the top application header strip (presentation only).
+
+        Refinement pass: compressed from a two-line banner to a single-row
+        toolbar (~32px). Dropped the duplicate "PS5 image tooling" subtitle
+        and the stacked CURRENT SECTION eyebrow; the section name now sits
+        inline after the app name with a separator. Padding tightened.
+        Still presentation only — same vars, no new controls.
+        """
+        bg = COLORS['bg_2']
+        bar = tk.Frame(parent, bg=bg)
         bar.pack(fill='x')
-        self._ps5_status_var = tk.StringVar(value='PS5  ●  Not connected')
+
+        left = tk.Frame(bar, bg=bg)
+        left.pack(side='left', padx=(12, 0), pady=4)
+        tk.Label(left, text='\U0001f3ae', font=(FONTS['h3'][0], 13),
+                 bg=bg, fg=COLORS['accent_hi']).pack(side='left', padx=(0, 8))
+        tk.Label(left, text=_('exFAT Image Builder'),
+                 font=(FONTS['h3'][0], 12, 'bold'),
+                 bg=bg, fg=COLORS['fg_0']).pack(side='left')
+
+        tk.Label(left, text='\u203a', font=(FONTS['body'][0], 12),
+                 bg=bg, fg=COLORS['fg_5']).pack(side='left', padx=8)
+        self._header_section_var = tk.StringVar(
+            value=self._HEADER_SECTION_NAMES.get(
+                self._active_tab.get(), self._active_tab.get().title()))
+        tk.Label(left, textvariable=self._header_section_var,
+                 font=(FONTS['body'][0], 12, 'bold'),
+                 bg=bg, fg=COLORS['accent_hi']).pack(side='left')
+
+        ver = tk.Frame(bar, bg=COLORS['bg_3'],
+                       highlightbackground=COLORS['border_3'],
+                       highlightthickness=1)
+        ver.pack(side='right', padx=(0, 12), pady=4)
+        tk.Label(ver, text='\u25cf', font=FONTS['meta'],
+                 bg=COLORS['bg_3'], fg=COLORS['success']).pack(
+                     side='left', padx=(8, 4))
+        tk.Label(ver, text='v' + APP_VERSION, font=FONTS['meta'],
+                 bg=COLORS['bg_3'], fg=COLORS['fg_3']).pack(
+                     side='left', padx=(0, 10))
+
+        if not hasattr(self, '_ps5_status_var'):
+            self._ps5_status_var = tk.StringVar(
+                value='PS5  \u25cf  Not connected')
+        tk.Label(bar, textvariable=self._ps5_status_var,
+                 font=FONTS['meta'], bg=bg, fg=COLORS['fg_3'],
+                 padx=8).pack(side='right', padx=(0, 6), pady=4)
+
+    def _update_header_section(self, key):
+        """Update the header's current-section label. Presentation only."""
+        var = getattr(self, '_header_section_var', None)
+        if var is None:
+            return
+        var.set(self._HEADER_SECTION_NAMES.get(key, key.title()))
+
+    def _build_ps5_status_bar(self, parent):
+        """Persistent PS5 connection + queue status bar.
+
+        Phase 1 shell refresh: token-driven colours (was hardcoded
+        #0d0d0d / #444444 / #58a6ff), slightly more padding, a thin top
+        hairline so the bar reads as its own surface. PRESENTATION ONLY —
+        the status variables (_ps5_status_var / _ftp_status_var /
+        _queue_status_var), the click-to-ping binding, and the ping loop
+        are unchanged.
+        """
+        _bar_bg = COLORS['bg_0']
+
+        tk.Frame(parent, bg=COLORS['border_2'], height=1).pack(fill='x')
+        bar = tk.Frame(parent, bg=_bar_bg,
+                       highlightbackground=COLORS['border_2'],
+                       highlightthickness=0)
+        bar.pack(fill='x')
+        if not hasattr(self, '_ps5_status_var'):
+            self._ps5_status_var = tk.StringVar(value='PS5  ●  Not connected')
         self._ps5_status_lbl = tk.Label(
             bar, textvariable=self._ps5_status_var,
-            font=('Segoe UI', 8), bg='#0d0d0d', fg='#444444',
-            padx=10, pady=3, cursor='hand2')
+            font=FONTS['meta'], bg=_bar_bg, fg=COLORS['fg_4'],
+            padx=12, pady=5, cursor='hand2')
         self._ps5_status_lbl.pack(side='left')
         self._ps5_status_lbl.bind('<Button-1>', lambda e: self._ps5_status_ping())
 
-        tk.Label(bar, text='│', font=('Segoe UI', 8),
-                 bg='#0d0d0d', fg=BORDER).pack(side='left')
+        tk.Label(bar, text='│', font=FONTS['meta'],
+                 bg=_bar_bg, fg=COLORS['border_3']).pack(side='left')
 
         self._ftp_status_var = tk.StringVar(value='FTP  ●  Idle')
         tk.Label(bar, textvariable=self._ftp_status_var,
-                 font=('Segoe UI', 8), bg='#0d0d0d', fg='#444444',
-                 padx=10, pady=3).pack(side='left')
+                 font=FONTS['meta'], bg=_bar_bg, fg=COLORS['fg_4'],
+                 padx=12, pady=5).pack(side='left')
 
         self._queue_status_var = tk.StringVar(value='')
         tk.Label(bar, textvariable=self._queue_status_var,
-                 font=('Segoe UI', 8), bg='#0d0d0d', fg='#58a6ff',
-                 padx=10, pady=3).pack(side='right')
+                 font=FONTS['meta'], bg=_bar_bg, fg=COLORS['accent_hi'],
+                 padx=12, pady=5).pack(side='right')
 
         self.after(5000, self._ps5_status_ping_loop)
 
@@ -22516,7 +27632,7 @@ class ExFATBuilder(_TK_BASE):
         ip = self._settings.get('ps5_ip', self._settings.get('ftp_ip', '')).strip()
         if not ip:
             self._ps5_status_var.set('PS5  ●  No IP set — click to ping')
-            self._ps5_status_lbl.config(fg='#444444')
+            self._ps5_status_lbl.config(fg=COLORS['fg_4'])
             return
         import threading, socket
         def _ping():
@@ -22534,7 +27650,7 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._ps5_status_lbl.config, {'fg': SUCCESS})
             else:
                 self.after(0, self._ps5_status_var.set, '🎮 PS5  ●  Offline  (%s)' % ip)
-                self.after(0, self._ps5_status_lbl.config, {'fg': '#444444'})
+                self.after(0, self._ps5_status_lbl.config, {'fg': COLORS['fg_4']})
         threading.Thread(target=_ping, daemon=True).start()
 
     def _ps5_status_ping_loop(self):
@@ -22542,57 +27658,74 @@ class ExFATBuilder(_TK_BASE):
         self.after(30000, self._ps5_status_ping_loop)
 
     def _build_global_log(self, parent):
-        """Build the collapsible OUTPUT LOG bar at the bottom of the window."""
+        """Build the collapsible OUTPUT LOG bar at the bottom of the window.
+
+        Phase 1 shell refresh: token-driven colours, a small accent tick on
+        the header, slightly larger mono body text and a deeper console
+        background for readability. PRESENTATION ONLY — _log_visible, the
+        toggle label/_toggle_log, Copy (_log_copy / _log_copy_status) and
+        Clear (_log_clear), and the log_box widget all keep their existing
+        names and behaviour.
+        """
         self._log_visible = tk.BooleanVar(value=False)
 
         # Header row — click to expand/collapse
-        log_header = tk.Frame(parent, bg=SURFACE2,
-                              highlightbackground=BORDER, highlightthickness=1)
+        log_header = tk.Frame(parent, bg=COLORS['bg_2'],
+                              highlightbackground=COLORS['border_2'],
+                              highlightthickness=1)
         log_header.pack(fill='x')
+
+        tk.Frame(log_header, bg=COLORS['accent'], width=3).pack(
+            side='left', fill='y')
 
         self._log_toggle_lbl = tk.Label(
             log_header,
             text='\u25b6  OUTPUT LOG',
-            font=('Segoe UI', 8, 'bold'),
-            bg=SURFACE2, fg=MUTED,
+            font=(FONTS['eyebrow'][0], 8, 'bold'),
+            bg=COLORS['bg_2'], fg=COLORS['fg_3'],
             cursor='hand2', padx=10, pady=4)
         self._log_toggle_lbl.pack(side='left')
         self._log_toggle_lbl.bind('<Button-1>', lambda e: self._toggle_log())
 
         tk.Button(log_header, text='Clear',
-                  font=('Segoe UI', 8),
-                  bg=SURFACE2, fg=MUTED,
-                  activebackground=SURFACE2, relief='flat', bd=0,
-                  padx=8, pady=3, cursor='hand2',
-                  command=self._log_clear).pack(side='right', padx=(0, 4))
+                  font=FONTS['meta'],
+                  bg=COLORS['bg_3'], fg=COLORS['fg_3'],
+                  activebackground=COLORS['bg_4'],
+                  activeforeground=COLORS['fg_1'],
+                  relief='flat', bd=0,
+                  padx=10, pady=3, cursor='hand2',
+                  command=self._log_clear).pack(side='right', padx=(0, 6))
 
         # v3.6.3: Copy the whole Output Log to the clipboard. Does not modify
         # or clear the log. A small status label briefly confirms the copy.
         self._log_copy_status = tk.Label(
-            log_header, text='', font=('Segoe UI', 8),
-            bg=SURFACE2, fg=MUTED)
+            log_header, text='', font=FONTS['meta'],
+            bg=COLORS['bg_2'], fg=COLORS['fg_4'])
         self._log_copy_status.pack(side='right', padx=(0, 6))
         tk.Button(log_header, text='Copy',
-                  font=('Segoe UI', 8),
-                  bg=SURFACE2, fg=MUTED,
-                  activebackground=SURFACE2, relief='flat', bd=0,
-                  padx=8, pady=3, cursor='hand2',
+                  font=FONTS['meta'],
+                  bg=COLORS['bg_3'], fg=COLORS['fg_3'],
+                  activebackground=COLORS['bg_4'],
+                  activeforeground=COLORS['fg_1'],
+                  relief='flat', bd=0,
+                  padx=10, pady=3, cursor='hand2',
                   command=self._log_copy).pack(side='right', padx=(0, 4))
 
         # Log body (hidden by default)
         self._log_body = tk.Frame(parent, bg=BG)
         log_outer = tk.Frame(self._log_body, bg=BG,
-                             highlightbackground=BORDER, highlightthickness=1)
+                             highlightbackground=COLORS['border_2'],
+                             highlightthickness=1)
         log_outer.pack(fill='x', padx=0, pady=(2, 0))
-        log_sb = tk.Scrollbar(log_outer, bg=BG, troughcolor=SURFACE2)
+        log_sb = tk.Scrollbar(log_outer, bg=BG, troughcolor=COLORS['bg_2'])
         log_sb.pack(side='right', fill='y')
         self.log_box = tk.Text(
             log_outer,
             height=8,
-            font=('Consolas', 8),
-            bg='#0a0a0f', fg='#a0c8a0',
-            insertbackground='#a0c8a0',
-            relief='flat', bd=6,
+            font=(FONTS['mono_sm'][0], 9),
+            bg=COLORS['bg_0'], fg='#a8d0a8',
+            insertbackground='#a8d0a8',
+            relief='flat', bd=8,
             state='disabled', wrap='word',
             yscrollcommand=log_sb.set)
         self.log_box.pack(fill='x')
@@ -22611,10 +27744,12 @@ class ExFATBuilder(_TK_BASE):
         self._log_visible.set(not self._log_visible.get())
         if self._log_visible.get():
             self._log_body.pack(fill='x', pady=(2, 0))
-            self._log_toggle_lbl.config(text='\u25bc  OUTPUT LOG', fg=TEXT)
+            self._log_toggle_lbl.config(text='\u25bc  OUTPUT LOG',
+                                        fg=COLORS['fg_2'])
         else:
             self._log_body.pack_forget()
-            self._log_toggle_lbl.config(text='\u25b6  OUTPUT LOG', fg=MUTED)
+            self._log_toggle_lbl.config(text='\u25b6  OUTPUT LOG',
+                                        fg=COLORS['fg_3'])
 
     def _preflight_source(self, src_folder, out_path):
         """Single-pass scan of the source folder + sanity checks before
@@ -22829,14 +27964,23 @@ class ExFATBuilder(_TK_BASE):
                                   _plat.version())
         except Exception:
             py, win = 'unknown', 'unknown'
+        try:
+            from ui.mkpfs_runner import mkpfs_version, mkpfs_supports_deep_unpack
+            _mkpfs_ver = mkpfs_version() or '(not available)'
+            _mkpfs_deep = ('yes' if mkpfs_supports_deep_unpack()
+                           else 'no')
+        except Exception:
+            _mkpfs_ver, _mkpfs_deep = '(unknown)', 'unknown'
         banner = (
-            '=' * 70 + '\n'
-            'exFAT Image Builder v%s\n'
-            'Session start: %s\n'
-            'Windows: %s\n'
-            'Python:  %s  (frozen=%s)\n'
-            % (APP_VERSION, time.strftime('%Y-%m-%d %H:%M:%S'), win, py,
-               bool(getattr(sys, 'frozen', False))) + '=' * 70 + '\n')
+            '=' * 70
+            + f'\nexFAT Image Builder v{APP_VERSION!s}'
+            f'\nSession start: {time.strftime("%Y-%m-%d %H:%M:%S")!s}'
+            f'\nWindows: {win!s}'
+            f'\nPython:  {py!s}  (frozen='
+            f'{bool(getattr(sys, "frozen", False))!s})\nMkPFS:   '
+            f'{_mkpfs_ver!s}  (OSFMount-free extract/verify capable: '
+            f'{_mkpfs_deep!s})\n'
+            + '=' * 70 + '\n')
         self._log_to_file(banner)
         try:
             self._prune_old_logs(base, max_age_days=30, max_files=50)
@@ -22921,12 +28065,12 @@ class ExFATBuilder(_TK_BASE):
         if getattr(self, '_log_tags_configured', False):
             return
         try:
-            self.log_box.tag_configure('log_error',   foreground='#ff6b6b')
-            self.log_box.tag_configure('log_warn',    foreground='#ffa940')
-            self.log_box.tag_configure('log_success', foreground='#52c41a')
-            self.log_box.tag_configure('log_info',    foreground='#9b87d4')
-            self.log_box.tag_configure('log_retry',   foreground='#ff8c42')
-            self.log_box.tag_configure('log_muted',   foreground='#888888')
+            self.log_box.tag_configure('log_error',   foreground=COLORS['danger_hi'])
+            self.log_box.tag_configure('log_warn',    foreground=COLORS['warn_hi'])
+            self.log_box.tag_configure('log_success', foreground=COLORS['success_hi'])
+            self.log_box.tag_configure('log_info',    foreground=COLORS['accent_hi'])
+            self.log_box.tag_configure('log_retry',   foreground=COLORS['warn'])
+            self.log_box.tag_configure('log_muted',   foreground=COLORS['fg_4'])
         except Exception:
             pass
         self._log_tags_configured = True
@@ -23170,6 +28314,20 @@ if __name__ == '__main__':
             sys.stderr.write('mkpfs import failed: %s\n' % _e)
             sys.exit(3)
         _rc = _mkpfs_main(sys.argv[2:])
+        sys.exit(_rc if isinstance(_rc, int) else 0)
+
+    if len(sys.argv) >= 2 and sys.argv[1] == '--__lazy_worker__':
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+        try:
+            from ui.experimental_mkpfs import lazy_worker_main as _lazy_main
+        except Exception as _e:
+            sys.stderr.write('lazy worker import failed: %s\n' % _e)
+            sys.exit(3)
+        _rc = _lazy_main(sys.argv[2:])
         sys.exit(_rc if isinstance(_rc, int) else 0)
 
     def _crash_handler(exc_type, exc_value, exc_tb):

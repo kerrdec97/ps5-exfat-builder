@@ -45,6 +45,7 @@ from exfat_builder import *  # noqa: F401,F403
 from exfat_builder import _
 
 from ui.shared.cards import Card, StatusPill, DetectedGameStrip
+from ui.shared.page_head import page_head
 from ui.shared.forms import LabeledField
 from ui.shared.progress import StagedProgressBar
 from ui.shared.scroll import attach_scroll
@@ -143,34 +144,6 @@ def _info_banner(parent, text, on_click=None):
     return bar
 
 
-def _page_head(parent, badge_emoji, title_text, subtitle_text):
-    """Top-of-page header with a gradient-ish badge tile + title + subtitle."""
-    bg = COLORS['bg_1']
-    head = tk.Frame(parent, bg=bg)
-
-    # Badge tile (accent gradient approximation — solid accent with darker border)
-    badge = tk.Label(head, text=badge_emoji,
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     font=(FONTS['body'][0], 18, 'bold'),
-                     width=3, height=2, padx=4, pady=0,
-                     highlightbackground=COLORS['accent_pressed'],
-                     highlightthickness=1)
-    badge.pack(side='left', padx=(0, 14))
-
-    text_col = tk.Frame(head, bg=bg)
-    text_col.pack(side='left', fill='x', expand=True)
-    tk.Label(text_col, text=title_text,
-             font=(FONTS['h2'][0], 18, 'bold'),
-             bg=bg, fg=COLORS['fg_0'], anchor='w'
-             ).pack(fill='x')
-    tk.Label(text_col, text=subtitle_text,
-             font=FONTS['meta'],
-             bg=bg, fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(2, 0))
-
-    return head
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # Main entry — build the exFAT tab into `parent`.
 # ─────────────────────────────────────────────────────────────────────────
@@ -209,8 +182,8 @@ def build_exfat_tab(parent, app):
     grid.grid_rowconfigure(2, weight=1)                    # third row stretches
 
     # Row 0: page-head spanning full width
-    head = _page_head(grid, '\U0001f4be', 'Build exFAT Image',
-                      'Pick a game folder, set the output, and queue the build.')
+    head = page_head(grid, '\U0001f4be', _('Build exFAT image'),
+                     _('Pick a game folder, set the output, and queue the build.'))
     head.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 10))
 
     # Row 1: tip banner spanning full width

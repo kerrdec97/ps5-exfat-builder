@@ -41,6 +41,7 @@ import tkinter as tk
 from tkinter_theme import COLORS, FONTS
 
 from exfat_builder import *  # noqa: F401,F403
+from ui.shared.app_dialog import app_confirm
 from exfat_builder import _, save_settings
 from ui.shared.scroll import attach_scroll
 
@@ -479,11 +480,10 @@ def _render_detail_for(app, idx):
 
 def _pl_remove_then_refresh(app, idx):
     """Remove confirmation + refresh both panes."""
-    from tkinter import messagebox
     if idx < 0 or idx >= len(app._pl_payloads):
         return
     name = app._pl_payloads[idx].get('name', '')
-    if not messagebox.askyesno(_('Remove payload'),
+    if not app_confirm(app, _('Remove payload'),
         _('Remove "%s" from the list?') % name):
         return
     app._pl_payloads.pop(idx)

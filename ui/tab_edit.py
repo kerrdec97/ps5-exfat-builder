@@ -29,7 +29,9 @@ OSFMount cleanup is the app's existing close-time sweep
 import os
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
+
+from ui.shared.app_dialog import app_confirm, app_warning
 
 from tkinter_theme import COLORS, FONTS
 from exfat_builder import _
@@ -199,7 +201,7 @@ def _edit_open(app, state, show_mode, set_pill, pfs_api):
         pfs_api['set_source'](p, compressed=(fmt == 'pfs_c'))
         set_pill('pfs')
     else:
-        messagebox.showwarning(_('Unsupported file type'),
+        app_warning(app, _('Unsupported file type'),
             _('Supported image types: .ffpkg, .exfat, .ffpfs, .ffpfsc'))
 
 
@@ -261,19 +263,19 @@ def _build_pfs_workspace(pane, app, state):
         if st == 'done':
             r['card'].config(highlightbackground=COLORS['success'],
                              highlightthickness=2)
-            r['chk'].config(text='\u2713')
+            r['chk'].config(text='\u2713', fg=COLORS['success'])
             r['glyph'].config(fg=COLORS['success'])
             r['title'].config(fg=COLORS['fg_0'])
         elif st == 'active':
             r['card'].config(highlightbackground=COLORS['teal'],
                              highlightthickness=2)
-            r['chk'].config(text='')
+            r['chk'].config(text='\u25b6', fg=COLORS['teal'])
             r['glyph'].config(fg=COLORS['teal'])
             r['title'].config(fg=COLORS['teal'])
         else:
             r['card'].config(highlightbackground=COLORS['border_2'],
                              highlightthickness=1)
-            r['chk'].config(text='')
+            r['chk'].config(text='\u25cb', fg=COLORS['fg_5'])
             r['glyph'].config(fg=COLORS['fg_5'])
             r['title'].config(fg=COLORS['fg_1'])
 
@@ -449,17 +451,17 @@ def _build_pfs_workspace(pane, app, state):
         src = src_var.get().strip()
         ws = ws_var.get().strip()
         if not src or not os.path.isfile(src):
-            messagebox.showwarning(_('Missing'),
+            app_warning(app, _('Missing'),
                 _('No PFS image selected.'))
             return
         if not ws or not os.path.isdir(ws):
-            messagebox.showwarning(_('Missing'),
+            app_warning(app, _('Missing'),
                 _('Pick a workspace folder.'))
             return
         stem = os.path.splitext(os.path.basename(src))[0]
         dest = os.path.normpath(os.path.join(ws, stem))
         overwrite = os.path.exists(dest)
-        if overwrite and not messagebox.askyesno(_('Folder exists'),
+        if overwrite and not app_confirm(app, _('Folder exists'),
                 dest + _('\n\nalready exists. Overwrite its contents?')):
             return
         unpack_btn.config(state='disabled')

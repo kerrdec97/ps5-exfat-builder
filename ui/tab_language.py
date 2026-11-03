@@ -43,6 +43,7 @@ from exfat_builder import (
     _, set_language, save_settings, _TRANSLATIONS,
 )
 from ui.shared.scroll import attach_scroll
+from ui.shared.app_dialog import app_error, app_info
 
 
 # Master list of supported language codes with native + English name.
@@ -566,8 +567,7 @@ def _apply_lang(app, code):
     if getattr(app, '_building', False) \
             or getattr(app, '_unified_active', False) \
             or getattr(app, '_ffpkg_building', False):
-        from tkinter import messagebox
-        messagebox.showinfo(
+        app_info(app, 
             _('Build in progress'),
             _('Finish or cancel the running build before changing the '
               'language, then click Apply again.'))
@@ -582,7 +582,7 @@ def _apply_lang(app, code):
 
 def _export_json(app, code):
     """Export the current language dict to a JSON file."""
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog
     if code == 'en':
         # English is the source — there's no entry in _TRANSLATIONS.
         # Build a key-for-key dict from another language's keys so the
@@ -592,7 +592,7 @@ def _export_json(app, code):
     else:
         d = _TRANSLATIONS.get(code, {})
     if not d:
-        messagebox.showinfo(_('Export'),
+        app_info(app, _('Export'),
                             _('No translation entries for this language.'))
         return
     path = filedialog.asksaveasfilename(
@@ -604,19 +604,18 @@ def _export_json(app, code):
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(d, f, indent=2, ensure_ascii=False, sort_keys=True)
-        messagebox.showinfo(_('Export'),
+        app_info(app, _('Export'),
                             _('Saved %d strings to %s') %
                             (len(d), os.path.basename(path)))
     except Exception as e:
-        messagebox.showerror(_('Export failed'), str(e))
+        app_error(app, _('Export failed'), str(e))
 
 
 def _import_json(app):
     """Import a translation .json. Decorative — would need a path to merge
     user-supplied strings into _TRANSLATIONS; out of scope for this
     iteration."""
-    from tkinter import messagebox
-    messagebox.showinfo(_('Import .json'),
+    app_info(app, _('Import .json'),
                         _('Translation imports from JSON files are not yet '
                           'wired up. The Export button works — you can use '
                           'it to bootstrap a translation file, then send '
