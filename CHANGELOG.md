@@ -62,6 +62,21 @@ consistent look. Every existing feature, setting and language is kept.
   UFS2Tool, mkpfs, Publishing Tools) before releasing drives.
 - **Threads:** every widget's `after()` is safe to call from worker threads
   (seen as "main thread is not in main loop" in Windows test runs).
+- **Verification first:** a built exFAT image shows "Built — verifying…"
+  until verification ends; "Complete!" and the history entry carry the
+  real verdict.
+- **Drive letters** mapped to network shares (invisible to the elevated app)
+  are no longer picked for mounting images (#64, #42).
+- **Stale-mount sweep** never unmounts volumes that were mounted before the
+  app started.
+- **Console output** of the build and robocopy is decoded with the OEM code
+  page (measured on Windows), so accented file names are no longer garbled.
+- **Large dumps:** the source-size walk and "delete source folder" no longer
+  run on the UI thread.
+- **Settings and history:** a settings file that is valid JSON but not an
+  object is set aside instead of crashing every start; history is written
+  atomically and an unreadable one is kept as `.corrupt`.
+- **Build errors** are always written to the Output Log.
 
 ### Fixed — backports
 - The "basic byte-patch" fallback, used when the backport engine could not
@@ -84,6 +99,10 @@ consistent look. Every existing feature, setting and language is kept.
   large images are refused.
 - UFS2Tool may run on .NET 9/10: .NET 8 support ends on 2026-11-10. The
   .NET check accepts 8 or newer.
+- The build scripts and UFS2Tool, which run elevated from a temp folder,
+  are compared byte for byte with the copies inside the app before every
+  use and re-extracted if changed; PowerShell is started by its full path;
+  temp folders left by earlier sessions are removed at start-up.
 - In-app updates: packaged `.exe` only, never during a build, the release's
   `.sha256` is required (fail closed), downloads time out, and the app exits
   through its normal close path.
