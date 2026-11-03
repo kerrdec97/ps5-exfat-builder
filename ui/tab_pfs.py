@@ -37,6 +37,10 @@ from exfat_builder import _
 from ui.shared.page_head import (
     make_themed_button, info_banner, page_head, field_block)
 from ui.shared.scroll import attach_scroll
+from tkinter_theme import px
+from ui.shared.widgets import (
+    Button, IconButton, Card, Badge, Divider, Rounded, InfoBar, PageHeader,
+    StepIcon, Dropdown, ProgressBar, IconLabel, autowrap)
 
 def _fmt_size(b):
     if b >= 1024**3:
@@ -218,79 +222,76 @@ def _supports_hardlinks(directory):
 
 
 def build_pfs_tab(parent, app):
-    parent.configure(bg=COLORS['bg_1'])
+    from ui.tab_extract import scroll_page
+    from ui.icons import icon_image
 
-    canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0, highlightthickness=0)
-    canvas.pack(side='left', fill='both', expand=True)
-    sb = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
-    sb.pack(side='right', fill='y')
-    canvas.configure(yscrollcommand=sb.set)
-    inner = tk.Frame(canvas, bg=COLORS['bg_1'])
-    inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
-    inner.bind('<Configure>', lambda e:
-        canvas.configure(scrollregion=canvas.bbox('all')))
-    canvas.bind('<Configure>', lambda e:
-        canvas.itemconfig(inner_id, width=e.width))
-    attach_scroll(canvas)
+    def strip_glyphs(t):
+        # drop the legacy leading info glyph (the bar/caption has its own)
+        return t.lstrip('\u2139').lstrip()
+    BG2, BG3 = COLORS['bg_2'], COLORS['bg_3']
+    inner = scroll_page(parent)
 
     # ── Page head ────────────────────────────────────────────────────
-    head = page_head(inner, '\U0001f5dc',
-                     _('Build PFS image'),
-                     _('Pack a game dump into a .ffpfs / .ffpfsc image for ShadowMount+ / MicroMount.'))
-    head.pack(fill='x', padx=24, pady=(14, 8))
+    head = PageHeader(inner, _('Build PFS image'),
+                      _('Pack a game dump into a .ffpfs / .ffpfsc image for ShadowMount+ / MicroMount.'))
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
-    info_banner(inner,
-        '\u2139  Choose the output format below.  .ffpfsc is a compressed '
-        'container (smaller on disk, but reads are capped ~150\u2013250 MB/s on '
-        'console).  .ffpfs is an uncompressed PFS (larger, but full read speed '
-        'and a single fast pass \u2014 no temporary file).  Large games are '
-        'I/O-heavy, so allow time and free space.'
-    ).pack(fill='x', padx=24, pady=(0, 12))
-
+    # mkpfs availability (header, right) — icon + word badge.
     badge_var = tk.StringVar(value='Checking mkpfs\u2026')
-    badge_row = tk.Frame(inner, bg=COLORS['bg_1'])
-    badge_row.pack(fill='x', padx=24, pady=(0, 14))
-    badge_lbl = tk.Label(badge_row, textvariable=badge_var,
-                          font=FONTS['mono_sm'],
-                          bg=COLORS['bg_1'], fg=COLORS['fg_4'], anchor='w')
-    badge_lbl.pack(side='left')
+    badge_lbl = Badge(head.actions, badge_var.get(), 'neutral', icon='loader',
+                      surface=COLORS['bg_1'])
+    badge_lbl.pack(side='right')
 
     def _check_badge():
         from ui.mkpfs_runner import mkpfs_version
         ver = mkpfs_version()
         if ver:
             parent.after(0, lambda: (badge_var.set('\u2713  mkpfs  ' + ver),
-                                      badge_lbl.config(fg=COLORS['teal'])))
+                                      badge_lbl.set('mkpfs  ' + ver,
+                                                    'success', icon=None)))
         else:
             parent.after(0, lambda: (badge_var.set('\u2717  mkpfs not available'),
-                                      badge_lbl.config(fg=COLORS['danger'])))
+                                      badge_lbl.set('mkpfs not available',
+                                                    'danger', icon=None)))
     threading.Thread(target=_check_badge, daemon=True).start()
 
-    # ── Path selector ────────────────────────────────────────────────
+    InfoBar(inner, kind='info', text=strip_glyphs(
+        '\u2139  Choose the output format below.  .ffpfsc is a compressed '
+        'container (smaller on disk, but reads are capped ~150\u2013250 MB/s on '
+        'console).  .ffpfs is an uncompressed PFS (larger, but full read speed '
+        'and a single fast pass \u2014 no temporary file).  Large games are '
+        'I/O-heavy, so allow time and free space.')
+    ).pack(fill='x', padx=px(24), pady=(0, px(16)))
+
+    # ── Path selector (Build-screen style tiles) ─────────────────────
     path_var = tk.StringVar(value='convert')  # 'convert' | 'extract'
 
     sel_frame = tk.Frame(inner, bg=COLORS['bg_1'])
-    sel_frame.pack(fill='x', padx=24, pady=(0, 14))
+    sel_frame.pack(fill='x', padx=px(24), pady=(0, px(16)))
+    sel_frame.columnconfigure(0, weight=1, uniform='pfs_sel')
+    sel_frame.columnconfigure(1, weight=1, uniform='pfs_sel')
 
     def _make_path_tile(parent_f, key, icon, title, subtitle):
-        outer = tk.Frame(parent_f, bg=COLORS['bg_2'],
-                         highlightthickness=2,
-                         highlightbackground=COLORS['border_2'],
-                         cursor='hand2')
-        outer.pack(side='left', fill='both', expand=True, padx=(0, 8))
-        icon_lbl = tk.Label(outer, text=icon, font=(FONTS['body'][0], 20),
-                            bg=COLORS['bg_2'], fg=COLORS['fg_4'])
-        icon_lbl.pack(pady=(18, 4))
-        title_lbl = tk.Label(outer, text=title,
-                             font=(FONTS['body_strong'][0], 11),
-                             bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-                             wraplength=240, justify='center')
-        title_lbl.pack(padx=12)
-        sub_lbl = tk.Label(outer, text=subtitle, font=FONTS['meta'],
-                           bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                           wraplength=240, justify='center')
-        sub_lbl.pack(padx=12, pady=(4, 18))
-        widgets = {'outer': outer, 'icon': icon_lbl, 'title': title_lbl, 'sub': sub_lbl}
+        col = len(parent_f.grid_slaves(row=0))
+        outer = Rounded(parent_f, bg=BG3, border=COLORS['border_3'], radius=8,
+                        padding=(px(16), px(14)), surface=COLORS['bg_1'],
+                        cursor='hand2')
+        outer.grid(row=0, column=col, sticky='nsew',
+                   padx=(0 if col == 0 else px(8), 0))
+        icon_lbl = tk.Label(outer, bg=BG3, bd=0, anchor='w')
+        icon_lbl.pack(anchor='w')
+        title_lbl = tk.Label(outer, text=title, font=FONTS['body_strong'],
+                             bg=BG3, fg=COLORS['fg_0'], anchor='w',
+                             justify='left')
+        title_lbl.pack(fill='x', pady=(px(8), 0))
+        sub_lbl = tk.Label(outer, text=subtitle, font=FONTS['caption'],
+                           bg=BG3, fg=COLORS['fg_3'], anchor='w',
+                           justify='left')
+        sub_lbl.pack(fill='x', pady=(px(2), 0))
+        autowrap(sub_lbl)
+        check = tk.Label(outer, bg=BG3, bd=0)
+        widgets = {'outer': outer, 'icon': icon_lbl, 'title': title_lbl,
+                   'sub': sub_lbl, 'check': check, 'icon_name': icon}
         def _select(_=None, k=key):
             path_var.set(k)
             _refresh_tiles()
@@ -302,24 +303,31 @@ def build_pfs_tab(parent, app):
     # Dump-direct PFS build was removed \u2014 only the stable exFAT/ffpkg \u2192 .ffpfsc
     # route remains (Convert), plus Extract.
     tile_convert = _make_path_tile(sel_frame, 'convert',
-        '\U0001f504', 'Build from .exfat / .ffpkg',
+        'convert', 'Build from .exfat / .ffpkg',
         'Already have one? Pack it straight into a mountable .ffpfsc \u2014 no rebuild')
     tile_extract = _make_path_tile(sel_frame, 'extract',
-        '\U0001f4e4', 'Extract a .ffpfs / .ffpfsc image',
+        'extract', 'Extract a .ffpfs / .ffpfsc image',
         'Unpack a PFS image to a folder \u2014 edit then rebuild')
 
     def _refresh_tiles():
         for key, tile in (('convert', tile_convert),
                           ('extract', tile_extract)):
             active = path_var.get() == key
-            tile['outer'].config(
-                highlightbackground=COLORS['teal'] if active else COLORS['border_2'],
-                bg=COLORS['bg_3'] if active else COLORS['bg_2'])
-            for w in (tile['icon'], tile['title'], tile['sub']):
-                w.config(bg=COLORS['bg_3'] if active else COLORS['bg_2'],
-                         fg=(COLORS['teal'] if active and (w is tile['title'] or w is tile['icon'])
-                             else COLORS['fg_1'] if w is tile['title']
-                             else COLORS['fg_4']))
+            bg = COLORS['accent_08'] if active else BG3
+            tile['outer'].set_style(
+                bg=bg, border=COLORS['accent'] if active else COLORS['border_3'])
+            for w in (tile['icon'], tile['title'], tile['sub'], tile['check']):
+                w.config(bg=bg)
+            tile['icon'].config(image=icon_image(
+                tile['icon_name'], 20,
+                COLORS['accent_hi'] if active else COLORS['fg_2'], bg))
+            tile['check'].config(image=icon_image('success', 16,
+                                                  COLORS['accent_hi'], bg))
+            if active:
+                tile['check'].place(relx=1.0, x=-px(12), y=px(12), anchor='ne')
+            else:
+                tile['check'].place_forget()
+            tile['outer'].raise_decorations()
     _refresh_tiles()
 
     panel_build   = tk.Frame(inner, bg=COLORS['bg_1'])
@@ -654,50 +662,8 @@ def build_pfs_tab(parent, app):
         n = len(queue)
         for idx, job in enumerate(queue):
             editable = (job['status'] == 'queued' and not running)
-            row = tk.Frame(qlist, bg=COLORS['bg_3'])
-            row.pack(fill='x', padx=10, pady=2)
-            # Multi-select checkbox (only on queued rows, when idle)
-            if editable:
-                var = _sel_vars.get(id(job))
-                if var is None:
-                    var = tk.BooleanVar(value=False)
-                    _sel_vars[id(job)] = var
-                XCheck(row, variable=var, bg=COLORS['bg_3'],
-                               activebackground=COLORS['bg_3'],
-                               selectcolor=COLORS['bg_4'],
-                               highlightthickness=0, bd=0,
-                               cursor='hand2').pack(side='left')
-            else:
-                tk.Frame(row, bg=COLORS['bg_3'], width=20,
-                         height=1).pack(side='left')
-            dot = tk.Label(row, text=_STATUS_DOT.get(job['status'], '\u25cb'),
-                           font=(FONTS['body'][0], 9), bg=COLORS['bg_3'],
-                           fg=_STATUS_COLORS.get(job['status'], COLORS['fg_4']))
-            dot.pack(side='left', padx=(2, 8))
-            tk.Label(row, text=job['name'], font=FONTS['mono_sm'],
-                     bg=COLORS['bg_3'], fg=COLORS['fg_1'], anchor='w').pack(
-                         side='left', fill='x', expand=True)
-            st = tk.Label(row, text=job['status'], font=FONTS['meta'],
-                          bg=COLORS['bg_3'],
-                          fg=_STATUS_COLORS.get(job['status'], COLORS['fg_4']))
-            st.pack(side='right')
-            if editable:
-                # Single remove
-                x = tk.Label(row, text='\u2715', font=FONTS['meta'],
-                             bg=COLORS['bg_3'], fg=COLORS['fg_5'], cursor='hand2')
-                x.pack(side='right', padx=(0, 10))
-                x.bind('<Button-1>', lambda e, j=job: _remove_job(j))
-                # Reorder down / up (hidden at the ends)
-                if idx < n - 1:
-                    dn = tk.Label(row, text='\u25bc', font=FONTS['meta'],
-                                  bg=COLORS['bg_3'], fg=COLORS['fg_4'], cursor='hand2')
-                    dn.pack(side='right', padx=(0, 6))
-                    dn.bind('<Button-1>', lambda e, i=idx: _move(i, +1))
-                if idx > 0:
-                    up = tk.Label(row, text='\u25b2', font=FONTS['meta'],
-                                  bg=COLORS['bg_3'], fg=COLORS['fg_4'], cursor='hand2')
-                    up.pack(side='right', padx=(0, 6))
-                    up.bind('<Button-1>', lambda e, i=idx: _move(i, -1))
+            _queue_row(qlist, idx, n, job, editable, _sel_vars,
+                       _remove_job, _move)
 
     def _remove_job(job):
         if queue_state['running']:
@@ -1287,26 +1253,22 @@ def build_pfs_tab(parent, app):
     convert_queue = []                       # list of job dicts
     cq_state      = {'running': False, 'idx': 0, 'sel': {}}
 
-    card_c = tk.Frame(panel_convert, bg=COLORS['bg_2'],
-                      highlightthickness=1, highlightbackground=COLORS['border_2'])
-    card_c.pack(fill='x', padx=24, pady=(0, 14))
-    _card_head(card_c, '\U0001f504', 'Build .ffpfsc from .exfat / .ffpkg',
-               'Pick an existing image \u2014 it is packed straight into a compressed PFS container, no extraction')
-    body_c = tk.Frame(card_c, bg=COLORS['bg_2'])
-    body_c.pack(fill='x', padx=24, pady=(4, 18))
+    from ui.tab_extract import page_columns, caption as _cap
+    left_c, right_c = page_columns(panel_convert)
+    card_c = Card(left_c, title='Build .ffpfsc from .exfat / .ffpkg',
+                  subtitle='Pick an existing image \u2014 it is packed straight '
+                           'into a compressed PFS container, no extraction')
+    card_c.pack(fill='x')
+    body_c = card_c.body
 
-    note_c = tk.Frame(body_c, bg=COLORS['bg_3'],
-                      highlightthickness=1, highlightbackground=COLORS['border_3'])
-    note_c.pack(fill='x', pady=(0, 12))
-    tk.Label(note_c,
-             text=('\u2139  The .exfat / .ffpkg becomes the nested image inside the '
-                   '.ffpfsc \u2014 one pack, no extraction, no OSFMount/UFS2Tool.\n'
-                   'Official MicroMount method. Compression cuts most games '
-                   '40\u201360%; reads top out around 150\u2013250 MB/s on console.\n'
-                   'Have a raw dump folder? Build an .exfat (exFAT tab) or .ffpkg '
-                   '(ffpkg tab) first \u2014 that is the supported route into a .ffpfsc.'),
-             font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-             anchor='w', justify='left').pack(fill='x', padx=12, pady=8)
+    note_c = _cap(body_c, strip_glyphs(
+        '\u2139  The .exfat / .ffpkg becomes the nested image inside the '
+        '.ffpfsc \u2014 one pack, no extraction, no OSFMount/UFS2Tool. '
+        'Official MicroMount method. Compression cuts most games '
+        '40\u201360%; reads top out around 150\u2013250 MB/s on console. '
+        'Have a raw dump folder? Build an .exfat (exFAT tab) or .ffpkg '
+        '(ffpkg tab) first \u2014 that is the supported route into a .ffpfsc.'))
+    note_c.pack(fill='x', pady=(0, px(4)))
 
     def _browse_src_c():
         p = filedialog.askopenfilename(title='Select source image',
@@ -1332,9 +1294,10 @@ def build_pfs_tab(parent, app):
     field_block(body_c, 'Output name', var=name_c_var,
                 hint='auto-filled from source name if blank')
     field_block(body_c, 'Temp / work folder (optional)', var=tempdir_c_var,
-                on_browse=_browse_temp_c,
-                hint='only used if the source drive can\u2019t hard-link '
-                     '(exFAT/FAT32) \u2014 needs room for one image copy')
+                on_browse=_browse_temp_c)
+    _cap(body_c, 'only used if the source drive can\u2019t hard-link '
+                 '(exFAT/FAT32) \u2014 needs room for one image copy'
+         ).pack(fill='x', pady=(px(4), 0))
 
     def _on_src_c(*_):
         p = src_c_var.get().strip()
@@ -1369,14 +1332,16 @@ def build_pfs_tab(parent, app):
             pass
     app._pfs_open_convert_with = _open_convert_with
 
-    tk.Label(body_c, textvariable=info_c_var, font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w').pack(fill='x', pady=(4, 8))
+    tk.Label(body_c, textvariable=info_c_var, font=FONTS['body'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w').pack(
+                 fill='x', pady=(px(12), 0))
 
     space_c_var = tk.StringVar()
-    space_c_lbl = tk.Label(body_c, textvariable=space_c_var, font=FONTS['meta'],
-                           bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w',
-                           justify='left')
-    space_c_lbl.pack(fill='x', pady=(0, 6))
+    space_c_lbl = tk.Label(body_c, textvariable=space_c_var,
+                           font=FONTS['caption'], bg=COLORS['bg_2'],
+                           fg=COLORS['fg_3'], anchor='w', justify='left')
+    space_c_lbl.pack(fill='x', pady=(px(2), 0))
+    autowrap(space_c_lbl)
 
     def _update_space_c(*_):
         p = src_c_var.get().strip()
@@ -1422,30 +1387,36 @@ def build_pfs_tab(parent, app):
         else:
             parts.append('Temp (%s): hard-link \u2014 no copy needed \u2713' % sdrv)
         space_c_var.set('   \u00b7   '.join(parts))
-        space_c_lbl.config(fg=COLORS['warn'] if short else COLORS['fg_4'])
+        space_c_lbl.config(fg=COLORS['warn_hi'] if short else COLORS['fg_3'])
 
     outdir_c_var.trace_add('write', _update_space_c)
     tempdir_c_var.trace_add('write', _update_space_c)
     src_c_var.trace_add('write', _update_space_c)
 
-    adv_c = tk.Frame(body_c, bg=COLORS['bg_2'])
-    adv_c.pack(fill='x', pady=(10, 0))
-    tk.Label(adv_c, text='CPU cores:', font=FONTS['label'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left')
-    core_menu_c = ttk.Combobox(adv_c, textvariable=cpu_cores_c_var,
-                                values=_core_choices, width=5, state='readonly')
-    core_menu_c.pack(side='left', padx=(8, 0))
-    tk.Label(adv_c, text='  more cores = faster compression (you have %d)' % _max_cores,
-             font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_5']).pack(side='left')
-
-    _make_cb(body_c, 'Verify after packing \u2014 re-reads the image to confirm it '
-             'wrote correctly (slower; does not change the output)',
-             verify_c_var).pack(anchor='w', pady=(8, 0))
-    tk.Label(body_c, text=('   note: a converted image is nested, so verify may '
-                           'log "sce_sys/param.json / eboot.bin not found" \u2014 '
-                           'that is expected and does not mean the image is bad.'),
-             font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_5'],
-             anchor='w', justify='left').pack(fill='x', pady=(2, 0))
+    # ── Options: settings-style rows ──
+    opt_c = Card(left_c, title='Options')
+    opt_c.pack(fill='x', pady=(px(16), 0))
+    adv_c = tk.Frame(opt_c.body, bg=COLORS['bg_2'])
+    adv_c.pack(fill='x')
+    _ac_l = tk.Frame(adv_c, bg=COLORS['bg_2'])
+    _ac_l.pack(side='left', fill='x', expand=True)
+    tk.Label(_ac_l, text='CPU cores', font=FONTS['body'], bg=COLORS['bg_2'],
+             fg=COLORS['fg_1'], anchor='w').pack(fill='x')
+    tk.Label(_ac_l, text='more cores = faster compression (you have %d)' % _max_cores,
+             font=FONTS['caption'], bg=COLORS['bg_2'], fg=COLORS['fg_3'],
+             anchor='w').pack(fill='x', pady=(px(2), 0))
+    core_menu_c = Dropdown(adv_c, textvariable=cpu_cores_c_var,
+                           values=_core_choices, width=6)
+    core_menu_c.pack(side='right', anchor='n')
+    Divider(opt_c.body, color=COLORS['border_1']).pack(fill='x',
+                                                       pady=px(12))
+    _make_cb(opt_c.body, 'Verify after packing', verify_c_var).pack(anchor='w')
+    _vn = _cap(opt_c.body, ('Re-reads the image to confirm it wrote correctly '
+                            '(slower; does not change the output). Note: a '
+                            'converted image is nested, so verify may '
+                            'log "sce_sys/param.json / eboot.bin not found" \u2014 '
+                            'that is expected and does not mean the image is bad.'))
+    _vn.pack(fill='x', pady=(px(2), 0), padx=(px(28), 0))
 
     _STAGES_CONVERT2 = [
         ('prep',     'Prepare',   0,   5),
@@ -1453,25 +1424,25 @@ def build_pfs_tab(parent, app):
         ('compress', 'Compress', 15,  92),
         ('write',    'Write',    92, 100),
     ]
-    prog_c = _ProgressBlock(body_c, _STAGES_CONVERT2)
+    run_c = Card(right_c, title='Pack',
+                 subtitle='Progress also appears in the OUTPUT LOG.')
+    run_c.pack(fill='x')
+    prog_c = _ProgressBlock(run_c.body, _STAGES_CONVERT2)
 
-    btn_row_c = tk.Frame(body_c, bg=COLORS['bg_2'])
-    btn_row_c.pack(anchor='w', pady=(14, 0))
-    btn_c = make_themed_button(btn_row_c, text='Build .ffpfsc now',
-                                command=lambda: _run_convert(),
-                                kind='success', icon='\u25b6',
-                                font_size=10, padx=18, pady=9)
-    btn_c.pack(side='left')
-    btn_cq_add = make_themed_button(btn_row_c, text='Add to queue',
-                                command=lambda: _cq_add(),
-                                kind='accent', icon='\u002b',
-                                font_size=10, padx=16, pady=9)
-    btn_cq_add.pack(side='left', padx=(8, 0))
-    btn_cq_run = make_themed_button(btn_row_c, text='Build all',
-                                command=lambda: _cq_run_all(),
-                                kind='teal', icon='\u25b6',
-                                font_size=10, padx=16, pady=9)
-    btn_cq_run.pack(side='left', padx=(8, 0))
+    Divider(run_c.body, color=COLORS['border_1']).pack(fill='x',
+                                                       pady=(px(16), px(12)))
+    btn_row_c = tk.Frame(run_c.body, bg=COLORS['bg_2'])
+    btn_row_c.pack(fill='x')
+    btn_c = Button(btn_row_c, text='Build .ffpfsc now', icon='play',
+                   variant='primary', command=lambda: _run_convert(),
+                   surface=COLORS['bg_2'])
+    btn_c.pack(side='right')
+    btn_cq_add = Button(btn_row_c, text='Add to queue', icon='plus',
+                        command=lambda: _cq_add(), surface=COLORS['bg_2'])
+    btn_cq_add.pack(side='right', padx=(0, px(6)))
+    btn_cq_run = Button(btn_row_c, text='Build all', icon='queue',
+                        command=lambda: _cq_run_all(), surface=COLORS['bg_2'])
+    btn_cq_run.pack(side='left')
 
     def _run_convert():
         if state_c['busy']:
@@ -1915,29 +1886,20 @@ def build_pfs_tab(parent, app):
     # ─────────────────────────────────────────────────────────────────
     # Convert queue — batch .exfat/.ffpkg → .ffpfsc, run sequentially
     # ─────────────────────────────────────────────────────────────────
-    cq_card = tk.Frame(panel_convert, bg=COLORS['bg_3'],
-                       highlightthickness=1, highlightbackground=COLORS['border_3'])
-    cq_head = tk.Frame(cq_card, bg=COLORS['bg_3'])
-    cq_head.pack(fill='x', padx=16, pady=(12, 6))
-    tk.Label(cq_head, text='CONVERT QUEUE', font=FONTS['eyebrow'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_5']).pack(side='left')
+    cq_card = Card(panel_convert, title='Convert queue')
     cq_count_var = tk.StringVar(value='')
-    tk.Label(cq_head, textvariable=cq_count_var, font=FONTS['meta'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_4']).pack(side='left', padx=(10, 0))
+    tk.Label(cq_card.head_actions, textvariable=cq_count_var,
+             font=FONTS['caption'], bg=COLORS['bg_2'],
+             fg=COLORS['fg_3']).pack(side='left', padx=(0, px(10)))
+    Button(cq_card.head_actions, text='Remove selected', icon='minus',
+           size='sm', command=lambda: _cq_remove_selected(),
+           surface=COLORS['bg_2']).pack(side='left')
+    Button(cq_card.head_actions, text='Clear', icon='trash', size='sm',
+           variant='subtle', command=lambda: _cq_clear(),
+           surface=COLORS['bg_2']).pack(side='left', padx=(px(4), 0))
 
-    cq_list = tk.Frame(cq_card, bg=COLORS['bg_3'])
-    cq_list.pack(fill='x', padx=6, pady=(0, 6))
-
-    cq_btns = tk.Frame(cq_card, bg=COLORS['bg_3'])
-    cq_btns.pack(fill='x', padx=16, pady=(0, 12))
-    make_themed_button(cq_btns, text='Remove selected',
-                       command=lambda: _cq_remove_selected(),
-                       kind='accent', icon='\u2715', font_size=10,
-                       padx=14, pady=8).pack(side='left')
-    make_themed_button(cq_btns, text='Clear',
-                       command=lambda: _cq_clear(),
-                       kind='accent', icon='\u2717', font_size=10,
-                       padx=14, pady=8).pack(side='left', padx=(8, 0))
+    cq_list = tk.Frame(cq_card.body, bg=COLORS['bg_2'])
+    cq_list.pack(fill='x')
 
     def _cq_render():
         for w in cq_list.winfo_children():
@@ -1947,7 +1909,7 @@ def build_pfs_tab(parent, app):
             cq_count_var.set('')
             cq_state['sel'].clear()
             return
-        cq_card.pack(fill='x', padx=24, pady=(0, 14))
+        cq_card.pack(fill='x', padx=px(24), pady=(0, px(16)))
         done   = sum(1 for j in convert_queue if j['status'] == 'done')
         failed = sum(1 for j in convert_queue if j['status'] == 'failed')
         lab = ('%d job%s  \u00b7  %d done'
@@ -1962,43 +1924,8 @@ def build_pfs_tab(parent, app):
         n = len(convert_queue)
         for idx, job in enumerate(convert_queue):
             editable = (job['status'] == 'queued' and not running)
-            row = tk.Frame(cq_list, bg=COLORS['bg_3'])
-            row.pack(fill='x', padx=10, pady=2)
-            if editable:
-                var = cq_state['sel'].get(id(job))
-                if var is None:
-                    var = tk.BooleanVar(value=False)
-                    cq_state['sel'][id(job)] = var
-                XCheck(row, variable=var, bg=COLORS['bg_3'],
-                               activebackground=COLORS['bg_3'],
-                               selectcolor=COLORS['bg_4'], highlightthickness=0,
-                               bd=0, cursor='hand2').pack(side='left')
-            else:
-                tk.Frame(row, bg=COLORS['bg_3'], width=20, height=1).pack(side='left')
-            tk.Label(row, text=_STATUS_DOT.get(job['status'], '\u25cb'),
-                     font=(FONTS['body'][0], 9), bg=COLORS['bg_3'],
-                     fg=_STATUS_COLORS.get(job['status'], COLORS['fg_4'])).pack(
-                         side='left', padx=(2, 8))
-            tk.Label(row, text=job['name'], font=FONTS['mono_sm'],
-                     bg=COLORS['bg_3'], fg=COLORS['fg_1'], anchor='w').pack(
-                         side='left', fill='x', expand=True)
-            tk.Label(row, text=job['status'], font=FONTS['meta'], bg=COLORS['bg_3'],
-                     fg=_STATUS_COLORS.get(job['status'], COLORS['fg_4'])).pack(side='right')
-            if editable:
-                x = tk.Label(row, text='\u2715', font=FONTS['meta'],
-                             bg=COLORS['bg_3'], fg=COLORS['fg_5'], cursor='hand2')
-                x.pack(side='right', padx=(0, 10))
-                x.bind('<Button-1>', lambda e, j=job: _cq_remove_job(j))
-                if idx < n - 1:
-                    dn = tk.Label(row, text='\u25bc', font=FONTS['meta'],
-                                  bg=COLORS['bg_3'], fg=COLORS['fg_4'], cursor='hand2')
-                    dn.pack(side='right', padx=(0, 6))
-                    dn.bind('<Button-1>', lambda e, i=idx: _cq_move(i, +1))
-                if idx > 0:
-                    up = tk.Label(row, text='\u25b2', font=FONTS['meta'],
-                                  bg=COLORS['bg_3'], fg=COLORS['fg_4'], cursor='hand2')
-                    up.pack(side='right', padx=(0, 6))
-                    up.bind('<Button-1>', lambda e, i=idx: _cq_move(i, -1))
+            _queue_row(cq_list, idx, n, job, editable, cq_state['sel'],
+                       _cq_remove_job, _cq_move)
 
     def _cq_add():
         src    = src_c_var.get().strip()
@@ -2123,26 +2050,21 @@ def build_pfs_tab(parent, app):
     info_e_var   = tk.StringVar(value='')
     state_e      = {'busy': False}
 
-    card_e = tk.Frame(panel_extract, bg=COLORS['bg_2'],
-                      highlightthickness=1, highlightbackground=COLORS['border_2'])
-    card_e.pack(fill='x', padx=24, pady=(0, 14))
-    _card_head(card_e, '\U0001f4e4', 'Extract .ffpfs / .ffpfsc  \u2192  folder',
-               'Unpack a PFS image so you can edit files, then rebuild from the Build tab')
-    body_e = tk.Frame(card_e, bg=COLORS['bg_2'])
-    body_e.pack(fill='x', padx=24, pady=(4, 18))
+    left_e, right_e = page_columns(panel_extract)
+    card_e = Card(left_e, title='Extract .ffpfs / .ffpfsc  \u2192  folder',
+                  subtitle='Unpack a PFS image so you can edit files, then '
+                           'rebuild from the Build tab')
+    card_e.pack(fill='x')
+    body_e = card_e.body
 
-    note_e = tk.Frame(body_e, bg=COLORS['bg_3'],
-                      highlightthickness=1, highlightbackground=COLORS['border_3'])
-    note_e.pack(fill='x', pady=(0, 12))
-    tk.Label(note_e,
-             text=('\u2139  PFS images are read-only \u2014 files cannot be changed in place.\n'
-                   'A .ffpfs (uncompressed) unpacks straight to the game files \u2014 best '
-                   'for the edit \u2192 rebuild loop.\n'
-                   'A .ffpfsc (container) unpacks to its nested image instead '
-                   '(pfs_image.dat, or the inner .exfat / .ffpkg) \u2014 extract or mount '
-                   'that to reach the game files.'),
-             font=FONTS['mono_sm'], bg=COLORS['bg_3'], fg=COLORS['fg_3'],
-             anchor='w', justify='left').pack(fill='x', padx=12, pady=8)
+    note_e = _cap(body_e, strip_glyphs(
+        '\u2139  PFS images are read-only \u2014 files cannot be changed in place. '
+        'A .ffpfs (uncompressed) unpacks straight to the game files \u2014 best '
+        'for the edit \u2192 rebuild loop. '
+        'A .ffpfsc (container) unpacks to its nested image instead '
+        '(pfs_image.dat, or the inner .exfat / .ffpkg) \u2014 extract or mount '
+        'that to reach the game files.'))
+    note_e.pack(fill='x', pady=(0, px(4)))
 
     def _browse_src_e():
         p = filedialog.askopenfilename(title='Select PFS image',
@@ -2171,16 +2093,22 @@ def build_pfs_tab(parent, app):
             info_e_var.set('')
     src_e_var.trace_add('write', _on_src_e)
 
-    tk.Label(body_e, textvariable=info_e_var, font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['teal'], anchor='w').pack(fill='x', pady=(4, 8))
+    tk.Label(body_e, textvariable=info_e_var, font=FONTS['body'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_1'], anchor='w').pack(
+                 fill='x', pady=(px(12), 0))
 
-    prog_e = _ProgressBlock(body_e, _STAGES_EXTRACT)
-
-    btn_e = make_themed_button(body_e, text='Extract to folder',
-                                command=lambda: _run_extract(),
-                                kind='success', icon='\u25b6',
-                                font_size=10, padx=18, pady=9)
-    btn_e.pack(anchor='w', pady=(14, 0))
+    run_e = Card(right_e, title='Extract',
+                 subtitle='Progress also appears in the OUTPUT LOG.')
+    run_e.pack(fill='x')
+    prog_e = _ProgressBlock(run_e.body, _STAGES_EXTRACT)
+    Divider(run_e.body, color=COLORS['border_1']).pack(fill='x',
+                                                       pady=(px(16), px(12)))
+    _btn_row_e = tk.Frame(run_e.body, bg=COLORS['bg_2'])
+    _btn_row_e.pack(fill='x')
+    btn_e = Button(_btn_row_e, text='Extract to folder', icon='extract',
+                   variant='primary', command=lambda: _run_extract(),
+                   surface=COLORS['bg_2'])
+    btn_e.pack(side='right')
 
     def _run_extract():
         if state_e['busy']:
@@ -2274,38 +2202,73 @@ def build_pfs_tab(parent, app):
     _refresh_panels()
 
 
+_ROW_BADGE = {'queued': ('Queued', 'neutral', 'queue'),
+              'running': ('Running', 'info', 'loader'),
+              'done': ('Done', 'success', 'check'),
+              'failed': ('Failed', 'danger', 'error')}
+_ROW_GLYPH = {'queued': '\u23f3', 'running': '\u25b6',
+              'done': '\u2714', 'failed': '\u2715'}
+
+
+def _queue_row(parent, idx, n, job, editable, sel_vars, on_remove, on_move):
+    """One queue row (Build-screen style): select check · status icon ·
+    name · status badge · reorder / remove icon buttons."""
+    bg = parent.cget('bg')
+    if idx:
+        Divider(parent, color=COLORS['border_1']).pack(fill='x')
+    row = tk.Frame(parent, bg=bg)
+    row.pack(fill='x', pady=px(6))
+    # Multi-select checkbox (only on queued rows, when idle)
+    if editable:
+        var = sel_vars.get(id(job))
+        if var is None:
+            var = tk.BooleanVar(value=False)
+            sel_vars[id(job)] = var
+        XCheck(row, variable=var, surface=bg).pack(side='left',
+                                                   padx=(0, px(6)))
+    else:
+        tk.Frame(row, bg=bg, width=px(30), height=1).pack(side='left')
+    StepIcon(row, _ROW_GLYPH.get(job['status'], '\u23f3'), size=16,
+             bg=bg).pack(side='left', padx=(0, px(10)))
+    if editable:
+        IconButton(row, 'trash', lambda j=job: on_remove(j),
+                   tooltip='Remove from queue', size='sm',
+                   surface=bg).pack(side='right')
+        # Reorder down / up (hidden at the ends)
+        if idx < n - 1:
+            IconButton(row, 'arrow_down', lambda i=idx: on_move(i, +1),
+                       tooltip='Move down', size='sm',
+                       surface=bg).pack(side='right')
+        if idx > 0:
+            IconButton(row, 'arrow_up', lambda i=idx: on_move(i, -1),
+                       tooltip='Move up', size='sm',
+                       surface=bg).pack(side='right')
+    word, tone, icon = _ROW_BADGE.get(job['status'],
+                                      (str(job['status']).title(),
+                                       'neutral', None))
+    Badge(row, word, tone, icon=icon, surface=bg).pack(side='right',
+                                                      padx=(px(8), px(8)))
+    tk.Label(row, text=job['name'], font=FONTS['body'], bg=bg,
+             fg=COLORS['fg_1'], anchor='w').pack(side='left', fill='x',
+                                                 expand=True)
+
+
 def _card_head(card, icon, title, subtitle):
-    chead = tk.Frame(card, bg=COLORS['bg_2'])
-    chead.pack(fill='x', padx=24, pady=(18, 14))
-    ico = tk.Label(chead, text=icon,
-                   font=(FONTS['body'][0], 11),
-                   bg=COLORS['accent_08'], fg=COLORS['teal'],
-                   width=2, padx=4, pady=2)
-    ico.pack(side='left', padx=(0, 12))
-    col = tk.Frame(chead, bg=COLORS['bg_2'])
-    col.pack(side='left', fill='x', expand=True)
-    tk.Label(col, text=title,
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w').pack(fill='x')
-    tk.Label(col, text=subtitle,
-             font=FONTS['meta'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w').pack(fill='x', pady=(2, 0))
-    tk.Frame(card, bg=COLORS['border_2'], height=1).pack(fill='x')
+    """Card heading (subtitle-style title + caption) above a hairline,
+    for the plain frame cards of the dump-folder panel."""
+    bg = card.cget('bg')
+    chead = tk.Frame(card, bg=bg)
+    chead.pack(fill='x', padx=px(16), pady=(px(16), px(12)))
+    tk.Label(chead, text=title, font=FONTS['subtitle'], bg=bg,
+             fg=COLORS['fg_0'], anchor='w').pack(fill='x')
+    tk.Label(chead, text=subtitle, font=FONTS['caption'], bg=bg,
+             fg=COLORS['fg_3'], anchor='w').pack(fill='x', pady=(px(2), 0))
+    Divider(card, color=COLORS['border_1']).pack(fill='x')
 
 
 def _make_cb(parent, text, var):
-    def _style(*_):
-        cb.config(fg=COLORS['teal'] if var.get() else COLORS['fg_4'])
-    cb = XCheck(parent, text=text, variable=var,
-                         font=FONTS['mono_sm'],
-                         bg=COLORS['bg_2'], fg=COLORS['teal'],
-                         selectcolor=COLORS['bg_3'],
-                         activebackground=COLORS['bg_2'],
-                         activeforeground=COLORS['teal'],
-                         bd=0, padx=8, cursor='hand2')
-    var.trace_add('write', _style)
-    _style()
-    return cb
+    """Design-system checkbox (state shown by the indicator)."""
+    return XCheck(parent, text=text, variable=var)
 
 
 _SUMMARY_PATTERNS = {
@@ -2339,42 +2302,35 @@ def _show_summary_panel(parent_frame, stats, out_path):
         if getattr(w, '_is_summary_card', False):
             w.destroy()
 
-    card = tk.Frame(parent_frame, bg=COLORS['bg_3'],
-                    highlightthickness=1,
-                    highlightbackground=COLORS['border_3'])
+    card = Card(parent_frame, title='Build summary')
     card._is_summary_card = True
-    card.pack(fill='x', padx=24, pady=(12, 0))
+    card.pack(fill='x', padx=px(24), pady=(0, px(16)))
 
     if 'errors' in stats or 'warnings' in stats:
         errs  = int(stats.get('errors',   0) or 0)
         warns = int(stats.get('warnings', 0) or 0)
-        badge = ('\u2713  all checks passed' if errs == 0 and warns == 0
-                 else '\u26a0  %d verify error%s' % (errs, 's' if errs != 1 else ''))
-        badge_fg = COLORS['teal'] if errs == 0 and warns == 0 else COLORS['warn']
+        if errs == 0 and warns == 0:
+            badge, tone = 'All checks passed', 'success'
+        else:
+            badge, tone = ('%d verify error%s' % (errs, 's' if errs != 1 else ''),
+                           'warn')
     else:
-        badge, badge_fg = '\u2713  created', COLORS['teal']
+        badge, tone = 'Created', 'success'
+    Badge(card.head_actions, badge, tone, surface=COLORS['bg_2']).pack()
 
-    hdr = tk.Frame(card, bg=COLORS['bg_2'])
-    hdr.pack(fill='x')
-    tk.Label(hdr, text='BUILD SUMMARY', font=FONTS['eyebrow'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w').pack(
-                 side='left', padx=14, pady=8)
-    tk.Label(hdr, text=badge, font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=badge_fg).pack(side='right', padx=14)
-    tk.Frame(card, bg=COLORS['border_3'], height=1).pack(fill='x')
-
-    grid = tk.Frame(card, bg=COLORS['bg_3'])
-    grid.pack(fill='x', pady=(6, 10))
+    grid = tk.Frame(card.body, bg=COLORS['bg_2'])
+    grid.pack(fill='x')
     grid.columnconfigure(1, weight=1)
 
-    def row(r, lbl, val, vfg=None):
-        tk.Label(grid, text=lbl, font=FONTS['mono_sm'],
-                 bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-                 anchor='w').grid(row=r, column=0, sticky='w', padx=(14, 8), pady=2)
+    def row(r, lbl, val, vfg=None, mono=False):
+        tk.Label(grid, text=lbl, font=FONTS['body'], bg=COLORS['bg_2'],
+                 fg=COLORS['fg_3'], anchor='w').grid(
+                     row=r, column=0, sticky='w', padx=(0, px(16)),
+                     pady=px(3))
         tk.Label(grid, text=val,
-                 font=(FONTS['mono_sm'][0], FONTS['mono_sm'][1], 'bold'),
-                 bg=COLORS['bg_3'], fg=vfg or COLORS['fg_1'],
-                 anchor='w').grid(row=r, column=1, sticky='w', padx=(0, 14), pady=2)
+                 font=FONTS['code'] if mono else FONTS['body_strong'],
+                 bg=COLORS['bg_2'], fg=vfg or COLORS['fg_0'],
+                 anchor='w').grid(row=r, column=1, sticky='w', pady=px(3))
 
     r = 0
     if stats.get('total_files'):
@@ -2382,10 +2338,9 @@ def _show_summary_panel(parent_frame, stats, out_path):
     if stats.get('size_raw'):
         row(r, 'Source size', stats['size_raw'].strip()); r += 1
     if stats.get('size_stored'):
-        row(r, 'Image size', stats['size_stored'].strip(),
-            vfg=COLORS['teal']); r += 1
+        row(r, 'Image size', stats['size_stored'].strip()); r += 1
     if stats.get('gain_pct'):
-        gfg = COLORS['teal'] if float(stats['gain_pct']) > 0 else COLORS['fg_3']
+        gfg = COLORS['success_hi'] if float(stats['gain_pct']) > 0 else COLORS['fg_3']
         row(r, 'Space saved', stats['gain_pct'] + '%', vfg=gfg); r += 1
     if stats.get('compressed') and stats.get('uncompressed'):
         row(r, 'Compressed',
@@ -2399,110 +2354,104 @@ def _show_summary_panel(parent_frame, stats, out_path):
     if stats.get('version'):
         row(r, 'PFS version', stats['version'].strip()); r += 1
     if stats.get('crc32'):
-        row(r, 'CRC32', stats['crc32'], vfg=COLORS['fg_3']); r += 1
+        row(r, 'CRC32', stats['crc32'], vfg=COLORS['fg_2'], mono=True); r += 1
     if out_path:
-        row(r, 'Output', os.path.basename(out_path)); r += 1
+        row(r, 'Output', os.path.basename(out_path), mono=True); r += 1
 
 
 # ════════════════════════════════════════════════════════════════════
 # Progress block widget
 # ════════════════════════════════════════════════════════════════════
 class _ProgressBlock:
-    """Reusable detailed progress block: big %, stage tiles, bar, detail."""
+    """Reusable detailed progress block (Build-screen style): stage row
+    (step icon + caption per stage), overall %, stage name + detail line
+    and a 6px bar. API: reset / update / set_status / set_detail / done /
+    fail."""
 
     def __init__(self, parent, stages):
         self._stages    = stages          # list of (key, label, start, end)
         self._phase     = None
-        self._frame     = tk.Frame(parent, bg=COLORS['bg_2'])
-        self._frame.pack(fill='x', pady=(18, 0))
+        self._bg        = parent.cget('bg')
+        self._frame     = tk.Frame(parent, bg=self._bg)
+        self._frame.pack(fill='x')
         self._build()
 
     def _build(self):
-        f = self._frame
+        f, bg = self._frame, self._bg
 
-        # Top row: big % + stage name + detail
-        top = tk.Frame(f, bg=COLORS['bg_2'])
-        top.pack(fill='x', pady=(0, 6))
-
-        self._pct_lbl = tk.Label(top, text='',
-                                  font=(FONTS['body_strong'][0], 28),
-                                  bg=COLORS['bg_2'], fg=COLORS['teal'],
-                                  width=5, anchor='e')
-        self._pct_lbl.pack(side='left')
-
-        right = tk.Frame(top, bg=COLORS['bg_2'])
-        right.pack(side='left', padx=(10, 0))
-        self._stage_lbl = tk.Label(right, text='',
-                                    font=(FONTS['body_strong'][0], 11),
-                                    bg=COLORS['bg_2'], fg=COLORS['fg_1'],
-                                    anchor='w')
-        self._stage_lbl.pack(anchor='w')
-        self._detail_var = tk.StringVar(value='')
-        self._detail_lbl = tk.Label(right, textvariable=self._detail_var,
-                                     font=FONTS['mono_sm'],
-                                     bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-                                     anchor='w')
-        self._detail_lbl.pack(anchor='w')
-
-        # Progress bar
-        self._pbar = ttk.Progressbar(f,
-                                      style='Success.Horizontal.TProgressbar',
-                                      mode='determinate', maximum=100)
-        self._pbar.pack(fill='x', pady=(0, 8))
-
-        # Stage tiles
-        tiles_row = tk.Frame(f, bg=COLORS['bg_2'])
+        # Stage row
+        tiles_row = tk.Frame(f, bg=bg)
         tiles_row.pack(fill='x')
         self._tiles = {}
-        for key, label, _s, _e in self._stages:
-            tile = tk.Frame(tiles_row, bg=COLORS['bg_3'],
-                            highlightthickness=1,
-                            highlightbackground=COLORS['border_3'])
-            tile.pack(side='left', padx=(0, 6), ipadx=10, ipady=4)
-            dot = tk.Label(tile, text='\u25cf',
-                           bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                           font=(FONTS['body'][0], 9))
-            dot.pack(side='left', padx=(6, 2))
-            lbl = tk.Label(tile, text=label,
-                           bg=COLORS['bg_3'], fg=COLORS['fg_4'],
-                           font=FONTS['mono_sm'])
-            lbl.pack(side='left', padx=(0, 6))
-            self._tiles[key] = {'tile': tile, 'dot': dot, 'lbl': lbl}
+        for i, (key, label, _s, _e) in enumerate(self._stages):
+            tiles_row.columnconfigure(i, weight=1, uniform='pfs_stage')
+            cell = tk.Frame(tiles_row, bg=bg)
+            cell.grid(row=0, column=i, sticky='w')
+            dot = StepIcon(cell, '\u23f3', size=16, bg=bg)
+            dot.pack(side='left')
+            lbl = tk.Label(cell, text=label, bg=bg, fg=COLORS['fg_4'],
+                           font=FONTS['caption'])
+            lbl.pack(side='left', padx=(px(6), 0))
+            self._tiles[key] = {'tile': cell, 'dot': dot, 'lbl': lbl}
+
+        # Stage name + detail (left) · overall % (right)
+        top = tk.Frame(f, bg=bg)
+        top.pack(fill='x', pady=(px(14), 0))
+        self._pct_lbl = tk.Label(top, text='', font=FONTS['body'], bg=bg,
+                                 fg=COLORS['fg_2'], anchor='e')
+        self._pct_lbl.pack(side='right', anchor='n')
+        right = tk.Frame(top, bg=bg)
+        right.pack(side='left', fill='x', expand=True)
+        self._stage_lbl = tk.Label(right, text='Idle', font=FONTS['body_strong'],
+                                   bg=bg, fg=COLORS['fg_3'], anchor='w')
+        self._stage_lbl.pack(fill='x')
+
+        # Progress bar
+        self._pbar = ProgressBar(f, mode='determinate', maximum=100,
+                                 surface=bg)
+        self._pbar.pack(fill='x', pady=(px(8), 0))
+
+        self._detail_var = tk.StringVar(value='')
+        self._detail_lbl = tk.Label(f, textvariable=self._detail_var,
+                                    font=FONTS['caption'], bg=bg,
+                                    fg=COLORS['fg_3'], anchor='w',
+                                    justify='left')
+        self._detail_lbl.pack(fill='x', pady=(px(6), 0))
+        autowrap(self._detail_lbl)
+
+    def _paint(self, key, state):
+        w = self._tiles.get(key)
+        if not w:
+            return
+        glyph, fg = {'pending': ('\u23f3', COLORS['fg_4']),
+                     'active': ('\u25b6', COLORS['fg_0']),
+                     'done': ('\u2714', COLORS['fg_2']),
+                     'error': ('\u2715', COLORS['danger_hi'])}[state]
+        w['dot'].config(text=glyph)
+        w['lbl'].config(fg=fg, font=FONTS['caption_strong']
+                        if state == 'active' else FONTS['caption'])
 
     def reset(self):
         self._phase = None
         self._pbar['value'] = 0
-        self._pct_lbl.config(text='0%', fg=COLORS['teal'])
-        self._stage_lbl.config(text='', fg=COLORS['fg_1'])
+        self._pbar.set_tone('accent')
+        self._pct_lbl.config(text='0%', fg=COLORS['fg_2'])
+        self._stage_lbl.config(text='', fg=COLORS['fg_0'])
         self._detail_var.set('')
-        for key, w in self._tiles.items():
-            w['tile'].config(bg=COLORS['bg_3'],
-                             highlightbackground=COLORS['border_3'])
-            w['lbl'].config(bg=COLORS['bg_3'], fg=COLORS['fg_4'])
-            w['dot'].config(bg=COLORS['bg_3'], fg=COLORS['fg_5'],
-                            text='\u25cf')
+        for key in self._tiles:
+            self._paint(key, 'pending')
 
     def update(self, phase, pct, detail=''):
         if self._phase != phase:
             # Mark previous done
             if self._phase and self._phase in self._tiles:
-                w = self._tiles[self._phase]
-                w['tile'].config(bg=COLORS['bg_3'],
-                                 highlightbackground=COLORS['border_3'])
-                w['lbl'].config(bg=COLORS['bg_3'], fg=COLORS['teal'])
-                w['dot'].config(bg=COLORS['bg_3'], fg=COLORS['teal'],
-                                text='\u2713')
+                self._paint(self._phase, 'done')
             self._phase = phase
             # Activate new
             if phase in self._tiles:
-                w = self._tiles[phase]
-                w['tile'].config(bg=COLORS['bg_2'],
-                                 highlightbackground=COLORS['teal'])
-                w['lbl'].config(bg=COLORS['bg_2'], fg=COLORS['teal'])
-                w['dot'].config(bg=COLORS['bg_2'], fg=COLORS['teal'],
-                                text='\u25cf')
+                self._paint(phase, 'active')
             label = next((l for k, l, _s, _e in self._stages if k == phase), phase.title())
-            self._stage_lbl.config(text=label + '\u2026', fg=COLORS['teal'])
+            self._stage_lbl.config(text=label + '\u2026', fg=COLORS['fg_0'])
 
         # Weighted overall %
         entry = next(((s, e) for k, _l, s, e in self._stages if k == phase), (0, 100))
@@ -2525,29 +2474,24 @@ class _ProgressBlock:
     def set_status(self, msg, error=False):
         self._detail_var.set(msg)
         if error:
-            self._stage_lbl.config(text='Failed', fg=COLORS['danger'])
-            self._pct_lbl.config(fg=COLORS['danger'])
+            self._stage_lbl.config(text='Failed', fg=COLORS['danger_hi'])
+            self._pct_lbl.config(fg=COLORS['danger_hi'])
 
     def set_detail(self, msg):
         """Update just the detail line (used by the live file-size poller)."""
         self._detail_var.set(msg)
 
     def done(self):
-        for key, w in self._tiles.items():
-            w['tile'].config(bg=COLORS['bg_3'],
-                             highlightbackground=COLORS['border_3'])
-            w['lbl'].config(bg=COLORS['bg_3'], fg=COLORS['teal'])
-            w['dot'].config(bg=COLORS['bg_3'], fg=COLORS['teal'],
-                            text='\u2713')
+        for key in self._tiles:
+            self._paint(key, 'done')
         self._pbar['value'] = 100
-        self._pct_lbl.config(text='100%', fg=COLORS['teal'])
-        self._stage_lbl.config(text='Done \u2713', fg=COLORS['teal'])
+        self._pbar.set_tone('success')
+        self._pct_lbl.config(text='100%', fg=COLORS['fg_2'])
+        self._stage_lbl.config(text='Done', fg=COLORS['success_hi'])
 
     def fail(self):
         if self._phase and self._phase in self._tiles:
-            w = self._tiles[self._phase]
-            w['tile'].config(highlightbackground=COLORS['danger'])
-            w['lbl'].config(fg=COLORS['danger'])
-            w['dot'].config(fg=COLORS['danger'], text='\u2717')
-        self._pct_lbl.config(fg=COLORS['danger'])
-        self._stage_lbl.config(text='Failed', fg=COLORS['danger'])
+            self._paint(self._phase, 'error')
+        self._pbar.set_tone('danger')
+        self._pct_lbl.config(fg=COLORS['danger_hi'])
+        self._stage_lbl.config(text='Failed', fg=COLORS['danger_hi'])

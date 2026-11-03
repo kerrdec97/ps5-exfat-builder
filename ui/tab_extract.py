@@ -13,38 +13,17 @@ Extract an image to a folder. Format-routed (Stage 3a):
                        (a .ffpfsc unpacks to its NESTED IMAGE, extracted next
                        via the OSFMount .exfat route — unchanged).
 
-Layout (single column, no embedded log — uses global OUTPUT LOG):
+Layout (design system, sibling of the Build screen; no embedded log):
 
-    ┌─ Page head ───────────────────────────────────────────────────────┐
-    │ [📤]  Extract image                                               │
-    │       Mount + copy contents from an .exfat image                  │
-    ├───────────────────────────────────────────────────────────────────┤
-    │ [i] Mounts via OSFMount, mirrors files preserving structure...    │
-    ├───────────────────────────────────────────────────────────────────┤
-    │ ┌─ Drop zone ─────────────────────────────────────────────────┐ │
-    │ │   📤  Drop .exfat image here                                │ │
-    │ │       or click to browse                                    │ │
-    │ └─────────────────────────────────────────────────────────────┘ │
-    │ ┌─ Detected strip (when file selected) ───────────────────────┐ │
-    │ │ 🎮 Returnal · CUSA-XXXXX · v1.04 · 56.8 GB                   │ │
-    │ └─────────────────────────────────────────────────────────────┘ │
-    │ ┌─ Form fields ───────────────────────────────────────────────┐ │
-    │ │ Source image                                                │ │
-    │ │ [_______________________________________________] [Browse]  │ │
-    │ │                                                             │ │
-    │ │ Output directory                                            │ │
-    │ │ [_______________________________________________] [Browse]  │ │
-    │ │                                                             │ │
-    │ │ Output folder name  • auto from filename                    │ │
-    │ │ [_______________________________________________]           │ │
-    │ │                                                             │ │
-    │ │ ┌─ Progress card ────────────────────────────────────────┐ │ │
-    │ │ │ status text         [████──────] ETA xx:xx              │ │ │
-    │ │ └────────────────────────────────────────────────────────┘ │ │
-    │ │                                                             │ │
-    │ │ [📤 Extract Image]                                          │ │
-    │ └─────────────────────────────────────────────────────────────┘ │
-    └───────────────────────────────────────────────────────────────────┘
+    Page header  "Extract image"                  [Force dismount][Advanced]
+    ┌ Source image ─────────────────[Browse…]┐ ┌ Extract ─────────────────┐
+    │ cover · title · id · stats · badge     │ │ format badge + note      │
+    │ path field · drop strip                │ │ status · eta · bar       │
+    └────────────────────────────────────────┘ │      [Cancel] [Extract]  │
+    ┌ Output folder ─────────────────────────┐ └──────────────────────────┘
+    │ Output directory [_____][Browse…]      │ ┌ (i) how it works ────────┐
+    │ Output folder name [_____]             │ └──────────────────────────┘
+    └────────────────────────────────────────┘
 
 Output goes to the global OUTPUT LOG at the bottom (no embedded log
 duplicating it).
@@ -69,17 +48,549 @@ from exfat_builder import _, _NO_WIN_FLAGS
 from ui.shared.app_dialog import app_warning, app_error, app_confirm
 from ui.shared.scroll import attach_scroll
 
-from ui.shared.cards import DetectedGameStrip
-from ui.shared.hero import GameHero
-from ui.shared.forms import DropZone
 from ui.shared.log_view import ConsoleView   # kept for compat; not packed
 from ui.shared.page_head import (
     make_themed_button, info_banner, page_head, field_block)
 
 
-def build_extract_tab(parent, app):
-    parent.configure(bg=COLORS['bg_1'])
+# ─────────────────────────────────────────────────────────────────────────
+# Design-system kit for the Extract / Convert / legacy build screens
+# ─────────────────────────────────────────────────────────────────────────
+# Small private helpers built on ui.shared.widgets. They live here (not in
+# ui/shared) because only the Extract, Convert, exFAT/ffpkg/PFS build tabs
+# use them; each one keeps the attribute / method names the legacy
+# callbacks in exfat_builder.py already call.
+from tkinter_theme import px, surface_of
+from ui.shared.widgets import (
+    Button, IconButton, Card, Badge, Divider, Rounded, RoundedBar, StepIcon,
+    CoverLabel, IconLabel, PageHeader, InfoBar, TextField, autowrap,
+    Tooltip as _XTooltip)
+from ui.icons import strip_glyphs
 
+C = COLORS
+BG1, BG2, BG3 = COLORS['bg_1'], COLORS['bg_2'], COLORS['bg_3']
+
+# hero badge kind -> Badge tone
+_HERO_TONE = {'ready': 'success', 'wait': 'neutral', 'busy': 'info',
+              'warn': 'warn', 'low': 'warn', 'error': 'danger'}
+
+
+def _sentence(text):
+    """Display an ALL-CAPS legacy label in sentence case (display only —
+    the translation key itself is untouched)."""
+    if isinstance(text, str) and text.isupper() and len(text) > 3:
+        return text[:1] + text[1:].lower()
+    return text
+
+
+def _cap1(text):
+    """First letter upper-cased for display (legacy hint strings are
+    lower-case fragments; the translation key itself is untouched)."""
+    if isinstance(text, str) and text[:1].islower():
+        return text[:1].upper() + text[1:]
+    return text
+
+
+def scroll_page(parent):
+    """Scrollable page canvas (bg_1) with a design-system scrollbar.
+    Returns the inner frame to pack the page into."""
+    parent.configure(bg=BG1)
+    canvas = tk.Canvas(parent, bg=BG1, bd=0, highlightthickness=0)
+    sb = XScrollbar(parent, orient='vertical', command=canvas.yview)
+    sb.pack(side='right', fill='y')
+    canvas.pack(side='left', fill='both', expand=True)
+    canvas.configure(yscrollcommand=sb.set)
+    inner = tk.Frame(canvas, bg=BG1)
+    inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
+    inner.bind('<Configure>', lambda e:
+               canvas.configure(scrollregion=canvas.bbox('all')))
+    canvas.bind('<Configure>', lambda e:
+                canvas.itemconfig(inner_id, width=e.width))
+    attach_scroll(canvas)
+    inner._xc_canvas = canvas
+    return inner
+
+
+def page_columns(parent, left=7, right=5, pady=(0, 16)):
+    """Two-column grid (uniform weights) like the Build screen.
+    Returns (left_frame, right_frame)."""
+    bg = surface_of(parent)
+    cols = tk.Frame(parent, bg=bg)
+    cols.pack(fill='x', padx=px(24), pady=pady)
+    cols.columnconfigure(0, weight=left, uniform='xc_cols')
+    cols.columnconfigure(1, weight=right, uniform='xc_cols')
+    lf = tk.Frame(cols, bg=bg)
+    lf.grid(row=0, column=0, sticky='nsew', padx=(0, px(8)))
+    rf = tk.Frame(cols, bg=bg)
+    rf.grid(row=0, column=1, sticky='nsew', padx=(px(8), 0))
+    # Wide zero-height struts keep the column split independent of the
+    # wrapping labels' requested widths (otherwise re-wrapping can make
+    # the uniform grid round 1px differently on every pass and loop).
+    tk.Frame(cols, bg=bg, width=left * px(240), height=0).grid(
+        row=1, column=0)
+    tk.Frame(cols, bg=bg, width=right * px(240), height=0).grid(
+        row=1, column=1)
+    return lf, rf
+
+
+def caption(parent, text='', textvariable=None, fg=None, wrap=True, **kw):
+    """Caption-style help text (fg_3) that re-wraps to its width."""
+    bg = surface_of(parent)
+    lbl = tk.Label(parent, text=text, textvariable=textvariable,
+                   font=FONTS['caption'], bg=bg, fg=fg or C['fg_3'],
+                   anchor='w', justify='left', **kw)
+    if wrap:
+        autowrap(lbl)
+    return lbl
+
+
+def field_caption(parent, text, hint=None):
+    """Field label (body, fg_2) with an optional caption hint beside it."""
+    bg = surface_of(parent)
+    row = tk.Frame(parent, bg=bg)
+    tk.Label(row, text=text, font=FONTS['body'], bg=bg, fg=C['fg_2'],
+             anchor='w').pack(side='left')
+    if hint:
+        tk.Label(row, text=hint, font=FONTS['caption'], bg=bg,
+                 fg=C['fg_4'], anchor='w').pack(side='left', padx=(px(8), 0))
+    return row
+
+
+def value_row(parent, label, var=None, text=None, mono=False):
+    """Summary row: body label (fg_3) left, value (fg_0) right.
+    Returns (row, value_label)."""
+    bg = surface_of(parent)
+    row = tk.Frame(parent, bg=bg)
+    tk.Label(row, text=label, font=FONTS['body'], bg=bg, fg=C['fg_3'],
+             anchor='w').pack(side='left')
+    val = tk.Label(row, text=text or '', textvariable=var,
+                   font=FONTS['code'] if mono else FONTS['body_strong'],
+                   bg=bg, fg=C['fg_0'], anchor='e')
+    val.pack(side='right')
+    return row, val
+
+
+class CompatBar(RoundedBar):
+    """6px rounded progress bar that also accepts the legacy canvas calls
+    the existing callbacks make on a progress Canvas:
+        canvas.coords(bar_item, x0, 0, x1, h)
+        canvas.itemconfig(bar_item, fill=SUCCESS|ACCENT)
+    Use `CompatBar.ITEM` wherever the old code stored the rectangle id."""
+
+    ITEM = 'xc_bar'
+
+    def coords(self, item, *args):
+        if item == self.ITEM:
+            if len(args) == 1 and isinstance(args[0], (list, tuple)):
+                args = tuple(args[0])
+            if len(args) >= 4:
+                try:
+                    W = max(1, self.winfo_width())
+                    x0, x1 = float(args[0]), float(args[2])
+                    self.set(max(0.0, (x1 - x0)) / W, relx=max(0.0, x0) / W)
+                except Exception:
+                    pass
+            return None
+        return super().coords(item, *args)
+
+    def itemconfig(self, item, cnf=None, **kw):
+        if item == self.ITEM:
+            if cnf:
+                kw.update(cnf)
+            fill = kw.get('fill')
+            if isinstance(fill, str) and fill:
+                ok = fill.lower() in (C['success'].lower(),
+                                      C['success_hi'].lower())
+                self.set_color(C['success'] if ok else C['accent'])
+            return None
+        return super().itemconfig(item, cnf, **kw)
+
+    itemconfigure = itemconfig
+
+
+class ImageHero(tk.Frame):
+    """Build-style source hero: cover tile, title, id, optional path, a
+    stats grid and a status badge. Same public API as
+    ui.shared.hero.GameHero (set_title / set_path / set_stat / set_badge /
+    reset_cover / set_cover_from_folder / set_cover_from_file)."""
+
+    def __init__(self, parent, stats, placeholder='disc', cover=112,
+                 cols=3, empty_title=''):
+        bg = surface_of(parent)
+        super().__init__(parent, bg=bg)
+        self._bg = bg
+        self._box = cover
+        self._placeholder = placeholder
+        self._cover_token = 0
+        self._cover_img = None
+        self.cover = CoverLabel(self, box=cover, placeholder=placeholder)
+        self.cover.pack(side='left', anchor='n', padx=(0, px(16)))
+        col = tk.Frame(self, bg=bg)
+        col.pack(side='left', fill='both', expand=True)
+        self.title_var = tk.StringVar(value=empty_title or '—')
+        t = tk.Label(col, textvariable=self.title_var, font=FONTS['subtitle'],
+                     bg=bg, fg=C['fg_0'], anchor='w', justify='left')
+        t.pack(fill='x')
+        autowrap(t)
+        self.id_var = tk.StringVar(value='')
+        self._id_lbl = tk.Label(col, textvariable=self.id_var,
+                                font=FONTS['code'], bg=bg, fg=C['fg_3'],
+                                anchor='w')
+        self._id_lbl.pack(fill='x', pady=(px(2), 0))
+        self.path_var = tk.StringVar(value='')
+        self._path_lbl = tk.Label(col, textvariable=self.path_var,
+                                  font=FONTS['code'], bg=bg, fg=C['fg_4'],
+                                  anchor='w', justify='left')
+        autowrap(self._path_lbl)
+        self._path_anchor = tk.Frame(col, bg=bg, height=px(10))
+        self._path_anchor.pack(fill='x')
+        grid = tk.Frame(col, bg=bg)
+        grid.pack(fill='x')
+        for c in range(cols):
+            grid.columnconfigure(c, weight=1, uniform='xc_hero')
+        self._cells = {}
+        n = len(stats)
+        for i, (label, key) in enumerate(stats):
+            r, c = divmod(i, cols)
+            span = (cols - c) if i == n - 1 else 1   # last cell takes the rest
+            cell = tk.Frame(grid, bg=bg)
+            cell.grid(row=r, column=c, columnspan=span, sticky='new',
+                      pady=(0 if r == 0 else px(10), 0),
+                      padx=(0, px(12)))
+            tk.Label(cell, text=label, font=FONTS['caption'], bg=bg,
+                     fg=C['fg_3'], anchor='w').pack(anchor='w')
+            v = tk.StringVar(value='—')
+            val = tk.Label(cell, textvariable=v, font=FONTS['body_strong'],
+                           bg=bg, fg=C['fg_0'], anchor='w', justify='left')
+            val.pack(anchor='w', fill='x', pady=(px(2), 0))
+            autowrap(val)
+            self._cells[key] = (v, val)
+        self._bottom = tk.Frame(col, bg=bg)
+        self._bottom.pack(fill='x', pady=(px(12), 0))
+        self.badge = Badge(self._bottom, '', 'neutral', surface=bg)
+        self._badge_on = False
+
+    # ── GameHero-compatible API ──
+    def set_title(self, title, game_id=''):
+        self.title_var.set(title or '—')
+        self.id_var.set(game_id or '')
+
+    def set_path(self, text):
+        self.path_var.set(text or '')
+        try:
+            if text:
+                self._path_lbl.pack(fill='x', pady=(px(2), 0),
+                                    before=self._path_anchor)
+            else:
+                self._path_lbl.pack_forget()
+        except Exception:
+            pass
+
+    def set_stat(self, key, value, warn=False):
+        cell = self._cells.get(key)
+        if not cell:
+            return
+        v, val = cell
+        v.set(value if value not in (None, '') else '—')
+        try:
+            val.config(fg=C['warn_hi'] if warn else C['fg_0'])
+        except Exception:
+            pass
+
+    def set_badge(self, text, kind='ready'):
+        try:
+            if not text:
+                self.badge.pack_forget()
+                self._badge_on = False
+                return
+            self.badge.set(_sentence(text), _HERO_TONE.get(kind, 'neutral'))
+            if not self._badge_on:
+                self.badge.pack(side='left')
+                self._badge_on = True
+        except Exception:
+            pass
+
+    def reset_cover(self):
+        self._cover_token += 1
+        self._cover_img = None
+        try:
+            self.cover.config(image='', text='')
+        except Exception:
+            pass
+
+    def _load_async(self, loader):
+        self._cover_token += 1
+        token = self._cover_token
+
+        def _w():
+            try:
+                pil = loader()
+            except Exception:
+                pil = None
+
+            def _apply():
+                if token != self._cover_token:
+                    return
+                if pil is None:
+                    self.reset_cover()
+                    return
+                try:
+                    from PIL import ImageTk as _IT
+                    self._cover_img = _IT.PhotoImage(pil)
+                    self.cover.config(image=self._cover_img)
+                except Exception:
+                    self.reset_cover()
+            try:
+                self.after(0, _apply)
+            except Exception:
+                pass
+        threading.Thread(target=_w, daemon=True).start()
+
+    def set_cover_from_folder(self, app, folder):
+        if not folder or not os.path.isdir(folder):
+            self.reset_cover()
+            return
+
+        def _load():
+            cp = app._load_cover_art(folder)
+            if not cp:
+                return None
+            from exfat_builder import _load_cover_image
+            return _load_cover_image(cp, target=px(self._box))
+        self._load_async(_load)
+
+    def set_cover_from_file(self, app, path):
+        if not path or not os.path.isfile(path):
+            self.reset_cover()
+            return
+
+        def _load():
+            from exfat_builder import _load_cover_image
+            return _load_cover_image(path, target=px(self._box))
+        self._load_async(_load)
+
+
+class DropStrip(Rounded):
+    """One-line inset drop target (bg_0 well, hairline border, icon +
+    text + caption hint). Clicking browses; folders/files dropped via
+    tkinterdnd2 go to `on_drop(path)` when the package is installed."""
+
+    def __init__(self, parent, text, on_drop=None, on_click=None,
+                 hint=None, icon='download'):
+        outside = surface_of(parent)
+        super().__init__(parent, bg=C['bg_0'], border=C['border_2'],
+                         radius=8, padding=(px(14), px(10)), surface=outside)
+        self._on_drop, self._on_click = on_drop, on_click
+        self._icon = IconLabel(self, icon, 16, C['fg_3'], C['bg_0'])
+        self._icon.pack(side='left', padx=(0, px(10)))
+        self._glyph_lbl = self._icon
+        col = tk.Frame(self, bg=C['bg_0'])
+        col.pack(side='left', fill='x', expand=True)
+        self._main_lbl = tk.Label(col, text=text, font=FONTS['body'],
+                                  bg=C['bg_0'], fg=C['fg_2'], anchor='w')
+        self._main_lbl.pack(fill='x')
+        self._hint_lbl = None
+        if hint:
+            self._hint_lbl = tk.Label(col, text=hint, font=FONTS['caption'],
+                                      bg=C['bg_0'], fg=C['fg_4'], anchor='w')
+            self._hint_lbl.pack(fill='x')
+        widgets = [self, self._icon, col, self._main_lbl] + (
+            [self._hint_lbl] if self._hint_lbl else [])
+        for w in widgets:
+            w.bind('<Enter>', lambda e: self._hover(True), add='+')
+            w.bind('<Leave>', lambda e: self._hover(False), add='+')
+            if on_click:
+                w.bind('<Button-1>', lambda e: self._on_click(), add='+')
+                try:
+                    w.configure(cursor='hand2')
+                except Exception:
+                    pass
+        try:
+            self.drop_target_register('DND_Files')
+            self.dnd_bind('<<DropEnter>>', lambda e: self._hover(True))
+            self.dnd_bind('<<DropLeave>>', lambda e: self._hover(False))
+            self.dnd_bind('<<Drop>>', self._dnd)
+        except Exception:
+            pass
+
+    def _hover(self, on):
+        try:
+            self.set_style(border=C['border_4'] if on else C['border_2'])
+            self._icon.set(fg=C['fg_1'] if on else C['fg_3'])
+        except Exception:
+            pass
+
+    def _dnd(self, event):
+        self._hover(False)
+        try:
+            paths = self.tk.splitlist(event.data)
+        except Exception:
+            paths = [event.data]
+        for p in paths:
+            p = p.strip('{}').strip('"').strip()
+            if p and self._on_drop:
+                self._on_drop(p)
+
+
+class StageTracker(tk.Frame):
+    """Build-screen style phase row (step icon + caption per stage) above
+    a 6px rounded bar and a caption meta row. Drop-in for
+    ui.shared.progress.StagedProgressBar: set_active / set_complete /
+    set_pending / set_error / set_progress / set_meta / reset, plus
+    `bar_canvas` + `bar_rect` for the legacy `_update_bar_visual`."""
+
+    def __init__(self, parent, stages, bg=None, meta=True):
+        bg = bg or surface_of(parent)
+        super().__init__(parent, bg=bg)
+        self._bg = bg
+        self._cells = []
+        row = tk.Frame(self, bg=bg)
+        row.pack(fill='x')
+        for i, name in enumerate(stages):
+            row.columnconfigure(i, weight=1, uniform='xc_stage')
+            cell = tk.Frame(row, bg=bg)
+            cell.grid(row=0, column=i, sticky='w')
+            ic = StepIcon(cell, '⏳', size=16, bg=bg)
+            ic.pack(side='left')
+            lbl = tk.Label(cell, text=name, font=FONTS['caption'], bg=bg,
+                           fg=C['fg_4'], anchor='w')
+            lbl.pack(side='left', padx=(px(6), 0))
+            self._cells.append((ic, lbl))
+        self.bar = CompatBar(self, height=6, surface=bg)
+        self.bar.pack(fill='x', pady=(px(12), 0))
+        self.bar_canvas = self.bar
+        self.bar_rect = CompatBar.ITEM
+        self._pct = 0
+        self._meta_left = tk.StringVar(value='')
+        self._meta_right = tk.StringVar(value='')
+        if meta:
+            mrow = tk.Frame(self, bg=bg)
+            mrow.pack(fill='x', pady=(px(6), 0))
+            tk.Label(mrow, textvariable=self._meta_left, font=FONTS['caption'],
+                     bg=bg, fg=C['fg_3'], anchor='w').pack(side='left')
+            tk.Label(mrow, textvariable=self._meta_right,
+                     font=FONTS['caption'], bg=bg, fg=C['fg_2'],
+                     anchor='e').pack(side='right')
+
+    def _paint(self, idx, state):
+        if not (0 <= idx < len(self._cells)):
+            return
+        ic, lbl = self._cells[idx]
+        glyph, fg = {'pending': ('⏳', C['fg_4']),
+                     'active': ('▶', C['fg_0']),
+                     'done': ('✔', C['fg_2']),
+                     'error': ('✕', C['danger_hi'])}[state]
+        ic.config(text=glyph)
+        lbl.config(fg=fg, font=FONTS['caption_strong'] if state == 'active'
+                   else FONTS['caption'])
+
+    def set_pending(self, idx):
+        self._paint(idx, 'pending')
+
+    def set_active(self, idx):
+        for i in range(len(self._cells)):
+            self._paint(i, 'done' if i < idx else
+                        'active' if i == idx else 'pending')
+
+    def set_complete(self, idx):
+        self._paint(idx, 'done')
+
+    def set_error(self, idx):
+        self._paint(idx, 'error')
+
+    def set_progress(self, pct):
+        self._pct = max(0, min(100, pct))
+        self.bar.set_color(C['success'] if self._pct >= 100 else C['accent'])
+        self.bar.set(self._pct / 100.0)
+
+    def set_meta(self, left=None, right=None):
+        if left is not None:
+            self._meta_left.set(left)
+        if right is not None:
+            self._meta_right.set(right)
+
+    def reset(self):
+        for i in range(len(self._cells)):
+            self._paint(i, 'pending')
+        self.set_progress(0)
+        self.set_meta('', '')
+
+
+class DetectedStrip(tk.Frame):
+    """Detected-game row for the legacy build forms (cover · title · id ·
+    version · size · Detected badge). Drop-in for
+    ui.shared.cards.DetectedGameStrip: exposes cover_label, title_var,
+    id_var, ver_var and size_var; the caller packs / pack_forgets it."""
+
+    def __init__(self, parent, box=72):
+        bg = surface_of(parent)
+        super().__init__(parent, bg=bg)
+        self.cover_label = CoverLabel(self, box=box, placeholder='game')
+        self.cover_label.pack(side='left', anchor='n', padx=(0, px(14)))
+        col = tk.Frame(self, bg=bg)
+        col.pack(side='left', fill='x', expand=True)
+        self.title_var = tk.StringVar()
+        self.id_var = tk.StringVar()
+        self.ver_var = tk.StringVar()
+        self.size_var = tk.StringVar()
+        t = tk.Label(col, textvariable=self.title_var, font=FONTS['subtitle'],
+                     bg=bg, fg=C['fg_0'], anchor='w', justify='left')
+        t.pack(fill='x')
+        autowrap(t)
+        meta = tk.Frame(col, bg=bg)
+        meta.pack(fill='x', pady=(px(2), 0))
+        tk.Label(meta, textvariable=self.id_var, font=FONTS['code'], bg=bg,
+                 fg=C['fg_3'], anchor='w').pack(side='left')
+        tk.Label(meta, textvariable=self.ver_var, font=FONTS['caption'],
+                 bg=bg, fg=C['fg_3'], anchor='w').pack(side='left',
+                                                       padx=(px(10), 0))
+        # The legacy detectors prefix the size line with an emoji; show it
+        # without the glyph.
+        self._size_disp = tk.StringVar()
+        self.size_var.trace_add('write', lambda *a: self._size_disp.set(
+            strip_glyphs(self.size_var.get())))
+        tk.Label(col, textvariable=self._size_disp, font=FONTS['caption'],
+                 bg=bg, fg=C['fg_2'], anchor='w').pack(fill='x',
+                                                      pady=(px(6), 0))
+        Badge(col, 'Detected', 'success', surface=bg).pack(anchor='w',
+                                                          pady=(px(8), 0))
+
+
+def adv_toggle(header, app, fd_text, err_title=None):
+    """Header actions: an 'Advanced' toggle that reveals Force Dismount
+    (kept behind a toggle so the page head stays calm)."""
+    def _force_dismount():
+        try:
+            app._force_dismount_all()
+        except Exception as e:
+            try:
+                from ui.shared.app_dialog import app_error as _ae
+                _ae(app, err_title or fd_text, str(e))
+            except Exception:
+                pass
+    fd_btn = Button(header.actions, text=fd_text, icon='eject',
+                    command=_force_dismount, surface=BG1)
+    shown = {'on': False}
+
+    def _toggle():
+        if shown['on']:
+            fd_btn.pack_forget()
+            shown['on'] = False
+            adv_btn.config(variant='subtle')
+        else:
+            fd_btn.pack(side='right', padx=(0, px(6)))
+            shown['on'] = True
+            adv_btn.config(variant='selected')
+    adv_btn = Button(header.actions, text=_('Advanced'), icon='settings',
+                     variant='subtle', command=_toggle, surface=BG1)
+    adv_btn.pack(side='right')
+    return adv_btn, fd_btn
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Extract screen
+# ─────────────────────────────────────────────────────────────────────────
+def build_extract_tab(parent, app):
     # State
     app._extract_file_var   = tk.StringVar()
     app._extract_outdir_var = tk.StringVar()
@@ -88,210 +599,128 @@ def build_extract_tab(parent, app):
     app._extract_eta_var    = tk.StringVar(value='')
     app._extract_pct        = 0
 
-    # ── Scrollable wrap ──
-    canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0,
-                       highlightthickness=0)
-    canvas.pack(side='left', fill='both', expand=True)
-    sb = XScrollbar(parent, orient='vertical', command=canvas.yview,
-                       bg=COLORS['bg_2'], troughcolor=COLORS['bg_1'])
-    sb.pack(side='right', fill='y')
-    canvas.configure(yscrollcommand=sb.set)
+    inner = scroll_page(parent)
 
-    inner = tk.Frame(canvas, bg=COLORS['bg_1'])
-    inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
-    inner.bind('<Configure>', lambda e:
-        canvas.configure(scrollregion=canvas.bbox('all')))
-    canvas.bind('<Configure>', lambda e:
-        canvas.itemconfig(inner_id, width=e.width))
-    attach_scroll(canvas)
+    # ── Page header ──
+    head = PageHeader(inner, _('Extract image'),
+                      _('Extract an .exfat, .ffpkg, or PFS image to a folder.'))
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
+    _adv_btn, fd_btn = adv_toggle(head, app, _('Force Dismount'))
 
-    # ── Page head ──
-    head = page_head(inner, '\U0001f4e4',
-                     _('Extract image'),
-                     _('Extract an .exfat, .ffpkg, or PFS image to a folder.'))
-    head.pack(fill='x', padx=24, pady=(14, 12))
+    left, right = page_columns(inner)
 
-    # Force Dismount button on the right of the head
-    def _force_dismount():
-        try:
-            app._force_dismount_all()
-        except Exception:
-            pass
-    fd_btn = make_themed_button(head, '\u26a0  ' + _('Force Dismount'),
-                                  command=_force_dismount, kind='ghost')
-    _fd_shown = {'on': False}
-
-    def _toggle_fd():
-        if _fd_shown['on']:
-            fd_btn.pack_forget()
-            _fd_shown['on'] = False
-            _adv_btn.config(text='\u2699  ' + _('Advanced'))
-        else:
-            fd_btn.pack(side='right', padx=(8, 0))
-            _fd_shown['on'] = True
-            _adv_btn.config(text='\u2699  ' + _('Advanced \u25be'))
-    _adv_btn = make_themed_button(head, '\u2699  ' + _('Advanced'),
-                                  command=_toggle_fd, kind='ghost')
-    _adv_btn.pack(side='right', padx=(8, 0))
-
-    # ── Info banner ──
-    banner = info_banner(inner, _(
-        'Unpacks a game image back into its files and folders. Needs '
-        'roughly the image size in free space; progress appears in the '
-        'OUTPUT LOG (click the bar at the bottom to expand). Note: a '
-        '.ffpfsc unpacks to its nested image, not directly to game files. '
-        '(Mechanics: .exfat via OSFMount, .ffpkg via UFS2Tool, '
-        '.ffpfs/.ffpfsc via mkpfs.)'))
-    banner.pack(fill='x', padx=24, pady=(0, 14))
-
-    # ── Card ──
-    card = tk.Frame(inner, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_2'],
-                     highlightthickness=1)
-    card.pack(fill='x', padx=24, pady=(0, 14))
-
-    pad = tk.Frame(card, bg=COLORS['bg_2'])
-    pad.pack(fill='x', padx=24, pady=18)
-
-    # Numbered section headings (same look as the Convert tab)
-    def _section(text, top=0):
-        tk.Label(pad, text=text, font=(FONTS['body_strong'][0], 11),
-                 bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-            fill='x', pady=(top, 6))
-
-    _section(_('1.  Source image'))
-
-    # ── Game hero (Build-style): cover + title + stats + status badge ──
-    app._extract_hero = GameHero(
-        pad,
-        stats=[('Format', 'format'), ('Image Size', 'size'),
-               ('Expected Files', 'files'), ('Output Space', 'output')],
-        cover_glyph='\U0001f4e4', cover_size=150)
-    app._extract_hero.pack(fill='x', pady=(0, 10))
+    # ── Source card ──
+    src_card = Card(left, title=_('Source image'),
+                    subtitle=_cap1(_('the image to extract (.exfat, .ffpkg, .ffpfs, .ffpfsc)')))
+    src_card.pack(fill='x')
+    Button(src_card.head_actions, text=_('Browse') + '…',
+           icon='folder_open', command=lambda: _browse_any_image(app),
+           surface=BG2).pack()
+    app._extract_hero = ImageHero(
+        src_card.body,
+        stats=[('Format', 'format'), ('Image size', 'size'),
+               ('Expected files', 'files'), ('Output space', 'output')],
+        placeholder='disc', cover=112, cols=3,
+        empty_title=_('No image selected'))
+    app._extract_hero.pack(fill='x')
     app._extract_hero.set_title(_('No image selected'), '')
     app._extract_hero.set_badge(_('SELECT AN IMAGE'), 'wait')
     # legacy attr kept for any external reference; no longer the focal UI
     app._extract_info_strip = None
 
-    # Detected-format badge + plain-language note (filled by _refresh_detected)
-    fmt_row = tk.Frame(pad, bg=COLORS['bg_2'])
-    fmt_row.pack(fill='x', pady=(0, 12))
-    app._extract_fmt_badge = tk.Label(
-        fmt_row, text=_('NO IMAGE'),
-        font=(FONTS['body_strong'][0], 10),
-        bg=COLORS['bg_4'], fg=COLORS['fg_4'], padx=10, pady=3)
-    app._extract_fmt_badge.pack(side='left')
-    app._extract_fmt_note = tk.Label(
-        fmt_row, text=_('Select an image to detect its format.'),
-        font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-        anchor='w', justify='left')
-    app._extract_fmt_note.pack(side='left', padx=(10, 0), fill='x', expand=True)
+    Divider(src_card.body, color=C['border_1']).pack(fill='x',
+                                                     pady=(px(16), px(12)))
+    TextField(src_card.body, textvariable=app._extract_file_var, mono=True,
+              surface=BG2).pack(fill='x')
 
-    # Form fields
-    field_block(pad, _('Source image'),
-                 var=app._extract_file_var,
-                 on_browse=lambda: _browse_any_image(app),
-                 browse_text=_('Browse'),
-                 hint=_('the image to extract (.exfat, .ffpkg, .ffpfs, .ffpfsc)'))
+    # Demoted drop strip (supports the workflow, not the focal point)
+    dz = DropStrip(src_card.body,
+                   _('Drop .exfat / .ffpkg / PFS image here · or Browse above'),
+                   on_drop=lambda p: _on_drop(app, p),
+                   on_click=lambda: _browse_any_image(app), icon='download')
+    dz.pack(fill='x', pady=(px(12), 0))
 
-    _section(_('2.  Output folder'), top=4)
+    # ── Output card ──
+    out_card = Card(left, title=_('Output folder'),
+                    subtitle=_cap1(_('where extracted files will land')))
+    out_card.pack(fill='x', pady=(px(16), 0))
+    _out_block = field_block(out_card.body, _('Output directory'),
+                             var=app._extract_outdir_var,
+                             on_browse=app._browse_extract_outdir,
+                             browse_text=_('Browse'))
+    _out_block.pack_configure(pady=0)
 
-    field_block(pad, _('Output directory'),
-                 var=app._extract_outdir_var,
-                 on_browse=app._browse_extract_outdir,
-                 browse_text=_('Browse'),
-                 hint=_('where extracted files will land'))
-
-    # Output folder name with auto-detected hint
-    name_block = tk.Frame(pad, bg=COLORS['bg_2'])
-    name_block.pack(fill='x', pady=(14, 0))
-    name_lbl_row = tk.Frame(name_block, bg=COLORS['bg_2'])
+    name_block = tk.Frame(out_card.body, bg=BG2)
+    name_block.pack(fill='x', pady=(px(12), 0))
+    name_lbl_row = tk.Frame(name_block, bg=BG2)
     name_lbl_row.pack(fill='x')
-    tk.Label(name_lbl_row, text=_('Output folder name'),
-             font=FONTS['label'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_3'], anchor='w'
-             ).pack(side='left')
+    tk.Label(name_lbl_row, text=_('Output folder name'), font=FONTS['body'],
+             bg=BG2, fg=C['fg_2'], anchor='w').pack(side='left')
     app._extract_auto_lbl = tk.Label(name_lbl_row,
-        text='  \u2022  ' + _('auto from filename'),
-        font=FONTS['meta'],
-        bg=COLORS['bg_2'], fg=COLORS['success_hi'])
-    app._extract_auto_lbl.pack(side='left')
+        text=_('auto from filename'), font=FONTS['caption'],
+        bg=BG2, fg=C['fg_4'])
+    app._extract_auto_lbl.pack(side='left', padx=(px(8), 0))
+    TextField(name_block, textvariable=app._extract_name_var, mono=True,
+              surface=BG2).pack(fill='x', pady=(px(4), 0))
 
-    name_wrap = tk.Frame(name_block, bg=COLORS['field_bg'],
-                          highlightbackground=COLORS['border_3'],
-                          highlightthickness=1)
-    name_wrap.pack(fill='x', pady=(6, 0))
-    XEntry(name_wrap, textvariable=app._extract_name_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['field_bg'], fg=COLORS['field_fg'],
-             insertbackground=COLORS['field_fg'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=8
-             ).pack(fill='x')
+    # ── Right column: extract summary + actions + progress ──
+    act = Card(right, title=_('Extract'),
+               subtitle=_('Unpacks the image into the output folder.'))
+    act.pack(fill='x')
+    fmt_row = tk.Frame(act.body, bg=BG2)
+    fmt_row.pack(fill='x')
+    app._extract_fmt_badge = Badge(fmt_row, _sentence(_('NO IMAGE')),
+                                   'neutral', surface=BG2)
+    app._extract_fmt_badge.pack(side='left', anchor='n')
+    app._extract_fmt_note = caption(
+        fmt_row, _('Select an image to detect its format.'))
+    app._extract_fmt_note.pack(side='left', fill='x', expand=True,
+                               padx=(px(10), 0))
 
-    _section(_('3.  Extract'), top=4)
-
-    # ── Progress card ──
-    prog_card = tk.Frame(pad, bg=COLORS['bg_3'],
-                          highlightbackground=COLORS['border_2'],
-                          highlightthickness=1)
-    prog_card.pack(fill='x', pady=(0, 14))
-    pi = tk.Frame(prog_card, bg=COLORS['bg_3'])
-    pi.pack(fill='x', padx=14, pady=12)
-
-    status_row = tk.Frame(pi, bg=COLORS['bg_3'])
+    Divider(act.body, color=C['border_1']).pack(fill='x',
+                                                pady=(px(14), px(12)))
+    # Progress (status · eta · bar) — filled by the extract workers.
+    status_row = tk.Frame(act.body, bg=BG2)
     status_row.pack(fill='x')
-    tk.Label(status_row, textvariable=app._extract_status_var,
-             font=FONTS['body_b'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(side='left', fill='x', expand=True)
+    _status_lbl = tk.Label(status_row, textvariable=app._extract_status_var,
+                           font=FONTS['body_strong'], bg=BG2, fg=C['fg_0'],
+                           anchor='w', justify='left')
+    _status_lbl.pack(side='left', fill='x', expand=True)
+    autowrap(_status_lbl)
     tk.Label(status_row, textvariable=app._extract_eta_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_4'], anchor='e'
-             ).pack(side='right')
+             font=FONTS['caption'], bg=BG2, fg=C['fg_3'],
+             anchor='e').pack(side='right', anchor='n', padx=(px(8), 0))
+    _idle = caption(act.body, _('Progress appears here when an extraction '
+                                'starts. Details go to the OUTPUT LOG.'))
 
-    # Slim progress bar
-    bar_bg = tk.Frame(pi, bg=COLORS['bg_4'], height=8)
-    bar_bg.pack(fill='x', pady=(8, 0))
-    bar_bg.pack_propagate(False)
-    app._extract_canvas = tk.Canvas(bar_bg, height=8, bg=COLORS['bg_4'],
-                                     highlightthickness=0)
-    app._extract_canvas.pack(fill='both', expand=True)
-    app._extract_bar = app._extract_canvas.create_rectangle(
-        0, 0, 0, 8, fill=COLORS['accent'], outline='')
+    app._extract_canvas = CompatBar(act.body, height=6, surface=BG2)
+    app._extract_canvas.pack(fill='x', pady=(px(8), 0))
+    app._extract_bar = CompatBar.ITEM
     app._extract_canvas.bind('<Configure>',
-        lambda e: app._update_extract_bar(app._extract_pct))
+        lambda e: app._update_extract_bar(app._extract_pct), add='+')
 
-    # ── Demoted drop strip (supports the workflow, not the focal point) ──
-    dz = DropZone(pad,
-                  on_drop=lambda p: _on_drop(app, p),
-                  on_click=lambda: _browse_any_image(app),
-                  hint=None,
-                  glyph='\U0001f4e4')
-    dz.pack(fill='x', pady=(14, 0))
-    try:
-        # compress to a slim one-line strip
-        _inner = dz._glyph_lbl.master
-        _inner.pack_configure(padx=12, pady=7)
-        dz._glyph_lbl.configure(font=(FONTS['body'][0], 11))
-        dz._glyph_lbl.pack_configure(side='left', padx=(0, 8))
-        dz._main_lbl.configure(
-            text=_('Drop .exfat / .ffpkg / PFS image here \u00b7 or Browse above'),
-            font=FONTS['mono_sm'])
-        dz._main_lbl.pack_configure(side='left')
-    except Exception:
-        pass
+    def _idle_sync(*_a):
+        try:
+            if app._extract_status_var.get().strip():
+                _idle.pack_forget()
+                status_row.pack(fill='x', before=app._extract_canvas)
+            else:
+                status_row.pack_forget()
+                _idle.pack(fill='x', before=app._extract_canvas)
+        except Exception:
+            pass
+    app._extract_status_var.trace_add('write', _idle_sync)
+    _idle_sync()
 
-    # ── Action button (dominant) ──
-    app._extract_btn = make_themed_button(
-        pad,
-        text=_('Extract Image'),
-        command=lambda: _route_extract(app),
-        kind='success',
-        icon='\U0001f4e4',
-        font_size=13, padx=34, pady=14)
-    app._extract_btn.pack(fill='x', pady=(18, 0))
+    Divider(act.body, color=C['border_1']).pack(fill='x',
+                                                pady=(px(16), px(12)))
+    btn_row = tk.Frame(act.body, bg=BG2)
+    btn_row.pack(fill='x')
+    app._extract_btn = Button(btn_row, text=_('Extract Image'),
+                              icon='extract', variant='primary',
+                              command=lambda: _route_extract(app),
+                              surface=BG2)
+    app._extract_btn.pack(side='right')
 
     # ── Cancel (shown only while an in-tab worker runs) ──
     # Cooperative flag polled by the ffpkg mount+copy engine.
@@ -301,24 +730,32 @@ def build_extract_tab(parent, app):
         app._extract_cancel['v'] = True
         try:
             app._extract_cancel_btn.config(state='disabled',
-                                           text=_('Cancelling\u2026'))
+                                           text=_('Cancelling…'))
         except Exception:
             pass
 
-    app._extract_cancel_btn = make_themed_button(
-        pad,
-        text=_('Cancel Extract'),
-        command=_extract_request_cancel,
-        kind='ghost',
-        font_size=11, padx=20, pady=8)
+    app._extract_cancel_btn = Button(btn_row, text=_('Cancel Extract'),
+                                     icon='stop', variant='secondary',
+                                     command=_extract_request_cancel,
+                                     surface=BG2)
     # not packed here — the workers pack/forget it around a run
+
+    # ── How it works ──
+    how = InfoBar(right, kind='info', text=_(
+        'Unpacks a game image back into its files and folders. Needs '
+        'roughly the image size in free space; progress appears in the '
+        'OUTPUT LOG (click the bar at the bottom to expand). Note: a '
+        '.ffpfsc unpacks to its nested image, not directly to game files. '
+        '(Mechanics: .exfat via OSFMount, .ffpkg via UFS2Tool, '
+        '.ffpfs/.ffpfsc via mkpfs.)'))
+    how.pack(fill='x', pady=(px(16), 0))
 
     # ── Hidden ConsoleView for back-compat ──
     # Legacy code paths (mostly in exfat_builder.py) still expect to
     # find `app._extract_log` as a Text widget. We create one but never
     # pack it — the actual output goes to the global OUTPUT LOG via the
     # `_extract_log_to_global` hook below.
-    hidden_holder = tk.Frame(inner, bg=COLORS['bg_1'])
+    hidden_holder = tk.Frame(inner, bg=BG1)
     # Don't pack; it stays as a no-op holder
     _cv = ConsoleView(hidden_holder, height=10)
     app._extract_log = _cv.text
@@ -382,7 +819,7 @@ def _refresh_detected(app):
         needed_gb = req_gb * (1.6 if compressed else 1.05)
         ok = free_gb >= needed_gb
         tail = ' (+ temp space)' if compressed else ''
-        mark = '\u2713 Enough space' if ok else '\u2717 Low on space'
+        mark = 'enough space' if ok else 'low on space'
         txt = 'Need ~%.0f GB%s \u00b7 %.0f GB free \u00b7 %s' % (
             req_gb, tail, free_gb, mark)
         return (txt, 'ok' if ok else 'low')
@@ -397,12 +834,11 @@ def _refresh_detected(app):
         _badge = getattr(app, '_extract_fmt_badge', None)
         _note = getattr(app, '_extract_fmt_note', None)
         if _badge is not None:
-            _badge.config(text=_('NO IMAGE'), bg=COLORS['bg_4'],
-                          fg=COLORS['fg_4'])
+            _badge.set(_sentence(_('NO IMAGE')), 'neutral', icon=None)
         if _note is not None:
             _note.config(text=_('Pick an image above to extract \u2014 its '
                                 'format is detected automatically.'),
-                         fg=COLORS['fg_4'])
+                         fg=COLORS['fg_3'])
         return
 
     base = os.path.basename(path)
@@ -417,13 +853,12 @@ def _refresh_detected(app):
     if _badge is not None or _note is not None:
         _btxt, _ntxt, _state = _format_meta(fmt)
         if _state == 'ok':
-            _bg, _fg, _nfg = (COLORS['accent_08'], COLORS['accent_hi'],
-                              COLORS['fg_4'])
+            _tone, _nfg = 'info', COLORS['fg_3']
         else:
-            _bg, _fg, _nfg = (COLORS['danger_bg'], COLORS['danger_hi'],
-                              COLORS['danger_hi'])
+            _tone, _nfg = 'danger', COLORS['danger_hi']
         if _badge is not None:
-            _badge.config(text=_btxt, bg=_bg, fg=_fg)
+            _badge.set(_btxt if _state == 'ok' else _sentence(_btxt), _tone,
+                       icon=None)
         if _note is not None:
             _note.config(text=_ntxt, fg=_nfg)
 
@@ -462,7 +897,7 @@ def _refresh_detected(app):
     except Exception:
         _img_sz = 0
     _verdict_txt, _verdict_state = _space_verdict(_img_sz, fmt)
-    hero.set_stat('output', _verdict_txt)
+    hero.set_stat('output', _verdict_txt, warn=(_verdict_state == 'low'))
     hero.set_badge(_('READY TO EXTRACT'), 'ready')
     # cover: scope strictly to the SELECTED game — never scan the parent
     # directory (that returns a sibling game's icon0.png; see the cover-art
@@ -756,7 +1191,7 @@ def _run_ffpkg_extract_tab(app):
     try:
         app._extract_cancel_btn.config(state='normal',
                                        text=_('Cancel Extract'))
-        app._extract_cancel_btn.pack(fill='x', pady=(8, 0))
+        app._extract_cancel_btn.pack(side='left')
     except Exception:
         pass
     _set_xprog(app, 0, _('Preparing\u2026'), '')
