@@ -10,7 +10,7 @@ from **Next steps** below rather than re-auditing.
 
 | Check | Where | Result |
 |---|---|---|
-| Unit + GUI tests (Linux, Xvfb) | `EXFAT_GUI_SMOKE=1 python -m unittest discover -s tests` | 165 tests, OK (6 Windows-only skipped) |
+| Unit + GUI tests (Linux, Xvfb) | `EXFAT_GUI_SMOKE=1 python -m unittest discover -s tests` | 167 tests, OK (6 Windows-only skipped) |
 | Windows build + tests | GitHub Actions `Windows build and test`, windows-2025 | `build.bat` exe build, unit tests, GUI tests, 25 pages × en/de/ja with 0 errors, exe launch (alive after 40 s); artifacts: exe + `.sha256`, screenshots |
 | Real UFS2Tool on Windows | `tests/test_ufs2tool_windows.py` in CI | `.ffpkg` built into `.part`, renamed, UFS2 magic verified; ran on .NET 10.0.14 via roll-forward |
 | Embedded PowerShell script | `tests/test_scripts_windows.py` in CI | parses with PowerShell's parser |
@@ -104,7 +104,14 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
     profile manifest (older manifests: "differs from recorded originals"
     asks, Backport All skips);
   * Backport All runs the same per-game checks; restore refuses zip-slip
-    entries and reports partial restores.
+    entries and reports partial restores;
+  * **originals copied before the engine runs.** Reproduced with the embedded
+    engine on a synthetic ELF (`EngineInPlaceRegression`): on a dump without
+    SELF files it SDK-patches the game's ELFs in place and leaves
+    `<file>.bak` in the game, so the "originals" ZIP held patched files and
+    the real originals were only `.bak` files packed into the image. Now
+    every executable is copied first and the engine's new `.bak` files are
+    removed; SDK-patch failures count as failures.
 
 ### Backport GUI audit findings compared with this repo
 
@@ -143,9 +150,9 @@ findings concern code that does not exist here.
 
 * No test runs the real embedded pipeline on real PS5 executables (no
   license-clear sample SELFs); the run-safety tests use a stand-in temp tree.
-* The embedded pipeline's SDK patcher can make `.bak` files beside the
-  files it patches; whether any reach the game folder in Auto Backport is
-  unverified without real executables.
+* The in-place fix is tested with a synthetic ELF only; real decrypted
+  dumps (and SELF dumps, which the engine decrypts into its own folder)
+  still need one run on the owner's PC.
 * SDK Fixer / Batch SDK (separate tools) were not part of this pass.
 * No PS5 hardware or real Publishing Tools available to this session.
 

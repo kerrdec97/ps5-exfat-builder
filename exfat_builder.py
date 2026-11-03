@@ -17039,6 +17039,19 @@ class ExFATBuilder(_TK_BASE):
                                 os.path.join(og_root, og_fn), game)
                             original_game_files.add(og_rel.lower())
 
+                    # ── Step 0: copy every executable to the originals now.
+                    # On a dump without SELF files the engine patches the
+                    # game's ELFs in place, so a copy taken later would
+                    # already be patched (reproduced with the embedded
+                    # engine; see tests/test_backport_engine.py).
+                    from core import backport_safety as _bsf
+                    _n_snap = _bsf.snapshot_files(
+                        game, self._abp_scan_executables(game)[0],
+                        originals_dir)
+                    self.after(0, self._abp_log_line,
+                               '✓ Originals copied before patching: %d '
+                               'executable(s)' % _n_snap, 'ok')
+
                     # ── Step 1: Apply fakelib into game/fakelib/ subfolder ──
                     if fakelib_src and os.path.isdir(fakelib_src):
                         self.after(0, self._abp_log_line,
@@ -17246,10 +17259,17 @@ class ExFATBuilder(_TK_BASE):
                     self.after(0, self._abp_log_line,
                                '✓ %d patched file(s) applied to game folder' % applied,
                                'ok')
+                    _baks = _bsf.remove_new_baks(game, original_game_files)
+                    if _baks:
+                        self.after(0, self._abp_log_line,
+                                   '✓ Removed %d engine .bak file(s) from the '
+                                   'game folder (originals are in the ZIP)'
+                                   % len(_baks), 'ok')
                     self.after(0, self._abp_set_progress, 95)
 
                     failed = (results.get('decrypt', {}).get('failed', 0) +
-                              results.get('signing', {}).get('failed', 0))
+                              results.get('signing', {}).get('failed', 0) +
+                              results.get('downgrade', {}).get('failed', 0))
                     ok_c   = (results.get('decrypt', {}).get('successful', 0) +
                               results.get('signing', {}).get('successful', 0))
 
@@ -17885,7 +17905,7 @@ class ExFATBuilder(_TK_BASE):
             ok = orig_ok and (not pat_dest or bool(pat_zip)) and not failed
             if failed:
                 self.after(0, self._abp_log_line,
-                           '✗ %d file(s) failed to decrypt or sign — the '
+                           '✗ %d file(s) failed to decrypt, SDK-patch or sign — the '
                            'game may not start. See the log above.' % failed,
                            'err')
             self.after(0, self._abp_done, ok)
@@ -22594,6 +22614,12 @@ class ExFATBuilder(_TK_BASE):
 
                     os.makedirs(originals_dir, exist_ok=True)
                     os.makedirs(patched_dir,   exist_ok=True)
+                    # Originals before the engine runs: it patches ELF-only
+                    # dumps in place (see the single-game run).
+                    from core import backport_safety as _bsf
+                    _bsf.snapshot_files(
+                        folder, self._abp_scan_executables(folder)[0],
+                        originals_dir)
 
                     # Apply fakelib
                     if fakelib_src and os.path.isdir(fakelib_src):
@@ -22668,7 +22694,9 @@ class ExFATBuilder(_TK_BASE):
                                 _sh.copy2(p_src, p_dest)
                         _pipe_failed = (
                             results.get('decrypt', {}).get('failed', 0) +
-                            results.get('signing', {}).get('failed', 0))
+                            results.get('signing', {}).get('failed', 0) +
+                            results.get('downgrade', {}).get('failed', 0))
+                        _bsf.remove_new_baks(folder, original_game_files)
                         bp_ok = True
                     except Exception as bp_e:
                         _glog('✗ Pipeline failed: %s. The originals of any '
@@ -22784,7 +22812,7 @@ class ExFATBuilder(_TK_BASE):
                                   'are only in %s — copy that folder '
                                   'somewhere safe.' % originals_dir)
                         if _pipe_failed:
-                            _glog('✗ %d file(s) failed to decrypt or sign.'
+                            _glog('✗ %d file(s) failed to decrypt, SDK-patch or sign.'
                                   % _pipe_failed)
                         if saved_orig and not _zerr and not _pipe_failed:
                             ok_count += 1

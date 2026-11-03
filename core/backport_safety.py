@@ -322,3 +322,45 @@ def backported_by_manifest(game, manifest):
     if differs:
         return 'differs', differs
     return ('original', []) if same else ('unknown', [])
+
+
+def snapshot_files(game, rel_paths, dest):
+    """Copy `rel_paths` of `game` into `dest` (same layout) before the
+    engine runs. On a dump without SELF files (already decrypted ELFs) the
+    engine patches the game's files in place, so a copy taken afterwards
+    would already be patched. Returns the number of files copied; a file
+    that cannot be copied raises, so the run stops before any change."""
+    import shutil
+    n = 0
+    for rel in rel_paths:
+        src = os.path.join(game, rel)
+        dst = os.path.join(dest, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        n += 1
+    return n
+
+
+def remove_new_baks(game, before_lower):
+    """Delete '<executable>.bak' files the engine left in `game` that were
+    not there before the run (`before_lower`: lower-cased relative paths
+    present beforehand). The originals are kept in the originals ZIP, so
+    these copies would only be packed into the image. Returns the
+    relative paths removed."""
+    removed = []
+    for root, dirs, files in os.walk(game):
+        dirs[:] = [d for d in dirs if d.lower() != 'decrypted']
+        for fn in files:
+            low = fn.lower()
+            if not low.endswith('.bak') or not low[:-4].endswith(EXEC_EXTS):
+                continue
+            path = os.path.join(root, fn)
+            rel = os.path.relpath(path, game)
+            if rel.lower() in before_lower:
+                continue
+            try:
+                os.remove(path)
+                removed.append(rel.replace(os.sep, '/'))
+            except OSError:
+                pass
+    return sorted(removed)

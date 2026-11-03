@@ -90,6 +90,11 @@ consistent look. Every existing feature, setting and language is kept.
   is refused; an already backported folder (same fakelib set) is refused
   because its originals would be patched files; another tool's fakelib folder
   is backed up and allowed; free space for backups is checked first.
+- **Decrypted (ELF) dumps:** the backport engine patches their executables
+  in place, so the "originals" ZIP held already patched files and the real
+  originals were left as `.bak` files inside the game. Executables are now
+  copied to the originals before the engine runs, and the `.bak` files are
+  removed afterwards. SDK-patch failures are reported.
 - **Originals are never lost.** The ZIP folders are chosen and checked before
   any file changes (the originals ZIP is required). Before, cancelling the
   folder prompt after patching, a ZIP error, or **Backport All** with only a

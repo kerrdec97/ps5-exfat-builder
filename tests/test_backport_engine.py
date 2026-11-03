@@ -271,5 +271,87 @@ class BackportRunSafety(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.d, 'outside.txt')))
 
 
+def _synthetic_elf(ps5_sdk=0x07000038):
+    """A minimal 64-bit ELF with one PT_SCE_PROCPARAM segment, built here
+    from the format (no game data): enough for the SDK patcher."""
+    import struct
+    b = bytearray(0x200)
+    b[0:7] = b'\x7fELF\x02\x01\x01'
+    struct.pack_into('<HHI', b, 0x10, 2, 0x3E, 1)
+    struct.pack_into('<Q', b, 0x20, 0x40)
+    struct.pack_into('<HH', b, 0x36, 0x38, 1)
+    struct.pack_into('<IIQQQQQQ', b, 0x40, 0x61000001, 4, 0x100, 0, 0,
+                     0x40, 0x40, 8)
+    struct.pack_into('<IIIII', b, 0x100, 0x40, 0, 0x4942524F, 0x09590001,
+                     ps5_sdk)
+    return bytes(b)
+
+
+class EngineInPlaceRegression(unittest.TestCase):
+    """The embedded engine patches an ELF-only (decrypted) dump in place and
+    leaves <file>.bak in the game. The originals must be copied before it
+    runs, and the .bak files must not stay in the game folder."""
+
+    def test_originals_snapshot_survives_in_place_patching(self):
+        import io, shutil, sys, contextlib
+        from core import backport_safety as bs
+        mod = load_app()
+        d = tempfile.mkdtemp(prefix='bp_inplace_')
+        self.addCleanup(shutil.rmtree, d, True)
+        game = os.path.join(d, 'game')
+        os.makedirs(game)
+        original = _synthetic_elf()
+        with open(os.path.join(game, 'eboot.bin'), 'wb') as f:
+            f.write(original)
+        before = {'eboot.bin'}
+        originals = os.path.join(d, 'originals')
+        self.assertEqual(bs.snapshot_files(game, ['eboot.bin'], originals), 1)
+
+        _bp, tmp = mod.extract_backport(d)
+        saved_path, saved_mods = list(sys.path), dict(sys.modules)
+        sys.path[:0] = [tmp, os.path.join(tmp, 'src')]
+        try:
+            from Backport import PS5ELFProcessor
+            with contextlib.redirect_stdout(io.StringIO()):
+                r = PS5ELFProcessor(use_colors=False).decrypt_and_sign_pipeline(
+                    input_dir=game, output_dir=os.path.join(d, 'patched'),
+                    sdk_pair=4, paid=0x3100000000000002, ptype=1,
+                    fakelib_source=None, create_backup=True, overwrite=True,
+                    apply_libc_patch=True, auto_revert_for_high_sdk=True,
+                    verbose=True, save_to_config=False)
+        finally:
+            sys.path[:] = saved_path
+            for k in set(sys.modules) - set(saved_mods):
+                sys.modules.pop(k, None)
+        self.assertEqual(r['downgrade']['successful'], 1)
+        with open(os.path.join(game, 'eboot.bin'), 'rb') as f:
+            in_place = f.read() != original
+        # Measured with the embedded engine: the game file itself changes.
+        self.assertTrue(in_place)
+        # The snapshot taken before the run is the real original either way.
+        with open(os.path.join(originals, 'eboot.bin'), 'rb') as f:
+            self.assertEqual(f.read(), original)
+        if in_place:
+            self.assertTrue(os.path.isfile(os.path.join(game, 'eboot.bin.bak')))
+        self.assertEqual(bs.remove_new_baks(game, before),
+                         ['eboot.bin.bak'] if in_place else [])
+        self.assertEqual(os.listdir(game), ['eboot.bin'])
+
+    def test_remove_new_baks_keeps_preexisting(self):
+        import shutil
+        from core import backport_safety as bs
+        d = tempfile.mkdtemp(prefix='bp_bak_')
+        self.addCleanup(shutil.rmtree, d, True)
+        for rel in ('eboot.bin.bak', 'sce_module/libc.prx.bak',
+                    'save.bak', 'decrypted/eboot.bin.bak'):
+            p = os.path.join(d, *rel.split('/'))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            open(p, 'wb').close()
+        removed = bs.remove_new_baks(d, {'eboot.bin.bak'})
+        self.assertEqual(removed, ['sce_module/libc.prx.bak'])
+        self.assertTrue(os.path.isfile(os.path.join(d, 'eboot.bin.bak')))
+        self.assertTrue(os.path.isfile(os.path.join(d, 'save.bak')))
+
+
 if __name__ == '__main__':
     unittest.main()
