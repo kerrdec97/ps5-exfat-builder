@@ -14,7 +14,9 @@ from **Next steps** below rather than re-auditing.
 | Windows build + tests | GitHub Actions `Windows build and test`, windows-2025 | `build.bat` exe build, unit tests, GUI tests, 25 pages × en/de/ja with 0 errors, exe launch (alive after 40 s); artifacts: exe + `.sha256`, screenshots |
 | Real UFS2Tool on Windows | `tests/test_ufs2tool_windows.py` in CI | `.ffpkg` built into `.part`, renamed, UFS2 magic verified; ran on .NET 10.0.14 via roll-forward |
 | Embedded PowerShell script | `tests/test_scripts_windows.py` in CI | parses with PowerShell's parser |
-| FPKG end to end | `tests/test_fpkg.py`, GUI test | 31 engine tests + one Build-tab job, against a stand-in `prospero-pub-cmd.exe` |
+| FPKG end to end | `tests/test_fpkg.py`, GUI test | engine + add-on tests and a Build-tab job against a stand-in `prospero-pub-cmd.exe`; on Windows CI the stand-in is compiled to a real .exe (create, cancel via taskkill, update, verify/extract, non-ASCII junction build, stock-tool rejection all pass) |
+| Batch file → PowerShell script | `tests/test_scripts_windows.py` in CI | extracted `make_image.bat` starts the script by full path; stops at the OSFMount check |
+| Console code page | `tests/test_console_encoding_windows.py` in CI | robocopy output decodes correctly only as OEM (ANSI 1252 / OEM 437 runner) |
 
 Not covered by any test: OSFMount image builds/mounts, robocopy on a real
 game, real Sony Publishing Tools, any console behaviour.
@@ -31,17 +33,17 @@ game, real Sony Publishing Tools, any console behaviour.
 | H4 | Cancel deletes a finished image | **Fixed** (finished jobs kept) |
 | H5 | "N built successfully" counts queued items | **Fixed** |
 | H6 | Failed ffpkg left under final name | **Fixed** (`.part` + rename) |
-| M1 | "Complete!" before verification | Open |
+| M1 | "Complete!" before verification | **Fixed** |
 | M2 | Rebuild deletes old image first | **Fixed** (set aside, restore on failure) |
 | M3 | Widgets touched from worker threads | **Partly fixed** (thread-safe `after()` everywhere; .NET dialog moved to Tk thread); `_detect_game_info` race remains |
-| M4 | Folder walks / rmtree on the UI thread | Open |
-| M5 | Sweep dismounts the user's own mounts | Open |
+| M4 | Folder walks / rmtree on the UI thread | **Partly fixed** (verify size walk + delete-source rmtree moved off the Tk thread; `_run_queue` pre-walk remains) |
+| M5 | Sweep dismounts the user's own mounts | **Fixed** (volumes mounted before start are left alone) |
 | M6 | Updater hash optional, no timeout | **Fixed** |
-| M7 | Elevated app runs code from user-writable temp | **Partly fixed** (Backport.py private fresh folder); scripts/UFS2Tool still extracted to temp without a hash re-check |
+| M7 | Elevated app runs code from user-writable temp | **Fixed** (private fresh folders; scripts/UFS2Tool re-checked byte-for-byte before each use; PowerShell by full path) |
 | M8 | Duplicate pipelines | Open (design work) |
-| M9 | Temp leftovers never recovered | **Partly fixed** (backport folders cleaned) |
-| M10 | Console output decoded as `mbcs` | Open (needs Windows locale test) |
-| L1–L6 | Low items | L2 fixed (shortcuts); others open |
+| M9 | Temp leftovers never recovered | **Fixed** (start-up sweep of the app's own folders older than a day) |
+| M10 | Console output decoded as `mbcs` | **Fixed** (measured on Windows; OEM decoding for build/robocopy) |
+| L1–L6 | Low items | L1, L2 fixed; L3 (dead retry branch) and L6 open; L4 (unused modules) needs the owner's approval to delete files |
 
 ## Issue audit (`ISSUE_AUDIT.md`) — status of defects still open there
 
@@ -52,7 +54,7 @@ game, real Sony Publishing Tools, any console behaviour.
 | H3 PS1 counts skipped files | **Fixed** |
 | M1 backport byte-patch fallback | **Fixed** (removed) |
 | M2 stale Backport.py / sys.path | **Fixed** |
-| M3 stale-mount sweep before build (#82) | Open (needs OSFMount on Windows) |
+| M3 stale-mount sweep before build (#82) | Open on purpose: a sweep at build start would also unmount images the user opened in this session (File Manager / editors); needs OSFMount on Windows to judge |
 | M4 right.sprx "Invalid param magic", dump fakelib | **Partly**: other tools' fakelib handled; `right.sprx` replacement needs the Backport GUI source/asset |
 | M5 network-mapped letters in Python pickers | **Fixed** (`ui/shared/drives.py`, all 12 mount pickers) |
 | M6 `_item_error` not logged | **Fixed** (also restores a set-aside image) |
@@ -100,6 +102,6 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
    and the close-during-build behaviour.
 3. FPKG with the owner's Publishing Tools: one small game, then a
    multi-language game; record results in `docs/FPKG.md`.
-4. Remaining audit items: M1, M4, M5, M10, issue-audit M3.
+4. Remaining audit items: M4 (queue pre-walk), M8 (duplicate pipelines), L3/L6, issue-audit M3; L4 deletion needs approval.
 5. Release: only with the owner's approval (no public release or push to
    `main` without it). The CI exe artifact is a test build, not a release.
