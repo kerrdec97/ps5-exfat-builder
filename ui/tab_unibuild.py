@@ -26,8 +26,11 @@ from ui.shared.page_head import (
 from ui.shared.scroll import attach_scroll
 
 # extension + label per output type
-_TYPE_EXT = {'exfat': '.exfat', 'ffpkg': '.ffpkg', 'pfs': '.ffpfsc'}
-_TYPE_LABEL = {'exfat': 'exFAT', 'ffpkg': 'ffpkg', 'pfs': 'PFS'}
+_TYPE_EXT = {'exfat': '.exfat', 'ffpkg': '.ffpkg', 'pfs': '.ffpfsc', 'fpkg': '.pkg'}
+_TYPE_LABEL = {'exfat': 'exFAT', 'ffpkg': 'ffpkg', 'pfs': 'PFS', 'fpkg': 'FPKG'}
+# FPKG compression presets: label -> Publishing Tools --compression_level.
+_FPKG_LEVELS = (('Tool default', None), ('Fast (2)', 2), ('Standard (4)', 4),
+                ('Smallest (7)', 7), ('Maximum (9)', 9))
 
 # status -> (badge text, colour key)
 _STATUS_BADGE = {
@@ -285,8 +288,8 @@ def build_unibuild_tab(parent, app):
     from ui.shared.page_head import _tr
     page_hdr = PageHeader(
         inner, _tr('Build'),
-        'Pack a game dump into an exFAT, ffpkg or compressed PFS image. '
-        'Jobs of different formats can share one queue.')
+        'Pack a game dump into an exFAT, ffpkg or compressed PFS image, or '
+        'an installable FPKG. Jobs of different formats can share one queue.')
     page_hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
     cols = tk.Frame(inner, bg=BG1)
     cols.pack(fill='x', padx=px(24), pady=(0, px(16)))
@@ -357,7 +360,7 @@ def build_unibuild_tab(parent, app):
     fmt_card.pack(fill='x', pady=(px(16), 0))
     fmt_row = tk.Frame(fmt_body, bg=BG2)
     fmt_row.pack(fill='x')
-    for c in range(3):
+    for c in range(4):
         fmt_row.columnconfigure(c, weight=1, uniform='fmt')
 
     def _restyle_tiles():
@@ -422,6 +425,7 @@ def build_unibuild_tab(parent, app):
     _make_type_card(0, 'exfat', 'drive', 'exFAT', 'Recommended — mountable image for most setups', recommended=True, tip='Recommended for most users. Easy to mount and widely supported.')
     _make_type_card(1, 'ffpkg', 'package', 'ffpkg', 'Package-style image', tip='Package-style image format.')
     _make_type_card(2, 'pfs', 'compress', 'PFS', 'Compressed image — smaller, slower to build', tip='Compressed image format. Smaller size, slower build.')
+    _make_type_card(3, 'fpkg', 'box', 'FPKG', 'Installable .pkg — needs your Publishing Tools', tip='Builds a PS5 package (.pkg) with your own copy of the Publishing Tools (prospero-pub-cmd.exe). Nothing from Sony is included with this app.')
     tk.Label(fmt_body, text='Not sure? exFAT is the safe default for most games.', font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'], anchor='w').pack(fill='x', pady=(px(10), 0))
     adv_state = {'open': False}
     adv_disc_header = tk.Label(fmt_body, text=' Advanced options', font=FONTS['body'], bg=BG2, fg=COLORS['fg_2'], cursor='hand2', anchor='w', compound='left', image=icon_image('chevron_right', 16, COLORS['fg_3'], BG2))
@@ -587,11 +591,103 @@ def build_unibuild_tab(parent, app):
     TextField(size_frame, textvariable=img_size_gb, width=6, justify='center').pack(side='left')
     tk.Label(size_frame, text='GB', font=FONTS['body'], bg=BG2, fg=COLORS['fg_3']).pack(side='left', padx=(px(6), 0))
 
+    # ── FPKG options ──
+    fpkg_tool_var = tk.StringVar(value=str(app._settings.get('fpkg_pubtools_path') or ''))
+    fpkg_level_var = tk.StringVar(value=str(app._settings.get('fpkg_compression') or _FPKG_LEVELS[0][0]))
+    fpkg_chunks_var = tk.StringVar(value=str(app._settings.get('fpkg_chunk_count') or 100))
+    fpkg_verify_var = tk.BooleanVar(value=bool(app._settings.get('fpkg_tool_verify', True)))
+    fpkg_keep_var = tk.BooleanVar(value=bool(app._settings.get('fpkg_keep_project', False)))
+    fpkg_status_var = tk.StringVar(value='')
+    fpkg_frame = tk.Frame(fmt_body, bg=BG2)
+
+    def _fpkg_save(*_a):
+        try:
+            app._settings['fpkg_pubtools_path'] = fpkg_tool_var.get().strip()
+            app._settings['fpkg_compression'] = fpkg_level_var.get()
+            app._settings['fpkg_chunk_count'] = fpkg_chunks_var.get().strip()
+            app._settings['fpkg_tool_verify'] = bool(fpkg_verify_var.get())
+            app._settings['fpkg_keep_project'] = bool(fpkg_keep_var.get())
+            from exfat_builder import save_settings
+            save_settings(app._settings)
+        except Exception:
+            pass
+
+    def _fpkg_refresh_status(*_a):
+        path = fpkg_tool_var.get().strip()
+        if not path:
+            fpkg_status_var.set('Not set. Choose prospero-pub-cmd.exe from your '
+                                'Publishing Tools.')
+            return
+        try:
+            from core.fpkg.toolchain import find_toolchain
+            tc = find_toolchain(path)
+        except Exception as e:
+            fpkg_status_var.set('Could not check the tools: %s' % e)
+            return
+        if tc.ok:
+            msg = 'Found: ' + tc.summary()
+            if tc.warnings:
+                msg += '\n' + tc.warnings[0]
+        else:
+            msg = '; '.join(tc.problems)
+        fpkg_status_var.set(msg)
+
+    def _fpkg_browse():
+        p = filedialog.askopenfilename(
+            title='Select prospero-pub-cmd.exe',
+            filetypes=[('Publishing Tools', 'prospero-pub-cmd.exe'),
+                       ('Programs', '*.exe'), ('All files', '*.*')])
+        if p:
+            fpkg_tool_var.set(os.path.normpath(p))
+            _fpkg_save()
+            _fpkg_refresh_status()
+    _fpkg_tool_block = field_block(fpkg_frame, 'Publishing Tools (prospero-pub-cmd.exe)',
+                                   var=fpkg_tool_var, on_browse=_fpkg_browse,
+                                   hint='your own copy — not included')
+    _fpkg_tool_block.pack_configure(pady=0)
+    _fpkg_st = tk.Label(fpkg_frame, textvariable=fpkg_status_var, font=FONTS['caption'],
+                        bg=BG2, fg=COLORS['fg_3'], anchor='w', justify='left')
+    _fpkg_st.pack(fill='x', pady=(px(4), 0))
+    autowrap(_fpkg_st)
+    _fpkg_opts = tk.Frame(fpkg_frame, bg=BG2)
+    _fpkg_opts.pack(fill='x', pady=(px(10), 0))
+    tk.Label(_fpkg_opts, text='Compression', font=FONTS['body'], bg=BG2,
+             fg=COLORS['fg_2']).pack(side='left', padx=(0, px(8)))
+    _fpkg_dd = Dropdown(_fpkg_opts, textvariable=fpkg_level_var, width=14,
+                        values=[lab for lab, _v in _FPKG_LEVELS], surface=BG2)
+    _fpkg_dd.pack(side='left')
+    _fpkg_dd.bind('<<ComboboxSelected>>', _fpkg_save)
+    tk.Label(_fpkg_opts, text='PlayGo chunks', font=FONTS['body'], bg=BG2,
+             fg=COLORS['fg_2']).pack(side='left', padx=(px(18), px(8)))
+    XEntry(_fpkg_opts, textvariable=fpkg_chunks_var, width=5, justify='center').pack(side='left')
+    _fpkg_checks = tk.Frame(fpkg_frame, bg=BG2)
+    _fpkg_checks.pack(fill='x', pady=(px(10), 0))
+    XCheck(_fpkg_checks, text='Verify with img_verify after packing',
+           variable=fpkg_verify_var, command=_fpkg_save).pack(side='left', padx=(0, px(18)))
+    XCheck(_fpkg_checks, text='Keep project files (.gp5)',
+           variable=fpkg_keep_var, command=_fpkg_save).pack(side='left')
+    _fpkg_note = tk.Label(fpkg_frame, text=(
+        'The package is made by your Publishing Tools; this app writes the '
+        'project and checks the result. A stock Publishing Tools install '
+        'does not make an installable debug FPKG: such output is reported as '
+        'a failure. The game folder needs sce_sys/param.json with a valid '
+        'Content ID and the dump\'s sce_sys/keystone. Paths must be ASCII.'),
+        font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'], anchor='w', justify='left')
+    _fpkg_note.pack(fill='x', pady=(px(10), 0))
+    autowrap(_fpkg_note)
+    fpkg_tool_var.trace_add('write', lambda *_a: _fpkg_refresh_status())
+    fpkg_chunks_var.trace_add('write', lambda *_a: _fpkg_save())
+    _fpkg_refresh_status()
+
     def _refresh_size_row():
         if out_type.get() == 'exfat':
             size_frame.pack(anchor='w', pady=(px(14), 0))
         else:
             size_frame.pack_forget()
+        if out_type.get() == 'fpkg':
+            fpkg_frame.pack(fill='x', pady=(px(14), 0))
+        else:
+            fpkg_frame.pack_forget()
 
     # ── Output (folders + naming) ──
     cfg_card, cfg_body = _dash_card(left, 'Output',
@@ -748,7 +844,7 @@ def build_unibuild_tab(parent, app):
     def _uq_cancel():
         if not uq_state.get('running') or uq_state.get('cancel'):
             return
-        if not app_confirm(app, 'Cancel build', 'Stop the build queue?\n\n• PFS compression stops right away.\n• An exFAT/ffpkg image already being written finishes the current file first, then stops.\n• Remaining queued jobs will not start.\n\nPartial/unfinished output and any temporary files are deleted. Jobs that finish, including the one running now if it completes, are kept.'):
+        if not app_confirm(app, 'Cancel build', 'Stop the build queue?\n\n• PFS compression and FPKG packing stop right away.\n• An exFAT/ffpkg image already being written finishes the current file first, then stops.\n• Remaining queued jobs will not start.\n\nPartial/unfinished output and any temporary files are deleted. Jobs that finish, including the one running now if it completes, are kept.'):
             return
         uq_state['cancel'] = True
         uq_state['running'] = False
@@ -1872,6 +1968,28 @@ def build_unibuild_tab(parent, app):
                     return
             except Exception:
                 pass
+        _fpkg_opts_job = None
+        if t == 'fpkg':
+            try:
+                from core.fpkg import param as _fp
+                from core.fpkg.toolchain import find_toolchain as _ftc
+                _prm = _fp.load(src)
+                name = _fp.output_name(_prm)
+            except Exception as e:
+                app_error(app, 'FPKG', 'This folder cannot be packaged yet:\n\n%s' % e)
+                return
+            _tc = _ftc(fpkg_tool_var.get().strip())
+            if not _tc.ok:
+                app_error(app, 'Publishing Tools', '\n'.join(_tc.problems) + '\n\nChoose your prospero-pub-cmd.exe under Output format \u2192 FPKG.')
+                return
+            try:
+                _chunks = int(fpkg_chunks_var.get().strip() or 100)
+                if not 1 <= _chunks <= 255:
+                    raise ValueError
+            except ValueError:
+                app_error(app, 'FPKG', 'PlayGo chunks must be a number from 1 to 255.')
+                return
+            _fpkg_opts_job = {'tool': _tc.exe, 'level': dict(_FPKG_LEVELS).get(fpkg_level_var.get()), 'chunks': _chunks, 'verify': bool(fpkg_verify_var.get()), 'keep': bool(fpkg_keep_var.get())}
         ext = _TYPE_EXT[t]
         if not name:
             name = os.path.basename(src.rstrip('/\\')) + ext
@@ -1884,7 +2002,11 @@ def build_unibuild_tab(parent, app):
         _final_ext = '.ffpfsc' if t == 'pfs' else ext
         _final_stem = stem
         _target = os.path.join(outdir, _final_stem + _final_ext)
-        if os.path.exists(_target):
+        if os.path.exists(_target) and t == 'fpkg':
+            # Packages are never overwritten: the builder saves a numbered
+            # copy beside an existing one.
+            pass
+        elif os.path.exists(_target):
             _ow = app_choose3(app, 'Output already exists', '%s\n\nalready exists in the output folder.' % (_final_stem + _final_ext), ok_label='Overwrite', alt_label='Save numbered copy', cancel_label="Don't add")
             if _ow is None:
                 return
@@ -1920,7 +2042,7 @@ def build_unibuild_tab(parent, app):
             if not app_confirm(app, 'Low disk space', '\n'.join(lines)):
                 return
         _job_temp = tempdir_var.get().strip() or str(app._settings.get('temp_dir') or '').strip()
-        queue.append({'src': src, 'outdir': outdir, 'name': name, 'type': t, 'temp': _job_temp, 'via': pfs_via.get() if t == 'pfs' and not _img_mode else None, 'ppsa': (detected.get('title_id') or '').strip(), 'from_image': _img_mode, 'src_ext': os.path.splitext(src)[1].lower() if _img_mode else None, 'exfat_size': exfat_size if t == 'exfat' else None, 'backend': pfs_backend.get().strip().lower() or 'lazy', 'zlib_backend': pfs_zlib_backend.get().strip().lower() or 'zlib', 'status': 'queued', 'need_out': space_state.get('out_need', 0), 'need_tmp': space_state.get('tmp_need', 0), 'out_drive': space_state.get('out_drive', ''), 'tmp_drive': space_state.get('tmp_drive', '')})
+        queue.append({'src': src, 'outdir': outdir, 'name': name, 'type': t, 'temp': _job_temp, 'via': pfs_via.get() if t == 'pfs' and not _img_mode else None, 'ppsa': (detected.get('title_id') or '').strip(), 'from_image': _img_mode, 'src_ext': os.path.splitext(src)[1].lower() if _img_mode else None, 'exfat_size': exfat_size if t == 'exfat' else None, 'backend': pfs_backend.get().strip().lower() or 'lazy', 'zlib_backend': pfs_zlib_backend.get().strip().lower() or 'zlib', 'status': 'queued', 'need_out': space_state.get('out_need', 0), 'need_tmp': space_state.get('tmp_need', 0), 'out_drive': space_state.get('out_drive', ''), 'tmp_drive': space_state.get('tmp_drive', ''), 'fpkg': _fpkg_opts_job})
         try:
             app._log(f"[QUEUE] captured src={src!s} outdir={outdir!s} temp={_job_temp or '(none)'!s} type={t!s}\n")
         except Exception:
@@ -2672,6 +2794,48 @@ def build_unibuild_tab(parent, app):
             app.after(0, _start_pack, staged, stage_dir, final_path)
 
         threading.Thread(target=_prep_worker, daemon=True).start()
+    def _dispatch_fpkg(job, cb):
+        """Build a PS5 package with core.fpkg in a worker thread."""
+        from core.fpkg import FpkgOptions, build_fpkg
+        o = job.get('fpkg') or {}
+        job['_final_path'] = None
+        job['_inter_path'] = None
+        job['_inter_is_artifact'] = False
+        opts = FpkgOptions(job['src'], job['outdir'], tool_path=o.get('tool'),
+                           compression_level=o.get('level'),
+                           chunk_count=o.get('chunks', 100),
+                           keep_intermediate=o.get('keep', False),
+                           tool_verify=o.get('verify', True),
+                           temp_dir=job.get('temp') or None)
+        _last = {'pct': 0.0}
+
+        def _progress(pct, step):
+            if pct is not None:
+                _last['pct'] = pct
+            _uq_set_progress(_last['pct'], step, None)
+
+        def _log(line):
+            try:
+                app._log(line + '\n')
+            except Exception:
+                pass
+
+        def _work():
+            res = build_fpkg(opts, log=_log, progress=_progress,
+                             cancel_check=lambda: bool(uq_state.get('cancel')))
+
+            def _done():
+                if res.out_path:
+                    job['out_path'] = res.out_path
+                    job['_final_path'] = res.out_path
+                    job['name'] = os.path.basename(res.out_path)
+                if res.messages and res.status is not True:
+                    job['error'] = res.messages[0]
+                cb(res.status if res.status is not None else False)
+            app.after(0, _done)
+        _log('[UNIBUILD] FPKG build: %s -> %s' % (job['src'], job['outdir']))
+        threading.Thread(target=_work, daemon=True).start()
+
     def _uq_dispatch(job, cb):
         t = job['type']
         try:
@@ -2692,6 +2856,9 @@ def build_unibuild_tab(parent, app):
             return
         if t == 'ffpkg':
             _dispatch_ffpkg(job, cb)
+            return
+        if t == 'fpkg':
+            _dispatch_fpkg(job, cb)
             return
         if t == 'pfs':
             try:
@@ -2725,7 +2892,14 @@ def build_unibuild_tab(parent, app):
                     kept.append(ip)
         except Exception:
             pass
-        if job.get('type') in ('exfat', 'ffpkg') and reason != 'cancelled':
+        if job.get('type') == 'fpkg':
+            # The FPKG builder removes its own partial files; a finished
+            # package (only ever renamed into place on success) is kept.
+            fp = job.get('_final_path')
+            if fp and os.path.isfile(fp):
+                kept.append(fp)
+            fp = None
+        elif job.get('type') in ('exfat', 'ffpkg') and reason != 'cancelled':
             # The builders already delete genuinely partial images
             # themselves; anything still here was built to the end.
             fp = job.get('_final_path') or job.get('out_path')
@@ -3041,6 +3215,13 @@ def build_unibuild_tab(parent, app):
         app._unified_status_card_show(True)
         _uq_render()
         _uq_run_next()
+    # Handles for the GUI tests (tests/test_gui_smoke.py): drive the real
+    # page the way a user would, without hunting for widgets.
+    app._uq_test_api = {'pick_type': _pick_type, 'src_var': src_var,
+                        'outdir_var': outdir_var, 'fpkg_tool_var': fpkg_tool_var,
+                        'fpkg_chunks_var': fpkg_chunks_var, 'add': _uq_add,
+                        'build_all': _uq_build_all, 'queue': queue,
+                        'state': uq_state}
     _restyle_tiles()
     _refresh_via()
     _refresh_size_row()
