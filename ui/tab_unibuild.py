@@ -3217,6 +3217,9 @@ def build_unibuild_tab(parent, app):
         _uq_run_next()
     # Handles for the GUI tests (tests/test_gui_smoke.py): drive the real
     # page the way a user would, without hunting for widgets.
+    # Keyboard shortcuts (Ctrl+B / Esc) act on this queue.
+    app._uq_build_all = _uq_build_all
+    app._uq_cancel = _uq_cancel
     app._uq_test_api = {'pick_type': _pick_type, 'src_var': src_var,
                         'outdir_var': outdir_var, 'fpkg_tool_var': fpkg_tool_var,
                         'fpkg_chunks_var': fpkg_chunks_var, 'add': _uq_add,

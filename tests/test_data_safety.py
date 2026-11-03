@@ -185,6 +185,37 @@ class CoverArtFormats(unittest.TestCase):
         self.assertIsNone(self.mod._normalize_cover(bad))
 
 
+class ChildProcesses(unittest.TestCase):
+    def test_kill_child_tree(self):
+        try:
+            import psutil  # noqa: F401
+        except ImportError:
+            self.skipTest('psutil not installed')
+        import subprocess
+        import time
+        mod = load_app()
+        # A child that starts a grandchild, both sleeping.
+        code = ('import subprocess, sys, time; '
+                'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); '
+                'time.sleep(60)')
+        p = subprocess.Popen([sys.executable, '-c', code])
+        try:
+            import psutil
+            deadline = time.time() + 10
+            while time.time() < deadline and not psutil.Process(p.pid).children():
+                time.sleep(0.05)
+            grand = psutil.Process(p.pid).children()
+            self.assertTrue(grand)
+            n = mod.kill_child_processes(timeout=5)
+            self.assertGreaterEqual(n, 2)
+            p.wait(timeout=10)
+            for g in grand:
+                self.assertFalse(g.is_running() and g.status() != psutil.STATUS_ZOMBIE)
+        finally:
+            if p.poll() is None:
+                p.kill()
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()

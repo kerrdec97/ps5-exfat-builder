@@ -2679,6 +2679,35 @@ def backport_fakelib_state(game, fakelib_src):
     return 'same' if found_any else 'other'
 
 
+def kill_child_processes(timeout=5.0, pid=None):
+    """Terminate, then kill, every descendant process of `pid` (default:
+    this process). Returns how many were found. Needs psutil."""
+    try:
+        import psutil
+    except Exception:
+        return 0
+    try:
+        me = psutil.Process(pid or os.getpid())
+        kids = me.children(recursive=True)
+    except Exception:
+        return 0
+    for p in kids:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    try:
+        _gone, alive = psutil.wait_procs(kids, timeout=timeout)
+    except Exception:
+        alive = kids
+    for p in alive:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    return len(kids)
+
+
 def describe_missing_files(src_sizes, img_sizes, limit=15):
     """Human-readable list of source files absent from (or shorter on) the
     image, largest first, for the verification report."""
@@ -3870,6 +3899,18 @@ class ExFATBuilder(_TK_BASE):
                         pass
         except Exception:
             pass
+        # Farewell Edition (technical audit H3): stop every tool this app
+        # started (PowerShell, robocopy, UFS2Tool, mkpfs workers, the
+        # Publishing Tools) BEFORE dismounting. They used to keep running
+        # after the window closed, and the dismount sweep then pulled the
+        # image out from under a writer.
+        try:
+            _n_killed = kill_child_processes()
+            if _n_killed:
+                self._log_to_file('[CLOSE] Stopped %d running tool process(es).\n'
+                                  % _n_killed)
+        except Exception:
+            pass
         cleanup_scripts()
         cleanup_ufs2tool()
         # Unmount any UFS drive (mount-as-drive) still open so the letter
@@ -3901,7 +3942,9 @@ class ExFATBuilder(_TK_BASE):
         """Ctrl+B: build current tab's queue."""
         try:
             tab = self._active_tab.get() if hasattr(self, '_active_tab') else 'build'
-            if tab == 'build' and hasattr(self, '_run_queue'):
+            if tab == 'unibuild' and hasattr(self, '_uq_build_all'):
+                self._uq_build_all()
+            elif tab == 'build' and hasattr(self, '_run_queue'):
                 self._run_queue()
             elif tab == 'ffpkg' and hasattr(self, '_ffpkg_run_queue'):
                 self._ffpkg_run_queue()
@@ -3920,10 +3963,10 @@ class ExFATBuilder(_TK_BASE):
                     return
             # Active tab determines which cancel to call
             tab = self._active_tab.get() if hasattr(self, '_active_tab') else 'build'
-            if tab == 'build' and hasattr(self, '_cancel_build'):
-                self._cancel_build()
-            elif tab == 'ffpkg' and hasattr(self, '_ffpkg_cancel'):
-                self._ffpkg_cancel()
+            # The Build queue confirms before cancelling, so a stray Esc
+            # cannot stop a build on its own.
+            if tab == 'unibuild' and hasattr(self, '_uq_cancel'):
+                self._uq_cancel()
         except Exception:
             pass
 
@@ -25858,6 +25901,20 @@ class ExFATBuilder(_TK_BASE):
             that the new process is alive. If not, it rolls back to
             the `.bak`.
         """
+        # Farewell Edition (technical audit M6): only the packaged .exe can
+        # replace itself (from source this would overwrite python.exe), and
+        # never while a build is writing an image.
+        if not getattr(sys, 'frozen', False):
+            app_info(self, 'Update',
+                     'Automatic update only works in the packaged .exe.\n\n'
+                     'Download v%s from the GitHub releases page.' % version)
+            return
+        if (getattr(self, '_building', False)
+                or getattr(self, '_unified_active', False)
+                or getattr(self, '_ffpkg_building', False)):
+            app_warning(self, 'Update',
+                        'A build is running. Update when it has finished.')
+            return
         from ui.shared.widgets import RoundedBar, IconLabel
         win = tk.Toplevel(self)
         win.title('Updating to v' + version)
@@ -25917,6 +25974,13 @@ class ExFATBuilder(_TK_BASE):
                     win.after(0, status_var.set,
                               'No exe found in release assets.')
                     return
+                if not sha_url:
+                    # Fail closed: without a published checksum the
+                    # download cannot be checked, so it is not installed.
+                    win.after(0, status_var.set,
+                              'This release has no .sha256 checksum — '
+                              'download it manually from GitHub.')
+                    return
 
                 win.after(0, status_var.set, 'Downloading...')
 
@@ -25934,7 +25998,22 @@ class ExFATBuilder(_TK_BASE):
                     win.after(0, status_var.set,
                               'Downloading... %.1f MB (%d%%)' % (mb, pct))
 
-                urllib.request.urlretrieve(exe_url, tmp_path, reporthook)
+                # Stream with a socket timeout (urlretrieve has none and
+                # could hang forever on a stalled connection).
+                _req = urllib.request.Request(
+                    exe_url, headers={'User-Agent': 'ps5-exfat-builder'})
+                with urllib.request.urlopen(_req, timeout=30) as _r, \
+                        open(tmp_path, 'wb') as _out:
+                    _tot = int(_r.headers.get('Content-Length') or 0)
+                    _n = 0
+                    _blk = 1 << 16
+                    while True:
+                        _chunk = _r.read(_blk)
+                        if not _chunk:
+                            break
+                        _out.write(_chunk)
+                        _n += 1
+                        reporthook(_n, _blk, _tot)
 
                 # ── v3.1.0+ : sanity-check the download ────────────
                 try:
@@ -25974,6 +26053,8 @@ class ExFATBuilder(_TK_BASE):
                         # GitHub release .sha256 files typically
                         # contain "<hex>  <filename>" or just "<hex>".
                         expected_sha = sha_text.split()[0].lower()
+                        if not re.fullmatch(r'[0-9a-f]{64}', expected_sha):
+                            raise ValueError('bad checksum file')
                         h = hashlib.sha256()
                         with open(tmp_path, 'rb') as fh:
                             for chunk in iter(lambda: fh.read(1 << 20), b''):
@@ -25989,13 +26070,12 @@ class ExFATBuilder(_TK_BASE):
                     except RuntimeError:
                         raise
                     except Exception as e:
-                        # Verify pass errored (network, parse, etc.)
-                        # — don't block the update on this; just log.
-                        try:
-                            self._log('[UPDATE] SHA256 verify could '
-                                       'not run: ' + str(e) + '\n')
-                        except Exception:
-                            pass
+                        # Fail closed: an unverifiable download is never
+                        # installed.
+                        raise RuntimeError(
+                            'The download could not be verified (%s). '
+                            'Nothing was changed; try again or download '
+                            'manually from GitHub.' % e)
 
                 # ── Build the updater batch ────────────────────────
                 # Key v3.1.0+ changes:
@@ -26130,11 +26210,17 @@ class ExFATBuilder(_TK_BASE):
                 # reuse the old one's files: "Failed to import encodings
                 # module" after an in-app update.
                 _upd_env = updater_environment(os.environ)
-                win.after(1500, lambda: (
-                    subprocess.Popen(['cmd', '/c', bat_path],
-                                     env=_upd_env,
-                                     creationflags=subprocess.CREATE_NO_WINDOW),
-                    self.destroy()))
+                def _launch_and_close():
+                    subprocess.Popen(['cmd', '/c', bat_path], env=_upd_env,
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
+                    # Normal close path (settings saved, tools stopped,
+                    # drives released, log flushed), without the popup.
+                    self._close_popup_shown = True
+                    try:
+                        self._on_close()
+                    except Exception:
+                        self.destroy()
+                win.after(1500, _launch_and_close)
 
             except Exception as e:
                 win.after(0, status_var.set, 'Update failed: ' + str(e))
