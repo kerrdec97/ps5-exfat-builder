@@ -8192,13 +8192,8 @@ class ExFATBuilder(_TK_BASE):
                     self._ffpkg_log('[POST] Source folder KEPT: %s\n' % _why)
                     src = ''
                 if src and os.path.isdir(src):
-                    try:
-                        import shutil as _sh
-                        self._ffpkg_log('[POST] Deleting source: %s\n' % src)
-                        _sh.rmtree(src)
-                        self._ffpkg_log('[POST] Source deleted ✓\n')
-                    except Exception as de:
-                        self._ffpkg_log('[POST] Delete failed: %s\n' % str(de))
+                    self._rmtree_in_background(
+                        src, lambda t: self.after(0, self._ffpkg_log, t))
             # ── Pipeline: convert the .ffpkg to .ffpfsc, delete the .ffpkg to
             # free space, then move to the next build. Skips FTP-of-the-ffpkg.
             if not getattr(self, '_unified_active', False) \
@@ -10421,6 +10416,12 @@ class ExFATBuilder(_TK_BASE):
                 src_folder = self._queue[idx].game_folder
                 def do_verify():
                     ok, msg = self._verify_image(out_path, src_folder)
+                    # Technical audit M4: measure the source here, in the
+                    # worker, not on the Tk thread in _verify_done.
+                    try:
+                        self._queue[idx]._src_size = self._get_folder_size(src_folder)
+                    except Exception:
+                        pass
                     self.after(0, self._verify_done, ok, msg, idx, indices, pos, out_path)
                 threading.Thread(target=do_verify, daemon=True).start()
         else:
@@ -23232,6 +23233,18 @@ class ExFATBuilder(_TK_BASE):
         return (False, True, 'MkPFS verification FAILED (rc='
                 f'{rc!s}){tail!s}. MkPFS checks image structure and payload against the source; this is a genuine failure, not a tool error. Rebuild the image. (OSFMount fallback was intentionally NOT used so a real problem is not hidden by the weaker file-count check.)')
 
+    def _rmtree_in_background(self, path, log):
+        """Delete a source folder off the Tk thread (a game dump can hold
+        tens of thousands of files; doing it inline froze the window)."""
+        def work():
+            try:
+                log('[POST] Deleting source folder: %s\n' % path)
+                shutil.rmtree(path)
+                log('[POST] Source folder deleted \u2713\n')
+            except Exception as de:
+                log('[POST] Failed to delete source: %s\n' % de)
+        threading.Thread(target=work, daemon=True).start()
+
     def _mark_content_verified(self, out_path):
         """Record that `out_path`'s contents were compared against its
         source and matched. Only then may the source be deleted."""
@@ -23617,7 +23630,7 @@ class ExFATBuilder(_TK_BASE):
         # ── Corrupt image detection ──
         if ok and os.path.isfile(out_path):
             size = os.path.getsize(out_path)
-            src_size = self._get_folder_size(self._queue[idx].game_folder)
+            src_size = getattr(self._queue[idx], '_src_size', None) or 0
             if src_size > 10 * 1024**2 and size < src_size * 0.05:
                 ok = False
                 msg = ('Image is suspiciously small (%.1f MB) for a game that '
@@ -23786,14 +23799,8 @@ class ExFATBuilder(_TK_BASE):
                           'image with the source, and that did not happen '
                           'this time (%s).\n' % msg)
             if self._adv_delete_source_var.get() and _verified:
-                src = self._queue[idx].game_folder
-                try:
-                    import shutil as _sh
-                    self._log('[POST] Deleting source folder: %s\n' % src)
-                    _sh.rmtree(src)
-                    self._log('[POST] Source folder deleted \u2713\n')
-                except Exception as de:
-                    self._log('[POST] Failed to delete source: %s\n' % str(de))
+                self._rmtree_in_background(self._queue[idx].game_folder,
+                                           self._log)
         else:
             # Step 41 (v2.5.7): don't block the queue with a modal dialog.
             # When a queue of 4+ games runs overnight and one fails verify,

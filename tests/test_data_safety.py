@@ -357,6 +357,26 @@ class StaleMountSweep(unittest.TestCase):
         self.assertEqual(dismounted, ['I'])
 
 
+class BackgroundDelete(unittest.TestCase):
+    def test_rmtree_runs_off_the_calling_thread(self):
+        import threading
+        import time
+        mod = load_app()
+        d = tempfile.mkdtemp(prefix='rmbg_')
+        _write(d, 'a/b/c.bin', b'x')
+        seen = []
+        mod.ExFATBuilder._rmtree_in_background(
+            object(), d, lambda t: seen.append((threading.get_ident(), t)))
+        deadline = time.time() + 10
+        while os.path.exists(d) and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(os.path.exists(d))
+        while len(seen) < 2 and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(all(tid != threading.get_ident() for tid, _t in seen))
+        self.assertIn('deleted', seen[-1][1])
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()
