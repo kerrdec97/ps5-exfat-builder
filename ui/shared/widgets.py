@@ -239,7 +239,9 @@ class Button(ttk.Button):
             return super().configure()
         restyle = False
         if 'variant' in kw:
-            self._xb_variant = BUTTON_ALIASES.get(kw.pop('variant'), 'secondary')
+            v = kw.pop('variant')
+            v = BUTTON_ALIASES.get(v, v)
+            self._xb_variant = v if v in BUTTON_VARIANTS else 'secondary'
             restyle = True
         for k in ('bg', 'background'):
             if k in kw:
@@ -956,14 +958,27 @@ class Card(Rounded):
 
 
 def _autowrap(label, margin=0):
-    """Re-wrap a label to its width as it resizes."""
+    """Re-wrap a label to its width as it resizes.
+
+    Guarded against feedback loops: a wraplength change can resize the
+    label, which fires <Configure> again — only widths that differ by more
+    than a few pixels re-wrap, and never re-entrantly."""
+    state = {'busy': False, 'w': 0}
+
     def _on(e):
+        if state['busy'] or e.width <= 1:
+            return
         w = max(px(80), e.width - margin)
+        if abs(w - state['w']) <= px(4):
+            return
+        state['busy'] = True
         try:
-            if int(label.cget('wraplength') or 0) != w:
-                label.configure(wraplength=w)
+            state['w'] = w
+            label.configure(wraplength=w)
         except Exception:
             pass
+        finally:
+            label.after_idle(lambda: state.__setitem__('busy', False))
     label.bind('<Configure>', _on, add='+')
     return label
 
