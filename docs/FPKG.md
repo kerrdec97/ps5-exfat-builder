@@ -79,6 +79,60 @@ package. The size class is not changed for updates.
 *Extract a package…* runs `img_extract` into an **empty** folder (a folder
 with files in it is refused). Both write their output to the Output Log.
 
+## Add-on (DLC) packages
+
+**What the Publishing Tools interface offers.** The strings of
+`prospero-pub-cmd.exe` (see `docs/farewell/FPKG_RESEARCH.md` §1.4 and §1.11)
+list three volume types: `prospero_app` (game), `prospero_ac` (add-on with
+content) and `prospero_al` (entitlement-only add-on). They also list an
+`entitlement_key` that the GP5 `<package>` element carries for add-ons. The
+reference FPKG builder never built add-ons through these tools; it used a
+different library. So this path has **not been run against real
+Publishing Tools or installed on a console**.
+
+**What this app does.** *Build an add-on (DLC)…* in the FPKG panel builds a
+`prospero_ac` package:
+* input: the add-on's content folder, which must contain the add-on's own
+  `sce_sys/param.json` (as a dumped add-on does), and its 32-hex-character
+  entitlement key;
+* both can be filled from the selected game's `dlc_emu.ini`: `[PSAC]` entries
+  whose `mount_point` folder exists locally with a `param.json` are offered,
+  and the others are listed with the reason they can't be built;
+* the project uses volume type `prospero_ac`, the entitlement key, the
+  add-on's Content ID and no PlayGo chunk table;
+* packing, progress, `[Error]` handling, the header/plaintext-marker check,
+  never-overwrite naming and optional `img_verify` work as for games.
+
+**Precise limitations.**
+* `prospero_al` (entitlement-only) is **refused**. It has no file system,
+  and the PS5 debug installer refuses such packages, so a "successful" build
+  would be useless.
+* An add-on **without** `sce_sys/param.json` is refused. The fields the
+  Publishing Tools need in an add-on's `param.json` are not documented, so
+  the app does not make one up. An unlock-only add-on is possible with a
+  folder that holds just a real `param.json`.
+* The entitlement key is never guessed or extracted: you enter it, or it
+  comes from `dlc_emu.ini`. (Reading it from `license.info` needs a library
+  this app doesn't use.)
+* Add-ons are built one at a time from the dialog, not through the queue.
+
+## Coverage summary
+
+| Area | Status | Tested how |
+|---|---|---|
+| Compression (`--compression_level`, presets) | Done | argv tests; stand-in tool |
+| PFS | Done by the Publishing Tools (`img_create`); the app marks placeholder payloads `pfs_compression="disable"` and checks the outer superblock (mode 13, plaintext marker) | header tests |
+| GP5 project (order, exclusions, empty dirs, `param.json` normalisation) | Done | unit tests; stand-in tool parses it |
+| PlayGo (every chunk initial and in every scenario, placeholders, languages) | Done | unit tests |
+| Create (`img_create`, progress, cancel, errors, naming) | Done | end-to-end against the stand-in on Linux and on Windows (compiled stand-in) |
+| Verify (header checks + `img_verify`) | Done | stand-in tool |
+| Extract (`img_extract`, empty folder only) | Done | stand-in tool |
+| Update builds (`--ref_pkg_path`, `.remastered.pkg`) | Done | stand-in tool |
+| Add-on `prospero_ac` | Done (experimental) | GP5 tests; end-to-end against the stand-in; `dlc_emu.ini` mapping |
+| Add-on `prospero_al` | Refused (installer rejects it) | test |
+| Non-ASCII folder paths | Done on Windows (junctions) | Windows CI |
+| Real Publishing Tools / console install | **Not tested** | needs the owner's tools and a PS5 |
+
 ## Limitations
 
 * **Not yet tested with real Publishing Tools or on a console.** The
@@ -91,5 +145,8 @@ with files in it is refused). Both write their output to the Output Log.
   Publishing Tools' rule). A non-ASCII path **to** the game or output
   folder is handled on Windows with a temporary NTFS junction under an ASCII
   temp folder, removed afterwards.
-* No DLC (`prospero_ac`) packages, no PS4→PS5 SELF repair (PS4-magic
-  executables are reported), no `.ucp` digest repair, no DDS→PNG recovery.
+* No PS4→PS5 SELF repair (PS4-magic executables are reported), no `.ucp`
+  digest repair, no DDS→PNG recovery, no source-layout PlayGo (the dump's
+  own chunk table is not reused).
+* Building straight from an `.exfat` / `.ffpkg` image is not offered; extract
+  it first (Extract tab).

@@ -31,6 +31,19 @@ def main(argv):
     if cmd == 'img_create':
         gp5, out = argv[-2], argv[-1]
         root = ET.parse(gp5).getroot()
+        vt = root.findtext('volume/volume_type')
+        pkg = root.find('volume/package')
+        if vt == 'prospero_ac':
+            if not pkg.get('entitlement_key') or root.find('volume/chunk_info') is not None:
+                print('[Error] Format of the GP5 file is not valid (add-on volume)')
+                return 1
+        elif vt == 'prospero_app':
+            if root.find('volume/chunk_info') is None:
+                print('[Error] Format of the GP5 file is not valid (chunk_info)')
+                return 1
+        else:
+            print('[Error] unsupported volume type %s' % vt)
+            return 1
         missing = [f.get('src_path') for f in root.iter('file')
                    if not os.path.isfile(f.get('src_path'))]
         if missing:

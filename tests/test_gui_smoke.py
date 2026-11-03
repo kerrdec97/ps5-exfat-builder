@@ -7,6 +7,7 @@ No OSFMount, robocopy, PS5 or network access is needed for it to pass.
 """
 import os
 import time
+import tkinter as tk
 import unittest
 
 from tests._support import load_app, temp_settings_file
@@ -126,6 +127,14 @@ class GuiSmoke(unittest.TestCase):
                 self.assertFalse(api['state'].get('running'))
                 self.assertEqual(job['status'], 'done', job.get('error'))
                 self.assertTrue(os.path.isfile(job['out_path']))
+                # The add-on dialog opens without errors.
+                app._uq_fpkg_addon_dialog()
+                app.update()
+                tops = [w for w in app.winfo_children()
+                        if isinstance(w, tk.Toplevel)
+                        and 'add-on' in w.title().lower()]
+                self.assertEqual(len(tops), 1)
+                tops[0].destroy()
                 self.assertEqual(errors, [])
             finally:
                 app.destroy()

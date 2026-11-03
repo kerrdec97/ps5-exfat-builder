@@ -27,6 +27,14 @@ consistent look. Every existing feature, setting and language is kept.
   Publishing Tools install, which consoles will not install, is reported as a
   failure. Packages are never overwritten; optional `img_verify` afterwards.
 - Cancel stops the tool's whole process tree and removes the partial file.
+- Update builds against a base package, and *Verify a package…* /
+  *Extract a package…* for existing packages.
+- **Add-on (DLC) packages** (`prospero_ac`, experimental) from a content
+  folder with its own `param.json` and entitlement key, optionally filled
+  from the game's `dlc_emu.ini`. Entitlement-only add-ons (`prospero_al`)
+  are refused because the debug installer rejects them.
+- Non-ASCII game and output folder paths work through temporary ASCII
+  junctions on Windows.
 
 ### Fixed — data safety (technical and issue audits, `docs/farewell/`)
 - **PFS:** mkpfs exit code 1 means it wrote the image and then its check

@@ -71,7 +71,10 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
   keep project files. Queue job type `fpkg`.
 * **Licensing:** nothing copied from the reference FPKG builder (no licence,
   ships Sony binaries); no Sony tools bundled, linked or downloaded.
-* **Not done:** building from `.exfat`/`.ffpkg` directly, DLC (`prospero_ac`), SELF/UCP repair, DDS→PNG. Real-tool and
+* **Add-ons:** `prospero_ac` built from a content folder with its own
+  `param.json` + entitlement key (dialog, `dlc_emu.ini` mapping);
+  `prospero_al` refused (installer rejects it). See `docs/FPKG.md`.
+* **Not done:** building from `.exfat`/`.ffpkg` directly, SELF/UCP repair, DDS→PNG. Real-tool and
   console testing. (Update builds and verify/extract of an existing `.pkg`
   are in the GUI.)
 

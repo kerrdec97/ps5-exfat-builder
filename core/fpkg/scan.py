@@ -96,13 +96,14 @@ def _path_problem(rel):
     return None
 
 
-def scan(app_dir, cancel_check=None):
+def scan(app_dir, cancel_check=None, require_eboot=True):
     """Scan `app_dir`. Raises ScanError for symlinks/junctions and when
-    the folder is not a PS5 app; path-rule problems are collected in
-    `bad_paths` so they can all be shown at once."""
+    the folder is not a PS5 app (`require_eboot`; add-ons have no
+    eboot.bin); path-rule problems are collected in `bad_paths` so they
+    can all be shown at once."""
     if not os.path.isdir(app_dir):
         raise ScanError('Folder not found: %s' % app_dir)
-    if not os.path.isfile(os.path.join(app_dir, 'eboot.bin')):
+    if require_eboot and not os.path.isfile(os.path.join(app_dir, 'eboot.bin')):
         raise ScanError('eboot.bin was not found in the folder root; this is '
                         'not a PS5 app folder.')
     res = ScanResult()

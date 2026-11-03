@@ -730,6 +730,101 @@ def build_unibuild_tab(parent, app):
             command=lambda: _fpkg_tool_action('verify'), surface=BG2).pack(side='left')
     XButton(_fpkg_tools_row, text='Extract a package…', icon='extract', size='sm',
             command=lambda: _fpkg_tool_action('extract'), surface=BG2).pack(side='left', padx=(px(8), 0))
+
+    def _fpkg_addon_dialog():
+        """Build an add-on (DLC) package: content folder + entitlement key,
+        optionally filled from the selected game's dlc_emu.ini."""
+        from core.fpkg import dlc as _dlc
+        outdir = outdir_var.get().strip()
+        if not outdir or not os.path.isdir(outdir):
+            app_error(app, 'Add-on package', 'Pick an output folder first.')
+            return
+        dlg = tk.Toplevel(app)
+        dlg.title('Build an add-on (DLC) package')
+        dlg.configure(bg=BG2)
+        dlg.transient(app)
+        body = tk.Frame(dlg, bg=BG2)
+        body.pack(fill='both', expand=True, padx=px(24), pady=px(20))
+        tk.Label(body, text='Add-on (DLC) package', font=FONTS['title'], bg=BG2,
+                 fg=COLORS['fg_0'], anchor='w').pack(fill='x')
+        _intro = tk.Label(body, text=(
+            'Builds a prospero_ac add-on with your Publishing Tools. The folder '
+            'must hold the add-on\'s own sce_sys/param.json. Entitlement-only '
+            'add-ons are not built (the debug installer refuses them). '
+            'Experimental: not yet tested with real tools or on a console.'),
+            font=FONTS['caption'], bg=BG2, fg=COLORS['fg_3'], anchor='w',
+            justify='left', wraplength=px(520))
+        _intro.pack(fill='x', pady=(px(4), px(8)))
+        folder_var = tk.StringVar()
+        key_var = tk.StringVar()
+        game = src_var.get().strip()
+        entries = _dlc.addons_from_dlc_emu(game) if os.path.isdir(game) else []
+        if entries:
+            labels = ['%s  —  %s' % (e['content_id'] or '?', 'ready' if e['supported']
+                                     else 'not buildable: ' + e['reason'])
+                      for e in entries]
+            pick_var = tk.StringVar()
+            tk.Label(body, text="From this game's dlc_emu.ini", font=FONTS['body'],
+                     bg=BG2, fg=COLORS['fg_2'], anchor='w').pack(fill='x', pady=(px(8), px(4)))
+            dd = Dropdown(body, textvariable=pick_var, values=labels, surface=BG2, width=60)
+            dd.pack(fill='x')
+
+            def _picked(_e=None):
+                try:
+                    e = entries[labels.index(pick_var.get())]
+                except ValueError:
+                    return
+                if e['payload_dir']:
+                    folder_var.set(e['payload_dir'])
+                if e['entitlement_key']:
+                    key_var.set(e['entitlement_key'])
+            dd.bind('<<ComboboxSelected>>', _picked)
+
+        def _browse_folder():
+            p = filedialog.askdirectory(title='Add-on content folder', parent=dlg)
+            if p:
+                folder_var.set(os.path.normpath(p))
+        field_block(body, 'Add-on content folder', var=folder_var,
+                    on_browse=_browse_folder, hint='contains sce_sys/param.json')
+        kb = field_block(body, 'Entitlement key', var=key_var,
+                         hint='32 hexadecimal characters')
+        btns = tk.Frame(body, bg=BG2)
+        btns.pack(fill='x', pady=(px(16), 0))
+
+        def _go():
+            opts = _dlc.AddonOptions(folder_var.get().strip(), outdir,
+                                     tool_path=fpkg_tool_var.get().strip(),
+                                     entitlement_key=key_var.get().strip(),
+                                     compression_level=dict(_FPKG_LEVELS).get(fpkg_level_var.get()),
+                                     tool_verify=bool(fpkg_verify_var.get()),
+                                     temp_dir=tempdir_var.get().strip() or None)
+            dlg.destroy()
+
+            def _log(line):
+                try:
+                    app._log(line + '\n')
+                except Exception:
+                    pass
+
+            def _work():
+                r = _dlc.build_addon(opts, log=_log)
+
+                def _show():
+                    if r.status is True:
+                        app_info(app, 'Add-on package', 'Built:\n%s' % r.out_path)
+                    elif r.status == 'warn':
+                        app_warning(app, 'Add-on package', '\n'.join(r.messages))
+                    else:
+                        app_error(app, 'Add-on package', '\n'.join(r.messages) or 'Failed.')
+                app.after(0, _show)
+            threading.Thread(target=_work, daemon=True).start()
+        XButton(btns, text='Build add-on', icon='box', variant='primary',
+                command=_go, surface=BG2).pack(side='right')
+        XButton(btns, text='Cancel', command=dlg.destroy,
+                surface=BG2).pack(side='right', padx=(0, px(8)))
+    app._uq_fpkg_addon_dialog = _fpkg_addon_dialog
+    XButton(_fpkg_tools_row, text='Build an add-on (DLC)…', icon='box', size='sm',
+            command=_fpkg_addon_dialog, surface=BG2).pack(side='left', padx=(px(8), 0))
     _fpkg_note = tk.Label(fpkg_frame, text=(
         'The package is made by your Publishing Tools; this app writes the '
         'project and checks the result. A stock Publishing Tools install '

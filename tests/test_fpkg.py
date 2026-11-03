@@ -19,7 +19,7 @@ from tests._support import ROOT
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from core.fpkg import aliases, backend, gp5, param as P, playgo, runner, scan as S, verify  # noqa: E402
+from core.fpkg import aliases, backend, dlc, gp5, param as P, playgo, runner, scan as S, verify  # noqa: E402
 
 FAKE = os.path.join(ROOT, 'tests', 'fakes', 'fake_pubcmd.py')
 CID = 'UP0000-PPSA01234_00-ABCDEFGHIJKLMNOP'
@@ -197,6 +197,72 @@ class PlayGoAndGp5Tests(unittest.TestCase):
         self.assertEqual(fl[1].get('dst_path'), 'a&b "q".bin')
         self.assertEqual(fl[1].get('pfs_compression'), 'disable')
         self.assertEqual(root.find('files/empty_dir').get('dst_path'), 'addcont0')
+
+
+ADDON_CID = 'UP0000-PPSA01234_00-DLCPACK000000001'
+KEY = '0123456789abcdef0123456789ABCDEF'
+
+
+def make_addon(base, name='addcont0', with_param=True):
+    d = os.path.join(base, name)
+    os.makedirs(os.path.join(d, 'sce_sys'), exist_ok=True)
+    if with_param:
+        with open(os.path.join(d, 'sce_sys', 'param.json'), 'w') as f:
+            json.dump({'contentId': ADDON_CID, 'contentVersion': '01.000.000'}, f)
+    with open(os.path.join(d, 'data.bin'), 'wb') as f:
+        f.write(b'dlc' * 100)
+    return d
+
+
+class AddonProjectTests(unittest.TestCase):
+    def test_ac_gp5_has_key_and_no_chunk_table(self):
+        text = gp5.build_xml(ADDON_CID, None, [('data.bin', 'C:\\x\\data.bin', 0, None)],
+                             volume_type='prospero_ac', entitlement_key=KEY.lower())
+        root = ET.fromstring(text.encode('utf-8'))
+        self.assertEqual(root.find('volume/volume_type').text, 'prospero_ac')
+        pkg = root.find('volume/package')
+        self.assertEqual(pkg.get('content_id'), ADDON_CID)
+        self.assertEqual(pkg.get('entitlement_key'), KEY.lower())
+        self.assertIsNone(root.find('volume/chunk_info'))
+
+    def test_addon_volume_requires_key(self):
+        with self.assertRaises(ValueError):
+            gp5.build_xml(ADDON_CID, None, [], volume_type='prospero_ac')
+
+    def test_preflight_rules(self):
+        tmp = tempfile.mkdtemp(prefix='addon_pre_')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ok_dir = make_addon(tmp)
+        no_param = make_addon(tmp, 'addcont1', with_param=False)
+        out = os.path.join(tmp, 'out')
+        cases = [
+            (dlc.AddonOptions(ok_dir, out, volume_type=dlc.VOLUME_AL,
+                              entitlement_key=KEY), 'Entitlement-only'),
+            (dlc.AddonOptions(ok_dir, out, entitlement_key='xyz'), '32 hexadecimal'),
+            (dlc.AddonOptions(no_param, out, entitlement_key=KEY,
+                              tool_path=os.path.join(tmp, 'nope')), 'Publishing Tools'),
+        ]
+        for opts, needle in cases:
+            r = dlc.build_addon(opts)
+            self.assertIs(r.status, False)
+            self.assertIn(needle, ' '.join(r.messages))
+
+    def test_dlc_emu_entries(self):
+        tmp = tempfile.mkdtemp(prefix='addon_ini_')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        make_addon(tmp, 'addcont0')
+        with open(os.path.join(tmp, 'dlc_emu.ini'), 'w') as f:
+            f.write('[PSAC]\ncontent_id=%s\nmount_point=/app0/addcont0\n'
+                    'entitlement_key=%s\n\n[PSAL]\ncontent_id=%s\n\n'
+                    '[PSAC]\ncontent_id=%s\nmount_point=/app0/addcont9\n'
+                    % (ADDON_CID, KEY, ADDON_CID[:-1] + '2', ADDON_CID[:-1] + '3'))
+        entries = dlc.addons_from_dlc_emu(tmp)
+        self.assertEqual([e['kind'] for e in entries], ['PSAC', 'PSAL', 'PSAC'])
+        self.assertTrue(entries[0]['supported'])
+        self.assertEqual(entries[0]['entitlement_key'], KEY)
+        self.assertFalse(entries[1]['supported'])
+        self.assertIn('debug installer', entries[1]['reason'])
+        self.assertFalse(entries[2]['supported'])
 
 
 class RunnerTests(unittest.TestCase):
@@ -473,6 +539,25 @@ class EndToEnd(unittest.TestCase):
         else:
             self.assertIs(r.status, False)
             self.assertIn('ASCII', ' '.join(r.messages))
+
+    def test_addon_package_build(self):
+        addon = make_addon(self.tmp)
+        logs = []
+        r = dlc.build_addon(dlc.AddonOptions(addon, self.out, tool_path=self.exe,
+                                             entitlement_key=KEY), log=logs.append)
+        self.assertIs(r.status, True, '\n'.join(logs + r.messages))
+        self.assertEqual(os.path.basename(r.out_path), ADDON_CID + '-A0100-V0100.pkg')
+        self.assertTrue(verify.check_header(r.out_path).ok)
+        self.assertFalse([n for n in os.listdir(self.out) if n.endswith('.gp5')])
+        os.environ['FAKE_PUBCMD_MODE'] = 'stock'
+        r2 = dlc.build_addon(dlc.AddonOptions(addon, self.out, tool_path=self.exe,
+                                              entitlement_key=KEY))
+        self.assertIs(r2.status, False)
+        no_param = make_addon(self.tmp, 'addcont1', with_param=False)
+        r3 = dlc.build_addon(dlc.AddonOptions(no_param, self.out, tool_path=self.exe,
+                                              entitlement_key=KEY))
+        self.assertIs(r3.status, False)
+        self.assertIn('param.json', ' '.join(r3.messages))
 
     def test_preflight_failures(self):
         os.remove(os.path.join(self.dump, 'sce_sys', 'keystone'))

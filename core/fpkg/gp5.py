@@ -7,7 +7,7 @@ DEFAULT_PASSCODE = '0' * 32
 
 
 def build_xml(content_id, layout, files, empty_dirs=(), passcode=DEFAULT_PASSCODE,
-              volume_type='prospero_app'):
+              volume_type='prospero_app', entitlement_key=None):
     """Return the GP5 document as text (CRLF line endings).
 
     files: iterable of (dst_rel, abs_src, chunk, extra_attrs or None),
@@ -17,8 +17,16 @@ def build_xml(content_id, layout, files, empty_dirs=(), passcode=DEFAULT_PASSCOD
     root = ET.Element('psproject', {'fmt': 'gp5'})
     vol = ET.SubElement(root, 'volume')
     ET.SubElement(vol, 'volume_type').text = volume_type
-    ET.SubElement(vol, 'package', {'passcode': passcode,
-                                   'content_id': content_id})
+    pkg_attrs = {'passcode': passcode, 'content_id': content_id}
+    if volume_type in ('prospero_ac', 'prospero_al'):
+        # Add-on volumes carry the add-on's entitlement key and no PlayGo
+        # chunk table (an AL volume carries the key only).
+        if not entitlement_key:
+            raise ValueError('add-on volumes need an entitlement key')
+        if volume_type == 'prospero_al':
+            pkg_attrs = {'passcode': passcode}
+        pkg_attrs['entitlement_key'] = entitlement_key
+    ET.SubElement(vol, 'package', pkg_attrs)
     if volume_type == 'prospero_app':
         n = layout.chunk_count
         ci = ET.SubElement(vol, 'chunk_info', {
