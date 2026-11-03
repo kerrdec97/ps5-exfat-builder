@@ -145,6 +145,47 @@ class MkpfsExitCodes(unittest.TestCase):
                 '%s accepts mkpfs exit code 1 as success' % name)
 
 
+class RebuildKeepsPreviousImage(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_app()
+        self.d = tempfile.mkdtemp(prefix='prev_')
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.out = os.path.join(self.d, 'Game.exfat')
+
+    def _read(self, p):
+        with open(p, 'rb') as f:
+            return f.read()
+
+    def test_nothing_to_set_aside(self):
+        self.assertIsNone(self.mod.set_aside_previous_image(self.out))
+        self.assertEqual(self.mod.settle_previous_image(self.out, None, False), '')
+
+    def test_success_drops_previous(self):
+        _write(self.d, 'Game.exfat', b'old')
+        aside = self.mod.set_aside_previous_image(self.out)
+        self.assertFalse(os.path.exists(self.out))
+        _write(self.d, 'Game.exfat', b'new')
+        self.mod.settle_previous_image(self.out, aside, success=True)
+        self.assertEqual(self._read(self.out), b'new')
+        self.assertFalse(os.path.exists(aside))
+
+    def test_failure_restores_previous_and_keeps_failed(self):
+        _write(self.d, 'Game.exfat', b'old good')
+        aside = self.mod.set_aside_previous_image(self.out)
+        _write(self.d, 'Game.exfat', b'half new')
+        msg = self.mod.settle_previous_image(self.out, aside, success=False)
+        self.assertIn('restored', msg)
+        self.assertEqual(self._read(self.out), b'old good')
+        self.assertEqual(self._read(os.path.join(self.d, 'Game.failed.exfat')),
+                         b'half new')
+
+    def test_failure_after_script_deleted_new_image(self):
+        _write(self.d, 'Game.exfat', b'old good')
+        aside = self.mod.set_aside_previous_image(self.out)
+        self.mod.settle_previous_image(self.out, aside, success=False)
+        self.assertEqual(self._read(self.out), b'old good')
+
+
 class QueueSummary(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()

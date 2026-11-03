@@ -2708,6 +2708,47 @@ def kill_child_processes(timeout=5.0, pid=None):
     return len(kids)
 
 
+def set_aside_previous_image(out_path):
+    """Rename an existing image to '<name>.previous<ext>' before it is
+    rebuilt. Returns the new path, or None when there was nothing."""
+    if not out_path or not os.path.isfile(out_path):
+        return None
+    stem, ext = os.path.splitext(out_path)
+    aside = stem + '.previous' + ext
+    n = 2
+    while os.path.exists(aside):
+        aside = '%s.previous%d%s' % (stem, n, ext)
+        n += 1
+    os.replace(out_path, aside)
+    return aside
+
+
+def settle_previous_image(out_path, aside, success):
+    """After a rebuild: drop the set-aside image on success; on failure
+    put it back, keeping a failed new image as '<name>.failed<ext>'.
+    Returns a log message ('' when there was nothing to do)."""
+    if not aside or not os.path.isfile(aside):
+        return ''
+    if success:
+        try:
+            os.remove(aside)
+            return 'Removed the previous image (the new build succeeded).'
+        except OSError as e:
+            return 'The previous image is still at %s (%s).' % (aside, e)
+    try:
+        if os.path.isfile(out_path):
+            stem, ext = os.path.splitext(out_path)
+            failed = stem + '.failed' + ext
+            if os.path.exists(failed):
+                os.remove(failed)
+            os.replace(out_path, failed)
+        os.replace(aside, out_path)
+        return ('The build failed; the previous image was restored to %s.'
+                % out_path)
+    except OSError as e:
+        return 'The previous image is kept at %s (%s).' % (aside, e)
+
+
 def describe_missing_files(src_sizes, img_sizes, limit=15):
     """Human-readable list of source files absent from (or shorter on) the
     image, largest first, for the verification report."""
@@ -10278,6 +10319,12 @@ class ExFATBuilder(_TK_BASE):
                 self._copy_done = False
                 self._flush_active = False
                 return self._item_done(1, idx, indices, pos, out_path)
+            _msg = settle_previous_image(out_path,
+                                         getattr(self._queue[idx], '_previous_image', None),
+                                         success=True)
+            self._queue[idx]._previous_image = None
+            if _msg:
+                self._log('[POST] %s\n' % _msg)
             # v3.6.2: copy/finalize is fully done — tear down the drive
             # poll and the finalize bridge so neither can re-emit a stale
             # frame, then show a clear completion status.
@@ -10331,6 +10378,12 @@ class ExFATBuilder(_TK_BASE):
                 self._stop_drive_poll()
             except Exception:
                 pass
+            _msg = settle_previous_image(out_path,
+                                         getattr(self._queue[idx], '_previous_image', None),
+                                         success=False)
+            self._queue[idx]._previous_image = None
+            if _msg:
+                self._log('[POST] %s\n' % _msg)
             self._update_queue_dot(idx, 'failed')
             self._set_progress(self._current_pct, 'Failed', '')
             self._set_status('Build failed (exit code ' + str(returncode) + ')', DANGER)
@@ -10752,6 +10805,19 @@ class ExFATBuilder(_TK_BASE):
                       '%s GB\n' % img_override)
         else:
             img_override = self._adv_img_size_var.get().strip()
+        # Farewell Edition (technical audit M2): the build script deletes an
+        # existing image before it starts, so a failed rebuild used to lose
+        # both. Move the old image aside; it is removed only when the new
+        # build has succeeded and restored if it fails.
+        try:
+            item._previous_image = set_aside_previous_image(out_path)
+            if item._previous_image:
+                self._log('[PRE] Existing image moved aside until the new '
+                          'build succeeds: %s\n' % item._previous_image)
+        except OSError as _pe:
+            item._previous_image = None
+            self._log('[PRE] Could not move the existing image aside (%s); '
+                      'it will be replaced.\n' % _pe)
         for _w1p in (self._bat_path, out_path, item.game_folder, osf_path):
             if _w1p and '"' in _w1p:
                 raise RuntimeError(
