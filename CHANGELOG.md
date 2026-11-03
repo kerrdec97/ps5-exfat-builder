@@ -90,6 +90,30 @@ consistent look. Every existing feature, setting and language is kept.
   is refused; an already backported folder (same fakelib set) is refused
   because its originals would be patched files; another tool's fakelib folder
   is backed up and allowed; free space for backups is checked first.
+- **Originals are never lost.** The ZIP folders are chosen and checked before
+  any file changes (the originals ZIP is required). Before, cancelling the
+  folder prompt after patching, a ZIP error, or **Backport All** with only a
+  backported-ZIP folder left the originals in a temp folder that Backport All
+  then deleted. The temp copy is removed only after the originals ZIP was
+  written and read back; otherwise the log says where the originals are.
+- ZIPs are written as `.part` and renamed, and never overwrite an earlier ZIP
+  (`… original files (2).zip`). A ZIP error, or files that failed to decrypt
+  or sign, is reported as a failure instead of "Auto backport complete".
+- Another tool's fakelib files that get replaced are now really in the
+  originals ZIP (they were left out).
+- Refused before anything changes: a ZIP folder inside the game folder; a ZIP
+  or temp path longer than Windows' 259 characters; a fakelib set with
+  libraries in sub-folders (e.g. the folder above the set), empty or tiny
+  placeholder files, non-ELF/SELF files, or a set inside the game folder.
+- A folder this app backported before is recognised from the file hashes it
+  now records after each run (profile manifest next to the originals ZIPs);
+  files that differ from the recorded originals ask for confirmation.
+- **Backport All** runs the same checks per game (Target SDK ≤ game SDK,
+  already backported, fakelib, ZIP folders) and skips a game instead of
+  guessing; it also backs up another tool's fakelib files and writes the
+  profile manifest.
+- Restoring an originals ZIP refuses entries that would be written outside
+  the game folder, and a partial restore is reported as failed.
 
 ### Security & dependencies
 - PyInstaller 6.22.3 (hardening for elevated one-file apps), Pillow 13.0.0
@@ -231,9 +255,11 @@ consistent look. Every existing feature, setting and language is kept.
   console; its tests use a stand-in tool. Source must be a dump folder with
   ASCII paths; no DLC packages, SELF repair, `.ucp` repair or DDS→PNG
   recovery yet. Update builds exist in the engine but not in the Build tab.
-- The PS5 Backport GUI's engine (`right.sprx` replacement, confirmed-fix
-  families, import-table audit) is not merged: its source was not available
-  to this build.
+- The PS5 Backport GUI's engine (import-table audit, confirmed-fix
+  families, audio gate, AMPR/PlayGo variants, `right.sprx` replacement) is
+  not merged. Its checkout has no project licence and ships Sony-, game- and
+  firmware-derived data of unknown origin, so none of it is copied; the
+  checks above are independent equivalents. See `docs/farewell/STATUS.md`.
 - Not tested on real hardware for this release: image builds with OSFMount,
   robocopy on a real game, Windows 10/11 locales, and a PS5. The Windows CI
   runner has no OSFMount and no console. See the README.

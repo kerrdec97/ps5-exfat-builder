@@ -66,6 +66,7 @@ RELEASE = {
         "Stuck OSFMount drivers now time out with a clear message instead of hanging the queue",
         "Sidebar and page titles follow your interface language",
         "Clear explanations for full images and a missing .NET 8 runtime",
+        "Backports: the originals ZIP folder is checked before any file changes and earlier backups are never overwritten",
         "Safer in-app updater and a reproducible, verified release build",
         "Refreshed graphite theme with a single accent colour and visible keyboard focus",
     ],

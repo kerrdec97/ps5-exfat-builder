@@ -10,7 +10,7 @@ from **Next steps** below rather than re-auditing.
 
 | Check | Where | Result |
 |---|---|---|
-| Unit + GUI tests (Linux, Xvfb) | `EXFAT_GUI_SMOKE=1 python -m unittest discover -s tests` | 118 tests, OK (3 Windows-only skipped) |
+| Unit + GUI tests (Linux, Xvfb) | `EXFAT_GUI_SMOKE=1 python -m unittest discover -s tests` | 165 tests, OK (6 Windows-only skipped) |
 | Windows build + tests | GitHub Actions `Windows build and test`, windows-2025 | `build.bat` exe build, unit tests, GUI tests, 25 pages × en/de/ja with 0 errors, exe launch (alive after 40 s); artifacts: exe + `.sha256`, screenshots |
 | Real UFS2Tool on Windows | `tests/test_ufs2tool_windows.py` in CI | `.ffpkg` built into `.part`, renamed, UFS2 magic verified; ran on .NET 10.0.14 via roll-forward |
 | Embedded PowerShell script | `tests/test_scripts_windows.py` in CI | parses with PowerShell's parser |
@@ -86,17 +86,75 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
   private, fresh engine folder; Target SDK ≤ game SDK; already-backported
   detection; other tools' fakelib backed up; free-space check; OS metadata
   files never treated as executables.
-* **Blocked:** the Backport GUI source lives on the owner's PC (`D:\`), not on
-  GitHub. Remote Control showed no shared folders during this session
-  (`list_computer_folders` returned nothing), so its engine (import-table
-  audit FW 4.03–13.60, confirmed fix families, audio check, ZIP hash
-  verification, `right.sprx` replacement, PSSR 2 test) could not be merged.
+* **Done after the read-only D:\ inspection** (`core/backport_safety.py`,
+  original code; tests `tests/test_backport_safety.py` and
+  `BackportRunSafety` in `tests/test_backport_engine.py`):
+  * originals ZIP folder required and checked **before** anything changes;
+    temp originals deleted only after the ZIP was written and read back
+    (Backport All used to delete them even when no originals ZIP was
+    written; the single run asked for the folder only after patching, from
+    the worker thread);
+  * ZIPs written as `.part` + rename, never overwriting an earlier ZIP; ZIP
+    errors and decrypt/sign failures reported as failures;
+  * replaced fakelib files of another tool now really in the originals ZIP;
+  * ZIP folder inside the game, ZIP/temp paths over 259 characters, and
+    unusable fakelib sets (sub-folders, < 1 KiB, non-ELF/SELF, inside the
+    game) refused;
+  * already-backported detection from patched-file hashes recorded in the
+    profile manifest (older manifests: "differs from recorded originals"
+    asks, Backport All skips);
+  * Backport All runs the same per-game checks; restore refuses zip-slip
+    entries and reports partial restores.
+
+### Backport GUI audit findings compared with this repo
+
+The Backport GUI checkout (`D:\fixing input\unity_input_gui`, branch
+`snapshot/20261021-f1-pro-v45`, HEAD `3cf4ffac`, seven unstaged changes) was
+inspected read-only on the owner's PC and left unchanged. Nothing from it was
+copied. This repo's Backport engine is the embedded `Backport.py` pipeline
+(decrypt → SDK pair 1–10 → fake-sign), not the Backport GUI engine, so most
+findings concern code that does not exist here.
+
+| Audit finding (Backport GUI) | In this repo? | Result |
+|---|---|---|
+| Import-table checks FW 4.03–13.60 skip decode errors, merge gaps, trust seeded slots | No import-table audit here | Not ported: the firmware import tables have undocumented provenance. A clean-room version needs tables built from a documented source |
+| V2 registry / report-only patterns / firmware boundaries / planner families disagree; old AGENTS.md count | None of these exist here (no `AGENTS.md`, no planner) | Nothing consumed here; nothing to reconcile |
+| Audio gate checks only `sceAudioOut2Set3DLatency`; live parser keeps last 600 chars | No such gate or truncation (`ui/audio_fix_scan.py` checked) | Not applicable |
+| AMPR `prtm` (JWE3 V32 kernel panic after ~1 min) / `prtp` (fails on Planet Coaster 2 V3) | Not present; `ui/build_ampr_index.py` only builds the path index | Not added. If ever added, experimental and off by default |
+| `packaged_ampr_sha` / `ampr_unmap_prt_fatal` leave ZIPs open | Not present; every `ZipFile` here is a `with` block (incl. embedded `Archive.py`) | New ZIP helpers tested for closed handles (rename + delete after use) |
+| Already-backported detection filename/coarse based, no tests | Fakelib-content check existed with tests | **Fixed** further: manifest hash detection, Backport All coverage |
+| Destination: nested output, Windows long paths | Missing | **Fixed** (see above) |
+| Release-only 4e1d7250 rejects nested/undersized fake libraries | Reproduced: a nested or empty set was copied as-is | **Fixed** independently (sub-folder, < 1 KiB, non-ELF/SELF) |
+| Boundary UNKNOWN → HARDWARE_MEASURED_FW13_20_PRO | No firmware boundary model here | Record only: the evidence is FW 4.50 Base rejection and Pro 13.20. Other models/firmwares are untested |
+| SDK5–13 target pairs | This engine supports pairs 1–10 | Hardware proof reported for SDK 5 only; no higher pairs added |
+
+### Blocked on licence / provenance (kept out of this repo)
+
+* The Backport GUI checkout has no tracked project licence, so none of its
+  code is reused.
+* A GPL-3.0 AMPR/PlayGo source ships there without the licence text or a
+  source offer; not copied or bundled.
+* `right.sprx` (Sony-derived), PSSR and kernel files (game-derived) and the
+  firmware import tables (undocumented origin) are not copied, bundled or
+  downloaded. The `right.sprx` "Invalid param magic" fix (issue audit M4)
+  stays open for that reason.
+
+## Remaining backport gaps
+
+* No test runs the real embedded pipeline on real PS5 executables (no
+  license-clear sample SELFs); the run-safety tests use a stand-in temp tree.
+* The embedded pipeline's SDK patcher can make `.bak` files beside the
+  files it patches; whether any reach the game folder in Auto Backport is
+  unverified without real executables.
+* SDK Fixer / Batch SDK (separate tools) were not part of this pass.
+* No PS5 hardware or real Publishing Tools available to this session.
 
 ## Next steps (resume here)
 
-1. **When D:\ is reachable:** inventory the Backport GUI source; port its
-   engine checks into `_abp_run` / Backport pipeline with tests; check the
-   licence of any bundled asset (e.g. a standard `right.sprx`) before use.
+1. **Backport GUI:** inventory done (read-only). Only clean-room,
+   license-clear equivalents are allowed; the import-table audit needs
+   firmware tables from a documented source first. `right.sprx`, PSSR,
+   kernel files and the GPL AMPR/PlayGo source stay out.
 2. On a real Windows PC with OSFMount: build one small game end to end
    (exFAT, FFPKG, PFS), verify, extract; confirm the rebuild/restore path
    and the close-during-build behaviour.
