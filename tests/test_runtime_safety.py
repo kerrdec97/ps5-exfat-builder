@@ -119,3 +119,31 @@ class OsfmountDiscovery(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ImageSpaceCheck(unittest.TestCase):
+    """Issue #33: adding files to a full image failed file-by-file."""
+
+    def test_shortfall_reported(self):
+        app = load_app()
+        with tempfile.TemporaryDirectory() as d:
+            free = __import__('shutil').disk_usage(d).free
+            self.assertIsNone(app.image_space_shortfall(d, 1024))
+            need, have = app.image_space_shortfall(d, free + 10 ** 9)
+            self.assertGreater(need, have)
+            # Overwritten files give their space back.
+            self.assertIsNone(app.image_space_shortfall(d, free + 10 ** 9,
+                                                        sizes_replaced=10 ** 9 + 2 ** 23))
+            self.assertIn('fixed size', app.image_full_message(need, have))
+
+
+class DotnetHint(unittest.TestCase):
+    """Closed issue #70: 'newfs failed (rc=2147516547)'."""
+
+    def test_codes_and_text(self):
+        hint = load_app().dotnet_runtime_hint
+        self.assertIn('.NET 8', hint(2147516547))          # 0x80008083 unsigned
+        self.assertIn('.NET 8', hint(-2147450749))         # same, signed
+        self.assertIn('.NET 8', hint(1, 'Failed to resolve hostfxr.dll [not found]'))
+        self.assertEqual(hint(1, 'Error: File too large'), '')
+        self.assertEqual(hint(0), '')

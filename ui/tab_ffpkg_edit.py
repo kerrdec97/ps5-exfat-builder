@@ -2070,7 +2070,11 @@ def _apply_backport(app):
                         rc_newfs = -1
 
                 if rc_newfs != 0:
+                    from exfat_builder import dotnet_runtime_hint
+                    _dn = dotnet_runtime_hint(rc_newfs,
+                                              '\n'.join(captured_tail))
                     raise RuntimeError(
+                        (_dn + '\n\n' if _dn else '') +
                         _('newfs failed: ') +
                         '\n'.join(captured_tail[-10:])[:800])
                 if not os.path.isfile(new_img) or os.path.getsize(new_img) == 0:

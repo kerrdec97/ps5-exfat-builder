@@ -2600,6 +2600,61 @@ def updater_environment(environ):
     return env
 
 
+def image_space_shortfall(dest_dir, sizes_to_add, sizes_replaced=0):
+    """(needed, free) when the files about to be copied into a mounted
+    image cannot fit, else None. ``sizes_replaced`` is the size of existing
+    files that will be overwritten (their space is reused). Returns None
+    when free space cannot be determined."""
+    try:
+        free = shutil.disk_usage(dest_dir).free
+    except OSError:
+        return None
+    # A little slack for exFAT directory entries / cluster rounding.
+    needed = max(0, int(sizes_to_add) - int(sizes_replaced)) + 4 * 1024 * 1024
+    return (needed, free) if needed > free else None
+
+
+def image_full_message(needed, free):
+    """Plain-language explanation for issue #33 ("No space left on device"
+    while adding files to an existing image)."""
+    return ('This image does not have enough free space for those files.\n\n'
+            '  Needed:  %.2f GB\n  Free:    %.2f GB\n\n'
+            'An exFAT image has a fixed size, so it cannot grow. To add these '
+            'files, rebuild the image from the game folder with a larger size '
+            '(Build \u2192 exFAT image size \u2192 Custom), or delete files you '
+            'no longer need from the image first. Nothing was copied.'
+            % (needed / 1024 ** 3, free / 1024 ** 3))
+
+
+# .NET host error codes returned by apphost launchers such as UFS2Tool.exe
+# when the required runtime is not installed (closed issue #70 showed
+# "newfs failed (rc=2147516547)" = 0x80008083, hostfxr not found).
+_DOTNET_HOST_ERRORS = {
+    0x80008081: 'the .NET host library could not be loaded',
+    0x80008083: 'the .NET runtime (hostfxr) was not found',
+    0x80008096: 'the required .NET framework version is not installed',
+}
+
+
+def dotnet_runtime_hint(returncode, output=''):
+    """Plain-language explanation when a UFS2Tool failure is really a
+    missing .NET 8 runtime, else ''."""
+    try:
+        code = int(returncode) & 0xFFFFFFFF
+    except (TypeError, ValueError):
+        code = None
+    low = (output or '').lower()
+    if (code in _DOTNET_HOST_ERRORS or 'hostfxr' in low
+            or 'you must install .net' in low
+            or 'framework: \'microsoft.netcore.app' in low):
+        why = _DOTNET_HOST_ERRORS.get(code, 'the .NET runtime is missing')
+        return ('UFS2Tool (used for .ffpkg images) could not start: %s. '
+                'Install the Microsoft .NET 8 Runtime (x64) from '
+                'https://dotnet.microsoft.com/download/dotnet/8.0 and try '
+                'again.' % why)
+    return ''
+
+
 def coerce_size_gb(value):
     """Per-item image size override -> positive number of GB, or None.
 
@@ -7871,6 +7926,11 @@ class ExFATBuilder(_TK_BASE):
             self._ffpkg_set_progress(self._ffpkg_current_pct, 'Failed', '')
             self._set_status('ffpkg build failed (exit %d)' % returncode, DANGER)
             self._ffpkg_log('\n[ERROR] Exit code: %d\n' % returncode)
+            _dn = dotnet_runtime_hint(returncode)
+            if _dn:
+                self._ffpkg_log('[ERROR] %s\n' % _dn)
+                self._set_status('ffpkg build failed: .NET 8 runtime missing',
+                                 DANGER)
             self._ffpkg_render_queue()
             if getattr(self, '_unified_active', False):
                 self._ffpkg_log('[UNIBUILD] ffpkg build failed \u2014 continuing queue\n')
@@ -8419,6 +8479,21 @@ class ExFATBuilder(_TK_BASE):
         files = filedialog.askopenfilenames(title='Select file(s) to add')
         if not files:
             return
+        # Farewell Edition (issue #33): fail early with an explanation when
+        # the image is too small for the selection.
+        try:
+            _need = sum(os.path.getsize(f) for f in files)
+            _reused = sum(os.path.getsize(os.path.join(
+                self._fm_current_dir, os.path.basename(f))) for f in files
+                if os.path.isfile(os.path.join(self._fm_current_dir,
+                                               os.path.basename(f))))
+        except OSError:
+            _need = _reused = 0
+        _short = image_space_shortfall(self._fm_current_dir, _need, _reused)
+        if _short:
+            app_error(self, 'Not enough space in the image',
+                      image_full_message(*_short))
+            return
         added = 0
         skipped = 0
         overwrite_all = [False]
@@ -8474,6 +8549,21 @@ class ExFATBuilder(_TK_BASE):
 
         if not all_files:
             app_info(self, 'Empty folder', 'The selected folder contains no files.')
+            return
+
+        # Farewell Edition (issue #33): check the image has room BEFORE
+        # copying, instead of failing file after file with "No space
+        # left on device".
+        try:
+            _need = sum(os.path.getsize(sp) for sp, _dp, _n in all_files)
+            _reused = sum(os.path.getsize(dp) for _sp, dp, _n in all_files
+                          if os.path.isfile(dp))
+        except OSError:
+            _need = _reused = 0
+        _short = image_space_shortfall(self._fm_current_dir, _need, _reused)
+        if _short:
+            app_error(self, 'Not enough space in the image',
+                      image_full_message(*_short))
             return
 
         # Check for any conflicts upfront

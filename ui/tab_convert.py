@@ -756,6 +756,13 @@ def build_convert_tab(parent, app):
                 rc = _run(newfs_cmd, progress_cb=_newfs_cb)
                 if rc != 0:
                     _log('newfs failed (rc=%d).' % rc)
+                    try:
+                        from exfat_builder import dotnet_runtime_hint
+                        _dn = dotnet_runtime_hint(rc)
+                        if _dn:
+                            _log(_dn)
+                    except Exception:
+                        pass
                     parent.after(0, prog.close)
                     parent.after(0, lambda:
                         _set_busy_e2f(False, 'newfs failed.'))
