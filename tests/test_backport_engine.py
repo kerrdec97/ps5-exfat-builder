@@ -47,5 +47,60 @@ class ExecutableDetection(unittest.TestCase):
                          ['eboot.bin', 'sce_module/libc.prx'])
 
 
+class FakelibState(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_app()
+        self.d = tempfile.mkdtemp(prefix='bp_fl_')
+        self.addCleanup(__import__('shutil').rmtree, self.d, True)
+        self.game = os.path.join(self.d, 'game')
+        self.src = os.path.join(self.d, 'fakelib_set')
+        for base in (self.game, self.src):
+            os.makedirs(base)
+        open(os.path.join(self.game, 'eboot.bin'), 'wb').close()
+        with open(os.path.join(self.src, 'libSceAgc.sprx'), 'wb') as f:
+            f.write(b'agc' * 100)
+
+    def _put(self, data):
+        os.makedirs(os.path.join(self.game, 'fakelib'), exist_ok=True)
+        with open(os.path.join(self.game, 'fakelib', 'libSceAgc.sprx'), 'wb') as f:
+            f.write(data)
+
+    def test_states(self):
+        st = self.mod.backport_fakelib_state
+        self.assertEqual(st(self.game, self.src), 'none')
+        self._put(b'other tool')
+        self.assertEqual(st(self.game, self.src), 'other')
+        self._put(b'agc' * 100)
+        self.assertEqual(st(self.game, self.src), 'same')
+        self.assertEqual(st(self.game, None), 'other')
+
+
+class ExtractBackport(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_app()
+        self.base = tempfile.mkdtemp(prefix='bp_base_')
+        self.addCleanup(__import__('shutil').rmtree, self.base, True)
+
+    def test_private_fresh_folder_each_time(self):
+        import sys
+        # A stale Backport.py and a planted module in the user's Temp root
+        # must never be used.
+        with open(os.path.join(self.base, 'Backport.py'), 'w') as f:
+            f.write('raise SystemExit("stale")\n')
+        bp1, tmp1 = self.mod.extract_backport(self.base)
+        self.assertNotEqual(os.path.normcase(tmp1), os.path.normcase(self.base))
+        self.assertEqual(os.path.dirname(tmp1), self.base)
+        with open(bp1, 'rb') as f:
+            self.assertNotIn(b'stale', f.read(200))
+        self.assertTrue(os.path.isfile(os.path.join(tmp1, 'src', 'make_fself.py')))
+        sys.path.insert(0, tmp1)
+        bp2, tmp2 = self.mod.extract_backport(self.base)
+        self.assertNotEqual(tmp1, tmp2)
+        self.assertFalse(os.path.exists(tmp1))      # previous one cleaned up
+        self.assertNotIn(tmp1, sys.path)
+        self.assertNotIn(self.base, sys.path)
+        __import__('shutil').rmtree(tmp2, True)
+
+
 if __name__ == '__main__':
     unittest.main()

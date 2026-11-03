@@ -730,14 +730,28 @@ def _load_cover_image(path, target=180):
 
 _UFS2TOOL_DIR = None
 
+_BACKPORT_DIRS = []
+
+
 def extract_backport(custom_temp=None):
     """Extract Backport.py and all src/ modules to a temp directory."""
     import base64 as _b64
-    tmp = custom_temp or tempfile.mkdtemp(prefix='exfat_builder_bp_')
+    # Always a fresh private folder (inside the user's Temp folder when one
+    # is set): the folder goes onto sys.path of an elevated process, so it
+    # must never be a shared folder where other .py files could sit, and a
+    # Backport.py left by an older version must never be reused.
+    base = custom_temp if (custom_temp and os.path.isdir(custom_temp)) else None
+    for old in _BACKPORT_DIRS[:]:
+        for p in (old, os.path.join(old, 'src')):
+            while p in sys.path:
+                sys.path.remove(p)
+        shutil.rmtree(old, ignore_errors=True)
+        _BACKPORT_DIRS.remove(old)
+    tmp = tempfile.mkdtemp(prefix='exfat_builder_bp_', dir=base)
+    _BACKPORT_DIRS.append(tmp)
     bp_path = os.path.join(tmp, 'Backport.py')
-    if not os.path.isfile(bp_path):
-        with open(bp_path, 'wb') as f:
-            f.write(_b64.b64decode(_BACKPORT_B64))
+    with open(bp_path, 'wb') as f:
+        f.write(_b64.b64decode(_BACKPORT_B64))
 
     src_dir = os.path.join(tmp, 'src')
     os.makedirs(src_dir, exist_ok=True)
@@ -2622,6 +2636,47 @@ def summarize_outcomes(statuses):
     title = 'Complete' if all_ok else ('Finished with problems'
                                        if done or warn else 'Build failed')
     return title, '\n'.join(parts), all_ok
+
+
+def backport_fakelib_state(game, fakelib_src):
+    """How a game folder's fakelib/ relates to the set about to be applied.
+
+    'none'  - no fakelib folder (or it is empty);
+    'same'  - every file of the backport set is already there, byte for
+              byte: the folder was backported before, so its "originals"
+              would be patched files and must not be captured;
+    'other' - a fakelib folder from another tool or an older set; its
+              files are backed up before being overwritten."""
+    dest = os.path.join(game, 'fakelib')
+    if not os.path.isdir(dest) or not any(
+            files for _r, _d, files in os.walk(dest)):
+        return 'none'
+    if not fakelib_src or not os.path.isdir(fakelib_src):
+        return 'other'
+    import hashlib
+    found_any = False
+    for root, _dirs, files in os.walk(fakelib_src):
+        for fn in files:
+            src = os.path.join(root, fn)
+            rel = os.path.relpath(src, fakelib_src)
+            dst = os.path.join(dest, rel)
+            try:
+                if not os.path.isfile(dst) or \
+                        os.path.getsize(dst) != os.path.getsize(src):
+                    return 'other'
+                hs = []
+                for path in (src, dst):
+                    h = hashlib.sha256()
+                    with open(path, 'rb') as f:
+                        for block in iter(lambda: f.read(1 << 20), b''):
+                            h.update(block)
+                    hs.append(h.digest())
+                if hs[0] != hs[1]:
+                    return 'other'
+                found_any = True
+            except OSError:
+                return 'other'
+    return 'same' if found_any else 'other'
 
 
 def describe_missing_files(src_sizes, img_sizes, limit=15):
@@ -16533,12 +16588,57 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
 
+        # Farewell Edition: safeguards from the PS5 Backport GUI.
+        # 1. A target SDK above the game's own SDK cannot work.
+        try:
+            _game_sdk = ExFATBuilder._read_sdk_from_folder(game)
+        except Exception:
+            _game_sdk = None
+        if _game_sdk and sdk_int > int(_game_sdk):
+            app_warning(self, 'Target SDK too high',
+                'Target SDK %d is higher than this game\'s own SDK %d.\n\n'
+                'Choose SDK %d or lower.' % (sdk_int, _game_sdk, _game_sdk))
+            return
+        # 2. An already backported folder: its "originals" are patched files.
+        _fl_state = backport_fakelib_state(game, fakelib_src)
+        if _fl_state == 'same':
+            app_warning(self, 'Already backported',
+                'This game folder already contains these backport files '
+                '(fakelib).\n\nOriginals cannot be captured from a patched '
+                'folder. Use an unmodified copy of the game, or restore the '
+                'originals ZIP from the earlier run first.')
+            return
+        # 3. Room for the originals/patched copies and their ZIPs.
+        try:
+            _ex_bytes = 0
+            for _rel in self._abp_scan_executables(game)[0]:
+                try:
+                    _ex_bytes += os.path.getsize(os.path.join(game, _rel))
+                except OSError:
+                    pass
+            _bk_base = self._settings.get('temp_dir') or tempfile.gettempdir()
+            _free = shutil.disk_usage(_bk_base if os.path.isdir(_bk_base)
+                                      else tempfile.gettempdir()).free
+            if _ex_bytes and _free < _ex_bytes * 4:
+                app_warning(self, 'Not enough free space',
+                    'The backport keeps originals and patched copies of the '
+                    'executables and zips both: about %.1f GB is needed in '
+                    'the temp folder, %.1f GB is free.'
+                    % (_ex_bytes * 4 / 1024**3, _free / 1024**3))
+                return
+        except Exception:
+            pass
+
         game_base = os.path.basename(game.rstrip('\\/'))
         if ' - Auto Backport Backup' in game_base:
             game_base = game_base[:game_base.index(' - Auto Backport Backup')]
 
         # Use a temp dir for originals/patched — zips are the permanent backup
         backup_dir = tempfile.mkdtemp(prefix='exfat_builder_abp_')
+        if _fl_state == 'other':
+            self._log('[ABP] The game already has a fakelib folder from another '
+                      'tool; files that get replaced are kept in the originals '
+                      'backup.\n')
 
         if not app_confirm(self, 'Apply Auto Backport',
                 'Game folder: %s\n\n'
@@ -16595,8 +16695,6 @@ class ExFATBuilder(_TK_BASE):
                 except Exception as bp_err:
                     self.after(0, self._abp_log_line,
                                '⚠ Full pipeline unavailable: ' + str(bp_err), 'warn')
-                    self.after(0, self._abp_log_line,
-                               '  Falling back to basic byte-patch mode', 'warn')
 
                 if bp_available:
                     # ── Full pipeline via PS5ELFProcessor ──
@@ -16860,141 +16958,19 @@ class ExFATBuilder(_TK_BASE):
                                game_base, sdk_int, game)
                     return
 
-                # ── Fallback: basic byte-patch mode ──
-                exts = {'.self', '.sprx', '.prx', '.elf', '.bin'}
-                all_files = []
-                for root_dir, dirs, files in os.walk(game):
-                    # Skip decrypted folder — it's output from a previous run
-                    dirs[:] = [d for d in dirs if d.lower() != 'decrypted']
-                    for fn in files:
-                        if os.path.splitext(fn)[1].lower() in exts:
-                            all_files.append(os.path.join(root_dir, fn))
-
-                if not all_files:
-                    self.after(0, self._abp_log_line,
-                               '✗ No patchable files found (.self/.sprx/.prx/.elf)',
-                               'err')
-                    self.after(0, self._abp_done, False)
-                    return
-
+                # Farewell Edition: there is no safe fallback. The old
+                # "basic byte-patch mode" wrote the SDK number into ELF
+                # e_flags / SELF header bytes that are not the SDK field,
+                # damaging the game's executables while reporting success.
+                # Without the real decrypt/re-sign pipeline nothing is
+                # changed and the run is reported as failed.
                 self.after(0, self._abp_log_line,
-                           'Found %d patchable file(s)' % len(all_files), 'info')
-                self.after(0, self._abp_log_line,
-                           'Backup folder: ' + backup_dir, 'info')
-                self.after(0, self._abp_log_line,
-                           'Target SDK: %d\n' % sdk_int, 'info')
-
-                os.makedirs(backup_dir, exist_ok=True)
-                ok_count   = 0
-                skip_count = 0
-                fail_count = 0
-
-                originals_dir = os.path.join(backup_dir, 'originals')
-                patched_dir   = os.path.join(backup_dir, 'patched')
-                os.makedirs(originals_dir, exist_ok=True)
-                os.makedirs(patched_dir,   exist_ok=True)
-
-                self.after(0, self._abp_log_line,
-                           'Originals backed up to: originals\\', 'info')
-                self.after(0, self._abp_log_line,
-                           'Patched files applied to: ' + game + '\n', 'info')
-
-                # ── Snapshot original game files BEFORE fakelib ──
-                original_game_files = set()
-                for og_root, og_dirs, og_files in os.walk(game):
-                    og_dirs[:] = [d for d in og_dirs if d.lower() != 'decrypted']
-                    for og_fn in og_files:
-                        og_rel = os.path.relpath(
-                            os.path.join(og_root, og_fn), game)
-                        original_game_files.add(og_rel.lower())
-
-                # ── Apply fakelib into game/fakelib/ subfolder ──
-                if fakelib_src and os.path.isdir(fakelib_src):
-                    self.after(0, self._abp_log_line,
-                               'Applying fakelib from: ' + fakelib_src, 'info')
-                    fl_count = 0
-                    fakelib_dest_root = os.path.join(game, 'fakelib')
-                    os.makedirs(fakelib_dest_root, exist_ok=True)
-                    for fl_root, fl_dirs, fl_files in os.walk(fakelib_src):
-                        for fl_fn in fl_files:
-                            fl_src_path = os.path.join(fl_root, fl_fn)
-                            fl_rel      = os.path.relpath(fl_src_path, fakelib_src)
-                            fl_dest     = os.path.join(fakelib_dest_root, fl_rel)
-                            fl_dest_dir = os.path.dirname(fl_dest)
-                            os.makedirs(fl_dest_dir, exist_ok=True)
-                            # Backup original if it exists
-                            if os.path.isfile(fl_dest):
-                                orig_fl = os.path.join(
-                                    originals_dir, 'fakelib', fl_rel)
-                                os.makedirs(os.path.dirname(orig_fl), exist_ok=True)
-                                _sh.copy2(fl_dest, orig_fl)
-                            _sh.copy2(fl_src_path, fl_dest)
-                            fl_count += 1
-                    self.after(0, self._abp_log_line,
-                               '✓ Fakelib: %d file(s) → game/fakelib/' % fl_count,
-                               'ok')
-
-                for i, fpath in enumerate(all_files):
-                    fname = os.path.relpath(fpath, game)
-                    pct   = int((i / len(all_files)) * 90)
-                    self.after(0, self._abp_set_progress, pct)
-                    self.after(0, self._abp_status_var.set,
-                               'Patching %d / %d — %s' % (
-                                   i + 1, len(all_files), fname))
-                    try:
-                        # Step 1: Only backup if this was an original game file
-                        if fname.lower() in original_game_files:
-                            orig_path = os.path.join(originals_dir, fname)
-                            os.makedirs(os.path.dirname(orig_path), exist_ok=True)
-                            _sh.copy2(fpath, orig_path)
-
-                        # Step 2: Patch the file bytes (in-place on fpath)
-                        patched = self._abp_patch_file(fpath, sdk_int)
-
-                        if patched:
-                            # Step 3: Save patched copy to backup/patched/
-                            pat_path = os.path.join(patched_dir, fname)
-                            os.makedirs(os.path.dirname(pat_path), exist_ok=True)
-                            _sh.copy2(fpath, pat_path)
-
-                            # Step 4: Explicitly write patched file back to
-                            # the game folder — ensures it's there even if
-                            # fpath was from a different resolved path
-                            game_dest = os.path.join(game, fname)
-                            os.makedirs(os.path.dirname(game_dest), exist_ok=True)
-                            if os.path.abspath(fpath) != os.path.abspath(game_dest):
-                                _sh.copy2(fpath, game_dest)
-
-                            self.after(0, self._abp_log_line,
-                                       '✓ ' + fname + ' → applied to game', 'ok')
-                            ok_count += 1
-                        else:
-                            self.after(0, self._abp_log_line,
-                                       '· ' + fname + ' (not an ELF — skipped)',
-                                       'warn')
-                            skip_count += 1
-
-                    except Exception as fe:
-                        self.after(0, self._abp_log_line,
-                                   '✗ ' + fname + ' — ' + str(fe), 'err')
-                        fail_count += 1
-
-                self.after(0, self._abp_set_progress, 100, SUCCESS)
-                self.after(0, self._abp_log_line, '\n─── Done ───', 'info')
-                self.after(0, self._abp_log_line,
-                           '✓ Patched & applied: %d   · Skipped: %d   ✗ Failed: %d'
-                           % (ok_count, skip_count, fail_count),
-                           'ok' if fail_count == 0 else 'warn')
-                self.after(0, self._abp_log_line,
-                           'Game folder: ' + game, 'info')
-                self.after(0, self._abp_log_line,
-                           'Originals: ' + originals_dir, 'info')
-                self.after(0, self._abp_log_line,
-                           'Patched copies: ' + patched_dir, 'info')
-                self.after(0, self._abp_zip_backups,
-                           originals_dir, patched_dir,
-                           game_base, sdk_int, game)
-                self.after(0, self._abp_done, fail_count == 0)
+                           '✗ The backport engine (Backport.py) could not be '
+                           'loaded, so no files were changed. Restart the '
+                           'app; if this repeats, attach the log to a bug '
+                           'report.', 'err')
+                self.after(0, self._abp_done, False)
+                return
 
             except Exception as e:
                 self.after(0, self._abp_log_line,
@@ -17002,57 +16978,6 @@ class ExFATBuilder(_TK_BASE):
                 self.after(0, self._abp_done, False)
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _abp_patch_file(self, fpath, sdk_int):
-        """Patch a single PS5 ELF/SELF file to target SDK.
-        Checks for SCE magic header before attempting to patch.
-        Returns True if patched, False if skipped (not an SCE ELF)."""
-        # Read magic bytes
-        with open(fpath, 'rb') as f:
-            magic = f.read(4)
-
-        # SCE SELF magic: 4F 15 3D 1D
-        # ELF magic: 7F 45 4C 46
-        is_sce  = magic == b'\x4f\x15\x3d\x1d'
-        is_elf  = magic[:4] == b'\x7f\x45\x4c\x46'
-
-        if not is_sce and not is_elf:
-            return False  # Not a patchable binary — skip
-
-        if is_elf:
-            # Raw ELF — patch sdk version in header if present
-            # PS5 ELF extended header has SDK version at a known offset
-            with open(fpath, 'r+b') as f:
-                data = bytearray(f.read())
-                # e_flags at offset 0x30 in 64-bit ELF holds SDK info
-                # Write sdk_int into flags area as 16-bit value
-                # This is a best-effort patch — proper patching
-                # requires Backport.py (decrypt_and_sign_pipeline)
-                if len(data) > 0x32:
-                    data[0x30] = sdk_int & 0xFF
-                    data[0x31] = (sdk_int >> 8) & 0xFF
-                    f.seek(0)
-                    f.write(data)
-            return True
-
-        if is_sce:
-            # SCE SELF — SDK version is at offset 0x18 in the SCE header
-            with open(fpath, 'r+b') as f:
-                data = bytearray(f.read())
-                if len(data) > 0x1C:
-                    # SDK version stored as 4-byte big-endian at 0x18
-                    # Format: major.minor as 0x00MM00mm
-                    maj = (sdk_int >> 8) & 0xFF
-                    mn  = sdk_int & 0xFF
-                    data[0x18] = 0x00
-                    data[0x19] = maj
-                    data[0x1A] = 0x00
-                    data[0x1B] = mn
-                    f.seek(0)
-                    f.write(data)
-            return True
-
-        return False
 
     def _read_sfo_info(self, game_folder):
         """Read TITLE_ID, TITLE, APP_VER from param.sfo. Returns dict."""
