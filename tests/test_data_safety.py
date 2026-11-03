@@ -257,6 +257,24 @@ class ChildProcesses(unittest.TestCase):
                 p.kill()
 
 
+class DriveLetters(unittest.TestCase):
+    def test_network_letters_marked_used(self):
+        from unittest import mock
+        load_app()
+        from ui.shared import drives
+        with mock.patch.object(drives, 'network_mapped_letters',
+                               return_value={'Z', 'm'.upper()}):
+            mask = drives.used_letter_mask()
+        self.assertTrue(mask & (1 << 25))           # Z:
+        self.assertTrue(mask & (1 << 12))           # M:
+
+    def test_no_crash_off_windows(self):
+        load_app()
+        from ui.shared import drives
+        self.assertIsInstance(drives.network_mapped_letters(), set)
+        self.assertIsInstance(drives.used_letter_mask(), int)
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()

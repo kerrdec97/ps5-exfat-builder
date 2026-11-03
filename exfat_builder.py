@@ -1,6 +1,7 @@
 import tkinter as tk
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import filedialog, ttk, simpledialog
+from ui.shared.drives import used_letter_mask
 from ui.shared.app_dialog import (
     app_choose3, app_confirm, app_danger, app_error, app_info,
     app_success, app_warning,
@@ -5234,7 +5235,7 @@ class ExFATBuilder(_TK_BASE):
         """First free drive letter as 'X:' scanning Z: down to G:, else None."""
         try:
             import ctypes as _ct
-            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            bitmask = used_letter_mask()
         except Exception:
             bitmask = 0
         for i in range(25, 5, -1):  # Z: down to G:
@@ -5513,7 +5514,7 @@ class ExFATBuilder(_TK_BASE):
         drive = None
         try:
             import ctypes as _ct
-            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            bitmask = used_letter_mask()
             for i in range(25, 3, -1):
                 if not (bitmask & (1 << i)):
                     drive = chr(65 + i) + ':'
@@ -9041,7 +9042,7 @@ class ExFATBuilder(_TK_BASE):
         # Find free drive letter
         try:
             import ctypes as _ct
-            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            bitmask = used_letter_mask()
             free = None
             for i in range(25, 3, -1):
                 if not (bitmask & (1 << i)):
@@ -10476,6 +10477,23 @@ class ExFATBuilder(_TK_BASE):
     def _item_error(self, msg, idx, indices, pos):
         self._update_queue_dot(idx, 'failed')
         self._set_status('Error: ' + msg, DANGER)
+        # Issue audit M6: always record the reason in the Output Log (and
+        # the session log file), not only in a dialog or the status bar.
+        try:
+            self._log('[ERROR] Build could not run: %s\n' % msg)
+        except Exception:
+            pass
+        try:
+            out = os.path.join(self._queue[idx].output_dir,
+                               self._queue[idx].output_name)
+            _m = settle_previous_image(
+                out, getattr(self._queue[idx], '_previous_image', None),
+                success=False)
+            self._queue[idx]._previous_image = None
+            if _m:
+                self._log('[POST] %s\n' % _m)
+        except Exception:
+            pass
         if getattr(self, '_unified_active', False):
             self._log('[UNIBUILD] item error: %s \u2014 continuing queue\n' % msg)
             self._process_next(indices, pos + 1)
@@ -11560,7 +11578,7 @@ class ExFATBuilder(_TK_BASE):
 
                 # Find free drive letter
                 import ctypes as _ct
-                drives_bitmask = _ct.windll.kernel32.GetLogicalDrives()
+                drives_bitmask = used_letter_mask()
                 free_letter = None
                 for i in range(25, 3, -1):  # Z: down to D:
                     if not (drives_bitmask & (1 << i)):
@@ -23237,7 +23255,7 @@ class ExFATBuilder(_TK_BASE):
         # Find free drive letter
         try:
             import ctypes as _ct
-            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+            bitmask = used_letter_mask()
             free_letter = None
             for i in range(25, 3, -1):
                 if not (bitmask & (1 << i)):
@@ -23277,7 +23295,7 @@ class ExFATBuilder(_TK_BASE):
             # drive that survived the sweep.
             try:
                 import ctypes as _ct2
-                bitmask2 = _ct2.windll.kernel32.GetLogicalDrives()
+                bitmask2 = used_letter_mask()
                 for i in range(25, 3, -1):
                     if not (bitmask2 & (1 << i)):
                         free_letter = chr(65 + i) + ':'
@@ -23294,7 +23312,7 @@ class ExFATBuilder(_TK_BASE):
             # dismount of the proposed letter fixes that.
             def _pick_free_letter(_avoid=None):
                 import ctypes as _ctp
-                bm = _ctp.windll.kernel32.GetLogicalDrives()
+                bm = used_letter_mask()
                 avoid_set = set(c.upper() for c in (_avoid or ''))
                 for i in range(25, 3, -1):
                     ch = chr(65 + i)
@@ -23553,7 +23571,7 @@ class ExFATBuilder(_TK_BASE):
                     try:
                         # Find free drive letter
                         import ctypes as _ct
-                        used = _ct.windll.kernel32.GetLogicalDrives()
+                        used = used_letter_mask()
                         mount_letter = None
                         for i in range(3, 26):
                             if not (used & (1 << i)):

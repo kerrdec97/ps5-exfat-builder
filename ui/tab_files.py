@@ -28,6 +28,7 @@ with Treeview row order.
 import os
 import time
 import tkinter as tk
+from ui.shared.drives import used_letter_mask
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 from tkinter import ttk
 
@@ -1283,7 +1284,7 @@ def _bp_exfat_to_temp(app, img_path):
             pass
 
     try:
-        drives_bitmask = _ct.windll.kernel32.GetLogicalDrives()
+        drives_bitmask = used_letter_mask()
         free_letter = None
         for i in range(25, 3, -1):
             if not (drives_bitmask & (1 << i)):

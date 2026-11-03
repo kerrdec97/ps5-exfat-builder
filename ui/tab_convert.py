@@ -35,6 +35,7 @@ the dump in, then dismounts.
 import os
 import re
 import subprocess
+from ui.shared.drives import used_letter_mask
 import threading
 import time
 import tkinter as tk
@@ -543,7 +544,7 @@ def build_convert_tab(parent, app):
             parent.after(0, prog.set_stage, 'mount',
                 'Finding free drive letter...')
             import ctypes as _ct
-            used_mask = _ct.windll.kernel32.GetLogicalDrives()
+            used_mask = used_letter_mask()
             mount_letter = None
             for code in range(ord('G'), ord('Z') + 1):
                 if not (used_mask & (1 << (code - ord('A')))):
@@ -1127,7 +1128,7 @@ def build_convert_tab(parent, app):
                         'Failed to allocate output file: ' + str(e))
 
                 # Pick a free drive letter
-                used_mask = _ct.windll.kernel32.GetLogicalDrives()
+                used_mask = used_letter_mask()
                 mount_letter = None
                 for code in range(ord('G'), ord('Z') + 1):
                     if not (used_mask & (1 << (code - ord('A')))):

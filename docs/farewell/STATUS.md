@@ -54,8 +54,8 @@ game, real Sony Publishing Tools, any console behaviour.
 | M2 stale Backport.py / sys.path | **Fixed** |
 | M3 stale-mount sweep before build (#82) | Open (needs OSFMount on Windows) |
 | M4 right.sprx "Invalid param magic", dump fakelib | **Partly**: other tools' fakelib handled; `right.sprx` replacement needs the Backport GUI source/asset |
-| M5 network-mapped letters in Python pickers | Open |
-| M6 `_item_error` not logged | Open |
+| M5 network-mapped letters in Python pickers | **Fixed** (`ui/shared/drives.py`, all 12 mount pickers) |
+| M6 `_item_error` not logged | **Fixed** (also restores a set-aside image) |
 
 No GitHub issue was closed or commented on. Issues that the audit found
 fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
@@ -98,6 +98,6 @@ fixed or already implemented (e.g. #60, #61, Backport GUI #28) are listed in
    and the close-during-build behaviour.
 3. FPKG with the owner's Publishing Tools: one small game, then a
    multi-language game; record results in `docs/FPKG.md`.
-4. Remaining audit items: M1, M4, M5, M10, issue-audit M3/M5/M6.
+4. Remaining audit items: M1, M4, M5, M10, issue-audit M3.
 5. Release: only with the owner's approval (no public release or push to
    `main` without it). The CI exe artifact is a test build, not a release.

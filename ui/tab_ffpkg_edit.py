@@ -22,6 +22,7 @@ NOT supported by UFS2Tool's CLI:
 import os
 import sys
 import time
+from ui.shared.drives import used_letter_mask
 import tempfile
 import subprocess
 import threading
@@ -3177,7 +3178,7 @@ def _bp_extract_exfat_to_temp(app, img_path):
 
     try:
         # Find a free drive letter.
-        drives_bitmask = _ct.windll.kernel32.GetLogicalDrives()
+        drives_bitmask = used_letter_mask()
         free_letter = None
         for i in range(25, 3, -1):
             if not (drives_bitmask & (1 << i)):
