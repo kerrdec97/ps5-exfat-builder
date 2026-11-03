@@ -228,9 +228,37 @@ class Sidebar(tk.Frame):
         self._footer.pack(side='bottom', fill='x')
         self._footer_rule = tk.Frame(self, bg=C['border_2'], height=1)
         self._footer_rule.pack(side='bottom', fill='x')
-        self._body = tk.Frame(self, bg=C['bg_0'])
-        self._body.pack(side='top', fill='both', expand=True,
-                        padx=px(8), pady=(px(8), 0))
+        # The item list scrolls when the window is shorter than the rail.
+        self._canvas = tk.Canvas(self, bg=C['bg_0'], highlightthickness=0,
+                                 bd=0)
+        self._canvas.pack(side='top', fill='both', expand=True)
+        self._body = tk.Frame(self._canvas, bg=C['bg_0'])
+        self._body_win = self._canvas.create_window(
+            (px(8), px(8)), window=self._body, anchor='nw')
+
+        def _sync(_e=None):
+            try:
+                w = self._canvas.winfo_width() - 2 * px(8)
+                self._canvas.itemconfigure(self._body_win, width=max(1, w))
+                h = self._body.winfo_reqheight() + px(16)
+                self._canvas.configure(scrollregion=(0, 0, w, h))
+            except Exception:
+                pass
+        self._body.bind('<Configure>', _sync)
+        self._canvas.bind('<Configure>', _sync)
+
+        def _wheel(e):
+            try:
+                if self._body.winfo_reqheight() + px(16) <= self._canvas.winfo_height():
+                    return
+                d = -1 if (getattr(e, 'delta', 0) > 0 or getattr(e, 'num', 0) == 4) else 1
+                self._canvas.yview_scroll(d * 2, 'units')
+            except Exception:
+                pass
+        for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self._canvas.bind(seq, _wheel)
+            self._body.bind(seq, _wheel)
+        self._wheel = _wheel
 
     # ── building ─────────────────────────────────────────────────────
     def add_group(self, title):
@@ -250,6 +278,9 @@ class Sidebar(tk.Frame):
         item = NavItem(self._body, key, label, icon=icon,
                        on_select=self._dispatch)
         item.pack(fill='x', pady=(0, px(2)))
+        for w in (item, item._bgf, item._icon, item._label):
+            for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+                w.bind(seq, self._wheel, add='+')
         self._items[key] = item
         self._build_order.append(item)
         if self._collapsed:
@@ -330,6 +361,7 @@ class Sidebar(tk.Frame):
                 w.pack(fill='x', pady=(0, px(2)))
             for w in (self._footer, self._footer_rule):
                 w.pack_forget()
+            self._canvas.itemconfigure(self._body_win)
         else:
             self.configure(width=self._full_width)
             for item in self._items.values():
@@ -341,8 +373,7 @@ class Sidebar(tk.Frame):
                     w.pack(fill='x', padx=px(12), pady=(px(14), px(4)))
                 else:
                     w.pack(fill='x', pady=(0, px(2)))
-            self._body.pack_forget()
+            self._canvas.pack_forget()
             self._footer.pack(side='bottom', fill='x')
             self._footer_rule.pack(side='bottom', fill='x')
-            self._body.pack(side='top', fill='both', expand=True,
-                            padx=px(8), pady=(px(8), 0))
+            self._canvas.pack(side='top', fill='both', expand=True)

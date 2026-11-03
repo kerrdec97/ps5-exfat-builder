@@ -926,6 +926,11 @@ class Card(Rounded):
                 tile = tk.Label(head, image=icon_image(icon, 16, C['accent_hi'], C['accent_lo']),
                                 bg=C['accent_lo'], width=px(32), height=px(32))
                 tile.pack(side='left', padx=(0, px(12)))
+            # Actions are packed before the expanding title column so they
+            # always get their full width.
+            self.head_actions = tk.Frame(head, bg=bg)
+            self.head_actions.pack(side='right', anchor='n',
+                                   padx=(px(12), 0))
             col = tk.Frame(head, bg=bg)
             col.pack(side='left', fill='x', expand=True)
             self.title_label = tk.Label(col, text=strip_glyphs(title), bg=bg,
@@ -939,8 +944,6 @@ class Card(Rounded):
                     font=FONTS['caption'], anchor='w', justify='left')
                 self.subtitle_label.pack(fill='x', pady=(px(2), 0))
                 _autowrap(self.subtitle_label)
-            self.head_actions = tk.Frame(head, bg=bg)
-            self.head_actions.pack(side='right', anchor='n')
             self.body = tk.Frame(self, bg=bg)
             self.body.pack(fill='both', expand=True)
         if actions:

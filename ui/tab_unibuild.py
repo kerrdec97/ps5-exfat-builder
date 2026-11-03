@@ -295,6 +295,27 @@ def build_unibuild_tab(parent, app):
     left.grid(row=0, column=0, sticky='nsew', padx=(0, px(8)))
     right = tk.Frame(cols, bg=BG1)
     right.grid(row=0, column=1, sticky='nsew', padx=(px(8), 0))
+    _cols_mode = {'stacked': None}
+
+    def _reflow_cols(e=None):
+        # Narrow windows: stack the right column under the left one.
+        stacked = cols.winfo_width() < px(900)
+        if stacked == _cols_mode['stacked']:
+            return
+        _cols_mode['stacked'] = stacked
+        if stacked:
+            cols.columnconfigure(1, weight=0, uniform='')
+            cols.columnconfigure(0, weight=1, uniform='')
+            left.grid_configure(row=0, column=0, columnspan=2, padx=0)
+            right.grid_configure(row=1, column=0, columnspan=2, padx=0,
+                                 pady=(px(16), 0))
+        else:
+            cols.columnconfigure(0, weight=7, uniform='bcols')
+            cols.columnconfigure(1, weight=5, uniform='bcols')
+            left.grid_configure(row=0, column=0, columnspan=1, padx=(0, px(8)))
+            right.grid_configure(row=0, column=1, columnspan=1,
+                                 padx=(px(8), 0), pady=0)
+    cols.bind('<Configure>', _reflow_cols, add='+')
 
     # ── Source ──
     hero = Card(left, title='Source',
