@@ -4667,178 +4667,90 @@ class ExFATBuilder(_TK_BASE):
         self._ffpkg_extract_status_var = tk.StringVar(value=_('Idle'))
         self._ffpkg_extract_eta_var    = tk.StringVar(value='')
 
+        from ui.shared.widgets import (PageHeader, Card, Button as _DSButton,
+                                       InfoBar, Divider)
+        from ui.shared.page_head import field_block
+        from ui.tab_extract import page_columns, CompatBar
+        _B2 = COLORS['bg_2']
+        parent.configure(bg=COLORS['bg_1'])
+
         # ── Page head ──
-        head = tk.Frame(parent, bg=BG)
-        head.pack(fill='x', padx=24, pady=(14, 6))
-        icon_tile = tk.Frame(head, bg=COLORS['accent_15'],
-                              width=32, height=32)
-        icon_tile.pack(side='left')
-        icon_tile.pack_propagate(False)
-        tk.Label(icon_tile, text='\U0001f4e4',
-                 bg=COLORS['accent_15'], fg=ACCENT,
-                 font=(FONTS['body'][0], 14)
-                 ).pack(expand=True)
-        title_col = tk.Frame(head, bg=BG)
-        title_col.pack(side='left', padx=(10, 0))
-        tk.Label(title_col, text=_('Extract ffpkg Image'),
-                 font=(FONTS['body_strong'][0], 14),
-                 bg=BG, fg=COLORS['fg_0']
-                 ).pack(anchor='w')
-        tk.Label(title_col,
-                 text=_('Unpack a .ffpkg back into a game folder.'),
-                 font=FONTS['mono_sm'],
-                 bg=BG, fg=COLORS['fg_5']
-                 ).pack(anchor='w')
+        head = PageHeader(parent, _('Extract ffpkg Image'),
+                          _('Unpack a .ffpkg back into a game folder.'))
+        head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
+
+        left, right = page_columns(parent)
 
         # ── File picker card ──
-        card = tk.Frame(parent, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        card.pack(fill='x', padx=24, pady=(8, 8))
-        inner = tk.Frame(card, bg=COLORS['bg_2'])
-        inner.pack(fill='x', padx=14, pady=12)
+        card = Card(left, title='Source image',
+                    subtitle='The .ffpkg to unpack and where its files go.')
+        card.pack(fill='x')
+        inner = card.body
+        field_block(inner, _('ffpkg image:').rstrip(':'),
+                    self._ffpkg_extract_file_var,
+                    on_browse=self._ffpkg_extract_browse_image,
+                    browse_text=_('Browse')).pack_configure(pady=0)
+        field_block(inner, _('Output dir:').rstrip(':'),
+                    self._ffpkg_extract_outdir_var,
+                    on_browse=self._ffpkg_extract_browse_outdir,
+                    browse_text=_('Browse'))
+        field_block(inner, _('Folder name:').rstrip(':'),
+                    self._ffpkg_extract_name_var)
 
-        # Image row
-        img_row = tk.Frame(inner, bg=COLORS['bg_2'])
-        img_row.pack(fill='x', pady=(0, 6))
-        tk.Label(img_row, text=_('ffpkg image:'),
-                 font=FONTS['label'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-                 width=12, anchor='w').pack(side='left')
-        ef = tk.Frame(img_row, bg=COLORS['bg_0'],
-                      highlightbackground=COLORS['border_3'],
-                      highlightthickness=1)
-        ef.pack(side='left', fill='x', expand=True)
-        XEntry(ef, textvariable=self._ffpkg_extract_file_var,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-                 insertbackground=ACCENT,
-                 relief='flat', bd=4
-                 ).pack(fill='x')
-        XButton(img_row, text=_('Browse'),
-                  font=(FONTS['body'][0], 9),
-                  bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                  activebackground=COLORS['bg_5'], relief='flat', bd=0,
-                  padx=12, pady=6, cursor='hand2',
-                  highlightbackground=COLORS['border_3'], highlightthickness=1,
-                  command=self._ffpkg_extract_browse_image
-                  ).pack(side='left', padx=(6, 0))
+        # ── Action + status card ──
+        act = Card(right, title=_('Extract'),
+                   subtitle='Extract copies the files out; Mount browses '
+                            'the image in Explorer.')
+        act.pack(fill='x')
+        st_row = tk.Frame(act.body, bg=_B2)
+        st_row.pack(fill='x')
+        tk.Label(st_row, textvariable=self._ffpkg_extract_status_var,
+                 font=FONTS['body_strong'], bg=_B2, fg=COLORS['fg_0'],
+                 anchor='w').pack(side='left')
+        tk.Label(st_row, textvariable=self._ffpkg_extract_eta_var,
+                 font=FONTS['caption'], bg=_B2, fg=COLORS['fg_3'],
+                 anchor='e').pack(side='right')
 
-        # Output dir row
-        out_row = tk.Frame(inner, bg=COLORS['bg_2'])
-        out_row.pack(fill='x', pady=(0, 6))
-        tk.Label(out_row, text=_('Output dir:'),
-                 font=FONTS['label'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-                 width=12, anchor='w').pack(side='left')
-        ef2 = tk.Frame(out_row, bg=COLORS['bg_0'],
-                       highlightbackground=COLORS['border_3'],
-                       highlightthickness=1)
-        ef2.pack(side='left', fill='x', expand=True)
-        XEntry(ef2, textvariable=self._ffpkg_extract_outdir_var,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-                 insertbackground=ACCENT,
-                 relief='flat', bd=4
-                 ).pack(fill='x')
-        XButton(out_row, text=_('Browse'),
-                  font=(FONTS['body'][0], 9),
-                  bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                  activebackground=COLORS['bg_5'], relief='flat', bd=0,
-                  padx=12, pady=6, cursor='hand2',
-                  highlightbackground=COLORS['border_3'], highlightthickness=1,
-                  command=self._ffpkg_extract_browse_outdir
-                  ).pack(side='left', padx=(6, 0))
+        # Progress bar
+        self._ffpkg_extract_bar = CompatBar(act.body, height=6, surface=_B2)
+        self._ffpkg_extract_bar.pack(fill='x', pady=(px(8), 0))
+        self._ffpkg_extract_bar_rect = CompatBar.ITEM
 
-        # Folder name row
-        name_row = tk.Frame(inner, bg=COLORS['bg_2'])
-        name_row.pack(fill='x', pady=(0, 6))
-        tk.Label(name_row, text=_('Folder name:'),
-                 font=FONTS['label'],
-                 bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-                 width=12, anchor='w').pack(side='left')
-        ef3 = tk.Frame(name_row, bg=COLORS['bg_0'],
-                       highlightbackground=COLORS['border_3'],
-                       highlightthickness=1)
-        ef3.pack(side='left', fill='x', expand=True)
-        XEntry(ef3, textvariable=self._ffpkg_extract_name_var,
-                 font=FONTS['mono_sm'],
-                 bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-                 insertbackground=ACCENT,
-                 relief='flat', bd=4
-                 ).pack(fill='x')
-
-        # Action + status row
-        act_row = tk.Frame(parent, bg=BG)
-        act_row.pack(fill='x', padx=24, pady=(0, 8))
-        self._ffpkg_extract_btn = XButton(act_row,
-            text='\U0001f4e4  ' + _('Extract Image'),
-            font=(FONTS['body_strong'][0], 10),
-            bg=ACCENT, fg=COLORS['fg_0'],
-            activebackground=COLORS['accent_hi'],
-            relief='flat', bd=0, padx=18, pady=8,
-            cursor='hand2',
-            command=self._run_ffpkg_extract)
-        self._ffpkg_extract_btn.pack(side='left')
-        self._ffpkg_mount_btn = XButton(act_row,
+        Divider(act.body, color=COLORS['border_1']).pack(
+            fill='x', pady=(px(16), px(12)))
+        act_row = tk.Frame(act.body, bg=_B2)
+        act_row.pack(fill='x')
+        self._ffpkg_extract_btn = _DSButton(act_row,
+            text='\U0001f4e4  ' + _('Extract Image'), variant='primary',
+            command=self._run_ffpkg_extract, surface=_B2)
+        self._ffpkg_extract_btn.pack(side='right')
+        self._ffpkg_mount_btn = _DSButton(act_row,
             text='\U0001f4bd  ' + _('Mount as drive'),
-            font=(FONTS['body_strong'][0], 10),
-            bg=COLORS['bg_3'], fg=COLORS['fg_1'],
-            activebackground=COLORS['bg_5'], activeforeground=COLORS['fg_0'],
-            relief='flat', bd=0, padx=16, pady=8, cursor='hand2',
-            highlightbackground=COLORS['border_3'], highlightthickness=1,
-            command=self._run_ffpkg_mount)
-        self._ffpkg_mount_btn.pack(side='left', padx=(8, 0))
-        self._ffpkg_open_btn = XButton(act_row,
+            command=self._run_ffpkg_mount, surface=_B2)
+        self._ffpkg_mount_btn.pack(side='left')
+        self._ffpkg_open_btn = _DSButton(act_row,
             text='\U0001f4c2  ' + _('Open'),
-            font=(FONTS['body'][0], 9),
-            bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-            activebackground=COLORS['bg_5'], relief='flat', bd=0,
-            padx=12, pady=6, cursor='hand2',
-            highlightbackground=COLORS['border_3'], highlightthickness=1,
-            command=self._ffpkg_open_mounted)
+            command=self._ffpkg_open_mounted, surface=_B2)
         # _ffpkg_open_btn is packed only while a drive is mounted.
-        tk.Label(act_row, textvariable=self._ffpkg_extract_status_var,
-                 font=FONTS['mono_sm'],
-                 bg=BG, fg=COLORS['fg_4']
-                 ).pack(side='left', padx=(12, 0))
-        tk.Label(act_row, textvariable=self._ffpkg_extract_eta_var,
-                 font=FONTS['mono_sm'],
-                 bg=BG, fg=COLORS['accent_hi']
-                 ).pack(side='right')
 
         # Guidance: extract reads each file into memory and UFS2Tool caps
         # that at 2 GB, so very large packaged files can't be extracted
         # directly. Mounting streams on demand and has no such limit.
-        tk.Label(parent,
-            text=_('Tip: extract mounts the image read-only and copies files out (needs the free Dokan driver). A single file of 4 GB or larger can’t be extracted — the bundled mount driver can’t serve a file past the 4 GB boundary, so extraction stops before copying it. Use “Mount as drive” to browse the image and copy smaller files out in Explorer; the same per-file limit applies there too.'),
-            font=FONTS['mono_sm'], bg=BG, fg=COLORS['fg_5'],
-            wraplength=920, justify='left', anchor='w'
-            ).pack(fill='x', padx=24, pady=(0, 6))
+        InfoBar(right, kind='info',
+            text=_('Tip: extract mounts the image read-only and copies files out (needs the free Dokan driver). A single file of 4 GB or larger can’t be extracted — the bundled mount driver can’t serve a file past the 4 GB boundary, so extraction stops before copying it. Use “Mount as drive” to browse the image and copy smaller files out in Explorer; the same per-file limit applies there too.')
+            ).pack(fill='x', pady=(px(16), 0))
 
-        # Progress bar
-        pb_outer = tk.Frame(parent, bg=COLORS['bg_5'], height=8)
-        pb_outer.pack(fill='x', padx=24, pady=(0, 8))
-        pb_outer.pack_propagate(False)
-        self._ffpkg_extract_bar = tk.Canvas(pb_outer,
-            bg=COLORS['bg_5'], highlightthickness=0)
-        self._ffpkg_extract_bar.pack(fill='both', expand=True)
-        self._ffpkg_extract_bar_rect = self._ffpkg_extract_bar.create_rectangle(
-            0, 0, 0, 8, fill=ACCENT, outline='')
-
-        # Log
-        log_outer = tk.Frame(parent, bg=COLORS['bg_0'],
-                              highlightbackground=COLORS['border_2'],
-                              highlightthickness=1)
-        log_outer.pack(fill='both', expand=True, padx=24, pady=(0, 12))
+        # Log (inset well)
+        log_card = Card(parent, title='Extract log', padding=16)
+        log_card.pack(fill='both', expand=True, padx=px(24), pady=(0, px(16)))
+        log_outer = Card(log_card.body, tone='inset', padding=4)
+        log_outer.pack(fill='both', expand=True)
         self._ffpkg_extract_log = tk.Text(log_outer,
-            font=(FONTS['code'][0], 9),
-            bg=COLORS['bg_0'], fg=COLORS['fg_3'],
-            insertbackground=ACCENT,
-            relief='flat', bd=6, wrap='word',
-            state='disabled')
-        sb = XScrollbar(log_outer, command=self._ffpkg_extract_log.yview,
-                          bg=COLORS['bg_3'], troughcolor=COLORS['bg_0'])
+            font=FONTS['code'], bg=COLORS['bg_0'], fg=COLORS['fg_3'],
+            insertbackground=COLORS['fg_1'], relief='flat', bd=6,
+            wrap='word', state='disabled', height=8,
+            highlightthickness=0)
+        sb = XScrollbar(log_outer, command=self._ffpkg_extract_log.yview)
         self._ffpkg_extract_log.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
         self._ffpkg_extract_log.pack(fill='both', expand=True)
@@ -7618,33 +7530,40 @@ class ExFATBuilder(_TK_BASE):
                 def _open_dl():
                     import webbrowser
                     webbrowser.open('https://dotnet.microsoft.com/en-us/download/dotnet/8.0')
+                from ui.shared.widgets import (Button as _DSButton,
+                                               IconLabel as _DSIcon,
+                                               Divider as _DSDivider)
+                _B2, _B1 = COLORS['bg_2'], COLORS['bg_1']
                 dlg = tk.Toplevel(self)
                 dlg.title('.NET 8 Not Found')
-                dlg.configure(bg=BG)
+                dlg.configure(bg=_B2)
                 dlg.resizable(False, False)
                 dlg.grab_set()
-                tk.Label(dlg,
-                         text='\u26a0  .NET 8 Runtime not found',
-                         font=(FONTS['body_strong'][0], 11), bg=BG, fg='#ffaa44'
-                         ).pack(padx=24, pady=(18, 4))
+                _hd = tk.Frame(dlg, bg=_B2)
+                _hd.pack(fill='x', padx=px(24), pady=(px(20), px(4)))
+                _DSIcon(_hd, 'warning', 20, COLORS['warn'], _B2).pack(
+                    side='left', padx=(0, px(10)))
+                tk.Label(_hd, text='.NET 8 Runtime not found',
+                         font=FONTS['title'], bg=_B2, fg=COLORS['fg_0']
+                         ).pack(side='left')
                 tk.Label(dlg,
                          text='UFS2Tool requires the .NET 8 Runtime (not SDK) to build .ffpkg images.\n'
                               'Download and install the Windows x64 Desktop Runtime.',
-                         font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
-                         wraplength=340, justify='left'
-                         ).pack(padx=24, pady=(0, 12))
-                btn_row = tk.Frame(dlg, bg=BG)
-                btn_row.pack(pady=(0, 18))
-                XButton(btn_row, text='\U0001f30d  Open Download Page',
-                          font=(FONTS['body_strong'][0], 10),
-                          bg=ACCENT, fg=TEXT, relief='flat', bd=0,
-                          padx=14, pady=6, cursor='hand2',
-                          command=lambda: (_open_dl(), dlg.destroy())
-                          ).pack(side='left', padx=(0, 8))
-                XButton(btn_row, text='Close',
-                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                          relief='flat', bd=0, padx=14, pady=6, cursor='hand2',
-                          command=dlg.destroy).pack(side='left')
+                         font=FONTS['body'], bg=_B2, fg=COLORS['fg_2'],
+                         wraplength=px(380), justify='left'
+                         ).pack(anchor='w', padx=px(24), pady=(px(4), px(20)))
+                _DSDivider(dlg, color=COLORS['border_2']).pack(fill='x')
+                _ft = tk.Frame(dlg, bg=_B1)
+                _ft.pack(fill='x')
+                btn_row = tk.Frame(_ft, bg=_B1)
+                btn_row.pack(fill='x', padx=px(24), pady=px(14))
+                _DSButton(btn_row, text='Open Download Page', icon='globe',
+                          variant='primary',
+                          command=lambda: (_open_dl(), dlg.destroy()),
+                          surface=_B1).pack(side='right')
+                _DSButton(btn_row, text='Close', command=dlg.destroy,
+                          width=10, surface=_B1).pack(side='right',
+                                                      padx=(0, px(8)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -8057,50 +7976,60 @@ class ExFATBuilder(_TK_BASE):
             self._ffpkg_render_queue()
 
     def _ffpkg_render_queue(self):
+        from ui.shared.widgets import (Badge, IconButton, Divider,
+                                       EmptyState, StepIcon)
+        RB = COLORS['bg_2']
         for w in self._ffpkg_queue_frame.winfo_children():
             w.destroy()
+        try:
+            _n = len(self._ffpkg_queue)
+            self._ffpkg_queue_count_var.set(
+                '%d item%s' % (_n, '' if _n == 1 else 's'))
+        except Exception:
+            pass
         if not self._ffpkg_queue:
-            tk.Label(self._ffpkg_queue_frame,
-                     text='Queue is empty — add a game folder above',
-                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5'],
-                     pady=14).pack()
+            EmptyState(self._ffpkg_queue_frame, icon='queue',
+                       title='Queue is empty \u2014 add a game folder above',
+                       text='', bg=RB).pack(fill='x')
             return
+        _glyph = {'waiting': '\u23f3', 'building': '\u25b6',
+                  'done': '\u2714', 'failed': '\u2715'}
+        _word = {'waiting': ('Waiting', 'neutral', 'queue'),
+                 'building': ('Building', 'info', 'loader'),
+                 'done': ('Done', 'success', 'check'),
+                 'failed': ('Failed', 'danger', 'error')}
         for i, item in enumerate(self._ffpkg_queue):
-            bg = QUEUE_ODD if i % 2 == 0 else QUEUE_EVEN
-            row = tk.Frame(self._ffpkg_queue_frame, bg=bg)
-            row.pack(fill='x')
-            # Status dot
-            dot = tk.Canvas(row, width=12, height=12, bg=bg, highlightthickness=0)
-            dot.pack(side='left', padx=(10, 6), pady=8)
-            colour = {
-                'waiting':  BORDER,
-                'building': ACCENT,
-                'done':     SUCCESS,
-                'failed':   DANGER,
-            }.get(item['status'], BORDER)
-            dot.create_oval(1, 1, 11, 11, fill=colour, outline='')
-            # Name
-            tk.Label(row, text=item['name'],
-                     font=(FONTS['body'][0], 9), bg=bg, fg=TEXT,
-                     anchor='w').pack(side='left', fill='x', expand=True, padx=(0, 8))
+            if i:
+                Divider(self._ffpkg_queue_frame,
+                        color=COLORS['border_1']).pack(fill='x')
+            row = tk.Frame(self._ffpkg_queue_frame, bg=RB)
+            row.pack(fill='x', pady=px(6))
+            # Status icon
+            StepIcon(row, _glyph.get(item['status'], '\u23f3'), size=16,
+                     bg=RB).pack(side='left', padx=(0, px(10)))
             # Remove button (only when not building)
             if not self._ffpkg_building:
                 idx = i
-                XButton(row, text='\u2715',
-                          font=(FONTS['body'][0], 9), bg=bg, fg=DANGER,
-                          activebackground=bg, activeforeground=DANGER,
-                          relief='flat', bd=0, padx=8, cursor='hand2',
-                          command=lambda ix=idx: self._ffpkg_remove_item(ix)
-                          ).pack(side='right', padx=(0, 6))
+                IconButton(row, 'trash',
+                           lambda ix=idx: self._ffpkg_remove_item(ix),
+                           tooltip='Remove from queue', size='sm',
+                           surface=RB).pack(side='right')
             # Upload button if done
             if item['status'] == 'done':
                 out_path = os.path.join(item['odir'], item['name'])
-                XButton(row, text='\u2191 PS5',
-                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=ACCENT,
-                          activebackground=BORDER, activeforeground=ACCENT,
-                          relief='flat', bd=0, padx=8, pady=2, cursor='hand2',
-                          command=lambda p=out_path: self._ftp_upload_file(p)
-                          ).pack(side='right', padx=(0, 4))
+                IconButton(row, 'upload',
+                           lambda p=out_path: self._ftp_upload_file(p),
+                           tooltip='Upload to PS5', size='sm',
+                           surface=RB).pack(side='right')
+            word, tone, bicon = _word.get(item['status'],
+                                          (str(item['status']).title(),
+                                           'neutral', None))
+            Badge(row, word, tone, icon=bicon, surface=RB).pack(
+                side='right', padx=(px(8), px(8)))
+            # Name
+            tk.Label(row, text=item['name'], font=FONTS['body'], bg=RB,
+                     fg=COLORS['fg_1'], anchor='w').pack(
+                         side='left', fill='x', expand=True)
 
     def _ffpkg_run_queue(self):
         if self._ffpkg_building:
@@ -8208,20 +8137,20 @@ class ExFATBuilder(_TK_BASE):
             pass
 
     def _field(self, parent, label, var, browse_cmd, drag_drop=False):
-        row = tk.Frame(parent, bg=BG)
-        row.pack(fill='x', pady=(0, 6))
-        tk.Label(row, text=label, font=(FONTS['body'][0], 9),
-                 bg=BG, fg=MUTED, anchor='w').pack(fill='x')
-        inner = tk.Frame(row, bg=BG)
-        inner.pack(fill='x', pady=(3, 0))
-        ef = tk.Frame(inner, bg=FIELD_BG,
-                      highlightbackground=BORDER, highlightthickness=1)
+        from ui.shared.widgets import (Button as _DSButton,
+                                       TextField as _DSField)
+        from tkinter_theme import surface_of
+        bg = surface_of(parent)
+        row = tk.Frame(parent, bg=bg)
+        row.pack(fill='x', pady=(0, px(12)))
+        tk.Label(row, text=label, font=FONTS['body'], bg=bg,
+                 fg=COLORS['fg_2'], anchor='w').pack(fill='x')
+        inner = tk.Frame(row, bg=bg)
+        inner.pack(fill='x', pady=(px(4), 0))
+        ef = tk.Frame(inner, bg=bg)
         ef.pack(side='left', fill='x', expand=True)
-        entry = XEntry(ef, textvariable=var, font=(FONTS['code'][0], 10),
-                 bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
-                 selectbackground=FIELD_SEL_BG, selectforeground=FIELD_SEL_FG,
-                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
-                 relief='flat', bd=6, state='readonly')
+        entry = _DSField(ef, textvariable=var, mono=True, state='readonly',
+                         surface=bg)
         entry.pack(fill='x')
         if drag_drop:
             entry.drop_target_register = lambda *a: None
@@ -8232,11 +8161,9 @@ class ExFATBuilder(_TK_BASE):
                 ef.dnd_bind('<<Drop>>', lambda e: self._on_drop(e.data))
             except Exception:
                 pass
-        XButton(inner, text='Browse', font=(FONTS['body'][0], 9),
-                  bg=SURFACE2, fg=TEXT, activebackground=BORDER,
-                  activeforeground=TEXT, relief='flat', bd=0,
-                  padx=14, pady=6, cursor='hand2',
-                  command=browse_cmd).pack(side='left', padx=(6, 0))
+        _DSButton(inner, text='Browse', icon='folder_open',
+                  command=browse_cmd, surface=bg).pack(side='left',
+                                                       padx=(px(6), 0))
         return entry
 
     def _find_osfmount(self):
@@ -9019,21 +8946,26 @@ class ExFATBuilder(_TK_BASE):
         n_physical = len(drives) - n_virtual
 
         # ── Build dialog ──
+        from ui.shared.widgets import (Button as _DSButton, Check as _DSCheck,
+                                       Divider as _DSDivider, Badge as _DSBadge)
+        _B2, _B1 = COLORS['bg_2'], COLORS['bg_1']
         dlg = tk.Toplevel(self)
         dlg.title('Force Dismount — Select Drive')
-        dlg.configure(bg=BG)
+        dlg.configure(bg=_B2)
         dlg.resizable(False, False)
         dlg.attributes('-topmost', True)
 
         tk.Label(dlg, text='Select drive(s) to force dismount:',
-                 font=(FONTS['body_strong'][0], 10), bg=BG, fg=TEXT,
-                 padx=20, pady=12).pack(anchor='w')
+                 font=FONTS['title'], bg=_B2, fg=COLORS['fg_0'],
+                 anchor='w').pack(fill='x', padx=px(24), pady=(px(20), 0))
 
         tk.Label(dlg,
                  text='Your system drive is hidden for safety.',
-                 font=(FONTS['body'][0], 9),
-                 bg=BG, fg=COLORS['fg_4'],
-                 padx=20, pady=(0, 6)).pack(anchor='w')
+                 font=FONTS['body'], bg=_B2, fg=COLORS['fg_2'],
+                 anchor='w').pack(fill='x', padx=px(24),
+                                  pady=(px(4), px(12)))
+        rows_box = tk.Frame(dlg, bg=_B2)
+        rows_box.pack(fill='x', padx=px(24))
 
         check_vars = {}
         physical_rows = []  # list of (Frame, drive_letter)
@@ -9041,26 +8973,19 @@ class ExFATBuilder(_TK_BASE):
         def _row(d, hidden=False):
             var = tk.BooleanVar(value=d['current'])
             check_vars[d['letter']] = var
-            row = tk.Frame(dlg, bg=BG)
+            row = tk.Frame(rows_box, bg=_B2)
             if not hidden:
-                row.pack(fill='x', padx=20, pady=2)
-            tag = ''
+                row.pack(fill='x', pady=px(2))
+            _DSCheck(row, variable=var,
+                     text='%s:  %s  (%s)' % (d['letter'], d['label'],
+                                            d['size']),
+                     surface=_B2).pack(side='left')
             if d['current']:
-                tag = '  \u2190 current build drive'
+                _DSBadge(row, 'current build drive', 'info',
+                         surface=_B2).pack(side='left', padx=(px(8), 0))
             elif not d['is_virtual']:
-                tag = '  \u2014 physical drive!'
-            XCheck(row, variable=var,
-                           bg=BG, activebackground=BG,
-                           selectcolor=ACCENT,
-                           cursor='hand2').pack(side='left')
-            color = ACCENT if d['current'] else (
-                '#c08040' if not d['is_virtual'] else TEXT)
-            tk.Label(row,
-                     text='%s:  %s  (%s)%s' % (
-                         d['letter'], d['label'], d['size'], tag),
-                     font=(FONTS['body'][0], 9),
-                     bg=BG, fg=color,
-                     anchor='w').pack(side='left')
+                _DSBadge(row, 'physical drive!', 'warn',
+                         surface=_B2).pack(side='left', padx=(px(8), 0))
             return row
 
         # Virtual drives
@@ -9069,27 +8994,24 @@ class ExFATBuilder(_TK_BASE):
                 _row(d, hidden=False)
 
         if not n_virtual:
-            tk.Label(dlg,
+            tk.Label(rows_box,
                      text='(No virtual drives detected. Use the '
                           'Advanced toggle below to show physical '
                           'drives — but be very careful.)',
-                     font=(FONTS['body'][0], 9),
-                     bg=BG, fg=COLORS['fg_4'],
-                     padx=20, pady=(6, 0), wraplength=380,
-                     justify='left'
-                     ).pack(anchor='w')
+                     font=FONTS['caption'], bg=_B2, fg=COLORS['fg_3'],
+                     wraplength=px(380), justify='left'
+                     ).pack(anchor='w', pady=(px(6), 0))
 
         # Physical drives — hidden behind an expander
         if n_physical:
-            adv = tk.Frame(dlg, bg=BG)
-            adv.pack(fill='x', padx=20, pady=(8, 0))
+            adv = tk.Frame(rows_box, bg=_B2)
+            adv.pack(fill='x', pady=(px(10), 0))
             show_phys = tk.BooleanVar(value=False)
 
             def _toggle_physical():
                 if show_phys.get():
                     for row in physical_rows:
-                        row.pack(fill='x', padx=20, pady=2,
-                                 before=adv)
+                        row.pack(fill='x', pady=px(2), before=adv)
                 else:
                     for row in physical_rows:
                         row.pack_forget()
@@ -9100,24 +9022,21 @@ class ExFATBuilder(_TK_BASE):
                             if d['letter'] in check_vars:
                                 check_vars[d['letter']].set(False)
 
-            XCheck(adv, variable=show_phys,
-                           text=('\u26a0  Show physical drives '
-                                 '(%d hidden) \u2014 advanced'
-                                 % n_physical),
-                           font=(FONTS['body'][0], 9),
-                           bg=BG, fg='#c08040',
-                           activebackground=BG,
-                           selectcolor=BG,
-                           cursor='hand2',
-                           command=_toggle_physical
-                           ).pack(anchor='w')
+            _DSCheck(adv, variable=show_phys,
+                     text=('Show physical drives '
+                           '(%d hidden) \u2014 advanced' % n_physical),
+                     command=_toggle_physical, surface=_B2).pack(anchor='w')
 
             for d in drives:
                 if not d['is_virtual']:
                     physical_rows.append(_row(d, hidden=True))
 
-        btn_row = tk.Frame(dlg, bg=BG)
-        btn_row.pack(fill='x', padx=20, pady=(12, 16))
+        tk.Frame(dlg, bg=_B2, height=px(20)).pack(fill='x')
+        _DSDivider(dlg, color=COLORS['border_2']).pack(fill='x')
+        _foot = tk.Frame(dlg, bg=_B1)
+        _foot.pack(fill='x')
+        btn_row = tk.Frame(_foot, bg=_B1)
+        btn_row.pack(fill='x', padx=px(24), pady=px(14))
 
         selected = [None]
 
@@ -9143,17 +9062,11 @@ class ExFATBuilder(_TK_BASE):
             selected[0] = picks
             dlg.destroy()
 
-        XButton(btn_row, text='\u23cf Dismount Selected',
-                  font=(FONTS['body_strong'][0], 10),
-                  bg=DANGER, fg=TEXT, activebackground='#c0392b',
-                  relief='flat', bd=0, padx=16, pady=8,
-                  cursor='hand2', command=_go).pack(side='right')
-        XButton(btn_row, text='Cancel',
-                  font=(FONTS['body'][0], 9),
-                  bg=SURFACE2, fg=MUTED, activebackground=BORDER,
-                  relief='flat', bd=0, padx=12, pady=8,
-                  cursor='hand2', command=dlg.destroy
-                  ).pack(side='right', padx=(0, 8))
+        _DSButton(btn_row, text='Dismount Selected', icon='eject',
+                  variant='danger', command=_go,
+                  surface=_B1).pack(side='right')
+        _DSButton(btn_row, text='Cancel', command=dlg.destroy, width=10,
+                  surface=_B1).pack(side='right', padx=(0, px(8)))
 
         dlg.grab_set()
         self.wait_window(dlg)
@@ -10846,9 +10759,12 @@ class ExFATBuilder(_TK_BASE):
         import math as _math
         suggested_gb = (int(_math.ceil(src_gb * 1.10)) if src_gb else 0)
 
+        from ui.shared.widgets import (Button as _DSButton, Divider,
+                                       TextField as _DSField)
+        _B2, _B1 = COLORS['bg_2'], COLORS['bg_1']
         win = tk.Toplevel(self)
         win.title('Custom image size — ' + display)
-        win.configure(bg=BG)
+        win.configure(bg=_B2)
         win.transient(self)
         win.resizable(False, False)
         # Make it modal-ish: grab focus, close on Escape.
@@ -10858,23 +10774,17 @@ class ExFATBuilder(_TK_BASE):
             pass
 
         # Header
-        head = tk.Frame(win, bg=BG)
-        head.pack(fill='x', padx=20, pady=(18, 4))
-        tk.Label(head, text='\U0001f4cf  Custom image size',
-                  font=(FONTS['body_strong'][0], 11),
-                  bg=BG, fg=TEXT).pack(anchor='w')
-        tk.Label(head, text=display,
-                  font=(FONTS['body'][0], 9),
-                  bg=BG, fg=MUTED, wraplength=440,
-                  justify='left').pack(anchor='w', pady=(2, 0))
+        head = tk.Frame(win, bg=_B2)
+        head.pack(fill='x', padx=px(24), pady=(px(20), 0))
+        tk.Label(head, text='Custom image size', font=FONTS['title'],
+                 bg=_B2, fg=COLORS['fg_0']).pack(anchor='w')
+        tk.Label(head, text=display, font=FONTS['body'], bg=_B2,
+                 fg=COLORS['fg_2'], wraplength=px(440),
+                 justify='left').pack(anchor='w', pady=(px(4), 0))
 
         # Body
-        body = tk.Frame(win, bg=SURFACE2,
-                         highlightbackground=BORDER,
-                         highlightthickness=1)
-        body.pack(fill='x', padx=20, pady=(12, 4))
-        inner = tk.Frame(body, bg=SURFACE2)
-        inner.pack(fill='x', padx=16, pady=14)
+        inner = tk.Frame(win, bg=_B2)
+        inner.pack(fill='x', padx=px(24), pady=(px(16), px(20)))
 
         # Source size info
         if src_bytes > 0:
@@ -10883,47 +10793,37 @@ class ExFATBuilder(_TK_BASE):
                            % (src_gb,
                               '{:,}'.format(self._count_files(
                                   item.game_folder))),
-                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
+                      font=FONTS['body'], bg=_B2, fg=COLORS['fg_2'],
                       anchor='w').pack(fill='x')
             tk.Label(inner,
                       text='Suggested override: %d GB  '
                            '(source \u00d7 1.10, rounded up)'
                            % suggested_gb,
-                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=ACCENT,
-                      anchor='w').pack(fill='x', pady=(2, 8))
+                      font=FONTS['body'], bg=_B2, fg=COLORS['fg_2'],
+                      anchor='w').pack(fill='x', pady=(px(2), px(12)))
         else:
             tk.Label(inner,
                       text='(Could not measure source folder size)',
-                      font=(FONTS['body'][0], 9), bg=SURFACE2, fg=DANGER,
-                      anchor='w').pack(fill='x', pady=(0, 8))
+                      font=FONTS['body'], bg=_B2, fg=COLORS['danger_hi'],
+                      anchor='w').pack(fill='x', pady=(0, px(12)))
 
         # Entry
-        entry_row = tk.Frame(inner, bg=SURFACE2)
-        entry_row.pack(fill='x')
-        tk.Label(entry_row, text='Image size (GB):',
-                  font=(FONTS['body_strong'][0], 10),
-                  bg=SURFACE2, fg=TEXT).pack(side='left')
+        tk.Label(inner, text='Image size (GB):', font=FONTS['body'],
+                 bg=_B2, fg=COLORS['fg_2'], anchor='w').pack(fill='x')
+        entry_row = tk.Frame(inner, bg=_B2)
+        entry_row.pack(fill='x', pady=(px(4), 0))
         _cur_gb = coerce_size_gb(item.size_override_gb)
         size_var = tk.StringVar(
             value=('%g' % _cur_gb if _cur_gb else ''))
-        ef = tk.Frame(entry_row, bg=FIELD_BG,
-                       highlightbackground=BORDER, highlightthickness=1)
-        ef.pack(side='left', padx=(8, 0))
-        entry = XEntry(ef, textvariable=size_var,
-                          font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
-                          insertbackground=FIELD_FG, relief='flat', bd=4,
-                          width=8)
-        entry.pack()
+        entry = _DSField(entry_row, textvariable=size_var, mono=True,
+                         width=10, surface=_B2)
+        entry.pack(side='left')
         entry.focus_set()
         entry.icursor('end')
 
         # Quick-pick buttons for common bumps
         if suggested_gb > 0:
-            qp = tk.Frame(inner, bg=SURFACE2)
-            qp.pack(fill='x', pady=(10, 0))
-            tk.Label(qp, text='Quick pick:',
-                      font=(FONTS['body'][0], 9), bg=SURFACE2,
-                      fg=MUTED).pack(side='left', padx=(0, 6))
+            qp = entry_row
             for bump_label, bump_val in [
                     ('Suggested (%d)' % suggested_gb, suggested_gb),
                     ('+1 GB',  suggested_gb + 1),
@@ -10931,12 +10831,8 @@ class ExFATBuilder(_TK_BASE):
                     ('+5 GB',  suggested_gb + 5)]:
                 def _set(v=bump_val):
                     size_var.set(str(v))
-                XButton(qp, text=bump_label,
-                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                          activebackground=BORDER,
-                          relief='flat', bd=0, padx=10, pady=3,
-                          cursor='hand2', command=_set
-                          ).pack(side='left', padx=(0, 4))
+                _DSButton(qp, text=bump_label, size='sm', command=_set,
+                          surface=_B2).pack(side='left', padx=(px(6), 0))
 
         # Hint
         tk.Label(inner,
@@ -10944,13 +10840,16 @@ class ExFATBuilder(_TK_BASE):
                         'is in whole GB. The build will fail at the '
                         'copy step if you pick a size smaller than '
                         'the source.'),
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                  wraplength=400, justify='left', anchor='w'
-                  ).pack(fill='x', pady=(10, 0))
+                  font=FONTS['caption'], bg=_B2, fg=COLORS['fg_3'],
+                  wraplength=px(440), justify='left', anchor='w'
+                  ).pack(fill='x', pady=(px(8), 0))
 
-        # Buttons
-        btn_row = tk.Frame(win, bg=BG)
-        btn_row.pack(fill='x', padx=20, pady=(8, 18))
+        # Footer band (bg_1) with right-aligned buttons
+        Divider(win, color=COLORS['border_2']).pack(fill='x')
+        btn_row = tk.Frame(win, bg=_B1)
+        btn_row.pack(fill='x')
+        btn_row = tk.Frame(btn_row, bg=_B1)
+        btn_row.pack(fill='x', padx=px(24), pady=px(14))
 
         def _apply():
             raw = size_var.get().strip()
@@ -10998,28 +10897,13 @@ class ExFATBuilder(_TK_BASE):
                 pass
             win.destroy()
 
-        XButton(btn_row, text='Apply',
-                   font=(FONTS['body_strong'][0], 9),
-                   bg=ACCENT, fg=TEXT,
-                   activebackground=ACCENT, activeforeground=TEXT,
-                   relief='flat', bd=0, padx=18, pady=7,
-                   cursor='hand2', command=_apply
-                   ).pack(side='right')
-        XButton(btn_row, text='Cancel',
-                   font=(FONTS['body'][0], 9),
-                   bg=SURFACE2, fg=TEXT,
-                   activebackground=BORDER, activeforeground=TEXT,
-                   relief='flat', bd=0, padx=14, pady=7,
-                   cursor='hand2', command=win.destroy
-                   ).pack(side='right', padx=(0, 6))
+        _DSButton(btn_row, text='Apply', variant='primary', command=_apply,
+                  width=10, surface=_B1).pack(side='right')
+        _DSButton(btn_row, text='Cancel', command=win.destroy, width=10,
+                  surface=_B1).pack(side='right', padx=(0, px(8)))
         if coerce_size_gb(item.size_override_gb):
-            XButton(btn_row, text='Clear override',
-                       font=(FONTS['body'][0], 9),
-                       bg=SURFACE2, fg=DANGER,
-                       activebackground=BORDER, activeforeground=DANGER,
-                       relief='flat', bd=0, padx=12, pady=7,
-                       cursor='hand2', command=_clear
-                       ).pack(side='left')
+            _DSButton(btn_row, text='Clear override', variant='subtle',
+                      command=_clear, surface=_B1).pack(side='left')
 
         # Wire Enter / Escape.
         entry.bind('<Return>', lambda _e: _apply())
@@ -11055,176 +10939,155 @@ class ExFATBuilder(_TK_BASE):
             except Exception:
                 pass
             return
+        from ui.shared.widgets import (Badge, Button as _DSButton,
+                                       IconButton, Divider, EmptyState,
+                                       StepIcon)
+        RB = COLORS['bg_2']
         for w in self._queue_frame.winfo_children():
             w.destroy()
         self._queue_count_var.set(str(len(self._queue)) + ' items')
         if not self._queue:
-            tk.Label(self._queue_frame,
-                     text='No items yet  \u2014  add a game above',
-                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                     pady=14).pack()
+            EmptyState(self._queue_frame, icon='queue', title='No items yet',
+                       text='Add a game above, or drop game folders here.',
+                       bg=RB).pack(fill='x')
             return
+        _glyph = {'waiting': '⏳', 'building': '▶',
+                  'done': '✔', 'failed': '✕'}
+        _word = {'waiting': ('Waiting', 'neutral', 'queue'),
+                 'building': ('Building', 'info', 'loader'),
+                 'done': ('Done', 'success', 'check'),
+                 'failed': ('Failed', 'danger', 'error')}
         for i, item in enumerate(self._queue):
-            row_bg = QUEUE_ODD if i % 2 == 0 else QUEUE_EVEN
-            row = tk.Frame(self._queue_frame, bg=row_bg)
-            row.pack(fill='x')
-            dot_color = {'waiting': MUTED, 'building': ACCENT,
-                         'done': SUCCESS, 'failed': DANGER}.get(item.status, MUTED)
-            dot = tk.Canvas(row, width=10, height=10, bg=row_bg,
-                            highlightthickness=0)
-            dot.pack(side='left', padx=(10, 6), pady=9)
-            dot.create_oval(1, 1, 9, 9, fill=dot_color, outline='')
+            if i:
+                Divider(self._queue_frame,
+                        color=COLORS['border_1']).pack(fill='x')
+            row = tk.Frame(self._queue_frame, bg=RB)
+            row.pack(fill='x', pady=px(6))
+            StepIcon(row, _glyph.get(item.status, '⏳'), size=16,
+                     bg=RB).pack(side='left', anchor='n', padx=(0, px(10)),
+                                 pady=(px(2), 0))
             display = item.game_title or os.path.basename(item.game_folder)
             if item.version:
                 display += '  v' + item.version
-            # Status badge for done/failed
-            if item.status == 'done':
-                tk.Label(row, text='\u2713', font=(FONTS['body'][0], 9),
-                         bg=row_bg, fg=SUCCESS).pack(side='left', padx=(0, 4))
-            elif item.status == 'failed':
-                tk.Label(row, text='\u2717', font=(FONTS['body'][0], 9),
-                         bg=row_bg, fg=DANGER).pack(side='left', padx=(0, 4))
             idx = i
             # v3.0.0: pack the right-side action cluster BEFORE the
             # expanding labels below. Otherwise long game titles
             # push these off-screen and the user can't reach them.
-            # The × remove button packs first (rightmost), then any
+            # The remove button packs first (rightmost), then any
             # status-specific buttons (Open folder, Upload, Size).
-            XButton(row, text='\u00d7', font=(FONTS['body'][0], 10),
-                      bg=row_bg, fg=DANGER,
-                      activebackground=row_bg, activeforeground=DANGER,
-                      relief='flat', bd=0, padx=8, pady=4,
-                      cursor='hand2',
-                      command=lambda ix=idx: self._remove_queue_item(ix)
-                      ).pack(side='right', padx=(0, 4))
+            IconButton(row, 'trash',
+                       lambda ix=idx: self._remove_queue_item(ix),
+                       tooltip='Remove from queue', size='sm',
+                       surface=RB).pack(side='right', anchor='n')
             # Open output folder + Upload — only when done
             if item.status == 'done':
                 out_path = os.path.join(item.output_dir, item.output_name)
-                XButton(row, text='\U0001f4c2', font=(FONTS['body'][0], 10),
-                          bg=row_bg, fg=MUTED,
-                          activebackground=row_bg, activeforeground=TEXT,
-                          relief='flat', bd=0, padx=6, pady=4,
-                          cursor='hand2',
-                          command=lambda p=item.output_dir: self._open_folder(p)
-                          ).pack(side='right', padx=(0, 2))
-                XButton(row, text='\u2191 PS5', font=(FONTS['body'][0], 9),
-                          bg=row_bg, fg=ACCENT,
-                          activebackground=row_bg, activeforeground=ACCENT,
-                          relief='flat', bd=0, padx=6, pady=4,
-                          cursor='hand2',
-                          command=lambda p=out_path: self._ftp_upload_file(p)
-                          ).pack(side='right', padx=(0, 2))
-            # v3.0.0: Size button. Now packed as a proper bordered
-            # pill (visible whether or not a size is set) BEFORE
-            # the expanding labels so it never gets clipped. Hidden
-            # once the row is building/done — size is locked in.
+                IconButton(row, 'folder_open',
+                           lambda p=item.output_dir: self._open_folder(p),
+                           tooltip='Open output folder', size='sm',
+                           surface=RB).pack(side='right', anchor='n')
+                IconButton(row, 'upload',
+                           lambda p=out_path: self._ftp_upload_file(p),
+                           tooltip='Upload to PS5', size='sm',
+                           surface=RB).pack(side='right', anchor='n')
+            # v3.0.0: Size button — visible whether or not a size is set,
+            # packed BEFORE the expanding labels so it never gets
+            # clipped. Hidden once the row is building/done.
             if item.status in ('waiting', 'failed'):
-                # 'auto' (Build tab sentinel) / bad values -> no pill value
+                # 'auto' (Build tab sentinel) / bad values -> no value
                 cur = coerce_size_gb(getattr(item, 'size_override_gb', None))
                 if cur:
-                    # Override active: solid accent pill, bold.
-                    pill_bg = ACCENT
-                    pill_fg = TEXT
-                    pill_border = ACCENT
-                    pill_text = '\U0001f4cf  %d GB' % cur
-                    pill_weight = 'bold'
+                    pill_text = '%d GB' % cur
                     pill_tip = ('Custom image size: %d GB. '
                                 'Click to change or clear.' % cur)
                 else:
-                    # No override: accent-ringed pill with the row's
-                    # own background as the interior, so it stays
-                    # visibly distinct on every row regardless of
-                    # alternating row colours.
-                    pill_bg = row_bg
-                    pill_fg = ACCENT
-                    pill_border = ACCENT
-                    pill_text = '\U0001f4cf  Size'
-                    pill_weight = 'bold'
+                    pill_text = 'Size'
                     pill_tip = ('Set a custom image size for this '
                                 'build. Useful when the auto-size '
                                 'is too small (e.g. Gear Club '
                                 'Unlimited needs +1 GB).')
-                # 2-pixel ring frame so the pill is clearly outlined
-                # even on rows that share its interior colour.
-                pill_wrap = tk.Frame(row, bg=pill_border)
-                pill_wrap.pack(side='right', padx=(0, 6), pady=4)
-                size_btn = XButton(pill_wrap, text=pill_text,
-                          font=('Segoe UI', 8, pill_weight),
-                          bg=pill_bg, fg=pill_fg,
-                          activebackground=ACCENT,
-                          activeforeground=TEXT,
-                          relief='flat', bd=0, padx=10, pady=3,
-                          cursor='hand2',
-                          command=lambda ix=idx:
-                              self._show_size_override_dialog(ix))
-                # 2px inset on top/bottom gives the pill a clearly
-                # visible outline ring on every row.
-                size_btn.pack(padx=2, pady=2)
-                try:
-                    Tooltip(size_btn, pill_tip)
-                except Exception:
-                    pass
-            # Now the expanding text labels can take whatever's left.
-            tk.Label(row, text=display, font=(FONTS['body_strong'][0], 9),
-                     bg=row_bg, fg=TEXT, anchor='w').pack(side='left')
-            tk.Label(row, text='  \u2192  ' + item.output_name,
-                     font=(FONTS['code'][0], 8), bg=row_bg, fg=INFO_FG,
-                     anchor='w').pack(side='left')
-            tk.Label(row, text=item.output_dir,
-                     font=(FONTS['body'][0], 9), bg=row_bg, fg=MUTED,
-                     anchor='w').pack(side='left', padx=(6, 0), fill='x', expand=True)
+                size_btn = _DSButton(
+                    row, text=pill_text, icon='ruler', size='sm',
+                    variant='selected' if cur else 'secondary',
+                    command=lambda ix=idx: self._show_size_override_dialog(ix),
+                    tooltip=pill_tip, surface=RB)
+                size_btn.pack(side='right', anchor='n', padx=(0, px(6)))
+            word, tone, bicon = _word.get(item.status,
+                                          (str(item.status).title(),
+                                           'neutral', None))
+            Badge(row, word, tone, icon=bicon, surface=RB).pack(
+                side='right', anchor='n', padx=(px(8), px(8)),
+                pady=(px(4), 0))
+            # Now the text column can take whatever's left.
+            col = tk.Frame(row, bg=RB)
+            col.pack(side='left', fill='x', expand=True)
+            tk.Label(col, text=display, font=FONTS['body'], bg=RB,
+                     fg=COLORS['fg_1'], anchor='w').pack(fill='x')
+            sub = tk.Frame(col, bg=RB)
+            sub.pack(fill='x')
+            tk.Label(sub, text=item.output_name, font=FONTS['code'],
+                     bg=RB, fg=COLORS['fg_3'], anchor='w').pack(side='left')
+            tk.Label(sub, text=item.output_dir, font=FONTS['caption'],
+                     bg=RB, fg=COLORS['fg_4'], anchor='w').pack(
+                         side='left', padx=(px(8), 0), fill='x',
+                         expand=True)
             # Right-click context menu
             def _show_ctx(event, it=item, ix=idx):
-                menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
-                               activebackground=ACCENT, activeforeground=TEXT,
-                               font=(FONTS['body'][0], 9))
-                menu.add_command(label='\U0001f4c2  Open source folder',
+                menu = tk.Menu(self, tearoff=0, bg=COLORS['bg_3'],
+                               fg=COLORS['fg_1'],
+                               activebackground=COLORS['bg_4'],
+                               activeforeground=COLORS['fg_0'],
+                               font=FONTS['body'], bd=1, relief='flat')
+                menu.add_command(label='Open source folder',
                     command=lambda: self._open_folder(it.game_folder))
-                menu.add_command(label='\U0001f4c2  Open output folder',
+                menu.add_command(label='Open output folder',
                     command=lambda: self._open_folder(it.output_dir))
                 if it.status in ('waiting', 'failed'):
                     menu.add_separator()
-                    menu.add_command(label='\u25b6  Build this item',
+                    menu.add_command(label='Build this item',
                         command=lambda: self._build_single(ix))
                     # v3.0.0: per-item custom size override.
                     cur_size = coerce_size_gb(
                         getattr(it, 'size_override_gb', None))
-                    size_label = ('\U0001f4cf  Set custom size... '
-                                   '(currently %d GB)' % cur_size
-                                   if cur_size else
-                                   '\U0001f4cf  Set custom size...')
+                    size_label = ('Set custom size… '
+                                  '(currently %d GB)' % cur_size
+                                  if cur_size else
+                                  'Set custom size…')
                     menu.add_command(label=size_label,
                         command=lambda: self._show_size_override_dialog(ix))
                 if it.status == 'done':
                     out_path = os.path.join(it.output_dir, it.output_name)
                     menu.add_separator()
-                    menu.add_command(label='\U0001f4be  Reveal .exfat in Explorer',
+                    menu.add_command(label='Reveal .exfat in Explorer',
                         command=lambda: self._reveal_in_explorer(out_path))
-                    menu.add_command(label='\u2191  Upload to PS5',
+                    menu.add_command(label='Upload to PS5',
                         command=lambda: self._ftp_upload_file(out_path))
                 # Move up / down — only show if more than one item
                 if len(self._queue) > 1:
                     menu.add_separator()
                     if ix > 0:
-                        menu.add_command(label='\u2191  Move up',
+                        menu.add_command(label='Move up',
                             command=lambda: self._move_queue_item(ix, ix - 1))
                     if ix < len(self._queue) - 1:
-                        menu.add_command(label='\u2193  Move down',
+                        menu.add_command(label='Move down',
                             command=lambda: self._move_queue_item(ix, ix + 1))
                 # Copy paths — convenience for sharing paths in bug reports
                 menu.add_separator()
-                menu.add_command(label='\U0001f4cb  Copy source path',
+                menu.add_command(label='Copy source path',
                     command=lambda: self._clip_set(it.game_folder))
-                menu.add_command(label='\U0001f4cb  Copy output path',
+                menu.add_command(label='Copy output path',
                     command=lambda: self._clip_set(
                         os.path.join(it.output_dir, it.output_name)))
                 menu.add_separator()
-                menu.add_command(label='\u2717  Remove from queue',
+                menu.add_command(label='Remove from queue',
                     command=lambda: self._remove_queue_item(ix))
                 menu.tk_popup(event.x_root, event.y_root)
-            row.bind('<Button-3>', _show_ctx)
-            for child in row.winfo_children():
-                child.bind('<Button-3>', _show_ctx)
+
+            def _bind_ctx(w, fn=_show_ctx):
+                w.bind('<Button-3>', fn)
+                for child in w.winfo_children():
+                    _bind_ctx(child, fn)
+            _bind_ctx(row)
 
     def _resume_queue(self):
         """Resume a paused queue."""

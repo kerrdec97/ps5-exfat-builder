@@ -67,26 +67,18 @@ _MOUNT_TIMEOUT_S = 90
 
 
 def _flow_chips(parent, src_ext, dst_ext):
-    """Compact Source → Destination flow chips, packed right in a
-    card head (v3.6.0 pass)."""
-    wrap = tk.Frame(parent, bg=COLORS['bg_2'])
-    wrap.pack(side='right', padx=(8, 0))
-    tk.Label(wrap, text=' ' + src_ext + ' ',
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['accent_08'], fg=COLORS['accent_hi'],
-             padx=6, pady=2,
-             highlightbackground=COLORS['accent_lo'],
-             highlightthickness=1).pack(side='left')
-    tk.Label(wrap, text='\u2192',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=6)
-    tk.Label(wrap, text=' ' + dst_ext + ' ',
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['teal_bg'], fg=COLORS['teal_hi'],
-             padx=6, pady=2,
-             highlightbackground=COLORS['border_3'],
-             highlightthickness=1).pack(side='left')
+    """Compact Source → Destination format chips (mono badges + arrow),
+    packed right in a card head / row."""
+    from tkinter_theme import px, surface_of
+    from ui.shared.widgets import Badge, IconLabel
+    bg = surface_of(parent)
+    wrap = tk.Frame(parent, bg=bg)
+    wrap.pack(side='right', padx=(px(8), 0))
+    Badge(wrap, src_ext, 'outline', mono=True, surface=bg).pack(side='left')
+    IconLabel(wrap, 'arrow_right', 16, COLORS['fg_3'], bg).pack(
+        side='left', padx=px(6))
+    Badge(wrap, dst_ext, 'info', mono=True, surface=bg).pack(side='left')
+    return wrap
 
 
 def build_convert_tab(parent, app):
@@ -108,86 +100,43 @@ def build_convert_tab(parent, app):
     # is currently active.
     status_var = e2f_status_var
 
-    # ── Scrollable wrap ──
-    canvas = tk.Canvas(parent, bg=COLORS['bg_1'], bd=0,
-                       highlightthickness=0)
-    canvas.pack(side='left', fill='both', expand=True)
-    sb = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
-    sb.pack(side='right', fill='y')
-    canvas.configure(yscrollcommand=sb.set)
+    # ── Page (design system; sibling of the Build screen) ──
+    from tkinter_theme import px
+    from ui.shared.widgets import (
+        Card, Badge, Divider, Segmented, InfoBar, PageHeader, Button,
+        ProgressBar, IconLabel)
+    from ui.tab_extract import (
+        scroll_page, page_columns, adv_toggle, ImageHero, caption, _sentence)
+    C = COLORS
+    BG2 = COLORS['bg_2']
+    inner = scroll_page(parent)
 
-    inner = tk.Frame(canvas, bg=COLORS['bg_1'])
-    inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
+    head = PageHeader(inner, _('Convert images'),
+                      _('Convert between .exfat and .ffpkg.'))
+    head.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
+    # Force Dismount stays behind the header's "Advanced" toggle.
+    adv_toggle(head, app, 'Force Dismount', 'Force Dismount failed')
 
-    inner.bind('<Configure>', lambda e:
-        canvas.configure(scrollregion=canvas.bbox('all')))
-    canvas.bind('<Configure>', lambda e:
-        canvas.itemconfig(inner_id, width=e.width))
-    attach_scroll(canvas)
+    left, right = page_columns(inner)
 
-    # ── Page head with badge ──
-    head = page_head(inner, '\U0001f4bf',
-                     _('Convert images'),
-                     _('Convert between .exfat and .ffpkg.'))
-    head.pack(fill='x', padx=24, pady=(14, 12))
-
-    # v3.6.3: cross-reference so users wanting a compressed .ffpfsc don't get
-    # stuck here (Convert only does exFAT <-> ffpkg).
-    tk.Label(inner,
-             text='Need a compressed .ffpfsc image? Use Build \u2192 PFS '
-                  '\u2192 Existing Image.',
-             font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-             anchor='w').pack(fill='x', padx=24, pady=(0, 8))
-
-    # Right-aligned Force Dismount button on the page head row
-    def _force_dismount():
-        try:
-            app._force_dismount_all()
-        except Exception as e:
-            app_error(parent, 'Force Dismount failed', str(e))
-
-    fd_btn = make_themed_button(head,
-                                  '\u26a0  Force Dismount',
-                                  command=_force_dismount,
-                                  kind='ghost')
-    # v4: tucked behind an "Advanced" toggle so the page head stays calm.
-    _fd_shown = {'on': False}
-
-    def _toggle_fd():
-        if _fd_shown['on']:
-            fd_btn.pack_forget()
-            _fd_shown['on'] = False
-            _adv_btn.config(text='\u2699  Advanced')
-        else:
-            fd_btn.pack(side='right', padx=(8, 0))
-            _fd_shown['on'] = True
-            _adv_btn.config(text='\u2699  Advanced \u25be')
-
-    _adv_btn = make_themed_button(head, '\u2699  Advanced',
-                                  command=_toggle_fd, kind='ghost')
-    _adv_btn.pack(side='right', padx=(8, 0))
-
-    # ── Info banner ──
-    banner = info_banner(inner, _(
-        'Converts a game image between exFAT and ffpkg formats. Progress '
-        'appears in the OUTPUT LOG (click the bar at the bottom to expand). '
-        '(Mechanics: the source is mounted via OSFMount, rebuilt with '
-        'UFS2Tool, then unmounted \u2014 nothing on your console is touched.)'))
-    banner.pack(fill='x', padx=24, pady=(0, 14))
-
-    # ── Selected-image hero (v3.6.0 pass) ──
-    # Hidden until a source file is picked in either card; then shows
-    # the game parsed from the image's filename, the source/output
-    # formats, the file size, and a READY TO CONVERT badge.
-    # Presentation only — built entirely from the path string and
-    # os.path.getsize; nothing is mounted or opened.
-    hero = GameHero(inner,
-                    stats=[('Source Format', 'src'),
-                           ('Output Format', 'dst'),
-                           ('Size', 'size'),
-                           ('Status', 'status')],
-                    cover_glyph='\U0001f4bf', cover_size=120)
-    hero_packed = {'on': False}
+    # ── Selected-image hero (right column) ──
+    # Shows the game parsed from the image's filename, the source/output
+    # formats, the file size and a status badge. Presentation only —
+    # built entirely from the path string and os.path.getsize; nothing
+    # is mounted or opened.
+    hero_card = Card(right, title='Selected image',
+                     subtitle='Parsed from the file name — nothing is mounted.')
+    hero_card.pack(fill='x')
+    hero = ImageHero(hero_card.body,
+                     stats=[('Source format', 'src'),
+                            ('Output format', 'dst'),
+                            ('Size', 'size'),
+                            (_('Status'), 'status')],
+                     placeholder='disc', cover=96, cols=2,
+                     empty_title='No image selected')
+    hero.pack(fill='x')
+    hero.set_badge('Select an image', 'wait')
+    hero_packed = {'on': True}
 
     def _humansize(n):
         try:
@@ -195,31 +144,31 @@ def build_convert_tab(parent, app):
                 return '%.2f GB' % (n / 1024**3)
             return '%d MB' % (n // 1024**2)
         except Exception:
-            return '\u2014'
+            return '—'
 
     def _update_hero(path, src_fmt, dst_fmt):
         try:
             if not path or not os.path.isfile(path):
-                if hero_packed['on']:
-                    hero.pack_forget()
-                    hero_packed['on'] = False
+                hero.set_title('No image selected', '')
+                hero.set_path('')
+                for _k in ('src', 'dst', 'size', 'status'):
+                    hero.set_stat(_k, '—')
+                hero.set_badge('Select an image', 'wait')
+                hero.reset_cover()
                 return
-            if not hero_packed['on']:
-                hero.pack(fill='x', padx=24, pady=(0, 14), after=banner)
-                hero_packed['on'] = True
             from ui.tab_ps5_mgr import parse_meta_from_filename
             gid, ver, disp = parse_meta_from_filename(
                 os.path.basename(path))
             title = disp or os.path.splitext(os.path.basename(path))[0]
             hero.set_title(title, (gid or '') +
-                           ((' \u00b7 v' + ver) if ver else ''))
+                           ((' · v' + ver) if ver else ''))
             hero.set_path(path)
             hero.set_stat('src', src_fmt)
             hero.set_stat('dst', dst_fmt)
             try:
                 hero.set_stat('size', _humansize(os.path.getsize(path)))
             except Exception:
-                hero.set_stat('size', '\u2014')
+                hero.set_stat('size', '—')
             hero.set_stat('status', 'Ready')
             hero.set_badge('READY TO CONVERT', 'ready')
             hero.reset_cover()
@@ -227,116 +176,101 @@ def build_convert_tab(parent, app):
             pass
     app._conv_update_hero = _update_hero
 
-    # ── Step 1: direction selector (segmented) ──
-    # One card at a time is shown below; the selector swaps them.
+    # ── Convert action card (right column) ──
+    # One action panel per direction (button · status · progress); the
+    # direction selector swaps them together with the form cards.
+    act_card = Card(right, title=_('Convert'),
+                    subtitle='Progress also appears in the OUTPUT LOG.')
+    act_card.pack(fill='x', pady=(px(16), 0))
+    act_body = act_card.body
+
+    banner = InfoBar(right, kind='info', text=_(
+        'Converts a game image between exFAT and ffpkg formats. Progress '
+        'appears in the OUTPUT LOG (click the bar at the bottom to expand). '
+        '(Mechanics: the source is mounted via OSFMount, rebuilt with '
+        'UFS2Tool, then unmounted — nothing on your console is touched.)'))
+    banner.pack(fill='x', pady=(px(16), 0))
+
+    # ── Direction selector (left column) ──
+    # One form card at a time is shown below; the selector swaps them.
     _conv_dir = {'val': 'e2f'}
+    _conv_dir_sel = tk.StringVar(value='e2f')
 
-    dir_card = tk.Frame(inner, bg=COLORS['bg_2'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-    dir_card.pack(fill='x', padx=24, pady=(0, 14), after=banner)
-    _dh = tk.Frame(dir_card, bg=COLORS['bg_2'])
-    _dh.pack(fill='x', padx=24, pady=(16, 14))
-    tk.Label(_dh, text='1.  Conversion direction',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        anchor='w', pady=(0, 8))
-    _seg = tk.Frame(_dh, bg=COLORS['bg_1'])
-    _seg.pack(side='left')
+    dir_card = Card(left, title='Conversion direction',
+                    subtitle='Pick which way to convert, then choose the '
+                             'source image and a destination.')
+    dir_card.pack(fill='x')
+    _dh = dir_card.body
+    _seg = Segmented(_dh, [('e2f', 'Create FFPKG from exFAT'),
+                           ('f2e', 'Create exFAT from FFPKG')],
+                     variable=_conv_dir_sel,
+                     command=lambda k: _set_direction(k))
+    _seg.pack(anchor='w')
+    _conv_seg_btns = getattr(_seg, '_btns', {})
 
-    _conv_seg_btns = {}
-
-    def _seg_btn(key, label):
-        b = tk.Label(_seg, text=label, font=(FONTS['body_strong'][0], 10),
-                     bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-                     padx=14, pady=7, cursor='hand2')
-        b.pack(side='left', padx=2, pady=2)
-        b.bind('<Button-1>', lambda _e, k=key: _set_direction(k))
-        _conv_seg_btns[key] = b
-        return b
-
-    _seg_btn('e2f', 'Create FFPKG from exFAT')
-    _seg_btn('f2e', 'Create exFAT from FFPKG')
-
-    _conv_hdr = tk.Frame(_dh, bg=COLORS['bg_2'])
-    _conv_hdr.pack(side='left', padx=(18, 0))
-    tk.Label(_conv_hdr, text='Converting', font=FONTS['meta'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-             ).pack(anchor='w')
-    _conv_dir_var = tk.StringVar(value='exFAT  \u2192  FFPKG')
+    _conv_hdr = tk.Frame(_dh, bg=BG2)
+    _conv_hdr.pack(fill='x', pady=(px(14), 0))
+    tk.Label(_conv_hdr, text='Converting', font=FONTS['body'],
+             bg=BG2, fg=C['fg_3'], anchor='w').pack(side='left')
+    _conv_dir_var = tk.StringVar(value='exFAT  →  FFPKG')
     tk.Label(_conv_hdr, textvariable=_conv_dir_var,
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_2'], fg=COLORS['accent_hi'], anchor='w'
-             ).pack(
-        anchor='w')
+             font=FONTS['body_strong'], bg=BG2, fg=C['fg_0'],
+             anchor='w').pack(side='left', padx=(px(8), 0))
+    _dir_chips = tk.Frame(_conv_hdr, bg=BG2)
+    _dir_chips.pack(side='right')
+
+    # v3.6.3: cross-reference so users wanting a compressed .ffpfsc don't get
+    # stuck here (Convert only does exFAT <-> ffpkg).
+    Divider(_dh, color=C['border_1']).pack(fill='x', pady=(px(14), px(10)))
+    caption(_dh, 'Need a compressed .ffpfsc image? Use Build → PFS '
+                 '→ Existing Image.').pack(fill='x')
 
     def _set_direction(key):
-        # Highlight the chosen segment, update the header, swap the card.
+        # Highlight the chosen segment, update the header, swap the card
+        # and its action panel.
         _conv_dir['val'] = key
-        for k, b in _conv_seg_btns.items():
-            if k == key:
-                b.config(bg=COLORS['accent_08'], fg=COLORS['accent_hi'])
-            else:
-                b.config(bg=COLORS['bg_1'], fg=COLORS['fg_4'])
-        _conv_dir_var.set('exFAT  \u2192  FFPKG' if key == 'e2f'
-                          else 'FFPKG  \u2192  exFAT')
+        if _conv_dir_sel.get() != key:
+            _conv_dir_sel.set(key)
+        _conv_dir_var.set('exFAT  →  FFPKG' if key == 'e2f'
+                          else 'FFPKG  →  exFAT')
+        for w in _dir_chips.winfo_children():
+            w.destroy()
+        _flow_chips(_dir_chips, '.exfat' if key == 'e2f' else '.ffpkg',
+                    '.ffpkg' if key == 'e2f' else '.exfat')
         # Cards are registered on `app` once built (below).
         try:
             _e2f = getattr(app, '_conv_card_e2f', None)
             _f2e = getattr(app, '_conv_card_f2e', None)
+            _show, _hide = (_e2f, _f2e) if key == 'e2f' else (_f2e, _e2f)
+            if _hide is not None:
+                _hide.pack_forget()
+            if _show is not None:
+                _show.pack(fill='x', pady=(px(16), 0), after=dir_card)
+            _ae = state.get('e2f_panel')
+            _af = state.get('f2e_panel')
+            _ps, _ph = (_ae, _af) if key == 'e2f' else (_af, _ae)
+            if _ph is not None:
+                _ph.pack_forget()
+            if _ps is not None:
+                _ps.pack(fill='x')
+        except Exception:
+            pass
+        # Re-show the hero for the source picked in this direction.
+        try:
             if key == 'e2f':
-                if _f2e is not None:
-                    _f2e.pack_forget()
-                if _e2f is not None:
-                    _e2f.pack(fill='x', padx=24, pady=(0, 14), after=dir_card)
+                _update_hero(e2f_src.get().strip(), 'exFAT', 'ffpkg')
             else:
-                if _e2f is not None:
-                    _e2f.pack_forget()
-                if _f2e is not None:
-                    _f2e.pack(fill='x', padx=24, pady=(0, 14), after=dir_card)
+                _update_hero(f2e_src.get().strip(), 'ffpkg', 'exFAT')
         except Exception:
             pass
     app._conv_set_direction = _set_direction
 
-    # ── Conversion card ──
-    card_outer = tk.Frame(inner, bg=COLORS['bg_2'],
-                           highlightbackground=COLORS['border_2'],
-                           highlightthickness=1)
-    card_outer.pack(fill='x', padx=24, pady=(0, 14))
+    # ── exFAT → ffpkg card ──
+    card_outer = Card(left, title='exFAT → ffpkg',
+                      subtitle='Pick an existing .exfat image and a destination.')
+    card_outer.pack(fill='x', pady=(px(16), 0))
     app._conv_card_e2f = card_outer
-
-    # Card head
-    chead = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    chead.pack(fill='x', padx=24, pady=(18, 14))
-
-    # Icon tile
-    ico = tk.Label(chead, text='\u2192',
-                   font=(FONTS['body'][0], 11),
-                   bg=COLORS['accent_08'], fg=COLORS['accent'],
-                   width=2, padx=4, pady=2)
-    ico.pack(side='left', padx=(0, 12))
-
-    _flow_chips(chead, '.exfat', '.ffpkg')
-
-    title_col = tk.Frame(chead, bg=COLORS['bg_2'])
-    title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(title_col, text='exFAT \u2192 ffpkg',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(fill='x')
-    tk.Label(title_col,
-             text='Pick an existing .exfat image and a destination.',
-             font=FONTS['meta'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(2, 0))
-
-    # Hairline under head
-    tk.Frame(card_outer, bg=COLORS['border_2'], height=1
-             ).pack(fill='x')
-
-    # Card body
-    body = tk.Frame(card_outer, bg=COLORS['bg_2'])
-    body.pack(fill='x', padx=24, pady=(4, 18))
+    body = card_outer.body
 
     # ── Form fields ──
     def _browse_src():
@@ -352,15 +286,10 @@ def build_convert_tab(parent, app):
         if p:
             e2f_outdir.set(p)
 
-    tk.Label(body, text='2.  Source image', font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        fill='x', pady=(0, 6))
     field_block(body, 'Source .exfat',
                  var=e2f_src, on_browse=_browse_src,
-                 hint='the image to convert')
-    tk.Label(body, text='3.  Output', font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        fill='x', pady=(12, 6))
+                 hint='the image to convert').pack_configure(pady=0)
+    Divider(body, color=C['border_1']).pack(fill='x', pady=(px(16), px(4)))
     field_block(body, 'Output folder',
                  var=e2f_outdir, on_browse=_browse_outdir,
                  hint='where the .ffpkg will be written')
@@ -378,33 +307,30 @@ def build_convert_tab(parent, app):
         _update_hero(e2f_src.get().strip(), 'exFAT', 'ffpkg')
     e2f_src.trace_add('write', _on_e2f_src)
 
-    # ── Action row: Convert button + status + progress bar ──
-    tk.Label(body, text='4.  Convert', font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        fill='x', pady=(14, 6))
-    action_row = tk.Frame(body, bg=COLORS['bg_2'])
-    action_row.pack(fill='x', pady=(0, 0))
-
-    convert_btn = make_themed_button(
-        action_row,
-        text='Convert to ffpkg',
-        command=lambda: _do_exfat_to_ffpkg(),
-        kind='success',
-        icon='\u25b6',
-        font_size=10, padx=18, pady=9)
-    convert_btn.pack(side='left')
+    # ── Action panel: status + progress bar + Convert button ──
+    action_row = tk.Frame(act_body, bg=BG2)
+    state['e2f_panel'] = action_row
 
     status_lbl = tk.Label(action_row, textvariable=e2f_status_var,
-                          font=FONTS['mono_sm'],
-                          bg=COLORS['bg_2'], fg=COLORS['fg_4'],
+                          font=FONTS['body_strong'], bg=BG2, fg=C['fg_0'],
                           anchor='w')
-    status_lbl.pack(side='left', padx=(16, 0))
+    status_lbl.pack(fill='x')
 
-    # Slim progress bar on the right of the action row
-    pbar_wrap = tk.Frame(action_row, bg=COLORS['bg_2'])
-    pbar_wrap.pack(side='right', fill='x', expand=True, padx=(16, 0))
-    pbar = ttk.Progressbar(pbar_wrap, mode='indeterminate', length=200)
+    # Slim progress bar (indeterminate while a conversion runs)
+    pbar_wrap = tk.Frame(action_row, bg=BG2)
+    pbar_wrap.pack(fill='x', pady=(px(8), 0))
+    pbar = ProgressBar(pbar_wrap, mode='determinate', value=0, surface=BG2)
     pbar.pack(fill='x')
+    Divider(action_row, color=C['border_1']).pack(fill='x',
+                                                  pady=(px(16), px(12)))
+    _e2f_btns = tk.Frame(action_row, bg=BG2)
+    _e2f_btns.pack(fill='x')
+    convert_btn = Button(
+        _e2f_btns,
+        text='Convert to ffpkg',
+        command=lambda: _do_exfat_to_ffpkg(),
+        variant='primary', icon='play', surface=BG2)
+    convert_btn.pack(side='right')
 
     # ── Helpers ──
     def _log(line):
@@ -415,6 +341,7 @@ def build_convert_tab(parent, app):
         state['busy'] = b
         try:
             if b:
+                pbar.config(mode='indeterminate')
                 pbar.start(10)
                 e2f_status_var.set(label or 'Working...')
                 convert_btn.config(state='disabled', cursor='watch')
@@ -424,6 +351,7 @@ def build_convert_tab(parent, app):
                     state['f2e_btn'].config(state='disabled')
             else:
                 pbar.stop()
+                pbar.config(mode='determinate', value=0)
                 e2f_status_var.set(label or 'Idle.')
                 convert_btn.config(state='normal', cursor='hand2')
                 if 'f2e_btn' in state and state['f2e_btn']:
@@ -808,38 +736,11 @@ def build_convert_tab(parent, app):
         # "Preparing... 0%" forever with no Output Log activity (every step
         # lives inside this worker). Matches the ffpkg→exFAT pattern.
         threading.Thread(target=worker, daemon=True).start()
-    f2e_card = tk.Frame(inner, bg=COLORS['bg_2'],
-                         highlightbackground=COLORS['border_2'],
-                         highlightthickness=1)
-    f2e_card.pack(fill='x', padx=24, pady=(0, 14))
+    f2e_card = Card(left, title='ffpkg → exFAT',
+                    subtitle='Pick an existing .ffpkg and a destination.')
+    f2e_card.pack(fill='x', pady=(px(16), 0))
     app._conv_card_f2e = f2e_card
-
-    f2e_chead = tk.Frame(f2e_card, bg=COLORS['bg_2'])
-    f2e_chead.pack(fill='x', padx=24, pady=(18, 14))
-    f2e_ico = tk.Label(f2e_chead, text='\u2192',
-                       font=(FONTS['body'][0], 11),
-                       bg=COLORS['accent_08'], fg=COLORS['accent'],
-                       width=2, padx=4, pady=2)
-    f2e_ico.pack(side='left', padx=(0, 12))
-    _flow_chips(f2e_chead, '.ffpkg', '.exfat')
-
-    f2e_title_col = tk.Frame(f2e_chead, bg=COLORS['bg_2'])
-    f2e_title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(f2e_title_col, text='ffpkg \u2192 exFAT',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(fill='x')
-    tk.Label(f2e_title_col,
-             text='Pick an existing .ffpkg and a destination.',
-             font=FONTS['meta'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w'
-             ).pack(fill='x', pady=(2, 0))
-
-    tk.Frame(f2e_card, bg=COLORS['border_2'], height=1
-             ).pack(fill='x')
-
-    f2e_body = tk.Frame(f2e_card, bg=COLORS['bg_2'])
-    f2e_body.pack(fill='x', padx=24, pady=(4, 18))
+    f2e_body = f2e_card.body
 
     def _f2e_browse_src():
         p = filedialog.askopenfilename(
@@ -854,16 +755,11 @@ def build_convert_tab(parent, app):
         if p:
             f2e_outdir.set(p)
 
-    tk.Label(f2e_body, text='2.  Source image',
-             font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        fill='x', pady=(0, 6))
     field_block(f2e_body, 'Source .ffpkg',
                  var=f2e_src, on_browse=_f2e_browse_src,
-                 hint='the image to convert')
-    tk.Label(f2e_body, text='3.  Output', font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        fill='x', pady=(12, 6))
+                 hint='the image to convert').pack_configure(pady=0)
+    Divider(f2e_body, color=C['border_1']).pack(fill='x',
+                                                pady=(px(16), px(4)))
     field_block(f2e_body, 'Output folder',
                  var=f2e_outdir, on_browse=_f2e_browse_outdir,
                  hint='where the .exfat will be written')
@@ -880,35 +776,34 @@ def build_convert_tab(parent, app):
         _update_hero(f2e_src.get().strip(), 'ffpkg', 'exFAT')
     f2e_src.trace_add('write', _on_f2e_src)
 
-    # Both cards exist now — show the default direction (exFAT → ffpkg).
-    _set_direction('e2f')
-
-    tk.Label(f2e_body, text='4.  Convert', font=(FONTS['body_strong'][0], 11),
-             bg=COLORS['bg_2'], fg=COLORS['accent'], anchor='w').pack(
-        fill='x', pady=(14, 6))
-    f2e_action_row = tk.Frame(f2e_body, bg=COLORS['bg_2'])
-    f2e_action_row.pack(fill='x', pady=(0, 0))
-
-    f2e_btn = make_themed_button(
-        f2e_action_row,
-        text='Convert to exFAT',
-        command=lambda: _do_ffpkg_to_exfat(),
-        kind='success',
-        icon='\u25b6',
-        font_size=10, padx=18, pady=9)
-    f2e_btn.pack(side='left')
-    state['f2e_btn'] = f2e_btn
+    # ── Action panel: status + progress bar + Convert button ──
+    f2e_action_row = tk.Frame(act_body, bg=BG2)
+    state['f2e_panel'] = f2e_action_row
 
     tk.Label(f2e_action_row, textvariable=f2e_status_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w').pack(side='left', padx=(16, 0))
+             font=FONTS['body_strong'], bg=BG2, fg=C['fg_0'],
+             anchor='w').pack(fill='x')
 
-    f2e_pbar_wrap = tk.Frame(f2e_action_row, bg=COLORS['bg_2'])
-    f2e_pbar_wrap.pack(side='right', fill='x', expand=True, padx=(16, 0))
-    f2e_pbar = ttk.Progressbar(f2e_pbar_wrap, mode='indeterminate',
-                                length=200)
+    f2e_pbar_wrap = tk.Frame(f2e_action_row, bg=BG2)
+    f2e_pbar_wrap.pack(fill='x', pady=(px(8), 0))
+    f2e_pbar = ProgressBar(f2e_pbar_wrap, mode='determinate', value=0,
+                           surface=BG2)
     f2e_pbar.pack(fill='x')
+    Divider(f2e_action_row, color=C['border_1']).pack(fill='x',
+                                                      pady=(px(16), px(12)))
+    _f2e_btns = tk.Frame(f2e_action_row, bg=BG2)
+    _f2e_btns.pack(fill='x')
+
+    f2e_btn = Button(
+        _f2e_btns,
+        text='Convert to exFAT',
+        command=lambda: _do_ffpkg_to_exfat(),
+        variant='primary', icon='play', surface=BG2)
+    f2e_btn.pack(side='right')
+    state['f2e_btn'] = f2e_btn
+
+    # Both cards exist now — show the default direction (exFAT → ffpkg).
+    _set_direction('e2f')
 
     # Register f2e_btn back so the other set_busy locks it too.
     state['f2e_btn'] = f2e_btn
@@ -917,6 +812,7 @@ def build_convert_tab(parent, app):
         state['busy'] = b
         try:
             if b:
+                f2e_pbar.config(mode='indeterminate')
                 f2e_pbar.start(10)
                 f2e_status_var.set(label or 'Working...')
                 f2e_btn.config(state='disabled', cursor='watch')
@@ -928,6 +824,7 @@ def build_convert_tab(parent, app):
                     pass
             else:
                 f2e_pbar.stop()
+                f2e_pbar.config(mode='determinate', value=0)
                 f2e_status_var.set(label or 'Idle.')
                 f2e_btn.config(state='normal', cursor='hand2')
                 try:
