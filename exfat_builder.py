@@ -636,6 +636,10 @@ def _trim_cover_borders(img):
     return img
 
 
+COVER_FORMATS = ('PNG', 'JPEG', 'WEBP', 'BMP', 'DDS')
+COVER_MAX_PIXELS = 8192 * 8192
+
+
 def _normalize_cover(path):
     """Normalize arbitrary source artwork into the standard 2:3 portrait
     master (COVER_NORM_W x COVER_NORM_H PNG) and cache it.
@@ -672,7 +676,12 @@ def _normalize_cover(path):
         return None
 
     try:
-        img = Image.open(path)
+        # Cover art comes from user-supplied dumps: only decode the image
+        # formats game artwork actually uses, and refuse decompression
+        # bombs, so a crafted file cannot reach other Pillow decoders.
+        img = Image.open(path, formats=COVER_FORMATS)
+        if img.width * img.height > COVER_MAX_PIXELS:
+            return None
         img.load()
     except Exception:
         return None
@@ -709,7 +718,7 @@ def _load_cover_image(path, target=180):
     if not norm:
         return None
     try:
-        img = Image.open(norm)
+        img = Image.open(norm, formats=('PNG',))
         img.load()
         h = max(1, int(target))
         w = max(1, int(round(h * COVER_NORM_W / float(COVER_NORM_H))))
@@ -7528,7 +7537,7 @@ class ExFATBuilder(_TK_BASE):
                 # 96x96 thumbnail — bigger than the previous 56x56 so
                 # cover art is genuinely readable. LANCZOS gives clean
                 # downscale even for high-res icon0.png sources.
-                img = Image.open(cover_path).resize((96, 96), Image.LANCZOS)
+                img = Image.open(cover_path, formats=COVER_FORMATS).resize((96, 96), Image.LANCZOS)
                 self._cover_image = ImageTk.PhotoImage(img)
                 self._cover_label.config(image=self._cover_image, text='',
                                           width=96, height=96)
@@ -7821,7 +7830,7 @@ class ExFATBuilder(_TK_BASE):
         if cover_path:
             try:
                 from PIL import Image, ImageTk
-                img = Image.open(cover_path).resize((96, 96), Image.LANCZOS)
+                img = Image.open(cover_path, formats=COVER_FORMATS).resize((96, 96), Image.LANCZOS)
                 self._ffpkg_cover_image = ImageTk.PhotoImage(img)
                 self._ffpkg_cover_label.config(
                     image=self._ffpkg_cover_image, text='', width=96, height=96)

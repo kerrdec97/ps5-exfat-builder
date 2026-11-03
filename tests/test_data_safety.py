@@ -169,6 +169,22 @@ class QueueSummary(unittest.TestCase):
         self.assertEqual(t, 'Complete')
 
 
+class CoverArtFormats(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_app()
+        self.d = tempfile.mkdtemp(prefix='cover_')
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_png_cover_accepted_other_formats_refused(self):
+        from PIL import Image
+        good = os.path.join(self.d, 'icon0.png')
+        Image.new('RGB', (64, 96), (200, 30, 30)).save(good, 'PNG')
+        self.assertTrue(self.mod._normalize_cover(good))
+        bad = os.path.join(self.d, 'pic0.png')       # a GIF named .png
+        Image.new('RGB', (64, 96), (30, 200, 30)).save(bad, 'GIF')
+        self.assertIsNone(self.mod._normalize_cover(bad))
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()

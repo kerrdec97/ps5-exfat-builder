@@ -23,8 +23,10 @@ and copyright notices preserved.
   so it carries GPL-3.0 terms. Because this source is vendored and distributed
   as part of exFAT Image Builder, the GPL-3.0 obligations extend to the
   distributed program (see LICENSING NOTE below).
-- **Verified:** upstream `LICENSE` is GPL-3.0 (identical text to PSBrew/MkPFS).
-  The full text ships in `vendor/lazy_mkpfs/LICENSE` and `LICENSES/GPL-3.0.txt`;
+- **Verified:** GPL-3.0, inherited from PSBrew/MkPFS. The repository's `main`
+  branch carries the GPL-3.0 `LICENSE`; on the vendored `lazy` branch that file
+  was removed upstream (commit `60a1722`), so the text was taken from `main`
+  (byte-identical to PSBrew/MkPFS). The full text ships in `vendor/lazy_mkpfs/LICENSE` and `LICENSES/GPL-3.0.txt`;
   `UPSTREAM_README.md` / `UPSTREAM_COMMIT.txt` (upstream commit
   `78bdd00c5645b1170420df051c586dd0ca4f918d`) and the "Based on PSBrew/MkPFS"
   attribution are retained. Local vendoring patches (runtime `pip install`
@@ -43,6 +45,37 @@ and copyright notices preserved.
 - **License: BSD-2-Clause — verified.** `Copyright (c) 2026, SvenGDK`. The
   full text is reproduced in "License texts" below and in
   `LICENSES/UFS2Tool-BSD-2-Clause.txt`.
+
+### DokanNet — .NET wrapper for the Dokan user-mode file system
+- **Bundled as:** embedded `DokanNet.dll` 2.0.1 (base64 in `exfat_builder.py`),
+  used by UFS2Tool. Byte-identical to `lib/netstandard2.0/DokanNet.dll` in the
+  official NuGet package `DokanNet 2.0.1`.
+- **Authors:** Adrien J., Maxime C., Hiroki Asakawa —
+  <https://github.com/dokan-dev/dokan-dotnet>
+- **License: MIT — verified** (NuGet licence expression and the project's
+  `license.txt`). The full text ships in `LICENSES/DokanNet-MIT.txt`.
+
+### Bundled Python runtime and packages (Windows executable)
+The release `.exe` is built with PyInstaller and contains these, each under
+its own licence (versions in `requirements-build.txt`):
+- **CPython** 3.11 — PSF License; **Tcl/Tk** — Tcl/Tk (BSD-style) licence.
+- **PyInstaller bootloader** — GPL-2.0-or-later with the PyInstaller
+  bootloader exception (the exception permits distributing the bundled app).
+- **mkpfs** (PSBrew) — GPL-3.0 (`LICENSES/GPL-3.0.txt`).
+- **Pillow** — MIT-CMU (HPND), with bundled libjpeg-turbo, libpng, zlib,
+  libtiff, FreeType, OpenJPEG, libwebp and others under their own licences.
+- **cryptography** — Apache-2.0 or BSD-3-Clause, with OpenSSL (Apache-2.0).
+- **psutil** — BSD-3-Clause.
+- **tkinterdnd2** — MIT, with the tkdnd library (BSD-style).
+- **zlib-ng** (python-zlib-ng) — PSF-2.0, bundling zlib-ng (zlib licence).
+- **isal** (python-isal) — PSF-2.0, bundling Intel ISA-L (BSD-3-Clause).
+A complete listing with licence texts can be generated from the build
+environment with `pip-licenses --from=mixed --with-license-file`.
+
+### FPKG builder (not bundled: user-supplied tools)
+`core/fpkg/` is original code written for this project. It drives the
+user's own Sony Publishing Tools (`prospero-pub-cmd.exe`), which are **not**
+included, linked or downloaded. No code from other FPKG builders was copied.
 
 ### Fake-signing & decrypt tooling (backport engine)
 Embedded as base64 in `exfat_builder.py` (`_SRC_FSELF_B64`, `_SRC_DECRYPT_B64`),
