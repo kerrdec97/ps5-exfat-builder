@@ -320,6 +320,43 @@ class SettingsAndHistoryFiles(unittest.TestCase):
             self.assertEqual([e['success'] for e in json.load(f)], [False, True])
 
 
+class StaleMountSweep(unittest.TestCase):
+    def test_sweep_leaves_volumes_mounted_before_start(self):
+        import ctypes
+        from unittest import mock
+        mod = load_app()
+
+        class K32:
+            @staticmethod
+            def GetLogicalDrives():
+                return (1 << 2) | (1 << 7) | (1 << 8) | (1 << 9)  # C H I J
+
+        class WinDll:
+            kernel32 = K32()
+
+        vols = {'H': ('PS5DATA', 111), 'I': ('PS5DATA', 222), 'J': ('DATA', 3)}
+        dismounted = []
+
+        class Fake:
+            _preexisting_osf_volumes = {('H', 111), ('I', 999)}
+
+            def _log(self, *_a):
+                pass
+
+            def _dismount_drive_robust(self, letter, max_wait_seconds=15):
+                dismounted.append(letter)
+                return True
+
+        with mock.patch.object(ctypes, 'windll', WinDll(), create=True), \
+                mock.patch.object(mod, '_volume_label_serial',
+                                  lambda l: vols.get(l, ('', None))):
+            killed = mod.ExFATBuilder._sweep_stale_osf_mounts(Fake())
+        # H was mounted before start (same serial): kept. I has a new
+        # serial (remounted since): swept. J is not an app label: kept.
+        self.assertEqual(killed, ['I'])
+        self.assertEqual(dismounted, ['I'])
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()

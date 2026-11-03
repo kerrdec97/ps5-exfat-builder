@@ -2755,6 +2755,40 @@ def settle_previous_image(out_path, aside, success):
         return 'The previous image is kept at %s (%s).' % (aside, e)
 
 
+def _volume_label_serial(letter):
+    """(upper-case label, serial number) of drive `letter`, or ('', None)."""
+    try:
+        import ctypes as _ct
+        vol_buf = _ct.create_unicode_buffer(256)
+        serial = _ct.c_ulong(0)
+        ok = _ct.windll.kernel32.GetVolumeInformationW(
+            letter + ':\\', vol_buf, 256, _ct.byref(serial), None, None,
+            None, 0)
+        if not ok:
+            return '', None
+        return (vol_buf.value or '').upper(), int(serial.value)
+    except Exception:
+        return '', None
+
+
+def osf_labelled_volumes():
+    """{(letter, serial)} of mounted volumes carrying the labels this app
+    gives its images (OSFIMG, PS5DATA, PS5IMG)."""
+    out = set()
+    try:
+        import ctypes as _ct
+        mask = int(_ct.windll.kernel32.GetLogicalDrives())
+    except Exception:
+        return out
+    for i in range(3, 26):
+        if mask & (1 << i):
+            letter = chr(65 + i)
+            label, serial = _volume_label_serial(letter)
+            if label in ('OSFIMG', 'PS5DATA', 'PS5IMG'):
+                out.add((letter, serial))
+    return out
+
+
 def describe_missing_files(src_sizes, img_sizes, limit=15):
     """Human-readable list of source files absent from (or shorter on) the
     image, largest first, for the verification report."""
@@ -4145,6 +4179,12 @@ class ExFATBuilder(_TK_BASE):
                    % (APP_VERSION, APP_EDITION))
 
         self._settings = load_settings()
+        # Volumes with this app's labels that are mounted before it starts
+        # belong to the user; the stale-mount sweep never touches them.
+        try:
+            self._preexisting_osf_volumes = osf_labelled_volumes()
+        except Exception:
+            self._preexisting_osf_volumes = set()
 
         # v3.6.2: now that settings (logs-dir) are loaded, open the session
         # log files and write the startup banner. Best-effort.
@@ -9710,14 +9750,19 @@ class ExFATBuilder(_TK_BASE):
                 pass
             # GetVolumeInformationW — null label tolerated; we only
             # care about a match against the OSFMount labels.
-            try:
-                vol_buf = _ct.create_unicode_buffer(256)
-                ok = _ct.windll.kernel32.GetVolumeInformationW(
-                    letter + ':\\', vol_buf, 256, None, None, None, None, 0)
-                label = (vol_buf.value or '').upper() if ok else ''
-            except Exception:
-                label = ''
+            label, serial = _volume_label_serial(letter)
             if label not in ('OSFIMG', 'PS5DATA', 'PS5IMG'):
+                continue
+            # Technical audit M5: a volume that was already mounted when
+            # the app started is the user's (or another tool's), not a
+            # leak from this session - leave it alone.
+            if (letter, serial) in getattr(self, '_preexisting_osf_volumes', set()):
+                try:
+                    self._log('%s Leaving %s: (label=%s) mounted: it was '
+                              'mounted before the app started.\n'
+                              % (log_prefix, letter, label))
+                except Exception:
+                    pass
                 continue
             try:
                 self._log('%s Dismounting stale OSFMount drive %s: '
