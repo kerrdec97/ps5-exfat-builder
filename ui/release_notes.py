@@ -42,23 +42,25 @@ RELEASES_URL = 'https://github.com/%s/%s/releases' % (REPO_OWNER, REPO_NAME)
 # THE ONLY THING TO EDIT FOR A NEW RELEASE
 # ─────────────────────────────────────────────────────────────────────────
 RELEASE = {
-    "version": "3.6.4",
-    "title": "Faster PFS Builds & Honest Progress",
-    "summary": ("A reliability-focused update: dump \u2192 .ffpfsc builds now "
-                "stage the heavy intermediate image on your fast temp drive, "
-                "PFS unpack shows live progress, and several reported build "
-                "and extraction issues are fixed."),
+    "version": "4.1.0",
+    "title": "Farewell Edition",
+    "summary": ("The final release of exFAT Image Builder. It restores the "
+                "complete v4.0.2 feature set, stops finished images from "
+                "being deleted by mistake, makes builds work the same on "
+                "every Windows language, and gives the whole app a cleaner, "
+                "more consistent look. Thank you for everything."),
     "highlights": [
-        "Dump \u2192 .ffpfsc stages the intermediate image on the temp drive (much faster on SSD-temp / HDD-output setups)",
-        "PFS unpack (.ffpfs / .ffpfsc) now shows live progress, speed and ETA",
-        "Free-space preflight before OSFMount \u2014 clear errors instead of a bare exit code",
-        "Cross-drive final-output moves are verified and crash-safe",
+        "Finished images are never deleted because a status check disagreed \u2014 they are kept and flagged instead",
+        "Non-English Windows: copy results are counted on the image itself, no longer read from translated robocopy text",
+        "Verification waits for slow-to-appear drives and names any files that are actually missing",
+        "Fixed the cause of the PFS \u201cErrno 22 Invalid argument\u201d crash on non-English systems",
     ],
     "improvements": [
-        "Multithread (/MT) extraction progress now advances correctly",
-        "Library now lists uncompressed .ffpfs images too",
-        "Language Apply rebuilds the whole UI (translation coverage still expanding)",
-        "Cleaner Build screen: advanced perf options tucked away, dead/confusing settings removed",
+        "Stuck OSFMount drivers now time out with a clear message instead of hanging the queue",
+        "Sidebar and page titles follow your interface language",
+        "Clear explanations for full images and a missing .NET 8 runtime",
+        "Safer in-app updater and a reproducible, verified release build",
+        "Refreshed graphite theme with a single accent colour and visible keyboard focus",
     ],
     "supporters": 6,
     "show_on_first_launch": True,
