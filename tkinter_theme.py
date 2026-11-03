@@ -665,6 +665,16 @@ def progress_style(surface=None, tone="accent", thickness=6):
 def apply_theme(root: tk.Tk) -> ttk.Style:
     """Apply the design system to `root`. Returns the ttk.Style."""
     global SCALE
+    if _ROOT[0] is not None and _ROOT[0] is not root:
+        # A new Tk interpreter: images and element styles made for the
+        # previous one do not exist in it, so rebuild them on demand.
+        _IMAGES.clear()
+        _CREATED.clear()
+        try:
+            from ui import icons as _icons
+            _icons._CACHE.clear()
+        except Exception:
+            pass
     _ROOT[0] = root
     try:
         SCALE = max(1.0, round(root.winfo_fpixels("1i") / 96.0 * 4) / 4)

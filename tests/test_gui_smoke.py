@@ -45,6 +45,42 @@ class GuiSmoke(unittest.TestCase):
             finally:
                 app.destroy()
 
+    def test_worker_thread_after_runs_on_tk_thread(self):
+        import threading
+        mod = load_app()
+        with temp_settings_file() as path:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('{"release_last_seen_version": "%s", '
+                        '"check_updates_on_boot": false}' % mod.APP_VERSION)
+            app = mod.ExFATBuilder()
+            ran = []
+            try:
+                main_id = threading.get_ident()
+
+                def worker():
+                    app.after(0, lambda: ran.append(threading.get_ident()))
+                    app.after(30, lambda: ran.append('later'))
+                    app.after_idle(lambda: ran.append('idle'))
+                t = threading.Thread(target=worker)
+                t.start()
+                t.join()
+                deadline = time.time() + 3
+                while len(ran) < 3 and time.time() < deadline:
+                    app.update()
+                    time.sleep(0.01)
+                self.assertIn(main_id, ran)
+                self.assertIn('later', ran)
+                self.assertIn('idle', ran)
+            finally:
+                app.destroy()
+            # A worker finishing after the window closed must not raise.
+            errs = []
+            t = threading.Thread(target=lambda: errs.append(
+                app.after(0, lambda: None)))
+            t.start()
+            t.join()
+            self.assertEqual(errs, ['after#xthread'])
+
 
 if __name__ == '__main__':
     unittest.main()

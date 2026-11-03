@@ -2925,7 +2925,113 @@ class _TQCancelled(Exception):
     pass
 
 
+_TK_ORIG_AFTER = tk.Misc.after
+_TK_ORIG_AFTER_IDLE = tk.Misc.after_idle
+_TK_ORIG_AFTER_CANCEL = tk.Misc.after_cancel
+_XTHREAD_ID = 'after#xthread'
+
+
+def _xthread_root(w):
+    """The app window when `w` belongs to it and we are off its thread."""
+    try:
+        root = w._root()
+    except Exception:
+        return None
+    q = getattr(root, '_xthread_queue', None)
+    tid = root.__dict__.get('_tk_thread_id')
+    if q is None or tid is None or threading.get_ident() == tid:
+        return None
+    return root
+
+
+def _ts_after(self, ms, func=None, *args):
+    if func is not None:
+        root = _xthread_root(self)
+        if root is not None:
+            root._xthread_queue().put((ms, func, args))
+            return _XTHREAD_ID
+    return _TK_ORIG_AFTER(self, ms, func, *args)
+
+
+def _ts_after_idle(self, func, *args):
+    root = _xthread_root(self)
+    if root is not None:
+        root._xthread_queue().put((0, func, args))
+        return _XTHREAD_ID
+    return _TK_ORIG_AFTER_IDLE(self, func, *args)
+
+
+def _ts_after_cancel(self, id):
+    if id == _XTHREAD_ID:
+        return None
+    return _TK_ORIG_AFTER_CANCEL(self, id)
+
+
+# Every widget's after()/after_idle() is safe to call from worker threads:
+# off-thread calls are queued and replayed on the Tk thread (see
+# ExFATBuilder._xthread_pump).
+tk.Misc.after = _ts_after
+tk.Misc.after_idle = _ts_after_idle
+tk.Misc.after_cancel = _ts_after_cancel
+
+
 class ExFATBuilder(_TK_BASE):
+    # ── Thread-safe scheduling ─────────────────────────────────────────
+    # Worker threads throughout the app hand results back with
+    # self.after(0, fn, ...). Calling into Tcl from a non-Tk thread is not
+    # safe: outside mainloop it raises "main thread is not in main loop"
+    # (seen in the Windows CI run when a worker finished after its window
+    # closed), and inside mainloop it can intermittently wedge Tcl's timer
+    # list. Calls made from another thread are therefore queued here and
+    # replayed on the Tk thread by a small pump; Tk-thread calls are
+    # unchanged. Queued calls whose window is gone are simply dropped.
+    def _xthread_queue(self):
+        q = self.__dict__.get('_xthread_q')
+        if q is None:
+            import queue as _q
+            q = self.__dict__.setdefault('_xthread_q', _q.Queue())
+        return q
+
+    def _on_tk_thread(self):
+        tid = self.__dict__.get('_tk_thread_id')
+        return tid is None or threading.get_ident() == tid
+
+    def _xthread_pump(self):
+        q = self._xthread_queue()
+        for _ in range(500):
+            try:
+                ms, func, args = q.get_nowait()
+            except Exception:
+                break
+            try:
+                if ms and ms > 0:
+                    _TK_ORIG_AFTER(self, ms, func, *args)
+                else:
+                    func(*args)
+            except Exception:
+                try:
+                    self.report_callback_exception(*sys.exc_info())
+                except Exception:
+                    pass
+        try:
+            _TK_ORIG_AFTER(self, 15, self._xthread_pump)
+        except Exception:
+            pass
+
+    def destroy(self):
+        # Cancel pending timers first so callbacks scheduled by pages and
+        # workers do not fire into a deleted interpreter ("invalid command
+        # name ..." on shutdown).
+        try:
+            for aid in self.tk.splitlist(self.tk.call('after', 'info')):
+                try:
+                    self.tk.call('after', 'cancel', aid)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        super().destroy()
+
     @staticmethod
     def _scrub_private_paths(text):
         """v4.0.0 (trust): replace private home/temp path prefixes in text with
@@ -3735,6 +3841,8 @@ class ExFATBuilder(_TK_BASE):
         # background thread works most of the time but intermittently wedges
         # or crashes the interpreter — the classic "hangs sometimes" bug.
         self._tk_thread_id = threading.get_ident()
+        self._xthread_queue()
+        _TK_ORIG_AFTER(self, 15, self._xthread_pump)
         # Cross-thread log delivery. Worker threads can't safely call after()
         # (Tcl's timer queue isn't thread-safe either) nor touch the Text
         # widget. Instead they push (text, tag) onto this queue; a lightweight
