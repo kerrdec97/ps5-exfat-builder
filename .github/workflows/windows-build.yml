@@ -1,0 +1,81 @@
+name: Windows build and test
+
+# Builds the release executable exactly as build.bat does, runs the unit and
+# GUI tests on real Windows, launches the built .exe and screenshots it.
+# Artifacts: the .exe + .sha256, page screenshots (en/de/ja) and reports.
+# Runs on the development branch only; nothing is published.
+
+on:
+  push:
+    branches: [farewell-edition-dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+
+      - name: Build executable (build.bat)
+        shell: cmd
+        run: build.bat
+
+      - name: Unit tests (Windows)
+        shell: cmd
+        run: .build-venv\Scripts\python.exe -m unittest discover -s tests -v
+
+      - name: GUI smoke test (Windows)
+        shell: cmd
+        env:
+          EXFAT_GUI_SMOKE: '1'
+        run: .build-venv\Scripts\python.exe -m unittest tests.test_gui_smoke -v
+
+      - name: Visit and screenshot every page (en, de, ja)
+        shell: cmd
+        run: |
+          .build-venv\Scripts\python.exe tools\gui_check.py ci-out\gui-en || exit /b 1
+          .build-venv\Scripts\python.exe tools\gui_check.py ci-out\gui-de --lang de || exit /b 1
+          .build-venv\Scripts\python.exe tools\gui_check.py ci-out\gui-ja --lang ja || exit /b 1
+
+      - name: Launch the built .exe
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'dist\exFAT Image Builder.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "exe missing: $exe" }
+          New-Item -ItemType Directory -Force ci-out\exe | Out-Null
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 40
+          $alive = -not $p.HasExited
+          & .build-venv\Scripts\python.exe -c "from PIL import ImageGrab; ImageGrab.grab().save(r'ci-out\exe\exe_launch.png')"
+          Get-Process | Where-Object { $_.ProcessName -like 'exFAT Image Builder*' } |
+            Select-Object ProcessName, Id, WorkingSet64, CPU | Format-Table | Out-String | Tee-Object ci-out\exe\processes.txt
+          if ($alive) { Stop-Process -Id $p.Id -Force } else { "exit code: $($p.ExitCode)" | Tee-Object ci-out\exe\exit.txt }
+          (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash | Tee-Object ci-out\exe\sha256.txt
+          if (-not $alive) { throw "The executable exited within 40 seconds" }
+
+      - name: Upload executable
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exFAT-Image-Builder-exe
+          path: |
+            dist/*.exe
+            dist/*.sha256
+          if-no-files-found: warn
+
+      - name: Upload screenshots and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-evidence
+          path: ci-out/
+          if-no-files-found: warn

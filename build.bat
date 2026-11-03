@@ -153,11 +153,11 @@ echo.
 echo Upload BOTH "exFAT Image Builder.exe" and "exFAT Image Builder.exe.sha256"
 echo to the GitHub release so the auto-updater can verify the download.
 echo.
-pause
+if not defined CI pause
 exit /b 0
 
 :fail
 echo.
 echo Build stopped.
-pause
+if not defined CI pause
 exit /b 1
