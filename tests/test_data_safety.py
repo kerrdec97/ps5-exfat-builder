@@ -397,6 +397,36 @@ class ExtractedToolIntegrity(unittest.TestCase):
         self.assertFalse(mod.ufs2tool_intact(exe))
 
 
+class TempLeftoverSweep(unittest.TestCase):
+    def test_only_old_own_folders_removed(self):
+        import time
+        mod = load_app()
+        root = tempfile.mkdtemp(prefix='sweeproot_')
+        self.addCleanup(shutil.rmtree, root, True)
+        old_t = time.time() - 3 * 86400
+        made = {}
+        for name in ('exfat_builder_ufs2_old', 'exfat_builder_bp_old',
+                     'exfat_builder_new', 'exfat_builder_keep',
+                     'someone_elses_dir', 'exfat_builder_file'):
+            p = os.path.join(root, name)
+            if name.endswith('_file'):
+                open(p, 'w').close()
+            else:
+                os.makedirs(p)
+            made[name] = p
+        for name in ('exfat_builder_ufs2_old', 'exfat_builder_bp_old',
+                     'exfat_builder_keep', 'someone_elses_dir',
+                     'exfat_builder_file'):
+            os.utime(made[name], (old_t, old_t))
+        gone = mod.sweep_old_temp_dirs([root, root],
+                                       keep=[made['exfat_builder_keep']])
+        self.assertEqual(sorted(os.path.basename(g) for g in gone),
+                         ['exfat_builder_bp_old', 'exfat_builder_ufs2_old'])
+        for name in ('exfat_builder_new', 'exfat_builder_keep',
+                     'someone_elses_dir', 'exfat_builder_file'):
+            self.assertTrue(os.path.exists(made[name]), name)
+
+
 class DotnetRuntime(unittest.TestCase):
     def setUp(self):
         self.mod = load_app()

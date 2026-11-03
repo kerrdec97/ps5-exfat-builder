@@ -570,6 +570,49 @@ def ufs2tool_intact(exe_path):
             _same_bytes(os.path.join(d, 'DokanNet.dll'), _DOKAN_B64))
 
 
+_OWN_TEMP_PREFIXES = ('exfat_builder_ufs2_', 'exfat_builder_bp_',
+                      'exfat_builder_abp_', 'exfat_builder_')
+
+
+def sweep_old_temp_dirs(roots, max_age_hours=24, now=None, keep=()):
+    """Remove folders this app created in temp roots during earlier
+    sessions (technical audit M9). Only direct children whose name starts
+    with one of the app's own prefixes, that are folders (not links) and
+    untouched for `max_age_hours`, are removed; `keep` lists paths in use
+    by this session. Returns the removed paths."""
+    now = now or time.time()
+    keep = {os.path.normcase(os.path.abspath(k)) for k in keep if k}
+    removed = []
+    seen = set()
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        rk = os.path.normcase(os.path.abspath(root))
+        if rk in seen:
+            continue
+        seen.add(rk)
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            continue
+        for e in entries:
+            if not e.name.startswith(_OWN_TEMP_PREFIXES):
+                continue
+            try:
+                if e.is_symlink() or not e.is_dir(follow_symlinks=False):
+                    continue
+                if os.path.normcase(os.path.abspath(e.path)) in keep:
+                    continue
+                if now - e.stat(follow_symlinks=False).st_mtime < max_age_hours * 3600:
+                    continue
+            except OSError:
+                continue
+            shutil.rmtree(e.path, ignore_errors=True)
+            if not os.path.exists(e.path):
+                removed.append(e.path)
+    return removed
+
+
 def cleanup_scripts():
     global _TEMP_DIR
     if _TEMP_DIR and os.path.isdir(_TEMP_DIR):
@@ -4208,6 +4251,17 @@ class ExFATBuilder(_TK_BASE):
                    % (APP_VERSION, APP_EDITION))
 
         self._settings = load_settings()
+        # Remove temp folders left by earlier sessions (in the background).
+        def _sweep_temp(_roots=(tempfile.gettempdir(),
+                                self._settings.get('temp_dir') or None)):
+            try:
+                gone = sweep_old_temp_dirs(_roots, keep=(_TEMP_DIR,))
+                if gone:
+                    self._log('[STARTUP] Removed %d temp folder(s) left by '
+                              'earlier sessions.\n' % len(gone))
+            except Exception:
+                pass
+        threading.Thread(target=_sweep_temp, daemon=True).start()
         # Volumes with this app's labels that are mounted before it starts
         # belong to the user; the stale-mount sweep never touches them.
         try:
