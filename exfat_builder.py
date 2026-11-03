@@ -11876,10 +11876,16 @@ class ExFATBuilder(_TK_BASE):
             app_warning(self, 'No IP', 'Enter your PS5 IP address in Settings first.')
             return
 
+        from tkinter_theme import px as _px
+        from ui.shared.widgets import (Button as _Btn, IconButton as _IBtn,
+                                       TextField as _TFld, Divider as _Div,
+                                       Card as _Card)
+        _C = COLORS
+        BG2 = _C['bg_2']
         win = tk.Toplevel(self)
         win.title('PS5 FTP Manager — ' + ip)
-        win.geometry('780x580')
-        win.configure(bg=BG)
+        win.geometry('%dx%d' % (_px(820), _px(600)))
+        win.configure(bg=BG2)
         win.transient(self)
 
         # ── State ──
@@ -11890,106 +11896,95 @@ class ExFATBuilder(_TK_BASE):
         clipboard   = [None]  # (action, remote_path) for cut/copy
         sel_mode    = tk.StringVar(value='extended')
 
-        # ── Header ──
-        hdr = tk.Frame(win, bg=BG)
-        hdr.pack(fill='x', padx=16, pady=(12, 4))
-        tk.Label(hdr, text=_('PS5 FTP Manager'),
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
-        tk.Label(hdr, textvariable=status_var,
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='right')
+        # ── Footer band (bg_1) — Close, right-aligned ──
+        foot = tk.Frame(win, bg=_C['bg_1'])
+        foot.pack(side='bottom', fill='x')
+        _Div(win, color=_C['border_2']).pack(side='bottom', fill='x')
+        self._ps5_sel_var = tk.StringVar(value='')
+        tk.Label(foot, textvariable=self._ps5_sel_var, font=FONTS['caption'],
+                 bg=_C['bg_1'], fg=_C['fg_3'], anchor='w').pack(
+                     side='left', padx=_px(24))
+        _Btn(foot, text='Close', width=10,
+             command=lambda: (_ftp_quit(), win.destroy())
+             ).pack(side='right', padx=_px(24), pady=_px(16))
 
-        # ── Path / breadcrumb bar ──
-        path_row = tk.Frame(win, bg=BG)
-        path_row.pack(fill='x', padx=16, pady=(0, 4))
-        XButton(path_row, text='\u2191 Up',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
-                  command=lambda: _go_up()).pack(side='left', padx=(0, 6))
-        pf = tk.Frame(path_row, bg=FIELD_BG,
-                      highlightbackground=BORDER, highlightthickness=1)
-        pf.pack(side='left', fill='x', expand=True)
-        path_entry = XEntry(pf, textvariable=path_var,
-                              font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
-                              insertbackground=FIELD_FG, relief='flat', bd=4)
-        path_entry.pack(fill='x')
+        body = tk.Frame(win, bg=BG2)
+        body.pack(fill='both', expand=True, padx=_px(24), pady=(_px(20), _px(16)))
+
+        # ── Header ──
+        hdr = tk.Frame(body, bg=BG2)
+        hdr.pack(fill='x', pady=(0, _px(12)))
+        tk.Label(hdr, text=_('PS5 FTP Manager'), font=FONTS['title'],
+                 bg=BG2, fg=_C['fg_0']).pack(side='left')
+        tk.Label(hdr, textvariable=status_var, font=FONTS['caption'],
+                 bg=BG2, fg=_C['fg_3']).pack(side='right', anchor='s')
+
+        # ── Path bar ──
+        path_row = tk.Frame(body, bg=BG2)
+        path_row.pack(fill='x', pady=(0, _px(8)))
+        _IBtn(path_row, 'arrow_up', lambda: _go_up(), tooltip='Up',
+              variant='secondary').pack(side='left', padx=(0, _px(6)))
+        path_entry = _TFld(path_row, textvariable=path_var, mono=True)
+        path_entry.pack(side='left', fill='x', expand=True)
         path_entry.bind('<Return>', lambda e: _load(path_var.get()))
-        XButton(path_row, text='Go',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  relief='flat', bd=0, padx=10, pady=4, cursor='hand2',
-                  command=lambda: _load(path_var.get())).pack(side='left', padx=(6, 0))
-        XButton(path_row, text='\U0001f504',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
-                  command=lambda: _load(path_var.get())).pack(side='left', padx=(4, 0))
+        _Btn(path_row, text='Go', command=lambda: _load(path_var.get())
+             ).pack(side='left', padx=(_px(6), 0))
+        _IBtn(path_row, 'refresh', lambda: _load(path_var.get()),
+              tooltip='Refresh', variant='secondary').pack(
+                  side='left', padx=(_px(6), 0))
 
         # ── Toolbar ──
-        toolbar = tk.Frame(win, bg=BG)
-        toolbar.pack(fill='x', padx=16, pady=(0, 4))
+        toolbar = tk.Frame(body, bg=BG2)
+        toolbar.pack(fill='x', pady=(0, _px(8)))
 
-        def tbtn(text, cmd, fg=TEXT, bg=SURFACE2):
-            XButton(toolbar, text=text, font=(FONTS['body'][0], 9),
-                      bg=bg, fg=fg, activebackground=BORDER,
-                      activeforeground=TEXT, relief='flat', bd=0,
-                      padx=8, pady=3, cursor='hand2',
-                      command=cmd).pack(side='left', padx=(0, 3))
+        def tbtn(text, cmd, icon, danger=False):
+            _Btn(toolbar, text=text, icon=icon, size='sm',
+                 variant='subtle', command=cmd).pack(side='left',
+                                                     padx=(0, _px(2)))
 
-        tbtn('\U0001f4c2 New folder', lambda: _new_folder())
-        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
-        tbtn('\u2702 Rename',  lambda: _rename())
-        tbtn('\u2702\ufe0f Cut',    lambda: _cut())
-        tbtn('\U0001f4cb Copy path', lambda: _copy_path())
-        tbtn('\U0001f4cb Paste',    lambda: _paste())
-        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
-        tbtn('\u2935 Download', lambda: _download())
-        tk.Frame(toolbar, bg=BORDER, width=1).pack(side='left', fill='y', padx=4)
-        tbtn('\U0001f5d1 Delete', lambda: _delete(), fg=DANGER)
+        def tsep():
+            _Div(toolbar, color=_C['border_2'], vertical=True).pack(
+                side='left', fill='y', padx=_px(6), pady=_px(4))
+
+        tbtn('New folder', lambda: _new_folder(), 'folder_plus')
+        tsep()
+        tbtn('Rename', lambda: _rename(), 'pencil')
+        tbtn('Cut', lambda: _cut(), 'scissors')
+        tbtn('Copy path', lambda: _copy_path(), 'copy')
+        tbtn('Paste', lambda: _paste(), 'clipboard')
+        tsep()
+        tbtn('Download', lambda: _download(), 'download')
+        tsep()
+        tbtn('Delete', lambda: _delete(), 'trash', danger=True)
 
         # Storage indicator
         self._ps5_free_var = tk.StringVar(value='')
-        tk.Label(toolbar, textvariable=self._ps5_free_var,
-                 font=(FONTS['body'][0], 9), bg=BG, fg=INFO_FG,
-                 anchor='e').pack(side='right')
+        tk.Label(toolbar, textvariable=self._ps5_free_var, font=FONTS['caption'],
+                 bg=BG2, fg=_C['fg_3'], anchor='e').pack(side='right')
 
         # ── File list with columns ──
-        list_outer = tk.Frame(win, bg=SURFACE2,
-                              highlightbackground=BORDER, highlightthickness=1)
-        list_outer.pack(fill='both', expand=True, padx=16, pady=(0, 6))
-
-        # Column header
-        col_hdr = tk.Frame(list_outer, bg=COLORS['bg_0'])
-        col_hdr.pack(fill='x')
+        list_outer = _Card(body, padding=0, tone='canvas')
+        list_outer.pack(fill='both', expand=True)
+        col_hdr = tk.Frame(list_outer, bg=_C['bg_1'])
+        col_hdr.pack(fill='x', padx=_px(8), pady=(_px(6), 0))
         for col_text, col_w in [('Name', 50), ('Size', 12), ('Type', 10)]:
-            tk.Label(col_hdr, text=col_text,
-                     font=(FONTS['body_strong'][0], 9), bg=COLORS['bg_0'], fg=MUTED,
-                     anchor='w', width=col_w).pack(side='left', padx=(8, 0), pady=3)
-
-        listbox = tk.Listbox(list_outer, font=(FONTS['code'][0], 9),
-                             bg=SURFACE2, fg=TEXT,
-                             selectbackground=ACCENT, selectforeground='#ffffff',
-                             activestyle='none', relief='flat', bd=6,
-                             selectmode='extended')
-        sb = XScrollbar(list_outer, command=listbox.yview,
-                          bg=SURFACE2, troughcolor=BG)
+            tk.Label(col_hdr, text=col_text, font=FONTS['caption_strong'],
+                     bg=_C['bg_1'], fg=_C['fg_3'], anchor='w',
+                     width=col_w).pack(side='left', padx=(_px(8), 0),
+                                       pady=_px(4))
+        _Div(list_outer, color=_C['border_1']).pack(fill='x')
+        lwrap = tk.Frame(list_outer, bg=_C['bg_1'])
+        lwrap.pack(fill='both', expand=True, padx=_px(4), pady=_px(4))
+        listbox = tk.Listbox(lwrap, font=FONTS['code'],
+                             bg=_C['bg_1'], fg=_C['fg_1'],
+                             selectbackground=_C['accent_lo'],
+                             selectforeground=_C['fg_0'],
+                             activestyle='none', relief='flat', bd=0,
+                             highlightthickness=0, selectmode='extended')
+        sb = XScrollbar(lwrap, command=listbox.yview)
         listbox.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
-        listbox.pack(fill='both', expand=True)
-
-        # ── Status bar ──
-        stat_bar = tk.Frame(win, bg=COLORS['bg_0'])
-        stat_bar.pack(fill='x', padx=16, pady=(0, 4))
-        self._ps5_sel_var = tk.StringVar(value='')
-        tk.Label(stat_bar, textvariable=self._ps5_sel_var,
-                 font=(FONTS['body'][0], 9), bg=COLORS['bg_0'], fg=MUTED,
-                 anchor='w').pack(side='left', padx=8, pady=3)
-
-        # ── Bottom buttons ──
-        btn_row = tk.Frame(win, bg=BG)
-        btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        XButton(btn_row, text='Close', font=(FONTS['body'][0], 9),
-                  bg=SURFACE2, fg=MUTED, relief='flat', bd=0,
-                  padx=10, pady=5, cursor='hand2',
-                  command=lambda: (_ftp_quit(), win.destroy())
-                  ).pack(side='right')
+        listbox.pack(fill='both', expand=True, padx=(_px(8), 0))
 
         # ── Helper: parse LIST line ──
         def _parse_line(line):
@@ -13066,13 +13061,15 @@ class ExFATBuilder(_TK_BASE):
             pass
 
         # Empty case
+        from ui.shared.widgets import Badge as _Badge, Divider as _Div
+        from ui.shared.widgets import EmptyState as _Empty
         if not merged:
-            tk.Label(self._ps5mgr_rows,
-                     text=_('No games found on PS5 or in local images.\n'
-                            'Build a few in the exFAT tab first, then refresh.'),
-                     font=(FONTS['body'][0], 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
-                     pady=40, justify='center'
-                     ).pack(fill='x')
+            _es = _Empty(self._ps5mgr_rows, icon='game',
+                         title=_('No games found'),
+                         text=_('No games found on PS5 or in local images.\n'
+                                'Build a few in the exFAT tab first, then refresh.'),
+                         bg=_TC['bg_2'])
+            _es.pack(fill='x')
             return
 
         # Pre-build a CUSA→library-game lookup so we can pull cover paths.
@@ -13088,6 +13085,9 @@ class ExFATBuilder(_TK_BASE):
         except Exception:
             pass
 
+        from tkinter_theme import px as _px
+        from ui.icons import icon_image as _icon_image
+        BG2 = _TC['bg_2']
         rendered = 0
         for item in merged:
             name = item['name']
@@ -13099,28 +13099,25 @@ class ExFATBuilder(_TK_BASE):
                 if search not in hay:
                     continue
 
-            row = tk.Frame(self._ps5mgr_rows, bg=_TC['bg_2'])
+            if rendered:
+                _Div(self._ps5mgr_rows, color=_TC['border_1']).pack(fill='x')
+            row = tk.Frame(self._ps5mgr_rows, bg=BG2)
             row.pack(fill='x')
 
-            inner = tk.Frame(row, bg=_TC['bg_2'])
-            inner.pack(fill='x')
+            inner = tk.Frame(row, bg=BG2)
+            inner.pack(fill='x', padx=_px(16))
             for i, (key, _label, width, _anchor) in enumerate(_COLS):
                 if width is None:
                     inner.grid_columnconfigure(i, weight=1, uniform='col')
                 else:
-                    inner.grid_columnconfigure(i, weight=0, minsize=width)
+                    inner.grid_columnconfigure(i, weight=0, minsize=_px(width))
 
             # ── Col 0: Cover thumbnail (32x32) ──
-            cover_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            cover_cell.grid(row=0, column=0, sticky='w', padx=(14, 0), pady=8)
-            cover_lbl = tk.Label(cover_cell, bg=_TC['bg_5'],
-                                  text='\U0001f3ae',
-                                  font=(_TF['body'][0], 14),
-                                  fg=_TC['accent'],
-                                  width=3, height=1,
-                                  highlightbackground=_TC['border_3'],
-                                  highlightthickness=1)
-            cover_lbl.pack()
+            cover_lbl = tk.Label(inner, bg=_TC['bg_3'], bd=0,
+                                 image=_icon_image('game', 16, _TC['fg_4'],
+                                                   _TC['bg_3']),
+                                 width=_px(32), height=_px(32))
+            cover_lbl.grid(row=0, column=0, sticky='w', pady=_px(8))
             # Async cover load from library lookup. Normalize gid to
             # no-hyphen ("PPSA05344") for the cover_lookup key.
             if gid:
@@ -13140,95 +13137,79 @@ class ExFATBuilder(_TK_BASE):
                     self.after(10, _load_cover)
 
             # ── Col 1: Game (title + meta) ──
-            game_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            game_cell.grid(row=0, column=1, sticky='ew', padx=(8, 8), pady=8)
-            tk.Label(game_cell, text=display,
-                     font=(_TF['body'][0], 10, 'bold'),
-                     bg=_TC['bg_2'], fg=_TC['fg_0'],
-                     anchor='w'
-                     ).pack(fill='x')
+            game_cell = tk.Frame(inner, bg=BG2)
+            game_cell.grid(row=0, column=1, sticky='ew', padx=(_px(8), _px(8)),
+                           pady=_px(8))
+            tk.Label(game_cell, text=display, font=_TF['body_strong'],
+                     bg=BG2, fg=_TC['fg_0'], anchor='w').pack(fill='x')
             sub_parts = []
             if gid:
                 sub_parts.append(gid)
             if ver:
                 sub_parts.append('v' + ver)
             if sub_parts:
-                tk.Label(game_cell, text=' \u00b7 '.join(sub_parts),
-                         font=_TF['mono_sm'],
-                         bg=_TC['bg_2'], fg=_TC['accent_hi'],
-                         anchor='w'
-                         ).pack(fill='x')
+                tk.Label(game_cell, text=' · '.join(sub_parts),
+                         font=_TF['code'], bg=BG2, fg=_TC['fg_3'],
+                         anchor='w').pack(fill='x')
 
             # ── Col 2: Local size (right) ──
             local_size = item['local']['size'] if item.get('local') else None
-            tk.Label(inner, text=humanize_size(local_size),
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'],
-                     fg=_TC['fg_3'] if local_size else _TC['fg_6'],
-                     anchor='e'
-                     ).grid(row=0, column=2, sticky='e', padx=(0, 8))
+            tk.Label(inner, text=humanize_size(local_size), font=_TF['code'],
+                     bg=BG2, fg=_TC['fg_1'] if local_size else _TC['fg_5'],
+                     anchor='e').grid(row=0, column=2, sticky='e',
+                                      padx=(0, _px(8)))
 
-            # ── Col 3: PS5 size (right) — color = match/mismatch ──
+            # ── Col 3: PS5 size (right) — colour = match/mismatch ──
             remote_size = item['remote']['size'] if item.get('remote') else None
-            ps5_color = _TC['fg_6']
+            ps5_color = _TC['fg_5']
             mismatch = False
             if remote_size is not None:
                 if local_size is not None and local_size != remote_size:
                     ps5_color = _TC['warn_hi']
                     mismatch = True
                 else:
-                    ps5_color = _TC['fg_3']
-            tk.Label(inner, text=humanize_size(remote_size),
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'], fg=ps5_color,
-                     anchor='e'
-                     ).grid(row=0, column=3, sticky='e', padx=(0, 8))
+                    ps5_color = _TC['fg_1']
+            tk.Label(inner, text=humanize_size(remote_size), font=_TF['code'],
+                     bg=BG2, fg=ps5_color, anchor='e'
+                     ).grid(row=0, column=3, sticky='e', padx=(0, _px(24)))
 
-            # ── Col 4: Status pill ──
-            status_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            status_cell.grid(row=0, column=4, sticky='w', padx=(0, 8))
+            # ── Col 4: Status badge ──
             status = item['status']
             if status == 'on_ps5':
                 if mismatch:
-                    pbg, pfg, ptxt = (_TC['warn_bg'], _TC['warn_hi'],
-                                      '\u26a0 SIZE MISMATCH')
+                    btxt, btone = _('Size mismatch'), 'warn'
                 else:
-                    pbg, pfg, ptxt = (_TC['success_bg'], _TC['success_hi'],
-                                      '\u25cf ON PS5')
+                    btxt, btone = _('On PS5'), 'success'
             elif status == 'local_only':
-                pbg, pfg, ptxt = (_TC['warn_bg'], _TC['warn_hi'],
-                                  '\u25cf LOCAL ONLY')
+                btxt, btone = _('Local only'), 'warn'
             else:  # remote_only
-                pbg, pfg, ptxt = (_TC['accent_08'], _TC['accent_hi'],
-                                  '\u25cf PS5 ONLY')
-            tk.Label(status_cell, text=' ' + ptxt + ' ',
-                     font=(_TF['mono_sm'][0], 9, 'bold'),
-                     bg=pbg, fg=pfg, padx=4, pady=2
-                     ).pack(anchor='w')
+                btxt, btone = 'PS5 only', 'info'
+            _Badge(inner, btxt, btone, surface=BG2).grid(
+                row=0, column=4, sticky='w', padx=(0, _px(8)))
 
             # ── Col 5: PS5 path ──
             remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
             if status == 'local_only':
                 path_text = '— ' + _('not uploaded') + ' —'
-                path_color = _TC['fg_6']
+                path_color = _TC['fg_5']
+                path_font = _TF['caption']
             else:
                 path_text = (remote_dir.rstrip('/') + '/' + name)
                 # Truncate from left if very long
                 if len(path_text) > 50:
-                    path_text = '\u2026' + path_text[-48:]
+                    path_text = '…' + path_text[-48:]
                 path_color = _TC['fg_3']
-            tk.Label(inner, text=path_text,
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'], fg=path_color,
-                     anchor='w'
-                     ).grid(row=0, column=5, sticky='ew', padx=(0, 8))
+                path_font = _TF['code']
+            tk.Label(inner, text=path_text, font=path_font,
+                     bg=BG2, fg=path_color, anchor='w'
+                     ).grid(row=0, column=5, sticky='ew', padx=(0, _px(8)))
 
             # ── Col 6: Actions ──
-            actions_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            actions_cell.grid(row=0, column=6, sticky='e', padx=(0, 14))
+            actions_cell = tk.Frame(inner, bg=BG2)
+            actions_cell.grid(row=0, column=6, sticky='e')
 
             if status == 'local_only' and item.get('local'):
-                _icon_btn(actions_cell, '\u2191',
+                _icon_btn(actions_cell, '↑',
                           tooltip='Upload to PS5',
                           command=lambda p=item['local']['path']:
                               self._ftp_upload_file(p),
@@ -13240,7 +13221,7 @@ class ExFATBuilder(_TK_BASE):
                               os.startfile(os.path.dirname(p))
                           ).pack(side='left', padx=1)
             elif status == 'remote_only':
-                _icon_btn(actions_cell, '\u2913',
+                _icon_btn(actions_cell, '⤓',
                           tooltip='Pull to local (not yet implemented)',
                           command=lambda: None
                           ).pack(side='left', padx=1)
@@ -13253,23 +13234,21 @@ class ExFATBuilder(_TK_BASE):
                                   os.startfile(os.path.dirname(p))
                               ).pack(side='left', padx=1)
                 if mismatch and item.get('local'):
-                    _icon_btn(actions_cell, '\u2191',
+                    _icon_btn(actions_cell, '↑',
                               tooltip='Re-upload',
                               command=lambda p=item['local']['path']:
                                   self._ftp_upload_file(p),
                               accent=True
                               ).pack(side='left', padx=1)
 
-            tk.Frame(self._ps5mgr_rows, bg=_TC['border_2'], height=1
-                     ).pack(fill='x')
             rendered += 1
 
         if rendered == 0:
-            tk.Label(self._ps5mgr_rows,
-                     text=_('No matches for current filter.'),
-                     font=(FONTS['body'][0], 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
-                     pady=40
-                     ).pack(fill='x')
+            _es = _Empty(self._ps5mgr_rows, icon='search',
+                         title=_('No matches for current filter.'),
+                         bg=_TC['bg_2'])
+            _es.configure(height=_px(160))
+            _es.pack(fill='x')
 
     # ══════════════════════════════════════════════════════════════════════════
     # HELP TAB
@@ -17597,75 +17576,90 @@ class ExFATBuilder(_TK_BASE):
         build_y2jb_tab(parent, self)
 
 
+    def _y2jb_ui(self):
+        """Design-system helpers for the Y2JB sub-tab builders."""
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
+        from ui.shared import widgets as _W
+        return _TC, _TF, _px, _W
+
+    def _y2jb_file_row(self, parent, label, var, browse_cmd, hint=None):
+        """Label above a read-only mono path field with a Browse button.
+        Returns the row frame so callers can add an action button."""
+        _TC, _TF, _px, _W = self._y2jb_ui()
+        bg = parent.cget('bg')
+        _W.field_label(parent, label, hint, bg=bg).pack(fill='x')
+        row = tk.Frame(parent, bg=bg)
+        row.pack(fill='x', pady=(_px(4), _px(12)))
+        _W.TextField(row, textvariable=var, mono=True,
+                     state='readonly').pack(side='left', fill='x', expand=True)
+        b = _W.Button(row, text='Browse…', icon='folder_open',
+                      command=browse_cmd)
+        b.pack(side='left', padx=(_px(6), 0))
+        row.browse = b
+        return row
+
+    def _y2jb_region_row(self, parent, label, items):
+        """Label + a row of region choices (Radio/Check widgets created by
+        `items(row)`)."""
+        _TC, _TF, _px, _W = self._y2jb_ui()
+        bg = parent.cget('bg')
+        _W.field_label(parent, label, bg=bg).pack(fill='x')
+        row = tk.Frame(parent, bg=bg)
+        row.pack(fill='x', pady=(_px(6), _px(12)))
+        items(row)
+        return row
+
     def _y2jb_build_connection(self, parent):
         """Connection sub-tab: PS5 IP, FTP port, DPI port, save/test buttons."""
-        conn = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
-        conn.pack(fill='x', padx=24, pady=(0, 12))
-        c_inner = tk.Frame(conn, bg=SURFACE2)
-        c_inner.pack(fill='x', padx=14, pady=10)
+        _TC, _TF, _px, _W = self._y2jb_ui()
+        card = _W.Card(parent, title='Connection',
+                       subtitle='Where the PS5 is and which ports its FTP '
+                                'server and Direct Package Installer use.')
+        card.pack(fill='x')
+        body = card.body
+        BG2 = _TC['bg_2']
 
-        row1 = tk.Frame(c_inner, bg=SURFACE2)
-        row1.pack(fill='x', pady=(0, 6))
-        tk.Label(row1, text='PS5 IP Address:', font=(FONTS['body'][0], 9),
-                 bg=SURFACE2, fg=MUTED, width=18, anchor='w').pack(side='left')
-        ip_ef = tk.Frame(row1, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
-        ip_ef.pack(side='left', fill='x', expand=True)
-        XEntry(ip_ef, textvariable=self._y2jb_ps5_ip,
-                 font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG, relief='flat', bd=6).pack(fill='x')
+        grid = tk.Frame(body, bg=BG2)
+        grid.pack(fill='x')
+        grid.columnconfigure(0, weight=2, uniform='y2c')
+        grid.columnconfigure(1, weight=1, uniform='y2c')
+        grid.columnconfigure(2, weight=1, uniform='y2c')
 
-        row2 = tk.Frame(c_inner, bg=SURFACE2)
-        row2.pack(fill='x', pady=(0, 6))
-        tk.Label(row2, text='FTP Port:', font=(FONTS['body'][0], 9),
-                 bg=SURFACE2, fg=MUTED, width=18, anchor='w').pack(side='left')
-        fp_ef = tk.Frame(row2, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
-        fp_ef.pack(side='left')
-        XEntry(fp_ef, textvariable=self._y2jb_ftp_port,
-                 font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG, relief='flat', bd=6, width=8).pack()
-        tk.Label(row2, text='  (ftpsrv: 2121  /  etaHEN: 1337)',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(8,0))
+        def cell(col, label, var, hint):
+            f = tk.Frame(grid, bg=BG2)
+            f.grid(row=0, column=col, sticky='new',
+                   padx=(0 if col == 0 else _px(8), 0 if col == 2 else _px(8)))
+            _W.field_label(f, label, bg=BG2).pack(fill='x')
+            _W.TextField(f, textvariable=var, mono=True).pack(
+                fill='x', pady=(_px(4), 0))
+            if hint:
+                _W.help_text(f, hint, bg=BG2).pack(fill='x', pady=(_px(4), 0))
 
-        row3 = tk.Frame(c_inner, bg=SURFACE2)
-        row3.pack(fill='x')
-        tk.Label(row3, text='DPI Port:', font=(FONTS['body'][0], 9),
-                 bg=SURFACE2, fg=MUTED, width=18, anchor='w').pack(side='left')
-        dp_ef = tk.Frame(row3, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
-        dp_ef.pack(side='left')
-        XEntry(dp_ef, textvariable=self._y2jb_dpi_port,
-                 font=(FONTS['code'][0], 10), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG, relief='flat', bd=6, width=8).pack()
-        tk.Label(row3, text='  Direct Package Installer V2 port (default 12800)',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left', padx=(8,0))
+        cell(0, 'PS5 IP address', self._y2jb_ps5_ip, None)
+        cell(1, 'FTP port', self._y2jb_ftp_port, 'ftpsrv: 2121  /  etaHEN: 1337')
+        cell(2, 'DPI port', self._y2jb_dpi_port,
+             'Direct Package Installer V2 port (default 12800)')
 
-        # Save connection button
-        save_row = tk.Frame(c_inner, bg=SURFACE2)
-        save_row.pack(fill='x', pady=(10, 0))
-        save_btn = XButton(save_row, text='Save Connection Settings',
-                  font=(FONTS['body'][0], 9), bg=ACCENT, fg=TEXT,
-                  activebackground=COLORS['accent_pressed'], activeforeground=TEXT,
-                  relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
-                  command=self._y2jb_save_connection)
+        _W.Divider(body, color=_TC['border_1']).pack(fill='x', pady=_px(16))
+        save_row = tk.Frame(body, bg=BG2)
+        save_row.pack(fill='x')
+        save_btn = _W.Button(save_row, text='Save Connection Settings',
+                             icon='save', variant='primary',
+                             command=self._y2jb_save_connection)
         save_btn.pack(side='left')
         Tooltip(save_btn, 'Save the IP and port settings to disk so they\'re '
                           'restored on next launch.')
 
-        ftp_btn = XButton(save_row, text='Test FTP',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
-                  command=self._y2jb_test_ftp)
-        ftp_btn.pack(side='left', padx=(8, 0))
+        ftp_btn = _W.Button(save_row, text='Test FTP', icon='wifi',
+                            command=self._y2jb_test_ftp)
+        ftp_btn.pack(side='left', padx=(_px(8), 0))
         Tooltip(ftp_btn, 'Try to connect to the PS5 FTP server using the IP '
                          'and FTP port above. Confirms the PS5 is reachable '
                          'and an FTP payload (etaHEN, ftpsrv) is running.')
 
-        dpi_btn = XButton(save_row, text='Test DPI',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
-                  command=self._y2jb_test_dpi)
-        dpi_btn.pack(side='left', padx=(8, 0))
+        dpi_btn = _W.Button(save_row, text='Test DPI', icon='plug',
+                            command=self._y2jb_test_dpi)
+        dpi_btn.pack(side='left', padx=(_px(8), 0))
         Tooltip(dpi_btn, 'Try to reach etaHEN\'s Direct Package Installer V2 '
                          'on the DPI port (default 12800). Required for one-click '
                          'PKG install.')
@@ -17792,105 +17786,65 @@ class ExFATBuilder(_TK_BASE):
 
     def _y2jb_build_patch(self, parent):
         """Patch sub-tab: region selector, patch local files, auto-block FTP."""
-        patch_outer = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
-        patch_outer.pack(fill='x', padx=24, pady=(0, 12))
-        patch_body = tk.Frame(patch_outer, bg=SURFACE2)
-        patch_body.pack(fill='x', padx=14, pady=10)
-
-        # Region selector for patching
-        reg_lbl_row = tk.Frame(patch_body, bg=SURFACE2)
-        reg_lbl_row.pack(fill='x', pady=(0, 6))
-        tk.Label(reg_lbl_row, text='Region to patch:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=16, anchor='w').pack(side='left')
-        self._y2jb_patch_region = tk.StringVar(value='USA')
-        # v3.0.0: use the central Y2JB_REGION_IDS so the UI label
-        # cannot drift from the worker. Sort keys so the order is
-        # stable (USA, EU, JP).
+        _TC, _TF, _px, _W = self._y2jb_ui()
+        BG2 = _TC['bg_2']
         REGION_IDS = self.Y2JB_REGION_IDS
-        for reg in ['USA', 'EU', 'JP']:
-            tid = REGION_IDS.get(reg, '')
-            XRadio(reg_lbl_row, text='%s (%s)' % (reg, tid),
-                           variable=self._y2jb_patch_region, value=reg,
-                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                           selectcolor=BG, activebackground=SURFACE2,
-                           cursor='hand2').pack(side='left', padx=(0, 16))
 
-        # Warning banner
-        warn = tk.Frame(patch_body, bg='#2a1500',
-                        highlightbackground='#aa5500', highlightthickness=1)
-        warn.pack(fill='x', pady=(0, 10))
-        tk.Label(warn,
-                 text=('\u26a0  Patch after installing YouTube.  '
-                       'Patching blocks the app from being updated by '
-                       'Sony.  Title IDs: USA=%s \u2022 EU=%s \u2022 '
-                       'JP=%s   \u2014   v3.0.0 verifies every patch '
-                       'by reading the file back.'
-                       % (REGION_IDS['USA'], REGION_IDS['EU'],
-                          REGION_IDS['JP'])),
-                 font=(FONTS['body'][0], 9), bg='#2a1500', fg='#ffaa44',
-                 anchor='w', wraplength=860).pack(fill='x', padx=10, pady=6)
+        # ── Region ──
+        reg_card = _W.Card(parent, title='Region to patch',
+                           subtitle='Patch after installing YouTube. Patching '
+                                    'blocks the app from being updated by Sony.')
+        reg_card.pack(fill='x')
+        self._y2jb_patch_region = tk.StringVar(value='USA')
 
-        # Patch local files
-        local_lbl = tk.Frame(patch_body, bg=SURFACE2)
-        local_lbl.pack(fill='x')
-        tk.Label(local_lbl, text='Patch local files',
-                 font=(FONTS['body_strong'][0], 10), bg=SURFACE2, fg=TEXT).pack(side='left')
-        tk.Label(local_lbl,
-                 text='  \u2014  select folder containing app.db, appinfo.db and param.json from your PC',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+        def _radios(row):
+            # v3.0.0: the central Y2JB_REGION_IDS keeps the label in step
+            # with the worker; order is stable (USA, EU, JP).
+            for reg in ['USA', 'EU', 'JP']:
+                tid = REGION_IDS.get(reg, '')
+                _W.Radio(row, text='%s (%s)' % (reg, tid),
+                         variable=self._y2jb_patch_region, value=reg
+                         ).pack(side='left', padx=(0, _px(16)))
+        _W.field_label(reg_card.body, 'Region', bg=BG2).pack(fill='x')
+        rrow = tk.Frame(reg_card.body, bg=BG2)
+        rrow.pack(fill='x', pady=(_px(6), _px(12)))
+        _radios(rrow)
+        _W.InfoBar(reg_card.body, kind='warn',
+                   title='Patch after installing YouTube.',
+                   text=('Patching blocks the app from being updated by Sony. '
+                         'Title IDs: USA=%s · EU=%s · JP=%s. '
+                         'v3.0.0 verifies every patch by reading the file back.'
+                         % (REGION_IDS['USA'], REGION_IDS['EU'],
+                            REGION_IDS['JP']))).pack(fill='x')
 
+        # ── Patch local files ──
+        loc = _W.Card(parent, title='Patch local files',
+                      subtitle='Select the folder containing app.db, '
+                               'appinfo.db and param.json from your PC.')
+        loc.pack(fill='x', pady=(_px(16), 0))
         self._y2jb_patch_dir = tk.StringVar()
-        pf_row = tk.Frame(patch_body, bg=SURFACE2)
-        pf_row.pack(fill='x', pady=(4, 8))
-        pf_ef = tk.Frame(pf_row, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
-        pf_ef.pack(side='left', fill='x', expand=True)
-        XEntry(pf_ef, textvariable=self._y2jb_patch_dir,
-                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG,
-                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
-                 relief='flat', bd=4,
-                 state='readonly').pack(fill='x')
-        plf_browse = XButton(pf_row, text='Browse',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, relief='flat', bd=0,
-                  padx=12, pady=4, cursor='hand2',
-                  command=self._y2jb_browse_patch_dir)
-        plf_browse.pack(side='left', padx=(6, 0))
-        Tooltip(plf_browse, 'Pick the folder that contains the param.json, '
-                            'app.db and appinfo.db you want to patch (usually '
-                            'a folder you\'ve previously downloaded from PS5).')
-
-        plf_btn = XButton(pf_row, text='\U0001f6e1  Patch Local Files',
-                  font=(FONTS['body_strong'][0], 9), bg='#5a3a00', fg=TEXT,
-                  activebackground='#7a5a00', relief='flat', bd=0,
-                  padx=14, pady=4, cursor='hand2',
-                  command=self._y2jb_patch_local)
-        plf_btn.pack(side='left', padx=(8, 0))
+        pf_row = self._y2jb_file_row(loc.body, 'Folder', self._y2jb_patch_dir,
+                                     self._y2jb_browse_patch_dir)
+        Tooltip(pf_row.browse, 'Pick the folder that contains the param.json, '
+                               'app.db and appinfo.db you want to patch (usually '
+                               'a folder you\'ve previously downloaded from PS5).')
+        plf_btn = _W.Button(loc.body, text='Patch Local Files', icon='shield',
+                            command=self._y2jb_patch_local)
+        plf_btn.pack(anchor='w')
         Tooltip(plf_btn, 'Patch the files on your PC. Backups (.bak) are '
                          'created automatically. Upload the patched files back '
                          'to your PS5 to block YouTube updates.')
 
-        # Divider
-        tk.Frame(patch_body, bg=BORDER, height=1).pack(fill='x', pady=8)
-
-        # Auto-Block over FTP
-        ftp_lbl = tk.Frame(patch_body, bg=SURFACE2)
-        ftp_lbl.pack(fill='x')
-        tk.Label(ftp_lbl, text='Auto-Block over FTP',
-                 font=(FONTS['body_strong'][0], 10), bg=SURFACE2, fg=TEXT).pack(side='left')
-        tk.Label(ftp_lbl,
-                 text='  \u2014  patches param.json, appinfo.db and app.db directly on PS5 via FTP  \u2022  stay in PS5 Settings before running',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
-
-        ftp_btn_row = tk.Frame(patch_body, bg=SURFACE2)
-        ftp_btn_row.pack(fill='x', pady=(8, 0))
-        ab_btn = XButton(ftp_btn_row,
-                  text='\U0001f4e1  Auto-Block over FTP',
-                  font=(FONTS['body_strong'][0], 9), bg=DANGER, fg=TEXT,
-                  activebackground='#cc2222', relief='flat', bd=0,
-                  padx=14, pady=6, cursor='hand2',
-                  command=self._y2jb_auto_block_ftp)
+        # ── Auto-Block over FTP ──
+        ftp = _W.Card(parent, title='Auto-Block over FTP',
+                      subtitle='Patches param.json, appinfo.db and app.db '
+                               'directly on PS5 via FTP. Stay in PS5 Settings '
+                               'before running.')
+        ftp.pack(fill='x', pady=(_px(16), 0))
+        ftp_btn_row = tk.Frame(ftp.body, bg=BG2)
+        ftp_btn_row.pack(fill='x')
+        ab_btn = _W.Button(ftp_btn_row, text='Auto-Block over FTP', icon='wifi',
+                           variant='danger', command=self._y2jb_auto_block_ftp)
         ab_btn.pack(side='left')
         Tooltip(ab_btn, 'One-click block: downloads param.json, appinfo.db and '
                         'app.db from your PS5 via FTP, patches them, and uploads '
@@ -17898,321 +17852,199 @@ class ExFATBuilder(_TK_BASE):
                         'you\'re in the PS5 Settings menu (not in YouTube) before '
                         'running.')
         self._y2jb_register_gated_button(ab_btn)
-        tk.Label(ftp_btn_row,
-                 text='  \u2190 Stay in PS5 Settings menu before clicking this!',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg='#aa4444').pack(side='left')
+        _W.IconLabel(ftp_btn_row, 'warning', 16, _TC['warn'], BG2).pack(
+            side='left', padx=(_px(12), _px(6)))
+        tk.Label(ftp_btn_row, text='Stay in the PS5 Settings menu before '
+                                   'clicking this.',
+                 font=_TF['caption'], bg=BG2, fg=_TC['warn_hi']).pack(side='left')
 
         # Patch status
         self._y2jb_patch_status = tk.StringVar(value='')
-        tk.Label(patch_body, textvariable=self._y2jb_patch_status,
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
-                 anchor='w', wraplength=900, justify='left').pack(fill='x', pady=(8, 0))
+        st = tk.Label(ftp.body, textvariable=self._y2jb_patch_status,
+                      font=_TF['body'], bg=BG2, fg=_TC['success_hi'],
+                      anchor='w', justify='left')
+        st.pack(fill='x', pady=(_px(12), 0))
+        _W.autowrap(st)
 
 
     def _y2jb_build_files(self, parent):
-        """Files sub-tab: download0.dat placer + change YouTube icon."""
-        dat_outer = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
-        dat_outer.pack(fill='x', padx=24, pady=(0, 12))
-        dat_body = tk.Frame(dat_outer, bg=SURFACE2)
-        dat_body.pack(fill='x', padx=14, pady=10)
+        """Files sub-tab: download0.dat placer + change YouTube icon + art set."""
+        _TC, _TF, _px, _W = self._y2jb_ui()
+        BG2 = _TC['bg_2']
 
-        tk.Label(dat_body,
-                 text='Places download0.dat into the correct PS5 path for the selected region. '
-                      'The PS5 must have an FTP server running.',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
-
-        # Region selector for dat
-        dat_reg_row = tk.Frame(dat_body, bg=SURFACE2)
-        dat_reg_row.pack(fill='x', pady=(0, 6))
-        tk.Label(dat_reg_row, text='Region:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=10, anchor='w').pack(side='left')
+        # ── download0.dat ──
+        dat = _W.Card(parent, title='Place download0.dat',
+                      subtitle='Places download0.dat into the correct PS5 path '
+                               'for the selected region. The PS5 must have an '
+                               'FTP server running.')
+        dat.pack(fill='x')
         self._y2jb_dat_region = tk.StringVar(value='USA')
         DAT_PATHS = {
             'USA': '/user/download/PPSA01650',
             'EU':  '/user/download/PPSA01651',
             'JP':  '/user/download/PPSA01652',
         }
-        for reg in ('USA', 'EU', 'JP'):
-            XRadio(dat_reg_row, text='%s (%s)' % (reg, DAT_PATHS[reg]),
-                           variable=self._y2jb_dat_region, value=reg,
-                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                           selectcolor=BG, activebackground=SURFACE2,
-                           cursor='hand2').pack(side='left', padx=(0, 12))
 
-        # File selector
+        def _dat_radios(row):
+            for reg in ('USA', 'EU', 'JP'):
+                _W.Radio(row, text='%s (%s)' % (reg, DAT_PATHS[reg]),
+                         variable=self._y2jb_dat_region, value=reg
+                         ).pack(side='left', padx=(0, _px(16)))
+        self._y2jb_region_row(dat.body, 'Region', _dat_radios)
+
         self._y2jb_dat_path = tk.StringVar()
-        dat_file_row = tk.Frame(dat_body, bg=SURFACE2)
-        dat_file_row.pack(fill='x', pady=(0, 8))
-        tk.Label(dat_file_row, text='download0.dat:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=16, anchor='w').pack(side='left')
-        dat_ef = tk.Frame(dat_file_row, bg=FIELD_BG, highlightbackground=BORDER, highlightthickness=1)
-        dat_ef.pack(side='left', fill='x', expand=True)
-        XEntry(dat_ef, textvariable=self._y2jb_dat_path,
-                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG,
-                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
-                 relief='flat', bd=4,
-                 state='readonly').pack(fill='x')
-        dat_browse_btn = XButton(dat_file_row, text='Browse',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, relief='flat', bd=0,
-                  padx=12, pady=4, cursor='hand2',
-                  command=lambda: self._y2jb_browse_dat())
-        dat_browse_btn.pack(side='left', padx=(6, 0))
-        Tooltip(dat_browse_btn, 'Pick the download0.dat file you downloaded '
+        dat_row = self._y2jb_file_row(dat.body, 'download0.dat',
+                                      self._y2jb_dat_path,
+                                      lambda: self._y2jb_browse_dat())
+        Tooltip(dat_row.browse, 'Pick the download0.dat file you downloaded '
                                 'from the ps5-y2jb-autoloader releases page.')
-
-        place_btn = XButton(dat_file_row,
-                  text='\U0001f4e4  Place on PS5',
-                  font=(FONTS['body_strong'][0], 9), bg='#1a5a3a', fg=TEXT,
-                  activebackground='#2a7a4a', relief='flat', bd=0,
-                  padx=14, pady=4, cursor='hand2',
-                  command=self._y2jb_place_dat)
-        place_btn.pack(side='left', padx=(8, 0))
+        act = tk.Frame(dat.body, bg=BG2)
+        act.pack(fill='x')
+        place_btn = _W.Button(act, text='Place on PS5', icon='upload',
+                              command=self._y2jb_place_dat)
+        place_btn.pack(side='left')
         Tooltip(place_btn, 'Upload download0.dat to the correct path on PS5 '
                            'for the selected region. This is required for '
                            'non-jailbroken / soft-jailbroken consoles to load '
                            'the autoloader.')
         self._y2jb_register_gated_button(place_btn)
-
         self._y2jb_dat_status = tk.StringVar(value='')
-        tk.Label(dat_body, textvariable=self._y2jb_dat_status,
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
-                 anchor='w').pack(fill='x')
-        ico_outer = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
-        ico_outer.pack(fill='x', padx=24, pady=(0, 12))
-        ico_body = tk.Frame(ico_outer, bg=SURFACE2)
-        ico_body.pack(fill='x', padx=14, pady=10)
+        tk.Label(act, textvariable=self._y2jb_dat_status, font=_TF['body'],
+                 bg=BG2, fg=_TC['success_hi'], anchor='w').pack(
+                     side='left', padx=(_px(12), 0))
 
-        tk.Label(ico_body,
-                 text='Upload a custom 512x512 PNG as the YouTube app icon. '
-                      'Uploads to /user/appmeta/<TitleID>/icon0.png for the selected region(s) via FTP.',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
-
-        # Region checkboxes (can do all 3 at once)
-        ico_reg_row = tk.Frame(ico_body, bg=SURFACE2)
-        ico_reg_row.pack(fill='x', pady=(0, 6))
-        tk.Label(ico_reg_row, text='Region(s):',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=12, anchor='w').pack(side='left')
+        # ── App icon ──
+        ico = _W.Card(parent, title='YouTube app icon',
+                      subtitle='Upload a custom 512x512 PNG as the YouTube app '
+                               'icon. Uploads to /user/appmeta/<TitleID>/'
+                               'icon0.png for the selected region(s) via FTP.')
+        ico.pack(fill='x', pady=(_px(16), 0))
         ICON_PATHS = {
             'USA': '/user/appmeta/PPSA01650/icon0.png',
             'EU':  '/user/appmeta/PPSA01651/icon0.png',
             'JP':  '/user/appmeta/PPSA01652/icon0.png',
         }
         self._y2jb_icon_regions = {}
-        for reg in ('USA', 'EU', 'JP'):
-            var = tk.BooleanVar(value=True)
-            self._y2jb_icon_regions[reg] = var
-            XCheck(ico_reg_row,
-                           text='%s  (%s)' % (reg, ICON_PATHS[reg]),
-                           variable=var,
-                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                           selectcolor=BG, activebackground=SURFACE2,
-                           cursor='hand2').pack(side='left', padx=(0, 14))
 
-        # File picker row
+        def _ico_checks(row):
+            for reg in ('USA', 'EU', 'JP'):
+                var = tk.BooleanVar(value=True)
+                self._y2jb_icon_regions[reg] = var
+                _W.Check(row, text='%s  (%s)' % (reg, ICON_PATHS[reg]),
+                         variable=var).pack(side='left', padx=(0, _px(16)))
+        self._y2jb_region_row(ico.body, 'Region(s)', _ico_checks)
+
         self._y2jb_icon_path = tk.StringVar()
-        ico_file_row = tk.Frame(ico_body, bg=SURFACE2)
-        ico_file_row.pack(fill='x', pady=(0, 8))
-        tk.Label(ico_file_row, text='icon0.png (512x512):',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=20, anchor='w').pack(side='left')
-        ico_ef = tk.Frame(ico_file_row, bg=FIELD_BG,
-                          highlightbackground=BORDER, highlightthickness=1)
-        ico_ef.pack(side='left', fill='x', expand=True)
-        XEntry(ico_ef, textvariable=self._y2jb_icon_path,
-                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG,
-                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
-                 relief='flat', bd=4,
-                 state='readonly').pack(fill='x')
-        XButton(ico_file_row, text='Browse',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, relief='flat', bd=0,
-                  padx=12, pady=4, cursor='hand2',
-                  command=self._y2jb_browse_icon).pack(side='left', padx=(6, 0))
-        icon_upload_btn = XButton(ico_file_row,
-                  text='\U0001f5bc  Upload Icon to PS5',
-                  font=(FONTS['body_strong'][0], 9), bg='#3a2a5a', fg=TEXT,
-                  activebackground='#5a3a8a', relief='flat', bd=0,
-                  padx=14, pady=4, cursor='hand2',
-                  command=self._y2jb_upload_icon)
-        icon_upload_btn.pack(side='left', padx=(8, 0))
+        self._y2jb_file_row(ico.body, 'icon0.png', self._y2jb_icon_path,
+                            self._y2jb_browse_icon, hint='512x512 PNG')
+        _W.InfoBar(ico.body, kind='warn',
+                   text='PNG must be exactly 512x512 pixels. The PS5 may need '
+                        'to be restarted or the app re-launched for the icon '
+                        'to refresh.').pack(fill='x', pady=(0, _px(12)))
+        act = tk.Frame(ico.body, bg=BG2)
+        act.pack(fill='x')
+        icon_upload_btn = _W.Button(act, text='Upload Icon to PS5',
+                                    icon='image',
+                                    command=self._y2jb_upload_icon)
+        icon_upload_btn.pack(side='left')
         self._y2jb_register_gated_button(icon_upload_btn)
-
-        # Warning about icon size
-        tk.Label(ico_body,
-                 text='\u26a0  PNG must be exactly 512x512 pixels. The PS5 may need to be restarted '
-                      'or the app re-launched for the icon to refresh.',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg='#aa8800',
-                 anchor='w', wraplength=880).pack(fill='x', pady=(0, 4))
-
         self._y2jb_icon_status = tk.StringVar(value='')
-        tk.Label(ico_body, textvariable=self._y2jb_icon_status,
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
-                 anchor='w').pack(fill='x')
+        tk.Label(act, textvariable=self._y2jb_icon_status, font=_TF['body'],
+                 bg=BG2, fg=_TC['success_hi'], anchor='w').pack(
+                     side='left', padx=(_px(12), 0))
 
-        art_outer = tk.Frame(parent, bg=SURFACE2,
-                             highlightbackground=BORDER, highlightthickness=1)
-        art_outer.pack(fill='x', padx=24, pady=(0, 12))
-        art_body = tk.Frame(art_outer, bg=SURFACE2)
-        art_body.pack(fill='x', padx=14, pady=10)
-        tk.Label(art_body,
-                 text='Upload a full art set from a local folder. Sends pic0.png / pic0.dds / pic1.dds / pic2.dds (and icon0.png if present) to /user/appmeta/<TitleID>/, and icon0.png / pic0.png to /user/catalog_downloader/appmeta/<TitleID>/. Overwrite only — missing files are skipped.',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 anchor='w', wraplength=880).pack(fill='x', pady=(0, 8))
-
-        art_reg_row = tk.Frame(art_body, bg=SURFACE2)
-        art_reg_row.pack(fill='x', pady=(0, 6))
-        tk.Label(art_reg_row, text='Region(s):',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=12, anchor='w').pack(side='left')
+        # ── Art set ──
+        art = _W.Card(parent, title='Art set',
+                      subtitle='Upload a full art set from a local folder. Sends '
+                               'pic0.png / pic0.dds / pic1.dds / pic2.dds (and '
+                               'icon0.png if present) to /user/appmeta/<TitleID>/, '
+                               'and icon0.png / pic0.png to '
+                               '/user/catalog_downloader/appmeta/<TitleID>/. '
+                               'Overwrite only — missing files are skipped.')
+        art.pack(fill='x', pady=(_px(16), 0))
         self._y2jb_art_regions = {}
-        for reg in ('USA', 'EU', 'JP'):
-            var = tk.BooleanVar(value=True)
-            self._y2jb_art_regions[reg] = var
-            XCheck(art_reg_row,
-                           text=f'{reg!s}  ({self.Y2JB_REGION_IDS[reg]!s})',
-                           variable=var,
-                           font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                           selectcolor=BG, activebackground=SURFACE2,
-                           cursor='hand2').pack(side='left', padx=(0, 14))
+
+        def _art_checks(row):
+            for reg in ('USA', 'EU', 'JP'):
+                var = tk.BooleanVar(value=True)
+                self._y2jb_art_regions[reg] = var
+                _W.Check(row, text=f'{reg!s}  ({self.Y2JB_REGION_IDS[reg]!s})',
+                         variable=var).pack(side='left', padx=(0, _px(16)))
+        self._y2jb_region_row(art.body, 'Region(s)', _art_checks)
 
         self._y2jb_art_dir = tk.StringVar()
-        art_file_row = tk.Frame(art_body, bg=SURFACE2)
-        art_file_row.pack(fill='x', pady=(0, 8))
-        tk.Label(art_file_row, text='Art folder:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=20, anchor='w').pack(side='left')
-        art_ef = tk.Frame(art_file_row, bg=FIELD_BG,
-                          highlightbackground=BORDER, highlightthickness=1)
-        art_ef.pack(side='left', fill='x', expand=True)
-        XEntry(art_ef, textvariable=self._y2jb_art_dir,
-                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG,
-                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
-                 relief='flat', bd=4, state='readonly').pack(fill='x')
-        XButton(art_file_row, text='Browse',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, relief='flat', bd=0,
-                  padx=12, pady=4, cursor='hand2',
-                  command=self._y2jb_browse_art_dir).pack(side='left',
-                                                          padx=(6, 0))
-        art_upload_btn = XButton(art_file_row,
-                  text='\U0001f5bc  Upload Art Set to PS5',
-                  font=(FONTS['body_strong'][0], 9), bg='#3a2a5a', fg=TEXT,
-                  activebackground='#5a3a8a', relief='flat', bd=0,
-                  padx=14, pady=4, cursor='hand2',
-                  command=self._y2jb_upload_art_set)
-        art_upload_btn.pack(side='left', padx=(8, 0))
+        self._y2jb_file_row(art.body, 'Art folder', self._y2jb_art_dir,
+                            self._y2jb_browse_art_dir)
+        act = tk.Frame(art.body, bg=BG2)
+        act.pack(fill='x')
+        art_upload_btn = _W.Button(act, text='Upload Art Set to PS5',
+                                   icon='picture',
+                                   command=self._y2jb_upload_art_set)
+        art_upload_btn.pack(side='left')
         self._y2jb_register_gated_button(art_upload_btn)
-
         self._y2jb_art_status = tk.StringVar(value='')
-        tk.Label(art_body, textvariable=self._y2jb_art_status,
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS,
-                 anchor='w').pack(fill='x')
+        tk.Label(act, textvariable=self._y2jb_art_status, font=_TF['body'],
+                 bg=BG2, fg=_TC['success_hi'], anchor='w').pack(
+                     side='left', padx=(_px(12), 0))
 
 
     def _y2jb_build_autoloader(self, parent):
         """Autoloader sub-tab: edit autoload.txt and manage ELF files."""
-        al_hdr = tk.Frame(parent, bg=BG)
-        al_hdr.pack(fill='x', padx=24, pady=(8, 4))
-        tk.Label(al_hdr, text='\U0001f4c4  ps5_autoloader Editor',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
-        tk.Label(al_hdr,
-                 text='  — edit autoload.txt and manage ELF files in the ps5_autoloader folder',
-                 font=(FONTS['body'][0], 9), bg=BG, fg=COLORS['fg_5']).pack(side='left')
-
-        al_outer = tk.Frame(parent, bg=SURFACE2, highlightbackground=BORDER, highlightthickness=1)
-        al_outer.pack(fill='x', padx=24, pady=(0, 6))
-        al_inner = tk.Frame(al_outer, bg=SURFACE2)
-        al_inner.pack(fill='x', padx=12, pady=10)
+        _TC, _TF, _px, _W = self._y2jb_ui()
+        BG2 = _TC['bg_2']
+        card = _W.Card(parent, title='ps5_autoloader editor',
+                       subtitle='Edit autoload.txt and manage ELF files in the '
+                                'ps5_autoloader folder.')
+        card.pack(fill='x')
+        body = card.body
 
         # Folder selector
-        al_dir_row = tk.Frame(al_inner, bg=SURFACE2)
-        al_dir_row.pack(fill='x', pady=(0, 6))
-        tk.Label(al_dir_row, text='ps5_autoloader folder:',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                 width=22, anchor='w').pack(side='left')
         self._al_dir_var = tk.StringVar(value=self._settings.get('al_dir', ''))
-        al_dir_ef = tk.Frame(al_dir_row, bg=FIELD_BG,
-                             highlightbackground=BORDER, highlightthickness=1)
-        al_dir_ef.pack(side='left', fill='x', expand=True)
-        XEntry(al_dir_ef, textvariable=self._al_dir_var,
-                 font=(FONTS['code'][0], 9), bg=FIELD_BG, fg=FIELD_FG,
-                 insertbackground=FIELD_FG,
-                 disabledforeground=FIELD_FG, readonlybackground=FIELD_BG,
-                 relief='flat', bd=4,
-                 state='readonly').pack(fill='x')
-        XButton(al_dir_row, text='Browse',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, relief='flat', bd=0,
-                  padx=10, pady=3, cursor='hand2',
-                  command=self._al_browse_dir).pack(side='left', padx=(6, 0))
-        XButton(al_dir_row, text='Load',
-                  font=(FONTS['body'][0], 9), bg=ACCENT, fg=TEXT,
-                  activebackground=COLORS['accent_pressed'], relief='flat', bd=0,
-                  padx=10, pady=3, cursor='hand2',
-                  command=self._al_load).pack(side='left', padx=(4, 0))
+        row = self._y2jb_file_row(body, 'ps5_autoloader folder',
+                                  self._al_dir_var, self._al_browse_dir)
+        _W.Button(row, text='Load', icon='refresh',
+                  command=self._al_load).pack(side='left', padx=(_px(6), 0))
 
-        # Info label
-        tk.Label(al_inner,
-                 text='autoload.txt format: one ELF/BIN/JS per line \u2022 !1000 = sleep 1000ms \u2022 # lines are comments',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5'],
-                 anchor='w').pack(fill='x', pady=(0, 6))
-
-        # Text editor for autoload.txt
-        al_edit_frame = tk.Frame(al_inner, bg=COLORS['bg_0'],
-                                  highlightbackground=BORDER, highlightthickness=1)
-        al_edit_frame.pack(fill='x', pady=(0, 6))
-        al_edit_sb = XScrollbar(al_edit_frame, bg=SURFACE2, troughcolor=BG)
-        al_edit_sb.pack(side='right', fill='y')
-        self._al_text = tk.Text(al_edit_frame,
-                                 font=(FONTS['code'][0], 9), bg=COLORS['bg_0'], fg=COLORS['fg_2'],
-                                 insertbackground=TEXT, relief='flat', bd=6,
-                                 spacing1=0, spacing2=0, spacing3=0, height=8,
-                                 yscrollcommand=al_edit_sb.set)
+        # Editor
+        _W.field_label(body, 'autoload.txt',
+                       'one ELF/BIN/JS per line · !1000 = sleep 1000ms '
+                       '· # lines are comments', bg=BG2).pack(fill='x')
+        well = _W.Card(body, tone='inset', padding=4)
+        well.pack(fill='x', pady=(_px(4), _px(12)))
+        al_edit_sb = _W.Scrollbar(well)
+        al_edit_sb.pack(side='right', fill='y', pady=_px(4))
+        self._al_text = tk.Text(well, font=_TF['code'], bg=_TC['bg_0'],
+                                fg=_TC['fg_1'], insertbackground=_TC['fg_0'],
+                                selectbackground=_TC['accent_lo'],
+                                selectforeground=_TC['fg_0'],
+                                relief='flat', bd=0, highlightthickness=0,
+                                padx=_px(10), pady=_px(8),
+                                spacing1=0, spacing2=0, spacing3=0, height=8,
+                                yscrollcommand=al_edit_sb.set)
         al_edit_sb.config(command=self._al_text.yview)
         self._al_text.pack(fill='x', expand=True)
 
-        # Payload list in folder
-        al_files_lbl = tk.Frame(al_inner, bg=SURFACE2)
-        al_files_lbl.pack(fill='x', pady=(6, 2))
-        tk.Label(al_files_lbl, text='ELF files in folder:',
-                 font=(FONTS['body_strong'][0], 9), bg=SURFACE2, fg=TEXT).pack(side='left')
-        tk.Label(al_files_lbl,
-                 text='  click to insert into editor at cursor',
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+        # Payload files in the folder
+        _W.field_label(body, 'ELF files in folder',
+                       'click to insert into the editor at the cursor',
+                       bg=BG2).pack(fill='x')
+        self._al_files_frame = tk.Frame(body, bg=BG2)
+        self._al_files_frame.pack(fill='x', pady=(_px(6), _px(12)))
 
-        self._al_files_frame = tk.Frame(al_inner, bg=SURFACE2)
-        self._al_files_frame.pack(fill='x', pady=(0, 6))
-
-        # Action buttons
-        al_btn_row = tk.Frame(al_inner, bg=SURFACE2)
+        _W.Divider(body, color=_TC['border_1']).pack(fill='x', pady=(0, _px(16)))
+        al_btn_row = tk.Frame(body, bg=BG2)
         al_btn_row.pack(fill='x')
-        XButton(al_btn_row, text='\u2795 Add ELF file',
-                  font=(FONTS['body'][0], 9), bg='#1a5a3a', fg=TEXT,
-                  activebackground='#2a7a4a', relief='flat', bd=0,
-                  padx=10, pady=4, cursor='hand2',
+        _W.Button(al_btn_row, text='Add ELF file', icon='plus',
                   command=self._al_add_elf).pack(side='left')
-        XButton(al_btn_row, text='!sleep Insert',
-                  font=(FONTS['body'][0], 9), bg='#3a3a1a', fg=TEXT,
-                  activebackground='#5a5a2a', relief='flat', bd=0,
-                  padx=10, pady=4, cursor='hand2',
-                  command=self._al_insert_sleep).pack(side='left', padx=(6, 0))
-        XButton(al_btn_row, text='\U0001f4be Save autoload.txt',
-                  font=(FONTS['body_strong'][0], 9), bg=ACCENT, fg=TEXT,
-                  activebackground=COLORS['accent_pressed'], relief='flat', bd=0,
-                  padx=14, pady=4, cursor='hand2',
-                  command=self._al_save).pack(side='left', padx=(6, 0))
+        _W.Button(al_btn_row, text='Insert !sleep', icon='timer',
+                  command=self._al_insert_sleep).pack(side='left',
+                                                      padx=(_px(6), 0))
         self._al_status_var = tk.StringVar(value='')
+        _W.Button(al_btn_row, text='Save autoload.txt', icon='save',
+                  variant='primary', command=self._al_save).pack(side='right')
         tk.Label(al_btn_row, textvariable=self._al_status_var,
-                 font=(FONTS['body'][0], 9), bg=SURFACE2, fg=SUCCESS).pack(side='left', padx=(12, 0))
+                 font=_TF['body'], bg=BG2, fg=_TC['success_hi']).pack(
+                     side='right', padx=(0, _px(12)))
 
         # Auto-load if folder already saved
         if self._al_dir_var.get() and os.path.isdir(self._al_dir_var.get()):
@@ -18229,15 +18061,18 @@ class ExFATBuilder(_TK_BASE):
         save_settings(self._settings)
 
     def _pl_render(self):
-        # Step 14 (v2.1.6): rewritten to build payload cards in the new
-        # design, with click-to-select that drives the detail aside.
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
+        # Farewell Edition: payload rows on the design system (icon tile,
+        # name + notes, mono meta, Send action; accent_lo selection), with
+        # click-to-select that drives the detail card.
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
         from ui.tab_payloads import _render_detail_for, _render_detail_empty
+        from ui.shared.widgets import (Button as _Btn, Divider as _Div,
+                                       EmptyState as _Empty, IconLabel as _Ico)
 
         for w in self._pl_list_frame.winfo_children():
             w.destroy()
 
-        # Update count pill
+        # Update count
         n = len(self._pl_payloads)
         if hasattr(self, '_pl_count_var'):
             self._pl_count_var.set('%d %s' % (n, 'saved'))
@@ -18250,19 +18085,14 @@ class ExFATBuilder(_TK_BASE):
             pass
 
         if not self._pl_payloads:
-            # v3.6.0 PS5 pass: shared EmptyState instead of bare labels.
-            from ui.shared.ps5_kit import scroll_empty_state
-            from ui.shared.page_head import make_themed_button
-            es = scroll_empty_state(
-                self._pl_list_frame, icon='\U0001f4e5',
-                title=_('No payloads saved'),
-                description=_('Add your first payload (.bin / .elf) and '
-                              'send it to the PS5 in one click.'),
-                height=280)
+            es = _Empty(self._pl_list_frame, icon='rocket',
+                        title=_('No payloads saved'),
+                        text=_('Add your first payload (.bin / .elf) and '
+                               'send it to the PS5 in one click.'),
+                        action=(_('Add payload'), self._pl_add, 'plus'),
+                        bg=_TC['bg_2'])
+            es.configure(height=_px(260))
             es.pack(fill='x')
-            make_themed_button(es.actions, '+  ' + _('Add payload'),
-                               command=self._pl_add, kind='primary',
-                               font_size=9, padx=12, pady=6).pack()
             return
 
         active_idx = self._pl_selected_idx.get() if hasattr(
@@ -18281,109 +18111,72 @@ class ExFATBuilder(_TK_BASE):
                     continue
 
             is_active = (idx == active_idx)
-            row_bg = _TC['accent_08'] if is_active else _TC['bg_3']
-            border_bg = _TC['accent'] if is_active else _TC['border_2']
+            row_bg = _TC['accent_lo'] if is_active else _TC['bg_2']
 
-            # v3.6.0 PS5 pass: spaced library card (bordered surface)
-            # instead of hairline-separated rows. Same click-to-select
-            # + Send wiring as before.
-            card = tk.Frame(self._pl_list_frame, bg=row_bg, cursor='hand2',
-                            highlightbackground=border_bg,
-                            highlightthickness=1)
-            card.pack(fill='x', padx=10, pady=(8, 0))
-
-            strip = tk.Frame(card, bg=(_TC['accent'] if is_active
-                                       else row_bg), width=3)
-            strip.pack(side='left', fill='y')
-            strip.pack_propagate(False)
-
+            if rendered:
+                _Div(self._pl_list_frame, color=_TC['border_1']).pack(fill='x')
+            card = tk.Frame(self._pl_list_frame, bg=row_bg, cursor='hand2')
+            card.pack(fill='x')
             inner = tk.Frame(card, bg=row_bg)
-            inner.pack(side='left', fill='x', expand=True, padx=14, pady=12)
+            inner.pack(fill='x', padx=_px(16), pady=_px(12))
 
-            # Type icon — color based on extension
+            # Type tile — neutral; the extension is spelled out in the meta
+            tile = tk.Frame(inner, bg=_TC['bg_3'], width=_px(32),
+                            height=_px(32))
+            tile.pack(side='left', anchor='n', padx=(0, _px(12)))
+            tile.pack_propagate(False)
             ext = os.path.splitext(path)[1].lower()
-            icon_bg = (_TC['danger_bg'] if ext == '.bin'
-                       else _TC['accent_08'] if ext == '.elf'
-                       else _TC['bg_4'])
-            icon_fg = (_TC['danger_hi'] if ext == '.bin'
-                       else _TC['accent_hi'] if ext == '.elf'
-                       else _TC['fg_4'])
-            icon_label = tk.Label(inner, text='\u26a1',
-                                   font=(_TF['body'][0], 14),
-                                   bg=icon_bg, fg=icon_fg,
-                                   width=3, height=1)
-            icon_label.pack(side='left', padx=(0, 12))
+            icon_label = _Ico(tile, 'binary' if ext == '.bin' else
+                              'code' if ext == '.jar' else 'rocket', 16,
+                              _TC['fg_2'], _TC['bg_3'])
+            icon_label.place(relx=0.5, rely=0.5, anchor='center')
+
+            # Send action
+            send_btn = _Btn(inner, text=_('Send'), icon='send', size='sm',
+                            surface=row_bg,
+                            command=lambda p=pl: self._pl_send(p))
+            send_btn.pack(side='right', anchor='n', padx=(_px(12), 0))
 
             # Info column
             info = tk.Frame(inner, bg=row_bg)
             info.pack(side='left', fill='x', expand=True)
-            tk.Label(info, text=name,
-                     font=(_TF['body'][0], 11, 'bold'),
-                     bg=row_bg, fg=_TC['fg_0'], anchor='w'
-                     ).pack(fill='x')
+            tk.Label(info, text=name, font=_TF['body_strong'],
+                     bg=row_bg, fg=_TC['fg_0'], anchor='w').pack(fill='x')
             if notes:
-                tk.Label(info, text=notes[:80] + ('\u2026' if len(notes) > 80 else ''),
-                         font=_TF['meta'],
-                         bg=row_bg, fg=_TC['fg_4'],
-                         anchor='w', justify='left'
-                         ).pack(fill='x', pady=(2, 0))
-            # Meta row — file · port · last sent
+                tk.Label(info, text=notes[:80] + ('…' if len(notes) > 80 else ''),
+                         font=_TF['caption'], bg=row_bg, fg=_TC['fg_3'],
+                         anchor='w', justify='left').pack(fill='x', pady=(_px(2), 0))
+            # Meta row — file · port · ip · last sent
             tag_row = tk.Frame(info, bg=row_bg)
-            tag_row.pack(fill='x', pady=(5, 0))
+            tag_row.pack(fill='x', pady=(_px(4), 0))
             exists = path and os.path.isfile(path)
             tk.Label(tag_row, text=(fname or _('(no file)')),
-                     font=(_TF['mono_sm'][0], 9),
-                     bg=_TC['bg_2'] if exists else _TC['danger_bg'],
-                     fg=_TC['fg_4'] if exists else _TC['danger_hi'],
-                     padx=6, pady=1
+                     font=_TF['code'], bg=row_bg,
+                     fg=_TC['fg_2'] if exists else _TC['danger_hi']
                      ).pack(side='left')
             port_txt = str(pl.get('port', '') or
                            self._pl_port_var.get().strip() or '9090')
-            tk.Label(tag_row, text=':' + port_txt,
-                     font=(_TF['mono_sm'][0], 9),
-                     bg=_TC['bg_2'], fg=_TC['teal'],
-                     padx=6, pady=1
-                     ).pack(side='left', padx=(6, 0))
+            tk.Label(tag_row, text=':' + port_txt, font=_TF['code'],
+                     bg=row_bg, fg=_TC['fg_3']).pack(side='left', padx=(_px(8), 0))
             if pl.get('ip'):
-                tk.Label(tag_row, text=pl['ip'],
-                         font=(_TF['mono_sm'][0], 9),
-                         bg=_TC['bg_2'], fg=_TC['accent_hi'],
-                         padx=6, pady=1
-                         ).pack(side='left', padx=(6, 0))
+                tk.Label(tag_row, text=pl['ip'], font=_TF['code'],
+                         bg=row_bg, fg=_TC['fg_3']
+                         ).pack(side='left', padx=(_px(8), 0))
             last = pl.get('last_sent', '')
             tk.Label(tag_row,
-                     text=_('Last sent') + ': ' + (str(last) if last else '\u2014'),
-                     font=(_TF['mono_sm'][0], 9),
-                     bg=row_bg, fg=_TC['fg_5']
-                     ).pack(side='left', padx=(10, 0))
+                     text=_('Last sent') + ': ' + (str(last) if last else '—'),
+                     font=_TF['caption'], bg=row_bg, fg=_TC['fg_4']
+                     ).pack(side='left', padx=(_px(12), 0))
 
-            # Right action — Send button
-            send_btn = XButton(inner,
-                text='\u2197  ' + _('Send'),
-                font=(_TF['button'][0], 9, 'bold'),
-                bg=_TC['accent'], fg=_TC['fg_0'],
-                activebackground=_TC['accent_hi'],
-                activeforeground=_TC['fg_0'],
-                relief='flat', bd=0,
-                padx=12, pady=6,
-                cursor='hand2',
-                command=lambda p=pl: self._pl_send(p))
-            send_btn.pack(side='right', padx=(8, 0))
-
-            # Click-to-select on the whole card (excluding the send button)
+            # Click-to-select on the whole row (excluding the Send button)
             def _on_click(_e=None, i=idx):
                 self._pl_selected_idx.set(i)
                 _render_detail_for(self, i)
                 self._pl_render()
 
-            for w in [card, strip, inner, icon_label, info, tag_row]:
+            for w in [card, inner, tile, icon_label, info, tag_row]:
                 w.bind('<Button-1>', _on_click)
-            for child in info.winfo_children():
-                try:
-                    child.bind('<Button-1>', _on_click)
-                except Exception:
-                    pass
-            for child in tag_row.winfo_children():
+            for child in list(info.winfo_children()) + list(tag_row.winfo_children()):
                 try:
                     child.bind('<Button-1>', _on_click)
                 except Exception:
@@ -18392,64 +18185,65 @@ class ExFATBuilder(_TK_BASE):
             rendered += 1
 
         if rendered == 0:
-            tk.Label(self._pl_list_frame,
-                     text='No matches for current filter.',
-                     font=(FONTS['body'][0], 9), bg=_TC['bg_2'], fg=_TC['fg_5'],
-                     pady=40
-                     ).pack(fill='x')
+            es = _Empty(self._pl_list_frame, icon='search',
+                        title='No matches for current filter.',
+                        bg=_TC['bg_2'])
+            es.configure(height=_px(160))
+            es.pack(fill='x')
 
     def _pl_add(self):
         self._pl_edit(None)
 
     def _pl_edit(self, idx):
         """Open add/edit dialog for a payload."""
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
+        from ui.shared.widgets import (Button as _Btn, TextField as _TFld,
+                                       Divider as _Div, field_label as _flabel)
         is_new = idx is None
         pl = {} if is_new else dict(self._pl_payloads[idx])
 
         win = tk.Toplevel(self)
         win.title('Add Payload' if is_new else 'Edit Payload')
-        win.geometry('520x280')
-        win.configure(bg=BG)
+        win.geometry('%dx%d' % (_px(520), _px(400)))
+        win.configure(bg=_TC['bg_2'])
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
 
-        body = tk.Frame(win, bg=BG)
-        body.pack(fill='both', expand=True, padx=24, pady=16)
+        # Footer band (bg_1) with right-aligned buttons, primary rightmost.
+        foot = tk.Frame(win, bg=_TC['bg_1'])
+        foot.pack(side='bottom', fill='x')
+        _Div(win, color=_TC['border_2']).pack(side='bottom', fill='x')
+        btn_row = tk.Frame(foot, bg=_TC['bg_1'])
+        btn_row.pack(side='right', padx=_px(24), pady=_px(16))
+
+        body = tk.Frame(win, bg=_TC['bg_2'])
+        body.pack(fill='both', expand=True, padx=_px(24), pady=(_px(20), _px(16)))
+        tk.Label(body, text='Add Payload' if is_new else 'Edit Payload',
+                 font=_TF['title'], bg=_TC['bg_2'], fg=_TC['fg_0'],
+                 anchor='w').pack(fill='x', pady=(0, _px(12)))
 
         name_var  = tk.StringVar(value=pl.get('name', ''))
         path_var  = tk.StringVar(value=pl.get('path', ''))
         notes_var = tk.StringVar(value=pl.get('notes', ''))
 
-        def row(label, var, browse=False):
-            r = tk.Frame(body, bg=BG)
-            r.pack(fill='x', pady=(0,8))
-            tk.Label(r, text=label, font=(FONTS['body'][0], 9),
-                     bg=BG, fg=MUTED, width=10, anchor='w').pack(side='left')
-            ef = tk.Frame(r, bg=FIELD_BG,
-                          highlightbackground=BORDER, highlightthickness=1)
-            ef.pack(side='left', fill='x', expand=True)
-            e = XEntry(ef, textvariable=var, font=(FONTS['code'][0], 9),
-                         bg=FIELD_BG, fg=FIELD_FG, insertbackground=FIELD_FG,
-                         selectbackground=FIELD_SEL_BG,
-                         selectforeground=FIELD_SEL_FG, relief='flat', bd=4)
-            e.pack(fill='x')
+        def row(label, var, browse=False, mono=False):
+            _flabel(body, label, bg=_TC['bg_2']).pack(fill='x',
+                                                      pady=(_px(4), 0))
+            r = tk.Frame(body, bg=_TC['bg_2'])
+            r.pack(fill='x', pady=(_px(4), _px(8)))
+            e = _TFld(r, textvariable=var, mono=mono)
+            e.pack(side='left', fill='x', expand=True)
             if browse:
-                XButton(r, text='Browse',
-                          font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                          activebackground=BORDER, activeforeground=TEXT,
-                          relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
-                          command=lambda v=var: self._pl_browse_file(v, name_var)
-                          ).pack(side='left', padx=(6,0))
+                _Btn(r, text='Browse…', icon='folder_open',
+                     command=lambda v=var: self._pl_browse_file(v, name_var)
+                     ).pack(side='left', padx=(_px(6), 0))
             return e
 
         name_entry = row('Name', name_var)
         name_entry.focus()
-        row('File (.elf/.bin/.jar)', path_var, browse=True)
+        row('File (.elf/.bin/.jar)', path_var, browse=True, mono=True)
         row('Notes', notes_var)
-
-        btn_row = tk.Frame(body, bg=BG)
-        btn_row.pack(fill='x', pady=(8,0))
 
         def _save():
             name = name_var.get().strip()
@@ -18474,16 +18268,10 @@ class ExFATBuilder(_TK_BASE):
             self._pl_status_var.set(('Added' if is_new else 'Updated') + ': ' + name)
             win.destroy()
 
-        XButton(btn_row, text='Save',
-                  font=(FONTS['body_strong'][0], 10), bg=SUCCESS, fg=TEXT,
-                  activebackground='#3d9140', activeforeground=TEXT,
-                  relief='flat', bd=0, padx=18, pady=6, cursor='hand2',
-                  command=_save).pack(side='left')
-        XButton(btn_row, text='Cancel',
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=MUTED,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=12, pady=6, cursor='hand2',
-                  command=win.destroy).pack(side='left', padx=(8,0))
+        _Btn(btn_row, text='Save', variant='primary', width=10,
+             command=_save).pack(side='right')
+        _Btn(btn_row, text='Cancel', width=10,
+             command=win.destroy).pack(side='right', padx=(0, _px(8)))
         win.bind('<Return>', lambda e: _save())
         win.bind('<Escape>', lambda e: win.destroy())
 
@@ -18673,27 +18461,27 @@ class ExFATBuilder(_TK_BASE):
             ])
         except Exception:
             files = []
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
+        from ui.shared.widgets import (Rounded as _Rnd, Button as _Btn,
+                                       IconButton as _IBtn)
+        _bg = self._al_files_frame.cget('bg')
         if not files:
             tk.Label(self._al_files_frame, text='No ELF/BIN/JS files in folder',
-                     font=(FONTS['body'][0], 9), bg=SURFACE2, fg=COLORS['fg_5']).pack(side='left')
+                     font=_TF['body'], bg=_bg, fg=_TC['fg_3']).pack(side='left')
             return
         for fname in files:
-            # Card: [filename button] [🗑 delete]
-            card = tk.Frame(self._al_files_frame, bg='#1a2a1a',
-                            highlightbackground='#2a4a2a', highlightthickness=1)
-            card.pack(side='left', padx=(0, 4))
-            XButton(card, text=fname,
-                      font=(FONTS['code'][0], 8), bg='#1a2a1a', fg='#88dd88',
-                      activebackground='#2a4a2a', activeforeground=TEXT,
-                      relief='flat', bd=0, padx=8, pady=3, cursor='hand2',
-                      command=lambda fn=fname: self._al_insert_filename(fn)
-                      ).pack(side='left')
-            XButton(card, text='🗑',
-                      font=(FONTS['body'][0], 9), bg='#1a2a1a', fg='#884444',
-                      activebackground='#3a1a1a', activeforeground='#ff6666',
-                      relief='flat', bd=0, padx=4, pady=3, cursor='hand2',
-                      command=lambda fn=fname: self._al_delete_payload(fn)
-                      ).pack(side='left')
+            # Chip: [filename — insert] [delete]
+            card = _Rnd(self._al_files_frame, bg=_TC['bg_3'],
+                        border=_TC['border_3'], radius=4, padding=_px(2),
+                        surface=_bg)
+            card.pack(side='left', padx=(0, _px(6)))
+            _Btn(card, text=fname, size='sm', variant='subtle',
+                 surface=_TC['bg_3'],
+                 command=lambda fn=fname: self._al_insert_filename(fn)
+                 ).pack(side='left')
+            _IBtn(card, 'trash', lambda fn=fname: self._al_delete_payload(fn),
+                  tooltip='Delete %s' % fname, size='sm',
+                  surface=_TC['bg_3']).pack(side='left')
 
     def _al_delete_payload(self, filename):
         """Delete a payload file from the autoloader folder after confirmation."""
@@ -25462,47 +25250,54 @@ class ExFATBuilder(_TK_BASE):
             return
         remote_dir = self._ftp_path_var.get().strip() or '/data/etaHEN/games/'
 
+        from tkinter_theme import px as _px
+        from ui.shared.widgets import (Button as _Btn, Divider as _Div,
+                                       Card as _Card)
+        _C = COLORS
+        BG2 = _C['bg_2']
         win = tk.Toplevel(self)
         win.title('Installed Games on PS5 — ' + ip)
-        win.geometry('640x480')
-        win.configure(bg=BG)
+        win.geometry('%dx%d' % (_px(640), _px(500)))
+        win.configure(bg=BG2)
         win.transient(self)
 
-        hdr = tk.Frame(win, bg=BG)
-        hdr.pack(fill='x', padx=16, pady=(12, 4))
-        tk.Label(hdr, text='Installed Games',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
+        # Footer band (bg_1) with right-aligned buttons.
+        foot = tk.Frame(win, bg=_C['bg_1'])
+        foot.pack(side='bottom', fill='x')
+        _Div(win, color=_C['border_2']).pack(side='bottom', fill='x')
+        btn_row = tk.Frame(foot, bg=_C['bg_1'])
+        btn_row.pack(side='right', padx=_px(24), pady=_px(16))
+        _Btn(btn_row, text='Close', width=10,
+             command=win.destroy).pack(side='right')
+        _Btn(btn_row, text='Refresh', icon='refresh',
+             command=lambda: _load()).pack(side='right', padx=(0, _px(8)))
+
+        body = tk.Frame(win, bg=BG2)
+        body.pack(fill='both', expand=True, padx=_px(24), pady=(_px(20), _px(16)))
+        hdr = tk.Frame(body, bg=BG2)
+        hdr.pack(fill='x')
+        tk.Label(hdr, text='Installed Games', font=FONTS['title'],
+                 bg=BG2, fg=_C['fg_0']).pack(side='left')
         self._ps5_storage_var = tk.StringVar(value='')
-        tk.Label(hdr, textvariable=self._ps5_storage_var,
-                 font=(FONTS['body'][0], 9), bg=BG, fg=INFO_FG).pack(side='right')
+        tk.Label(hdr, textvariable=self._ps5_storage_var, font=FONTS['caption'],
+                 bg=BG2, fg=_C['fg_3']).pack(side='right', anchor='s')
 
         status_var = tk.StringVar(value='Connecting...')
-        tk.Label(win, textvariable=status_var,
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(anchor='w', padx=16)
+        tk.Label(body, textvariable=status_var, font=FONTS['body'],
+                 bg=BG2, fg=_C['fg_2']).pack(anchor='w', pady=(_px(4), _px(12)))
 
-        list_frame = tk.Frame(win, bg=SURFACE2,
-                              highlightbackground=BORDER, highlightthickness=1)
-        list_frame.pack(fill='both', expand=True, padx=16, pady=(6, 8))
-        listbox = tk.Listbox(list_frame, font=(FONTS['code'][0], 9),
-                             bg=SURFACE2, fg=TEXT,
-                             selectbackground=ACCENT, selectforeground='#ffffff',
-                             relief='flat', activestyle='none', bd=6)
-        sb = XScrollbar(list_frame, command=listbox.yview,
-                          bg=SURFACE2, troughcolor=BG)
+        list_frame = _Card(body, padding=4, tone='canvas')
+        list_frame.pack(fill='both', expand=True)
+        listbox = tk.Listbox(list_frame, font=FONTS['code'],
+                             bg=_C['bg_1'], fg=_C['fg_1'],
+                             selectbackground=_C['accent_lo'],
+                             selectforeground=_C['fg_0'],
+                             relief='flat', activestyle='none', bd=0,
+                             highlightthickness=0)
+        sb = XScrollbar(list_frame, command=listbox.yview)
         listbox.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
-        listbox.pack(fill='both', expand=True)
-
-        btn_row = tk.Frame(win, bg=BG)
-        btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        XButton(btn_row, text='Refresh', font=(FONTS['body'][0], 9),
-                  bg=SURFACE2, fg=TEXT, relief='flat', bd=0,
-                  padx=10, pady=5, cursor='hand2',
-                  command=lambda: _load()).pack(side='left')
-        XButton(btn_row, text='Close', font=(FONTS['body'][0], 9),
-                  bg=SURFACE2, fg=MUTED, relief='flat', bd=0,
-                  padx=10, pady=5, cursor='hand2',
-                  command=win.destroy).pack(side='right')
+        listbox.pack(fill='both', expand=True, padx=(_px(8), 0), pady=_px(4))
 
         def _load():
             status_var.set('Loading...')
@@ -25966,10 +25761,16 @@ class ExFATBuilder(_TK_BASE):
         entries = []
         ftp_ref = [None]
 
+        from tkinter_theme import px as _px
+        from ui.shared.widgets import (Button as _Btn, Divider as _Div,
+                                       Card as _Card, TextField as _TFld,
+                                       IconButton as _IBtn, autowrap as _autowrap)
+        _C = COLORS
+        BG2 = _C['bg_2']
         win = tk.Toplevel(self)
         win.title(_('Select PS5 game folder') + ' — ' + ip)
-        win.geometry('640x540')
-        win.configure(bg=BG)
+        win.geometry('%dx%d' % (_px(680), _px(580)))
+        win.configure(bg=BG2)
         win.transient(self)
 
         cur_path = tk.StringVar(value=(start_path or '/').strip() or '/')
@@ -26107,83 +25908,68 @@ class ExFATBuilder(_TK_BASE):
                 pass
             win.destroy()
 
-        hdr = tk.Frame(win, bg=BG)
-        hdr.pack(fill='x', padx=16, pady=(12, 6))
-        tk.Label(hdr, text=_('Select PS5 game folder'),
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(side='left')
-        tk.Label(hdr, textvariable=status_var,
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='right')
+        # Footer band (bg_1): Refresh · Cancel · Select (primary rightmost)
+        foot = tk.Frame(win, bg=_C['bg_1'])
+        foot.pack(side='bottom', fill='x')
+        _Div(win, color=_C['border_2']).pack(side='bottom', fill='x')
+        btn_row = tk.Frame(foot, bg=_C['bg_1'])
+        btn_row.pack(side='right', padx=_px(24), pady=_px(16))
+        _Btn(btn_row, text=_('Select this folder'), variant='primary',
+             command=_select).pack(side='right')
+        _Btn(btn_row, text=_('Cancel'), width=10, command=_close).pack(
+            side='right', padx=(0, _px(8)))
+        _Btn(foot, text=_('Refresh'), icon='refresh', command=_refresh).pack(
+            side='left', padx=_px(24))
 
-        path_row = tk.Frame(win, bg=BG)
-        path_row.pack(fill='x', padx=16, pady=(0, 6))
-        XButton(path_row, text='↑ ' + _('Up'), command=_up,
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=12, pady=5,
-                  cursor='hand2', highlightthickness=0).pack(side='left')
-        path_entry = XEntry(path_row, textvariable=cur_path,
-                              font=(FONTS['code'][0], 10), bg=SURFACE2, fg=TEXT,
-                              insertbackground=TEXT, relief='flat',
-                              highlightthickness=1, highlightbackground=BORDER)
-        path_entry.pack(side='left', fill='x', expand=True, padx=(8, 8), ipady=4)
+        body = tk.Frame(win, bg=BG2)
+        body.pack(fill='both', expand=True, padx=_px(24), pady=(_px(20), _px(16)))
+        tk.Label(body, text=_('Select PS5 game folder'), font=FONTS['title'],
+                 bg=BG2, fg=_C['fg_0'], anchor='w').pack(fill='x')
+        st = tk.Label(body, textvariable=status_var, font=FONTS['body'],
+                      bg=BG2, fg=_C['fg_2'], anchor='w', justify='left')
+        st.pack(fill='x', pady=(_px(4), _px(12)))
+        _autowrap(st)
+
+        path_row = tk.Frame(body, bg=BG2)
+        path_row.pack(fill='x', pady=(0, _px(8)))
+        _IBtn(path_row, 'arrow_up', _up, tooltip=_('Up'),
+              variant='secondary').pack(side='left')
+        path_entry = _TFld(path_row, textvariable=cur_path, mono=True)
+        path_entry.pack(side='left', fill='x', expand=True, padx=(_px(6), _px(6)))
         path_entry.bind('<Return>', _refresh)
-        XButton(path_row, text=_('Go'), command=_refresh,
-                  font=(FONTS['body'][0], 9), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=12, pady=5,
-                  cursor='hand2', highlightthickness=0).pack(side='left')
+        _Btn(path_row, text=_('Go'), command=_refresh).pack(side='left')
 
-        roots_row = tk.Frame(win, bg=BG)
-        roots_row.pack(fill='x', padx=16, pady=(0, 6))
-        tk.Label(roots_row, text=_('Jump to:'),
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(side='left',
-                                                              padx=(0, 6))
+        roots_row = tk.Frame(body, bg=BG2)
+        roots_row.pack(fill='x', pady=(0, _px(8)))
+        tk.Label(roots_row, text=_('Jump to:'), font=FONTS['caption'],
+                 bg=BG2, fg=_C['fg_3']).pack(side='left', padx=(0, _px(6)))
         for _lbl in ('/data/etaHEN/games', '/mnt', '/mnt/data', '/user/app'):
-            XButton(roots_row, text=_lbl,
-                      command=lambda p=_lbl: _goto(p),
-                      font=(FONTS['code'][0], 8), bg=SURFACE2, fg=TEXT,
-                      activebackground=BORDER, activeforeground=TEXT,
-                      relief='flat', bd=0, padx=8, pady=3,
-                      cursor='hand2', highlightthickness=0).pack(side='left',
-                                                                 padx=(0, 4))
+            _Btn(roots_row, text=_lbl, size='sm', variant='subtle',
+                 command=lambda p=_lbl: _goto(p)).pack(side='left',
+                                                      padx=(0, _px(2)))
 
-        list_wrap = tk.Frame(win, bg=BG)
-        list_wrap.pack(fill='both', expand=True, padx=16, pady=(0, 6))
+        list_wrap = _Card(body, padding=4, tone='canvas')
+        list_wrap.pack(fill='both', expand=True)
         sb = XScrollbar(list_wrap, orient='vertical')
-        lb = tk.Listbox(list_wrap, font=(FONTS['code'][0], 10),
-                        bg=SURFACE2, fg=TEXT, selectmode='browse',
-                        activestyle='none', relief='flat',
-                        highlightthickness=1, highlightbackground=BORDER,
-                        selectbackground=ACCENT, selectforeground='#ffffff',
+        lb = tk.Listbox(list_wrap, font=FONTS['code'],
+                        bg=_C['bg_1'], fg=_C['fg_1'], selectmode='browse',
+                        activestyle='none', relief='flat', bd=0,
+                        highlightthickness=0,
+                        selectbackground=_C['accent_lo'],
+                        selectforeground=_C['fg_0'],
                         yscrollcommand=sb.set)
         sb.config(command=lb.yview)
         sb.pack(side='right', fill='y')
-        lb.pack(side='left', fill='both', expand=True)
+        lb.pack(side='left', fill='both', expand=True, padx=(_px(8), 0),
+                pady=_px(4))
         lb.bind('<Double-Button-1>', _on_dbl)
 
-        tk.Label(win,
+        hint = tk.Label(body,
                  text=_('Double-click a folder to open it. Choose the game’s app0 folder — the one containing eboot.bin / sce_sys.'),
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED, justify='left',
-                 wraplength=600).pack(fill='x', padx=16, pady=(0, 4))
-
-        btn_row = tk.Frame(win, bg=BG)
-        btn_row.pack(fill='x', padx=16, pady=(0, 12))
-        XButton(btn_row, text=_('Select this folder'), command=_select,
-                  font=(FONTS['body_strong'][0], 10), bg=ACCENT, fg='#ffffff',
-                  activebackground=ACCENT, activeforeground='#ffffff',
-                  relief='flat', bd=0, padx=16, pady=8,
-                  cursor='hand2', highlightthickness=0).pack(side='left')
-        XButton(btn_row, text=_('Cancel'), command=_close,
-                  font=(FONTS['body'][0], 10), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=16, pady=8,
-                  cursor='hand2', highlightthickness=0).pack(side='right')
-        XButton(btn_row, text=_('Refresh'), command=_refresh,
-                  font=(FONTS['body'][0], 10), bg=SURFACE2, fg=TEXT,
-                  activebackground=BORDER, activeforeground=TEXT,
-                  relief='flat', bd=0, padx=16, pady=8,
-                  cursor='hand2', highlightthickness=0).pack(side='right',
-                                                             padx=(0, 8))
+                 font=FONTS['caption'], bg=BG2, fg=_C['fg_3'], justify='left',
+                 anchor='w')
+        hint.pack(fill='x', pady=(_px(8), 0))
+        _autowrap(hint)
 
         win.protocol('WM_DELETE_WINDOW', _close)
         try:
