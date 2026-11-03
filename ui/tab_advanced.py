@@ -39,6 +39,7 @@ import os
 import sys
 import subprocess
 import tkinter as tk
+from ui.shared.scroll import wheel_units
 from tkinter import ttk
 
 from tkinter_theme import COLORS, FONTS
@@ -414,7 +415,7 @@ def _scroll_host(parent):
     # Scroll only while the pointer is over THIS pane (3 panes stack;
     # bind_all/unbind_all on Enter/Leave keeps them from fighting).
     def _wheel(e, c=cv):
-        c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        c.yview_scroll(wheel_units(c, e.delta), 'units')
     cv.bind('<Enter>', lambda _e, c=cv: c.bind_all('<MouseWheel>', _wheel))
     cv.bind('<Leave>', lambda _e, c=cv: c.unbind_all('<MouseWheel>'))
     return inner
@@ -1206,7 +1207,7 @@ def _build_dlc_pane(parent, app):
     list_frame.bind('<Configure>', lambda e: (list_canvas.configure(scrollregion=list_canvas.bbox('all')), list_canvas.itemconfig(_win, width=list_canvas.winfo_width())))
     list_canvas.bind('<Configure>', lambda e: list_canvas.itemconfig(_win, width=e.width))
     def _dlc_wheel(e, _c=list_canvas):
-        _c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        _c.yview_scroll(wheel_units(_c, e.delta), 'units')
     list_canvas.bind('<Enter>', lambda _e, _c=list_canvas: _c.bind_all('<MouseWheel>', _dlc_wheel))
     list_canvas.bind('<Leave>', lambda _e, _c=list_canvas: _c.unbind_all('<MouseWheel>'))
     list_sb.pack(side='right', fill='y')
@@ -1592,7 +1593,7 @@ def _build_dlc_pane(parent, app):
         inner.bind('<Configure>', lambda e: (cv.configure(scrollregion=cv.bbox('all')), cv.itemconfig(win_id, width=cv.winfo_width())))
         cv.bind('<Configure>', lambda e: cv.itemconfig(win_id, width=e.width))
         def _sw(e, _c=cv):
-            _c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+            _c.yview_scroll(wheel_units(_c, e.delta), 'units')
         cv.bind('<Enter>', lambda _e, _c=cv: _c.bind_all('<MouseWheel>', _sw))
         cv.bind('<Leave>', lambda _e, _c=cv: _c.unbind_all('<MouseWheel>'))
         sb.pack(side='right', fill='y')
@@ -1747,7 +1748,7 @@ def _build_dlc_pane(parent, app):
         cid_inner.bind('<Configure>', lambda e: (cid_canvas.configure(scrollregion=cid_canvas.bbox('all')), cid_canvas.itemconfig(_cid_win, width=cid_canvas.winfo_width())))
         cid_canvas.bind('<Configure>', lambda e: cid_canvas.itemconfig(_cid_win, width=e.width))
         def _cid_wheel(ev, _c=cid_canvas):
-            _c.yview_scroll(int(-1 * (ev.delta / 120)), 'units')
+            _c.yview_scroll(wheel_units(_c, ev.delta), 'units')
         cid_canvas.bind('<Enter>', lambda _e, _c=cid_canvas: _c.bind_all('<MouseWheel>', _cid_wheel))
         cid_canvas.bind('<Leave>', lambda _e, _c=cid_canvas: _c.unbind_all('<MouseWheel>'))
         cid_sb.pack(side='right', fill='y')

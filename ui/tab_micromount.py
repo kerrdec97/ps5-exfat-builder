@@ -26,6 +26,7 @@ import socket
 import threading
 import time
 import tkinter as tk
+from ui.shared.scroll import wheel_units
 from tkinter import filedialog
 
 from ui.shared.app_dialog import app_info, app_warning, app_error, app_confirm
@@ -795,7 +796,7 @@ def _build_content(parent, app):
     canvas.bind('<Configure>', _on_canvas_config)
 
     def _on_wheel(e):
-        canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        canvas.yview_scroll(wheel_units(canvas, e.delta), 'units')
     canvas.bind('<Enter>', lambda _e: canvas.bind_all('<MouseWheel>', _on_wheel))
     canvas.bind('<Leave>', lambda _e: canvas.unbind_all('<MouseWheel>'))
 

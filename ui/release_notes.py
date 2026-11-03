@@ -28,6 +28,7 @@ import time
 import webbrowser
 
 import tkinter as tk
+from ui.shared.scroll import wheel_units
 
 from tkinter_theme import COLORS, FONTS
 
@@ -200,7 +201,7 @@ def show_release_modal(app, force=False):
               lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
     canvas.bind('<Configure>', lambda e: canvas.itemconfig(cid, width=e.width))
     canvas.bind('<MouseWheel>',
-                lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+                lambda e: canvas.yview_scroll(wheel_units(canvas, e.delta), 'units'))
 
     pad = tk.Frame(body, bg=COLORS['bg_1'])
     pad.pack(fill='both', expand=True, padx=30, pady=(22, 18))

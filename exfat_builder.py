@@ -18,6 +18,7 @@ import struct
 import json
 
 sys.modules.setdefault('exfat_builder', sys.modules[__name__])
+from ui.shared.scroll import wheel_units  # after the alias above
 
 # ── tkinterdnd2 — optional, enables drag & drop of folders ──
 try:
@@ -14084,7 +14085,7 @@ class ExFATBuilder(_TK_BASE):
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfig(win, width=e.width))
         def _bpr_on_wheel(e, _c=canvas):
-            _c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+            _c.yview_scroll(wheel_units(_c, e.delta), 'units')
         canvas.bind('<Enter>',
                     lambda _e, _c=canvas: _c.bind_all('<MouseWheel>',
                                                       _bpr_on_wheel))
@@ -21960,7 +21961,7 @@ class ExFATBuilder(_TK_BASE):
         canvas.bind('<Configure>', lambda e:
             canvas.itemconfig('hb', width=e.width))
         canvas.bind('<MouseWheel>',
-            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), 'units'))
+            lambda e: canvas.yview_scroll(wheel_units(canvas, e.delta), 'units'))
 
         def section(title):
             tk.Label(body, text=title, font=('Segoe UI', 11, 'bold'),
