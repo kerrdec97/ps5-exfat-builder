@@ -8,6 +8,10 @@ first-launch modal, the dashboard support card, and the post-success prompt —
 reads from this data. No release notes are hardcoded in the UI.
 
 Surfaces provided:
+  • dialog_shell / dialog_present / dialog_heading
+                                   — the design-system dialog frame (bg_2
+                                     body, bg_1 footer band) shared by the
+                                     app's own small dialogs.
   • show_release_modal(app)        — the single first-launch modal (Steam/VS
                                      Code style). Shown once per new version.
   • maybe_show_release_modal(app)  — gate: shows the modal only if this
@@ -29,9 +33,10 @@ import webbrowser
 
 import tkinter as tk
 from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
-from ui.shared.scroll import wheel_units
+from ui.shared.widgets import Badge, Card, Divider, IconLabel, Rounded
+from ui.shared.scroll import wheel_units, attach_scroll
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
 # Support / project links (single definition).
 KOFI_URL   = 'https://ko-fi.com/deckerr9746220'
@@ -106,23 +111,73 @@ def should_show_modal(app):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Small shared widgets
+# Small shared widgets — design-system dialog shell
 # ─────────────────────────────────────────────────────────────────────────
-def _btn(parent, text, primary=False, command=None, accent=None):
-    """A flat themed button. primary=filled accent, else subtle."""
-    if primary:
-        bg = accent or COLORS['accent']
-        fg = '#ffffff'
-        abg = COLORS.get('accent_pressed', bg)
-    else:
-        bg = COLORS['bg_4']
-        fg = COLORS['fg_2']
-        abg = COLORS['bg_5']
-    b = XButton(parent, text=text, command=command,
-                  font=FONTS['button'], bg=bg, fg=fg,
-                  activebackground=abg, activeforeground='#ffffff',
-                  relief='flat', bd=0, padx=16, pady=9, cursor='hand2')
-    return b
+C = COLORS
+BG1, BG2, BG3 = C['bg_1'], C['bg_2'], C['bg_3']
+
+
+def _btn(parent, text, primary=False, command=None, accent=None, icon=None,
+         variant=None):
+    """A design-system button. primary=filled accent, else secondary.
+    Footer buttons get a ~96px minimum width (negative ttk width)."""
+    v = variant or ('primary' if primary else 'secondary')
+    return XButton(parent, text=text, command=command, variant=v, icon=icon,
+                   width=-9)
+
+
+def dialog_shell(app, title, width=480, height=None):
+    """Create a modal dialog laid out per the design system: a bg_2 body
+    and a bg_1 footer band (hairline on top) for right-aligned buttons.
+
+    Returns (win, body, footer). Call `dialog_present(win, app, w, h)`
+    once the content is built to centre, show and grab it."""
+    win = tk.Toplevel(app)
+    win.withdraw()
+    win.title(title)
+    win.configure(bg=BG2)
+    win.transient(app)
+    foot_band = tk.Frame(win, bg=BG1)
+    foot_band.pack(side='bottom', fill='x')
+    Divider(win, color=C['border_2']).pack(side='bottom', fill='x')
+    footer = tk.Frame(foot_band, bg=BG1)
+    footer.pack(fill='x', padx=px(20), pady=px(16))
+    body = tk.Frame(win, bg=BG2)
+    body.pack(fill='both', expand=True)
+    win._xb_size = (width, height)
+    return win, body, footer
+
+
+def dialog_present(win, app, width=None, height=None):
+    """Size (or fit), centre over the main window, show and grab."""
+    try:
+        win.update_idletasks()
+        w = width or win.winfo_reqwidth()
+        h = height or win.winfo_reqheight()
+        app.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - w) // 2
+        y = app.winfo_rooty() + (app.winfo_height() - h) // 3
+        win.geometry('%dx%d+%d+%d' % (w, h, max(0, x), max(0, y)))
+    except Exception:
+        pass
+    win.deiconify()
+    try:
+        win.grab_set()
+    except Exception:
+        pass
+
+
+def dialog_heading(parent, title, icon=None, icon_fg=None, wrap=None):
+    """Dialog title row: optional 20px glyph + `title` text."""
+    row = tk.Frame(parent, bg=BG2)
+    row.pack(fill='x')
+    if icon:
+        IconLabel(row, icon, 20, icon_fg or C['fg_2'], BG2).pack(
+            side='left', padx=(0, px(10)))
+    tk.Label(row, text=title, font=FONTS['title'], bg=BG2, fg=C['fg_0'],
+             anchor='w', justify='left',
+             wraplength=wrap or 0).pack(side='left', fill='x', expand=True)
+    return row
 
 
 def _open(url):
@@ -154,25 +209,10 @@ def show_release_modal(app, force=False):
     r = RELEASE
     ver = r.get('version', '')
 
-    win = tk.Toplevel(app)
-    win.title("What's new \u2014 v" + ver)
-    win.configure(bg=COLORS['bg_1'])
-    win.transient(app)
-    try:
-        win.grab_set()
-    except Exception:
-        pass
-
     sw, sh = app.winfo_screenwidth(), app.winfo_screenheight()
-    W = min(680, sw - 80)
-    H = min(720, sh - 100)
-    try:
-        app.update_idletasks()
-        x = app.winfo_x() + (app.winfo_width() - W) // 2
-        y = app.winfo_y() + (app.winfo_height() - H) // 2
-        win.geometry('%dx%d+%d+%d' % (W, H, max(0, x), max(0, y)))
-    except Exception:
-        win.geometry('%dx%d' % (W, H))
+    W = min(px(600), sw - 80)
+    H = min(px(680), sh - 100)
+    win, outer, bar = dialog_shell(app, "What's new — v" + ver, W, H)
 
     def _dismiss():
         if not force:
@@ -185,111 +225,98 @@ def show_release_modal(app, force=False):
 
     win.protocol('WM_DELETE_WINDOW', _dismiss)
 
-    # Accent top bar
-    tk.Frame(win, bg=COLORS['accent'], height=4).pack(fill='x')
-
     # Scroll wrapper (small screens still see everything; buttons pinned below)
-    outer = tk.Frame(win, bg=COLORS['bg_1'])
-    outer.pack(fill='both', expand=True)
-    canvas = tk.Canvas(outer, bg=COLORS['bg_1'], highlightthickness=0)
+    canvas = tk.Canvas(outer, bg=BG2, highlightthickness=0)
     vsb = XScrollbar(outer, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=vsb.set)
-    vsb.pack(side='right', fill='y')
+    vsb.pack(side='right', fill='y', padx=(0, px(4)), pady=px(4))
     canvas.pack(side='left', fill='both', expand=True)
-    body = tk.Frame(canvas, bg=COLORS['bg_1'])
+    body = tk.Frame(canvas, bg=BG2)
     cid = canvas.create_window((0, 0), window=body, anchor='nw')
     body.bind('<Configure>',
               lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
     canvas.bind('<Configure>', lambda e: canvas.itemconfig(cid, width=e.width))
-    canvas.bind('<MouseWheel>',
-                lambda e: canvas.yview_scroll(wheel_units(canvas, e.delta), 'units'))
+    attach_scroll(canvas)
 
-    pad = tk.Frame(body, bg=COLORS['bg_1'])
-    pad.pack(fill='both', expand=True, padx=30, pady=(22, 18))
+    pad = tk.Frame(body, bg=BG2)
+    pad.pack(fill='both', expand=True, padx=px(24), pady=(px(24), px(24)))
+    wrap = W - px(80)
 
-    # ── Eyebrow + version pill ──
-    top = tk.Frame(pad, bg=COLORS['bg_1'])
+    # ── Overline + version ──
+    top = tk.Frame(pad, bg=BG2)
     top.pack(fill='x')
-    tk.Label(top, text="WHAT'S NEW",
-             font=FONTS['eyebrow'], bg=COLORS['bg_1'],
-             fg=COLORS['accent_hi']).pack(side='left')
-    pill = tk.Frame(top, bg=COLORS['accent_15'])
-    pill.pack(side='right')
-    tk.Label(pill, text='  v' + ver + '  ', font=FONTS['body_b'],
-             bg=COLORS['accent_15'], fg=COLORS['accent_hi']).pack()
+    tk.Label(top, text="WHAT'S NEW", font=FONTS['overline'], bg=BG2,
+             fg=C['fg_4']).pack(side='left')
+    Badge(top, 'v' + ver, 'outline', mono=True, surface=BG2).pack(
+        side='left', padx=(px(10), 0))
 
     # ── Title + summary ──
-    tk.Label(pad, text=r.get('title', ''), font=FONTS['h1'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w',
-             justify='left', wraplength=W - 80).pack(fill='x', pady=(12, 4))
-    tk.Label(pad, text=r.get('summary', ''), font=FONTS['body'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_3'], anchor='w',
-             justify='left', wraplength=W - 80).pack(fill='x')
+    tk.Label(pad, text=r.get('title', ''), font=FONTS['title'], bg=BG2,
+             fg=C['fg_0'], anchor='w', justify='left',
+             wraplength=wrap).pack(fill='x', pady=(px(8), px(6)))
+    tk.Label(pad, text=r.get('summary', ''), font=FONTS['body'], bg=BG2,
+             fg=C['fg_2'], anchor='w', justify='left',
+             wraplength=wrap).pack(fill='x')
 
     # ── Section renderer ──
-    def _section(title, items, dot_color, glyph):
+    def _section(title, items, icon):
         if not items:
             return
-        tk.Frame(pad, bg=COLORS['border_2'], height=1).pack(
-            fill='x', pady=(18, 14))
-        tk.Label(pad, text=title, font=FONTS['h3'],
-                 bg=COLORS['bg_1'], fg=COLORS['fg_1'],
-                 anchor='w').pack(fill='x', pady=(0, 8))
+        tk.Label(pad, text=title, font=FONTS['subtitle'], bg=BG2,
+                 fg=C['fg_0'], anchor='w').pack(fill='x', pady=(px(24), px(8)))
         for it in items:
-            row = tk.Frame(pad, bg=COLORS['bg_1'])
-            row.pack(fill='x', pady=2)
-            tk.Label(row, text=glyph, font=FONTS['body_b'],
-                     bg=COLORS['bg_1'], fg=dot_color,
-                     width=2, anchor='w').pack(side='left')
-            tk.Label(row, text=it, font=FONTS['body'],
-                     bg=COLORS['bg_1'], fg=COLORS['fg_2'], anchor='w',
-                     justify='left', wraplength=W - 130).pack(
-                         side='left', fill='x', expand=True)
+            row = tk.Frame(pad, bg=BG2)
+            row.pack(fill='x', pady=px(4))
+            IconLabel(row, icon, 16, C['fg_3'], BG2).pack(
+                side='left', anchor='n', padx=(0, px(10)), pady=(px(1), 0))
+            tk.Label(row, text=it, font=FONTS['body'], bg=BG2, fg=C['fg_1'],
+                     anchor='w', justify='left',
+                     wraplength=wrap - px(30)).pack(side='left', fill='x',
+                                                    expand=True)
 
-    _section('Highlights', r.get('highlights', []),
-             COLORS['accent_hi'], '\u2737')          # ✷
-    _section("What's improved", r.get('improvements', []),
-             COLORS['teal'], '\u2713')               # ✓
+    _section('Highlights', r.get('highlights', []), 'sparkles')
+    _section("What's improved", r.get('improvements', []), 'check')
 
-    # ── Integrated support section (no separate popup) ──
-    tk.Frame(pad, bg=COLORS['border_2'], height=1).pack(fill='x', pady=(18, 14))
-    sup = tk.Frame(pad, bg=COLORS['bg_3'])
-    sup.pack(fill='x')
-    sup_in = tk.Frame(sup, bg=COLORS['bg_3'])
-    sup_in.pack(fill='x', padx=16, pady=14)
-    tk.Label(sup_in, text='\u2764  Support Development',
-             font=FONTS['body_b'], bg=COLORS['bg_3'],
-             fg=COLORS['fg_0'], anchor='w').pack(fill='x')
+    # ── Integrated support panel (no separate popup) ──
+    sup = Rounded(pad, bg=BG3, border=C['border_3'], radius=8,
+                  padding=(px(16), px(14)), surface=BG2)
+    sup.pack(fill='x', pady=(px(24), 0))
+    IconLabel(sup, 'heart', 16, C['fg_3'], BG3).pack(
+        side='left', anchor='n', padx=(0, px(12)), pady=(px(2), 0))
+    sup_in = tk.Frame(sup, bg=BG3)
+    sup_in.pack(side='left', fill='x', expand=True)
+    tk.Label(sup_in, text='Support development', font=FONTS['body_strong'],
+             bg=BG3, fg=C['fg_0'], anchor='w').pack(fill='x')
     n_sup = r.get('supporters')
     sup_msg = ("This project is maintained by a single developer. If this "
                "tool has saved you time, consider supporting future updates.")
     if isinstance(n_sup, int) and n_sup > 0:
         sup_msg += "  Thank you to the %d supporters so far." % n_sup
-    tk.Label(sup_in, text=sup_msg, font=FONTS['label'],
-             bg=COLORS['bg_3'], fg=COLORS['fg_3'], anchor='w',
-             justify='left', wraplength=W - 110).pack(fill='x', pady=(4, 10))
-    _btn(sup_in, '\u2615  Buy Me A Coffee', primary=True,
-         command=lambda: _open(KOFI_URL)).pack(anchor='w')
+    tk.Label(sup_in, text=sup_msg, font=FONTS['body'], bg=BG3, fg=C['fg_2'],
+             anchor='w', justify='left',
+             wraplength=wrap - px(60)).pack(fill='x', pady=(px(4), px(8)))
+    XButton(sup_in, text='Buy me a coffee', icon='coffee', variant='secondary',
+            size='sm', surface=BG3,
+            command=lambda: _open(KOFI_URL)).pack(anchor='w')
 
-    # ── Pinned button bar (always visible, not scrolled) ──
-    bar = tk.Frame(win, bg=COLORS['bg_2'])
-    bar.pack(fill='x', side='bottom')
-    barin = tk.Frame(bar, bg=COLORS['bg_2'])
-    barin.pack(fill='x', padx=22, pady=12)
-
-    _btn(barin, _t(app, 'View Full Changelog'), primary=False,
-         command=lambda: _open_changelog(app)).pack(side='left')
-    _btn(barin, _t(app, 'Support Development'), primary=False,
-         command=lambda: _open(KOFI_URL)).pack(side='left', padx=8)
-    _btn(barin, _t(app, 'Start Building'), primary=True,
-         command=_dismiss).pack(side='right')
+    # ── Pinned footer (always visible, not scrolled) ──
+    _btn(bar, _t(app, 'View Full Changelog'), variant='subtle',
+         icon='file_text', command=lambda: _open_changelog(app)
+         ).pack(side='left')
+    start = _btn(bar, _t(app, 'Start Building'), primary=True,
+                 command=_dismiss)
+    start.pack(side='right')
+    _btn(bar, _t(app, 'Support Development'), icon='heart',
+         command=lambda: _open(KOFI_URL)).pack(side='right', padx=(0, px(8)))
 
     win.bind('<Escape>', lambda e: _dismiss())
     win.bind('<Return>', lambda e: _dismiss())
+    dialog_present(win, app, W, H)
     try:
-        win.focus_set()
+        start.focus_set()
     except Exception:
         pass
+    return win
 
 
 def _t(app, s):
@@ -337,35 +364,24 @@ def build_support_card(parent, app):
     GitHub in the background. Falls back to the local version count if the
     network is unavailable. Pure display + one button.
     """
-    card = tk.Frame(parent, bg=COLORS['bg_2'],
-                    highlightbackground=COLORS['border_2'],
-                    highlightthickness=1)
-    inner = tk.Frame(card, bg=COLORS['bg_2'])
-    inner.pack(fill='both', expand=True, padx=16, pady=14)
-
-    # Title row
-    trow = tk.Frame(inner, bg=COLORS['bg_2'])
-    trow.pack(fill='x')
-    tk.Label(trow, text='\u2764  Support Development', font=FONTS['h3'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_0']).pack(side='left')
-    tk.Label(trow, text='v' + RELEASE.get('version', ''),
-             font=FONTS['meta'], bg=COLORS['bg_2'],
-             fg=COLORS['fg_4']).pack(side='right')
+    card = Card(parent, title='Support development', padding=16)
+    tk.Label(card.head_actions, text='v' + RELEASE.get('version', ''),
+             font=FONTS['caption'], bg=BG2, fg=C['fg_4']).pack()
+    inner = card.body
 
     # Live stat line (filled async)
-    stat_var = tk.StringVar(value='Downloads: \u2026   Releases: \u2026')
-    tk.Label(inner, textvariable=stat_var, font=FONTS['label'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_3'],
-             anchor='w').pack(fill='x', pady=(8, 2))
+    stat_var = tk.StringVar(value='Downloads: …   Releases: …')
+    tk.Label(inner, textvariable=stat_var, font=FONTS['body'], bg=BG2,
+             fg=C['fg_1'], anchor='w').pack(fill='x')
 
     tk.Label(inner,
-             text=('Donations are appreciated but never required \u2014 this '
+             text=('Donations are appreciated but never required — this '
                    'tool will always be free and open source.'),
-             font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_4'],
-             anchor='w', justify='left', wraplength=320).pack(
-                 fill='x', pady=(0, 12))
+             font=FONTS['caption'], bg=BG2, fg=C['fg_3'],
+             anchor='w', justify='left', wraplength=px(320)).pack(
+                 fill='x', pady=(px(4), px(12)))
 
-    _btn(inner, _t(app, 'Support Project'), primary=True,
+    _btn(inner, _t(app, 'Support Project'), primary=True, icon='heart',
          command=lambda: _open(KOFI_URL)).pack(anchor='w')
 
     _load_repo_stats(app, stat_var)
@@ -464,47 +480,9 @@ def _show_success_prompt(app, op_label):
     except Exception:
         pass
 
-    win = tk.Toplevel(app)
-    win.title(op_label + ' Complete')
-    win.configure(bg=COLORS['bg_1'])
-    win.transient(app)
+    W = px(440)
+    win, body, btns = dialog_shell(app, op_label + ' Complete', W)
     win.resizable(False, False)
-    try:
-        win.grab_set()
-    except Exception:
-        pass
-
-    W, H = 420, 250
-    try:
-        app.update_idletasks()
-        x = app.winfo_x() + (app.winfo_width() - W) // 2
-        y = app.winfo_y() + (app.winfo_height() - H) // 2
-        win.geometry('%dx%d+%d+%d' % (W, H, max(0, x), max(0, y)))
-    except Exception:
-        win.geometry('%dx%d' % (W, H))
-
-    tk.Frame(win, bg=COLORS['success'], height=4).pack(fill='x')
-    body = tk.Frame(win, bg=COLORS['bg_1'])
-    body.pack(fill='both', expand=True, padx=24, pady=18)
-
-    tk.Label(body, text='\u2713  ' + op_label + ' Complete',
-             font=FONTS['h3'], bg=COLORS['bg_1'],
-             fg=COLORS['success_hi'], anchor='w').pack(fill='x')
-    tk.Label(body, text=_success_line(op_label), font=FONTS['label'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_3'], anchor='w',
-             justify='left', wraplength=W - 60).pack(fill='x', pady=(4, 14))
-
-    tk.Frame(body, bg=COLORS['border_2'], height=1).pack(fill='x')
-    tk.Label(body, text='\u2764  Enjoying exFAT Image Builder?',
-             font=FONTS['body_b'], bg=COLORS['bg_1'],
-             fg=COLORS['fg_1'], anchor='w').pack(fill='x', pady=(12, 2))
-    tk.Label(body, text='Support helps fund future development.',
-             font=FONTS['label'], bg=COLORS['bg_1'], fg=COLORS['fg_3'],
-             anchor='w', justify='left',
-             wraplength=W - 60).pack(fill='x', pady=(0, 14))
-
-    btns = tk.Frame(body, bg=COLORS['bg_1'])
-    btns.pack(fill='x')
 
     def _close():
         try:
@@ -513,18 +491,38 @@ def _show_success_prompt(app, op_label):
             pass
         win.destroy()
 
+    win.protocol('WM_DELETE_WINDOW', _close)
+
+    pad = tk.Frame(body, bg=BG2)
+    pad.pack(fill='both', expand=True, padx=px(24), pady=(px(22), px(22)))
+    dialog_heading(pad, op_label + ' Complete', icon='success',
+                   icon_fg=C['success'], wrap=W - px(90))
+    tk.Label(pad, text=_success_line(op_label), font=FONTS['body'],
+             bg=BG2, fg=C['fg_2'], anchor='w', justify='left',
+             wraplength=W - px(48)).pack(fill='x', pady=(px(8), px(16)))
+
+    Divider(pad, color=C['border_1']).pack(fill='x')
+    tk.Label(pad, text='Enjoying exFAT Image Builder?',
+             font=FONTS['body_strong'], bg=BG2, fg=C['fg_0'],
+             anchor='w').pack(fill='x', pady=(px(14), px(2)))
+    tk.Label(pad, text='Support helps fund future development.',
+             font=FONTS['body'], bg=BG2, fg=C['fg_2'], anchor='w',
+             justify='left', wraplength=W - px(48)).pack(fill='x')
+
+    support = _btn(btns, _t(app, 'Support Development'), primary=True,
+                   icon='heart', command=lambda: (_open(KOFI_URL), _close()))
+    support.pack(side='right')
     _btn(btns, _t(app, 'Close'), primary=False,
-         command=_close).pack(side='right')
-    _btn(btns, _t(app, 'Support Development'), primary=True,
-         command=lambda: (_open(KOFI_URL), _close())).pack(
-             side='right', padx=(0, 8))
+         command=_close).pack(side='right', padx=(0, px(8)))
 
     win.bind('<Escape>', lambda e: _close())
     win.bind('<Return>', lambda e: _close())
+    dialog_present(win, app, W, None)
     try:
-        win.focus_set()
+        support.focus_set()
     except Exception:
         pass
+    return win
 
 
 def _success_line(op_label):

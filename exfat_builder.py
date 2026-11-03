@@ -3409,37 +3409,29 @@ class ExFATBuilder(_TK_BASE):
         """Small themed goodbye dialog with a Ko-fi link. Either button
         resumes the normal close path (settings save, cleanup, mount
         sweep) via _on_close, whose guard flag is already set."""
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
+        from ui.release_notes import (dialog_shell, dialog_present,
+                                      dialog_heading, _btn as _dbtn)
 
-        win = tk.Toplevel(self)
-        win.title('Thanks for using exFAT Image Builder')
-        win.configure(bg=_TC['bg_1'])
+        W = _px(440)
+        win, body, btns = dialog_shell(
+            self, 'Thanks for using exFAT Image Builder', W)
         win.resizable(False, False)
-        win.transient(self)
-        try:
-            win.grab_set()
-        except Exception:
-            pass
 
-        body = tk.Frame(win, bg=_TC['bg_1'])
-        body.pack(fill='both', expand=True, padx=26, pady=22)
-
-        tk.Label(body, text='\u2764', font=(FONTS['body'][0], 26),
-                 bg=_TC['bg_1'], fg=_TC['danger_hi']
-                 ).pack(pady=(0, 8))
-        tk.Label(body, text='Support is appreciated',
-                 font=(_TF['h2'][0], 14, 'bold'),
-                 bg=_TC['bg_1'], fg=_TC['fg_0']).pack()
-        tk.Label(body,
-                 text='If this tool saved you some time, a coffee\n'
+        pad = tk.Frame(body, bg=_TC['bg_2'])
+        pad.pack(fill='both', expand=True, padx=_px(24), pady=_px(22))
+        dialog_heading(pad, 'Support is appreciated', icon='heart',
+                       icon_fg=_TC['fg_2'])
+        tk.Label(pad,
+                 text='If this tool saved you some time, a coffee '
                       'keeps the updates coming. Thank you!',
-                 font=_TF['body'], bg=_TC['bg_1'], fg=_TC['fg_3'],
-                 justify='center').pack(pady=(6, 2))
-        link = tk.Label(body, text=KOFI_URL,
-                        font=(_TF['mono_sm'][0], 9, 'underline'),
-                        bg=_TC['bg_1'], fg=_TC['accent_hi'],
-                        cursor='hand2')
-        link.pack(pady=(0, 14))
+                 font=_TF['body'], bg=_TC['bg_2'], fg=_TC['fg_2'],
+                 justify='left', anchor='w',
+                 wraplength=W - _px(48)).pack(fill='x', pady=(_px(8), _px(6)))
+        link = tk.Label(pad, text=KOFI_URL, font=_TF['code'],
+                        bg=_TC['bg_2'], fg=_TC['accent_hi'],
+                        cursor='hand2', anchor='w')
+        link.pack(fill='x')
 
         def _finish_close():
             try:
@@ -3458,37 +3450,15 @@ class ExFATBuilder(_TK_BASE):
 
         link.bind('<Button-1>', _open_kofi)
 
-        btns = tk.Frame(body, bg=_TC['bg_1'])
-        btns.pack()
-        XButton(btns, text='\u2615  Open Ko-fi',
-                  font=(_TF['button'][0], 10, 'bold'),
-                  bg=_TC['accent'], fg=_TC['fg_0'],
-                  activebackground=_TC.get('accent_hi', _TC['accent']),
-                  activeforeground=_TC['fg_0'],
-                  relief='flat', bd=0, padx=16, pady=8,
-                  cursor='hand2', command=_open_kofi
-                  ).pack(side='left')
-        XButton(btns, text='Close',
-                  font=(_TF['button'][0], 10),
-                  bg=_TC['bg_3'], fg=_TC['fg_2'],
-                  activebackground=_TC['bg_4'],
-                  activeforeground=_TC['fg_0'],
-                  relief='flat', bd=0, padx=16, pady=8,
-                  cursor='hand2', command=_finish_close
-                  ).pack(side='left', padx=(10, 0))
+        kofi = _dbtn(btns, 'Open Ko-fi', primary=True, icon='coffee',
+                     command=_open_kofi)
+        kofi.pack(side='right')
+        _dbtn(btns, 'Close', command=_finish_close).pack(
+            side='right', padx=(0, _px(8)))
 
         win.protocol('WM_DELETE_WINDOW', _finish_close)
-
-        # Center over the main window
-        try:
-            win.update_idletasks()
-            x = self.winfo_x() + (self.winfo_width()
-                                  - win.winfo_width()) // 2
-            y = self.winfo_y() + (self.winfo_height()
-                                  - win.winfo_height()) // 2
-            win.geometry('+%d+%d' % (max(0, x), max(0, y)))
-        except Exception:
-            pass
+        win.bind('<Escape>', lambda e: _finish_close())
+        dialog_present(win, self, W, None)
 
     @staticmethod
     def _changelog_path():
@@ -3688,22 +3658,23 @@ class ExFATBuilder(_TK_BASE):
 
     def _show_keyboard_shortcuts(self):
         """Show a modal listing all keyboard shortcuts."""
-        dlg = tk.Toplevel(self)
-        dlg.title('Keyboard shortcuts')
-        dlg.configure(bg=BG)
-        dlg.geometry('420x340')
-        dlg.transient(self)
+        from tkinter_theme import COLORS as _TC, FONTS as _TF, px as _px
+        from ui.release_notes import (dialog_shell, dialog_present,
+                                      dialog_heading, _btn as _dbtn)
+        from ui.shared.widgets import Rounded as _Rounded, Divider as _Div
+
+        W = _px(480)
+        dlg, body, btns = dialog_shell(self, 'Keyboard shortcuts', W)
+        dlg.resizable(False, False)
         try:
             dlg.iconbitmap(self.winfo_toplevel().iconbitmap())
         except Exception:
             pass
 
-        tk.Label(dlg, text='\u2328  Keyboard shortcuts',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT,
-                 padx=20, pady=14).pack(anchor='w')
-
-        body = tk.Frame(dlg, bg=BG)
-        body.pack(fill='both', expand=True, padx=20, pady=(0, 12))
+        BG2 = _TC['bg_2']
+        pad = tk.Frame(body, bg=BG2)
+        pad.pack(fill='both', expand=True, padx=_px(24), pady=_px(22))
+        dialog_heading(pad, 'Keyboard shortcuts', icon='keyboard')
 
         SHORTCUTS = [
             ('Ctrl + B',          'Build queue (current tab)'),
@@ -3714,21 +3685,38 @@ class ExFATBuilder(_TK_BASE):
             ('Double-click row',  'Open build folder (in History tab)'),
             ('Drop folder',       'Add to build queue (drag & drop)'),
         ]
-        for keys, desc in SHORTCUTS:
-            row = tk.Frame(body, bg=BG)
-            row.pack(fill='x', pady=2)
-            tk.Label(row, text=keys, font=('Consolas', 10, 'bold'),
-                     bg=SURFACE2, fg=ACCENT, width=18, anchor='w',
-                     padx=8, pady=3).pack(side='left')
-            tk.Label(row, text=desc, font=(FONTS['body'][0], 9),
-                     bg=BG, fg=TEXT, anchor='w',
-                     padx=10).pack(side='left', fill='x', expand=True)
+        rows = tk.Frame(pad, bg=BG2)
+        rows.pack(fill='x', pady=(_px(14), 0))
+        rows.grid_columnconfigure(1, weight=1)
+        for r, (keys, desc) in enumerate(SHORTCUTS):
+            if r:
+                _Div(rows, color=_TC['border_1']).grid(
+                    row=2 * r - 1, column=0, columnspan=2, sticky='ew')
+            tk.Label(rows, text=desc, font=_TF['body'], bg=BG2,
+                     fg=_TC['fg_1'], anchor='w'
+                     ).grid(row=2 * r, column=1, sticky='w', pady=_px(8))
+            caps = tk.Frame(rows, bg=BG2)
+            caps.grid(row=2 * r, column=0, sticky='w', padx=(0, _px(16)))
+            parts = keys.split(' + ')
+            for i, k in enumerate(parts):
+                if i:
+                    tk.Label(caps, text='+', font=_TF['caption'], bg=BG2,
+                             fg=_TC['fg_4']).pack(side='left', padx=_px(4))
+                cap = _Rounded(caps, bg=_TC['bg_3'], border=_TC['border_3'],
+                               radius=4, padding=(_px(8), _px(2)), surface=BG2)
+                cap.pack(side='left')
+                tk.Label(cap, text=k, font=_TF['caption_strong'],
+                         bg=_TC['bg_3'], fg=_TC['fg_0']).pack()
 
-        XButton(dlg, text='Close',
-                  font=(FONTS['body'][0], 9), bg=ACCENT, fg=TEXT,
-                  activebackground=COLORS['accent_pressed'], relief='flat', bd=0,
-                  padx=20, pady=6, cursor='hand2',
-                  command=dlg.destroy).pack(pady=(0, 16))
+        close = _dbtn(btns, 'Close', primary=True, command=dlg.destroy)
+        close.pack(side='right')
+        dlg.bind('<Escape>', lambda e: dlg.destroy())
+        dlg.bind('<Return>', lambda e: dlg.destroy())
+        dialog_present(dlg, self, W, None)
+        try:
+            close.focus_set()
+        except Exception:
+            pass
 
     def __init__(self):
         super().__init__()
@@ -20182,17 +20170,12 @@ class ExFATBuilder(_TK_BASE):
     def _history_refresh(self, list_frame):
         """Reload and display history entries, applying filters if set.
 
-        Step 10 (v2.1.2): rewritten to render rows in the new design with
-        proper grid columns matching the table header (Game / Type / Output
-        / Size / Duration / When / Status / Actions). UI-only change.
+        Reading and filtering stay here; the rows are drawn by
+        ui.tab_history.render_history_rows (design-system table rows:
+        Game / Type / Output / Size / Duration / When / Status / actions).
         """
-        from ui.tab_history import _humanize_when, _detect_kind, _COLS, _icon_btn
+        from ui.tab_history import render_history_rows
 
-        # Theme constants — pulled here so the row builder uses tokens
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
-
-        for w in list_frame.winfo_children():
-            w.destroy()
         try:
             with open(self._history_path(), 'r', encoding='utf-8') as f:
                 history = json.load(f)
@@ -20224,245 +20207,7 @@ class ExFATBuilder(_TK_BASE):
                     continue
             filtered.append(h)
 
-        if not filtered:
-            msg = ('No build history yet — finish a build to populate this list.'
-                   if not history
-                   else 'No matches for current filter.')
-            tk.Label(list_frame, text=msg,
-                     font=(FONTS['body'][0], 10), bg=_TC['bg_2'], fg=_TC['fg_5'],
-                     pady=40).pack(fill='x')
-            return
-
-        for entry in filtered:
-            row = tk.Frame(list_frame, bg=_TC['bg_2'])
-            row.pack(fill='x')
-
-            # Configure same column grid as the header
-            for i, (key, _label, width) in enumerate(_COLS):
-                if width is None:
-                    row.grid_columnconfigure(i, weight=1, uniform='col')
-                else:
-                    row.grid_columnconfigure(i, weight=0, minsize=width)
-
-            inner = tk.Frame(row, bg=_TC['bg_2'])
-            inner.grid(row=0, column=0, columnspan=len(_COLS),
-                       sticky='ew')
-            for i, (key, _label, width) in enumerate(_COLS):
-                if width is None:
-                    inner.grid_columnconfigure(i, weight=1, uniform='col2')
-                else:
-                    inner.grid_columnconfigure(i, weight=0, minsize=width)
-
-            ok = entry.get('success', True)
-            kind = _detect_kind(entry)
-
-            # Folder/output for action callbacks
-            folder = entry.get('folder', '')
-            out_path = entry.get('output', '')
-            output_dir = (os.path.dirname(out_path)
-                          if out_path else folder)
-
-            # Hover effect — subtle bg lift
-            def _hover_in(_e=None, w=inner):
-                w.configure(bg=_TC['bg_3'])
-                for ch in w.winfo_children():
-                    try:
-                        ch.configure(bg=_TC['bg_3'])
-                        # Also recolor any sub-frames
-                        for sub in ch.winfo_children():
-                            try:
-                                if not hasattr(sub, '_pill_protected'):
-                                    sub.configure(bg=_TC['bg_3'])
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-            def _hover_out(_e=None, w=inner):
-                w.configure(bg=_TC['bg_2'])
-                for ch in w.winfo_children():
-                    try:
-                        ch.configure(bg=_TC['bg_2'])
-                        for sub in ch.winfo_children():
-                            try:
-                                if not hasattr(sub, '_pill_protected'):
-                                    sub.configure(bg=_TC['bg_2'])
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-            inner.bind('<Enter>', _hover_in)
-            inner.bind('<Leave>', _hover_out)
-
-            # ── Col 0: Game (cover thumb + title + meta line) ──
-            # v3.6.0 pass: small async cover from the entry's source
-            # folder, matching the Library/Backports card pattern.
-            game_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            game_cell.grid(row=0, column=0, sticky='ew',
-                            padx=(14, 8), pady=8)
-            thumb = tk.Label(game_cell, text='\U0001f3ae',
-                             font=(_TF['body'][0], 14),
-                             bg=_TC['bg_3'], fg=_TC['fg_6'],
-                             width=4, height=2,
-                             highlightbackground=_TC['border_3'],
-                             highlightthickness=1)
-            thumb._pill_protected = True
-            thumb.pack(side='left', padx=(0, 10))
-            if folder and os.path.isdir(folder):
-                def _load_thumb(fol=folder, lbl=thumb):
-                    try:
-                        cp = self._load_cover_art(fol)
-                        if not cp:
-                            return
-                        img = _load_cover_image(cp, target=44)
-                        if img is None:
-                            return
-                        from PIL import ImageTk
-                        photo = ImageTk.PhotoImage(img)
-
-                        def _apply():
-                            try:
-                                if lbl.winfo_exists():
-                                    lbl.config(image=photo, text='',
-                                               width=44, height=44)
-                                    lbl.image = photo
-                            except Exception:
-                                pass
-                        self.after(0, _apply)
-                    except Exception:
-                        pass
-                threading.Thread(target=_load_thumb, daemon=True).start()
-            txtcol = tk.Frame(game_cell, bg=_TC['bg_2'])
-            txtcol.pack(side='left', fill='x', expand=True)
-            tk.Label(txtcol, text=entry.get('title', '(no title)'),
-                     font=(_TF['body'][0], 10, 'bold'),
-                     bg=_TC['bg_2'], fg=_TC['fg_0'],
-                     anchor='w'
-                     ).pack(fill='x')
-            sub = ' \u00b7 '.join(filter(None, [
-                entry.get('title_id', ''),
-                ('v' + entry['version']) if entry.get('version') else '',
-            ]))
-            if sub:
-                tk.Label(txtcol, text=sub,
-                         font=_TF['mono_sm'],
-                         bg=_TC['bg_2'], fg=_TC['accent_hi'],
-                         anchor='w'
-                         ).pack(fill='x')
-
-            # ── Col 1: Type pill ──
-            type_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            type_cell.grid(row=0, column=1, sticky='w', padx=(0, 8))
-            type_schemes = {
-                'exfat':    (_TC['accent_08'],  _TC['accent_hi'], 'EXFAT'),
-                'ffpkg':    (_TC['teal_bg'],    _TC['teal_hi'],   'FFPKG'),
-                'backport': (None,              _TC['purple'],    'BACKPORT'),
-                'unknown':  (_TC['bg_3'],       _TC['fg_4'],      '?'),
-            }
-            tbg, tfg, tlabel = type_schemes.get(kind, type_schemes['unknown'])
-            if tbg is None:
-                tbg = '#1f1228'  # purple-tinted
-            type_pill = tk.Label(type_cell, text=' ' + tlabel + ' ',
-                                 font=(_TF['mono_sm'][0], 9, 'bold'),
-                                 bg=tbg, fg=tfg, padx=4, pady=2)
-            type_pill._pill_protected = True
-            type_pill.pack(anchor='w')
-
-            # ── Col 2: Output path ──
-            out_lbl_text = out_path if out_path else '— no output —'
-            # Truncate from the left if too long
-            if len(out_lbl_text) > 60:
-                out_lbl_text = '\u2026' + out_lbl_text[-58:]
-            out_lbl = tk.Label(inner, text=out_lbl_text,
-                               font=_TF['mono_sm'],
-                               bg=_TC['bg_2'], fg=_TC['fg_4'],
-                               anchor='w',
-                               cursor='hand2' if (out_path and
-                                                  os.path.isdir(output_dir or '')) else '')
-            out_lbl.grid(row=0, column=2, sticky='ew', padx=(0, 8))
-            if out_path and output_dir and os.path.isdir(output_dir):
-                out_lbl.bind('<Button-1>',
-                    lambda e, p=output_dir: os.startfile(p))
-
-            # ── Col 3: Size (right-aligned) ──
-            if out_path and os.path.isfile(out_path):
-                try:
-                    sz = os.path.getsize(out_path)
-                    if sz >= 1024**3:
-                        size_text = '%.1f GB' % (sz / 1024**3)
-                    else:
-                        size_text = '%d MB' % (sz // 1024**2)
-                except Exception:
-                    size_text = '—'
-            else:
-                size_text = '—'
-            tk.Label(inner, text=size_text,
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'], fg=_TC['fg_4'],
-                     anchor='e'
-                     ).grid(row=0, column=3, sticky='e', padx=(0, 8))
-
-            # ── Col 4: Duration (right-aligned, currently always — not stored) ──
-            tk.Label(inner, text='—',
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'], fg=_TC['fg_5'],
-                     anchor='e'
-                     ).grid(row=0, column=4, sticky='e', padx=(0, 8))
-
-            # ── Col 5: When ──
-            tk.Label(inner, text=_humanize_when(entry.get('time', '')),
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'], fg=_TC['fg_4'],
-                     anchor='w'
-                     ).grid(row=0, column=5, sticky='w', padx=(0, 8))
-
-            # ── Col 6: Status pill ──
-            status_cell = tk.Frame(inner, bg=_TC['bg_2'])
-            status_cell.grid(row=0, column=6, sticky='w', padx=(0, 8))
-            if ok:
-                spill_bg, spill_fg, spill_text = (
-                    _TC['success_bg'], _TC['success_hi'], '\u2713 SUCCESS')
-            else:
-                spill_bg, spill_fg, spill_text = (
-                    _TC['danger_bg'],  _TC['danger_hi'],  '\u2717 FAILED')
-            spill = tk.Label(status_cell, text=' ' + spill_text + ' ',
-                             font=(_TF['mono_sm'][0], 9, 'bold'),
-                             bg=spill_bg, fg=spill_fg, padx=4, pady=2)
-            spill._pill_protected = True
-            spill.pack(anchor='w')
-
-            # ── Col 7: Actions (icon buttons) ──
-            actions = tk.Frame(inner, bg=_TC['bg_2'])
-            actions.grid(row=0, column=7, sticky='e', padx=(0, 14))
-
-            # 📂 Open output folder
-            if output_dir and os.path.isdir(output_dir):
-                _icon_btn(actions, '\U0001f4c2',
-                          tooltip='Open folder',
-                          command=lambda p=output_dir: os.startfile(p)
-                          ).pack(side='left', padx=1)
-            _ttl_for_log = (entry.get('title')
-                            or entry.get('title_id') or '')
-            _icon_btn(actions, '\U0001f4c4',
-                      tooltip='View log',
-                      command=lambda t=_ttl_for_log, o=output_dir:
-                          self._history_view_log(t, o)
-                      ).pack(side='left', padx=1)
-            # ↻ Re-queue
-            if folder and os.path.isdir(folder):
-                _icon_btn(actions, '\u21bb',
-                          tooltip='Re-queue',
-                          command=lambda f=folder: self._add_to_queue_from_path(f),
-                          accent=True
-                          ).pack(side='left', padx=1)
-            # ✕ Remove from history (decorative — no per-entry remove
-            #    callback exists; would need backend work)
-            #    For now, do nothing on click; tooltip says removal isn't
-            #    yet supported per-entry. The Clear-history button does
-            #    bulk wipe.
-
-            # Hairline divider below the row
-            tk.Frame(list_frame, bg=_TC['border_2'], height=1
-                     ).pack(fill='x')
+        render_history_rows(self, list_frame, history, filtered)
 
     def _history_view_log(self, title, output_dir):
         """v4.0.0 Phase 2: open the build log for a history entry. Build logs
@@ -21854,83 +21599,53 @@ class ExFATBuilder(_TK_BASE):
         build_about_tab(parent, self)
 
     def _help_text_fallback(self, parent):
-        """Simple text fallback when tkinterweb isn't installed."""
-        canvas = tk.Canvas(parent, bg=BG, highlightthickness=0)
-        sb = XScrollbar(parent, command=canvas.yview,
-                          bg=SURFACE2, troughcolor=BG)
-        canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side='right', fill='y')
-        canvas.pack(side='left', fill='both', expand=True)
-        body = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0,0), window=body, anchor='nw', tags='hb')
-        body.bind('<Configure>', lambda e:
-            canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.bind('<Configure>', lambda e:
-            canvas.itemconfig('hb', width=e.width))
-        canvas.bind('<MouseWheel>',
-            lambda e: canvas.yview_scroll(wheel_units(canvas, e.delta), 'units'))
-
-        def section(title):
-            tk.Label(body, text=title, font=(FONTS['body_strong'][0], 11),
-                     bg=BG, fg=ACCENT, anchor='w').pack(
-                         fill='x', padx=32, pady=(20,4))
-            tk.Frame(body, bg=BORDER, height=1).pack(fill='x', padx=32)
-
-        def qa(question, answer):
-            tk.Label(body, text=question, font=(FONTS['body_strong'][0], 9),
-                     bg=BG, fg=TEXT, anchor='w',
-                     wraplength=680, justify='left').pack(
-                         fill='x', padx=40, pady=(10,2))
-            tk.Label(body, text=answer, font=(FONTS['body'][0], 9),
-                     bg=BG, fg=MUTED, anchor='w',
-                     wraplength=680, justify='left').pack(
-                         fill='x', padx=40, pady=(0,4))
-
-        tk.Label(body, text='Help & Tutorial',
-                 font=(FONTS['body_strong'][0], 16), bg=BG, fg=TEXT).pack(
-                     anchor='w', padx=32, pady=(20,2))
-        tk.Label(body,
-                 text='exFAT Image Builder v' + APP_VERSION + '  —  by DecKerr97\n'
-                      'Click "Open in browser" above for the full tutorial.',
-                 font=(FONTS['body'][0], 9), bg=BG, fg=COLORS['fg_5']).pack(anchor='w', padx=32)
-
-        section('Getting Started')
-        qa('Do I need Python installed?',
-           'No. The .exe includes everything. The only requirement is OSFMount (free). '
-           'Go to Settings → OSFMount → Browse if it is not detected automatically.')
-        qa('What is OSFMount?',
-           'A free tool by PassMark that mounts disk image files as Windows drive letters. '
-           'Required for building images. Download from osforensics.com.')
-        qa('The app says OSFMount not detected',
-           'Go to the Settings tab → OSFMount section → click Browse and navigate to '
-           'osfmount.com wherever you installed it. It saves automatically.')
-
-        section('Building')
-        qa('What does the temp folder do?',
-           'During a build the app creates a blank disk image, mounts it, formats it '
-           'as exFAT, copies all game files in, then saves it to your output directory. '
-           'The temp folder is where this staging happens — it needs free space equal '
-           'to the game size.')
-        qa('Build failed — what do I check?',
-           '1. OSFMount is installed and detected in Settings.\n'
-           '2. eboot.bin exists in the game folder root.\n'
-           '3. The output drive has enough free space.\n'
-           '4. The temp folder drive also has enough free space.\n'
-           '5. The app is running as Administrator.')
-        qa('Image not dismounting after build?',
-           'Click the ⏏ Force Dismount button in the bottom right of the Build tab. '
-           'It uses the same method as Windows Explorer Eject, which works even when '
-           'OSFMount\'s own command fails.')
-
-        section('FTP & PS5')
-        qa('How do I find my PS5 IP address?',
-           'On the PS5: Settings → Network → View Connection Status. '
-           'Or use Auto-detect PS5 IP in Settings.')
-        qa('FTP won\'t connect',
-           'Make sure the PS5 FTP server is running in your homebrew settings. '
-           'Check the IP address and port number.')
-
-        tk.Frame(body, bg=BG, height=32).pack()
+        """Built-in documentation when tkinterweb isn't installed: a
+        two-column docs layout (on-this-page links + article card) drawn by
+        ui.tab_help.build_help_article."""
+        from ui.tab_help import build_help_article
+        sections = [
+            ('Getting Started', [
+                ('Do I need Python installed?',
+                 'No. The .exe includes everything. The only requirement is OSFMount (free). '
+                 'Go to Settings \u2192 OSFMount \u2192 Browse if it is not detected automatically.'),
+                ('What is OSFMount?',
+                 'A free tool by PassMark that mounts disk image files as Windows drive letters. '
+                 'Required for building images. Download from osforensics.com.'),
+                ('The app says OSFMount not detected',
+                 'Go to the Settings tab \u2192 OSFMount section \u2192 click Browse and navigate to '
+                 'osfmount.com wherever you installed it. It saves automatically.'),
+            ]),
+            ('Building', [
+                ('What does the temp folder do?',
+                 'During a build the app creates a blank disk image, mounts it, formats it '
+                 'as exFAT, copies all game files in, then saves it to your output directory. '
+                 'The temp folder is where this staging happens \u2014 it needs free space equal '
+                 'to the game size.'),
+                ('Build failed \u2014 what do I check?',
+                 '1. OSFMount is installed and detected in Settings.\n'
+                 '2. eboot.bin exists in the game folder root.\n'
+                 '3. The output drive has enough free space.\n'
+                 '4. The temp folder drive also has enough free space.\n'
+                 '5. The app is running as Administrator.'),
+                ('Image not dismounting after build?',
+                 'Click the Force Dismount button in the bottom right of the Build tab. '
+                 'It uses the same method as Windows Explorer Eject, which works even when '
+                 'OSFMount\'s own command fails.'),
+            ]),
+            ('FTP & PS5', [
+                ('How do I find my PS5 IP address?',
+                 'On the PS5: Settings \u2192 Network \u2192 View Connection Status. '
+                 'Or use Auto-detect PS5 IP in Settings.'),
+                ('FTP won\'t connect',
+                 'Make sure the PS5 FTP server is running in your homebrew settings. '
+                 'Check the IP address and port number.'),
+            ]),
+        ]
+        build_help_article(
+            parent, self,
+            meta='exFAT Image Builder v' + APP_VERSION + '  \u00b7  by DecKerr97',
+            sections=sections,
+            note='Click \u201cOpen in browser\u201d above for the full tutorial.')
 
     def _help_load_bundled(self):
         """Load the bundled tutorial HTML (base64 embedded in the exe)."""
