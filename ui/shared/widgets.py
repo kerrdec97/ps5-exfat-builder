@@ -350,8 +350,10 @@ class TextField(ttk.Entry):
         try:
             var = self.cget('textvariable')
             if var:
+                # The entry picks up the new value in its own trace, which
+                # may run after this one — re-check once Tk is idle.
                 self.tk.call('trace', 'add', 'variable', var, 'write',
-                             self.register(lambda *a: refresh()))
+                             self.register(lambda *a: self.after_idle(refresh)))
         except Exception:
             pass
         self.after_idle(refresh)
