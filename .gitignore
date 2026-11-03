@@ -21,6 +21,7 @@ __pycache__/
 
 # ── Virtual environments ─────────────────────────────────────────────────
 .venv/
+.build-venv/
 venv/
 env/
 ENV/
@@ -91,6 +92,7 @@ exfat_builder_v*.zip
 /*.md
 !/README.md
 !/CHANGELOG.md
+!/THIRD_PARTY_NOTICES.md
 
 # Scratch prototype (not imported by the app — design exploration only)
 elevation_prototype.py

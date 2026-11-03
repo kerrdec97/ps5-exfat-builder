@@ -1,0 +1,17 @@
+# Pinned build/runtime dependencies for the Windows release build.
+# build.bat installs these into an isolated virtual environment (.build-venv)
+# so the executable only contains what the application actually uses — not
+# whatever happens to be installed on the build machine.
+#
+# Versions match the ones shipped in the v4.0.2 release executable unless a
+# comment says otherwise. Python 3.11 (64-bit) is required.
+pyinstaller==6.16.0
+pillow==12.3.0
+psutil==7.2.2
+tkinterdnd2==0.6.2
+# Stock PFS backend (fallback when the vendored Lazy_MkPFS cannot be used)
+mkpfs==0.0.9
+cryptography==49.0.0
+# Optional fast compression backends used by mkpfs / vendored Lazy_MkPFS
+zlib-ng==1.0.0
+isal==1.8.0

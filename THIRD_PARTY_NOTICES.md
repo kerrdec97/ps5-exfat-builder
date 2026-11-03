@@ -5,10 +5,11 @@ projects below. Each remains the property of its authors and is used under its
 own license. Where a license requires it, the full license text must be included
 and copyright notices preserved.
 
-> ⚠️ **Maintainer action required.** Entries marked **[VERIFY]** were not
-> confirmed against the upstream repository and must be checked before release.
-> For every component, copy the exact copyright line from that project's own
-> `LICENSE` file — do not paraphrase it.
+> **Farewell Edition (v4.1.0) license review.** Every component below was
+> checked against its upstream repository's `LICENSE` file where one exists;
+> verified entries say so. Entries still marked **[VERIFY]** have no license
+> file upstream (or could not be reached) and should be confirmed with their
+> authors before redistribution. Full license texts are in `LICENSES/`.
 
 ---
 
@@ -22,17 +23,19 @@ and copyright notices preserved.
   so it carries GPL-3.0 terms. Because this source is vendored and distributed
   as part of exFAT Image Builder, the GPL-3.0 obligations extend to the
   distributed program (see LICENSING NOTE below).
-- **Action:** place the GPL-3.0 license text in `vendor/lazy_mkpfs/LICENSE`,
-  keep `UPSTREAM_README.md` and `UPSTREAM_COMMIT.txt`, and retain the
-  "Based on PSBrew/MkPFS" attribution already present in the source.
+- **Verified:** upstream `LICENSE` is GPL-3.0 (identical text to PSBrew/MkPFS).
+  The full text ships in `vendor/lazy_mkpfs/LICENSE` and `LICENSES/GPL-3.0.txt`;
+  `UPSTREAM_README.md` / `UPSTREAM_COMMIT.txt` (upstream commit
+  `78bdd00c5645b1170420df051c586dd0ca4f918d`) and the "Based on PSBrew/MkPFS"
+  attribution are retained. Local vendoring patches (runtime `pip install`
+  disabled) are marked in the source.
 
 ### UFS2Tool — FreeBSD UFS1/UFS2 filesystem manager (`.ffpkg` backend)
 - **Bundled as:** embedded `UFS2Tool.exe` (base64 in `exfat_builder.py`)
 - **Author:** SvenGDK — <https://github.com/SvenGDK/UFS2Tool>
-- **License: BSD-2-Clause** (permissive). Requires retaining the copyright
-  notice and the two-clause license text in this file.
-- **Action:** paste UFS2Tool's exact copyright line and the BSD-2-Clause text
-  into the "License texts" section below.
+- **License: BSD-2-Clause — verified.** `Copyright (c) 2026, SvenGDK`. The
+  full text is reproduced in "License texts" below and in
+  `LICENSES/UFS2Tool-BSD-2-Clause.txt`.
 
 ### Fake-signing & decrypt tooling (backport engine)
 Embedded as base64 in `exfat_builder.py` (`_SRC_FSELF_B64`, `_SRC_DECRYPT_B64`),
@@ -41,8 +44,8 @@ these convert ELF ⇄ fake-signed SELF and are wired into the Auto-Backport flow
   - **Original author:** john-tornblom — from the PS5 payload SDK,
     <https://github.com/ps5-payload-dev/sdk> (`samples/install_app/make_fself.py`)
   - **Modified by:** Nazky (@NazkyYT)
-  - **License: [VERIFY]** — confirm the ps5-payload-dev/sdk license and reproduce
-    it (the source header credits john-tornblom; keep that header intact).
+  - **License: GPL-3.0 — verified** from the ps5-payload-dev/sdk `LICENSE`
+    file. The crediting header in the embedded source is kept intact.
 
 ### SDK version patcher (backport engine)
 Embedded as base64 (`_SRC_PATCHER_B64`); rewrites PS5/PS4 SDK version fields.
@@ -72,23 +75,24 @@ Sent to the console by the app. Separate programs — but if you redistribute th
 ### ShadowMountPlus / MicroMount — PS5 auto-mounter payload
 - **Author:** drakmor — <https://github.com/drakmor/ShadowMountPlus>
   (fork of RDX-Sci01/ShadowMount1.3GBT; original ShadowMount by VoidWhisper)
-- **License: GPL-3.0.**
+- **License: GPL-3.0 — verified** from the upstream `LICENSE` file.
 - **Upstream credits:** Drakmor (ShadowMountPlus); VoidWhisper (ShadowMount);
   BestPig (BackPort); EchoStretch (kstuff-toggle); Gezine; earthonion;
   LightningMods; john-tornblom (SDK); PS5 R&D community.
 
 ### ftpsrv — FTP server for jailbroken PS4/PS5
 - **Author:** ps5-payload-dev — <https://github.com/ps5-payload-dev/ftpsrv>
-- **License: [VERIFY]** (ps5-payload-dev projects are commonly permissive, but
-  confirm on the repo before shipping the `.elf`).
+- **License: GPL-3.0 — verified** from the upstream `LICENSE` file.
 
 ### klogsrv — PS5 kernel log streamer
 - **Author:** ps5-payload-dev — <https://github.com/ps5-payload-dev/klogsrv>
-- **License: [VERIFY]**
+- **License: GPL-3.0 — verified** from the upstream `LICENSE` file.
 
 ### Other bundled payloads (if shipped in your release)
 - ps5-hen, kstuff / kstuff-lite, zftpd, etc. — **[VERIFY]** author + license for
-  each `.elf` you distribute, and list them here.
+  each `.elf` you distribute, and list them here. (No `LICENSE` file was found
+  at the default branch of ps5-payload-dev/zftpd or EchoStretch/kstuff during
+  the Farewell review.)
 
 ---
 
@@ -128,16 +132,42 @@ with the upstream authors and/or someone qualified before publishing.
 
 ## License texts
 
-> Paste the full, verbatim license text for each component below, copied from
-> that project's own `LICENSE` file. At minimum:
-> - **GPL-3.0** (Lazy_MkPFS / MkPFS, and ShadowMountPlus if you ship it): the
->   full GNU GPL v3 text, once.
-> - **BSD-2-Clause** (UFS2Tool): the two-clause text with SvenGDK's exact
->   copyright line.
-> - Any text required by the **[VERIFY]** components once their licenses are
->   confirmed (ps5-payload-dev SDK / ftpsrv / klogsrv, idlesauce gist).
+> Verbatim texts copied from each project's own `LICENSE` file. Still to add
+> once confirmed: the terms for the idlesauce SDK-patcher gist and any other
+> **[VERIFY]** payload you distribute.
 
-<!-- GPL-3.0 full text here -->
+### GNU General Public License v3.0
+Applies to Lazy_MkPFS, MkPFS, ShadowMountPlus, the ps5-payload-dev SDK
+tooling, ftpsrv and klogsrv. The complete, unmodified text is in
+[`LICENSES/GPL-3.0.txt`](LICENSES/GPL-3.0.txt) (also shipped inside the
+executable and at `vendor/lazy_mkpfs/LICENSE`).
 
-<!-- BSD-2-Clause text (UFS2Tool) here, with the exact copyright line from
-     https://github.com/SvenGDK/UFS2Tool/blob/main/LICENSE -->
+### UFS2Tool — BSD 2-Clause License
+
+```
+BSD 2-Clause License
+
+Copyright (c) 2026, SvenGDK
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
