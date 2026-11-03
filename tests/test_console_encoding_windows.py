@@ -46,10 +46,11 @@ class ConsoleEncodingProbe(unittest.TestCase):
                     txt = raw.decode(enc, errors='replace')
                 except LookupError:
                     continue
-                # 'é' exists in both the ANSI and OEM code pages of a
-                # Western system ('ō' exists in neither and becomes '?').
-                res[enc] = ('Y?tei \u00e9\u00e8' in txt or 'f\u00e9.bin' in txt
-                            or NAME in txt)
+                # 'é'/'è' exist in both the ANSI and OEM code pages of a
+                # Western system and have different byte values there, so
+                # only the right decoding shows them ('ō' is best-fitted
+                # to 'o' or '?' by Windows and is not checked).
+                res[enc] = ('\u00e9' in txt and '\u00e8' in txt) or ('f\u00e9.bin' in txt)
             results[key] = res
         try:
             import ctypes
