@@ -30,6 +30,13 @@ and copyright notices preserved.
   attribution are retained. Local vendoring patches (runtime `pip install`
   disabled) are marked in the source.
 
+### Lucide — interface icons
+- **Bundled as:** rendered icon masks in `ui/icons_data.py` (one custom
+  "eject" glyph in the same style is original to this project)
+- **Author:** Lucide Contributors (portions © Cole Bemis, Feather) —
+  <https://lucide.dev>, <https://github.com/lucide-icons/lucide>, version 0.460.0
+- **License: ISC — verified.** The full text ships in `LICENSES/Lucide-ISC.txt`.
+
 ### UFS2Tool — FreeBSD UFS1/UFS2 filesystem manager (`.ffpkg` backend)
 - **Bundled as:** embedded `UFS2Tool.exe` (base64 in `exfat_builder.py`)
 - **Author:** SvenGDK — <https://github.com/SvenGDK/UFS2Tool>
