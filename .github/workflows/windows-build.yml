@@ -29,18 +29,25 @@ jobs:
         shell: cmd
         run: build.bat
 
+      - name: Build the stand-in Publishing Tools (tests only, never shipped)
+        shell: cmd
+        run: .build-venv\Scripts\python.exe -m PyInstaller --onefile --noconfirm --log-level WARN --distpath ci-fake --workpath ci-fake\build --specpath ci-fake --name prospero-pub-cmd tests\fakes\fake_pubcmd.py
+
       - name: Installed .NET runtimes (UFS2Tool needs 8 or newer)
         shell: cmd
         run: dotnet --list-runtimes || exit /b 0
 
       - name: Unit tests (Windows, includes a real UFS2Tool .ffpkg build)
         shell: cmd
+        env:
+          FAKE_PUBCMD_EXE: ${{ github.workspace }}\ci-fake\prospero-pub-cmd.exe
         run: .build-venv\Scripts\python.exe -m unittest discover -s tests -v
 
       - name: GUI smoke test (Windows)
         shell: cmd
         env:
           EXFAT_GUI_SMOKE: '1'
+          FAKE_PUBCMD_EXE: ${{ github.workspace }}\ci-fake\prospero-pub-cmd.exe
         run: .build-venv\Scripts\python.exe -m unittest tests.test_gui_smoke -v
 
       - name: Visit and screenshot every page (en, de, ja)

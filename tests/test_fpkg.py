@@ -315,20 +315,36 @@ class AliasTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.real, 'new.bin')))
 
 
-@unittest.skipIf(os.name == 'nt', 'the fake Publishing Tools is a script')
+FAKE_EXE = os.environ.get('FAKE_PUBCMD_EXE')   # compiled stand-in (Windows CI)
+
+
+def install_fake_tool(tools):
+    """Put a stand-in prospero-pub-cmd.exe into `tools` and return its path:
+    a script on POSIX, or the compiled stand-in named by FAKE_PUBCMD_EXE on
+    Windows. Returns None when no stand-in can be used."""
+    os.makedirs(os.path.join(tools, 'ext'), exist_ok=True)
+    open(os.path.join(tools, 'libScePubTools.dll'), 'wb').close()
+    exe = os.path.join(tools, 'prospero-pub-cmd.exe')
+    if os.name == 'nt':
+        if not (FAKE_EXE and os.path.isfile(FAKE_EXE)):
+            return None
+        shutil.copy2(FAKE_EXE, exe)
+        return exe
+    with open(exe, 'w') as f:
+        f.write('#!%s\nimport runpy, sys\nsys.argv[0] = %r\n'
+                'runpy.run_path(%r, run_name="__main__")\n'
+                % (sys.executable, FAKE, FAKE))
+    os.chmod(exe, os.stat(exe).st_mode | stat.S_IEXEC)
+    return exe
+
+
+@unittest.skipIf(os.name == 'nt' and not FAKE_EXE,
+                 'set FAKE_PUBCMD_EXE to a compiled stand-in on Windows')
 class EndToEnd(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='fpkg_e2e_')
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        tools = os.path.join(self.tmp, 'tools')
-        os.makedirs(os.path.join(tools, 'ext'))
-        open(os.path.join(tools, 'libScePubTools.dll'), 'wb').close()
-        self.exe = os.path.join(tools, 'prospero-pub-cmd.exe')
-        with open(self.exe, 'w') as f:
-            f.write('#!%s\nimport runpy, sys\nsys.argv[0] = %r\n'
-                    'runpy.run_path(%r, run_name="__main__")\n'
-                    % (sys.executable, FAKE, FAKE))
-        os.chmod(self.exe, os.stat(self.exe).st_mode | stat.S_IEXEC)
+        self.exe = install_fake_tool(os.path.join(self.tmp, 'tools'))
         self.dump = make_dump(self.tmp)
         self.out = os.path.join(self.tmp, 'out')
         self.addCleanup(os.environ.pop, 'FAKE_PUBCMD_MODE', None)
@@ -439,11 +455,24 @@ class EndToEnd(unittest.TestCase):
         self.assertIs(st, False)
         os.environ.pop('FAKE_PUBCMD_EXTRACT')
 
-    def test_non_ascii_folder_fails_clearly_without_junctions(self):
-        bad = make_dump(self.tmp, name='Y\u014dtei')
-        r = backend.build_fpkg(backend.FpkgOptions(bad, self.out, tool_path=self.exe))
-        self.assertIs(r.status, False)
-        self.assertIn('ASCII', ' '.join(r.messages))
+    def test_non_ascii_game_folder(self):
+        game = make_dump(self.tmp, name='Y\u014dtei')
+        out = os.path.join(self.tmp, 'Ausgabe \u00e9')
+        r = backend.build_fpkg(backend.FpkgOptions(game, out, tool_path=self.exe,
+                                                   chunk_count=2))
+        if os.name == 'nt':
+            # Built through ASCII junctions; the real paths are reported
+            # and no junction is left behind.
+            self.assertIs(r.status, True, r.messages)
+            self.assertEqual(os.path.dirname(r.out_path), os.path.abspath(out))
+            self.assertTrue(os.path.isfile(r.out_path))
+            root = aliases.alias_root()
+            if root:
+                self.assertFalse([n for n in os.listdir(root)
+                                  if n.startswith('a%d-' % os.getpid())])
+        else:
+            self.assertIs(r.status, False)
+            self.assertIn('ASCII', ' '.join(r.messages))
 
     def test_preflight_failures(self):
         os.remove(os.path.join(self.dump, 'sce_sys', 'keystone'))

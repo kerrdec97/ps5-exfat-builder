@@ -82,25 +82,16 @@ class GuiSmoke(unittest.TestCase):
             self.assertEqual(errs, ['after#xthread'])
 
 
-    @unittest.skipIf(os.name == 'nt', 'the fake Publishing Tools is a script')
     def test_fpkg_job_through_build_queue(self):
         import shutil
-        import stat
-        import sys
         import tempfile
-        from tests.test_fpkg import FAKE, CID, make_dump
+        from tests.test_fpkg import CID, install_fake_tool, make_dump
         mod = load_app()
         tmp = tempfile.mkdtemp(prefix='gui_fpkg_')
         self.addCleanup(shutil.rmtree, tmp, True)
-        tools = os.path.join(tmp, 'tools')
-        os.makedirs(os.path.join(tools, 'ext'))
-        open(os.path.join(tools, 'libScePubTools.dll'), 'wb').close()
-        exe = os.path.join(tools, 'prospero-pub-cmd.exe')
-        with open(exe, 'w') as f:
-            f.write('#!%s\nimport runpy, sys\nsys.argv[0] = %r\n'
-                    'runpy.run_path(%r, run_name="__main__")\n'
-                    % (sys.executable, FAKE, FAKE))
-        os.chmod(exe, os.stat(exe).st_mode | stat.S_IEXEC)
+        exe = install_fake_tool(os.path.join(tmp, 'tools'))
+        if not exe:
+            self.skipTest('set FAKE_PUBCMD_EXE to a compiled stand-in on Windows')
         dump = make_dump(tmp)
         out = os.path.join(tmp, 'out')
         os.makedirs(out)
