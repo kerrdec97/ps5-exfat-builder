@@ -1,55 +1,52 @@
 """
-ui/tab_images.py — My Images tab.
+ui/tab_images.py — Library › Built Images (My Images) screen.
 
-Step 15 (v2.1.7): refactored against preview/images-tab-redesign.html.
+Design-system layout, matching Library › Source Dumps:
 
-Layout:
+    My Images                         [Add folder] [Re-scan] [Send selected to PS5]
+    Finished images ready to use
+    [search…………]  [All | FW 4.51+ | Backport]                    status text
+    ┌ image tiles (scroll) ─────────────────────┐ ┌ rail ────────────┐
+    │ cover, name, title ID, version · size,    │ │ Selection         │
+    │ format / backport badges, select check    │ │ Image folders     │
+    └───────────────────────────────────────────┘ └───────────────────┘
 
-    ┌─ toolbar (page-head) ───────────────────────────────────────────┐
-    │  My Images                                                      │
-    │  82 images · 4.21 TB total · D:/ free 412 GB                    │
-    │              [↻ Re-scan] [📂 Open folder] [🎮 Send selected]   │
-    ├─ scan-dirs strip ───────────────────────────────────────────────┤
-    │  D:/PS5/Images  ✕      D:/Backports  ✕    [+ Add folder]       │
-    ├─ filterbar ─────────────────────────────────────────────────────┤
-    │  🔍 search    [All 82] [FW 4.51+ 61] [Backport 14] [Update 23]  │
-    ├─ card grid ─────────────────────────────────────────────────────┤
-    │  🎮Returnal       🎮Last of Us II  🎮Elden Ring  🎮GoW Ragnarok │
-    │  CUSA-22871 v2.10  CUSA-03173 …    CUSA-26879 …  CUSA-31000 …   │
-    │  ...                                                            │
-    └─────────────────────────────────────────────────────────────────┘
-
-Replaces the legacy single-column Listbox with a multi-column card grid
-using the shared `GameCard` widget (same component used in Library).
-
-Backwards compat: every `_img_*` attribute the existing 8+ callbacks read
-is preserved with the same name. The `_img_listbox` attribute now points
-to a hidden Listbox kept around solely so legacy callbacks
-(`_img_apply_filter`, `_img_update_sel`, `_img_context_menu`) can read
-selection indices via `curselection()`. Selection is mirrored from the
-visible card grid into the hidden listbox on every click.
+Presentation only. Every `_img_*` attribute the monolith's callbacks read
+keeps its name (`_img_scan_dirs`, `_img_entries`, `_img_selected_idx`,
+`_img_search_var`, `_img_filter_chip`, `_img_status_var`, `_img_sel_var`,
+`_img_stats_var`, `_img_dirs_frame`, `_img_batch_btn`, `_img_grid_frame`,
+`_img_grid_canvas`, `_img_grid_window`, `_img_listbox`). `_img_listbox` is
+a hidden Listbox kept so legacy callbacks can read the selection through
+`curselection()`; the visible tile selection is mirrored into it.
 """
 
 import os
 import re
 import tkinter as tk
-from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
 
 from exfat_builder import *  # noqa: F401,F403
 from exfat_builder import _, save_settings
 
-from ui.shared.cards import GameCard
+from ui.shared.widgets import (
+    Button, IconButton, Scrollbar, Card, PageHeader, Segmented, EmptyState,
+    IconLabel, Divider, Tooltip, Badge)
 from ui.shared.scroll import attach_scroll
+from ui.tab_library import (
+    Tile, search_field, scroll_column, fit_text, load_cover_async,
+    _autohide_scroll, grid_columns, status_label, usable_width, RAIL_W, GAP)
+
+C = COLORS
+BG1, BG2, BG3 = C['bg_1'], C['bg_2'], C['bg_3']
 
 
 def build_images_tab(parent, app):
-    parent.configure(bg=COLORS['bg_1'])
+    parent.configure(bg=BG1)
 
     app._img_scan_dirs = app._settings.get('img_scan_dirs', [])
     app._img_entries   = []
-    # Selection — set of indices into _img_entries (post-filter)
+    # Selection — set of indices into _img_entries
     app._img_selected_idx = set()
     app._img_search_var = tk.StringVar()
     app._img_filter_chip = tk.StringVar(value='all')
@@ -57,32 +54,16 @@ def build_images_tab(parent, app):
         value=_('Add a folder containing PS5 images (.exfat, .ffpkg, '
                 '.ffpfs, .ffpfsc) and click Re-scan'))
     app._img_sel_var = tk.StringVar(value='')
+    app._img_stats_var = tk.StringVar(value='')
+    app._img_tiles = {}
 
-    # ── Toolbar ──
-    _build_toolbar(parent, app)
-
-    # ── Scan-dirs strip ──
-    app._img_dirs_frame = tk.Frame(parent, bg=COLORS['bg_2'],
-                                    highlightbackground=COLORS['border_2'],
-                                    highlightthickness=1)
-    app._img_dirs_frame.pack(fill='x', padx=24, pady=(0, 8))
-
-    # ── Filter bar ──
-    _build_filterbar(parent, app)
-
-    # ── Action bar ──
-    _build_action_bar(parent, app)
-
-    # ── Card grid ──
-    _build_grid(parent, app)
+    _build_toolbar(parent, app)      # page header + actions
+    _build_filterbar(parent, app)    # search + filter + status
+    _build_main(parent, app)         # grid + rail (selection, folders)
 
     # Hidden listbox kept for legacy callback compat
-    # (`_img_listbox.curselection()` is read by `_img_update_sel`,
-    # `_img_context_menu`, etc.). We mirror the card-grid selection into
-    # it on every card click.
+    # (`_img_listbox.curselection()`); mirrored on every selection change.
     app._img_listbox = tk.Listbox(parent, exportselection=False)
-    # Don't pack — hidden. selectmode='extended' to allow index-based
-    # multi-select via .selection_set().
     app._img_listbox.configure(selectmode='extended')
 
     # Render initial scan-dirs + status
@@ -92,180 +73,193 @@ def build_images_tab(parent, app):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Toolbar — title + stats + bulk actions
+# Page header — title + description + actions (primary rightmost)
 # ─────────────────────────────────────────────────────────────────────────
 def _build_toolbar(parent, app):
-    bar = tk.Frame(parent, bg=COLORS['bg_1'])
-    bar.pack(fill='x', padx=24, pady=(14, 8))
-
-    title_col = tk.Frame(bar, bg=COLORS['bg_1'])
-    title_col.pack(side='left', fill='x', expand=True)
-
-    tk.Label(title_col, text=_('My Images'),
-             font=(FONTS['body_strong'][0], 14),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0']
-             ).pack(anchor='w')
-
-    # v3.6.3: one-line helper so first-time users know what this view holds.
-    tk.Label(title_col, text=_('Finished images ready to use'),
-             font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4']
-             ).pack(anchor='w', pady=(1, 0))
-
-    # Stats row (under title)
-    app._img_stats_var = tk.StringVar(value='')
-    tk.Label(title_col, textvariable=app._img_stats_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_1'], fg=COLORS['fg_4']
-             ).pack(anchor='w', pady=(2, 0))
-
-    # Right-aligned actions
-    _ghost_btn(bar, '\u21bb  ' + _('Re-scan'),
-               command=app._img_scan
-               ).pack(side='right', padx=(6, 0))
-    _ghost_btn(bar, '+  ' + _('Add folder'),
-               command=app._img_add_dir
-               ).pack(side='right')
-    app._img_batch_btn = _accent_btn(bar,
-        '\U0001f3ae  ' + _('Send selected to PS5'),
-        command=app._img_batch_upload)
-    app._img_batch_btn.pack(side='right', padx=(0, 12))
+    hdr = PageHeader(parent, _('My Images'), _('Finished images ready to use'))
+    hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
+    a = hdr.actions
+    app._img_batch_btn = Button(a, text=_('Send selected to PS5'), icon='send',
+                                variant='primary', command=app._img_batch_upload)
+    app._img_batch_btn.pack(side='right')
+    Button(a, text=_('Re-scan'), icon='refresh',
+           command=app._img_scan).pack(side='right', padx=(0, px(8)))
+    Button(a, text=_('Add folder'), icon='folder_plus',
+           command=app._img_add_dir).pack(side='right', padx=(0, px(8)))
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Filter bar — search + chips
+# Filter bar — search + filter toggle + status
 # ─────────────────────────────────────────────────────────────────────────
 def _build_filterbar(parent, app):
-    bar = tk.Frame(parent, bg=COLORS['bg_1'])
-    bar.pack(fill='x', padx=24, pady=(0, 10))
+    bar = tk.Frame(parent, bg=BG1)
+    bar.pack(fill='x', padx=px(24), pady=(0, px(12)))
 
-    # Search input
-    search_wrap = tk.Frame(bar, bg=COLORS['bg_0'],
-                           highlightbackground=COLORS['border_3'],
-                           highlightthickness=1)
-    search_wrap.pack(side='left')
-    tk.Label(search_wrap, text='\U0001f50d',
-             font=(FONTS['body'][0], 11),
-             bg=COLORS['bg_0'], fg=COLORS['fg_4']
-             ).pack(side='left', padx=(8, 4))
-    XEntry(search_wrap, textvariable=app._img_search_var,
-             font=FONTS['body'],
-             bg=COLORS['bg_0'], fg=COLORS['fg_1'],
-             insertbackground=COLORS['accent'],
-             selectbackground=COLORS['accent'],
-             selectforeground=COLORS['fg_0'],
-             relief='flat', bd=0,
-             width=32
-             ).pack(side='left', ipady=5, padx=(0, 8))
+    search_field(bar, app._img_search_var, 'Search by name or title ID',
+                 width=px(320)).pack(side='left')
+    app._img_search_var.trace_add('write', lambda *a: _re_render_grid(app))
 
-    # Re-render grid live on search change
-    app._img_search_var.trace_add(
-        'write', lambda *a: _re_render_grid(app))
+    seg = Segmented(bar, [('all', _('All')), ('fw451', _('FW 4.51+')),
+                          ('backport', _('Backport'))],
+                    variable=app._img_filter_chip,
+                    command=lambda k: _re_render_grid(app))
+    seg.pack(side='left', padx=(px(12), 0))
+    # Legacy: key -> widgets of each filter option.
+    app._img_chip_widgets = {k: (b, b, b) for k, b in seg._btns.items()}
 
-    # Chip filters
-    chips_frame = tk.Frame(bar, bg=COLORS['bg_1'])
-    chips_frame.pack(side='left', padx=(10, 0))
-
-    app._img_chip_widgets = {}
-
-    def _chip(key, label):
-        chip = tk.Frame(chips_frame, bg=COLORS['bg_3'],
-                        highlightbackground=COLORS['border_3'],
-                        highlightthickness=1, cursor='hand2')
-        chip.pack(side='left', padx=2)
-        inner = tk.Frame(chip, bg=COLORS['bg_3'])
-        inner.pack(padx=10, pady=4)
-        lbl = tk.Label(inner, text=label,
-                       font=FONTS['meta'],
-                       bg=COLORS['bg_3'], fg=COLORS['fg_3'])
-        lbl.pack()
-        for w in [chip, inner, lbl]:
-            w.bind('<Button-1>',
-                   lambda e, k=key: _select_chip(app, k))
-        app._img_chip_widgets[key] = (chip, inner, lbl)
-
-    _chip('all',      _('All'))
-    _chip('fw451',    _('FW 4.51+'))
-    _chip('backport', _('Backport'))
-
-    # Apply default chip styling
-    _select_chip(app, 'all', re_render=False)
+    status_label(bar, app._img_status_var).pack(
+        side='right', fill='x', expand=True, padx=(px(16), 0))
 
 
 def _select_chip(app, key, re_render=True):
-    """Update chip visuals + filter state."""
+    """Set the filter (the Segmented toggle repaints from the variable)."""
     app._img_filter_chip.set(key)
-    for k, (chip, inner, lbl) in app._img_chip_widgets.items():
-        if k == key:
-            chip.configure(bg=COLORS['accent_08'],
-                           highlightbackground=COLORS['accent'])
-            inner.configure(bg=COLORS['accent_08'])
-            lbl.configure(bg=COLORS['accent_08'], fg=COLORS['accent_hi'])
-        else:
-            chip.configure(bg=COLORS['bg_3'],
-                           highlightbackground=COLORS['border_3'])
-            inner.configure(bg=COLORS['bg_3'])
-            lbl.configure(bg=COLORS['bg_3'], fg=COLORS['fg_3'])
     if re_render:
         _re_render_grid(app)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Action bar — selection info + status
+# Main row — tile grid (scrollable) + rail
 # ─────────────────────────────────────────────────────────────────────────
-def _build_action_bar(parent, app):
-    bar = tk.Frame(parent, bg=COLORS['bg_2'],
-                   highlightbackground=COLORS['border_2'],
-                   highlightthickness=1)
-    bar.pack(fill='x', padx=24, pady=(0, 8))
-    inner = tk.Frame(bar, bg=COLORS['bg_2'])
-    inner.pack(fill='x', padx=12, pady=8)
+def _build_main(parent, app):
+    main = tk.Frame(parent, bg=BG1)
+    main.pack(fill='both', expand=True, padx=px(24), pady=(0, px(16)))
 
-    tk.Label(inner, textvariable=app._img_status_var,
-             font=FONTS['mono_sm'],
-             bg=COLORS['bg_2'], fg=COLORS['fg_4']
-             ).pack(side='left')
+    rail_outer, rail = scroll_column(main, px(RAIL_W))
+    rail_outer.pack(side='right', fill='y', padx=(px(GAP), 0))
 
-    tk.Label(inner, textvariable=app._img_sel_var,
-             font=(FONTS['body_strong'][0], 9),
-             bg=COLORS['bg_2'], fg=COLORS['accent_hi']
-             ).pack(side='right')
+    # Selection summary
+    sel = Card(rail, title='Selection')
+    sel.pack(fill='x')
+    sel_val = tk.Label(sel.body, font=FONTS['body_strong'], bg=BG2,
+                       fg=C['fg_0'], anchor='w')
+    sel_val.pack(fill='x')
+    tk.Label(sel.body,
+             text='Click images to select them for Send selected to PS5. '
+                  'Right-click an image for more actions; double-click '
+                  'opens its folder.',
+             font=FONTS['caption'], bg=BG2, fg=C['fg_3'], anchor='w',
+             justify='left', wraplength=px(RAIL_W) - px(32)).pack(
+                 fill='x', pady=(px(4), 0))
 
+    def _sel_text(*_a):
+        v = app._img_sel_var.get()
+        sel_val.configure(text=v or 'No images selected',
+                          fg=C['fg_0'] if v else C['fg_3'])
+    app._img_sel_var.trace_add('write', _sel_text)
+    _sel_text()
 
-# ─────────────────────────────────────────────────────────────────────────
-# Card grid (scrollable)
-# ─────────────────────────────────────────────────────────────────────────
-def _build_grid(parent, app):
-    outer = tk.Frame(parent, bg=COLORS['bg_1'])
-    outer.pack(fill='both', expand=True, padx=24, pady=(0, 12))
+    # Scan folders
+    fold = Card(rail, title='Image folders')
+    fold.pack(fill='x', pady=(px(GAP), 0))
+    stats = tk.Label(fold.body, textvariable=app._img_stats_var,
+                     font=FONTS['caption'], bg=BG2, fg=C['fg_3'], anchor='w')
+    stats_div = Divider(fold.body, color=C['border_1'])
+    app._img_dirs_frame = tk.Frame(fold.body, bg=BG2)
+    app._img_dirs_frame.pack(fill='x')
 
-    canvas = tk.Canvas(outer, bg=COLORS['bg_1'], highlightthickness=0)
-    sb = XScrollbar(outer, command=canvas.yview,
-                      bg=COLORS['bg_3'], troughcolor=COLORS['bg_1'])
+    def _stats_vis(*_a):
+        # The totals line (and its divider) only shows once images exist.
+        try:
+            if app._img_stats_var.get():
+                if not stats.winfo_manager():
+                    stats.pack(fill='x', pady=(0, px(8)),
+                               before=app._img_dirs_frame)
+                    stats_div.pack(fill='x', before=app._img_dirs_frame)
+            elif stats.winfo_manager():
+                stats.pack_forget()
+                stats_div.pack_forget()
+        except Exception:
+            pass
+    app._img_stats_var.trace_add('write', _stats_vis)
+
+    # Tile grid
+    canvas = tk.Canvas(main, bg=BG1, highlightthickness=0, bd=0)
+    sb = Scrollbar(main, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=sb.set)
-    sb.pack(side='right', fill='y')
     canvas.pack(side='left', fill='both', expand=True)
-
-    app._img_grid_frame = tk.Frame(canvas, bg=COLORS['bg_1'])
-    win = canvas.create_window((0, 0), window=app._img_grid_frame,
-                                anchor='nw')
+    app._img_grid_frame = tk.Frame(canvas, bg=BG1)
+    win = canvas.create_window((0, 0), window=app._img_grid_frame, anchor='nw')
     app._img_grid_canvas = canvas
     app._img_grid_window = win
-    app._img_grid_frame.bind('<Configure>', lambda e:
-        canvas.configure(scrollregion=canvas.bbox('all')))
-    # Re-flow grid columns on canvas resize
+    app._img_grid_sb = sb
+    _autohide_scroll(canvas, app._img_grid_frame, sb,
+                     pack=dict(side='right', fill='y', padx=(px(6), 0),
+                               before=canvas))
+    state = {'w': 0, 'job': None}
+
     def _on_canvas_resize(e):
-        canvas.itemconfig(win, width=e.width)
-        _re_render_grid(app)
-    canvas.bind('<Configure>', _on_canvas_resize)
+        canvas.itemconfig(win, width=e.width + px(GAP))
+        if e.width == state['w']:
+            return
+        state['w'] = e.width
+        if state['job']:
+            try:
+                canvas.after_cancel(state['job'])
+            except Exception:
+                pass
+        state['job'] = canvas.after(60, lambda: _re_render_grid(app))
+    canvas.bind('<Configure>', _on_canvas_resize, add='+')
     attach_scroll(canvas)
 
 
+def render_dirs(app):
+    """Scan-folder rows in the rail card (called by _img_render_dirs)."""
+    frame = app._img_dirs_frame
+    for w in frame.winfo_children():
+        w.destroy()
+    inner_w = px(RAIL_W) - px(32)
+    if not app._img_scan_dirs:
+        tk.Label(frame,
+                 text='No image folders yet. Use Add folder to pick a folder '
+                      'with .exfat, .ffpkg, .ffpfs or .ffpfsc images.',
+                 font=FONTS['caption'], bg=BG2, fg=C['fg_3'], anchor='w',
+                 justify='left', wraplength=inner_w).pack(fill='x',
+                                                          pady=(0, px(4)))
+        return
+    for i, d in enumerate(app._img_scan_dirs):
+        if i:
+            Divider(frame, color=C['border_1']).pack(fill='x')
+        row = tk.Frame(frame, bg=BG2)
+        row.pack(fill='x', pady=px(8))
+        line = tk.Frame(row, bg=BG2)
+        line.pack(fill='x')
+        IconLabel(line, 'folder', 16, C['fg_3'], BG2).pack(side='left')
+        IconButton(line, 'close', (lambda dd=d: app._img_remove_dir(dd)),
+                   tooltip='Remove folder', size='sm',
+                   surface=BG2).pack(side='right')
+        IconButton(line, 'folder_open', (lambda dd=d: app._open_folder(dd)),
+                   tooltip=_('Open folder'), size='sm',
+                   surface=BG2).pack(side='right')
+        name = os.path.basename(d.rstrip('/\\')) or d
+        count = sum(1 for e in app._img_entries
+                    if os.path.dirname(e.get('path', '')) == d)
+        badge = Badge(line, '%d image%s' % (count, '' if count == 1 else 's'),
+                      'neutral', surface=BG2)
+        avail = inner_w - px(24) - px(64) - int(badge.cget('width')) - px(8)
+        tk.Label(line, text=fit_text(name, FONTS['body_strong'], avail),
+                 font=FONTS['body_strong'], bg=BG2, fg=C['fg_1'],
+                 anchor='w').pack(side='left', padx=(px(8), px(8)))
+        badge.pack(side='left')
+        path = tk.Label(row, text=fit_text(d, FONTS['code'], inner_w - px(24),
+                                           middle=True),
+                        font=FONTS['code'], bg=BG2, fg=C['fg_4'], anchor='w')
+        path.pack(fill='x', padx=(px(24), 0))
+        if path.cget('text') != d:
+            Tooltip(path, d)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Grid rendering
+# ─────────────────────────────────────────────────────────────────────────
 def _re_render_grid(app):
-    """Re-render the card grid from current entries + filter + search."""
+    """Re-render the tile grid from current entries + filter + search."""
     if not hasattr(app, '_img_grid_frame'):
         return
-    for w in app._img_grid_frame.winfo_children():
+    frame = app._img_grid_frame
+    for w in frame.winfo_children():
         w.destroy()
+    app._img_tiles = {}
 
     # Apply search + chip filter
     search = ''
@@ -277,201 +271,155 @@ def _re_render_grid(app):
 
     visible = []
     for i, e in enumerate(app._img_entries):
-        # Parse meta from filename for filter checks
         meta = _parse_meta(e['name'])
-
         if search:
             hay = (e['name'] + ' ' + (meta.get('cusa') or '') +
                    ' ' + meta.get('title', '')).lower()
             if search not in hay:
                 continue
-
         if chip == 'backport' and not meta.get('is_backport'):
             continue
-        # 'fw451' chip — skip filtering (we don't know FW from filename
-        # alone). Treat as a no-op visual filter for this iteration.
-
+        # 'fw451' — FW is not known from the filename alone; no-op filter.
         visible.append((i, e, meta))
 
+    # Folder rows show per-folder counts; keep them current.
+    try:
+        render_dirs(app)
+    except Exception:
+        pass
+
     if not visible:
-        from ui.shared.empty_state import EmptyState
-        holder = tk.Frame(app._img_grid_frame, bg=COLORS['bg_1'],
-                          height=300)
-        holder.pack(fill='x', pady=20)
+        try:
+            h = max(px(300), app._img_grid_canvas.winfo_height() - px(4))
+            w = max(px(300), app._img_grid_canvas.winfo_width())
+        except Exception:
+            h, w = px(320), px(600)
+        holder = tk.Frame(frame, bg=BG1, height=h, width=w)
+        holder.pack(fill='x')
         holder.pack_propagate(False)
         if not app._img_entries:
-            EmptyState(holder, icon='\U0001f4be',
-                       title=_('No Images Found'),
-                       description=_('Build an image to see it here.')
-                       ).pack(fill='both', expand=True)
+            es = EmptyState(holder, icon='image', title=_('No Images Found'),
+                            text=_('Build an image to see it here.'),
+                            action=(_('Add folder'), app._img_add_dir,
+                                    'folder_plus'))
         else:
-            EmptyState(holder, icon='\U0001f50d',
-                       title=_('No matches'),
-                       description=_('No images match the current '
-                                     'search or filter.')
-                       ).pack(fill='both', expand=True)
+            es = EmptyState(holder, icon='search', title=_('No matches'),
+                            text=_('No images match the current '
+                                   'search or filter.'))
+        es.place(relx=0, rely=0, relwidth=1, relheight=1)
         return
 
-    # Compute column count from canvas width
+    W = usable_width(app._img_grid_canvas, getattr(app, '_img_grid_sb', None))
+    gap = px(GAP)
+    cols, tile_w = grid_columns(W)
     try:
-        canvas_w = app._img_grid_canvas.winfo_width()
-    except Exception:
-        canvas_w = 700
-    if canvas_w < 50:
-        canvas_w = 700
-    # v3.6.2: fixed 2:3 cover (113px) + fixed info column = ~390px card.
-    card_w = 390
-    cols = max(1, canvas_w // (card_w + 16))
-
-    for grid_i, (idx, entry, meta) in enumerate(visible):
-        row = grid_i // cols
-        col = grid_i % cols
-        _make_image_card(app, entry, meta, idx, row, col)
-
-    # v3.6.2: uniform columns so cards never stretch unevenly; clear any
-    # stale weights left from a previous, wider layout.
-    try:
-        old_cols = app._img_grid_frame.grid_size()[0]
+        old_cols = frame.grid_size()[0]
     except Exception:
         old_cols = cols
     for c in range(max(old_cols, cols)):
         if c < cols:
-            app._img_grid_frame.grid_columnconfigure(
-                c, weight=1, uniform='imgcards')
+            frame.grid_columnconfigure(c, weight=1, uniform='imgcards',
+                                       minsize=tile_w + gap)
         else:
-            app._img_grid_frame.grid_columnconfigure(c, weight=0, uniform='')
+            frame.grid_columnconfigure(c, weight=0, uniform='', minsize=0)
+
+    for grid_i, (idx, entry, meta) in enumerate(visible):
+        _make_image_card(app, entry, meta, idx, grid_i // cols,
+                         grid_i % cols, tile_w)
 
 
-def _make_image_card(app, entry, meta, idx, row, col):
-    """Build one GameCard for an .exfat image."""
-    # Format size
-    size_text = None
+def _make_image_card(app, entry, meta, idx, row, col, tile_w=None):
+    """Build one tile for an image file."""
+    tile_w = tile_w or px(180)
     sz = entry.get('size', 0)
+    size_text = None
     if sz > 0:
         size_text = ('%.1f GB' % (sz / 1024**3) if sz >= 1024**3
                      else '%d MB' % (sz // 1024**2))
-
-    status = 'backport' if meta.get('is_backport') else None
-
-    # Format badge from the file extension (presentation only — the
-    # scanner currently indexes .exfat; this generalizes automatically
-    # if other formats are ever listed).
     ext = entry['name'].rsplit('.', 1)[-1].lower()
     fmt_label = {'exfat': 'exFAT', 'ffpkg': 'ffpkg',
                  'ffpfs': 'PFS', 'ffpfsc': 'PFS'}.get(ext, ext.upper())
-    badges = [(fmt_label, 'accent')]
+    badges = [(fmt_label, 'outline')]
     if meta.get('is_backport'):
-        badges.append(('BACKPORT', 'purple'))
+        badges.append(('Backport', 'neutral'))
+    line = '  ·  '.join(x for x in (meta.get('version_str'), size_text) if x)
 
-    card = GameCard(
-        app._img_grid_frame,
-        title=meta.get('title') or entry['name'],
-        game_id=meta.get('cusa') or '',
-        version=meta.get('version_str'),
-        size_text=size_text,
-        status=status,
-        date_text=entry.get('date'),
-        badges=badges,
-        cover_badge=(fmt_label, 'accent'),
-        cover_size=170,
-        on_menu=lambda e: (_sync_hidden_listbox(app),
-                           app._img_context_menu(e)),
-    )
-    card.grid(row=row, column=col, padx=6, pady=6, sticky='nsew')
-    # Tag the card frame and all descendants with _img_idx so the
-    # right-click handler in main file can recover which entry was hit.
+    tile = Tile(app._img_grid_frame, tile_w,
+                meta.get('title') or entry['name'],
+                game_id=meta.get('cusa') or '', meta=line, badges=badges,
+                placeholder='image', selected=(idx in app._img_selected_idx),
+                check=True)
+    tile.grid(row=row, column=col, padx=(0, px(GAP)), pady=(0, px(GAP)),
+              sticky='nw')
+    app._img_tiles[idx] = tile
+    if entry.get('date'):
+        Tooltip(tile.cover_label, '%s\n%s' % (entry['name'], entry['date']))
+
+    # Tag the tile and all descendants with _img_idx so the right-click
+    # handler in the main file can recover which entry was hit.
     def _tag_idx(widget, i=idx):
         widget._img_idx = i
         for child in widget.winfo_children():
             _tag_idx(child, i)
-    _tag_idx(card)
+    _tag_idx(tile)
 
-    # Async cover-art lookup. The .exfat file itself doesn't carry cover
-    # art, but if the user has scanned a games library, we can find a
-    # matching CUSA entry there and reuse its `cover` field.
-    #
-    # NB: my parsed CUSA is "PPSA-05344" (hyphenated), but the library's
-    # `title_id` field comes from param.sfo as "PPSA05344" (no hyphen).
-    # Normalize both sides by stripping hyphens before comparing.
-    cusa_raw = (meta.get('cusa') or '').upper()
-    cusa_norm = cusa_raw.replace('-', '')
+    # Cover art from a matching library game (title IDs compared without
+    # hyphens: the filename gives "PPSA-05344", param.sfo "PPSA05344").
+    cusa_norm = (meta.get('cusa') or '').upper().replace('-', '')
     if cusa_norm:
         try:
             for g in getattr(app, '_lib_games', []) or []:
                 lib_cusa = g.get('title_id', '').upper().replace('-', '')
                 if lib_cusa == cusa_norm and g.get('cover'):
-                    cover_path = g['cover']
-                    def _load(p=cover_path, lbl=card.cover_label):
-                        try:
-                            from exfat_builder import _load_cover_image
-                            img = _load_cover_image(p, target=170)  # matches cover_size=170
-                            if img is None:
-                                return
-                            from PIL import ImageTk as _PITk
-                            photo = _PITk.PhotoImage(img)
-                            lbl.config(image=photo, text='')
-                            lbl.image = photo
-                        except Exception:
-                            pass
-                    app.after(20, _load)
+                    load_cover_async(app, tile.cover_label, g['cover'],
+                                     tile.cover_h)
                     break
         except Exception:
             pass
 
-    # Selection visual — accent border + brighter card (shared styling)
-    is_selected = (idx in app._img_selected_idx)
-    if is_selected:
-        card.set_selected(True)
-
-    # Click bindings — left = toggle select, right = context menu, double = open
     def _on_left(_e=None, i=idx):
         _toggle_select(app, i)
+
     def _on_double(_e=None, e=entry):
         try:
             os.startfile(os.path.dirname(e['path']))
         except Exception:
             pass
+
     def _on_right(e=None, idx=idx):
-        # Sync the hidden listbox first so legacy callback sees the right
-        # selection, then call the legacy handler.
+        # Sync the hidden listbox first so the legacy callback sees the
+        # right selection, then call the legacy handler.
         _sync_hidden_listbox(app)
         try:
             app._img_context_menu(e)
         except Exception:
             pass
 
-    # GameCard binds clicks on itself + descendants in __init__; we
-    # need to override after construction.
-    def _bind_recursive(widget, handler, sequence):
-        # don't clobber the \u22ee overflow button's own left-click
-        if (sequence == '<Button-1>'
-                and widget is getattr(card, '_menu_btn', None)):
-            return
-        widget.bind(sequence, handler)
-        for child in widget.winfo_children():
-            _bind_recursive(child, handler, sequence)
-
-    _bind_recursive(card, _on_left, '<Button-1>')
-    _bind_recursive(card, _on_right, '<Button-3>')
-    _bind_recursive(card, _on_double, '<Double-Button-1>')
+    tile.bind_all_events(left=_on_left, double=_on_double, right=_on_right)
 
 
 def _toggle_select(app, idx):
-    """Add/remove idx from selection set + re-render the affected card."""
+    """Add/remove idx from the selection and restyle its tile in place."""
     if idx in app._img_selected_idx:
         app._img_selected_idx.remove(idx)
     else:
         app._img_selected_idx.add(idx)
     _sync_hidden_listbox(app)
     _update_selection_status(app)
+    tile = getattr(app, '_img_tiles', {}).get(idx)
+    if tile is not None:
+        try:
+            tile.set_selected(idx in app._img_selected_idx)
+            return
+        except Exception:
+            pass
     _re_render_grid(app)
 
 
 def _sync_hidden_listbox(app):
-    """Mirror the card-grid selection into the hidden _img_listbox so
-    legacy callbacks can read it via `curselection()`."""
+    """Mirror the tile selection into the hidden _img_listbox so legacy
+    callbacks can read it via `curselection()`."""
     lb = app._img_listbox
-    # Reset the listbox content to match _img_entries order
     lb.delete(0, 'end')
     for e in app._img_entries:
         lb.insert('end', e['name'])
@@ -482,7 +430,7 @@ def _sync_hidden_listbox(app):
 
 
 def _update_selection_status(app):
-    """Update the right-aligned selection summary."""
+    """Update the selection summary."""
     n = len(app._img_selected_idx)
     if n == 0:
         app._img_sel_var.set('')
@@ -530,32 +478,3 @@ def _parse_meta(name):
     out['title'] = cleaned or base
 
     return out
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────
-def _ghost_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_2'],
-                     activebackground=COLORS['bg_3'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=12, pady=6,
-                     cursor='hand2',
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1,
-                     command=command)
-
-
-def _accent_btn(parent, text, command):
-    return XButton(parent, text=text,
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['accent'], fg=COLORS['fg_0'],
-                     activebackground=COLORS['accent_hi'],
-                     activeforeground=COLORS['fg_0'],
-                     relief='flat', bd=0,
-                     padx=14, pady=6,
-                     cursor='hand2',
-                     command=command)
