@@ -1386,3 +1386,218 @@ class Toasts:
             y -= t.winfo_reqheight() + px(8)
         for t in self.items[3:]:
             t.place_forget()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# RoundedBar — canvas progress bar with a place()-compatible fill proxy
+# ─────────────────────────────────────────────────────────────────────
+class _FillProxy:
+    """Stands in for a legacy `fill` Frame that code moved with
+    place_configure(relx=…, relwidth=…)."""
+
+    def __init__(self, bar):
+        self.bar = bar
+
+    def place_configure(self, cnf=None, **kw):
+        if cnf:
+            kw.update(cnf)
+        if 'relx' in kw:
+            self.bar._rx = float(kw['relx'])
+        if 'relwidth' in kw:
+            self.bar._rw = float(kw['relwidth'])
+        self.bar._redraw()
+
+    place = place_configure
+
+    def configure(self, cnf=None, **kw):
+        if cnf:
+            kw.update(cnf)
+        bg = kw.get('bg') or kw.get('background')
+        if bg:
+            self.bar.set_color(bg)
+
+    config = configure
+
+
+class RoundedBar(tk.Canvas):
+    """6px rounded progress bar. `bar.fill` accepts place_configure(relx,
+    relwidth) like the legacy Frame-based bars; `set(fraction)` too."""
+
+    def __init__(self, master=None, height=6, color=None, track=None,
+                 surface=None, **kw):
+        self._sf = surface or surface_of(master)
+        self._h = px(height)
+        super().__init__(master, bg=self._sf, height=self._h,
+                         highlightthickness=0, bd=0)
+        self._color = color or C['accent']
+        self._track = track or C['bg_5']
+        self._rx, self._rw = 0.0, 0.0
+        self.fill = _FillProxy(self)
+        self.bind('<Configure>', lambda e: self._redraw())
+
+    def set(self, frac, relx=0.0):
+        self._rx, self._rw = float(relx), max(0.0, min(1.0, float(frac)))
+        self._redraw()
+
+    def set_color(self, color):
+        self._color = color
+        self._redraw()
+
+    def _caps(self, color, under):
+        h = self._h
+        img = rounded_image(h, h, h // 2, color, under, key=('cap', h, color, under))
+        return img
+
+    def _seg(self, x0, x1, color, under):
+        h = self._h
+        r = h // 2
+        if x1 - x0 < h:
+            x1 = x0 + h
+        cap = self._caps(color, under)
+        self._keep.append(cap)
+        self.create_rectangle(x0 + r, 0, x1 - r, h, fill=color, width=0)
+        self.create_image(x0, 0, image=cap, anchor='nw')
+        self.create_image(x1 - h, 0, image=cap, anchor='nw')
+
+    def _redraw(self):
+        self.delete('all')
+        self._keep = []
+        W = max(1, self.winfo_width())
+        self._seg(0, W, self._track, self._sf)
+        if self._rw > 0:
+            x0 = int(W * self._rx)
+            x1 = int(W * min(1.0, self._rx + self._rw))
+            self._seg(x0, max(x0 + self._h, x1), self._color, self._track)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# StepIcon — stepper dot driven by legacy glyph text
+# ─────────────────────────────────────────────────────────────────────
+_STEP_GLYPHS = {
+    '✔': ('success', 'success'), '✓': ('success', 'success'),
+    '▶': ('play_circle', 'accent_hi'), '⏳': ('circle', 'fg_6'),
+    '✕': ('error', 'danger'), '✗': ('error', 'danger'),
+    '⚠': ('warning', 'warn'),
+}
+
+
+class StepIcon(tk.Label):
+    """A label that shows an icon for status glyphs (✔ ▶ ⏳ ✕ ⚠) so code
+    that does .config(text='✔', fg=…) keeps working."""
+
+    def __init__(self, master=None, glyph='⏳', size=16, bg=None, **kw):
+        self._sz = size
+        self._bg = bg or surface_of(master)
+        super().__init__(master, bg=self._bg, bd=0, padx=0, pady=0)
+        self.configure(text=glyph)
+
+    def configure(self, cnf=None, **kw):
+        if cnf:
+            kw.update(cnf)
+        t = kw.pop('text', None)
+        kw.pop('fg', None)
+        kw.pop('foreground', None)
+        kw.pop('font', None)
+        if 'bg' in kw:
+            self._bg = kw['bg']
+        if t is not None:
+            name, col = _STEP_GLYPHS.get(t.strip()[:1] if t else '', ('circle', 'fg_6'))
+            kw['image'] = icon_image(name, self._sz, C[col], self._bg)
+        if kw:
+            return super().configure(**kw)
+
+    config = configure
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CoverLabel — fixed-size cover art tile with an icon placeholder
+# ─────────────────────────────────────────────────────────────────────
+class CoverLabel(tk.Label):
+    """Cover tile (box x box px). Accepts the legacy calls
+    .config(image=photo, text='', width=…, height=…) and
+    .config(image='', text='🎮', …) — the emoji becomes an icon."""
+
+    def __init__(self, master=None, box=128, placeholder='game', **kw):
+        self._box = px(box)
+        self._ph = placeholder
+        super().__init__(master, bg=C['bg_3'], bd=0, width=self._box,
+                         height=self._box)
+        self._show_placeholder(placeholder)
+
+    def _show_placeholder(self, name):
+        img = icon_image(name, 36, C['fg_4'], C['bg_3'])
+        super().configure(image=img, text='', width=self._box, height=self._box)
+
+    def configure(self, cnf=None, **kw):
+        if cnf:
+            kw.update(cnf)
+        img = kw.get('image', None)
+        txt = kw.get('text', None)
+        if img == '' or (img is None and txt):
+            from ui.icons import leading_icon
+            name = leading_icon(txt or '') or self._ph
+            if name == 'ps5':
+                name = 'game'
+            self._show_placeholder(name)
+            return
+        if img:
+            return super().configure(image=img, text='', width=self._box,
+                                     height=self._box)
+        kw = {k: v for k, v in kw.items() if k not in ('font', 'width', 'height', 'fg')}
+        if kw:
+            return super().configure(**kw)
+
+    config = configure
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Expander — collapsible section with chevron header
+# ─────────────────────────────────────────────────────────────────────
+class Expander(tk.Frame):
+    """Header row (chevron · title · caption) toggling `body`.
+    on_toggle(open) is called after each change."""
+
+    def __init__(self, master=None, title='', caption=None, icon=None,
+                 open=False, on_toggle=None, bg=None, **kw):
+        bg = bg or surface_of(master)
+        super().__init__(master, bg=bg, **kw)
+        self._bg = bg
+        self.is_open = bool(open)
+        self.on_toggle = on_toggle
+        self.head = Rounded(self, bg=C['bg_3'], border=C['border_2'], radius=4,
+                            padding=(px(10), px(7)), surface=bg)
+        self.head.pack(fill='x')
+        self._chev = tk.Label(self.head, bg=C['bg_3'], bd=0)
+        self._chev.pack(side='left')
+        if icon:
+            IconLabel(self.head, icon, 16, C['fg_3'], C['bg_3']).pack(
+                side='left', padx=(px(8), 0))
+        tk.Label(self.head, text=strip_glyphs(title), bg=C['bg_3'],
+                 fg=C['fg_1'], font=FONTS['body_strong']).pack(
+                     side='left', padx=(px(8), 0))
+        if caption:
+            tk.Label(self.head, text=caption, bg=C['bg_3'], fg=C['fg_4'],
+                     font=FONTS['caption']).pack(side='left', padx=(px(10), 0))
+        self.body = tk.Frame(self, bg=bg)
+        for w in [self.head] + list(self.head.winfo_children()):
+            w.bind('<Button-1>', lambda e: self.toggle())
+            try:
+                w.configure(cursor='hand2')
+            except Exception:
+                pass
+        self._render()
+
+    def toggle(self):
+        self.is_open = not self.is_open
+        self._render()
+        if self.on_toggle:
+            self.on_toggle(self.is_open)
+
+    def _render(self):
+        self._chev.configure(image=icon_image(
+            'chevron_down' if self.is_open else 'chevron_right', 16,
+            C['fg_2'], C['bg_3']))
+        if self.is_open:
+            self.body.pack(fill='x', pady=(px(8), 0))
+        else:
+            self.body.pack_forget()
