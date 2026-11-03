@@ -1,46 +1,72 @@
 """
-ui/tab_home.py — Home dashboard (v4.0 Entry 2 Phase 1).
+ui/tab_home.py — Home (landing page).
 
-The landing surface for the app: goal-first cards that route the user to the
-right workflow. Every card routes through the EXISTING _switch_tab router —
-no new navigation, no backend logic. Additive: the top bar and sidebar are
-untouched; this is simply a new destination.
+Design-system layout:
 
-Presentation only. All colours/fonts via COLORS/FONTS tokens (standing rule).
+    exFAT Image Builder
+    What would you like to do?
+    ┌ Status ──────────────────────────────────────────────────────────┐
+    │ [ps5] PS5 console   [net] FTP transfer   [queue] Build queue      │
+    │       ● badge             ● badge                ● badge          │
+    └──────────────────────────────────────────────────────────────────┘
+    QUICK ACTIONS
+    [Build Image]   [Extract Image]   [Convert Image]
+    [PS5 Tools]     [Library]         [Report Issue]
+
+Every action card routes through the EXISTING app._switch_tab router — no
+new navigation, no backend logic. The status cells follow the app's own
+status variables (_ps5_status_var / _ftp_status_var / _queue_status_var);
+they are read, never written.
 """
 
+import re
 import tkinter as tk
-from ui.shared.widgets import (Button as XButton, Check as XCheck, Radio as XRadio, TextField as XEntry, Scrollbar as XScrollbar)
 
-from tkinter_theme import COLORS, FONTS
+from tkinter_theme import COLORS, FONTS, px
+from ui.shared.widgets import (
+    Scrollbar as XScrollbar, PageHeader, Card, Rounded, Badge, IconLabel,
+    IconButton, SectionTitle, Divider, autowrap)
+from ui.shared.status import tone_for, clean
+from ui.icons import icon_image
 
 from exfat_builder import _
 from ui.shared.scroll import attach_scroll
 
+C = COLORS
+BG1, BG2, BG3 = C['bg_1'], C['bg_2'], C['bg_3']
+
 
 def build_home_tab(parent, app):
-    """Build the Home dashboard into `parent`.
+    """Build the Home page into `parent`.
 
-    Cards call app._switch_tab(<registry key>) — the same router the top bar
-    and sidebar use. No new state, no backend change.
+    Cards call app._switch_tab(<registry key>) — the same router the
+    sidebar uses. No new state, no backend change.
     """
-    parent.configure(bg=COLORS['bg_1'])
+    parent.configure(bg=BG1)
 
-    # ── Page-level scroll (consistent with the PS5 Overview page) ──
-    page_canvas = tk.Canvas(parent, bg=COLORS['bg_1'], highlightthickness=0)
-    page_sb = XScrollbar(parent, orient='vertical',
-                           command=page_canvas.yview,
-                           bg=COLORS['bg_3'], troughcolor=COLORS['bg_1'])
+    # ── Page-level scroll ──
+    page_canvas = tk.Canvas(parent, bg=BG1, highlightthickness=0, bd=0)
+    page_sb = XScrollbar(parent, orient='vertical', command=page_canvas.yview)
     page_canvas.configure(yscrollcommand=page_sb.set)
-    page_sb.pack(side='right', fill='y')
     page_canvas.pack(side='left', fill='both', expand=True)
 
-    body = tk.Frame(page_canvas, bg=COLORS['bg_1'])
+    body = tk.Frame(page_canvas, bg=BG1)
     _win = page_canvas.create_window((0, 0), window=body, anchor='nw')
-    body.bind('<Configure>', lambda e:
-              page_canvas.configure(scrollregion=page_canvas.bbox('all')))
-    page_canvas.bind('<Configure>', lambda e:
-                     page_canvas.itemconfig(_win, width=e.width))
+
+    def _sync(_e=None):
+        try:
+            page_canvas.configure(scrollregion=page_canvas.bbox('all'))
+            need = body.winfo_reqheight() > page_canvas.winfo_height() + 1
+            if need and not page_sb.winfo_ismapped():
+                page_sb.pack(side='right', fill='y', before=page_canvas)
+            elif not need and page_sb.winfo_ismapped():
+                page_sb.pack_forget()
+                page_canvas.yview_moveto(0)
+        except Exception:
+            pass
+    body.bind('<Configure>', _sync)
+    page_canvas.bind('<Configure>', lambda e: (
+        page_canvas.itemconfig(_win, width=e.width), _sync()))
     attach_scroll(page_canvas)
 
     def _go(key):
@@ -51,115 +77,185 @@ def build_home_tab(parent, app):
         except Exception:
             pass
 
-    # ── Hero / welcome header ──
-    hero = tk.Frame(body, bg=COLORS['bg_1'])
-    hero.pack(fill='x', padx=24, pady=(20, 6))
-    tk.Label(hero, text=_('exFAT Image Builder'),
-             font=(FONTS['body_strong'][0], 22),
-             bg=COLORS['bg_1'], fg=COLORS['fg_0'], anchor='w'
-             ).pack(anchor='w')
-    tk.Label(hero, text=_('What would you like to do?'),
-             font=FONTS['body'], bg=COLORS['bg_1'], fg=COLORS['fg_4'],
-             anchor='w').pack(anchor='w', pady=(2, 0))
+    # ── Page header ──
+    hdr = PageHeader(body, _('exFAT Image Builder'),
+                     _('What would you like to do?'))
+    hdr.pack(fill='x', padx=px(24), pady=(px(20), px(16)))
 
-    # ── Status strip: PS5 / FTP / Queue (reads existing StringVars when the
-    # monolith exposes them; falls back to a static placeholder otherwise) ──
-    strip = tk.Frame(body, bg=COLORS['bg_2'],
-                     highlightbackground=COLORS['border_2'],
-                     highlightthickness=1)
-    strip.pack(fill='x', padx=24, pady=(12, 2))
+    # ── Status ──
+    _build_status(body, app, _go)
 
-    def _chip(var_name, fallback):
-        var = getattr(app, var_name, None)
-        cell = tk.Frame(strip, bg=COLORS['bg_2'])
-        cell.pack(side='left', padx=14, pady=8)
-        if var is not None:
-            tk.Label(cell, textvariable=var, font=FONTS['meta'],
-                     bg=COLORS['bg_2'], fg=COLORS['fg_2']).pack(side='left')
-        else:
-            tk.Label(cell, text=fallback, font=FONTS['meta'],
-                     bg=COLORS['bg_2'], fg=COLORS['fg_4']).pack(side='left')
+    # ── Quick actions ──
+    SectionTitle(body, 'Quick actions', overline=True).pack(
+        fill='x', padx=px(24), pady=(px(8), px(8)))
 
-    def _sep():
-        tk.Frame(strip, bg=COLORS['border_2'], width=1).pack(
-            side='left', fill='y', pady=8)
-
-    _chip('_ps5_status_var', _('PS5  \u25cf  \u2014'))
-    _sep()
-    _chip('_ftp_status_var', _('FTP  \u25cf  \u2014'))
-    _sep()
-    _chip('_queue_status_var', _('Queue  \u2014'))
-
-    # ── Primary goal-first cards ──
-    section = tk.Frame(body, bg=COLORS['bg_1'])
-    section.pack(fill='x', padx=24, pady=(14, 10))
-
-    grid = tk.Frame(section, bg=COLORS['bg_1'])
-    grid.pack(fill='x')
+    grid = tk.Frame(body, bg=BG1)
+    grid.pack(fill='x', padx=px(24), pady=(0, px(24)))
     _COLS = 3
     for c in range(_COLS):
         grid.grid_columnconfigure(c, weight=1, uniform='homecard')
 
     # (registry key, icon, title, description). Routes are existing keys.
     cards = [
-        ('unibuild', '\U0001f6e0', _('Build Image'),
+        ('unibuild', 'build', _('Build Image'),
          _('Create a new image from a game folder.')),
-        ('extract',  '\U0001f4e4', _('Extract Image'),
+        ('extract',  'extract', _('Extract Image'),
          _('Unpack an image back into files and folders.')),
-        ('convert',  '\U0001f504', _('Convert Image'),
+        ('convert',  'convert', _('Convert Image'),
          _('Change an existing image between exFAT and ffpkg.')),
-        ('ps5',      '\U0001f3ae', _('PS5 Tools'),
+        ('ps5',      'ps5', _('PS5 Tools'),
          _('Connect to your PS5: transfer, payloads, kernel log.')),
-        ('library',  '\U0001f4da', _('Library'),
+        ('library',  'library', _('Library'),
          _('Browse and manage your local game images.')),
-        ('report',   '\U0001f41e', _('Report Issue'),
+        ('report',   'bug', _('Report Issue'),
          _('Report a problem or get help.')),
     ]
-
-    def _make_card(col_idx, key, icon, title, desc):
-        r, c = divmod(col_idx, _COLS)
-        card = tk.Frame(grid, bg=COLORS['bg_3'],
-                        highlightbackground=COLORS['border_2'],
-                        highlightthickness=1)
-        card.grid(row=r, column=c, sticky='nsew',
-                  padx=(0 if c == 0 else 10, 0), pady=(0, 10))
-
-        inner = tk.Frame(card, bg=COLORS['bg_3'])
-        inner.pack(fill='both', expand=True, padx=14, pady=11)
-
-        trow = tk.Frame(inner, bg=COLORS['bg_3'])
-        trow.pack(fill='x')
-        icon_tile = tk.Label(trow, text=icon, font=(FONTS['body'][0], 14),
-                             bg=COLORS['accent_08'], fg=COLORS['teal'],
-                             padx=6, pady=3)
-        icon_tile.pack(side='left', padx=(0, 9))
-        tk.Label(trow, text=title, font=(FONTS['body_strong'][0], 11),
-                 bg=COLORS['bg_3'], fg=COLORS['fg_0'], anchor='w'
-                 ).pack(side='left')
-        # "Open →" affordance on the right of the title row — the whole
-        # card is clickable, this just signals it.
-        open_lbl = tk.Label(trow, text=_('Open \u2192'), font=FONTS['meta'],
-                            bg=COLORS['bg_3'], fg=COLORS['accent_hi'])
-        open_lbl.pack(side='right')
-
-        desc_lbl = tk.Label(inner, text=desc, font=FONTS['meta'],
-                            bg=COLORS['bg_3'], fg=COLORS['fg_4'], anchor='w',
-                            justify='left', wraplength=240)
-        desc_lbl.pack(fill='x', pady=(7, 0))
-
-        # Whole card is the click target; hover lifts the surface.
-        _kids = (card, inner, trow, icon_tile, open_lbl, desc_lbl)
-        def _enter(_e=None):
-            for w in (card, inner, trow):
-                w.configure(bg=COLORS['bg_4'])
-        def _leave(_e=None):
-            for w in (card, inner, trow):
-                w.configure(bg=COLORS['bg_3'])
-        for w in _kids:
-            w.bind('<Button-1>', lambda e, k=key: _go(k))
-            w.bind('<Enter>', _enter)
-            w.bind('<Leave>', _leave)
-            w.configure(cursor='hand2')
-
+    # "Open →" affordance; the arrow becomes an icon.
+    open_text = _('Open →').replace('→', '').strip()
     for i, (key, icon, title, desc) in enumerate(cards):
-        _make_card(i, key, icon, title, desc)
+        r, c = divmod(i, _COLS)
+        card = _action_card(grid, icon, title, desc, open_text,
+                            lambda k=key: _go(k))
+        # Split the 16px gutters so every card ends up the same width.
+        gl = px(16) * c // _COLS
+        gr = px(16) - px(16) * (c + 1) // _COLS
+        card.grid(row=r, column=c, sticky='nsew', padx=(gl, gr),
+                  pady=(0, px(16)))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Status card — PS5 / FTP / queue, read from the app's status variables
+# ─────────────────────────────────────────────────────────────────────────
+_TONE = {'success': 'success', 'info': 'info', 'danger': 'danger',
+         'idle': 'neutral'}
+
+
+def _status_text(raw, prefix, empty):
+    t = clean(raw or '')
+    if prefix and t.upper().startswith(prefix.upper()):
+        t = t[len(prefix):]
+    t = re.sub(r'\s{2,}', ' ', t).strip(' —-')
+    return t or empty
+
+
+def _build_status(body, app, go):
+    card = Card(body, title='Status',
+                subtitle='Connection and queue at a glance. Open a page to '
+                         'change it.')
+    card.pack(fill='x', padx=px(24), pady=(0, px(16)))
+    row = tk.Frame(card.body, bg=BG2)
+    row.pack(fill='x')
+    cells = [
+        ('_ps5_status_var', _('PS5  ●  —'), 'PS5', 'ps5',
+         'PS5 console', 'ps5', 'Not connected'),
+        ('_ftp_status_var', _('FTP  ●  —'), 'FTP', 'network',
+         'FTP transfer', 'ftp', 'Idle'),
+        ('_queue_status_var', _('Queue  —'), 'Queue', 'queue',
+         'Build queue', 'unibuild', 'No active jobs'),
+    ]
+    for i in range(len(cells)):
+        row.grid_columnconfigure(i * 2, weight=1, uniform='hs')
+    for i, (var_name, fallback, prefix, icon, label, route, empty) in \
+            enumerate(cells):
+        if i:
+            Divider(row, vertical=True, color=C['border_1']).grid(
+                row=0, column=i * 2 - 1, sticky='ns', padx=px(16))
+        var = getattr(app, var_name, None)
+        if var is None:
+            var = tk.StringVar(value=fallback)
+        cell = tk.Frame(row, bg=BG2)
+        cell.grid(row=0, column=i * 2, sticky='ew')
+        tile = tk.Label(cell, image=icon_image(icon, 16, C['fg_2'], BG3),
+                        bg=BG3, width=px(32), height=px(32), bd=0)
+        tile.pack(side='left', anchor='n')
+        IconButton(cell, 'chevron_right', (lambda r=route: go(r)),
+                   tooltip='Open', size='sm', surface=BG2).pack(
+                       side='right', anchor='center')
+        col = tk.Frame(cell, bg=BG2)
+        col.pack(side='left', fill='x', expand=True, padx=(px(12), 0))
+        tk.Label(col, text=label, font=FONTS['body_strong'], bg=BG2,
+                 fg=C['fg_1'], anchor='w').pack(fill='x')
+        badge = Badge(col, '', 'neutral', surface=BG2)
+        badge.pack(anchor='w', pady=(px(4), 0))
+
+        def _refresh(*_a, v=var, b=badge, p=prefix, e=empty):
+            try:
+                raw = v.get()
+            except Exception:
+                return
+            text = _status_text(raw, p, e)
+            tone = _TONE.get(tone_for(raw), 'neutral') if raw else 'neutral'
+            try:
+                b.set(text, tone)
+            except Exception:
+                pass
+        try:
+            var.trace_add('write', _refresh)
+        except Exception:
+            pass
+        _refresh()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Quick-action card — icon tile, title, description, "Open" link
+# ─────────────────────────────────────────────────────────────────────────
+def _action_card(parent, icon, title, desc, open_text, command):
+    card = Rounded(parent, bg=BG2, border=C['border_2'], radius=8,
+                   padding=px(16), cursor='hand2')
+    top = tk.Frame(card, bg=BG2)
+    top.pack(fill='x')
+    tile = tk.Label(top, image=icon_image(icon, 16, C['accent_hi'],
+                                          C['accent_lo']),
+                    bg=C['accent_lo'], width=px(32), height=px(32), bd=0)
+    tile.pack(side='left')
+    title_lbl = tk.Label(top, text=title, font=FONTS['subtitle'], bg=BG2,
+                         fg=C['fg_0'], anchor='w')
+    title_lbl.pack(side='left', fill='x', expand=True, padx=(px(12), 0))
+    desc_lbl = tk.Label(card, text=desc, font=FONTS['body'], bg=BG2,
+                        fg=C['fg_3'], anchor='nw', justify='left')
+    desc_lbl.pack(fill='both', expand=True, pady=(px(12), px(12)))
+    autowrap(desc_lbl)
+    link = tk.Frame(card, bg=BG2)
+    link.pack(fill='x', side='bottom')
+    link_lbl = tk.Label(link, text=open_text, font=FONTS['body_strong'],
+                        bg=BG2, fg=C['accent_hi'])
+    link_lbl.pack(side='left')
+    arrow = IconLabel(link, 'arrow_right', 16, C['accent_hi'], BG2)
+    arrow.pack(side='left', padx=(px(6), 0))
+
+    plain = (top, title_lbl, desc_lbl, link, link_lbl)
+    state = {'on': False}
+
+    def paint(on):
+        if state['on'] == on:
+            return
+        state['on'] = on
+        bg = BG3 if on else BG2
+        card.set_style(bg=bg, border=C['border_4'] if on else C['border_2'])
+        for w in plain:
+            w.configure(bg=bg)
+        arrow.set(bg=bg)
+
+    def leave(e):
+        try:
+            under = card.winfo_containing(e.x_root, e.y_root)
+        except Exception:
+            under = None
+        while under is not None:
+            if under is card:
+                return
+            under = getattr(under, 'master', None)
+        paint(False)
+
+    def bind(w):
+        w.bind('<Button-1>', lambda e: command(), add='+')
+        w.bind('<Enter>', lambda e: paint(True), add='+')
+        w.bind('<Leave>', leave, add='+')
+        try:
+            w.configure(cursor='hand2')
+        except Exception:
+            pass
+        for ch in w.winfo_children():
+            bind(ch)
+    bind(card)
+    return card

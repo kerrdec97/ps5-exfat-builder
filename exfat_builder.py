@@ -12364,44 +12364,11 @@ class ExFATBuilder(_TK_BASE):
             self._img_scan()
 
     def _img_render_dirs(self):
-        # Step 15 (v2.1.7): rewritten to use design tokens for the dir
-        # chips. Behavior unchanged: shows scan-dir paths with × remove.
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
-
-        for w in self._img_dirs_frame.winfo_children():
-            w.destroy()
-
-        if not self._img_scan_dirs:
-            tk.Label(self._img_dirs_frame,
-                     text='No scan folders configured. Click "+ Add folder" '
-                          'above to add one.',
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_2'], fg=_TC['fg_5'],
-                     pady=8
-                     ).pack(fill='x')
-            return
-
-        wrap = tk.Frame(self._img_dirs_frame, bg=_TC['bg_2'])
-        wrap.pack(fill='x', padx=8, pady=6)
-        for d in self._img_scan_dirs:
-            chip = tk.Frame(wrap, bg=_TC['bg_3'],
-                            highlightbackground=_TC['border_3'],
-                            highlightthickness=1)
-            chip.pack(side='left', padx=(0, 6), pady=2)
-            tk.Label(chip, text='\U0001f4c1  ' + d,
-                     font=_TF['mono_sm'],
-                     bg=_TC['bg_3'], fg=_TC['fg_3'],
-                     padx=8, pady=4
-                     ).pack(side='left')
-            XButton(chip, text='\u00d7',
-                      font=(_TF['body'][0], 9, 'bold'),
-                      bg=_TC['bg_3'], fg=_TC['fg_5'],
-                      activebackground=_TC['bg_3'],
-                      activeforeground=_TC['danger_hi'],
-                      relief='flat', bd=0, padx=6,
-                      cursor='hand2',
-                      command=lambda dd=d: self._img_remove_dir(dd)
-                      ).pack(side='left')
+        # Design-system redesign: scan folders are rows in the Built Images
+        # rail card (folder icon, name, image count, path, Open / Remove
+        # icon buttons). Behaviour unchanged: lists the paths, removes one.
+        from ui.tab_images import render_dirs
+        render_dirs(self)
 
     def _img_remove_dir(self, d):
         if d in self._img_scan_dirs:
@@ -12494,16 +12461,8 @@ class ExFATBuilder(_TK_BASE):
         return '%.1f TB' % size
 
     def _img_context_menu(self, event):
-        # Step 15 (v2.1.7): the visible UI is a card grid, so the legacy
-        # listbox.nearest() approach doesn't apply. We attach the entry
-        # index to each card via the event widget chain in tab_images.
-        # When right-clicked, the index is read from the bound handler in
-        # tab_images.py (passed via closure); this method serves as a
-        # fallback called from anywhere.
-        from tkinter_theme import COLORS as _TC, FONTS as _TF
-
-        # Try to recover the entry index from the widget's _img_idx
-        # attribute (set by tab_images on each card). Walk up if needed.
+        # The visible UI is a tile grid; each tile (and its descendants)
+        # carries the entry index as `_img_idx` (set in tab_images).
         widget = getattr(event, 'widget', None)
         idx = None
         while widget is not None:
@@ -12518,22 +12477,23 @@ class ExFATBuilder(_TK_BASE):
             return
         entry = self._img_entries[idx]
 
-        menu = tk.Menu(self, tearoff=0,
-                       bg=_TC['bg_2'], fg=_TC['fg_1'],
-                       activebackground=_TC['accent'],
-                       activeforeground=_TC['fg_0'],
-                       font=(_TF['body'][0], 9))
+        menu = tk.Menu(self, tearoff=0, bg=COLORS['bg_3'], fg=COLORS['fg_1'],
+                       activebackground=COLORS['bg_4'],
+                       activeforeground=COLORS['fg_0'],
+                       disabledforeground=COLORS['fg_3'],
+                       font=FONTS['body'], bd=0, relief='flat')
         menu.add_command(label=entry['name'], state='disabled',
-                         font=(_TF['body'][0], 9, 'bold'))
+                         font=FONTS['body_strong'])
         menu.add_separator()
-        menu.add_command(label='\u2191  Upload to PS5',
+        menu.add_command(label='Upload to PS5',
                          command=lambda: self._ftp_upload_file(entry['path']))
-        menu.add_command(label='\U0001f5c2  Open in File Manager',
+        menu.add_command(label='Open in File Manager',
                          command=lambda: self._open_image_in_fm(entry['path']))
-        menu.add_command(label='\U0001f4c2  Open containing folder',
-                         command=lambda: self._open_folder(entry['dir']))
+        menu.add_command(label='Open containing folder',
+                         command=lambda: self._open_folder(
+                             entry.get('dir') or os.path.dirname(entry['path'])))
         menu.add_separator()
-        menu.add_command(label='\U0001f5d1  Delete image',
+        menu.add_command(label='Delete image',
                          command=lambda: self._img_delete(entry))
         menu.tk_popup(event.x_root, event.y_root)
 
@@ -21996,77 +21956,11 @@ class ExFATBuilder(_TK_BASE):
 
     # ── Library helpers ───────────────────────────────────────────────────────
     def _lib_render_folders(self):
-        # Step 5 (v2.0.7): rewritten to use the FolderChip shared widget,
-        # rendering chips in a horizontal flex-style layout to match the
-        # design system mock. Logic-wise (paths shown, remove behavior)
-        # nothing changed.
-        # v3.6.0 Library polish: folder CARDS (icon + name + count badge +
-        # path + \u22ee overflow). Same actions as the old chips: open the
-        # folder, remove it from scanning. Logic untouched.
-        for w in self._lib_folder_frame.winfo_children():
-            w.destroy()
-        if not self._lib_folders:
-            tk.Label(self._lib_folder_frame,
-                     text=_('No scan folders added yet — click "+ Add Folder"'),
-                     font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
-                     pady=4).pack(anchor='w')
-            if hasattr(self, '_lib_stat_folders_var'):
-                self._lib_stat_folders_var.set('0')
-            return
-        for i, folder in enumerate(self._lib_folders):
-            idx = i  # capture
-            count = 0
-            if self._lib_games:
-                count = sum(1 for g in self._lib_games
-                            if g.get('folder', '').startswith(folder))
-            fc = tk.Frame(self._lib_folder_frame, bg=COLORS['bg_2'],
-                          highlightbackground=COLORS['border_2'],
-                          highlightthickness=1)
-            fc.pack(side='left', padx=(0, 10))
-            fin = tk.Frame(fc, bg=COLORS['bg_2'])
-            fin.pack(padx=12, pady=8)
-            top = tk.Frame(fin, bg=COLORS['bg_2'])
-            top.pack(fill='x')
-            tk.Label(top, text='\U0001f4c1',
-                     font=(FONTS['body'][0], 11),
-                     bg=COLORS['bg_2'], fg=COLORS['accent']
-                     ).pack(side='left', padx=(0, 8))
-            name = os.path.basename(folder.rstrip('/\\')) or folder
-            tk.Label(top, text=name,
-                     font=(FONTS['body_strong'][0], 10),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_0']
-                     ).pack(side='left')
-            tk.Label(top, text=' %d game%s ' % (count,
-                                                 '' if count == 1 else 's'),
-                     font=(FONTS['body_strong'][0], 9),
-                     bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                     padx=5, pady=1,
-                     highlightbackground=COLORS['border_3'],
-                     highlightthickness=1).pack(side='left', padx=(8, 0))
-
-            def _folder_menu(e, f=folder, ix=idx):
-                m = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
-                            activebackground=ACCENT, activeforeground=TEXT,
-                            font=(FONTS['body'][0], 9))
-                m.add_command(label='\U0001f4c2  ' + _('Open folder'),
-                              command=lambda: self._open_folder(f))
-                m.add_command(label='\u2715  ' + _('Stop scanning this folder'),
-                              command=lambda: self._lib_remove_folder(ix))
-                m.tk_popup(e.x_root, e.y_root)
-            mb = tk.Label(top, text='\u22ee',
-                          font=(FONTS['body_strong'][0], 11),
-                          bg=COLORS['bg_3'], fg=COLORS['fg_2'],
-                          padx=8, pady=0, cursor='hand2',
-                          highlightbackground=COLORS['border_3'],
-                          highlightthickness=1)
-            mb.pack(side='left', padx=(10, 0))
-            mb.bind('<Button-1>', _folder_menu)
-            tk.Label(fin, text=folder,
-                     font=(FONTS['body'][0], 9),
-                     bg=COLORS['bg_2'], fg=COLORS['fg_5'], anchor='w'
-                     ).pack(fill='x', pady=(3, 0))
-        if hasattr(self, '_lib_stat_folders_var'):
-            self._lib_stat_folders_var.set(str(len(self._lib_folders)))
+        # Design-system redesign: scan folders are rows in the Library rail
+        # card (folder icon, name, game count, path, Open / Stop scanning
+        # icon buttons). Same data and the same two actions as before.
+        from ui.tab_library import render_folders
+        render_folders(self)
 
     def _lib_add_folder(self):
         p = filedialog.askdirectory(title='Select folder containing PS5 game dumps')
@@ -22434,284 +22328,65 @@ class ExFATBuilder(_TK_BASE):
             self._lib_render_grid(filtered)
 
     def _lib_empty_state(self, parent):
-        """Presentation-only centered empty state for the grid/list area
-        when there are no games to show. No logic — just a friendlier
-        placeholder than a bare label."""
-        wrap = tk.Frame(parent, bg=COLORS['bg_1'])
-        wrap.pack(fill='x', pady=48)
-        tk.Label(wrap, text='\U0001f4c1', font=(FONTS['body'][0], 30),
-                 bg=COLORS['bg_1'], fg=COLORS['fg_5']).pack()
-        tk.Label(wrap, text=_('No games to show'),
-                 font=(FONTS['body_strong'][0], 11),
-                 bg=COLORS['bg_1'], fg=COLORS['fg_1']).pack(pady=(10, 2))
-        tk.Label(wrap,
-                 text=_('Add a folder of PS5 dumps, then Scan to populate your library.'),
-                 font=FONTS['meta'], bg=COLORS['bg_1'],
-                 fg=COLORS['fg_4']).pack()
+        """Presentation-only centred empty state for the grid/list area
+        when there are no games to show."""
+        from ui.tab_library import empty_state
+        empty_state(self, parent)
 
     def _lib_render_list(self, games=None):
+        # Table-style list (thumb, title, title ID, version, SDK, size).
+        # Click selects (detail panel), double-click adds to the Build
+        # queue, right-click opens the context menu.
         if games is None:
             games = self._lib_games
-        for w in self._lib_grid_frame.winfo_children():
-            w.destroy()
-        if not games:
-            self._lib_empty_state(self._lib_grid_frame)
-            return
-        for i, game in enumerate(games):
-            row_bg = COLORS['bg_2'] if i % 2 == 0 else COLORS['bg_3']
-            row = tk.Frame(self._lib_grid_frame, bg=row_bg, cursor='hand2',
-                           highlightbackground=COLORS['border_2'],
-                           highlightthickness=1)
-            row.pack(fill='x', pady=1)
-
-            # Cover thumbnail (small)
-            thumb_lbl = tk.Label(row, bg=COLORS['bg_4'], text='\U0001f3ae',
-                                  font=(FONTS['body'][0], 14), fg=COLORS['fg_5'],
-                                  width=4, height=2)
-            thumb_lbl.pack(side='left', padx=(10, 10), pady=6)
-            if game.get('cover'):
-                def load_thumb(path=game['cover'], lbl=thumb_lbl):
-                    try:
-                        img = _load_cover_image(path, target=40)
-                        if img is None:
-                            return
-                        from PIL import ImageTk
-                        photo = ImageTk.PhotoImage(img)
-                        lbl.config(image=photo, text='', width=40, height=40)
-                        lbl.image = photo
-                    except Exception:
-                        pass
-                threading.Thread(target=load_thumb, daemon=True).start()
-
-            # Title + meta
-            info_col = tk.Frame(row, bg=row_bg)
-            info_col.pack(side='left', fill='x', expand=True, pady=6)
-            tk.Label(info_col, text=game['title'],
-                     font=(FONTS['body_strong'][0], 10),
-                     bg=row_bg, fg=COLORS['fg_0'],
-                     anchor='w').pack(anchor='w')
-            meta = game['title_id']
-            if game['version']:
-                meta += '  \u00b7  v' + game['version']
-            tk.Label(info_col, text=meta,
-                     font=FONTS['meta'], bg=row_bg, fg=COLORS['fg_4'],
-                     anchor='w').pack(anchor='w')
-
-            # Size
-            if game['size'] > 0:
-                sz = ('%.1f GB' % (game['size'] / 1024**3)
-                      if game['size'] >= 1024**3
-                      else '%d MB' % (game['size'] // 1024**2))
-                tk.Label(row, text=sz,
-                         font=FONTS['mono_sm'], bg=row_bg, fg=COLORS['fg_3'],
-                         anchor='e').pack(side='right', padx=14)
-
-            # Bind click / right-click to context menu
-            def _bind_ctx(widgets, g=game):
-                for w in widgets:
-                    w.bind('<Button-1>',   lambda e, gg=g: self._lib_context_menu(e, gg))
-                    w.bind('<Double-Button-1>', lambda e, gg=g: self._add_to_queue_from_path(gg['folder']))
-                    w.bind('<Button-3>',   lambda e, gg=g: self._lib_context_menu(e, gg))
-            _bind_ctx([row, thumb_lbl, info_col] + list(info_col.winfo_children()))
+        from ui.tab_library import render_list
+        render_list(self, games)
 
     def _lib_render_grid(self, games=None):
         if games is None:
             games = self._lib_games
-        for w in self._lib_grid_frame.winfo_children():
-            w.destroy()
-        if not games:
-            self._lib_empty_state(self._lib_grid_frame)
-            return
-        try:
-            canvas_w = self._lib_canvas.winfo_width()
-        except Exception:
-            canvas_w = 700
-        # v3.6.2: fixed 2:3 cover (147px) + fixed info column = ~495px
-        # card. Was a guessed ~600px which left an over-wide gap.
-        card_w = 495
-        cols   = max(1, canvas_w // (card_w + 16))
-        # v3.6.2: clear stale weights from a previous wider layout so
-        # emptied columns don't keep claiming width.
-        try:
-            old_cols = self._lib_grid_frame.grid_size()[0]
-        except Exception:
-            old_cols = cols
-        for c in range(max(old_cols, cols)):
-            if c < cols:
-                self._lib_grid_frame.grid_columnconfigure(
-                    c, weight=1, uniform='libcard')
-            else:
-                self._lib_grid_frame.grid_columnconfigure(
-                    c, weight=0, uniform='')
-        self._lib_sel_card = None   # widgets were destroyed above
-        for i, game in enumerate(games):
-            row = i // cols
-            col = i % cols
-            self._lib_make_card(self._lib_grid_frame, game, row, col)
+        from ui.tab_library import render_grid
+        render_grid(self, games)
 
     def _lib_make_card(self, parent, game, row, col):
-        # Step 5 (v2.0.7): rewritten to use the GameCard shared widget.
-        # The cover image loads async into card.cover_label, the badges +
-        # CUSA-id chip + hover effects are built into GameCard. Click and
-        # right-click bindings match the legacy behavior.
-        from ui.shared.cards import GameCard
-
-        # Compute the card's status badge.
-        # SDK threshold: HEN coverage reaches roughly FW 7.61 = SDK 16
-        # in early 2026; games at SDK 18+ need a backport. (The legacy
-        # threshold was >=8, set when PS5 firmware was around 4.x —
-        # that's now stale and incorrectly flags every modern game.)
-        status = None
-        status_text = None
-        if game.get('built'):
-            status = 'built'
-        else:
-            sdk_val = game.get('system_ver', 0)
-            if sdk_val and sdk_val >= 18:
-                status = 'warn'
-                status_text = 'SDK %d.xx+' % sdk_val
-            elif sdk_val and sdk_val >= 16:
-                # Edge of HEN coverage — show as backport-required
-                status = 'backport'
-                status_text = 'SDK %d' % sdk_val
-            elif sdk_val and sdk_val >= 1:
-                # Any detected SDK gets a badge — older games at SDK 2–4
-                # don't strictly *need* a backport on jailbroken FW, but
-                # users want to see what SDK each game has anyway.
-                status = 'backport'
-                status_text = 'SDK %d' % sdk_val
-
-        # Format version + size for the meta row.
-        # Compact the SFO version 'XX.YYY.ZZZ' to PS5-style 'vX.YY' so it
-        # doesn't overflow the narrow card meta row. The patch (ZZZ) is
-        # almost always 000 and is not shown to match PS5's own UI.
-        version = None
-        v_raw = game.get('version', '')
-        if v_raw:
-            try:
-                parts = v_raw.split('.')
-                major = int(parts[0])
-                minor = int(parts[1]) if len(parts) > 1 else 0
-                # PS5 shows "1.00", "1.18", "4.01" — major stripped of
-                # leading zeros, minor as 2-digit padded.
-                version = 'v%d.%02d' % (major, minor)
-            except (ValueError, IndexError):
-                # Non-numeric version string; truncate raw to 8 chars
-                version = 'v' + v_raw[:8]
-        size_text = None
-        if game.get('size', 0) > 0:
-            sz = game['size']
-            size_text = ('%.1f GB' % (sz / 1024**3)
-                         if sz >= 1024**3
-                         else '%d MB' % (sz // 1024**2))
-
-        # v3.6.0 Library polish — derive the premium-card fields from
-        # the SAME game dict (presentation only; scan data unchanged).
-        sdk_val = game.get('system_ver', 0)
-        cover_badge = ('SDK %d' % sdk_val, 'purple') if sdk_val else None
-        badges = []
-        if sdk_val:
-            badges.append(('SDK %d' % sdk_val,
-                           'warn' if sdk_val >= 18 else 'purple'))
-            if sdk_val >= 18:
-                badges.append(('BACKPORT REQUIRED', 'warn'))
-            else:
-                badges.append(('BACKPORT READY', 'purple'))
-        badges.append(('BUILT', 'success') if game.get('built')
-                      else ('BUILD READY', 'success'))
-        date_text = None
-        try:
-            date_text = time.strftime(
-                '%d/%m/%Y %H:%M',
-                time.localtime(os.path.getmtime(game['folder'])))
-        except Exception:
-            date_text = None
-        folder_text = os.path.dirname(game.get('folder', '')) or None
-
-        def _select(_e=None, g=game):
-            # presentation-only selection highlight
-            prev = getattr(self, '_lib_sel_card', None)
-            if prev is not None and prev is not card:
-                try:
-                    prev.set_selected(False)
-                except Exception:
-                    pass
-            try:
-                card.set_selected(True)
-            except Exception:
-                pass
-            self._lib_sel_card = card
-
-        card = GameCard(
-            parent,
-            title=game['title'],
-            game_id=game.get('title_id', ''),
-            version=version,
-            size_text=size_text,
-            status=status,
-            status_text=status_text,
-            date_text=date_text,
-            folder_text=folder_text,
-            badges=badges,
-            cover_badge=cover_badge,
-            cover_size=220,
-            on_click=_select,
-            on_double=lambda e, g=game:
-                self._add_to_queue_from_path(g['folder']),
-            on_right=lambda e, g=game: self._lib_context_menu(e, g),
-            on_menu=lambda e, g=game: self._lib_context_menu(e, g),
-        )
-        card.grid(row=row, column=col, padx=8, pady=8, sticky='nsew')
-        parent.grid_columnconfigure(col, weight=1, uniform='libcard')
-
-        # Async cover-art load — same threading pattern as the legacy code,
-        # writes to card.cover_label which is the inner emoji/image label.
-        if game.get('cover'):
-            def load_art(path=game['cover'], lbl=card.cover_label):
-                try:
-                    img = _load_cover_image(path, target=220)  # matches cover_size=220
-                    if img is None:
-                        return
-                    from PIL import ImageTk
-                    photo = ImageTk.PhotoImage(img)
-                    lbl.config(image=photo, text='')
-                    lbl.image = photo  # keep reference (GC otherwise frees it)
-                except Exception:
-                    pass
-            threading.Thread(target=load_art, daemon=True).start()
+        # Design-system tile (2:3 cover, title, title ID, version/size,
+        # SDK / Built badges). Click selects and fills the detail panel,
+        # double-click adds to the Build queue, right-click opens the
+        # context menu — same callbacks as before.
+        from ui.tab_library import make_game_tile
+        card = make_game_tile(self, parent, game, row, col)
 
         # If SDK isn't already known, kick off the async detect — matches
-        # the legacy behavior. The badge can't be added retroactively to
-        # GameCard (the widget bakes its badge at construction time), so
-        # for the SDK-warn case we just log it; the badge will appear on
-        # the next render. This is acceptable because the typical path is
-        # _lib_scan → games dict gets system_ver populated → render.
+        # the legacy behavior; the badge appears on the next render.
         if not game.get('system_ver'):
             def _maybe_log_sdk(folder=game['folder']):
                 sdk = ExFATBuilder._read_sdk_from_folder(folder)
                 if sdk:
                     game['system_ver'] = sdk
             threading.Thread(target=_maybe_log_sdk, daemon=True).start()
+        return card
 
     def _lib_context_menu(self, event, game):
-        menu = tk.Menu(self, tearoff=0, bg=SURFACE2, fg=TEXT,
-                       activebackground=ACCENT, activeforeground=TEXT,
-                       font=(FONTS['body'][0], 9))
-        menu.add_command(label='\U0001f3ae  ' + game['title'],
-                         state='disabled', font=(FONTS['body_strong'][0], 9))
+        menu = tk.Menu(self, tearoff=0, bg=COLORS['bg_3'], fg=COLORS['fg_1'],
+                       activebackground=COLORS['bg_4'],
+                       activeforeground=COLORS['fg_0'],
+                       disabledforeground=COLORS['fg_3'],
+                       font=FONTS['body'], bd=0, relief='flat')
+        menu.add_command(label=game['title'],
+                         state='disabled', font=FONTS['body_strong'])
         menu.add_separator()
-        menu.add_command(label='\U0001f528  Build',
+        menu.add_command(label=_('Build'),
                          command=lambda: self._lib_quick_add(game))
-        menu.add_command(label='\u26a1  Backport',
+        menu.add_command(label='Backport',
                          command=lambda: self._lib_auto_backport(game))
-        menu.add_command(label='\U0001f4c2  Open Folder',
+        menu.add_command(label='Open Folder',
                          command=lambda: self._open_folder(game['folder']))
-        menu.add_command(label='\U0001f4cb  Details',
+        menu.add_command(label='Details',
                          command=lambda: self._lib_show_detail(game))
         menu.add_separator()
-        menu.add_command(label='\u2795  Add to ffpkg Queue',
+        menu.add_command(label=_('Add to ffpkg Queue'),
                          command=lambda: self._lib_quick_add_ffpkg(game))
-        menu.add_command(label='\U0001f5d1  Remove from library',
+        menu.add_command(label=_('Remove from library'),
                          command=lambda: self._lib_remove_game(game))
         menu.tk_popup(event.x_root, event.y_root)
 
@@ -23208,85 +22883,11 @@ class ExFATBuilder(_TK_BASE):
         self._lib_status_var.set(str(len(self._lib_games)) + ' game(s)')
 
     def _lib_show_detail(self, game):
-        win = tk.Toplevel(self)
-        win.title(game['title'])
-        win.geometry('500x380')
-        win.configure(bg=BG)
-        win.resizable(False, False)
-        win.transient(self)
-
-        body = tk.Frame(win, bg=BG)
-        body.pack(fill='both', expand=True, padx=24, pady=20)
-
-        # Cover + info side by side
-        top = tk.Frame(body, bg=BG)
-        top.pack(fill='x', pady=(0, 16))
-
-        # Cover
-        cover_frame = tk.Frame(top, bg=COLORS['bg_0'],
-                               width=120, height=120)
-        cover_frame.pack(side='left', padx=(0, 20))
-        cover_frame.pack_propagate(False)
-        cover_lbl = tk.Label(cover_frame, bg=COLORS['bg_0'],
-                             text='\U0001f3ae', font=(FONTS['body'][0], 30),
-                             fg='#2a2a2a')
-        cover_lbl.pack(expand=True)
-
-        if game.get('cover'):
-            def load(path=game['cover'], lbl=cover_lbl):
-                try:
-                    from PIL import Image, ImageTk
-                    img = Image.open(path).resize((120, 120), Image.LANCZOS)
-                    photo = ImageTk.PhotoImage(img)
-                    lbl.config(image=photo, text='')
-                    lbl.image = photo
-                except Exception:
-                    pass
-            threading.Thread(target=load, daemon=True).start()
-
-        # Info
-        info = tk.Frame(top, bg=BG)
-        info.pack(side='left', fill='both', expand=True)
-
-        tk.Label(info, text=game['title'],
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT,
-                 wraplength=300, justify='left', anchor='w').pack(anchor='w')
-        tk.Label(info, text=game['title_id'],
-                 font=(FONTS['code'][0], 9), bg=BG, fg=INFO_FG,
-                 anchor='w').pack(anchor='w', pady=(4, 0))
-        if game['version']:
-            tk.Label(info, text='Version ' + game['version'],
-                     font=(FONTS['body'][0], 9), bg=BG, fg=MUTED,
-                     anchor='w').pack(anchor='w')
-        if game['size'] > 0:
-            sz = ('%.2f GB' % (game['size'] / 1024**3)
-                  if game['size'] >= 1024**3
-                  else '%d MB' % (game['size'] // 1024**2))
-            tk.Label(info, text=sz + ' estimated image size',
-                     font=(FONTS['body'][0], 9), bg=BG, fg=COLORS['fg_5'],
-                     anchor='w').pack(anchor='w', pady=(4, 0))
-
-        # SDK version — read in background
-        sdk_var = tk.StringVar(value='Detecting SDK...')
-        sdk_lbl = tk.Label(info, textvariable=sdk_var,
-                           font=(FONTS['body_strong'][0], 9),
-                           bg=BG, fg='#ffaa00', anchor='w')
-        sdk_lbl.pack(anchor='w', pady=(4, 0))
-
-        def _detect_sdk_bg():
-            sdk = ExFATBuilder._read_sdk_from_folder(game['folder'])
-            if sdk is not None:
-                suggest = max(4, sdk - 1)
-                self.after(0, sdk_var.set,
-                           'Game SDK: %d.xx  —  Backport target: SDK %d' % (sdk, suggest))
-            else:
-                self.after(0, sdk_var.set, 'SDK: not detected')
-        threading.Thread(target=_detect_sdk_bg, daemon=True).start()
-
-        # Folder path
-        tk.Label(body, text=game['folder'],
-                 font=(FONTS['code'][0], 8), bg=BG, fg=COLORS['fg_5'],
-                 wraplength=440, justify='left', anchor='w').pack(anchor='w')
+        # Design-system dialog: bg_2 body with the title heading, cover and
+        # facts (version, size, background SDK detection, folder), and a
+        # bg_1 footer band with Open folder / Close. Lives in tab_library.
+        from ui.tab_library import show_detail_dialog
+        return show_detail_dialog(self, game)
 
         
 
