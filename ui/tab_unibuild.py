@@ -748,7 +748,7 @@ def build_unibuild_tab(parent, app):
     def _uq_cancel():
         if not uq_state.get('running') or uq_state.get('cancel'):
             return
-        if not app_confirm(app, 'Cancel build', 'Stop the build queue?\n\n• PFS compression stops right away.\n• An exFAT/ffpkg image already being written finishes the current file first, then stops.\n• Remaining queued jobs will not start.\n\nPartial/unfinished output and any temporary files are deleted. Jobs already finished are kept.'):
+        if not app_confirm(app, 'Cancel build', 'Stop the build queue?\n\n• PFS compression stops right away.\n• An exFAT/ffpkg image already being written finishes the current file first, then stops.\n• Remaining queued jobs will not start.\n\nPartial/unfinished output and any temporary files are deleted. Jobs that finish, including the one running now if it completes, are kept.'):
             return
         uq_state['cancel'] = True
         uq_state['running'] = False
@@ -2342,7 +2342,23 @@ def build_unibuild_tab(parent, app):
                     app._uq_heartbeat_stop()
                 except Exception:
                     pass
-                ok2 = os.path.isfile(final_path) and not os.path.isfile(inter_path)
+                # The pipeline records whether the .ffpfsc came out good. A
+                # leftover intermediate it could not delete (locked by AV or
+                # Explorer) does not make a finished .ffpfsc a failure, and
+                # must never get it deleted by the failure cleanup (issue
+                # audit H1).
+                _res = app.pipeline_convert_result(final_path)
+                if _res is None:
+                    ok2 = os.path.isfile(final_path) and not os.path.isfile(inter_path)
+                else:
+                    ok2 = bool(_res) and os.path.isfile(final_path)
+                if ok2 and os.path.isfile(inter_path) and job.get('_inter_is_artifact'):
+                    try:
+                        app._log('[UNIBUILD] .ffpfsc finished; the intermediate '
+                                 'image could not be removed and was left at: '
+                                 '%s\n' % inter_path)
+                    except Exception:
+                        pass
                 if ok2:
                     _uq_set_progress(100, 'Converted to .ffpfsc', 'done')
                     try:
@@ -2487,7 +2503,17 @@ def build_unibuild_tab(parent, app):
                     app._uq_heartbeat_stop()
                 except Exception:
                     pass
-                ok2 = os.path.isfile(produced_ffpfsc)
+                _res = app.pipeline_convert_result(produced_ffpfsc)
+                ok2 = os.path.isfile(produced_ffpfsc) and _res is not False
+                if _res is False and os.path.isfile(produced_ffpfsc):
+                    # Written but rejected (e.g. mkpfs's check failed):
+                    # never moved into place as a finished image.
+                    try:
+                        os.remove(produced_ffpfsc)
+                        app._log('[UNIBUILD] Removed the rejected .ffpfsc: '
+                                 '%s\n' % produced_ffpfsc)
+                    except Exception:
+                        pass
                 out_final = final_path
                 if ok2:
                     try:
@@ -2749,9 +2775,20 @@ def build_unibuild_tab(parent, app):
             pass
         if job['type'] != 'pfs' and 'out_path' not in job:
             job['out_path'] = os.path.join(job['outdir'], job['name'])
-        if uq_state.get('cancel'):
+        if uq_state.get('cancel') and not ok:
+            # Only work that did not finish is cleaned up on cancel. An
+            # exFAT/ffpkg build cannot be interrupted mid-copy, so it often
+            # completes after Cancel was pressed: that image is a finished
+            # result and is kept (audit H4).
             job['status'] = 'cancelled'
             _uq_cleanup_job(job, reason='cancelled')
+        elif uq_state.get('cancel') and ok:
+            job['status'] = 'warn' if ok == 'warn' else 'done'
+            try:
+                app._log('[UNIBUILD] %s finished before the cancel took '
+                         'effect; the image was kept.\n' % job.get('name', ''))
+            except Exception:
+                pass
         elif ok is None:
             job['status'] = 'skipped'
         elif ok == 'warn':

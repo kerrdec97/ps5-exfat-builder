@@ -29,7 +29,11 @@ jobs:
         shell: cmd
         run: build.bat
 
-      - name: Unit tests (Windows)
+      - name: Installed .NET runtimes (UFS2Tool needs 8 or newer)
+        shell: cmd
+        run: dotnet --list-runtimes || exit /b 0
+
+      - name: Unit tests (Windows, includes a real UFS2Tool .ffpkg build)
         shell: cmd
         run: .build-venv\Scripts\python.exe -m unittest discover -s tests -v
 

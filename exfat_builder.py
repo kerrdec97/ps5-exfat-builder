@@ -758,8 +758,11 @@ def extract_ufs2tool(custom_temp=None):
         ('UFS2Tool.dll',             _UFS2TOOL_DLL_B64),
         ('DokanNet.dll',             _DOKAN_B64),
     ]
-    # runtimeconfig.json — .NET 8 framework-dependent
-    rc_json = (b'{"runtimeOptions":{"tfm":"net8.0","framework":{'
+    # runtimeconfig.json — framework-dependent, built for .NET 8. .NET 8
+    # support ends on 2026-11-10, so let it run on any newer installed
+    # runtime (.NET 9/10...) instead of failing on PCs without .NET 8.
+    rc_json = (b'{"runtimeOptions":{"tfm":"net8.0","rollForward":'
+               b'"LatestMajor","framework":{'
                b'"name":"Microsoft.NETCore.App","version":"8.0.0"},'
                b'"configProperties":{"System.Reflection.Metadata.'
                b'MetadataUpdater.IsSupported":false}}}')
@@ -2508,6 +2511,110 @@ def verify_walk_tree(base, skip_hidden=False):
     return count, total, sizes, eboot
 
 
+def source_has_build_exclusions(base, skip_hidden=False):
+    """True when the build copy would leave something in `base` out: a
+    'decrypted' folder, a nested image file, or (with "exclude hidden")
+    a hidden file. A tool that compares the image against the raw folder
+    (mkpfs verify --source-dir) would then report a false failure."""
+    for root, dirs, files in os.walk(base):
+        if any(d.lower() == 'decrypted' for d in dirs):
+            return True
+        for fn in files:
+            if fn.lower().endswith(_VERIFY_EXCL_EXT):
+                return True
+            if skip_hidden and _is_hidden_file(os.path.join(root, fn)):
+                return True
+    return False
+
+
+def image_matches_source(src_sizes, img_sizes):
+    """Strict content check used before anything is deleted: every file
+    the build copied from the source must be on the image at its full
+    size. Returns (ok, problems, count): `problems` names the worst
+    files (largest first) and `count` is how many files are affected."""
+    count = sum(1 for rel, size in src_sizes.items()
+                if img_sizes.get(rel, -1) < size)
+    return count == 0, describe_missing_files(src_sizes, img_sizes), count
+
+
+def ffpkg_part_path(out_path):
+    """Where UFS2Tool writes an .ffpkg while it is being built."""
+    return out_path + '.part'
+
+
+def finalize_ffpkg_part(returncode, out_path):
+    """Give a finished '<name>.part' its real name, or remove a failed one.
+
+    Returns (returncode, message). A zero exit with no output file is
+    turned into a failure (-2) instead of being reported as built."""
+    part = ffpkg_part_path(out_path)
+    if returncode == 0:
+        if not os.path.isfile(part) or os.path.getsize(part) == 0:
+            if os.path.isfile(out_path) and not os.path.isfile(part):
+                return 0, ''          # written under its final name already
+            return -2, ('UFS2Tool exited 0 but wrote no image (%s)'
+                        % os.path.basename(part))
+        try:
+            os.replace(part, out_path)
+        except OSError as e:
+            return -3, 'Could not rename %s to %s: %s' % (
+                os.path.basename(part), os.path.basename(out_path), e)
+        return 0, ''
+    if os.path.isfile(part):
+        try:
+            os.remove(part)
+            return returncode, ('Removed the incomplete image %s'
+                                % os.path.basename(part))
+        except OSError as e:
+            return returncode, ('Incomplete image left at %s (%s)'
+                                % (part, e))
+    return returncode, ''
+
+
+def ffpkg_safe_to_delete_source(src, out_path):
+    """Whether "delete source folder after ffpkg build" may run.
+
+    UFS2 images are not compressed, so a complete image is at least as
+    large as the files that were put into it. Anything less means data
+    is missing and the source must stay. Returns (ok, reason)."""
+    if not src or not os.path.isdir(src):
+        return False, 'source folder not found'
+    if not out_path or not os.path.isfile(out_path):
+        return False, 'the built image was not found'
+    if not os.path.isfile(os.path.join(src, 'eboot.bin')):
+        return False, 'source has no eboot.bin, so it was not checked'
+    total = 0
+    for root, _dirs, files in os.walk(src):
+        for fn in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                return False, 'could not read %s' % fn
+    img = os.path.getsize(out_path)
+    if img < total:
+        return False, ('the image (%.2f GB) is smaller than the source data '
+                       '(%.2f GB)' % (img / 1024**3, total / 1024**3))
+    return True, ''
+
+
+def summarize_outcomes(statuses):
+    """(title, message, all_ok) for the end-of-queue dialog, counted from
+    each item's real status instead of the number of queued items."""
+    done = sum(1 for st in statuses if st == 'done')
+    warn = sum(1 for st in statuses if st == 'warn')
+    failed = len(statuses) - done - warn
+    parts = ['%d image(s) built successfully.' % done]
+    if warn:
+        parts.append('%d built with a verification warning \u2014 check them '
+                     'before use.' % warn)
+    if failed:
+        parts.append('%d failed \u2014 see the OUTPUT LOG.' % failed)
+    all_ok = not warn and not failed
+    title = 'Complete' if all_ok else ('Finished with problems'
+                                       if done or warn else 'Build failed')
+    return title, '\n'.join(parts), all_ok
+
+
 def describe_missing_files(src_sizes, img_sizes, limit=15):
     """Human-readable list of source files absent from (or shorter on) the
     image, largest first, for the verification report."""
@@ -2647,6 +2754,13 @@ _DOTNET_HOST_ERRORS = {
     0x80008083: 'the .NET runtime (hostfxr) was not found',
     0x80008096: 'the required .NET framework version is not installed',
 }
+
+
+def dotnet_runtime_line_ok(line):
+    """True for a `dotnet --list-runtimes` line naming .NET 8 or newer
+    (UFS2Tool targets .NET 8 and is allowed to roll forward)."""
+    m = re.search(r'Microsoft\.NETCore\.App\s+(\d+)\.', line or '')
+    return bool(m) and int(m.group(1)) >= 8
 
 
 def dotnet_runtime_hint(returncode, output=''):
@@ -7611,8 +7725,10 @@ class ExFATBuilder(_TK_BASE):
                             capture_output=True, text=True, timeout=15,
                             creationflags=0x08000000 if os.name == 'nt' else 0)
                 output = r.stdout + r.stderr
+                # UFS2Tool targets .NET 8 and rolls forward to any newer
+                # major version (see extract_ufs2tool).
                 for line in output.splitlines():
-                    if 'Microsoft.NETCore.App 8.' in line:
+                    if dotnet_runtime_line_ok(line):
                         found   = True
                         version = line.strip()
                         break
@@ -7622,7 +7738,7 @@ class ExFATBuilder(_TK_BASE):
                                  capture_output=True, text=True, timeout=10,
                                  creationflags=0x08000000 if os.name == 'nt' else 0)
                     v = (r2.stdout + r2.stderr).strip()
-                    if v.startswith('8.'):
+                    if dotnet_runtime_line_ok('Microsoft.NETCore.App ' + v):
                         found   = True
                         version = '.NET ' + v
             except FileNotFoundError:
@@ -7634,48 +7750,53 @@ class ExFATBuilder(_TK_BASE):
 
             if found:
                 self.after(0, lambda *_a: app_info(self, *_a),
-                           '\u2713 .NET 8 Found',
-                           '.NET 8 Runtime is installed and ready.\n\n'
+                           '\u2713 .NET Found',
+                           'A .NET 8 or newer runtime is installed.\n\n'
                            + version +
                            '\n\nUFS2Tool (ffpkg builder) will work correctly.')
             else:
-                def _open_dl():
-                    import webbrowser
-                    webbrowser.open('https://dotnet.microsoft.com/en-us/download/dotnet/8.0')
-                from ui.shared.widgets import (Button as _DSButton,
-                                               IconLabel as _DSIcon,
-                                               Divider as _DSDivider)
-                _B2, _B1 = COLORS['bg_2'], COLORS['bg_1']
-                dlg = tk.Toplevel(self)
-                dlg.title('.NET 8 Not Found')
-                dlg.configure(bg=_B2)
-                dlg.resizable(False, False)
-                dlg.grab_set()
-                _hd = tk.Frame(dlg, bg=_B2)
-                _hd.pack(fill='x', padx=px(24), pady=(px(20), px(4)))
-                _DSIcon(_hd, 'warning', 20, COLORS['warn'], _B2).pack(
-                    side='left', padx=(0, px(10)))
-                tk.Label(_hd, text='.NET 8 Runtime not found',
-                         font=FONTS['title'], bg=_B2, fg=COLORS['fg_0']
-                         ).pack(side='left')
-                tk.Label(dlg,
-                         text='UFS2Tool requires the .NET 8 Runtime (not SDK) to build .ffpkg images.\n'
-                              'Download and install the Windows x64 Desktop Runtime.',
-                         font=FONTS['body'], bg=_B2, fg=COLORS['fg_2'],
-                         wraplength=px(380), justify='left'
-                         ).pack(anchor='w', padx=px(24), pady=(px(4), px(20)))
-                _DSDivider(dlg, color=COLORS['border_2']).pack(fill='x')
-                _ft = tk.Frame(dlg, bg=_B1)
-                _ft.pack(fill='x')
-                btn_row = tk.Frame(_ft, bg=_B1)
-                btn_row.pack(fill='x', padx=px(24), pady=px(14))
-                _DSButton(btn_row, text='Open Download Page', icon='globe',
-                          variant='primary',
-                          command=lambda: (_open_dl(), dlg.destroy()),
-                          surface=_B1).pack(side='right')
-                _DSButton(btn_row, text='Close', command=dlg.destroy,
-                          width=10, surface=_B1).pack(side='right',
-                                                      padx=(0, px(8)))
+                self.after(0, _show_missing)
+
+        def _show_missing():
+            def _open_dl():
+                import webbrowser
+                webbrowser.open('https://dotnet.microsoft.com/en-us/download/dotnet/10.0')
+            from ui.shared.widgets import (Button as _DSButton,
+                                           IconLabel as _DSIcon,
+                                           Divider as _DSDivider)
+            _B2, _B1 = COLORS['bg_2'], COLORS['bg_1']
+            dlg = tk.Toplevel(self)
+            dlg.title('.NET 8 Not Found')
+            dlg.configure(bg=_B2)
+            dlg.resizable(False, False)
+            dlg.grab_set()
+            _hd = tk.Frame(dlg, bg=_B2)
+            _hd.pack(fill='x', padx=px(24), pady=(px(20), px(4)))
+            _DSIcon(_hd, 'warning', 20, COLORS['warn'], _B2).pack(
+                side='left', padx=(0, px(10)))
+            tk.Label(_hd, text='.NET 8 Runtime not found',
+                     font=FONTS['title'], bg=_B2, fg=COLORS['fg_0']
+                     ).pack(side='left')
+            tk.Label(dlg,
+                     text='UFS2Tool needs the .NET Runtime, version 8 or newer '
+                          '(not the SDK), to build .ffpkg images. .NET 8 support '
+                          'ends in November 2026, so install .NET 10: the '
+                          'Windows x64 Desktop Runtime.',
+                     font=FONTS['body'], bg=_B2, fg=COLORS['fg_2'],
+                     wraplength=px(380), justify='left'
+                     ).pack(anchor='w', padx=px(24), pady=(px(4), px(20)))
+            _DSDivider(dlg, color=COLORS['border_2']).pack(fill='x')
+            _ft = tk.Frame(dlg, bg=_B1)
+            _ft.pack(fill='x')
+            btn_row = tk.Frame(_ft, bg=_B1)
+            btn_row.pack(fill='x', padx=px(24), pady=px(14))
+            _DSButton(btn_row, text='Open Download Page', icon='globe',
+                      variant='primary',
+                      command=lambda: (_open_dl(), dlg.destroy()),
+                      surface=_B1).pack(side='right')
+            _DSButton(btn_row, text='Close', command=dlg.destroy,
+                      width=10, surface=_B1).pack(side='right',
+                                                  padx=(0, px(8)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -7859,6 +7980,9 @@ class ExFATBuilder(_TK_BASE):
     def _ffpkg_item_done(self, returncode, idx, indices, pos, out_path):
         elapsed = time.time() - self._ffpkg_start_time if self._ffpkg_start_time else 0
         m, s = int(elapsed//60), int(elapsed%60)
+        returncode, _fin_msg = finalize_ffpkg_part(returncode, out_path)
+        if _fin_msg:
+            self._ffpkg_log('[POST] %s\n' % _fin_msg)
         if returncode == 0:
             self._ffpkg_queue[idx]['status'] = 'done'
             self._ffpkg_activate_dot(len(self._ffpkg_stage_dots) if hasattr(self, '_ffpkg_stage_dots') else 3)
@@ -7869,6 +7993,10 @@ class ExFATBuilder(_TK_BASE):
             # ── Delete source folder if enabled ──
             if self._adv_delete_source_ffpkg_var.get():
                 src = self._ffpkg_queue[idx].get('folder', '')
+                _ok_del, _why = ffpkg_safe_to_delete_source(src, out_path)
+                if not _ok_del:
+                    self._ffpkg_log('[POST] Source folder KEPT: %s\n' % _why)
+                    src = ''
                 if src and os.path.isdir(src):
                     try:
                         import shutil as _sh
@@ -7963,15 +8091,20 @@ class ExFATBuilder(_TK_BASE):
                 if cb:
                     cb(ok)
                 return
-            self._ffpkg_set_progress(100, 'All done!', '')
-            self._set_status('ffpkg: %d image(s) built \u2713' % len(indices), SUCCESS)
+            _t, _msg, _all = summarize_outcomes(
+                [self._ffpkg_queue[i].get('status') for i in indices
+                 if 0 <= i < len(self._ffpkg_queue)])
+            self._ffpkg_set_progress(100, 'All done!' if _all else _t, '')
+            self._set_status('ffpkg: ' + _msg.split('\n')[0]
+                             + ('' if _all else '  ' + _t),
+                             SUCCESS if _all else WARNING)
             self._ffpkg_render_queue()
             self._trigger_shutdown('ffpkg')  # before messagebox blocks
             _sd_action = self._settings.get('shutdown_action', 'none')
             _sd_on_ffpkg = self._settings.get('shutdown_on_ffpkg', False)
             if _sd_action == 'none' or not _sd_on_ffpkg:
-                app_info(self, 'ffpkg Complete',
-                    '%d ffpkg image(s) built successfully!' % len(indices))
+                (app_info if _all else app_warning)(
+                    self, 'ffpkg ' + _t, _msg)
                 # Hand-off to Convert (ffpkg -> .ffpfsc) when a single image was built.
                 try:
                     if len(indices) == 1 and hasattr(self, '_pfs_open_convert_with') \
@@ -8017,7 +8150,16 @@ class ExFATBuilder(_TK_BASE):
                '-S', '512',
                '-i', inode,
                '-D', game_folder,
-               out_path]
+               ffpkg_part_path(out_path)]
+        # UFS2Tool writes to '<name>.part'; the file only gets its real
+        # name once the build succeeded, so a failed or interrupted build
+        # never leaves a broken image that looks finished, and an older
+        # image with the same name survives until the new one is ready.
+        try:
+            if os.path.isfile(ffpkg_part_path(out_path)):
+                os.remove(ffpkg_part_path(out_path))
+        except OSError:
+            pass
 
         label = 'Building %d/%d: %s' % (pos + 1, len(indices), item['name'])
         self._ffpkg_set_progress(0, label, '')
@@ -10421,16 +10563,19 @@ class ExFATBuilder(_TK_BASE):
                 if cb:
                     cb(ok)
                 return
+            _t, _msg, _all = summarize_outcomes(
+                [getattr(self._queue[i], 'status', None) for i in indices
+                 if 0 <= i < len(self._queue)])
             self._set_status(
-                'All done!  \u2713  ' + str(len(indices)) + ' image(s) built', SUCCESS)
+                ('All done!  \u2713  ' if _all else _t + ':  ')
+                + _msg.replace('\n', '  '), SUCCESS if _all else WARNING)
             self._refresh_temp_size()
             self._trigger_shutdown('exfat')  # launch countdown
             # Only show blocking messagebox if no shutdown is scheduled
             _sd_action = self._settings.get('shutdown_action', 'none')
             _sd_on_exfat = self._settings.get('shutdown_on_exfat', False)
             if _sd_action == 'none' or not _sd_on_exfat:
-                app_info(self, 'Complete',
-                    str(len(indices)) + ' image(s) built successfully!')
+                (app_info if _all else app_warning)(self, _t, _msg)
                 # Hand-off: exFAT/ffpkg -> .ffpfsc mounts far more reliably than
                 # a direct dump build. If a single image was built, offer to jump
                 # straight to Convert with it pre-filled.
@@ -22894,8 +23039,28 @@ class ExFATBuilder(_TK_BASE):
             return True, False, ''
 
         argv = ['verify', out_path]
+        _with_src = False
         if src_folder and os.path.isdir(src_folder):
-            argv += ['--source-dir', src_folder]
+            try:
+                _skip_h = bool(self._adv_excl_hidden_var.get())
+            except Exception:
+                _skip_h = False
+            try:
+                _excl = source_has_build_exclusions(src_folder, _skip_h)
+            except Exception:
+                _excl = True
+            if _excl:
+                # The build left some of the folder out on purpose, so a
+                # whole-folder comparison would fail falsely. Check the
+                # image structure here and compare contents with the
+                # mount walk, which applies the same exclusions.
+                self._log('[VERIFY] Source has files the build excludes '
+                          '(decrypted folder, nested images or hidden '
+                          'files) — mkpfs checks structure only; contents '
+                          'are compared by the mount check.\n')
+            else:
+                argv += ['--source-dir', src_folder]
+                _with_src = True
         self._log('[VERIFY] OSFMount: SKIPPED for this run — using mkpfs verify (native, mount-free).\n')
         self._log('[VERIFY] Command: mkpfs %s\n' % ' '.join(argv))
 
@@ -22916,7 +23081,12 @@ class ExFATBuilder(_TK_BASE):
                       % e)
             return True, False, ''
 
+        if rc == 0 and not _with_src:
+            self._log('[VERIFY] Native structure check PASSED — comparing '
+                      'contents with the mount check.\n')
+            return True, False, ''
         if rc == 0:
+            self._mark_content_verified(out_path)
             self._log('[VERIFY] Native verify PASSED (mkpfs verify rc=0). OSFMount was not used.\n')
             tail = (' — %s' % _last['line']) if _last['line'] else ''
             return (True, True, 'Verified ✓ via MkPFS '
@@ -22934,6 +23104,16 @@ class ExFATBuilder(_TK_BASE):
                   f'{rc!s}){tail!s}. The image did NOT verify. NOT falling back to OSFMount — a genuine verification failure must not be masked by the weaker mount-walk check.\n')
         return (False, True, 'MkPFS verification FAILED (rc='
                 f'{rc!s}){tail!s}. MkPFS checks image structure and payload against the source; this is a genuine failure, not a tool error. Rebuild the image. (OSFMount fallback was intentionally NOT used so a real problem is not hidden by the weaker file-count check.)')
+
+    def _mark_content_verified(self, out_path):
+        """Record that `out_path`'s contents were compared against its
+        source and matched. Only then may the source be deleted."""
+        d = self.__dict__.setdefault('_content_verified', {})
+        d[os.path.normcase(os.path.abspath(out_path))] = True
+
+    def _take_content_verified(self, out_path):
+        d = self.__dict__.setdefault('_content_verified', {})
+        return d.pop(os.path.normcase(os.path.abspath(out_path)), False)
 
     def _verify_image(self, out_path, src_folder):
         try:
@@ -23240,6 +23420,19 @@ class ExFATBuilder(_TK_BASE):
             count_ok = (src_count <= 0
                         or img_count >= src_count - 2)
 
+            # Every copied source file must be on the image at full size.
+            # The byte/count tolerances below cannot hide a missing file
+            # any more (a 0.5 % margin is gigabytes on a large game).
+            exact_ok, missing, n_bad = image_matches_source(
+                src_sizes, img_sizes)
+            if not exact_ok:
+                self._log('[VERIFY] Files missing or short on the image:\n')
+                for _ln in missing:
+                    self._log('[VERIFY]   %s\n' % _ln)
+                return False, ('Image is missing %d file(s) from the source. '
+                               'First affected: %s. Rebuild the image.'
+                               % (n_bad, missing[0]))
+            self._mark_content_verified(out_path)
             if size_ok and count_ok:
                 return True, ('Verified \u2713  eboot.bin present, '
                               '%d/%d files, %.2f/%.2f GB confirmed'
@@ -23450,7 +23643,13 @@ class ExFATBuilder(_TK_BASE):
                     except Exception:
                         pass
                 self.after(1200, _nudge)
-            if self._adv_delete_source_var.get():
+            _verified = self._take_content_verified(out_path)
+            if self._adv_delete_source_var.get() and not _verified:
+                self._log('[POST] Source folder KEPT: "Delete source folder" '
+                          'only runs after verification has compared the '
+                          'image with the source, and that did not happen '
+                          'this time (%s).\n' % msg)
+            if self._adv_delete_source_var.get() and _verified:
                 src = self._queue[idx].game_folder
                 try:
                     import shutil as _sh
@@ -23721,6 +23920,12 @@ class ExFATBuilder(_TK_BASE):
                 'can be deleted manually.' % (src, e))
         return dst
 
+    def pipeline_convert_result(self, ffpfsc_path):
+        """True/False: whether the last pipeline convert to `ffpfsc_path`
+        produced a good .ffpfsc; None when no result was recorded."""
+        return self.__dict__.setdefault('_pipeline_results', {}).pop(
+            os.path.normcase(os.path.abspath(ffpfsc_path)), None)
+
     def _pipeline_convert_then_next(self, image_path, on_continue,
                                     delete_source_on_success=True,
                                     explicit_output_path=None,
@@ -23757,6 +23962,10 @@ class ExFATBuilder(_TK_BASE):
         else:
             ffpfsc = os.path.splitext(image_path)[0] + '.ffpfsc'
             title  = os.path.splitext(os.path.basename(image_path))[0]
+
+        _results = self.__dict__.setdefault('_pipeline_results', {})
+        _rkey = os.path.normcase(os.path.abspath(ffpfsc))
+        _results.pop(_rkey, None)
 
         def _worker():
             _conv_cancelled = {'v': False}
@@ -23874,6 +24083,7 @@ class ExFATBuilder(_TK_BASE):
                             progress_cb=_lazy_progress_cb)
                         _lazy_prog['stop'] = True
                         if _res == RESULT_OK:
+                            _results[_rkey] = True
                             try:
                                 self._log('[PIPELINE] ffpfsc backend used: Lazy_MkPFS\n')
                             except Exception:
@@ -24363,6 +24573,10 @@ class ExFATBuilder(_TK_BASE):
                                    'image kept (see log)' % title, DANGER)
                         # Treat as a failed convert: do NOT delete the source.
                         rc = 1
+                    else:
+                        _results[_rkey] = True
+                    if suspect_tiny:
+                        pass
                     elif not delete_source_on_success:
                         self._log('[PIPELINE] Built %s. Source image is '
                                   'user-selected \u2014 left untouched '
@@ -24411,6 +24625,7 @@ class ExFATBuilder(_TK_BASE):
             except Exception as ex:
                 self._log('[PIPELINE] Error: %s\n' % ex)
             finally:
+                _results.setdefault(_rkey, False)
                 if not _conv_cancelled['v']:
                     self.after(0, on_continue)
 

@@ -964,8 +964,9 @@ def build_pfs_tab(parent, app):
                 parent.after(0, lambda l=step_lbl: prog_b.update('pack', 0, l))
 
                 rc1 = run_mkpfs(argv1, log_cb=_log_parse, progress_cb=_on_progress)
-                if not (rc1 == 0 or (rc1 == 1 and os.path.exists(target1))) \
-                        or not os.path.exists(target1):
+                # mkpfs returns 1 when its post-create check found errors
+                # in an image it already wrote, so only rc 0 is a success.
+                if rc1 != 0 or not os.path.exists(target1):
                     if disk_full['hit']:
                         parent.after(0, lambda: (
                             prog_b.fail(),
@@ -1026,7 +1027,7 @@ def build_pfs_tab(parent, app):
                     actual = out_path
                     file_ok = os.path.exists(actual)
 
-                if rc2 == 0 or (rc2 == 1 and file_ok):
+                if rc2 == 0 and file_ok:
                     ok = True
                     sz = os.path.getsize(actual) / 1024**3
                     parent.after(0, lambda s=dict(stats), _sz=sz, _act=actual: (
@@ -1773,7 +1774,10 @@ def build_pfs_tab(parent, app):
                 except Exception:
                     file_ok = os.path.exists(actual)
 
-                if rc == 0 or (rc == 1 and file_ok):
+                # rc 1 means mkpfs wrote the image and its check then found
+                # errors: never a success, and never a reason to delete the
+                # source image.
+                if rc == 0 and file_ok:
                     out_sz = os.path.getsize(actual)
                     try:
                         in_sz = os.path.getsize(src)
@@ -1838,7 +1842,11 @@ def build_pfs_tab(parent, app):
                         prog_c.fail(), btn_c.config(state='normal'),
                         prog_c.set_status('Failed (rc=%d) \u2014 see OUTPUT LOG' % rc, error=True),
                         (app_error(parent, 'Failed',
-                            'mkpfs exited with code %d.\n\nCheck OUTPUT LOG.' % rc)
+                            ('mkpfs wrote the image but its check found errors '
+                             '(code 1). The output was removed and the source '
+                             'image was kept.\n\nCheck OUTPUT LOG.') if rc == 1 else
+                            'mkpfs exited with code %d. The source image was '
+                            'kept.\n\nCheck OUTPUT LOG.' % rc)
                          if not cq_state['running'] else None)))
                     try:
                         if os.path.exists(out_path):
