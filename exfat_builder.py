@@ -2124,6 +2124,14 @@ for _lang_code, _nav_strings in _NAV_TRANSLATIONS.items():
         _table.setdefault(_key, _value)
 del _lang_code, _nav_strings, _table, _key, _value
 
+# OS metadata copied along with a dump (never game content).
+_OS_METADATA_FILES = frozenset(('.ds_store', 'thumbs.db', 'desktop.ini',
+                                'ehthumbs.db', '.localized'))
+_OS_METADATA_DIRS = frozenset(('__MACOSX', '.Trashes', '.fseventsd',
+                               '.Spotlight-V100', '.TemporaryItems',
+                               'System Volume Information', '$RECYCLE.BIN'))
+
+
 def _(text):
     """Translate text to the current language, falling back to English."""
     if _LANG[0] == 'en':
@@ -14743,6 +14751,13 @@ class ExFATBuilder(_TK_BASE):
         name = os.path.basename(path).lower()
         if name.endswith('.bak'):
             return False
+        # Farewell Edition: OS metadata left by copying a dump through a
+        # Mac or Windows Explorer (AppleDouble '._eboot.bin', .DS_Store,
+        # Thumbs.db, desktop.ini) is never an executable. '._libc.prx' used
+        # to be sent to the SDK patcher because of its extension and failed
+        # the whole backport (same fix as PS5 Backport GUI 0.3.3).
+        if name.startswith('._') or name in _OS_METADATA_FILES:
+            return False
         try:
             with open(path, 'rb') as f:
                 magic = f.read(4)
@@ -14751,6 +14766,10 @@ class ExFATBuilder(_TK_BASE):
         if magic == b'\x7FELF' or magic in (b'\x4F\x15\x3D\x1D',
                                             b'\x54\x14\xF5\xEE'):
             return True
+        if len(magic) == 4:
+            # The header was readable and is not ELF/SELF: whatever the
+            # name says, the patcher cannot rewrite it.
+            return False
         if name == 'eboot.bin':
             return True
         return name.endswith(('.prx', '.sprx', '.self', '.elf'))
@@ -14762,8 +14781,11 @@ class ExFATBuilder(_TK_BASE):
         execs, skipped = [], []
         for root, dirs, files in os.walk(folder):
             dirs[:] = [d for d in dirs
-                       if d.lower() not in ('decrypted', 'fakelib')]
+                       if d.lower() not in ('decrypted', 'fakelib')
+                       and d not in _OS_METADATA_DIRS]
             for fn in files:
+                if fn.startswith('._') or fn.lower() in _OS_METADATA_FILES:
+                    continue
                 rel = os.path.relpath(os.path.join(root, fn), folder)
                 if self._abp_is_executable_file(os.path.join(root, fn)):
                     execs.append(rel)
