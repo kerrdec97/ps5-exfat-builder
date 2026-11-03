@@ -162,20 +162,31 @@ def build_unibuild_tab(parent, app):
         """Modal list for the rare multi-root case. Returns the chosen path
         or None if cancelled. Presentation only — no build logic."""
         try:
+            from tkinter_theme import px
+            from ui.shared.widgets import Button as _B, IconLabel as _IL
             dlg = tk.Toplevel(parent)
             dlg.title('Multiple game roots found')
-            dlg.configure(bg=COLORS['bg_1'])
+            dlg.configure(bg=COLORS['bg_2'])
             dlg.transient(parent.winfo_toplevel())
             dlg.grab_set()
-            tk.Label(dlg, text='Several folders contain eboot.bin.\nPick the game root to build from:', bg=COLORS['bg_1'], fg=COLORS['fg_1'], font=FONTS['body'], justify='left').pack(anchor='w', padx=16, pady=(14, 8))
+            body = tk.Frame(dlg, bg=COLORS['bg_2'])
+            body.pack(fill='both', expand=True, padx=px(24), pady=(px(22), px(16)))
+            head = tk.Frame(body, bg=COLORS['bg_2'])
+            head.pack(fill='x')
+            _IL(head, 'folder_tree', 20, COLORS['accent_hi'], COLORS['bg_2']).pack(side='left', padx=(0, px(10)))
+            tk.Label(head, text='Pick the game root', bg=COLORS['bg_2'], fg=COLORS['fg_0'], font=FONTS['title']).pack(side='left')
+            tk.Label(body, text='Several folders contain eboot.bin. Pick the game root to build from:', bg=COLORS['bg_2'], fg=COLORS['fg_2'], font=FONTS['body'], justify='left').pack(anchor='w', pady=(px(10), px(10)))
             chosen = {'path': None}
-            lb = tk.Listbox(dlg, width=80, height=min(12, len(candidates)), bg=COLORS['bg_3'], fg=COLORS['fg_1'])
+            lb = tk.Listbox(body, width=80, height=min(12, len(candidates)), bg=COLORS['bg_0'], fg=COLORS['fg_1'], font=FONTS['code'], selectbackground=COLORS['accent_lo'], selectforeground=COLORS['fg_0'], highlightthickness=1, highlightbackground=COLORS['border_2'], highlightcolor=COLORS['focus'], bd=0, activestyle='none')
             for c in candidates:
-                lb.insert('end', c)
+                lb.insert('end', '  ' + c)
             lb.select_set(0)
-            lb.pack(fill='both', expand=True, padx=16, pady=4)
+            lb.pack(fill='both', expand=True)
+            tk.Frame(dlg, bg=COLORS['border_2'], height=1).pack(fill='x')
             btns = tk.Frame(dlg, bg=COLORS['bg_1'])
-            btns.pack(fill='x', padx=16, pady=(8, 14))
+            btns.pack(fill='x')
+            _bar = tk.Frame(btns, bg=COLORS['bg_1'])
+            _bar.pack(fill='x', padx=px(18), pady=px(10))
             def _ok():
                 sel = lb.curselection()
                 if sel:
@@ -184,8 +195,8 @@ def build_unibuild_tab(parent, app):
             def _cancel():
                 chosen['path'] = None
                 dlg.destroy()
-            make_themed_button(btns, text='Use this folder', command=_ok, kind='success', font_size=10, padx=16, pady=8).pack(side='right')
-            make_themed_button(btns, text='Cancel', command=_cancel, kind='accent', font_size=10, padx=16, pady=8).pack(side='right', padx=(0, 8))
+            _B(_bar, text='Use this folder', variant='primary', command=_ok, surface=COLORS['bg_1']).pack(side='right')
+            _B(_bar, text='Cancel', command=_cancel, surface=COLORS['bg_1']).pack(side='right', padx=(0, px(4)))
             dlg.bind('<Return>', lambda _e: _ok())
             dlg.bind('<Escape>', lambda _e: _cancel())
             parent.wait_window(dlg)

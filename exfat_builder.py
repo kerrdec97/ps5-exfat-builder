@@ -8781,45 +8781,19 @@ class ExFATBuilder(_TK_BASE):
     def _fm_overwrite_dialog(self, filename, show_all_options):
         """Ask user what to do when a file already exists. Returns:
         'overwrite', 'overwrite_all', 'skip', 'skip_all'"""
-        win = tk.Toplevel(self)
-        win.title('File exists')
-        win.configure(bg=BG)
-        win.resizable(False, False)
-        win.transient(self)
-        win.grab_set()
-
-        tk.Label(win, text='\u26a0  File already exists',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=WARNING).pack(padx=24, pady=(16, 4))
-        tk.Label(win, text=filename,
-                 font=(FONTS['code'][0], 9), bg=BG, fg=MUTED).pack(padx=24, pady=(0, 16))
-
-        result = [None]
-
-        btn_frame = tk.Frame(win, bg=BG)
-        btn_frame.pack(padx=24, pady=(0, 16))
-
-        def make_btn(text, val, fg=TEXT, bg=SURFACE2):
-            XButton(btn_frame, text=text, font=(FONTS['body'][0], 9),
-                      bg=bg, fg=fg, activebackground=BORDER,
-                      activeforeground=TEXT, relief='flat', bd=0,
-                      padx=12, pady=6, cursor='hand2',
-                      command=lambda v=val: (result.__setitem__(0, v), win.destroy())
-                      ).pack(side='left', padx=4)
-
-        make_btn('Overwrite', 'overwrite', bg=WARNING, fg='#000000')
+        from ui.shared.app_dialog import app_choose
+        choices = []
         if show_all_options:
-            make_btn('Overwrite All', 'overwrite_all', bg=DANGER)
-        make_btn('Skip', 'skip')
+            choices.append(('Skip All', 'skip_all', 'secondary'))
+        choices.append(('Skip', 'skip', 'secondary'))
         if show_all_options:
-            make_btn('Skip All', 'skip_all')
-
-        win.update_idletasks()
-        # Centre over parent
-        x = self.winfo_x() + (self.winfo_width()  - win.winfo_width())  // 2
-        y = self.winfo_y() + (self.winfo_height() - win.winfo_height()) // 2
-        win.geometry('+%d+%d' % (x, y))
-        win.wait_window()
-        return result[0] or 'skip'
+            choices.append(('Overwrite All', 'overwrite_all', 'danger'))
+        choices.append(('Overwrite', 'overwrite', 'primary'))
+        res = app_choose(self, 'File already exists',
+                         'A file with this name is already in the destination.',
+                         choices, variant='warning', detail=filename,
+                         cancel_value='skip')
+        return res or 'skip'
 
     def _fm_refresh(self):
         if not self._fm_drive or not self._fm_current_dir:
@@ -26678,33 +26652,34 @@ class ExFATBuilder(_TK_BASE):
             that the new process is alive. If not, it rolls back to
             the `.bak`.
         """
+        from ui.shared.widgets import RoundedBar, IconLabel
         win = tk.Toplevel(self)
         win.title('Updating to v' + version)
-        win.geometry('420x180')
-        win.configure(bg=BG)
+        win.geometry('%dx%d' % (px(460), px(170)))
+        win.configure(bg=COLORS['bg_2'])
         win.resizable(False, False)
         win.transient(self)
 
-        body = tk.Frame(win, bg=BG)
-        body.pack(fill='both', expand=True, padx=24, pady=16)
-        tk.Label(body, text='Downloading v' + version + '...',
-                 font=(FONTS['body_strong'][0], 11), bg=BG, fg=TEXT).pack(anchor='w')
+        body = tk.Frame(win, bg=COLORS['bg_2'])
+        body.pack(fill='both', expand=True, padx=px(24), pady=px(22))
+        head = tk.Frame(body, bg=COLORS['bg_2'])
+        head.pack(fill='x')
+        IconLabel(head, 'download', 20, COLORS['accent_hi'], COLORS['bg_2']).pack(
+            side='left', padx=(0, px(10)))
+        tk.Label(head, text='Downloading v' + version + '\u2026',
+                 font=FONTS['title'], bg=COLORS['bg_2'],
+                 fg=COLORS['fg_0']).pack(side='left')
         status_var = tk.StringVar(value='Connecting to GitHub...')
-        tk.Label(body, textvariable=status_var,
-                 font=(FONTS['body'][0], 9), bg=BG, fg=MUTED).pack(anchor='w', pady=(4,8))
-        bar_frame = tk.Frame(body, bg=TRACK, height=16)
-        bar_frame.pack(fill='x')
-        bar_frame.pack_propagate(False)
-        bar_cv = tk.Canvas(bar_frame, height=16, bg=TRACK,
-                           highlightthickness=0, bd=0)
-        bar_cv.pack(fill='both', expand=True)
-        bar_rect = bar_cv.create_rectangle(0, 0, 0, 16, fill=ACCENT, outline='')
+        tk.Label(body, textvariable=status_var, font=FONTS['body'],
+                 bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(
+                     anchor='w', pady=(px(10), px(10)))
+        _ubar = RoundedBar(body, height=6, surface=COLORS['bg_2'])
+        _ubar.pack(fill='x')
 
         def set_bar(pct):
             try:
-                w = bar_cv.winfo_width()
-                bar_cv.coords(bar_rect, 0, 0, int(w * pct / 100), 16)
-                bar_cv.itemconfig(bar_rect, fill=SUCCESS if pct >= 100 else ACCENT)
+                _ubar.set_color(COLORS['success'] if pct >= 100 else COLORS['accent'])
+                _ubar.set(max(0.0, min(1.0, pct / 100.0)))
             except Exception:
                 pass
 

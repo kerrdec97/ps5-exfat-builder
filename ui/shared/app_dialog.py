@@ -246,7 +246,97 @@ def app_question(parent, title, message, *, detail=None, note=None,
     return "yes" if dlg.result else "no"
 
 
+def app_choose(parent, title, message, choices, *, variant="warning",
+               detail=None, note=None, cancel_value=None):
+    """Modal with several labelled outcomes.
+
+    choices: list of (label, value, variant) — variant in primary /
+    secondary / danger; listed left to right, the last is the default
+    (Enter). Returns the chosen value, or `cancel_value` on Esc/close.
+    """
+    win = tk.Toplevel(parent)
+    win.withdraw()
+    win.title(title or "exFAT Image Builder")
+    win.configure(bg=C["border_3"])
+    win.resizable(False, False)
+    try:
+        win.transient(parent.winfo_toplevel())
+    except Exception:
+        pass
+    result = {"v": cancel_value}
+    icon, icol = _VARIANTS.get(variant, _VARIANTS["warning"])
+    frame = tk.Frame(win, bg=C["bg_2"])
+    frame.pack(fill="both", expand=True, padx=1, pady=1)
+    body = tk.Frame(frame, bg=C["bg_2"])
+    body.pack(fill="both", expand=True, padx=px(24), pady=(px(22), px(20)))
+    head = tk.Frame(body, bg=C["bg_2"])
+    head.pack(fill="x")
+    IconLabel(head, icon, 20, C[icol], C["bg_2"]).pack(
+        side="left", anchor="n", padx=(0, px(10)), pady=(px(3), 0))
+    tk.Label(head, text=title or "", font=FONTS["title"], fg=C["fg_0"],
+             bg=C["bg_2"], anchor="w").pack(side="left", fill="x")
+    if message:
+        tk.Label(body, text=message, font=FONTS["body"], fg=C["fg_2"],
+                 bg=C["bg_2"], wraplength=px(440), justify="left",
+                 anchor="w").pack(fill="x", pady=(px(12), 0))
+    if detail:
+        box = tk.Frame(body, bg=C["bg_0"], highlightthickness=1,
+                       highlightbackground=C["border_2"])
+        box.pack(fill="x", pady=(px(12), 0))
+        tk.Label(box, text=detail, font=FONTS["code"], fg=C["fg_2"],
+                 bg=C["bg_0"], wraplength=px(416), justify="left",
+                 anchor="w").pack(fill="x", padx=px(12), pady=px(10))
+    if note:
+        tk.Label(body, text=note, font=FONTS["caption"], fg=C["warn_hi"],
+                 bg=C["bg_2"], wraplength=px(440), justify="left",
+                 anchor="w").pack(fill="x", pady=(px(12), 0))
+    tk.Frame(frame, bg=C["border_2"], height=1).pack(fill="x")
+    foot = tk.Frame(frame, bg=C["bg_1"])
+    foot.pack(fill="x")
+    bar = tk.Frame(foot, bg=C["bg_1"])
+    bar.pack(fill="x", padx=px(18), pady=px(10))
+
+    def pick(v):
+        result["v"] = v
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        win.destroy()
+    last = None
+    for label, value, var in reversed(list(choices)):
+        b = Button(bar, text=label, variant=var or "secondary",
+                   command=lambda v=value: pick(v), surface=C["bg_1"])
+        b.configure(width=max(len(label), 8))
+        b.pack(side="right", padx=(px(4), 0))
+        if last is None:
+            last = (b, value)
+    win.bind("<Escape>", lambda e: pick(cancel_value))
+    if last:
+        win.bind("<Return>", lambda e: pick(last[1]))
+    win.protocol("WM_DELETE_WINDOW", lambda: pick(cancel_value))
+    win.update_idletasks()
+    w = max(px(480), frame.winfo_reqwidth() + 2)
+    h = frame.winfo_reqheight() + 2
+    try:
+        top = parent.winfo_toplevel()
+        x = top.winfo_rootx() + max(0, (top.winfo_width() - w) // 2)
+        y = top.winfo_rooty() + max(0, (top.winfo_height() - h) // 3)
+        win.geometry("%dx%d+%d+%d" % (w, h, x, y))
+    except Exception:
+        pass
+    win.deiconify()
+    if last:
+        last[0].focus_set()
+    try:
+        win.grab_set()
+    except Exception:
+        pass
+    win.wait_window(win)
+    return result["v"]
+
+
 __all__ = [
-    "AppDialog", "app_info", "app_warning", "app_error", "app_success",
+    "app_choose", "AppDialog", "app_info", "app_warning", "app_error", "app_success",
     "app_confirm", "app_danger", "app_choose3", "app_question",
 ]
