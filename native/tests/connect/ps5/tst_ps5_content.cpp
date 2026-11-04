@@ -205,12 +205,13 @@ private slots:
         QVERIFY(writeBytes(QDir(dir).filePath(QStringLiteral("Alpha.bin")), "b"));
         QVERIFY(writeBytes(QDir(dir).filePath(QStringLiteral("zeta.js")), "j"));
         QCOMPARE(payloadFiles(dir), (QStringList{QStringLiteral("Alpha.bin"), QStringLiteral("kstuff.elf"), QStringLiteral("zeta.js")}));
-        QVERIFY(!deletePayload(dir, QStringLiteral("../outside.elf")).ok());
-        QVERIFY(!deletePayload(dir, QStringLiteral("autoload.txt")).ok());
-        bool trashed = false;
-        QVERIFY(deletePayload(dir, QStringLiteral("zeta.js"), &trashed).ok());
+        QVERIFY(!deletePayload(dir, QStringLiteral("../outside.elf"), false).ok());
+        QVERIFY(!deletePayload(dir, QStringLiteral("autoload.txt"), false).ok());
+        bool trashed = true;
+        QVERIFY(deletePayload(dir, QStringLiteral("zeta.js"), false, &trashed).ok()); // never the real recycle bin in tests
+        QVERIFY(!trashed);
         QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("zeta.js"))));
-        QCOMPARE(deletePayload(dir, QStringLiteral("zeta.js")).error().code, ErrorCode::NotFound);
+        QCOMPARE(deletePayload(dir, QStringLiteral("zeta.js"), false).error().code, ErrorCode::NotFound);
     }
 
     void autoloaderFolderSettingAndLegacyKey()

@@ -112,6 +112,7 @@ private slots:
         QVERIFY(writeBytes(dir + QStringLiteral("/kstuff.elf"), kElf));
         QVERIFY(writeBytes(dir + QStringLiteral("/autoload.txt"), "kstuff.elf\r\n\r\n\r\n\r\n!1000\r\n"));
         pages::AutoloaderTab tab(*m_ctx, fakeConsole(1));
+        tab.setUseRecycleBin(false); // never the developer's real recycle bin
         tab.resize(1100, 900);
         tab.openFolder(dir);
         QCOMPARE(m_ctx->settings().value(ps5::keys::kAutoloaderFolder).toString(), dir);

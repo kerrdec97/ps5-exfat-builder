@@ -303,7 +303,7 @@ Result<QString> addPayload(const QString& folder, const QString& sourceFile, boo
     return name;
 }
 
-Status deletePayload(const QString& folder, const QString& fileName, bool* trashed)
+Status deletePayload(const QString& folder, const QString& fileName, bool toRecycleBin, bool* trashed)
 {
     FW_TRY(needFolder(folder));
     if (const QString why = payloadNameProblem(fileName); !why.isEmpty())
@@ -313,7 +313,7 @@ Status deletePayload(const QString& folder, const QString& fileName, bool* trash
         return Error(ErrorCode::NotFound, QStringLiteral("%1 is no longer in the folder.").arg(fileName));
     if (trashed)
         *trashed = false;
-    if (QFile::moveToTrash(path)) {
+    if (toRecycleBin && QFile::moveToTrash(path)) {
         if (trashed)
             *trashed = true;
         return success();

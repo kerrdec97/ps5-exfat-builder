@@ -391,9 +391,9 @@ void AutoloaderTab::deletePayloadFile(const QString& fileName)
         QStringList files;
     };
     runLocal<Deleted>(
-        [dir, fileName](const CancellationToken&) -> Result<Deleted> {
+        [dir, fileName, toRecycleBin = m_useRecycleBin](const CancellationToken&) -> Result<Deleted> {
             Deleted d;
-            FW_TRY(al::deletePayload(dir, fileName, &d.trashed));
+            FW_TRY(al::deletePayload(dir, fileName, toRecycleBin, &d.trashed));
             d.files = al::payloadFiles(dir);
             return d;
         },

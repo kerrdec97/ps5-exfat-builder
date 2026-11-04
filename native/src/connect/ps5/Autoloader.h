@@ -112,9 +112,9 @@ Result<SaveResult> save(const QString& folder, const QString& text);
 Result<QString> addPayload(const QString& folder, const QString& sourceFile, bool overwrite,
                            const CancellationToken& token = {});
 
-// Removes a payload file from the folder: to the recycle bin when the system
-// has one (`*trashed` = true), otherwise deleted. Only .elf/.bin/.js names
-// without path separators.
-Status deletePayload(const QString& folder, const QString& fileName, bool* trashed = nullptr);
+// Removes a payload file from the folder. With `toRecycleBin`, to the recycle
+// bin when the system has one (`*trashed` = true), otherwise deleted. Only
+// .elf/.bin/.js names without path separators.
+Status deletePayload(const QString& folder, const QString& fileName, bool toRecycleBin, bool* trashed = nullptr);
 
 } // namespace fw::ps5::autoloader

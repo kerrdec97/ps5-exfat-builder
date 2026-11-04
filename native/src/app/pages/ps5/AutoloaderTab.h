@@ -30,6 +30,7 @@ public:
     void saveNow();                             // no confirmation
     void addPayloadFile(const QString& source, bool overwrite);
     void deletePayloadFile(const QString& fileName);
+    void setUseRecycleBin(bool on) { m_useRecycleBin = on; } // tests: delete instead
 
 private:
     void load();
@@ -57,6 +58,7 @@ private:
     QStringList m_files;
     QString m_current; // the folder the editor's text belongs to
     bool m_dirty = false;
+    bool m_useRecycleBin = true;
     bool m_demo = false;
 };
 
