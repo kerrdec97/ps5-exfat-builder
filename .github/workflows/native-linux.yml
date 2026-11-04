@@ -9,6 +9,8 @@ on:
     branches: [farewell-edition-dev, 'claude/wizardly-sagan-mahxhj']
     paths:
       - 'native/**'
+      - '!native/docs/**'
+      - '!native/**/*.md'
       - '.github/workflows/native-linux.yml'
   workflow_dispatch:
 
