@@ -47,6 +47,15 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
 * **New interface** on the Farewell design system: one accent colour, real
   focus rings, every setting generated from the engines that use it (no
   decorative controls), per-job overrides with clear badges, structured logs.
+  Pages: Home, Build image, FPKG, Extract & verify, Edit image (stage changes,
+  apply in one verified job, convert between formats), Backport, Queue, PS5
+  connect (FTP browser, payloads, kernel log, Y2JB, mount config), Library
+  (scan, covers, dump rename with undo, DLC-emu editor), Logs, Settings, About.
+* **Built to be safe with your files.** The queue never runs two jobs on the
+  same image or game folder at once; deleting temporary folders or a source
+  never follows a junction or symbolic link into another folder; images are
+  flushed to the drive before they replace anything; an interrupted exFAT
+  edit is undone from its journal; only one copy of the app runs at a time.
 
 ## Changed from the legacy app
 
@@ -61,6 +70,29 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
 * Fixed while porting: the Language Stripper crashed on its first match; the
   legacy PFS tab double-compressed `.ffpfsc`; DLC-emu and dump-rename edge
   cases; several data-safety issues listed in `docs/BACKPORT_PARITY.md`.
+
+## Performance
+
+Measured on the build machine (not your PC): exFAT images are written at the
+speed of the disk, FFPKG builds match or beat UFS2Tool, and FFPFSC builds are
+faster than Lazy_MkPFS at the default level with byte-identical output. See
+`docs/PERFORMANCE.md`.
+
+## How it was tested
+
+* **Automated tests** (35 test programs, run on every change): Linux with
+  AddressSanitizer/UBSan and Windows (MSVC 2022, Qt 6.8) in CI. They include
+  byte-for-byte comparisons with UFS2Tool and Lazy_MkPFS output, the legacy
+  app's own JSON/INI/GP5 output as goldens, crash and cancel recovery, and —
+  on Windows — mounting the app's exFAT images with the real Windows exFAT
+  driver (read back, `chkdsk`) and reading Windows-formatted images natively.
+* **The real executable** is built, deployed with its Qt runtime, self-tested,
+  made to render every page and kept running for 30 s on a Windows runner.
+* **Independent review**: four reviewers read the core, image engines,
+  PFS/FPKG and Backport/PS5 code against the specs and with crafted inputs;
+  their findings were fixed with regression tests.
+* **Not tested**: your PC, a PS5 console, real Sony Publishing Tools, a real
+  game dump. These are the owner's checklist below.
 
 ## Not in this release
 

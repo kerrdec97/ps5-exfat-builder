@@ -83,6 +83,23 @@ jobs:
             throw "ctest failed ($code)"
           }
 
+      - name: Evidence of the real Windows exFAT driver test
+        if: success() || failure()
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          FW_OFFLINE: '1'
+          FW_WINDOWS_MOUNT_TEST: '1'
+        run: |
+          # Prints every check (mount, read back, chkdsk, Windows-formatted image read natively), not just pass/fail.
+          New-Item -ItemType Directory -Force ci-out | Out-Null
+          $log = Join-Path $PWD 'ci-out\tst_exfat_windows.txt'
+          $exe = Get-ChildItem -Recurse build\tests -Filter 'tst_exfat_windows.exe' | Select-Object -First 1
+          Push-Location $exe.DirectoryName
+          & $exe.FullName -v1 -o "$log,txt" | Out-Null
+          Pop-Location
+          Get-Content $log
+
       - name: Deploy Qt runtime
         shell: pwsh
         run: |
