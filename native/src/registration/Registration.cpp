@@ -1,5 +1,6 @@
 #include "registration/Registration.h"
 
+#include "connect/notify/Module.h"
 #include "connect/ps5/Module.h"
 #include "connect/update/Module.h"
 #include "engines/backport/Module.h"
@@ -26,6 +27,7 @@ void registerAllModules(ModuleContext& ctx)
     backport::registerModule(ctx);
     ps5::registerModule(ctx);
     update::registerModule(ctx);
+    notify::registerModule(ctx);
     tools::registerModule(ctx);
     integration::registerModule(ctx); // last: wires engines together
 }
@@ -33,7 +35,7 @@ void registerAllModules(ModuleContext& ctx)
 QStringList registeredModuleNames()
 {
     return {QStringLiteral("general"), QStringLiteral("gameinfo"), QStringLiteral("exfat"), QStringLiteral("pfs"),
-            QStringLiteral("ufs2"),    QStringLiteral("fpkg"),     QStringLiteral("backport"), QStringLiteral("ps5"), QStringLiteral("update"), QStringLiteral("tools"), QStringLiteral("integration")};
+            QStringLiteral("ufs2"),    QStringLiteral("fpkg"),     QStringLiteral("backport"), QStringLiteral("ps5"), QStringLiteral("update"), QStringLiteral("notify"), QStringLiteral("tools"), QStringLiteral("integration")};
 }
 
 } // namespace fw

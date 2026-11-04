@@ -19,6 +19,10 @@ public:
 
     int succeededSinceIdle() const { return m_succeeded; }
     int failedSinceIdle() const { return m_failed; }
+    // Ids of the jobs of the run that queueFinished() reported last, each once,
+    // in the order they finished (notifications list them). Valid until the
+    // queue finishes again.
+    QStringList lastRunJobIds() const { return m_lastRun; }
 
 signals:
     // The queue finished; `action` should run after `delaySeconds` unless the
@@ -34,6 +38,8 @@ private:
     int m_succeeded = 0;
     int m_failed = 0;
     int m_cancelled = 0;
+    QStringList m_runIds;  // jobs finished since the queue was last idle
+    QStringList m_lastRun;
 };
 
 } // namespace fw

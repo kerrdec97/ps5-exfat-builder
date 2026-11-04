@@ -9,6 +9,8 @@ QueueCompletionWatcher::QueueCompletionWatcher(JobQueue& queue, SettingsStore& s
         const auto rec = m_queue.record(id);
         if (!rec)
             return;
+        if (!m_runIds.contains(id))
+            m_runIds << id;
         switch (rec->state) {
         case JobState::Succeeded: ++m_succeeded; break;
         case JobState::Cancelled: ++m_cancelled; break;
@@ -27,6 +29,8 @@ void QueueCompletionWatcher::onIdle()
         return;
     const int ok = m_succeeded, failed = m_failed, cancelled = m_cancelled;
     m_succeeded = m_failed = m_cancelled = 0;
+    m_lastRun = m_runIds;
+    m_runIds.clear();
     emit queueFinished(ok, failed, cancelled);
 
     const SettingsValues snap = m_settings.snapshot();

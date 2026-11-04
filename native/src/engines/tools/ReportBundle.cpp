@@ -65,6 +65,17 @@ QString userNameOf(const QString& home)
 }
 } // namespace
 
+QString redactSecrets(const QString& text)
+{
+    // general.discordWebhookUrl: anyone with the token can post to the channel.
+    static const QRegularExpression webhook(
+        QStringLiteral("(https?:(?:\\\\?/){2}(?:[A-Za-z0-9-]+\\.)*discord(?:app)?\\.com(?:\\\\?/)api(?:\\\\?/)(?:v\\d+(?:\\\\?/))?"
+                       "webhooks(?:\\\\?/)\\d+(?:\\\\?/))[A-Za-z0-9_\\-]+"),
+        QRegularExpression::CaseInsensitiveOption);
+    QString out = text;
+    return out.replace(webhook, QStringLiteral("\\1<token hidden>"));
+}
+
 QString redactUserPaths(const QString& text)
 {
     QString out = text;
@@ -139,6 +150,7 @@ Result<ReportResult> buildReportBundle(const ReportOptions& options, const Cance
     const auto addText = [&](const QString& name, QString text) -> Status {
         if (options.redactUserPaths)
             text = redactUserPaths(text);
+        text = redactSecrets(text); // always, whatever the user chose
         FW_TRY(w.addData(name, text.toUtf8(), zip::Method::Deflate));
         result.contents << name;
         return success();

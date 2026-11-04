@@ -188,7 +188,8 @@ private slots:
         fwtest::writeTextFile(logs + QStringLiteral("/farewell.log"), (QStringLiteral("opened ") + home + QStringLiteral("/Games/x\n")).toUtf8());
         fwtest::writeTextFile(logs + QStringLiteral("/farewell.jsonl"), "{}\n");
         const QString settings = m_root.filePath(QStringLiteral("settings.json"));
-        fwtest::writeTextFile(settings, (QStringLiteral("{\"storage.defaultOutputFolder\": \"") + QDir::homePath() + QStringLiteral("/out\"}")).toUtf8());
+        fwtest::writeTextFile(settings, (QStringLiteral("{\"storage.defaultOutputFolder\": \"") + QDir::homePath()
+                                         + QStringLiteral("/out\", \"general.discordWebhookUrl\": \"https://discord.com/api/webhooks/42/SeCrEt_token-1\"}")).toUtf8());
         ReportOptions opt;
         opt.destinationFolder = m_root.filePath(QStringLiteral("reports"));
         QDir().mkpath(opt.destinationFolder);
@@ -207,13 +208,19 @@ private slots:
         QVERIFY2(!log.contains(home.toUtf8()), log.constData());
         QVERIFY(log.contains("~"));
         QVERIFY(!st.contains(QDir::homePath().toUtf8()));
-        // Redaction off keeps the paths.
+        QVERIFY(!st.contains("SeCrEt"));
+        QVERIFY(st.contains("https://discord.com/api/webhooks/42/<token hidden>"));
+        // Redaction off keeps the paths, never the webhook token.
         opt.redactUserPaths = false;
         auto plain = buildReportBundle(opt, CancellationToken(), nullptr);
         QVERIFY(plain.ok());
         zip::Reader z2;
         QVERIFY(z2.open(plain->zipPath).ok());
         QVERIFY(z2.readAll(*z2.find(QStringLiteral("logs/farewell.log"))).value().contains(home.toUtf8()));
+        QVERIFY(!z2.readAll(*z2.find(QStringLiteral("settings.json"))).value().contains("SeCrEt"));
+        QCOMPARE(redactSecrets(QStringLiteral("\"https:\\/\\/discordapp.com\\/api\\/v10\\/webhooks\\/7\\/abc-DEF\"")),
+                 QStringLiteral("\"https:\\/\\/discordapp.com\\/api\\/v10\\/webhooks\\/7\\/<token hidden>\""));
+        QCOMPARE(redactSecrets(QStringLiteral("no secrets here")), QStringLiteral("no secrets here"));
     }
 };
 
