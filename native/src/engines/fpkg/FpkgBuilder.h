@@ -28,6 +28,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -144,7 +145,26 @@ Gp5Project projectFromPlan(const BuildPlan& plan, const FpkgSettings& settings,
 QString defaultOutputFolder(const QString& source, const QString& defaultOutputDir);
 // Where an existing file would be moved by "Keep both": "name (n).pkg" with the first free n >= 1.
 QString keepBothName(const QString& finalPath);
-// Moves `partial` to `finalPath` following the conflict policy. Notes go to `notes`.
+
+struct OutputMove {
+    QString partial;   // the finished file under its temporary name
+    QString finalPath; // where it belongs
+};
+using RenameFn = std::function<bool(const QString& from, const QString& to)>;
+
+// Puts every finished file in place as one step, following the conflict
+// policy: first every existing file at a final name is set aside (renamed
+// to "name (n).pkg" for "Keep both", to a temporary name for "Overwrite"),
+// then every partial file is renamed. If any step fails, everything done so
+// far is undone, so the folder never holds a mix of old and new outputs.
+// The new files are never deleted: after a failure each one is kept under a
+// free numbered name ("name (n).pkg"), or under its partial name when even
+// that rename fails; the error names them and `kept` lists them. Notes for
+// the outcome go to `notes`. `renameFn` replaces QFile::rename (tests use it
+// to simulate a file another program holds open).
+Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy, QStringList& notes,
+                    QStringList* kept = nullptr, const RenameFn& renameFn = {});
+// One file: placeOutputs({{partial, finalPath}}, ...).
 Status placeOutput(const QString& partial, const QString& finalPath, OutputConflict policy, QStringList& notes);
 
 // ---- validation (cheap; runs on the UI thread) ----------------------------------------------

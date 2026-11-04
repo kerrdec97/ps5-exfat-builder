@@ -87,6 +87,12 @@ struct MergedEntry {
     qint64 size = 0;
     int fileRoot = -1;
     std::vector<QString> dirAbs; // per root ("" when absent)
+    int lastRoot = -1;           // the last root that listed this name
+    QString lastAbs;             // its path there
+    // Two entries of one root whose names differ only in letter case: the
+    // package paths are case-insensitive, so one would silently replace or
+    // merge into the other.
+    QString caseTwinA, caseTwinB;
 };
 
 class Walker {
@@ -130,6 +136,7 @@ public:
                     m_res.excluded.push_back({rel, why, true});
                     continue;
                 }
+                FW_TRY(checkCaseTwins(e));
                 FW_TRY(walk(parts + QStringList{e.name}, e.dirAbs));
                 continue;
             }
@@ -151,6 +158,7 @@ public:
                 m_res.excluded.push_back({rel, why, false});
                 continue;
             }
+            FW_TRY(checkCaseTwins(e));
             const QString problem = pathRuleProblem(rel);
             if (!problem.isEmpty())
                 m_res.badPaths.push_back({rel, problem});
@@ -177,6 +185,17 @@ public:
     }
 
 private:
+    static Status checkCaseTwins(const MergedEntry& e)
+    {
+        if (e.caseTwinA.isEmpty())
+            return success();
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 and %2 differ only in letter case. Paths inside a package are not "
+                                    "case-sensitive, so one would replace the other. Rename or remove one of them.")
+                         .arg(QDir::toNativeSeparators(e.caseTwinA), QDir::toNativeSeparators(e.caseTwinB)),
+                     QStringLiteral("case-insensitive name collision: %1 | %2").arg(e.caseTwinA, e.caseTwinB));
+    }
+
     Status list(const QStringList& parts, const std::vector<QString>& absDirs, std::vector<MergedEntry>& out)
     {
         std::map<QString, size_t> byKey;
@@ -215,11 +234,20 @@ private:
                         e.size = fi.size();
                         e.fileRoot = int(r);
                     }
+                    e.lastRoot = int(r);
+                    e.lastAbs = fi.filePath();
                     byKey.emplace(key, out.size());
                     out.push_back(std::move(e));
                     continue;
                 }
                 MergedEntry& e = out[it->second];
+                if (e.lastRoot == int(r) && e.caseTwinA.isEmpty()) {
+                    // Same folder, same root: "Data" next to "data".
+                    e.caseTwinA = e.lastAbs;
+                    e.caseTwinB = fi.filePath();
+                }
+                e.lastRoot = int(r);
+                e.lastAbs = fi.filePath();
                 e.name = name; // the later root's spelling wins
                 const bool link = fi.isSymbolicLink() || fi.isJunction();
                 if (link) {

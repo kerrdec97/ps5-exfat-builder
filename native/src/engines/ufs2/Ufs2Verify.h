@@ -4,6 +4,7 @@
 // to a folder.
 
 #include "core/Cancellation.h"
+#include "core/PathSafety.h"
 #include "core/Progress.h"
 #include "core/Result.h"
 #include "engines/ufs2/Ufs2Reader.h"
@@ -53,10 +54,11 @@ struct ExtractReport {
     std::vector<std::pair<int, QString>> written; // tree node -> file written
 };
 
-// The name an image entry gets on disk. With Windows rules, characters
-// Windows forbids become '_', trailing dots/spaces go and reserved device
-// names (CON, NUL, COM1...) get a '_' prefix; otherwise names are unchanged.
-QString hostFileName(const QString& name, bool windowsRules);
+// The name an image entry gets on disk (core/PathSafety.h). With Windows
+// rules, characters Windows forbids become '_', trailing dots/spaces go and
+// reserved device names (CON, NUL, COM1...) get a '_' prefix; otherwise names
+// are unchanged.
+using fw::hostFileName;
 
 // Writes `tree` (loaded from `image`) into the existing, empty folder `dest`.
 // Names that collide on the destination (after the Windows rules above, or

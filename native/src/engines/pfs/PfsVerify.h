@@ -97,11 +97,16 @@ struct ExtractReport {
     qint64 bytes = 0;
     bool nested = false;
     QStringList warnings;
+    QStringList renamed; // "image path → name on disk" for names this drive cannot store as they are
 };
 
 // Unpacks the image into `outputDir`. A new or empty folder is filled through
 // "<outputDir>.part" and renamed at the end, so a cancelled or failed
-// extraction leaves nothing behind.
+// extraction leaves nothing behind. Every output path is built from image
+// names that pass isSafeEntryName() and is checked to stay inside the folder
+// (core/PathSafety.h); names the drive cannot store (on Windows: forbidden
+// characters, trailing dots or spaces, device names such as CON; names that
+// then collide get " (2)") are changed and listed in ExtractReport::renamed.
 Result<ExtractReport> extractImage(const QString& image, const QString& outputDir, const ExtractOptions& options,
                                    const CancellationToken& token, const ProgressHooks& hooks = {});
 

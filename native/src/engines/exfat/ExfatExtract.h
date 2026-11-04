@@ -28,10 +28,18 @@ struct ExtractStats {
     qint64 bytes = 0;
     qint64 elapsedMs = 0;
     QStringList warnings;
+    QStringList renamed;               // "image path → name on disk"
+    QHash<QString, QString> imagePath; // path written (relative to destDir) -> image path, where they differ
 };
 
 // Writes the contents of `tree` below `destDir` (which must exist). Progress
 // is advanced by bytes and files written.
+//
+// Image names are untrusted: every output path is checked to stay inside
+// `destDir` (core/PathSafety.h). Names exFAT allows but the drive cannot
+// store as they are (on Windows: trailing dots or spaces, device names such
+// as CON or NUL; names that then collide get " (2)") are changed, listed in
+// ExtractStats::renamed and mapped back in ExtractStats::imagePath.
 Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tree, const QString& destDir,
                                  const ExtractOptions& options, const CancellationToken& token,
                                  ProgressReporter* progress = nullptr);
