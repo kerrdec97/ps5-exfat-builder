@@ -102,8 +102,10 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Dump Rename (presets, preview, no overwrite) | `library.rename` (preview/apply/undo log) | Done | tst_gameinfo; tst_app_ui (rename preview through the engine) | — |
 | Language Stripper | `engines/tools` (verified backup ZIP before removal, restore); legacy scan crashed on an undefined table — fixed | Done | tst_tools | — |
 | DLC-emu editor | `tools::dlcemu` (parse/render/validate/auto-find/save with .bak) | Done | tst_dlcemu (goldens from the legacy module); tst_app_ui (editor round trip) | — |
-| AMPR index (generate locally) | `engines/pfs/AmprIndex` | Done | tst_pfs_golden (AMPR case) | — |
-| AMPR index over FTP, fakelib manager, PS5 Manager compare | — | Not ported | — | Lower priority; listed for a later release |
+| AMPR index (generate locally) | `engines/pfs/AmprIndex` (build-time, Lazy rules); stand-alone tool `ampr.index.local` (`AmprJobs`, current ampr_emu upstream row rules, "Not an APR title?" gate) on PS5 connect › AMPR index | Done | tst_pfs_golden (AMPR case); tst_ampr_ftp (local tool, gate); tst_app_ps5_tools (AMPR tab queues it) | Windows CI not yet run on this change |
+| AMPR index over FTP | `ampr.index.ftp` (integration `AmprFtp`): app0 check before any walk, `walkRemoteTree` (MLSD / MDTM times), native writer, upload `.tmp` → old index kept as `.bak` (upstream fix) → rename, read-back; PS5 connect › AMPR index with a console folder picker | Done · field check | tst_ampr_ftp (index from the fake console == index from the same local folder byte for byte, MLSD and LIST+MDTM; `.bak`; parent folder refused; rename refused; cancel); tst_ps5_content (walk) | The AMPR emulator reading an index built over FTP on a real console |
+| Fakelib manager (ShadowMount+) | `ps5::fakelib` (list, legacy reject/confirm rules, add/replace via `uploadReplace`, remove, enable/disable by rename without overwriting the other folder); PS5 connect › Fakelib | Done · field check | tst_ps5_content (fakelibLocalFileRules, fakelibManagerOverFtp, fakelibKeepsTheOriginalWhenTheServerCannotRename); tst_app_ps5_tools (fakelibTabManagesOverlaysOnAFakeConsole) | ShadowMount+ loading the overlays on a console |
+| PS5 Manager game list and compare | `ps5::listConsoleGames` (LIST/MLSD per folder, SITE AVAIL), `mergeGames` (legacy statuses), `compareConsoleFolder` (missing / extra / different size against a dump or an .exfat/.ffpkg); PS5 connect › Manager | Done · field check | tst_ps5_content (gameListMergesConsoleAndLocalImages, folderCompareFindsMissingExtraAndDifferentFiles, siteAvailAndFolderParsing, remoteTreeWalkWithMlsdAndList); tst_app_ps5_tools (managerTabListsGamesAndComparesFolders) | Real console listings and SITE AVAIL replies (inventory U4); large games over Wi-Fi |
 
 ## 7. PS5 connectivity (see docs/engines/PS5_CONNECT.md)
 
@@ -114,7 +116,8 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Kernel log viewer | `KlogClient` (reconnect, tags, wait-for-line) | Done · field check | tst_ps5_services; tst_app_ui (kernel-log model bounds) | Real console |
 | Y2JB (DPI install, auto-block with backups and read-back) | `DpiInstaller`, `Y2jb` | Done · field check | tst_ps5_services | Real console |
 | ShadowMount+/MicroMount config + Safe to unplug | `MountConfig`, `ps5.shadowmount.stop` | Done · field check | tst_ps5_services (INI goldens from the legacy code) | Real console |
-| IP auto-detect sweep, FTP diagnostics/speed test, autoloader editor | — | Not ported | — | Later release |
+| Autoloader editor (local `ps5_autoloader/autoload.txt`) | `ps5::autoloader` (legacy normalisation and header, validation, insert/remove helpers, save with `.bak`, add/delete payloads); setting `ps5.autoloaderFolder` (legacy `al_dir`); PS5 connect › Autoloader | Done | tst_ps5_content (autoloaderNormalizesLikeTheLegacyEditor, autoloaderParsesAndValidates, autoloaderEditingHelpers, autoloaderLoadSaveAddDelete, autoloaderFolderSettingAndLegacyKey); tst_legacy_import; tst_app_ps5_tools (autoloaderTabEditsALocalFolder) | Windows CI not yet run on this change; ps5_autoloader itself never run against the saved file |
+| IP auto-detect sweep, FTP diagnostics/speed test | — | Not ported | — | Later release |
 
 ## 8. Packaging and platform
 

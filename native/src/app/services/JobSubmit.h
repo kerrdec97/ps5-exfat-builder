@@ -31,6 +31,8 @@
 //                  ps5.dpi.install  {package, host?, port?}
 //                  ps5.y2jb.autoBlock {region ("USA"|"EU"|"JP"), confirmed: true, backupDir?, host?, port?}
 //                  ps5.shadowmount.stop {host?, port?}
+//   AMPR index     ampr.index.local {folder, force?}           (pfs: writes <folder>/ampr_emu.index)
+//                  ampr.index.ftp   {remoteFolder, host?, port?} (integration: build on the console folder, upload with .bak)
 //   Image edit     image.exfat.edit {image, operations: [{op: add|replace|delete|mkdir, imagePath, localPath}]}
 //                  image.ffpkg.edit {image, operations: [{op: add|replace|delete|rename|mkdir, path, source, newName}]}
 //   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfsc"), output (file path)}
@@ -107,6 +109,8 @@ Result<QString> submitConvert(AppContext& ctx, const QString& image, const QStri
 Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
                                     const QString& destination, const QJsonArray& items, const QString& undoLog);
 Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPath);
+Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force);
+Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder);
 QString imageEditKind(const QString& image); // "image.exfat.edit" / "image.ffpkg.edit" / ""
 
 // Kinds the Queue page hides (system jobs: update checks).

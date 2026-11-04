@@ -1,6 +1,10 @@
 #include "app/pages/Ps5ConnectPage.h"
 
 #include "app/AppContext.h"
+#include "app/pages/ps5/AmprTab.h"
+#include "app/pages/ps5/AutoloaderTab.h"
+#include "app/pages/ps5/FakelibTab.h"
+#include "app/pages/ps5/ManagerTab.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
 #include "app/ui/LogView.h"
@@ -222,6 +226,24 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     m_stack->addWidget(buildKlogTab());
     m_stack->addWidget(buildY2jbTab());
     m_stack->addWidget(buildMountTab());
+    // Console-content tools (pages/ps5/*Tab): their own connections, demo states by tab data.
+    {
+        const auto endpoint = [this] {
+            ps5::ConsoleEndpoint ep = ps5::endpointFromSettings(m_ctx.settings().snapshot());
+            ep.host = host();
+            ep.ftpPort = quint16(ftpPort());
+            return ep;
+        };
+        const QList<QPair<QString, ConsoleToolTab*>> tools = {{QStringLiteral("Manager"), new Ps5ManagerTab(ctx, endpoint, m_stack)},
+                                                              {QStringLiteral("Fakelib"), new FakelibTab(ctx, endpoint, m_stack)},
+                                                              {QStringLiteral("Autoloader"), new AutoloaderTab(ctx, endpoint, m_stack)},
+                                                              {QStringLiteral("AMPR index"), new AmprTab(ctx, endpoint, m_stack)}};
+        for (const auto& [title, tool] : tools) {
+            m_tabs->setTabData(m_tabs->addTab(title), tool->demoKey());
+            m_stack->addWidget(tool);
+            connect(tool, &ConsoleToolTab::toastRequested, this, &Page::toastRequested);
+        }
+    }
 
     connect(m_session, &ConsoleSession::connected, this, [this](const QString& welcome) {
         setConnectedUi(true, welcome.simplified());
@@ -1350,7 +1372,11 @@ QString Ps5ConnectPage::statusContext() const
 
 QStringList Ps5ConnectPage::demoStates() const
 {
-    return {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount")};
+    QStringList states = {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount")};
+    for (int t = 0; t < m_tabs->count(); ++t) // console-content tools name their state in the tab data
+        if (!m_tabs->tabData(t).toString().isEmpty())
+            states << m_tabs->tabData(t).toString();
+    return states;
 }
 
 void Ps5ConnectPage::applyDemoState(const QString& name)
@@ -1359,6 +1385,12 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
     const int i = tabs.indexOf(name);
     if (i >= 0)
         m_tabs->setCurrentIndex(i);
+    for (int t = 0; t < m_tabs->count(); ++t)
+        if (!name.isEmpty() && m_tabs->tabData(t).toString() == name)
+            if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t))) {
+                m_tabs->setCurrentIndex(t);
+                tool->applyDemo();
+            }
     if (name == QLatin1String("klog") && m_klog->rowCount() == 0) {
         // Specimen lines so the viewer's tags are visible in the evidence.
         for (const QString& t : {QStringLiteral("[KERNEL] sceKernelLoadStartModule: libSceNpTrophy2.sprx"), QStringLiteral("[shadowmount] unmount start /mnt/ext0"),
@@ -1376,6 +1408,9 @@ void Ps5ConnectPage::clearDemoState()
 {
     m_klog->clear();
     klogFilterChanged();
+    for (int t = 0; t < m_stack->count(); ++t)
+        if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t)))
+            tool->clearDemo();
     m_tabs->setCurrentIndex(0);
 }
 
