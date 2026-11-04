@@ -1,0 +1,1 @@
+fw_add_module(fw_engine_integration DEPENDS fw_engine_exfat fw_engine_ufs2 fw_engine_pfs fw_engine_fpkg fw_engine_general fw_connect_ps5)

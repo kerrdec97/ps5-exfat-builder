@@ -269,7 +269,13 @@ Result<JobOutcome> BackportScanJob::run(JobContext& ctx)
             excludes << QDir::cleanPath(QFileInfo(d).absoluteFilePath());
     }
     QStringList warnings;
-    const QStringList games = discoverGames(ctx.settings.stringList(keys::kScanFolders),
+    QStringList scanFolders;
+    for (const auto& v : m_params.value(QStringLiteral("folders")).toArray())
+        if (!v.toString().trimmed().isEmpty())
+            scanFolders << v.toString();
+    if (scanFolders.isEmpty())
+        scanFolders = ctx.settings.stringList(keys::kScanFolders);
+    const QStringList games = discoverGames(scanFolders,
                                             int(ctx.settings.integer(keys::kScanDepth)), excludes, ctx.token, &warnings);
     if (!ctx.token.checkpoint())
         return Error::cancelled();

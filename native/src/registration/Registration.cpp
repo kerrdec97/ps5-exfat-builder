@@ -6,6 +6,7 @@
 #include "engines/exfat/Module.h"
 #include "engines/fpkg/Module.h"
 #include "engines/gameinfo/Module.h"
+#include "engines/integration/Module.h"
 #include "engines/general/Module.h"
 #include "engines/pfs/Module.h"
 #include "engines/tools/Module.h"
@@ -26,12 +27,13 @@ void registerAllModules(ModuleContext& ctx)
     ps5::registerModule(ctx);
     update::registerModule(ctx);
     tools::registerModule(ctx);
+    integration::registerModule(ctx); // last: wires engines together
 }
 
 QStringList registeredModuleNames()
 {
     return {QStringLiteral("general"), QStringLiteral("gameinfo"), QStringLiteral("exfat"), QStringLiteral("pfs"),
-            QStringLiteral("ufs2"),    QStringLiteral("fpkg"),     QStringLiteral("backport"), QStringLiteral("ps5"), QStringLiteral("update"), QStringLiteral("tools")};
+            QStringLiteral("ufs2"),    QStringLiteral("fpkg"),     QStringLiteral("backport"), QStringLiteral("ps5"), QStringLiteral("update"), QStringLiteral("tools"), QStringLiteral("integration")};
 }
 
 } // namespace fw

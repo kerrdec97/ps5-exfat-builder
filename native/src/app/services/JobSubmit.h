@@ -10,26 +10,23 @@
 //
 // Kinds and parameter names used by the UI (to reconcile with the engines):
 //
-//   Image builds   image.exfat.build / image.ufs2.build / image.pfs.build
-//                  {source, output, label?, title?, titleId?, version?, format}
-//                  `format` is "exfat" | "ffpkg" | "ffpfsc"; `output` is the
-//                  destination folder; `label` the chosen file name (no path).
-//   Image verify   image.<fmt>.verify   {image}
-//   Image extract  image.<fmt>.extract  {image, destination}
-//                  <fmt> comes from the file extension: .exfat → exfat,
-//                  .ffpkg → ufs2, .ffpfs/.ffpfsc → pfs.
-//   FPKG build     fpkg.build   {source, sourceType ("folder"|"exfat"|"ffpfsc"|"ffpkg"|"gp5"),
-//                               output, contentId?, title?, contentVersion?,
-//                               packageType ("app"|"addon"|"update"), basePackage?}
+//   Image builds   image.exfat.build / image.ffpkg.build / image.pfs.build
+//                  {source, output (full file path), format ("ffpfsc" for PFS)}
+//   Image verify   image.<fmt>.verify   {image}  (no source: standalone integrity check)
+//   Image extract  image.<fmt>.extract  {image, output, deep (PFS)}
+//                  <fmt> from the extension: .exfat → exfat, .ffpkg → ffpkg,
+//                  .ffpfs/.ffpfsc → pfs.
+//   FPKG build     fpkg.build   {source (folder | .gp5 | image), output?, contentId?, contentVersion?,
+//                               title?, basePackage?, baseFolder?, exactSource?, updateOutput?}
+//   FPKG add-on    fpkg.addon   {payloadFolder, output?, contentId?, entitlementKey, volumeType?}
 //   FPKG verify    fpkg.verify  {package, integrity: bool}
 //   FPKG extract   fpkg.extract {package, destination}
-//   Backport       backport.run     {gameFolders: [..]}   (+ per-job overrides of backport.* settings)
-//                  backport.restore {originalsZip, gameFolder?}
-//                  backport.scan    {folders: [..], depth?} → details.games (see LibraryGame)
-//   Library        library.scan     {folders: [..]} → details.games = [{folder, title, titleId,
-//                                   version, sdk, requiredFw, sizeBytes, files, cover?}]
-//   PS5            ps5.ftp.upload   {host, port, localPath, remotePath}
-//                  ps5.payload.send {host, port, file}
+//   Backport       backport.run     {game}  — one job per game (+ per-job overrides of backport.*)
+//                  backport.restore {game, zip?}  or {journal} to roll back an interrupted apply
+//                  backport.scan    {game} or {folders: [..]} (library mode) → details.games
+//   Library        library.scan     {folders: [..]} → details.games = [LibraryGame::toJson()]
+//   PS5            ps5.ftp.upload   {sources: [..], remoteDir?, host?, port?}
+//                  ps5.payload.send {file, target? ("payload"|"shadowmount"|...), host?, port?}
 //   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate)
 //                  update.download  {release: <details>} → outputs[0] = verified installer
 //   Tools          tools.languages.scan    {folder, batch}

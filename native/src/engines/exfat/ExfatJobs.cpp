@@ -330,12 +330,18 @@ public:
     }
     QString kind() const override { return kJobVerify; }
     QString title() const override { return QFileInfo(m_image).fileName(); }
-    QString subtitle() const override { return QStringLiteral("Verify against %1").arg(native(m_source)); }
+    QString subtitle() const override
+    {
+        return m_source.isEmpty() ? QStringLiteral("Check the image on its own")
+                                  : QStringLiteral("Verify against %1").arg(native(m_source));
+    }
     QStringList phases() const override { return {QStringLiteral("Reading image"), QStringLiteral("Comparing")}; }
     QJsonObject parameters() const override { return m_p; }
     Status validate(const SettingsValues&) const override
     {
         FW_TRY(checkImageFile(m_image));
+        if (m_source.trimmed().isEmpty())
+            return success(); // standalone check: structure (+ every byte readable in full mode)
         return checkSourceFolder(m_source);
     }
     Result<JobOutcome> run(JobContext& ctx) override
@@ -345,6 +351,8 @@ public:
         ctx.progress->setPhases(phases(), {0.1, 0.9});
         ctx.progress->beginPhase(0, 0);
         FW_TRY_ASSIGN(const bool recovered, recoverInterruptedEdit(m_image, &ctx.log));
+        if (m_source.trimmed().isEmpty())
+            return runStandalone(ctx, recovered);
         ScanRules rules = x.rules;
         rules.excludePatterns += m_excludes;
         FW_TRY_ASSIGN(VerifyReport rep, verifyImageAgainstFolder(m_image, m_source, rules, verifyOptions(x, ctx, 1),
@@ -359,6 +367,63 @@ public:
     }
 
 private:
+    // Without a source folder: the structure must be intact, and in "full"
+    // mode every file must read back to its full length without errors.
+    Result<JobOutcome> runStandalone(JobContext& ctx, bool recovered)
+    {
+        FW_TRY_ASSIGN(auto reader, ExfatReader::open(m_image));
+        FW_TRY_ASSIGN(ImageTree tree, reader->readTree(ctx.token, true));
+        JobOutcome o;
+        if (recovered)
+            o.warnings << QStringLiteral("An interrupted edit of this image was undone before verifying it.");
+        o.warnings << tree.warnings;
+        if (!tree.problems.isEmpty()) {
+            o.verification = Verification::Failed;
+            o.verificationDetail = QStringLiteral("The image is damaged: %1").arg(tree.problems.first());
+            o.details.insert(QStringLiteral("problems"), QJsonArray::fromStringList(tree.problems));
+            o.summary = QStringLiteral("The image is damaged.");
+            return o;
+        }
+        const bool full = ctx.settings.string(QStringLiteral("verification.mode")) != QStringLiteral("structure");
+        qint64 files = 0, bytes = 0;
+        for (const ImageEntry& e : tree.entries)
+            if (!e.isDir) {
+                ++files;
+                bytes += e.size;
+            }
+        if (full) {
+            ctx.progress->beginPhase(1, bytes, files);
+            ImageFileStream stream(m_image, reader->geometry());
+            FW_TRY(stream.open());
+            QByteArray buf;
+            buf.resize(4 * 1024 * 1024);
+            for (const ImageEntry& e : tree.entries) {
+                if (e.isDir)
+                    continue;
+                qint64 off = 0;
+                while (off < e.size) {
+                    if (!ctx.token.checkpoint())
+                        return Error::cancelled();
+                    auto n = stream.read(e, off, buf.data(), buf.size());
+                    if (!n.ok() || n.value() <= 0) {
+                        o.verification = Verification::Failed;
+                        o.verificationDetail = QStringLiteral("%1 could not be read back.").arg(e.path);
+                        o.summary = QStringLiteral("The image is damaged.");
+                        return o;
+                    }
+                    off += n.value();
+                    ctx.progress->advance(n.value());
+                }
+                ctx.progress->advanceFiles(1);
+            }
+        }
+        o.verification = Verification::Passed;
+        o.verificationDetail = full ? QStringLiteral("Structure intact; %1 files (%2) read back without errors.").arg(formatCount(files), formatBytes(bytes))
+                                    : QStringLiteral("Structure intact; %1 files.").arg(formatCount(files));
+        o.summary = QStringLiteral("The image is intact.");
+        return o;
+    }
+
     QJsonObject m_p;
     QString m_image, m_source;
     QStringList m_excludes;

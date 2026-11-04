@@ -16,6 +16,19 @@
 
 namespace fw::pages {
 
+namespace {
+// backport.run takes one `game` per job; older queue files may hold `gameFolders`.
+QStringList gamesOf(const QJsonObject& params)
+{
+    QStringList out;
+    if (params.contains(QStringLiteral("game")))
+        out << params.value(QStringLiteral("game")).toString();
+    for (const auto& v : params.value(QStringLiteral("gameFolders")).toArray())
+        out << v.toString();
+    return out;
+}
+} // namespace
+
 using namespace ui;
 using namespace theme;
 
@@ -282,8 +295,8 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
         auto rec = m_ctx.queue().record(id);
         if (!rec || rec->kind != QLatin1String("backport.run"))
             return;
-        for (const auto& v : rec->parameters.value(QStringLiteral("gameFolders")).toArray())
-            m_table->setStatusText(v.toString(), rec->state == JobState::Running ? QStringLiteral("Running · %1").arg(thinPercent(rec->progress.overallFraction)) : jobStateName(rec->state),
+        for (const QString& game : gamesOf(rec->parameters))
+            m_table->setStatusText(game, rec->state == JobState::Running ? QStringLiteral("Running · %1").arg(thinPercent(rec->progress.overallFraction)) : jobStateName(rec->state),
                                    rec->state == JobState::Running ? Tone::Info : toneForState(rec->state));
     });
     rebuildTable();
@@ -395,8 +408,7 @@ void BackportPage::onJobFinished(const QString& id)
         m_scanJobId.clear();
     }
     if (rec->kind == QLatin1String("backport.run")) {
-        for (const auto& v : rec->parameters.value(QStringLiteral("gameFolders")).toArray()) {
-            const QString folder = v.toString();
+        for (const QString& folder : gamesOf(rec->parameters)) {
             QString status = rec->state == JobState::Succeeded ? (rec->outcome ? rec->outcome->summary : QStringLiteral("Backported")) : QStringLiteral("Failed: %1").arg(rec->error ? rec->error->message : jobStateName(rec->state));
             for (const auto& g : m_library.games())
                 if (g.info.folder == folder)

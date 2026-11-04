@@ -45,8 +45,13 @@ GameSummary GameSummary::fromJson(const QJsonObject& o)
     s.titleId = o.value(QStringLiteral("titleId")).toString();
     s.contentId = o.value(QStringLiteral("contentId")).toString();
     s.version = o.value(QStringLiteral("version")).toString();
-    s.sdk = o.value(QStringLiteral("sdk")).toString();
+    // Accepts the UI's own summary, backport.scan games and library.scan games.
+    s.sdk = o.value(QStringLiteral("sdk")).toVariant().toString();
+    if (s.sdk.isEmpty())
+        s.sdk = o.value(QStringLiteral("sdkVersion")).toString();
     s.requiredFw = o.value(QStringLiteral("requiredFw")).toString();
+    if (s.requiredFw.isEmpty())
+        s.requiredFw = o.value(QStringLiteral("requiredSystemVersion")).toString();
     s.bytes = qint64(o.value(QStringLiteral("sizeBytes")).toDouble());
     s.files = qint64(o.value(QStringLiteral("files")).toDouble());
     s.isGame = o.value(QStringLiteral("isGame")).toBool(true);

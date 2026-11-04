@@ -3,6 +3,7 @@
 #include "core/BuildInfo.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
+#include "engines/integration/Module.h"
 #include "registration/Registration.h"
 
 #include <QFileInfo>
@@ -29,6 +30,7 @@ AppContext::AppContext(QObject* parent) : QObject(parent), m_schema(std::make_sh
     m_settings = std::make_unique<SettingsStore>(m_schema, Paths::settingsFile(), this);
     m_history = std::make_unique<JobHistory>(Paths::historyFile());
     m_queue = std::make_unique<JobQueue>(*m_settings, m_factory, this);
+    m_postBuild = new integration::PostBuildActions(*m_queue, *m_settings, this);
     m_queue->setHistory(m_history.get());
     m_queue->setPersistencePath(Paths::queueFile());
 }

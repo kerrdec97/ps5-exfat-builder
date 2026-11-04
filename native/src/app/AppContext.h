@@ -56,6 +56,7 @@ private:
     std::unique_ptr<SettingsStore> m_settings;
     std::unique_ptr<JobHistory> m_history;
     std::unique_ptr<JobQueue> m_queue;
+    QObject* m_postBuild = nullptr; // integration::PostBuildActions (owned by this)
     std::shared_ptr<RingBufferSink> m_ring;
     std::shared_ptr<FileLogSink> m_file;
     std::shared_ptr<CallbackSink> m_uiSink;
