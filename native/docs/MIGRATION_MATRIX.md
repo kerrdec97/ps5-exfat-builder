@@ -74,8 +74,13 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Apply to game folder (journaled, crash-safe rollback), restore | `ApplyJournal`, `RestoreService` | Done | tst_backport_run | Default "apply" = on (owner may flip) |
 | Already-backported detection (manifest hashes) | `BackportManifest` (reads Python schema 1, writes 2) | Done | tst_backport_run | — |
 | Interrupted-apply prompt at start | `backport::interruptedApplies()` | Done | tst_backport_run; start-up banner on the Backport page | — |
-| Import-table audit, fix families, audio gate, PS5 Pro fix/Pro build, right.sprx, default fakelib set, save-data fixes, SDK 11–13 | — | Blocked | — | Backport GUI source (D:\) not reachable; firmware tables and Sony-derived files have no documented licence/provenance |
-| Audio-fix scanner (legacy hidden tab) | — | Not ported | — | Unreachable in the legacy UI; patch profiles need console evidence |
+| Run report per run (JSON + self-contained HTML next to `BackportBackup/<ID>/`), "Open report" on the Backport page | `RunReport` (runner, SDK fix, audio report) | Done | tst_backport_report | — |
+| SDK Fixer, SDK marker only (copy, or in place with backup ZIP + journal, undo) | `SdkFixer`, `backport.sdkFix`, `backport.restore {undoSdkFix}` | Done · field check | tst_backport_sdkfix | Console load test of a fixed build |
+| Unity/Il2Cpp module-name case (detector) | `ModuleImports` → plan / library-scan issue `ModuleNameCase` | Done · field check | tst_backport_detect | Dynamic-tag layout on real PS5 titles unverified; the fix stays blocked |
+| Audio-fix scanner (legacy hidden tab) | `AudioScan`, `backport.audioScan` (read-only report) | Done | tst_backport_detect | Patch profiles need console evidence (no test patch) |
+| User-supplied AMPR/PlayGo libraries with hash pinning | `ProviderSet`, `backport.amprPlaygoFolder`, `backport.pinProviders` | Done · field check | tst_backport_providers | Nothing bundled; whether a given provider loads is the user's test |
+| Console logs from the Backport page (payload, kernel log) | Links to the PS5 connect page tabs | Done | — (UI link; screenshot `backport-report`) | Crash-dump download: console paths not documented in this repo |
+| Import-table audit, fix families, audio gate and audio patches, Il2Cpp case fix, PS5 Pro fix/Pro build, right.sprx, default fakelib set, bundled AMPR/PlayGo, save-data fixes, SDK 11–13 | — | Blocked | — | Backport GUI source (D:\) not reachable; firmware tables and Sony-derived files have no documented licence/provenance |
 
 ## 5. Queue, history, logging, settings, storage
 
