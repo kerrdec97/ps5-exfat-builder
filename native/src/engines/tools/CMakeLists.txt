@@ -1,1 +1,1 @@
-fw_add_module(fw_engine_tools)
+fw_add_module(fw_engine_tools DEPENDS fw_engine_gameinfo)

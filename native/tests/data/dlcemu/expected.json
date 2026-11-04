@@ -1,0 +1,79 @@
+{
+ "errors": [
+  "Entry 2 (PSAC): content_id must be exactly 36 characters (got 5).",
+  "Entry 2 (PSAC): label must be 1-16 alphanumeric characters.",
+  "Entry 2 (PSAC): service_label must be 1-6 alphanumeric characters.",
+  "Entry 2 (PSAC): mount_point must be at most 15 characters (got 28).",
+  "Entry 2 (PSAC): entitlement_key must be 32 hexadecimal characters.",
+  "Entry 2 (PSAC): download_status must be one of: NO_EXTRA_DATA, NO_IN_QUEUE, DOWNLOADING, DOWNLOAD_SUSPENDED, INSTALLED.",
+  "Entry 3 (PSXX): Unknown section type [PSXX]."
+ ],
+ "warnings": [
+  "Entry 2 (PSAC): mount_point \"/app0/addcont_with_long_name\" does not exist locally (it may exist on the console; dlc_emu will not create it).",
+  "Entry 3 (PSXX): duplicate unified label \"SEASONPASS000001\" (also Entry 1) — the module skips duplicates."
+ ],
+ "suggestions": [
+  {
+   "section": "PSAC",
+   "params": {
+    "content_id": "UP9000-PPSA01234_00-SEASONPASS000001",
+    "mount_point": "/app0/addcont0",
+    "download_status": "INSTALLED"
+   },
+   "confidence": "high",
+   "source": "param.json contentId",
+   "placeholder": false
+  },
+  {
+   "section": "PSAC",
+   "params": {
+    "content_id": "UP9000-PPSA01234_00-COSTUMEPACK00002",
+    "mount_point": "/app0/addcont1",
+    "download_status": "INSTALLED"
+   },
+   "confidence": "high",
+   "source": "param.json contentId",
+   "placeholder": false
+  },
+  {
+   "section": "PSAC",
+   "params": {
+    "content_id": "UP9000-PPSA01234_00-ADDCONT000000002",
+    "mount_point": "/app0/addcont2",
+    "download_status": "INSTALLED"
+   },
+   "confidence": "medium",
+   "source": "matched to /app0/addcont2",
+   "placeholder": true
+  },
+  {
+   "section": "PSAC",
+   "params": {
+    "content_id": "UP9000-PPSA01234_00-ABCDEFGHIJKLMNOP"
+   },
+   "confidence": "low",
+   "source": "eboot.bin scan",
+   "placeholder": false
+  },
+  {
+   "section": "PSAC",
+   "params": {
+    "content_id": "UP9000-PPSA01234_00-QRSTUVWXYZ012345"
+   },
+   "confidence": "low",
+   "source": "eboot.bin scan",
+   "placeholder": false
+  }
+ ],
+ "prefix": "UP9000-PPSA01234_00-",
+ "prefix_placeholder": false,
+ "addcont": [
+  "/app0/addcont0",
+  "/app0/addcont1",
+  "/app0/addcont2"
+ ],
+ "base_ids": [
+  "UP9000-PPSA01234_00-GAMEGAME00000000"
+ ],
+ "notes": []
+}
