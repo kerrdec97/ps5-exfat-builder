@@ -50,7 +50,7 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Edit exFAT (add/replace/delete/new folder) | `image.exfat.edit`: in place with undo journal when safe, else rebuild + verify + swap | Done | tst_exfat_edit; tst_app_ui (Edit image page against a real built image) | — |
 | Edit ffpkg (add/replace/delete/rename/mkdir) | `image.ffpkg.edit` rebuild through `.part`, original kept until verified | Done | tst_ufs2_jobs; Edit image page | Not exercised from the UI end to end |
 | Convert exFAT↔ffpkg, image→.ffpfsc | `image.convert` (extract + build + verify) | Done | tst_integration (exFAT→FFPKG→FFPFSC→exFAT byte-identical); "Convert to…" card on Edit image | Not exercised from the UI end to end |
-| ffpkg hex preview, compare two images | — | Not ported | — | Low value; verify covers integrity |
+| ffpkg hex preview, compare two images | `image.compare` {a, b, depth}: `integration::compareTrees` over `integration::ImageFiles` (native readers for .exfat / .ffpkg / .ffpfs / .ffpfsc incl. nested containers, or a folder); only in A / only in B (files and folders), different size, different content with the first differing offset (full depth streams both sides), PFSC block padding tolerated; capped lists + exact counts in `JobOutcome::details`, job succeeds whatever it finds. Compare card + result sheet (Copy report) on Extract & verify. Hex preview: `ImageFiles::readSlice` → `services/HexPreview` (worker thread), Edit image › Preview… / double-click, offset/hex/ASCII, 64 KiB + Load more | Done | tst_image_compare (identical exFAT/FFPKG/FFPFSC/dump pairwise, edited copy → every difference kind, structure vs full, PFSC padding with a real compressed .ffpfs, capped lists, cancellation, validation, byte slices from every format); tst_image_tools (hex service on built .exfat/.ffpkg, Preview sheet with Load more, Compare card → queue → result sheet) | Legacy report's UFS2 mode/BSD-flag differences not compared (the readers do not expose them for every format); the preview opens what the editor opens (.exfat/.ffpkg) |
 
 ## 3. FPKG packages (see FPKG_PARITY.md)
 
@@ -74,8 +74,13 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Apply to game folder (journaled, crash-safe rollback), restore | `ApplyJournal`, `RestoreService` | Done | tst_backport_run | Default "apply" = on (owner may flip) |
 | Already-backported detection (manifest hashes) | `BackportManifest` (reads Python schema 1, writes 2) | Done | tst_backport_run | — |
 | Interrupted-apply prompt at start | `backport::interruptedApplies()` | Done | tst_backport_run; start-up banner on the Backport page | — |
-| Import-table audit, fix families, audio gate, PS5 Pro fix/Pro build, right.sprx, default fakelib set, save-data fixes, SDK 11–13 | — | Blocked | — | Backport GUI source (D:\) not reachable; firmware tables and Sony-derived files have no documented licence/provenance |
-| Audio-fix scanner (legacy hidden tab) | — | Not ported | — | Unreachable in the legacy UI; patch profiles need console evidence |
+| Run report per run (JSON + self-contained HTML next to `BackportBackup/<ID>/`), "Open report" on the Backport page | `RunReport` (runner, SDK fix, audio report) | Done | tst_backport_report | — |
+| SDK Fixer, SDK marker only (copy, or in place with backup ZIP + journal, undo) | `SdkFixer`, `backport.sdkFix`, `backport.restore {undoSdkFix}` | Done · field check | tst_backport_sdkfix | Console load test of a fixed build |
+| Unity/Il2Cpp module-name case (detector) | `ModuleImports` → plan / library-scan issue `ModuleNameCase` | Done · field check | tst_backport_detect | Dynamic-tag layout on real PS5 titles unverified; the fix stays blocked |
+| Audio-fix scanner (legacy hidden tab) | `AudioScan`, `backport.audioScan` (read-only report) | Done | tst_backport_detect | Patch profiles need console evidence (no test patch) |
+| User-supplied AMPR/PlayGo libraries with hash pinning | `ProviderSet`, `backport.amprPlaygoFolder`, `backport.pinProviders` | Done · field check | tst_backport_providers | Nothing bundled; whether a given provider loads is the user's test |
+| Console logs from the Backport page (payload, kernel log) | Links to the PS5 connect page tabs | Done | — (UI link; screenshot `backport-report`) | Crash-dump download: console paths not documented in this repo |
+| Import-table audit, fix families, audio gate and audio patches, Il2Cpp case fix, PS5 Pro fix/Pro build, right.sprx, default fakelib set, bundled AMPR/PlayGo, save-data fixes, SDK 11–13 | — | Blocked | — | Backport GUI source (D:\) not reachable; firmware tables and Sony-derived files have no documented licence/provenance |
 
 ## 5. Queue, history, logging, settings, storage
 

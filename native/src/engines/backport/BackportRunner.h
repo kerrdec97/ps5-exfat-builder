@@ -10,6 +10,10 @@
 //             the game with rollback (S35, V7)
 // The game folder is not written before Apply (S31). A build with any
 // per-file failure produces no backport ZIP and applies nothing (D4, S34).
+//
+// Every run that passes the preflight writes a run report (#24, RunReport.h)
+// next to the game's backup records, whatever its outcome; a failed run names
+// it in the error detail (reportFromDetail()).
 
 #include "core/Result.h"
 #include "engines/backport/BackportEngine.h"
@@ -37,6 +41,8 @@ struct RunResult {
     QStringList leftUnchanged;
     int filesRewritten = 0;
     bool buildVerified = true; // backport.verifyBuild (V1-V3 per executable)
+    QString reportJson;        // #24 run report (RunReport.h)
+    QString reportHtml;
     QJsonObject details;
 };
 

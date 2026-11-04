@@ -446,7 +446,7 @@ private slots:
                                       keys::kFakelibFolder, keys::kApplyToGameFolder, keys::kNidPatchMode,
                                       keys::kEncryptedSelfPolicy, keys::kVerifyBuild, keys::kScanFolders,
                                       keys::kScanDepth, keys::kKeepStagingOnFailure, keys::kJournalRetentionDays,
-                                      keys::kNotes};
+                                      keys::kNotes, keys::kAmprPlaygoFolder};
         int count = 0;
         for (const auto* d : schema.all()) {
             QVERIFY2(d->key.startsWith(QStringLiteral("backport.")), qPrintable(d->key));
@@ -468,6 +468,11 @@ private slots:
         QVERIFY(jobs.contains(QStringLiteral("backport.run")));
         QVERIFY(jobs.contains(QStringLiteral("backport.restore")));
         QVERIFY(jobs.contains(QStringLiteral("backport.scan")));
+        QVERIFY(jobs.contains(QStringLiteral("backport.sdkFix")));
+        QVERIFY(jobs.contains(QStringLiteral("backport.audioScan")));
+        QVERIFY(jobs.contains(QStringLiteral("backport.pinProviders")));
+        QCOMPARE(schema.find(keys::kAmprPlaygoFolder)->type, SettingType::DirPath);
+        QVERIFY(schema.find(keys::kAmprPlaygoFolder)->perJob);
         // No settings for blocked features.
         for (const auto* d : schema.all())
             QVERIFY2(!d->key.contains(QStringLiteral("pro"), Qt::CaseInsensitive) || d->key == keys::kTargetSdk,
@@ -485,7 +490,9 @@ private slots:
         QDir().mkpath(d.filePath("o"));
         QDir().mkpath(d.filePath("b"));
         QDir().mkpath(d.filePath("f"));
+        QDir().mkpath(d.filePath("p"));
         QVariantMap values{{keys::kOriginalsZipFolder, d.filePath("o")},
+                           {keys::kAmprPlaygoFolder, d.filePath("p")},
                            {keys::kBackportZipFolder, d.filePath("b")},
                            {keys::kTargetSdk, QStringLiteral("5")},
                            {keys::kFakelibFolder, d.filePath("f")},
@@ -502,6 +509,7 @@ private slots:
         QCOMPARE(o.backportDir, d.filePath("b"));
         QCOMPARE(o.targetSdk, 5);
         QCOMPARE(o.fakelibDir, d.filePath("f"));
+        QCOMPARE(o.providerDir, d.filePath("p"));
         QCOMPARE(o.applyToGame, false);
         QCOMPARE(o.nidMode, NidMode::Off);
         QCOMPARE(o.encryptedPolicy, EncryptedPolicy::LeaveUnchanged);

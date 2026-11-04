@@ -324,11 +324,23 @@ private slots:
             titles << tabs->tabText(i);
         for (const QString& t : {QStringLiteral("Manager"), QStringLiteral("Fakelib"), QStringLiteral("Autoloader"), QStringLiteral("AMPR index")})
             QVERIFY2(titles.contains(t), qPrintable(titles.join(u',')));
-        const QStringList states = page->demoStates();
+        QStringList states = page->demoStates();
+        QCOMPARE(states.removeDuplicates(), qsizetype(0)); // every tab carries a key; no state twice
         const QString shots = qEnvironmentVariable("FW_TAB_SHOTS");
         for (const QString& key : {QStringLiteral("manager"), QStringLiteral("fakelib"), QStringLiteral("autoloader"), QStringLiteral("ampr")}) {
             QVERIFY(states.contains(key));
+            // Stable key in the tab data; other pages open the tab by key.
+            int keyed = -1;
+            for (int i = 0; i < tabs->count(); ++i)
+                if (tabs->tabData(i).toString() == key)
+                    keyed = i;
+            QVERIFY(keyed > 0);
+            window.navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), key}});
+            QCOMPARE(tabs->currentIndex(), keyed);
+            window.navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("ftp")}});
+            QCOMPARE(tabs->currentIndex(), 0);
             page->applyDemoState(key);
+            QCOMPARE(tabs->currentIndex(), keyed);
             QCOMPARE(tabs->tabText(tabs->currentIndex()).toLower().left(4), key.left(4));
             pages::ConsoleToolTab* tool = nullptr;
             for (auto* t : page->findChildren<pages::ConsoleToolTab*>())

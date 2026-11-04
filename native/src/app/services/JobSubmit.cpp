@@ -320,6 +320,12 @@ Result<QString> submitConvert(AppContext& ctx, const QString& image, const QStri
                    overrides);
 }
 
+Result<QString> submitCompare(AppContext& ctx, const QString& a, const QString& b, const QString& depth)
+{
+    return enqueue(ctx, QStringLiteral("image.compare"),
+                   QJsonObject{{QStringLiteral("a"), a}, {QStringLiteral("b"), b}, {QStringLiteral("depth"), depth}}, {});
+}
+
 Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
                                     const QString& destination, const QJsonArray& items, const QString& undoLog)
 {

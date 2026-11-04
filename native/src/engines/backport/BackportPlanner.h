@@ -13,6 +13,7 @@
 #include "engines/backport/ExecutableScanner.h"
 #include "engines/backport/FakelibSet.h"
 #include "engines/backport/GameMetadata.h"
+#include "engines/backport/ModuleImports.h"
 
 #include <QList>
 #include <QString>
@@ -49,7 +50,11 @@ struct BackportPlan {
     QString titleId;       // manifest folder
     std::optional<int> gameSdk;
     const SdkPair* pair = nullptr;
-    std::optional<FakelibSource> fakelib;
+    std::optional<FakelibSource> fakelib; // the set staged into fakelib/ (with the providers in place)
+    std::optional<FakelibSource> providers; // #34: the user's AMPR/PlayGo libraries
+    QStringList providersIgnored;           // other libraries in the provider folder
+    bool pinProvidersOnRun = false;         // the provider folder has no pins yet (trust on first use)
+    std::vector<ModuleCaseMismatch> moduleCase; // #41 detector
     FakelibState fakelibState = FakelibState::None;
     QStringList fakelibExtras;          // the dump's own fakelib files the set does not replace
     QStringList stagedFakelibTargets;   // game-relative targets of the staged set

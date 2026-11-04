@@ -6,7 +6,12 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "engines/backport/BackportJobs.h"
+#include "engines/backport/BackportSettings.h"
+#include "engines/backport/RunReport.h"
+#include "engines/backport/SdkFixer.h"
 
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -16,6 +21,10 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmapCache>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTimer>
+#include <QUrl>
 
 namespace fw::pages {
 
@@ -29,6 +38,24 @@ QStringList gamesOf(const QJsonObject& params)
     for (const auto& v : params.value(QStringLiteral("gameFolders")).toArray())
         out << v.toString();
     return out;
+}
+
+// The game folder a backport, SDK fix or audio report job is about.
+QString folderOf(const QJsonObject& params)
+{
+    const QString g = params.value(QStringLiteral("game")).toString();
+    return g.isEmpty() ? params.value(QStringLiteral("folder")).toString() : g;
+}
+
+// The run report a finished job names: its outcome, or the error detail of a failed run.
+QString reportOf(const JobRecord& rec)
+{
+    QString html;
+    if (rec.outcome)
+        html = rec.outcome->details.value(QStringLiteral("report")).toObject().value(QStringLiteral("html")).toString();
+    if (html.isEmpty() && rec.error)
+        html = backport::reportFromDetail(rec.error->detail);
+    return html;
 }
 } // namespace
 
@@ -284,6 +311,16 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
             } else
                 emit toastRequested(Tone::Err, QStringLiteral("Backport not started"), r.error().message);
         });
+        const bool canFix = jobs::isAvailable(m_ctx, backport::kJobSdkFix);
+        menu.addAction(QStringLiteral("Fix the SDK marker on a copy…"), this, [this, folder] { fixSdk(folder, false); })->setEnabled(canFix);
+        menu.addAction(QStringLiteral("Fix the SDK marker in place…"), this, [this, folder] { fixSdk(folder, true); })->setEnabled(canFix);
+        menu.addAction(QStringLiteral("Undo the last SDK fix…"), this, [this, folder] { undoSdkFix(folder); })
+            ->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("backport.restore")));
+        menu.addAction(QStringLiteral("Audio report (read-only)"), this, [this, folder] { audioReport(folder); })
+            ->setEnabled(jobs::isAvailable(m_ctx, backport::kJobAudioScan));
+        const QString report = m_reports.value(folder);
+        menu.addAction(QStringLiteral("Open the last report"), this, [this, report] { openReport(report); })->setEnabled(!report.isEmpty());
+        menu.addSeparator();
         menu.addAction(QStringLiteral("Build image from this dump"), this, [this, folder] {
             emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), folder}}});
         });
@@ -307,16 +344,34 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     ll->addWidget(m_tableCard);
 
     auto* activity = new Card(left);
-    auto* openLogs = new Link(QStringLiteral("Open in Logs"), activity);
+    auto* activityLinks = new QWidget(activity);
+    auto* alh = hbox(activityLinks, space::md);
+    m_openReport = new Link(QStringLiteral("Open report"), activityLinks);
+    m_openReport->setVisible(false);
+    connect(m_openReport, &Link::activated, this, [this] { openReport(m_lastReport); });
+    auto* openLogs = new Link(QStringLiteral("Open in Logs"), activityLinks);
     connect(openLogs, &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("logs"), {{QStringLiteral("source"), QStringLiteral("backport")}}});
     });
-    activity->setTitle(QStringLiteral("Activity"), openLogs);
+    alh->addWidget(m_openReport);
+    alh->addWidget(openLogs);
+    activity->setTitle(QStringLiteral("Activity"), activityLinks);
     activity->body()->setSpacing(space::sm);
     m_activity = new ActivityWell(logModel, activity);
     m_activity->setSource(QStringLiteral("backport"));
     activity->body()->addWidget(m_activity);
     ll->addWidget(activity);
+    // Shortcuts to the PS5 connect page (Payloads and Kernel log tabs); no protocol work here.
+    auto* console = new InfoBar(Tone::Info, left);
+    console->setTitle(QStringLiteral("Testing on a console?"));
+    console->setMessage(QStringLiteral("Send the kernel-log or debug payload and watch the kernel log on the PS5 connect page while the game starts."));
+    connect(console->addLink(QStringLiteral("Send a payload…")), &Link::activated, this, [this] {
+        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("payloads")}}});
+    });
+    connect(console->addLink(QStringLiteral("Open the kernel log")), &Link::activated, this, [this] {
+        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("klog")}}});
+    });
+    ll->addWidget(console);
 
     auto* right = new QWidget(columns);
     auto* rl = vbox(right, space::lg);
@@ -328,6 +383,15 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     tip->setTitle(QStringLiteral("Black screen on FW 5.00 or newer?"));
     tip->setMessage(QStringLiteral("Set Target SDK to 5 or higher and backport the unmodified game again. Keep the SDK 4 ZIP for FW 4.xx consoles."));
     rl->addWidget(tip);
+    m_providers = new InfoBar(Tone::Info, right);
+    m_providers->setTitle(QStringLiteral("AMPR / PlayGo libraries"));
+    connect(m_providers->addLink(QStringLiteral("Pin them again…")), &Link::activated, this, &BackportPage::pinProviders);
+    rl->addWidget(m_providers);
+    connect(m_options, &JobOptionsPanel::overridesChanged, this, &BackportPage::refreshProviderBar);
+    connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+        if (key == backport::keys::kAmprPlaygoFolder)
+            refreshProviderBar();
+    });
     rl->addStretch(1);
     layout->setLeft(left);
     layout->setRight(right);
@@ -344,6 +408,7 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
                                    rec->state == JobState::Running ? Tone::Info : toneForState(rec->state));
     });
     rebuildTable();
+    refreshProviderBar();
 }
 
 void BackportPage::rebuildTable()
@@ -458,6 +523,35 @@ void BackportPage::onJobFinished(const QString& id)
         m_library.setLastScan(QDateTime::currentDateTime());
         m_scanJobId.clear();
     }
+    if (rec->kind == backport::kJobRun || rec->kind == backport::kJobSdkFix || rec->kind == backport::kJobAudioScan) {
+        const QString html = reportOf(*rec);
+        if (!html.isEmpty()) {
+            m_reports.insert(folderOf(rec->parameters), QDir::fromNativeSeparators(html));
+            m_lastReport = QDir::fromNativeSeparators(html);
+            m_openReport->setVisible(true);
+            m_openReport->setToolTip(nativePath(m_lastReport));
+        }
+    }
+    const bool undo = rec->kind == QLatin1String("backport.restore") && rec->parameters.value(QStringLiteral("undoSdkFix")).toBool();
+    if (rec->kind == backport::kJobSdkFix || rec->kind == backport::kJobAudioScan || rec->kind == backport::kJobPinProviders || undo) {
+        const bool ok = rec->state == JobState::Succeeded && rec->outcome;
+        const QString title = rec->kind == backport::kJobSdkFix  ? QStringLiteral("SDK fix")
+            : rec->kind == backport::kJobAudioScan               ? QStringLiteral("Audio report")
+            : rec->kind == backport::kJobPinProviders            ? QStringLiteral("AMPR / PlayGo pins")
+                                                                 : QStringLiteral("Undo the SDK fix");
+        if (rec->state != JobState::Cancelled)
+            emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? title : QStringLiteral("%1 failed").arg(title),
+                                ok ? rec->outcome->summary : (rec->error ? rec->error->message : jobStateName(rec->state)));
+        const QString folder = folderOf(rec->parameters);
+        if (rec->kind == backport::kJobSdkFix)
+            m_table->setStatusText(folder, ok ? QStringLiteral("SDK fixed") : QStringLiteral("SDK fix failed"), ok ? Tone::Ok : Tone::Err);
+        // A copy appears in the library next to its source.
+        if (ok && rec->kind == backport::kJobSdkFix && rec->parameters.value(QStringLiteral("mode")).toString() != QLatin1String("inPlace")) {
+            const QString out = QDir::fromNativeSeparators(rec->outcome->details.value(QStringLiteral("output")).toString());
+            if (!out.isEmpty() && out != folder)
+                addGameFolder(out);
+        }
+    }
     if (rec->kind == QLatin1String("backport.run")) {
         for (const QString& folder : gamesOf(rec->parameters)) {
             QString status = rec->state == JobState::Succeeded ? (rec->outcome ? rec->outcome->summary : QStringLiteral("Backported")) : QStringLiteral("Failed: %1").arg(rec->error ? rec->error->message : jobStateName(rec->state));
@@ -501,6 +595,97 @@ void BackportPage::restoreOriginals()
         m_ctx.queue().holdQueue(false);
 }
 
+Result<QString> BackportPage::enqueueBackportJob(const QString& kind, const QJsonObject& params, const QString& notStarted)
+{
+    if (!jobs::isAvailable(m_ctx, kind)) {
+        emit toastRequested(Tone::Err, notStarted, jobs::unavailable(kind).message);
+        return jobs::unavailable(kind);
+    }
+    auto r = m_ctx.queue().enqueue(kind, params, m_options->overrides());
+    if (!r.ok()) {
+        emit toastRequested(Tone::Err, notStarted, r.error().message);
+        return r;
+    }
+    m_ctx.queue().holdQueue(false);
+    return r;
+}
+
+void BackportPage::fixSdk(const QString& folder, bool inPlace)
+{
+    const QString sdk = m_options->effectiveValue(backport::keys::kTargetSdk).toString();
+    const QString text = inPlace
+        ? QStringLiteral("Every executable in %1 gets the SDK %2 marker (loads on FW %2.00 and later). The files that change are "
+                         "saved to a backup ZIP in the originals ZIP folder first, then replaced through a journal that rolls back "
+                         "on any error. No fakelib is added and param.json is not changed. Undo it later with Undo the last SDK fix.")
+              .arg(Sheet::monoSpan(nativePath(folder)), sdk)
+        : QStringLiteral("A copy named %1 is made next to the folder, with every executable at the SDK %2 marker (loads on FW %2.00 "
+                         "and later). No fakelib is added and param.json is not changed; the folder itself is only read.")
+              .arg(Sheet::monoSpan(backport::sdkFixCopyName(QFileInfo(folder).fileName(), sdk.toInt())), sdk);
+    if (!Sheet::confirm(window(), inPlace ? QStringLiteral("Change the SDK marker in place?") : QStringLiteral("Fix the SDK marker on a copy?"),
+                        text, QStringLiteral("Cancel"), inPlace ? QStringLiteral("Change in place") : QStringLiteral("Make the copy"), false,
+                        inPlace ? Sheet::Icon::Warning : Sheet::Icon::Info))
+        return;
+    const QJsonObject p{{QStringLiteral("folder"), folder}, {QStringLiteral("mode"), inPlace ? QStringLiteral("inPlace") : QStringLiteral("copy")}};
+    if (enqueueBackportJob(backport::kJobSdkFix, p, QStringLiteral("SDK fix not started")).ok())
+        m_table->setStatusText(folder, QStringLiteral("Queued · SDK fix"), Tone::Info);
+}
+
+void BackportPage::undoSdkFix(const QString& folder)
+{
+    if (!Sheet::confirm(window(), QStringLiteral("Undo the last SDK fix?"),
+                        QStringLiteral("The files the last in-place SDK fix of %1 replaced are put back from its backup. Files "
+                                       "that changed since are left as they are and reported.")
+                            .arg(Sheet::monoSpan(nativePath(folder))),
+                        QStringLiteral("Keep the fix"), QStringLiteral("Undo it"), false, Sheet::Icon::Info))
+        return;
+    (void)enqueueBackportJob(QStringLiteral("backport.restore"),
+                             QJsonObject{{QStringLiteral("game"), folder}, {QStringLiteral("undoSdkFix"), true}},
+                             QStringLiteral("Undo not started"));
+}
+
+void BackportPage::audioReport(const QString& folder)
+{
+    if (enqueueBackportJob(backport::kJobAudioScan, QJsonObject{{QStringLiteral("game"), folder}}, QStringLiteral("Audio report not started")).ok())
+        emit toastRequested(Tone::Info, QStringLiteral("Audio report queued"),
+                            QStringLiteral("Read-only: nothing in the game is changed. Open report shows it when it is done."));
+}
+
+void BackportPage::pinProviders()
+{
+    const QString folder = m_options->effectiveValue(backport::keys::kAmprPlaygoFolder).toString().trimmed();
+    if (folder.isEmpty())
+        return;
+    if (!Sheet::confirm(window(), QStringLiteral("Pin the AMPR / PlayGo libraries again?"),
+                        QStringLiteral("The SHA-256 of libSceAmpr and libScePlayGo in %1 is recorded now. Later backports use "
+                                       "exactly these files and refuse them if they change, until you pin them again.")
+                            .arg(Sheet::monoSpan(nativePath(folder))),
+                        QStringLiteral("Cancel"), QStringLiteral("Pin them"), false, Sheet::Icon::Info))
+        return;
+    (void)enqueueBackportJob(backport::kJobPinProviders, QJsonObject{{QStringLiteral("folder"), folder}},
+                             QStringLiteral("Pinning not started"));
+}
+
+void BackportPage::openReport(const QString& htmlPath)
+{
+    if (htmlPath.isEmpty())
+        return;
+    if (!QFileInfo(htmlPath).isFile()) {
+        emit toastRequested(Tone::Warn, QStringLiteral("Report not found"), nativePath(htmlPath));
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(htmlPath)))
+        openInFileManager(htmlPath);
+}
+
+void BackportPage::refreshProviderBar()
+{
+    const QString folder = m_options->effectiveValue(backport::keys::kAmprPlaygoFolder).toString().trimmed();
+    m_providers->setVisible(!folder.isEmpty() && jobs::isAvailable(m_ctx, backport::kJobPinProviders));
+    m_providers->setMessage(QStringLiteral("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
+                                           "purpose, pin them again, or the backport is refused.")
+                                .arg(nativePath(folder)));
+}
+
 void BackportPage::refresh() { scan(); }
 
 bool BackportPage::acceptsDrop(const QList<QUrl>& urls) const
@@ -539,5 +724,27 @@ QString BackportPage::statusContext() const
 }
 
 void BackportPage::setDragHighlight(bool on) { m_tableCard->setDropHighlight(on); }
+
+void BackportPage::applyDemoState(const QString& name)
+{
+    if (name == QLatin1String("report")) {
+        m_openReport->setVisible(true);
+        return;
+    }
+    if (name != QLatin1String("pins"))
+        return;
+    m_providers->setVisible(true);
+    m_providers->setMessage(QStringLiteral("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
+                                           "purpose, pin them again, or the backport is refused.")
+                                .arg(nativePath(QStringLiteral("D:/Backport/ampr_emu"))));
+    QTimer::singleShot(0, this, [this] { scrollArea()->verticalScrollBar()->setValue(scrollArea()->verticalScrollBar()->maximum()); });
+}
+
+void BackportPage::clearDemoState()
+{
+    m_openReport->setVisible(!m_lastReport.isEmpty());
+    refreshProviderBar();
+    scrollArea()->verticalScrollBar()->setValue(0);
+}
 
 } // namespace fw::pages

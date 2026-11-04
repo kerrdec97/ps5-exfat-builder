@@ -207,8 +207,14 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     content()->addWidget(statusRow);
 
     m_tabs = new QTabBar(this);
-    for (const auto& t : {QStringLiteral("FTP browser"), QStringLiteral("Payloads"), QStringLiteral("Kernel log"), QStringLiteral("Y2JB"), QStringLiteral("Mount config")})
-        m_tabs->addTab(t);
+    // Stable keys in the tab data: other pages open a tab by key, never by position.
+    const std::pair<QString, QString> tabs[] = {{QStringLiteral("ftp"), QStringLiteral("FTP browser")},
+                                                {QStringLiteral("payloads"), QStringLiteral("Payloads")},
+                                                {QStringLiteral("klog"), QStringLiteral("Kernel log")},
+                                                {QStringLiteral("y2jb"), QStringLiteral("Y2JB")},
+                                                {QStringLiteral("mount"), QStringLiteral("Mount config")}};
+    for (const auto& [key, label] : tabs)
+        m_tabs->setTabData(m_tabs->addTab(label), key);
     m_tabs->setExpanding(false);
     m_tabs->setDrawBase(false);
     m_tabs->setProperty("fwNoRing", true);
@@ -226,7 +232,8 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     m_stack->addWidget(buildKlogTab());
     m_stack->addWidget(buildY2jbTab());
     m_stack->addWidget(buildMountTab());
-    // Console-content tools (pages/ps5/*Tab): their own connections, demo states by tab data.
+    // Console-content tools (pages/ps5/*Tab): their own connections. The stable tab key
+    // ("manager", "fakelib", "autoloader", "ampr") is also the tool's demo-state name.
     {
         const auto endpoint = [this] {
             ps5::ConsoleEndpoint ep = ps5::endpointFromSettings(m_ctx.settings().snapshot());
@@ -1342,8 +1349,19 @@ void Ps5ConnectPage::dropUrls(const QList<QUrl>& urls)
 
 void Ps5ConnectPage::navigateWith(const QVariantMap& args)
 {
-    if (args.contains(QStringLiteral("tab")))
-        m_tabs->setCurrentIndex(args.value(QStringLiteral("tab")).toInt());
+    if (args.contains(QStringLiteral("tab"))) {
+        // A key ("payloads", "klog"...) or, for older callers, an index.
+        const QVariant tab = args.value(QStringLiteral("tab"));
+        bool isIndex = false;
+        const int index = tab.toInt(&isIndex);
+        if (isIndex && tab.typeId() != QMetaType::QString) {
+            m_tabs->setCurrentIndex(index);
+        } else {
+            for (int i = 0; i < m_tabs->count(); ++i)
+                if (m_tabs->tabData(i).toString() == tab.toString())
+                    m_tabs->setCurrentIndex(i);
+        }
+    }
     if (args.contains(QStringLiteral("upload"))) {
         m_tabs->setCurrentIndex(0);
         if (m_session->isConnected())
@@ -1373,9 +1391,9 @@ QString Ps5ConnectPage::statusContext() const
 QStringList Ps5ConnectPage::demoStates() const
 {
     QStringList states = {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount")};
-    for (int t = 0; t < m_tabs->count(); ++t) // console-content tools name their state in the tab data
-        if (!m_tabs->tabData(t).toString().isEmpty())
-            states << m_tabs->tabData(t).toString();
+    for (int t = 0; t < m_stack->count(); ++t) // console-content tools: their tab key
+        if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t)))
+            states << tool->demoKey();
     return states;
 }
 
@@ -1385,12 +1403,11 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
     const int i = tabs.indexOf(name);
     if (i >= 0)
         m_tabs->setCurrentIndex(i);
-    for (int t = 0; t < m_tabs->count(); ++t)
-        if (!name.isEmpty() && m_tabs->tabData(t).toString() == name)
-            if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t))) {
-                m_tabs->setCurrentIndex(t);
-                tool->applyDemo();
-            }
+    for (int t = 0; t < m_stack->count(); ++t)
+        if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t)); tool && tool->demoKey() == name) {
+            navigateWith({{QStringLiteral("tab"), name}}); // by key, not by position
+            tool->applyDemo();
+        }
     if (name == QLatin1String("klog") && m_klog->rowCount() == 0) {
         // Specimen lines so the viewer's tags are visible in the evidence.
         for (const QString& t : {QStringLiteral("[KERNEL] sceKernelLoadStartModule: libSceNpTrophy2.sprx"), QStringLiteral("[shadowmount] unmount start /mnt/ext0"),

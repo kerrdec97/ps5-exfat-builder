@@ -84,6 +84,25 @@ void registerBackportSettings(SettingsSchema& s)
         s.add(d);
     }
 
+    {
+        SettingDef d;
+        d.key = keys::kAmprPlaygoFolder;
+        d.section = kBackport;
+        d.group = QStringLiteral("Folders");
+        d.label = QStringLiteral("AMPR / PlayGo libraries");
+        d.description = QStringLiteral("A folder with your own libSceAmpr.sprx and/or libScePlayGo.sprx (for example a "
+                                       "build of ampr_emu). They take the place of the same-named libraries in fakelib/ "
+                                       "(from the fakelib folder or the dump). Their SHA-256 is pinned at the first "
+                                       "backport; a changed file is refused until you pin the folder again on the "
+                                       "Backport page. Nothing is bundled or downloaded. Empty: not used.");
+        d.type = SettingType::DirPath;
+        d.defaultValue = QString();
+        d.validator = dirMustExistIfSet;
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+
     // ---- Backport: run --------------------------------------------------------------
     {
         SettingDef d;
@@ -310,6 +329,7 @@ BackportOptions optionsFromSettings(const SettingsValues& v, const QString& game
     o.backportDir = v.string(keys::kBackportZipFolder).trimmed();
     o.targetSdk = v.string(keys::kTargetSdk).toInt();
     o.fakelibDir = v.string(keys::kFakelibFolder).trimmed();
+    o.providerDir = v.string(keys::kAmprPlaygoFolder).trimmed();
     o.applyToGame = v.boolean(keys::kApplyToGameFolder);
     o.nidMode = v.string(keys::kNidPatchMode) == u"off" ? NidMode::Off : NidMode::Auto;
     o.encryptedPolicy = v.string(keys::kEncryptedSelfPolicy) == u"leaveUnchanged" ? EncryptedPolicy::LeaveUnchanged

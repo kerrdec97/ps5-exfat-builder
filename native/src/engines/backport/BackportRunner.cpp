@@ -4,6 +4,8 @@
 #include "engines/backport/ApplyJournal.h"
 #include "engines/backport/BackportManifest.h"
 #include "engines/backport/BackupArchive.h"
+#include "engines/backport/ProviderSet.h"
+#include "engines/backport/RunReport.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -62,6 +64,151 @@ QJsonObject fileJson(const FileResult& f)
     return o;
 }
 
+// What a run did, collected for its report (#24).
+struct RunTrace {
+    bool planned = false; // the preflight passed: a report is written
+    QString title, titleId, manifestPath;
+    QJsonObject inputs, target, verification, apply;
+    QJsonArray issues, files, skipped, zips;
+};
+
+QJsonArray issuesJson(const BackportPlan& plan);
+
+QJsonObject zipJson(const QString& role, const StagedZip& z)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("role"), role);
+    o.insert(QStringLiteral("result"), QStringLiteral("written and verified"));
+    o.insert(QStringLiteral("path"), native(z.finalPath()));
+    o.insert(QStringLiteral("sha256"), z.result().zipSha256);
+    o.insert(QStringLiteral("members"), z.result().count);
+    o.insert(QStringLiteral("bytes"), double(z.result().bytes));
+    return o;
+}
+
+QJsonObject fileReportJson(const FileResult& f, const BackportPlan& plan, int targetSdk)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("file"), f.rel);
+    const bool fakelibTarget = plan.stagedFakelibTargets.contains(f.rel);
+    QString result, why;
+    if (!f.ok) {
+        result = QStringLiteral("failed");
+        why = f.message;
+        o.insert(QStringLiteral("code"), codeName(f.code));
+    } else if (f.stage == FileStage::LeftUnchanged) {
+        result = QStringLiteral("left unchanged");
+        why = QStringLiteral("Encrypted or compressed; carried over as it is (policy: leave unchanged).");
+    } else if (fakelibTarget) {
+        const QString name = f.rel.section(u'/', -1);
+        const bool provider = plan.providers && plan.providers->find(name);
+        const QString from = provider ? QStringLiteral("the AMPR/PlayGo folder") : QStringLiteral("the fakelib folder");
+        if (f.shaBefore.isEmpty())
+            result = QStringLiteral("added");
+        else if (f.shaBefore == f.shaAfter)
+            result = QStringLiteral("unchanged");
+        else
+            result = QStringLiteral("replaced");
+        why = result == u"replaced"
+            ? QStringLiteral("Library from %1; the earlier file is kept in the originals ZIP.").arg(from)
+            : QStringLiteral("Library from %1, copied unchanged (never re-signed).").arg(from);
+    } else if (f.shaBefore == f.shaAfter) {
+        result = QStringLiteral("unchanged");
+        why = QStringLiteral("Already the SDK %1 build.").arg(targetSdk);
+    } else {
+        result = QStringLiteral("rewritten");
+        why = f.sdkBefore ? QStringLiteral("SDK %1 -> %2, fake-signed").arg(*f.sdkBefore).arg(f.sdkAfter.value_or(targetSdk))
+                          : QStringLiteral("Fake-signed (no SDK param to change)");
+        if (f.nid.action == NidAction::Applied || f.nid.action == NidAction::Reverted)
+            why += QStringLiteral("; libc import %1 (%2)").arg(nidActionName(f.nid.action)).arg(f.nid.count);
+        why += u'.';
+    }
+    o.insert(QStringLiteral("result"), result);
+    o.insert(QStringLiteral("why"), why);
+    o.insert(QStringLiteral("stage"), fileStageName(f.stage));
+    if (f.sdkBefore)
+        o.insert(QStringLiteral("sdkBefore"), *f.sdkBefore);
+    if (f.sdkAfter)
+        o.insert(QStringLiteral("sdkAfter"), *f.sdkAfter);
+    if (!f.shaBefore.isEmpty())
+        o.insert(QStringLiteral("sha256Before"), f.shaBefore);
+    if (!f.shaAfter.isEmpty())
+        o.insert(QStringLiteral("sha256After"), f.shaAfter);
+    return o;
+}
+
+void tracePlan(RunTrace& t, const BackportPlan& plan, const BackportOptions& opt)
+{
+    t.planned = true;
+    t.title = plan.meta.title;
+    t.titleId = plan.titleId;
+    t.manifestPath = plan.manifestPath;
+    QJsonObject in;
+    in.insert(QStringLiteral("game"), native(plan.options.game));
+    in.insert(QStringLiteral("titleId"), plan.meta.titleId);
+    in.insert(QStringLiteral("title"), plan.meta.title);
+    in.insert(QStringLiteral("version"), plan.meta.version);
+    if (plan.gameSdk)
+        in.insert(QStringLiteral("gameSdk"), *plan.gameSdk);
+    if (plan.meta.paramSdk)
+        in.insert(QStringLiteral("paramJsonSdk"), *plan.meta.paramSdk);
+    if (!plan.meta.requiredFwText().isEmpty())
+        in.insert(QStringLiteral("requiredFw"), plan.meta.requiredFwText());
+    in.insert(QStringLiteral("originalsZipFolder"), native(opt.originalsDir));
+    in.insert(QStringLiteral("backportZipFolder"), native(opt.backportDir));
+    in.insert(QStringLiteral("fakelibFolder"), native(opt.fakelibDir));
+    in.insert(QStringLiteral("amprPlaygoFolder"), native(opt.providerDir));
+    if (plan.providers) {
+        QJsonObject prov;
+        for (const FakelibLib& l : plan.providers->libs)
+            prov.insert(l.name, l.sha256);
+        in.insert(QStringLiteral("amprPlaygoSha256"), prov);
+        in.insert(QStringLiteral("amprPlaygoPins"), plan.pinProvidersOnRun ? QStringLiteral("pinned by this run")
+                                                                           : QStringLiteral("matched the pins"));
+    }
+    in.insert(QStringLiteral("applyToGameFolder"), opt.applyToGame);
+    in.insert(QStringLiteral("nidPatchMode"), opt.nidMode == NidMode::Off ? QStringLiteral("off") : QStringLiteral("auto"));
+    in.insert(QStringLiteral("encryptedSelfPolicy"), opt.encryptedPolicy == EncryptedPolicy::Refuse
+                                                         ? QStringLiteral("refuse")
+                                                         : QStringLiteral("leaveUnchanged"));
+    in.insert(QStringLiteral("verifyBuild"), opt.verifyBuild);
+    in.insert(QStringLiteral("notes"), opt.notes);
+    in.insert(QStringLiteral("fakelibState"), fakelibStateName(plan.fakelibState));
+    in.insert(QStringLiteral("manifestVerdict"), verdictName(plan.verdict));
+    t.inputs = in;
+    if (plan.pair) {
+        QJsonObject tg;
+        tg.insert(QStringLiteral("sdk"), plan.pair->n);
+        tg.insert(QStringLiteral("label"), firmwareLabel(plan.pair->n));
+        tg.insert(QStringLiteral("ps5Sdk"), QStringLiteral("0x%1").arg(plan.pair->ps5, 8, 16, QLatin1Char('0')));
+        tg.insert(QStringLiteral("ps4Sdk"), QStringLiteral("0x%1").arg(plan.pair->ps4, 8, 16, QLatin1Char('0')));
+        t.target = tg;
+    }
+    t.issues = issuesJson(plan);
+    const auto skip = [&t](const QString& file, const QString& why) {
+        QJsonObject o;
+        o.insert(QStringLiteral("file"), file);
+        o.insert(QStringLiteral("why"), why);
+        t.skipped.append(o);
+    };
+    for (const ExecFile& e : plan.scan.executables) {
+        if (e.area == Area::Fakelib)
+            skip(e.rel, QStringLiteral("In the dump's fakelib/: never re-signed; carried over unchanged unless the set "
+                                       "replaces it (then kept in the originals ZIP)."));
+        else if (e.area == Area::Decrypted)
+            skip(e.rel, QStringLiteral("In decrypted/: never processed; kept in the originals ZIP."));
+    }
+    for (const QString& b : plan.scan.leftoverBaks)
+        skip(b, QStringLiteral("A .bak file: never an executable; left alone."));
+    for (const QString& l : plan.scan.skippedSymlinks)
+        skip(l, QStringLiteral("A link: not followed and not backported."));
+    const QStringList meta = plan.scan.metadataSkipped;
+    for (int i = 0; i < meta.size() && i < 50; ++i)
+        skip(meta[i], QStringLiteral("OS metadata: never an executable."));
+    if (meta.size() > 50)
+        skip(QStringLiteral("%1 more").arg(meta.size() - 50), QStringLiteral("OS metadata: never an executable."));
+}
+
 QJsonArray issuesJson(const BackportPlan& plan)
 {
     QJsonArray a;
@@ -79,7 +226,9 @@ QJsonArray issuesJson(const BackportPlan& plan)
 
 } // namespace
 
-Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
+namespace {
+
+Result<RunResult> runBackportImpl(const BackportOptions& optIn, JobContext& ctx, RunTrace& t)
 {
     if (ctx.tempDir.isEmpty() || !QFileInfo(ctx.tempDir).isDir())
         return makeError(Code::Internal, QStringLiteral("The job has no temporary folder."));
@@ -130,6 +279,17 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
     if (!plan.canRun())
         return plan.blockingError();
     ctx.log.info(plan.summary());
+    tracePlan(t, plan, opt);
+    t.verification.insert(QStringLiteral("preflight"), QStringLiteral("passed (%1 findings reported)").arg(plan.issues.size()));
+
+    // #34: the provider folder's first use pins its libraries (trust on first use).
+    if (plan.pinProvidersOnRun && plan.providers) {
+        const QString pinsPath = opt.providerPinsPath.isEmpty() ? defaultProviderPinsPath() : opt.providerPinsPath;
+        if (Status st = pinProviders(*plan.providers, pinsPath); st.ok())
+            ctx.log.info(QStringLiteral("Pinned the AMPR/PlayGo libraries in %1.").arg(native(plan.providers->dir)));
+        else
+            ctx.log.warn(st.error().message);
+    }
 
     RunResult result;
     result.details.insert(QStringLiteral("issues"), issuesJson(plan));
@@ -143,6 +303,7 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
     // ---- Patch -------------------------------------------------------------------
     auto built = buildBackport(plan, staging, ctx);
     if (!built.ok()) {
+        t.verification.insert(QStringLiteral("build"), QStringLiteral("failed: %1").arg(built.error().message));
         if (built.error().isCancelled())
             return cancelledUnchanged();
         const QString kept = keepStaging();
@@ -157,6 +318,15 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
         files.append(fileJson(f));
     result.details.insert(QStringLiteral("files"), files);
     result.warnings << build.warnings;
+    for (const FileResult& f : build.files)
+        t.files.append(fileReportJson(f, plan, opt.targetSdk));
+    t.verification.insert(QStringLiteral("build"),
+                          build.failed() ? QStringLiteral("failed: %1").arg(build.firstFailure()->message)
+                          : opt.verifyBuild
+                              ? QStringLiteral("passed: structure, round trip and SDK of every signed executable (V1-V3), "
+                                               "fakelib hashes (V4), coverage (V5)")
+                              : QStringLiteral("V1-V3 turned off (backport.verifyBuild); fakelib hashes (V4) and coverage "
+                                               "(V5) passed"));
     if (build.failed()) {
         const FileResult* f = build.firstFailure();
         QStringList all;
@@ -261,6 +431,7 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
     }
     result.originalsZip = origZip.finalPath();
     ctx.log.info(QStringLiteral("Originals ZIP written and verified: %1").arg(native(result.originalsZip)));
+    t.zips.append(zipJson(QStringLiteral("originals"), origZip));
     if (bpZip) {
         Status st = bpZip->verify(ctx.token, ctx.progress);
         if (st.ok())
@@ -274,8 +445,19 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
         } else {
             result.backportZip = bpZip->finalPath();
             ctx.log.info(QStringLiteral("Backport ZIP written and verified: %1").arg(native(result.backportZip)));
+            t.zips.append(zipJson(QStringLiteral("backport"), *bpZip));
         }
     }
+    if (backportError) {
+        QJsonObject z;
+        z.insert(QStringLiteral("role"), QStringLiteral("backport"));
+        z.insert(QStringLiteral("result"), QStringLiteral("failed"));
+        z.insert(QStringLiteral("why"), backportError->message);
+        t.zips.append(z);
+    }
+    t.verification.insert(QStringLiteral("zips"),
+                          QStringLiteral("each ZIP read back before its rename: member count, CRC and size of every "
+                                         "member, SHA-256 of every member against its source"));
 
     // Manifest (S21), recorded once the originals ZIP is final.
     Manifest manifest = plan.manifest ? *plan.manifest
@@ -299,6 +481,7 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
     if (Status st = writeManifest(manifest); !st.ok())
         result.warnings << QStringLiteral("The backport manifest could not be written: %1").arg(st.error().message);
     result.manifestPath = manifest.path;
+    t.manifestPath = manifest.path;
 
     if (backportError)
         return makeError(Code::ZipWriteFailed,
@@ -360,7 +543,10 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
             return ApplyJournal::HookAction::Continue;
         };
         Status st = journal->apply(ctx.token, ctx.progress, hook);
+        t.apply.insert(QStringLiteral("journal"), native(journalPath));
         if (!st.ok()) {
+            t.apply.insert(QStringLiteral("result"), st.error().message);
+            t.verification.insert(QStringLiteral("apply"), QStringLiteral("failed: %1").arg(st.error().message));
             const Code c = codeOf(st.error());
             if (c == Code::Cancelled)
                 return makeError(Code::Cancelled, QStringLiteral("%1 Originals: %2").arg(st.error().message, native(result.originalsZip)));
@@ -370,6 +556,8 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
                              st.error().detail);
         }
         result.applied = true;
+        t.apply.insert(QStringLiteral("result"), QStringLiteral("applied %1 files").arg(entries.size()));
+        t.verification.insert(QStringLiteral("apply"), QStringLiteral("every applied file holds the staged bytes (V7)"));
         TargetRecord applied = target;
         applied.applied = true;
         applied.addedFiles = journal->addedFiles();
@@ -380,6 +568,10 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
         ctx.log.info(QStringLiteral("Applied %1 files to %2").arg(entries.size()).arg(native(game)));
     }
 
+    if (!opt.applyToGame) {
+        t.apply.insert(QStringLiteral("result"), QStringLiteral("not applied: Apply to game folders is off"));
+        t.verification.insert(QStringLiteral("apply"), QStringLiteral("not applied; the game folder was not changed"));
+    }
     result.status = result.leftUnchanged.isEmpty() ? RunStatus::Succeeded : RunStatus::Partial;
     QString s = QStringLiteral("Backported to SDK %1 (loads on FW %1.00+). Originals: %2")
                     .arg(opt.targetSdk)
@@ -399,6 +591,76 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
     result.details.insert(QStringLiteral("manifest"), native(result.manifestPath));
     result.details.insert(QStringLiteral("journal"), native(result.journalPath));
     return result;
+}
+
+} // namespace
+
+Result<RunResult> runBackport(const BackportOptions& opt, JobContext& ctx)
+{
+    RunTrace t;
+    Result<RunResult> r = runBackportImpl(opt, ctx, t);
+    if (!t.planned)
+        return r; // refused by the preflight: the error says why, no report
+
+    QJsonObject rep = newReport(QStringLiteral("backport"));
+    rep.insert(QStringLiteral("jobId"), ctx.jobId);
+    rep.insert(QStringLiteral("title"), t.title);
+    rep.insert(QStringLiteral("titleId"), t.titleId);
+    QJsonObject outcome;
+    QStringList warnings;
+    if (r.ok()) {
+        outcome.insert(QStringLiteral("status"), runStatusName(r->status));
+        outcome.insert(QStringLiteral("summary"), r->summary);
+        warnings = r->warnings;
+    } else {
+        const Error& e = r.error();
+        const Code c = codeOf(e);
+        outcome.insert(QStringLiteral("status"), c == Code::Cancelled ? QStringLiteral("cancelled")
+                                                 : e.message.startsWith(QStringLiteral("Partial:")) ? QStringLiteral("partial")
+                                                                                                   : QStringLiteral("failed"));
+        outcome.insert(QStringLiteral("summary"), e.message);
+        QJsonObject err;
+        err.insert(QStringLiteral("code"), codeName(c));
+        err.insert(QStringLiteral("detail"), e.detail);
+        outcome.insert(QStringLiteral("error"), err);
+        for (const QJsonValue& i : std::as_const(t.issues))
+            if (i.toObject().value(QStringLiteral("severity")).toString() == u"warn")
+                warnings << i.toObject().value(QStringLiteral("message")).toString();
+    }
+    rep.insert(QStringLiteral("outcome"), outcome);
+    rep.insert(QStringLiteral("inputs"), t.inputs);
+    if (!t.target.isEmpty())
+        rep.insert(QStringLiteral("target"), t.target);
+    rep.insert(QStringLiteral("verification"), t.verification);
+    rep.insert(QStringLiteral("zips"), t.zips);
+    rep.insert(QStringLiteral("files"), t.files);
+    rep.insert(QStringLiteral("skipped"), t.skipped);
+    if (!t.apply.isEmpty())
+        rep.insert(QStringLiteral("apply"), t.apply);
+    if (!t.manifestPath.isEmpty())
+        rep.insert(QStringLiteral("manifest"), native(t.manifestPath));
+    rep.insert(QStringLiteral("issues"), t.issues);
+    rep.insert(QStringLiteral("warnings"), QJsonArray::fromStringList(warnings));
+
+    const QString dir = !opt.reportDir.isEmpty() ? opt.reportDir
+        : !t.manifestPath.isEmpty()              ? reportDirForManifest(t.manifestPath)
+                                                 : defaultReportDir();
+    auto written = writeReport(dir, reportBaseName(QStringLiteral("backport SDK %1").arg(opt.targetSdk)), rep);
+    if (!written.ok()) {
+        ctx.log.warn(QStringLiteral("The run report could not be written: %1").arg(written.error().message));
+        if (r.ok())
+            r->warnings << QStringLiteral("The run report could not be written: %1").arg(written.error().message);
+        return r;
+    }
+    ctx.log.info(QStringLiteral("Run report: %1").arg(native(written->html)));
+    if (r.ok()) {
+        r->reportJson = written->json;
+        r->reportHtml = written->html;
+        r->details.insert(QStringLiteral("report"), reportFilesJson(written.value()));
+        return r;
+    }
+    Error e = r.takeError();
+    return Error(e.code, e.message, appendReportToDetail(e.detail, written->html));
 }
 
 JobOutcome toOutcome(const RunResult& r)
