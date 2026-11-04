@@ -91,7 +91,13 @@ struct WriteOptions {
     int indent = 2;          // < 0: compact single line
     bool ensureAscii = false; // escape non-ASCII as \uXXXX (Python ensure_ascii=True)
     bool trailingNewline = false;
+    // Re-render non-integer numbers as Python's repr(float) does (1.50 → 1.5,
+    // 1e5 → 100000.0), matching a Python json.load/json.dump round trip.
+    bool pythonFloats = false;
 };
+
+// Python repr() of a double ("1.5", "100000.0", "1e+16", "1.5e-05").
+QString pythonFloatRepr(double d);
 
 QByteArray write(const Value& value, const WriteOptions& options = {});
 

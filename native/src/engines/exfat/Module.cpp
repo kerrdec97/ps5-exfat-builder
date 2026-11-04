@@ -376,17 +376,7 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("exfat_extract_robocopy_mt"), keys::kExtractParallel);
     s.addLegacyKey(QStringLiteral("exfat_extract_mt_threads"), keys::kExtractThreads,
                    [](const QVariant& v) { return legacyInt(v, 1, 128); });
-    // Legacy exFAT verification switches map onto the shared Verification settings.
-    s.addLegacyKey(QStringLiteral("adv_skip_verify"), general::keys::kVerifyAfterBuild,
-                   [](const QVariant& v) -> std::optional<QVariant> { return QVariant(!v.toBool()); });
-    s.addLegacyKey(QStringLiteral("adv_checksum_verify"), general::keys::kVerifyMode,
-                   [](const QVariant& v) -> std::optional<QVariant> {
-                       // On meant SHA-256 of every file: full. Off was the legacy size
-                       // walk; keep the new default (full) instead of downgrading.
-                       if (v.toBool())
-                           return QVariant(QStringLiteral("full"));
-                       return std::nullopt;
-                   });
+
 
     registerJobKinds(ctx.jobs);
 }

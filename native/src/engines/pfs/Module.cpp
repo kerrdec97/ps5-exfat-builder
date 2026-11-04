@@ -74,18 +74,16 @@ PlanOptions planOptionsFrom(const SettingsValues& s, qint64 time)
 
 std::optional<VerifyDepth> verifyDepthFrom(const SettingsValues& s)
 {
-    const QString v = s.string(keys::kVerify);
-    if (v == u"off")
+    // One app-wide switch (Settings › Verification) for every image format.
+    if (!s.boolean(general::keys::kVerifyAfterBuild))
         return std::nullopt;
-    return v == u"structure" ? VerifyDepth::Structure : VerifyDepth::Full;
+    return s.string(general::keys::kVerifyMode) == u"structure" ? VerifyDepth::Structure : VerifyDepth::Full;
 }
 
 qint64 freeSpaceMarginFrom(const SettingsValues& s)
 {
     // App-wide reserve declared by the general module (ARCHITECTURE.md, Job rules).
-    const QVariant v = s.value(QStringLiteral("storage.freeSpaceMarginMiB"));
-    const qint64 mib = v.isValid() ? v.toLongLong() : 512;
-    return std::max<qint64>(0, mib) * 1024 * 1024;
+    return general::freeSpaceMarginBytes(s);
 }
 
 void registerModule(ModuleContext& ctx)
@@ -381,27 +379,6 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = false;
         d.perJob = true;
         d.order = order++;
-        s.add(d);
-    }
-
-    // ---- Verification ----------------------------------------------------------------------
-    {
-        SettingDef d;
-        d.key = keys::kVerify;
-        d.section = QStringLiteral("Verification");
-        d.group = QStringLiteral("PFS images");
-        d.label = QStringLiteral("Check PFS images after building");
-        d.description = QStringLiteral(
-            "Full reads the finished image back and compares every file byte for byte with the source. Structure "
-            "checks the image layout, every compressed block and the file list and sizes, without reading the "
-            "source again. A failed check fails the job and removes the image.");
-        d.type = SettingType::Enum;
-        d.defaultValue = QStringLiteral("full");
-        d.choices = {{QStringLiteral("full"), QStringLiteral("Full (every byte)"), {}},
-                     {QStringLiteral("structure"), QStringLiteral("Structure (layout, blocks, names, sizes)"), {}},
-                     {QStringLiteral("off"), QStringLiteral("Off"), {}}};
-        d.perJob = true;
-        d.order = 100;
         s.add(d);
     }
 

@@ -13,6 +13,7 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <tlhelp32.h>
 #else
 #include <csignal>
 #include <sched.h>
@@ -172,6 +173,32 @@ struct JobHandle {
     }
 };
 
+// Resumes every thread of a process started with CREATE_SUSPENDED.
+bool resumeProcessThreads(qint64 pid)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return false;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    bool resumed = false;
+    if (Thread32First(snap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == DWORD(pid)) {
+                HANDLE t = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+                if (t) {
+                    if (ResumeThread(t) != DWORD(-1))
+                        resumed = true;
+                    CloseHandle(t);
+                }
+            }
+            te.dwSize = sizeof(te);
+        } while (Thread32Next(snap, &te));
+    }
+    CloseHandle(snap);
+    return resumed;
+}
+
 void taskkillTree(qint64 pid)
 {
     // Fallback for children that escaped the job object.
@@ -204,8 +231,10 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     proc.setProcessChannelMode(spec.mergeStderr ? QProcess::MergedChannels : QProcess::SeparateChannels);
     proc.setInputChannelMode(QProcess::ManagedInputChannel);
 #ifdef Q_OS_WIN
+    // Started suspended: it joins the kill-on-close job object (and gets its
+    // CPU limit) before it can run a single instruction or spawn a child.
     proc.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-        args->flags |= CREATE_NO_WINDOW;
+        args->flags |= CREATE_NO_WINDOW | CREATE_SUSPENDED;
     });
     JobHandle jobObject;
 #else
@@ -224,10 +253,21 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     const qint64 pid = proc.processId();
 
 #ifdef Q_OS_WIN
-    jobObject.assign(pid);
+    if (!jobObject.assign(pid))
+        log.warn(QStringLiteral("Could not attach %1 to the stop-on-close group; taskkill is the fallback.")
+                     .arg(QFileInfo(spec.program).fileName()));
 #endif
     if (spec.onStarted)
         spec.onStarted(pid);
+#ifdef Q_OS_WIN
+    if (!resumeProcessThreads(pid)) {
+        proc.kill();
+        proc.waitForFinished(5000);
+        return Error(ErrorCode::ExternalToolFailed,
+                     QStringLiteral("Could not start %1.").arg(QFileInfo(spec.program).fileName()),
+                     QStringLiteral("the suspended process could not be resumed"));
+    }
+#endif
 
     std::atomic<bool> cancelRequested{false};
     auto killTree = [&, pid] {

@@ -34,7 +34,6 @@ inline const QString kKeepEmptyFolders = QStringLiteral("pfs.keepEmptyFolders");
 inline const QString kAmprIndex = QStringLiteral("pfs.amprIndex");
 inline const QString kThreads = QStringLiteral("pfs.threads");
 inline const QString kDeleteSourceAfterConvert = QStringLiteral("pfs.deleteSourceAfterConvert");
-inline const QString kVerify = QStringLiteral("pfs.verify");
 } // namespace keys
 
 namespace kinds {

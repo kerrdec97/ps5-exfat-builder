@@ -453,6 +453,13 @@ void registerModule(ModuleContext& ctx)
         return QVariant(!v.toBool());
     });
     s.addLegacyKey(QStringLiteral("adv_delete_source"), keys::kDeleteSource);
+    // On meant "SHA-256 of every file" (full); off was the legacy size walk,
+    // which is not downgraded: the default (full) stays.
+    s.addLegacyKey(QStringLiteral("adv_checksum_verify"), keys::kVerifyMode, [](const QVariant& v) -> std::optional<QVariant> {
+        if (v.toBool())
+            return QVariant(QStringLiteral("full"));
+        return std::nullopt;
+    });
 }
 
 } // namespace fw::general

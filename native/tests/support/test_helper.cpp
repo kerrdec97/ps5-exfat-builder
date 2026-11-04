@@ -37,7 +37,8 @@ int main(int argc, char** argv)
 #else
         const std::string line = "\"" + self + "\" sleep " + std::to_string(arg) + " &";
 #endif
-        std::system(line.c_str());
+        const int rc = std::system(line.c_str());
+        (void)rc;
         std::printf("spawned\n");
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::milliseconds(arg));

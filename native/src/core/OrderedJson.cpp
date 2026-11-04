@@ -1,6 +1,9 @@
 #include "core/OrderedJson.h"
 
 #include <charconv>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <cmath>
 #include <cstring>
 
@@ -552,7 +555,14 @@ void writeValue(QByteArray& out, const Value& v, const WriteOptions& o, int leve
     switch (v.type()) {
     case Value::Type::Null: out += "null"; return;
     case Value::Type::Bool: out += v.toBool() ? "true" : "false"; return;
-    case Value::Type::Number: out += v.numberText().toLatin1(); return;
+    case Value::Type::Number: {
+        const QString t = v.numberText();
+        if (o.pythonFloats && (t.contains(u'.') || t.contains(u'e') || t.contains(u'E')))
+            out += pythonFloatRepr(t.toDouble()).toLatin1();
+        else
+            out += t.toLatin1();
+        return;
+    }
     case Value::Type::String: writeString(out, v.toString(), o.ensureAscii); return;
     case Value::Type::Array: {
         if (v.size() == 0) {
@@ -593,6 +603,51 @@ void writeValue(QByteArray& out, const Value& v, const WriteOptions& o, int leve
 }
 
 } // namespace
+
+QString pythonFloatRepr(double d)
+{
+    if (std::isnan(d))
+        return QStringLiteral("NaN");
+    if (std::isinf(d))
+        return d > 0 ? QStringLiteral("Infinity") : QStringLiteral("-Infinity");
+    if (d == 0.0)
+        return std::signbit(d) ? QStringLiteral("-0.0") : QStringLiteral("0.0");
+    // Shortest round-trip digits, then Python's formatting rule: fixed for
+    // exponents -4 <= e < 16, otherwise d.ddde±XX.
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof(buf), d, std::chars_format::scientific);
+    const std::string sci(buf, r.ptr);
+    const auto epos = sci.find('e');
+    std::string mant = sci.substr(0, epos);
+    const int exp = std::stoi(sci.substr(epos + 1));
+    const bool neg = !mant.empty() && mant[0] == '-';
+    if (neg)
+        mant.erase(0, 1);
+    std::string digits;
+    for (char c : mant)
+        if (c != '.')
+            digits += c;
+    std::string out;
+    if (exp >= -4 && exp < 16) {
+        if (exp >= 0) {
+            if (int(digits.size()) <= exp + 1) {
+                out = digits + std::string(size_t(exp + 1 - int(digits.size())), '0') + ".0";
+            } else {
+                out = digits.substr(0, size_t(exp + 1)) + "." + digits.substr(size_t(exp + 1));
+            }
+        } else {
+            out = "0." + std::string(size_t(-exp - 1), '0') + digits;
+        }
+    } else {
+        out = digits.substr(0, 1);
+        if (digits.size() > 1)
+            out += "." + digits.substr(1);
+        char e[16];
+        std::snprintf(e, sizeof(e), "e%c%02d", exp < 0 ? '-' : '+', std::abs(exp));
+        out += e;
+    }
+    return QString::fromLatin1((neg ? "-" : "") + out);
+}
 
 Result<Value> parse(const QByteArray& utf8, const ParseOptions& options)
 {

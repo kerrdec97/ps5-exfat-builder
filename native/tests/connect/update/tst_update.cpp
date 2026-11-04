@@ -121,7 +121,7 @@ class TstUpdate : public QObject {
             auto id = queue->enqueue(kind, params);
             if (!id.ok())
                 return std::nullopt;
-            QTest::qWaitFor([&] { auto r = queue->record(id.value()); return r && isTerminal(r->state); }, 20000);
+            (void)QTest::qWaitFor([&] { auto r = queue->record(id.value()); return r && isTerminal(r->state); }, 20000);
             return queue->record(id.value());
         }
     };

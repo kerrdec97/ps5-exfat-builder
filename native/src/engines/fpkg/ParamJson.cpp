@@ -271,7 +271,7 @@ QByteArray toCrlf(const QByteArray& lf)
 
 QByteArray serializeParamJson(const json::Value& param)
 {
-    return toCrlf(json::write(param, {2, false, true}));
+    return toCrlf(json::write(param, {2, false, true, /*pythonFloats=*/true}));
 }
 
 } // namespace fw::fpkg

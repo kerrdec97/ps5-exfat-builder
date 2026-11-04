@@ -95,7 +95,7 @@ private slots:
                                      keys::kFileMinGain,        keys::kSkipExecutables,         keys::kBlockSize,
                                      keys::kCaseInsensitive,    keys::kImageVersion,            keys::kExcludes,
                                      keys::kKeepEmptyFolders,   keys::kAmprIndex,               keys::kThreads,
-                                     keys::kDeleteSourceAfterConvert, keys::kVerify};
+                                     keys::kDeleteSourceAfterConvert};
         int declared = 0;
         for (const auto* d : env.schema->all()) {
             if (!d->key.startsWith(QStringLiteral("pfs.")))
@@ -104,7 +104,7 @@ private slots:
             QVERIFY2(pfsKeys.contains(d->key), qPrintable(d->key));
             QVERIFY2(!d->description.isEmpty(), qPrintable(d->key));
             QVERIFY2(env.schema->normalize(d->key, d->defaultValue).ok(), qPrintable(d->key));
-            QCOMPARE(d->section, d->key == keys::kVerify ? QStringLiteral("Verification") : QStringLiteral("PFS"));
+            QCOMPARE(d->section, QStringLiteral("PFS"));
         }
         QCOMPARE(declared, pfsKeys.size());
         QVERIFY(env.jobs.contains(kinds::kBuild));
@@ -153,7 +153,7 @@ private slots:
                                               {keys::kKeepEmptyFolders, false},
                                               {keys::kAmprIndex, QStringLiteral("refresh")},
                                               {keys::kThreads, 3},
-                                              {keys::kVerify, QStringLiteral("structure")}});
+                                              {general::keys::kVerifyMode, QStringLiteral("structure")}});
         QVERIFY2(norm.ok(), norm.ok() ? "" : qPrintable(norm.error().message));
         const SettingsValues s = store.snapshot(*norm);
         const BuildOptions o = buildOptionsFrom(s, 1);
@@ -174,7 +174,7 @@ private slots:
         QVERIFY(!po.keepEmptyFolders);
         QCOMPARE(po.ampr, AmprMode::Refresh);
         QCOMPARE(verifyDepthFrom(s), std::optional<VerifyDepth>(VerifyDepth::Structure));
-        auto off = store.normalizeOverrides({{keys::kVerify, QStringLiteral("off")}, {keys::kAmprIndex, QStringLiteral("off")}});
+        auto off = store.normalizeOverrides({{general::keys::kVerifyAfterBuild, false}, {keys::kAmprIndex, QStringLiteral("off")}});
         QVERIFY(!verifyDepthFrom(store.snapshot(*off)));
         QCOMPARE(planOptionsFrom(store.snapshot(*off), 0).ampr, AmprMode::Off);
     }
@@ -383,7 +383,7 @@ private slots:
 
         // Structure-only verification never deletes the source.
         const QString img2 = makeImage(tmp);
-        auto structure = store.normalizeOverrides({{keys::kDeleteSourceAfterConvert, true}, {keys::kVerify, QStringLiteral("structure")}});
+        auto structure = store.normalizeOverrides({{keys::kDeleteSourceAfterConvert, true}, {general::keys::kVerifyMode, QStringLiteral("structure")}});
         auto job2 = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img2},
                                                            {QStringLiteral("output"), tmp.filePath(QStringLiteral("b.ffpfsc"))}}));
         auto rr2 = runJob(**job2, store.snapshot(*structure));
@@ -399,7 +399,7 @@ private slots:
         QVERIFY(QFileInfo(folder).isDir());
 
         // Verification off: reported as skipped.
-        auto offv = store.normalizeOverrides({{keys::kVerify, QStringLiteral("off")}});
+        auto offv = store.normalizeOverrides({{general::keys::kVerifyAfterBuild, false}});
         auto job4 = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), folder},
                                                            {QStringLiteral("output"), tmp.filePath(QStringLiteral("d.ffpfsc"))}}));
         auto rr4 = runJob(**job4, store.snapshot(*offv));

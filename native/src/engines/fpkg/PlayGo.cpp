@@ -204,7 +204,7 @@ json::Value defaultScenarioObject(const QString& language)
 
 QByteArray scenarioFileBytes(const json::Value& doc)
 {
-    return toCrlf(json::write(doc, {2, false, true}));
+    return toCrlf(json::write(doc, {2, false, true, /*pythonFloats=*/true}));
 }
 
 // ---- source table ------------------------------------------------------------------

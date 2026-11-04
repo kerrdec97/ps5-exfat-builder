@@ -171,8 +171,8 @@ Status PartFile::commit(bool replaceExisting)
                          QStringLiteral("%1 already exists. Choose another name or output folder.")
                              .arg(QFileInfo(m_final).fileName()));
         // Set the old file aside first so a failed rename can be undone (audit M2).
-        const QString aside = m_final + QStringLiteral(".old");
-        QFile::remove(aside);
+        // A name nobody uses, so a user's own "<name>.old" is never touched.
+        const QString aside = uniquePath(m_final + QStringLiteral(".fw-old"));
         if (!QFile::rename(m_final, aside))
             return Error(ErrorCode::PermissionDenied,
                          QStringLiteral("Could not replace %1. Close any program using it and try again.")

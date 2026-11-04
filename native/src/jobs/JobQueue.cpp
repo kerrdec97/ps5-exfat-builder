@@ -354,7 +354,7 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
                 }, Qt::QueuedConnection);
         },
         100);
-    e->reporter->setPhases(e->rec.phases);
+    e->reporter->setPhases(e->rec.phases, e->job ? e->job->phaseWeights() : QList<double>{});
 
     std::unique_ptr<Job> job = std::move(e->job);
     SettingsValues settings = m_settings.snapshot(e->rec.overrides);

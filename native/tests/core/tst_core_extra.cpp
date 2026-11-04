@@ -61,6 +61,23 @@ private slots:
         QCOMPARE(json::write(json::Value(2.0), {-1}), QByteArray("2.0"));
     }
 
+    void jsonPythonFloatRepr()
+    {
+        QCOMPARE(json::pythonFloatRepr(1.5), QStringLiteral("1.5"));
+        QCOMPARE(json::pythonFloatRepr(100000.0), QStringLiteral("100000.0"));
+        QCOMPARE(json::pythonFloatRepr(1e16), QStringLiteral("1e+16"));
+        QCOMPARE(json::pythonFloatRepr(1.5e-5), QStringLiteral("1.5e-05"));
+        QCOMPARE(json::pythonFloatRepr(0.0001), QStringLiteral("0.0001"));
+        QCOMPARE(json::pythonFloatRepr(-2.25), QStringLiteral("-2.25"));
+        QCOMPARE(json::pythonFloatRepr(123456789012345680.0), QStringLiteral("1.2345678901234568e+17"));
+        QCOMPARE(json::pythonFloatRepr(0.1), QStringLiteral("0.1"));
+        auto doc = json::parse(R"({"a":1.50,"b":1e5,"c":7})");
+        QVERIFY(doc.ok());
+        json::WriteOptions w{-1};
+        w.pythonFloats = true;
+        QCOMPARE(json::write(doc.value(), w), QByteArray(R"({"a": 1.5, "b": 100000.0, "c": 7})"));
+    }
+
     void jsonRejectsMalformedWithPosition()
     {
         for (const char* bad : {"{", "{\"a\":}", "[1,]", "{\"a\" 1}", "tru", "\"unterminated", "{} x", "01", "1.", "\"\\x\""}) {

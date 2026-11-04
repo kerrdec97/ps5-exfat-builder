@@ -57,6 +57,8 @@ public:
     virtual QString title() const = 0;     // "Astro Bot (PPSA01325)"
     virtual QString subtitle() const { return {}; } // "exFAT · 48.2 GB → D:\Images"
     virtual QStringList phases() const { return {QStringLiteral("Working")}; }
+    // Relative weight of each phase for the overall progress (default equal).
+    virtual QList<double> phaseWeights() const { return {}; }
     virtual QJsonObject parameters() const = 0; // enough to re-create the job
 
     // Cheap pre-flight check before the job is accepted into the queue.

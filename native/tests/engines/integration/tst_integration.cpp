@@ -53,7 +53,7 @@ struct Env {
             qWarning() << "enqueue failed:" << id.error().toLogString();
             return std::nullopt;
         }
-        QTest::qWaitFor([&] { auto r = queue->record(id.value()); return r && isTerminal(r->state); }, 120000);
+        (void)QTest::qWaitFor([&] { auto r = queue->record(id.value()); return r && isTerminal(r->state); }, 120000);
         return queue->record(id.value());
     }
 };
