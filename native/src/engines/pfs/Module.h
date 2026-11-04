@@ -48,7 +48,8 @@ BuildOptions buildOptionsFrom(const SettingsValues& settings, qint64 time);
 PlanOptions planOptionsFrom(const SettingsValues& settings, qint64 time);
 // Worker threads: pfs.threads, or performance.workerThreads when it is 0.
 int threadsFrom(const SettingsValues& settings);
-// VerifyDepth from pfs.verify; std::nullopt when verification is off.
+// VerifyDepth from the general module's verification.verifyAfterBuild and
+// verification.mode; std::nullopt when verification is off.
 std::optional<VerifyDepth> verifyDepthFrom(const SettingsValues& settings);
 // storage.freeSpaceMarginMiB in bytes (the app-wide reserve).
 qint64 freeSpaceMarginFrom(const SettingsValues& settings);

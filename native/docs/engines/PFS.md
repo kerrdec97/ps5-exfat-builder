@@ -200,7 +200,6 @@ per job.
 | `pfs.keepEmptyFolders` | PFS · Source folder | on | legacy PFS tab `_seed_empty_dir_markers` (`.pfskeep`) |
 | `pfs.amprIndex` | PFS · Source folder | add when missing | Lazy `ensure_ampr_index`; "refresh" = legacy Build page `_maybe_build_ampr_index` |
 | `pfs.deleteSourceAfterConvert` | PFS · After converting | off | legacy `pfs_delete_source_after_convert` |
-| `pfs.verify` | Verification · PFS images | full | MkPFS `--verify`; Lazy `main_verify.py` |
 
 Legacy keys imported (`addLegacyKey`): `pfs_compression_level` (clamped to
 1–9; ISA-L levels 0–3 become zlib levels), `pfs_lazy_cpu_count`,
@@ -213,9 +212,11 @@ temporary files).
 
 Also read: `performance.workerThreads` (through `general::workerThreads`) and
 `storage.freeSpaceMarginMiB` (free-space reserve, as ARCHITECTURE.md requires).
-`pfs.verify` overlaps the general module's `verification.verifyAfterBuild` /
-`verification.mode`; the PFS jobs read only `pfs.verify` (open question for the
-app: one switch for every engine, or per-engine ones).
+Verification has no `pfs.*` setting: `verifyDepthFrom` reads the general
+module's app-wide switches (Settings › Verification, one for every image
+format), `verification.verifyAfterBuild` (on / off) and `verification.mode`
+(`full` | `structure`, see Verification below); both may be overridden per
+job. They take the place of MkPFS `--verify` and Lazy `main_verify.py`.
 
 The builder never writes into the source folder: `ampr_emu.index` and
 `.pfskeep` markers exist only in the image (Lazy and the legacy app wrote them
