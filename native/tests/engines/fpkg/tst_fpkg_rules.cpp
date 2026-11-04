@@ -439,6 +439,59 @@ private slots:
         QVERIFY(scanSource({many}, o, src.token()).ok()); // no checkpoint reached
     }
 
+    // Package paths are case-insensitive: two entries of one folder whose
+    // names differ only in case would merge (folders) or replace each other
+    // (files), so the scan refuses them and names both.
+    void scannerRejectsCaseTwins()
+    {
+        const QString probe = dir(QStringLiteral("casetwins-probe"));
+        put(probe, QStringLiteral("a"), "x");
+        if (QFileInfo::exists(QDir(probe).filePath(QStringLiteral("A"))))
+            QSKIP("This file system is not case-sensitive, so such a folder cannot exist on it.");
+        const auto expectClash = [](const QString& root, const QString& a, const QString& b) {
+            auto r = scanSource({root}, {}, CancellationToken());
+            QVERIFY(!r.ok());
+            QCOMPARE(r.error().code, ErrorCode::Unsupported);
+            const QString msg = r.error().message;
+            QVERIFY2(msg.contains(QDir::toNativeSeparators(QDir(root).filePath(a))), qPrintable(msg));
+            QVERIFY2(msg.contains(QDir::toNativeSeparators(QDir(root).filePath(b))), qPrintable(msg));
+        };
+
+        const QString folders = dir(QStringLiteral("casetwins/folders"));
+        put(folders, QStringLiteral("eboot.bin"), "e");
+        put(folders, QStringLiteral("Data/a.pak"), "a");
+        put(folders, QStringLiteral("data/b.pak"), "b");
+        expectClash(folders, QStringLiteral("Data"), QStringLiteral("data"));
+
+        const QString files = dir(QStringLiteral("casetwins/files"));
+        put(files, QStringLiteral("eboot.bin"), "e");
+        put(files, QStringLiteral("Docs/Readme.TXT"), "1");
+        put(files, QStringLiteral("Docs/readme.txt"), "2");
+        expectClash(files, QStringLiteral("Docs/Readme.TXT"), QStringLiteral("Docs/readme.txt"));
+
+        const QString mixed = dir(QStringLiteral("casetwins/mixed"));
+        put(mixed, QStringLiteral("Movie/a.bin"), "a");
+        put(mixed, QStringLiteral("movie"), "a file");
+        expectClash(mixed, QStringLiteral("Movie"), QStringLiteral("movie"));
+
+        // Entries the package leaves out anyway (OS metadata) do not clash.
+        const QString junk = dir(QStringLiteral("casetwins/junk"));
+        put(junk, QStringLiteral("eboot.bin"), "e");
+        put(junk, QStringLiteral("Thumbs.db"), "1");
+        put(junk, QStringLiteral("thumbs.db"), "2");
+        QVERIFY(scanSource({junk}, {}, CancellationToken()).ok());
+
+        // Across roots (an update over its base) the same names are the overlay.
+        const QString upd = dir(QStringLiteral("casetwins/upd"));
+        const QString base = dir(QStringLiteral("casetwins/base"));
+        put(upd, QStringLiteral("data/a.pak"), "new");
+        put(base, QStringLiteral("Data/a.pak"), "old");
+        auto overlay = scanSource({upd, base}, {}, CancellationToken());
+        QVERIFY(overlay.ok());
+        QCOMPARE(int(overlay->files.size()), 1);
+        QCOMPARE(readAll(overlay->files[0].absPath), QByteArray("new"));
+    }
+
     void dlcEmuIni()
     {
         const DlcEmuIni ini = parseDlcEmuIni(

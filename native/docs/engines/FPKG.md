@@ -116,8 +116,10 @@ running job).
   `<empty_dir>`s; `chunk` on every file in layout B, only when > 0 in C, never in A, always on payloads/fillers;
   `pfs_compression="disable"` on payloads/fillers; `param.json` → `.gp5-assets/<stem>/sce_sys/param.json`.
 * Walk order (case-folded, then code point), exclusions of §4.5 (plus our two documented extras: root `decrypted/` and
-  root image/package files), links → error, non-regular files left out, path rule (printable ASCII, no `%`/`;`, no empty
-  component, no trailing dot) listed before packing, keystone exactly 96 bytes, AMPR import warning.
+  root image/package files), links → error, two packaged entries of one folder whose names differ only in letter case
+  (`Data/` + `data/`, `Readme.TXT` + `readme.txt`) → error naming both (package paths are case-insensitive; the overlay
+  of an update over its base is not affected), non-regular files left out, path rule (printable ASCII, no `%`/`;`, no
+  empty component, no trailing dot) listed before packing, keystone exactly 96 bytes, AMPR import warning.
 * Empty folders: empty or junk-only, outside `sce_sys`; folders emptied by exclusions are not declared; DLC mount
   folders first.
 * PlayGo A/B/C as in §4.6 (B: language `i` in chunk min(i, N−1); every scenario lists every chunk; all chunks initial).
@@ -176,8 +178,8 @@ running job).
   folders/overlay/links/cancellation, `dlc_emu.ini`, scenario rules, payloads/fillers, `plgx`/FICM/FLT parsing, hash
   vectors, GP5 escaping, goldens for layouts A/B/C + scenario + `param.json`, planning errors, PNG/DDS/SELF/UCP,
   output parser across random chunk splits, header check, conflict policies, all-or-nothing placement of several
-  outputs (a rename that fails while setting aside, while placing the second output, or always), settings and
-  legacy keys, toolchain lookup and probes, stagers.
+  outputs (a rename that fails while setting aside, while placing the second output, or always), case-only name
+  clashes in the scanner, settings and legacy keys, toolchain lookup and probes, stagers.
 * `tst_fpkg_build` — jobs end to end against the stand-in: full build (argv, TEMP/TMP, cwd, logs, cleanup, progress),
   project contents and compression level, stock/`[Error]`/crash/no-output failures (the `0xC0000135`/`0xC000007B`
   rows exist only on Windows, where the stand-in can return such exit codes; they have not been run yet), bar

@@ -79,7 +79,11 @@ struct ScanResult {
 };
 
 // Errors: a root that is not a readable folder (NotFound / IoError), a link
-// or junction anywhere in the walked tree (Unsupported), cancellation.
+// or junction anywhere in the walked tree (Unsupported), two packaged entries
+// of one root whose names differ only in letter case, such as "Data/" next to
+// "data/" or "Readme.TXT" next to "readme.txt" (Unsupported, naming both: the
+// package file system is case-insensitive, so one would be lost),
+// cancellation.
 Result<ScanResult> scanSource(const QStringList& roots, const ScanOptions& options, const CancellationToken& token);
 
 // Finds `rel` below `root` matching each component case-insensitively (an
