@@ -39,7 +39,8 @@ native/
       fpkg/                 FPKG packages through the user's Publishing Tools
       backport/             Backport engine (scan, planner, patcher, ZIPs, journaled apply, restore)
       tools/                Language Stripper, DLC-emu editor, problem reports
-      integration/          cross-engine workflows: image.convert, FPKG image stagers, post-build upload
+      integration/          cross-engine workflows: image.convert, image.compare (ImageFiles: read-only
+                                          file access to any image or folder), FPKG image stagers, post-build upload
     connect/ps5/            fw_connect_ps5 — FTP, payload sender, kernel log, DPI/Y2JB, mount configs
     connect/update/         fw_connect_update — release check and verified download
     registration/           calls every module's registerModule()
