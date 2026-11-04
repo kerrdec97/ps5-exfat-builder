@@ -55,10 +55,21 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
+          FW_OFFLINE: '1'
         run: |
           New-Item -ItemType Directory -Force ci-out | Out-Null
-          ctest --test-dir build --output-on-failure --timeout 900 --output-junit "$PWD\ci-out\ctest-junit.xml" 2>&1 | Tee-Object ci-out\ctest.txt
-          if ($LASTEXITCODE -ne 0) { throw "ctest failed ($LASTEXITCODE)" }
+          ctest --test-dir build --timeout 900 --output-junit "$PWD\ci-out\ctest-junit.xml" 2>&1 | Tee-Object ci-out\ctest.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # Show every failing test's own output (PowerShell piping hides it above).
+            $failed = Select-String -Path ci-out\ctest.txt -Pattern '\d+ - (\S+) \(' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+            foreach ($t in $failed) {
+              Write-Host "===== $t ====="
+              $exe = Get-ChildItem -Recurse build\tests -Filter "$t.exe" | Select-Object -First 1
+              if ($exe) { & $exe.FullName -o -,txt 2>&1 | Out-Host; Write-Host "exit code: $LASTEXITCODE" }
+            }
+            throw "ctest failed ($code)"
+          }
 
       - name: Deploy Qt runtime
         shell: pwsh
