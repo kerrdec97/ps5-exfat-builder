@@ -3,6 +3,7 @@
 #include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/DpiInstaller.h"
 #include "connect/ps5/Endpoint.h"
+#include "connect/ps5/FtpDiagnostics.h"
 #include "connect/ps5/FtpTransfer.h"
 #include "connect/ps5/MountConfig.h"
 #include "connect/ps5/PayloadSender.h"
@@ -492,6 +493,147 @@ private:
     QJsonObject m_p;
 };
 
+// ---- ps5.ftp.diagnose ----------------------------------------------------------------------
+
+QString mbps(double v)
+{
+    return v < 0 ? QStringLiteral("—") : QStringLiteral("%1 MB/s").arg(v, 0, 'f', v < 10 ? 1 : 0);
+}
+
+class DiagnoseJob final : public Job {
+public:
+    explicit DiagnoseJob(QJsonObject p) : m_p(std::move(p)) {}
+    QString kind() const override { return jobkinds::kFtpDiagnose; }
+    QString title() const override
+    {
+        return speedTest() ? QStringLiteral("PS5 FTP speed test") : QStringLiteral("PS5 FTP diagnostics");
+    }
+    QString subtitle() const override
+    {
+        const QString folder = m_p.value(QStringLiteral("folder")).toString().trimmed();
+        return folder.isEmpty() ? QStringLiteral("Games folder from Settings") : folder;
+    }
+    QStringList phases() const override
+    {
+        QStringList p{QStringLiteral("Connecting"), QStringLiteral("Checking")};
+        if (speedTest())
+            p << QStringLiteral("Speed test");
+        return p;
+    }
+    QJsonObject parameters() const override { return m_p; }
+
+    // The folder is normalised like typed input ("games" → "/games").
+    Status validate(const SettingsValues& s) const override { return needHost(endpointFor(m_p, s)); }
+
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        ConsoleEndpoint ep = endpointFor(m_p, ctx.settings);
+        ep.ftpPort = portParam(m_p, ep.ftpPort);
+        DiagnoseOptions opt;
+        opt.folder = m_p.value(QStringLiteral("folder")).toString();
+        opt.speedTest = speedTest();
+        if (m_p.contains(QStringLiteral("speedTestBytes")))
+            opt.speedTestBytes = std::clamp<qint64>(m_p.value(QStringLiteral("speedTestBytes")).toInteger(), 4096, kSpeedTestBytes * 4);
+        int phase = 0;
+        ctx.progress->beginPhase(0, 0);
+        auto r = diagnoseFtp(
+            ep, opt, ctx.token,
+            [&](DiagnoseStage stage, const QString& text) {
+                const int want = stage == DiagnoseStage::Connecting ? 0 : stage == DiagnoseStage::Checking ? 1 : 2;
+                if (want != phase && want < int(phases().size())) {
+                    phase = want;
+                    ctx.progress->beginPhase(phase, phase == 2 ? 2 * opt.speedTestBytes : 0);
+                }
+                ctx.progress->setCurrentItem(text);
+                ctx.log.debug(QStringLiteral("[FTP] Diagnostics: %1").arg(text));
+            },
+            [&](qint64 n) { ctx.progress->advance(n); });
+        if (!r.ok())
+            return r.takeError();
+        const FtpDiagnosis& d = r.value();
+        logDiagnosis(ctx.log, d);
+        JobOutcome o;
+        o.details = d.toJson();
+        QStringList parts;
+        if (!d.reachable) {
+            o.summary = QStringLiteral("Not reachable at %1:%2").arg(d.host).arg(d.port);
+        } else {
+            parts << QStringLiteral("Reachable in %1 ms").arg(d.rttMs);
+            if (d.loggedIn)
+                parts << QStringLiteral("logged in");
+            if (d.writable)
+                parts << (*d.writable ? QStringLiteral("%1 writable").arg(d.folder) : QStringLiteral("%1 not writable").arg(d.folder));
+            if (d.speed.ran && d.speed.uploadMBps >= 0)
+                parts << QStringLiteral("upload %1, download %2").arg(mbps(d.speed.uploadMBps), mbps(d.speed.downloadMBps));
+            o.summary = parts.join(QStringLiteral(" · "));
+        }
+        // Warnings: everything that is not right but does not stop transfers outright.
+        if (d.passive == false)
+            o.warnings << QStringLiteral("The FTP server refused passive mode (PASV and EPSV).");
+        if (d.binary == false)
+            o.warnings << QStringLiteral("The FTP server refused binary mode (TYPE I).");
+        if (d.writable == false)
+            o.warnings << QStringLiteral("Cannot write to %1. %2").arg(d.folder, d.writableDetail);
+        if (!d.probeCleaned)
+            o.warnings << QStringLiteral("The probe file %1 could not be removed from the PS5; delete it by hand.").arg(d.probePath);
+        if (opt.speedTest && !d.speed.error.isEmpty())
+            o.warnings << QStringLiteral("Speed test: %1").arg(d.speed.error);
+        if (d.speed.ran && !d.speed.cleaned)
+            o.warnings << QStringLiteral("The speed-test file %1 (%2) could not be removed from the PS5; delete it by hand.")
+                              .arg(d.speed.path, formatBytes(d.speed.bytes));
+        for (const QString& w : o.warnings)
+            ctx.log.warn(QStringLiteral("[FTP] %1").arg(w));
+        if (!d.usable()) {
+            o.verification = Verification::Failed;
+            o.verificationDetail = d.error.isEmpty() ? QStringLiteral("the FTP server could not be used") : d.error;
+        } else if (d.speed.readBackMatches == false) {
+            o.verification = Verification::Failed;
+            o.verificationDetail = QStringLiteral("the speed-test file read back from the PS5 differs from what was sent");
+        } else if (!o.warnings.isEmpty() || !d.error.isEmpty()) {
+            o.verification = Verification::Inconclusive;
+            o.verificationDetail = !d.error.isEmpty() ? d.error : o.warnings.join(u' ');
+        } else {
+            o.verification = Verification::Passed;
+            o.verificationDetail = opt.speedTest ? QStringLiteral("every check passed; the speed-test file read back identical")
+                                                 : QStringLiteral("every check passed");
+        }
+        return o;
+    }
+
+private:
+    bool speedTest() const { return m_p.value(QStringLiteral("speedTest")).toBool(false); }
+
+    static void logDiagnosis(const Log& log, const FtpDiagnosis& d)
+    {
+        auto yn = [](const std::optional<bool>& b) {
+            return !b ? QStringLiteral("not checked") : *b ? QStringLiteral("yes") : QStringLiteral("no");
+        };
+        if (!d.reachable) {
+            log.info(QStringLiteral("[FTP] Diagnostics %1:%2: not reachable — %3").arg(d.host).arg(d.port).arg(d.error));
+            return;
+        }
+        log.info(QStringLiteral("[FTP] Diagnostics %1:%2: reachable (%3 ms), banner \"%4\", login %5, FEAT %6, passive %7%8, "
+                                "binary %9")
+                     .arg(d.host)
+                     .arg(d.port)
+                     .arg(d.rttMs)
+                     .arg(d.banner, d.loggedIn ? QStringLiteral("ok") : QStringLiteral("refused"),
+                          d.featOk ? d.features.raw.simplified() : QStringLiteral("not supported"), yn(d.passive),
+                          d.passiveMode.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(d.passiveMode), yn(d.binary)));
+        if (d.writable)
+            log.info(QStringLiteral("[FTP] Writable %1: %2 — %3").arg(d.folder, yn(d.writable), d.writableDetail));
+        log.info(QStringLiteral("[FTP] Server: %1 (%2); destination %3").arg(d.server.label, d.server.confidence, d.destination));
+        if (d.speed.ran)
+            log.info(QStringLiteral("[FTP] Speed test (%1): upload %2, download %3, read-back %4, removed %5")
+                         .arg(formatBytes(d.speed.bytes), mbps(d.speed.uploadMBps), mbps(d.speed.downloadMBps),
+                              yn(d.speed.readBackMatches), d.speed.cleaned ? QStringLiteral("yes") : QStringLiteral("NO")));
+        if (!d.error.isEmpty())
+            log.warn(QStringLiteral("[FTP] Diagnostics stopped: %1").arg(d.error));
+    }
+
+    QJsonObject m_p;
+};
+
 // ---- settings ------------------------------------------------------------------------------
 
 QString hostProblem(const QVariant& v)
@@ -695,6 +837,7 @@ void registerModule(ModuleContext& ctx)
     add(jobkinds::kDpiInstall, QStringLiteral("Install package (DPI)"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new DpiJob(p)); });
     add(jobkinds::kY2jbAutoBlock, QStringLiteral("Y2JB auto-block"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new AutoBlockJob(p)); });
     add(jobkinds::kShadowMountStop, QStringLiteral("ShadowMount+ safe to unplug"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new StopJob(p)); });
+    add(jobkinds::kFtpDiagnose, QStringLiteral("FTP diagnostics"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new DiagnoseJob(p)); });
 }
 
 } // namespace fw::ps5

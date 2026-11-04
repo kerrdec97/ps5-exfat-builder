@@ -31,6 +31,8 @@ inline const QString kPayloadSend = QStringLiteral("ps5.payload.send");
 inline const QString kDpiInstall = QStringLiteral("ps5.dpi.install");
 inline const QString kY2jbAutoBlock = QStringLiteral("ps5.y2jb.autoBlock");
 inline const QString kShadowMountStop = QStringLiteral("ps5.shadowmount.stop");
+// {host?, port?, folder?, speedTest: bool, speedTestBytes? (tests)} → details = FtpDiagnosis::toJson()
+inline const QString kFtpDiagnose = QStringLiteral("ps5.ftp.diagnose");
 } // namespace jobkinds
 
 } // namespace fw::ps5

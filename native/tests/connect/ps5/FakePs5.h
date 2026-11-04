@@ -115,6 +115,10 @@ public:
         QString corruptStorPath;         // after a STOR to this path completes, keep only half (once)
         QStringList extraListNames;      // fake file entries added to every LIST/MLSD (unsafe-name tests)
         bool refuseDeleteWhileOpen = false; // DELE of a file still being written answers 550 (like Windows)
+        QByteArray greeting = "220 FakePS5 FTP ready"; // first line sent to every connection
+        QByteArray extraFeatures;        // added to the FEAT reply, e.g. " XCRYPT\r\n CPFR\r\n"
+        bool refuseEpsv = false;         // EPSV answers 502 (with refusePasv: no passive mode at all)
+        QStringList refuseDeletePaths;   // DELE refused (550) for these virtual paths; STOR still allowed
     };
 
     explicit FakeFtpServer(Options o) : m_opt(std::move(o))
@@ -196,7 +200,7 @@ private:
         m_sessions.push_back(s);
         m_connections.fetch_add(1);
         if (!m_opt.silentGreeting)
-            reply(s.get(), "220 FakePS5 FTP ready");
+            reply(s.get(), m_opt.greeting);
         Session* raw = s.get();
         QObject::connect(sock, &QTcpSocket::readyRead, sock, [this, raw] {
             raw->inbuf += raw->ctrl->readAll();
@@ -493,7 +497,7 @@ private:
                 f += " MLSD\r\n MLST type*;size*;modify*;\r\n";
             if (m_opt.supportRest)
                 f += " REST STREAM\r\n";
-            f += " SIZE\r\n MDTM\r\n UTF8\r\n211 End";
+            f += " SIZE\r\n MDTM\r\n UTF8\r\n" + m_opt.extraFeatures + "211 End";
             reply(s, f);
         } else if (cmd == u"PWD") {
             reply(s, "257 \"" + s->cwd.toUtf8() + "\" is the current directory");
@@ -521,7 +525,10 @@ private:
             else
                 openPassive(s, false);
         } else if (cmd == u"EPSV") {
-            openPassive(s, true);
+            if (m_opt.refuseEpsv)
+                reply(s, "502 EPSV not implemented.");
+            else
+                openPassive(s, true);
         } else if (cmd == u"PORT") {
             const QStringList n = arg.split(u',');
             if (n.size() != 6) {
@@ -571,7 +578,9 @@ private:
             else
                 reply(s, "550 Remove directory operation failed.");
         } else if (cmd == u"DELE") {
-            if (m_opt.refuseDeleteWhileOpen && m_openForWrite.contains(local(s, arg)))
+            if (m_opt.refuseDeletePaths.contains(virtualPath(s, arg)))
+                reply(s, "550 Permission denied.");
+            else if (m_opt.refuseDeleteWhileOpen && m_openForWrite.contains(local(s, arg)))
                 reply(s, "550 The process cannot access the file because it is being used by another process.");
             else if (!readOnly(s, arg) && QFileInfo(local(s, arg)).isFile() && QFile::remove(local(s, arg)))
                 reply(s, "250 Delete operation successful.");
