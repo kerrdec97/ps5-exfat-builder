@@ -180,6 +180,7 @@ Result<JobOutcome> BackportRestoreJob::run(JobContext& ctx)
     ro.game = gameOf(m_params);
     ro.zip = m_params.value(QStringLiteral("zip")).toString();
     ro.originalsDir = ctx.settings.string(keys::kOriginalsZipFolder).trimmed();
+    ro.allowUnrecorded = m_params.value(QStringLiteral("allowUnrecorded")).toBool(false);
     if (ctx.progress)
         ctx.progress->beginPhase(1, 0);
     FW_TRY_ASSIGN(const RestoreReport rep, restoreOriginals(ro, ctx.token, ctx.progress));
@@ -190,12 +191,14 @@ Result<JobOutcome> BackportRestoreJob::run(JobContext& ctx)
                          QStringLiteral("The originals ZIP has entries that would be written outside the game folder, so "
                                         "nothing was restored: %1")
                              .arg(rep.refused.join(QStringLiteral("; "))));
-    if (!rep.errors.isEmpty())
+    if (!rep.errors.isEmpty() || !rep.skipped.isEmpty()) {
+        const QStringList problems = rep.errors + rep.skipped;
         return makeError(Code::RestoreFailed,
-                         QStringLiteral("Partial restore: %1 files restored, %2 could not be: %3")
+                         QStringLiteral("Partial restore: %1 files restored, %2 not: %3")
                              .arg(rep.restored + rep.unchanged)
-                             .arg(rep.errors.size())
-                             .arg(rep.errors.join(QStringLiteral("; "))));
+                             .arg(problems.size())
+                             .arg(problems.join(QStringLiteral("; "))));
+    }
     o.summary = QStringLiteral("Restored %1 files from %2%3.")
                     .arg(rep.restored + rep.unchanged)
                     .arg(QFileInfo(rep.zip).fileName(),
