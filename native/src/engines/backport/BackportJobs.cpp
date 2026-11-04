@@ -1,6 +1,11 @@
 #include "engines/backport/BackportJobs.h"
 
 #include "engines/backport/ApplyJournal.h"
+#include "engines/backport/AudioScan.h"
+#include "engines/backport/ModuleImports.h"
+#include "engines/backport/ProviderSet.h"
+#include "engines/backport/RunReport.h"
+#include "engines/backport/SdkFixer.h"
 #include "engines/backport/BackportPlanner.h"
 #include "engines/backport/BackportRunner.h"
 #include "engines/backport/BackportSettings.h"
@@ -73,7 +78,24 @@ QJsonObject scanJson(const ScanResult& s, const GameMetadata& meta)
     o.insert(QStringLiteral("nestedEbootFolders"), QJsonArray::fromStringList(s.nestedEbootDirs));
     o.insert(QStringLiteral("leftoverBak"), QJsonArray::fromStringList(s.leftoverBaks));
     o.insert(QStringLiteral("metadataSkipped"), s.metadataSkipped.size());
+    QJsonArray mismatches;
+    for (const ModuleCaseMismatch& m : moduleCaseMismatches(s)) {
+        QJsonObject mo;
+        mo.insert(QStringLiteral("importer"), m.importer);
+        mo.insert(QStringLiteral("module"), m.imported);
+        mo.insert(QStringLiteral("file"), m.file);
+        mismatches.append(mo);
+    }
+    o.insert(QStringLiteral("moduleCaseMismatches"), mismatches);
     return o;
+}
+
+QString moduleCaseMessage(const QJsonObject& m)
+{
+    return QStringLiteral("%1 imports the module %2, but the file is %3 (the letters differ in case). Firmware that "
+                          "looks modules up case-sensitively may not load it. Reported only.")
+        .arg(m.value(QStringLiteral("importer")).toString(), m.value(QStringLiteral("module")).toString(),
+             m.value(QStringLiteral("file")).toString());
 }
 
 } // namespace
@@ -134,6 +156,8 @@ QString BackportRestoreJob::title() const
 {
     if (m_params.contains(QStringLiteral("journal")))
         return QStringLiteral("Roll back an interrupted backport");
+    if (m_params.value(QStringLiteral("undoSdkFix")).toBool())
+        return QStringLiteral("Undo the SDK fix of %1").arg(folderTitle(gameOf(m_params), QStringLiteral("a folder")));
     return QStringLiteral("Restore %1").arg(folderTitle(gameOf(m_params), QStringLiteral("originals")));
 }
 
@@ -160,7 +184,18 @@ Result<JobOutcome> BackportRestoreJob::run(JobContext& ctx)
     if (ctx.progress)
         ctx.progress->beginPhase(0, 0);
     JobOutcome o;
-    const QString journalPath = m_params.value(QStringLiteral("journal")).toString();
+    QString journalPath = m_params.value(QStringLiteral("journal")).toString();
+    const bool undoSdkFix = journalPath.isEmpty() && m_params.value(QStringLiteral("undoSdkFix")).toBool();
+    if (undoSdkFix) {
+        const QString originals = ctx.settings.string(keys::kOriginalsZipFolder).trimmed();
+        journalPath = latestSdkFixRecord(originals, gameOf(m_params));
+        if (journalPath.isEmpty())
+            return makeError(Code::RestoreFailed,
+                             QStringLiteral("No in-place SDK fix of %1 is recorded%2.")
+                                 .arg(QDir::toNativeSeparators(gameOf(m_params)),
+                                      originals.isEmpty() ? QString()
+                                                          : QStringLiteral(" in %1").arg(QDir::toNativeSeparators(originals))));
+    }
     if (!journalPath.isEmpty()) {
         FW_TRY_ASSIGN(ApplyJournal j, ApplyJournal::load(journalPath));
         if (ctx.progress)
@@ -169,7 +204,10 @@ Result<JobOutcome> BackportRestoreJob::run(JobContext& ctx)
         Status st = j.rollback(ctx.token, &problems);
         if (!st.ok())
             return st.takeError();
-        o.summary = QStringLiteral("The interrupted backport of %1 was rolled back.").arg(QDir::toNativeSeparators(j.game()));
+        o.summary = undoSdkFix ? QStringLiteral("The SDK fix of %1 was undone.").arg(QDir::toNativeSeparators(j.game()))
+                               : QStringLiteral("The interrupted backport of %1 was rolled back.").arg(QDir::toNativeSeparators(j.game()));
+        if (undoSdkFix)
+            o.details.insert(QStringLiteral("record"), QDir::toNativeSeparators(journalPath));
         o.outputs << j.game();
         o.verification = Verification::Passed;
         o.verificationDetail = QStringLiteral("Every file holds its original bytes again.");
@@ -295,13 +333,212 @@ Result<JobOutcome> BackportScanJob::run(JobContext& ctx)
             warnings << s.error().message;
             continue;
         }
-        list.append(scanJson(s.value(), readGameMetadata(g)));
+        QJsonObject gj = scanJson(s.value(), readGameMetadata(g));
+        QJsonArray issues;
+        for (const QJsonValue& m : gj.value(QStringLiteral("moduleCaseMismatches")).toArray()) {
+            QJsonObject io;
+            io.insert(QStringLiteral("severity"), severityName(Severity::Warn));
+            io.insert(QStringLiteral("code"), codeName(Code::ModuleNameCase));
+            io.insert(QStringLiteral("message"), moduleCaseMessage(m.toObject()));
+            issues.append(io);
+        }
+        if (!issues.isEmpty())
+            gj.insert(QStringLiteral("issues"), issues);
+        list.append(gj);
         if (ctx.progress)
             ctx.progress->advance(1);
     }
     o.details.insert(QStringLiteral("games"), list);
     o.warnings = warnings;
     o.summary = QStringLiteral("Found %1 games.").arg(games.size());
+    return o;
+}
+
+// ---- backport.sdkFix ----------------------------------------------------------------------
+
+namespace {
+QString folderOf(const QJsonObject& p)
+{
+    const QString f = p.value(QStringLiteral("folder")).toString();
+    return f.isEmpty() ? gameOf(p) : f;
+}
+} // namespace
+
+SdkFixOptions sdkFixOptionsFrom(const SettingsValues& settings, const QJsonObject& p)
+{
+    const BackportOptions b = optionsFromSettings(settings, folderOf(p));
+    SdkFixOptions o;
+    o.folder = folderOf(p);
+    o.targetSdk = p.contains(QStringLiteral("targetSdk")) ? p.value(QStringLiteral("targetSdk")).toVariant().toInt() : b.targetSdk;
+    o.mode = p.value(QStringLiteral("mode")).toString() == u"inPlace" ? SdkFixMode::InPlace : SdkFixMode::Copy;
+    o.outputDir = p.value(QStringLiteral("outputDir")).toString();
+    o.originalsDir = b.originalsDir;
+    if (!b.backportDir.isEmpty())
+        o.excludeDirs << b.backportDir;
+    o.encryptedPolicy = b.encryptedPolicy;
+    o.verifyBuild = b.verifyBuild;
+    o.journalRetentionDays = b.journalRetentionDays;
+    o.freeSpaceMarginBytes = b.freeSpaceMarginBytes;
+    return o;
+}
+
+BackportSdkFixJob::BackportSdkFixJob(QJsonObject params) : m_params(std::move(params)) {}
+
+QString BackportSdkFixJob::title() const
+{
+    return QStringLiteral("SDK fix · %1").arg(folderTitle(folderOf(m_params), QStringLiteral("folder")));
+}
+
+QString BackportSdkFixJob::subtitle() const
+{
+    return QStringLiteral("%1 · %2")
+        .arg(m_params.value(QStringLiteral("mode")).toString() == u"inPlace" ? QStringLiteral("In place") : QStringLiteral("Copy"),
+             QDir::toNativeSeparators(folderOf(m_params)));
+}
+
+QStringList BackportSdkFixJob::phases() const
+{
+    return sdkFixPhases();
+}
+
+Status BackportSdkFixJob::validate(const SettingsValues& settings) const
+{
+    const SdkFixOptions o = sdkFixOptionsFrom(settings, m_params);
+    if (o.folder.isEmpty() || !QFileInfo(o.folder).isDir())
+        return makeError(Code::NotAGame, QStringLiteral("The folder %1 does not exist.").arg(QDir::toNativeSeparators(o.folder)));
+    if (!sdkPair(o.targetSdk))
+        return makeError(Code::TargetSdkInvalid, QStringLiteral("Target SDK %1 is not supported.").arg(o.targetSdk));
+    const QString mode = m_params.value(QStringLiteral("mode")).toString();
+    if (!mode.isEmpty() && mode != u"copy" && mode != u"inPlace")
+        return makeError(Code::Internal, QStringLiteral("Unknown SDK fix mode \"%1\".").arg(mode));
+    if (o.mode == SdkFixMode::InPlace && o.originalsDir.isEmpty())
+        return makeError(Code::ZipFolderInvalid,
+                         QStringLiteral("Choose the originals ZIP folder in Settings > Backport first: an in-place SDK "
+                                        "fix saves the files it replaces there."));
+    return success();
+}
+
+Result<JobOutcome> BackportSdkFixJob::run(JobContext& ctx)
+{
+    FW_TRY_ASSIGN(const SdkFixResult r, runSdkFix(sdkFixOptionsFrom(ctx.settings, m_params), ctx));
+    return toOutcome(r);
+}
+
+// ---- backport.audioScan --------------------------------------------------------------------
+
+BackportAudioScanJob::BackportAudioScanJob(QJsonObject params) : m_params(std::move(params)) {}
+
+QString BackportAudioScanJob::title() const
+{
+    return QStringLiteral("Audio report · %1").arg(folderTitle(gameOf(m_params), QStringLiteral("game")));
+}
+
+Status BackportAudioScanJob::validate(const SettingsValues&) const
+{
+    const QString game = gameOf(m_params);
+    if (game.isEmpty() || !QFileInfo(game).isDir())
+        return makeError(Code::NotAGame, QStringLiteral("The game folder %1 does not exist.").arg(QDir::toNativeSeparators(game)));
+    return success();
+}
+
+Result<JobOutcome> BackportAudioScanJob::run(JobContext& ctx)
+{
+    if (ctx.progress)
+        ctx.progress->beginPhase(0, 0);
+    const QString game = gameOf(m_params);
+    const bool all = m_params.value(QStringLiteral("allExecutables")).toBool(false);
+    FW_TRY_ASSIGN(const AudioReport audio, scanGameAudio(game, all, ctx.token));
+    const QJsonObject sections = audioReportJson(audio);
+    const GameMetadata meta = readGameMetadata(audio.game);
+    QJsonObject rep = newReport(QStringLiteral("audioScan"));
+    rep.insert(QStringLiteral("jobId"), ctx.jobId);
+    rep.insert(QStringLiteral("title"), meta.title);
+    rep.insert(QStringLiteral("titleId"), manifestTitleId(meta, audio.game));
+    const QString verdict = sections.value(QStringLiteral("summary")).toObject().value(QStringLiteral("verdict")).toString();
+    QJsonObject outcome;
+    outcome.insert(QStringLiteral("status"), QStringLiteral("reportOnly"));
+    outcome.insert(QStringLiteral("summary"), verdict);
+    rep.insert(QStringLiteral("outcome"), outcome);
+    QJsonObject inputs;
+    inputs.insert(QStringLiteral("game"), QDir::toNativeSeparators(audio.game));
+    inputs.insert(QStringLiteral("scanned"), all ? QStringLiteral("every game executable") : QStringLiteral("eboot.bin"));
+    rep.insert(QStringLiteral("inputs"), inputs);
+    for (auto it = sections.constBegin(); it != sections.constEnd(); ++it)
+        rep.insert(it.key(), it.value());
+
+    JobOutcome o;
+    o.verification = Verification::Skipped;
+    o.verificationDetail = QStringLiteral("Report only; nothing was changed.");
+    o.details = sections;
+    o.summary = QStringLiteral("Audio report (%1): %2")
+                    .arg(audioTierName(audio.tier), verdict);
+    const QString dir = reportDirForGame(ctx.settings.string(keys::kOriginalsZipFolder).trimmed(), audio.game);
+    auto written = writeReport(dir, reportBaseName(QStringLiteral("audio report")), rep);
+    if (written.ok()) {
+        o.details.insert(QStringLiteral("report"), reportFilesJson(written.value()));
+        ctx.log.info(QStringLiteral("Run report: %1").arg(QDir::toNativeSeparators(written->html)));
+    } else {
+        o.warnings << QStringLiteral("The report could not be written: %1").arg(written.error().message);
+    }
+    return o;
+}
+
+// ---- backport.pinProviders ------------------------------------------------------------------
+
+BackportPinProvidersJob::BackportPinProvidersJob(QJsonObject params) : m_params(std::move(params)) {}
+
+namespace {
+QString providerFolderOf(const QJsonObject& p, const SettingsValues& s)
+{
+    const QString f = p.value(QStringLiteral("folder")).toString().trimmed();
+    return f.isEmpty() ? s.string(keys::kAmprPlaygoFolder).trimmed() : f;
+}
+} // namespace
+
+Status BackportPinProvidersJob::validate(const SettingsValues& settings) const
+{
+    const QString f = providerFolderOf(m_params, settings);
+    if (f.isEmpty())
+        return makeError(Code::FakelibInvalid, QStringLiteral("Choose the AMPR / PlayGo libraries folder in Settings > Backport first."));
+    if (!QFileInfo(f).isDir())
+        return makeError(Code::FakelibInvalid, QStringLiteral("The AMPR/PlayGo folder %1 does not exist.").arg(QDir::toNativeSeparators(f)));
+    return success();
+}
+
+Result<JobOutcome> BackportPinProvidersJob::run(JobContext& ctx)
+{
+    if (ctx.progress)
+        ctx.progress->beginPhase(0, 0);
+    const QString folder = providerFolderOf(m_params, ctx.settings);
+    FakelibSource set;
+    QStringList ignored;
+    const QStringList problems = providerProblems(folder, QString(), &set, &ignored, ctx.token);
+    if (!ctx.token.checkpoint())
+        return Error::cancelled();
+    if (!problems.isEmpty())
+        return makeError(Code::FakelibInvalid,
+                         QStringLiteral("The AMPR/PlayGo folder %1 cannot be pinned: %2")
+                             .arg(QDir::toNativeSeparators(folder), problems.join(QStringLiteral(" "))));
+    const QString pinsPath = defaultProviderPinsPath();
+    const ProviderPinCheck before = checkProviderPins(set, pinsPath);
+    FW_TRY(pinProviders(set, pinsPath));
+    QStringList names;
+    QJsonObject files;
+    for (const FakelibLib& l : set.libs) {
+        names << QStringLiteral("%1 (%2…)").arg(l.name, l.sha256.left(8));
+        files.insert(l.name, l.sha256);
+    }
+    JobOutcome o;
+    o.summary = QStringLiteral("Pinned %1.").arg(names.join(QStringLiteral(", ")));
+    if (before.pinned && !before.ok())
+        o.summary += QStringLiteral(" Earlier pins replaced (%1).").arg(before.describe());
+    if (!ignored.isEmpty())
+        o.warnings << QStringLiteral("Ignored (not AMPR/PlayGo): %1.").arg(ignored.join(QStringLiteral(", ")));
+    o.verification = Verification::Passed;
+    o.verificationDetail = QStringLiteral("SHA-256 recorded for %1 files.").arg(set.libs.size());
+    o.details.insert(QStringLiteral("folder"), QDir::toNativeSeparators(set.dir));
+    o.details.insert(QStringLiteral("files"), files);
+    o.details.insert(QStringLiteral("pins"), QDir::toNativeSeparators(pinsPath));
     return o;
 }
 
@@ -313,6 +550,12 @@ void registerBackportJobs(JobFactory& jobs)
              [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new BackportRestoreJob(p)); });
     jobs.add(kJobScan, QStringLiteral("Backport scan"),
              [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new BackportScanJob(p)); });
+    jobs.add(kJobSdkFix, QStringLiteral("SDK fix"),
+             [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new BackportSdkFixJob(p)); });
+    jobs.add(kJobAudioScan, QStringLiteral("Audio report"),
+             [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new BackportAudioScanJob(p)); });
+    jobs.add(kJobPinProviders, QStringLiteral("Pin AMPR/PlayGo libraries"),
+             [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new BackportPinProvidersJob(p)); });
 }
 
 } // namespace fw::backport

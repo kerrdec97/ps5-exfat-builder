@@ -1,8 +1,9 @@
 #pragma once
 
 // Backport settings (docs/BACKPORT_PARITY.md §5). Every key is read by this
-// module: optionsFromSettings() (backport.run), the scan job (library
-// folders and depth) and the restore job (originals folder). Blocked
+// module: optionsFromSettings() (backport.run, backport.scan, backport.sdkFix,
+// backport.pinProviders), the scan job (library folders and depth) and the
+// restore job (originals folder). Blocked
 // features (PS5 Pro fix / Pro build, default fakelib set, right.sprx copy,
 // import-table audit, audio check, save-data fixes, SDK 11-13) have no
 // settings on purpose.
@@ -17,6 +18,7 @@ inline const QString kOriginalsZipFolder = QStringLiteral("backport.originalsZip
 inline const QString kBackportZipFolder = QStringLiteral("backport.backportZipFolder");
 inline const QString kTargetSdk = QStringLiteral("backport.targetSdk");
 inline const QString kFakelibFolder = QStringLiteral("backport.fakelibFolder");
+inline const QString kAmprPlaygoFolder = QStringLiteral("backport.amprPlaygoFolder");
 inline const QString kApplyToGameFolder = QStringLiteral("backport.applyToGameFolder");
 inline const QString kNidPatchMode = QStringLiteral("backport.nidPatchMode");
 inline const QString kEncryptedSelfPolicy = QStringLiteral("backport.encryptedSelfPolicy");

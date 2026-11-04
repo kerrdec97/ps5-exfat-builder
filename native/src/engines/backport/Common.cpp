@@ -51,6 +51,8 @@ QString codeName(Code code)
     case Code::RollbackFailed: return QStringLiteral("RollbackFailed");
     case Code::RestoreFailed: return QStringLiteral("RestoreFailed");
     case Code::ManifestMismatch: return QStringLiteral("ManifestMismatch");
+    case Code::ModuleNameCase: return QStringLiteral("ModuleNameCase");
+    case Code::ProviderChanged: return QStringLiteral("ProviderChanged");
     case Code::Cancelled: return QStringLiteral("Cancelled");
     case Code::Internal: return QStringLiteral("Internal");
     }
@@ -72,6 +74,7 @@ ErrorCode toErrorCode(Code code)
     case Code::ZipFolderInvalid:
     case Code::PathTooLong:
     case Code::NothingToDo:
+    case Code::ModuleNameCase:
     case Code::InterruptedApply: return ErrorCode::InvalidArgument;
     case Code::InsufficientSpace: return ErrorCode::InsufficientSpace;
     case Code::ElfInvalid:
@@ -92,6 +95,7 @@ ErrorCode toErrorCode(Code code)
     case Code::VerifyFailed:
     case Code::ZipVerifyFailed:
     case Code::GameChanged:
+    case Code::ProviderChanged:
     case Code::ManifestMismatch: return ErrorCode::VerificationFailed;
     case Code::Cancelled: return ErrorCode::Cancelled;
     }

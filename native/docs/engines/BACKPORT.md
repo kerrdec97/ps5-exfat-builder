@@ -29,10 +29,15 @@ Whether a console loads the result is **UNVERIFIED** by this work.
 | Journaled Apply with content-based rollback, crash recovery | Implemented | `ApplyJournal.*` |
 | Restore (zip-slip refusal, added files removed, manifest checks) | Implemented | `RestoreService.*` |
 | Run orchestration (Scan → Patch → Package → Verify → Apply) | Implemented | `BackportRunner.*` |
-| Jobs `backport.run`, `backport.restore`, `backport.scan` | Implemented | `BackportJobs.*` |
+| Jobs `backport.run`, `backport.restore`, `backport.scan`, `backport.sdkFix`, `backport.audioScan`, `backport.pinProviders` | Implemented | `BackportJobs.*` |
 | Settings and legacy keys | Implemented | `BackportSettings.*`, `Module.*` |
-| Rebuild a ZIP with another SDK (#31), SDK Fixer, Results tracker, AMPR index, report export | Later (not in this pass) | — |
-| Import-table audit, fix families, audio check, PS5 Pro fix / Pro build, `right.sprx` copy, default fakelib set, save-data fixes, SDK pairs 11–13 | **Blocked** (§7 of the spec); no code and no settings | — |
+| Run report, JSON + self-contained HTML, next to the backup records (#24) | Implemented | `RunReport.*` |
+| SDK Fixer, SDK marker only: copy, or in place with backup ZIP + journal, undoable | Implemented | `SdkFixer.*` |
+| Unity/Il2Cpp module-name case detector (#41) | Implemented (detector only) | `ModuleImports.*` |
+| Audio report, read-only (#40) | Implemented (report only) | `AudioScan.*` |
+| User-supplied AMPR/PlayGo libraries with hash pinning (#34) | Implemented | `ProviderSet.*` |
+| Rebuild a ZIP with another SDK (#31), Results tracker, AMPR index | Later (not in this pass) | — |
+| Import-table audit, fix families, audio check and audio patches, Il2Cpp case fix, PS5 Pro fix / Pro build, `right.sprx` copy, default fakelib set, bundled AMPR/PlayGo providers, save-data fixes, SDK pairs 11–13 | **Blocked** (§7 of the spec); no code and no settings | — |
 
 ## Licences
 
@@ -44,6 +49,10 @@ Whether a console loads the result is **UNVERIFIED** by this work.
   `Backport.py`, the SDK patcher gist or the Backport GUI was read or translated. The legacy app's
   own code (`core/backport_safety.py`, `ui/backport_profiles.py`, `exfat_builder.py` helpers such
   as `_sfo_zip_prefix`) was used as the behavioural reference.
+* `AudioScan.*` is a port of this project's own legacy scanner (`ui/audio_channel_scan.py` and the
+  confirmed profiles in `ui/audio_profiles.py`). `ModuleImports.*` uses only the public ELF/SCE
+  dynamic-tag layout (DT_NEEDED, DT_SCE_NEEDED_MODULE, DT_SCE_STRTAB, DT_SCE_STRSZ); no code from
+  any loader or from the Backport GUI. The SDK Fixer reuses this module's own pipeline.
 * No `right.sprx`, PSSR, kernel files, firmware tables or fakelib binaries are bundled or downloaded.
 
 ## A run
@@ -87,7 +96,79 @@ its own record, so one never replaces or restores the other:
   record is updated.
 
 Job parameters: `backport.run {game, confirmDiffers?}`; `backport.restore {game, zip?,
-allowUnrecorded?}` or `{journal}`; `backport.scan {game?}` or `{folders?}` (library mode).
+allowUnrecorded?}`, `{journal}` or `{game, undoSdkFix: true}`; `backport.scan {game?}` or
+`{folders?}` (library mode); `backport.sdkFix {folder, mode?: copy|inPlace, targetSdk?, outputDir?}`;
+`backport.audioScan {game, allExecutables?}`; `backport.pinProviders {folder?}`.
+
+## Run reports (#24)
+
+Every `backport.run` that passes its preflight writes a report, whatever the outcome (succeeded,
+partial, nothing to do, failed, cancelled); so does every SDK fix and audio report. A run the
+preflight refuses writes none: the error already says why.
+
+* Where: `<originals>/BackportBackup/<TitleID>/reports/` (or `…/folders/<name>-<hash>/reports/`
+  for a folder whose title ID another folder already uses), next to `manifest.json`, which is
+  unchanged. Without an originals ZIP folder: `<dataDir>/backport/reports/`. Names
+  `<yyyyMMdd-HHmmss> backport SDK <N>.json/.html`; a taken name gets ` (N)`.
+* JSON (`format: fw-backport-report`, `schema: 1`, `kind`): engine identity and SDK table hash, job
+  id, outcome (status, summary, error code and detail), inputs (folders, game and param.json SDK,
+  required FW, options, AMPR/PlayGo hashes and pin state), target pair (PS5/PS4 values), per-file
+  results (`rewritten`, `unchanged`, `added`, `replaced`, `left unchanged`, `failed`, each with
+  why, SDK before/after, SHA-256 before/after), skipped files (dump fakelib, `decrypted/`, `.bak`,
+  links, OS metadata), ZIPs (role, path, SHA-256, members, bytes), verification (preflight, V1–V5,
+  ZIP read-back, V7), apply journal, manifest path, issues, warnings.
+* HTML: one file, inline CSS (light and dark), no scripts, no external resources, a
+  Content-Security-Policy of `default-src 'none'`, every value escaped.
+* A successful run returns the paths in `RunResult::reportJson/reportHtml` and
+  `JobOutcome::details.report`; a failed run appends `Run report: <html>` to the error detail
+  (`reportFromDetail()`); the Backport page shows "Open report" either way.
+
+## SDK Fixer
+
+`backport.sdkFix` changes only the SDK marker: the PS4/PS5 SDK values of each executable's
+process/module param, then the file is fake-signed again. Fakelib off, libc import rename off,
+`param.json` / `param.sfo` never written and checked unchanged, `fakelib/` and `decrypted/` never
+processed, the same preflight rules for encrypted and unrewritable files, free space checked.
+The build is the backport build (`buildBackport`) in the job's staging folder, so V1–V3 apply.
+A target above the eboot's current SDK is allowed with a warning (a backport folder at SDK 4
+raised to 5 is the main use).
+
+| Mode | Writes | On failure / cancel | Undo |
+|---|---|---|---|
+| Copy (default) | `<output or parent>/<name> SDK <N>` (FW tags, old SDK tags and "- Copy"/"(N)" removed from the name; the title ID kept) through `<copy>.fwpart`; executables and param files checked by SHA-256, other files by size | the `.fwpart` is removed; the source is only read (P14) | delete the copy |
+| In place | backup ZIP `<prefix> SDK <N> fix original files.zip` in the originals ZIP folder (read back before anything changes), then an apply journal (`<jobId>-sdkfix.json`) | rolled back by the journal; a crash leaves a pending journal for the start-up offer, and a new run or SDK fix of that folder is refused until it is rolled back | `backport.restore {game, undoSdkFix: true}`: the finished journal kept in `BackportBackup/<TitleID>/…/sdk-fixes/` is rolled back from the backup ZIP |
+
+When the folder has its own backport record, the fix is appended to it (`sdk_fixes`: target,
+backup ZIP and its SHA-256, the undo record, `files_after`). Restore and the S7 verdict count those
+files as backport output, so restoring the backport originals still works after an SDK fix and a
+new backport of the fixed folder is refused as already backported.
+
+## Detectors (report only)
+
+* **Module-name case (#41).** The scanner reads each executable's needed files and modules from
+  its dynamic table (`ModuleImports.h`) and compares them with the libraries directly in
+  `sce_module/`. A name that matches only when letter case is ignored (".prx"/".sprx" ignored)
+  is a Warn issue (`ModuleNameCase`) in the plan, the run report and the library scan; the backport
+  is not blocked and nothing is renamed. The fix stays blocked. That real PS5 executables use the
+  documented tag values is **UNVERIFIED**; without a readable table the NUL-separated names in
+  DYNLIBDATA are used (import NIDs, which contain `#`, are ignored).
+* **Audio (#40).** `backport.audioScan` scans the raw bytes of `eboot.bin` (or every game
+  executable): the channel-config cluster (unpatched 12 / patched 8 channels), twin branches, audio
+  API names, loose leads (at most 200) and the two confirmed profiles. It writes a report with kind
+  `audioScan` and status "report only", and never writes to the game.
+
+## AMPR / PlayGo providers (#34)
+
+`backport.amprPlaygoFolder` points at the user's own `libSceAmpr` and/or `libScePlayGo`
+(`.sprx`/`.prx`, S8 rules; other libraries in the folder are ignored and listed). They are merged
+into the fakelib set where it is staged (`fakelib/` and nested eboot folders): a same-named library
+of the set is replaced (its file name kept), otherwise they are added; with no fakelib folder they
+are the whole set, which also replaces a dump's own copies (kept in the originals ZIP, S14).
+Pins: SHA-256 and size per file, per folder, in `<dataDir>/backport/provider-pins.json`. The first
+backport with an unpinned folder pins it (logged, and "pinned by this run" in the report). Later a
+changed, added or missing file refuses the run before anything is written (`ProviderChanged`)
+until the folder is pinned again (`backport.pinProviders`; "Pin them again…" on the Backport page).
+Nothing is bundled or downloaded.
 
 ## Settings
 
@@ -98,6 +179,7 @@ All keys are read by this module; blocked features have no setting.
 | `backport.originalsZipFolder` | Backport · Folders | DirPath, "" | — | `optionsFromSettings` (run, scan); restore job (ZIP and manifest lookup); library scan exclusion | `abp_zip_orig_dest` |
 | `backport.backportZipFolder` | Backport · Folders | DirPath, "" | — | `optionsFromSettings`; library scan exclusion | `abp_zip_pat_dest` |
 | `backport.fakelibFolder` | Backport · Folders | DirPath, "" (a file path is refused) | per job | `optionsFromSettings` | `abp_fakelib` (a file path is dropped with a warning) |
+| `backport.amprPlaygoFolder` | Backport · Folders | DirPath, "" | per job | `optionsFromSettings` → planner (#34); `backport.pinProviders` when no folder is passed | — |
 | `backport.applyToGameFolder` | Backport · Run | Bool, **true** | per job | `optionsFromSettings` → Apply phase, plan line | — |
 | `backport.notes` | Backport · Run | String ≤ 500, "" | per job | written into the manifest | `abp_notes` (cut to 500) |
 | `backport.scanFolders` | Backport · Game library | StringList, [] | — | `backport.scan` without a game or `folders` (library mode) | `bp_folders` + `bp_scan_folder` (merged by a whole-file importer) |
@@ -110,13 +192,15 @@ All keys are read by this module; blocked features have no setting.
 | `backport.nidPatchMode` | Firmware and SDK · Backport target | Enum auto / off, auto | advanced | engine | — |
 
 `storage.freeSpaceMarginMiB` (general module) is read as the S12 reserve when it is registered.
-`backport.results` (the Results list) is not implemented yet.
+`backport.results` (the Results list) is not implemented yet. AMPR/PlayGo pins are data, not a
+setting: `<dataDir>/backport/provider-pins.json`.
 
 ## Safety rules → tests
 
 Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F),
 `tst_backport_scan.cpp` (Sc), `tst_backport_zip.cpp` (Z), `tst_backport_planner.cpp` (P),
-`tst_backport_run.cpp` (R).
+`tst_backport_run.cpp` (R), `tst_backport_report.cpp` (Rp), `tst_backport_sdkfix.cpp` (Fx),
+`tst_backport_detect.cpp` (D), `tst_backport_providers.cpp` (Pv).
 
 | Rule | How it is kept | Tests |
 |---|---|---|
@@ -143,7 +227,7 @@ Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F
 | S21 manifest after each run, atomic | `writeManifest()` via `writeFileAtomic` | R `selfGameBackportedAndApplied`; Sc `pythonSchema1ManifestReadAndUpgraded` |
 | S22 batch: same checks, doubtful → skip | Each game is its own `backport.run`; Confirm blocks unless `confirmDiffers` | P `manifestVerdictRules` |
 | S23 archive handles closed | Core reader opens per read; rename/delete after use | Z `writesVerifiesAndNeverOverwrites` |
-| S24 SDK Fixer | Not implemented in this pass | — |
+| S24 SDK Fixer | `SdkFixer.*`: NID off, no fakelib, param files checked, staging only; copy removes its `.fwpart`; in place backs up to a verified ZIP and applies through the journal | Fx `copyModeLeavesTheSourceUntouched`, `copyFailureRemovesTheHalfWrittenCopy`, `inPlaceWritesABackupAJournalAndAnUndoRecord`, `undoRestoresTheFolder`, `applyFailureRollsBack`, `crashDuringApplyIsRecoverable`, `alreadyAtTheTargetIsNothingToDo`, `fixOfABackportedFolderIsKnownToItsRecord`, `refusals` |
 | S25 Batch Retag | Not implemented in this pass | — |
 | S26 tooling never closes issues | Process rule | — |
 | S27 licence | Nothing blocked is bundled; no settings for blocked features | Sc `settingsRegisteredAndWellFormed` |
@@ -159,8 +243,20 @@ Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F
 | S37 the originals ZIP is never deleted automatically | Nothing in the module deletes a ZIP | R `restoreRemovesAddedFilesAndAllowsANewRun` |
 | S38 ZIP folders not scanned; nested ZIP folders refused | Scanner and discovery exclude ZIP folders that lie inside the scanned folder; a ZIP folder that is the game (or library) folder or one of its parents is ignored for it, so it never hides the game's sub-folders; planner | P `zipFolderRules`; Sc `nestedEbootAndExcludedFolders`, `discoverGamesHonoursDepthAndExcludes`, `excludeThatContainsTheRootIsIgnored`; R `zipFolderThatIsTheGamesParentHidesNothing` |
 
-Implementable rules S1, S3–S23, S27–S38: each has at least one test. S2 holds by construction;
-S24, S25 (features not built yet) and S26 (process) have no test.
+Implementable rules S1, S3–S24, S27–S38: each has at least one test. S2 holds by construction;
+S25 (Batch Retag, not built yet) and S26 (process) have no test.
+
+Later rows built in this pass and their tests: #24 run report (Rp `successfulRunWritesJsonAndHtmlNextToTheRecords`,
+`skippedFilesAndWarningsAreListed`, `failedRunNamesItsReport`, `partialRunIsReportedAsPartial`,
+`refusedRunWritesNoReport`, `htmlEscapesEveryValue`, `namesAreNeverReused`); #41 detector (D
+`readsImportsFromTheDynamicTable`, `fallsBackToTheDynlibNames`, `hostileDynamicTablesNeverCrash`,
+`caseMismatchIsAScanIssue`, `exactCaseAndUnrelatedModulesAreNotReported`, `libraryScanReportsTheMismatch`);
+#40 audio (D `unpatchedClusterIsFound`, `patchedAndMixedClusters`, `loneFragmentsNeverCount`,
+`twinBranchAndApiNames`, `leadsAreCappedAndCoalesced`, `confirmedProfileIsRecognised`,
+`audioScanJobIsReadOnlyAndWritesAReport`); #34 providers (Pv `folderRules`,
+`firstRunPinsAndStagesTheProviders`, `changedProviderIsRefusedUntilRepinned`,
+`addedOrMissingProviderIsRefused`, `providersReplaceTheDumpsOwnCopy`, `mergeKeepsTheSetsFileName`,
+`pinJobRecordsAndReportsChanges`).
 
 Format and build checks: golden SHA-256 for F1/F2 × pairs 4/10 and the NID golden (F
 `goldenHashes`, `workedExampleHeader`, `nidGolden`; R `selfGameBackportedAndApplied` checks the
@@ -187,7 +283,7 @@ same hashes on the files applied to the game); every pair 1–10 (F `eachPairIsW
 | P11 AMPR key folding | Not applicable yet (AMPR index not built) | — |
 | P12 no free-space check in batch; wrong temp path estimate | Fixed (S12 per game, exact staging path) | P `freeSpaceChecked`, `longStagingPathIsWarned` |
 | P13 games scan 2 levels, ZIP folders scanned | Fixed (depth setting, exclusions) | Sc `discoverGamesHonoursDepthAndExcludes` |
-| P14 SDK Fixer modifies an ELF source | Not applicable yet (SDK Fixer not built) | — |
+| P14 SDK Fixer modifies an ELF source | Fixed: staging only; copy mode only reads the source | Fx `copyModeLeavesTheSourceUntouched` |
 
 ## Where this differs from the spec, and why
 
@@ -245,5 +341,9 @@ cmake --build native/build-backport --target tst_backport_format tst_backport_sc
 ctest --test-dir native/build-backport -R backport --output-on-failure
 ```
 
+(The four newer test executables are `tst_backport_report`, `tst_backport_sdkfix`,
+`tst_backport_detect` and `tst_backport_providers`; `-R backport` runs them too.)
+
 Each test links only `fw_engine_backport` and the core test support. The fixtures are in
-`BackportFixtures.h` (F1–F13) and `BackportTestEnv.h` (game trees G1 a–h and a job context).
+`BackportFixtures.h` (F1–F13, and `f1WithImports()` for the #41 dynamic table) and
+`BackportTestEnv.h` (game trees G1 a–h and a job context).

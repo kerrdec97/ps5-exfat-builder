@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QString>
+#include <QStringList>
 #include <QtEndian>
 
 #include <cstring>
@@ -220,5 +221,46 @@ inline QByteArray readBytes(const QString& path)
 
 // A fakelib library: a valid PRX (F2 layout) with distinct code bytes.
 inline QByteArray fakeLib(int seed) { return f2(seed); }
+
+// F1 with a sixth program header, PT_DYNAMIC, inside PT_SCE_DYNLIBDATA
+// (0x5900): DT_SCE_STRTAB / DT_SCE_STRSZ, one DT_NEEDED per `needed` name and
+// one DT_SCE_NEEDED_MODULE per `modules` name, then DT_NULL; the string table
+// follows the dynamic table inside DYNLIBDATA (#41 fixtures).
+inline QByteArray f1WithImports(const QStringList& needed, const QStringList& modules)
+{
+    QByteArray b = f1();
+    put16(b, 0x38, 6);
+    const quint64 entries = quint64(needed.size() + modules.size() + 3);
+    const quint64 dynSize = entries * 16;
+    writePhdrs(b, {{0x2, 4, 0x5900, 0, 0, dynSize, dynSize, 8}}, 0x40 + 5 * 0x38);
+    for (qsizetype o = 0x5900; o < 0x5A00; ++o)
+        b[o] = '\0';
+    QByteArray strtab(1, '\0');
+    QList<quint64> neededOff, moduleOff;
+    for (const QString& n : needed) {
+        neededOff << quint64(strtab.size());
+        strtab += n.toLatin1() + '\0';
+    }
+    for (const QString& n : modules) {
+        moduleOff << quint64(strtab.size());
+        strtab += n.toLatin1() + '\0';
+    }
+    Q_ASSERT(dynSize + quint64(strtab.size()) <= 0x100);
+    qsizetype o = 0x5900;
+    const auto entry = [&](qint64 tag, quint64 val) {
+        put64(b, o, quint64(tag));
+        put64(b, o + 8, val);
+        o += 16;
+    };
+    entry(0x61000035, dynSize);              // DT_SCE_STRTAB (offset in DYNLIBDATA)
+    entry(0x61000037, quint64(strtab.size())); // DT_SCE_STRSZ
+    for (quint64 off : neededOff)
+        entry(1, off);                       // DT_NEEDED
+    for (int i = 0; i < moduleOff.size(); ++i)
+        entry(0x6100000F, (quint64(i + 1) << 48) | (quint64(1) << 32) | moduleOff[i]); // DT_SCE_NEEDED_MODULE
+    entry(0, 0);                             // DT_NULL
+    std::memcpy(b.data() + 0x5900 + dynSize, strtab.constData(), size_t(strtab.size()));
+    return b;
+}
 
 } // namespace fwtest::bp

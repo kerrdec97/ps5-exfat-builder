@@ -46,6 +46,7 @@ struct ExecFile {
     std::optional<quint32> ps4, ps5; // first process param, else first module param
     std::optional<int> sdk;          // BCD major of ps5
     bool moduleWithoutParam = false;
+    QStringList importedModules;     // needed file/module names (ModuleImports.h), Full scans and eboot.bin
 
     bool isProcessable() const { return area == Area::Game && (cls == FileClass::Elf || cls == FileClass::Self); }
     bool isEncryptedOrCompressed() const
