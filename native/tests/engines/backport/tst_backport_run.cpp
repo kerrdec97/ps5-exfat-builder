@@ -18,6 +18,7 @@
 #include "engines/backport/SelfReader.h"
 #include "support/TestSupport.h"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QTest>
 
@@ -446,6 +447,82 @@ private slots:
         // The manifest says nothing was applied.
         auto m = readManifest(manifestPathFor(e.orig, QStringLiteral("PPSA01234")));
         QVERIFY(!m.value()->applied());
+    }
+
+    // Apply checks every file before the first write (ports the Backport GUI's
+    // test_apply_refuses_when_game_changed_after_build / ..._if_added_file_appeared).
+    void gameChangedBeforeApplyWritesNothing()
+    {
+        Env e;
+        const QString victim = e.game + "/sce_module/libc.prx"; // the last file Apply replaces
+        auto o = e.options();
+        bool changed = false;
+        o.testHook = [&](const QString& p, const QString&) -> Status {
+            if (p == u"zip.commit" && !changed) { // ZIPs written, Apply not started
+                changed = true;
+                writeBytes(victim, selfOf(f2(55)));
+            }
+            return success();
+        };
+        const auto before = snapshotTree(e.game);
+        const QDateTime ebootTime = QFileInfo(e.game + "/eboot.bin").lastModified();
+        auto r = runBackport(o, e.ctx);
+        QVERIFY(!r.ok());
+        QCOMPARE(codeOf(r.error()), Code::GameChanged);
+        QVERIFY2(r.error().message.contains(QStringLiteral("nothing was applied")), qPrintable(r.error().message));
+        auto now = snapshotTree(e.game);
+        QCOMPARE(now.value(QStringLiteral("eboot.bin")), before.value(QStringLiteral("eboot.bin")));
+        QCOMPARE(QFileInfo(e.game + "/eboot.bin").lastModified(), ebootTime); // never written, not even rolled back
+        QVERIFY(!QFileInfo::exists(e.game + "/fakelib"));
+        now.remove(QStringLiteral("sce_module/libc.prx"));
+        auto expected = before;
+        expected.remove(QStringLiteral("sce_module/libc.prx"));
+        QCOMPARE(now, expected);
+        const auto journals = QDir(e.journals).entryList({"*.json"});
+        QCOMPARE(journals.size(), 1);
+        QCOMPARE(ApplyJournal::load(e.journals + "/" + journals.front())->state(), JournalState::RolledBack);
+        QVERIFY(ApplyJournal::findInterrupted(e.journals).empty());
+    }
+
+    void fileAppearingBeforeApplyWritesNothing()
+    {
+        Env e;
+        auto o = e.options();
+        bool added = false;
+        o.testHook = [&](const QString& p, const QString&) -> Status {
+            if (p == u"zip.commit" && !added) {
+                added = true;
+                writeBytes(e.game + "/fakelib/libSceNpAuth.sprx", QByteArray(2048, 'x'));
+            }
+            return success();
+        };
+        const QByteArray eboot = readBytes(e.game + "/eboot.bin");
+        auto r = runBackport(o, e.ctx);
+        QVERIFY(!r.ok());
+        QCOMPARE(codeOf(r.error()), Code::GameChanged);
+        QVERIFY(r.error().message.contains(QStringLiteral("appeared after the scan")));
+        QCOMPARE(readBytes(e.game + "/eboot.bin"), eboot);
+        QVERIFY(!QFileInfo::exists(e.game + "/fakelib/libSceAgc.sprx"));
+        QCOMPARE(readBytes(e.game + "/fakelib/libSceNpAuth.sprx"), QByteArray(2048, 'x')); // the user's file is left alone
+    }
+
+    // A read-only dump (copied from a disc or a share) is applied and restored
+    // (port of the Backport GUI's test_read_only_target).
+    void readOnlyGameFilesAreAppliedAndRestored()
+    {
+        Env e;
+        const auto before = snapshotTree(e.game);
+        const QString eboot = e.game + "/eboot.bin";
+        QVERIFY(QFile::setPermissions(eboot, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther));
+        auto r = runBackport(e.options(), e.ctx);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().toLogString()));
+        QVERIFY(r->applied);
+        QVERIFY(readBytes(eboot) != before.value(QStringLiteral("eboot.bin")));
+        QVERIFY(QFile::setPermissions(eboot, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther));
+        QVERIFY(QFile::setPermissions(e.game + "/fakelib/libSceAgc.sprx", QFileDevice::ReadOwner));
+        auto rep = restoreOriginals({e.game, r->originalsZip, e.orig}, CancellationToken());
+        QVERIFY2(rep.ok() && rep->ok(), qPrintable(rep.ok() ? rep->errors.join(u'|') : rep.error().toLogString()));
+        QCOMPARE(snapshotTree(e.game), before);
     }
 
     void crashDuringApplyIsRecoverable()

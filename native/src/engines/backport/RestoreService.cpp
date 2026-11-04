@@ -257,6 +257,8 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
                     return success();
                 },
                 token);
+            if (st.ok())
+                st = flushToDisk(out, QFileInfo(target).fileName()); // on the drive before it replaces anything
             out.close();
         }
         if (!st.ok()) {
@@ -325,7 +327,7 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
                 rep.keptAdded << *rel;
                 continue;
             }
-            if (QFile::remove(target)) {
+            if (removeFileForce(target)) {
                 rep.removedAdded << *rel;
                 removeEmptyParents(game, *rel);
             } else {

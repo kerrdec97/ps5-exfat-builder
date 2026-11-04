@@ -93,8 +93,14 @@ Result<QByteArray> readFileBytes(const QString& path, qint64 maxBytes = kMaxExec
 // unless `replaceExisting`).
 Status writeFileBytes(const QString& path, const QByteArray& data, bool replaceExisting = false);
 // Renames `src` over `dst`, replacing it atomically when it exists
-// (MoveFileEx(REPLACE_EXISTING) on Windows, rename(2) elsewhere).
+// (MoveFileEx(REPLACE_EXISTING) on Windows, rename(2) elsewhere). A
+// read-only `dst` is made writable first (Windows refuses to replace it).
 Status replaceFileAtomic(const QString& src, const QString& dst);
+// Clears the read-only attribute of a file (Windows) or adds the owner's
+// write permission (elsewhere). Folders and links are left alone.
+void clearReadOnly(const QString& path);
+// QFile::remove, retried once after clearReadOnly().
+bool removeFileForce(const QString& path);
 // Reads the first `n` bytes of a file (fewer if the file is shorter).
 Result<QByteArray> readHead(const QString& path, qint64 n);
 

@@ -110,9 +110,11 @@ Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 larges
 inline constexpr qint64 kIoChunk = 4 * 1024 * 1024;
 
 // Copies src → dst through dst.part; preserves modification time. Progress is
-// advanced by bytes copied.
+// advanced by bytes copied. `durable` flushes the copy to the drive
+// (flushToDisk) before it gets its name, for files that replace a user's
+// file (backport Apply and rollback).
 Status copyFileStreaming(const QString& src, const QString& dst, const CancellationToken& token,
-                         ProgressReporter* progress = nullptr, bool replaceExisting = false);
+                         ProgressReporter* progress = nullptr, bool replaceExisting = false, bool durable = false);
 
 // SHA-256 of a file (hex, lowercase).
 Result<QString> sha256File(const QString& path, const CancellationToken& token, ProgressReporter* progress = nullptr);

@@ -164,7 +164,7 @@ Status ApplyJournal::restoreOriginal(const JournalEntry& e, const QString& targe
     removeTemp(tmp);
     // 1. The staging snapshot, when it is still there and intact.
     if (!e.backupStagingPath.isEmpty() && hashOf(e.backupStagingPath) == e.sha256Before) {
-        if (Status st = copyFileStreaming(e.backupStagingPath, tmp, token, nullptr, true); st.ok()) {
+        if (Status st = copyFileStreaming(e.backupStagingPath, tmp, token, nullptr, true, true); st.ok()) {
             if (hashOf(tmp) == e.sha256Before)
                 return replaceFileAtomic(tmp, target);
         }
@@ -194,6 +194,8 @@ Status ApplyJournal::restoreOriginal(const JournalEntry& e, const QString& targe
                 return success();
             },
             token);
+        if (st.ok())
+            st = flushToDisk(out, QFileInfo(target).fileName()); // the original survives a power cut
         out.close();
         if (!st.ok() || QString::fromLatin1(h.result().toHex()) != e.sha256Before) {
             removeTemp(tmp);
@@ -233,7 +235,7 @@ Status ApplyJournal::rollback(const CancellationToken& token, QStringList* probl
                 continue;
             }
             if (cur == e.sha256After) {
-                if (!QFile::remove(target))
+                if (!removeFileForce(target))
                     problems << QStringLiteral("%1 could not be removed.").arg(e.rel);
                 else
                     e.done = false;
@@ -261,6 +263,36 @@ Status ApplyJournal::apply(const CancellationToken& token, ProgressReporter* pro
 {
     if (m_state != JournalState::Pending)
         return makeError(Code::ApplyFailed, QStringLiteral("This apply journal was already used."));
+
+    // Every check before the first write (as the Backport GUI): each file to
+    // replace still has the content that was backed up, no file to add exists
+    // yet, and every staged copy still has the staged hash. A mismatch means
+    // nothing is written, so there is nothing to roll back. The same checks run
+    // again per file below, for changes made while Apply runs.
+    for (const JournalEntry& e : m_entries) {
+        if (!token.checkpoint()) {
+            m_state = JournalState::RolledBack;
+            (void)save();
+            return makeError(Code::Cancelled, QStringLiteral("Cancelled. The game folder was not changed."));
+        }
+        const QString target = joinPath(m_game, e.rel);
+        QString why;
+        Code code = Code::GameChanged;
+        if (e.action == ApplyAction::Replace && hashOf(target) != e.sha256Before) {
+            why = QStringLiteral("%1 changed after the backup was made").arg(e.rel);
+        } else if (e.action == ApplyAction::Add && QFileInfo::exists(target)) {
+            why = QStringLiteral("%1 appeared after the scan").arg(e.rel);
+        } else if (hashOf(e.stagedPath) != e.sha256After) {
+            why = QStringLiteral("the staged copy of %1 changed").arg(e.rel);
+            code = Code::VerifyFailed;
+        }
+        if (!why.isEmpty()) {
+            m_state = JournalState::RolledBack;
+            m_error = why;
+            (void)save();
+            return makeError(code, QStringLiteral("%1, so nothing was applied. The game folder was not changed.").arg(why));
+        }
+    }
 
     Error failure;
     bool failed = false;
@@ -317,7 +349,7 @@ Status ApplyJournal::apply(const CancellationToken& token, ProgressReporter* pro
             }
         }
         const QString tmp = target + QStringLiteral(".fwpart");
-        if (Status st = copyFileStreaming(e.stagedPath, tmp, token, progress, true); !st.ok()) {
+        if (Status st = copyFileStreaming(e.stagedPath, tmp, token, progress, true, true); !st.ok()) {
             removeTemp(tmp);
             if (st.error().isCancelled()) {
                 cancelled = true;

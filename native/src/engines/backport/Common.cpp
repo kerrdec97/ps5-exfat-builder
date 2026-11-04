@@ -219,11 +219,36 @@ Status writeFileBytes(const QString& path, const QByteArray& data, bool replaceE
     return part.commit(replaceExisting);
 }
 
+void clearReadOnly(const QString& path)
+{
+#ifdef Q_OS_WIN
+    const std::wstring p = toLongPath(path).toStdWString();
+    const DWORD attrs = GetFileAttributesW(p.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) && !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+        SetFileAttributesW(p.c_str(), attrs & ~DWORD(FILE_ATTRIBUTE_READONLY));
+#else
+    const QFileInfo fi(path);
+    if (fi.isFile() && !fi.isSymLink() && !(fi.permissions() & QFileDevice::WriteOwner))
+        QFile::setPermissions(path, fi.permissions() | QFileDevice::WriteOwner);
+#endif
+}
+
+bool removeFileForce(const QString& path)
+{
+    if (QFile::remove(path))
+        return true;
+    clearReadOnly(path);
+    return QFile::remove(path);
+}
+
 Status replaceFileAtomic(const QString& src, const QString& dst)
 {
 #ifdef Q_OS_WIN
     const std::wstring s = toLongPath(src).toStdWString();
     const std::wstring d = toLongPath(dst).toStdWString();
+    // A read-only target (a dump copied from a disc or a read-only share)
+    // cannot be replaced; the backup of its content is already verified.
+    clearReadOnly(dst);
     if (!MoveFileExW(s.c_str(), d.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         const DWORD err = GetLastError();
         return Error(ErrorCode::IoError,

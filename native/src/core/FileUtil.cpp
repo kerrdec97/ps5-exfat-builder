@@ -324,7 +324,7 @@ Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 larges
 // ---- streaming I/O -------------------------------------------------------------
 
 Status copyFileStreaming(const QString& src, const QString& dst, const CancellationToken& token,
-                         ProgressReporter* progress, bool replaceExisting)
+                         ProgressReporter* progress, bool replaceExisting, bool durable)
 {
     QFile in(toLongPath(src));
     if (!in.open(QIODevice::ReadOnly))
@@ -353,9 +353,13 @@ Status copyFileStreaming(const QString& src, const QString& dst, const Cancellat
         if (progress)
             progress->advance(n);
     }
-    if (!out.flush())
+    if (durable) {
+        if (Status st = flushToDisk(out, QFileInfo(dst).fileName()); !st.ok())
+            return st;
+    } else if (!out.flush()) {
         return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QFileInfo(dst).fileName()),
                      out.errorString());
+    }
     out.setFileTime(QFileInfo(src).lastModified(), QFileDevice::FileModificationTime);
     out.close();
     return part.commit(replaceExisting);
