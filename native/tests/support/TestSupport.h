@@ -22,14 +22,6 @@ void isolateAppData(QTemporaryDir& dir);
 bool writeRandomFile(const QString& path, qint64 size, quint32 seed);
 bool writeTextFile(const QString& path, const QByteArray& text);
 
-// A schema with every module registered (what the app uses).
-struct Registry {
-    std::shared_ptr<fw::SettingsSchema> schema = std::make_shared<fw::SettingsSchema>();
-    fw::DependencyRegistry deps;
-    fw::JobFactory jobs;
-    Registry();
-};
-
 QString helperPath();
 QString dataDir();
 

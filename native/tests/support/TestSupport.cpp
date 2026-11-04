@@ -1,7 +1,6 @@
 #include "support/TestSupport.h"
 
 #include "core/Paths.h"
-#include "registration/Registration.h"
 
 #include <QDir>
 #include <QFile>
@@ -45,12 +44,6 @@ bool writeTextFile(const QString& path, const QByteArray& text)
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
     return f.write(text) == text.size();
-}
-
-Registry::Registry()
-{
-    fw::ModuleContext ctx{*schema, deps, jobs};
-    fw::registerAllModules(ctx);
 }
 
 QString helperPath() { return QStringLiteral(FW_TEST_HELPER); }

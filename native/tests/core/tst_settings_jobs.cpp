@@ -7,6 +7,7 @@
 #include "engines/general/Module.h"
 #include "jobs/JobHistory.h"
 #include "jobs/JobQueue.h"
+#include "support/TestRegistry.h"
 #include "support/TestSupport.h"
 
 #include <QFile>
