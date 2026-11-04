@@ -32,13 +32,16 @@ native/
     jobs/                   fw_jobs     — Job, JobFactory, JobQueue, JobHistory, ModuleContext
     engines/<name>/         fw_engine_<name> — one static library per feature module
       general/              app-wide settings (General, Performance, Storage, Verification, Logging, Advanced)
-      gameinfo/             dump detection, param.json/param.sfo, title metadata, covers
-      exfat/                native exFAT image writer/reader/verify
-      pfs/                  PFS / FFPFSC compressed image builder/reader/verify (GPL port)
-      ufs2/                 FFPKG (UFS2) images
+      gameinfo/             dump detection, param.json/param.sfo, metadata, covers, library scan, dump rename
+      exfat/                native exFAT image writer/reader/verify/extract/edit
+      pfs/                  PFS / FFPFSC compressed image builder/reader/verify (GPL port), AMPR index
+      ufs2/                 FFPKG (UFS2) images (port of UFS2Tool newfs), reader/verify/extract/edit
       fpkg/                 FPKG packages through the user's Publishing Tools
-      backport/             Backport engine
-    connect/ps5/            fw_connect_ps5 — FTP, payload sender, kernel log, console tools
+      backport/             Backport engine (scan, planner, patcher, ZIPs, journaled apply, restore)
+      tools/                Language Stripper, DLC-emu editor, problem reports
+      integration/          cross-engine workflows: image.convert, FPKG image stagers, post-build upload
+    connect/ps5/            fw_connect_ps5 — FTP, payload sender, kernel log, DPI/Y2JB, mount configs
+    connect/update/         fw_connect_update — release check and verified download
     registration/           calls every module's registerModule()
     app/                    the Qt Widgets application (theme, widgets, pages, main.cpp)
   tests/
@@ -94,6 +97,26 @@ Each module exposes `void fw::<name>::registerModule(fw::ModuleContext&)` in
   dependencies, log buffer).
 * All look-and-feel comes from the design system (`docs/DESIGN_PROPOSAL.md`):
   tokens in one place, QSS generated from tokens, custom widgets for the rest.
+
+## Dependencies by module
+
+| Target | Qt modules | Why |
+|---|---|---|
+| core, jobs, most engines | Core, Concurrent (+ zlib) | — |
+| gameinfo | + Gui (QImage only) | cover normalisation; no widgets, no GUI application object |
+| connect/ps5 | + Network, Sql | sockets; SQLite edits of the console's app.db/appinfo.db (ships `sqldrivers/qsqlite.dll`) |
+| connect/update | + Network | HTTPS to GitHub |
+| app | + Gui, Widgets, Svg, Network | the interface |
+
+Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
+`QThread`, `QtConcurrent`); never use them from `std::thread`.
+
+## Testing switches
+
+`FW_DATA_DIR` isolates all app data (tests, CI). `FW_OFFLINE=1` stops the
+silent update check (set for every test and CI run). Module tests link only
+their own module (`tests/engines/<m>/`, `tests/connect/<m>/`); helper
+executables come from a module's `tests/.../extra.cmake`.
 
 ## Data locations
 
