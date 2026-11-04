@@ -325,10 +325,12 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
     const QString id = e->rec.id;
     QPointer<JobQueue> self(this);
 
+    std::weak_ptr<Entry> weak = e; // the entry owns the reporter: no cycle
     e->reporter = std::make_unique<ProgressReporter>(
-        [self, e, id](const ProgressSnapshot&) {
+        [self, weak, id](const ProgressSnapshot&) {
+            auto entry = weak.lock();
             // Coalesce: post at most one pending UI update per job.
-            if (e->progressPending.exchange(true))
+            if (!entry || entry->progressPending.exchange(true))
                 return;
             if (self)
                 QMetaObject::invokeMethod(self.data(), [self, id] {
