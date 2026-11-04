@@ -932,6 +932,7 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
     if (log)
         log->info(QStringLiteral("Rebuilding the image: %1 files, %2, %3").arg(st.fileCount).arg(formatBytes(st.totalBytes), plan->sizeChoice));
     auto written = writeImage(st, plan.value(), part.partPath(), w, token, progress, log);
+    original.close(); // Windows cannot rename a file that is still open
     if (!written.ok())
         return written.takeError();
 

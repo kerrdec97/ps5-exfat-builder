@@ -17,6 +17,7 @@
 #include <QStandardPaths>
 #include <QTest>
 
+#include <algorithm>
 #include <vector>
 
 namespace exfattest {

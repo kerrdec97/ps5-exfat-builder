@@ -126,6 +126,7 @@ class ImageFileStream {
 public:
     ImageFileStream(const QString& imagePath, const Geometry& geo);
     Status open();
+    void close() { m_file.close(); }
     // Reads up to `len` bytes of `e` from `offset`. Returns the bytes read
     // (0 at the end of the file). Bytes past ValidDataLength read as zero.
     Result<qint64> read(const ImageEntry& e, qint64 offset, char* buf, qint64 len);

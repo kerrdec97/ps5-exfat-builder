@@ -351,11 +351,15 @@ Result<std::unique_ptr<NodeReader>> openLocalNode(const SourceNode& node, const 
 
 namespace {
 
-// Sequential writer that leaves runs of zeros as holes (resize + seek): the
-// regions read back as zeros on every platform, and sparse-capable file
-// systems do not even allocate them.
+// Sequential writer. Runs of zeros of 1 MiB or more are left as holes
+// (resize + seek): they read back as zeros on every platform, and
+// sparse-capable file systems do not even allocate them. Shorter gaps
+// (cluster padding, region alignment) are written as zeros, which avoids a
+// resize per file.
 class ImageSink {
 public:
+    static constexpr qint64 kHoleMin = kMiB;
+
     explicit ImageSink(QFile& f) : m_f(f) {}
     qint64 pos() const { return m_pos; }
 
@@ -363,18 +367,8 @@ public:
     {
         if (n <= 0)
             return success();
-        if (m_pos != m_end) {
-            if (!m_f.resize(m_pos) || !m_f.seek(m_pos))
-                return fileError(QStringLiteral("Could not write the image."), m_f);
-            m_end = m_pos;
-        }
-        qint64 done = 0;
-        while (done < n) {
-            const qint64 w = m_f.write(p + done, n - done);
-            if (w <= 0)
-                return fileError(QStringLiteral("Could not write the image."), m_f);
-            done += w;
-        }
+        FW_TRY(closeGap());
+        FW_TRY(raw(p, n));
         m_pos += n;
         m_end = m_pos;
         return success();
@@ -389,6 +383,37 @@ public:
     }
 
 private:
+    Status raw(const char* p, qint64 n)
+    {
+        qint64 done = 0;
+        while (done < n) {
+            const qint64 w = m_f.write(p + done, n - done);
+            if (w <= 0)
+                return fileError(QStringLiteral("Could not write the image."), m_f);
+            done += w;
+        }
+        return success();
+    }
+    Status closeGap()
+    {
+        const qint64 gap = m_pos - m_end;
+        if (gap <= 0)
+            return success();
+        if (gap >= kHoleMin) {
+            if (!m_f.resize(m_pos) || !m_f.seek(m_pos))
+                return fileError(QStringLiteral("Could not write the image."), m_f);
+        } else {
+            static const std::vector<char> zeros(size_t(64 * 1024), '\0');
+            for (qint64 left = gap; left > 0;) {
+                const qint64 n = std::min<qint64>(left, qint64(zeros.size()));
+                FW_TRY(raw(zeros.data(), n));
+                left -= n;
+            }
+        }
+        m_end = m_pos;
+        return success();
+    }
+
     QFile& m_f;
     qint64 m_pos = 0; // logical position
     qint64 m_end = 0; // bytes actually written so far (file end)
