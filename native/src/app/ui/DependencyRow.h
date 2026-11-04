@@ -32,8 +32,8 @@ protected:
 private:
     QString m_id;
     QLabel* m_icon;
-    QLabel* m_name;
-    QLabel* m_detail;
+    ElideLabel* m_name;
+    ElideLabel* m_detail;
     Badge* m_badge;
     Link* m_fix;
     DependencyInfo m_info;

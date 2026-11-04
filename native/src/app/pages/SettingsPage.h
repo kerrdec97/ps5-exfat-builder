@@ -45,6 +45,7 @@ private:
     void updateSectionHeader();
     void updateSectionBadges();
     void importLegacy();
+    void importLegacyFrom(const QString& path);
     void resetAll();
     void updateTempUsage();
     QString sectionCaption(const QString& section) const;

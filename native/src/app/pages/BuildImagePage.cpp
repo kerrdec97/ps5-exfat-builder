@@ -17,8 +17,6 @@ namespace fw::pages {
 using namespace ui;
 using namespace theme;
 
-static const QStringList kBuildKinds = {QStringLiteral("image.exfat.build"), QStringLiteral("image.ufs2.build"),
-                                        QStringLiteral("image.pfs.build")};
 
 BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     : JobFormPage(ctx, queueModel, QStringLiteral("build"), QStringLiteral("Build image"),
@@ -120,7 +118,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         if (key == general::keys::kDefaultOutputDir)
             updateOutput();
     });
-    setRequiredKinds(kBuildKinds);
+    setRequiredKinds({jobs::imageBuildKind(jobs::kFormatExfat), jobs::imageBuildKind(jobs::kFormatFfpkg), jobs::imageBuildKind(jobs::kFormatFfpfsc)});
     updateOutput();
 }
 

@@ -240,4 +240,106 @@ Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationF
     return enqueue(ctx, QStringLiteral("tools.report"), p, {});
 }
 
+QString imageEditKind(const QString& image)
+{
+    const QString ext = QFileInfo(image).suffix().toLower();
+    if (ext == QLatin1String("exfat"))
+        return QStringLiteral("image.exfat.edit");
+    if (ext == QLatin1String("ffpkg"))
+        return QStringLiteral("image.ffpkg.edit");
+    return {};
+}
+
+static void putEndpoint(QJsonObject& p, const QString& host, int port)
+{
+    if (!host.isEmpty())
+        p.insert(QStringLiteral("host"), host);
+    if (port > 0)
+        p.insert(QStringLiteral("port"), port);
+}
+
+Result<QString> submitFtpDownload(AppContext& ctx, const QString& host, int port, const QStringList& remotePaths,
+                                  const QString& localDir, bool overwrite)
+{
+    QJsonObject p{{QStringLiteral("sources"), QJsonArray::fromStringList(remotePaths)}, {QStringLiteral("localDir"), localDir},
+                  {QStringLiteral("overwrite"), overwrite}};
+    putEndpoint(p, host, port);
+    return enqueue(ctx, QStringLiteral("ps5.ftp.download"), p, {});
+}
+
+Result<QString> submitFtpUploadMany(AppContext& ctx, const QString& host, int port, const QStringList& localPaths,
+                                    const QString& remoteDir, bool allowProtectedPaths)
+{
+    QJsonObject p{{QStringLiteral("sources"), QJsonArray::fromStringList(localPaths)}};
+    if (!remoteDir.isEmpty())
+        p.insert(QStringLiteral("remoteDir"), remoteDir);
+    if (allowProtectedPaths)
+        p.insert(QStringLiteral("allowProtectedPaths"), true);
+    putEndpoint(p, host, port);
+    return enqueue(ctx, QStringLiteral("ps5.ftp.upload"), p, {});
+}
+
+Result<QString> submitDpiInstall(AppContext& ctx, const QString& host, int port, const QString& package)
+{
+    QJsonObject p{{QStringLiteral("package"), package}};
+    putEndpoint(p, host, port);
+    return enqueue(ctx, QStringLiteral("ps5.dpi.install"), p, {});
+}
+
+Result<QString> submitY2jbAutoBlock(AppContext& ctx, const QString& host, int port, const QString& region,
+                                    const QString& backupDir)
+{
+    QJsonObject p{{QStringLiteral("region"), region}, {QStringLiteral("confirmed"), true}};
+    if (!backupDir.isEmpty())
+        p.insert(QStringLiteral("backupDir"), backupDir);
+    putEndpoint(p, host, port);
+    return enqueue(ctx, QStringLiteral("ps5.y2jb.autoBlock"), p, {});
+}
+
+Result<QString> submitShadowMountStop(AppContext& ctx, const QString& host, int port)
+{
+    QJsonObject p;
+    putEndpoint(p, host, port);
+    return enqueue(ctx, QStringLiteral("ps5.shadowmount.stop"), p, {});
+}
+
+Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJsonArray& operations,
+                                const QVariantMap& overrides)
+{
+    const QString kind = imageEditKind(image);
+    if (kind.isEmpty())
+        return Error(ErrorCode::Unsupported, QStringLiteral("Only .exfat and .ffpkg images can be edited."));
+    return enqueue(ctx, kind, QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("operations"), operations}}, overrides);
+}
+
+Result<QString> submitConvert(AppContext& ctx, const QString& image, const QString& format, const QString& output,
+                              const QVariantMap& overrides)
+{
+    return enqueue(ctx, QStringLiteral("image.convert"),
+                   QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("format"), format}, {QStringLiteral("output"), output}},
+                   overrides);
+}
+
+Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
+                                    const QString& destination, const QJsonArray& items, const QString& undoLog)
+{
+    QJsonObject p{{QStringLiteral("mode"), mode}};
+    if (!source.isEmpty())
+        p.insert(QStringLiteral("source"), source);
+    if (!preset.isEmpty())
+        p.insert(QStringLiteral("preset"), preset);
+    if (!destination.isEmpty())
+        p.insert(QStringLiteral("destination"), destination);
+    if (!items.isEmpty())
+        p.insert(QStringLiteral("items"), items);
+    if (!undoLog.isEmpty())
+        p.insert(QStringLiteral("undoLog"), undoLog);
+    return enqueue(ctx, QStringLiteral("library.rename"), p, {});
+}
+
+Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPath)
+{
+    return enqueue(ctx, QStringLiteral("backport.restore"), QJsonObject{{QStringLiteral("journal"), journalPath}}, {});
+}
+
 } // namespace fw::jobs

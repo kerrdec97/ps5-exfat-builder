@@ -4,6 +4,8 @@
 #include "app/services/JobSubmit.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "engines/gameinfo/DumpRename.h"
+#include "engines/gameinfo/Module.h"
 #include "engines/tools/Module.h"
 
 #include <QDir>
@@ -36,6 +38,7 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
     m_tabs = new QTabBar(this);
     m_tabs->addTab(QStringLiteral("Games"));
     m_tabs->addTab(QStringLiteral("Languages"));
+    m_tabs->addTab(QStringLiteral("DLC emulator"));
     m_tabs->setExpanding(false);
     m_tabs->setDrawBase(false);
     m_tabs->setProperty("fwNoRing", true);
@@ -64,8 +67,13 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
     h->addWidget(m_search);
     auto* add = button(QStringLiteral("Add folders…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), m_gamesCard);
     auto* rescan = button(QStringLiteral("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), m_gamesCard);
+    auto* renameBtn = button(QStringLiteral("Rename dumps…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_gamesCard);
+    renameBtn->setEnabled(jobs::isAvailable(ctx, QStringLiteral("library.rename")));
+    renameBtn->setToolTip(renameBtn->isEnabled() ? QStringLiteral("Rename dump folders after their title ID, name and version") : QStringLiteral("Not available in this build"));
+    connect(renameBtn, &QPushButton::clicked, this, &LibraryPage::renameDumps);
     h->addWidget(add);
     h->addWidget(rescan);
+    h->addWidget(renameBtn);
     connect(add, &QPushButton::clicked, this, &LibraryPage::addFolders);
     connect(rescan, &QPushButton::clicked, this, &LibraryPage::scan);
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) { rebuildGames(); });
@@ -170,6 +178,9 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
     langLayout->addWidget(table);
     langLayout->addStretch(1);
     m_stack->addWidget(lang);
+    m_dlc = new DlcEmuEditor(m_stack);
+    connect(m_dlc, &DlcEmuEditor::toastRequested, this, &LibraryPage::toastRequested);
+    m_stack->addWidget(m_dlc);
 
     connect(&m_library, &LibraryStore::changed, this, &LibraryPage::rebuildGames);
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &LibraryPage::onJobFinished);
@@ -262,6 +273,14 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
         m_tabs->setCurrentIndex(1);
         m_langFolder->setPath(folder);
     });
+    menu.addAction(QStringLiteral("Edit DLC list…"), this, [this, folder] {
+        m_tabs->setCurrentIndex(2);
+        m_dlc->openFolder(folder);
+    });
+    menu.addAction(QStringLiteral("Edit image…"), this, [this, folder] {
+        emit navigateRequested({QStringLiteral("edit"), {}});
+        Q_UNUSED(folder);
+    })->setVisible(false);
     menu.addSeparator();
     menu.addAction(QStringLiteral("Rename folder…"), this, [this, folder] { renameGame(folder); });
     menu.addAction(QStringLiteral("Show in folder"), this, [folder] { openInFileManager(folder); });
@@ -319,6 +338,140 @@ void LibraryPage::renameGame(const QString& folder)
     emit toastRequested(Tone::Ok, QStringLiteral("Folder renamed"), newName);
 }
 
+// ---- Dump rename ----------------------------------------------------------------------
+
+void LibraryPage::renameDumps()
+{
+    auto* s = new Sheet(window(), QStringLiteral("Rename dumps"), Sheet::Icon::None, size::dialogWide);
+    s->addText(QStringLiteral("Every dump folder directly inside the source folder gets a name from its title ID, name and version. Nothing is renamed until you confirm the preview; an undo log is written."));
+    auto* source = new PathField(PathField::Mode::Directory, s);
+    source->setDialogTitle(QStringLiteral("Choose the folder that holds the dumps"));
+    const QStringList folders = m_library.scanFolders();
+    if (!folders.isEmpty())
+        source->setPath(folders.first());
+    s->body()->addWidget(field(QStringLiteral("Folder of dumps"), source, {}, s));
+    auto* preset = new Segmented(s);
+    QString current = m_ctx.settings().value(gameinfo::keys::kRenamePreset).toString();
+    if (const SettingDef* d = m_ctx.schema().find(gameinfo::keys::kRenamePreset)) {
+        for (const auto& c : d->choices)
+            preset->addSegment(c.description.isEmpty() ? c.label : c.description, {}, c.value);
+    } else {
+        preset->addSegment(QStringLiteral("PPSA01234"), {}, QStringLiteral("ppsa"));
+        preset->addSegment(QStringLiteral("PPSA01234 Spider-Man"), {}, QStringLiteral("ppsa_title"));
+        preset->addSegment(QStringLiteral("PPSA01234 Spider-Man (01.050.000)"), {}, QStringLiteral("ppsa_title_v"));
+        if (current.isEmpty())
+            current = QStringLiteral("ppsa_title_v");
+    }
+    preset->setCurrentValue(current);
+    s->body()->addWidget(field(QStringLiteral("Pattern"), preset, {}, s));
+    auto* dest = new PathField(PathField::Mode::Directory, s);
+    dest->setPlaceholder(QStringLiteral("Rename in place"));
+    s->body()->addWidget(field(QStringLiteral("Move into (optional)"), dest, QStringLiteral("Must be on the same drive; folders are renamed, never copied."), s));
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    auto* undo = s->addButton(QStringLiteral("Undo last rename…"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Preview"), Sheet::Role::Primary);
+    const int r = s->exec();
+    if (r == 1) {
+        const QString log = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the rename undo log"), gameinfo::defaultRenameUndoDir(), QStringLiteral("Undo logs (*.json)"));
+        if (log.isEmpty())
+            return;
+        auto res = jobs::submitLibraryRename(m_ctx, QStringLiteral("undo"), {}, {}, {}, {}, log);
+        if (!res.ok())
+            emit toastRequested(Tone::Err, QStringLiteral("Undo not started"), res.error().message);
+        else {
+            m_renameUndoId = res.value();
+            m_ctx.queue().holdQueue(false);
+        }
+        return;
+    }
+    Q_UNUSED(undo);
+    if (r != 2 || source->path().isEmpty())
+        return;
+    m_renameSource = source->path();
+    m_renamePreset = preset->currentValue().toString();
+    m_renameDest = dest->path();
+    auto res = jobs::submitLibraryRename(m_ctx, QStringLiteral("preview"), m_renameSource, m_renamePreset, m_renameDest, {}, {});
+    if (!res.ok()) {
+        emit toastRequested(Tone::Err, QStringLiteral("Preview not started"), res.error().message);
+        return;
+    }
+    m_renamePreviewId = res.value();
+    m_ctx.queue().holdQueue(false);
+    emit toastRequested(Tone::Info, QStringLiteral("Previewing names…"), nativePath(m_renameSource));
+}
+
+void LibraryPage::showRenamePreview(const QJsonArray& items, const QString& preset)
+{
+    if (items.isEmpty()) {
+        Sheet::message(window(), QStringLiteral("No dumps found"), QStringLiteral("%1 has no sub-folders that look like dumps.").arg(Sheet::monoSpan(nativePath(m_renameSource))), Sheet::Icon::Info);
+        return;
+    }
+    auto* s = new Sheet(window(), QStringLiteral("Preview: %1 dump%2").arg(items.size()).arg(items.size() == 1 ? QString() : QStringLiteral("s")), Sheet::Icon::None, 900);
+    s->addText(QStringLiteral("Pattern %1. Edit a proposed name before applying; names that already exist or repeat are skipped.").arg(Sheet::monoSpan(preset)));
+    auto* table = new QTableWidget(0, 4, s);
+    table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("Proposed name"), QStringLiteral("Status")});
+    table->horizontalHeader()->setFixedHeight(32);
+    table->horizontalHeader()->setHighlightSections(false);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    table->setColumnWidth(0, 70);
+    table->setColumnWidth(3, 180);
+    table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(size::row);
+    table->setShowGrid(false);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setMinimumHeight(std::min(12, int(items.size())) * size::row + 40);
+    for (const auto& v : items) {
+        const QJsonObject it = v.toObject();
+        const int r = table->rowCount();
+        table->insertRow(r);
+        auto* sel = new QTableWidgetItem;
+        sel->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        const QString status = it.value(QStringLiteral("status")).toString();
+        const bool ready = status == QLatin1String("Ready");
+        sel->setCheckState(ready && it.value(QStringLiteral("selected")).toBool(true) ? Qt::Checked : Qt::Unchecked);
+        sel->setData(Qt::UserRole, it.value(QStringLiteral("source")).toString());
+        table->setItem(r, 0, sel);
+        auto* cur = new QTableWidgetItem(it.value(QStringLiteral("currentName")).toString());
+        cur->setFont(font::mono());
+        cur->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        table->setItem(r, 1, cur);
+        auto* prop = new QTableWidgetItem(it.value(QStringLiteral("proposedName")).toString());
+        prop->setFont(font::mono());
+        prop->setForeground(color::fg_0);
+        table->setItem(r, 2, prop);
+        const QString msg = it.value(QStringLiteral("message")).toString();
+        auto* st = new QTableWidgetItem(msg.isEmpty() ? status : QStringLiteral("%1 — %2").arg(status, msg));
+        st->setForeground(ready ? color::success_hi : status == QLatin1String("AlreadyNamed") ? color::fg_3 : color::warn_hi);
+        st->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        st->setToolTip(QStringLiteral("%1 · %2 · %3").arg(it.value(QStringLiteral("titleId")).toString(), it.value(QStringLiteral("title")).toString(), it.value(QStringLiteral("version")).toString()));
+        table->setItem(r, 3, st);
+    }
+    s->body()->addWidget(table);
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Rename"), Sheet::Role::Primary);
+    if (s->exec() != 1)
+        return;
+    QJsonArray edits;
+    for (int r = 0; r < table->rowCount(); ++r)
+        edits.append(QJsonObject{{QStringLiteral("source"), table->item(r, 0)->data(Qt::UserRole).toString()},
+                                 {QStringLiteral("name"), table->item(r, 2)->text().trimmed()},
+                                 {QStringLiteral("selected"), table->item(r, 0)->checkState() == Qt::Checked}});
+    applyRename(edits);
+}
+
+void LibraryPage::applyRename(const QJsonArray& items)
+{
+    auto res = jobs::submitLibraryRename(m_ctx, QStringLiteral("apply"), m_renameSource, m_renamePreset, m_renameDest, items, {});
+    if (!res.ok()) {
+        emit toastRequested(Tone::Err, QStringLiteral("Rename not started"), res.error().message);
+        return;
+    }
+    m_renameApplyId = res.value();
+    m_ctx.queue().holdQueue(false);
+}
+
 // ---- Languages ---------------------------------------------------------------------
 
 void LibraryPage::languageScan()
@@ -356,6 +509,32 @@ void LibraryPage::onJobFinished(const QString& id)
             m_library.setGames(std::move(games));
         m_library.setLastScan(QDateTime::currentDateTime());
         m_scanJobId.clear();
+    }
+    if (id == m_renamePreviewId) {
+        m_renamePreviewId.clear();
+        if (rec->state != JobState::Succeeded || !rec->outcome) {
+            emit toastRequested(Tone::Err, QStringLiteral("Preview failed"), rec->error ? rec->error->message : QStringLiteral("See the log."));
+        } else {
+            showRenamePreview(rec->outcome->details.value(QStringLiteral("items")).toArray(), rec->outcome->details.value(QStringLiteral("preset")).toString());
+        }
+    }
+    if (id == m_renameApplyId) {
+        m_renameApplyId.clear();
+        const QString undo = rec->outcome ? rec->outcome->details.value(QStringLiteral("undoLog")).toString() : QString();
+        if (rec->state == JobState::Succeeded && rec->outcome) {
+            const int n = rec->outcome->details.value(QStringLiteral("renamed")).toInt();
+            emit toastRequested(n > 0 ? Tone::Ok : Tone::Warn, rec->outcome->summary, undo.isEmpty() ? QString() : QStringLiteral("An undo log was written; use Rename dumps… › Undo last rename to reverse it."));
+            scan();
+        } else {
+            emit toastRequested(Tone::Err, QStringLiteral("Rename failed"), rec->error ? rec->error->message : QStringLiteral("See the log."));
+        }
+    }
+    if (id == m_renameUndoId) {
+        m_renameUndoId.clear();
+        emit toastRequested(rec->state == JobState::Succeeded ? Tone::Ok : Tone::Err, rec->state == JobState::Succeeded ? QStringLiteral("Rename undone") : QStringLiteral("Undo failed"),
+                            rec->outcome ? rec->outcome->summary : (rec->error ? rec->error->message : QString()));
+        if (rec->state == JobState::Succeeded)
+            scan();
     }
     if (id == m_langJobId) {
         m_langJobId.clear();
@@ -550,6 +729,10 @@ void LibraryPage::navigateWith(const QVariantMap& args)
 {
     if (args.contains(QStringLiteral("tab")))
         m_tabs->setCurrentIndex(args.value(QStringLiteral("tab")).toInt());
+    if (args.contains(QStringLiteral("dlcFolder"))) {
+        m_tabs->setCurrentIndex(2);
+        m_dlc->openFolder(args.value(QStringLiteral("dlcFolder")).toString());
+    }
     if (args.contains(QStringLiteral("languagesFolder"))) {
         m_tabs->setCurrentIndex(1);
         m_langFolder->setPath(args.value(QStringLiteral("languagesFolder")).toString());
@@ -565,6 +748,8 @@ void LibraryPage::applyDemoState(const QString& name)
 {
     if (name == QLatin1String("languages"))
         m_tabs->setCurrentIndex(1);
+    else if (name == QLatin1String("dlc"))
+        m_tabs->setCurrentIndex(2);
 }
 
 void LibraryPage::clearDemoState() { m_tabs->setCurrentIndex(0); }

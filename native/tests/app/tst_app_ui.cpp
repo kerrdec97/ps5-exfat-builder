@@ -7,7 +7,10 @@
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
 #include "app/models/LogModel.h"
+#include "app/pages/DlcEmuEditor.h"
+#include "app/pages/ImageEditorPage.h"
 #include "app/pages/LogsPage.h"
+#include "app/pages/Ps5ConnectPage.h"
 #include "app/pages/Page.h"
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
@@ -21,8 +24,11 @@
 #include "core/Paths.h"
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
+#include "connect/ps5/FakePs5.h"
+#include "engines/tools/DlcEmu.h"
 
 #include <QDir>
+#include <QJsonDocument>
 #include <QLineEdit>
 #include <QSettings>
 #include <QSignalSpy>
@@ -293,6 +299,139 @@ private slots:
             QVERIFY(!r.ok());
             QCOMPARE(r.error().code, ErrorCode::Unsupported);
         }
+    }
+
+    void imageEditorStagesAndOpensRealImage()
+    {
+        auto* page = qobject_cast<pages::ImageEditorPage*>(m_window->page(QStringLiteral("edit")));
+        QVERIFY(page);
+        // Staged operations map to the engine's JSON shape (exFAT by default).
+        page->clearStaged();
+        page->stage({QStringLiteral("add"), QStringLiteral("sce_sys/extra.bin"), QStringLiteral("/tmp/extra.bin"), {}});
+        page->stage({QStringLiteral("delete"), QStringLiteral("old/file.txt"), {}, {}});
+        page->stage({QStringLiteral("mkdir"), QStringLiteral("new_folder"), {}, {}});
+        const QJsonArray ops = page->operationsJson();
+        QCOMPARE(ops.size(), 3);
+        QCOMPARE(ops[0].toObject().value(QStringLiteral("op")).toString(), QStringLiteral("add"));
+        QCOMPARE(ops[0].toObject().value(QStringLiteral("imagePath")).toString(), QStringLiteral("sce_sys/extra.bin"));
+        QCOMPARE(ops[0].toObject().value(QStringLiteral("localPath")).toString(), QStringLiteral("/tmp/extra.bin"));
+        QCOMPARE(ops[1].toObject().value(QStringLiteral("op")).toString(), QStringLiteral("delete"));
+        page->clearStaged();
+        QVERIFY(page->staged().empty());
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build")))
+            QSKIP("exFAT engine not registered in this build");
+        // Build a small image with the real engine and browse it.
+        const QString src = m_root.filePath(QStringLiteral("edit-src"));
+        QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00001\"}"));
+        QVERIFY(fwtest::writeRandomFile(src + QStringLiteral("/eboot.bin"), 70000, 7));
+        const QString out = m_root.filePath(QStringLiteral("edit-src.exfat"));
+        auto r = jobs::submitImageBuild(*m_ctx, jobs::kFormatExfat, src, m_root.path(), QStringLiteral("edit-src"), {});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().message));
+        m_ctx->queue().holdQueue(false);
+        QVERIFY(waitForState(m_ctx->queue(), r.value(), JobState::Succeeded, 60000));
+        QVERIFY(QFileInfo::exists(out));
+        m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), out}});
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+        QCOMPARE(page->format(), QStringLiteral("exfat"));
+        bool sawEboot = false, sawSceSys = false;
+        for (int i = 0; i < page->tree()->topLevelItemCount(); ++i) {
+            const QString n = page->tree()->topLevelItem(i)->text(0);
+            sawEboot |= n == QLatin1String("eboot.bin");
+            sawSceSys |= n == QLatin1String("sce_sys");
+        }
+        QVERIFY(sawEboot);
+        QVERIFY(sawSceSys);
+        m_ctx->queue().clearFinished();
+    }
+
+    void klogModelIsBoundedAndTagged()
+    {
+        pages::KlogModel model;
+        for (int i = 0; i < 5; ++i) {
+            ps5::KlogLine l;
+            l.received = QDateTime::currentDateTime();
+            l.text = i == 1 ? QStringLiteral("panic: boom") : i == 2 ? QStringLiteral("warn: low") : QStringLiteral("line %1").arg(i);
+            l.tag = ps5::klogTag(l.text);
+            model.append(l);
+        }
+        QCOMPARE(model.rowCount(), 5);
+        QCOMPARE(model.errors(), 1);
+        QCOMPARE(model.warnings(), 1);
+        QCOMPARE(model.index(1, pages::KlogModel::TagColumn).data().toString(), QStringLiteral("Error"));
+        QVERIFY(model.allText().contains(QStringLiteral("panic: boom")));
+        model.clear();
+        QCOMPARE(model.rowCount(), 0);
+        QCOMPARE(model.errors(), 0);
+    }
+
+    void ftpBrowserListsAFakeConsole()
+    {
+        const QString root = m_root.filePath(QStringLiteral("ftp-root"));
+        QVERIFY(fwtest::writeTextFile(root + QStringLiteral("/data/etaHEN/games/readme.txt"), "hi"));
+        QVERIFY(fwtest::writeTextFile(root + QStringLiteral("/data/etaHEN/games/PPSA00001.exfat"), "img"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/data/etaHEN/games/folder")));
+        fake::FakeFtpServer::Options o;
+        o.root = root;
+        fake::FakeFtpServer server(o);
+        auto* page = qobject_cast<pages::Ps5ConnectPage*>(m_window->page(QStringLiteral("ps5")));
+        QVERIFY(page);
+        m_window->navigate(QStringLiteral("ps5"));
+        QSignalSpy connected(page->session(), &ui::ConsoleSession::connected);
+        page->session()->connectTo(QStringLiteral("127.0.0.1"), server.port(), 5000, true);
+        QTRY_VERIFY_WITH_TIMEOUT(connected.count() == 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(page->isReachable(), 10000); // the page learns about it through a queued signal
+        page->listRemote(QStringLiteral("/data/etaHEN/games"));
+        QTRY_VERIFY_WITH_TIMEOUT(page->remoteTable()->rowCount() == 3, 10000);
+        QCOMPARE(page->currentRemoteDir(), QStringLiteral("/data/etaHEN/games"));
+        QCOMPARE(page->remoteTable()->item(0, 0)->text(), QStringLiteral("folder")); // folders first
+        QVERIFY(page->isReachable());
+        QSignalSpy disconnected(page->session(), &ui::ConsoleSession::disconnected);
+        page->session()->disconnect();
+        QTRY_VERIFY_WITH_TIMEOUT(disconnected.count() == 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!page->isReachable(), 10000);
+    }
+
+    void dlcEmuEditorRoundTrip()
+    {
+        pages::DlcEmuEditor editor;
+        editor.resize(1100, 700);
+        const QString app0 = m_root.filePath(QStringLiteral("dlc-app0"));
+        QVERIFY(QDir().mkpath(app0 + QStringLiteral("/addcont0")));
+        const auto parsed = tools::dlcemu::parse(QStringLiteral("[PSAC]\r\ncontent_id=UP9000-PPSA00001_00-ADDON00000000001\r\nlabel=DLC1\r\nmount_point=/app0/addcont0\r\ndownload_status=INSTALLED\r\nextra_key=kept\r\n"));
+        QCOMPARE(int(parsed.size()), 1);
+        editor.setEntries(parsed);
+        QCOMPARE(editor.table()->rowCount(), 1);
+        const auto back = editor.entries();
+        QCOMPARE(int(back.size()), 1);
+        QCOMPARE(back[0].get(QStringLiteral("content_id")), QStringLiteral("UP9000-PPSA00001_00-ADDON00000000001"));
+        QCOMPARE(back[0].get(QStringLiteral("extra_key")), QStringLiteral("kept")); // unknown keys survive the table
+        QVERIFY(editor.validationText().startsWith(QStringLiteral("Valid")));
+        // An invalid edit shows an error.
+        editor.table()->item(0, 1)->setText(QStringLiteral("short"));
+        QVERIFY(editor.validationText().contains(QStringLiteral("error")));
+    }
+
+    void libraryRenamePreviewUsesTheEngine()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("library.rename")))
+            QSKIP("library.rename not registered in this build");
+        const QString lib = m_root.filePath(QStringLiteral("rename-lib"));
+        const QString dump = lib + QStringLiteral("/GameA");
+        QVERIFY(fwtest::writeTextFile(dump + QStringLiteral("/eboot.bin"), "x"));
+        QVERIFY(fwtest::writeTextFile(dump + QStringLiteral("/sce_sys/param.json"),
+                                      "{\"titleId\":\"PPSA01234\",\"contentVersion\":\"01.000.000\",\"localizedParameters\":{\"defaultLanguage\":\"en-US\",\"en-US\":{\"titleName\":\"Test Game\"}}}"));
+        auto r = jobs::submitLibraryRename(*m_ctx, QStringLiteral("preview"), lib, QStringLiteral("ppsa_title_v"), {}, {}, {});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().message));
+        m_ctx->queue().holdQueue(false);
+        QVERIFY(waitForState(m_ctx->queue(), r.value(), JobState::Succeeded, 30000));
+        auto rec = m_ctx->queue().record(r.value());
+        QVERIFY(rec && rec->outcome);
+        const QJsonArray items = rec->outcome->details.value(QStringLiteral("items")).toArray();
+        QCOMPARE(items.size(), 1);
+        // The version part comes from the SFO/app version, which a param.json-only dump does not carry.
+        QVERIFY(items[0].toObject().value(QStringLiteral("proposedName")).toString().startsWith(QStringLiteral("PPSA01234 Test Game")));
+        QVERIFY(QFileInfo(dump).isDir()); // preview renames nothing
+        m_ctx->queue().clearFinished();
     }
 
     void screenshotsCoverEveryPage()
