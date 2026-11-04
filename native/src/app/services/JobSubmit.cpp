@@ -303,6 +303,16 @@ Result<QString> submitShadowMountStop(AppContext& ctx, const QString& host, int 
     return enqueue(ctx, QStringLiteral("ps5.shadowmount.stop"), p, {});
 }
 
+Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest)
+{
+    QJsonObject p;
+    putEndpoint(p, host, port);
+    if (!folder.trimmed().isEmpty())
+        p.insert(QStringLiteral("folder"), folder.trimmed());
+    p.insert(QStringLiteral("speedTest"), speedTest);
+    return enqueue(ctx, QStringLiteral("ps5.ftp.diagnose"), p, {});
+}
+
 Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJsonArray& operations,
                                 const QVariantMap& overrides)
 {

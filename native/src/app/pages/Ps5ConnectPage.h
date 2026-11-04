@@ -2,8 +2,9 @@
 
 // PS5 connect (Connect artboard): console address bound to the ps5.* settings,
 // a live FTP session on a worker thread, and tabs: FTP browser · Payloads ·
-// Kernel log · Y2JB · Mount config. Transfers, payloads, DPI installs, the
-// Y2JB auto-block and "Safe to unplug" are queue jobs.
+// Kernel log · Y2JB · Mount config · Diagnostics. Transfers, payloads, DPI
+// installs, the Y2JB auto-block, "Safe to unplug" and the FTP diagnostics are
+// queue jobs. "Find my PS5" in the header sweeps the network (FindConsole.h).
 
 #include "app/pages/Page.h"
 #include "app/services/AppStores.h"
@@ -22,6 +23,9 @@
 #include <memory>
 
 namespace fw::pages {
+
+class DiagnosticsTab;
+class FindConsoleButton;
 
 // Bounded kernel-log buffer for the viewer (legacy defect 4: unbounded).
 class KlogModel : public QAbstractTableModel {
@@ -68,6 +72,8 @@ public:
     QString currentRemoteDir() const { return m_remoteDir; }
     QTableWidget* remoteTable() { return m_remote; }
     KlogModel* klogModel() { return m_klog; }
+    DiagnosticsTab* diagnosticsTab() { return m_diagnostics; }
+    FindConsoleButton* findConsoleButton() { return m_find; }
     void listRemote(const QString& path);
 signals:
     void reachabilityChanged(bool reachable, const QString& host);
@@ -184,6 +190,8 @@ private:
     QPushButton* m_mountSendElf;
     ui::PathField* m_mountElf;
     QPointer<QWidget> m_demoSheet;
+    DiagnosticsTab* m_diagnostics = nullptr; // pages/ps5/DiagnosticsTab
+    FindConsoleButton* m_find = nullptr;     // pages/ps5/FindConsole
 };
 
 } // namespace fw::pages

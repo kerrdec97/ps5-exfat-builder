@@ -31,6 +31,7 @@
 //                  ps5.dpi.install  {package, host?, port?}
 //                  ps5.y2jb.autoBlock {region ("USA"|"EU"|"JP"), confirmed: true, backupDir?, host?, port?}
 //                  ps5.shadowmount.stop {host?, port?}
+//                  ps5.ftp.diagnose {host?, port?, folder?, speedTest} → details = ps5::FtpDiagnosis::toJson()
 //   Image edit     image.exfat.edit {image, operations: [{op: add|replace|delete|mkdir, imagePath, localPath}]}
 //                  image.ffpkg.edit {image, operations: [{op: add|replace|delete|rename|mkdir, path, source, newName}]}
 //   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfsc"), output (file path)}
@@ -99,6 +100,8 @@ Result<QString> submitDpiInstall(AppContext& ctx, const QString& host, int port,
 Result<QString> submitY2jbAutoBlock(AppContext& ctx, const QString& host, int port, const QString& region,
                                     const QString& backupDir);
 Result<QString> submitShadowMountStop(AppContext& ctx, const QString& host, int port);
+// `folder` empty = the games folder from Settings.
+Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest);
 // `operations` already in the engine's JSON shape (see the header comment).
 Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJsonArray& operations,
                                 const QVariantMap& overrides);

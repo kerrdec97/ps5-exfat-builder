@@ -2,11 +2,13 @@
 
 #include "app/AppContext.h"
 #include "app/models/JobQueueModel.h"
+#include "app/services/AppStores.h"
 #include "app/ui/Icons.h"
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QStorageInfo>
 
@@ -58,12 +60,39 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     strip->body()->addLayout(row);
     content()->addWidget(strip);
 
+    // ---- PS5 setup checklist (MGR-5)
+    m_setup = new Card(this);
+    m_setupProgress = new Badge(QString(), Tone::Neutral, m_setup);
+    m_setup->setTitle(QStringLiteral("PS5 setup checklist"), m_setupProgress);
+    m_setupRows = new QWidget(m_setup);
+    vbox(m_setupRows, 0);
+    m_setup->body()->addWidget(m_setupRows);
+    content()->addWidget(m_setup);
+    m_lastCheck = loadLastFtpCheck();
+    connect(&ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+        if (key.startsWith(QLatin1String("ps5.")))
+            refreshChecklist();
+    });
+    connect(&ctx.settings(), &SettingsStore::resetDone, this, &HomePage::refreshChecklist);
+    // The last FTP diagnosis feeds the "FTP reachable" row, also after a restart.
+    connect(&ctx.queue(), &JobQueue::jobFinished, this, [this](const QString& id) {
+        const auto rec = m_ctx.queue().record(id);
+        if (!rec)
+            return;
+        if (const auto check = ftpCheckFromJob(*rec)) {
+            m_lastCheck = check;
+            (void)saveLastFtpCheck(*check);
+            refreshChecklist();
+        }
+    });
+
     // ---- Continue
     m_continue = new Card(this);
     m_continueButton = button(QStringLiteral("Retry"), ButtonVariant::Primary, QStringLiteral("undo"), m_continue);
     m_continue->setTitle(QStringLiteral("Continue"), m_continueButton);
     m_continueTitle = label({}, TextStyle::BodyStrong, color::fg_0, m_continue);
     m_continueMeta = label({}, TextStyle::Mono, color::fg_3, m_continue);
+    m_continueMeta->setWordWrap(true); // error messages can be long: never widen the page
     m_continue->body()->addWidget(m_continueTitle);
     m_continue->body()->addWidget(m_continueMeta);
     m_continue->hide();
@@ -130,10 +159,74 @@ void HomePage::setConsoleStatus(const QString& text, Tone tone)
 {
     m_consoleValue->setText(text);
     m_consoleBadge->set(tone == Tone::Ok ? QStringLiteral("Connected") : QStringLiteral("Open PS5 connect"), tone);
+    m_browserConnected = tone == Tone::Ok;
+    refreshChecklist();
+}
+
+void HomePage::setPayloadStore(PayloadStore* store)
+{
+    if (m_payloads)
+        disconnect(m_payloads, nullptr, this, nullptr);
+    m_payloads = store;
+    if (m_payloads)
+        connect(m_payloads, &PayloadStore::changed, this, &HomePage::refreshChecklist);
+    refreshChecklist();
+}
+
+QString HomePage::checklistProgress() const { return m_setupProgress->text(); }
+
+void HomePage::refreshChecklist()
+{
+    ChecklistInputs in = checklistInputs(m_ctx.settings().snapshot());
+    in.lastCheck = m_lastCheck;
+    in.browserConnected = m_browserConnected;
+    if (m_payloads)
+        for (const auto& e : m_payloads->entries())
+            if (QFileInfo(e.path).isFile())
+                ++in.payloadsReady;
+    m_checklist = setupChecklist(in);
+    const int done = completedCount(m_checklist);
+    const bool all = done == m_checklist.size();
+    m_setupProgress->set(QStringLiteral("%1 / %2 complete").arg(done).arg(m_checklist.size()), all ? Tone::Ok : Tone::Neutral);
+    m_setupProgress->setIconName(all ? defaultBadgeIcon(Tone::Ok) : QString());
+
+    auto* rows = m_setupRows->layout();
+    while (QLayoutItem* it = rows->takeAt(0)) {
+        delete it->widget();
+        delete it;
+    }
+    for (int i = 0; i < m_checklist.size(); ++i) {
+        const ChecklistItem& item = m_checklist[i];
+        if (i > 0)
+            rows->addWidget(hairline(m_setupRows));
+        auto* row = new QWidget(m_setupRows);
+        row->setObjectName(QStringLiteral("checklist-") + item.id);
+        auto* h = hbox(row, space::md, QMargins(0, 6, 0, 6));
+        auto* glyph = new QLabel(row);
+        glyph->setFixedSize(size::icon, size::icon);
+        glyph->setPixmap(iconPixmap(item.done ? QStringLiteral("success") : QStringLiteral("warning"), size::icon,
+                                    item.done ? color::success : color::warn, devicePixelRatioF()));
+        h->addWidget(glyph, 0, Qt::AlignTop);
+        auto* text = new QWidget(row);
+        auto* tv = vbox(text, 2);
+        tv->addWidget(label(item.label, TextStyle::Body, item.done ? color::fg_1 : color::fg_0, text));
+        auto* detail = caption(item.detail, text);
+        detail->setWordWrap(true);
+        tv->addWidget(detail);
+        h->addWidget(text, 1);
+        if (!item.fixText.isEmpty()) {
+            auto* fix = new Link(item.fixText, row);
+            const NavRequest nav{item.fixPage, item.fixArgs};
+            connect(fix, &Link::activated, this, [this, nav] { emit navigateRequested(nav); });
+            h->addWidget(fix, 0, Qt::AlignVCenter);
+        }
+        rows->addWidget(row);
+    }
 }
 
 void HomePage::refresh()
 {
+    refreshChecklist();
     const int running = m_model.countInState(JobState::Running) + m_model.countInState(JobState::Paused);
     const int queued = m_model.countInState(JobState::Queued);
     const int failed = m_model.countInState(JobState::Failed) + m_model.countInState(JobState::Interrupted);

@@ -19,6 +19,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "connect/notify/DiscordWebhook.h"
 #include "core/BuildInfo.h"
 #include "core/CrashHandler.h"
 #include "core/FileUtil.h"
@@ -71,6 +72,15 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     m_library = new LibraryStore(this);
     m_payloads = new PayloadStore(this);
     m_watcher = new QueueCompletionWatcher(ctx.queue(), ctx.settings(), this);
+    // general.discordWebhookUrl: a summary of each finished run (update checks
+    // and FTP diagnostics are not worth a message).
+    auto* discord = new notify::DiscordNotifier(ctx.settings(), this);
+    discord->watch(ctx.queue(), *m_watcher, [this](const QString& kind) { return m_ctx.jobFactory().displayName(kind); },
+                   [](const QString& kind) { return !jobs::isSystemKind(kind) && kind != QLatin1String("ps5.ftp.diagnose"); });
+    connect(discord, &notify::DiscordNotifier::delivered, this, [this](bool ok, int, const QString& message) {
+        if (!ok)
+            toast(Tone::Warn, QStringLiteral("Discord notification not sent"), message);
+    });
 
     auto* central = new QWidget(this);
     central->setProperty("fwNoRing", true);
@@ -184,6 +194,7 @@ void MainWindow::addPage(pages::Page* page, const QString& iconName, const QStri
 void MainWindow::buildPages()
 {
     m_home = new pages::HomePage(m_ctx, *m_queueModel, this);
+    m_home->setPayloadStore(m_payloads);
     addPage(m_home, QStringLiteral("home"), QStringLiteral("Home"));
     m_sidebar->addGroup(QStringLiteral("Workflows"));
     addPage(new pages::BuildImagePage(m_ctx, *m_queueModel, this), QStringLiteral("build"), QStringLiteral("Build image"));

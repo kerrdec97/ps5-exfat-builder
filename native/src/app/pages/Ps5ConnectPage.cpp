@@ -1,6 +1,8 @@
 #include "app/pages/Ps5ConnectPage.h"
 
 #include "app/AppContext.h"
+#include "app/pages/ps5/DiagnosticsTab.h"
+#include "app/pages/ps5/FindConsole.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
 #include "app/ui/LogView.h"
@@ -182,8 +184,10 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     m_ftpPort->setText(QString::number(settingPort(ps5::keys::kFtpPort, 2121)));
     connect(m_ftpPort, &QLineEdit::editingFinished, this, [this] { (void)m_ctx.settings().setValue(ps5::keys::kFtpPort, m_ftpPort->text().toInt()); });
     m_connect = button(QStringLiteral("Connect"), ButtonVariant::Primary, QStringLiteral("plug"), this);
+    m_find = new FindConsoleButton(ctx, this); // fills ps5.consoleIp / ps5.ftpPort, which the fields follow
     header()->addAction(m_host);
     header()->addAction(m_ftpPort);
+    header()->addAction(m_find);
     header()->addAction(m_connect);
     connect(m_connect, &QPushButton::clicked, this, &Ps5ConnectPage::toggleConnection);
     connect(&ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant& v) {
@@ -203,7 +207,7 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     content()->addWidget(statusRow);
 
     m_tabs = new QTabBar(this);
-    for (const auto& t : {QStringLiteral("FTP browser"), QStringLiteral("Payloads"), QStringLiteral("Kernel log"), QStringLiteral("Y2JB"), QStringLiteral("Mount config")})
+    for (const auto& t : {QStringLiteral("FTP browser"), QStringLiteral("Payloads"), QStringLiteral("Kernel log"), QStringLiteral("Y2JB"), QStringLiteral("Mount config"), QStringLiteral("Diagnostics")})
         m_tabs->addTab(t);
     m_tabs->setExpanding(false);
     m_tabs->setDrawBase(false);
@@ -222,6 +226,8 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     m_stack->addWidget(buildKlogTab());
     m_stack->addWidget(buildY2jbTab());
     m_stack->addWidget(buildMountTab());
+    m_diagnostics = new DiagnosticsTab(ctx, {[this] { return host(); }, [this] { return ftpPort(); }, [this] { return m_remoteDir; }}, m_stack);
+    m_stack->addWidget(m_diagnostics);
 
     connect(m_session, &ConsoleSession::connected, this, [this](const QString& welcome) {
         setConnectedUi(true, welcome.simplified());
@@ -1320,8 +1326,16 @@ void Ps5ConnectPage::dropUrls(const QList<QUrl>& urls)
 
 void Ps5ConnectPage::navigateWith(const QVariantMap& args)
 {
-    if (args.contains(QStringLiteral("tab")))
-        m_tabs->setCurrentIndex(args.value(QStringLiteral("tab")).toInt());
+    if (args.contains(QStringLiteral("tab"))) {
+        // An index, or a tab's title ("Diagnostics").
+        const QVariant tab = args.value(QStringLiteral("tab"));
+        bool isIndex = false;
+        int index = tab.toInt(&isIndex);
+        for (int i = 0; !isIndex && i < m_tabs->count(); ++i)
+            if (m_tabs->tabText(i).compare(tab.toString(), Qt::CaseInsensitive) == 0)
+                index = i;
+        m_tabs->setCurrentIndex(index);
+    }
     if (args.contains(QStringLiteral("upload"))) {
         m_tabs->setCurrentIndex(0);
         if (m_session->isConnected())
@@ -1350,7 +1364,7 @@ QString Ps5ConnectPage::statusContext() const
 
 QStringList Ps5ConnectPage::demoStates() const
 {
-    return {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount")};
+    return {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount"), QStringLiteral("diagnostics"), QStringLiteral("find")};
 }
 
 void Ps5ConnectPage::applyDemoState(const QString& name)
@@ -1359,6 +1373,12 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
     const int i = tabs.indexOf(name);
     if (i >= 0)
         m_tabs->setCurrentIndex(i);
+    if (name == QLatin1String("diagnostics")) {
+        m_tabs->setCurrentIndex(m_stack->indexOf(m_diagnostics));
+        m_diagnostics->showSpecimen();
+    }
+    if (name == QLatin1String("find"))
+        m_demoSheet = m_find->openSpecimen();
     if (name == QLatin1String("klog") && m_klog->rowCount() == 0) {
         // Specimen lines so the viewer's tags are visible in the evidence.
         for (const QString& t : {QStringLiteral("[KERNEL] sceKernelLoadStartModule: libSceNpTrophy2.sprx"), QStringLiteral("[shadowmount] unmount start /mnt/ext0"),
@@ -1374,6 +1394,9 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
 
 void Ps5ConnectPage::clearDemoState()
 {
+    if (auto* s = qobject_cast<Sheet*>(m_demoSheet.data()))
+        s->close(0);
+    m_diagnostics->clearResult();
     m_klog->clear();
     klogFilterChanged();
     m_tabs->setCurrentIndex(0);
