@@ -256,7 +256,13 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     labelRow->setSpacing(space::sm);
     m_label = label(m_def.label, TextStyle::Body, color::fg_1, left);
     m_label->setWordWrap(true);
-    m_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    // setWordWrap() turns on the height-for-width flag of the label's size policy;
+    // a plain setSizePolicy(Expanding, Preferred) afterwards would drop it again and
+    // a translated label that wraps ("Fehlgeschlagene Jobs automatisch wiederholen")
+    // would be laid out one line short.
+    QSizePolicy wrapPolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    wrapPolicy.setHeightForWidth(true);
+    m_label->setSizePolicy(wrapPolicy);
     labelRow->addWidget(m_label, 1);
     m_badge = new Badge(tr("Overridden for this job"), Tone::Neutral, left);
     m_badge->setIconName(QStringLiteral("advanced"));
@@ -267,7 +273,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     auto* helpRow = new QHBoxLayout;
     helpRow->setSpacing(4);
     m_help = caption({}, left);
-    m_help->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_help->setSizePolicy(wrapPolicy);
     m_useDefault = new Link(tr("Use default"), left);
     m_useDefault->setFont(font::caption());
     m_useDefault->hide();

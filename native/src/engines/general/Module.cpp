@@ -89,7 +89,9 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("General");
         d.group = QStringLiteral("Language");
         d.label = QStringLiteral("Interface language");
-        d.description = QStringLiteral("The language of menus, pages and settings. Messages from the engines (job results, errors, logs) stay in English. Takes effect when the app restarts.");
+        // The settings page appends its own "Takes effect after a restart." note for
+        // every restartRequired setting, so the description must not repeat it.
+        d.description = QStringLiteral("The language of menus, pages and settings. Messages from the engines (job results, errors, logs) stay in English.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("en");
         d.choices.append({i18n::kSystemLanguage, QStringLiteral("System language"), {}});

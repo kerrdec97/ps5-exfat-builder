@@ -154,7 +154,13 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     m_cards = new QWidget(m_pane);
     m_cardsLayout = vbox(m_cards, space::lg);
     m_paneLayout->addWidget(m_cards);
-    h->addWidget(m_pane, 1, Qt::AlignTop);
+    // The pane fills the column and keeps its content at the top through a stretch,
+    // instead of an AlignTop item: an aligned item is sized from a cached
+    // height-for-width that is not refreshed after the rows inside have wrapped
+    // their translated labels, which squeezed whole cards (German, with Show
+    // advanced on).
+    m_paneLayout->addStretch(1);
+    h->addWidget(m_pane, 1);
     content()->addWidget(columns);
     connect(m_advancedSwitch, &QAbstractButton::toggled, this, &SettingsPage::setShowAdvanced);
     connect(m_resetSection, &QPushButton::clicked, this, [this] {

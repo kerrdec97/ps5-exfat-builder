@@ -53,6 +53,12 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
   apply in one verified job, convert between formats), Backport, Queue, PS5
   connect (FTP browser, payloads, kernel log, Y2JB, mount config), Library
   (scan, covers, dump rename with undo, DLC-emu editor), Logs, Settings, About.
+* **Sixteen interface languages** (Settings › General › Interface language,
+  takes effect at restart; Arabic right-to-left): the legacy list, shown by
+  native name. The texts were machine-translated for this release and have
+  not been reviewed by native speakers; engine messages (job results, errors,
+  logs) stay in English. Corrections: edit `native/src/app/i18n/<code>.json`
+  and send it to @kerrdec97.
 * **Built to be safe with your files.** The queue never runs two jobs on the
   same image or game folder at once; deleting temporary folders or a source
   never follows a junction or symbolic link into another folder; images are
@@ -120,6 +126,9 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
   lost: the new package is kept under a numbered name.
 * A file you created yourself named exactly like an output plus `.part`
   (for example `Game.exfat.part`) is overwritten by a build of that output.
+* The fifteen non-English interface languages are unreviewed machine
+  translations (about 97 % of the interface; identifiers and engine messages
+  stay English). Terms may be off; English is the default.
 
 ## Not in this release
 
@@ -127,8 +136,7 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
   owner's D:\ drive): firmware import-table audit, fix families, audio gate,
   PS5 Pro fix/Pro build, `right.sprx` replacement, default fakelib set,
   save-data fixes, SDK pairs 11–13.
-* **Not ported**: interface translations (only English for now), Dokan
-  "mount as drive", autoloader editor, AMPR index over FTP, the zftpd web-UI
+* **Not ported**: Dokan "mount as drive", autoloader editor, AMPR index over FTP, the zftpd web-UI
   (ZHTTP) probe of the FTP diagnostics.
 
 ## Before release (owner's checklist)

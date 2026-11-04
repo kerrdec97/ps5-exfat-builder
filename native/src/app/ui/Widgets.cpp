@@ -521,7 +521,10 @@ void Badge::paintEvent(QPaintEvent*)
     }
     p.setPen(toneText(m_tone));
     p.setFont(font());
-    p.drawText(QRect(x, 0, width() - x, height()), Qt::AlignVCenter | Qt::AlignLeft, elideMiddle(m_text, 32));
+    // A row that is narrower than its contents (translated texts in a side card)
+    // hands the badge less than its size hint: elide instead of cutting glyphs.
+    const QString shown = QFontMetrics(font()).elidedText(elideMiddle(m_text, 32), Qt::ElideRight, qMax(0, width() - x - 8));
+    p.drawText(QRect(x, 0, width() - x, height()), Qt::AlignVCenter | Qt::AlignLeft, shown);
 }
 
 // ---- switch -------------------------------------------------------------------
@@ -1030,6 +1033,12 @@ EmptyState::EmptyState(const QString& iconName, const QString& title, const QStr
     auto* c = caption(text, this);
     c->setAlignment(Qt::AlignCenter);
     c->setFixedWidth(320);
+    // Word-wrapped labels of a fixed width report a one-line minimum height, so a
+    // height-constrained parent (a card body that also holds a hidden table) would
+    // squeeze a three-line caption (German, Japanese…) over the title. Reserve the
+    // wrapped height up front; the texts never change after construction.
+    t->setMinimumHeight(t->heightForWidth(360));
+    c->setMinimumHeight(c->heightForWidth(320));
     m_layout->addWidget(c, 0, Qt::AlignHCenter);
     auto* actions = new QWidget(this);
     m_actions = hbox(actions, space::sm, QMargins(0, space::sm, 0, 0));
