@@ -36,6 +36,9 @@ struct BackportOptions {
     // #32: PS5 Pro fix, shader-assert part (ProFix.h): the root eboot.bin's
     // guarded "s_trap 1" become "s_nop 0". Opt-in, never automatic.
     bool proFix = false;
+    // #40: the CRI Unity audio fix (CriAudio.h); changes a file only when its exact
+    // 12-channel rack layout is found once next to the 8-channel one.
+    bool criAudioFix = true;
     bool keepStagingOnFailure = true;
     int journalRetentionDays = 30;
     QString notes;

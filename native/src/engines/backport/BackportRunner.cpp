@@ -64,6 +64,8 @@ QJsonObject fileJson(const FileResult& f)
         o.insert(QStringLiteral("nid"), nidActionName(f.nid.action));
     if (f.substitutedStandard)
         o.insert(QStringLiteral("substitutedStandard"), true);
+    if (f.criRackPatched)
+        o.insert(QStringLiteral("criAudioFix"), true);
     if (f.shaderTrapNops > 0)
         o.insert(QStringLiteral("shaderTrapNops"), f.shaderTrapNops);
     return o;
@@ -134,6 +136,8 @@ QJsonObject fileReportJson(const FileResult& f, const BackportPlan& plan, int ta
             why += QStringLiteral("; libc import %1 (%2)").arg(nidActionName(f.nid.action)).arg(f.nid.count);
         if (f.shaderTrapNops > 0)
             why += QStringLiteral("; PS5 Pro fix: %1 shader-assert trap(s) -> s_nop 0").arg(f.shaderTrapNops);
+        if (f.criRackPatched)
+            why += QStringLiteral("; CRI audio fix: 12-channel speaker rack -> 8 channels");
         why += u'.';
     }
     o.insert(QStringLiteral("result"), result);
@@ -187,6 +191,8 @@ void tracePlan(RunTrace& t, const BackportPlan& plan, const BackportOptions& opt
                                                          ? QStringLiteral("refuse")
                                                          : QStringLiteral("leaveUnchanged"));
     in.insert(QStringLiteral("verifyBuild"), opt.verifyBuild);
+    in.insert(QStringLiteral("proFix"), opt.proFix);
+    in.insert(QStringLiteral("criAudioFix"), opt.criAudioFix);
     in.insert(QStringLiteral("notes"), opt.notes);
     in.insert(QStringLiteral("fakelibState"), fakelibStateName(plan.fakelibState));
     in.insert(QStringLiteral("manifestVerdict"), verdictName(plan.verdict));
@@ -365,6 +371,12 @@ Result<RunResult> runBackportImpl(const BackportOptions& optIn, JobContext& ctx,
     result.leftUnchanged = build.leftUnchanged;
     result.buildVerified = opt.verifyBuild;
     result.filesRewritten = build.okCount();
+    if (!build.criRackPatched.isEmpty()) {
+        result.details.insert(QStringLiteral("criAudioFix"), QJsonArray::fromStringList(build.criRackPatched));
+        t.target.insert(QStringLiteral("criAudioFix"), QJsonArray::fromStringList(build.criRackPatched));
+        ctx.log.info(QStringLiteral("CRI audio fix: the 12-channel speaker rack became 8 channels in %1.")
+                         .arg(build.criRackPatched.join(QStringLiteral(", "))));
+    }
     if (opt.proFix) {
         // #32: what the Pro fix did, for the job details, the log and the report.
         QJsonObject pro;

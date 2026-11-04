@@ -447,7 +447,7 @@ private slots:
                                       keys::kEncryptedSelfPolicy, keys::kVerifyBuild, keys::kScanFolders,
                                       keys::kScanDepth, keys::kKeepStagingOnFailure, keys::kJournalRetentionDays,
                                       keys::kNotes, keys::kAmprPlaygoFolder, keys::kProFix,
-                                      keys::kStandardRightSprx};
+                                      keys::kStandardRightSprx, keys::kCriAudioFix};
         int count = 0;
         for (const auto* d : schema.all()) {
             QVERIFY2(d->key.startsWith(QStringLiteral("backport.")), qPrintable(d->key));
@@ -509,6 +509,7 @@ private slots:
                            {keys::kEncryptedSelfPolicy, QStringLiteral("leaveUnchanged")},
                            {keys::kVerifyBuild, false},
                            {keys::kProFix, true},
+                           {keys::kCriAudioFix, false},
                            {keys::kStandardRightSprx, d.filePath("right.sprx")},
                            {keys::kKeepStagingOnFailure, false},
                            {keys::kJournalRetentionDays, 7},
@@ -525,6 +526,7 @@ private slots:
         QCOMPARE(o.encryptedPolicy, EncryptedPolicy::LeaveUnchanged);
         QCOMPARE(o.verifyBuild, false);
         QCOMPARE(o.proFix, true);
+        QCOMPARE(o.criAudioFix, false);
         QCOMPARE(o.standardRightSprx, d.filePath("right.sprx"));
         QCOMPARE(o.keepStagingOnFailure, false);
         QCOMPARE(o.journalRetentionDays, 7);

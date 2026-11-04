@@ -13,6 +13,7 @@
 
 #include "core/Result.h"
 #include "engines/backport/BackportPlanner.h"
+#include "engines/backport/CriAudio.h"
 #include "engines/backport/NidPatch.h"
 #include "engines/backport/SceParam.h"
 #include "jobs/Job.h"
@@ -41,6 +42,7 @@ struct FileResult {
     QStringList patchMessages;
     int shaderTrapNops = 0; // #32 Pro fix sites patched in this file
     bool substitutedStandard = false; // #35: the standard right.sprx, converted, took the dump's copy's place
+    bool criRackPatched = false;      // #40: the CRI Unity rack became 8 channels in this file
 };
 
 struct StagedFile {
@@ -60,6 +62,7 @@ struct BuildResult {
     QStringList warnings;
     bool nothingChanged = false;        // every output equals the game's current bytes
     int shaderTrapNops = 0;             // #32 Pro fix: sites patched in the root eboot.bin
+    QStringList criRackPatched;         // #40: files whose CRI Unity rack became 8 channels
 
     bool failed() const;
     const FileResult* firstFailure() const;
@@ -77,6 +80,7 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
 // Title fixes applied to the patched ELF before it is signed.
 struct ExecutableFixes {
     bool shaderTrapNops = false; // #32 Pro fix (ProFix.h); the runner sets it for the root eboot.bin only
+    bool criAudioRack = false;   // #40 CRI Unity 12ch -> 8ch rack (CriAudio.h)
 };
 
 // The per-file pipeline on bytes, without I/O (also used by tests).
@@ -86,6 +90,7 @@ struct ProcessedExecutable {
     PatchReport patch;
     NidResult nid;
     int shaderTrapNops = 0;
+    CriRackAnalysis criRack; // #40 (state NotApplicable unless asked and a CRI Atom module)
 };
 Result<ProcessedExecutable> processExecutable(const QByteArray& input, const SdkPair& pair, NidMode nidMode,
                                               bool verify, QStringList* warnings = nullptr,

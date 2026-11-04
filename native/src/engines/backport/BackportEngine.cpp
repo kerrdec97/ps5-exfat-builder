@@ -181,6 +181,17 @@ Result<ProcessedExecutable> processExecutable(const QByteArray& input, const Sdk
         return makeError(Code::ElfInvalid, QStringLiteral("it is not an ELF or SELF file"));
     }
     FW_TRY_ASSIGN(p.patch, patchSdk(p.elf, pair));
+    if (fixes.criAudioRack) {
+        FW_TRY_ASSIGN(p.criRack, applyCriRackFix(p.elf));
+        if (p.criRack.state == CriRackState::Patch)
+            p.patch.messages << QStringLiteral("%1 at 0x%2: 12-channel speaker rack -> 8 channels")
+                                    .arg(QLatin1String(kCriRackFamily))
+                                    .arg(p.criRack.va, 0, 16);
+        else if (p.criRack.state == CriRackState::Unknown && warnings)
+            *warnings << QStringLiteral("CRI audio fix not applied: %1 (the bytes do not match the confirmed "
+                                        "layout, so nothing was changed)")
+                             .arg(p.criRack.why);
+    }
     if (fixes.shaderTrapNops) {
         FW_TRY_ASSIGN(p.shaderTrapNops, applyShaderTrapNops(p.elf));
         if (p.shaderTrapNops > 0)
@@ -290,6 +301,7 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
         ExecutableFixes fixes;
         // #32: the Pro fix touches only the root eboot.bin (as the Backport GUI).
         fixes.shaderTrapNops = opt.proFix && relKey(e->rel) == QLatin1String("eboot.bin");
+        fixes.criAudioRack = opt.criAudioFix; // only a CRI Atom module with the exact layout changes
         auto proc = processExecutable(data.value(), pair, opt.nidMode, opt.verifyBuild, &warnings, fixes);
         for (const QString& w : std::as_const(warnings))
             r.warnings << QStringLiteral("%1: %2").arg(e->rel, w);
@@ -313,6 +325,9 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
         fr.nid = proc->nid;
         fr.shaderTrapNops = proc->shaderTrapNops;
         r.shaderTrapNops += proc->shaderTrapNops;
+        fr.criRackPatched = proc->criRack.state == CriRackState::Patch;
+        if (fr.criRackPatched)
+            r.criRackPatched << e->rel;
         if (!proc->patch.patched.empty())
             fr.sdkAfter = pair.n;
         fr.stage = FileStage::Stage;

@@ -164,6 +164,24 @@ void registerBackportSettings(SettingsSchema& s)
     }
     {
         SettingDef d;
+        d.key = keys::kCriAudioFix;
+        d.section = kBackport;
+        d.group = QStringLiteral("Target");
+        d.label = QStringLiteral("CRI audio fix (Unity)");
+        d.description = QStringLiteral("Unity games with CRI Atom audio set up a 12-channel (7.1.4) speaker layout that "
+                                       "FW 4.5x cannot open, so they have no sound. This changes it to 8 channels (7.1) "
+                                       "in the CRI plugin, only where its exact layout is found once next to the "
+                                       "8-channel one. Confirmed on PAC-MAN WORLD 2 Re-PAC, STORY OF SEASONS: Grand "
+                                       "Bazaar and WONDERBOY Asha in Monster World. The sound stays 7.1 on newer "
+                                       "firmware too.");
+        d.type = SettingType::Bool;
+        d.defaultValue = true; // the owner's engine applies it whenever the layout matches
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
         d.key = keys::kNidPatchMode;
         d.section = kBackport;
         d.group = QStringLiteral("Target");
@@ -387,6 +405,7 @@ BackportOptions optionsFromSettings(const SettingsValues& v, const QString& game
                                                                                    : EncryptedPolicy::Refuse;
     o.verifyBuild = v.boolean(keys::kVerifyBuild);
     o.proFix = v.boolean(keys::kProFix);
+    o.criAudioFix = v.boolean(keys::kCriAudioFix);
     o.keepStagingOnFailure = v.boolean(keys::kKeepStagingOnFailure);
     o.journalRetentionDays = int(v.integer(keys::kJournalRetentionDays));
     o.notes = v.string(keys::kNotes).left(kMaxNotesLength);
