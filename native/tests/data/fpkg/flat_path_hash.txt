@@ -1,0 +1,7 @@
+	29842e87f7fa7305
+/sce_sys/keystone	aec4b3ec3ec6dccb
+eboot.bin	f16a60eee4f247fc
+Data/A.pak	c557cc6af7eeac7f
+/Data/_x.bin	1522aaf601e7a5c0
+sce_module/libc.prx	2f9cc26d8009e4b3
+a/very/long/path/with/many/components/file.bin	626fb41deec582f6

@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='utf-8'?>
+<psproject fmt="gp5">
+  <volume>
+    <volume_type>prospero_app</volume_type>
+    <package passcode="00000000000000000000000000000000" content_id="UP0000-PPSA01234_00-GOLDENTEST000000" />
+    <chunk_info chunk_count="3" scenario_count="2">
+      <chunks supported_languages="en-US fr-FR de-DE" default_language="en-US">
+        <chunk id="0" label="Base" />
+        <chunk id="1" languages="fr-FR" label="French voice" />
+        <chunk id="2" label="Extra" />
+      </chunks>
+      <scenarios default_id="0">
+        <scenario id="0" type="playmode" initial_chunk_count="3" label="Main">0 1 2</scenario>
+        <scenario id="1" type="playmode" initial_chunk_count="3" label="Second">2 0 1</scenario>
+      </scenarios>
+    </chunk_info>
+  </volume>
+  <files>
+    <file dst_path="sce_sys/playgo-scenario.json" src_path="C:\out\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.playgo-scenario.json" />
+    <file dst_path="playgo-chunks/002.bin" src_path="C:\out\.gp5-assets\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100\playgo-chunks\002.bin" chunk="2" pfs_compression="disable" />
+    <file dst_path="Data/1.bin" src_path="C:\dump\Data\1.bin" />
+    <file dst_path="Data/_x.bin" src_path="C:\dump\Data\_x.bin" chunk="2" />
+    <file dst_path="Data/a&amp;b.bin" src_path="C:\dump\Data\a&amp;b.bin" />
+    <file dst_path="Data/A.pak" src_path="C:\dump\Data\A.pak" chunk="1" />
+    <file dst_path="Data/b.pak" src_path="C:\dump\Data\b.pak" />
+    <file dst_path="dlc_emu.ini" src_path="C:\dump\dlc_emu.ini" />
+    <file dst_path="eboot.bin" src_path="C:\dump\eboot.bin" />
+    <file dst_path="sce_module/libc.prx" src_path="C:\dump\sce_module\libc.prx" />
+    <file dst_path="sce_sys/icon0.png" src_path="C:\dump\sce_sys\icon0.png" />
+    <file dst_path="sce_sys/keystone" src_path="C:\dump\sce_sys\keystone" />
+    <file dst_path="sce_sys/param.json" src_path="C:\out\.gp5-assets\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100\sce_sys\param.json" />
+    <empty_dir dst_path="addcont0" />
+    <empty_dir dst_path="Data/Empty" />
+    <empty_dir dst_path="Data/JunkOnly" />
+  </files>
+</psproject>
