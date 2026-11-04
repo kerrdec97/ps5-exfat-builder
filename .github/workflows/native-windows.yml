@@ -70,7 +70,6 @@ jobs:
           Copy-Item native\packaging\README-portable.txt "$dist\README.txt"
           Copy-Item LICENSES -Recurse "$dist\LICENSES"
           Copy-Item native\packaging\licenses\* "$dist\LICENSES\"
-          Invoke-WebRequest -Uri https://www.gnu.org/licenses/lgpl-3.0.txt -OutFile "$dist\LICENSES\Qt-LGPL-3.0.txt"
           Copy-Item native\packaging\THIRD_PARTY_NOTICES-native.md "$dist\THIRD_PARTY_NOTICES.md"
           Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
 
