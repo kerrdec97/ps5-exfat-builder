@@ -153,6 +153,28 @@ QMap<QString, QSet<QString>> Manifest::patchedHashes() const
         }
     }
     addAfter(doc.value(QStringLiteral("files_after")));
+    // In-place SDK fixes of this folder (SdkFixer.h): what they wrote is also
+    // "what a backport tool wrote" for the verdict and for restore.
+    const Value& fixes = doc.value(QStringLiteral("sdk_fixes"));
+    for (int i = 0; i < fixes.size(); ++i)
+        addAfter(fixes.at(i).value(QStringLiteral("files_after")));
+    return out;
+}
+
+QMap<QString, QSet<QString>> Manifest::sdkFixHashes() const
+{
+    QMap<QString, QSet<QString>> out;
+    const Value& fixes = doc.value(QStringLiteral("sdk_fixes"));
+    for (int i = 0; i < fixes.size(); ++i) {
+        const Value& after = fixes.at(i).value(QStringLiteral("files_after"));
+        if (!after.isObject())
+            continue;
+        for (const QString& k : after.keys()) {
+            const QString h = after.value(k).value(QStringLiteral("sha256")).toString().toLower();
+            if (!h.isEmpty())
+                out[relKey(k)].insert(h);
+        }
+    }
     return out;
 }
 
@@ -352,6 +374,30 @@ void recordTarget(Manifest& m, const TargetRecord& t)
     }
 }
 
+void recordSdkFix(Manifest& m, const SdkFixRecord& f)
+{
+    m.doc.insert(QStringLiteral("schema_version"), Value(kManifestSchemaWritten));
+    Value after = Value::object();
+    for (auto it = f.filesAfter.cbegin(); it != f.filesAfter.cend(); ++it) {
+        Value v = Value::object();
+        v.insert(QStringLiteral("sha256"), Value(it.value().first));
+        v.insert(QStringLiteral("size"), Value(it.value().second));
+        after.insert(it.key(), v);
+    }
+    Value e = Value::object();
+    e.insert(QStringLiteral("fixed_at"), Value(now()));
+    e.insert(QStringLiteral("tool_version"), Value(QString::fromLatin1(fw::build::kVersion)));
+    e.insert(QStringLiteral("target"), Value(targetKey(f.sdk)));
+    e.insert(QStringLiteral("backup_zip"), Value(QDir::toNativeSeparators(f.backupZip)));
+    e.insert(QStringLiteral("backup_zip_sha256"), Value(f.backupZipSha256));
+    e.insert(QStringLiteral("record"), Value(QDir::toNativeSeparators(f.record)));
+    e.insert(QStringLiteral("files_after"), after);
+    if (!m.doc.value(QStringLiteral("sdk_fixes")).isArray())
+        m.doc.insert(QStringLiteral("sdk_fixes"), Value::array());
+    m.doc[QStringLiteral("sdk_fixes")].append(e);
+    addHistory(m, QStringLiteral("sdk_fix"), targetKey(f.sdk));
+}
+
 void recordRestore(Manifest& m, const QString& zip)
 {
     m.doc.insert(QStringLiteral("current_target"), Value());
@@ -397,6 +443,14 @@ std::pair<Verdict, QStringList> manifestVerdict(const ScanResult& scan, const Ma
             continue;
         const QString cur = current(it.key());
         if (!cur.isEmpty() && cur == it.value())
+            hits << it.key();
+    }
+    const auto fixed = manifest->sdkFixHashes();
+    for (auto it = fixed.cbegin(); it != fixed.cend(); ++it) {
+        if (it.key().startsWith(QStringLiteral("fakelib/")) || hits.contains(it.key()))
+            continue;
+        const QString cur = current(it.key());
+        if (!cur.isEmpty() && it.value().contains(cur))
             hits << it.key();
     }
     if (!hits.isEmpty())

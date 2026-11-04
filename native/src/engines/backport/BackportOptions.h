@@ -20,6 +20,10 @@ struct BackportOptions {
     QString game;
     int targetSdk = kDefaultTargetSdk;
     QString fakelibDir;
+    // #34: the user's own libSceAmpr / libScePlayGo (ProviderSet.h); empty: none.
+    QString providerDir;
+    // Where the provider pins are kept (default: <dataDir>/backport/provider-pins.json).
+    QString providerPinsPath;
     QString originalsDir;
     QString backportDir;      // empty: no backport ZIP
     bool applyToGame = true;  // D5 (owner decision; Backport GUI defaults to off)
@@ -37,6 +41,9 @@ struct BackportOptions {
     QString stagingHint;
     // Apply journals (default: <dataDir>/backport/journals).
     QString journalDir;
+    // Run reports (#24). Empty: next to the game's backup records
+    // (RunReport.h), or <dataDir>/backport/reports without an originals folder.
+    QString reportDir;
 
     // ---- test seams -----------------------------------------------------------
     // Free-space probe (default fw::diskSpace).

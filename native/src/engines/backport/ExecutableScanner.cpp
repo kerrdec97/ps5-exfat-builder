@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "engines/backport/ElfImage.h"
+#include "engines/backport/ModuleImports.h"
 #include "engines/backport/SceParam.h"
 #include "engines/backport/SelfFormat.h"
 #include "engines/backport/SelfReader.h"
@@ -138,6 +139,7 @@ void classifyFull(ExecFile& f, const QString& path)
             return;
         }
         readParams(f, d);
+        f.importedModules = readModuleImports(d).names;
         return;
     }
     auto info = selfio::inspect(d);
@@ -174,6 +176,7 @@ void classifyFull(ExecFile& f, const QString& path)
         return;
     }
     readParams(f, elfData.value());
+    f.importedModules = readModuleImports(elfData.value()).names;
 }
 
 void classifyQuick(ExecFile& f, const QString& path, const QByteArray& head4)
