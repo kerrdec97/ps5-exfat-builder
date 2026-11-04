@@ -1438,7 +1438,7 @@ void TwoColumnLayout::setGeometry(const QRect& rect)
     if (m_left) {
         const int lw = std::min(m_leftMax, rect.width() - (m_right ? m_rightWidth + m_gap : 0));
         const int h = m_left->hasHeightForWidth() ? m_left->heightForWidth(lw) : m_left->sizeHint().height();
-        m_left->setGeometry(QRect(rect.x(), rect.y(), lw, std::max(h, rect.height())));
+        m_left->setGeometry(QRect(rect.x(), rect.y(), lw, std::max(h, m_left->minimumSize().height())));
         if (m_right) {
             const int rx = rect.x() + lw + m_gap;
             const int rh = m_right->hasHeightForWidth() ? m_right->heightForWidth(m_rightWidth) : m_right->sizeHint().height();

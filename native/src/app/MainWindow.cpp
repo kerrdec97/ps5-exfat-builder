@@ -9,6 +9,7 @@
 #include "app/pages/ExtractVerifyPage.h"
 #include "app/pages/FpkgPage.h"
 #include "app/pages/HomePage.h"
+#include "app/pages/ImageEditorPage.h"
 #include "app/pages/LibraryPage.h"
 #include "app/pages/LogsPage.h"
 #include "app/pages/Ps5ConnectPage.h"
@@ -22,6 +23,7 @@
 #include "core/CrashHandler.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "engines/backport/Module.h"
 #include "engines/general/Module.h"
 #include "engines/tools/Module.h"
 #include "engines/tools/ReportBundle.h"
@@ -153,6 +155,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     updateStatus();
     ctx.checkDependenciesAsync();
     QTimer::singleShot(500, this, &MainWindow::checkCrashFiles);
+    QTimer::singleShot(700, this, &MainWindow::checkInterruptedBackports);
     if (ctx.settings().value(QStringLiteral("general.checkForUpdatesOnStart")).toBool())
         QTimer::singleShot(3000, this, [this] { checkForUpdates(true); });
 }
@@ -186,6 +189,7 @@ void MainWindow::buildPages()
     addPage(new pages::BuildImagePage(m_ctx, *m_queueModel, this), QStringLiteral("build"), QStringLiteral("Build image"));
     addPage(new pages::FpkgPage(m_ctx, *m_queueModel, this), QStringLiteral("package"), QStringLiteral("FPKG"));
     addPage(new pages::ExtractVerifyPage(m_ctx, *m_queueModel, this), QStringLiteral("extract"), QStringLiteral("Extract & verify"));
+    addPage(new pages::ImageEditorPage(m_ctx, *m_queueModel, this), QStringLiteral("edit"), QStringLiteral("Edit image"));
     addPage(new pages::BackportPage(m_ctx, *m_queueModel, *m_logModel, *m_library, this), QStringLiteral("backports"), QStringLiteral("Backport"));
     m_sidebar->addGroup(QStringLiteral("Tools"));
     m_queuePage = new pages::QueuePage(m_ctx, *m_queueModel, *m_logModel, this);
@@ -598,6 +602,34 @@ void MainWindow::checkCrashFiles()
     connect(bar, &InfoBar::dismissed, this, [newest] { QSettings().setValue(QStringLiteral("crash/lastAcknowledged"), newest); });
     m_crashBanner = bar;
     showBanner(bar);
+}
+
+void MainWindow::checkInterruptedBackports()
+{
+    for (const backport::PendingJournal& j : backport::interruptedApplies()) {
+        auto* bar = new InfoBar(Tone::Warn, this);
+        bar->setDismissable(true);
+        const QString game = QFileInfo(j.game).fileName();
+        bar->setTitle(QStringLiteral("Roll back the interrupted backport of %1?").arg(game));
+        bar->setMessage(QStringLiteral("A backport was applying files to %1 when the app stopped. Rolling back restores the originals from the journal; the game folder is not touched otherwise.").arg(nativePath(j.game)));
+        auto* roll = bar->addLink(QStringLiteral("Roll back now"));
+        const QString journal = j.path;
+        connect(roll, &Link::activated, this, [this, journal, bar] {
+            auto r = jobs::submitBackportRollback(m_ctx, journal);
+            if (!r.ok()) {
+                toast(Tone::Err, QStringLiteral("Rollback not started"), r.error().message);
+                return;
+            }
+            m_ctx.queue().holdQueue(false);
+            bar->hide();
+            emit bar->dismissed();
+            navigate(QStringLiteral("queue"), {{QStringLiteral("jobId"), r.value()}});
+        });
+        auto* open = bar->addLink(QStringLiteral("Show the game folder"));
+        const QString folder = j.game;
+        connect(open, &Link::activated, this, [folder] { openInFileManager(folder); });
+        showBanner(bar);
+    }
 }
 
 void MainWindow::reportProblem(const QStringList& extraFiles)

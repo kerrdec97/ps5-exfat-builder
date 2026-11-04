@@ -20,6 +20,10 @@ struct LibraryGame {
     GameSummary info;
     QString status;      // free text from the last scan / backport ("Not backported", ...)
     QDateTime lastSeen;
+    // backport.scan results (empty when not scanned by the backport engine)
+    QStringList issues;  // "severity: message"
+    bool canRun = true;
+    QString plan;
 };
 
 class LibraryStore : public QObject {
@@ -33,6 +37,7 @@ public:
     const std::vector<LibraryGame>& games() const { return m_games; }
     void setGames(std::vector<LibraryGame> games);   // replaces (after a scan)
     void upsertGame(const GameSummary& info, const QString& status = {});
+    void setBackportInfo(const QString& folder, const QStringList& issues, bool canRun, const QString& plan);
     void removeGame(const QString& folder);
     void renameGame(const QString& folder, const QString& newFolder);
     QDateTime lastScan() const { return m_lastScan; }

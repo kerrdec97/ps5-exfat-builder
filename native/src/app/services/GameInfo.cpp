@@ -34,13 +34,14 @@ QJsonObject GameSummary::toJson() const
     return {{QStringLiteral("folder"), folder}, {QStringLiteral("title"), title}, {QStringLiteral("titleId"), titleId},
             {QStringLiteral("contentId"), contentId}, {QStringLiteral("version"), version}, {QStringLiteral("sdk"), sdk},
             {QStringLiteral("requiredFw"), requiredFw}, {QStringLiteral("sizeBytes"), bytes}, {QStringLiteral("files"), files},
-            {QStringLiteral("isGame"), isGame}};
+            {QStringLiteral("isGame"), isGame}, {QStringLiteral("platform"), platform}, {QStringLiteral("kind"), kind},
+            {QStringLiteral("coverPath"), coverPath}};
 }
 
 GameSummary GameSummary::fromJson(const QJsonObject& o)
 {
     GameSummary s;
-    s.folder = o.value(QStringLiteral("folder")).toString();
+    s.folder = QDir::fromNativeSeparators(o.value(QStringLiteral("folder")).toString());
     s.title = o.value(QStringLiteral("title")).toString();
     s.titleId = o.value(QStringLiteral("titleId")).toString();
     s.contentId = o.value(QStringLiteral("contentId")).toString();
@@ -52,6 +53,9 @@ GameSummary GameSummary::fromJson(const QJsonObject& o)
     s.requiredFw = o.value(QStringLiteral("requiredFw")).toString();
     if (s.requiredFw.isEmpty())
         s.requiredFw = o.value(QStringLiteral("requiredSystemVersion")).toString();
+    s.platform = o.value(QStringLiteral("platform")).toString();
+    s.kind = o.value(QStringLiteral("kind")).toString();
+    s.coverPath = o.value(QStringLiteral("coverPath")).toString();
     s.bytes = qint64(o.value(QStringLiteral("sizeBytes")).toDouble());
     s.files = qint64(o.value(QStringLiteral("files")).toDouble());
     s.isGame = o.value(QStringLiteral("isGame")).toBool(true);

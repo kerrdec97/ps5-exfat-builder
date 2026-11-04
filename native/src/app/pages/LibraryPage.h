@@ -5,6 +5,7 @@
 // scan, keep/remove per language, backup, restore).
 
 #include "app/pages/BackportPage.h"
+#include "app/pages/DlcEmuEditor.h"
 #include "app/services/AppStores.h"
 
 #include <QCheckBox>
@@ -24,7 +25,7 @@ public:
     void dropUrls(const QList<QUrl>& urls) override;
     void navigateWith(const QVariantMap& args) override;
     QString statusContext() const override;
-    QStringList demoStates() const override { return {QStringLiteral("languages")}; }
+    QStringList demoStates() const override { return {QStringLiteral("languages"), QStringLiteral("dlc")}; }
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
 
@@ -34,6 +35,9 @@ private:
     void addFolders();
     void scan();
     void renameGame(const QString& folder);
+    void renameDumps();
+    void showRenamePreview(const QJsonArray& items, const QString& preset);
+    void applyRename(const QJsonArray& items);
     void gameMenu(const QString& folder, const QPoint& pos);
     // Languages
     void languageScan();
@@ -59,6 +63,8 @@ private:
     QLabel* m_footer;
     QString m_scanJobId;
     QStringList m_pendingAdds;
+    QString m_renamePreviewId, m_renameApplyId, m_renameUndoId;
+    QString m_renameSource, m_renamePreset, m_renameDest;
     // languages
     ui::PathField* m_langFolder;
     QCheckBox* m_langBatch;
@@ -70,6 +76,7 @@ private:
     QLabel* m_langSummary;
     QPushButton* m_langStrip;
     QPushButton* m_langRestore;
+    DlcEmuEditor* m_dlc;
     QString m_langJobId;
     QJsonArray m_langGames; // last scan result
 };

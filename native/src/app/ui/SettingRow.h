@@ -65,9 +65,13 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
     void updateHelp();
+    QBoxLayout* m_layout = nullptr;
+    QWidget* m_right = nullptr;
+    bool m_narrow = false;
     SettingDef m_def;
     SettingEditor* m_editor;
     QLabel* m_label;

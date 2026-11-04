@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
+#include "app/services/JobSubmit.h"
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
 
@@ -760,7 +761,10 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     m_running->hide();
 
     m_list = new JobList(ctx, model, JobRow::Variant::Dock, this);
-    m_list->setFilter([](const JobRecord& r) { return r.state != JobState::Running && r.state != JobState::Paused; });
+    // System jobs (update checks) never show in the dock, like in the Queue page and the header chip.
+    m_list->setFilter([](const JobRecord& r) {
+        return !jobs::isSystemKind(r.kind) && r.state != JobState::Running && r.state != JobState::Paused;
+    });
     m_list->setMaxRows(6);
     connect(m_list, &JobList::activated, this, &JobsDock::openJobRequested);
     body()->addWidget(m_list);
@@ -785,21 +789,21 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
 
 void JobsDock::refresh()
 {
-    const int total = m_model.rowCount();
-    m_count->setText(QString::number(total));
-    m_count->setVisible(total > 0);
+    const int rows = m_model.rowCount();
     const bool held = m_ctx.queue().isHeld();
     m_pause->setIconName(held ? QStringLiteral("play") : QStringLiteral("pause"));
     m_pause->setToolTip(held ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
     m_pause->setAccessibleName(m_pause->toolTip());
 
     const JobRecord* running = nullptr;
+    int total = 0; // user jobs only; system jobs (update.*) are hidden everywhere in the UI
     int queued = 0;
     qint64 etaMs = -1;
-    for (int r = 0; r < total; ++r) {
+    for (int r = 0; r < rows; ++r) {
         const JobRecord* rec = m_model.recordAt(r);
-        if (!rec)
+        if (!rec || jobs::isSystemKind(rec->kind))
             continue;
+        ++total;
         if ((rec->state == JobState::Running || rec->state == JobState::Paused) && !running)
             running = rec;
         if (rec->state == JobState::Queued)
@@ -807,6 +811,8 @@ void JobsDock::refresh()
         if (rec->state == JobState::Running && rec->progress.etaMs >= 0)
             etaMs = std::max<qint64>(etaMs, 0) + rec->progress.etaMs;
     }
+    m_count->setText(QString::number(total));
+    m_count->setVisible(total > 0);
     if (running) {
         m_runningId = running->id;
         m_runTitle->setFullText(running->title);

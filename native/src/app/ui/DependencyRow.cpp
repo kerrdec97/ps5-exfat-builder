@@ -23,11 +23,19 @@ DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* pa
     h->addWidget(m_icon, 0, Qt::AlignVCenter);
     auto* col = new QVBoxLayout;
     col->setSpacing(2);
-    m_name = label(name, TextStyle::Body, color::fg_1, this);
-    m_detail = caption({}, this);
+    m_name = new ElideLabel(name, Qt::ElideRight, this);
+    m_name->setFont(font::body());
+    setTextColor(m_name, color::fg_1);
+    m_detail = new ElideLabel({}, Qt::ElideRight, this);
+    m_detail->setFont(font::caption());
+    setTextColor(m_detail, color::fg_3);
     col->addWidget(m_name);
     col->addWidget(m_detail);
-    h->addLayout(col, 1);
+    auto* textCol = new QWidget(this);
+    textCol->setLayout(col);
+    textCol->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    textCol->setMinimumWidth(120);
+    h->addWidget(textCol, 1);
     m_badge = new Badge(QStringLiteral("Checking…"), Tone::Neutral, this);
     h->addWidget(m_badge);
     m_fix = new Link(QStringLiteral("How to fix…"), this);
@@ -47,14 +55,15 @@ void DependencyRow::setChecking()
 void DependencyRow::setInfo(const DependencyInfo& info)
 {
     m_info = info;
-    m_name->setText(info.version.isEmpty() ? info.name : QStringLiteral("%1 %2").arg(info.name, info.version));
+    m_name->setFullText(info.version.isEmpty() ? info.name : QStringLiteral("%1 %2").arg(info.name, info.version));
     QString detail = info.detail;
     if (!info.path.isEmpty())
         detail = detail.isEmpty() ? QDir::toNativeSeparators(info.path) : QStringLiteral("%1 · %2").arg(detail, QDir::toNativeSeparators(info.path));
     if (detail.isEmpty())
         detail = info.purpose;
-    m_detail->setText(detail);
+    m_detail->setFullText(detail);
     m_detail->setFont(info.path.isEmpty() ? font::caption() : font::mono());
+    m_detail->setToolTip(QStringList{info.purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix}.join(QStringLiteral("\n")).trimmed());
     QString iconName;
     QColor c;
     Tone tone = Tone::Neutral;
@@ -72,7 +81,6 @@ void DependencyRow::setInfo(const DependencyInfo& info)
     const bool fixable = !info.howToFix.isEmpty() && info.status != DependencyStatus::Ready;
     m_fix->setVisible(fixable);
     m_fix->setText(!info.settingKey.isEmpty() ? QStringLiteral("Set path…") : QStringLiteral("How to fix…"));
-    setToolTip(info.howToFix);
 }
 
 void DependencyRow::setDivider(bool on)
