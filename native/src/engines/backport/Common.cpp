@@ -47,6 +47,7 @@ QString codeName(Code code)
     case Code::ZipVerifyFailed: return QStringLiteral("ZipVerifyFailed");
     case Code::GameChanged: return QStringLiteral("GameChanged");
     case Code::ApplyFailed: return QStringLiteral("ApplyFailed");
+    case Code::InterruptedApply: return QStringLiteral("InterruptedApply");
     case Code::RollbackFailed: return QStringLiteral("RollbackFailed");
     case Code::RestoreFailed: return QStringLiteral("RestoreFailed");
     case Code::ManifestMismatch: return QStringLiteral("ManifestMismatch");
@@ -70,7 +71,8 @@ ErrorCode toErrorCode(Code code)
     case Code::FakelibInvalid:
     case Code::ZipFolderInvalid:
     case Code::PathTooLong:
-    case Code::NothingToDo: return ErrorCode::InvalidArgument;
+    case Code::NothingToDo:
+    case Code::InterruptedApply: return ErrorCode::InvalidArgument;
     case Code::InsufficientSpace: return ErrorCode::InsufficientSpace;
     case Code::ElfInvalid:
     case Code::ParamMissing:

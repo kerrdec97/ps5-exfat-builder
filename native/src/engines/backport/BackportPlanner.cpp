@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "engines/backport/ApplyJournal.h"
 #include "engines/backport/BackupArchive.h"
 
 #include <QDir>
@@ -133,6 +134,15 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
                                "(%1, %2). Use the same folder or two separate ones.")
                     .arg(native(opt.backportDir), native(opt.originalsDir)));
     }
+
+    // S35: an interrupted apply on this game must be rolled back first.
+    for (const PendingJournal& j : ApplyJournal::findInterrupted(opt.journalDir.isEmpty() ? defaultJournalDir() : opt.journalDir))
+        if (isSameOrInside(j.game, game) && isSameOrInside(game, j.game))
+            add(Code::InterruptedApply, Severity::Refuse,
+                QStringLiteral("An earlier backport of this game was interrupted while it was being applied. Roll it "
+                               "back first (it is offered at start-up, or restore the originals from %1).")
+                    .arg(native(j.originalsZip)),
+                {j.path});
 
     // Scan (read-only). The ZIP folders are never entered (S38).
     QStringList excludes;

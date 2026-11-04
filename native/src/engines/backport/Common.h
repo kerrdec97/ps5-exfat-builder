@@ -55,6 +55,7 @@ enum class Code {
     ZipVerifyFailed,
     GameChanged,
     ApplyFailed,
+    InterruptedApply,
     RollbackFailed,
     RestoreFailed,
     ManifestMismatch,

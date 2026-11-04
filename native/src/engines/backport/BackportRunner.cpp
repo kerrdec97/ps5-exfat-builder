@@ -89,6 +89,8 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
     if (opt.journalDir.isEmpty())
         opt.journalDir = defaultJournalDir();
     const QString staging = QDir(ctx.tempDir).filePath(QStringLiteral("staging"));
+    if (QFileInfo::exists(staging))
+        FW_TRY(removeTreeSafely(staging, ctx.tempDir)); // private to this job: start empty
     const ZipHook zipHook = [&opt](const QString& point, const QString& item) -> Status {
         return opt.testHook ? opt.testHook(point, item) : success();
     };
@@ -338,7 +340,9 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
         }
         const QString id = ctx.jobId.isEmpty() ? QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddHHmmsszzz"))
                                                : sanitizeFileName(ctx.jobId);
-        const QString journalPath = QDir(opt.journalDir).filePath(id + QStringLiteral(".json"));
+        QString journalPath = QDir(opt.journalDir).filePath(id + QStringLiteral(".json"));
+        for (int n = 2; QFileInfo::exists(journalPath); ++n) // a retried job id
+            journalPath = QDir(opt.journalDir).filePath(QStringLiteral("%1-%2.json").arg(id).arg(n));
         auto journal = ApplyJournal::create(journalPath, ctx.jobId, game, result.originalsZip, entries);
         if (!journal.ok())
             return makeError(Code::ApplyFailed,
@@ -368,7 +372,7 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
         TargetRecord applied = target;
         applied.applied = true;
         applied.addedFiles = journal->addedFiles();
-        applied.journal = id;
+        applied.journal = QFileInfo(journalPath).completeBaseName();
         recordTarget(manifest, applied);
         if (Status ms = writeManifest(manifest); !ms.ok())
             result.warnings << QStringLiteral("The backport manifest could not be updated: %1").arg(ms.error().message);

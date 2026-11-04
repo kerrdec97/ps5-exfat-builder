@@ -213,6 +213,17 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
     if (ctx.progress)
         ctx.progress->beginPhase(1, total, qint64(processable.size() + size_t(plan.stagedFakelibTargets.size())));
 
+    // Encrypted files carried over by policy (S32 leaveUnchanged): recorded,
+    // never read into the build.
+    for (const QString& rel : plan.leaveUnchanged) {
+        FileResult fr;
+        fr.rel = rel;
+        fr.ok = true;
+        fr.stage = FileStage::LeftUnchanged;
+        r.leftUnchanged << rel;
+        r.files.push_back(fr);
+    }
+
     for (const ExecFile* e : processable) {
         if (!ctx.token.checkpoint())
             return Error::cancelled();
