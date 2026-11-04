@@ -403,6 +403,64 @@ private slots:
         QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
     }
 
+    // A replacement that cannot be read halfway through the apply rolls the
+    // image back byte for byte, even when the files written before it were
+    // small (nothing may be left in a write buffer to land after the undo).
+    void failedInPlaceApplyRestoresEveryByte()
+    {
+        for (int variant = 0; variant < 2; ++variant) {
+            const QString img = freshImage();
+            const QByteArray hash = fileHash(img);
+            const quint16 flagsBefore = volumeFlagsOf(img);
+            const QString small1 = path(QStringLiteral("small1-%1.bin").arg(variant));
+            const QString small2 = path(QStringLiteral("small2-%1.bin").arg(variant));
+            const QString vanishing = path(QStringLiteral("vanishing-%1.bin").arg(variant));
+            QVERIFY(writeBytes(small1, QByteArray(99, 'a')));
+            QVERIFY(writeBytes(small2, QByteArray(10, 'b')));
+            QVERIFY(writeRandom(vanishing, 300 * 1024, 81));
+            // Either order, so that small writes happen before the failure in one of them.
+            const QString firstTarget = variant == 0 ? QStringLiteral("data/medium.bin") : QStringLiteral("data/large.bin");
+            const QString lastTarget = variant == 0 ? QStringLiteral("data/large.bin") : QStringLiteral("data/medium.bin");
+            EditOptions o = options();
+            o.writer.openRetries = 0;
+            o.writer.retryWaitMs = 0;
+            o.onPhase = [&](int phase, qint64, qint64, bool) {
+                if (phase == 1)
+                    QFile::remove(vanishing);
+            };
+            CancellationToken token;
+            auto r = editImage(img, {op(EditOp::Kind::Replace, firstTarget, small1),
+                                     op(EditOp::Kind::Replace, QStringLiteral("eboot.bin"), small2),
+                                     op(EditOp::Kind::Replace, lastTarget, vanishing)},
+                               o, token);
+            QVERIFY(!r.ok());
+            QCOMPARE(fileHash(img), hash);
+            QCOMPARE(volumeFlagsOf(img), flagsBefore);
+            QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+            expectIntact(img);
+        }
+    }
+
+    void successfulInPlaceEditLeavesTheVolumeClean()
+    {
+        const QString img = freshImage();
+        const QString local = path(QStringLiteral("clean.bin"));
+        QVERIFY(writeBytes(local, QByteArray(1234, 'c')));
+        CancellationToken token;
+        auto r = editImage(img, {op(EditOp::Kind::Replace, QStringLiteral("data/medium.bin"), local)}, options(), token);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(r->inPlace);
+        QVERIFY(r->verification.passed());
+        QCOMPARE(volumeFlagsOf(img) & kVolumeDirty, 0);
+        QVERIFY(treeOf(img).warnings.join(u' ').indexOf(QStringLiteral("VolumeDirty")) < 0);
+    }
+
+    static quint16 volumeFlagsOf(const QString& img)
+    {
+        const QByteArray b = readAllOf(img).left(512);
+        return quint16(uchar(b[int(kVolumeFlagsOffset)]) | (uchar(b[int(kVolumeFlagsOffset) + 1]) << 8));
+    }
+
     void interruptedInPlaceEditIsRolledBack()
     {
         const QString img = freshImage();

@@ -10,6 +10,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QFile>
 #include <QString>
 
 #include <memory>
@@ -149,5 +150,19 @@ Result<FileTree> scanTree(const QString& root, const CancellationToken& token, c
 // Removes a directory tree. Refuses to touch drive roots, the user's home
 // folder and anything outside `mustBeInside` when it is given.
 Status removeTreeSafely(const QString& path, const QString& mustBeInside = {});
+
+// Deletes a folder and everything in it like QDir::removeRecursively(), but
+// never descends into a junction or symbolic link: the link itself is removed
+// and what it points at is left alone (Qt follows NTFS junctions).
+bool removeTreeNoFollow(const QString& dir);
+
+// True for symbolic links and NTFS junctions (mount points); false for other
+// reparse points such as cloud placeholders and for .lnk shortcuts.
+bool isJunctionOrSymlink(const QString& path);
+
+// Flushes Qt's buffer and the operating system's cache of an open file to the
+// drive (FlushFileBuffers / fsync), so a verified image survives a power cut
+// before it replaces anything.
+Status flushToDisk(QFile& file, const QString& displayName);
 
 } // namespace fw

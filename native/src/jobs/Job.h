@@ -31,6 +31,9 @@ enum class Verification { NotRun, Passed, Failed, Skipped, Inconclusive };
 
 QString verificationName(Verification v);
 
+// True when two busyPaths() lists share a path or one contains the other.
+bool busyPathsOverlap(const QStringList& a, const QStringList& b);
+
 struct JobOutcome {
     QStringList outputs;          // files/folders produced
     Verification verification = Verification::NotRun;
@@ -60,6 +63,14 @@ public:
     // Relative weight of each phase for the overall progress (default equal).
     virtual QList<double> phaseWeights() const { return {}; }
     virtual QJsonObject parameters() const = 0; // enough to re-create the job
+
+    // Files and folders this job reads or changes that no other job may use at
+    // the same time (an image being edited, verified or written, a game being
+    // backported). The queue does not start a job whose paths overlap — equal,
+    // or one inside the other — a running job's. Default: the string values of
+    // the parameters "image", "output", "source", "game", "package",
+    // "destination", "folder" and "file", made absolute.
+    virtual QStringList busyPaths() const;
 
     // Cheap pre-flight check before the job is accepted into the queue.
     virtual Status validate(const SettingsValues& settings) const

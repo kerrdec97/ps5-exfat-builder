@@ -14,7 +14,10 @@
 #include <QStorageInfo>
 
 #ifdef Q_OS_WIN
+#include <io.h>
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -215,7 +218,7 @@ TempDir::TempDir(const QString& prefix, const QString& parentDir)
 TempDir::~TempDir()
 {
     if (!m_keep && !m_path.isEmpty())
-        QDir(m_path).removeRecursively();
+        removeTreeNoFollow(m_path); // never through a junction left inside
 }
 
 QString TempDir::filePath(const QString& name) const
@@ -306,7 +309,7 @@ Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 larges
     if (drive.endsWith(u'\\') && drive.size() > 1)
         drive.chop(1);
     constexpr qint64 k4GiB = 4LL * 1024 * 1024 * 1024;
-    if ((fs == u"FAT32" || fs == u"FAT" || fs == u"VFAT" || fs == u"MSDOS") && largestFileBytes >= k4GiB - 1)
+    if ((fs == u"FAT32" || fs == u"FAT" || fs == u"VFAT" || fs == u"MSDOS") && largestFileBytes >= k4GiB) // FAT32 holds up to 4 GiB - 1
         return Error(ErrorCode::Unsupported,
                      QStringLiteral("%1 is formatted as FAT32, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.").arg(drive),
                      QStringLiteral("largest file %1 bytes").arg(largestFileBytes));
@@ -436,6 +439,27 @@ bool matchesExclude(const QString& rel, const QStringList& excludes)
 }
 } // namespace
 
+bool isJunctionOrSymlink(const QString& path)
+{
+    const QFileInfo fi(path);
+    if (fi.isSymbolicLink())
+        return true;
+#ifdef Q_OS_WIN
+    // Junctions and symbolic links only: cloud placeholders (OneDrive) and
+    // deduplicated files are reparse points too, but they are ordinary data.
+    WIN32_FIND_DATAW fd;
+    const QString native = QDir::toNativeSeparators(toLongPath(path));
+    HANDLE h = FindFirstFileW(reinterpret_cast<LPCWSTR>(native.utf16()), &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    FindClose(h);
+    return (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        && (fd.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT || fd.dwReserved0 == IO_REPARSE_TAG_SYMLINK);
+#else
+    return false;
+#endif
+}
+
 Result<FileTree> scanTree(const QString& root, const CancellationToken& token, const ScanOptions& options)
 {
     QFileInfo rootInfo(root);
@@ -453,15 +477,26 @@ Result<FileTree> scanTree(const QString& root, const CancellationToken& token, c
 
     QDirIterator it(tree.root, filters, flags);
     const QDir base(tree.root);
+    QStringList skippedLinks;
     qint64 n = 0;
     while (it.hasNext()) {
         it.next();
         if ((++n & 0x3FF) == 0 && !token.checkpoint())
             return Error::cancelled();
         const QFileInfo fi = it.fileInfo();
-        if (fi.isSymLink() && !options.followSymlinks)
-            continue;
         const QString rel = base.relativeFilePath(fi.absoluteFilePath());
+        if (!options.followSymlinks) {
+            // Symbolic links and junctions are skipped with everything below
+            // them (Qt descends into junctions). Windows shortcuts (.lnk) are
+            // ordinary files.
+            if (std::any_of(skippedLinks.begin(), skippedLinks.end(),
+                            [&](const QString& l) { return rel.startsWith(l); }))
+                continue;
+            if (isJunctionOrSymlink(fi.absoluteFilePath())) {
+                skippedLinks << rel + u'/';
+                continue;
+            }
+        }
         if (!options.excludes.isEmpty() && matchesExclude(rel, options.excludes))
             continue;
         FileEntry e;
@@ -487,6 +522,47 @@ Result<FileTree> scanTree(const QString& root, const CancellationToken& token, c
     return tree;
 }
 
+bool removeTreeNoFollow(const QString& dir)
+{
+    if (isJunctionOrSymlink(dir))
+        return QFile::remove(dir) || QDir().rmdir(dir); // the link only
+    bool ok = true;
+    QDirIterator it(dir, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+    while (it.hasNext()) {
+        const QString p = it.next();
+        const QFileInfo fi = it.fileInfo();
+        if (isJunctionOrSymlink(p)) {
+            if (!QFile::remove(p) && !QDir().rmdir(p))
+                ok = false;
+        } else if (fi.isDir()) {
+            if (!removeTreeNoFollow(p))
+                ok = false;
+        } else if (!QFile::remove(p)) {
+            QFile::setPermissions(p, fi.permissions() | QFileDevice::WriteOwner | QFileDevice::WriteUser);
+            if (!QFile::remove(p))
+                ok = false;
+        }
+    }
+    return QDir().rmdir(dir) && ok;
+}
+
+Status flushToDisk(QFile& file, const QString& displayName)
+{
+    if (!file.flush())
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(displayName), file.errorString());
+#ifdef Q_OS_WIN
+    const intptr_t h = _get_osfhandle(file.handle());
+    if (h == -1 || !FlushFileBuffers(reinterpret_cast<HANDLE>(h)))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
+                     QStringLiteral("FlushFileBuffers failed (%1)").arg(GetLastError()));
+#else
+    if (::fsync(file.handle()) != 0)
+        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
+                     QStringLiteral("fsync failed"));
+#endif
+    return success();
+}
+
 Status removeTreeSafely(const QString& path, const QString& mustBeInside)
 {
     const QFileInfo fi(path);
@@ -501,8 +577,12 @@ Status removeTreeSafely(const QString& path, const QString& mustBeInside)
         return Error(ErrorCode::PermissionDenied,
                      QStringLiteral("Refused to delete %1: it is outside %2.")
                          .arg(QDir::toNativeSeparators(abs), QDir::toNativeSeparators(mustBeInside)));
-    if (fi.isDir()) {
-        if (!QDir(abs).removeRecursively())
+    if (fi.isDir() && (fi.isSymLink() || isJunctionOrSymlink(abs))) {
+        // A link to a folder: remove the link, never what it points at.
+        if (!QFile::remove(abs) && !QDir().rmdir(abs))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not delete %1.").arg(QDir::toNativeSeparators(abs)));
+    } else if (fi.isDir()) {
+        if (!removeTreeNoFollow(abs))
             return Error(ErrorCode::IoError, QStringLiteral("Some files in %1 could not be deleted.").arg(QDir::toNativeSeparators(abs)));
     } else if (!QFile::remove(abs)) {
         return Error(ErrorCode::IoError, QStringLiteral("Could not delete %1.").arg(QDir::toNativeSeparators(abs)));

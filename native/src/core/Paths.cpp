@@ -1,5 +1,7 @@
 #include "core/Paths.h"
 
+#include "core/FileUtil.h"
+
 #include "core/Log.h"
 
 #include <QCoreApplication>
@@ -126,7 +128,7 @@ int sweepStaleTemp(int maxAgeHours)
             continue;
         if (fi.lastModified() > cutoff)
             continue;
-        if (QDir(fi.absoluteFilePath()).removeRecursively())
+        if (removeTreeNoFollow(fi.absoluteFilePath())) // a crashed job may have left a junction inside
             ++removed;
     }
     if (removed > 0)

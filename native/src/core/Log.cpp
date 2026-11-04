@@ -72,6 +72,13 @@ struct FileLogSink::Impl {
     int keep;
     QFile text, json;
     std::mutex mutex;
+    qint64 rotateAt = 0; // size that triggers the next rotation
+
+    void flushFiles()
+    {
+        text.flush();
+        json.flush();
+    }
 };
 
 FileLogSink::FileLogSink(QString dir, QString baseName, qint64 maxBytes, int keep)
@@ -98,7 +105,7 @@ QString FileLogSink::jsonPath() const { return QDir(d->dir).filePath(d->base + Q
 
 void FileLogSink::rotateIfNeeded()
 {
-    if (d->text.size() < d->maxBytes)
+    if (d->text.size() < std::max(d->maxBytes, d->rotateAt))
         return;
     d->text.close();
     d->json.close();
@@ -111,14 +118,20 @@ void FileLogSink::rotateIfNeeded()
             QFile::rename(from, to);
         }
     }
+    bool rotated = true;
     for (const auto* ext : {".log", ".jsonl"}) {
         const QString cur = dir.filePath(d->base + QLatin1String(ext));
         const QString to = dir.filePath(QStringLiteral("%1.1%2").arg(d->base, QLatin1String(ext)));
         QFile::remove(to);
-        QFile::rename(cur, to);
+        if (!QFile::rename(cur, to))
+            rotated = false;
     }
     (void)d->text.open(QIODevice::Append | QIODevice::Text);
     (void)d->json.open(QIODevice::Append | QIODevice::Text);
+    // The current log could not be renamed (another program holds it): keep
+    // writing to it and try again only after another `maxBytes`, instead of
+    // shifting — and deleting — the older logs on every write.
+    d->rotateAt = rotated ? 0 : d->text.size() + d->maxBytes;
 }
 
 void FileLogSink::write(const LogRecord& r)
@@ -134,13 +147,13 @@ void FileLogSink::write(const LogRecord& r)
         d->json.write("\n");
     }
     if (r.level >= LogLevel::Warning)
-        flush();
+        d->flushFiles();
 }
 
 void FileLogSink::flush()
 {
-    d->text.flush();
-    d->json.flush();
+    std::lock_guard lock(d->mutex); // never while write() or a rotation uses the files
+    d->flushFiles();
 }
 
 // ---------------------------------------------------------------------------

@@ -202,7 +202,9 @@ Status writeJournal(const QString& image, const QString& journal, const std::vec
     return part.commit(false);
 }
 
-Status rollbackJournal(const QString& image, const QString& journal)
+// `writingBack` (optional) becomes true once the journal has been checked and
+// its bytes start going back into the image.
+Status rollbackJournal(const QString& image, const QString& journal, bool* writingBack = nullptr)
 {
     const QString what = QStringLiteral("the undo journal");
     QFile j(toLongPath(journal));
@@ -247,6 +249,8 @@ Status rollbackJournal(const QString& image, const QString& journal)
         return Error(ErrorCode::CorruptData, QStringLiteral("The undo journal %1 is damaged; the image was not changed back.")
                                                  .arg(QDir::toNativeSeparators(journal)));
     // Pass 2: write the saved bytes back.
+    if (writingBack)
+        *writingBack = true;
     QFile img(toLongPath(image));
     if (!img.open(QIODevice::ReadWrite))
         return Error(ErrorCode::IoError, QStringLiteral("Could not open the image to undo the edit."), img.errorString());
@@ -754,9 +758,21 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
     const qint64 used = std::max<qint64>(0, tree.usedClusters - freedClusters);
     patches.push_back({112, QByteArray(1, char(quint8(used * 100 / std::max<quint32>(1, g.clusterCount))))});
 
+    // VolumeFlags (boot sector bytes 106-107, outside the boot checksum): the
+    // volume is marked dirty while the edit is applied, so a crash in the
+    // middle leaves an image that the console or Windows does not trust.
+    const quint16 volumeFlags = reader.volume().boot.volumeFlags;
+    const auto flagBytes = [](quint16 v) {
+        QByteArray b(2, '\0');
+        b[0] = char(v & 0xFF);
+        b[1] = char(v >> 8);
+        return b;
+    };
+
     // Undo journal: everything about to be overwritten.
     std::vector<Range> ranges;
-    qint64 journalBytes = 64;
+    ranges.push_back({kVolumeFlagsOffset, 2});
+    qint64 journalBytes = 64 + 2 + 12;
     for (const DataWrite& w : writes) {
         ranges.push_back({w.offset, w.length});
         journalBytes += w.length + 12;
@@ -786,29 +802,46 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
     if (o.onPhase)
         o.onPhase(1, dataBytes, qint64(writes.size()), true);
     {
+        // Unbuffered: nothing may be left in a write buffer when a failure
+        // rolls back through another handle (a later flush would put the new
+        // bytes back on top of the restored image).
         QFile rw(toLongPath(image));
-        if (!rw.open(QIODevice::ReadWrite))
-            return undoAfter(image, journal, Error(ErrorCode::IoError, QStringLiteral("Could not open the image for writing."), rw.errorString()));
+        const auto fail = [&](Error why) {
+            rw.close();
+            return undoAfter(image, journal, std::move(why));
+        };
+        if (!rw.open(QIODevice::ReadWrite | QIODevice::Unbuffered))
+            return fail(Error(ErrorCode::IoError, QStringLiteral("Could not open the image for writing."), rw.errorString()));
+        const auto writeFlags = [&](quint16 v) -> Status {
+            if (!rw.seek(kVolumeFlagsOffset))
+                return fileError(QStringLiteral("Could not write the image."), rw);
+            const QByteArray b = flagBytes(v);
+            FW_TRY(writeExact(rw, b.constData(), b.size(), QStringLiteral("the image")));
+            return syncFile(rw, QStringLiteral("the image"));
+        };
+        // The dirty mark reaches the disk before any of the new data does.
+        if (const Status st = writeFlags(quint16(volumeFlags | kVolumeDirty)); !st.ok())
+            return fail(st.error());
         std::vector<char> buf(size_t(std::max<qint64>(64 * 1024, o.writer.bufferBytes)));
         for (const DataWrite& w : writes) {
             if (progress)
                 progress->setCurrentItem(w.shown);
             auto in = openForRead(w.localPath, o.writer.openRetries, o.writer.retryWaitMs, token);
             if (!in.ok())
-                return undoAfter(image, journal, in.takeError());
+                return fail(in.takeError());
             if (in.value()->size() != w.length)
-                return undoAfter(image, journal, Error(ErrorCode::IoError, QStringLiteral("%1 changed while the image was being edited.")
-                                                                               .arg(QDir::toNativeSeparators(w.localPath))));
+                return fail(Error(ErrorCode::IoError, QStringLiteral("%1 changed while the image was being edited.")
+                                                      .arg(QDir::toNativeSeparators(w.localPath))));
             if (!rw.seek(w.offset))
-                return undoAfter(image, journal, fileError(QStringLiteral("Could not write the image."), rw));
+                return fail(fileError(QStringLiteral("Could not write the image."), rw));
             for (qint64 done = 0; done < w.length;) {
                 if (!token.checkpoint())
-                    return undoAfter(image, journal, Error::cancelled());
+                    return fail(Error::cancelled());
                 const qint64 n = std::min<qint64>(qint64(buf.size()), w.length - done);
                 if (const Status st = readExact(*in.value(), buf.data(), n, QDir::toNativeSeparators(w.localPath)); !st.ok())
-                    return undoAfter(image, journal, st.error());
+                    return fail(st.error());
                 if (const Status st = writeExact(rw, buf.data(), n, QStringLiteral("the image")); !st.ok())
-                    return undoAfter(image, journal, st.error());
+                    return fail(st.error());
                 done += n;
                 if (progress)
                     progress->advance(n);
@@ -818,12 +851,16 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
         }
         for (const Patch& p : patches) {
             if (!rw.seek(p.offset))
-                return undoAfter(image, journal, fileError(QStringLiteral("Could not write the image."), rw));
+                return fail(fileError(QStringLiteral("Could not write the image."), rw));
             if (const Status st = writeExact(rw, p.bytes.constData(), p.bytes.size(), QStringLiteral("the image")); !st.ok())
-                return undoAfter(image, journal, st.error());
+                return fail(st.error());
         }
         if (const Status st = syncFile(rw, QStringLiteral("the image")); !st.ok())
-            return undoAfter(image, journal, st.error());
+            return fail(st.error());
+        // Everything is on disk: the volume is consistent again (the journal
+        // stays until verification has passed).
+        if (const Status st = writeFlags(volumeFlags); !st.ok())
+            return fail(st.error());
     }
     if (o.testCrashAfterApply)
         return Error(ErrorCode::Internal, QStringLiteral("Simulated crash after applying the edit (test)."));
@@ -978,8 +1015,28 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
 Result<bool> recoverInterruptedEdit(const QString& image, const Log* log)
 {
     const QString journal = editJournalPath(image);
-    // An incomplete journal means the image was never modified.
-    QFile::remove(journal + QStringLiteral(".part"));
+    const QString partJournal = journal + QStringLiteral(".part");
+    if (QFileInfo::exists(partJournal)) {
+        // The journal is written and flushed under its .part name, then
+        // renamed before the image is touched. After a crash the rename may not
+        // have reached the disk although image writes did, so a complete .part
+        // journal is applied too: it holds the original bytes, so writing them
+        // back is harmless if the image was never changed. An incomplete or
+        // foreign one means the image was not modified.
+        if (!QFileInfo::exists(journal)) {
+            bool writingBack = false;
+            const Status st = rollbackJournal(image, partJournal, &writingBack);
+            if (st.ok()) {
+                if (log)
+                    log->warn(QStringLiteral("An earlier edit of %1 was interrupted while it started; undone from %2.")
+                                  .arg(QDir::toNativeSeparators(image), QDir::toNativeSeparators(partJournal)));
+                return true;
+            }
+            if (writingBack)
+                return st.error();
+        }
+        QFile::remove(partJournal);
+    }
     if (!QFileInfo::exists(journal))
         return false;
     if (log)

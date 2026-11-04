@@ -253,7 +253,8 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     const qint64 pid = proc.processId();
 
 #ifdef Q_OS_WIN
-    if (!jobObject.assign(pid))
+    const bool inJobObject = jobObject.assign(pid);
+    if (!inJobObject)
         log.warn(QStringLiteral("Could not attach %1 to the stop-on-close group; taskkill is the fallback.")
                      .arg(QFileInfo(spec.program).fileName()));
 #endif
@@ -273,7 +274,10 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     auto killTree = [&, pid] {
 #ifdef Q_OS_WIN
         jobObject.terminate();
-        taskkillTree(pid);
+        // taskkill only as the fallback, and only while the process is still
+        // ours: once it has exited its PID can belong to someone else.
+        if (!inJobObject && proc.state() != QProcess::NotRunning)
+            taskkillTree(pid);
 #else
         if (pid > 0) {
             ::kill(-pid_t(pid), SIGTERM);
