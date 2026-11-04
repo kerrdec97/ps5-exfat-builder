@@ -1,6 +1,7 @@
 #include "app/pages/ImageEditorPage.h"
 
 #include "app/AppContext.h"
+#include "app/pages/HexPreviewSheet.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
@@ -12,6 +13,7 @@
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QJsonObject>
+#include <QMenu>
 
 namespace fw::pages {
 
@@ -89,6 +91,12 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
     m_treeView->setSelectionMode(QAbstractItemView::SingleSelection);
     m_treeView->setIndentation(20);
     m_treeView->setFont(font::mono());
+    m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_treeView, &QTreeWidget::customContextMenuRequested, this, &ImageEditorPage::showTreeMenu);
+    connect(m_treeView, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* it, int) {
+        if (it && !it->data(0, Qt::UserRole + 1).toBool())
+            (void)preview(it->data(0, Qt::UserRole).toString());
+    });
     treeCard->body()->addWidget(m_treeView);
     m_treeEmpty = new EmptyState(QStringLiteral("drive"), QStringLiteral("No image open"), QStringLiteral("Choose an .exfat or .ffpkg image above to browse what it contains."), treeCard);
     treeCard->body()->addWidget(m_treeEmpty);
@@ -167,11 +175,13 @@ void ImageEditorPage::onTree(const ImageTreeResult& r)
     m_tree = r;
     if (!r.error.isEmpty()) {
         m_badge->set(QStringLiteral("Cannot open"), Tone::Err);
+        m_badge->setIconName(defaultBadgeIcon(Tone::Err));
         m_image->setError(r.error);
         m_summary->clear();
     } else {
         m_image->setError({});
         m_badge->set(r.problems.isEmpty() ? QStringLiteral("Ready to edit") : QStringLiteral("Damaged"), r.problems.isEmpty() ? Tone::Ok : Tone::Err);
+        m_badge->setIconName(defaultBadgeIcon(m_badge->tone())); // drop the "Reading…" spinner glyph
         QStringList parts{r.format == QLatin1String("exfat") ? QStringLiteral("exFAT") : QStringLiteral("FFPKG (UFS2)")};
         if (!r.label.isEmpty())
             parts << QStringLiteral("label %1").arg(r.label);
@@ -209,6 +219,8 @@ void ImageEditorPage::rebuildTree()
         it->setData(0, Qt::UserRole, n.path);
         it->setData(0, Qt::UserRole + 1, n.isDir);
         it->setIcon(0, icon(n.isDir ? QStringLiteral("folder") : QStringLiteral("file"), color::fg_3));
+        if (!n.isDir)
+            it->setToolTip(0, QStringLiteral("/%1\nDouble-click to preview its bytes").arg(n.path));
         it->setText(1, n.isDir ? QString() : formatBytes(n.size));
         it->setForeground(1, color::fg_3);
         it->setText(2, n.modified.isValid() ? humanTime(n.modified) : QString());
@@ -357,6 +369,75 @@ void ImageEditorPage::renameSelected()
     if (n.isEmpty() || n.contains(u'/') || n == p.section(u'/', -1))
         return;
     stage({QStringLiteral("rename"), p, {}, n});
+}
+
+void ImageEditorPage::showTreeMenu(const QPoint& pos)
+{
+    QTreeWidgetItem* it = m_treeView->itemAt(pos);
+    if (!it)
+        return;
+    m_treeView->setCurrentItem(it);
+    const bool dir = it->data(0, Qt::UserRole + 1).toBool();
+    const QString path = it->data(0, Qt::UserRole).toString();
+    QMenu menu(this);
+    QAction* prev = menu.addAction(QStringLiteral("Preview…"), this, [this, path] { (void)preview(path); });
+    prev->setEnabled(!dir);
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Replace…"), this, &ImageEditorPage::replaceSelected)->setEnabled(m_btnReplace->isEnabled());
+    menu.addAction(QStringLiteral("Rename"), this, &ImageEditorPage::renameSelected)->setEnabled(m_btnRename->isEnabled());
+    QAction* del = menu.addAction(QStringLiteral("Delete"), this, &ImageEditorPage::deleteSelected);
+    del->setEnabled(m_btnDelete->isEnabled());
+    menu.exec(m_treeView->viewport()->mapToGlobal(pos));
+}
+
+HexPreviewSheet* ImageEditorPage::preview(const QString& path)
+{
+    if (m_tree.nodes.empty() || !m_tree.error.isEmpty())
+        return nullptr;
+    qint64 size = -1;
+    bool found = false;
+    for (const ImageNode& n : m_tree.nodes)
+        if (n.path == path && !n.isDir) {
+            size = n.size;
+            found = true;
+            break;
+        }
+    if (!found)
+        return nullptr;
+    auto* s = new HexPreviewSheet(window(), m_tree.image, path, size);
+    s->start();
+    s->open();
+    return s;
+}
+
+void ImageEditorPage::applyDemoState(const QString& name)
+{
+    if (name != QLatin1String("hex-preview"))
+        return;
+    // A sample slice (no image is read): an ELF-like header, then mixed bytes and strings.
+    QByteArray data("\x7f" "ELF\x02\x01\x01\x09", 8);
+    data += QByteArray(8, '\0');
+    data += QByteArray::fromHex("0300 3e00 0100 0000 c0a3 0100 0000 0000 4000 0000 0000 0000");
+    const QByteArray words = QByteArrayLiteral("sce_module/libc.prx\0libSceFios2.prx\0/app0/sce_sys/param.json\0");
+    for (int i = 0; data.size() < int(kHexPreviewChunk); ++i)
+        data += (i % 9 == 4) ? words : QByteArray(1, char((i * 37 + (i >> 3)) & 0xFF));
+    data.truncate(qsizetype(kHexPreviewChunk));
+    auto* s = new HexPreviewSheet(window(), QStringLiteral("D:/Images/PPSA01325 Astro Bot (01.002).exfat"), QStringLiteral("eboot.bin"), 2355200);
+    HexSlice slice;
+    slice.image = s->image();
+    slice.path = s->path();
+    slice.offset = 0;
+    slice.fileSize = 2355200;
+    slice.data = data;
+    s->showSlice(slice);
+    s->open();
+    m_demoSheet = s;
+}
+
+void ImageEditorPage::clearDemoState()
+{
+    if (auto* s = qobject_cast<Sheet*>(m_demoSheet.data()))
+        s->close(0);
 }
 
 QJsonArray ImageEditorPage::operationsJson() const

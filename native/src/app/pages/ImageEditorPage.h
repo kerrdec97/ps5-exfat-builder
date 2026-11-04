@@ -2,16 +2,20 @@
 
 // Edit image (legacy Edit page): open an .exfat or .ffpkg image, browse its
 // tree (read on a worker thread), stage add / replace / delete / new folder
-// / rename operations, review them and apply through image.<fmt>.edit; and
-// "Convert to…" through image.convert.
+// / rename operations, review them and apply through image.<fmt>.edit;
+// "Convert to…" through image.convert; and a read-only hex preview of a file
+// (context menu "Preview…" or double-click; HexPreviewSheet).
 
 #include "app/pages/Page.h"
 #include "app/services/ImageTree.h"
 
 #include <QJsonArray>
+#include <QPointer>
 #include <QTreeWidget>
 
 namespace fw::pages {
+
+class HexPreviewSheet;
 
 struct StagedOp {
     QString op;        // add | replace | delete | mkdir | rename
@@ -30,7 +34,9 @@ public:
     void navigateWith(const QVariantMap& args) override;
     void refresh() override;
     QString statusContext() const override;
-    QStringList demoStates() const override { return {}; }
+    QStringList demoStates() const override { return {QStringLiteral("hex-preview")}; }
+    void applyDemoState(const QString& name) override;
+    void clearDemoState() override;
     void open(const QString& image);
     // The operations in the engine's JSON shape (tests).
     QJsonArray operationsJson() const;
@@ -39,6 +45,9 @@ public:
     void clearStaged();
     QString format() const { return m_tree.format; }
     QTreeWidget* tree() { return m_treeView; }
+    // Opens the hex preview of the file at `path` in the open image (non-modal);
+    // nullptr when no image is open or `path` is not a file in it.
+    HexPreviewSheet* preview(const QString& path);
 
 protected:
     Result<QString> submit(bool buildNow) override;
@@ -55,6 +64,7 @@ private:
     void newFolder();
     void renameSelected();
     void convert();
+    void showTreeMenu(const QPoint& pos);
 
     ui::ImageTreeReader* m_reader;
     ui::ImageTreeResult m_tree;
@@ -77,6 +87,7 @@ private:
     ui::Segmented* m_convertFormat;
     ui::PathField* m_convertOutput;
     QPushButton* m_convert;
+    QPointer<QWidget> m_demoSheet;
 };
 
 } // namespace fw::pages
