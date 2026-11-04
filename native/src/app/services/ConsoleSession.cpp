@@ -1,4 +1,5 @@
 #include "app/services/ConsoleSession.h"
+#include "app/i18n/I18n.h"
 
 #include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/FtpClient.h"
@@ -39,7 +40,7 @@ public:
     void cancelRunning()
     {
         std::lock_guard lock(m_cancelMutex);
-        m_cancel.cancel(QStringLiteral("Disconnected"));
+        m_cancel.cancel(tr("Disconnected"));
         m_cancel = CancellationSource();
     }
 
@@ -72,7 +73,7 @@ public slots:
         RemoteListing out;
         out.path = ps5::normalizeRemotePath(path);
         if (!m_client) {
-            out.error = QStringLiteral("Not connected.");
+            out.error = tr("Not connected.");
             emit m_session->listed(out);
             return;
         }
@@ -91,48 +92,48 @@ public slots:
     void doRemove(const QString& path, bool isDir)
     {
         if (!m_client) {
-            emit m_session->operationDone(QStringLiteral("delete"), false, QStringLiteral("Not connected."));
+            emit m_session->operationDone(QStringLiteral("delete"), false, tr("Not connected."));
             return;
         }
         Status st = isDir ? m_client->removeTree(path, token()) : m_client->dele(path);
-        emit m_session->operationDone(QStringLiteral("delete"), st.ok(), st.ok() ? QStringLiteral("Deleted %1").arg(path) : st.error().message);
+        emit m_session->operationDone(QStringLiteral("delete"), st.ok(), st.ok() ? tr("Deleted %1").arg(path) : st.error().message);
     }
     void doRename(const QString& from, const QString& to)
     {
         if (!m_client) {
-            emit m_session->operationDone(QStringLiteral("rename"), false, QStringLiteral("Not connected."));
+            emit m_session->operationDone(QStringLiteral("rename"), false, tr("Not connected."));
             return;
         }
         auto st = m_client->rename(from, to);
-        emit m_session->operationDone(QStringLiteral("rename"), st.ok(), st.ok() ? QStringLiteral("Renamed to %1").arg(ps5::remoteFileName(to)) : st.error().message);
+        emit m_session->operationDone(QStringLiteral("rename"), st.ok(), st.ok() ? tr("Renamed to %1").arg(ps5::remoteFileName(to)) : st.error().message);
     }
     void doMkdir(const QString& path)
     {
         if (!m_client) {
-            emit m_session->operationDone(QStringLiteral("mkdir"), false, QStringLiteral("Not connected."));
+            emit m_session->operationDone(QStringLiteral("mkdir"), false, tr("Not connected."));
             return;
         }
         auto st = m_client->mkd(path);
-        emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? QStringLiteral("Created %1").arg(path) : st.error().message);
+        emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? tr("Created %1").arg(path) : st.error().message);
     }
     void doLoadMount(int tool)
     {
         if (!m_client) {
-            emit m_session->mountConfigLoaded(tool, false, {}, QStringLiteral("Not connected."));
+            emit m_session->mountConfigLoaded(tool, false, {}, tr("Not connected."));
             return;
         }
         auto r = ps5::loadMountConfig(*m_client, ps5::MountTool(tool));
         if (!r.ok()) {
             const bool fresh = r.error().code == ErrorCode::NotFound;
-            emit m_session->mountConfigLoaded(tool, fresh, {}, fresh ? QStringLiteral("No config.ini on the console yet; the defaults are shown.") : r.error().message);
+            emit m_session->mountConfigLoaded(tool, fresh, {}, fresh ? tr("No config.ini on the console yet; the defaults are shown.") : r.error().message);
             return;
         }
-        emit m_session->mountConfigLoaded(tool, true, r.value(), QStringLiteral("Loaded from the console."));
+        emit m_session->mountConfigLoaded(tool, true, r.value(), tr("Loaded from the console."));
     }
     void doPushMount(int tool, const QString& text)
     {
         if (!m_client) {
-            emit m_session->mountConfigPushed(tool, false, QStringLiteral("Not connected."));
+            emit m_session->mountConfigPushed(tool, false, tr("Not connected."));
             return;
         }
         auto r = ps5::pushMountConfig(*m_client, ps5::MountTool(tool), text, ps5::newConsoleBackupDir());
@@ -141,8 +142,8 @@ public slots:
             return;
         }
         emit m_session->mountConfigPushed(tool, true,
-                                          r->backupPath.isEmpty() ? QStringLiteral("Written to the console (no earlier config existed).")
-                                                                  : QStringLiteral("Written to the console. The previous config was saved to %1").arg(r->backupPath));
+                                          r->backupPath.isEmpty() ? tr("Written to the console (no earlier config existed).")
+                                                                  : tr("Written to the console. The previous config was saved to %1").arg(r->backupPath));
     }
     void doSiteAvail()
     {

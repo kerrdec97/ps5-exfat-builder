@@ -1,4 +1,5 @@
 #include "app/ui/SettingRow.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
@@ -17,7 +18,7 @@ using namespace theme;
 
 // ---- editor -----------------------------------------------------------------
 
-SettingEditor::SettingEditor(const SettingDef& def, QWidget* parent) : QObject(parent), m_def(def)
+SettingEditor::SettingEditor(const SettingDef& def, QWidget* parent) : QObject(parent), m_def(i18n::localized(def))
 {
     build(parent);
 }
@@ -106,7 +107,7 @@ void SettingEditor::build(QWidget* parent)
         pf->setFilter(m_def.fileFilter);
         pf->setDialogTitle(m_def.label);
         pf->setFixedWidth(360);
-        pf->setPlaceholder(m_def.type == SettingType::DirPath ? QStringLiteral("Default") : QStringLiteral("Not set"));
+        pf->setPlaceholder(m_def.type == SettingType::DirPath ? tr("Default") : tr("Not set"));
         pf->edit()->setAccessibleName(m_def.label);
         connect(pf, &PathField::pathChanged, this, [this](const QString& p) {
             if (!m_updating)
@@ -119,10 +120,10 @@ void SettingEditor::build(QWidget* parent)
     case SettingType::StringList: {
         auto* wrap = new QWidget(parent);
         auto* h = hbox(wrap, space::sm);
-        auto* edit = textInput(QStringLiteral("None"), true, wrap);
+        auto* edit = textInput(tr("None"), true, wrap);
         edit->setAccessibleName(m_def.label);
-        edit->setToolTip(QStringLiteral("Separate entries with ;"));
-        auto* add = button(QStringLiteral("Add…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), wrap);
+        edit->setToolTip(tr("Separate entries with ;"));
+        auto* add = button(tr("Add…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), wrap);
         h->addWidget(edit, 1);
         h->addWidget(add);
         wrap->setFixedWidth(360);
@@ -222,7 +223,7 @@ void SettingEditor::setError(bool error)
 QString SettingRow::displayValue(const SettingDef& def, const QVariant& value)
 {
     switch (def.type) {
-    case SettingType::Bool: return value.toBool() ? QStringLiteral("On") : QStringLiteral("Off");
+    case SettingType::Bool: return value.toBool() ? tr("On") : tr("Off");
     case SettingType::Enum:
         for (const auto& c : def.choices)
             if (c.value == value.toString())
@@ -233,17 +234,17 @@ QString SettingRow::displayValue(const SettingDef& def, const QVariant& value)
         return def.unit.isEmpty() ? value.toString() : QStringLiteral("%1 %2").arg(value.toString(), def.unit);
     case SettingType::DirPath:
     case SettingType::FilePath:
-        return value.toString().isEmpty() ? QStringLiteral("Default") : QDir::toNativeSeparators(value.toString());
+        return value.toString().isEmpty() ? tr("Default") : QDir::toNativeSeparators(value.toString());
     case SettingType::StringList: {
         const auto l = value.toStringList();
-        return l.isEmpty() ? QStringLiteral("None") : l.join(QStringLiteral("; "));
+        return l.isEmpty() ? tr("None") : l.join(QStringLiteral("; "));
     }
-    case SettingType::String: return value.toString().isEmpty() ? QStringLiteral("(empty)") : value.toString();
+    case SettingType::String: return value.toString().isEmpty() ? tr("(empty)") : value.toString();
     }
     return value.toString();
 }
 
-SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent), m_def(def)
+SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent), m_def(i18n::localized(def))
 {
     setProperty("fwNoRing", true);
     auto* h = hbox(this, space::lg, QMargins(0, 6, 0, 6));
@@ -253,11 +254,11 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     auto* col = vbox(left, 2);
     auto* labelRow = new QHBoxLayout;
     labelRow->setSpacing(space::sm);
-    m_label = label(def.label, TextStyle::Body, color::fg_1, left);
+    m_label = label(m_def.label, TextStyle::Body, color::fg_1, left);
     m_label->setWordWrap(true);
     m_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     labelRow->addWidget(m_label, 1);
-    m_badge = new Badge(QStringLiteral("Overridden for this job"), Tone::Neutral, left);
+    m_badge = new Badge(tr("Overridden for this job"), Tone::Neutral, left);
     m_badge->setIconName(QStringLiteral("advanced"));
     m_badge->hide();
     labelRow->addWidget(m_badge);
@@ -267,7 +268,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     helpRow->setSpacing(4);
     m_help = caption({}, left);
     m_help->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_useDefault = new Link(QStringLiteral("Use default"), left);
+    m_useDefault = new Link(tr("Use default"), left);
     m_useDefault->setFont(font::caption());
     m_useDefault->hide();
     connect(m_useDefault, &Link::activated, this, &SettingRow::useDefaultRequested);
@@ -286,7 +287,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     m_message = new MessageRow(right);
     rcol->addWidget(m_message);
     h->addWidget(right, 0, Qt::AlignRight | Qt::AlignVCenter);
-    m_editor->widget()->setAccessibleName(def.label);
+    m_editor->widget()->setAccessibleName(m_def.label);
     updateHelp();
 }
 
@@ -296,11 +297,11 @@ void SettingRow::updateHelp()
     if (!m_disabledReason.isEmpty())
         parts << m_disabledReason;
     else if (m_overridden && !m_defaultText.isEmpty())
-        parts << QStringLiteral("Default is %1.").arg(m_defaultText);
+        parts << tr("Default is %1.").arg(m_defaultText);
     else if (!m_def.description.isEmpty())
         parts << m_def.description;
     if (m_restart)
-        parts << QStringLiteral("Takes effect after a restart.");
+        parts << tr("Takes effect after a restart.");
     m_help->setText(parts.join(u' '));
     m_help->setVisible(!parts.isEmpty());
     m_useDefault->setVisible(m_overridden);
@@ -396,8 +397,8 @@ void JobOptionsPanel::build()
             if (!d->perJob || m_exclude.contains(d->key))
                 continue;
             const QString title = m_sections.size() > 1 && !d->group.isEmpty() && d->group != section
-                                      ? QStringLiteral("%1 · %2").arg(section, d->group)
-                                      : (d->group.isEmpty() ? section : d->group);
+                                      ? QStringLiteral("%1 · %2").arg(i18n::trs(section), i18n::trs(d->group))
+                                      : i18n::trs(d->group.isEmpty() ? section : d->group);
             auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g) { return g.title == title; });
             if (it == groups.end()) {
                 groups.push_back({title, {}});
@@ -407,7 +408,7 @@ void JobOptionsPanel::build()
         }
     }
     if (groups.empty()) {
-        auto* c = caption(QStringLiteral("No per-job options are registered for this workflow in this build."), this);
+        auto* c = caption(tr("No per-job options are registered for this workflow in this build."), this);
         l->addWidget(c);
         return;
     }
@@ -544,7 +545,7 @@ void JobOptionsPanel::refreshDependencies()
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
             const QString otherLabel = other ? other->label : d->enabledWhenKey;
             const QString want = other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString();
-            row->setDisabledReason(QStringLiteral("Only available when \"%1\" is %2.").arg(otherLabel, want));
+            row->setDisabledReason(tr("Only available when \"%1\" is %2.").arg(otherLabel, want));
         }
     }
 }

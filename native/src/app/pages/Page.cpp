@@ -1,4 +1,5 @@
 #include "app/pages/Page.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/models/JobQueueModel.h"
@@ -50,7 +51,7 @@ JobFormPage::JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QStri
                          const QString& caption, const QString& primaryText, const QString& featureName, QWidget* parent)
     : Page(ctx, key, title, caption, parent), m_feature(featureName)
 {
-    m_queue = button(QStringLiteral("Add to queue"), ButtonVariant::Secondary, QStringLiteral("plus"), this);
+    m_queue = button(tr("Add to queue"), ButtonVariant::Secondary, QStringLiteral("plus"), this);
     m_primary = button(primaryText, ButtonVariant::Primary, QStringLiteral("play"), this);
     header()->addAction(m_queue);
     header()->addAction(m_primary);
@@ -104,7 +105,7 @@ void JobFormPage::refreshAvailability()
     }
     m_primary->setEnabled(m_available);
     m_queue->setEnabled(m_available);
-    m_primary->setToolTip(m_available ? QString() : QStringLiteral("Not available in this build"));
+    m_primary->setToolTip(m_available ? QString() : tr("Not available in this build"));
 }
 
 void JobFormPage::showFormError(const QString& title, const QString& message)
@@ -132,7 +133,7 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
     if (withOpenFolderRow) {
         auto* row = new QWidget(card);
         auto* h = hbox(row, space::lg, QMargins(0, 6, 0, 6));
-        auto* lab = label(QStringLiteral("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
+        auto* lab = label(tr("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
         h->addWidget(lab, 1);
         m_openFolder = new Switch(row);
         m_openFolder->setAccessibleName(lab->text());
@@ -165,23 +166,23 @@ void JobFormPage::submitClicked(bool buildNow)
 {
     clearFormError();
     if (!m_available) {
-        showFormError(QStringLiteral("%1 is not available in this build").arg(m_feature),
-                      QStringLiteral("The engine for this workflow is not part of this build, so nothing was queued."));
+        showFormError(tr("%1 is not available in this build").arg(m_feature),
+                      tr("The engine for this workflow is not part of this build, so nothing was queued."));
         return;
     }
     if (m_options && m_options->hasErrors()) {
-        showFormError(QStringLiteral("Check the job settings"), m_options->errorMessages().join(u' '));
+        showFormError(tr("Check the job settings"), m_options->errorMessages().join(u' '));
         return;
     }
     const QString problem = validateForm();
     if (!problem.isEmpty()) {
-        showFormError(QStringLiteral("Not ready to start"), problem);
+        showFormError(tr("Not ready to start"), problem);
         return;
     }
     auto r = submit(buildNow);
     if (!r.ok()) {
-        showFormError(r.error().code == ErrorCode::Unsupported ? QStringLiteral("Not available in this build")
-                                                              : QStringLiteral("The job was not added"),
+        showFormError(r.error().code == ErrorCode::Unsupported ? tr("Not available in this build")
+                                                              : tr("The job was not added"),
                       r.error().message);
         return;
     }
@@ -201,7 +202,7 @@ void JobFormPage::submitClicked(bool buildNow)
         q.holdQueue(false);
     }
     emit jobSubmitted(id, openOutputWhenDone());
-    emit toastRequested(Tone::Info, buildNow ? QStringLiteral("Started") : QStringLiteral("Added to the queue"),
+    emit toastRequested(Tone::Info, buildNow ? tr("Started") : tr("Added to the queue"),
                         q.record(id) ? q.record(id)->title : QString());
 }
 
@@ -214,8 +215,8 @@ void JobFormPage::setDragHighlight(bool on)
 void JobFormPage::applyDemoState(const QString& name)
 {
     if (name == QLatin1String("error"))
-        showFormError(QStringLiteral("Not enough space on C:"),
-                      QStringLiteral("This image needs 48.5 GB; 34.1 GB is free. Free 14.4 GB or choose another output folder."));
+        showFormError(tr("Not enough space on C:"),
+                      tr("This image needs 48.5 GB; 34.1 GB is free. Free 14.4 GB or choose another output folder."));
 }
 
 void JobFormPage::clearDemoState() { clearFormError(); }
@@ -233,12 +234,12 @@ QString relativeTime(const QDateTime& t)
         return {};
     const qint64 s = t.secsTo(QDateTime::currentDateTime());
     if (s < 60)
-        return QStringLiteral("just now");
+        return tr("just now");
     if (s < 3600)
-        return QStringLiteral("%1 min ago").arg(s / 60);
+        return tr("%1 min ago").arg(s / 60);
     if (s < 86400)
-        return QStringLiteral("%1 h ago").arg(s / 3600);
-    return QStringLiteral("%1 days ago").arg(s / 86400);
+        return tr("%1 h ago").arg(s / 3600);
+    return tr("%1 days ago").arg(s / 86400);
 }
 
 QString driveLabel(const QString& path)
@@ -247,7 +248,7 @@ QString driveLabel(const QString& path)
     QString root = si.rootPath();
     if (root.size() >= 2 && root[1] == u':')
         return root.left(2);
-    return root.isEmpty() ? QStringLiteral("this drive") : root;
+    return root.isEmpty() ? tr("this drive") : root;
 }
 
 } // namespace fw::pages

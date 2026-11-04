@@ -1,4 +1,5 @@
 #include "app/models/JobQueueModel.h"
+#include "app/i18n/I18n.h"
 
 #include "core/FileUtil.h"
 
@@ -9,12 +10,12 @@ QString progressDetailText(const ProgressSnapshot& p)
     QStringList parts;
     if (p.total > 0) {
         if (p.unitIsBytes)
-            parts << QStringLiteral("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
+            parts << tr("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
         else
-            parts << QStringLiteral("%1 of %2").arg(formatCount(p.done), formatCount(p.total));
+            parts << tr("%1 of %2").arg(formatCount(p.done), formatCount(p.total));
     }
     if (p.filesTotal > 0)
-        parts << QStringLiteral("%1 of %2 files").arg(formatCount(p.filesDone), formatCount(p.filesTotal));
+        parts << tr("%1 of %2 files").arg(formatCount(p.filesDone), formatCount(p.filesTotal));
     if (p.unitIsBytes && p.ratePerSec > 0)
         parts << formatRate(p.ratePerSec);
     if (p.etaMs >= 0)
@@ -99,10 +100,10 @@ static QString elapsedText(const JobRecord& r)
     const QDateTime end = r.finished.isValid() ? r.finished : QDateTime::currentDateTime();
     const qint64 s = r.started.secsTo(end);
     if (s < 60)
-        return QStringLiteral("%1 s").arg(s);
+        return tr("%1 s").arg(s);
     if (s < 3600)
-        return QStringLiteral("%1 min %2 s").arg(s / 60).arg(s % 60);
-    return QStringLiteral("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
+        return tr("%1 min %2 s").arg(s / 60).arg(s % 60);
+    return tr("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
 }
 
 QVariant JobQueueModel::data(const QModelIndex& index, int role) const

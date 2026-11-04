@@ -1,4 +1,5 @@
 #include "app/pages/ImageEditorPage.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/pages/HexPreviewSheet.h"
@@ -24,22 +25,22 @@ QString StagedOp::describe() const
 {
     const QString shown = QStringLiteral("/") + imagePath;
     if (op == QLatin1String("add"))
-        return QStringLiteral("Add %1 → %2").arg(nativePath(localPath), shown);
+        return tr("Add %1 → %2").arg(nativePath(localPath), shown);
     if (op == QLatin1String("replace"))
-        return QStringLiteral("Replace %1 with %2").arg(shown, nativePath(localPath));
+        return tr("Replace %1 with %2").arg(shown, nativePath(localPath));
     if (op == QLatin1String("delete"))
-        return QStringLiteral("Delete %1").arg(shown);
+        return tr("Delete %1").arg(shown);
     if (op == QLatin1String("mkdir"))
-        return QStringLiteral("New folder %1").arg(shown);
+        return tr("New folder %1").arg(shown);
     if (op == QLatin1String("rename"))
-        return QStringLiteral("Rename %1 → %2").arg(shown, newName);
+        return tr("Rename %1 → %2").arg(shown, newName);
     return op;
 }
 
 ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
-    : JobFormPage(ctx, queueModel, QStringLiteral("edit"), QStringLiteral("Edit image"),
-                  QStringLiteral("Open an .exfat or .ffpkg image, stage changes and apply them in one job. The original is never lost before the edited image has verified."),
-                  QStringLiteral("Apply changes"), QStringLiteral("Image editing"), parent)
+    : JobFormPage(ctx, queueModel, QStringLiteral("edit"), tr("Edit image"),
+                  tr("Open an .exfat or .ffpkg image, stage changes and apply them in one job. The original is never lost before the edited image has verified."),
+                  tr("Apply changes"), tr("Image editing"), parent)
 {
     m_reader = new ImageTreeReader(this);
     connect(m_reader, &ImageTreeReader::ready, this, &ImageEditorPage::onTree);
@@ -47,14 +48,14 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
 
     auto* source = new Card(this);
     setSourceCard(source);
-    m_badge = new Badge(QStringLiteral("Choose an image"), Tone::Neutral, source);
-    source->setTitle(QStringLiteral("Image"), m_badge);
+    m_badge = new Badge(tr("Choose an image"), Tone::Neutral, source);
+    source->setTitle(tr("Image"), m_badge);
     m_image = new PathField(PathField::Mode::OpenFile, source);
-    m_image->setFilter(QStringLiteral("Images (*.exfat *.ffpkg)"));
-    m_image->setDialogTitle(QStringLiteral("Choose an image to edit"));
-    m_image->setPlaceholder(QStringLiteral(".exfat or .ffpkg"));
+    m_image->setFilter(tr("Images (*.exfat *.ffpkg)"));
+    m_image->setDialogTitle(tr("Choose an image to edit"));
+    m_image->setPlaceholder(tr(".exfat or .ffpkg"));
     m_image->setStartDir(ctx.settings().value(general::keys::kDefaultOutputDir).toString());
-    source->body()->addWidget(field(QStringLiteral("Image file"), m_image, QStringLiteral("Drop an image anywhere on this page. FFPFSC images cannot be edited; convert them first."), source));
+    source->body()->addWidget(field(tr("Image file"), m_image, tr("Drop an image anywhere on this page. FFPFSC images cannot be edited; convert them first."), source));
     m_summary = caption({}, source);
     source->body()->addWidget(m_summary);
     form()->addWidget(source);
@@ -62,14 +63,14 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
 
     auto* treeCard = new Card(this, Card::Variant::Table);
     auto* h = treeCard->header();
-    h->addWidget(heading(QStringLiteral("Contents"), TextStyle::Subtitle, treeCard));
+    h->addWidget(heading(tr("Contents"), TextStyle::Subtitle, treeCard));
     h->addStretch(1);
-    m_btnAddFiles = button(QStringLiteral("Add files…"), ButtonVariant::Secondary, QStringLiteral("file_plus"), treeCard);
-    m_btnAddFolder = button(QStringLiteral("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), treeCard);
-    m_btnReplace = button(QStringLiteral("Replace…"), ButtonVariant::Secondary, QStringLiteral("replace"), treeCard);
-    m_btnMkdir = button(QStringLiteral("New folder"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), treeCard);
-    m_btnRename = button(QStringLiteral("Rename"), ButtonVariant::Secondary, QStringLiteral("edit"), treeCard);
-    m_btnDelete = button(QStringLiteral("Delete"), ButtonVariant::Secondary, QStringLiteral("trash"), treeCard);
+    m_btnAddFiles = button(tr("Add files…"), ButtonVariant::Secondary, QStringLiteral("file_plus"), treeCard);
+    m_btnAddFolder = button(tr("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), treeCard);
+    m_btnReplace = button(tr("Replace…"), ButtonVariant::Secondary, QStringLiteral("replace"), treeCard);
+    m_btnMkdir = button(tr("New folder"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), treeCard);
+    m_btnRename = button(tr("Rename"), ButtonVariant::Secondary, QStringLiteral("edit"), treeCard);
+    m_btnDelete = button(tr("Delete"), ButtonVariant::Secondary, QStringLiteral("trash"), treeCard);
     for (auto* b : {m_btnAddFiles, m_btnAddFolder, m_btnReplace, m_btnMkdir, m_btnRename, m_btnDelete})
         h->addWidget(b);
     connect(m_btnAddFiles, &QPushButton::clicked, this, [this] { addFiles(false); });
@@ -79,7 +80,7 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
     connect(m_btnRename, &QPushButton::clicked, this, &ImageEditorPage::renameSelected);
     connect(m_btnDelete, &QPushButton::clicked, this, &ImageEditorPage::deleteSelected);
     m_treeView = new QTreeWidget(treeCard);
-    m_treeView->setHeaderLabels({QStringLiteral("Name"), QStringLiteral("Size"), QStringLiteral("Modified")});
+    m_treeView->setHeaderLabels({tr("Name"), tr("Size"), tr("Modified")});
     m_treeView->header()->setFixedHeight(32);
     m_treeView->header()->setStretchLastSection(false);
     m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -98,7 +99,7 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
             (void)preview(it->data(0, Qt::UserRole).toString());
     });
     treeCard->body()->addWidget(m_treeView);
-    m_treeEmpty = new EmptyState(QStringLiteral("drive"), QStringLiteral("No image open"), QStringLiteral("Choose an .exfat or .ffpkg image above to browse what it contains."), treeCard);
+    m_treeEmpty = new EmptyState(QStringLiteral("drive"), tr("No image open"), tr("Choose an .exfat or .ffpkg image above to browse what it contains."), treeCard);
     treeCard->body()->addWidget(m_treeEmpty);
     connect(m_treeView, &QTreeWidget::itemSelectionChanged, this, [this] {
         bool dir = false;
@@ -111,11 +112,11 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
     form()->addWidget(treeCard);
 
     m_stagedCard = new Card(this);
-    m_clear = button(QStringLiteral("Clear"), ButtonVariant::Subtle, QStringLiteral("close"), m_stagedCard);
+    m_clear = button(tr("Clear"), ButtonVariant::Subtle, QStringLiteral("close"), m_stagedCard);
     setButtonSmall(m_clear, true);
-    m_stagedCard->setTitle(QStringLiteral("Staged changes"), m_clear);
+    m_stagedCard->setTitle(tr("Staged changes"), m_clear);
     m_stagedCard->body()->setSpacing(0);
-    m_stagedCaption = caption(QStringLiteral("Nothing staged. Changes are collected here and applied together; nothing touches the image until you apply."), m_stagedCard);
+    m_stagedCaption = caption(tr("Nothing staged. Changes are collected here and applied together; nothing touches the image until you apply."), m_stagedCard);
     m_stagedCard->body()->addWidget(m_stagedCaption);
     auto* stagedList = new QWidget(m_stagedCard);
     m_stagedLayout = vbox(stagedList, 0);
@@ -123,23 +124,23 @@ ImageEditorPage::ImageEditorPage(AppContext& ctx, JobQueueModel& queueModel, QWi
     connect(m_clear, &QPushButton::clicked, this, &ImageEditorPage::clearStaged);
     form()->addWidget(m_stagedCard);
 
-    addJobOptionsCard(QStringLiteral("Job settings"), {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance")}, {}, QStringLiteral("All build settings"), false);
+    addJobOptionsCard(tr("Job settings"), {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance")}, {}, tr("All build settings"), false);
 
     auto* conv = new Card(this);
-    conv->setTitle(QStringLiteral("Convert to…"));
+    conv->setTitle(tr("Convert to…"));
     m_convertFormat = new Segmented(conv);
     m_convertFormat->addSegment(QStringLiteral("exFAT"), QStringLiteral("drive"), jobs::kFormatExfat);
-    m_convertFormat->addSegment(QStringLiteral("FFPKG (UFS2)"), QStringLiteral("package"), jobs::kFormatFfpkg);
+    m_convertFormat->addSegment(tr("FFPKG (UFS2)"), QStringLiteral("package"), jobs::kFormatFfpkg);
     m_convertFormat->addSegment(QStringLiteral("FFPFSC"), QStringLiteral("compress"), jobs::kFormatFfpfsc);
-    m_convertFormat->setAccessibleName(QStringLiteral("Target format"));
-    conv->body()->addWidget(field(QStringLiteral("Target format"), m_convertFormat, QStringLiteral("The image is read back, written in the new format next to it and verified; the original stays."), conv));
+    m_convertFormat->setAccessibleName(tr("Target format"));
+    conv->body()->addWidget(field(tr("Target format"), m_convertFormat, tr("The image is read back, written in the new format next to it and verified; the original stays."), conv));
     m_convertOutput = new PathField(PathField::Mode::SaveFile, conv);
-    m_convertOutput->setDialogTitle(QStringLiteral("Save the converted image as"));
-    conv->body()->addWidget(field(QStringLiteral("Save as"), m_convertOutput, QStringLiteral("Empty: next to the source with the new extension."), conv));
+    m_convertOutput->setDialogTitle(tr("Save the converted image as"));
+    conv->body()->addWidget(field(tr("Save as"), m_convertOutput, tr("Empty: next to the source with the new extension."), conv));
     auto* crow = new QWidget(conv);
     auto* ch = hbox(crow, space::sm);
     ch->addStretch(1);
-    m_convert = button(QStringLiteral("Convert"), ButtonVariant::Secondary, QStringLiteral("convert"), crow);
+    m_convert = button(tr("Convert"), ButtonVariant::Secondary, QStringLiteral("convert"), crow);
     ch->addWidget(m_convert);
     conv->body()->addWidget(crow);
     connect(m_convert, &QPushButton::clicked, this, &ImageEditorPage::convert);
@@ -165,7 +166,7 @@ void ImageEditorPage::open(const QString& image)
     }
     const QString kind = jobs::imageEditKind(image);
     setRequiredKinds(kind.isEmpty() ? QStringList{} : QStringList{kind});
-    m_badge->set(QStringLiteral("Reading…"), Tone::Info);
+    m_badge->set(tr("Reading…"), Tone::Info);
     m_badge->setIconName(QStringLiteral("loader"));
     m_reader->read(image);
 }
@@ -174,20 +175,20 @@ void ImageEditorPage::onTree(const ImageTreeResult& r)
 {
     m_tree = r;
     if (!r.error.isEmpty()) {
-        m_badge->set(QStringLiteral("Cannot open"), Tone::Err);
+        m_badge->set(tr("Cannot open"), Tone::Err);
         m_badge->setIconName(defaultBadgeIcon(Tone::Err));
         m_image->setError(r.error);
         m_summary->clear();
     } else {
         m_image->setError({});
-        m_badge->set(r.problems.isEmpty() ? QStringLiteral("Ready to edit") : QStringLiteral("Damaged"), r.problems.isEmpty() ? Tone::Ok : Tone::Err);
+        m_badge->set(r.problems.isEmpty() ? tr("Ready to edit") : tr("Damaged"), r.problems.isEmpty() ? Tone::Ok : Tone::Err);
         m_badge->setIconName(defaultBadgeIcon(m_badge->tone())); // drop the "Reading…" spinner glyph
-        QStringList parts{r.format == QLatin1String("exfat") ? QStringLiteral("exFAT") : QStringLiteral("FFPKG (UFS2)")};
+        QStringList parts{r.format == QLatin1String("exfat") ? QStringLiteral("exFAT") : tr("FFPKG (UFS2)")};
         if (!r.label.isEmpty())
-            parts << QStringLiteral("label %1").arg(r.label);
-        parts << formatBytes(r.totalBytes) << QStringLiteral("%1 files").arg(formatCount(r.fileCount)) << QStringLiteral("%1 folders").arg(formatCount(r.dirCount));
+            parts << tr("label %1").arg(r.label);
+        parts << formatBytes(r.totalBytes) << tr("%1 files").arg(formatCount(r.fileCount)) << tr("%1 folders").arg(formatCount(r.dirCount));
         if (!r.problems.isEmpty())
-            parts << QStringLiteral("%1 problem%2: %3").arg(r.problems.size()).arg(r.problems.size() == 1 ? QString() : QStringLiteral("s")).arg(r.problems.first());
+            parts << tr("%1 problem%2: %3").arg(r.problems.size()).arg(r.problems.size() == 1 ? QString() : tr("s")).arg(r.problems.first());
         else if (!r.warnings.isEmpty())
             parts << r.warnings.first();
         m_summary->setText(parts.join(QStringLiteral(" · ")));
@@ -280,7 +281,7 @@ void ImageEditorPage::rebuildStaged()
         t->setFont(font::mono());
         setTextColor(t, color::fg_1);
         h->addWidget(t, 1);
-        auto* x = new IconButton(QStringLiteral("close"), QStringLiteral("Remove this change"), IconButton::Size::Small, row);
+        auto* x = new IconButton(QStringLiteral("close"), tr("Remove this change"), IconButton::Size::Small, row);
         connect(x, &QToolButton::clicked, this, [this, i] {
             if (i < m_ops.size())
                 m_ops.erase(m_ops.begin() + long(i));
@@ -291,7 +292,7 @@ void ImageEditorPage::rebuildStaged()
         if (i + 1 < m_ops.size())
             m_stagedLayout->addWidget(hairline(this));
     }
-    primaryButton()->setText(m_ops.empty() ? QStringLiteral("Apply changes") : QStringLiteral("Apply %1 change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s")));
+    primaryButton()->setText(m_ops.empty() ? tr("Apply changes") : tr("Apply %1 change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : tr("s")));
     emit statusContextChanged();
 }
 
@@ -302,13 +303,13 @@ void ImageEditorPage::addFiles(bool folder)
     if (!target.isEmpty() && !dir)
         target = target.contains(u'/') ? target.section(u'/', 0, -2) : QString();
     if (folder) {
-        const QString d = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose a folder to add"));
+        const QString d = QFileDialog::getExistingDirectory(window(), tr("Choose a folder to add"));
         if (d.isEmpty())
             return;
         stage({QStringLiteral("add"), target.isEmpty() ? QFileInfo(d).fileName() : target + u'/' + QFileInfo(d).fileName(), d, {}});
         return;
     }
-    for (const QString& f : QFileDialog::getOpenFileNames(window(), QStringLiteral("Choose files to add")))
+    for (const QString& f : QFileDialog::getOpenFileNames(window(), tr("Choose files to add")))
         stage({QStringLiteral("add"), target.isEmpty() ? QFileInfo(f).fileName() : target + u'/' + QFileInfo(f).fileName(), f, {}});
 }
 
@@ -318,7 +319,7 @@ void ImageEditorPage::replaceSelected()
     const QString p = selectedPath(&dir);
     if (p.isEmpty() || dir)
         return;
-    const QString f = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the new content for %1").arg(p));
+    const QString f = QFileDialog::getOpenFileName(window(), tr("Choose the new content for %1").arg(p));
     if (!f.isEmpty())
         stage({QStringLiteral("replace"), p, f, {}});
 }
@@ -336,11 +337,11 @@ void ImageEditorPage::newFolder()
     QString target = selectedPath(&dir);
     if (!target.isEmpty() && !dir)
         target = target.contains(u'/') ? target.section(u'/', 0, -2) : QString();
-    auto* s = new Sheet(window(), QStringLiteral("New folder"), Sheet::Icon::None);
-    auto* name = textInput(QStringLiteral("Folder name"), true, s);
-    s->body()->addWidget(field(target.isEmpty() ? QStringLiteral("Name (in the image root)") : QStringLiteral("Name (in /%1)").arg(target), name, {}, s));
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
+    auto* s = new Sheet(window(), tr("New folder"), Sheet::Icon::None);
+    auto* name = textInput(tr("Folder name"), true, s);
+    s->body()->addWidget(field(target.isEmpty() ? tr("Name (in the image root)") : tr("Name (in /%1)").arg(target), name, {}, s));
+    s->addButton(tr("Cancel"), Sheet::Role::Safe);
+    s->addButton(tr("Stage"), Sheet::Role::Primary);
     name->setFocus();
     if (s->exec() != 1)
         return;
@@ -355,12 +356,12 @@ void ImageEditorPage::renameSelected()
     const QString p = selectedPath();
     if (p.isEmpty())
         return;
-    auto* s = new Sheet(window(), QStringLiteral("Rename"), Sheet::Icon::None);
+    auto* s = new Sheet(window(), tr("Rename"), Sheet::Icon::None);
     auto* name = textInput({}, true, s);
     name->setText(p.section(u'/', -1));
-    s->body()->addWidget(field(QStringLiteral("New name"), name, {}, s));
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
+    s->body()->addWidget(field(tr("New name"), name, {}, s));
+    s->addButton(tr("Cancel"), Sheet::Role::Safe);
+    s->addButton(tr("Stage"), Sheet::Role::Primary);
     name->setFocus();
     name->selectAll();
     if (s->exec() != 1)
@@ -380,12 +381,12 @@ void ImageEditorPage::showTreeMenu(const QPoint& pos)
     const bool dir = it->data(0, Qt::UserRole + 1).toBool();
     const QString path = it->data(0, Qt::UserRole).toString();
     QMenu menu(this);
-    QAction* prev = menu.addAction(QStringLiteral("Preview…"), this, [this, path] { (void)preview(path); });
+    QAction* prev = menu.addAction(tr("Preview…"), this, [this, path] { (void)preview(path); });
     prev->setEnabled(!dir);
     menu.addSeparator();
-    menu.addAction(QStringLiteral("Replace…"), this, &ImageEditorPage::replaceSelected)->setEnabled(m_btnReplace->isEnabled());
-    menu.addAction(QStringLiteral("Rename"), this, &ImageEditorPage::renameSelected)->setEnabled(m_btnRename->isEnabled());
-    QAction* del = menu.addAction(QStringLiteral("Delete"), this, &ImageEditorPage::deleteSelected);
+    menu.addAction(tr("Replace…"), this, &ImageEditorPage::replaceSelected)->setEnabled(m_btnReplace->isEnabled());
+    menu.addAction(tr("Rename"), this, &ImageEditorPage::renameSelected)->setEnabled(m_btnRename->isEnabled());
+    QAction* del = menu.addAction(tr("Delete"), this, &ImageEditorPage::deleteSelected);
     del->setEnabled(m_btnDelete->isEnabled());
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));
 }
@@ -465,11 +466,11 @@ QJsonArray ImageEditorPage::operationsJson() const
 QString ImageEditorPage::validateForm()
 {
     if (m_image->path().isEmpty())
-        return QStringLiteral("Open an image first.");
+        return tr("Open an image first.");
     if (!m_tree.error.isEmpty())
         return m_tree.error;
     if (m_ops.empty())
-        return QStringLiteral("Stage at least one change.");
+        return tr("Stage at least one change.");
     return {};
 }
 
@@ -482,10 +483,10 @@ Result<QString> ImageEditorPage::submit(bool)
             ++deletes;
         lines << o.describe().toHtmlEscaped();
     }
-    if (!Sheet::confirm(window(), QStringLiteral("Apply %1 change%2 to %3?").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s")).arg(QFileInfo(m_image->path()).fileName().toHtmlEscaped()),
-                        Sheet::monoSpan(lines.join(QStringLiteral("<br>"))) + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
-                        QStringLiteral("Keep editing"), QStringLiteral("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
-        return Error(ErrorCode::Cancelled, QStringLiteral("Not applied."));
+    if (!Sheet::confirm(window(), tr("Apply %1 change%2 to %3?").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : tr("s")).arg(QFileInfo(m_image->path()).fileName().toHtmlEscaped()),
+                        Sheet::monoSpan(lines.join(QStringLiteral("<br>"))) + (deletes > 0 ? tr("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
+                        tr("Keep editing"), tr("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
+        return Error(ErrorCode::Cancelled, tr("Not applied."));
     auto r = jobs::submitImageEdit(m_ctx, m_image->path(), operationsJson(), options()->overrides());
     if (r.ok()) {
         m_ops.clear();
@@ -506,17 +507,17 @@ void ImageEditorPage::convert()
         out = fi.absolutePath() + u'/' + fi.completeBaseName() + jobs::outputExtension(fmt);
     }
     if (QFileInfo::exists(out)) {
-        if (!Sheet::confirm(window(), QStringLiteral("Replace the existing image?"), QStringLiteral("%1 exists. It is set aside while the new image is written and restored if the conversion fails.").arg(Sheet::monoSpan(nativePath(out))),
-                            QStringLiteral("Cancel"), QStringLiteral("Replace")))
+        if (!Sheet::confirm(window(), tr("Replace the existing image?"), tr("%1 exists. It is set aside while the new image is written and restored if the conversion fails.").arg(Sheet::monoSpan(nativePath(out))),
+                            tr("Cancel"), tr("Replace")))
             return;
     }
     auto r = jobs::submitConvert(m_ctx, image, fmt, out, options()->overrides());
     if (!r.ok()) {
-        showFormError(QStringLiteral("Conversion not started"), r.error().message);
+        showFormError(tr("Conversion not started"), r.error().message);
         return;
     }
     m_ctx.queue().holdQueue(false);
-    emit toastRequested(Tone::Info, QStringLiteral("Conversion queued"), nativePath(out));
+    emit toastRequested(Tone::Info, tr("Conversion queued"), nativePath(out));
 }
 
 bool ImageEditorPage::acceptsDrop(const QList<QUrl>& urls) const
@@ -546,7 +547,7 @@ QString ImageEditorPage::statusContext() const
 {
     if (m_tree.nodes.empty())
         return {};
-    return QStringLiteral("%1 · %2 staged").arg(QFileInfo(m_tree.image).fileName()).arg(m_ops.size());
+    return tr("%1 · %2 staged").arg(QFileInfo(m_tree.image).fileName()).arg(m_ops.size());
 }
 
 } // namespace fw::pages

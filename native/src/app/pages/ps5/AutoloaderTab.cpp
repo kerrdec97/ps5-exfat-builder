@@ -1,4 +1,5 @@
 #include "app/pages/ps5/AutoloaderTab.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/ui/Sheet.h"
@@ -30,20 +31,20 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
 {
     auto* l = vbox(this, space::lg);
     auto* info = new InfoBar(Tone::Info, this);
-    info->setMessage(QStringLiteral("ps5_autoloader runs the payloads listed in autoload.txt after the exploit, looking on USB drives, "
+    info->setMessage(tr("ps5_autoloader runs the payloads listed in autoload.txt after the exploit, looking on USB drives, "
                                     "then /data, then savedata. This edits a folder on this PC: copy it to the console yourself."));
     l->addWidget(info);
 
     auto* pick = new Card(this);
-    m_badge = new Badge(QStringLiteral("No folder"), Tone::Neutral, pick);
+    m_badge = new Badge(tr("No folder"), Tone::Neutral, pick);
     m_badge->setIconName({});
-    pick->setTitle(QStringLiteral("ps5_autoloader folder"), m_badge);
+    pick->setTitle(tr("ps5_autoloader folder"), m_badge);
     auto* row = new QWidget(pick);
     auto* rh = hbox(row, space::sm);
     m_folder = new PathField(PathField::Mode::Directory, row);
-    m_folder->setDialogTitle(QStringLiteral("Choose the ps5_autoloader folder"));
-    m_folder->setPlaceholder(QStringLiteral("…/ps5_autoloader"));
-    m_reload = button(QStringLiteral("Reload"), ButtonVariant::Secondary, QStringLiteral("refresh"), row);
+    m_folder->setDialogTitle(tr("Choose the ps5_autoloader folder"));
+    m_folder->setPlaceholder(tr("…/ps5_autoloader"));
+    m_reload = button(tr("Reload"), ButtonVariant::Secondary, QStringLiteral("refresh"), row);
     rh->addWidget(m_folder, 1);
     rh->addWidget(m_reload, 0, Qt::AlignTop);
     pick->body()->addWidget(row);
@@ -52,12 +53,12 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     auto* edit = new Card(this, Card::Variant::Table);
     auto* h = edit->header();
     h->addWidget(heading(QStringLiteral("autoload.txt"), TextStyle::Subtitle, edit));
-    auto* hint = new ElideLabel(QStringLiteral("One .elf, .bin or .js per line · !1000 waits 1 s · # comment"), Qt::ElideRight, edit);
+    auto* hint = new ElideLabel(tr("One .elf, .bin or .js per line · !1000 waits 1 s · # comment"), Qt::ElideRight, edit);
     hint->setFont(fontFor(TextStyle::Caption));
     setTextColor(hint, color::fg_3);
     h->addWidget(hint, 1);
-    m_sleep = button(QStringLiteral("Insert !sleep…"), ButtonVariant::Secondary, QStringLiteral("timer"), edit);
-    m_save = button(QStringLiteral("Save autoload.txt"), ButtonVariant::Primary, QStringLiteral("save"), edit);
+    m_sleep = button(tr("Insert !sleep…"), ButtonVariant::Secondary, QStringLiteral("timer"), edit);
+    m_save = button(tr("Save autoload.txt"), ButtonVariant::Primary, QStringLiteral("save"), edit);
     h->addWidget(m_sleep);
     h->addWidget(m_save);
     m_editor = new QPlainTextEdit(edit);
@@ -66,7 +67,7 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_editor->setTabChangesFocus(true);
     m_editor->setMinimumHeight(12 * font::lineMono + 2 * space::md);
     m_editor->setAccessibleName(QStringLiteral("autoload.txt"));
-    m_editor->setPlaceholderText(QStringLiteral("Choose the ps5_autoloader folder first."));
+    m_editor->setPlaceholderText(tr("Choose the ps5_autoloader folder first."));
     edit->body()->addWidget(m_editor);
     auto* f = edit->footer();
     m_validation = new MessageRow(edit);
@@ -78,13 +79,13 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     l->addWidget(edit);
 
     auto* files = new Card(this);
-    m_add = button(QStringLiteral("Add payload…"), ButtonVariant::Secondary, QStringLiteral("plus"), files);
-    files->setTitle(QStringLiteral("Payloads in the folder"), m_add);
-    files->body()->addWidget(caption(QStringLiteral("Click a name to add it on a new line below the cursor. Add payload copies a file into the folder."), files));
+    m_add = button(tr("Add payload…"), ButtonVariant::Secondary, QStringLiteral("plus"), files);
+    files->setTitle(tr("Payloads in the folder"), m_add);
+    files->body()->addWidget(caption(tr("Click a name to add it on a new line below the cursor. Add payload copies a file into the folder."), files));
     m_chips = new QWidget(files);
     m_chipLayout = new FlowLayout(m_chips, space::sm, space::sm);
     files->body()->addWidget(m_chips);
-    m_noChips = caption(QStringLiteral("No .elf, .bin or .js files in the folder."), files);
+    m_noChips = caption(tr("No .elf, .bin or .js files in the folder."), files);
     files->body()->addWidget(m_noChips);
     l->addWidget(files);
     l->addStretch(1);
@@ -92,9 +93,9 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     connect(m_folder, &PathField::pathChanged, this, [this](const QString& p) {
         if (m_demo)
             return;
-        if (m_dirty && !Sheet::confirm(window(), QStringLiteral("Discard the unsaved changes?"),
-                                       QStringLiteral("autoload.txt was edited and not saved."), QStringLiteral("Keep editing"),
-                                       QStringLiteral("Discard"), true, Sheet::Icon::Warning)) {
+        if (m_dirty && !Sheet::confirm(window(), tr("Discard the unsaved changes?"),
+                                       tr("autoload.txt was edited and not saved."), tr("Keep editing"),
+                                       tr("Discard"), true, Sheet::Icon::Warning)) {
             m_folder->blockSignals(true); // keep editing the folder the text belongs to
             m_folder->setPath(m_current);
             m_folder->blockSignals(false);
@@ -103,9 +104,9 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
         openFolder(p);
     });
     connect(m_reload, &QPushButton::clicked, this, [this] {
-        if (m_dirty && !Sheet::confirm(window(), QStringLiteral("Discard the unsaved changes?"),
-                                       QStringLiteral("Reloading reads autoload.txt from the folder again."), QStringLiteral("Keep editing"),
-                                       QStringLiteral("Reload"), true, Sheet::Icon::Warning))
+        if (m_dirty && !Sheet::confirm(window(), tr("Discard the unsaved changes?"),
+                                       tr("Reloading reads autoload.txt from the folder again."), tr("Keep editing"),
+                                       tr("Reload"), true, Sheet::Icon::Warning))
             return;
         load();
     });
@@ -156,8 +157,8 @@ void AutoloaderTab::load()
         m_editor->blockSignals(false);
         m_dirty = false;
         setFiles({});
-        m_folder->setError(dir.isEmpty() ? QString() : QStringLiteral("The folder does not exist."));
-        m_badge->set(dir.isEmpty() ? QStringLiteral("No folder") : QStringLiteral("Folder missing"), dir.isEmpty() ? Tone::Neutral : Tone::Err);
+        m_folder->setError(dir.isEmpty() ? QString() : tr("The folder does not exist."));
+        m_badge->set(dir.isEmpty() ? tr("No folder") : tr("Folder missing"), dir.isEmpty() ? Tone::Neutral : Tone::Err);
         m_saved->clear();
         return;
     }
@@ -172,15 +173,15 @@ void AutoloaderTab::load()
                 return;
             if (!r.ok()) {
                 m_folder->setError(r.error().message);
-                m_badge->set(QStringLiteral("Not loaded"), Tone::Err);
+                m_badge->set(tr("Not loaded"), Tone::Err);
                 return;
             }
             setFiles(r->payloads);
             m_editor->setPlainText(r->file.text);
             m_dirty = !r->file.existed; // the header is new: saving creates the file
-            m_badge->set(r->file.existed ? QStringLiteral("autoload.txt loaded") : QStringLiteral("New autoload.txt"),
+            m_badge->set(r->file.existed ? tr("autoload.txt loaded") : tr("New autoload.txt"),
                          r->file.existed ? Tone::Ok : Tone::Info);
-            m_saved->setText(r->file.existed ? QString() : QStringLiteral("Not saved yet: the default header was created."));
+            m_saved->setText(r->file.existed ? QString() : tr("Not saved yet: the default header was created."));
             revalidate();
         });
 }
@@ -200,9 +201,9 @@ void AutoloaderTab::setFiles(const QStringList& files)
         auto* insert = button(name, ButtonVariant::Subtle, QStringLiteral("file"), row);
         setButtonSmall(insert, true);
         insert->setFont(font::mono());
-        insert->setToolTip(QStringLiteral("Add %1 below the cursor's line").arg(name));
-        auto* del = new IconButton(QStringLiteral("trash"), QStringLiteral("Delete %1 from the folder").arg(name), IconButton::Size::Tiny, row);
-        del->setToolTip(QStringLiteral("Delete %1 from the folder").arg(name));
+        insert->setToolTip(tr("Add %1 below the cursor's line").arg(name));
+        auto* del = new IconButton(QStringLiteral("trash"), tr("Delete %1 from the folder").arg(name), IconButton::Size::Tiny, row);
+        del->setToolTip(tr("Delete %1 from the folder").arg(name));
         ch->addWidget(insert);
         ch->addWidget(del);
         chip->body()->addWidget(row);
@@ -240,15 +241,15 @@ void AutoloaderTab::insertSleepLine(int ms)
 
 void AutoloaderTab::askInsertSleep()
 {
-    auto* s = new Sheet(window(), QStringLiteral("Insert a sleep"), Sheet::Icon::None);
+    auto* s = new Sheet(window(), tr("Insert a sleep"), Sheet::Icon::None);
     auto* ms = new QSpinBox(s);
     ms->setRange(100, 60000);
     ms->setSingleStep(500);
     ms->setValue(5000);
     ms->setSuffix(QStringLiteral(" ms"));
-    s->body()->addWidget(field(QStringLiteral("Wait"), ms, QStringLiteral("5000 ms = 5 seconds. Added as !<ms> below the cursor's line."), s));
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Insert"), Sheet::Role::Primary);
+    s->body()->addWidget(field(tr("Wait"), ms, tr("5000 ms = 5 seconds. Added as !<ms> below the cursor's line."), s));
+    s->addButton(tr("Cancel"), Sheet::Role::Safe);
+    s->addButton(tr("Insert"), Sheet::Role::Primary);
     ms->setFocus();
     ms->selectAll();
     if (s->exec() == 1)
@@ -263,13 +264,13 @@ void AutoloaderTab::revalidate()
     if (!hasFolder && text.isEmpty())
         m_validation->clear();
     else if (!v.errors.isEmpty())
-        m_validation->set(QStringLiteral("%1 problem%2: %3").arg(v.errors.size()).arg(v.errors.size() == 1 ? QString() : QStringLiteral("s")).arg(v.errors.first()), Tone::Err);
+        m_validation->set(tr("%1 problem%2: %3").arg(v.errors.size()).arg(v.errors.size() == 1 ? QString() : tr("s")).arg(v.errors.first()), Tone::Err);
     else if (!v.warnings.isEmpty())
-        m_validation->set(v.warnings.first() + (v.warnings.size() > 1 ? QStringLiteral(" (+%1 more)").arg(v.warnings.size() - 1) : QString()), Tone::Warn);
+        m_validation->set(v.warnings.first() + (v.warnings.size() > 1 ? tr(" (+%1 more)").arg(v.warnings.size() - 1) : QString()), Tone::Warn);
     else
-        m_validation->set(m_dirty ? QStringLiteral("Looks good · unsaved changes") : QStringLiteral("Looks good"), Tone::Ok);
+        m_validation->set(m_dirty ? tr("Looks good · unsaved changes") : tr("Looks good"), Tone::Ok);
     m_validation->setToolTip((v.errors + v.warnings).join(u'\n'));
-    m_counts->setText(QStringLiteral("%1 payload%2 · %3 sleep%4").arg(v.payloads).arg(v.payloads == 1 ? QString() : QStringLiteral("s")).arg(v.sleeps).arg(v.sleeps == 1 ? QString() : QStringLiteral("s")));
+    m_counts->setText(tr("%1 payload%2 · %3 sleep%4").arg(v.payloads).arg(v.payloads == 1 ? QString() : tr("s")).arg(v.sleeps).arg(v.sleeps == 1 ? QString() : tr("s")));
     const bool ready = hasFolder && !isBusy();
     m_save->setEnabled(ready);
     m_sleep->setEnabled(hasFolder && !isBusy());
@@ -285,9 +286,9 @@ void AutoloaderTab::save()
         QStringList shown;
         for (const QString& e : v.errors.mid(0, 4))
             shown << e.toHtmlEscaped();
-        if (!Sheet::confirm(window(), QStringLiteral("Save autoload.txt with problems?"),
-                            QStringLiteral("The autoloader would stumble on these lines:<br>%1").arg(shown.join(QStringLiteral("<br>"))),
-                            QStringLiteral("Keep editing"), QStringLiteral("Save anyway"), false, Sheet::Icon::Warning))
+        if (!Sheet::confirm(window(), tr("Save autoload.txt with problems?"),
+                            tr("The autoloader would stumble on these lines:<br>%1").arg(shown.join(QStringLiteral("<br>"))),
+                            tr("Keep editing"), tr("Save anyway"), false, Sheet::Icon::Warning))
             return;
     }
     saveNow();
@@ -302,7 +303,7 @@ void AutoloaderTab::saveNow()
     runLocal<al::SaveResult>([dir, text](const CancellationToken&) { return al::save(dir, text); },
                              [this, dir](const Result<al::SaveResult>& r) {
                                  if (!r.ok()) {
-                                     emit toastRequested(Tone::Err, QStringLiteral("autoload.txt not saved"), r.error().message);
+                                     emit toastRequested(Tone::Err, tr("autoload.txt not saved"), r.error().message);
                                      return;
                                  }
                                  if (dir != folder())
@@ -317,31 +318,31 @@ void AutoloaderTab::saveNow()
                                      m_editor->setTextCursor(c);
                                      m_dirty = false;
                                  }
-                                 m_badge->set(QStringLiteral("Saved"), Tone::Ok);
-                                 m_saved->setText(!r->changed ? QStringLiteral("Already up to date.")
-                                                  : r->backupPath.isEmpty() ? QStringLiteral("Saved.")
-                                                                            : QStringLiteral("Saved; the previous file is %1.").arg(QFileInfo(r->backupPath).fileName()));
+                                 m_badge->set(tr("Saved"), Tone::Ok);
+                                 m_saved->setText(!r->changed ? tr("Already up to date.")
+                                                  : r->backupPath.isEmpty() ? tr("Saved.")
+                                                                            : tr("Saved; the previous file is %1.").arg(QFileInfo(r->backupPath).fileName()));
                                  revalidate();
-                                 emit toastRequested(Tone::Ok, QStringLiteral("autoload.txt saved"), nativePath(r->path));
+                                 emit toastRequested(Tone::Ok, tr("autoload.txt saved"), nativePath(r->path));
                              });
 }
 
 void AutoloaderTab::addPayload()
 {
-    const QString src = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose a payload to add"), QString(),
-                                                     QStringLiteral("Payloads (*.elf *.bin *.js);;All files (*)"));
+    const QString src = QFileDialog::getOpenFileName(window(), tr("Choose a payload to add"), QString(),
+                                                     tr("Payloads (*.elf *.bin *.js);;All files (*)"));
     if (src.isEmpty())
         return;
     const QString name = QFileInfo(src).fileName();
     if (!al::isPayloadName(name)) {
-        Sheet::message(window(), QStringLiteral("Not a payload"), QStringLiteral("Only .elf, .bin and .js files can be autoloaded."), Sheet::Icon::Warning);
+        Sheet::message(window(), tr("Not a payload"), tr("Only .elf, .bin and .js files can be autoloaded."), Sheet::Icon::Warning);
         return;
     }
     bool overwrite = false;
     if (QFileInfo::exists(QDir(folder()).filePath(name))) {
-        if (!Sheet::confirm(window(), QStringLiteral("Replace %1?").arg(name.toHtmlEscaped()),
-                            QStringLiteral("%1 is already in the folder. Replace it with the chosen file?").arg(Sheet::monoSpan(name)),
-                            QStringLiteral("Cancel"), QStringLiteral("Replace"), true, Sheet::Icon::Warning))
+        if (!Sheet::confirm(window(), tr("Replace %1?").arg(name.toHtmlEscaped()),
+                            tr("%1 is already in the folder. Replace it with the chosen file?").arg(Sheet::monoSpan(name)),
+                            tr("Cancel"), tr("Replace"), true, Sheet::Icon::Warning))
             return;
         overwrite = true;
     }
@@ -360,23 +361,23 @@ void AutoloaderTab::addPayloadFile(const QString& source, bool overwrite)
         },
         [this](const Result<QStringList>& r) {
             if (!r.ok()) {
-                emit toastRequested(Tone::Err, QStringLiteral("Payload not added"), r.error().message);
+                emit toastRequested(Tone::Err, tr("Payload not added"), r.error().message);
                 return;
             }
             const QString name = r->first();
             setFiles(r->mid(1));
             insertPayloadLine(name);
-            emit toastRequested(Tone::Ok, QStringLiteral("%1 added").arg(name), QStringLiteral("Copied into the folder and added to autoload.txt; save to keep the line."));
+            emit toastRequested(Tone::Ok, tr("%1 added").arg(name), tr("Copied into the folder and added to autoload.txt; save to keep the line."));
         });
 }
 
 void AutoloaderTab::askDelete(const QString& fileName)
 {
-    if (!Sheet::confirm(window(), QStringLiteral("Delete %1?").arg(fileName.toHtmlEscaped()),
-                        QStringLiteral("%1 is removed from the folder (to the recycle bin when the system has one), and its lines in "
+    if (!Sheet::confirm(window(), tr("Delete %1?").arg(fileName.toHtmlEscaped()),
+                        tr("%1 is removed from the folder (to the recycle bin when the system has one), and its lines in "
                                        "autoload.txt with the sleeps right after them are taken out of the editor.")
                             .arg(Sheet::monoSpan(fileName)),
-                        QStringLiteral("Keep"), QStringLiteral("Delete"), true, Sheet::Icon::Warning))
+                        tr("Keep"), tr("Delete"), true, Sheet::Icon::Warning))
         return;
     deletePayloadFile(fileName);
 }
@@ -399,7 +400,7 @@ void AutoloaderTab::deletePayloadFile(const QString& fileName)
         },
         [this, fileName](const Result<Deleted>& r) {
             if (!r.ok()) {
-                emit toastRequested(Tone::Err, QStringLiteral("%1 not deleted").arg(fileName), r.error().message);
+                emit toastRequested(Tone::Err, tr("%1 not deleted").arg(fileName), r.error().message);
                 return;
             }
             setFiles(r->files);
@@ -410,9 +411,9 @@ void AutoloaderTab::deletePayloadFile(const QString& fileName)
                 c.select(QTextCursor::Document);
                 c.insertText(after);
             }
-            emit toastRequested(Tone::Ok, QStringLiteral("%1 deleted").arg(fileName),
-                                r->trashed ? QStringLiteral("Moved to the recycle bin. Save autoload.txt to keep the edited list.")
-                                           : QStringLiteral("Save autoload.txt to keep the edited list."));
+            emit toastRequested(Tone::Ok, tr("%1 deleted").arg(fileName),
+                                r->trashed ? tr("Moved to the recycle bin. Save autoload.txt to keep the edited list.")
+                                           : tr("Save autoload.txt to keep the edited list."));
         });
 }
 
@@ -426,7 +427,7 @@ void AutoloaderTab::applyDemo()
     m_folder->setError({});
     setFiles({QStringLiteral("elfldr.elf"), QStringLiteral("ftpsrv.elf"), QStringLiteral("kstuff.elf"), QStringLiteral("shadowmountplus.elf")});
     m_editor->setPlainText(al::defaultHeader() + QStringLiteral("elfldr.elf\n!1000\nkstuff.elf\n!3000\nftpsrv.elf\nshadowmountplus.elf\n"));
-    m_badge->set(QStringLiteral("autoload.txt loaded"), Tone::Ok);
+    m_badge->set(tr("autoload.txt loaded"), Tone::Ok);
     m_saved->clear();
     revalidate();
 }

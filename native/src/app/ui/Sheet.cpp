@@ -1,4 +1,5 @@
 #include "app/ui/Sheet.h"
+#include "app/i18n/I18n.h"
 
 #include "app/ui/Icons.h"
 
@@ -305,7 +306,7 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
         col->addLayout(links);
     }
     h->addLayout(col, 1);
-    auto* close = new IconButton(QStringLiteral("close"), QStringLiteral("Dismiss"), IconButton::Size::Tiny, t);
+    auto* close = new IconButton(QStringLiteral("close"), tr("Dismiss"), IconButton::Size::Tiny, t);
     connect(close, &QToolButton::clicked, this, [this, t] { remove(t); });
     h->addWidget(close, 0, Qt::AlignTop);
     t->setAttribute(Qt::WA_Hover);

@@ -1,4 +1,5 @@
 #include "app/services/JobSubmit.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "core/Paths.h"
@@ -56,8 +57,8 @@ QStringList missingKinds(const AppContext& ctx, const QStringList& kinds)
 
 Error unavailable(const QString& kind)
 {
-    return Error(ErrorCode::Unsupported, QStringLiteral("This feature is not available in this build."),
-                 QStringLiteral("job kind %1 is not registered").arg(kind));
+    return Error(ErrorCode::Unsupported, tr("This feature is not available in this build."),
+                 tr("job kind %1 is not registered").arg(kind));
 }
 
 bool isSystemKind(const QString& kind)
@@ -93,7 +94,7 @@ Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, con
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("verify"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, tr("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -109,7 +110,7 @@ Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, co
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("extract"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, tr("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -152,7 +153,7 @@ Result<QString> submitBackport(AppContext& ctx, const QStringList& gameFolders, 
     // The engine backports one game per job, so each game can fail, be
     // retried or be restored on its own.
     if (gameFolders.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose at least one game."));
+        return Error(ErrorCode::InvalidArgument, tr("Choose at least one game."));
     QString last;
     for (const QString& game : gameFolders) {
         auto r = enqueue(ctx, QStringLiteral("backport.run"), QJsonObject{{QStringLiteral("game"), game}}, overrides);
@@ -318,7 +319,7 @@ Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJs
 {
     const QString kind = imageEditKind(image);
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Only .exfat and .ffpkg images can be edited."));
+        return Error(ErrorCode::Unsupported, tr("Only .exfat and .ffpkg images can be edited."));
     return enqueue(ctx, kind, QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("operations"), operations}}, overrides);
 }
 

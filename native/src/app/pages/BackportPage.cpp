@@ -1,4 +1,5 @@
 #include "app/pages/BackportPage.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/models/JobQueueModel.h"
@@ -66,8 +67,8 @@ using namespace theme;
 
 GameTable::GameTable(bool selectable, QWidget* parent) : QTableWidget(0, 7, parent), m_selectable(selectable)
 {
-    setHorizontalHeaderLabels({QString(), QStringLiteral("Title"), QStringLiteral("Title ID"), QStringLiteral("Version"),
-                               QStringLiteral("SDK"), QStringLiteral("Size"), QStringLiteral("Status")});
+    setHorizontalHeaderLabels({QString(), tr("Title"), tr("Title ID"), tr("Version"),
+                               QStringLiteral("SDK"), tr("Size"), tr("Status")});
     horizontalHeader()->setFixedHeight(32);
     horizontalHeader()->setHighlightSections(false);
     horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -167,13 +168,13 @@ void GameTable::setGames(const std::vector<LibraryGame>& games, const QString& f
         statusItem->setData(Qt::UserRole, s.folder);
         setItem(r, 6, statusItem);
         Tone tone = Tone::Neutral;
-        QString status = g.status.isEmpty() ? (s.isGame ? QStringLiteral("Ready") : QStringLiteral("Not a game dump")) : g.status;
+        QString status = g.status.isEmpty() ? (s.isGame ? tr("Ready") : tr("Not a game dump")) : g.status;
         QString issueTip = g.issues.join(u'\n');
         if (!g.canRun && !g.issues.isEmpty()) {
-            status = QStringLiteral("Not ready: %1").arg(g.issues.first().section(QStringLiteral(": "), 1));
+            status = tr("Not ready: %1").arg(g.issues.first().section(QStringLiteral(": "), 1));
             tone = Tone::Err;
         } else if (!g.issues.isEmpty() && (g.status.isEmpty() || g.status == QLatin1String("Not backported"))) {
-            status = QStringLiteral("Ready · %1 note%2").arg(g.issues.size()).arg(g.issues.size() == 1 ? QString() : QStringLiteral("s"));
+            status = tr("Ready · %1 note%2").arg(g.issues.size()).arg(g.issues.size() == 1 ? QString() : tr("s"));
             tone = Tone::Warn;
         }
         if (!s.isGame) tone = Tone::Warn;
@@ -236,20 +237,20 @@ void GameTable::setAllChecked(bool on)
 // ---- page ------------------------------------------------------------------------
 
 BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logModel, LibraryStore& library, QWidget* parent)
-    : Page(ctx, QStringLiteral("backport"), QStringLiteral("Backport"),
-           QStringLiteral("Lower the SDK a game needs so it runs on older firmware. Originals are zipped before anything is changed."), parent),
+    : Page(ctx, QStringLiteral("backport"), tr("Backport"),
+           tr("Lower the SDK a game needs so it runs on older firmware. Originals are zipped before anything is changed."), parent),
       m_model(queueModel), m_library(library)
 {
     m_reader = new GameInfoReader(this);
     connect(m_reader, &GameInfoReader::ready, this, [this](const GameSummary& s) {
         if (s.exists)
-            m_library.upsertGame(s, s.isGame ? QStringLiteral("Not backported") : QString());
+            m_library.upsertGame(s, s.isGame ? tr("Not backported") : QString());
         if (!m_pendingAdds.isEmpty())
             m_reader->summarize(m_pendingAdds.takeFirst(), true);
     });
 
-    m_restore = button(QStringLiteral("Restore originals…"), ButtonVariant::Secondary, QStringLiteral("undo"), this);
-    m_backport = button(QStringLiteral("Backport"), ButtonVariant::Primary, QStringLiteral("backports"), this);
+    m_restore = button(tr("Restore originals…"), ButtonVariant::Secondary, QStringLiteral("undo"), this);
+    m_backport = button(tr("Backport"), ButtonVariant::Primary, QStringLiteral("backports"), this);
     header()->addAction(m_restore);
     header()->addAction(m_backport);
     connect(m_restore, &QPushButton::clicked, this, &BackportPage::restoreOriginals);
@@ -263,16 +264,16 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
 
     m_tableCard = new Card(left, Card::Variant::Table);
     auto* h = m_tableCard->header();
-    h->addWidget(heading(QStringLiteral("Game library"), TextStyle::Subtitle, m_tableCard));
+    h->addWidget(heading(tr("Game library"), TextStyle::Subtitle, m_tableCard));
     m_counts = caption({}, m_tableCard);
     h->addWidget(m_counts);
     h->addStretch(1);
-    m_search = textInput(QStringLiteral("Search title or ID"), false, m_tableCard);
+    m_search = textInput(tr("Search title or ID"), false, m_tableCard);
     m_search->setFixedWidth(220);
     m_search->setClearButtonEnabled(true);
     h->addWidget(m_search);
-    auto* add = button(QStringLiteral("Add folders…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), m_tableCard);
-    auto* rescan = button(QStringLiteral("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), m_tableCard);
+    auto* add = button(tr("Add folders…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), m_tableCard);
+    auto* rescan = button(tr("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), m_tableCard);
     h->addWidget(add);
     h->addWidget(rescan);
     connect(add, &QPushButton::clicked, this, &BackportPage::addFolders);
@@ -283,13 +284,13 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     auto* lh = hbox(locRow, space::md, QMargins(space::lg, 6, space::lg, 6));
     m_locations = caption({}, locRow);
     lh->addWidget(m_locations, 1);
-    auto* edit = new Link(QStringLiteral("Edit…"), locRow);
+    auto* edit = new Link(tr("Edit…"), locRow);
     edit->setFont(font::caption());
     connect(edit, &Link::activated, this, &BackportPage::addFolders);
     lh->addWidget(edit);
-    auto* all = new Link(QStringLiteral("Select all"), locRow);
+    auto* all = new Link(tr("Select all"), locRow);
     all->setFont(font::caption());
-    auto* none = new Link(QStringLiteral("Select none"), locRow);
+    auto* none = new Link(tr("Select none"), locRow);
     none->setFont(font::caption());
     lh->addWidget(all);
     lh->addWidget(none);
@@ -303,38 +304,38 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     connect(m_table, &GameTable::activatedFolder, this, [](const QString& f) { openInFileManager(f); });
     connect(m_table, &GameTable::contextRequested, this, [this](const QString& folder, const QPoint& pos) {
         QMenu menu(this);
-        menu.addAction(QStringLiteral("Backport this game"), this, [this, folder] {
+        menu.addAction(tr("Backport this game"), this, [this, folder] {
             auto r = jobs::submitBackport(m_ctx, {folder}, m_options->overrides());
             if (r.ok()) {
                 m_ctx.queue().holdQueue(false);
-                m_table->setStatusText(folder, QStringLiteral("Queued"), Tone::Info);
+                m_table->setStatusText(folder, tr("Queued"), Tone::Info);
             } else
-                emit toastRequested(Tone::Err, QStringLiteral("Backport not started"), r.error().message);
+                emit toastRequested(Tone::Err, tr("Backport not started"), r.error().message);
         });
         const bool canFix = jobs::isAvailable(m_ctx, backport::kJobSdkFix);
-        menu.addAction(QStringLiteral("Fix the SDK marker on a copy…"), this, [this, folder] { fixSdk(folder, false); })->setEnabled(canFix);
-        menu.addAction(QStringLiteral("Fix the SDK marker in place…"), this, [this, folder] { fixSdk(folder, true); })->setEnabled(canFix);
-        menu.addAction(QStringLiteral("Undo the last SDK fix…"), this, [this, folder] { undoSdkFix(folder); })
+        menu.addAction(tr("Fix the SDK marker on a copy…"), this, [this, folder] { fixSdk(folder, false); })->setEnabled(canFix);
+        menu.addAction(tr("Fix the SDK marker in place…"), this, [this, folder] { fixSdk(folder, true); })->setEnabled(canFix);
+        menu.addAction(tr("Undo the last SDK fix…"), this, [this, folder] { undoSdkFix(folder); })
             ->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("backport.restore")));
-        menu.addAction(QStringLiteral("Audio report (read-only)"), this, [this, folder] { audioReport(folder); })
+        menu.addAction(tr("Audio report (read-only)"), this, [this, folder] { audioReport(folder); })
             ->setEnabled(jobs::isAvailable(m_ctx, backport::kJobAudioScan));
         const QString report = m_reports.value(folder);
-        menu.addAction(QStringLiteral("Open the last report"), this, [this, report] { openReport(report); })->setEnabled(!report.isEmpty());
+        menu.addAction(tr("Open the last report"), this, [this, report] { openReport(report); })->setEnabled(!report.isEmpty());
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Build image from this dump"), this, [this, folder] {
+        menu.addAction(tr("Build image from this dump"), this, [this, folder] {
             emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), folder}}});
         });
-        menu.addAction(QStringLiteral("Show in folder"), this, [folder] { openInFileManager(folder); });
+        menu.addAction(tr("Show in folder"), this, [folder] { openInFileManager(folder); });
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Remove from library"), this, [this, folder] { m_library.removeGame(folder); });
+        menu.addAction(tr("Remove from library"), this, [this, folder] { m_library.removeGame(folder); });
         menu.exec(pos);
     });
-    m_empty = new EmptyState(QStringLiteral("library"), QStringLiteral("No games found"),
-                             QStringLiteral("Add a folder that holds game dumps. Each dump is a folder with sce_sys\\param.json or eboot.bin."), m_tableCard);
-    auto* emptyAdd = m_empty->addAction(QStringLiteral("Add folders…"), ButtonVariant::Primary);
+    m_empty = new EmptyState(QStringLiteral("library"), tr("No games found"),
+                             tr("Add a folder that holds game dumps. Each dump is a folder with sce_sys\\param.json or eboot.bin."), m_tableCard);
+    auto* emptyAdd = m_empty->addAction(tr("Add folders…"), ButtonVariant::Primary);
     connect(emptyAdd, &QPushButton::clicked, this, &BackportPage::addFolders);
     m_tableCard->body()->addWidget(m_empty);
-    m_unavailable = new UnavailableState(QStringLiteral("Backporting"), QStringLiteral("backport.run"), m_tableCard);
+    m_unavailable = new UnavailableState(tr("Backporting"), QStringLiteral("backport.run"), m_tableCard);
     m_tableCard->body()->addWidget(m_unavailable);
     auto* f = m_tableCard->footer();
     m_footerLeft = caption({}, m_tableCard);
@@ -346,16 +347,16 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     auto* activity = new Card(left);
     auto* activityLinks = new QWidget(activity);
     auto* alh = hbox(activityLinks, space::md);
-    m_openReport = new Link(QStringLiteral("Open report"), activityLinks);
+    m_openReport = new Link(tr("Open report"), activityLinks);
     m_openReport->setVisible(false);
     connect(m_openReport, &Link::activated, this, [this] { openReport(m_lastReport); });
-    auto* openLogs = new Link(QStringLiteral("Open in Logs"), activityLinks);
+    auto* openLogs = new Link(tr("Open in Logs"), activityLinks);
     connect(openLogs, &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("logs"), {{QStringLiteral("source"), QStringLiteral("backport")}}});
     });
     alh->addWidget(m_openReport);
     alh->addWidget(openLogs);
-    activity->setTitle(QStringLiteral("Activity"), activityLinks);
+    activity->setTitle(tr("Activity"), activityLinks);
     activity->body()->setSpacing(space::sm);
     m_activity = new ActivityWell(logModel, activity);
     m_activity->setSource(QStringLiteral("backport"));
@@ -363,12 +364,12 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     ll->addWidget(activity);
     // Shortcuts to the PS5 connect page (Payloads and Kernel log tabs); no protocol work here.
     auto* console = new InfoBar(Tone::Info, left);
-    console->setTitle(QStringLiteral("Testing on a console?"));
-    console->setMessage(QStringLiteral("Send the kernel-log or debug payload and watch the kernel log on the PS5 connect page while the game starts."));
-    connect(console->addLink(QStringLiteral("Send a payload…")), &Link::activated, this, [this] {
+    console->setTitle(tr("Testing on a console?"));
+    console->setMessage(tr("Send the kernel-log or debug payload and watch the kernel log on the PS5 connect page while the game starts."));
+    connect(console->addLink(tr("Send a payload…")), &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("payloads")}}});
     });
-    connect(console->addLink(QStringLiteral("Open the kernel log")), &Link::activated, this, [this] {
+    connect(console->addLink(tr("Open the kernel log")), &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("klog")}}});
     });
     ll->addWidget(console);
@@ -380,12 +381,12 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     m_options->build();
     rl->addWidget(m_options);
     auto* tip = new InfoBar(Tone::Info, right);
-    tip->setTitle(QStringLiteral("Black screen on FW 5.00 or newer?"));
-    tip->setMessage(QStringLiteral("Set Target SDK to 5 or higher and backport the unmodified game again. Keep the SDK 4 ZIP for FW 4.xx consoles."));
+    tip->setTitle(tr("Black screen on FW 5.00 or newer?"));
+    tip->setMessage(tr("Set Target SDK to 5 or higher and backport the unmodified game again. Keep the SDK 4 ZIP for FW 4.xx consoles."));
     rl->addWidget(tip);
     m_providers = new InfoBar(Tone::Info, right);
-    m_providers->setTitle(QStringLiteral("AMPR / PlayGo libraries"));
-    connect(m_providers->addLink(QStringLiteral("Pin them again…")), &Link::activated, this, &BackportPage::pinProviders);
+    m_providers->setTitle(tr("AMPR / PlayGo libraries"));
+    connect(m_providers->addLink(tr("Pin them again…")), &Link::activated, this, &BackportPage::pinProviders);
     rl->addWidget(m_providers);
     connect(m_options, &JobOptionsPanel::overridesChanged, this, &BackportPage::refreshProviderBar);
     connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
@@ -404,7 +405,7 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
         if (!rec || rec->kind != QLatin1String("backport.run"))
             return;
         for (const QString& game : gamesOf(rec->parameters))
-            m_table->setStatusText(game, rec->state == JobState::Running ? QStringLiteral("Running · %1").arg(thinPercent(rec->progress.overallFraction)) : jobStateName(rec->state),
+            m_table->setStatusText(game, rec->state == JobState::Running ? tr("Running · %1").arg(thinPercent(rec->progress.overallFraction)) : jobStateName(rec->state),
                                    rec->state == JobState::Running ? Tone::Info : toneForState(rec->state));
     });
     rebuildTable();
@@ -423,12 +424,12 @@ void BackportPage::rebuildTable()
     QStringList shown;
     for (const QString& f : folders)
         shown << nativePath(f);
-    m_locations->setText(folders.isEmpty() ? QStringLiteral("Scan locations: none yet") : QStringLiteral("Scan locations: %1").arg(shown.join(QStringLiteral(", "))));
+    m_locations->setText(folders.isEmpty() ? tr("Scan locations: none yet") : tr("Scan locations: %1").arg(shown.join(QStringLiteral(", "))));
     const QDateTime last = m_library.lastScan();
-    m_footerLeft->setText(QStringLiteral("%1 · %2 game%3 in %4 location%5")
-                              .arg(last.isValid() ? QStringLiteral("Last scan %1").arg(relativeTime(last)) : QStringLiteral("Not scanned yet"))
-                              .arg(m_library.games().size()).arg(m_library.games().size() == 1 ? QString() : QStringLiteral("s"))
-                              .arg(folders.size()).arg(folders.size() == 1 ? QString() : QStringLiteral("s")));
+    m_footerLeft->setText(tr("%1 · %2 game%3 in %4 location%5")
+                              .arg(last.isValid() ? tr("Last scan %1").arg(relativeTime(last)) : tr("Not scanned yet"))
+                              .arg(m_library.games().size()).arg(m_library.games().size() == 1 ? QString() : tr("s"))
+                              .arg(folders.size()).arg(folders.size() == 1 ? QString() : tr("s")));
     updateCounts();
 }
 
@@ -439,19 +440,19 @@ void BackportPage::updateCounts()
     for (const auto& g : m_library.games())
         if (checked.contains(g.info.folder))
             bytes += g.info.bytes;
-    m_counts->setText(QStringLiteral("%1 games · %2 selected").arg(m_table->gameCount()).arg(checked.size()));
-    m_footerRight->setText(checked.isEmpty() ? QString() : QStringLiteral("Selected: %1 game%2 · %3").arg(checked.size()).arg(checked.size() == 1 ? QString() : QStringLiteral("s")).arg(formatBytes(bytes)));
-    m_backport->setText(checked.size() == 1 ? QStringLiteral("Backport 1 game") : checked.isEmpty() ? QStringLiteral("Backport") : QStringLiteral("Backport %1 games").arg(checked.size()));
+    m_counts->setText(tr("%1 games · %2 selected").arg(m_table->gameCount()).arg(checked.size()));
+    m_footerRight->setText(checked.isEmpty() ? QString() : tr("Selected: %1 game%2 · %3").arg(checked.size()).arg(checked.size() == 1 ? QString() : tr("s")).arg(formatBytes(bytes)));
+    m_backport->setText(checked.size() == 1 ? tr("Backport 1 game") : checked.isEmpty() ? tr("Backport") : tr("Backport %1 games").arg(checked.size()));
     const bool available = jobs::isAvailable(m_ctx, QStringLiteral("backport.run"));
     m_backport->setEnabled(available && !checked.isEmpty());
-    m_backport->setToolTip(!available ? QStringLiteral("Not available in this build") : checked.isEmpty() ? QStringLiteral("Select at least one game") : QString());
+    m_backport->setToolTip(!available ? tr("Not available in this build") : checked.isEmpty() ? tr("Select at least one game") : QString());
     m_restore->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("backport.restore")));
     emit statusContextChanged();
 }
 
 void BackportPage::addFolders()
 {
-    const QString dir = QFileDialog::getExistingDirectory(window(), QStringLiteral("Add a folder of game dumps"));
+    const QString dir = QFileDialog::getExistingDirectory(window(), tr("Add a folder of game dumps"));
     if (dir.isEmpty())
         return;
     if (readGameSummary(dir, false).isGame) {
@@ -474,7 +475,7 @@ void BackportPage::scan()
 {
     const QStringList folders = m_library.scanFolders();
     if (folders.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("Nothing to scan"), QStringLiteral("Add a folder of game dumps first."));
+        emit toastRequested(Tone::Warn, tr("Nothing to scan"), tr("Add a folder of game dumps first."));
         return;
     }
     Result<QString> r = jobs::isAvailable(m_ctx, QStringLiteral("backport.scan"))
@@ -490,7 +491,7 @@ void BackportPage::scan()
                     ++found;
                 }
         m_library.setLastScan(QDateTime::currentDateTime());
-        emit toastRequested(Tone::Info, QStringLiteral("Scanned without the engine"), QStringLiteral("%1 game folder%2 found one level below the scan locations.").arg(found).arg(found == 1 ? QString() : QStringLiteral("s")));
+        emit toastRequested(Tone::Info, tr("Scanned without the engine"), tr("%1 game folder%2 found one level below the scan locations.").arg(found).arg(found == 1 ? QString() : tr("s")));
         return;
     }
     m_scanJobId = r.value();
@@ -535,16 +536,16 @@ void BackportPage::onJobFinished(const QString& id)
     const bool undo = rec->kind == QLatin1String("backport.restore") && rec->parameters.value(QStringLiteral("undoSdkFix")).toBool();
     if (rec->kind == backport::kJobSdkFix || rec->kind == backport::kJobAudioScan || rec->kind == backport::kJobPinProviders || undo) {
         const bool ok = rec->state == JobState::Succeeded && rec->outcome;
-        const QString title = rec->kind == backport::kJobSdkFix  ? QStringLiteral("SDK fix")
-            : rec->kind == backport::kJobAudioScan               ? QStringLiteral("Audio report")
-            : rec->kind == backport::kJobPinProviders            ? QStringLiteral("AMPR / PlayGo pins")
-                                                                 : QStringLiteral("Undo the SDK fix");
+        const QString title = rec->kind == backport::kJobSdkFix  ? tr("SDK fix")
+            : rec->kind == backport::kJobAudioScan               ? tr("Audio report")
+            : rec->kind == backport::kJobPinProviders            ? tr("AMPR / PlayGo pins")
+                                                                 : tr("Undo the SDK fix");
         if (rec->state != JobState::Cancelled)
-            emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? title : QStringLiteral("%1 failed").arg(title),
+            emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? title : tr("%1 failed").arg(title),
                                 ok ? rec->outcome->summary : (rec->error ? rec->error->message : jobStateName(rec->state)));
         const QString folder = folderOf(rec->parameters);
         if (rec->kind == backport::kJobSdkFix)
-            m_table->setStatusText(folder, ok ? QStringLiteral("SDK fixed") : QStringLiteral("SDK fix failed"), ok ? Tone::Ok : Tone::Err);
+            m_table->setStatusText(folder, ok ? tr("SDK fixed") : tr("SDK fix failed"), ok ? Tone::Ok : Tone::Err);
         // A copy appears in the library next to its source.
         if (ok && rec->kind == backport::kJobSdkFix && rec->parameters.value(QStringLiteral("mode")).toString() != QLatin1String("inPlace")) {
             const QString out = QDir::fromNativeSeparators(rec->outcome->details.value(QStringLiteral("output")).toString());
@@ -554,7 +555,7 @@ void BackportPage::onJobFinished(const QString& id)
     }
     if (rec->kind == QLatin1String("backport.run")) {
         for (const QString& folder : gamesOf(rec->parameters)) {
-            QString status = rec->state == JobState::Succeeded ? (rec->outcome ? rec->outcome->summary : QStringLiteral("Backported")) : QStringLiteral("Failed: %1").arg(rec->error ? rec->error->message : jobStateName(rec->state));
+            QString status = rec->state == JobState::Succeeded ? (rec->outcome ? rec->outcome->summary : tr("Backported")) : tr("Failed: %1").arg(rec->error ? rec->error->message : jobStateName(rec->state));
             for (const auto& g : m_library.games())
                 if (g.info.folder == folder)
                     m_library.upsertGame(g.info, status);
@@ -569,28 +570,28 @@ void BackportPage::primaryAction()
         return;
     auto r = jobs::submitBackport(m_ctx, checked, m_options->overrides());
     if (!r.ok()) {
-        emit toastRequested(Tone::Err, QStringLiteral("Backport not started"), r.error().message);
+        emit toastRequested(Tone::Err, tr("Backport not started"), r.error().message);
         return;
     }
     m_ctx.queue().holdQueue(false);
     for (const QString& f : checked)
-        m_table->setStatusText(f, QStringLiteral("Queued"), Tone::Info);
-    emit toastRequested(Tone::Info, QStringLiteral("Backport queued"), QStringLiteral("%1 game%2").arg(checked.size()).arg(checked.size() == 1 ? QString() : QStringLiteral("s")));
+        m_table->setStatusText(f, tr("Queued"), Tone::Info);
+    emit toastRequested(Tone::Info, tr("Backport queued"), tr("%1 game%2").arg(checked.size()).arg(checked.size() == 1 ? QString() : tr("s")));
 }
 
 void BackportPage::restoreOriginals()
 {
-    const QString zip = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the originals ZIP"), {}, QStringLiteral("Originals ZIP (*.zip)"));
+    const QString zip = QFileDialog::getOpenFileName(window(), tr("Choose the originals ZIP"), {}, tr("Originals ZIP (*.zip)"));
     if (zip.isEmpty())
         return;
     const QString game = m_table->currentFolder();
-    if (!Sheet::confirm(window(), QStringLiteral("Restore the original files?"),
-                        QStringLiteral("The files inside %1 replace the backported ones in the game folder. The backport ZIP is kept.").arg(Sheet::monoSpan(nativePath(zip))),
-                        QStringLiteral("Keep backport"), QStringLiteral("Restore originals"), false, Sheet::Icon::Info))
+    if (!Sheet::confirm(window(), tr("Restore the original files?"),
+                        tr("The files inside %1 replace the backported ones in the game folder. The backport ZIP is kept.").arg(Sheet::monoSpan(nativePath(zip))),
+                        tr("Keep backport"), tr("Restore originals"), false, Sheet::Icon::Info))
         return;
     auto r = jobs::submitBackportRestore(m_ctx, zip, game);
     if (!r.ok())
-        emit toastRequested(Tone::Err, QStringLiteral("Restore not started"), r.error().message);
+        emit toastRequested(Tone::Err, tr("Restore not started"), r.error().message);
     else
         m_ctx.queue().holdQueue(false);
 }
@@ -614,40 +615,40 @@ void BackportPage::fixSdk(const QString& folder, bool inPlace)
 {
     const QString sdk = m_options->effectiveValue(backport::keys::kTargetSdk).toString();
     const QString text = inPlace
-        ? QStringLiteral("Every executable in %1 gets the SDK %2 marker (loads on FW %2.00 and later). The files that change are "
+        ? tr("Every executable in %1 gets the SDK %2 marker (loads on FW %2.00 and later). The files that change are "
                          "saved to a backup ZIP in the originals ZIP folder first, then replaced through a journal that rolls back "
                          "on any error. No fakelib is added and param.json is not changed. Undo it later with Undo the last SDK fix.")
               .arg(Sheet::monoSpan(nativePath(folder)), sdk)
-        : QStringLiteral("A copy named %1 is made next to the folder, with every executable at the SDK %2 marker (loads on FW %2.00 "
+        : tr("A copy named %1 is made next to the folder, with every executable at the SDK %2 marker (loads on FW %2.00 "
                          "and later). No fakelib is added and param.json is not changed; the folder itself is only read.")
               .arg(Sheet::monoSpan(backport::sdkFixCopyName(QFileInfo(folder).fileName(), sdk.toInt())), sdk);
-    if (!Sheet::confirm(window(), inPlace ? QStringLiteral("Change the SDK marker in place?") : QStringLiteral("Fix the SDK marker on a copy?"),
-                        text, QStringLiteral("Cancel"), inPlace ? QStringLiteral("Change in place") : QStringLiteral("Make the copy"), false,
+    if (!Sheet::confirm(window(), inPlace ? tr("Change the SDK marker in place?") : tr("Fix the SDK marker on a copy?"),
+                        text, tr("Cancel"), inPlace ? tr("Change in place") : tr("Make the copy"), false,
                         inPlace ? Sheet::Icon::Warning : Sheet::Icon::Info))
         return;
     const QJsonObject p{{QStringLiteral("folder"), folder}, {QStringLiteral("mode"), inPlace ? QStringLiteral("inPlace") : QStringLiteral("copy")}};
-    if (enqueueBackportJob(backport::kJobSdkFix, p, QStringLiteral("SDK fix not started")).ok())
-        m_table->setStatusText(folder, QStringLiteral("Queued · SDK fix"), Tone::Info);
+    if (enqueueBackportJob(backport::kJobSdkFix, p, tr("SDK fix not started")).ok())
+        m_table->setStatusText(folder, tr("Queued · SDK fix"), Tone::Info);
 }
 
 void BackportPage::undoSdkFix(const QString& folder)
 {
-    if (!Sheet::confirm(window(), QStringLiteral("Undo the last SDK fix?"),
-                        QStringLiteral("The files the last in-place SDK fix of %1 replaced are put back from its backup. Files "
+    if (!Sheet::confirm(window(), tr("Undo the last SDK fix?"),
+                        tr("The files the last in-place SDK fix of %1 replaced are put back from its backup. Files "
                                        "that changed since are left as they are and reported.")
                             .arg(Sheet::monoSpan(nativePath(folder))),
-                        QStringLiteral("Keep the fix"), QStringLiteral("Undo it"), false, Sheet::Icon::Info))
+                        tr("Keep the fix"), tr("Undo it"), false, Sheet::Icon::Info))
         return;
     (void)enqueueBackportJob(QStringLiteral("backport.restore"),
                              QJsonObject{{QStringLiteral("game"), folder}, {QStringLiteral("undoSdkFix"), true}},
-                             QStringLiteral("Undo not started"));
+                             tr("Undo not started"));
 }
 
 void BackportPage::audioReport(const QString& folder)
 {
-    if (enqueueBackportJob(backport::kJobAudioScan, QJsonObject{{QStringLiteral("game"), folder}}, QStringLiteral("Audio report not started")).ok())
-        emit toastRequested(Tone::Info, QStringLiteral("Audio report queued"),
-                            QStringLiteral("Read-only: nothing in the game is changed. Open report shows it when it is done."));
+    if (enqueueBackportJob(backport::kJobAudioScan, QJsonObject{{QStringLiteral("game"), folder}}, tr("Audio report not started")).ok())
+        emit toastRequested(Tone::Info, tr("Audio report queued"),
+                            tr("Read-only: nothing in the game is changed. Open report shows it when it is done."));
 }
 
 void BackportPage::pinProviders()
@@ -655,14 +656,14 @@ void BackportPage::pinProviders()
     const QString folder = m_options->effectiveValue(backport::keys::kAmprPlaygoFolder).toString().trimmed();
     if (folder.isEmpty())
         return;
-    if (!Sheet::confirm(window(), QStringLiteral("Pin the AMPR / PlayGo libraries again?"),
-                        QStringLiteral("The SHA-256 of libSceAmpr and libScePlayGo in %1 is recorded now. Later backports use "
+    if (!Sheet::confirm(window(), tr("Pin the AMPR / PlayGo libraries again?"),
+                        tr("The SHA-256 of libSceAmpr and libScePlayGo in %1 is recorded now. Later backports use "
                                        "exactly these files and refuse them if they change, until you pin them again.")
                             .arg(Sheet::monoSpan(nativePath(folder))),
-                        QStringLiteral("Cancel"), QStringLiteral("Pin them"), false, Sheet::Icon::Info))
+                        tr("Cancel"), tr("Pin them"), false, Sheet::Icon::Info))
         return;
     (void)enqueueBackportJob(backport::kJobPinProviders, QJsonObject{{QStringLiteral("folder"), folder}},
-                             QStringLiteral("Pinning not started"));
+                             tr("Pinning not started"));
 }
 
 void BackportPage::openReport(const QString& htmlPath)
@@ -670,7 +671,7 @@ void BackportPage::openReport(const QString& htmlPath)
     if (htmlPath.isEmpty())
         return;
     if (!QFileInfo(htmlPath).isFile()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("Report not found"), nativePath(htmlPath));
+        emit toastRequested(Tone::Warn, tr("Report not found"), nativePath(htmlPath));
         return;
     }
     if (!QDesktopServices::openUrl(QUrl::fromLocalFile(htmlPath)))
@@ -681,7 +682,7 @@ void BackportPage::refreshProviderBar()
 {
     const QString folder = m_options->effectiveValue(backport::keys::kAmprPlaygoFolder).toString().trimmed();
     m_providers->setVisible(!folder.isEmpty() && jobs::isAvailable(m_ctx, backport::kJobPinProviders));
-    m_providers->setMessage(QStringLiteral("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
+    m_providers->setMessage(tr("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
                                            "purpose, pin them again, or the backport is refused.")
                                 .arg(nativePath(folder)));
 }
@@ -720,7 +721,7 @@ void BackportPage::navigateWith(const QVariantMap& args)
 QString BackportPage::statusContext() const
 {
     const int n = m_table->checkedFolders().size();
-    return n > 0 ? QStringLiteral("%1 game%2 selected").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")) : QString();
+    return n > 0 ? tr("%1 game%2 selected").arg(n).arg(n == 1 ? QString() : tr("s")) : QString();
 }
 
 void BackportPage::setDragHighlight(bool on) { m_tableCard->setDropHighlight(on); }
@@ -734,7 +735,7 @@ void BackportPage::applyDemoState(const QString& name)
     if (name != QLatin1String("pins"))
         return;
     m_providers->setVisible(true);
-    m_providers->setMessage(QStringLiteral("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
+    m_providers->setMessage(tr("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
                                            "purpose, pin them again, or the backport is refused.")
                                 .arg(nativePath(QStringLiteral("D:/Backport/ampr_emu"))));
     QTimer::singleShot(0, this, [this] { scrollArea()->verticalScrollBar()->setValue(scrollArea()->verticalScrollBar()->maximum()); });

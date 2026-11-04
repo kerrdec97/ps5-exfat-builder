@@ -1,4 +1,5 @@
 #include "app/ui/Widgets.h"
+#include "app/i18n/I18n.h"
 
 #include "app/ui/Icons.h"
 
@@ -852,13 +853,13 @@ void ProgressBlock::setState(ProgressBar::State state)
     QColor c = color::fg_0;
     if (state == ProgressBar::State::Done) {
         c = color::success_hi;
-        m_percent->setText(QStringLiteral("Done"));
+        m_percent->setText(tr("Done"));
     } else if (state == ProgressBar::State::Failed) {
         c = color::danger_hi;
-        m_percent->setText(QStringLiteral("Failed at %1").arg(thinPercent(m_bar->fraction())));
+        m_percent->setText(tr("Failed at %1").arg(thinPercent(m_bar->fraction())));
     } else if (state == ProgressBar::State::Paused) {
         c = color::fg_3;
-        m_percent->setText(QStringLiteral("Paused · %1").arg(thinPercent(m_bar->fraction())));
+        m_percent->setText(tr("Paused · %1").arg(thinPercent(m_bar->fraction())));
     }
     m_percent->setVisible(true);
     m_percent->setMinimumWidth(0);
@@ -946,7 +947,7 @@ InfoBar::InfoBar(Tone tone, QWidget* parent) : QFrame(parent), m_tone(tone)
     m_links->addStretch(1);
     col->addLayout(m_links);
     h->addLayout(col, 1);
-    m_dismiss = new IconButton(QStringLiteral("close"), QStringLiteral("Dismiss"), IconButton::Size::Tiny, this);
+    m_dismiss = new IconButton(QStringLiteral("close"), tr("Dismiss"), IconButton::Size::Tiny, this);
     m_dismiss->hide();
     connect(m_dismiss, &QToolButton::clicked, this, [this] {
         hide();
@@ -1111,17 +1112,17 @@ UnavailableState::UnavailableState(const QString& feature, const QString& kind, 
     tile->setStyleSheet(QStringLiteral("background:%1;border-radius:%2px;").arg(hex(color::bg_3)).arg(radius::md));
     tile->setPixmap(iconPixmap(QStringLiteral("package"), size::iconEmpty, color::fg_3, devicePixelRatioF()));
     l->addWidget(tile, 0, Qt::AlignHCenter);
-    auto* t = heading(QStringLiteral("%1 is not available in this build").arg(feature), TextStyle::Subtitle, this);
+    auto* t = heading(tr("%1 is not available in this build").arg(feature), TextStyle::Subtitle, this);
     t->setAlignment(Qt::AlignCenter);
     t->setWordWrap(true);
     t->setFixedWidth(420);
     l->addSpacing(4);
     l->addWidget(t, 0, Qt::AlignHCenter);
-    auto* c = caption(QStringLiteral("The engine that does this work is not part of this build. The form stays usable; nothing is queued until the engine is present."), this);
+    auto* c = caption(tr("The engine that does this work is not part of this build. The form stays usable; nothing is queued until the engine is present."), this);
     c->setAlignment(Qt::AlignCenter);
     c->setFixedWidth(420);
     l->addWidget(c, 0, Qt::AlignHCenter);
-    m_tech = label(QStringLiteral("job kind %1 is not registered").arg(kind), TextStyle::Mono, color::fg_4, this);
+    m_tech = label(tr("job kind %1 is not registered").arg(kind), TextStyle::Mono, color::fg_4, this);
     m_tech->setAlignment(Qt::AlignCenter);
     m_tech->setWordWrap(true);
     m_tech->setFixedWidth(420);
@@ -1130,8 +1131,8 @@ UnavailableState::UnavailableState(const QString& feature, const QString& kind, 
 
 void UnavailableState::setKinds(const QStringList& kinds)
 {
-    m_tech->setText(kinds.size() == 1 ? QStringLiteral("job kind %1 is not registered").arg(kinds.first())
-                                      : QStringLiteral("job kinds %1 are not registered").arg(kinds.join(QStringLiteral(", "))));
+    m_tech->setText(kinds.size() == 1 ? tr("job kind %1 is not registered").arg(kinds.first())
+                                      : tr("job kinds %1 are not registered").arg(kinds.join(QStringLiteral(", "))));
 }
 
 // ---- inputs ---------------------------------------------------------------------
@@ -1171,7 +1172,7 @@ PathField::PathField(Mode mode, QWidget* parent) : QWidget(parent), m_mode(mode)
     auto* row = new QHBoxLayout;
     row->setSpacing(space::sm);
     m_edit = textInput({}, true, this);
-    m_browse = button(QStringLiteral("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder"), this);
+    m_browse = button(tr("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder"), this);
     row->addWidget(m_edit, 1);
     row->addWidget(m_browse);
     l->addLayout(row);
@@ -1226,13 +1227,13 @@ void PathField::browse()
     QString chosen;
     switch (m_mode) {
     case Mode::Directory:
-        chosen = QFileDialog::getExistingDirectory(window(), m_title.isEmpty() ? QStringLiteral("Choose a folder") : m_title, start);
+        chosen = QFileDialog::getExistingDirectory(window(), m_title.isEmpty() ? tr("Choose a folder") : m_title, start);
         break;
     case Mode::OpenFile:
-        chosen = QFileDialog::getOpenFileName(window(), m_title.isEmpty() ? QStringLiteral("Choose a file") : m_title, start, m_filter);
+        chosen = QFileDialog::getOpenFileName(window(), m_title.isEmpty() ? tr("Choose a file") : m_title, start, m_filter);
         break;
     case Mode::SaveFile:
-        chosen = QFileDialog::getSaveFileName(window(), m_title.isEmpty() ? QStringLiteral("Save as") : m_title, start, m_filter);
+        chosen = QFileDialog::getSaveFileName(window(), m_title.isEmpty() ? tr("Save as") : m_title, start, m_filter);
         break;
     }
     if (!chosen.isEmpty())

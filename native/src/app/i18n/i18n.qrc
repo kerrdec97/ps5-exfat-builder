@@ -1,0 +1,20 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/i18n">
+    <file>zh.json</file>
+    <file>de.json</file>
+    <file>fr.json</file>
+    <file>es.json</file>
+    <file>pt.json</file>
+    <file>ja.json</file>
+    <file>ko.json</file>
+    <file>ru.json</file>
+    <file>ar.json</file>
+    <file>it.json</file>
+    <file>nl.json</file>
+    <file>pl.json</file>
+    <file>tr.json</file>
+    <file>th.json</file>
+    <file>vi.json</file>
+    <file>id.json</file>
+</qresource>
+</RCC>

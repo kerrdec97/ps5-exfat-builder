@@ -1,4 +1,5 @@
 #include "app/ui/DependencyRow.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
@@ -36,9 +37,9 @@ DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* pa
     textCol->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     textCol->setMinimumWidth(120);
     h->addWidget(textCol, 1);
-    m_badge = new Badge(QStringLiteral("Checking…"), Tone::Neutral, this);
+    m_badge = new Badge(tr("Checking…"), Tone::Neutral, this);
     h->addWidget(m_badge);
-    m_fix = new Link(QStringLiteral("How to fix…"), this);
+    m_fix = new Link(tr("How to fix…"), this);
     m_fix->hide();
     connect(m_fix, &Link::activated, this, [this] { emit fixRequested(m_id, m_info.howToFix, m_info.settingKey); });
     h->addWidget(m_fix);
@@ -48,7 +49,7 @@ DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* pa
 void DependencyRow::setChecking()
 {
     m_icon->setPixmap(iconPixmap(QStringLiteral("loader"), size::icon, color::fg_3, devicePixelRatioF()));
-    m_badge->set(QStringLiteral("Checking…"), Tone::Neutral);
+    m_badge->set(tr("Checking…"), Tone::Neutral);
     m_badge->setIconName(QStringLiteral("clock"));
 }
 
@@ -69,18 +70,18 @@ void DependencyRow::setInfo(const DependencyInfo& info)
     Tone tone = Tone::Neutral;
     QString word;
     switch (info.status) {
-    case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = QStringLiteral("Ready"); break;
-    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = QStringLiteral("Version unknown"); break;
-    case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Not found"); break;
-    case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Error"); break;
-    case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = QStringLiteral("Not needed"); break;
+    case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = tr("Ready"); break;
+    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = tr("Version unknown"); break;
+    case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = tr("Not found"); break;
+    case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = tr("Error"); break;
+    case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = tr("Not needed"); break;
     }
     m_icon->setPixmap(iconPixmap(iconName, size::icon, c, devicePixelRatioF()));
     m_badge->set(word, tone);
     m_badge->setIconName(tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone));
     const bool fixable = !info.howToFix.isEmpty() && info.status != DependencyStatus::Ready;
     m_fix->setVisible(fixable);
-    m_fix->setText(!info.settingKey.isEmpty() ? QStringLiteral("Set path…") : QStringLiteral("How to fix…"));
+    m_fix->setText(!info.settingKey.isEmpty() ? tr("Set path…") : tr("How to fix…"));
 }
 
 void DependencyRow::setDivider(bool on)

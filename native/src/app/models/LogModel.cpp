@@ -1,4 +1,5 @@
 #include "app/models/LogModel.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 
@@ -95,11 +96,11 @@ QVariant LogModel::headerData(int section, Qt::Orientation orientation, int role
     if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
         return {};
     switch (section) {
-    case TimeColumn: return QStringLiteral("Time");
-    case LevelColumn: return QStringLiteral("Level");
-    case SourceColumn: return QStringLiteral("Source");
-    case JobColumn: return QStringLiteral("Job");
-    case MessageColumn: return QStringLiteral("Message");
+    case TimeColumn: return tr("Time");
+    case LevelColumn: return tr("Level");
+    case SourceColumn: return tr("Source");
+    case JobColumn: return tr("Job");
+    case MessageColumn: return tr("Message");
     default: return {};
     }
 }

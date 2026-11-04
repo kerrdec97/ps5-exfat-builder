@@ -1,4 +1,5 @@
 #include "app/services/GameInfo.h"
+#include "app/i18n/I18n.h"
 
 #include "core/FileUtil.h"
 
@@ -23,9 +24,9 @@ QString GameSummary::metaLine() const
     if (bytes > 0)
         parts << formatBytes(bytes);
     if (files > 0)
-        parts << QStringLiteral("%1 files").arg(formatCount(files));
+        parts << tr("%1 files").arg(formatCount(files));
     if (!sdk.isEmpty())
-        parts << QStringLiteral("SDK %1").arg(sdk);
+        parts << tr("SDK %1").arg(sdk);
     return parts.join(QStringLiteral(" · "));
 }
 
@@ -84,12 +85,12 @@ GameSummary readGameSummary(const QString& folder, bool countFiles)
     s.folder = folder;
     const QFileInfo fi(folder);
     if (folder.isEmpty() || !fi.exists()) {
-        s.error = QStringLiteral("The folder does not exist.");
+        s.error = tr("The folder does not exist.");
         return s;
     }
     s.exists = true;
     if (!fi.isDir()) {
-        s.error = QStringLiteral("This is a file, not a game folder.");
+        s.error = tr("This is a file, not a game folder.");
         return s;
     }
     const QString param = QDir(folder).filePath(QStringLiteral("sce_sys/param.json"));

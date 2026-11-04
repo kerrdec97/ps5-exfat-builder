@@ -1,4 +1,5 @@
 #include "app/pages/ps5/AmprTab.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/pages/ps5/ConsoleFolderPicker.h"
@@ -26,49 +27,49 @@ AmprTab::AmprTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
 {
     auto* l = vbox(this, space::lg);
     auto* info = new InfoBar(Tone::Info, this);
-    info->setMessage(QStringLiteral("ampr_emu.index lets the AMPR emulator (fakelib/libSceAmpr.sprx) find a game's files whatever "
+    info->setMessage(tr("ampr_emu.index lets the AMPR emulator (fakelib/libSceAmpr.sprx) find a game's files whatever "
                                     "their letter case. Image builds add it by themselves (Settings › PFS › AMPR file index); use "
                                     "this for a dump you do not rebuild, or for a game already on the console."));
     l->addWidget(info);
 
     auto* local = new Card(this);
-    local->setTitle(QStringLiteral("From a folder on this PC"));
+    local->setTitle(tr("From a folder on this PC"));
     m_localFolder = new PathField(PathField::Mode::Directory, local);
-    m_localFolder->setDialogTitle(QStringLiteral("Choose the game's app0 folder"));
-    local->body()->addWidget(field(QStringLiteral("Game folder (app0)"), m_localFolder,
-                                   QStringLiteral("ampr_emu.index is written into this folder; an existing one is replaced once the new one is complete."), local));
+    m_localFolder->setDialogTitle(tr("Choose the game's app0 folder"));
+    local->body()->addWidget(field(tr("Game folder (app0)"), m_localFolder,
+                                   tr("ampr_emu.index is written into this folder; an existing one is replaced once the new one is complete."), local));
     auto* lrow = new QWidget(local);
     auto* lh = hbox(lrow, space::sm);
     m_localStatus = new MessageRow(lrow);
     lh->addWidget(m_localStatus, 1, Qt::AlignVCenter);
-    m_localGo = button(QStringLiteral("Generate"), ButtonVariant::Primary, QStringLiteral("file_plus"), lrow);
+    m_localGo = button(tr("Generate"), ButtonVariant::Primary, QStringLiteral("file_plus"), lrow);
     lh->addStretch(0);
     lh->addWidget(m_localGo);
     local->body()->addWidget(lrow);
     l->addWidget(local);
 
     auto* remote = new Card(this);
-    remote->setTitle(QStringLiteral("From a game folder on the PS5"));
+    remote->setTitle(tr("From a game folder on the PS5"));
     auto* rrow = new QWidget(remote);
     auto* rh = hbox(rrow, space::sm);
     m_remoteFolder = textInput(QStringLiteral("/data/etaHEN/games/PPSA01234-app0"), true, rrow);
-    m_remoteFolder->setAccessibleName(QStringLiteral("Game folder on the console"));
-    m_remoteBrowse = button(QStringLiteral("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder_open"), rrow);
+    m_remoteFolder->setAccessibleName(tr("Game folder on the console"));
+    m_remoteBrowse = button(tr("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder_open"), rrow);
     rh->addWidget(m_remoteFolder, 1);
     rh->addWidget(m_remoteBrowse);
-    remote->body()->addWidget(field(QStringLiteral("Game folder on the console (app0)"), rrow,
-                                    QStringLiteral("Must hold eboot.bin or sce_sys. The folder is read over FTP, the index is built here and "
+    remote->body()->addWidget(field(tr("Game folder on the console (app0)"), rrow,
+                                    tr("Must hold eboot.bin or sce_sys. The folder is read over FTP, the index is built here and "
                                                    "uploaded next to it; an existing index is kept as ampr_emu.index.bak."), remote));
     auto* grow = new QWidget(remote);
     auto* gh = hbox(grow, space::sm);
     m_remoteStatus = new MessageRow(grow);
     gh->addWidget(m_remoteStatus, 1, Qt::AlignVCenter);
-    m_remoteGo = button(QStringLiteral("Generate and upload"), ButtonVariant::Primary, QStringLiteral("upload"), grow);
+    m_remoteGo = button(tr("Generate and upload"), ButtonVariant::Primary, QStringLiteral("upload"), grow);
     gh->addStretch(0);
     gh->addWidget(m_remoteGo);
     remote->body()->addWidget(grow);
     l->addWidget(remote);
-    l->addWidget(caption(QStringLiteral("Both run in the queue; progress and the full result are on the Queue page."), this));
+    l->addWidget(caption(tr("Both run in the queue; progress and the full result are on the Queue page."), this));
     l->addStretch(1);
 
     connect(m_localGo, &QPushButton::clicked, this, &AmprTab::generateLocal);
@@ -104,7 +105,7 @@ QString AmprTab::submitLocal(const QString& folder, bool force)
         return {};
     }
     m_ctx.queue().holdQueue(false);
-    m_localStatus->set(QStringLiteral("Queued: %1").arg(nativePath(folder)), Tone::Info);
+    m_localStatus->set(tr("Queued: %1").arg(nativePath(folder)), Tone::Info);
     return r.value();
 }
 
@@ -117,7 +118,7 @@ QString AmprTab::submitConsole(const QString& remoteFolder)
         return {};
     }
     m_ctx.queue().holdQueue(false);
-    m_remoteStatus->set(QStringLiteral("Queued: %1").arg(remoteFolder), Tone::Info);
+    m_remoteStatus->set(tr("Queued: %1").arg(remoteFolder), Tone::Info);
     return r.value();
 }
 
@@ -125,21 +126,21 @@ void AmprTab::generateLocal()
 {
     const QString folder = m_localFolder->path().trimmed();
     if (folder.isEmpty() || !QFileInfo(folder).isDir()) {
-        m_localFolder->setError(folder.isEmpty() ? QStringLiteral("Choose the game's app0 folder.") : QStringLiteral("The folder does not exist."));
+        m_localFolder->setError(folder.isEmpty() ? tr("Choose the game's app0 folder.") : tr("The folder does not exist."));
         return;
     }
     m_localFolder->setError({});
     bool force = false;
     if (!pfs::folderHasAmprLibrary(folder)) {
         // Legacy "Not an APR title?" question.
-        if (!Sheet::confirm(window(), QStringLiteral("Not an APR title?"),
-                            QStringLiteral("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an APR title. Generate ampr_emu.index anyway?"),
-                            QStringLiteral("Cancel"), QStringLiteral("Generate anyway"), false, Sheet::Icon::Warning))
+        if (!Sheet::confirm(window(), tr("Not an APR title?"),
+                            tr("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an APR title. Generate ampr_emu.index anyway?"),
+                            tr("Cancel"), tr("Generate anyway"), false, Sheet::Icon::Warning))
             return;
         force = true;
     }
     if (!submitLocal(folder, force).isEmpty())
-        emit toastRequested(Tone::Info, QStringLiteral("AMPR index queued"), nativePath(folder));
+        emit toastRequested(Tone::Info, tr("AMPR index queued"), nativePath(folder));
 }
 
 void AmprTab::generateConsole()
@@ -147,34 +148,34 @@ void AmprTab::generateConsole()
     const QString raw = m_remoteFolder->text().trimmed();
     if (!raw.startsWith(u'/')) {
         setInputError(m_remoteFolder, true);
-        m_remoteStatus->set(QStringLiteral("Enter the game's folder on the console, starting with \"/\"."), Tone::Err);
+        m_remoteStatus->set(tr("Enter the game's folder on the console, starting with \"/\"."), Tone::Err);
         return;
     }
     setInputError(m_remoteFolder, false);
     const QString folder = ps5::normalizeRemotePath(raw);
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        m_remoteStatus->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Err);
+        m_remoteStatus->set(tr("Enter the console's IP address at the top of the page first."), Tone::Err);
         return;
     }
-    if (!Sheet::confirm(window(), QStringLiteral("Generate and upload?"),
-                        QStringLiteral("Build ampr_emu.index from %1 and upload it to that folder on the PS5? An existing index is kept as ampr_emu.index.bak.")
+    if (!Sheet::confirm(window(), tr("Generate and upload?"),
+                        tr("Build ampr_emu.index from %1 and upload it to that folder on the PS5? An existing index is kept as ampr_emu.index.bak.")
                             .arg(Sheet::monoSpan(QStringLiteral("ftp://%1:%2%3").arg(ep.host).arg(ep.ftpPort).arg(folder))),
-                        QStringLiteral("Cancel"), QStringLiteral("Generate and upload"), false, Sheet::Icon::Info))
+                        tr("Cancel"), tr("Generate and upload"), false, Sheet::Icon::Info))
         return;
     if (!submitConsole(folder).isEmpty())
-        emit toastRequested(Tone::Info, QStringLiteral("AMPR index queued"), folder);
+        emit toastRequested(Tone::Info, tr("AMPR index queued"), folder);
 }
 
 void AmprTab::browseConsole()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        m_remoteStatus->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Err);
+        m_remoteStatus->set(tr("Enter the console's IP address at the top of the page first."), Tone::Err);
         return;
     }
     const QString start = m_remoteFolder->text().trimmed().startsWith(u'/') ? m_remoteFolder->text().trimmed() : ep.gamesFolder;
-    const QString chosen = pickConsoleFolder(window(), ep, start, QStringLiteral("Choose the game's app0 folder"), QStringLiteral("Use this folder"));
+    const QString chosen = pickConsoleFolder(window(), ep, start, tr("Choose the game's app0 folder"), tr("Use this folder"));
     if (!chosen.isEmpty()) {
         m_remoteFolder->setText(chosen);
         setInputError(m_remoteFolder, false);
@@ -184,9 +185,9 @@ void AmprTab::browseConsole()
 void AmprTab::applyDemo()
 {
     m_localFolder->setPath(QStringLiteral("D:/Dumps/PPSA01234-app0"));
-    m_localStatus->set(QStringLiteral("Indexed 18,442 file(s) into D:\\Dumps\\PPSA01234-app0\\ampr_emu.index (1.4 MB)"), Tone::Ok);
+    m_localStatus->set(tr("Indexed 18,442 file(s) into D:\\Dumps\\PPSA01234-app0\\ampr_emu.index (1.4 MB)"), Tone::Ok);
     m_remoteFolder->setText(QStringLiteral("/mnt/usb0/games/PPSA05678-app0"));
-    m_remoteStatus->set(QStringLiteral("Indexed 9,120 file(s) and uploaded ampr_emu.index to /mnt/usb0/games/PPSA05678-app0 (old index kept as ampr_emu.index.bak)"), Tone::Ok);
+    m_remoteStatus->set(tr("Indexed 9,120 file(s) and uploaded ampr_emu.index to /mnt/usb0/games/PPSA05678-app0 (old index kept as ampr_emu.index.bak)"), Tone::Ok);
 }
 
 void AmprTab::clearDemo()

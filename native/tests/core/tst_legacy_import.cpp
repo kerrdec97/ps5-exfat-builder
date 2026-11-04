@@ -46,7 +46,6 @@ const QMap<QString, QString>& notImported()
         {QStringLiteral("adv_active_subtab"), QStringLiteral("UI state")},
         {QStringLiteral("ffpkg_active_subtab"), QStringLiteral("UI state")},
         {QStringLiteral("y2jb_active_subtab"), QStringLiteral("UI state")},
-        {QStringLiteral("language"), QStringLiteral("translations not shipped yet (English only)")},
         {QStringLiteral("theme"), QStringLiteral("single Graphite theme")},
         {QStringLiteral("notify_sound"), QStringLiteral("covered by general.notifyOnFinish (notification + sound)")},
         {QStringLiteral("recent_folders"), QStringLiteral("UI history")},

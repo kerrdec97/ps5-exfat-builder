@@ -5,6 +5,7 @@
 #include <QThread>
 
 #include "core/FileUtil.h"
+#include "core/Languages.h"
 
 #include <algorithm>
 
@@ -80,6 +81,24 @@ void registerModule(ModuleContext& ctx)
     int order = 0;
 
     // ---- General --------------------------------------------------------------
+    {
+        // Interface language (docs/I18N.md). Read once by main.cpp at start-up;
+        // "system" follows the operating system's language when it is shipped.
+        SettingDef d;
+        d.key = keys::kLanguage;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("Language");
+        d.label = QStringLiteral("Interface language");
+        d.description = QStringLiteral("The language of menus, pages and settings. Messages from the engines (job results, errors, logs) stay in English. Takes effect when the app restarts.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("en");
+        d.choices.append({i18n::kSystemLanguage, QStringLiteral("System language"), {}});
+        for (const i18n::LanguageInfo& l : i18n::supportedLanguages())
+            d.choices.append({l.code, l.nativeName, {}});
+        d.restartRequired = true;
+        d.order = order++;
+        s.add(d);
+    }
     {
         SettingDef d;
         d.key = keys::kConfirmOnClose;
@@ -441,6 +460,13 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("output_dir"), keys::kDefaultOutputDir);
     s.addLegacyKey(QStringLiteral("temp_dir"), keys::kTempFolder);
     s.addLegacyKey(QStringLiteral("logs_dir"), keys::kLogFolder);
+    // Legacy language codes: the 16 table codes plus "en" / "en_us" (both English).
+    s.addLegacyKey(QStringLiteral("language"), keys::kLanguage, [](const QVariant& v) -> std::optional<QVariant> {
+        const QString code = v.toString().trimmed().toLower().section(QLatin1Char('_'), 0, 0).section(QLatin1Char('-'), 0, 0);
+        if (i18n::findLanguage(code))
+            return QVariant(code);
+        return std::nullopt;
+    });
     s.addLegacyKey(QStringLiteral("adv_threads"), keys::kWorkerThreads);
     s.addLegacyKey(QStringLiteral("shutdown_action"), keys::kAfterQueueAction);
     s.addLegacyKey(QStringLiteral("shutdown_delay"), keys::kAfterQueueDelay, [](const QVariant& v) -> std::optional<QVariant> {
