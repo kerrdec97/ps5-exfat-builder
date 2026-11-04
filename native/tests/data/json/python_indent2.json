@@ -1,0 +1,25 @@
+{
+  "titleId": "PPSA01325",
+  "contentVersion": "01.000.000",
+  "localizedParameters": {
+    "defaultLanguage": "en-US",
+    "en-US": {
+      "titleName": "Astro Bot — “Test” \\ \"q\""
+    },
+    "ja-JP": {
+      "titleName": "アストロ"
+    }
+  },
+  "attribute3": 4456512,
+  "ratio": 1.5,
+  "big": 12345678901234567890,
+  "empty": {},
+  "list": [],
+  "arr": [
+    1,
+    true,
+    null,
+    "x\n\t"
+  ],
+  "emoji": "🎮"
+}

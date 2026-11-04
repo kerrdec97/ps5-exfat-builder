@@ -2,14 +2,17 @@
 
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Power.h"
 #include "jobs/JobHistory.h"
 
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
 #include <QRunnable>
+#include <QTimer>
 
 #include <algorithm>
 #include <exception>
@@ -40,6 +43,10 @@ JobQueue::JobQueue(SettingsStore& settings, const JobFactory& factory, QObject* 
 JobQueue::~JobQueue()
 {
     shutdown(15000);
+    // Workers hold raw pointers into m_entries (their progress reporters), so
+    // they must all be gone before the members are destroyed. Cancellation has
+    // been requested and tool processes killed; this returns promptly.
+    m_pool.waitForDone(-1);
 }
 
 QString JobQueue::newId()
@@ -298,7 +305,8 @@ void JobQueue::schedule()
         for (const auto& e : m_entries) {
             if (running >= maxConcurrent)
                 break;
-            if (e->rec.state == JobState::Queued && e->job) {
+            if (e->rec.state == JobState::Queued && e->job
+                && (!e->rec.notBefore.isValid() || e->rec.notBefore <= QDateTime::currentDateTime())) {
                 e->rec.state = JobState::Running;
                 e->rec.started = QDateTime::currentDateTime();
                 toStart.push_back(e);
@@ -308,8 +316,23 @@ void JobQueue::schedule()
     }
     for (const auto& e : toStart)
         startEntry(e);
-    if (toStart.empty() && runningCount() == 0 && pendingCount() == 0)
+    const bool busy = runningCount() > 0;
+    power::setKeepAwake(busy && m_settings.snapshot().boolean(QStringLiteral("performance.keepComputerAwake")));
+    if (toStart.empty() && !busy && pendingCount() == 0)
         emit idle();
+    // A delayed retry is waiting: come back when it is due.
+    QDateTime nextDue;
+    {
+        std::lock_guard lock(m_mutex);
+        for (const auto& e : m_entries)
+            if (e->rec.state == JobState::Queued && e->rec.notBefore.isValid()
+                && e->rec.notBefore > QDateTime::currentDateTime()
+                && (!nextDue.isValid() || e->rec.notBefore < nextDue))
+                nextDue = e->rec.notBefore;
+    }
+    if (nextDue.isValid())
+        QTimer::singleShot(int(std::max<qint64>(50, QDateTime::currentDateTime().msecsTo(nextDue) + 20)), this,
+                           [this] { schedule(); });
 }
 
 void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
@@ -317,10 +340,12 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
     const QString id = e->rec.id;
     QPointer<JobQueue> self(this);
 
+    std::weak_ptr<Entry> weak = e; // the entry owns the reporter: no cycle
     e->reporter = std::make_unique<ProgressReporter>(
-        [self, e, id](const ProgressSnapshot&) {
+        [self, weak, id](const ProgressSnapshot&) {
+            auto entry = weak.lock();
             // Coalesce: post at most one pending UI update per job.
-            if (e->progressPending.exchange(true))
+            if (!entry || entry->progressPending.exchange(true))
                 return;
             if (self)
                 QMetaObject::invokeMethod(self.data(), [self, id] {
@@ -343,7 +368,9 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
     m_pool.start([self, id, job = std::shared_ptr<Job>(std::move(job)), settings, token, reporter]() mutable {
         Result<JobOutcome> result = Error(ErrorCode::Internal, QStringLiteral("The job did not run."));
         {
-            TempDir temp(QStringLiteral("job-") + id);
+            const QString tempParent = settings.string(QStringLiteral("storage.tempFolder")).trimmed();
+            TempDir temp(QStringLiteral("job-") + id,
+                         (!tempParent.isEmpty() && QFileInfo(tempParent).isDir()) ? tempParent : QString());
             JobContext ctx;
             ctx.jobId = id;
             ctx.token = token;
@@ -384,11 +411,64 @@ void JobQueue::onWorkerProgress(const QString& id)
     emit jobChanged(id);
 }
 
+bool JobQueue::tryAutoRetry(const std::shared_ptr<Entry>& e, const Error& error)
+{
+    if (m_shuttingDown)
+        return false;
+    switch (error.code) {
+    case ErrorCode::IoError:
+    case ErrorCode::ExternalToolFailed:
+    case ErrorCode::Timeout:
+        break;
+    default:
+        return false; // cancelled, invalid input, missing tool, full disk, verification...
+    }
+    const SettingsValues snap = m_settings.snapshot();
+    const int maxRetries = int(snap.integer(QStringLiteral("general.autoRetryCount")));
+    if (e->rec.attempt > maxRetries)
+        return false;
+    auto job = m_factory.create(e->rec.kind, e->rec.parameters, e->rec.overrides);
+    if (!job.ok())
+        return false;
+    const int delay = int(snap.integer(QStringLiteral("general.autoRetryDelaySeconds")));
+    {
+        std::lock_guard lock(m_mutex);
+        e->job = std::move(job).value();
+        e->cancel = CancellationSource();
+        e->rec.attempt += 1;
+        e->rec.state = JobState::Queued;
+        e->rec.error.reset();
+        e->rec.outcome.reset();
+        e->rec.started = QDateTime();
+        e->rec.finished = QDateTime();
+        e->rec.notBefore = QDateTime::currentDateTime().addSecs(delay);
+        e->rec.progress = ProgressSnapshot();
+        e->rec.progress.phase = QStringLiteral("Waiting to retry");
+        e->rec.progress.indeterminate = true;
+    }
+    Log(QStringLiteral("queue"), e->rec.id)
+        .warn(QStringLiteral("Failed (%1); retrying in %2 s, attempt %3 of %4")
+                  .arg(error.message).arg(delay).arg(e->rec.attempt).arg(maxRetries + 1));
+    return true;
+}
+
 void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
 {
     auto e = find(id);
     if (!e)
         return;
+    if (!result.ok() && !result.error().isCancelled() && !e->cancel.isCancelled()) {
+        {
+            std::lock_guard lock(m_mutex);
+            e->reporter.reset();
+        }
+        if (tryAutoRetry(e, result.error())) {
+            emit jobChanged(id);
+            (void)saveQueue();
+            schedule();
+            return;
+        }
+    }
     JobRecord snapshot;
     {
         std::lock_guard lock(m_mutex);
@@ -515,6 +595,7 @@ bool JobQueue::shutdown(int msecs)
         return m_pool.waitForDone(0);
     (void)saveQueue();
     m_shuttingDown = true;
+    power::setKeepAwake(false);
     {
         std::lock_guard lock(m_mutex);
         for (const auto& e : m_entries)

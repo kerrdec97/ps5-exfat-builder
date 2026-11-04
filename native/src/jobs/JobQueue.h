@@ -37,6 +37,8 @@ struct JobRecord {
     std::optional<Error> error;
     QJsonObject parameters;
     QVariantMap overrides;
+    int attempt = 1;          // automatic retries increase this (general.autoRetryCount)
+    QDateTime notBefore;      // a retry waits until then (general.autoRetryDelaySeconds)
 };
 
 class JobHistory;
@@ -96,6 +98,7 @@ private:
     void onWorkerFinished(const QString& id, Result<JobOutcome> result);
     std::shared_ptr<Entry> find(const QString& id) const;
     QString newId();
+    bool tryAutoRetry(const std::shared_ptr<Entry>& e, const Error& error);
 
     SettingsStore& m_settings;
     const JobFactory& m_factory;

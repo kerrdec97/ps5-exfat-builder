@@ -5,6 +5,7 @@
 #include "engines/general/Module.h"
 #include "registration/Registration.h"
 
+#include <QFileInfo>
 #include <QPointer>
 #include <QThreadPool>
 #include <QtConcurrent/QtConcurrentRun>
@@ -50,7 +51,9 @@ Status AppContext::initialize()
 
     FW_TRY(m_settings->load());
     const auto snap = m_settings->snapshot();
-    m_file = std::make_shared<FileLogSink>(Paths::logsDir(), QStringLiteral("farewell"),
+    const QString customLogs = snap.string(general::keys::kLogFolder).trimmed();
+    const QString logsDir = (!customLogs.isEmpty() && QFileInfo(customLogs).isDir()) ? customLogs : Paths::logsDir();
+    m_file = std::make_shared<FileLogSink>(logsDir, QStringLiteral("farewell"),
                                            snap.integer(general::keys::kLogMaxMiB) * 1024 * 1024,
                                            int(snap.integer(general::keys::kLogKeepFiles)));
     Logger::instance().addSink(m_file);

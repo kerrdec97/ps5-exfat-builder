@@ -43,3 +43,11 @@ foreach(test_src ${FW_TESTS})
         TIMEOUT 900
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+# Module-owned extras (helper executables such as a stand-in external tool):
+# tests/<group>/<module>/extra.cmake is included if present. Inside it,
+# CMAKE_CURRENT_LIST_DIR is that module's test folder.
+file(GLOB FW_TEST_EXTRAS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*/*/extra.cmake)
+foreach(extra ${FW_TEST_EXTRAS})
+    include(${extra})
+endforeach()

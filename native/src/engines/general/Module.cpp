@@ -4,9 +4,56 @@
 #include <QFileInfo>
 #include <QThread>
 
+#include "core/FileUtil.h"
+
 #include <algorithm>
 
 namespace fw::general {
+
+qint64 ioBufferBytes(const SettingsValues& settings)
+{
+    return std::clamp<qint64>(settings.integer(keys::kIoBufferMiB), 1, 64) * 1024 * 1024;
+}
+
+qint64 freeSpaceMarginBytes(const SettingsValues& settings)
+{
+    return std::max<qint64>(0, settings.integer(keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
+}
+
+QString tempParentDir(const SettingsValues& settings)
+{
+    const QString custom = settings.string(keys::kTempFolder).trimmed();
+    if (!custom.isEmpty() && QFileInfo(custom).isDir())
+        return custom;
+    return {};
+}
+
+bool deleteSourceAfterVerifiedBuild(const JobContext& ctx, const QString& sourceFolder, JobOutcome& outcome)
+{
+    if (!ctx.settings.boolean(keys::kDeleteSource))
+        return false;
+    const auto refuse = [&](const QString& why) {
+        const QString msg = QStringLiteral("The source folder was kept: %1").arg(why);
+        outcome.warnings << msg;
+        ctx.log.warn(msg);
+        return false;
+    };
+    if (outcome.verification != Verification::Passed)
+        return refuse(QStringLiteral("the output was not verified."));
+    if (ctx.settings.string(keys::kVerifyMode) != QStringLiteral("full"))
+        return refuse(QStringLiteral("only a full (every byte) verification allows deleting the source."));
+    if (!QFileInfo(sourceFolder).isDir())
+        return refuse(QStringLiteral("it is not a folder."));
+    for (const QString& out : outcome.outputs)
+        if (isSameOrInside(out, sourceFolder))
+            return refuse(QStringLiteral("an output is inside it."));
+    const Status st = removeTreeSafely(sourceFolder);
+    if (!st.ok())
+        return refuse(st.error().message);
+    ctx.log.info(QStringLiteral("Deleted the source folder after a verified build: %1").arg(QDir::toNativeSeparators(sourceFolder)));
+    outcome.details.insert(QStringLiteral("sourceDeleted"), true);
+    return true;
+}
 
 int workerThreads(const SettingsValues& settings)
 {
@@ -33,20 +80,6 @@ void registerModule(ModuleContext& ctx)
     int order = 0;
 
     // ---- General --------------------------------------------------------------
-    {
-        SettingDef d;
-        d.key = keys::kLanguage;
-        d.section = QStringLiteral("General");
-        d.group = QStringLiteral("Interface");
-        d.label = QStringLiteral("Language");
-        d.description = QStringLiteral("Interface language. English is complete; other languages fall back to English where a translation is missing.");
-        d.type = SettingType::Enum;
-        d.defaultValue = QStringLiteral("en");
-        d.choices = {{QStringLiteral("en"), QStringLiteral("English"), {}}};
-        d.restartRequired = true;
-        d.order = order++;
-        s.add(d);
-    }
     {
         SettingDef d;
         d.key = keys::kConfirmOnClose;
@@ -93,6 +126,80 @@ void registerModule(ModuleContext& ctx)
         d.type = SettingType::DirPath;
         d.defaultValue = QString();
         d.advanced = true;
+        d.order = order++;
+        s.add(d);
+    }
+
+    {
+        SettingDef d;
+        d.key = keys::kAfterQueueAction;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("When the queue finishes");
+        d.label = QStringLiteral("Then");
+        d.description = QStringLiteral("What the computer does after the last job finishes. A countdown lets you cancel.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("none");
+        d.choices = {{QStringLiteral("none"), QStringLiteral("Do nothing"), {}},
+                     {QStringLiteral("sleep"), QStringLiteral("Sleep"), {}},
+                     {QStringLiteral("hibernate"), QStringLiteral("Hibernate"), {}},
+                     {QStringLiteral("shutdown"), QStringLiteral("Shut down"), {}},
+                     {QStringLiteral("restart"), QStringLiteral("Restart"), {}}};
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kAfterQueueDelay;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("When the queue finishes");
+        d.label = QStringLiteral("Countdown");
+        d.description = QStringLiteral("Seconds to wait, with a Cancel button, before the action above.");
+        d.type = SettingType::Int;
+        d.defaultValue = 60;
+        d.minimum = 10;
+        d.maximum = 3600;
+        d.unit = QStringLiteral("s");
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kAfterQueueOnlyIfOk;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("When the queue finishes");
+        d.label = QStringLiteral("Only if every job succeeded");
+        d.description = QStringLiteral("Leaves the computer on when a job failed, so you can see why.");
+        d.type = SettingType::Bool;
+        d.defaultValue = true;
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kAutoRetryCount;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("Behaviour");
+        d.label = QStringLiteral("Retry failed jobs automatically");
+        d.description = QStringLiteral("Retries a job that failed because of a read/write error, a tool failure or a timeout. Never retries cancelled jobs, verification failures, missing tools or a full disk.");
+        d.type = SettingType::Int;
+        d.defaultValue = 0;
+        d.minimum = 0;
+        d.maximum = 5;
+        d.unit = QStringLiteral("times");
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kAutoRetryDelay;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("Behaviour");
+        d.label = QStringLiteral("Wait before retrying");
+        d.type = SettingType::Int;
+        d.defaultValue = 30;
+        d.minimum = 0;
+        d.maximum = 3600;
+        d.unit = QStringLiteral("s");
         d.order = order++;
         s.add(d);
     }
@@ -204,6 +311,20 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
 
+    {
+        SettingDef d;
+        d.key = keys::kDeleteSource;
+        d.section = QStringLiteral("Storage");
+        d.group = QStringLiteral("Danger zone");
+        d.label = QStringLiteral("Delete the source folder after a verified build");
+        d.description = QStringLiteral("Frees space by deleting the dump folder once its image or package passed a full, every-byte verification. Never happens after a structure-only check, a skipped or failed verification, or when the output is inside the source.");
+        d.type = SettingType::Bool;
+        d.defaultValue = false;
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+
     // ---- Verification -----------------------------------------------------------
     order = 0;
     {
@@ -285,6 +406,21 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
 
+    {
+        SettingDef d;
+        d.key = keys::kLogFolder;
+        d.section = QStringLiteral("Logging");
+        d.group = QStringLiteral("Log files");
+        d.label = QStringLiteral("Log folder");
+        d.description = QStringLiteral("Where log files are written. Empty: the app's own folder in your local app data.");
+        d.type = SettingType::DirPath;
+        d.defaultValue = QString();
+        d.validator = dirMustExistIfSet;
+        d.restartRequired = true;
+        d.order = order++;
+        s.add(d);
+    }
+
     // ---- Advanced -----------------------------------------------------------------
     order = 0;
     {
@@ -301,9 +437,22 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
 
-    // Legacy (Python app) settings that map onto these.
-    s.addLegacyKey(QStringLiteral("language"), keys::kLanguage);
+    // Legacy (Python app, ~/.exfat_builder_settings.json) keys that map onto these.
     s.addLegacyKey(QStringLiteral("output_dir"), keys::kDefaultOutputDir);
+    s.addLegacyKey(QStringLiteral("temp_dir"), keys::kTempFolder);
+    s.addLegacyKey(QStringLiteral("logs_dir"), keys::kLogFolder);
+    s.addLegacyKey(QStringLiteral("adv_threads"), keys::kWorkerThreads);
+    s.addLegacyKey(QStringLiteral("shutdown_action"), keys::kAfterQueueAction);
+    s.addLegacyKey(QStringLiteral("shutdown_delay"), keys::kAfterQueueDelay, [](const QVariant& v) -> std::optional<QVariant> {
+        return QVariant(std::clamp<qint64>(v.toLongLong(), 10, 3600));
+    });
+    s.addLegacyKey(QStringLiteral("retry_count"), keys::kAutoRetryCount, [](const QVariant& v) -> std::optional<QVariant> {
+        return QVariant(std::clamp<qint64>(v.toLongLong(), 0, 5));
+    });
+    s.addLegacyKey(QStringLiteral("adv_skip_verify"), keys::kVerifyAfterBuild, [](const QVariant& v) -> std::optional<QVariant> {
+        return QVariant(!v.toBool());
+    });
+    s.addLegacyKey(QStringLiteral("adv_delete_source"), keys::kDeleteSource);
 }
 
 } // namespace fw::general

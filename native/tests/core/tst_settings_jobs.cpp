@@ -7,6 +7,7 @@
 #include "engines/general/Module.h"
 #include "jobs/JobHistory.h"
 #include "jobs/JobQueue.h"
+#include "jobs/QueueCompletionWatcher.h"
 #include "support/TestRegistry.h"
 #include "support/TestSupport.h"
 
@@ -14,6 +15,7 @@
 #include <QJsonDocument>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QMutex>
 #include <QTest>
 
 using namespace fw;
@@ -49,6 +51,16 @@ public:
         ctx.progress->advance(1);
         if (m_p.value(QStringLiteral("fail")).toBool())
             return Error(ErrorCode::IoError, QStringLiteral("Disk on fire"));
+        if (const int failTimes = m_p.value(QStringLiteral("failTimes")).toInt(); failTimes > 0) {
+            static QMap<QString, int> attempts;
+            static QMutex m;
+            QMutexLocker lock(&m);
+            const QString key = m_p.value(QStringLiteral("title")).toString();
+            if (++attempts[key] <= failTimes)
+                return Error(ErrorCode::IoError, QStringLiteral("Transient failure"));
+        }
+        if (m_p.value(QStringLiteral("missingTool")).toBool())
+            return Error(ErrorCode::DependencyMissing, QStringLiteral("Tool missing"));
         JobOutcome o;
         o.summary = QStringLiteral("ok");
         o.outputs << ctx.tempDir;
@@ -351,6 +363,88 @@ private slots:
         QCOMPARE(int(q.records().size()), 1);
         q.holdQueue(false);
         QVERIFY(waitForState(q, b.value(), JobState::Succeeded));
+    }
+
+    void transientFailuresAreRetriedAutomatically()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q9/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAutoRetryCount, 2).ok());
+        QVERIFY(store.setValue(general::keys::kAutoRetryDelay, 0).ok());
+        JobQueue q(store, reg.jobs);
+        auto ok = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("R1")}, {QStringLiteral("failTimes"), 2}});
+        QVERIFY(waitForState(q, ok.value(), JobState::Succeeded));
+        QCOMPARE(q.record(ok.value())->attempt, 3);
+        auto gaveUp = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("R2")}, {QStringLiteral("failTimes"), 5}});
+        QVERIFY(waitForState(q, gaveUp.value(), JobState::Failed));
+        QCOMPARE(q.record(gaveUp.value())->attempt, 3);
+        // Non-transient errors are never retried.
+        auto missing = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("missingTool"), true}});
+        QVERIFY(waitForState(q, missing.value(), JobState::Failed));
+        QCOMPARE(q.record(missing.value())->attempt, 1);
+    }
+
+    void completionWatcherRequestsPowerAction()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q10/settings.json")));
+        QVERIFY(store.load().ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        // Action "none": finished but no action.
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {}).ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 1; }, 5000));
+        QCOMPARE(due.count(), 0);
+        // Shut down after success.
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("shutdown")).ok());
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {}).ok());
+        QVERIFY(QTest::qWaitFor([&] { return due.count() == 1; }, 5000));
+        QCOMPARE(due.first().at(0).value<power::Action>(), power::Action::Shutdown);
+        QCOMPARE(due.first().at(1).toInt(), 60);
+        // A failed job blocks the action when "only if all succeeded" is on.
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("fail"), true}}).ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 3; }, 5000));
+        QCOMPARE(due.count(), 1);
+    }
+
+    void deleteSourceOnlyAfterFullVerification()
+    {
+        fwtest::Registry reg;
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("ds/settings.json")));
+        QVERIFY(store.load().ok());
+        const QString src = m_root.filePath(QStringLiteral("ds/dump"));
+        QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/eboot.bin"), "x"));
+        JobContext ctx;
+        ctx.log = Log(QStringLiteral("test"));
+        JobOutcome o;
+        o.outputs << m_root.filePath(QStringLiteral("ds/out.exfat"));
+        o.verification = Verification::Passed;
+        // Off by default.
+        ctx.settings = store.snapshot();
+        QVERIFY(!general::deleteSourceAfterVerifiedBuild(ctx, src, o));
+        QVERIFY(QFileInfo::exists(src));
+        // On, but structure-only verification: refused with a warning.
+        ctx.settings = store.snapshot({{general::keys::kDeleteSource, true}, {general::keys::kVerifyMode, QStringLiteral("structure")}});
+        QVERIFY(!general::deleteSourceAfterVerifiedBuild(ctx, src, o));
+        QCOMPARE(o.warnings.size(), 1);
+        // Output inside the source: refused.
+        ctx.settings = store.snapshot({{general::keys::kDeleteSource, true}});
+        JobOutcome inside = o;
+        inside.outputs = {src + QStringLiteral("/out.exfat")};
+        QVERIFY(!general::deleteSourceAfterVerifiedBuild(ctx, src, inside));
+        // Verification not passed: refused.
+        JobOutcome unverified = o;
+        unverified.verification = Verification::Skipped;
+        QVERIFY(!general::deleteSourceAfterVerifiedBuild(ctx, src, unverified));
+        QVERIFY(QFileInfo::exists(src));
+        // Everything right: deleted.
+        QVERIFY(general::deleteSourceAfterVerifiedBuild(ctx, src, o));
+        QVERIFY(!QFileInfo::exists(src));
     }
 
     void restartRecoveryRestoresPendingAndMarksInterrupted()

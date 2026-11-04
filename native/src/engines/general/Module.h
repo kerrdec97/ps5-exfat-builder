@@ -10,7 +10,6 @@ void registerModule(ModuleContext& ctx);
 
 // Keys declared here (consumers: JobQueue, main.cpp, FileUtil callers).
 namespace keys {
-inline const QString kLanguage = QStringLiteral("general.language");
 inline const QString kConfirmOnClose = QStringLiteral("general.confirmCloseWhileBusy");
 inline const QString kNotifyOnFinish = QStringLiteral("general.notifyOnFinish");
 inline const QString kRestoreQueue = QStringLiteral("general.restoreQueueOnStart");
@@ -28,9 +27,30 @@ inline const QString kLogMaxMiB = QStringLiteral("logging.maxFileMiB");
 inline const QString kKeepJobTemp = QStringLiteral("advanced.keepJobTempFolders");
 inline const QString kVerifyAfterBuild = QStringLiteral("verification.verifyAfterBuild");
 inline const QString kVerifyMode = QStringLiteral("verification.mode");
+inline const QString kAfterQueueAction = QStringLiteral("general.afterQueueAction");
+inline const QString kAfterQueueDelay = QStringLiteral("general.afterQueueDelaySeconds");
+inline const QString kAfterQueueOnlyIfOk = QStringLiteral("general.afterQueueOnlyIfAllSucceeded");
+inline const QString kAutoRetryCount = QStringLiteral("general.autoRetryCount");
+inline const QString kAutoRetryDelay = QStringLiteral("general.autoRetryDelaySeconds");
+inline const QString kLogFolder = QStringLiteral("logging.folder");
+inline const QString kDeleteSource = QStringLiteral("storage.deleteSourceAfterVerifiedBuild");
 } // namespace keys
 
 // Effective worker-thread count for engines (0 = all logical cores).
 int workerThreads(const SettingsValues& settings);
+// Read/write buffer size for streaming engines (performance.ioBufferMiB).
+qint64 ioBufferBytes(const SettingsValues& settings);
+// Free-space reserve every writer must keep (storage.freeSpaceMarginMiB);
+// pass it as the margin to fw::ensureFreeSpace().
+qint64 freeSpaceMarginBytes(const SettingsValues& settings);
+// The user's temporary folder (storage.tempFolder) or empty for the default.
+QString tempParentDir(const SettingsValues& settings);
+
+// For build jobs, after the outcome is final: deletes the source folder when
+// the user enabled storage.deleteSourceAfterVerifiedBuild AND the outcome is
+// content-verified (verification Passed in "full" mode) AND no output lies
+// inside the source (audit C1/C2). Returns true if the source was deleted;
+// a refusal is added to outcome.warnings and logged, never an error.
+bool deleteSourceAfterVerifiedBuild(const JobContext& ctx, const QString& sourceFolder, JobOutcome& outcome);
 
 } // namespace fw::general
