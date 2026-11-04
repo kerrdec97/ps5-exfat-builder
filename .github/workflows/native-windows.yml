@@ -180,6 +180,16 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: warn
 
+      - name: Upload debug symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-symbols
+          path: |
+            build/bin/*.pdb
+            build/tests/*.pdb
+          if-no-files-found: warn
+
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,3 +1,13 @@
+# Release builds with MSVC also produce .pdb symbol files (debug information in
+# the objects, /Z7, which parallel Ninja builds need; linked with /DEBUG). The
+# executable is optimised exactly as before (/OPT:REF /OPT:ICF restore the
+# Release defaults that /DEBUG turns off). Symbols make crash dumps from users
+# and crashing tests in CI readable; they are not shipped.
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 # Shared compiler settings for every Farewell target.
 function(fw_configure_target target)
     if(MSVC)
