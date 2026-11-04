@@ -124,4 +124,5 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | exFAT images with the real Windows driver | `tst_exfat_windows`: image wrapped in a VHD, mounted with Mount-DiskImage, read back and `chkdsk`ed; a Windows-formatted exFAT volume read by the native reader | Done | Windows CI (test log printed in the run) |
 | Installer + portable zip + SHA256SUMS | Inno Setup (per-user, no admin), zip, checksums | Done | CI artifacts |
 | No admin rights, no .NET, no OSFMount, no Python | Native engines | Done | — |
-| Real PC acceptance test (owner's machine) | — | Pending | No Windows PC was connected to this session; see RELEASE_NOTES "How to test" |
+| Windows CI acceptance of the release candidate | Commit `b29d7b5`, run 41804192710 | Done | 36/36 tests, deployed-exe self-test, 41 page screenshots, 30 s launch, installer + portable zip + SHA256SUMS |
+| Real PC acceptance test (owner's machine) | — | Pending | No Windows PC was connected to this session; see RELEASE_NOTES "Before release" |

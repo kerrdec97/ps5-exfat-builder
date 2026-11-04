@@ -91,8 +91,17 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
 * **Independent review**: four reviewers read the core, image engines,
   PFS/FPKG and Backport/PS5 code against the specs and with crafted inputs;
   their findings were fixed with regression tests.
-* **Not tested**: your PC, a PS5 console, real Sony Publishing Tools, a real
-  game dump. These are the owner's checklist below.
+* **Evidence for this build** (commit `b29d7b5`, GitHub Actions run
+  41804192710 on Windows Server 2025): 36/36 test programs passed; the real
+  Windows exFAT driver test passed (mount, read back, `chkdsk`); the deployed
+  exe's self-test listed 119 settings and every job kind; it rendered all 41
+  page screenshots; it was still running after 30 s (≈ 94 MB working set);
+  the installer and portable zip were built with `SHA256SUMS.txt`
+  (artifacts `native-windows-packages`, `native-windows-evidence`,
+  `native-windows-symbols`). Linux with sanitizers: run 41804192621 passed.
+* **Not tested**: your PC (no computer was connected to the session that
+  built this), a PS5 console, real Sony Publishing Tools, a real game dump.
+  These are the owner's checklist below.
 
 ## Known limitations
 
