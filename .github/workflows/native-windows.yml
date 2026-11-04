@@ -78,6 +78,7 @@ jobs:
         run: |
           $exe = Join-Path $PWD 'dist\exFAT Image Builder\exFAT Image Builder.exe'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-data'
+          $env:FW_OFFLINE = '1'
           $p = Start-Process -FilePath $exe -ArgumentList '--self-test' -RedirectStandardOutput ci-out\self-test.json -RedirectStandardError ci-out\self-test.err -PassThru -Wait -NoNewWindow
           Get-Content ci-out\self-test.json
           if ($p.ExitCode -ne 0) { throw "self-test exit code $($p.ExitCode)" }
@@ -87,6 +88,7 @@ jobs:
         run: |
           $exe = Join-Path $PWD 'dist\exFAT Image Builder\exFAT Image Builder.exe'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-data'
+          $env:FW_OFFLINE = '1'
           $p = Start-Process -FilePath $exe -ArgumentList '--screenshot-pages', (Join-Path $PWD 'ci-out\pages') -RedirectStandardOutput ci-out\screenshots.txt -PassThru -Wait -NoNewWindow
           Get-Content ci-out\screenshots.txt
           if ($p.ExitCode -ne 0) { throw "screenshot run exit code $($p.ExitCode)" }
@@ -96,6 +98,7 @@ jobs:
         run: |
           $exe = Join-Path $PWD 'dist\exFAT Image Builder\exFAT Image Builder.exe'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-data'
+          $env:FW_OFFLINE = '1'
           $p = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 30
           $alive = -not $p.HasExited

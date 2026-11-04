@@ -340,9 +340,10 @@ private slots:
 
     void paramJsonToleratesMalformedText()
     {
-        const QByteArray messy = "\xEF\xBB\xBF{\n // dumped by a tool\n \"titleId\": \"PPSA02000\", /* note */\n"
-                                 " \"localizedParameters\": {\"en-US\": {\"titleName\": \"Tr\xC3\xA4iling\",},},\n}\n\0\0\0";
-        auto r = parseParamJson(QByteArray(messy.constData(), messy.size() + 3));
+        // Built with an explicit length: a QByteArray from a literal stops at the first NUL.
+        static const char messyText[] = "\xEF\xBB\xBF{\n // dumped by a tool\n \"titleId\": \"PPSA02000\", /* note */\n"
+                                        " \"localizedParameters\": {\"en-US\": {\"titleName\": \"Tr\xC3\xA4iling\",},},\n}\n\0\0\0";
+        auto r = parseParamJson(QByteArray(messyText, int(sizeof(messyText) - 1)));
         QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
         QVERIFY(r->repaired);
         QCOMPARE(r->titleId, QStringLiteral("PPSA02000"));

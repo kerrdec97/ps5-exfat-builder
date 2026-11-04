@@ -1,0 +1,5 @@
+# Leaks inside system libraries we do not control (Linux CI only).
+leak:libproxy
+leak:libpxbackend
+leak:libglib-2.0
+leak:libfontconfig

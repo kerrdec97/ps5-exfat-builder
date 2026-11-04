@@ -473,6 +473,9 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
 
 void MainWindow::checkForUpdates(bool silent)
 {
+    // Automated tests and CI runs set FW_OFFLINE so nothing contacts GitHub.
+    if (silent && qEnvironmentVariableIsSet("FW_OFFLINE"))
+        return;
     auto r = jobs::submitUpdateCheck(m_ctx);
     if (!r.ok()) {
         if (!silent)

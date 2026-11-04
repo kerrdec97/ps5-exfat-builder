@@ -30,7 +30,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build qt6-base-dev qt6-base-dev-tools libqt6svg6-dev \
-            libgl1-mesa-dev zlib1g-dev exfatprogs fonts-dejavu-core
+            libgl1-mesa-dev zlib1g-dev exfatprogs fonts-dejavu-core fonts-inter libqt6sql6-sqlite unzip
 
       - name: Configure (ASan + UBSan)
         run: >
@@ -45,5 +45,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           ASAN_OPTIONS: detect_leaks=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/native/tests/lsan.supp
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          FW_OFFLINE: '1'
+
         run: ctest --test-dir build --output-on-failure --timeout 900
