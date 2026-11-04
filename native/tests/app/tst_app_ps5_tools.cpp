@@ -157,6 +157,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && !tab.isDirty(), 10000);
         QCOMPARE(readAll(empty + QStringLiteral("/autoload.txt")), ps5::autoloader::defaultHeader().toUtf8());
         QVERIFY(!QFileInfo::exists(empty + QStringLiteral("/autoload.txt.bak")));
+
+        // A folder that is not there: nothing of the previous folder stays editable.
+        tab.openFolder(empty + QStringLiteral("/missing"));
+        QVERIFY(tab.editor()->toPlainText().isEmpty());
+        QVERIFY(tab.chipNames().isEmpty());
+        QVERIFY(tab.editor()->isReadOnly());
     }
 
     void fakelibTabManagesOverlaysOnAFakeConsole()

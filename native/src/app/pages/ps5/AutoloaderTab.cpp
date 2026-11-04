@@ -95,6 +95,9 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
         if (m_dirty && !Sheet::confirm(window(), QStringLiteral("Discard the unsaved changes?"),
                                        QStringLiteral("autoload.txt was edited and not saved."), QStringLiteral("Keep editing"),
                                        QStringLiteral("Discard"), true, Sheet::Icon::Warning)) {
+            m_folder->blockSignals(true); // keep editing the folder the text belongs to
+            m_folder->setPath(m_current);
+            m_folder->blockSignals(false);
             return;
         }
         openFolder(p);
@@ -117,6 +120,7 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     connect(this, &ConsoleToolTab::busyChanged, this, [this](bool) { revalidate(); });
 
     const QString saved = al::folderFromSettings(m_ctx.settings().snapshot());
+    m_current = saved;
     m_folder->blockSignals(true);
     m_folder->setPath(saved);
     m_folder->blockSignals(false);
@@ -128,15 +132,16 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
 
 QString AutoloaderTab::folder() const
 {
-    return m_folder->path().trimmed();
+    return m_current;
 }
 
 void AutoloaderTab::openFolder(const QString& path)
 {
+    m_current = path.trimmed();
     m_folder->blockSignals(true);
-    m_folder->setPath(path);
+    m_folder->setPath(m_current);
     m_folder->blockSignals(false);
-    (void)m_ctx.settings().setValue(ps5::keys::kAutoloaderFolder, path.trimmed());
+    (void)m_ctx.settings().setValue(ps5::keys::kAutoloaderFolder, m_current);
     m_dirty = false;
     load();
 }
@@ -144,13 +149,16 @@ void AutoloaderTab::openFolder(const QString& path)
 void AutoloaderTab::load()
 {
     const QString dir = folder();
-    if (dir.isEmpty()) {
-        m_badge->set(QStringLiteral("No folder"), Tone::Neutral);
-        return;
-    }
-    if (!QFileInfo(dir).isDir()) {
-        m_folder->setError(QStringLiteral("The folder does not exist."));
-        m_badge->set(QStringLiteral("Folder missing"), Tone::Err);
+    if (dir.isEmpty() || !QFileInfo(dir).isDir()) {
+        // Nothing from another folder stays in the editor.
+        m_editor->blockSignals(true);
+        m_editor->clear();
+        m_editor->blockSignals(false);
+        m_dirty = false;
+        setFiles({});
+        m_folder->setError(dir.isEmpty() ? QString() : QStringLiteral("The folder does not exist."));
+        m_badge->set(dir.isEmpty() ? QStringLiteral("No folder") : QStringLiteral("Folder missing"), dir.isEmpty() ? Tone::Neutral : Tone::Err);
+        m_saved->clear();
         return;
     }
     m_folder->setError({});
@@ -287,6 +295,8 @@ void AutoloaderTab::save()
 
 void AutoloaderTab::saveNow()
 {
+    if (m_demo)
+        return; // the specimen folder is not on disk
     const QString dir = folder();
     const QString text = m_editor->toPlainText();
     runLocal<al::SaveResult>([dir, text](const CancellationToken&) { return al::save(dir, text); },
@@ -340,6 +350,8 @@ void AutoloaderTab::addPayload()
 
 void AutoloaderTab::addPayloadFile(const QString& source, bool overwrite)
 {
+    if (m_demo)
+        return; // the specimen folder is not on disk
     const QString dir = folder();
     runLocal<QStringList>(
         [dir, source, overwrite](const CancellationToken& token) -> Result<QStringList> {
@@ -371,6 +383,8 @@ void AutoloaderTab::askDelete(const QString& fileName)
 
 void AutoloaderTab::deletePayloadFile(const QString& fileName)
 {
+    if (m_demo)
+        return; // the specimen folder is not on disk
     const QString dir = folder();
     struct Deleted {
         bool trashed = false;
@@ -405,8 +419,9 @@ void AutoloaderTab::deletePayloadFile(const QString& fileName)
 void AutoloaderTab::applyDemo()
 {
     m_demo = true;
+    m_current = QStringLiteral("D:/PS5/USB/ps5_autoloader"); // specimen only: nothing is read or written
     m_folder->blockSignals(true);
-    m_folder->setPath(QStringLiteral("D:/PS5/USB/ps5_autoloader"));
+    m_folder->setPath(m_current);
     m_folder->blockSignals(false);
     m_folder->setError({});
     setFiles({QStringLiteral("elfldr.elf"), QStringLiteral("ftpsrv.elf"), QStringLiteral("kstuff.elf"), QStringLiteral("shadowmountplus.elf")});
@@ -419,16 +434,12 @@ void AutoloaderTab::applyDemo()
 void AutoloaderTab::clearDemo()
 {
     m_demo = false;
-    const QString saved = al::folderFromSettings(m_ctx.settings().snapshot());
+    m_current = al::folderFromSettings(m_ctx.settings().snapshot());
     m_folder->blockSignals(true);
-    m_folder->setPath(saved);
+    m_folder->setPath(m_current);
     m_folder->blockSignals(false);
-    m_editor->clear();
-    setFiles({});
     m_dirty = false;
-    m_badge->set(QStringLiteral("No folder"), Tone::Neutral);
-    if (!saved.isEmpty() && QFileInfo(saved).isDir())
-        load();
+    load(); // the saved folder again (or an empty editor)
     revalidate();
 }
 

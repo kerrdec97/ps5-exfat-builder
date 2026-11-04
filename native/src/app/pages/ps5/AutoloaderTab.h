@@ -55,6 +55,7 @@ private:
     QLabel* m_noChips;
     QLabel* m_saved;
     QStringList m_files;
+    QString m_current; // the folder the editor's text belongs to
     bool m_dirty = false;
     bool m_demo = false;
 };
