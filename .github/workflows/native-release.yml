@@ -1,0 +1,45 @@
+name: Native (C++) release
+
+# Pushing a tag v5.* builds, tests and packages the native Farewell Edition on
+# Windows (the same workflow as every push), then publishes the installer, the
+# portable zip and SHA256SUMS.txt as a GitHub *pre-release*. A pre-release is
+# not "latest", so the legacy app's update check does not offer it; promote it
+# by hand once it has been tested on a real PC and console.
+
+on:
+  push:
+    tags: ['v5.*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/native-windows.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-windows-packages
+          path: dist
+
+      - name: Check the packages against their checksums
+        run: |
+          ls -la dist
+          cd dist && tr -d '\r' < SHA256SUMS.txt | sha256sum -c -   # written on Windows (CRLF)
+
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.exe dist/SHA256SUMS.txt \
+            --prerelease --verify-tag \
+            --title "exFAT Image Builder ${GITHUB_REF_NAME#v} — Farewell Edition (native, pre-release)" \
+            --notes-file native/RELEASE_NOTES.md

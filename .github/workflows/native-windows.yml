@@ -14,6 +14,7 @@ on:
       - '!native/**/*.md'
       - '.github/workflows/native-windows.yml'
   workflow_dispatch:
+  workflow_call: # the release workflow builds, tests and packages through this one
 
 permissions:
   contents: read

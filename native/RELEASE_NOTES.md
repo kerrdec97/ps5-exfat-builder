@@ -1,8 +1,10 @@
 # exFAT Image Builder 5.0.0 — Farewell Edition (native) · release notes
 
-**Status: release candidate, not published.** Built and tested in CI on
-Windows (MSVC 2022, Qt 6.8) and Linux; not yet run on the owner's PC, a PS5
-console or with real Sony Publishing Tools. See *Before release* below.
+**Status: pre-release.** Built and tested in CI on Windows (MSVC 2022,
+Qt 6.8) and Linux; published as a GitHub *pre-release*, so the legacy app's
+update check does not offer it. Not yet run on the owner's PC, a PS5 console
+or with real Sony Publishing Tools — see *Before release* below. It becomes the
+"latest" release only after those checks.
 
 ## What it is
 
