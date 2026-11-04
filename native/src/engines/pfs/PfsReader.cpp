@@ -79,6 +79,7 @@ public:
     {
     }
     qint64 size() const override { return m_size; }
+    qint64 presentSize() const override { return std::clamp<qint64>(m_parent->presentSize() - m_base, 0, m_size); }
     Status readAt(qint64 offset, char* dst, qint64 len) override
     {
         if (offset < 0 || len < 0 || offset + len > m_size)
@@ -98,6 +99,7 @@ class ImageView final : public ByteSource {
 public:
     explicit ImageView(const PfsImage* img) : m_img(img) {}
     qint64 size() const override { return m_img->header().ndblock * qint64(m_img->header().blockSize); }
+    qint64 presentSize() const override { return m_img->presentBytes(); }
     Status readAt(qint64 offset, char* dst, qint64 len) override { return m_img->readBytes(offset, dst, len); }
     QString describe() const override { return m_img->describe(); }
 
@@ -182,9 +184,15 @@ Result<std::unique_ptr<PfscReader>> PfscReader::open(std::shared_ptr<ByteSource>
                                                      qint64 logical)
 {
     const QString name = source->describe();
+    // Only bytes really in the image count: a short image reads as zeros
+    // after presentSize(), and a crafted header must not make us allocate or
+    // decode a table that is not there.
+    const qint64 present = std::min(source->presentSize(), source->size());
     char head[kPfscHeaderSize];
     if (stored < kPfscHeaderSize)
         return damaged(QStringLiteral("a compressed file is too small for its PFSC header"), name);
+    if (base < 0 || base + kPfscHeaderSize > present)
+        return damaged(QStringLiteral("a compressed file starts past the end of the image"), name);
     FW_TRY(source->readAt(base, head, kPfscHeaderSize));
     PfscHeader h;
     const QString why = parsePfscHeader(head, kPfscHeaderSize, &h);
@@ -197,16 +205,29 @@ Result<std::unique_ptr<PfscReader>> PfscReader::open(std::shared_ptr<ByteSource>
         return damaged(QStringLiteral("PFSC block offset table is truncated"), name);
     if (logical > h.logicalSize)
         return damaged(QStringLiteral("PFSC logical size is smaller than the file size"), name);
-    QByteArray table(qsizetype(tableBytes), Qt::Uninitialized);
-    FW_TRY(source->readAt(base + h.offsetsOffset, table.data(), tableBytes));
+    if (base + h.offsetsOffset + tableBytes > present)
+        return damaged(QStringLiteral("the PFSC block offset table of a compressed file lies past the end of the image"),
+                       name);
+    // The table is read in bounded chunks straight into the offsets (it is
+    // known to be in the image, so its size is bounded by the image's).
     std::unique_ptr<PfscReader> r(new PfscReader());
     r->m_offsets.resize(size_t(h.blockCount + 1));
-    for (qint64 i = 0; i <= h.blockCount; ++i)
-        r->m_offsets[size_t(i)] = qint64(getU64(table.constData() + i * 8));
+    {
+        constexpr qint64 kChunkEntries = 64 * 1024;
+        QByteArray chunk(qsizetype(std::min<qint64>(kChunkEntries, h.blockCount + 1) * 8), Qt::Uninitialized);
+        for (qint64 first = 0; first <= h.blockCount; first += kChunkEntries) {
+            const qint64 n = std::min<qint64>(kChunkEntries, h.blockCount + 1 - first);
+            FW_TRY(source->readAt(base + h.offsetsOffset + first * 8, chunk.data(), n * 8));
+            for (qint64 i = 0; i < n; ++i)
+                r->m_offsets[size_t(first + i)] = qint64(getU64(chunk.constData() + i * 8));
+        }
+    }
     if (r->m_offsets.front() != h.dataOffset)
         return damaged(QStringLiteral("PFSC block offsets do not start at the data offset"), name);
     if (r->m_offsets.back() > stored)
         return damaged(QStringLiteral("PFSC block offsets exceed the stored payload"), name);
+    if (base + r->m_offsets.back() > present)
+        return damaged(QStringLiteral("the compressed blocks of a file lie past the end of the image"), name);
     for (size_t i = 1; i < r->m_offsets.size(); ++i)
         if (r->m_offsets[i] < r->m_offsets[i - 1])
             return damaged(QStringLiteral("PFSC block offsets are not in order"), name);
@@ -268,6 +289,19 @@ Status PfsImage::readBytes(qint64 offset, char* dst, qint64 len) const
     return success();
 }
 
+qint64 PfsImage::presentBytes() const
+{
+    return std::min(std::min(m_source->presentSize(), m_source->size()),
+                    m_header.ndblock * qint64(m_header.blockSize));
+}
+
+Status PfsImage::readMetadata(qint64 offset, char* dst, qint64 len, const QString& what) const
+{
+    if (offset < 0 || len < 0 || offset + len > presentBytes())
+        return damaged(QStringLiteral("%1 lies past the end of the image").arg(what), describe());
+    return readBytes(offset, dst, len);
+}
+
 Result<QByteArray> PfsImage::readPayload(const Inode& ino) const
 {
     if (ino.blocks == 0)
@@ -278,15 +312,20 @@ Result<QByteArray> PfsImage::readPayload(const Inode& ino) const
         return damaged(QStringLiteral("inode %1 has an invalid size").arg(ino.number), describe());
     if (stored > 256LL * 1024 * 1024)
         return damaged(QStringLiteral("inode %1 metadata is implausibly large").arg(ino.number), describe());
+    const QString what = QStringLiteral("the metadata of inode %1").arg(ino.number);
+    if (ino.db[0] < 0 || ino.db[0] * bs + stored > presentBytes()) // checked before allocating
+        return damaged(QStringLiteral("%1 lies past the end of the image").arg(what), describe());
     QByteArray data(qsizetype(stored), Qt::Uninitialized);
-    FW_TRY(readBytes(ino.db[0] * bs, data.data(), stored));
+    FW_TRY(readMetadata(ino.db[0] * bs, data.data(), stored, what));
     return data;
 }
 
 Status PfsImage::parse()
 {
     const QString name = describe();
-    const qint64 fsize = m_source->size();
+    // Bytes really stored: a nested image inside a short outer image reads
+    // partly as zeros, which must not pass for its metadata.
+    const qint64 fsize = std::min(m_source->presentSize(), m_source->size());
     if (fsize < 0x400)
         return damaged(QStringLiteral("the file is too small to be a PFS image"), name);
     QByteArray hdr(0x400, Qt::Uninitialized);
@@ -341,7 +380,7 @@ Status PfsImage::parse()
     m_inodes.reserve(size_t(H.inodeCount));
     QByteArray block(qsizetype(bs), Qt::Uninitialized);
     for (qint64 b = 0; b < H.inodeBlockCount && qint64(m_inodes.size()) < H.inodeCount; ++b) {
-        FW_TRY(readBytes((1 + b) * bs, block.data(), bs));
+        FW_TRY(readMetadata((1 + b) * bs, block.data(), bs, QStringLiteral("the inode table")));
         for (qint64 i = 0; i < perBlock && qint64(m_inodes.size()) < H.inodeCount; ++i)
             m_inodes.push_back(parseInode(block.constData() + i * isz, quint32(m_inodes.size()), false, 32));
     }
@@ -354,6 +393,22 @@ Status PfsImage::parse()
         };
         std::vector<Range> ranges;
         for (const Inode& ino : m_inodes) {
+            // Every byte of an inode lives in its blocks: a size the blocks
+            // cannot hold (e.g. data but no blocks at all) is damage, not an
+            // empty file.
+            const qint64 capacity = qint64(ino.blocks) * bs;
+            if (ino.size < 0 || ino.sizeCompressed < 0) {
+                problem(QStringLiteral("inode %1 has a negative size").arg(ino.number));
+                continue;
+            }
+            if (ino.blocks == 0 && (ino.logicalSize() > 0 || ino.storedSize() > 0)) {
+                problem(QStringLiteral("inode %1 holds %2 bytes but has no blocks")
+                            .arg(ino.number)
+                            .arg(std::max(ino.logicalSize(), ino.storedSize())));
+                continue;
+            }
+            if (ino.storedSize() > capacity || (!ino.isCompressed() && ino.logicalSize() > capacity))
+                problem(QStringLiteral("inode %1 is larger than its blocks").arg(ino.number));
             if (ino.blocks == 0)
                 continue;
             const qint64 start = ino.db[0];
@@ -382,7 +437,7 @@ Status PfsImage::parse()
 
     // ---- super root, flat_path_table, collision_resolver ----
     QByteArray superBlob(qsizetype(bs), Qt::Uninitialized);
-    FW_TRY(readBytes((1 + H.inodeBlockCount) * bs, superBlob.data(), bs));
+    FW_TRY(readMetadata((1 + H.inodeBlockCount) * bs, superBlob.data(), bs, QStringLiteral("the super root")));
     const auto superEntries = parseDirents(superBlob, m_problems, QStringLiteral("super root"));
     qint64 fptIno = -1, colIno = -1, urootIno = -1;
     for (const auto& e : superEntries) {
@@ -487,7 +542,11 @@ Status PfsImage::parse()
                 problem(QStringLiteral("directory %1 lists %2 twice").arg(where, QString::fromLatin1(e.name)));
                 continue;
             }
-            if (e.name.isEmpty() || e.name.contains('/')) {
+            // A name is one path component: a separator, NUL or a dot entry
+            // in the wrong place could point outside an extraction folder.
+            // (Extra "." / ".." entries are also caught by the count above.)
+            if (e.name.isEmpty() || e.name == "." || e.name == ".." || e.name.contains('/') || e.name.contains('\\')
+                || e.name.contains('\0')) {
                 problem(QStringLiteral("directory %1 has an invalid name").arg(where));
                 continue;
             }
@@ -606,8 +665,10 @@ Status PfsImage::parse()
 Status PfsImage::readFile(const Inode& ino, const Sink& sink, const CancellationToken& token) const
 {
     const qint64 logical = ino.logicalSize();
-    if (ino.blocks == 0 || logical <= 0)
+    if (logical <= 0)
         return success();
+    if (ino.blocks == 0)
+        return damaged(QStringLiteral("inode %1 holds %2 bytes but has no blocks").arg(ino.number).arg(logical), describe());
     const qint64 bs = m_header.blockSize;
     const qint64 base = ino.db[0] * bs;
     if (!ino.isCompressed()) {
@@ -655,6 +716,10 @@ Result<std::shared_ptr<ByteSource>> PfsImage::openFile(const Inode& ino) const
     const qint64 logical = ino.logicalSize();
     const qint64 bs = m_header.blockSize;
     const QString name = describe() + QStringLiteral(" (inode %1)").arg(ino.number);
+    const qint64 capacity = qint64(ino.blocks) * bs;
+    if (logical < 0 || ino.storedSize() < 0 || ino.storedSize() > capacity
+        || (!ino.isCompressed() && logical > capacity))
+        return damaged(QStringLiteral("inode %1 is larger than its blocks").arg(ino.number), describe());
     auto view = std::make_shared<ImageView>(this);
     if (!ino.isCompressed())
         return std::shared_ptr<ByteSource>(std::make_shared<SubSource>(view, ino.db[0] * bs, logical, name));

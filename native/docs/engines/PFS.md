@@ -272,6 +272,23 @@ content differences are listed (first 50) as "Missing from the image",
 "Not in the source", "Folder not in the source", "Different size",
 "Different content (first difference at byte N)".
 
+### Untrusted images
+
+An image is read as untrusted input. Beyond Lazy's checks the reader treats as
+damage: an entry name that is empty, "." or "..", or holds `/`, `\` or NUL;
+an inode whose size does not fit its blocks (data but no blocks included); and
+metadata (inode table, super root, directories, FPT, collision resolver) or a
+PFSC header, block offset table or stored blocks lying past the bytes the file
+really holds. Only file contents in the missing tail of a short (RAM-mode)
+image read as zeros, so a crafted header cannot make the reader allocate or
+zero-fill a huge table. Extraction builds every output path from names that
+pass `isSafeEntryName()` and checks it stays inside the output folder
+(`core/PathSafety.h`); names the drive cannot store (on Windows: `<>:"|?*`,
+control characters, trailing dots or spaces, device names such as `CON` or
+`LPT1`; on any system: names made only of dots and spaces) are changed, names
+that then collide get " (2)", and the job lists every change as a warning
+("Renamed for this drive: …").
+
 ## Compatibility
 
 ### Golden tests
@@ -427,6 +444,7 @@ threaded (30 vs 6 MB/s); level 9 is the legacy default.
 | `tst_pfs_golden` | 20 byte-identical golden cases against Lazy_MkPFS |
 | `tst_pfs_roundtrip` | build → read → compare for all four modes; verify finds changed / missing / extra / resized files; exclusions do not fail verification (H2); damaged compressed block, inode, dirent, PFSC and PFS headers, truncation → `CorruptData`; short (RAM-mode) images; extract (plain, deep, nested file, overwrite); cancelled extract leaves nothing; 1/4/7 threads → identical bytes; ASCII rule, empty source, AMPR modes |
 | `tst_pfs_jobs` | settings declared and read, legacy import, the three jobs, queue integration, validation, cancellation while writing and while verifying leaves no output or `.part`, failed verification removes the image and keeps the source (C1), delete-source rules, standalone verify with the build's exclusions (H2), game-root detection in a wrapper folder, extract job |
+| `tst_pfs_hostile` | crafted images: separator / NUL / dot entry names → `CorruptData` and nothing extracted; names a drive cannot store renamed on extraction and reported, nothing written outside the folder; size without blocks and size beyond the blocks → `CorruptData` (verification and extraction fail); a PFSC header declaring a 16 GiB block table in a small file is refused without allocating it; the path-safety helpers |
 | `tst_pfs_benchmark` | MB/s native (1 and N threads) vs Lazy_MkPFS on the same input; outputs identical |
 
 `ctest --test-dir native/build-pfs -R pfs --output-on-failure`. The benchmark

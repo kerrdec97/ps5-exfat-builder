@@ -1,6 +1,7 @@
 #include "engines/ufs2/Ufs2Verify.h"
 
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -214,25 +215,6 @@ Result<qint64> readEveryFile(const Ufs2Reader& image, const SourceTree& tree, co
 }
 
 // ---- extraction ------------------------------------------------------------------------
-
-QString hostFileName(const QString& name, bool windowsRules)
-{
-    if (!windowsRules)
-        return name;
-    QString out = sanitizeFileName(name);
-    static const QSet<QString> reserved = {QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
-                                           QStringLiteral("NUL"), QStringLiteral("COM1"), QStringLiteral("COM2"),
-                                           QStringLiteral("COM3"), QStringLiteral("COM4"), QStringLiteral("COM5"),
-                                           QStringLiteral("COM6"), QStringLiteral("COM7"), QStringLiteral("COM8"),
-                                           QStringLiteral("COM9"), QStringLiteral("LPT1"), QStringLiteral("LPT2"),
-                                           QStringLiteral("LPT3"), QStringLiteral("LPT4"), QStringLiteral("LPT5"),
-                                           QStringLiteral("LPT6"), QStringLiteral("LPT7"), QStringLiteral("LPT8"),
-                                           QStringLiteral("LPT9")};
-    const QString stem = out.section(u'.', 0, 0).toUpper();
-    if (reserved.contains(stem))
-        out.prepend(u'_');
-    return out;
-}
 
 namespace {
 

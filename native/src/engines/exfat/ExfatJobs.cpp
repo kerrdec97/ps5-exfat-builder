@@ -512,6 +512,12 @@ public:
                          .arg(rate(st.bytes, st.elapsedMs)));
         JobOutcome o;
         o.warnings = st.warnings;
+        for (int i = 0; i < st.renamed.size() && i < 20; ++i)
+            o.warnings << QStringLiteral("Renamed for this drive: %1").arg(st.renamed[i]);
+        if (st.renamed.size() > 20)
+            o.warnings << QStringLiteral("%1 more names were changed.").arg(st.renamed.size() - 20);
+        for (const QString& n : st.renamed)
+            ctx.log.info(QStringLiteral("Renamed for this drive: %1").arg(n));
         if (recovered)
             o.warnings << QStringLiteral("An interrupted edit of this image was undone before extracting it.");
         if (!QFile::remove(stage + u'/' + kExtractMarker))
@@ -520,6 +526,10 @@ public:
         if (x.verify) {
             ctx.progress->beginPhase(2, 0);
             FW_TRY_ASSIGN(SourceTree out, scanSource(stage, {}, ctx.token));
+            // Compare renamed entries under their names in the image.
+            for (SourceNode& n : out.nodes)
+                if (const auto it = st.imagePath.constFind(n.relativePath); it != st.imagePath.cend())
+                    n.relativePath = *it;
             FW_TRY_ASSIGN(VerifyReport rep, verifyImage(m_image, expectedFromFolder(out), verifyOptions(x, ctx, 2),
                                                          ctx.token, ctx.progress));
             applyVerification(o, rep);

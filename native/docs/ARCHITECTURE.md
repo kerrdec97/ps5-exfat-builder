@@ -28,7 +28,7 @@ native/
   cmake/FwWarnings.cmake    fw_configure_target(), fw_add_module()
   src/
     core/                   fw_core     — Result, Cancellation, Progress, Log, Settings, Paths,
-                                          FileUtil, ProcessRunner, Dependencies
+                                          FileUtil, PathSafety, ProcessRunner, Dependencies
     jobs/                   fw_jobs     — Job, JobFactory, JobQueue, JobHistory, ModuleContext
     engines/<name>/         fw_engine_<name> — one static library per feature module
       general/              app-wide settings (General, Performance, Storage, Verification, Logging, Advanced)

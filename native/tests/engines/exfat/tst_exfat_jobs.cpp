@@ -5,6 +5,7 @@
 #include "ExfatJobEnv.h"
 #include "ExfatTestUtil.h"
 
+#include "core/PathSafety.h"
 #include "core/Paths.h"
 #include "engines/exfat/ExfatJobs.h"
 #include "support/TestSupport.h"
@@ -431,6 +432,56 @@ private slots:
         r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest3}});
         QVERIFY(!r.ok());
         QCOMPARE(readAllOf(dest3 + QStringLiteral(".part/user-file.txt")), QByteArray("mine"));
+    }
+
+    // exFAT allows names Win32 rewrites or opens as devices (trailing dots or
+    // spaces, CON, NUL...). Extraction stores them under a name this drive
+    // keeps as it is, reports the change, verifies against the image's names,
+    // and never writes outside the output folder.
+    void extractMapsNamesTheDriveCannotStore()
+    {
+        const QString src = makeGame(QStringLiteral("xnames"), 2);
+        const QString img = path(QStringLiteral("xnames.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        struct Added {
+            const char* imagePath;
+            const char* content;
+        };
+        const Added added[] = {{"CON", "console"}, {"nul.txt", "null"}, {"end.", "trailing dot"},
+                               {"dup", "plain"},   {"dup.", "dotted"},  {"...", "only dots"},
+                               {"dir. /f.bin", "in a folder"}};
+        QJsonArray ops;
+        for (const Added& a : added) {
+            const QString local = path(QStringLiteral("xnames-local/%1.bin").arg(ops.size()));
+            QVERIFY(writeBytes(local, a.content));
+            ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("add")},
+                                   {QStringLiteral("imagePath"), QString::fromLatin1(a.imagePath)},
+                                   {QStringLiteral("localPath"), local}});
+        }
+        auto edit = m_env.run(kJobEdit, {{QStringLiteral("image"), img}, {QStringLiteral("operations"), ops}});
+        QVERIFY2(edit.ok(), qPrintable(edit.ok() ? QString() : err(edit.error())));
+
+        const QString dest = path(QStringLiteral("xnames-out"));
+        auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Passed); // renamed entries are compared under their image names
+        const bool win = hostUsesWindowsNames();
+        const QList<QPair<QString, QByteArray>> expected = {
+            {win ? QStringLiteral("_CON") : QStringLiteral("CON"), "console"},
+            {win ? QStringLiteral("_nul.txt") : QStringLiteral("nul.txt"), "null"},
+            {win ? QStringLiteral("end") : QStringLiteral("end."), "trailing dot"},
+            {QStringLiteral("dup"), "plain"},
+            {win ? QStringLiteral("dup (2)") : QStringLiteral("dup."), "dotted"},
+            {QStringLiteral("_"), "only dots"},
+            {win ? QStringLiteral("dir/f.bin") : QStringLiteral("dir. /f.bin"), "in a folder"},
+        };
+        for (const auto& [name, content] : expected)
+            QCOMPARE(readAllOf(dest + u'/' + name), content);
+        const QStringList renamed = r->warnings.filter(QStringLiteral("Renamed for this drive"));
+        QCOMPARE(renamed.size(), win ? 6 : 1);
+        QVERIFY(renamed.contains(QStringLiteral("Renamed for this drive: ... → _")));
+        QVERIFY(!QFileInfo::exists(path(QStringLiteral("CON"))));
+        QVERIFY(!QFileInfo::exists(path(QStringLiteral("_"))));
     }
 
     void extractCancellationLeavesNothing()

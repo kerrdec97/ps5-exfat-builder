@@ -5,14 +5,17 @@
 #include "engines/pfs/PfsVerify.h"
 
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 #include "engines/pfs/PfsIo.h"
 #include "engines/pfs/PfsReader.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 
 #include <algorithm>
+#include <map>
 #include <set>
 
 namespace fw::pfs {
@@ -410,8 +413,35 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
         }
     } cleanup{root, staged};
 
+    // Image names are untrusted. Each one becomes a single safe component
+    // (renamed where this drive cannot store it), and every path is checked to
+    // stay inside `root`. Folders come before their contents (sorted paths).
+    std::map<QByteArray, QString> hostDirs{{QByteArray(), QString()}};
+    std::map<QByteArray, QSet<QString>> taken;
+    const auto hostPath = [&](const QByteArray& path) -> Result<QString> {
+        const qsizetype slash = path.lastIndexOf('/');
+        const QByteArray parent = slash < 0 ? QByteArray() : path.left(slash);
+        const auto dir = hostDirs.find(parent);
+        if (dir == hostDirs.end())
+            return Error(ErrorCode::Internal, QStringLiteral("The folder of %1 was not extracted.").arg(rel(path)));
+        const QString name = rel(slash < 0 ? path : path.mid(slash + 1));
+        QString local = hostEntryName(name);
+        QSet<QString>& used = taken[parent];
+        if (used.contains(hostNameKey(local))) {
+            const QString stem = local;
+            for (int k = 2; used.contains(hostNameKey(local)); ++k)
+                local = QStringLiteral("%1 (%2)").arg(stem).arg(k);
+        }
+        used.insert(hostNameKey(local));
+        if (local != name)
+            rep.renamed << QStringLiteral("%1 → %2").arg(rel(path), local);
+        return dir->second.isEmpty() ? local : dir->second + u'/' + local;
+    };
+
     for (const PfsEntry& d : img.dirs()) {
-        const QString p = root + u'/' + rel(d.path);
+        FW_TRY_ASSIGN(const QString dirRel, hostPath(d.path));
+        hostDirs.emplace(d.path, dirRel);
+        FW_TRY_ASSIGN(const QString p, childPathInside(root, dirRel));
         const QFileInfo fi(p);
         if (fi.exists() && !fi.isDir())
             return Error(ErrorCode::AlreadyExists,
@@ -425,7 +455,8 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
     for (const PfsEntry& e : img.files()) {
         if (!token.checkpoint())
             return Error::cancelled();
-        const QString target = root + u'/' + rel(e.path);
+        FW_TRY_ASSIGN(const QString fileRel, hostPath(e.path));
+        FW_TRY_ASSIGN(const QString target, childPathInside(root, fileRel));
         if (QFileInfo(target).isDir())
             return Error(ErrorCode::AlreadyExists,
                          QStringLiteral("%1 is a folder; the image has a file there.").arg(QDir::toNativeSeparators(target)));

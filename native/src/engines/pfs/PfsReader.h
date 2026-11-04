@@ -34,6 +34,9 @@ class ByteSource {
 public:
     virtual ~ByteSource() = default;
     virtual qint64 size() const = 0;
+    // Bytes at the start of the source that are really stored; the rest of
+    // size() reads as zeros (a short image). Metadata must lie in this part.
+    virtual qint64 presentSize() const { return size(); }
     // Reads exactly `len` bytes at `offset` (fails past the end).
     virtual Status readAt(qint64 offset, char* dst, qint64 len) = 0;
     virtual QString describe() const = 0;
@@ -102,6 +105,11 @@ public:
     // bytes read as zeros.
     Status readBytes(qint64 offset, char* dst, qint64 len) const;
 
+    // Bytes of the image that are really stored (at most ndblock blocks); a
+    // short image reads as zeros after them. Metadata and PFSC block tables
+    // must lie inside this part.
+    qint64 presentBytes() const;
+
     // Bytes the image file is shorter than the header says (Lazy RAM-mode images).
     qint64 missingTailBytes() const { return m_missingTail; }
 
@@ -109,6 +117,8 @@ private:
     PfsImage() = default;
     Status parse();
     Result<QByteArray> readPayload(const Inode& inode) const;
+    // readBytes() limited to presentBytes(): metadata is never zero-filled.
+    Status readMetadata(qint64 offset, char* dst, qint64 len, const QString& what) const;
     void problem(const QString& what) { m_problems << what; }
 
     std::shared_ptr<ByteSource> m_source;
@@ -126,7 +136,10 @@ private:
 class PfscReader {
 public:
     // `base` is the absolute offset of the payload inside `source`, `stored`
-    // its stored size and `logical` the inode's logical size.
+    // its stored size and `logical` the inode's logical size. The header, the
+    // block offset table and every stored block must lie inside
+    // source->presentSize(), so a crafted header cannot make the reader
+    // allocate or zero-fill more than the image holds.
     static Result<std::unique_ptr<PfscReader>> open(std::shared_ptr<ByteSource> source, qint64 base, qint64 stored,
                                                     qint64 logical);
     qint64 logicalSize() const { return m_logical; }

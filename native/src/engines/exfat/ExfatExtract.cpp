@@ -1,12 +1,14 @@
 #include "engines/exfat/ExfatExtract.h"
 
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 #include "engines/exfat/Pipeline.h"
 #include "engines/exfat/PlatformFs.h"
 
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QSet>
 
 #include <algorithm>
 #include <atomic>
@@ -58,15 +60,42 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
     ExtractStats stats;
     const Geometry& g = reader.geometry();
     const QString image = reader.imagePath();
-    const auto target = [&](const ImageEntry& e) { return destDir + u'/' + e.path; };
+
+    // Where each entry goes. Parents come before their children (the tree is
+    // read breadth first); names are mapped to what this drive can store.
+    const size_t count = tree.entries.size();
+    std::vector<QString> hostRel(count), targets(count);
+    std::vector<QSet<QString>> taken(count);
+    for (size_t i = 1; i < count; ++i) {
+        const ImageEntry& e = tree.entries[i];
+        if (e.parent < 0 || size_t(e.parent) >= i || !tree.entries[size_t(e.parent)].isDir)
+            return corruptImage(QStringLiteral("the folder of %1 is not in the tree").arg(e.path));
+        QString local = hostEntryName(e.name);
+        QSet<QString>& used = taken[size_t(e.parent)];
+        if (used.contains(hostNameKey(local))) {
+            const QString stem = local;
+            for (int k = 2; used.contains(hostNameKey(local)); ++k)
+                local = QStringLiteral("%1 (%2)").arg(stem).arg(k);
+        }
+        used.insert(hostNameKey(local));
+        const QString& parentRel = hostRel[size_t(e.parent)];
+        hostRel[i] = parentRel.isEmpty() ? local : parentRel + u'/' + local;
+        if (local != e.name)
+            stats.renamed << QStringLiteral("%1 → %2").arg(e.path, local);
+        if (hostRel[i] != e.path)
+            stats.imagePath.insert(hostRel[i], e.path);
+        FW_TRY_ASSIGN(targets[i], childPathInside(destDir, hostRel[i]));
+    }
+    taken.clear();
+    const auto target = [&](int i) -> const QString& { return targets[size_t(i)]; };
 
     std::vector<int> files;
     for (int i = 1; i < int(tree.entries.size()); ++i) {
         const ImageEntry& e = tree.entries[size_t(i)];
         if (e.isDir) {
-            if (!QDir().mkpath(toLongPath(target(e))))
+            if (!QDir().mkpath(toLongPath(target(i))))
                 return Error(ErrorCode::IoError,
-                             QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(target(e))));
+                             QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(target(i))));
             ++stats.dirs;
         } else {
             files.push_back(i);
@@ -138,7 +167,7 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
         int current = -1;
         while (auto c = pipe.next()) {
             const ImageEntry& e = tree.entries[size_t(files[size_t(c->item)])];
-            const QString path = target(e);
+            const QString path = target(files[size_t(c->item)]);
             const QString shown = QDir::toNativeSeparators(path);
             if (c->item != current) {
                 current = c->item;
@@ -194,7 +223,7 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
                 if (k >= files.size())
                     return;
                 const ImageEntry& e = tree.entries[size_t(files[k])];
-                const QString path = target(e);
+                const QString path = target(files[k]);
                 const QString shown = QDir::toNativeSeparators(path);
                 QFile out(toLongPath(path));
                 if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
@@ -241,7 +270,7 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
     for (int i = int(tree.entries.size()) - 1; i >= 1; --i) {
         const ImageEntry& e = tree.entries[size_t(i)];
         if (e.isDir)
-            finisher.finish(e, target(e));
+            finisher.finish(e, target(i));
     }
     if (finisher.failed())
         stats.warnings << QStringLiteral("The timestamps or attributes of %1 items could not be restored.")

@@ -434,6 +434,12 @@ Result<JobOutcome> PfsExtractJob::run(JobContext& ctx)
     JobOutcome outcome;
     outcome.outputs << r.output;
     outcome.warnings = r.warnings;
+    for (int i = 0; i < r.renamed.size() && i < 20; ++i)
+        outcome.warnings << QStringLiteral("Renamed for this drive: %1").arg(r.renamed[i]);
+    if (r.renamed.size() > 20)
+        outcome.warnings << QStringLiteral("%1 more names were changed.").arg(r.renamed.size() - 20);
+    for (const QString& n : r.renamed)
+        ctx.log.info(QStringLiteral("Renamed for this drive: %1").arg(n));
     outcome.verification = Verification::NotRun;
     outcome.details.insert(QStringLiteral("files"), r.files);
     outcome.details.insert(QStringLiteral("folders"), r.dirs);
