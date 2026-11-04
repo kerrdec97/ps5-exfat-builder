@@ -448,6 +448,61 @@ private slots:
         expectIntact(img);
     }
 
+    void journalsBelongToOneImage()
+    {
+        const QString local = path(QStringLiteral("stale.bin"));
+        QVERIFY(writeRandom(local, 3 * kMiB, 71));
+        EditOptions crash = options();
+        crash.testCrashAfterApply = true;
+        CancellationToken token;
+
+        // The verify job undoes an interrupted edit before reading the image.
+        const QString a = freshImage();
+        const QByteArray hashA = fileHash(a);
+        QVERIFY(!editImage(a, {op(EditOp::Kind::Replace, QStringLiteral("data/large.bin"), local)}, crash, token).ok());
+        QVERIFY(fileHash(a) != hashA);
+        auto v = m_env.run(kJobVerify, {{QStringLiteral("image"), a}, {QStringLiteral("source"), m_src}});
+        QVERIFY2(v.ok(), qPrintable(v.ok() ? QString() : err(v.error())));
+        QCOMPARE(v->verification, Verification::Passed);
+        QVERIFY(v->warnings.join(u' ').contains(QStringLiteral("undone")));
+        QCOMPARE(fileHash(a), hashA);
+
+        // Building a new image over it discards the old image's journal.
+        const QString b = freshImage();
+        QVERIFY(!editImage(b, {op(EditOp::Kind::Delete, QStringLiteral("eboot.bin"))}, crash, token).ok());
+        QVERIFY(QFileInfo::exists(editJournalPath(b)));
+        auto built = m_env.run(kJobBuild, {{QStringLiteral("source"), m_src}, {QStringLiteral("output"), b}});
+        QVERIFY2(built.ok(), qPrintable(built.ok() ? QString() : err(built.error())));
+        QVERIFY(!QFileInfo::exists(editJournalPath(b)));
+
+        // A journal is never applied to a different image of the same size.
+        const QString c = freshImage();
+        QVERIFY(!editImage(c, {op(EditOp::Kind::Delete, QStringLiteral("eboot.bin"))}, crash, token).ok());
+        const QByteArray journal = readAllOf(editJournalPath(c));
+        {
+            CancellationToken t;
+            auto tree = scanSource(m_src, {}, t);
+            QVERIFY(tree.ok());
+            WriterOptions w;
+            w.volumeBytes = QFileInfo(c).size();
+            w.clusterBytes = 32768;
+            w.label = QStringLiteral("OTHER");
+            w.serial = 0x0BADF00D;
+            w.syncToDisk = false;
+            auto plan = planImage(tree.value(), w);
+            QVERIFY(plan.ok());
+            QVERIFY(writeImage(tree.value(), plan.value(), c, w, t).ok());
+        }
+        QVERIFY(writeBytes(editJournalPath(c), journal));
+        const QByteArray hashC = fileHash(c);
+        auto rec = recoverInterruptedEdit(c);
+        QVERIFY(!rec.ok());
+        QCOMPARE(rec.error().code, ErrorCode::CorruptData);
+        QVERIFY2(rec.error().message.contains(QStringLiteral("does not belong")), qPrintable(rec.error().message));
+        QCOMPARE(fileHash(c), hashC);
+        QFile::remove(editJournalPath(c));
+    }
+
     void editJobThroughTheFactory()
     {
         const QString img = freshImage();

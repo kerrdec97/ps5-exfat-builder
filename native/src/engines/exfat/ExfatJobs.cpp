@@ -272,6 +272,11 @@ public:
 
         FW_TRY(part.commit(x.overwrite));
         o.outputs << m_output;
+        // An undo journal of the image that was just replaced must never be
+        // applied to the new one.
+        for (const QString& j : {editJournalPath(m_output), editJournalPath(m_output) + QStringLiteral(".part")})
+            if (QFileInfo::exists(j) && QFile::remove(j))
+                ctx.log.info(QStringLiteral("Removed %1, left by an interrupted edit of the image that was replaced.").arg(native(j)));
 
         // Delete the source only after a full content-verified pass (audit C2).
         if (x.deleteSource) {
@@ -339,11 +344,14 @@ public:
         const ExfatSettings x = readSettings(ctx.settings);
         ctx.progress->setPhases(phases(), {0.1, 0.9});
         ctx.progress->beginPhase(0, 0);
+        FW_TRY_ASSIGN(const bool recovered, recoverInterruptedEdit(m_image, &ctx.log));
         ScanRules rules = x.rules;
         rules.excludePatterns += m_excludes;
         FW_TRY_ASSIGN(VerifyReport rep, verifyImageAgainstFolder(m_image, m_source, rules, verifyOptions(x, ctx, 1),
                                                                   ctx.token, ctx.progress));
         JobOutcome o;
+        if (recovered)
+            o.warnings << QStringLiteral("An interrupted edit of this image was undone before verifying it.");
         applyVerification(o, rep);
         o.summary = rep.passed() ? QStringLiteral("The image matches the folder.") : QStringLiteral("The image does not match the folder.");
         ctx.log.info(rep.summary());
@@ -395,6 +403,7 @@ public:
         const ExfatSettings x = readSettings(ctx.settings);
         ctx.progress->setPhases(phases(), {0.05, 0.6, 0.35});
         ctx.progress->beginPhase(0, 0);
+        FW_TRY_ASSIGN(const bool recovered, recoverInterruptedEdit(m_image, &ctx.log));
         FW_TRY_ASSIGN(std::unique_ptr<ExfatReader> reader, ExfatReader::open(m_image));
         FW_TRY_ASSIGN(ImageTree tree, reader->readTree(ctx.token, true));
         FW_TRY(ExfatReader::requireIntact(tree));
@@ -438,6 +447,8 @@ public:
                          .arg(rate(st.bytes, st.elapsedMs)));
         JobOutcome o;
         o.warnings = st.warnings;
+        if (recovered)
+            o.warnings << QStringLiteral("An interrupted edit of this image was undone before extracting it.");
         if (!QFile::remove(stage + u'/' + kExtractMarker))
             return Error(ErrorCode::IoError, QStringLiteral("Could not finish the extraction folder."));
 

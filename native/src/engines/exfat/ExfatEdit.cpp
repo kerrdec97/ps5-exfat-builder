@@ -94,8 +94,10 @@ QString editJournalPath(const QString& image)
 
 // ---- undo journal ---------------------------------------------------------------------
 //
-// "FWEXJNL1", u64 image size, u32 record count, records (u64 offset, u32
-// length, bytes), u64 FNV-1a checksum of the records. Written to
+// "FWEXJNL1", u64 image size, u32 volume serial, u32 record count, records
+// (u64 offset, u32 length, bytes), u64 FNV-1a checksum of the records. The
+// size and serial tie the journal to the image it was made for (in-place
+// edits never change them; every build writes a new serial). Written to
 // "<journal>.part", flushed, then renamed: a journal under its final name is
 // always complete, and the image is only modified after that rename.
 
@@ -118,6 +120,16 @@ quint64 fnv(quint64 h, const char* p, qint64 n)
     return h;
 }
 constexpr quint64 kFnvBasis = 14695981039346656037ULL;
+constexpr int kJournalHeader = 24;
+
+// VolumeSerialNumber of the image's main boot sector.
+quint32 imageSerial(QFile& f)
+{
+    uchar b[4] = {};
+    if (!f.seek(100) || f.read(reinterpret_cast<char*>(b), 4) != 4)
+        return 0;
+    return get32(b);
+}
 
 Status readExact(QFile& f, char* p, qint64 n, const QString& what)
 {
@@ -158,11 +170,12 @@ Status writeJournal(const QString& image, const QString& journal, const std::vec
     if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return fileError(QStringLiteral("Could not create the undo journal next to the image."), out);
     const QString what = QStringLiteral("the undo journal");
-    uchar head[20];
+    uchar head[kJournalHeader];
     std::memcpy(head, kJournalMagic, 8);
     put64(head + 8, quint64(in.size()));
-    put32(head + 16, quint32(pieces.size()));
-    FW_TRY(writeExact(out, reinterpret_cast<const char*>(head), 20, what));
+    put32(head + 16, imageSerial(in));
+    put32(head + 20, quint32(pieces.size()));
+    FW_TRY(writeExact(out, reinterpret_cast<const char*>(head), kJournalHeader, what));
     quint64 sum = kFnvBasis;
     std::vector<char> buf(size_t(4 * kMiB));
     for (const Range& p : pieces) {
@@ -196,16 +209,21 @@ Status rollbackJournal(const QString& image, const QString& journal)
     if (!j.open(QIODevice::ReadOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not open the undo journal %1.").arg(QDir::toNativeSeparators(journal)),
                      j.errorString());
-    uchar head[20];
-    FW_TRY(readExact(j, reinterpret_cast<char*>(head), 20, what));
+    uchar head[kJournalHeader];
+    FW_TRY(readExact(j, reinterpret_cast<char*>(head), kJournalHeader, what));
     if (std::memcmp(head, kJournalMagic, 8) != 0)
         return Error(ErrorCode::CorruptData, QStringLiteral("The undo journal %1 is not valid.").arg(QDir::toNativeSeparators(journal)));
     const qint64 imageSize = qint64(get64(head + 8));
-    const quint32 count = get32(head + 16);
-    if (QFileInfo(image).size() != imageSize)
-        return Error(ErrorCode::CorruptData,
-                     QStringLiteral("The undo journal %1 does not belong to this image (the sizes differ).")
-                         .arg(QDir::toNativeSeparators(journal)));
+    const quint32 serial = get32(head + 16);
+    const quint32 count = get32(head + 20);
+    {
+        QFile probe(toLongPath(image));
+        if (!probe.open(QIODevice::ReadOnly) || probe.size() != imageSize || imageSerial(probe) != serial)
+            return Error(ErrorCode::CorruptData,
+                         QStringLiteral("The undo journal %1 does not belong to this image (the image was replaced "
+                                        "since). Delete the journal; the image itself is not affected.")
+                             .arg(QDir::toNativeSeparators(journal)));
+    }
     std::vector<char> buf(size_t(4 * kMiB));
     // Pass 1: the checksum must match before anything is written back.
     quint64 sum = kFnvBasis;
@@ -232,7 +250,7 @@ Status rollbackJournal(const QString& image, const QString& journal)
     QFile img(toLongPath(image));
     if (!img.open(QIODevice::ReadWrite))
         return Error(ErrorCode::IoError, QStringLiteral("Could not open the image to undo the edit."), img.errorString());
-    j.seek(20);
+    j.seek(kJournalHeader);
     for (quint32 i = 0; i < count; ++i) {
         uchar rec[12];
         FW_TRY(readExact(j, reinterpret_cast<char*>(rec), 12, what));

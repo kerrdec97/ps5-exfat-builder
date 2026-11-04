@@ -92,9 +92,11 @@ directly and never loses the original before the edited image has verified
   journal under its final name is always complete; FNV-1a checksum). A
   failure, a cancellation or a failed verification rolls the image back from
   the journal: the file is byte-identical to before. A journal left by a crash
-  is rolled back by the next edit of that image (or `recoverInterruptedEdit`);
-  a damaged journal is refused rather than applied. Free space for the journal
-  plus the margin is checked first.
+  is rolled back by the next edit, verify or extract job on that image (or
+  `recoverInterruptedEdit`); a damaged journal is refused rather than applied.
+  The journal records the image's size and volume serial and is never applied
+  to any other image (a build that replaces the image deletes it). Free space
+  for the journal plus the margin is checked first.
 * **Rebuild** for everything else (adds, mkdir, replacements that need more
   clusters, `exfat.editStrategy = rebuild`): the edited tree is written to
   `<image>.part` — unchanged files are streamed from the original image —
