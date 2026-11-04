@@ -226,9 +226,20 @@ Status ApplyJournal::rollback(const CancellationToken& token, QStringList* probl
         if (!e.renameTo.isEmpty()) {
             const QString dir = QFileInfo(target).absolutePath();
             const QString was = e.rel.section(u'/', -1), now = e.renameTo.section(u'/', -1);
-            if (onDiskName(dir, now) == now && now != was) {
+            // Only a file this journal renamed: the dump's name is free and
+            // the game's spelling is listed exactly.
+            if (now != was && onDiskName(dir, now) == now && onDiskName(dir, was) != was) {
                 if (Status st = renameCaseOnly(dir, now, was); !st.ok())
                     problems << QStringLiteral("%1: %2").arg(e.rel, st.error().message);
+            }
+            // A crash inside the fallback rename leaves "<name>.fwcase" with
+            // the backported bytes; the bytes are restored below either way.
+            const QString stray = target + QStringLiteral(".fwcase");
+            if (QFileInfo(stray).isFile() && hashOf(stray) == e.sha256After) {
+                if (!QFileInfo(target).exists())
+                    (void)replaceFileAtomic(stray, target); // judged and restored like any applied file
+                else
+                    removeFileForce(stray);
             }
             e.renamed = false;
         }
@@ -303,6 +314,10 @@ Status ApplyJournal::apply(const CancellationToken& token, ProgressReporter* pro
         } else if (hashOf(e.stagedPath) != e.sha256After) {
             why = QStringLiteral("the staged copy of %1 changed").arg(e.rel);
             code = Code::VerifyFailed;
+        } else if (!e.renameTo.isEmpty()) {
+            const QString now = e.renameTo.section(u'/', -1);
+            if (now != e.rel.section(u'/', -1) && onDiskName(QFileInfo(target).absolutePath(), now) == now)
+                why = QStringLiteral("%1 already exists next to %2").arg(e.renameTo, e.rel);
         }
         if (!why.isEmpty()) {
             m_state = JournalState::RolledBack;

@@ -306,10 +306,14 @@ Status replaceFileAtomic(const QString& src, const QString& dst)
     const std::wstring s = toLongPath(src).toStdWString();
     const std::wstring d = toLongPath(dst).toStdWString();
     // A read-only target (a dump copied from a disc or a read-only share)
-    // cannot be replaced; the backup of its content is already verified.
+    // cannot be replaced; the backup of its content is already verified. If
+    // the move still fails, the target gets its attributes back.
+    const DWORD before = GetFileAttributesW(d.c_str());
     clearReadOnly(dst);
     if (!MoveFileExW(s.c_str(), d.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         const DWORD err = GetLastError();
+        if (before != INVALID_FILE_ATTRIBUTES && (before & FILE_ATTRIBUTE_READONLY))
+            SetFileAttributesW(d.c_str(), before);
         return Error(ErrorCode::IoError,
                      QStringLiteral("Could not replace %1. Close any program using it and try again.")
                          .arg(QDir::toNativeSeparators(dst)),

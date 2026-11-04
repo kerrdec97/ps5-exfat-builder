@@ -3,6 +3,8 @@
 #include "engines/backport/Common.h"
 #include "engines/backport/ElfImage.h"
 
+#include <algorithm>
+#include <initializer_list>
 #include <vector>
 
 namespace fw::backport {
@@ -60,6 +62,12 @@ Result<CriRackAnalysis> analyzeCriRack(QByteArrayView data)
             return makeError(Code::ElfInvalid, QStringLiteral("segment %1 lies outside the file").arg(ph.index));
         collect(data, ph, 12, twelve);
         collect(data, ph, 8, eight);
+    }
+    // Overlapping segments must not count the same file bytes twice.
+    for (std::vector<Hit>* hits : {&twelve, &eight}) {
+        std::sort(hits->begin(), hits->end(), [](const Hit& x, const Hit& y) { return x.off < y.off; });
+        hits->erase(std::unique(hits->begin(), hits->end(), [](const Hit& x, const Hit& y) { return x.off == y.off; }),
+                    hits->end());
     }
     if (twelve.empty()) {
         for (const Hit& x : eight)

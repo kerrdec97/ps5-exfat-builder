@@ -279,7 +279,11 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
     // #41 fix (ModuleCaseFix.h): the module paths the eboot loads by name
     // ("%s/Modules/<Name>.prx"); a dump file spelled differently is staged,
     // zipped and applied under the game's spelling.
-    if (const ExecFile* eb = scan.eboot(); eb && eb->isProcessable()) {
+    // Read only when the dump has a Media/Modules/ folder (any letter case).
+    const bool hasModules = std::any_of(scan.fileIndex.keyBegin(), scan.fileIndex.keyEnd(), [](const QString& k) {
+        return k.startsWith(QLatin1String("media/modules/"));
+    });
+    if (const ExecFile* eb = scan.eboot(); hasModules && eb && eb->isProcessable()) {
         auto bytes = readFileBytes(joinPath(game, eb->rel));
         if (bytes.ok()) {
             QByteArray image = bytes.value();
@@ -479,7 +483,7 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
                 QStringLiteral("Backport ZIP folder %1: %2").arg(native(opt.backportDir), why));
         else if (plan.pair)
             plan.backportZipPath =
-                uniqueZipPath(QDir(opt.backportDir).filePath(backportZipName(plan.prefix, opt.targetSdk)));
+                uniqueZipPath(QDir(opt.backportDir).filePath(backportZipName(plan.prefix, opt.targetSdk, opt.proFix)));
     }
 
     // S7: manifest verdict. Records are kept per game folder: this folder's

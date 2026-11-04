@@ -431,6 +431,10 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
         if (!fr.ok)
             ctx.log.warn(fr.message);
         r.files.push_back(fr);
+        if (ctx.progress) {
+            ctx.progress->advance(fr.sizeBefore);
+            ctx.progress->advanceFiles(1);
+        }
     }
 
     // Fakelib set: staged unchanged (never re-signed, D3), checked (V4).

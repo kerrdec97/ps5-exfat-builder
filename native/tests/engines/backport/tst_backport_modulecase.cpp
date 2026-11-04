@@ -133,6 +133,29 @@ private slots:
         QCOMPARE(snapshotTree(e.game), before);
     }
 
+    // A case-sensitive file system can hold both spellings: nothing is renamed
+    // over the other file (review finding; NTFS cannot hold both).
+    void bothSpellingsPresentRenameNothing()
+    {
+        Env e;
+        makeUnityGame(e);
+        QVERIFY(writeBytes(e.game + "/" + kGameRel, QByteArray("not a module")));
+        if (modulesListing(e).size() != 2)
+            QSKIP("This file system folds letter case: both spellings cannot exist.");
+        // Whichever spelling the scan's case-folded index keeps, nothing is
+        // renamed over the other file.
+        auto p = planBackport(e.options(), CancellationToken());
+        QVERIFY(p.ok());
+        QVERIFY(p->moduleCase.renames.empty());
+        const auto before = snapshotTree(e.game);
+        auto o = e.options();
+        o.applyToGame = false;
+        auto r = runBackport(o, e.ctx);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().toLogString()));
+        QCOMPARE(snapshotTree(e.game), before);
+        QCOMPARE(modulesListing(e).size(), 2);
+    }
+
     void rollbackPutsTheDumpsSpellingBack()
     {
         Env e;

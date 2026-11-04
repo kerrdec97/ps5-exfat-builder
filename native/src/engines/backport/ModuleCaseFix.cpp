@@ -79,6 +79,13 @@ ModuleCasePlan planModuleCase(const ScanResult& scan, const QStringList& request
             continue;
         }
         const QString folder = folderOf(have);
+        // A case-sensitive file system can hold both spellings: then the
+        // game's file exists already and nothing is renamed over it.
+        if (onDiskName(joinPath(scan.root, folder), wantFile) == wantFile) {
+            plan.notes << QStringLiteral("%1 and %2 both exist; neither is renamed.")
+                              .arg(have, folder.isEmpty() ? wantFile : folder + u'/' + wantFile);
+            continue;
+        }
         plan.renames.push_back({have, folder.isEmpty() ? wantFile : folder + u'/' + wantFile, folderDiffers});
     }
     return plan;
