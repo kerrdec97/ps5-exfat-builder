@@ -376,18 +376,28 @@ private slots:
         auto* page = qobject_cast<pages::Ps5ConnectPage*>(m_window->page(QStringLiteral("ps5")));
         QVERIFY(page);
         m_window->navigate(QStringLiteral("ps5"));
-        QSignalSpy connected(page->session(), &ui::ConsoleSession::connected);
+        // Counted on this thread (the session emits from its worker thread;
+        // a QSignalSpy would be appended to from there while we read it).
+        int connected = 0, disconnected = 0;
+        QObject ctx;
+        connect(page->session(), &ui::ConsoleSession::connected, &ctx, [&] { ++connected; });
+        connect(page->session(), &ui::ConsoleSession::disconnected, &ctx, [&] { ++disconnected; });
         page->session()->connectTo(QStringLiteral("127.0.0.1"), server.port(), 5000, true);
-        QTRY_VERIFY_WITH_TIMEOUT(connected.count() == 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(connected == 1, 10000);
         QTRY_VERIFY_WITH_TIMEOUT(page->isReachable(), 10000); // the page learns about it through a queued signal
         page->listRemote(QStringLiteral("/data/etaHEN/games"));
         QTRY_VERIFY_WITH_TIMEOUT(page->remoteTable()->rowCount() == 3, 10000);
         QCOMPARE(page->currentRemoteDir(), QStringLiteral("/data/etaHEN/games"));
         QCOMPARE(page->remoteTable()->item(0, 0)->text(), QStringLiteral("folder")); // folders first
         QVERIFY(page->isReachable());
-        QSignalSpy disconnected(page->session(), &ui::ConsoleSession::disconnected);
+        // Requests posted while one is running wait for it (the client's
+        // nested event loop must not run them inside the listing): a refresh,
+        // a free-space query and a disconnect in quick succession.
+        page->listRemote(QStringLiteral("/data/etaHEN/games"));
+        page->session()->siteAvail();
+        page->session()->list(QStringLiteral("/data/etaHEN"));
         page->session()->disconnect();
-        QTRY_VERIFY_WITH_TIMEOUT(disconnected.count() == 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(disconnected >= 1, 10000);
         QTRY_VERIFY_WITH_TIMEOUT(!page->isReachable(), 10000);
     }
 

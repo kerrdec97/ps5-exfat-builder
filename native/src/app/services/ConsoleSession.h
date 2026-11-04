@@ -4,6 +4,11 @@
 // Qt worker thread (QThread, never std::thread: Qt sockets need a Qt thread);
 // the page posts requests and receives results as queued signals on the UI
 // thread. Transfers do not go through here: they are queue jobs.
+//
+// Requests run strictly one after another. The FTP client waits in a nested
+// event loop, which also delivers newly posted requests; those are queued and
+// run after the current one instead of re-entering the client (a nested
+// disconnect would otherwise destroy the client under the running command).
 
 #include "connect/ps5/FtpListing.h"
 #include "connect/ps5/MountConfig.h"
@@ -12,6 +17,7 @@
 #include <QObject>
 #include <QThread>
 
+#include <functional>
 #include <vector>
 
 namespace fw::ui {
@@ -54,6 +60,8 @@ signals:
     void freeSpace(const QString& text);
 
 private:
+    void post(std::function<void()> request);
+
     QThread m_thread;
     ConsoleWorker* m_worker = nullptr;
     bool m_connected = false;

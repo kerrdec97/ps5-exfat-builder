@@ -4,7 +4,12 @@
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/RemotePath.h"
 
+#include "core/Cancellation.h"
+
+#include <deque>
+#include <functional>
 #include <memory>
+#include <mutex>
 
 namespace fw::ui {
 
@@ -12,6 +17,31 @@ class ConsoleWorker : public QObject {
     Q_OBJECT
 public:
     explicit ConsoleWorker(ConsoleSession* session) : m_session(session) {}
+
+    // Worker thread: runs `request` now, or after the running one when called
+    // from inside it (the client's nested event loop delivered it).
+    void run(std::function<void()> request)
+    {
+        m_pending.push_back(std::move(request));
+        if (m_busy)
+            return;
+        m_busy = true;
+        while (!m_pending.empty()) {
+            auto next = std::move(m_pending.front());
+            m_pending.pop_front();
+            next();
+        }
+        m_busy = false;
+    }
+
+    // Any thread: stops the running operation (where the client can be
+    // cancelled); later requests get a fresh token.
+    void cancelRunning()
+    {
+        std::lock_guard lock(m_cancelMutex);
+        m_cancel.cancel(QStringLiteral("Disconnected"));
+        m_cancel = CancellationSource();
+    }
 
 public slots:
     void doConnect(const QString& host, quint16 port, int connectTimeoutMs, bool passive)
@@ -21,7 +51,7 @@ public slots:
         opt.replyTimeoutMs = std::max(connectTimeoutMs, 5000);
         opt.passive = passive;
         m_client = std::make_unique<ps5::FtpClient>(opt);
-        auto st = m_client->open(host, port);
+        auto st = m_client->open(host, port, token());
         if (!st.ok()) {
             const QString why = st.error().message;
             m_client.reset();
@@ -46,7 +76,7 @@ public slots:
             emit m_session->listed(out);
             return;
         }
-        auto r = m_client->list(out.path);
+        auto r = m_client->list(out.path, ps5::FtpListMode::Auto, token());
         if (!r.ok()) {
             out.error = r.error().message;
             if (!m_client->isConnected()) {
@@ -64,7 +94,7 @@ public slots:
             emit m_session->operationDone(QStringLiteral("delete"), false, QStringLiteral("Not connected."));
             return;
         }
-        Status st = isDir ? m_client->removeTree(path) : m_client->dele(path);
+        Status st = isDir ? m_client->removeTree(path, token()) : m_client->dele(path);
         emit m_session->operationDone(QStringLiteral("delete"), st.ok(), st.ok() ? QStringLiteral("Deleted %1").arg(path) : st.error().message);
     }
     void doRename(const QString& from, const QString& to)
@@ -123,8 +153,18 @@ public slots:
     }
 
 private:
+    CancellationToken token()
+    {
+        std::lock_guard lock(m_cancelMutex);
+        return m_cancel.token();
+    }
+
     ConsoleSession* m_session;
     std::unique_ptr<ps5::FtpClient> m_client;
+    std::deque<std::function<void()>> m_pending; // worker thread only
+    bool m_busy = false;                          // worker thread only
+    std::mutex m_cancelMutex;
+    CancellationSource m_cancel;
 };
 
 ConsoleSession::ConsoleSession(QObject* parent) : QObject(parent)
@@ -140,56 +180,66 @@ ConsoleSession::ConsoleSession(QObject* parent) : QObject(parent)
 
 ConsoleSession::~ConsoleSession()
 {
-    QMetaObject::invokeMethod(m_worker, &ConsoleWorker::doDisconnect, Qt::BlockingQueuedConnection);
+    // Stop what is running, close the connection (after it, if the request
+    // arrives inside it), then let the thread finish before the worker goes.
+    m_worker->cancelRunning();
+    QMetaObject::invokeMethod(m_worker, [w = m_worker] { w->run([w] { w->doDisconnect(); }); }, Qt::BlockingQueuedConnection);
     m_thread.quit();
-    m_thread.wait(5000);
+    m_thread.wait(); // every client wait has a timeout; never delete a running worker
     delete m_worker;
+}
+
+void ConsoleSession::post(std::function<void()> request)
+{
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, r = std::move(request)]() mutable { w->run(std::move(r)); },
+                              Qt::QueuedConnection);
 }
 
 void ConsoleSession::connectTo(const QString& host, quint16 port, int connectTimeoutMs, bool passive)
 {
     m_host = host;
-    QMetaObject::invokeMethod(m_worker, [this, host, port, connectTimeoutMs, passive] { m_worker->doConnect(host, port, connectTimeoutMs, passive); }, Qt::QueuedConnection);
+    post([w = m_worker, host, port, connectTimeoutMs, passive] { w->doConnect(host, port, connectTimeoutMs, passive); });
 }
 
 void ConsoleSession::disconnect()
 {
-    QMetaObject::invokeMethod(m_worker, &ConsoleWorker::doDisconnect, Qt::QueuedConnection);
+    m_worker->cancelRunning(); // a long listing or delete stops now
+    post([w = m_worker] { w->doDisconnect(); });
 }
 
 void ConsoleSession::list(const QString& path)
 {
-    QMetaObject::invokeMethod(m_worker, [this, path] { m_worker->doList(path); }, Qt::QueuedConnection);
+    post([w = m_worker, path] { w->doList(path); });
 }
 
 void ConsoleSession::remove(const QString& path, bool isDir)
 {
-    QMetaObject::invokeMethod(m_worker, [this, path, isDir] { m_worker->doRemove(path, isDir); }, Qt::QueuedConnection);
+    post([w = m_worker, path, isDir] { w->doRemove(path, isDir); });
 }
 
 void ConsoleSession::rename(const QString& from, const QString& to)
 {
-    QMetaObject::invokeMethod(m_worker, [this, from, to] { m_worker->doRename(from, to); }, Qt::QueuedConnection);
+    post([w = m_worker, from, to] { w->doRename(from, to); });
 }
 
 void ConsoleSession::mkdir(const QString& path)
 {
-    QMetaObject::invokeMethod(m_worker, [this, path] { m_worker->doMkdir(path); }, Qt::QueuedConnection);
+    post([w = m_worker, path] { w->doMkdir(path); });
 }
 
 void ConsoleSession::loadMountConfig(ps5::MountTool tool)
 {
-    QMetaObject::invokeMethod(m_worker, [this, tool] { m_worker->doLoadMount(int(tool)); }, Qt::QueuedConnection);
+    post([w = m_worker, tool] { w->doLoadMount(int(tool)); });
 }
 
 void ConsoleSession::pushMountConfig(ps5::MountTool tool, const QString& text)
 {
-    QMetaObject::invokeMethod(m_worker, [this, tool, text] { m_worker->doPushMount(int(tool), text); }, Qt::QueuedConnection);
+    post([w = m_worker, tool, text] { w->doPushMount(int(tool), text); });
 }
 
 void ConsoleSession::siteAvail()
 {
-    QMetaObject::invokeMethod(m_worker, &ConsoleWorker::doSiteAvail, Qt::QueuedConnection);
+    post([w = m_worker] { w->doSiteAvail(); });
 }
 
 } // namespace fw::ui
