@@ -366,10 +366,10 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     console->setTitle(QStringLiteral("Testing on a console?"));
     console->setMessage(QStringLiteral("Send the kernel-log or debug payload and watch the kernel log on the PS5 connect page while the game starts."));
     connect(console->addLink(QStringLiteral("Send a payload…")), &Link::activated, this, [this] {
-        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), 1}}});
+        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("payloads")}}});
     });
     connect(console->addLink(QStringLiteral("Open the kernel log")), &Link::activated, this, [this] {
-        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), 2}}});
+        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("klog")}}});
     });
     ll->addWidget(console);
 

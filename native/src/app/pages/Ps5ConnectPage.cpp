@@ -203,8 +203,14 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     content()->addWidget(statusRow);
 
     m_tabs = new QTabBar(this);
-    for (const auto& t : {QStringLiteral("FTP browser"), QStringLiteral("Payloads"), QStringLiteral("Kernel log"), QStringLiteral("Y2JB"), QStringLiteral("Mount config")})
-        m_tabs->addTab(t);
+    // Stable keys in the tab data: other pages open a tab by key, never by position.
+    const std::pair<QString, QString> tabs[] = {{QStringLiteral("ftp"), QStringLiteral("FTP browser")},
+                                                {QStringLiteral("payloads"), QStringLiteral("Payloads")},
+                                                {QStringLiteral("klog"), QStringLiteral("Kernel log")},
+                                                {QStringLiteral("y2jb"), QStringLiteral("Y2JB")},
+                                                {QStringLiteral("mount"), QStringLiteral("Mount config")}};
+    for (const auto& [key, label] : tabs)
+        m_tabs->setTabData(m_tabs->addTab(label), key);
     m_tabs->setExpanding(false);
     m_tabs->setDrawBase(false);
     m_tabs->setProperty("fwNoRing", true);
@@ -1320,8 +1326,19 @@ void Ps5ConnectPage::dropUrls(const QList<QUrl>& urls)
 
 void Ps5ConnectPage::navigateWith(const QVariantMap& args)
 {
-    if (args.contains(QStringLiteral("tab")))
-        m_tabs->setCurrentIndex(args.value(QStringLiteral("tab")).toInt());
+    if (args.contains(QStringLiteral("tab"))) {
+        // A key ("payloads", "klog"...) or, for older callers, an index.
+        const QVariant tab = args.value(QStringLiteral("tab"));
+        bool isIndex = false;
+        const int index = tab.toInt(&isIndex);
+        if (isIndex && tab.typeId() != QMetaType::QString) {
+            m_tabs->setCurrentIndex(index);
+        } else {
+            for (int i = 0; i < m_tabs->count(); ++i)
+                if (m_tabs->tabData(i).toString() == tab.toString())
+                    m_tabs->setCurrentIndex(i);
+        }
+    }
     if (args.contains(QStringLiteral("upload"))) {
         m_tabs->setCurrentIndex(0);
         if (m_session->isConnected())
