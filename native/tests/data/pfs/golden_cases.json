@@ -1,0 +1,81 @@
+{
+  "comment": "Synthetic source trees for the PFS golden tests. Both make_golden.py (Python, Lazy_MkPFS reference) and tst_pfs_golden.cpp generate the same bytes from this spec. kinds: text (compressible words), random (incompressible), zeros, mixed (64 KiB text / random alternating), sparse (zeros with a random byte every 4 KiB). Every file gets mtime 1600000000.",
+  "fixed_time": 1700000000,
+  "file_mtime": 1600000000,
+  "trees": {
+    "game": [
+      {"path": "eboot.bin", "kind": "random", "size": 70000, "seed": 1},
+      {"path": "sce_sys/param.json", "kind": "text", "size": 900, "seed": 2},
+      {"path": "sce_sys/icon0.png", "kind": "random", "size": 5000, "seed": 3},
+      {"path": "sce_module/libc.prx", "kind": "mixed", "size": 200000, "seed": 4},
+      {"path": "data/Level_01.pak", "kind": "mixed", "size": 400000, "seed": 5},
+      {"path": "data/level_02.pak", "kind": "text", "size": 300001, "seed": 6},
+      {"path": "data/sub dir/a-b.bin", "kind": "sparse", "size": 131072, "seed": 7},
+      {"path": "data/sub dir/zero.bin", "kind": "zeros", "size": 0, "seed": 8},
+      {"path": "data/sub_dir/Z.txt", "kind": "text", "size": 65536, "seed": 9},
+      {"path": "data/subdir/nested/deep/file.dat", "kind": "random", "size": 1, "seed": 10},
+      {"path": "Audio/BGM.at9", "kind": "random", "size": 150000, "seed": 11},
+      {"path": "audio_cfg.ini", "kind": "text", "size": 4097, "seed": 12},
+      {"path": ".hidden", "kind": "text", "size": 10, "seed": 13}
+    ],
+    "manyfiles": [
+      {"path": "eboot.bin", "kind": "random", "size": 3000, "seed": 21},
+      {"generate": "many", "dir": "assets/textures_with_a_long_folder_name", "count": 180, "prefix": "texture_file_with_a_rather_long_name_", "suffix": ".tex", "kind": "text", "size": 700, "seed": 100},
+      {"path": "assets/z_last.bin", "kind": "mixed", "size": 70000, "seed": 22}
+    ],
+    "collision": [
+      {"path": "eboot.bin", "kind": "random", "size": 2000, "seed": 31},
+      {"path": "A_", "kind": "text", "size": 3000, "seed": 32},
+      {"path": "B@", "kind": "text", "size": 3001, "seed": 33},
+      {"path": "x/A_", "kind": "text", "size": 100, "seed": 34},
+      {"path": "x/B@/inner.bin", "kind": "random", "size": 100, "seed": 35}
+    ],
+    "ampr": [
+      {"path": "eboot.bin", "kind": "random", "size": 10000, "seed": 41},
+      {"path": "fakelib/libSceAmpr.sprx", "kind": "random", "size": 5000, "seed": 42},
+      {"path": "sce_sys/param.json", "kind": "text", "size": 500, "seed": 43},
+      {"path": "Data/Big.bin", "kind": "text", "size": 200000, "seed": 44},
+      {"path": "data2/small.bin", "kind": "mixed", "size": 70000, "seed": 45}
+    ],
+    "emptydirs": [
+      {"path": "eboot.bin", "kind": "random", "size": 1000, "seed": 51},
+      {"path": "game/content/a.bin", "kind": "text", "size": 1000, "seed": 52},
+      {"path": "game/saved/", "kind": "dir"},
+      {"path": "game/config/empty/", "kind": "dir"}
+    ],
+    "image_mixed": [
+      {"path": "PPSA01234.exfat", "kind": "mixed", "size": 1572864, "seed": 61}
+    ],
+    "image_random": [
+      {"path": "PPSA09999.ffpkg", "kind": "random", "size": 1234567, "seed": 62}
+    ],
+    "image_small": [
+      {"path": "small.exfat", "kind": "text", "size": 700000, "seed": 63}
+    ],
+    "image_text": [
+      {"path": "PPSA00042.exfat", "kind": "text", "size": 2097152, "seed": 64}
+    ]
+  },
+  "cases": [
+    {"name": "folder_raw_64k", "tree": "game", "build": "folder_raw", "block_size": 65536},
+    {"name": "folder_raw_4k", "tree": "game", "build": "folder_raw", "block_size": 4096},
+    {"name": "folder_raw_manyfiles_4k", "tree": "manyfiles", "build": "folder_raw", "block_size": 4096},
+    {"name": "folder_raw_case_sensitive", "tree": "game", "build": "folder_raw", "block_size": 32768, "case_insensitive": false},
+    {"name": "folder_raw_collision", "tree": "collision", "build": "folder_raw", "block_size": 65536},
+    {"name": "folder_raw_ampr", "tree": "ampr", "build": "folder_raw", "block_size": 65536},
+    {"name": "folder_raw_emptydirs_dropped", "tree": "emptydirs", "build": "folder_raw", "block_size": 65536, "keep_empty": false},
+    {"name": "folder_raw_emptydirs_markers", "tree": "emptydirs", "build": "folder_raw", "block_size": 65536, "keep_empty": true},
+    {"name": "folder_compressed_l6", "tree": "game", "build": "folder_compressed", "level": 6, "min_compress_mb": 0.05},
+    {"name": "folder_compressed_l9_min0", "tree": "game", "build": "folder_compressed", "level": 9, "min_compress_mb": 0.0},
+    {"name": "folder_compressed_manyfiles", "tree": "manyfiles", "build": "folder_compressed", "level": 1, "min_compress_mb": 0.0},
+    {"name": "folder_compressed_ampr", "tree": "ampr", "build": "folder_compressed", "level": 6, "min_compress_mb": 0.01},
+    {"name": "file_container_mixed_l9", "tree": "image_mixed", "build": "file_container", "file": "PPSA01234.exfat", "level": 9},
+    {"name": "file_container_mixed_l1", "tree": "image_mixed", "build": "file_container", "file": "PPSA01234.exfat", "level": 1},
+    {"name": "file_container_random_fallback", "tree": "image_random", "build": "file_container", "file": "PPSA09999.ffpkg", "level": 6},
+    {"name": "file_container_below_min", "tree": "image_small", "build": "file_container", "file": "small.exfat", "level": 6},
+    {"name": "file_container_text_min0", "tree": "image_small", "build": "file_container", "file": "small.exfat", "level": 6, "min_compress_mb": 0.0},
+    {"name": "file_container_text_2m", "tree": "image_text", "build": "file_container", "file": "PPSA00042.exfat", "level": 6},
+    {"name": "folder_container_l9", "tree": "game", "build": "folder_container", "level": 9},
+    {"name": "folder_container_ampr_l6", "tree": "ampr", "build": "folder_container", "level": 6}
+  ]
+}
