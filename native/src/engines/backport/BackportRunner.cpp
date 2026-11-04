@@ -4,6 +4,7 @@
 #include "engines/backport/ApplyJournal.h"
 #include "engines/backport/BackportManifest.h"
 #include "engines/backport/BackupArchive.h"
+#include "engines/backport/ProFix.h"
 #include "engines/backport/ProviderSet.h"
 #include "engines/backport/RunReport.h"
 
@@ -121,6 +122,8 @@ QJsonObject fileReportJson(const FileResult& f, const BackportPlan& plan, int ta
                           : QStringLiteral("Fake-signed (no SDK param to change)");
         if (f.nid.action == NidAction::Applied || f.nid.action == NidAction::Reverted)
             why += QStringLiteral("; libc import %1 (%2)").arg(nidActionName(f.nid.action)).arg(f.nid.count);
+        if (f.shaderTrapNops > 0)
+            why += QStringLiteral("; PS5 Pro fix: %1 shader-assert trap(s) -> s_nop 0").arg(f.shaderTrapNops);
         why += u'.';
     }
     o.insert(QStringLiteral("result"), result);
@@ -350,6 +353,25 @@ Result<RunResult> runBackportImpl(const BackportOptions& optIn, JobContext& ctx,
     result.leftUnchanged = build.leftUnchanged;
     result.buildVerified = opt.verifyBuild;
     result.filesRewritten = build.okCount();
+    if (opt.proFix) {
+        // #32: what the Pro fix did, for the job details, the log and the report.
+        QJsonObject pro;
+        pro.insert(QStringLiteral("family"), QLatin1String(kShaderTrapFamily));
+        pro.insert(QStringLiteral("sites"), build.shaderTrapNops);
+        pro.insert(QStringLiteral("applied"), build.shaderTrapNops > 0);
+        result.details.insert(QStringLiteral("proFix"), pro);
+        t.target.insert(QStringLiteral("proFix"), pro);
+        if (build.shaderTrapNops > 0) {
+            ctx.log.info(QStringLiteral("PS5 Pro fix: %1 shader-assert trap(s) in eboot.bin turned into no-ops.")
+                             .arg(build.shaderTrapNops));
+            result.warnings << QStringLiteral("PS5 Pro fix applied (%1 shader-assert traps): confirmed on one title only; "
+                                              "install it for a PS5 Pro black screen or GPU hang.")
+                                   .arg(build.shaderTrapNops);
+        } else {
+            result.warnings << QStringLiteral("PS5 Pro fix: eboot.bin has no guarded shader-assert traps, so the build "
+                                              "is the normal one.");
+        }
+    }
 
     // ---- Package -----------------------------------------------------------------
     std::vector<ZipMember> origMembers;
@@ -401,8 +423,8 @@ Result<RunResult> runBackportImpl(const BackportOptions& optIn, JobContext& ctx,
     std::unique_ptr<StagedZip> bpZip;
     std::optional<Error> backportError;
     if (!opt.backportDir.isEmpty()) {
-        bpZip = std::make_unique<StagedZip>(
-            uniqueZipPath(QDir(opt.backportDir).filePath(backportZipName(plan.prefix, opt.targetSdk))));
+        bpZip = std::make_unique<StagedZip>(uniqueZipPath(
+            QDir(opt.backportDir).filePath(backportZipName(plan.prefix, opt.targetSdk, build.shaderTrapNops > 0))));
         if (Status st = bpZip->write(bpMembers, ctx.token, ctx.progress, zipHook); !st.ok()) {
             if (st.error().isCancelled())
                 return cancelledUnchanged();

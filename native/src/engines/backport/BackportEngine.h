@@ -39,6 +39,7 @@ struct FileResult {
     qint64 sizeBefore = 0, sizeAfter = 0;
     NidResult nid;
     QStringList patchMessages;
+    int shaderTrapNops = 0; // #32 Pro fix sites patched in this file
 };
 
 struct StagedFile {
@@ -57,6 +58,7 @@ struct BuildResult {
     QStringList leftUnchanged;
     QStringList warnings;
     bool nothingChanged = false;        // every output equals the game's current bytes
+    int shaderTrapNops = 0;             // #32 Pro fix: sites patched in the root eboot.bin
 
     bool failed() const;
     const FileResult* firstFailure() const;
@@ -71,15 +73,22 @@ QString stagingStageDir(const QString& staging);
 // stops the run). Per-file processing failures are in BuildResult::files.
 Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagingDir, JobContext& ctx);
 
+// Title fixes applied to the patched ELF before it is signed.
+struct ExecutableFixes {
+    bool shaderTrapNops = false; // #32 Pro fix (ProFix.h); the runner sets it for the root eboot.bin only
+};
+
 // The per-file pipeline on bytes, without I/O (also used by tests).
 struct ProcessedExecutable {
     QByteArray elf;     // patched ELF
     QByteArray output;  // signed (and NID-substituted) SELF
     PatchReport patch;
     NidResult nid;
+    int shaderTrapNops = 0;
 };
 Result<ProcessedExecutable> processExecutable(const QByteArray& input, const SdkPair& pair, NidMode nidMode,
-                                              bool verify, QStringList* warnings = nullptr);
+                                              bool verify, QStringList* warnings = nullptr,
+                                              const ExecutableFixes& fixes = {});
 
 // V1-V3 on a staged SELF against the patched ELF it was made from.
 Status verifySignedExecutable(const QByteArray& output, const QByteArray& patchedElf, const NidResult& nid,

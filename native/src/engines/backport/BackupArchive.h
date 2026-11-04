@@ -25,7 +25,9 @@ namespace fw::backport {
 inline constexpr const char* kWorstNameSuffix = " (99).part.part";
 
 QString originalsZipName(const QString& prefix);
-QString backportZipName(const QString& prefix, int sdk);
+// "FW <sdk>xx <prefix> backport files.zip"; with the PS5 Pro fix applied
+// (#32) "FW <sdk>xx <prefix> Pro fix backport files.zip", as the Backport GUI.
+QString backportZipName(const QString& prefix, int sdk, bool proFix = false);
 
 // `path` if neither it nor its ".part" exists, else "<stem> (N)<ext>" for
 // the first free N (an earlier ZIP is never overwritten).

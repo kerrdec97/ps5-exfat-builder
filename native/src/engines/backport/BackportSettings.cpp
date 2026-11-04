@@ -33,7 +33,6 @@ void warnLegacy(const QString& what)
 void registerBackportSettings(SettingsSchema& s)
 {
     const QString kBackport = QStringLiteral("Backport");
-    const QString kFirmware = QStringLiteral("Firmware and SDK");
     int order = 0;
 
     // ---- Backport: folders ----------------------------------------------------------
@@ -99,6 +98,61 @@ void registerBackportSettings(SettingsSchema& s)
         d.defaultValue = QString();
         d.validator = dirMustExistIfSet;
         d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+
+    // ---- Backport: target -----------------------------------------------------------
+    // In the Backport section (not "Firmware and SDK") so that the Backport page,
+    // which lists the Backport section, shows them; before, Target SDK appeared
+    // on the FPKG page instead.
+    {
+        SettingDef d;
+        d.key = keys::kTargetSdk;
+        d.section = kBackport;
+        d.group = QStringLiteral("Target");
+        d.label = QStringLiteral("Target SDK");
+        d.description = QStringLiteral("The SDK written into every executable. An SDK N build only loads on firmware "
+                                       "N.00 and later. SDK 4 is the tested baseline; SDK 5 fixed black screens for "
+                                       "some titles on newer firmware; other targets are untested on hardware. It can't "
+                                       "be higher than the game's own SDK.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QString::number(kDefaultTargetSdk);
+        for (const SdkPair& p : sdkPairs())
+            d.choices << SettingChoice{QString::number(p.n), firmwareLabel(p.n), {}};
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kProFix;
+        d.section = kBackport;
+        d.group = QStringLiteral("Target");
+        d.label = QStringLiteral("PS5 Pro fix");
+        d.description = QStringLiteral("For a black screen or GPU hang on a PS5 Pro. Turns the guarded shader-assert "
+                                       "traps in eboot.bin into no-ops (the fix confirmed on Assassin's Creed Black Flag "
+                                       "Resynced; not confirmed on other games). The ZIP is named \"... Pro fix backport "
+                                       "files.zip\". The Backport GUI's AGCDriver hook is not included.");
+        d.type = SettingType::Bool;
+        d.defaultValue = false;
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kNidPatchMode;
+        d.section = kBackport;
+        d.group = QStringLiteral("Target");
+        d.label = QStringLiteral("libc import rename");
+        d.description = QStringLiteral("Automatic renames one libc import for targets up to SDK 6 and renames it back "
+                                       "for targets above 6, as the earlier engine did. Off leaves imports unchanged.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("auto");
+        d.choices = {{QStringLiteral("auto"), QStringLiteral("Automatic (SDK 6 and lower)"), {}},
+                     {QStringLiteral("off"), QStringLiteral("Off"), {}}};
+        d.advanced = true;
         d.order = order++;
         s.add(d);
     }
@@ -242,43 +296,6 @@ void registerBackportSettings(SettingsSchema& s)
         s.add(d);
     }
 
-    // ---- Firmware and SDK ----------------------------------------------------------
-    order = 0;
-    {
-        SettingDef d;
-        d.key = keys::kTargetSdk;
-        d.section = kFirmware;
-        d.group = QStringLiteral("Backport target");
-        d.label = QStringLiteral("Target SDK");
-        d.description = QStringLiteral("The SDK written into every executable. An SDK N build only loads on firmware "
-                                       "N.00 and later. SDK 4 is the tested baseline; SDK 5 fixed black screens for "
-                                       "some titles on newer firmware; other targets are untested on hardware. It can't "
-                                       "be higher than the game's own SDK.");
-        d.type = SettingType::Enum;
-        d.defaultValue = QString::number(kDefaultTargetSdk);
-        for (const SdkPair& p : sdkPairs())
-            d.choices << SettingChoice{QString::number(p.n), firmwareLabel(p.n), {}};
-        d.perJob = true;
-        d.order = order++;
-        s.add(d);
-    }
-    {
-        SettingDef d;
-        d.key = keys::kNidPatchMode;
-        d.section = kFirmware;
-        d.group = QStringLiteral("Backport target");
-        d.label = QStringLiteral("libc import rename");
-        d.description = QStringLiteral("Automatic renames one libc import for targets up to SDK 6 and renames it back "
-                                       "for targets above 6, as the earlier engine did. Off leaves imports unchanged.");
-        d.type = SettingType::Enum;
-        d.defaultValue = QStringLiteral("auto");
-        d.choices = {{QStringLiteral("auto"), QStringLiteral("Automatic (SDK 6 and lower)"), {}},
-                     {QStringLiteral("off"), QStringLiteral("Off"), {}}};
-        d.advanced = true;
-        d.order = order++;
-        s.add(d);
-    }
-
     // ---- Legacy (Python app) keys -------------------------------------------------
     s.addLegacyKey(QStringLiteral("abp_zip_orig_dest"), keys::kOriginalsZipFolder);
     s.addLegacyKey(QStringLiteral("abp_zip_pat_dest"), keys::kBackportZipFolder);
@@ -346,6 +363,7 @@ BackportOptions optionsFromSettings(const SettingsValues& v, const QString& game
     o.encryptedPolicy = v.string(keys::kEncryptedSelfPolicy) == u"leaveUnchanged" ? EncryptedPolicy::LeaveUnchanged
                                                                                    : EncryptedPolicy::Refuse;
     o.verifyBuild = v.boolean(keys::kVerifyBuild);
+    o.proFix = v.boolean(keys::kProFix);
     o.keepStagingOnFailure = v.boolean(keys::kKeepStagingOnFailure);
     o.journalRetentionDays = int(v.integer(keys::kJournalRetentionDays));
     o.notes = v.string(keys::kNotes).left(kMaxNotesLength);

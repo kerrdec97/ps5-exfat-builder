@@ -446,11 +446,12 @@ private slots:
                                       keys::kFakelibFolder, keys::kApplyToGameFolder, keys::kNidPatchMode,
                                       keys::kEncryptedSelfPolicy, keys::kVerifyBuild, keys::kScanFolders,
                                       keys::kScanDepth, keys::kKeepStagingOnFailure, keys::kJournalRetentionDays,
-                                      keys::kNotes, keys::kAmprPlaygoFolder};
+                                      keys::kNotes, keys::kAmprPlaygoFolder, keys::kProFix};
         int count = 0;
         for (const auto* d : schema.all()) {
             QVERIFY2(d->key.startsWith(QStringLiteral("backport.")), qPrintable(d->key));
-            QVERIFY2(d->section == u"Backport" || d->section == u"Firmware and SDK", qPrintable(d->key));
+            // Every backport setting is in the Backport section, so the Backport page lists it.
+            QVERIFY2(d->section == u"Backport", qPrintable(d->key));
             QVERIFY2(schema.normalize(d->key, d->defaultValue).ok(), qPrintable(d->key));
             QVERIFY2(!d->description.isEmpty(), qPrintable(d->key));
             ++count;
@@ -458,7 +459,10 @@ private slots:
         QCOMPARE(count, expected.size());
         for (const QString& k : expected)
             QVERIFY2(schema.contains(k), qPrintable(k));
-        QCOMPARE(schema.find(keys::kTargetSdk)->section, QStringLiteral("Firmware and SDK"));
+        QCOMPARE(schema.find(keys::kTargetSdk)->section, QStringLiteral("Backport"));
+        QVERIFY(schema.find(keys::kTargetSdk)->perJob);
+        QCOMPARE(schema.find(keys::kProFix)->defaultValue.toBool(), false); // opt-in, never automatic
+        QVERIFY(schema.find(keys::kProFix)->perJob);
         QCOMPARE(schema.find(keys::kTargetSdk)->choices.size(), 13); // pairs 1-13
         QCOMPARE(schema.find(keys::kTargetSdk)->choices.last().label, QStringLiteral("SDK 13 · loads on FW 13.00+"));
         QCOMPARE(schema.find(keys::kTargetSdk)->defaultValue.toString(), QStringLiteral("4"));
@@ -475,9 +479,10 @@ private slots:
         QVERIFY(jobs.contains(QStringLiteral("backport.pinProviders")));
         QCOMPARE(schema.find(keys::kAmprPlaygoFolder)->type, SettingType::DirPath);
         QVERIFY(schema.find(keys::kAmprPlaygoFolder)->perJob);
-        // No settings for blocked features.
+        // No settings for blocked features (the Pro build / PSSR 2 test, the AGCDriver hook).
         for (const auto* d : schema.all())
-            QVERIFY2(!d->key.contains(QStringLiteral("pro"), Qt::CaseInsensitive) || d->key == keys::kTargetSdk,
+            QVERIFY2(!d->key.contains(QStringLiteral("pssr"), Qt::CaseInsensitive)
+                         && !d->key.contains(QStringLiteral("agcdriver"), Qt::CaseInsensitive),
                      qPrintable(d->key));
     }
 
@@ -502,6 +507,7 @@ private slots:
                            {keys::kNidPatchMode, QStringLiteral("off")},
                            {keys::kEncryptedSelfPolicy, QStringLiteral("leaveUnchanged")},
                            {keys::kVerifyBuild, false},
+                           {keys::kProFix, true},
                            {keys::kKeepStagingOnFailure, false},
                            {keys::kJournalRetentionDays, 7},
                            {keys::kNotes, QStringLiteral("tested on 4.03")}};
@@ -516,6 +522,7 @@ private slots:
         QCOMPARE(o.nidMode, NidMode::Off);
         QCOMPARE(o.encryptedPolicy, EncryptedPolicy::LeaveUnchanged);
         QCOMPARE(o.verifyBuild, false);
+        QCOMPARE(o.proFix, true);
         QCOMPARE(o.keepStagingOnFailure, false);
         QCOMPARE(o.journalRetentionDays, 7);
         QCOMPARE(o.notes, QStringLiteral("tested on 4.03"));

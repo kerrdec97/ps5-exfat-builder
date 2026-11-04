@@ -68,7 +68,10 @@ QString BackportPlan::summary() const
                                                        : QStringLiteral("backport + originals ZIPs");
     const QString game = options.applyToGame ? QStringLiteral("game folder patched")
                                              : QStringLiteral("game folder unchanged");
-    return QStringLiteral("Next run: SDK %1 · %2 · %3").arg(options.targetSdk).arg(zips, game);
+    QString s = QStringLiteral("Next run: SDK %1 · %2 · %3").arg(options.targetSdk).arg(zips, game);
+    if (options.proFix)
+        s += QStringLiteral(" · PS5 Pro fix");
+    return s;
 }
 
 namespace {
@@ -348,7 +351,7 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
             plan.originalsZipPath = uniqueZipPath(QDir(opt.originalsDir).filePath(originalsZipName(plan.prefix)));
     }
     if (!opt.backportDir.trimmed().isEmpty()) {
-        const QString why = zipDestinationProblem(opt.backportDir, game, backportZipName(plan.prefix, kMaxTargetSdk));
+        const QString why = zipDestinationProblem(opt.backportDir, game, backportZipName(plan.prefix, kMaxTargetSdk, opt.proFix));
         if (!why.isEmpty())
             add(Code::ZipFolderInvalid, Severity::Refuse,
                 QStringLiteral("Backport ZIP folder %1: %2").arg(native(opt.backportDir), why));

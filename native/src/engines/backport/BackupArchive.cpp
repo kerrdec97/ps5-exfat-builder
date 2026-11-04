@@ -19,9 +19,11 @@ QString originalsZipName(const QString& prefix)
     return prefix + QStringLiteral(" original files.zip");
 }
 
-QString backportZipName(const QString& prefix, int sdk)
+QString backportZipName(const QString& prefix, int sdk, bool proFix)
 {
-    return QStringLiteral("FW %1xx %2 backport files.zip").arg(sdk).arg(prefix);
+    return QStringLiteral("FW %1xx %2%3 backport files.zip")
+        .arg(sdk)
+        .arg(prefix, proFix ? QStringLiteral(" Pro fix") : QString());
 }
 
 QString uniqueZipPath(const QString& path)

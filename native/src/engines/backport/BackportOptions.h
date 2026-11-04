@@ -30,6 +30,9 @@ struct BackportOptions {
     NidMode nidMode = NidMode::Auto;
     EncryptedPolicy encryptedPolicy = EncryptedPolicy::Refuse;
     bool verifyBuild = true;
+    // #32: PS5 Pro fix, shader-assert part (ProFix.h): the root eboot.bin's
+    // guarded "s_trap 1" become "s_nop 0". Opt-in, never automatic.
+    bool proFix = false;
     bool keepStagingOnFailure = true;
     int journalRetentionDays = 30;
     QString notes;

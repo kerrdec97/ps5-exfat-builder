@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "engines/backport/ElfImage.h"
+#include "engines/backport/ProFix.h"
 #include "engines/backport/SceParam.h"
 #include "engines/backport/SelfFormat.h"
 #include "engines/backport/SelfReader.h"
@@ -168,7 +169,7 @@ Status verifySignedExecutable(const QByteArray& output, const QByteArray& patche
 }
 
 Result<ProcessedExecutable> processExecutable(const QByteArray& input, const SdkPair& pair, NidMode nidMode,
-                                              bool verify, QStringList* warnings)
+                                              bool verify, QStringList* warnings, const ExecutableFixes& fixes)
 {
     ProcessedExecutable p;
     if (elf::hasElfMagic(input)) {
@@ -179,6 +180,15 @@ Result<ProcessedExecutable> processExecutable(const QByteArray& input, const Sdk
         return makeError(Code::ElfInvalid, QStringLiteral("it is not an ELF or SELF file"));
     }
     FW_TRY_ASSIGN(p.patch, patchSdk(p.elf, pair));
+    if (fixes.shaderTrapNops) {
+        FW_TRY_ASSIGN(p.shaderTrapNops, applyShaderTrapNops(p.elf));
+        if (p.shaderTrapNops > 0)
+            p.patch.messages << QStringLiteral("%1: %2 shader-assert trap(s) turned into s_nop 0 (PS5 Pro fix)")
+                                    .arg(QLatin1String(kShaderTrapFamily))
+                                    .arg(p.shaderTrapNops);
+        else
+            p.patch.messages << QStringLiteral("PS5 Pro fix: no guarded shader-assert trap found (nothing to change)");
+    }
     FW_TRY_ASSIGN(p.output, makeFakeSelf(p.elf));
     p.nid = applyNid(p.output, pair.n, nidMode);
     if (verify)
@@ -274,7 +284,10 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
         // Unwrap → SDK patch → sign → NID → verify, all in memory.
         QStringList warnings;
         fr.stage = FileStage::Unwrap;
-        auto proc = processExecutable(data.value(), pair, opt.nidMode, opt.verifyBuild, &warnings);
+        ExecutableFixes fixes;
+        // #32: the Pro fix touches only the root eboot.bin (as the Backport GUI).
+        fixes.shaderTrapNops = opt.proFix && relKey(e->rel) == QLatin1String("eboot.bin");
+        auto proc = processExecutable(data.value(), pair, opt.nidMode, opt.verifyBuild, &warnings, fixes);
         for (const QString& w : std::as_const(warnings))
             r.warnings << QStringLiteral("%1: %2").arg(e->rel, w);
         if (!proc.ok()) {
@@ -295,6 +308,8 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
         }
         fr.patchMessages = proc->patch.messages;
         fr.nid = proc->nid;
+        fr.shaderTrapNops = proc->shaderTrapNops;
+        r.shaderTrapNops += proc->shaderTrapNops;
         if (!proc->patch.patched.empty())
             fr.sdkAfter = pair.n;
         fr.stage = FileStage::Stage;
