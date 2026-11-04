@@ -70,7 +70,15 @@ jobs:
             foreach ($t in $failed) {
               Write-Host "===== $t ====="
               $exe = Get-ChildItem -Recurse build\tests -Filter "$t.exe" | Select-Object -First 1
-              if ($exe) { & $exe.FullName -o -,txt 2>&1 | Out-Host; Write-Host "exit code: $LASTEXITCODE" }
+              if ($exe) {
+                $log = Join-Path $PWD "ci-out\$t.log"
+                Push-Location $exe.DirectoryName
+                & $exe.FullName -o "$log,txt" -maxwarnings 0 | Out-Null
+                $rc = $LASTEXITCODE
+                Pop-Location
+                Get-Content $log | Where-Object { $_ -notmatch '^PASS' } | Out-Host
+                Write-Host "exit code: $rc"
+              }
             }
             throw "ctest failed ($code)"
           }
