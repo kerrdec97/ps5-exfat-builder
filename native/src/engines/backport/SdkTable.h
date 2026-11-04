@@ -2,8 +2,11 @@
 
 // SDK pair table (docs/BACKPORT_PARITY.md §2.6). Facts only: the PS5 SDK
 // value written at param +0x14 and the PS4 compatibility value at +0x10 for
-// each supported target. Pairs 11-13 have no documented values and are
-// deliberately absent (blocked).
+// each supported target. Pairs 1-10 are the pinned SDK patcher's table;
+// pairs 11-13 are the process-param values of retail eboots recorded by the
+// owner's Backport engine (see SdkTable.cpp). An SDK N build only loads on
+// firmware N.00 and later; SDK 5 is the only target above 4 with a reported
+// hardware result.
 
 #include <QByteArray>
 #include <QString>
@@ -14,16 +17,19 @@
 namespace fw::backport {
 
 struct SdkPair {
-    int n = 0;          // target SDK major (1..10)
+    int n = 0;          // target SDK major (1..13)
     quint32 ps5 = 0;    // u32 LE at param +0x14
     quint32 ps4 = 0;    // u32 LE at param +0x10
 };
 
 inline constexpr int kMinTargetSdk = 1;
-inline constexpr int kMaxTargetSdk = 10;
+inline constexpr int kMaxTargetSdk = 13;
 inline constexpr int kDefaultTargetSdk = 4;
+// The legacy Python app offered targets up to 11 but wrote pair 10 for 11.
+inline constexpr int kMaxLegacyTargetSdk = 10;
+inline constexpr std::size_t kPairCount = 13;
 
-const std::array<SdkPair, 10>& sdkPairs();
+const std::array<SdkPair, kPairCount>& sdkPairs();
 // nullptr when `n` is not a supported pair (S3: never clamp).
 const SdkPair* sdkPair(int n);
 

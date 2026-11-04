@@ -459,10 +459,12 @@ private slots:
         for (const QString& k : expected)
             QVERIFY2(schema.contains(k), qPrintable(k));
         QCOMPARE(schema.find(keys::kTargetSdk)->section, QStringLiteral("Firmware and SDK"));
-        QCOMPARE(schema.find(keys::kTargetSdk)->choices.size(), 10); // SDK 11-13 blocked
+        QCOMPARE(schema.find(keys::kTargetSdk)->choices.size(), 13); // pairs 1-13
+        QCOMPARE(schema.find(keys::kTargetSdk)->choices.last().label, QStringLiteral("SDK 13 · loads on FW 13.00+"));
         QCOMPARE(schema.find(keys::kTargetSdk)->defaultValue.toString(), QStringLiteral("4"));
         QCOMPARE(schema.find(keys::kApplyToGameFolder)->defaultValue.toBool(), true);
-        QVERIFY(!schema.normalize(keys::kTargetSdk, QStringLiteral("11")).ok());
+        QVERIFY(schema.normalize(keys::kTargetSdk, QStringLiteral("11")).ok());
+        QVERIFY(!schema.normalize(keys::kTargetSdk, QStringLiteral("14")).ok());
         QVERIFY(!schema.normalize(keys::kNotes, QString(501, u'x')).ok());
         QVERIFY(!schema.normalize(keys::kScanDepth, 13).ok());
         QVERIFY(jobs.contains(QStringLiteral("backport.run")));
@@ -530,7 +532,7 @@ private slots:
         QDir().mkpath(d.filePath("o"));
         writeBytes(d.filePath("lib.sprx"), "x");
         const QJsonObject legacy{{"abp_zip_orig_dest", d.filePath("o")},
-                                 {"abp_target_sdk", 11}, // dropped (S3: never clamped)
+                                 {"abp_target_sdk", 11}, // dropped: the old app wrote SDK 10 for "11"
                                  {"abp_last_sdk", "5"},
                                  {"abp_fakelib", d.filePath("lib.sprx")}, // a file: dropped
                                  {"abp_notes", QString(600, u'n')},

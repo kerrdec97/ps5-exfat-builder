@@ -7,7 +7,7 @@ name: Native (C++) Windows build and test
 
 on:
   push:
-    branches: [farewell-edition-dev, 'claude/wizardly-sagan-mahxhj']
+    branches: [farewell-edition-dev, 'claude/wizardly-sagan-mahxhj', 'claude/backport-parity-v5']
     paths:
       - 'native/**'
       - '!native/docs/**'

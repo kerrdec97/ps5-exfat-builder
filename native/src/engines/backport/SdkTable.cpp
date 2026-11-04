@@ -7,9 +7,15 @@
 
 namespace fw::backport {
 
-const std::array<SdkPair, 10>& sdkPairs()
+const std::array<SdkPair, kPairCount>& sdkPairs()
 {
-    static const std::array<SdkPair, 10> pairs = {{
+    // Pairs 1-10: the pinned SDK patcher's table. Pairs 11-13: the
+    // process-param values of real retail eboots, recorded by the owner's
+    // Backport engine (sdk_tool.py EXTRA_PAIRS, read 2026-10-17 from the
+    // original packages; the same scan reproduces pairs 1-10 exactly):
+    // 11 = 44 titles (e.g. Dying Light 2 01.090.000), 12 = 33 (e.g. Demon's
+    // Souls 01.007.000), 13 = 3 (e.g. Marvel's Wolverine 01.001.005).
+    static const std::array<SdkPair, kPairCount> pairs = {{
         {1, 0x01000050u, 0x07590001u},
         {2, 0x02000009u, 0x08050001u},
         {3, 0x03000027u, 0x08540001u},
@@ -20,6 +26,9 @@ const std::array<SdkPair, 10>& sdkPairs()
         {8, 0x08000041u, 0x11090001u},
         {9, 0x09000040u, 0x11590001u},
         {10, 0x10000040u, 0x12090001u},
+        {11, 0x11000040u, 0x12590001u},
+        {12, 0x12000038u, 0x13090001u},
+        {13, 0x13000035u, 0x13590001u},
     }};
     return pairs;
 }

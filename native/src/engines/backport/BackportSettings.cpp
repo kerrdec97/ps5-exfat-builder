@@ -286,7 +286,18 @@ void registerBackportSettings(SettingsSchema& s)
         bool ok = false;
         const int n = v.toString().trimmed().toInt(&ok);
         if (!ok || !sdkPair(n)) {
-            warnLegacy(QStringLiteral("Legacy target SDK %1 is not a supported pair (1-10); not imported.").arg(v.toString()));
+            warnLegacy(QStringLiteral("Legacy target SDK %1 is not a supported pair (1-%2); not imported.")
+                           .arg(v.toString())
+                           .arg(kMaxTargetSdk));
+            return std::nullopt;
+        }
+        if (n > kMaxLegacyTargetSdk) {
+            // The old app wrote pair 10 for "11": importing 11 would silently
+            // raise the build's firmware floor to FW 11.00.
+            warnLegacy(QStringLiteral("Legacy target SDK %1 was written as SDK %2 by the old app; not imported. Choose "
+                                      "the target again in Settings.")
+                           .arg(n)
+                           .arg(kMaxLegacyTargetSdk));
             return std::nullopt;
         }
         return QVariant(QString::number(n));

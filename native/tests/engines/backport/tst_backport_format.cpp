@@ -39,20 +39,26 @@ private slots:
     // ---- SdkTable ------------------------------------------------------------
     void sdkTableValues()
     {
-        const quint32 ps5[] = {0x01000050, 0x02000009, 0x03000027, 0x04000031, 0x05000033,
-                               0x06000038, 0x07000038, 0x08000041, 0x09000040, 0x10000040};
-        const quint32 ps4[] = {0x07590001, 0x08050001, 0x08540001, 0x09040001, 0x09590001,
-                               0x10090001, 0x10590001, 0x11090001, 0x11590001, 0x12090001};
-        for (int n = 1; n <= 10; ++n) {
+        // 1-10: the pinned patcher; 11-13: retail process params recorded by the
+        // Backport engine (sdk_tool.py EXTRA_PAIRS).
+        const quint32 ps5[] = {0x01000050, 0x02000009, 0x03000027, 0x04000031, 0x05000033, 0x06000038, 0x07000038,
+                               0x08000041, 0x09000040, 0x10000040, 0x11000040, 0x12000038, 0x13000035};
+        const quint32 ps4[] = {0x07590001, 0x08050001, 0x08540001, 0x09040001, 0x09590001, 0x10090001, 0x10590001,
+                               0x11090001, 0x11590001, 0x12090001, 0x12590001, 0x13090001, 0x13590001};
+        QCOMPARE(int(sdkPairs().size()), 13);
+        for (int n = 1; n <= 13; ++n) {
             const SdkPair* p = sdkPair(n);
             QVERIFY(p);
+            QCOMPARE(p->n, n);
             QCOMPARE(p->ps5, ps5[n - 1]);
             QCOMPARE(p->ps4, ps4[n - 1]);
             QCOMPARE(bcdMajor(p->ps5).value_or(-1), n); // BCD: 0x10 is 10, not 16
         }
         QVERIFY(!sdkPair(0));
-        QVERIFY(!sdkPair(11)); // S3 / blocked pairs 11-13
-        QVERIFY(!sdkPair(13));
+        QVERIFY(!sdkPair(14)); // S3: never clamped
+        QVERIFY(!sdkPair(-1));
+        QCOMPARE(sdkVersionText(0x13590001), QStringLiteral("13.59"));
+        QCOMPARE(firmwareLabel(13), QStringLiteral("SDK 13 · loads on FW 13.00+"));
         QCOMPARE(bcdMajor(0x10000040).value_or(-1), 10);
         QVERIFY(!bcdMajor(0x1A000000).has_value());
         QCOMPARE(sdkVersionText(0x09590001), QStringLiteral("9.59"));
@@ -191,7 +197,7 @@ private slots:
     void eachPairIsWritten_data()
     {
         QTest::addColumn<int>("n");
-        for (int n = 1; n <= 10; ++n)
+        for (int n = 1; n <= kMaxTargetSdk; ++n)
             QTest::newRow(qPrintable(QStringLiteral("pair %1").arg(n))) << n;
     }
     void eachPairIsWritten()

@@ -344,7 +344,7 @@ private slots:
         SdkFixOptions noOrig = fixOptions(e, SdkFixMode::InPlace, 5);
         noOrig.originalsDir.clear();
         QCOMPARE(codeOf(runSdkFix(noOrig, e.ctx).error()), Code::ZipFolderInvalid);
-        QCOMPARE(codeOf(runSdkFix(fixOptions(e, SdkFixMode::Copy, 11), e.ctx).error()), Code::TargetSdkInvalid);
+        QCOMPARE(codeOf(runSdkFix(fixOptions(e, SdkFixMode::Copy, 14), e.ctx).error()), Code::TargetSdkInvalid);
         SdkFixOptions inside = fixOptions(e, SdkFixMode::Copy, 5);
         inside.outputDir = e.game + "/data";
         QCOMPARE(codeOf(runSdkFix(inside, e.ctx).error()), Code::ZipFolderInvalid);

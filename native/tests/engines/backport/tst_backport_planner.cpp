@@ -77,7 +77,9 @@ private slots:
         QCOMPARE(p.blocking()->message, QStringLiteral("Target SDK 8 is higher than this game's own SDK 7. Choose SDK 7 or lower."));
         o.targetSdk = 7;
         QVERIFY(plan(o).canRun());
-        o.targetSdk = 11;
+        o.targetSdk = 11; // a real pair, but above the game's SDK 7
+        QVERIFY(refuses(plan(o), Code::TargetAboveGameSdk));
+        o.targetSdk = 14;
         QVERIFY(refuses(plan(o), Code::TargetSdkInvalid)); // never clamped
         o.targetSdk = 0;
         QVERIFY(refuses(plan(o), Code::TargetSdkInvalid));
