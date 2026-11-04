@@ -21,7 +21,8 @@
 //   .remastered.pkg)
 // FAKE_PUBCMD_VERIFY=fail, FAKE_PUBCMD_EXTRACT=fail|slow,
 // FAKE_PUBCMD_EXTRACT_PARAM=<param.json text>, FAKE_DDS2PNG_MODE=fail|wrong,
-// FAKE_PUBCMD_LOG=<file>: one JSON line per run (argv, cwd, TEMP, TMP, cpus).
+// FAKE_PUBCMD_LOG=<file>: one JSON line per run (argv, cwd, TEMP, TMP, start
+//   and end time, CPU count samples). FAKE_PUBCMD_DELAY_MS: delay per bar step.
 // FAKE_PUBCMD_CHILD_PIDFILE=<file>: img_create starts a child that sleeps and
 //   writes its pid there (process-tree kill tests).
 
@@ -369,7 +370,9 @@ int imgCreate(const std::vector<std::string>& args)
         out("|____|____|____|____|____|____|____|____|____|____|" + nl());
         out("0        20        40        60        80       100" + nl());
     }
-    const int delay = mode == "slow" ? 200 : 2;
+    int delay = mode == "slow" ? 200 : 2;
+    if (!env("FAKE_PUBCMD_DELAY_MS").empty())
+        delay = std::atoi(env("FAKE_PUBCMD_DELAY_MS").c_str());
     g_cpuSamples.push_back(cpuCount());
     for (int i = 0; i < 51; ++i) {
         if (mode != "nobar") {

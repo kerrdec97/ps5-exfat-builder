@@ -1484,11 +1484,11 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         if (req.updateOutput != UpdateOutput::FullOnly) finals << QDir(output).filePath(updatePackageName(plan.stem));
         if (req.updateOutput != UpdateOutput::UpdateOnly) finals << QDir(output).filePath(companionName(plan.stem));
         FW_TRY(checkBasePackagePath(req.basePackage, finals));
-        FW_TRY(checkUpdateAgainstBase(plan, roots, outcome.warnings));
         if (plan.scan.filesFromRoot[0] == 0)
             return Error(ErrorCode::InvalidArgument,
                          QStringLiteral("The update folder adds or replaces no file of the base. There is nothing to put "
                                         "in an update."));
+        FW_TRY(checkUpdateAgainstBase(plan, roots, outcome.warnings));
         log.info(QStringLiteral("Update: %1 file(s) from the update folder, %2 from the base.")
                      .arg(plan.scan.filesFromRoot[0]).arg(plan.scan.filesFromRoot[1]));
     }
