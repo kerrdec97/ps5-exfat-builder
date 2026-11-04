@@ -8,6 +8,15 @@
 //    extract with the source format's reader, build with the target format's
 //    writer, verify the new image against the extracted tree.
 //      params {image, format: "exfat"|"ffpkg"|"ffpfsc", output (file path)}
+//  * image.compare — compare two images (.exfat / .ffpkg / .ffpfs / .ffpfsc),
+//    or an image and a folder, through the native readers (ImageCompare.h):
+//    files and folders only in A / only in B, different sizes and, at full
+//    depth, different contents. The job succeeds whatever it finds; the
+//    differences are in JobOutcome::details (shape in app/services/JobSubmit.h)
+//    and the verification field is not used.
+//      params {a, b, depth: "full" (default) | "structure"}
+//  * ImageFiles.h — format-neutral read-only file access (also used by the
+//    Edit image page's hex preview).
 //  * Post-build upload to the PS5 (legacy adv_auto_upload): PostBuildActions
 //    queues ps5.ftp.upload for every verified image when
 //    ps5.autoUploadAfterBuild is on.
@@ -26,6 +35,7 @@ inline const QString kAutoUpload = QStringLiteral("ps5.autoUploadAfterBuild");
 }
 
 inline const QString kConvertJob = QStringLiteral("image.convert");
+inline const QString kCompareJob = QStringLiteral("image.compare");
 
 // Lives on the UI thread next to the queue.
 class PostBuildActions : public QObject {
