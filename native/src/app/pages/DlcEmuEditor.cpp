@@ -1,4 +1,5 @@
 #include "app/pages/DlcEmuEditor.h"
+#include "app/i18n/I18n.h"
 
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
@@ -27,29 +28,29 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     setProperty("fwNoRing", true);
     auto* l = vbox(this, space::lg);
     auto* pick = new Card(this);
-    m_badge = new Badge(QStringLiteral("No folder"), Tone::Neutral, pick);
+    m_badge = new Badge(tr("No folder"), Tone::Neutral, pick);
     m_badge->setIconName({});
-    pick->setTitle(QStringLiteral("DLC emulator (dlc_emu.ini)"), m_badge);
-    pick->body()->addWidget(caption(QStringLiteral("One entry per add-on the emulator should present to the game. The file lives in the game's app0 folder; it may hold at most 1,024 entries and 32 KiB."), pick));
+    pick->setTitle(tr("DLC emulator (dlc_emu.ini)"), m_badge);
+    pick->body()->addWidget(caption(tr("One entry per add-on the emulator should present to the game. The file lives in the game's app0 folder; it may hold at most 1,024 entries and 32 KiB."), pick));
     m_folder = new PathField(PathField::Mode::Directory, pick);
-    m_folder->setDialogTitle(QStringLiteral("Choose the game folder (app0)"));
-    pick->body()->addWidget(field(QStringLiteral("Game folder (app0)"), m_folder, {}, pick));
+    m_folder->setDialogTitle(tr("Choose the game folder (app0)"));
+    pick->body()->addWidget(field(tr("Game folder (app0)"), m_folder, {}, pick));
     l->addWidget(pick);
     connect(m_folder, &PathField::pathChanged, this, [this](const QString&) { load(); });
 
     auto* card = new Card(this, Card::Variant::Table);
     auto* h = card->header();
-    h->addWidget(heading(QStringLiteral("Entries"), TextStyle::Subtitle, card));
+    h->addWidget(heading(tr("Entries"), TextStyle::Subtitle, card));
     h->addStretch(1);
-    m_add = button(QStringLiteral("Add entry"), ButtonVariant::Secondary, QStringLiteral("plus"), card);
-    m_duplicate = button(QStringLiteral("Duplicate"), ButtonVariant::Secondary, QStringLiteral("copy"), card);
-    m_remove = button(QStringLiteral("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
-    m_find = button(QStringLiteral("Find DLC entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
-    m_save = button(QStringLiteral("Save…"), ButtonVariant::Primary, QStringLiteral("save"), card);
+    m_add = button(tr("Add entry"), ButtonVariant::Secondary, QStringLiteral("plus"), card);
+    m_duplicate = button(tr("Duplicate"), ButtonVariant::Secondary, QStringLiteral("copy"), card);
+    m_remove = button(tr("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
+    m_find = button(tr("Find DLC entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
+    m_save = button(tr("Save…"), ButtonVariant::Primary, QStringLiteral("save"), card);
     for (auto* b : {m_add, m_duplicate, m_remove, m_find, m_save})
         h->addWidget(b);
     m_table = new QTableWidget(0, ColumnCount, card);
-    m_table->setHorizontalHeaderLabels({QStringLiteral("Section"), QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"), QStringLiteral("download_status"), QStringLiteral("entitlement_key")});
+    m_table->setHorizontalHeaderLabels({tr("Section"), QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"), QStringLiteral("download_status"), QStringLiteral("entitlement_key")});
     m_table->horizontalHeader()->setFixedHeight(32);
     m_table->horizontalHeader()->setHighlightSections(false);
     m_table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -66,8 +67,8 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setMinimumHeight(8 * size::row + 40);
     card->body()->addWidget(m_table);
-    m_empty = new EmptyState(QStringLiteral("database"), QStringLiteral("No dlc_emu.ini yet"),
-                             QStringLiteral("Choose the game folder, then add entries by hand or let Find DLC entries look through the dump."), card);
+    m_empty = new EmptyState(QStringLiteral("database"), tr("No dlc_emu.ini yet"),
+                             tr("Choose the game folder, then add entries by hand or let Find DLC entries look through the dump."), card);
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
     m_validation = new MessageRow(card);
@@ -99,11 +100,11 @@ void DlcEmuEditor::load()
     const QString app0 = m_folder->path();
     if (app0.isEmpty()) {
         setEntries({});
-        m_badge->set(QStringLiteral("No folder"), Tone::Neutral);
+        m_badge->set(tr("No folder"), Tone::Neutral);
         return;
     }
     if (!QFileInfo(app0).isDir()) {
-        m_folder->setError(QStringLiteral("The folder does not exist."));
+        m_folder->setError(tr("The folder does not exist."));
         return;
     }
     m_folder->setError({});
@@ -121,7 +122,7 @@ void DlcEmuEditor::load()
             self->setEntries(r.value());
             self->m_dirty = false;
             const bool exists = QFile::exists(QDir(app0).filePath(QStringLiteral("dlc_emu.ini")));
-            self->m_badge->set(exists ? QStringLiteral("%1 entr%2 loaded").arg(r->size()).arg(r->size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")) : QStringLiteral("New file"), exists ? Tone::Ok : Tone::Info);
+            self->m_badge->set(exists ? tr("%1 entr%2 loaded").arg(r->size()).arg(r->size() == 1 ? tr("y") : tr("ies")) : tr("New file"), exists ? Tone::Ok : Tone::Info);
         }, Qt::QueuedConnection);
     });
 }
@@ -258,14 +259,14 @@ void DlcEmuEditor::revalidate()
     m_empty->setVisible(!anyRows);
     const dlc::Validation v = dlc::validate(all, m_folder->path());
     const int bytes = dlc::byteSize(all);
-    m_bytes->setText(QStringLiteral("%1 entr%2 · %3 of %4 KiB").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")).arg(QString::number(bytes / 1024.0, 'f', 1)).arg(dlc::kMaxIniBytes / 1024));
+    m_bytes->setText(tr("%1 entr%2 · %3 of %4 KiB").arg(all.size()).arg(all.size() == 1 ? tr("y") : tr("ies")).arg(QString::number(bytes / 1024.0, 'f', 1)).arg(dlc::kMaxIniBytes / 1024));
     setTextColor(m_bytes, bytes > dlc::kMaxIniBytes || int(all.size()) > dlc::kMaxEntries ? color::danger_hi : color::fg_3);
     if (!v.errors.isEmpty())
-        m_validation->set(QStringLiteral("%1 error%2: %3").arg(v.errors.size()).arg(v.errors.size() == 1 ? QString() : QStringLiteral("s")).arg(v.errors.first()), Tone::Err);
+        m_validation->set(tr("%1 error%2: %3").arg(v.errors.size()).arg(v.errors.size() == 1 ? QString() : tr("s")).arg(v.errors.first()), Tone::Err);
     else if (!v.warnings.isEmpty())
-        m_validation->set(QStringLiteral("%1 warning%2: %3").arg(v.warnings.size()).arg(v.warnings.size() == 1 ? QString() : QStringLiteral("s")).arg(v.warnings.first()), Tone::Warn);
+        m_validation->set(tr("%1 warning%2: %3").arg(v.warnings.size()).arg(v.warnings.size() == 1 ? QString() : tr("s")).arg(v.warnings.first()), Tone::Warn);
     else if (anyRows)
-        m_validation->set(QStringLiteral("Valid%1").arg(m_dirty ? QStringLiteral(" · unsaved changes") : QString()), Tone::Ok);
+        m_validation->set(tr("Valid%1").arg(m_dirty ? tr(" · unsaved changes") : QString()), Tone::Ok);
     else
         m_validation->clear();
     m_validation->setToolTip((v.errors + v.warnings).join(u'\n'));
@@ -288,20 +289,20 @@ void DlcEmuEditor::findEntries()
                 return;
             self->m_find->setEnabled(true);
             if (s.entries.empty()) {
-                Sheet::message(self->window(), QStringLiteral("No add-on entries found"),
-                               (s.notes.isEmpty() ? QStringLiteral("Nothing in the dump looks like an add-on content ID.") : s.notes.join(u' ')).toHtmlEscaped(), Sheet::Icon::Info);
+                Sheet::message(self->window(), tr("No add-on entries found"),
+                               (s.notes.isEmpty() ? tr("Nothing in the dump looks like an add-on content ID.") : s.notes.join(u' ')).toHtmlEscaped(), Sheet::Icon::Info);
                 return;
             }
-            auto* sheet = new Sheet(self->window(), QStringLiteral("Found %1 possible entr%2").arg(s.entries.size()).arg(s.entries.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")), Sheet::Icon::None, 900);
+            auto* sheet = new Sheet(self->window(), tr("Found %1 possible entr%2").arg(s.entries.size()).arg(s.entries.size() == 1 ? tr("y") : tr("ies")), Sheet::Icon::None, 900);
             QStringList intro;
-            intro << QStringLiteral("Prefix %1%2.").arg(Sheet::monoSpan(s.prefix), s.prefixIsPlaceholder ? QStringLiteral(" (placeholder: the dump's own content ID was not found; check every ID)") : QString());
+            intro << tr("Prefix %1%2.").arg(Sheet::monoSpan(s.prefix), s.prefixIsPlaceholder ? tr(" (placeholder: the dump's own content ID was not found; check every ID)") : QString());
             if (!s.addcont.isEmpty())
-                intro << QStringLiteral("Add-on folders: %1.").arg(Sheet::monoSpan(s.addcont.join(QStringLiteral(", "))));
+                intro << tr("Add-on folders: %1.").arg(Sheet::monoSpan(s.addcont.join(QStringLiteral(", "))));
             for (const QString& n : s.notes)
                 intro << n.toHtmlEscaped();
             sheet->addText(intro.join(u' '));
             auto* table = new QTableWidget(int(s.entries.size()), 4, sheet);
-            table->setHorizontalHeaderLabels({QStringLiteral("Add"), QStringLiteral("Confidence"), QStringLiteral("content_id"), QStringLiteral("Found in")});
+            table->setHorizontalHeaderLabels({tr("Add"), tr("Confidence"), QStringLiteral("content_id"), tr("Found in")});
             table->horizontalHeader()->setFixedHeight(32);
             table->horizontalHeader()->setHighlightSections(false);
             table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
@@ -337,8 +338,8 @@ void DlcEmuEditor::findEntries()
                 table->setItem(r, 3, src);
             }
             sheet->body()->addWidget(table);
-            sheet->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-            sheet->addButton(QStringLiteral("Add ticked entries"), Sheet::Role::Primary);
+            sheet->addButton(tr("Cancel"), Sheet::Role::Safe);
+            sheet->addButton(tr("Add ticked entries"), Sheet::Role::Primary);
             if (sheet->exec() != 1)
                 return;
             self->m_table->blockSignals(true);
@@ -355,7 +356,7 @@ void DlcEmuEditor::findEntries()
             if (added > 0)
                 self->m_dirty = true;
             self->revalidate();
-            emit self->toastRequested(Tone::Ok, QStringLiteral("%1 entr%2 added").arg(added).arg(added == 1 ? QStringLiteral("y") : QStringLiteral("ies")), QStringLiteral("Review the IDs, then save."));
+            emit self->toastRequested(Tone::Ok, tr("%1 entr%2 added").arg(added).arg(added == 1 ? tr("y") : tr("ies")), tr("Review the IDs, then save."));
         }, Qt::QueuedConnection);
     });
 }
@@ -371,10 +372,10 @@ void DlcEmuEditor::save()
     }
     const QString file = QDir(app0).filePath(QStringLiteral("dlc_emu.ini"));
     const bool exists = QFile::exists(file);
-    if (!Sheet::confirm(window(), QStringLiteral("Write dlc_emu.ini?"),
-                        QStringLiteral("%1 entr%2 are written to %3.%4").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")).arg(Sheet::monoSpan(nativePath(file)),
-                                                                                                               exists ? QStringLiteral(" The current file is kept as dlc_emu.ini.bak.") : QString()),
-                        QStringLiteral("Cancel"), QStringLiteral("Save"), false, Sheet::Icon::Info))
+    if (!Sheet::confirm(window(), tr("Write dlc_emu.ini?"),
+                        tr("%1 entr%2 are written to %3.%4").arg(all.size()).arg(all.size() == 1 ? tr("y") : tr("ies")).arg(Sheet::monoSpan(nativePath(file)),
+                                                                                                               exists ? tr(" The current file is kept as dlc_emu.ini.bak.") : QString()),
+                        tr("Cancel"), tr("Save"), false, Sheet::Icon::Info))
         return;
     m_save->setEnabled(false);
     QPointer<DlcEmuEditor> self(this);
@@ -385,14 +386,14 @@ void DlcEmuEditor::save()
                 return;
             self->m_save->setEnabled(true);
             if (!st.ok()) {
-                emit self->toastRequested(Tone::Err, QStringLiteral("dlc_emu.ini not saved"), st.error().message);
+                emit self->toastRequested(Tone::Err, tr("dlc_emu.ini not saved"), st.error().message);
                 return;
             }
             self->m_dirty = false;
             self->m_loaded = all;
             self->revalidate();
-            self->m_badge->set(QStringLiteral("%1 entr%2 saved").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")), Tone::Ok);
-            emit self->toastRequested(Tone::Ok, QStringLiteral("dlc_emu.ini saved"), nativePath(self->m_folder->path()));
+            self->m_badge->set(tr("%1 entr%2 saved").arg(all.size()).arg(all.size() == 1 ? tr("y") : tr("ies")), Tone::Ok);
+            emit self->toastRequested(Tone::Ok, tr("dlc_emu.ini saved"), nativePath(self->m_folder->path()));
         }, Qt::QueuedConnection);
     });
 }

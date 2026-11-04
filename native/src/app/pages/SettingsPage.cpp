@@ -1,4 +1,5 @@
 #include "app/pages/SettingsPage.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
@@ -78,17 +79,17 @@ private:
 } // namespace
 
 SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
-    : Page(ctx, QStringLiteral("settings"), QStringLiteral("Settings"),
-           QStringLiteral("Defaults for every new job. A job page can override any of them; the override shows a marker on that job only."), parent)
+    : Page(ctx, QStringLiteral("settings"), tr("Settings"),
+           tr("Defaults for every new job. A job page can override any of them; the override shows a marker on that job only."), parent)
 {
-    m_search = textInput(QStringLiteral("Search settings"), false, this);
+    m_search = textInput(tr("Search settings"), false, this);
     m_search->setFixedWidth(260);
     m_search->setClearButtonEnabled(true);
-    m_search->setAccessibleName(QStringLiteral("Search settings"));
+    m_search->setAccessibleName(tr("Search settings"));
     header()->addAction(m_search);
-    auto* import = button(QStringLiteral("Import legacy settings…"), ButtonVariant::Secondary, QStringLiteral("file_down"), this);
+    auto* import = button(tr("Import legacy settings…"), ButtonVariant::Secondary, QStringLiteral("file_down"), this);
     header()->addAction(import);
-    auto* resetAll = button(QStringLiteral("Reset all…"), ButtonVariant::Secondary, QStringLiteral("undo"), this);
+    auto* resetAll = button(tr("Reset all…"), ButtonVariant::Secondary, QStringLiteral("undo"), this);
     header()->addAction(resetAll);
     connect(import, &QPushButton::clicked, this, &SettingsPage::importLegacy);
     connect(resetAll, &QPushButton::clicked, this, &SettingsPage::resetAll);
@@ -114,7 +115,7 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     for (const QString& s : m_sections) {
         auto* wrap = new QWidget(m_sectionList);
         auto* wl = hbox(wrap, 0);
-        auto* b = new SectionButton(s, wrap);
+        auto* b = new SectionButton(i18n::trs(s), wrap);
         auto* badge = new Badge(QString(), Tone::Warn, b);
         badge->setCount(true);
         badge->setIconName({});
@@ -143,17 +144,23 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     scol->addWidget(m_secTitle);
     scol->addWidget(m_secCaption);
     sh->addLayout(scol, 1);
-    sh->addWidget(label(QStringLiteral("Show advanced"), TextStyle::Body, color::fg_1, secHeader), 0, Qt::AlignVCenter);
+    sh->addWidget(label(tr("Show advanced"), TextStyle::Body, color::fg_1, secHeader), 0, Qt::AlignVCenter);
     m_advancedSwitch = new Switch(secHeader);
-    m_advancedSwitch->setAccessibleName(QStringLiteral("Show advanced settings"));
+    m_advancedSwitch->setAccessibleName(tr("Show advanced settings"));
     sh->addWidget(m_advancedSwitch, 0, Qt::AlignVCenter);
-    m_resetSection = button(QStringLiteral("Reset section"), ButtonVariant::Subtle, QStringLiteral("undo"), secHeader);
+    m_resetSection = button(tr("Reset section"), ButtonVariant::Subtle, QStringLiteral("undo"), secHeader);
     sh->addWidget(m_resetSection, 0, Qt::AlignVCenter);
     m_paneLayout->addWidget(secHeader);
     m_cards = new QWidget(m_pane);
     m_cardsLayout = vbox(m_cards, space::lg);
     m_paneLayout->addWidget(m_cards);
-    h->addWidget(m_pane, 1, Qt::AlignTop);
+    // The pane fills the column and keeps its content at the top through a stretch,
+    // instead of an AlignTop item: an aligned item is sized from a cached
+    // height-for-width that is not refreshed after the rows inside have wrapped
+    // their translated labels, which squeezed whole cards (German, with Show
+    // advanced on).
+    m_paneLayout->addStretch(1);
+    h->addWidget(m_pane, 1);
     content()->addWidget(columns);
     connect(m_advancedSwitch, &QAbstractButton::toggled, this, &SettingsPage::setShowAdvanced);
     connect(m_resetSection, &QPushButton::clicked, this, [this] {
@@ -162,7 +169,7 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         m_ctx.settings().resetSection(m_section);
         (void)m_ctx.settings().save();
         rebuild();
-        emit toastRequested(Tone::Ok, QStringLiteral("%1 reset").arg(m_section), QStringLiteral("Defaults are back for this section."));
+        emit toastRequested(Tone::Ok, tr("%1 reset").arg(m_section), tr("Defaults are back for this section."));
     });
 
     connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
@@ -183,22 +190,22 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
 QString SettingsPage::sectionCaption(const QString& section) const
 {
     static const QHash<QString, QString> captions = {
-        {QStringLiteral("General"), QStringLiteral("How the app behaves.")},
-        {QStringLiteral("Build"), QStringLiteral("Defaults for Build image jobs.")},
-        {QStringLiteral("FPKG"), QStringLiteral("Defaults for FPKG packages.")},
-        {QStringLiteral("PFS"), QStringLiteral("Defaults for PFS and FFPFSC images.")},
-        {QStringLiteral("PlayGo"), QStringLiteral("PlayGo chunk layout and AMPR index.")},
-        {QStringLiteral("Backport"), QStringLiteral("Defaults for Backport jobs.")},
-        {QStringLiteral("Firmware and SDK"), QStringLiteral("Firmware targets and SDK versions.")},
-        {QStringLiteral("Tools"), QStringLiteral("External tools the app can use. Nothing is downloaded or bundled.")},
-        {QStringLiteral("Performance"), QStringLiteral("Threads, buffers and the queue.")},
-        {QStringLiteral("Storage"), QStringLiteral("Folders and free-space safety.")},
-        {QStringLiteral("Verification"), QStringLiteral("What happens after a build.")},
-        {QStringLiteral("PS5 connection"), QStringLiteral("How the app reaches the console.")},
-        {QStringLiteral("Logging"), QStringLiteral("Log files and problem reports.")},
-        {QStringLiteral("Advanced"), QStringLiteral("Troubleshooting. Change these only when asked to.")},
+        {QStringLiteral("General"), tr("How the app behaves.")},
+        {QStringLiteral("Build"), tr("Defaults for Build image jobs.")},
+        {QStringLiteral("FPKG"), tr("Defaults for FPKG packages.")},
+        {QStringLiteral("PFS"), tr("Defaults for PFS and FFPFSC images.")},
+        {QStringLiteral("PlayGo"), tr("PlayGo chunk layout and AMPR index.")},
+        {QStringLiteral("Backport"), tr("Defaults for Backport jobs.")},
+        {QStringLiteral("Firmware and SDK"), tr("Firmware targets and SDK versions.")},
+        {QStringLiteral("Tools"), tr("External tools the app can use. Nothing is downloaded or bundled.")},
+        {QStringLiteral("Performance"), tr("Threads, buffers and the queue.")},
+        {QStringLiteral("Storage"), tr("Folders and free-space safety.")},
+        {QStringLiteral("Verification"), tr("What happens after a build.")},
+        {QStringLiteral("PS5 connection"), tr("How the app reaches the console.")},
+        {QStringLiteral("Logging"), tr("Log files and problem reports.")},
+        {QStringLiteral("Advanced"), tr("Troubleshooting. Change these only when asked to.")},
     };
-    return captions.value(section, QStringLiteral("Defaults for %1.").arg(section));
+    return captions.value(section, tr("Defaults for %1.").arg(i18n::trs(section)));
 }
 
 void SettingsPage::showSection(const QString& section)
@@ -243,20 +250,21 @@ void SettingsPage::rebuild()
     m_tempClear = nullptr;
     const QString query = m_search->text().trimmed();
     if (!query.isEmpty()) {
-        m_secTitle->setText(QStringLiteral("Search results"));
+        m_secTitle->setText(tr("Search results"));
         m_resetSection->hide();
         int n = 0;
         for (const QString& s : m_sections) {
             Card* card = nullptr;
             std::vector<const SettingDef*> hits;
             for (const SettingDef* d : m_ctx.schema().inSection(s))
-                if (d->label.contains(query, Qt::CaseInsensitive) || d->description.contains(query, Qt::CaseInsensitive) || d->key.contains(query, Qt::CaseInsensitive))
+                if (d->label.contains(query, Qt::CaseInsensitive) || d->description.contains(query, Qt::CaseInsensitive) || d->key.contains(query, Qt::CaseInsensitive)
+                    || i18n::trs(d->label).contains(query, Qt::CaseInsensitive) || i18n::trs(d->description).contains(query, Qt::CaseInsensitive))
                     hits.push_back(d);
             if (hits.empty())
                 continue;
             card = new Card(m_cards);
             card->body()->setSpacing(0);
-            card->setTitle(s);
+            card->setTitle(i18n::trs(s));
             for (size_t i = 0; i < hits.size(); ++i) {
                 auto* row = new SettingRow(*hits[i], card);
                 row->setDivider(i + 1 < hits.size());
@@ -270,7 +278,7 @@ void SettingsPage::rebuild()
             }
             m_cardsLayout->addWidget(card);
         }
-        m_secCaption->setText(n == 0 ? QStringLiteral("No setting matches \"%1\".").arg(query) : QStringLiteral("%1 setting%2 match \"%3\".").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(query));
+        m_secCaption->setText(n == 0 ? tr("No setting matches \"%1\".").arg(query) : tr("%1 setting%2 match \"%3\".").arg(n).arg(n == 1 ? QString() : tr("s")).arg(query));
         refreshDependencyStates();
         return;
     }
@@ -306,7 +314,7 @@ void SettingsPage::buildSection(const QString& section)
             continue;
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
-        card->setTitle(g.isEmpty() ? section : g);
+        card->setTitle(i18n::trs(g.isEmpty() ? section : g));
         for (size_t i = 0; i < rows.size(); ++i) {
             const SettingDef* d = rows[i];
             auto* row = new SettingRow(*d, card);
@@ -324,24 +332,24 @@ void SettingsPage::buildSection(const QString& section)
         // Temporary files (Paths::tempUsageBytes / sweepStaleTemp).
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
-        card->setTitle(QStringLiteral("Temporary files"));
+        card->setTitle(tr("Temporary files"));
         auto* trow = new QWidget(card);
         auto* th = hbox(trow, space::lg, QMargins(0, 6, 0, 6));
         auto* tcol = new QVBoxLayout;
         tcol->setSpacing(2);
-        tcol->addWidget(label(QStringLiteral("Files left by jobs"), TextStyle::Body, color::fg_1, trow));
-        m_tempUsage = caption(QStringLiteral("Measuring…"), trow);
+        tcol->addWidget(label(tr("Files left by jobs"), TextStyle::Body, color::fg_1, trow));
+        m_tempUsage = caption(tr("Measuring…"), trow);
         tcol->addWidget(m_tempUsage);
         th->addLayout(tcol, 1);
-        m_tempClear = button(QStringLiteral("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), trow);
+        m_tempClear = button(tr("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), trow);
         m_tempClear->setEnabled(false);
         connect(m_tempClear, &QPushButton::clicked, this, [this] {
             if (m_ctx.queue().isBusy()) {
-                emit toastRequested(Tone::Warn, QStringLiteral("Jobs are running"), QStringLiteral("Temporary files are cleared when the queue is idle."));
+                emit toastRequested(Tone::Warn, tr("Jobs are running"), tr("Temporary files are cleared when the queue is idle."));
                 return;
             }
             const int n = Paths::sweepStaleTemp(0);
-            emit toastRequested(Tone::Ok, QStringLiteral("Temporary files cleared"), QStringLiteral("%1 folder%2 removed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
+            emit toastRequested(Tone::Ok, tr("Temporary files cleared"), tr("%1 folder%2 removed").arg(n).arg(n == 1 ? QString() : tr("s")));
             updateTempUsage();
         });
         th->addWidget(m_tempClear);
@@ -351,24 +359,24 @@ void SettingsPage::buildSection(const QString& section)
     }
     if (section == QLatin1String("Advanced")) {
         auto* card = new Card(m_cards);
-        card->setTitle(QStringLiteral("Import settings from the old app"));
-        card->body()->addWidget(caption(QStringLiteral("Reads the Python edition's settings.json and takes over every value the native app understands. Nothing is deleted; values the native app does not use are skipped."), card));
+        card->setTitle(tr("Import settings from the old app"));
+        card->body()->addWidget(caption(tr("Reads the Python edition's settings.json and takes over every value the native app understands. Nothing is deleted; values the native app does not use are skipped."), card));
         auto* pf = new PathField(PathField::Mode::OpenFile, card);
-        pf->setFilter(QStringLiteral("JSON files (*.json)"));
-        pf->setDialogTitle(QStringLiteral("Choose the old settings.json"));
+        pf->setFilter(tr("JSON files (*.json)"));
+        pf->setDialogTitle(tr("Choose the old settings.json"));
         const QString legacy = QDir::home().filePath(QStringLiteral(".exfat_builder_settings.json"));
         if (QFile::exists(legacy))
             pf->setPath(legacy);
         else
             pf->setPlaceholder(nativePath(legacy));
-        card->body()->addWidget(field(QStringLiteral("Old settings file"), pf, {}, card));
+        card->body()->addWidget(field(tr("Old settings file"), pf, {}, card));
         auto* row = new QWidget(card);
         auto* rh = hbox(row, space::sm);
         rh->addStretch(1);
-        auto* go = button(QStringLiteral("Import"), ButtonVariant::Primary, QStringLiteral("file_down"), row);
+        auto* go = button(tr("Import"), ButtonVariant::Primary, QStringLiteral("file_down"), row);
         connect(go, &QPushButton::clicked, this, [this, pf] {
             if (pf->path().isEmpty()) {
-                pf->setError(QStringLiteral("Choose the old settings file first."));
+                pf->setError(tr("Choose the old settings file first."));
                 return;
             }
             pf->setError({});
@@ -381,30 +389,30 @@ void SettingsPage::buildSection(const QString& section)
     if (section == QLatin1String("Tools")) {
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
-        auto* badge = new Badge(QStringLiteral("Checking…"), Tone::Neutral, card);
-        auto* row = card->setTitle(QStringLiteral("Components and tools"), badge);
-        auto* again = button(QStringLiteral("Check again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
+        auto* badge = new Badge(tr("Checking…"), Tone::Neutral, card);
+        auto* row = card->setTitle(tr("Components and tools"), badge);
+        auto* again = button(tr("Check again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
         setButtonSmall(again, true);
-        auto* copyReport = button(QStringLiteral("Copy report"), ButtonVariant::Subtle, QStringLiteral("copy"), card);
+        auto* copyReport = button(tr("Copy report"), ButtonVariant::Subtle, QStringLiteral("copy"), card);
         setButtonSmall(copyReport, true);
         row->addWidget(copyReport);
         row->addWidget(again);
         m_deps = new DependencyList(m_ctx, {}, card);
         card->body()->addWidget(m_deps);
         if (m_deps->isEmpty())
-            card->body()->addWidget(caption(QStringLiteral("No external tools are registered in this build."), card));
+            card->body()->addWidget(caption(tr("No external tools are registered in this build."), card));
         connect(again, &QPushButton::clicked, m_deps, &DependencyList::checkAgain);
         connect(copyReport, &QPushButton::clicked, this, [this] {
             QGuiApplication::clipboard()->setText(m_deps->report());
-            emit toastRequested(Tone::Ok, QStringLiteral("Report copied"), QStringLiteral("Dependency statuses are on the clipboard as JSON."));
+            emit toastRequested(Tone::Ok, tr("Report copied"), tr("Dependency statuses are on the clipboard as JSON."));
         });
         connect(m_deps, &DependencyList::changed, this, [this, badge] {
             if (m_deps->isEmpty()) {
-                badge->set(QStringLiteral("None"), Tone::Neutral);
+                badge->set(tr("None"), Tone::Neutral);
                 return;
             }
             const int ready = m_deps->readyCount(), total = m_deps->total();
-            badge->set(QStringLiteral("%1 of %2 ready").arg(ready).arg(total), ready == total ? Tone::Ok : Tone::Warn);
+            badge->set(tr("%1 of %2 ready").arg(ready).arg(total), ready == total ? Tone::Ok : Tone::Warn);
         });
         connect(m_deps, &DependencyList::fixRequested, this, [this](const QString&, const QString& how, const QString& settingKey) {
             navigateWith({{QStringLiteral("key"), settingKey}, {QStringLiteral("howToFix"), how}});
@@ -414,9 +422,9 @@ void SettingsPage::buildSection(const QString& section)
     } else if (!depIds.isEmpty()) {
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
-        auto* again = button(QStringLiteral("Detect again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
+        auto* again = button(tr("Detect again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
         setButtonSmall(again, true);
-        card->setTitle(QStringLiteral("Tools this section depends on"), again);
+        card->setTitle(tr("Tools this section depends on"), again);
         auto* list = new DependencyList(m_ctx, depIds, card);
         card->body()->addWidget(list);
         connect(again, &QPushButton::clicked, list, &DependencyList::checkAgain);
@@ -426,13 +434,13 @@ void SettingsPage::buildSection(const QString& section)
         m_cardsLayout->addWidget(card);
     }
     if (hiddenAdvanced > 0) {
-        auto* note = caption(QStringLiteral("%1 advanced setting%2 hidden. Turn on Show advanced to see %3.")
-                                 .arg(hiddenAdvanced).arg(hiddenAdvanced == 1 ? QString() : QStringLiteral("s")).arg(hiddenAdvanced == 1 ? QStringLiteral("it") : QStringLiteral("them")), m_cards);
+        auto* note = caption(tr("%1 advanced setting%2 hidden. Turn on Show advanced to see %3.")
+                                 .arg(hiddenAdvanced).arg(hiddenAdvanced == 1 ? QString() : tr("s")).arg(hiddenAdvanced == 1 ? QStringLiteral("it") : QStringLiteral("them")), m_cards);
         m_cardsLayout->addWidget(note);
     }
     if (m_cardsLayout->count() == 0)
-        m_cardsLayout->addWidget(new EmptyState(QStringLiteral("settings"), QStringLiteral("Nothing to set here yet"),
-                                                QStringLiteral("The modules that use this section are not part of this build."), m_cards));
+        m_cardsLayout->addWidget(new EmptyState(QStringLiteral("settings"), tr("Nothing to set here yet"),
+                                                tr("The modules that use this section are not part of this build."), m_cards));
 }
 
 void SettingsPage::updateTempUsage()
@@ -445,8 +453,8 @@ void SettingsPage::updateTempUsage()
         QMetaObject::invokeMethod(self.data(), [self, bytes] {
             if (!self || !self->m_tempUsage)
                 return;
-            self->m_tempUsage->setText(bytes > 0 ? QStringLiteral("%1 in %2").arg(formatBytes(bytes), nativePath(Paths::tempRoot()))
-                                                 : QStringLiteral("Nothing to clear in %1").arg(nativePath(Paths::tempRoot())));
+            self->m_tempUsage->setText(bytes > 0 ? tr("%1 in %2").arg(formatBytes(bytes), nativePath(Paths::tempRoot()))
+                                                 : tr("Nothing to clear in %1").arg(nativePath(Paths::tempRoot())));
             self->m_tempClear->setEnabled(bytes > 0);
         }, Qt::QueuedConnection);
     });
@@ -469,7 +477,7 @@ void SettingsPage::applyValue(const QString& key, const QVariant& value)
         row->setMessage({}, Tone::Neutral);
     if (const SettingDef* d = m_ctx.schema().find(key); d && d->restartRequired) {
         m_restartNeeded = true;
-        emit toastRequested(Tone::Info, QStringLiteral("Takes effect after a restart"), d->label);
+        emit toastRequested(Tone::Info, tr("Takes effect after a restart"), d->label);
     }
     emit attentionChanged();
     emit statusContextChanged();
@@ -497,7 +505,7 @@ void SettingsPage::refreshDependencyStates()
             it.value()->setDisabledReason({});
         else {
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
-            it.value()->setDisabledReason(QStringLiteral("Only available when \"%1\" is %2.")
+            it.value()->setDisabledReason(tr("Only available when \"%1\" is %2.")
                                               .arg(other ? other->label : d->enabledWhenKey,
                                                    other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString()));
         }
@@ -508,14 +516,14 @@ void SettingsPage::updateSectionHeader()
 {
     if (!m_search->text().trimmed().isEmpty())
         return;
-    m_secTitle->setText(m_section);
+    m_secTitle->setText(i18n::trs(m_section));
     int differ = 0;
     for (const SettingDef* d : m_ctx.schema().inSection(m_section))
         if (!m_ctx.settings().isDefault(d->key))
             ++differ;
     QString cap = sectionCaption(m_section);
     if (differ > 0)
-        cap += QStringLiteral(" %1 setting%2 differ%3 from the defaults.").arg(differ).arg(differ == 1 ? QString() : QStringLiteral("s")).arg(differ == 1 ? QStringLiteral("s") : QString());
+        cap += tr(" %1 setting%2 differ%3 from the defaults.").arg(differ).arg(differ == 1 ? QString() : tr("s")).arg(differ == 1 ? tr("s") : QString());
     m_secCaption->setText(cap);
     m_resetSection->setEnabled(differ > 0);
 }
@@ -553,7 +561,7 @@ void SettingsPage::importLegacy()
     const QString legacy = QDir::home().filePath(QStringLiteral(".exfat_builder_settings.json"));
     if (QFile::exists(legacy))
         start = legacy;
-    const QString path = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the legacy settings.json"), start, QStringLiteral("JSON files (*.json)"));
+    const QString path = QFileDialog::getOpenFileName(window(), tr("Choose the legacy settings.json"), start, tr("JSON files (*.json)"));
     if (path.isEmpty())
         return;
     importLegacyFrom(path);
@@ -566,7 +574,7 @@ void SettingsPage::importLegacyFrom(const QString& path)
         before.insert(d->key, m_ctx.settings().value(d->key));
     auto r = m_ctx.settings().importLegacy(path);
     if (!r.ok()) {
-        Sheet::message(window(), QStringLiteral("Nothing was imported"), r.error().message, Sheet::Icon::Error);
+        Sheet::message(window(), tr("Nothing was imported"), r.error().message, Sheet::Icon::Error);
         return;
     }
     (void)m_ctx.settings().save();
@@ -575,24 +583,24 @@ void SettingsPage::importLegacyFrom(const QString& path)
         if (m_ctx.settings().value(d->key) != before.value(d->key))
             changed << QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key))).toHtmlEscaped();
     rebuild();
-    const QString title = QStringLiteral("%1 value%2 imported").arg(r.value()).arg(r.value() == 1 ? QString() : QStringLiteral("s"));
+    const QString title = tr("%1 value%2 imported").arg(r.value()).arg(r.value() == 1 ? QString() : tr("s"));
     if (changed.isEmpty())
-        Sheet::message(window(), title, QStringLiteral("Every imported value already matched the current settings, so nothing changed."), Sheet::Icon::Info);
+        Sheet::message(window(), title, tr("Every imported value already matched the current settings, so nothing changed."), Sheet::Icon::Info);
     else
-        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(Sheet::monoSpan(changed.join(QStringLiteral("<br>")))), Sheet::Icon::Info);
+        Sheet::message(window(), title, tr("Changed:<br>%1").arg(Sheet::monoSpan(changed.join(QStringLiteral("<br>")))), Sheet::Icon::Info);
 }
 
 void SettingsPage::resetAll()
 {
-    if (!Sheet::confirm(window(), QStringLiteral("Reset every setting?"),
-                        QStringLiteral("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."),
-                        QStringLiteral("Keep settings"), QStringLiteral("Reset all"), true, Sheet::Icon::Warning))
+    if (!Sheet::confirm(window(), tr("Reset every setting?"),
+                        tr("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."),
+                        tr("Keep settings"), tr("Reset all"), true, Sheet::Icon::Warning))
         return;
     m_ctx.settings().resetAll();
     (void)m_ctx.settings().save();
     m_errors.clear();
     rebuild();
-    emit toastRequested(Tone::Ok, QStringLiteral("Settings reset"), QStringLiteral("Every setting is back to its default."));
+    emit toastRequested(Tone::Ok, tr("Settings reset"), tr("Every setting is back to its default."));
 }
 
 void SettingsPage::navigateWith(const QVariantMap& args)
@@ -615,7 +623,7 @@ void SettingsPage::navigateWith(const QVariantMap& args)
             m_fixBar->setDismissable(true);
             m_cardsLayout->insertWidget(0, m_fixBar);
         }
-        m_fixBar->setTitle(QStringLiteral("How to fix"));
+        m_fixBar->setTitle(tr("How to fix"));
         m_fixBar->setMessage(how);
         m_fixBar->show();
     }
@@ -649,10 +657,10 @@ QStringList SettingsPage::demoStates() const
 void SettingsPage::applyDemoState(const QString& name)
 {
     if (name == QLatin1String("reset-dialog")) {
-        auto* s = new Sheet(window(), QStringLiteral("Reset every setting?"), Sheet::Icon::Warning);
-        s->addText(QStringLiteral("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."));
-        s->addButton(QStringLiteral("Keep settings"), Sheet::Role::Safe);
-        s->addButton(QStringLiteral("Reset all"), Sheet::Role::Destructive);
+        auto* s = new Sheet(window(), tr("Reset every setting?"), Sheet::Icon::Warning);
+        s->addText(tr("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."));
+        s->addButton(tr("Keep settings"), Sheet::Role::Safe);
+        s->addButton(tr("Reset all"), Sheet::Role::Destructive);
         s->open();
         m_demoSheet = s;
         return;

@@ -1,4 +1,5 @@
 #include "app/pages/FpkgPage.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/services/JobSubmit.h"
@@ -28,8 +29,8 @@ using namespace theme;
 
 FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     : JobFormPage(ctx, queueModel, QStringLiteral("fpkg"), QStringLiteral("FPKG"),
-                  QStringLiteral("Build a package from a folder, an .exfat, .ffpfsc or .ffpkg image, or a .gp5 project. A package counts as done only after it has been verified."),
-                  QStringLiteral("Build package"), QStringLiteral("FPKG packaging"), parent)
+                  tr("Build a package from a folder, an .exfat, .ffpfsc or .ffpkg image, or a .gp5 project. A package counts as done only after it has been verified."),
+                  tr("Build package"), tr("FPKG packaging"), parent)
 {
     m_reader = new GameInfoReader(this);
     connect(m_reader, &GameInfoReader::ready, this, &FpkgPage::onSummary);
@@ -37,37 +38,37 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     // ---- Source
     auto* source = new Card(this);
     setSourceCard(source);
-    source->setTitle(QStringLiteral("Source"));
+    source->setTitle(tr("Source"));
     m_sourceType = new Segmented(source);
-    m_sourceType->addSegment(QStringLiteral("Folder"), {}, QStringLiteral("folder"));
+    m_sourceType->addSegment(tr("Folder"), {}, QStringLiteral("folder"));
     m_sourceType->addSegment(QStringLiteral(".exfat"), {}, QStringLiteral("exfat"));
     m_sourceType->addSegment(QStringLiteral(".ffpfsc"), {}, QStringLiteral("ffpfsc"));
     m_sourceType->addSegment(QStringLiteral(".ffpkg"), {}, QStringLiteral("ffpkg"));
-    m_sourceType->addSegment(QStringLiteral(".gp5 project"), {}, QStringLiteral("gp5"));
-    m_sourceType->setAccessibleName(QStringLiteral("Source type"));
+    m_sourceType->addSegment(tr(".gp5 project"), {}, QStringLiteral("gp5"));
+    m_sourceType->setAccessibleName(tr("Source type"));
     auto* tw = new QWidget(source);
     auto* tl = vbox(tw, space::xs);
-    tl->addWidget(label(QStringLiteral("Source type"), TextStyle::Body, color::fg_1, tw));
+    tl->addWidget(label(tr("Source type"), TextStyle::Body, color::fg_1, tw));
     tl->addWidget(m_sourceType, 0, Qt::AlignLeft);
     source->body()->addWidget(tw);
     m_source = new PathField(PathField::Mode::Directory, source);
     m_source->setStartDir(ctx.settings().value(general::keys::kLastSourceDir).toString());
-    m_sourceHelp = caption(QStringLiteral("Content ID, title and version are read from sce_sys/param.json."), source);
+    m_sourceHelp = caption(tr("Content ID, title and version are read from sce_sys/param.json."), source);
     auto* sw = new QWidget(source);
     auto* sl = vbox(sw, space::xs);
-    sl->addWidget(label(QStringLiteral("Game folder"), TextStyle::Body, color::fg_1, sw));
+    sl->addWidget(label(tr("Game folder"), TextStyle::Body, color::fg_1, sw));
     sl->addWidget(m_source);
     sl->addWidget(m_sourceHelp);
     source->body()->addWidget(sw);
     auto* ow = new QWidget(source);
     auto* ol = vbox(ow, space::xs);
-    ol->addWidget(label(QStringLiteral("Output folder"), TextStyle::Body, color::fg_1, ow));
+    ol->addWidget(label(tr("Output folder"), TextStyle::Body, color::fg_1, ow));
     auto* orow = new QHBoxLayout;
     orow->setSpacing(space::sm);
     m_output = new PathField(PathField::Mode::Directory, ow);
-    m_output->setDialogTitle(QStringLiteral("Choose the output folder for the package"));
+    m_output->setDialogTitle(tr("Choose the output folder for the package"));
     orow->addWidget(m_output, 1);
-    m_nextToSource = new QCheckBox(QStringLiteral("Next to source"), ow);
+    m_nextToSource = new QCheckBox(tr("Next to source"), ow);
     m_nextToSource->setChecked(true);
     orow->addWidget(m_nextToSource);
     ol->addLayout(orow);
@@ -82,30 +83,30 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
 
     // ---- Package details
     auto* details = new Card(this);
-    details->setTitle(QStringLiteral("Package details"));
-    m_contentId = textInput(QStringLiteral("UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx"), true, details);
+    details->setTitle(tr("Package details"));
+    m_contentId = textInput(tr("UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx"), true, details);
     m_contentId->setMaxLength(36);
-    details->body()->addWidget(field(QStringLiteral("Content ID"), m_contentId,
-                                     QStringLiteral("36 characters, UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx. Read from param.json; edit only if you know why."), details));
+    details->body()->addWidget(field(tr("Content ID"), m_contentId,
+                                     tr("36 characters, UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx. Read from param.json; edit only if you know why."), details));
     auto* grid = new QWidget(details);
     auto* gh = hbox(grid, space::md);
     gh->setAlignment(Qt::AlignTop);
     m_title = textInput({}, false, grid);
     m_version = textInput(QStringLiteral("01.000.000"), true, grid);
-    gh->addWidget(field(QStringLiteral("Title"), m_title, {}, grid), 2);
-    gh->addWidget(field(QStringLiteral("Version"), m_version, {}, grid), 1);
+    gh->addWidget(field(tr("Title"), m_title, {}, grid), 2);
+    gh->addWidget(field(tr("Version"), m_version, {}, grid), 1);
     m_packageType = new Segmented(grid);
-    m_packageType->addSegment(QStringLiteral("App"), {}, QStringLiteral("app"));
-    m_packageType->addSegment(QStringLiteral("Add-on"), {}, QStringLiteral("addon"));
-    m_packageType->addSegment(QStringLiteral("Update"), {}, QStringLiteral("update"));
-    m_packageType->setAccessibleName(QStringLiteral("Package type"));
-    gh->addWidget(field(QStringLiteral("Package type"), m_packageType, {}, grid), 1);
+    m_packageType->addSegment(tr("App"), {}, QStringLiteral("app"));
+    m_packageType->addSegment(tr("Add-on"), {}, QStringLiteral("addon"));
+    m_packageType->addSegment(tr("Update"), {}, QStringLiteral("update"));
+    m_packageType->setAccessibleName(tr("Package type"));
+    gh->addWidget(field(tr("Package type"), m_packageType, {}, grid), 1);
     details->body()->addWidget(grid);
     m_basePackage = new PathField(PathField::Mode::OpenFile, details);
-    m_basePackage->setFilter(QStringLiteral("Packages (*.pkg)"));
-    m_basePackage->setDialogTitle(QStringLiteral("Choose the base package installed on the console"));
-    m_baseField = field(QStringLiteral("Base package (.pkg installed on the console)"), m_basePackage,
-                        QStringLiteral("Updates are built against the package the console already has."), details);
+    m_basePackage->setFilter(tr("Packages (*.pkg)"));
+    m_basePackage->setDialogTitle(tr("Choose the base package installed on the console"));
+    m_baseField = field(tr("Base package (.pkg installed on the console)"), m_basePackage,
+                        tr("Updates are built against the package the console already has."), details);
     m_baseField->hide();
     details->body()->addWidget(m_baseField);
     m_addonField = new QWidget(details);
@@ -113,17 +114,17 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     auto* arow = new QWidget(m_addonField);
     auto* ah = hbox(arow, space::md);
     ah->setAlignment(Qt::AlignTop);
-    m_entitlementKey = textInput(QStringLiteral("32 hexadecimal characters"), true, arow);
+    m_entitlementKey = textInput(tr("32 hexadecimal characters"), true, arow);
     m_entitlementKey->setMaxLength(32);
-    ah->addWidget(field(QStringLiteral("Entitlement key"), m_entitlementKey, QStringLiteral("From dlc_emu.ini or the add-on's own metadata."), arow), 2);
+    ah->addWidget(field(tr("Entitlement key"), m_entitlementKey, tr("From dlc_emu.ini or the add-on's own metadata."), arow), 2);
     m_volumeType = dropdown(arow);
-    m_volumeType->addItem(QStringLiteral("prospero_ac · add-on with data"), QStringLiteral("prospero_ac"));
-    ah->addWidget(field(QStringLiteral("Volume type"), m_volumeType, QStringLiteral("prospero_al (licence only) is not supported."), arow), 1);
+    m_volumeType->addItem(tr("prospero_ac · add-on with data"), QStringLiteral("prospero_ac"));
+    ah->addWidget(field(tr("Volume type"), m_volumeType, tr("prospero_al (licence only) is not supported."), arow), 1);
     al->addWidget(arow);
     auto* drow = new QWidget(m_addonField);
     auto* dh = hbox(drow, space::sm);
-    dh->addWidget(caption(QStringLiteral("In add-on mode the source is the add-on's payload folder (addcont0…), not the game."), drow), 1);
-    m_fromDlcEmu = button(QStringLiteral("From dlc_emu.ini…"), ButtonVariant::Secondary, QStringLiteral("database"), drow);
+    dh->addWidget(caption(tr("In add-on mode the source is the add-on's payload folder (addcont0…), not the game."), drow), 1);
+    m_fromDlcEmu = button(tr("From dlc_emu.ini…"), ButtonVariant::Secondary, QStringLiteral("database"), drow);
     dh->addWidget(m_fromDlcEmu);
     al->addWidget(drow);
     m_addonField->hide();
@@ -134,8 +135,8 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
         const QString t = m_packageType->currentValue().toString();
         m_baseField->setVisible(t == QLatin1String("update"));
         m_addonField->setVisible(t == QLatin1String("addon"));
-        m_sourceHelp->setText(t == QLatin1String("addon") ? QStringLiteral("The add-on payload folder: the game's addcont<N> folder, or any folder holding the add-on's files and its sce_sys/param.json.")
-                                                            : QStringLiteral("Content ID, title and version are read from sce_sys/param.json."));
+        m_sourceHelp->setText(t == QLatin1String("addon") ? tr("The add-on payload folder: the game's addcont<N> folder, or any folder holding the add-on's files and its sce_sys/param.json.")
+                                                            : tr("Content ID, title and version are read from sce_sys/param.json."));
     });
 
     // ---- Option cards from the schema (Compression, PlayGo and param.json, Sony SDK ...)
@@ -143,8 +144,8 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     m_cards->setGroupCards(true);
     m_cards->build();
     form()->addWidget(m_cards);
-    addJobOptionsCard(QStringLiteral("Build"), {QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Storage")},
-                      {general::keys::kDefaultOutputDir}, QStringLiteral("All FPKG settings"));
+    addJobOptionsCard(tr("Build"), {QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Storage")},
+                      {general::keys::kDefaultOutputDir}, tr("All FPKG settings"));
 
     // ---- Right column: dependencies + summary
     QStringList depIds;
@@ -153,24 +154,24 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
             if (!d->dependencyId.isEmpty() && !depIds.contains(d->dependencyId))
                 depIds << d->dependencyId;
     auto* depsCard = new Card(this);
-    m_depsBadge = new Badge(QStringLiteral("Checking…"), Tone::Neutral, depsCard);
-    auto* depsRow = depsCard->setTitle(QStringLiteral("Dependencies"), m_depsBadge);
-    auto* again = button(QStringLiteral("Check again"), ButtonVariant::Subtle, QStringLiteral("refresh"), depsCard);
+    m_depsBadge = new Badge(tr("Checking…"), Tone::Neutral, depsCard);
+    auto* depsRow = depsCard->setTitle(tr("Dependencies"), m_depsBadge);
+    auto* again = button(tr("Check again"), ButtonVariant::Subtle, QStringLiteral("refresh"), depsCard);
     setButtonSmall(again, true);
     depsRow->addWidget(again);
     depsCard->body()->setSpacing(0);
     m_deps = new DependencyList(ctx, depIds, depsCard);
     depsCard->body()->addWidget(m_deps);
     if (m_deps->isEmpty())
-        depsCard->body()->addWidget(caption(QStringLiteral("No external tools are registered for FPKG builds in this build."), depsCard));
+        depsCard->body()->addWidget(caption(tr("No external tools are registered for FPKG builds in this build."), depsCard));
     connect(again, &QPushButton::clicked, m_deps, &DependencyList::checkAgain);
     connect(m_deps, &DependencyList::changed, this, [this] {
         if (m_deps->isEmpty()) {
-            m_depsBadge->set(QStringLiteral("None"), Tone::Neutral);
+            m_depsBadge->set(tr("None"), Tone::Neutral);
             return;
         }
         const int ready = m_deps->readyCount(), total = m_deps->total();
-        m_depsBadge->set(QStringLiteral("%1 of %2 ready").arg(ready).arg(total), ready == total ? Tone::Ok : Tone::Warn);
+        m_depsBadge->set(tr("%1 of %2 ready").arg(ready).arg(total), ready == total ? Tone::Ok : Tone::Warn);
     });
     connect(m_deps, &DependencyList::fixRequested, this, [this](const QString&, const QString& how, const QString& settingKey) {
         emit navigateRequested({QStringLiteral("settings"), {{QStringLiteral("section"), QStringLiteral("Tools")}, {QStringLiteral("key"), settingKey}, {QStringLiteral("howToFix"), how}}});
@@ -178,7 +179,7 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     aside()->insertWidget(0, depsCard);
 
     auto* summary = new Card(this);
-    summary->setTitle(QStringLiteral("Build summary"));
+    summary->setTitle(tr("Build summary"));
     summary->body()->setSpacing(space::sm);
     auto addStat = [summary](const QString& name, QLabel*& value) {
         auto* row = new QWidget(summary);
@@ -188,23 +189,23 @@ FpkgPage::FpkgPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
         h->addWidget(value);
         summary->body()->addWidget(row);
     };
-    addStat(QStringLiteral("Source size"), m_estSize);
-    addStat(QStringLiteral("Free on output drive"), m_freeSpace);
+    addStat(tr("Source size"), m_estSize);
+    addStat(tr("Free on output drive"), m_freeSpace);
     {
         auto* row = new QWidget(summary);
         auto* h = hbox(row, space::md);
         auto* col = new QVBoxLayout;
         col->setSpacing(2);
-        col->addWidget(label(QStringLiteral("CPU cores while packing"), TextStyle::Body, color::fg_1, row));
-        m_liveNote = caption(QStringLiteral("Lower it any time, even while a package is building."), row);
+        col->addWidget(label(tr("CPU cores while packing"), TextStyle::Body, color::fg_1, row));
+        m_liveNote = caption(tr("Lower it any time, even while a package is building."), row);
         col->addWidget(m_liveNote);
         h->addLayout(col, 1);
         m_liveCores = dropdown(row);
         const int cores = std::max(1, QThread::idealThreadCount());
-        m_liveCores->addItem(QStringLiteral("All (%1)").arg(cores), 0);
+        m_liveCores->addItem(tr("All (%1)").arg(cores), 0);
         for (int c = cores - 1; c >= 1; --c)
-            m_liveCores->addItem(QStringLiteral("%1 of %2").arg(c).arg(cores), c);
-        m_liveCores->setAccessibleName(QStringLiteral("CPU cores while packing"));
+            m_liveCores->addItem(tr("%1 of %2").arg(c).arg(cores), c);
+        m_liveCores->setAccessibleName(tr("CPU cores while packing"));
         h->addWidget(m_liveCores);
         summary->body()->addWidget(row);
         connect(m_liveCores, &QComboBox::currentIndexChanged, this, [this](int) { applyLiveCpuLimit(); });
@@ -232,8 +233,8 @@ void FpkgPage::applyLiveCpuLimit()
             fpkg::setLiveCpuLimit(rec.id, cores);
             ++applied;
         }
-    m_liveNote->setText(applied > 0 ? QStringLiteral("Applied to %1 running package build%2 within a moment.").arg(applied).arg(applied == 1 ? QString() : QStringLiteral("s"))
-                                    : QStringLiteral("Lower it any time, even while a package is building."));
+    m_liveNote->setText(applied > 0 ? tr("Applied to %1 running package build%2 within a moment.").arg(applied).arg(applied == 1 ? QString() : tr("s"))
+                                    : tr("Lower it any time, even while a package is building."));
 }
 
 QString FpkgPage::expectedPackagePath() const
@@ -252,22 +253,22 @@ void FpkgPage::pickFromDlcEmu()
 {
     QString game = m_summary.exists && QFileInfo(m_summary.folder).isDir() ? m_summary.folder : QString();
     if (game.isEmpty() || !QFile::exists(QDir(game).filePath(QStringLiteral("dlc_emu.ini"))))
-        game = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game folder that holds dlc_emu.ini"));
+        game = QFileDialog::getExistingDirectory(window(), tr("Choose the game folder that holds dlc_emu.ini"));
     if (game.isEmpty())
         return;
     const auto candidates = fpkg::addonsFromDlcEmu(game);
     if (candidates.empty()) {
-        Sheet::message(window(), QStringLiteral("No add-ons found"), QStringLiteral("%1 has no dlc_emu.ini entries with a content ID.").arg(Sheet::monoSpan(nativePath(game))), Sheet::Icon::Info);
+        Sheet::message(window(), tr("No add-ons found"), tr("%1 has no dlc_emu.ini entries with a content ID.").arg(Sheet::monoSpan(nativePath(game))), Sheet::Icon::Info);
         return;
     }
-    auto* s = new Sheet(window(), QStringLiteral("Add-ons in dlc_emu.ini"), Sheet::Icon::None, size::dialogWide);
+    auto* s = new Sheet(window(), tr("Add-ons in dlc_emu.ini"), Sheet::Icon::None, size::dialogWide);
     auto* combo = dropdown(s);
     for (const auto& c : candidates)
-        combo->addItem(QStringLiteral("%1 · %2%3").arg(c.contentId, c.payloadFolder.isEmpty() ? QStringLiteral("no local payload folder") : nativePath(c.payloadFolder), c.supported ? QString() : QStringLiteral(" · ") + c.reason), int(&c - &candidates[0]));
+        combo->addItem(QStringLiteral("%1 · %2%3").arg(c.contentId, c.payloadFolder.isEmpty() ? tr("no local payload folder") : nativePath(c.payloadFolder), c.supported ? QString() : QStringLiteral(" · ") + c.reason), int(&c - &candidates[0]));
     combo->setMinimumWidth(520);
-    s->body()->addWidget(field(QStringLiteral("Add-on"), combo, QStringLiteral("Only entries with a payload folder and a supported volume type can be packaged."), s));
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Use this add-on"), Sheet::Role::Primary);
+    s->body()->addWidget(field(tr("Add-on"), combo, tr("Only entries with a payload folder and a supported volume type can be packaged."), s));
+    s->addButton(tr("Cancel"), Sheet::Role::Safe);
+    s->addButton(tr("Use this add-on"), Sheet::Role::Primary);
     if (s->exec() != 1)
         return;
     const auto& c = candidates[size_t(combo->currentData().toInt())];
@@ -276,7 +277,7 @@ void FpkgPage::pickFromDlcEmu()
     if (!c.payloadFolder.isEmpty())
         setSource(c.payloadFolder);
     if (!c.supported)
-        showFormError(QStringLiteral("This add-on cannot be packaged"), c.reason);
+        showFormError(tr("This add-on cannot be packaged"), c.reason);
 }
 
 void FpkgPage::onSourceTypeChanged()
@@ -285,17 +286,17 @@ void FpkgPage::onSourceTypeChanged()
     const bool folder = t == QLatin1String("folder");
     m_source->setMode(folder ? PathField::Mode::Directory : PathField::Mode::OpenFile);
     if (t == QLatin1String("exfat"))
-        m_source->setFilter(QStringLiteral("exFAT images (*.exfat)"));
+        m_source->setFilter(tr("exFAT images (*.exfat)"));
     else if (t == QLatin1String("ffpfsc"))
-        m_source->setFilter(QStringLiteral("PFS images (*.ffpfsc *.ffpfs)"));
+        m_source->setFilter(tr("PFS images (*.ffpfsc *.ffpfs)"));
     else if (t == QLatin1String("ffpkg"))
-        m_source->setFilter(QStringLiteral("FFPKG images (*.ffpkg)"));
+        m_source->setFilter(tr("FFPKG images (*.ffpkg)"));
     else if (t == QLatin1String("gp5"))
-        m_source->setFilter(QStringLiteral("GP5 projects (*.gp5)"));
-    m_sourceHelp->setText(folder ? QStringLiteral("Content ID, title and version are read from sce_sys/param.json.")
-                                 : QStringLiteral("The image is read directly; nothing is extracted to disk unless the engine needs to."));
-    m_source->setPlaceholder(folder ? QStringLiteral("Folder that holds sce_sys\\param.json") : QStringLiteral("Choose a file"));
-    m_source->setDialogTitle(folder ? QStringLiteral("Choose the game folder") : QStringLiteral("Choose the source image"));
+        m_source->setFilter(tr("GP5 projects (*.gp5)"));
+    m_sourceHelp->setText(folder ? tr("Content ID, title and version are read from sce_sys/param.json.")
+                                 : tr("The image is read directly; nothing is extracted to disk unless the engine needs to."));
+    m_source->setPlaceholder(folder ? tr("Folder that holds sce_sys\\param.json") : tr("Choose a file"));
+    m_source->setDialogTitle(folder ? tr("Choose the game folder") : tr("Choose the source image"));
     refresh();
 }
 
@@ -366,7 +367,7 @@ void FpkgPage::setSource(const QString& path)
 void FpkgPage::onSummary(const GameSummary& s)
 {
     m_summary = s;
-    m_source->setError(s.exists ? QString() : QStringLiteral("This source does not exist."));
+    m_source->setError(s.exists ? QString() : tr("This source does not exist."));
     if (s.exists) {
         if (!s.contentId.isEmpty())
             m_contentId->setText(s.contentId);
@@ -418,7 +419,7 @@ void FpkgPage::checkSpace()
                 return;
             self->m_output->setError({});
             if (!ds.ok()) {
-                self->m_spaceRow->set(QStringLiteral("The output drive is not available."), Tone::Warn);
+                self->m_spaceRow->set(tr("The output drive is not available."), Tone::Warn);
                 self->m_freeSpace->setText(QStringLiteral("—"));
                 return;
             }
@@ -433,14 +434,14 @@ void FpkgPage::checkSpace()
             const QString drive = driveLabel(folder);
             if (needed > 0 && ds->available < needed + general::freeSpaceMarginBytes(self->m_ctx.settings().snapshot())) {
                 self->m_spaceOk = false;
-                self->m_spaceProblem = QStringLiteral("Not enough space on %1: the package may need up to %2; %3 is free.").arg(drive, formatBytes(needed), formatBytes(ds->available));
+                self->m_spaceProblem = tr("Not enough space on %1: the package may need up to %2; %3 is free.").arg(drive, formatBytes(needed), formatBytes(ds->available));
                 self->m_spaceRow->set(self->m_spaceProblem, Tone::Err);
-                self->m_output->setError(QStringLiteral("Not enough space"));
+                self->m_output->setError(tr("Not enough space"));
                 return;
             }
-            QString text = QStringLiteral("%1 free on %2.").arg(formatBytes(ds->available), drive);
+            QString text = tr("%1 free on %2.").arg(formatBytes(ds->available), drive);
             if (needed > 0)
-                text += QStringLiteral(" The package needs up to %1.").arg(formatBytes(needed));
+                text += tr(" The package needs up to %1.").arg(formatBytes(needed));
             Tone tone = Tone::Ok;
             if (!vol->isEmpty()) {
                 text += u' ' + vol->join(u' ');
@@ -454,30 +455,30 @@ void FpkgPage::checkSpace()
 QString FpkgPage::validateForm()
 {
     if (m_source->path().isEmpty())
-        return QStringLiteral("Choose the source first.");
+        return tr("Choose the source first.");
     if (!m_summary.exists)
-        return QStringLiteral("The source does not exist.");
+        return tr("The source does not exist.");
     if (sourceType() == QLatin1String("folder") && !m_summary.isGame)
-        return QStringLiteral("The folder is not a game dump: sce_sys\\param.json is missing.");
+        return tr("The folder is not a game dump: sce_sys\\param.json is missing.");
     static const QRegularExpression cid(QStringLiteral("^[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_00-[A-Z0-9]{16}$"));
     const QString c = m_contentId->text().trimmed();
     setInputError(m_contentId, !c.isEmpty() && !cid.match(c).hasMatch());
     if (!c.isEmpty() && !cid.match(c).hasMatch())
-        return QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
+        return tr("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
     static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
     const QString v = m_version->text().trimmed();
     setInputError(m_version, !v.isEmpty() && !ver.match(v).hasMatch());
     if (!v.isEmpty() && !ver.match(v).hasMatch())
-        return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.000.");
+        return tr("The version must be NN.NNN.NNN, for example 01.000.000.");
     if (m_packageType->currentValue().toString() == QLatin1String("update") && m_basePackage->path().isEmpty())
-        return QStringLiteral("An update needs the base package that is installed on the console.");
+        return tr("An update needs the base package that is installed on the console.");
     if (m_packageType->currentValue().toString() == QLatin1String("addon")) {
         static const QRegularExpression hex32(QStringLiteral("^[0-9A-Fa-f]{32}$"));
         setInputError(m_entitlementKey, !hex32.match(m_entitlementKey->text().trimmed()).hasMatch());
         if (!hex32.match(m_entitlementKey->text().trimmed()).hasMatch())
-            return QStringLiteral("The entitlement key must be 32 hexadecimal characters.");
+            return tr("The entitlement key must be 32 hexadecimal characters.");
         if (c.isEmpty())
-            return QStringLiteral("An add-on needs its Content ID.");
+            return tr("An add-on needs its Content ID.");
     }
     if (!m_spaceOk)
         return m_spaceProblem;
@@ -510,14 +511,14 @@ Result<QString> FpkgPage::submit(bool)
     // An existing package with the expected name: ask now, since a queued job cannot.
     const QString expected = expectedPackagePath();
     if (!expected.isEmpty() && QFileInfo::exists(expected) && m_ctx.schema().contains(fpkg::keys::kOutputConflict)) {
-        auto* s = new Sheet(window(), QStringLiteral("A package with this name exists"), Sheet::Icon::Warning);
-        s->addText(QStringLiteral("%1 is already in the output folder. Keep both renames the existing file to \"name (1).pkg\"; overwrite sets it aside and restores it if the build fails.").arg(Sheet::monoSpan(nativePath(expected))));
-        s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-        s->addButton(QStringLiteral("Keep both"), Sheet::Role::Primary);
-        s->addButton(QStringLiteral("Overwrite"), Sheet::Role::Destructive);
+        auto* s = new Sheet(window(), tr("A package with this name exists"), Sheet::Icon::Warning);
+        s->addText(tr("%1 is already in the output folder. Keep both renames the existing file to \"name (1).pkg\"; overwrite sets it aside and restores it if the build fails.").arg(Sheet::monoSpan(nativePath(expected))));
+        s->addButton(tr("Cancel"), Sheet::Role::Safe);
+        s->addButton(tr("Keep both"), Sheet::Role::Primary);
+        s->addButton(tr("Overwrite"), Sheet::Role::Destructive);
         const int r = s->exec();
         if (r != 1 && r != 2)
-            return Error(ErrorCode::Cancelled, QStringLiteral("Not started."));
+            return Error(ErrorCode::Cancelled, tr("Not started."));
         overrides.insert(fpkg::keys::kOutputConflict, r == 1 ? QStringLiteral("keepBoth") : QStringLiteral("overwrite"));
     }
     return jobs::submitFpkgBuild(m_ctx, sourceType(), m_summary.folder, m_output->path(), details, overrides);

@@ -1,4 +1,5 @@
 #include "app/pages/QueuePage.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "app/models/JobQueueModel.h"
@@ -22,25 +23,25 @@ using namespace theme;
 static bool visibleJob(const JobRecord& r) { return !jobs::isSystemKind(r.kind); }
 
 QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logModel, QWidget* parent)
-    : Page(ctx, QStringLiteral("queue"), QStringLiteral("Queue"),
-           QStringLiteral("Jobs run one at a time in this order. Drag to reorder; finished jobs stay until you clear them."), parent),
+    : Page(ctx, QStringLiteral("queue"), tr("Queue"),
+           tr("Jobs run one at a time in this order. Drag to reorder; finished jobs stay until you clear them."), parent),
       m_model(queueModel), m_logModel(logModel)
 {
-    auto* exportCsv = button(QStringLiteral("Export history…"), ButtonVariant::Secondary, QStringLiteral("download"), this);
-    m_clearFinished = button(QStringLiteral("Clear finished"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
-    m_pauseQueue = button(QStringLiteral("Pause queue"), ButtonVariant::Secondary, QStringLiteral("pause"), this);
+    auto* exportCsv = button(tr("Export history…"), ButtonVariant::Secondary, QStringLiteral("download"), this);
+    m_clearFinished = button(tr("Clear finished"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
+    m_pauseQueue = button(tr("Pause queue"), ButtonVariant::Secondary, QStringLiteral("pause"), this);
     header()->addAction(exportCsv);
     header()->addAction(m_clearFinished);
     header()->addAction(m_pauseQueue);
     connect(exportCsv, &QPushButton::clicked, this, [this] {
-        const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Export job history"), QDir::homePath() + QStringLiteral("/job-history.csv"), QStringLiteral("CSV files (*.csv)"));
+        const QString path = QFileDialog::getSaveFileName(window(), tr("Export job history"), QDir::homePath() + QStringLiteral("/job-history.csv"), tr("CSV files (*.csv)"));
         if (path.isEmpty())
             return;
         auto st = m_ctx.history().exportCsv(path);
         if (st.ok())
-            emit toastRequested(Tone::Ok, QStringLiteral("History exported"), nativePath(path));
+            emit toastRequested(Tone::Ok, tr("History exported"), nativePath(path));
         else
-            emit toastRequested(Tone::Err, QStringLiteral("Export failed"), st.error().message);
+            emit toastRequested(Tone::Err, tr("Export failed"), st.error().message);
     });
     connect(m_clearFinished, &QPushButton::clicked, this, [this] { m_ctx.queue().clearFinished(); });
     connect(m_pauseQueue, &QPushButton::clicked, this, [this] {
@@ -54,9 +55,9 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     auto* card = new Card(columns, Card::Variant::Table);
     auto* h = card->header();
     m_filter = new Segmented(card);
-    for (const auto& s : {QStringLiteral("All"), QStringLiteral("Running"), QStringLiteral("Queued"), QStringLiteral("Done"), QStringLiteral("Failed")})
+    for (const auto& s : {tr("All"), tr("Running"), tr("Queued"), tr("Done"), tr("Failed")})
         m_filter->addSegment(s);
-    m_filter->setAccessibleName(QStringLiteral("Filter jobs"));
+    m_filter->setAccessibleName(tr("Filter jobs"));
     h->addWidget(m_filter);
     h->addStretch(1);
     m_eta = caption({}, card);
@@ -64,10 +65,10 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     connect(m_filter, &Segmented::currentChanged, this, &QueuePage::applyFilter);
     m_list = new JobList(ctx, queueModel, JobRow::Variant::Queue, card);
     m_list->setFilter(visibleJob);
-    m_empty = new EmptyState(QStringLiteral("queue"), QStringLiteral("No jobs in the queue"),
-                             QStringLiteral("Add a dump on Build image, FPKG or Backport. Jobs run one after another and keep going while you work."), card);
-    auto* b1 = m_empty->addAction(QStringLiteral("Build image"));
-    auto* b2 = m_empty->addAction(QStringLiteral("Build package"));
+    m_empty = new EmptyState(QStringLiteral("queue"), tr("No jobs in the queue"),
+                             tr("Add a dump on Build image, FPKG or Backport. Jobs run one after another and keep going while you work."), card);
+    auto* b1 = m_empty->addAction(tr("Build image"));
+    auto* b2 = m_empty->addAction(tr("Build package"));
     connect(b1, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
     connect(b2, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("fpkg"), {}}); });
     m_list->setEmptyWidget(m_empty);
@@ -87,7 +88,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     // ---- detail panel
     m_detail = new Card(columns);
     m_detail->body()->setSpacing(0);
-    m_detailEmpty = new EmptyState(QStringLiteral("list"), QStringLiteral("No job selected"), QStringLiteral("Select a job to see its progress, settings and log."), m_detail);
+    m_detailEmpty = new EmptyState(QStringLiteral("list"), tr("No job selected"), tr("Select a job to see its progress, settings and log."), m_detail);
     m_detailEmpty->setCompact(true);
     m_detail->body()->addWidget(m_detailEmpty);
     m_detailBody = new QWidget(m_detail);
@@ -118,7 +119,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     pl->addWidget(m_dStarted);
     d->addWidget(progWrap);
     d->addWidget(hairline(m_detailBody));
-    auto* ov1 = label(QStringLiteral("Job settings"), TextStyle::Overline, color::fg_4, m_detailBody);
+    auto* ov1 = label(tr("Job settings"), TextStyle::Overline, color::fg_4, m_detailBody);
     ov1->setContentsMargins(0, space::md, 0, 4);
     d->addWidget(ov1);
     m_dSettings = new QWidget(m_detailBody);
@@ -127,7 +128,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     m_dResult = new QWidget(m_detailBody);
     m_dResultLayout = vbox(m_dResult, 4, QMargins(0, space::sm, 0, 0));
     d->addWidget(m_dResult);
-    auto* ov2 = label(QStringLiteral("Log"), TextStyle::Overline, color::fg_4, m_detailBody);
+    auto* ov2 = label(tr("Log"), TextStyle::Overline, color::fg_4, m_detailBody);
     ov2->setContentsMargins(0, space::md, 0, 4);
     d->addWidget(ov2);
     m_dLog = new ActivityWell(logModel, m_detailBody);
@@ -137,11 +138,11 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     auto* actions = new QWidget(m_detailBody);
     auto* al = hbox(actions, space::sm, QMargins(0, space::md, 0, 0));
     al->addStretch(1);
-    m_dOpenLog = button(QStringLiteral("Open full log"), ButtonVariant::Subtle, {}, actions);
+    m_dOpenLog = button(tr("Open full log"), ButtonVariant::Subtle, {}, actions);
     setButtonSmall(m_dOpenLog, true);
-    m_dFolder = button(QStringLiteral("Show in folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), actions);
+    m_dFolder = button(tr("Show in folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), actions);
     setButtonSmall(m_dFolder, true);
-    m_dAction = button(QStringLiteral("Cancel job"), ButtonVariant::Secondary, QStringLiteral("close"), actions);
+    m_dAction = button(tr("Cancel job"), ButtonVariant::Secondary, QStringLiteral("close"), actions);
     setButtonSmall(m_dAction, true);
     al->addWidget(m_dOpenLog);
     al->addWidget(m_dFolder);
@@ -213,21 +214,21 @@ void QueuePage::updateCounts()
         default: ++failed; break;
         }
     }
-    m_filter->setSegmentText(0, QStringLiteral("All %1").arg(all));
-    m_filter->setSegmentText(1, QStringLiteral("Running %1").arg(running));
-    m_filter->setSegmentText(2, QStringLiteral("Queued %1").arg(queued));
-    m_filter->setSegmentText(3, QStringLiteral("Done %1").arg(done));
-    m_filter->setSegmentText(4, QStringLiteral("Failed %1").arg(failed));
+    m_filter->setSegmentText(0, tr("All %1").arg(all));
+    m_filter->setSegmentText(1, tr("Running %1").arg(running));
+    m_filter->setSegmentText(2, tr("Queued %1").arg(queued));
+    m_filter->setSegmentText(3, tr("Done %1").arg(done));
+    m_filter->setSegmentText(4, tr("Failed %1").arg(failed));
     const bool held = m_ctx.queue().isHeld();
-    m_pauseQueue->setText(held ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
+    m_pauseQueue->setText(held ? tr("Resume queue") : tr("Pause queue"));
     setButtonIcon(m_pauseQueue, held ? QStringLiteral("play") : QStringLiteral("pause"));
     m_clearFinished->setEnabled(done + failed > 0);
     if (held)
-        m_eta->setText(QStringLiteral("Queue paused · running jobs continue"));
+        m_eta->setText(tr("Queue paused · running jobs continue"));
     else if (eta >= 0)
-        m_eta->setText(QStringLiteral("Running job: %1").arg(formatTimeLeft(eta).toLower()));
+        m_eta->setText(tr("Running job: %1").arg(formatTimeLeft(eta).toLower()));
     else if (queued > 0 && running == 0)
-        m_eta->setText(QStringLiteral("Waiting to start"));
+        m_eta->setText(tr("Waiting to start"));
     else
         m_eta->setText({});
     emit statusContextChanged();
@@ -241,7 +242,7 @@ static QWidget* detailRow(const QString& name, const QString& value, bool mono, 
     auto* lh = hbox(left, space::sm);
     lh->addWidget(label(name, TextStyle::Body, color::fg_1, left));
     if (overridden) {
-        auto* b = new Badge(QStringLiteral("Overridden"), Tone::Neutral, left);
+        auto* b = new Badge(tr("Overridden"), Tone::Neutral, left);
         b->setIconName(QStringLiteral("advanced"));
         lh->addWidget(b);
     }
@@ -275,7 +276,7 @@ void QueuePage::updateDetail()
     const auto& p = r.progress;
     QString detail = progressDetailText(p);
     if (r.started.isValid())
-        detail += (detail.isEmpty() ? QString() : QStringLiteral(" · ")) + QStringLiteral("Started %1").arg(r.started.toString(QStringLiteral("HH:mm")));
+        detail += (detail.isEmpty() ? QString() : QStringLiteral(" · ")) + tr("Started %1").arg(r.started.toString(QStringLiteral("HH:mm")));
     m_dProgress->setProgress(p.overallFraction, p.indeterminate && r.state == JobState::Running, r.state == JobState::Running || r.state == JobState::Paused ? detail : QString());
     switch (r.state) {
     case JobState::Succeeded: m_dProgress->setState(ProgressBar::State::Done); break;
@@ -291,14 +292,14 @@ void QueuePage::updateDetail()
     if (r.state == JobState::Queued) {
         const int maxAttempts = m_ctx.settings().value(general::keys::kAutoRetryCount).toInt() + 1;
         const QString w = waitingText(r, maxAttempts);
-        started << (w.isEmpty() ? QStringLiteral("Added %1").arg(r.added.toString(QStringLiteral("HH:mm"))) : w);
+        started << (w.isEmpty() ? tr("Added %1").arg(r.added.toString(QStringLiteral("HH:mm"))) : w);
     }
     if (r.attempt > 1)
-        started << QStringLiteral("Attempt %1").arg(r.attempt);
+        started << tr("Attempt %1").arg(r.attempt);
     if (r.finished.isValid())
-        started << QStringLiteral("Finished %1").arg(r.finished.toString(QStringLiteral("HH:mm")));
+        started << tr("Finished %1").arg(r.finished.toString(QStringLiteral("HH:mm")));
     if (!r.started.isValid() && r.state != JobState::Queued)
-        started << QStringLiteral("Not started");
+        started << tr("Not started");
     m_dStarted->setText(started.join(QStringLiteral(" · ")));
     m_dStarted->setVisible(!started.isEmpty());
 
@@ -320,10 +321,10 @@ void QueuePage::updateDetail()
     }
     for (auto it = r.overrides.cbegin(); it != r.overrides.cend(); ++it) {
         const SettingDef* d = m_ctx.schema().find(it.key());
-        m_dSettingsLayout->addWidget(detailRow(d ? d->label : it.key(), d ? SettingRow::displayValue(*d, it.value()) : it.value().toString(), true, true, m_dSettings));
+        m_dSettingsLayout->addWidget(detailRow(d ? i18n::trs(d->label) : it.key(), d ? SettingRow::displayValue(i18n::localized(*d), it.value()) : it.value().toString(), true, true, m_dSettings));
     }
     if (m_dSettingsLayout->count() == 0)
-        m_dSettingsLayout->addWidget(caption(QStringLiteral("Default settings"), m_dSettings));
+        m_dSettingsLayout->addWidget(caption(tr("Default settings"), m_dSettings));
 
     // Result block
     while (QLayoutItem* it = m_dResultLayout->takeAt(0)) {
@@ -344,13 +345,13 @@ void QueuePage::updateDetail()
             m_dResultLayout->addWidget(row);
         }
         for (const QString& o : r.outcome->outputs)
-            m_dResultLayout->addWidget(detailRow(QStringLiteral("Output"), nativePath(o), true, false, m_dResult));
+            m_dResultLayout->addWidget(detailRow(tr("Output"), nativePath(o), true, false, m_dResult));
     }
     if (r.error && !r.error->isCancelled()) {
         auto* bar = new InfoBar(Tone::Err, m_dResult);
-        bar->setTitle(QStringLiteral("Failed"));
+        bar->setTitle(tr("Failed"));
         bar->setMessage(r.error->message);
-        auto* l = bar->addLink(QStringLiteral("Show in log"));
+        auto* l = bar->addLink(tr("Show in log"));
         connect(l, &Link::activated, this, [this] {
             emit navigateRequested({QStringLiteral("logs"), {{QStringLiteral("jobId"), m_selected}, {QStringLiteral("level"), QStringLiteral("error")}}});
         });
@@ -361,15 +362,15 @@ void QueuePage::updateDetail()
 
     m_dFolder->setVisible(r.outcome && !r.outcome->outputs.isEmpty());
     if (r.state == JobState::Running || r.state == JobState::Paused) {
-        m_dAction->setText(QStringLiteral("Cancel job"));
+        m_dAction->setText(tr("Cancel job"));
         setButtonIcon(m_dAction, QStringLiteral("close"));
         setButtonVariant(m_dAction, ButtonVariant::Secondary);
     } else if (r.state == JobState::Queued) {
-        m_dAction->setText(QStringLiteral("Remove"));
+        m_dAction->setText(tr("Remove"));
         setButtonIcon(m_dAction, QStringLiteral("trash"));
         setButtonVariant(m_dAction, ButtonVariant::Secondary);
     } else {
-        m_dAction->setText(r.state == JobState::Succeeded ? QStringLiteral("Run again") : QStringLiteral("Retry"));
+        m_dAction->setText(r.state == JobState::Succeeded ? tr("Run again") : tr("Retry"));
         setButtonIcon(m_dAction, QStringLiteral("undo"));
         setButtonVariant(m_dAction, r.state == JobState::Succeeded ? ButtonVariant::Secondary : ButtonVariant::Primary);
     }
@@ -401,12 +402,12 @@ void QueuePage::cancelWithConfirm(const QString& id)
     auto rec = m_ctx.queue().record(id);
     if (!rec || (rec->state != JobState::Running && rec->state != JobState::Paused))
         return;
-    const QString pct = rec->progress.indeterminate ? QString() : QStringLiteral(" is %1 done").arg(thinPercent(rec->progress.overallFraction));
+    const QString pct = rec->progress.indeterminate ? QString() : tr(" is %1 done").arg(thinPercent(rec->progress.overallFraction));
     bool remove = false;
-    const bool ok = Sheet::confirm(window(), QStringLiteral("Cancel the running job?"),
-                                   QStringLiteral("%1%2. Cancelling removes its partial output and leaves the source untouched.").arg(rec->title.toHtmlEscaped(), pct),
-                                   QStringLiteral("Keep running"), QStringLiteral("Cancel job"), true, Sheet::Icon::Warning,
-                                   QStringLiteral("Also remove the job from the queue"), &remove);
+    const bool ok = Sheet::confirm(window(), tr("Cancel the running job?"),
+                                   tr("%1%2. Cancelling removes its partial output and leaves the source untouched.").arg(rec->title.toHtmlEscaped(), pct),
+                                   tr("Keep running"), tr("Cancel job"), true, Sheet::Icon::Warning,
+                                   tr("Also remove the job from the queue"), &remove);
     if (!ok)
         return;
     m_ctx.queue().cancel(id);
@@ -427,19 +428,19 @@ QString QueuePage::statusContext() const
 {
     const int running = m_model.countInState(JobState::Running), queued = m_model.countInState(JobState::Queued);
     const int done = m_model.countInState(JobState::Succeeded), failed = m_model.countInState(JobState::Failed);
-    return QStringLiteral("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running).arg(queued).arg(done).arg(failed);
+    return tr("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running).arg(queued).arg(done).arg(failed);
 }
 
 void QueuePage::applyDemoState(const QString& name)
 {
     if (name != QLatin1String("cancel-dialog"))
         return;
-    auto* s = new Sheet(window(), QStringLiteral("Cancel the running build?"), Sheet::Icon::Warning);
-    s->addText(QStringLiteral("Ghost of Yotei is 63 % copied. Cancelling deletes the partial image %1 and leaves the dump untouched.")
+    auto* s = new Sheet(window(), tr("Cancel the running build?"), Sheet::Icon::Warning);
+    s->addText(tr("Ghost of Yotei is 63 % copied. Cancelling deletes the partial image %1 and leaves the dump untouched.")
                    .arg(Sheet::monoSpan(QStringLiteral("PPSA01325_Ghost_of_Yotei_v01.000.000.exfat"))));
-    s->addCheckbox(QStringLiteral("Also remove the job from the queue"));
-    s->addButton(QStringLiteral("Keep building"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Cancel build"), Sheet::Role::Destructive);
+    s->addCheckbox(tr("Also remove the job from the queue"));
+    s->addButton(tr("Keep building"), Sheet::Role::Safe);
+    s->addButton(tr("Cancel build"), Sheet::Role::Destructive);
     s->open();
     m_demoSheet = s;
 }

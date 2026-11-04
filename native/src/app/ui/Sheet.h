@@ -8,6 +8,7 @@
 // capture it and the Windows title bar never appears on it.
 
 #include "app/ui/Widgets.h"
+#include "app/i18n/I18n.h"
 
 #include <QCheckBox>
 #include <QEventLoop>
@@ -44,7 +45,7 @@ public:
                         const QString& actionText, bool destructive = true, Icon icon = Icon::Warning,
                         const QString& checkboxText = {}, bool* checkboxValue = nullptr);
     static void message(QWidget* host, const QString& title, const QString& text, Icon icon = Icon::Info,
-                        const QString& buttonText = QStringLiteral("OK"));
+                        const QString& buttonText = tr("OK"));
     static QString monoSpan(const QString& text);
 
 protected:

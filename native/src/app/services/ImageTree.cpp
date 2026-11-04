@@ -1,4 +1,5 @@
 #include "app/services/ImageTree.h"
+#include "app/i18n/I18n.h"
 
 #include "core/Cancellation.h"
 #include "engines/exfat/ExfatReader.h"
@@ -80,7 +81,7 @@ static ImageTreeResult readFfpkg(const QString& image)
     out.fileCount = t.fileCount;
     out.dirCount = t.dirCount;
     for (const QString& s : skipped)
-        out.warnings << QStringLiteral("Skipped (link or special file): %1").arg(s);
+        out.warnings << tr("Skipped (link or special file): %1").arg(s);
     return out;
 }
 
@@ -90,7 +91,7 @@ ImageTreeResult readImageTree(const QString& image)
     out.image = image;
     const QString ext = QFileInfo(image).suffix().toLower();
     if (!QFileInfo::exists(image)) {
-        out.error = QStringLiteral("The image does not exist.");
+        out.error = tr("The image does not exist.");
         return out;
     }
     if (ext == QLatin1String("exfat"))
@@ -98,7 +99,7 @@ ImageTreeResult readImageTree(const QString& image)
     else if (ext == QLatin1String("ffpkg"))
         out = readFfpkg(image);
     else
-        out.error = QStringLiteral("Only .exfat and .ffpkg images can be opened here.");
+        out.error = tr("Only .exfat and .ffpkg images can be opened here.");
     out.image = image;
     return out;
 }

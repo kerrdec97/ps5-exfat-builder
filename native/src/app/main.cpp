@@ -1,4 +1,5 @@
 #include "app/AppContext.h"
+#include "app/i18n/I18n.h"
 #include "app/MainWindow.h"
 #include "app/ui/Theme.h"
 
@@ -6,6 +7,7 @@
 #include "core/CrashHandler.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "engines/general/Module.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -41,6 +43,10 @@ int main(int argc, char* argv[])
                                     QStringLiteral("ms"));
     QCommandLineOption selfTestOpt(QStringLiteral("self-test"),
                                    QStringLiteral("Check every dependency, print a JSON report and exit."));
+    QCommandLineOption languageOpt(QStringLiteral("language"),
+                                   QStringLiteral("Interface language for this run (en, de, ja, ar, …) instead of the general.language setting."),
+                                   QStringLiteral("code"));
+    parser.addOption(languageOpt);
     parser.addOption(screenshotOpt);
     parser.addOption(quitAfterOpt);
     parser.addOption(selfTestOpt);
@@ -68,6 +74,12 @@ int main(int argc, char* argv[])
         QMessageBox::critical(nullptr, QStringLiteral("exFAT Image Builder"), st.error().message);
         return 1;
     }
+
+    // Interface language: the command line wins, then the general.language
+    // setting ("system" follows the OS). Installed before any widget exists;
+    // a change in Settings takes effect at the next start.
+    fw::i18n::install(&app, parser.isSet(languageOpt) ? parser.value(languageOpt)
+                                                      : context.settings().value(fw::general::keys::kLanguage).toString());
 
     if (parser.isSet(selfTestOpt)) {
         const auto results = context.dependencies().probeAll(context.settings().snapshot());

@@ -1,4 +1,5 @@
 #include "app/ui/Shell.h"
+#include "app/i18n/I18n.h"
 
 #include "app/ui/Icons.h"
 
@@ -242,34 +243,34 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     setFixedHeight(size::header);
     setProperty("fwNoRing", true);
     auto* h = hbox(this, space::sm, QMargins(space::sm, 0, space::md, 0));
-    m_menu = new IconButton(QStringLiteral("sidebar"), QStringLiteral("Toggle sidebar"), IconButton::Size::Regular, this);
+    m_menu = new IconButton(QStringLiteral("sidebar"), tr("Toggle sidebar"), IconButton::Size::Regular, this);
     h->addWidget(m_menu);
     auto* brand = new QWidget(this);
     auto* bl = hbox(brand, space::sm, QMargins(4, 0, 0, 0));
     bl->setAlignment(Qt::AlignBaseline);
-    bl->addWidget(label(QStringLiteral("exFAT Image Builder"), TextStyle::BodyStrong, color::fg_0, brand), 0, Qt::AlignBaseline);
-    bl->addWidget(label(QStringLiteral("Farewell Edition"), TextStyle::Body, color::fg_3, brand), 0, Qt::AlignBaseline);
+    bl->addWidget(label(tr("exFAT Image Builder"), TextStyle::BodyStrong, color::fg_0, brand), 0, Qt::AlignBaseline);
+    bl->addWidget(label(tr("Farewell Edition"), TextStyle::Body, color::fg_3, brand), 0, Qt::AlignBaseline);
     h->addWidget(brand);
     h->addStretch(1);
     m_consoleChipWrap = new QWidget(this);
     auto* cw = hbox(m_consoleChipWrap, 0);
-    m_consoleChip = new Badge(QStringLiteral("PS5 not connected"), Tone::Neutral, m_consoleChipWrap);
+    m_consoleChip = new Badge(tr("PS5 not connected"), Tone::Neutral, m_consoleChipWrap);
     m_consoleChip->setIconName(QStringLiteral("plug"));
     cw->addWidget(m_consoleChip);
     m_consoleChipWrap->setCursor(Qt::PointingHandCursor);
     m_consoleChipWrap->installEventFilter(this);
-    m_consoleChipWrap->setToolTip(QStringLiteral("Open PS5 connect"));
+    m_consoleChipWrap->setToolTip(tr("Open PS5 connect"));
     h->addWidget(m_consoleChipWrap);
     m_queueChipWrap = new QWidget(this);
     auto* qw = hbox(m_queueChipWrap, 0);
-    m_queueChip = new Badge(QStringLiteral("Queue idle"), Tone::Neutral, m_queueChipWrap);
+    m_queueChip = new Badge(tr("Queue idle"), Tone::Neutral, m_queueChipWrap);
     m_queueChip->setIconName(QStringLiteral("queue"));
     qw->addWidget(m_queueChip);
     m_queueChipWrap->setCursor(Qt::PointingHandCursor);
     m_queueChipWrap->installEventFilter(this);
-    m_queueChipWrap->setToolTip(QStringLiteral("Open the queue"));
+    m_queueChipWrap->setToolTip(tr("Open the queue"));
     h->addWidget(m_queueChipWrap);
-    m_help = new IconButton(QStringLiteral("help"), QStringLiteral("Help"), IconButton::Size::Regular, this);
+    m_help = new IconButton(QStringLiteral("help"), tr("Help"), IconButton::Size::Regular, this);
     h->addWidget(m_help);
 }
 
@@ -329,7 +330,7 @@ StatusBar::StatusBar(QWidget* parent) : QWidget(parent)
     m_context->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_context->setMaximumWidth(720);
     h->addWidget(m_context, 1);
-    setStatus(QStringLiteral("Ready"), Tone::Ok);
+    setStatus(tr("Ready"), Tone::Ok);
 }
 
 void StatusBar::setStatus(const QString& text, Tone tone)

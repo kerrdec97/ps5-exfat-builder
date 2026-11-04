@@ -1,4 +1,5 @@
 #include "app/pages/LogsPage.h"
+#include "app/i18n/I18n.h"
 
 #include "app/AppContext.h"
 #include "core/FileUtil.h"
@@ -19,35 +20,35 @@ using namespace ui;
 using namespace theme;
 
 LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
-    : Page(ctx, QStringLiteral("logs"), QStringLiteral("Logs"),
-           QStringLiteral("Everything the app and its engines report, in one place. Raw tool output is kept here, never in error messages."), parent),
+    : Page(ctx, QStringLiteral("logs"), tr("Logs"),
+           tr("Everything the app and its engines report, in one place. Raw tool output is kept here, never in error messages."), parent),
       m_model(logModel)
 {
     m_filter = new LogFilterModel(this);
     m_filter->setSourceModel(&m_model);
 
-    auto* copy = button(QStringLiteral("Copy shown"), ButtonVariant::Secondary, QStringLiteral("copy"), this);
-    auto* exportBtn = button(QStringLiteral("Export…"), ButtonVariant::Secondary, QStringLiteral("download"), this);
-    auto* folder = button(QStringLiteral("Open log folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), this);
-    auto* clear = button(QStringLiteral("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
+    auto* copy = button(tr("Copy shown"), ButtonVariant::Secondary, QStringLiteral("copy"), this);
+    auto* exportBtn = button(tr("Export…"), ButtonVariant::Secondary, QStringLiteral("download"), this);
+    auto* folder = button(tr("Open log folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), this);
+    auto* clear = button(tr("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
     header()->addAction(copy);
     header()->addAction(exportBtn);
     header()->addAction(folder);
     header()->addAction(clear);
     connect(copy, &QPushButton::clicked, this, [this] {
         QGuiApplication::clipboard()->setText(shownText());
-        emit toastRequested(Tone::Ok, QStringLiteral("Copied"), QStringLiteral("%1 lines on the clipboard").arg(formatCount(m_filter->rowCount())));
+        emit toastRequested(Tone::Ok, tr("Copied"), tr("%1 lines on the clipboard").arg(formatCount(m_filter->rowCount())));
     });
     connect(exportBtn, &QPushButton::clicked, this, [this] {
-        const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Export the shown log lines"),
-                                                          QDir::homePath() + QStringLiteral("/farewell-log.txt"), QStringLiteral("Text files (*.txt)"));
+        const QString path = QFileDialog::getSaveFileName(window(), tr("Export the shown log lines"),
+                                                          QDir::homePath() + QStringLiteral("/farewell-log.txt"), tr("Text files (*.txt)"));
         if (path.isEmpty())
             return;
         auto st = writeFileAtomic(path, shownText().toUtf8());
         if (st.ok())
-            emit toastRequested(Tone::Ok, QStringLiteral("Log exported"), nativePath(path));
+            emit toastRequested(Tone::Ok, tr("Log exported"), nativePath(path));
         else
-            emit toastRequested(Tone::Err, QStringLiteral("Export failed"), st.error().message);
+            emit toastRequested(Tone::Err, tr("Export failed"), st.error().message);
     });
     connect(folder, &QPushButton::clicked, this, [this] {
         const QString f = m_ctx.logFilePath().isEmpty() ? Paths::logsDir() : QFileInfo(m_ctx.logFilePath()).absolutePath();
@@ -62,30 +63,30 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     auto* h = card->header();
     h->setSpacing(space::md);
     m_level = new Segmented(card);
-    m_level->addSegment(QStringLiteral("All"));
-    m_level->addSegment(QStringLiteral("Info"));
-    m_level->addSegment(QStringLiteral("Warnings"), QStringLiteral("warning"));
-    m_level->addSegment(QStringLiteral("Errors"), QStringLiteral("error"));
-    m_level->setAccessibleName(QStringLiteral("Level"));
+    m_level->addSegment(tr("All"));
+    m_level->addSegment(tr("Info"));
+    m_level->addSegment(tr("Warnings"), QStringLiteral("warning"));
+    m_level->addSegment(tr("Errors"), QStringLiteral("error"));
+    m_level->setAccessibleName(tr("Level"));
     h->addWidget(m_level);
     m_source = dropdown(card);
     m_source->setMinimumWidth(160);
-    m_source->setAccessibleName(QStringLiteral("Source"));
+    m_source->setAccessibleName(tr("Source"));
     h->addWidget(m_source);
     m_job = dropdown(card);
     m_job->setMinimumWidth(160);
-    m_job->setAccessibleName(QStringLiteral("Job"));
+    m_job->setAccessibleName(tr("Job"));
     h->addWidget(m_job);
-    m_search = textInput(QStringLiteral("Search messages"), false, card);
+    m_search = textInput(tr("Search messages"), false, card);
     m_search->setFixedWidth(260);
     m_search->setClearButtonEnabled(true);
-    m_search->setAccessibleName(QStringLiteral("Search messages"));
+    m_search->setAccessibleName(tr("Search messages"));
     h->addWidget(m_search);
     h->addStretch(1);
-    h->addWidget(label(QStringLiteral("Follow"), TextStyle::Body, color::fg_1, card));
+    h->addWidget(label(tr("Follow"), TextStyle::Body, color::fg_1, card));
     m_follow = new Switch(card);
     m_follow->setChecked(true);
-    m_follow->setAccessibleName(QStringLiteral("Follow new lines"));
+    m_follow->setAccessibleName(tr("Follow new lines"));
     h->addWidget(m_follow);
 
     m_table = new LogTable(card);
@@ -101,13 +102,13 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     auto* dl = vbox(m_detail, 6, QMargins(space::lg, space::md, space::lg, space::md));
     auto* dh = new QHBoxLayout;
     dh->setSpacing(space::sm);
-    dh->addWidget(label(QStringLiteral("Selected line"), TextStyle::Overline, color::fg_4, m_detail));
+    dh->addWidget(label(tr("Selected line"), TextStyle::Overline, color::fg_4, m_detail));
     m_detailMeta = caption({}, m_detail);
     dh->addWidget(m_detailMeta);
     dh->addStretch(1);
-    m_openJob = new Link(QStringLiteral("Open job"), m_detail);
+    m_openJob = new Link(tr("Open job"), m_detail);
     dh->addWidget(m_openJob);
-    auto* copyLine = new Link(QStringLiteral("Copy line"), m_detail);
+    auto* copyLine = new Link(tr("Copy line"), m_detail);
     dh->addWidget(copyLine);
     dl->addLayout(dh);
     m_detailText = label({}, TextStyle::Mono, color::fg_1, m_detail);
@@ -194,7 +195,7 @@ void LogsPage::refreshSources()
     const QString curSource = m_source->currentData().toString();
     m_source->blockSignals(true);
     m_source->clear();
-    m_source->addItem(QStringLiteral("All sources"), QString());
+    m_source->addItem(tr("All sources"), QString());
     for (const QString& s : m_model.sources())
         m_source->addItem(s, s);
     m_source->setCurrentIndex(std::max(0, m_source->findData(curSource)));
@@ -202,7 +203,7 @@ void LogsPage::refreshSources()
     const QString curJob = m_job->currentData().toString();
     m_job->blockSignals(true);
     m_job->clear();
-    m_job->addItem(QStringLiteral("All jobs"), QString());
+    m_job->addItem(tr("All jobs"), QString());
     for (const auto& rec : m_ctx.queue().records())
         m_job->addItem(rec.title, rec.id);
     m_job->setCurrentIndex(std::max(0, m_job->findData(curJob)));
@@ -217,20 +218,20 @@ void LogsPage::updateCounts()
             if (rec->level == LogLevel::Warning) ++warn;
             else if (rec->level == LogLevel::Error) ++err;
         }
-    m_level->setSegmentText(2, warn > 0 ? QStringLiteral("Warnings %1").arg(warn) : QStringLiteral("Warnings"));
-    m_level->setSegmentText(3, err > 0 ? QStringLiteral("Errors %1").arg(err) : QStringLiteral("Errors"));
+    m_level->setSegmentText(2, warn > 0 ? tr("Warnings %1").arg(warn) : tr("Warnings"));
+    m_level->setSegmentText(3, err > 0 ? tr("Errors %1").arg(err) : tr("Errors"));
 }
 
 void LogsPage::updateFooter()
 {
     QStringList by;
-    by << QStringLiteral("level: %1").arg(QStringList{QStringLiteral("All"), QStringLiteral("Info"), QStringLiteral("Warnings"), QStringLiteral("Errors")}.value(m_level->currentIndex()));
-    by << QStringLiteral("source: %1").arg(m_source->currentData().toString().isEmpty() ? QStringLiteral("All") : m_source->currentData().toString());
+    by << tr("level: %1").arg(QStringList{tr("All"), tr("Info"), tr("Warnings"), tr("Errors")}.value(m_level->currentIndex()));
+    by << tr("source: %1").arg(m_source->currentData().toString().isEmpty() ? tr("All") : m_source->currentData().toString());
     if (!m_job->currentData().toString().isEmpty())
-        by << QStringLiteral("job: %1").arg(m_job->currentText());
+        by << tr("job: %1").arg(m_job->currentText());
     if (!m_search->text().trimmed().isEmpty())
-        by << QStringLiteral("search: \"%1\"").arg(m_search->text().trimmed());
-    m_footerLeft->setFullText(QStringLiteral("Showing %1 of %2 lines · filtered by %3").arg(formatCount(m_filter->rowCount()), formatCount(m_model.rowCount()), by.join(QStringLiteral(" · "))));
+        by << tr("search: \"%1\"").arg(m_search->text().trimmed());
+    m_footerLeft->setFullText(tr("Showing %1 of %2 lines · filtered by %3").arg(formatCount(m_filter->rowCount()), formatCount(m_model.rowCount()), by.join(QStringLiteral(" · "))));
     const QString path = m_ctx.logFilePath();
     const QFileInfo fi(path);
     m_footerRight->setFullText(path.isEmpty() ? QString() : QStringLiteral("%1 · %2").arg(nativePath(path), formatBytes(fi.size())));
@@ -253,7 +254,7 @@ void LogsPage::updateDetail()
     m_selectedJob = rec->jobId;
     QStringList metaParts{rec->time.toString(QStringLiteral("HH:mm:ss.zzz")), rec->source, logLevelName(rec->level)};
     if (!rec->jobId.isEmpty())
-        metaParts << QStringLiteral("job %1").arg(rec->jobId);
+        metaParts << tr("job %1").arg(rec->jobId);
     m_detailMeta->setText(metaParts.join(QStringLiteral(" · ")));
     QString text = rec->message;
     if (!rec->fields.isEmpty()) {
@@ -296,7 +297,7 @@ void LogsPage::navigateWith(const QVariantMap& args)
 
 QString LogsPage::statusContext() const
 {
-    return QStringLiteral("Log level: %1 · keeping %2 files")
+    return tr("Log level: %1 · keeping %2 files")
         .arg(m_ctx.settings().value(general::keys::kLogLevel).toString())
         .arg(m_ctx.settings().value(general::keys::kLogKeepFiles).toInt());
 }

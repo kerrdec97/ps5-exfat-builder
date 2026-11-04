@@ -1,4 +1,5 @@
 #include "app/ui/LogView.h"
+#include "app/i18n/I18n.h"
 
 #include "app/ui/Icons.h"
 
@@ -141,7 +142,7 @@ ActivityWell::ActivityWell(LogModel& model, QWidget* parent) : Card(parent, Card
 {
     m_lines = body();
     m_lines->setSpacing(0);
-    m_emptyLabel = label(QStringLiteral("Nothing yet."), TextStyle::Mono, color::fg_4, this);
+    m_emptyLabel = label(tr("Nothing yet."), TextStyle::Mono, color::fg_4, this);
     m_lines->addWidget(m_emptyLabel);
     connect(&m_model, &LogModel::rowsAppended, this, [this](int) { refresh(); });
     connect(&m_model, &QAbstractItemModel::modelReset, this, [this] { refresh(); });

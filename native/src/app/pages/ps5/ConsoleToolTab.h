@@ -12,6 +12,7 @@
 // waits).
 
 #include "app/ui/Widgets.h"
+#include "app/i18n/I18n.h"
 #include "connect/ps5/Endpoint.h"
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/FtpTransfer.h"
@@ -95,8 +96,8 @@ bool ConsoleToolTab::runOnConsole(ConsoleWork<T> work, Done<T> done)
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        emit toastRequested(ui::Tone::Warn, QStringLiteral("No console address"),
-                            QStringLiteral("Enter the console's IP address at the top of the page first."));
+        emit toastRequested(ui::Tone::Warn, tr("No console address"),
+                            tr("Enter the console's IP address at the top of the page first."));
         return false;
     }
     return runLocal<T>(

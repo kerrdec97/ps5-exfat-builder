@@ -34,6 +34,7 @@ inline const QString kAutoRetryCount = QStringLiteral("general.autoRetryCount");
 inline const QString kAutoRetryDelay = QStringLiteral("general.autoRetryDelaySeconds");
 inline const QString kLogFolder = QStringLiteral("logging.folder");
 inline const QString kDeleteSource = QStringLiteral("storage.deleteSourceAfterVerifiedBuild");
+inline const QString kLanguage = QStringLiteral("general.language");
 } // namespace keys
 
 // Effective worker-thread count for engines (0 = all logical cores).

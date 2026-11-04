@@ -1,4 +1,5 @@
 #include "app/pages/ps5/ConsoleToolTab.h"
+#include "app/i18n/I18n.h"
 
 #include <QHeaderView>
 
@@ -17,13 +18,13 @@ ConsoleToolTab::ConsoleToolTab(AppContext& ctx, EndpointFn endpointFn, const QSt
 ConsoleToolTab::~ConsoleToolTab()
 {
     // Every client wait has a timeout and checks the token every 25 ms.
-    m_cancel->cancel(QStringLiteral("Closed"));
+    m_cancel->cancel(tr("Closed"));
     m_future.waitForFinished();
 }
 
 void ConsoleToolTab::cancelWork()
 {
-    m_cancel->cancel(QStringLiteral("Cancelled"));
+    m_cancel->cancel(tr("Cancelled"));
 }
 
 bool ConsoleToolTab::beginWork()
