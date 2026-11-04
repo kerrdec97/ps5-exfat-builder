@@ -252,10 +252,10 @@ because nothing needs one.
   - an end-to-end `JobQueue` run
 
 **Throughput** (this VM, shared with other builds, warm cache, Release,
-301 MiB / 3,008 files, best of two runs with `sync` in between, four
-repetitions): native 133–613 ms (490–2,260 MiB/s), and UFS2Tool 480–636 ms
-(470–630 MiB/s) for the same tree. The timings are dominated by write-back
-noise on this machine. The Debug test build logs about 120–300 MiB/s
+301 MiB / 3,008 files, each run the best of two with `sync` in between, six
+runs): native 133–1,304 ms (231–2,260 MiB/s), and UFS2Tool 480–686 ms
+(439–627 MiB/s) for the same tree. In four of the six runs native was
+faster. The timings are dominated by write-back noise on this machine. The Debug test build logs about 120–300 MiB/s
 writing and about 650–2,000 MiB/s for the full comparison
 (`tst_ufs2_roundtrip benchmark`).
 
