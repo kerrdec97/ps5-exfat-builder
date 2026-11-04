@@ -18,6 +18,8 @@
 #include <QStyleOption>
 #include <QTextEdit>
 
+#include <algorithm>
+
 namespace fw::ui {
 
 using namespace theme;

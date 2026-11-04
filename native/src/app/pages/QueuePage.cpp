@@ -12,6 +12,8 @@
 #include <QFileInfo>
 #include <QJsonArray>
 
+#include <algorithm>
+
 namespace fw::pages {
 
 using namespace ui;

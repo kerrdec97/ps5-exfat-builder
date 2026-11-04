@@ -18,6 +18,8 @@
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <algorithm>
+
 namespace fw::pages {
 
 using namespace ui;
@@ -315,33 +317,36 @@ void SettingsPage::buildSection(const QString& section)
             card->body()->addWidget(row);
             refreshRow(key);
         }
-        if (section == QLatin1String("Storage") && g == groups.last()) {
-            // Temporary files row (Paths::tempUsageBytes / sweepStaleTemp).
-            card->body()->addWidget(hairline(card));
-            auto* trow = new QWidget(card);
-            auto* th = hbox(trow, space::lg, QMargins(0, 6, 0, 6));
-            auto* tcol = new QVBoxLayout;
-            tcol->setSpacing(2);
-            tcol->addWidget(label(QStringLiteral("Temporary files"), TextStyle::Body, color::fg_1, trow));
-            m_tempUsage = caption(QStringLiteral("Measuring…"), trow);
-            tcol->addWidget(m_tempUsage);
-            th->addLayout(tcol, 1);
-            m_tempClear = button(QStringLiteral("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), trow);
-            m_tempClear->setEnabled(false);
-            connect(m_tempClear, &QPushButton::clicked, this, [this] {
-                if (m_ctx.queue().isBusy()) {
-                    emit toastRequested(Tone::Warn, QStringLiteral("Jobs are running"), QStringLiteral("Temporary files are cleared when the queue is idle."));
-                    return;
-                }
-                const int n = Paths::sweepStaleTemp(0);
-                emit toastRequested(Tone::Ok, QStringLiteral("Temporary files cleared"), QStringLiteral("%1 folder%2 removed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
-                updateTempUsage();
-            });
-            th->addWidget(m_tempClear);
-            card->body()->addWidget(trow);
-            updateTempUsage();
-        }
         m_cardsLayout->addWidget(card);
+    }
+    if (section == QLatin1String("Storage")) {
+        // Temporary files (Paths::tempUsageBytes / sweepStaleTemp).
+        auto* card = new Card(m_cards);
+        card->body()->setSpacing(0);
+        card->setTitle(QStringLiteral("Temporary files"));
+        auto* trow = new QWidget(card);
+        auto* th = hbox(trow, space::lg, QMargins(0, 6, 0, 6));
+        auto* tcol = new QVBoxLayout;
+        tcol->setSpacing(2);
+        tcol->addWidget(label(QStringLiteral("Files left by jobs"), TextStyle::Body, color::fg_1, trow));
+        m_tempUsage = caption(QStringLiteral("Measuring…"), trow);
+        tcol->addWidget(m_tempUsage);
+        th->addLayout(tcol, 1);
+        m_tempClear = button(QStringLiteral("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), trow);
+        m_tempClear->setEnabled(false);
+        connect(m_tempClear, &QPushButton::clicked, this, [this] {
+            if (m_ctx.queue().isBusy()) {
+                emit toastRequested(Tone::Warn, QStringLiteral("Jobs are running"), QStringLiteral("Temporary files are cleared when the queue is idle."));
+                return;
+            }
+            const int n = Paths::sweepStaleTemp(0);
+            emit toastRequested(Tone::Ok, QStringLiteral("Temporary files cleared"), QStringLiteral("%1 folder%2 removed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
+            updateTempUsage();
+        });
+        th->addWidget(m_tempClear);
+        card->body()->addWidget(trow);
+        m_cardsLayout->addWidget(card);
+        updateTempUsage();
     }
     if (section == QLatin1String("Tools")) {
         auto* card = new Card(m_cards);

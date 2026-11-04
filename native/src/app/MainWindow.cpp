@@ -45,6 +45,9 @@
 #include <QStorageInfo>
 #include <QUrl>
 
+#include <algorithm>
+#include <memory>
+
 namespace fw {
 
 using namespace ui;

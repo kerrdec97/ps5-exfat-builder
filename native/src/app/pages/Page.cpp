@@ -10,6 +10,8 @@
 #include <QStorageInfo>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace fw::pages {
 
 using namespace ui;

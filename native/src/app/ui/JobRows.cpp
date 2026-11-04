@@ -19,6 +19,8 @@
 #include <QPainter>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace fw::ui {
 
 using namespace theme;

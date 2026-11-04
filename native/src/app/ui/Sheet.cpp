@@ -10,6 +10,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace fw::ui {
 
 using namespace theme;
