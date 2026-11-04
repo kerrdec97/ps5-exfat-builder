@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUrl>
 
 using namespace fw;
 using namespace fw::tools;
@@ -160,6 +161,24 @@ private slots:
         QVERIFY(!r.ok() && r.error().isCancelled());
         QVERIFY(QFileInfo::exists(g + QStringLiteral("/audio/ja/vo.bin")));
         QVERIFY(QDir(plan.backupFolder).entryList(QDir::Files).isEmpty());
+    }
+
+    void redactionCoversEverySpelling()
+    {
+        const QString home = QDir::homePath();
+        const QString user = QFileInfo(home).fileName();
+        const QString native = QDir::toNativeSeparators(home);
+        QString json = native;
+        json.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+        const QString text = home + QStringLiteral("/a | ") + native + QStringLiteral("\\b | ") + json + QStringLiteral(" | ")
+            + QString::fromLatin1(QUrl::toPercentEncoding(home, "/:")) + QStringLiteral(" | D:\\Users\\") + user
+            + QStringLiteral("\\Games | /home/") + user + QStringLiteral("/x");
+        const QString red = redactUserPaths(text);
+        QVERIFY2(!red.contains(home, Qt::CaseInsensitive), qPrintable(red));
+        QVERIFY2(!red.contains(native, Qt::CaseInsensitive), qPrintable(red));
+        if (user.size() >= 2)
+            QVERIFY2(!red.contains(QStringLiteral("\\") + user + QStringLiteral("\\"), Qt::CaseInsensitive)
+                         && !red.contains(QStringLiteral("/") + user + QStringLiteral("/"), Qt::CaseInsensitive), qPrintable(red));
     }
 
     void reportBundleRedactsAndVerifies()

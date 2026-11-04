@@ -20,9 +20,12 @@ Everything lives under `src/app/`; tests under `tests/app/`.
 | `ui/LogView.{h,cpp}` | `LogDelegate`/`LogTable` over `LogFilterModel`; `ActivityWell` (inset log tail per job or source). |
 | `services/JobSubmit.{h,cpp}` | The only path from pages to `JobQueue::enqueue`. Job kinds and parameter names are listed at the top of the header. Unregistered kinds return `ErrorCode::Unsupported`. |
 | `services/GameInfo.{h,cpp}` | Background summary of a game folder (param.json + tree size) for the Source cards and manual library rows. |
-| `services/AppStores.{h,cpp}` | `LibraryStore` (scan locations + games, `library.json`) and `PayloadStore` (`payloads.json`) under `Paths::dataDir()`. |
+| `services/AppStores.{h,cpp}` | `LibraryStore` (scan locations + games with backport-scan issues, `library.json`) and `PayloadStore` (`payloads.json`) under `Paths::dataDir()`. |
+| `services/ConsoleSession.{h,cpp}` | One `ps5::FtpClient` on a `QThread` worker (Qt sockets need a Qt thread): connect, list, delete, rename, mkdir, mount-config load/push, SITE AVAIL; results arrive as queued signals. |
+| `services/ImageTree.{h,cpp}` | Reads an .exfat (`ExfatReader`) or .ffpkg (`Ufs2Reader`) tree on a worker thread into a format-neutral node list for the editor. |
 | `pages/Page.{h,cpp}` | `Page` (scrollable content under a `PageHeader`, navigation/drop/F5/Ctrl+B/demo-state virtuals) and `JobFormPage` (form + dock template, availability state, submit flow). |
 | `pages/*Page.{h,cpp}` | One class per destination (below). |
+| `pages/DlcEmuEditor.{h,cpp}` | The dlc_emu.ini editor (Library › DLC emulator tab): table of entries, add/duplicate/remove, live validation + byte counter, Find DLC entries (`tools::dlcemu::autoFind` on a worker, review sheet with confidence badges and placeholders), Save with the .bak confirmation. |
 | `MainWindow.{h,cpp}` | The shell: pages, sidebar, chips, status bar, shortcuts, drag and drop, toasts, tray + beep, after-queue countdown, update banner, crash banner, problem report, `screenshotAllPages`. |
 | `models/` | `JobQueueModel`, `LogModel`/`LogFilterModel` (unchanged). |
 
@@ -32,19 +35,20 @@ Everything lives under `src/app/`; tests under `tests/app/`.
 |---|---|---|---|---|
 | Home | `home` | `HomePage` | status strip (console, queue, free space), Continue card, Recent jobs (history) | — (`JobQueue::retry` for Continue) |
 | Build image | `build` | `BuildImagePage` | Form + dock | `image.exfat.build`, `image.ufs2.build`, `image.pfs.build` |
-| FPKG | `fpkg` | `FpkgPage` | Form + dock (+ Dependencies, Build summary) | `fpkg.build` |
+| FPKG | `fpkg` | `FpkgPage` | Form + dock (+ Dependencies, Build summary) | `fpkg.build`, `fpkg.addon` (add-on mode: entitlement key, volume type, "From dlc_emu.ini…"), live CPU limit (`fpkg::setLiveCpuLimit` on running package jobs), existing-package sheet → `fpkg.outputConflict` override |
 | Extract & verify | `extract` | `ExtractVerifyPage` | Form + dock | `image.<fmt>.extract`, `image.<fmt>.verify`, `fpkg.extract`, `fpkg.verify` (by extension) |
-| Backport | `backport` | `BackportPage` | Table + panel | `backport.run`, `backport.restore`, `backport.scan` (or `library.scan`) |
+| Edit image | `edit` | `ImageEditorPage` | Form + dock (+ Convert to…) | `image.exfat.edit`, `image.ffpkg.edit` (operations JSON per EXFAT.md / UFS2.md), `image.convert` |
+| Backport | `backport` | `BackportPage` | Table + panel | `backport.run` (one job per game), `backport.restore {game, zip}` / `{journal}` (start-up banner from `backport::interruptedApplies()`), `backport.scan` (per-game issues/canRun/plan shown as status badge + tooltip) |
 | Queue | `queue` | `QueuePage` | List + detail | `JobQueue` controls (pause/resume/cancel/retry/remove/move/hold/clear), `JobHistory::exportCsv` |
-| PS5 connect | `ps5` | `Ps5ConnectPage` | Tabs: FTP browser · Payloads · Kernel log | `ps5.ftp.upload`, `ps5.payload.send`; TCP reachability probe is UI-side |
-| Library | `library` | `LibraryPage` | Tabs: Games · Languages | `library.scan`; `tools.languages.scan/strip/restore`; folder rename is local |
+| PS5 connect | `ps5` | `Ps5ConnectPage` | Tabs: FTP browser · Payloads · Kernel log · Y2JB · Mount config | FTP session (`ConsoleSession`): browse, breadcrumbs, delete/rename/mkdir with the protected-path sheet; `ps5.ftp.upload` (+ `allowProtectedPaths`), `ps5.ftp.download`, `ps5.payload.send` (target port from the ps5.* keys), `KlogClient` viewer (bounded `KlogModel`, tags, filter, pause, export), `ps5.dpi.install`, `ps5.y2jb.autoBlock` (confirm sheet, region), local Y2JB patching (`patchLocalFolder` on a worker), ShadowMount+/MicroMount config (`MountConfig` parse/render/validate, load/push over the session), `ps5.shadowmount.stop` |
+| Library | `library` | `LibraryPage` | Tabs: Games · Languages · DLC emulator | `library.scan` (covers from `coverPath`, platform/kind), `library.rename` (preview sheet → apply with edited names → undo), `tools.languages.scan/strip/restore`, `tools::dlcemu` editor |
 | Logs | `logs` | `LogsPage` | Full table | — |
 | Settings | `settings` | `SettingsPage` | Sections (generated from `SettingsSchema`) | — (`SettingsStore`, `DependencyRegistry`, `Paths::tempUsageBytes/sweepStaleTemp`) |
 | About (footer) | `credits` | `AboutPage` | Cards | `update.check` (Check for updates), `tools.report` (Report a problem…) |
 
-Shell-level jobs: `update.check` three seconds after start when `general.checkForUpdatesOnStart` is on (hidden from the Queue page as a system kind), `update.download` from the update banner, `tools.report` from the help menu / About / crash banner.
+Shell-level jobs: `update.check` three seconds after start when `general.checkForUpdatesOnStart` is on (hidden from the Queue page, the Jobs dock, the header chip and the status bar as a system kind; `jobs::isSystemKind`), `update.download` from the update banner, `tools.report` from the help menu / About / crash banner.
 
-Navigation arguments (`Page::navigateWith`): `build {source, format}`, `fpkg {source}`, `extract {source, mode}`, `backport {folder}`, `queue {jobId | "cancel:<id>"}`, `logs {jobId, source, level}`, `settings {section, key, howToFix}`, `library {tab, languagesFolder}`, `ps5 {tab, upload}`.
+Navigation arguments (`Page::navigateWith`): `build {source, format}`, `fpkg {source}`, `extract {source, mode}`, `edit {image}`, `backport {folder}`, `queue {jobId | "cancel:<id>"}`, `logs {jobId, source, level}`, `settings {section, key, howToFix}`, `library {tab, languagesFolder, dlcFolder}`, `ps5 {tab, upload}`.
 
 ## 3. How the schema drives the UI
 
@@ -62,8 +66,9 @@ Navigation arguments (`Page::navigateWith`): `build {source, format}`, `fpkg {so
 | Settings sections fixed list of 13 | Only sections that have settings (or dependencies) are listed | Generated from the schema; absent modules add no empty sections. |
 | `ui.lastPage`, `ui.sidebarCompact` in the settings store | QSettings (`window/geometry`, `window/sidebarCompact`, `window/lastPage`, `crash/lastAcknowledged`) | Window state is not a job setting; the schema is owned by modules. |
 | Queue "finishes in about 24 min" | Shown as the running job's time left plus the queued count | Queued jobs have no estimate until they run. |
-| FTP browser and kernel log | Designed unavailable states; "Send a file to the console" submits `ps5.ftp.upload`; payloads submit `ps5.payload.send` | The connect module is not in this build; the reachability test (TCP connect to the FTP port) is the only UI-side network call. |
-| Library/Backport table rows come from a scan job | When `library.scan` / `backport.scan` are absent, folders added by hand or dropped are summarised in-app (`GameInfoReader`) and the direct children of scan locations are listed | Keeps the pages usable before the engines land; the scan jobs replace the list when they exist. |
+| Edit folds into Extract & verify | Own "Edit image" page under Workflows (icon `edit`) | Browsing a tree, staging operations and reviewing them is a different template from the extract form; Convert to… lives on the same page. |
+| Mount config list keys as multi-line | Shown as one row per key; list values separated with `;` in the table | A table cell cannot edit line breaks; the page converts back to one repeated key per line before rendering. |
+| Library/Backport table rows come from a scan job | Also true without the engines: hand-added or dropped folders are summarised in-app (`GameInfoReader`) | The scan jobs replace the list when they run. |
 | Per-page "Activity" wells on every job page | Backport and the Queue detail panel have them; Build/FPKG/Extract rely on the dock | The dock already shows the running job; a second well duplicated it. |
 | Table header sort chevrons | Headers are not sortable yet | No table needed sorting for v1. |
 
@@ -71,4 +76,4 @@ Navigation arguments (`Page::navigateWith`): `build {source, format}`, `fpkg {so
 
 `exFAT Image Builder --screenshot-pages <dir>` (CI) renders every page, the demo states (`build-space-error`, `fpkg-error`, `extract-error`, `queue-cancel-dialog`, `library-languages`, every Settings section, `settings-reset-dialog`), the toast stack, the compact sidebar, the focus ring and the 1100 px layout. Locally: `QT_QPA_PLATFORM=offscreen FW_DATA_DIR=<tmp> …`.
 
-`tests/app/tst_app_ui.cpp` (offscreen): construction, every page opens, keyboard navigation (arrows, Space, Ctrl+L, Ctrl+1), Settings round trip (edit → store → reload, invalid value rejected with message, reset section, dependent row disabled), override badge in `JobOptionsPanel`, Queue page with a fake kind registered through `AppContext::mutableJobFactory()` (enqueue, reorder, cancel, retry, clear), Logs filter, unavailable kind state, screenshots per page.
+`tests/app/tst_app_ui.cpp` (offscreen, 15 cases): construction, every page opens, keyboard navigation (arrows, Space, Ctrl+L, Ctrl+1), Settings round trip (edit → store → reload, invalid value rejected with message, reset section, dependent row disabled), override badge in `JobOptionsPanel`, Queue page with a fake kind registered through `AppContext::mutableJobFactory()` (enqueue, reorder, cancel, retry, clear), Logs filter, unavailable kind state, image editor (staged operations JSON + a real exFAT image built by the engine and browsed), bounded kernel-log model, FTP browser against the in-process `fake::FakeFtpServer`, dlc_emu editor round trip and validation, `library.rename` preview through the real engine, screenshots per page.

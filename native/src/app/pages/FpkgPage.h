@@ -9,6 +9,7 @@
 #include "app/ui/DependencyRow.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 
 namespace fw::pages {
 
@@ -33,6 +34,9 @@ private:
     void updateOutput();
     void checkSpace();
     QString sourceType() const;
+    QString expectedPackagePath() const;
+    void applyLiveCpuLimit();
+    void pickFromDlcEmu();
 
     ui::GameInfoReader* m_reader;
     ui::GameSummary m_summary;
@@ -48,6 +52,12 @@ private:
     ui::Segmented* m_packageType;
     QWidget* m_baseField;
     ui::PathField* m_basePackage;
+    QWidget* m_addonField;
+    QLineEdit* m_entitlementKey;
+    QComboBox* m_volumeType;
+    QPushButton* m_fromDlcEmu;
+    QComboBox* m_liveCores;
+    QLabel* m_liveNote;
     ui::JobOptionsPanel* m_cards;
     ui::DependencyList* m_deps;
     ui::Badge* m_depsBadge;

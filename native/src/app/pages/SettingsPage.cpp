@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPointer>
 #include <QScrollBar>
+#include <QSet>
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -348,6 +349,35 @@ void SettingsPage::buildSection(const QString& section)
         m_cardsLayout->addWidget(card);
         updateTempUsage();
     }
+    if (section == QLatin1String("Advanced")) {
+        auto* card = new Card(m_cards);
+        card->setTitle(QStringLiteral("Import settings from the old app"));
+        card->body()->addWidget(caption(QStringLiteral("Reads the Python edition's settings.json and takes over every value the native app understands. Nothing is deleted; values the native app does not use are skipped."), card));
+        auto* pf = new PathField(PathField::Mode::OpenFile, card);
+        pf->setFilter(QStringLiteral("JSON files (*.json)"));
+        pf->setDialogTitle(QStringLiteral("Choose the old settings.json"));
+        const QString legacy = QDir::home().filePath(QStringLiteral(".exfat_builder_settings.json"));
+        if (QFile::exists(legacy))
+            pf->setPath(legacy);
+        else
+            pf->setPlaceholder(nativePath(legacy));
+        card->body()->addWidget(field(QStringLiteral("Old settings file"), pf, {}, card));
+        auto* row = new QWidget(card);
+        auto* rh = hbox(row, space::sm);
+        rh->addStretch(1);
+        auto* go = button(QStringLiteral("Import"), ButtonVariant::Primary, QStringLiteral("file_down"), row);
+        connect(go, &QPushButton::clicked, this, [this, pf] {
+            if (pf->path().isEmpty()) {
+                pf->setError(QStringLiteral("Choose the old settings file first."));
+                return;
+            }
+            pf->setError({});
+            importLegacyFrom(pf->path());
+        });
+        rh->addWidget(go);
+        card->body()->addWidget(row);
+        m_cardsLayout->addWidget(card);
+    }
     if (section == QLatin1String("Tools")) {
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
@@ -526,14 +556,30 @@ void SettingsPage::importLegacy()
     const QString path = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the legacy settings.json"), start, QStringLiteral("JSON files (*.json)"));
     if (path.isEmpty())
         return;
+    importLegacyFrom(path);
+}
+
+void SettingsPage::importLegacyFrom(const QString& path)
+{
+    QVariantMap before;
+    for (const SettingDef* d : m_ctx.schema().all())
+        before.insert(d->key, m_ctx.settings().value(d->key));
     auto r = m_ctx.settings().importLegacy(path);
     if (!r.ok()) {
         Sheet::message(window(), QStringLiteral("Nothing was imported"), r.error().message, Sheet::Icon::Error);
         return;
     }
     (void)m_ctx.settings().save();
+    QStringList changed;
+    for (const SettingDef* d : m_ctx.schema().all())
+        if (m_ctx.settings().value(d->key) != before.value(d->key))
+            changed << QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key))).toHtmlEscaped();
     rebuild();
-    emit toastRequested(Tone::Ok, QStringLiteral("Legacy settings imported"), QStringLiteral("%1 value%2 taken over. Values the native app does not use were skipped.").arg(r.value()).arg(r.value() == 1 ? QString() : QStringLiteral("s")));
+    const QString title = QStringLiteral("%1 value%2 imported").arg(r.value()).arg(r.value() == 1 ? QString() : QStringLiteral("s"));
+    if (changed.isEmpty())
+        Sheet::message(window(), title, QStringLiteral("Every imported value already matched the current settings, so nothing changed."), Sheet::Icon::Info);
+    else
+        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(Sheet::monoSpan(changed.join(QStringLiteral("<br>")))), Sheet::Icon::Info);
 }
 
 void SettingsPage::resetAll()

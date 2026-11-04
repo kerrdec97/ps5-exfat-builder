@@ -76,6 +76,7 @@ QString CancellationToken::reason() const
 void CancellationSource::cancel(const QString& reason)
 {
     std::vector<std::function<void()>> toRun;
+    std::unique_lock<std::mutex> runLock;
     {
         std::lock_guard lock(m_state->mutex);
         if (m_state->cancelled.exchange(true))
@@ -84,10 +85,13 @@ void CancellationSource::cancel(const QString& reason)
         for (auto& [id, fn] : m_state->callbacks)
             toRun.push_back(std::move(fn));
         m_state->callbacks.clear();
+        // Taken before `mutex` is released: a reset() that finds its callback
+        // already gone must then wait for it to finish (it could otherwise
+        // return in the gap and the callback would run with dangling captures).
+        runLock = std::unique_lock(m_state->runMutex);
+        m_state->runningThread.store(std::this_thread::get_id());
     }
     m_state->cv.notify_all();
-    std::lock_guard runLock(m_state->runMutex);
-    m_state->runningThread.store(std::this_thread::get_id());
     for (auto& fn : toRun)
         if (fn)
             fn();

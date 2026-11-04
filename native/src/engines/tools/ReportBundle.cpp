@@ -9,30 +9,81 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
+#include <QUrl>
 #include <QStorageInfo>
 #include <QSysInfo>
 #include <QThread>
 
 #include <algorithm>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace fw::tools {
+
+namespace {
+// Every spelling of the user's home folder that can appear in logs, settings
+// and JSON: native and '/' separators, JSON-escaped, URL-encoded and (on
+// Windows) the 8.3 short name.
+QStringList homeSpellings()
+{
+    QStringList out;
+    const QString home = QDir::homePath();
+    if (home.isEmpty() || home == QStringLiteral("/"))
+        return out;
+    QStringList bases{home, QDir::toNativeSeparators(home)};
+#ifdef Q_OS_WIN
+    wchar_t shortBuf[MAX_PATH];
+    const std::wstring longPath = QDir::toNativeSeparators(home).toStdWString();
+    const DWORD n = GetShortPathNameW(longPath.c_str(), shortBuf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        const QString shortPath = QString::fromWCharArray(shortBuf, int(n));
+        bases << shortPath << QDir::fromNativeSeparators(shortPath);
+    }
+#endif
+    for (const QString& b : std::as_const(bases)) {
+        out << b;
+        QString json = b;
+        json.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+        out << json;
+        out << QString::fromLatin1(QUrl::toPercentEncoding(QDir::fromNativeSeparators(b), "/:"));
+        out << QString::fromUtf8(QJsonDocument(QJsonArray{b}).toJson(QJsonDocument::Compact)).mid(2).chopped(2); // \uXXXX forms
+    }
+    out.removeDuplicates();
+    // Longest first so a longer spelling is never half-replaced by a shorter one.
+    std::sort(out.begin(), out.end(), [](const QString& a, const QString& b) { return a.size() > b.size(); });
+    return out;
+}
+
+QString userNameOf(const QString& home)
+{
+    return QFileInfo(home).fileName();
+}
+} // namespace
 
 QString redactUserPaths(const QString& text)
 {
     QString out = text;
-    QString home = QDir::homePath();
-    if (home.isEmpty() || home == QStringLiteral("/"))
-        return out;
-    const QString nativeHome = QDir::toNativeSeparators(home);
-    QString jsonHome = nativeHome;
-    jsonHome.replace(QStringLiteral("\\"), QStringLiteral("\\\\")); // as it appears inside JSON strings
-    for (const QString& h : {jsonHome, nativeHome, home})
-        out.replace(h, QStringLiteral("~"), Qt::CaseInsensitive);
-    // The bare user name can also appear in paths of other drives.
-    const QString user = QFileInfo(home).fileName();
-    if (user.size() >= 3)
-        out.replace(QStringLiteral("\\") + user + QStringLiteral("\\"), QStringLiteral("\\<user>\\"), Qt::CaseInsensitive);
+    for (const QString& h : homeSpellings())
+        if (!h.isEmpty())
+            out.replace(h, QStringLiteral("~"), Qt::CaseInsensitive);
+    // The bare user name in other paths (other drives, profiles, 8.3 forms).
+    const QString user = userNameOf(QDir::homePath());
+    if (user.size() >= 2) {
+        const QString u = QRegularExpression::escape(user);
+        static const QString sep = QStringLiteral("[\\\\/]");
+        const QRegularExpression inPath(QStringLiteral("(%1(?:Users|home|Documents and Settings)%1)%2(?=%1|$|\\W)").arg(sep, u),
+                                        QRegularExpression::CaseInsensitiveOption);
+        out.replace(inPath, QStringLiteral("\\1<user>"));
+        if (user.size() >= 4) {
+            const QRegularExpression word(QStringLiteral("\\b%1\\b").arg(u), QRegularExpression::CaseInsensitiveOption);
+            out.replace(word, QStringLiteral("<user>"));
+        }
+    }
     return out;
 }
 

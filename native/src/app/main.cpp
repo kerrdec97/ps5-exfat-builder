@@ -13,6 +13,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QMessageBox>
 #include <QTimer>
 
@@ -46,6 +47,18 @@ int main(int argc, char* argv[])
     parser.process(app);
 
     fw::Paths::initialize();
+
+    // One copy at a time: two would share one queue, one history and the same
+    // .part files. A lock left by a crashed copy is detected and taken over.
+    QLockFile instanceLock(QDir(fw::Paths::dataDir()).filePath(QStringLiteral("app.lock")));
+    instanceLock.setStaleLockTime(0);
+    if (!parser.isSet(selfTestOpt) && !instanceLock.tryLock(0)) {
+        QMessageBox::information(nullptr, QStringLiteral("exFAT Image Builder"),
+                                 QStringLiteral("exFAT Image Builder is already running. Switch to its window "
+                                                "(two copies would share the same queue and output files)."));
+        return 0;
+    }
+
     fw::crash::install(QDir(fw::Paths::logsDir()).filePath(QStringLiteral("crashes")));
     fw::Logger::installQtMessageHandler();
     fw::theme::apply(&app);

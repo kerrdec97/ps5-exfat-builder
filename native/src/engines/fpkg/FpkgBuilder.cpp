@@ -1023,7 +1023,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         QStringLiteral("sdk-tmp-%1").arg(QRandomGenerator::global()->generate(), 8, 16, QLatin1Char('0')));
     if (!QDir().mkpath(sdkTmp))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create a temporary folder for the Publishing Tools."));
-    ScopeExit dropTmp([&] { QDir(sdkTmp).removeRecursively(); });
+    ScopeExit dropTmp([&] { removeTreeNoFollow(sdkTmp); });
     QString sdkTmpTool;
     {
         auto m = j.aliases->map(sdkTmp, QStringLiteral("tmp"));
@@ -1220,7 +1220,7 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolcha
                                     JobContext& ctx, AsciiAliases& aliases)
 {
     const QString dest = QDir(ctx.tempDir).filePath(QStringLiteral("patch-base"));
-    QDir(dest).removeRecursively();
+    removeTreeNoFollow(dest);
     if (!QDir().mkpath(dest))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create a folder for the base package's files."));
     // The base's files are needed only where the update folder lacks them.
@@ -1299,7 +1299,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         if (!stager)
             return Error(ErrorCode::Unsupported, QStringLiteral("No reader for %1 images is available.").arg(srcInfo.suffix()));
         const QString stage = QDir(ctx.tempDir).filePath(QStringLiteral("stage"));
-        QDir(stage).removeRecursively();
+        removeTreeNoFollow(stage);
         if (!QDir().mkpath(stage))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the staging folder."));
         const qint64 est = stager->estimateStagedBytes(req.source) > 0 ? stager->estimateStagedBytes(req.source) : srcInfo.size();
@@ -1877,7 +1877,7 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
         QDir d(dest);
         for (const QFileInfo& fi : d.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)) {
             if (fi.isDir() && !fi.isSymbolicLink())
-                QDir(fi.absoluteFilePath()).removeRecursively();
+                removeTreeNoFollow(fi.absoluteFilePath());
             else
                 QFile::remove(fi.absoluteFilePath());
         }

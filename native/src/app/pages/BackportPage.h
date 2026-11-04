@@ -23,6 +23,7 @@ public:
     void setAllChecked(bool on);
     int gameCount() const { return m_count; }
     void setStatusText(const QString& folder, const QString& text, ui::Tone tone);
+    static QPixmap coverPixmap(const QString& coverPath, int px);
 signals:
     void checkedChanged();
     void contextRequested(const QString& folder, const QPoint& globalPos);

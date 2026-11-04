@@ -292,31 +292,53 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
                 uniqueZipPath(QDir(opt.backportDir).filePath(backportZipName(plan.prefix, opt.targetSdk)));
     }
 
-    // S7: manifest verdict.
+    // S7: manifest verdict. Records are kept per game folder: this folder's
+    // own record decides "differs"; any record of the same title ID (another
+    // copy or version, or this folder before it was moved) whose patched
+    // hashes match the current files means the folder is already backported.
     if (!opt.originalsDir.trimmed().isEmpty() && QFileInfo(opt.originalsDir).isDir()) {
-        plan.manifestPath = manifestPathFor(opt.originalsDir, plan.titleId);
-        auto m = readManifest(plan.manifestPath);
-        if (!m.ok()) {
+        const ManifestSet records = findManifests(opt.originalsDir, plan.titleId, game);
+        plan.manifestPath = records.ownPath;
+        plan.manifest = records.own;
+        for (const QString& d : records.damaged)
             add(Code::Ok, Severity::Warn,
-                QStringLiteral("%1 It is treated as missing and will be replaced.").arg(m.error().message));
-        } else {
-            plan.manifest = m.value();
-            auto [verdict, files] = manifestVerdict(scan, plan.manifest ? &*plan.manifest : nullptr, token);
-            plan.verdict = verdict;
-            plan.verdictFiles = files;
-            if (verdict == Verdict::Patched)
-                add(Code::AlreadyBackported, Severity::Refuse,
-                    QStringLiteral("This game folder already contains backport files: %1 match the files an earlier "
-                                   "backport produced. Restore the originals first.")
-                        .arg(listFiles(files)),
-                    files);
-            else if (verdict == Verdict::Differs)
-                add(Code::DiffersFromOriginals, opt.confirmDiffers ? Severity::Warn : Severity::Confirm,
-                    QStringLiteral("%1 differ from the recorded originals (already patched, or another version of the "
-                                   "game). Continue only if this folder holds the unmodified game.")
-                        .arg(listFiles(files)),
-                    files);
+                records.ownPathDamaged ? QStringLiteral("%1 It is set aside and replaced by this run's record.").arg(d)
+                                       : QStringLiteral("%1 It is ignored.").arg(d));
+        auto [verdict, files] = manifestVerdict(scan, plan.manifest ? &*plan.manifest : nullptr, token);
+        plan.verdict = verdict;
+        plan.verdictFiles = files;
+        if (verdict == Verdict::Patched)
+            add(Code::AlreadyBackported, Severity::Refuse,
+                QStringLiteral("This game folder already contains backport files: %1 match the files an earlier "
+                               "backport produced. Restore the originals first.")
+                    .arg(listFiles(files)),
+                files);
+        else if (verdict == Verdict::Differs)
+            add(Code::DiffersFromOriginals, opt.confirmDiffers ? Severity::Warn : Severity::Confirm,
+                QStringLiteral("%1 differ from the recorded originals (already patched, or another version of the "
+                               "game). Continue only if this folder holds the unmodified game.")
+                    .arg(listFiles(files)),
+                files);
+        for (const Manifest& other : records.others) {
+            if (plan.verdict == Verdict::Patched)
+                break;
+            const auto otherVerdict = manifestVerdict(scan, &other, token);
+            if (otherVerdict.first != Verdict::Patched)
+                continue;
+            plan.verdict = Verdict::Patched;
+            plan.verdictFiles = otherVerdict.second;
+            add(Code::AlreadyBackported, Severity::Refuse,
+                QStringLiteral("This game folder already contains backport files: %1 match the files an earlier "
+                               "backport of %2 produced. Restore the originals first.")
+                    .arg(listFiles(otherVerdict.second),
+                         native(other.doc.value(QStringLiteral("game_folder")).toString())),
+                otherVerdict.second);
         }
+        if (!records.own && !records.others.empty())
+            add(Code::Ok, Severity::Info,
+                QStringLiteral("Other folders of %1 have backport records; this folder gets its own record and "
+                               "theirs are not changed.")
+                    .arg(plan.titleId));
     }
 
     // NothingToDo: no executable to rewrite and no fakelib to add.

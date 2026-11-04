@@ -838,9 +838,9 @@ public:
         FW_TRY(writerStatus());
         if (m_file.size() < finalLength && !m_file.resize(finalLength))
             return Error(ErrorCode::IoError, QStringLiteral("Could not finish the image file."), m_file.errorString());
-        if (!m_file.flush())
-            return Error(ErrorCode::IoError, QStringLiteral("Could not finish the image file."), m_file.errorString());
-        return success();
+        // On the drive before it is verified, renamed, replaces an original or
+        // lets the source be deleted.
+        return flushToDisk(m_file, QStringLiteral("the image"));
     }
 
     void stop()

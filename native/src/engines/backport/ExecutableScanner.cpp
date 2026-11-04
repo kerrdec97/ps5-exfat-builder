@@ -345,6 +345,24 @@ struct Walker {
 
 } // namespace
 
+QStringList excludesBelow(const QString& root, const QStringList& excludeDirs)
+{
+    // An exclude that is the root or contains it (a ZIP folder that is the
+    // game's parent, or a library folder's parent) would hide the whole tree:
+    // it does not apply to this root. Only excludes strictly inside it do.
+    QStringList out;
+    for (const QString& ex : excludeDirs) {
+        if (ex.trimmed().isEmpty())
+            continue;
+        const QString abs = QDir::cleanPath(QFileInfo(ex).absoluteFilePath());
+        if (isSameOrInside(root, abs))
+            continue;
+        if (isSameOrInside(abs, root))
+            out << abs;
+    }
+    return out;
+}
+
 Result<ScanResult> scanGame(const QString& root, const CancellationToken& token, ScanMode mode,
                             const QStringList& excludeDirs)
 {
@@ -354,7 +372,7 @@ Result<ScanResult> scanGame(const QString& root, const CancellationToken& token,
                          QStringLiteral("The folder %1 does not exist.").arg(QDir::toNativeSeparators(root)));
     ScanResult r;
     r.root = QDir::cleanPath(ri.absoluteFilePath());
-    Walker w{r, token, mode, excludeDirs, {}, 0, false};
+    Walker w{r, token, mode, excludesBelow(r.root, excludeDirs), {}, 0, false};
     w.walk(r.root, QString(), Area::Game, false);
     if (w.cancelled || !token.checkpoint())
         return Error::cancelled();
@@ -401,9 +419,10 @@ QStringList discoverGames(const QStringList& folders, int depth, const QStringLi
 {
     QStringList games;
     QStringList seen;
+    QStringList active; // the excludes that apply below the folder being scanned
     const auto isExcluded = [&](const QString& abs) {
-        for (const QString& ex : excludeDirs)
-            if (!ex.isEmpty() && isSameOrInside(abs, ex))
+        for (const QString& ex : std::as_const(active))
+            if (isSameOrInside(abs, ex))
                 return true;
         return false;
     };
@@ -454,11 +473,7 @@ QStringList discoverGames(const QStringList& folders, int depth, const QStringLi
         if (dup)
             continue;
         unique << abs;
-        if (isExcluded(abs)) {
-            if (warnings)
-                *warnings << QStringLiteral("Skipped %1: it is a backup ZIP folder.").arg(QDir::toNativeSeparators(f));
-            continue;
-        }
+        active = excludesBelow(abs, excludeDirs);
         visit(abs, 0);
     }
     games.sort();

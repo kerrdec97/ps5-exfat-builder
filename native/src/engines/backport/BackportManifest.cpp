@@ -130,6 +130,32 @@ QMap<QString, QString> Manifest::addedFileHashes() const
     return out;
 }
 
+QMap<QString, QSet<QString>> Manifest::patchedHashes() const
+{
+    QMap<QString, QSet<QString>> out;
+    const auto addAfter = [&out](const Value& after) {
+        if (!after.isObject())
+            return;
+        for (const QString& k : after.keys()) {
+            const QString h = after.value(k).value(QStringLiteral("sha256")).toString().toLower();
+            if (!h.isEmpty())
+                out[relKey(k)].insert(h);
+        }
+    };
+    const Value& targets = doc.value(QStringLiteral("targets"));
+    if (targets.isObject()) {
+        for (const QString& t : targets.keys()) {
+            const auto post = stringMap(targets.value(t).value(QStringLiteral("post_hashes")));
+            for (auto it = post.cbegin(); it != post.cend(); ++it)
+                if (!it.value().isEmpty())
+                    out[relKey(it.key())].insert(it.value().toLower());
+            addAfter(targets.value(t).value(QStringLiteral("files_after")));
+        }
+    }
+    addAfter(doc.value(QStringLiteral("files_after")));
+    return out;
+}
+
 bool Manifest::applied() const
 {
     return doc.value(QStringLiteral("applied")).toBool(false);
@@ -138,6 +164,78 @@ bool Manifest::applied() const
 QString manifestPathFor(const QString& originalsDir, const QString& titleId)
 {
     return QDir(QDir(originalsDir).filePath(QStringLiteral("BackportBackup"))).filePath(titleId + QStringLiteral("/manifest.json"));
+}
+
+bool samePath(const QString& a, const QString& b)
+{
+    const auto norm = [](QString p) {
+        p.replace(u'\\', u'/');
+        return QDir::cleanPath(p);
+    };
+    if (a.trimmed().isEmpty() || b.trimmed().isEmpty())
+        return false;
+    return norm(a).compare(norm(b), Qt::CaseInsensitive) == 0;
+}
+
+bool manifestBelongsTo(const Manifest& m, const QString& game)
+{
+    return samePath(m.doc.value(QStringLiteral("game_folder")).toString(), QFileInfo(game).absoluteFilePath());
+}
+
+QString folderManifestPath(const QString& originalsDir, const QString& titleId, const QString& game)
+{
+    QString abs = QFileInfo(game).absoluteFilePath();
+    abs.replace(u'\\', u'/');
+    abs = QDir::cleanPath(abs).toLower();
+    QString name;
+    for (const QChar c : QFileInfo(QDir::cleanPath(game)).fileName())
+        if ((c.isLetterOrNumber() && c.unicode() < 0x80) || c == u'-' || c == u'_')
+            name.append(c);
+    name = name.left(40);
+    const QString hash = sha256Hex(abs.toUtf8()).left(8);
+    const QString key = name.isEmpty() ? hash : name + u'-' + hash;
+    return QDir(QDir(originalsDir).filePath(QStringLiteral("BackportBackup"))).filePath(
+        titleId + QStringLiteral("/folders/") + key + QStringLiteral("/manifest.json"));
+}
+
+ManifestSet findManifests(const QString& originalsDir, const QString& titleId, const QString& game)
+{
+    ManifestSet set;
+    const QString primary = manifestPathFor(originalsDir, titleId);
+    QStringList candidates = {primary};
+    const QString foldersDir = QDir(QFileInfo(primary).absolutePath()).filePath(QStringLiteral("folders"));
+    const QFileInfoList subs = QDir(foldersDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo& fi : subs)
+        candidates << QDir(fi.absoluteFilePath()).filePath(QStringLiteral("manifest.json"));
+    bool primaryDamaged = false;
+    for (const QString& c : std::as_const(candidates)) {
+        if (!QFileInfo(c).isFile())
+            continue;
+        auto m = readManifest(c);
+        if (!m.ok() || !m.value()) {
+            set.damaged << (m.ok() ? c : m.error().message);
+            if (c == primary)
+                primaryDamaged = true;
+            continue;
+        }
+        if (!set.own && manifestBelongsTo(*m.value(), game)) {
+            set.own = m.value();
+            set.ownPath = c;
+        } else {
+            set.others.push_back(*m.value());
+        }
+    }
+    if (set.own)
+        return set;
+    if (!QFileInfo::exists(primary)) {
+        set.ownPath = primary;
+    } else if (primaryDamaged) {
+        set.ownPath = primary; // set aside (kept as .corrupt-*) when the record is written
+        set.ownPathDamaged = true;
+    } else {
+        set.ownPath = folderManifestPath(originalsDir, titleId, game);
+    }
+    return set;
 }
 
 Result<std::optional<Manifest>> readManifest(const QString& path)

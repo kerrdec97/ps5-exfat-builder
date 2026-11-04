@@ -649,7 +649,7 @@ private slots:
         QVERIFY(out.error().message.startsWith(QStringLiteral("Partial restore")));
     }
 
-    void restoreWithoutManifestWarns()
+    void restoreWithoutRecordNeedsConsent()
     {
         Env e;
         const QString zp = e.tmp.filePath("loose original files.zip");
@@ -659,11 +659,151 @@ private slots:
             QVERIFY(w.addData("eboot.bin", "orig").ok());
             QVERIFY(w.finish().ok());
         }
-        auto rep = restoreOriginals({e.game, zp, QString()}, CancellationToken());
+        // No record names this ZIP: refused, nothing changed.
+        const auto before = snapshotTree(e.game);
+        auto refused = restoreOriginals({e.game, zp, QString()}, CancellationToken());
+        QVERIFY(!refused.ok());
+        QCOMPARE(codeOf(refused.error()), Code::ManifestMismatch);
+        QCOMPARE(snapshotTree(e.game), before);
+        // With the user's explicit consent it is restored, with a warning.
+        RestoreOptions ro{e.game, zp, QString()};
+        ro.allowUnrecorded = true;
+        auto rep = restoreOriginals(ro, CancellationToken());
         QVERIFY(rep.ok() && rep->ok());
         QCOMPARE(rep->restored, 1);
-        QVERIFY(rep->warnings.join(u'|').contains(QStringLiteral("No backport manifest")));
+        QVERIFY(rep->warnings.join(u'|').contains(QStringLiteral("No backport record")));
         QCOMPARE(readBytes(e.game + "/eboot.bin"), QByteArray("orig"));
+    }
+
+    // ---- a ZIP folder that is the game's parent (review bug 3) --------------------------
+    void zipFolderThatIsTheGamesParentHidesNothing()
+    {
+        {
+            Env e;
+            writeBytes(e.game + "/sce_module/libenc.sprx", f7()); // must make the run refuse (S32)
+            auto o = e.options();
+            o.originalsDir = e.tmp.filePath("games"); // parent of the game folder
+            o.backportDir.clear();
+            auto plan = planBackport(o, CancellationToken());
+            QVERIFY(plan.ok());
+            QVERIFY(plan->scan.find(QStringLiteral("sce_module/libc.prx")));
+            QVERIFY(plan->scan.find(QStringLiteral("sce_module/libenc.sprx")));
+            const auto before = snapshotTree(e.game);
+            auto r = runBackport(o, e.ctx);
+            QVERIFY(!r.ok());
+            QCOMPARE(codeOf(r.error()), Code::SelfEncrypted);
+            QCOMPARE(snapshotTree(e.game), before);
+        }
+        {
+            Env e;
+            auto o = e.options();
+            o.originalsDir = e.tmp.filePath("games");
+            o.backportDir = e.tmp.filePath("games"); // both ZIPs next to the games
+            const QByteArray libcBefore = readBytes(e.game + "/sce_module/libc.prx");
+            auto r = runBackport(o, e.ctx);
+            QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().toLogString()));
+            QVERIFY(readBytes(e.game + "/sce_module/libc.prx") != libcBefore);
+            QCOMPARE(sha(readBytes(e.game + "/sce_module/libc.prx")), kGoldenF2Pair4Nid);
+            QVERIFY(zipNames(r->originalsZip).contains(QStringLiteral("sce_module/libc.prx")));
+            QCOMPARE(QFileInfo(r->originalsZip).absolutePath(), QFileInfo(e.tmp.filePath("games")).absoluteFilePath());
+        }
+    }
+
+    // ---- records are per game folder (review bug 2) ------------------------------------
+    void restoreNeverUsesAnotherDumpsOriginals()
+    {
+        Env e; // game A
+        auto r = runBackport(e.options(), e.ctx);
+        QVERIFY(r.ok());
+        const QByteArray aManifest = readBytes(r->manifestPath);
+        // Game B: another dump of the same title, never backported.
+        const QString b = e.tmp.filePath("games/PPSA01234-v1.05");
+        makeGame(b, SelfOnly);
+        writeBytes(b + "/eboot.bin", selfOf(f1(0x40, 0x06000038, 0x10090001)));
+        writeBytes(b + "/sce_module/libc.prx", selfOf(f2(9)));
+        const auto bBefore = snapshotTree(b);
+        QCOMPARE(findOriginalsZip(b, e.orig), QString()); // never guessed from the title ID
+        auto autoRestore = restoreOriginals({b, QString(), e.orig}, CancellationToken());
+        QVERIFY(!autoRestore.ok());
+        QCOMPARE(codeOf(autoRestore.error()), Code::RestoreFailed);
+        QCOMPARE(snapshotTree(b), bBefore);
+        // Choosing A's ZIP for B: nothing of B is overwritten, the restore fails.
+        auto chosen = restoreOriginals({b, r->originalsZip, e.orig}, CancellationToken());
+        QVERIFY(chosen.ok());
+        QVERIFY(!chosen->ok());
+        QCOMPARE(chosen->restored, 0);
+        QCOMPARE(chosen->skipped.size(), 2);
+        QVERIFY(!chosen->ownRecord);
+        QCOMPARE(snapshotTree(b), bBefore);
+        QCOMPARE(readBytes(r->manifestPath), aManifest); // A's record untouched
+        // A still restores from its own record.
+        auto a = restoreOriginals({e.game, QString(), e.orig}, CancellationToken());
+        QVERIFY(a.ok() && a->ok());
+        QVERIFY(a->ownRecord);
+    }
+
+    void backportOfAnotherDumpKeepsBothRecords()
+    {
+        Env e; // game A
+        const auto aOriginal = snapshotTree(e.game);
+        auto ra = runBackport(e.options(), e.ctx);
+        QVERIFY(ra.ok());
+        const QByteArray aManifest = readBytes(ra->manifestPath);
+        const QString b = e.tmp.filePath("games/PPSA01234-v1.05");
+        makeGame(b, SelfOnly);
+        writeBytes(b + "/eboot.bin", selfOf(f1(0x40, 0x06000038, 0x10090001)));
+        const auto bOriginal = snapshotTree(b);
+        auto ob = e.options();
+        ob.game = b;
+        ob.targetSdk = 4;
+        auto rb = runBackport(ob, e.ctx);
+        QVERIFY2(rb.ok(), qPrintable(rb.ok() ? QString() : rb.error().toLogString()));
+        QVERIFY(rb->manifestPath != ra->manifestPath);
+        QVERIFY(rb->manifestPath.contains(QStringLiteral("/folders/")));
+        QCOMPARE(readBytes(ra->manifestPath), aManifest); // never clobbered
+        QCOMPARE(findOriginalsZip(e.game, e.orig), ra->originalsZip);
+        QCOMPARE(findOriginalsZip(b, e.orig), rb->originalsZip);
+        auto restoreA = restoreOriginals({e.game, QString(), e.orig}, CancellationToken());
+        auto restoreB = restoreOriginals({b, QString(), e.orig}, CancellationToken());
+        QVERIFY(restoreA.ok() && restoreA->ok());
+        QVERIFY(restoreB.ok() && restoreB->ok());
+        QCOMPARE(snapshotTree(e.game), aOriginal);
+        QCOMPARE(snapshotTree(b), bOriginal);
+    }
+
+    void copyOfABackportedDumpIsRefused()
+    {
+        Env e;
+        auto r = runBackport(e.options(), e.ctx);
+        QVERIFY(r.ok());
+        // The user copies the backported folder: its files are A's backported files.
+        const QString c = e.tmp.filePath("games/PPSA01234-copy");
+        const auto backported = snapshotTree(e.game);
+        for (auto it = backported.cbegin(); it != backported.cend(); ++it)
+            writeBytes(c + "/" + it.key(), it.value());
+        auto oc = e.options(false);
+        oc.game = c;
+        auto rc = runBackport(oc, e.ctx);
+        QVERIFY(!rc.ok());
+        QCOMPARE(codeOf(rc.error()), Code::AlreadyBackported);
+        QVERIFY(rc.error().message.contains(QStringLiteral("PPSA01234-app")));
+    }
+
+    void restoreLeavesFilesWithUnrecordedContent()
+    {
+        Env e;
+        auto r = runBackport(e.options(), e.ctx);
+        QVERIFY(r.ok());
+        writeBytes(e.game + "/eboot.bin", selfOf(f1(0x40, 0x05000033, 0x09590001))); // a later hand patch
+        const QByteArray handPatched = readBytes(e.game + "/eboot.bin");
+        auto rep = restoreOriginals({e.game, QString(), e.orig}, CancellationToken());
+        QVERIFY(rep.ok());
+        QVERIFY(!rep->ok());
+        QCOMPARE(rep->skipped.size(), 1);
+        QVERIFY(rep->skipped.front().startsWith(QStringLiteral("eboot.bin")));
+        QCOMPARE(readBytes(e.game + "/eboot.bin"), handPatched);
+        QCOMPARE(rep->restored, 1); // libc.prx held the recorded backported bytes
+        QVERIFY(!rep->manifestUpdated); // a partial restore does not mark the game restored
     }
 
     // ---- long paths (S28) ----------------------------------------------------------------

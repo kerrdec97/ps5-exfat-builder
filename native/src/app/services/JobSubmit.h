@@ -25,8 +25,17 @@
 //                  backport.restore {game, zip?}  or {journal} to roll back an interrupted apply
 //                  backport.scan    {game} or {folders: [..]} (library mode) → details.games
 //   Library        library.scan     {folders: [..]} → details.games = [LibraryGame::toJson()]
-//   PS5            ps5.ftp.upload   {sources: [..], remoteDir?, host?, port?}
+//   PS5            ps5.ftp.upload   {sources: [..], remoteDir?, host?, port?, allowProtectedPaths?}
+//                  ps5.ftp.download {sources: [remote..], localDir, overwrite?, host?, port?}
 //                  ps5.payload.send {file, target? ("payload"|"shadowmount"|...), host?, port?}
+//                  ps5.dpi.install  {package, host?, port?}
+//                  ps5.y2jb.autoBlock {region ("USA"|"EU"|"JP"), confirmed: true, backupDir?, host?, port?}
+//                  ps5.shadowmount.stop {host?, port?}
+//   Image edit     image.exfat.edit {image, operations: [{op: add|replace|delete|mkdir, imagePath, localPath}]}
+//                  image.ffpkg.edit {image, operations: [{op: add|replace|delete|rename|mkdir, path, source, newName}]}
+//   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfsc"), output (file path)}
+//   Dump rename    library.rename   {mode: preview|apply|undo, source, preset?, destination?, items: [{source, name, selected}], undoLog}
+//                  backport.restore {journal} rolls back an interrupted apply
 //   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate)
 //                  update.download  {release: <details>} → outputs[0] = verified installer
 //   Tools          tools.languages.scan    {folder, batch}
@@ -81,6 +90,24 @@ Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, co
                                     const QString& backupFolder);
 Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip, const QString& gameRoot);
 Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics);
+
+Result<QString> submitFtpDownload(AppContext& ctx, const QString& host, int port, const QStringList& remotePaths,
+                                  const QString& localDir, bool overwrite);
+Result<QString> submitFtpUploadMany(AppContext& ctx, const QString& host, int port, const QStringList& localPaths,
+                                    const QString& remoteDir, bool allowProtectedPaths);
+Result<QString> submitDpiInstall(AppContext& ctx, const QString& host, int port, const QString& package);
+Result<QString> submitY2jbAutoBlock(AppContext& ctx, const QString& host, int port, const QString& region,
+                                    const QString& backupDir);
+Result<QString> submitShadowMountStop(AppContext& ctx, const QString& host, int port);
+// `operations` already in the engine's JSON shape (see the header comment).
+Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJsonArray& operations,
+                                const QVariantMap& overrides);
+Result<QString> submitConvert(AppContext& ctx, const QString& image, const QString& format, const QString& output,
+                              const QVariantMap& overrides);
+Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
+                                    const QString& destination, const QJsonArray& items, const QString& undoLog);
+Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPath);
+QString imageEditKind(const QString& image); // "image.exfat.edit" / "image.ffpkg.edit" / ""
 
 // Kinds the Queue page hides (system jobs: update checks).
 bool isSystemKind(const QString& kind);

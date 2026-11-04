@@ -87,15 +87,21 @@ enum class ScanMode {
     Quick, // header classification only; params of eboot.bin (library scans)
 };
 
-// `excludeDirs`: absolute folders never entered (S38: the ZIP folders when
-// they sit under a scanned folder).
+// `excludeDirs`: folders never entered (S38: the ZIP folders when they sit
+// under the scanned folder). An exclude that is the root itself or one of its
+// parents is ignored: it would otherwise hide every sub-folder of the game.
 Result<ScanResult> scanGame(const QString& root, const CancellationToken& token, ScanMode mode = ScanMode::Full,
                             const QStringList& excludeDirs = {});
 
 // Game folders (eboot.bin at their root) under `folders`, at most `depth`
-// levels below each, never entering `excludeDirs` (S38) or OS metadata.
+// levels below each, never entering `excludeDirs` that lie below a scanned
+// folder (S38) or OS metadata. Excludes that contain a scanned folder are
+// ignored for it.
 QStringList discoverGames(const QStringList& folders, int depth, const QStringList& excludeDirs,
                           const CancellationToken& token, QStringList* warnings = nullptr);
+
+// The excludes that lie strictly inside `root` (cleaned, absolute).
+QStringList excludesBelow(const QString& root, const QStringList& excludeDirs);
 
 // Magic check used for fakelib libraries (ELF or either SELF magic).
 bool hasExecutableMagic(const QByteArray& head);

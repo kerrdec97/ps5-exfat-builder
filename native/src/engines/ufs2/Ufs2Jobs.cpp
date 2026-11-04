@@ -33,6 +33,20 @@ qint64 ioBufferBytes(const SettingsValues& s)
 bool verifyEnabled(const SettingsValues& s) { return s.boolean(general::keys::kVerifyAfterBuild); }
 CompareDepth verifyDepth(const SettingsValues& s) { return compareDepthFromSetting(s.string(general::keys::kVerifyMode)); }
 
+// Every live path with its size, sorted: two scans of a folder match when
+// nothing was added, removed or resized in between.
+QStringList listingOf(const SourceTree& t)
+{
+    QStringList out;
+    for (size_t i = 1; i < t.nodes.size(); ++i) {
+        const TreeNode& n = t.nodes[i];
+        if (!n.removed)
+            out << t.relativePath(int(i)) + (n.isDir() ? QStringLiteral("/") : u'\t' + QString::number(n.size));
+    }
+    out.sort();
+    return out;
+}
+
 QString seconds(qint64 ms) { return QStringLiteral("%1 s").arg(QString::number(double(ms) / 1000.0, 'f', 1)); }
 
 QJsonObject geometryJson(const PlanSummary& s)
@@ -217,6 +231,8 @@ public:
                 why = QStringLiteral("the image was not verified byte for byte");
             else if (!QFileInfo(QDir(src).filePath(QStringLiteral("eboot.bin"))).isFile())
                 why = QStringLiteral("the folder has no eboot.bin");
+            else if (auto again = scanLocalFolder(src, ctx.token); !again.ok() || listingOf(again.value()) != listingOf(tree))
+                why = QStringLiteral("files in it changed while the image was being built");
             if (why.isEmpty()) {
                 Status st = removeTreeSafely(src);
                 if (st.ok()) {
@@ -471,6 +487,23 @@ public:
             QStringList notes;
             WriterOptions opt;
             opt.params = formatParams(ctx.settings, &notes);
+            // The rebuilt image keeps the original's block and fragment size
+            // and free-space reserve; only the inode density follows Settings.
+            FormatParams kept = opt.params;
+            kept.blockSize = reader->sb().bsize;
+            kept.fragmentSize = reader->sb().fsize;
+            kept.minFreePercent = reader->sb().minfree;
+            if (validateParams(kept).ok()) {
+                if (kept.blockSize != opt.params.blockSize || kept.fragmentSize != opt.params.fragmentSize)
+                    ctx.log.info(QStringLiteral("Keeping the image's %1/%2 block/fragment size (Settings say %3/%4).")
+                                     .arg(kept.blockSize).arg(kept.fragmentSize)
+                                     .arg(opt.params.blockSize).arg(opt.params.fragmentSize));
+                opt.params = kept;
+            } else {
+                notes << QStringLiteral("The image's block size (%1/%2) cannot be rebuilt as is; the edited image uses the "
+                                        "sizes from Settings (%3/%4).")
+                             .arg(kept.blockSize).arg(kept.fragmentSize).arg(opt.params.blockSize).arg(opt.params.fragmentSize);
+            }
             opt.ioBufferBytes = ioBufferBytes(ctx.settings);
             for (const QString& n : notes)
                 outcome.warnings << n;

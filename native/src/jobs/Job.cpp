@@ -1,5 +1,9 @@
 #include "jobs/Job.h"
 
+#include <QDir>
+#include <QFileInfo>
+#include <QJsonValue>
+
 namespace fw {
 
 QString jobStateName(JobState state)
@@ -32,6 +36,41 @@ QString verificationName(Verification v)
     case Verification::Inconclusive: return QStringLiteral("Inconclusive");
     }
     return QStringLiteral("Unknown");
+}
+
+QStringList Job::busyPaths() const
+{
+    static const char* const keys[] = {"image", "output", "source", "game", "package", "destination", "folder", "file"};
+    const QJsonObject p = parameters();
+    QStringList out;
+    for (const char* k : keys) {
+        const QString v = p.value(QLatin1String(k)).toString();
+        if (!v.isEmpty())
+            out << QDir::cleanPath(QFileInfo(v).absoluteFilePath());
+    }
+    return out;
+}
+
+namespace {
+#ifdef Q_OS_WIN
+constexpr Qt::CaseSensitivity kPathCase = Qt::CaseInsensitive;
+#else
+constexpr Qt::CaseSensitivity kPathCase = Qt::CaseSensitive;
+#endif
+} // namespace
+
+bool busyPathsOverlap(const QStringList& a, const QStringList& b)
+{
+    const Qt::CaseSensitivity cs = kPathCase;
+    const auto inside = [cs](const QString& x, const QString& dir) {
+        return x.size() > dir.size() && x.startsWith(dir, cs)
+            && (dir.endsWith(u'/') || x.at(dir.size()) == u'/');
+    };
+    for (const QString& x : a)
+        for (const QString& y : b)
+            if (x.compare(y, kPathCase) == 0 || inside(x, y) || inside(y, x))
+                return true;
+    return false;
 }
 
 void JobFactory::add(const QString& kind, const QString& displayName, Creator creator)

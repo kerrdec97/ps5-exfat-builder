@@ -13,6 +13,9 @@
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QMenu>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmapCache>
 
 namespace fw::pages {
 
@@ -58,6 +61,7 @@ GameTable::GameTable(bool selectable, QWidget* parent) : QTableWidget(0, 7, pare
     setEditTriggers(QAbstractItemView::NoEditTriggers);
     setContextMenuPolicy(Qt::CustomContextMenu);
     setMinimumHeight(6 * size::row + 40);
+    setIconSize(QSize(size::coverRow, size::coverRow));
     connect(this, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
         if (it->column() == 0)
             emit checkedChanged();
@@ -67,6 +71,30 @@ GameTable::GameTable(bool selectable, QWidget* parent) : QTableWidget(0, 7, pare
             emit contextRequested(item(it->row(), 1)->data(Qt::UserRole).toString(), viewport()->mapToGlobal(p));
     });
     connect(this, &QTableWidget::cellDoubleClicked, this, [this](int r, int) { emit activatedFolder(item(r, 1)->data(Qt::UserRole).toString()); });
+}
+
+QPixmap GameTable::coverPixmap(const QString& coverPath, int px)
+{
+    if (coverPath.isEmpty() || !QFileInfo::exists(coverPath))
+        return {};
+    const QString key = QStringLiteral("cover|%1|%2").arg(coverPath).arg(px);
+    QPixmap out;
+    if (QPixmapCache::find(key, &out))
+        return out;
+    QPixmap src(coverPath);
+    if (src.isNull())
+        return {};
+    src = src.scaled(px, px, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    out = QPixmap(px, px);
+    out.fill(Qt::transparent);
+    QPainter p(&out);
+    p.setRenderHint(QPainter::Antialiasing);
+    QPainterPath clip;
+    clip.addRoundedRect(QRectF(0, 0, px, px), radius::sm, radius::sm);
+    p.setClipPath(clip);
+    p.drawPixmap((px - src.width()) / 2, (px - src.height()) / 2, src);
+    QPixmapCache::insert(key, out);
+    return out;
 }
 
 void GameTable::setGames(const std::vector<LibraryGame>& games, const QString& filter)
@@ -90,7 +118,13 @@ void GameTable::setGames(const std::vector<LibraryGame>& games, const QString& f
         title->setFont(font::bodyStrong());
         title->setForeground(color::fg_0);
         title->setData(Qt::UserRole, s.folder);
-        title->setToolTip(nativePath(s.folder));
+        QStringList tip{nativePath(s.folder)};
+        if (!s.platform.isEmpty())
+            tip << QStringLiteral("%1 %2").arg(s.platform, s.kind);
+        title->setToolTip(tip.join(QStringLiteral(" · ")));
+        const QPixmap cover = coverPixmap(s.coverPath, size::coverRow);
+        if (!cover.isNull())
+            title->setIcon(QIcon(cover));
         setItem(r, 1, title);
         auto mono = [](const QString& t, const QColor& c) {
             auto* it = new QTableWidgetItem(t);
@@ -107,6 +141,14 @@ void GameTable::setGames(const std::vector<LibraryGame>& games, const QString& f
         setItem(r, 6, statusItem);
         Tone tone = Tone::Neutral;
         QString status = g.status.isEmpty() ? (s.isGame ? QStringLiteral("Ready") : QStringLiteral("Not a game dump")) : g.status;
+        QString issueTip = g.issues.join(u'\n');
+        if (!g.canRun && !g.issues.isEmpty()) {
+            status = QStringLiteral("Not ready: %1").arg(g.issues.first().section(QStringLiteral(": "), 1));
+            tone = Tone::Err;
+        } else if (!g.issues.isEmpty() && (g.status.isEmpty() || g.status == QLatin1String("Not backported"))) {
+            status = QStringLiteral("Ready · %1 note%2").arg(g.issues.size()).arg(g.issues.size() == 1 ? QString() : QStringLiteral("s"));
+            tone = Tone::Warn;
+        }
         if (!s.isGame) tone = Tone::Warn;
         else if (status.startsWith(QLatin1String("Backported")) || status == QLatin1String("Done")) tone = Tone::Ok;
         else if (status.startsWith(QLatin1String("Failed"))) tone = Tone::Err;
@@ -115,6 +157,8 @@ void GameTable::setGames(const std::vector<LibraryGame>& games, const QString& f
         auto* h = hbox(wrap, 0, QMargins(8, 0, 8, 0));
         auto* badge = new Badge(status, tone, wrap);
         badge->setObjectName(QStringLiteral("statusBadge"));
+        if (!issueTip.isEmpty())
+            wrap->setToolTip(issueTip + (g.plan.isEmpty() ? QString() : QStringLiteral("\n\nPlan: ") + g.plan));
         if (tone == Tone::Neutral)
             badge->setIconName({});
         h->addWidget(badge);
@@ -397,9 +441,16 @@ void BackportPage::onJobFinished(const QString& id)
         std::vector<LibraryGame> games;
         for (const auto& v : rec->outcome->details.value(QStringLiteral("games")).toArray()) {
             LibraryGame g;
-            g.info = GameSummary::fromJson(v.toObject());
-            g.status = v.toObject().value(QStringLiteral("status")).toString();
+            const QJsonObject o = v.toObject();
+            g.info = GameSummary::fromJson(o);
+            g.status = o.value(QStringLiteral("status")).toString();
             g.lastSeen = QDateTime::currentDateTime();
+            for (const auto& iv : o.value(QStringLiteral("issues")).toArray()) {
+                const QJsonObject io = iv.toObject();
+                g.issues << QStringLiteral("%1: %2").arg(io.value(QStringLiteral("severity")).toString(), io.value(QStringLiteral("message")).toString());
+            }
+            g.canRun = o.value(QStringLiteral("canRun")).toBool(true);
+            g.plan = o.value(QStringLiteral("plan")).toString();
             games.push_back(g);
         }
         if (!games.empty())

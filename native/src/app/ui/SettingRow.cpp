@@ -247,6 +247,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
 {
     setProperty("fwNoRing", true);
     auto* h = hbox(this, space::lg, QMargins(0, 6, 0, 6));
+    m_layout = h;
     h->setAlignment(Qt::AlignVCenter);
     auto* left = new QWidget(this);
     auto* col = vbox(left, 2);
@@ -277,6 +278,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     left->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     h->addWidget(left, 1);
     auto* right = new QWidget(this);
+    m_right = right;
     auto* rcol = vbox(right, space::xs);
     rcol->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_editor = new SettingEditor(def, right);
@@ -340,6 +342,21 @@ void SettingRow::setRestartNote(bool on)
 {
     m_restart = on;
     updateHelp();
+}
+
+void SettingRow::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    // Narrow containers (the 400 px aside): label above the control.
+    const bool narrow = width() < 520;
+    if (narrow == m_narrow || !m_layout)
+        return;
+    m_narrow = narrow;
+    m_layout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_layout->setSpacing(narrow ? space::sm : space::lg);
+    m_layout->setAlignment(m_right, narrow ? Qt::AlignLeft : (Qt::AlignRight | Qt::AlignVCenter));
+    if (auto* rl = qobject_cast<QBoxLayout*>(m_right->layout()))
+        rl->setAlignment(narrow ? Qt::AlignLeft : (Qt::AlignRight | Qt::AlignVCenter));
 }
 
 void SettingRow::paintEvent(QPaintEvent*)

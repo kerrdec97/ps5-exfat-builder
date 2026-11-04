@@ -478,6 +478,8 @@ Status Reader::open(const QString& path)
         const qsizetype xEnd = x + extraLen;
         while (x + 4 <= xEnd) {
             const quint16 id = get16(cd.constData() + x), len = get16(cd.constData() + x + 2);
+            if (x + 4 + len > xEnd)
+                return corrupt(QStringLiteral("extra field outside its entry"));
             if (id == kZip64ExtraId) {
                 qsizetype q = x + 4;
                 if (e.uncompressedSize == 0xFFFFFFFFu && q + 8 <= x + 4 + len) { e.uncompressedSize = get64(cd.constData() + q); q += 8; }
@@ -544,6 +546,8 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
         if (progress)
             progress->advance(in.size());
         if (!inflating) {
+            if (produced + quint64(in.size()) > entry.uncompressedSize)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(entry.name));
             crc = quint32(::crc32(crc, reinterpret_cast<const Bytef*>(in.constData()), uInt(in.size())));
             produced += quint64(in.size());
             FW_TRY(sink(in));
@@ -560,6 +564,10 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
                              QStringLiteral("inflate %1").arg(rc));
             const qint64 n = qint64(out.size()) - qint64(zs.avail_out);
             if (n > 0) {
+                // Never more than the declared size (a crafted entry could
+                // otherwise inflate far past it and past readAll's limit).
+                if (produced + quint64(n) > entry.uncompressedSize)
+                    return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(entry.name));
                 const QByteArray chunk = QByteArray::fromRawData(out.constData(), int(n));
                 crc = quint32(::crc32(crc, reinterpret_cast<const Bytef*>(chunk.constData()), uInt(n)));
                 produced += quint64(n);

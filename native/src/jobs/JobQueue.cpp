@@ -25,6 +25,7 @@ struct JobQueue::Entry {
     CancellationSource cancel;
     std::atomic<bool> progressPending{false};
     std::unique_ptr<ProgressReporter> reporter;
+    QStringList busy;                  // busyPaths() taken when the job starts
 };
 
 namespace {
@@ -299,14 +300,24 @@ void JobQueue::schedule()
     {
         std::lock_guard lock(m_mutex);
         int running = 0;
+        QList<QStringList> busy; // paths in use by running jobs
         for (const auto& e : m_entries)
-            if (e->rec.state == JobState::Running || e->rec.state == JobState::Paused)
+            if (e->rec.state == JobState::Running || e->rec.state == JobState::Paused) {
                 ++running;
+                busy << e->busy;
+            }
         for (const auto& e : m_entries) {
             if (running >= maxConcurrent)
                 break;
             if (e->rec.state == JobState::Queued && e->job
                 && (!e->rec.notBefore.isValid() || e->rec.notBefore <= QDateTime::currentDateTime())) {
+                // Never two jobs on the same image or game at once (a verify
+                // must not roll back an edit that is still being applied).
+                const QStringList paths = e->job->busyPaths();
+                if (std::any_of(busy.begin(), busy.end(), [&](const QStringList& b) { return busyPathsOverlap(paths, b); }))
+                    continue;
+                e->busy = paths;
+                busy << paths;
                 e->rec.state = JobState::Running;
                 e->rec.started = QDateTime::currentDateTime();
                 toStart.push_back(e);
@@ -460,6 +471,8 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
     if (!result.ok() && !result.error().isCancelled() && !e->cancel.isCancelled()) {
         {
             std::lock_guard lock(m_mutex);
+            if (e->reporter) // keep where it stopped for the failed row
+                e->rec.progress = e->reporter->snapshot();
             e->reporter.reset();
         }
         if (tryAutoRetry(e, result.error())) {
@@ -559,32 +572,45 @@ Status JobQueue::restoreQueue()
             Log(QStringLiteral("queue")).warn(QStringLiteral("Could not restore a %1 job: %2").arg(kind, job.error().message));
             continue;
         }
-        if (wasRunning) {
-            // Keep a record the user can retry, but never auto-restart it.
+        // A record the user can retry, but that never starts by itself.
+        const auto keepInterrupted = [&](std::unique_ptr<Job>& j, const QString& why) {
             auto e = std::make_shared<Entry>();
             e->rec.id = newId();
             e->rec.kind = kind;
-            e->rec.title = job.value()->title();
-            e->rec.subtitle = job.value()->subtitle();
-            e->rec.phases = job.value()->phases();
-            e->rec.parameters = job.value()->parameters();
-            e->rec.overrides = job.value()->settingsOverrides;
+            e->rec.title = j->title();
+            e->rec.subtitle = j->subtitle();
+            e->rec.phases = j->phases();
+            e->rec.parameters = j->parameters();
+            e->rec.overrides = j->settingsOverrides;
             e->rec.added = QDateTime::fromString(o.value(QStringLiteral("added")).toString(), Qt::ISODate);
             e->rec.state = JobState::Interrupted;
-            e->rec.error = Error(ErrorCode::Internal,
-                                 QStringLiteral("The app closed while this job was running. Its partial output was not kept. Retry to run it again."));
+            e->rec.error = Error(ErrorCode::Internal, why);
             {
                 std::lock_guard lock(m_mutex);
                 m_entries.push_back(e);
             }
             emit jobAdded(e->rec.id);
-        } else {
-            auto added = enqueue(std::move(job).value());
-            if (!added.ok())
-                Log(QStringLiteral("queue")).warn(QStringLiteral("Could not restore a job: %1").arg(added.error().message));
+        };
+        if (wasRunning) {
+            keepInterrupted(job.value(),
+                            QStringLiteral("The app closed while this job was running. Its partial output was not kept. Retry to run it again."));
+            continue;
+        }
+        // enqueue() validates the job's inputs (a USB drive may not be plugged
+        // in yet) and takes the job; a second copy keeps the record if refused.
+        auto again = m_factory.create(kind, o.value(QStringLiteral("params")).toObject(),
+                                      o.value(QStringLiteral("overrides")).toObject().toVariantMap());
+        auto added = enqueue(std::move(job).value());
+        if (!added.ok()) {
+            Log(QStringLiteral("queue")).warn(QStringLiteral("Could not restore a job: %1").arg(added.error().message));
+            if (again.ok())
+                keepInterrupted(again.value(), QStringLiteral("This job was waiting when the app closed, but it cannot run now: %1 "
+                                                              "Retry it when that is fixed.")
+                                                   .arg(added.error().message));
         }
     }
-    m_held = previousHold;
+    // Restored jobs wait for the user to resume the queue.
+    m_held = previousHold || pendingCount() > 0;
     schedule();
     return success();
 }

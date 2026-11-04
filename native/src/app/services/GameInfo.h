@@ -21,6 +21,9 @@ struct GameSummary {
     QString version;     // 01.000.000
     QString sdk;         // "9.00" when known
     QString requiredFw;
+    QString platform;    // "PS4" / "PS5" (library.scan)
+    QString kind;        // "Game" / "Patch" / "Add-on"
+    QString coverPath;   // normalised cover PNG (library.scan)
     qint64 bytes = 0;
     qint64 files = 0;
     bool isGame = false; // has sce_sys/param.json or eboot.bin

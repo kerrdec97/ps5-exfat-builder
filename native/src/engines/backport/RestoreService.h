@@ -3,18 +3,26 @@
 // Restore a game folder from its originals ZIP (docs/BACKPORT_PARITY.md
 // §2.15, S20, S36, D6).
 //
-//  * The ZIP is checked against the manifest when there is one: the ZIP the
-//    manifest recorded must still have the recorded SHA-256; another ZIP
-//    must hold the same originals (member hashes) as the manifest records.
-//  * Every entry name is checked first; an entry that would land outside
-//    the game ("zip slip": absolute, drive letter, "..", ':' anywhere) makes
-//    the whole restore refuse before anything is written.
-//  * Files are written through "<target>.fwpart" and renamed over the target;
-//    files that already hold the original bytes are left untouched.
+//  * Backport records are kept per game folder (BackportManifest.h). Without
+//    a chosen ZIP, only this folder's own record is used: its ZIP is restored
+//    (another dump of the same title ID never matches). A chosen ZIP is
+//    matched to the record that names it (path or SHA-256): this folder's
+//    record, or another folder's (then nothing from that record is changed).
+//    A chosen ZIP no record names is refused unless `allowUnrecorded`.
+//  * The ZIP the record names must still have the recorded SHA-256, and every
+//    member must be the recorded original.
+//  * Every entry name is checked first; an entry that would land outside the
+//    game ("zip slip": absolute, drive letter, "..", ':' anywhere) makes the
+//    whole restore refuse before anything is written.
+//  * A file is only overwritten when it holds what the record says the
+//    backport wrote there; a file that already holds the original is left
+//    untouched; any other content is left as it is and reported (skipped),
+//    which fails the restore. A missing file is recreated only from this
+//    folder's own record.
 //  * Files the backport added (manifest added_files, schema 2; for a schema-1
 //    manifest the recorded fakelib/ post hashes not in the ZIP) are removed
-//    when they still hold what the backport wrote.
-//  * Any file that could not be restored makes the result a failure.
+//    when they still hold what the backport wrote, and only with this folder's
+//    own record, which is then updated. Other folders' records are never written.
 
 #include "core/Cancellation.h"
 #include "core/Progress.h"
@@ -29,35 +37,41 @@ namespace fw::backport {
 
 struct RestoreOptions {
     QString game;
-    QString zip;          // empty: find it (manifest first, then the newest matching name)
-    QString originalsDir; // where to look for the ZIP and the manifest
+    QString zip;          // empty: this folder's recorded originals ZIP
+    QString originalsDir; // where the records (BackportBackup/) and ZIPs are
+    // A chosen ZIP that no backport record names is restored without hash
+    // checks only when this is set (the user confirmed it belongs to the game).
+    bool allowUnrecorded = false;
 };
 
 struct RestoreReport {
     QString zip;
     QString manifestPath;
+    bool ownRecord = false;    // the record used belongs to this game folder
     int restored = 0;
     int unchanged = 0;
     QStringList refused;       // zip-slip entries
     QStringList errors;        // files that could not be restored
+    QStringList skipped;       // files holding content no record explains, left as they are
     QStringList removedAdded;  // files the backport added, removed
     QStringList keptAdded;     // added files left because their content changed
     QStringList warnings;
     bool manifestUpdated = false;
-    bool ok() const { return refused.isEmpty() && errors.isEmpty(); }
+    bool ok() const { return refused.isEmpty() && errors.isEmpty() && skipped.isEmpty(); }
 };
 
 // The game-relative path for an entry, or nullopt when it would escape `root`.
 std::optional<QString> safeMemberTarget(const QString& root, const QString& entryName);
 
-// The originals ZIP for a game: the manifest's recorded ZIP when it exists,
-// else the newest "* original files*.zip" in `originalsDir` whose name holds
-// the game's title ID.
+// The originals ZIP recorded for this game folder in `originalsDir`, or
+// empty. Never guessed from file names: another dump of the same title ID
+// would match.
 QString findOriginalsZip(const QString& game, const QString& originalsDir);
 
-// Restores; an error only for problems found before anything was written
-// (missing ZIP, hash mismatch, zip slip, cancellation before the first file).
-// Partial restores come back as a report with errors (ok() == false).
+// Restores; an error for problems found before anything was written
+// (missing ZIP or record, hash mismatch, cancellation before the first file).
+// Zip-slip refusals and partial restores come back as a report with
+// ok() == false.
 Result<RestoreReport> restoreOriginals(const RestoreOptions& options, const CancellationToken& token,
                                        ProgressReporter* progress = nullptr);
 

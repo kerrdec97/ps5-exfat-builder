@@ -26,12 +26,18 @@ std::string g_folderUtf8;
 #ifdef Q_OS_WIN
 LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
 {
+    // No heap allocation and no locks in here: the crash may have happened
+    // inside the allocator or while a log sink held its mutex.
     SYSTEMTIME st;
     GetLocalTime(&st);
-    wchar_t name[64];
-    swprintf(name, 64, L"crash-%04u%02u%02u-%02u%02u%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    const std::wstring base = g_folder + L"\\" + name;
-    HANDLE f = CreateFileW((base + L".dmp").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    wchar_t dmp[1024], txt[1024];
+    const auto name = [&](wchar_t* out, const wchar_t* ext) {
+        swprintf(out, 1024, L"%ls\\crash-%04u%02u%02u-%02u%02u%02u%ls", g_folder.c_str(), st.wYear, st.wMonth, st.wDay,
+                 st.wHour, st.wMinute, st.wSecond, ext);
+    };
+    name(dmp, L".dmp");
+    name(txt, L".txt");
+    HANDLE f = CreateFileW(dmp, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION mei{};
         mei.ThreadId = GetCurrentThreadId();
@@ -41,7 +47,7 @@ LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
                           MINIDUMP_TYPE(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory), &mei, nullptr, nullptr);
         CloseHandle(f);
     }
-    HANDLE t = CreateFileW((base + L".txt").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE t = CreateFileW(txt, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (t != INVALID_HANDLE_VALUE) {
         char text[256];
         const int n = std::snprintf(text, sizeof(text), "%s %s crashed: exception 0x%08lX at %p\r\n", build::kProductName,
@@ -51,8 +57,7 @@ LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
         WriteFile(t, text, DWORD(n > 0 ? n : 0), &written, nullptr);
         CloseHandle(t);
     }
-    Logger::instance().log(LogLevel::Error, QStringLiteral("crash"), QStringLiteral("The app crashed; a crash report was written."));
-    Logger::instance().flush();
+    // The next start finds the report and offers it (MainWindow's crash banner).
     return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif

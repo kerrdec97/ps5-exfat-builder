@@ -65,6 +65,19 @@ void LibraryStore::upsertGame(const GameSummary& info, const QString& status)
     emit changed();
 }
 
+void LibraryStore::setBackportInfo(const QString& folder, const QStringList& issues, bool canRun, const QString& plan)
+{
+    for (auto& g : m_games)
+        if (g.info.folder == folder) {
+            g.issues = issues;
+            g.canRun = canRun;
+            g.plan = plan;
+            save();
+            emit changed();
+            return;
+        }
+}
+
 void LibraryStore::removeGame(const QString& folder)
 {
     const auto before = m_games.size();
@@ -109,6 +122,10 @@ bool LibraryStore::load()
         lg.info = GameSummary::fromJson(g.value(QStringLiteral("info")).toObject());
         lg.status = g.value(QStringLiteral("status")).toString();
         lg.lastSeen = QDateTime::fromString(g.value(QStringLiteral("lastSeen")).toString(), Qt::ISODate);
+        for (const auto& i : g.value(QStringLiteral("issues")).toArray())
+            lg.issues << i.toString();
+        lg.canRun = g.value(QStringLiteral("canRun")).toBool(true);
+        lg.plan = g.value(QStringLiteral("plan")).toString();
         m_games.push_back(lg);
     }
     m_lastScan = QDateTime::fromString(o.value(QStringLiteral("lastScan")).toString(), Qt::ISODate);
@@ -120,7 +137,9 @@ bool LibraryStore::save() const
     QJsonArray games;
     for (const auto& g : m_games)
         games.append(QJsonObject{{QStringLiteral("info"), g.info.toJson()}, {QStringLiteral("status"), g.status},
-                                 {QStringLiteral("lastSeen"), g.lastSeen.toString(Qt::ISODate)}});
+                                 {QStringLiteral("lastSeen"), g.lastSeen.toString(Qt::ISODate)},
+                                 {QStringLiteral("issues"), QJsonArray::fromStringList(g.issues)}, {QStringLiteral("canRun"), g.canRun},
+                                 {QStringLiteral("plan"), g.plan}});
     const QJsonObject o{{QStringLiteral("folders"), QJsonArray::fromStringList(m_folders)}, {QStringLiteral("games"), games},
                         {QStringLiteral("lastScan"), m_lastScan.toString(Qt::ISODate)}};
     return writeFileAtomic(m_path, QJsonDocument(o).toJson()).ok();

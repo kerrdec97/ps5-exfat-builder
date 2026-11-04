@@ -242,7 +242,8 @@ constexpr bool kWindowsNames = true;
 constexpr bool kWindowsNames = false;
 #endif
 
-QString nameKey(const QString& n) { return kWindowsNames ? n.toLower() : n; }
+// NTFS compares names by upper-casing them (σ and ς are the same name there).
+QString nameKey(const QString& n) { return kWindowsNames ? n.toUpper() : n; }
 
 Status writeOne(const SourceTree& tree, int node, const QString& path, QByteArray& ba, QByteArray& bb,
                 const CancellationToken& token, ProgressReporter* progress)
@@ -294,11 +295,16 @@ Status writeOne(const SourceTree& tree, int node, const QString& path, QByteArra
         curLen = r.value();
         std::swap(cur, next);
     }
-    if (n.mtime > 0)
-        out.setFileTime(QDateTime::fromSecsSinceEpoch(n.mtime), QFileDevice::FileModificationTime);
+    // Close first: closing flushes the last buffered bytes, which would set
+    // the modification time back to now.
     out.close();
     if (out.error() != QFileDevice::NoError)
         return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QDir::toNativeSeparators(path)), out.errorString());
+    if (n.mtime > 0) {
+        QFile stamp(out.fileName());
+        if (stamp.open(QIODevice::ReadWrite | QIODevice::Append))
+            stamp.setFileTime(QDateTime::fromSecsSinceEpoch(n.mtime), QFileDevice::FileModificationTime);
+    }
     return success();
 }
 

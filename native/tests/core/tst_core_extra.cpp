@@ -32,6 +32,51 @@ class TstCoreExtra : public QObject {
 private slots:
     void initTestCase() { QVERIFY(m_root.isValid()); fwtest::isolateAppData(m_root); }
 
+    // Deleting a tree (delete source, temp folders, the stale-temp sweep)
+    // removes a junction or symlink inside it, never what it points at.
+    void deletesNeverFollowLinks()
+    {
+        const QString outside = m_root.filePath(QStringLiteral("links/outside"));
+        QVERIFY(QDir().mkpath(outside + QStringLiteral("/deep")));
+        fwtest::writeTextFile(outside + QStringLiteral("/keep.txt"), "precious");
+        fwtest::writeTextFile(outside + QStringLiteral("/deep/keep2.txt"), "precious");
+
+        const QString tree = m_root.filePath(QStringLiteral("links/tree"));
+        QVERIFY(QDir().mkpath(tree + QStringLiteral("/sub")));
+        fwtest::writeTextFile(tree + QStringLiteral("/sub/file.txt"), "mine");
+        QVERIFY(createDirectoryJunction(tree + QStringLiteral("/sub/link"), outside).ok());
+        QVERIFY(isJunctionOrSymlink(tree + QStringLiteral("/sub/link")));
+        QVERIFY(!isJunctionOrSymlink(tree + QStringLiteral("/sub")));
+
+        // A scan does not walk into the link.
+        auto scanned = scanTree(tree, CancellationToken());
+        QVERIFY(scanned.ok());
+        for (const auto& e : scanned->entries)
+            QVERIFY2(!e.relativePath.startsWith(QStringLiteral("sub/link")), qPrintable(e.relativePath));
+        QCOMPARE(scanned->fileCount, qint64(1));
+
+        QVERIFY(removeTreeSafely(tree).ok());
+        QVERIFY(!QFileInfo::exists(tree));
+        QVERIFY(QFileInfo::exists(outside + QStringLiteral("/keep.txt")));
+        QVERIFY(QFileInfo::exists(outside + QStringLiteral("/deep/keep2.txt")));
+
+        // A job's temporary folder with a link left inside it.
+        {
+            TempDir t(QStringLiteral("links"), m_root.filePath(QStringLiteral("links")));
+            QVERIFY(t.isValid());
+            QVERIFY(createDirectoryJunction(t.filePath(QStringLiteral("alias")), outside).ok());
+        }
+        QVERIFY(QFileInfo::exists(outside + QStringLiteral("/keep.txt")));
+        QVERIFY(QFileInfo::exists(outside + QStringLiteral("/deep/keep2.txt")));
+
+        // A link handed to removeTreeSafely directly: only the link goes.
+        const QString direct = m_root.filePath(QStringLiteral("links/direct"));
+        QVERIFY(createDirectoryJunction(direct, outside).ok());
+        QVERIFY(removeTreeSafely(direct).ok());
+        QVERIFY(!QFileInfo::exists(direct) || !QFileInfo(direct).isDir());
+        QVERIFY(QFileInfo::exists(outside + QStringLiteral("/keep.txt")));
+    }
+
     void jsonRoundTripIsByteIdenticalToPython()
     {
         const QByteArray pretty = readAll(fwtest::dataDir() + QStringLiteral("/json/python_indent2.json"));
