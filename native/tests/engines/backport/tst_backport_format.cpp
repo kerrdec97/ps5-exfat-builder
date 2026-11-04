@@ -4,6 +4,7 @@
 
 #include "BackportFixtures.h"
 
+#include "engines/backport/BackportEngine.h"
 #include "engines/backport/Common.h"
 #include "engines/backport/ElfImage.h"
 #include "engines/backport/NidPatch.h"
@@ -12,7 +13,11 @@
 #include "engines/backport/SelfReader.h"
 #include "engines/backport/SelfWriter.h"
 
+#include <QRandomGenerator>
 #include <QTest>
+
+#include <algorithm>
+#include <cstring>
 
 using namespace fw::backport;
 using namespace fwtest::bp;
@@ -334,6 +339,127 @@ private slots:
         QCOMPARE(codeOf(selfio::unwrap(selfOf(f1()).left(0x1000)).error()), Code::SelfMalformed);
         QVERIFY(!selfio::inspect(QByteArray("\x4f\x15\x3d\x1d", 4)).ok());
         QVERIFY(!selfio::inspect(f1()).ok()); // an ELF is not a SELF
+    }
+
+    // ---- hostile headers (review bug 1) ------------------------------------------------
+    void hostileProgramHeadersAreRefused_data()
+    {
+        QTest::addColumn<int>("phdr");
+        QTest::addColumn<quint64>("offset");
+        QTest::addColumn<quint64>("filesz");
+        QTest::newRow("offset wraps") << 0 << quint64(0xFFFFFFFFFFFFFFC0ULL) << quint64(0x4800);
+        QTest::newRow("32 GiB") << 0 << quint64(0x800000000ULL) << quint64(0x4800);
+        QTest::newRow("crosses the cap") << 0 << quint64(kMaxExecBytes - 0x20) << quint64(0x4800);
+        QTest::newRow("size wraps") << 1 << quint64(0x5800) << quint64(0xFFFFFFFFFFFFFF00ULL);
+        QTest::newRow("version segment far away") << 4 << quint64(0x7FFFFFFFFFFFFFFFULL) << quint64(0x20);
+        QTest::newRow("unplaced phdr far away") << 2 << quint64(0xFFFFFFFFFFFFFFFFULL) << quint64(0x60);
+    }
+    void hostileProgramHeadersAreRefused()
+    {
+        QFETCH(int, phdr);
+        QFETCH(quint64, offset);
+        QFETCH(quint64, filesz);
+        QByteArray s = selfOf(f1());
+        const qsizetype ph = 0x20 + 6 * 0x20 + 0x40 + qsizetype(phdr) * 0x38; // phdr in the SELF's ELF copy
+        put64(s, ph + 0x08, offset);
+        put64(s, ph + 0x20, filesz);
+        auto info = selfio::inspect(s);
+        QVERIFY(info.ok());
+        QCOMPARE(info->kind, SelfKind::Malformed);
+        auto u = selfio::unwrap(s);
+        QVERIFY(!u.ok());
+        QCOMPARE(codeOf(u.error()), Code::SelfMalformed);
+    }
+
+    void reviewerReproducerIsRefused()
+    {
+        // The reviewer's hand-made SELF: one data entry, one PT_LOAD at p_offset.
+        for (quint64 off : {0xFFFFFFFFFFFFFFC0ULL, 0x800000000ULL}) {
+            QByteArray d(0x140, '\0');
+            put32(d, 0x00, 0x1D3D154F);
+            put16(d, 0x18, 1);
+            put64(d, 0x20, 0x2804);
+            put64(d, 0x28, 0x100);
+            put64(d, 0x30, 0x40);
+            put64(d, 0x38, 0x40);
+            const char ident[7] = {0x7F, 'E', 'L', 'F', 2, 1, 1};
+            std::memcpy(d.data() + 0x40, ident, 7);
+            put16(d, 0x50, 0xFE00);
+            put16(d, 0x52, 0x3E);
+            put32(d, 0x54, 1);
+            put64(d, 0x60, 0x40);
+            put16(d, 0x74, 0x40);
+            put16(d, 0x76, 0x38);
+            put16(d, 0x78, 1);
+            put32(d, 0x80, 1);
+            put64(d, 0x88, off);
+            put64(d, 0xA0, 0x40);
+            put64(d, 0xA8, 0x40);
+            std::memset(d.data() + 0x100, 'A', 0x40);
+            QCOMPARE(selfio::inspect(d)->kind, SelfKind::Malformed);
+            QCOMPARE(codeOf(selfio::unwrap(d).error()), Code::SelfMalformed);
+            // A data entry of size 0 at that offset is refused as well (no huge zero fill).
+            put64(d, 0x30, 0);
+            QCOMPARE(codeOf(selfio::unwrap(d).error()), Code::SelfMalformed);
+        }
+    }
+
+    void mutatedHeadersNeverCrash()
+    {
+        // Seeded byte and word mutations of real headers through every parser
+        // and the whole per-file pipeline. Run under ASan in CI to catch
+        // out-of-bounds access; here it checks results stay bounded.
+        QRandomGenerator rng(0xB4C7);
+        const QByteArray bases[] = {selfOf(patched(f1(), 4)), selfOf(f2()), f1(), f2(), f9()};
+        int unwrapped = 0;
+        for (int iter = 0; iter < 3000; ++iter) {
+            QByteArray d = bases[iter % 5];
+            const int region = std::min<int>(int(d.size()), 0x300);
+            const int edits = 1 + int(rng.bounded(6));
+            // Mutations avoid producing offsets between 16 MiB and 1 GiB:
+            // those are accepted by design (up to kMaxExecBytes) and would only
+            // make the loop allocate hundreds of MiB.
+            for (int k = 0; k < edits; ++k) {
+                const int at = int(rng.bounded(region));
+                switch (rng.bounded(3)) {
+                case 0:
+                    if ((at & 7) != 3)
+                        d[at] = char(rng.generate() & 0xFF);
+                    break;
+                case 1:
+                    if (at + 8 <= d.size())
+                        put64(d, at & ~7, rng.generate64());
+                    break;
+                default:
+                    if (at + 8 <= d.size()) {
+                        int bit = int(rng.bounded(54));
+                        if (bit >= 20)
+                            bit += 10; // skip bits 20-29
+                        put64(d, at & ~7, get64(d, at & ~7) ^ (quint64(1) << bit));
+                    }
+                    break;
+                }
+            }
+            if (selfio::hasSelfMagic(d)) {
+                auto info = selfio::inspect(d);
+                auto u = selfio::unwrap(d);
+                if (u.ok()) {
+                    ++unwrapped;
+                    QVERIFY(u->size() <= kMaxExecBytes);
+                    if (u->size() > 64 * 1024 * 1024)
+                        continue; // bounded, but too large to push through the pipeline quickly
+                }
+            } else {
+                (void)ElfImage::parse(d, Strictness::Signable);
+                (void)ElfImage::parse(d, Strictness::Lenient);
+                (void)findParams(d);
+                QByteArray copy = d;
+                (void)patchSdk(copy, *sdkPair(4));
+                (void)makeFakeSelf(d);
+            }
+            (void)processExecutable(d, *sdkPair(4), NidMode::Auto, true);
+        }
+        QVERIFY(unwrapped > 0); // the fuzz also reached the successful path
     }
 
     void versionTailMismatchIsSkipped()

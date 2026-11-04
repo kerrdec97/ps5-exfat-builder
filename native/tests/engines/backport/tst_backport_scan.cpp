@@ -163,6 +163,43 @@ private slots:
         QVERIFY(!shallow.join(u'|').contains(QStringLiteral("PPSA00002")));
     }
 
+    void excludeThatContainsTheRootIsIgnored() // review bug 3
+    {
+        Env e;
+        // The ZIP folder is the game's parent, grandparent, or the game itself.
+        for (const QString& ex : {e.tmp.filePath("games"), e.tmp.path(), e.game}) {
+            auto s = scanGame(e.game, CancellationToken(), ScanMode::Full, {ex});
+            QVERIFY(s.ok());
+            QVERIFY2(s->find(QStringLiteral("sce_module/libc.prx")), qPrintable(ex));
+        }
+        QCOMPARE(excludesBelow(e.game, {e.tmp.filePath("games"), e.game + "/backups", QString()}),
+                 QStringList({QDir::cleanPath(e.game + "/backups")}));
+        // Library discovery: a ZIP folder that holds the library, or is it.
+        QTemporaryDir lib;
+        makeGame(lib.filePath("PPSA00001-app"), SelfOnly);
+        makeGame(lib.filePath("sub/PPSA00002-app"), SelfOnly);
+        makeGame(lib.filePath("zips/PPSA00003-app"), SelfOnly);
+        QCOMPARE(discoverGames({lib.path()}, 6, {lib.path()}, CancellationToken()).size(), 3);
+        QCOMPARE(discoverGames({lib.filePath("sub")}, 6, {lib.path()}, CancellationToken()).size(), 1);
+        QCOMPARE(discoverGames({lib.path()}, 6, {lib.filePath("zips")}, CancellationToken()).size(), 2); // S38 kept
+    }
+
+    void hostileSelfInALibraryScan() // review bug 1: reached through scanGame on eboot.bin
+    {
+        QTemporaryDir d;
+        for (quint64 off : {0xFFFFFFFFFFFFFFC0ULL, 0x800000000ULL}) {
+            QByteArray s = selfOf(f1());
+            put64(s, 0x20 + 6 * 0x20 + 0x40 + 0x08, off); // ELF copy: phdr 0 p_offset
+            writeBytes(d.filePath("lib/PPSA00001-app/eboot.bin"), s);
+            for (ScanMode mode : {ScanMode::Quick, ScanMode::Full}) {
+                auto r = scanGame(d.filePath("lib/PPSA00001-app"), CancellationToken(), mode);
+                QVERIFY(r.ok());
+                QCOMPARE(r->eboot()->cls, FileClass::SelfMalformed);
+                QVERIFY(!r->gameSdk().has_value());
+            }
+        }
+    }
+
     // ---- FakelibSet (port of tests/test_backport_safety.py FakelibSource) -----------
     void fakelibGoodSet()
     {

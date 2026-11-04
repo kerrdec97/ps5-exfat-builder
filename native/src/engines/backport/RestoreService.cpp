@@ -10,10 +10,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QRegularExpression>
 #include <QSet>
 
 #include <algorithm>
+#include <vector>
 
 namespace fw::backport {
 
@@ -26,42 +26,6 @@ std::optional<QString> safeMemberTarget(const QString& root, const QString& entr
     if (!isSameOrInside(target, root) || QDir::cleanPath(target) == QDir::cleanPath(root))
         return std::nullopt;
     return rel;
-}
-
-QString findOriginalsZip(const QString& game, const QString& originalsDir)
-{
-    if (originalsDir.isEmpty() || !QFileInfo(originalsDir).isDir())
-        return {};
-    const GameMetadata meta = readGameMetadata(game);
-    const QString tid = manifestTitleId(meta, game);
-    auto m = readManifest(manifestPathFor(originalsDir, tid));
-    if (m.ok() && m.value()) {
-        const QString z = QDir::fromNativeSeparators(m.value()->originalsZipAbs());
-        if (!z.isEmpty() && QFileInfo(z).isFile())
-            return z;
-    }
-    QString id = meta.titleId;
-    if (id.isEmpty()) {
-        static const QRegularExpression re(QStringLiteral("((?:PPSA|CUSA|PPSB)\\d+)"), QRegularExpression::CaseInsensitiveOption);
-        const auto mm = re.match(QFileInfo(game).fileName());
-        if (mm.hasMatch())
-            id = mm.captured(1).toUpper();
-    }
-    if (id.isEmpty())
-        return {};
-    QString best;
-    QDateTime bestTime;
-    const QFileInfoList zips = QDir(originalsDir).entryInfoList({QStringLiteral("*.zip")}, QDir::Files);
-    for (const QFileInfo& fi : zips) {
-        const QString n = fi.fileName();
-        if (!n.contains(QStringLiteral("original files"), Qt::CaseInsensitive) || !n.contains(id, Qt::CaseInsensitive))
-            continue;
-        if (best.isEmpty() || fi.lastModified() > bestTime) {
-            best = fi.absoluteFilePath();
-            bestTime = fi.lastModified();
-        }
-    }
-    return best;
 }
 
 namespace {
@@ -84,74 +48,127 @@ void removeEmptyParents(const QString& root, const QString& rel)
     }
 }
 
+QString recordedZip(const Manifest& m)
+{
+    QString z = m.originalsZipAbs();
+    z.replace(u'\\', u'/');
+    return QDir::fromNativeSeparators(z);
+}
+
+QString native(const QString& p)
+{
+    return QDir::toNativeSeparators(p);
+}
+
 } // namespace
+
+QString findOriginalsZip(const QString& game, const QString& originalsDir)
+{
+    if (originalsDir.isEmpty() || !QFileInfo(originalsDir).isDir())
+        return {};
+    const QString abs = QDir::cleanPath(QFileInfo(game).absoluteFilePath());
+    const ManifestSet records = findManifests(originalsDir, manifestTitleId(readGameMetadata(abs), abs), abs);
+    if (!records.own)
+        return {};
+    const QString z = recordedZip(*records.own);
+    return !z.isEmpty() && QFileInfo(z).isFile() ? z : QString();
+}
 
 Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const CancellationToken& token, ProgressReporter* progress)
 {
     RestoreReport rep;
     if (opt.game.isEmpty() || !QFileInfo(opt.game).isDir())
-        return makeError(Code::NotAGame, QStringLiteral("The game folder %1 does not exist.").arg(QDir::toNativeSeparators(opt.game)));
+        return makeError(Code::NotAGame, QStringLiteral("The game folder %1 does not exist.").arg(native(opt.game)));
     const QString game = QDir::cleanPath(QFileInfo(opt.game).absoluteFilePath());
-    rep.zip = opt.zip.isEmpty() ? findOriginalsZip(game, opt.originalsDir) : opt.zip;
-    if (rep.zip.isEmpty() || !QFileInfo(rep.zip).isFile())
-        return makeError(Code::RestoreFailed,
-                         rep.zip.isEmpty() ? QStringLiteral("No originals ZIP was found for %1. Choose the ZIP to restore from.")
-                                                 .arg(QDir::toNativeSeparators(game))
-                                           : QStringLiteral("The originals ZIP %1 does not exist.").arg(QDir::toNativeSeparators(rep.zip)));
-    if (isSameOrInside(rep.zip, game))
-        return makeError(Code::RestoreFailed, QStringLiteral("The originals ZIP must not be inside the game folder."));
+    const QString tid = manifestTitleId(readGameMetadata(game), game);
+    const bool chosenZip = !opt.zip.isEmpty();
 
-    // Manifest: next to the chosen originals folder, else next to the ZIP.
-    const GameMetadata meta = readGameMetadata(game);
-    const QString tid = manifestTitleId(meta, game);
+    // Backport records of this title: in the originals folder, and next to a
+    // chosen ZIP. This folder's own record, and the others.
+    std::optional<Manifest> own;
+    std::vector<Manifest> others;
+    QStringList dirs;
+    if (!opt.originalsDir.isEmpty())
+        dirs << opt.originalsDir;
+    if (chosenZip)
+        dirs << QFileInfo(opt.zip).absolutePath();
+    for (int i = 0; i < dirs.size(); ++i) {
+        if (!QFileInfo(dirs[i]).isDir() || (i > 0 && samePath(dirs[i], dirs[0])))
+            continue;
+        ManifestSet set = findManifests(dirs[i], tid, game);
+        for (const QString& d : std::as_const(set.damaged))
+            rep.warnings << QStringLiteral("%1 It is ignored.").arg(d);
+        if (!own && set.own)
+            own = set.own;
+        else if (set.own)
+            others.push_back(*set.own);
+        for (Manifest& m : set.others)
+            others.push_back(std::move(m));
+    }
+
+    // Which ZIP, and which record goes with it.
     std::optional<Manifest> manifest;
-    for (const QString& dir : {opt.originalsDir, QFileInfo(rep.zip).absolutePath()}) {
-        if (dir.isEmpty())
-            continue;
-        const QString p = manifestPathFor(dir, tid);
-        auto m = readManifest(p);
-        if (!m.ok()) {
-            rep.warnings << m.error().message;
-            continue;
-        }
-        if (m.value()) {
-            manifest = m.value();
-            rep.manifestPath = p;
-            break;
+    bool belongs = false;
+    if (!chosenZip) {
+        if (!own)
+            return makeError(Code::RestoreFailed,
+                             QStringLiteral("No originals ZIP is recorded for %1%2. Choose the ZIP to restore from.")
+                                 .arg(native(game),
+                                      opt.originalsDir.isEmpty() ? QString()
+                                                                 : QStringLiteral(" in %1").arg(native(opt.originalsDir))));
+        rep.zip = recordedZip(*own);
+        if (rep.zip.isEmpty() || !QFileInfo(rep.zip).isFile())
+            return makeError(Code::RestoreFailed,
+                             QStringLiteral("The originals ZIP recorded for this folder (%1) does not exist. Choose the "
+                                            "ZIP to restore from.")
+                                 .arg(native(rep.zip)));
+        manifest = own;
+        belongs = true;
+    } else {
+        rep.zip = QDir::cleanPath(QFileInfo(opt.zip).absoluteFilePath());
+        if (!QFileInfo(rep.zip).isFile())
+            return makeError(Code::RestoreFailed, QStringLiteral("The originals ZIP %1 does not exist.").arg(native(rep.zip)));
+        auto zipHash = sha256File(rep.zip, token);
+        if (!zipHash.ok())
+            return zipHash.takeError();
+        const auto names = [&](const Manifest& m) {
+            return samePath(recordedZip(m), rep.zip)
+                || (!m.originalsZipSha256().isEmpty() && m.originalsZipSha256().toLower() == zipHash.value());
+        };
+        if (own && names(*own)) {
+            manifest = own;
+            belongs = true;
+        } else {
+            for (const Manifest& m : others)
+                if (names(m)) {
+                    manifest = m;
+                    belongs = false;
+                    rep.warnings << QStringLiteral("%1 holds the originals recorded for %2. Only files that hold what "
+                                                   "that backport wrote are replaced; that folder's record is not "
+                                                   "changed.")
+                                        .arg(QFileInfo(rep.zip).fileName(),
+                                             native(m.doc.value(QStringLiteral("game_folder")).toString()));
+                    break;
+                }
+            if (!manifest && own) {
+                manifest = own;
+                belongs = true;
+                rep.warnings << QStringLiteral("%1 is not the originals ZIP recorded for this folder; its files are "
+                                               "checked against the recorded hashes.")
+                                    .arg(QFileInfo(rep.zip).fileName());
+            }
         }
     }
+    if (isSameOrInside(rep.zip, game))
+        return makeError(Code::RestoreFailed, QStringLiteral("The originals ZIP must not be inside the game folder."));
+    rep.ownRecord = manifest && belongs;
+    if (manifest)
+        rep.manifestPath = manifest->path;
 
     zip::Reader reader;
     if (Status st = reader.open(rep.zip); !st.ok())
         return makeError(Code::RestoreFailed, QStringLiteral("The originals ZIP cannot be read: %1").arg(st.error().message),
                          st.error().detail);
-
-    // Hash checks against the manifest (D6 / S36).
-    QMap<QString, QString> recorded; // relKey → sha256
-    if (manifest) {
-        const auto files = manifest->originalsFiles();
-        for (auto it = files.cbegin(); it != files.cend(); ++it)
-            recorded.insert(relKey(it.key()), it.value().toLower());
-        const QString recordedZip = QDir::fromNativeSeparators(manifest->originalsZipAbs());
-        const bool sameZip = !recordedZip.isEmpty() && isSameOrInside(rep.zip, recordedZip) && isSameOrInside(recordedZip, rep.zip);
-        if (sameZip) {
-            auto h = sha256File(rep.zip, token);
-            if (!h.ok())
-                return h.takeError();
-            if (!manifest->originalsZipSha256().isEmpty() && h.value() != manifest->originalsZipSha256().toLower())
-                return makeError(Code::ManifestMismatch,
-                                 QStringLiteral("The originals ZIP %1 changed since it was recorded, so it was not used. "
-                                                "Nothing was changed.")
-                                     .arg(QDir::toNativeSeparators(rep.zip)));
-        } else {
-            rep.warnings << QStringLiteral("%1 is not the originals ZIP recorded for this game; its files are checked "
-                                           "against the recorded hashes.")
-                                .arg(QFileInfo(rep.zip).fileName());
-        }
-    } else {
-        rep.warnings << QStringLiteral("No backport manifest was found for this game: the ZIP is restored without hash "
-                                       "checks, and files the backport added (such as fakelib/) are not removed.");
-    }
 
     // Zip slip: refuse the whole restore before writing anything (S20).
     std::vector<std::pair<const zip::Entry*, QString>> work;
@@ -168,8 +185,37 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
     if (!rep.refused.isEmpty())
         return rep; // nothing written
 
-    // When another ZIP than the recorded one is used, its members must hold
-    // the recorded originals (checked while writing, below).
+    if (!manifest) {
+        if (!opt.allowUnrecorded)
+            return makeError(Code::ManifestMismatch,
+                             QStringLiteral("No backport record names %1, so the files in %2 can't be checked before "
+                                            "they are overwritten. Nothing was changed. Restore without a record only "
+                                            "if you are sure this ZIP holds this folder's originals.")
+                                 .arg(QFileInfo(rep.zip).fileName(), native(game)));
+        rep.warnings << QStringLiteral("No backport record names this ZIP: it is restored without hash checks, and files "
+                                       "the backport added (such as fakelib/) are not removed.");
+    }
+
+    // The ZIP the record names must be the recorded one, byte for byte.
+    QMap<QString, QString> original;            // relKey → recorded original sha256
+    QMap<QString, QSet<QString>> written;       // relKey → hashes the backport recorded
+    if (manifest) {
+        const auto files = manifest->originalsFiles();
+        for (auto it = files.cbegin(); it != files.cend(); ++it)
+            original.insert(relKey(it.key()), it.value().toLower());
+        written = manifest->patchedHashes();
+        if (samePath(recordedZip(*manifest), rep.zip) && !manifest->originalsZipSha256().isEmpty()) {
+            auto h = sha256File(rep.zip, token);
+            if (!h.ok())
+                return h.takeError();
+            if (h.value() != manifest->originalsZipSha256().toLower())
+                return makeError(Code::ManifestMismatch,
+                                 QStringLiteral("The originals ZIP %1 changed since it was recorded, so it was not used. "
+                                                "Nothing was changed.")
+                                     .arg(native(rep.zip)));
+        }
+    }
+
     std::sort(work.begin(), work.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
     QSet<QString> zipKeys;
     for (const auto& w : work)
@@ -183,6 +229,15 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
         if (progress)
             progress->setCurrentItem(rel);
         const QString target = joinPath(game, rel);
+        const QString key = relKey(rel);
+        const QString current = hashOf(target);
+        // Decide before writing anything for this file.
+        if (manifest && current.isEmpty() && !belongs) {
+            rep.skipped << QStringLiteral("%1 is missing in this folder and the record belongs to another folder; it "
+                                          "was not created.")
+                               .arg(rel);
+            continue;
+        }
         const QString tmp = target + QStringLiteral(".fwpart");
         QDir().mkpath(QFileInfo(target).absolutePath());
         QCryptographicHash h(QCryptographicHash::Sha256);
@@ -212,27 +267,40 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
             continue;
         }
         const QString got = QString::fromLatin1(h.result().toHex());
-        if (recorded.contains(relKey(rel)) && recorded.value(relKey(rel)) != got) {
+        if (original.contains(key) && original.value(key) != got) {
             QFile::remove(tmp);
             rep.errors << QStringLiteral("%1 in the ZIP is not the recorded original; it was not restored.").arg(rel);
             continue;
         }
-        if (hashOf(target) == got) {
+        if (current == got) {
             QFile::remove(tmp);
             ++rep.unchanged;
-        } else if (Status rs = replaceFileAtomic(tmp, target); !rs.ok()) {
+            if (progress)
+                progress->advanceFiles(1);
+            continue;
+        }
+        // Only replace what the backport wrote (or recreate a missing file
+        // from this folder's own record).
+        const bool allowed = !manifest || (current.isEmpty() ? belongs : written.value(key).contains(current));
+        if (!allowed) {
+            QFile::remove(tmp);
+            rep.skipped << QStringLiteral("%1 holds content this backport did not record (neither the recorded original "
+                                          "nor the backported file); it was left as it is.")
+                               .arg(rel);
+            continue;
+        }
+        if (Status rs = replaceFileAtomic(tmp, target); !rs.ok()) {
             QFile::remove(tmp);
             rep.errors << QStringLiteral("%1: %2").arg(rel, rs.error().message);
             continue;
-        } else {
-            ++rep.restored;
         }
+        ++rep.restored;
         if (progress)
             progress->advanceFiles(1);
     }
 
-    // Files the backport added (D6).
-    if (manifest) {
+    // Files the backport added (D6), only with this folder's own record.
+    if (manifest && belongs) {
         QMap<QString, QString> added; // rel → sha256 written by the backport
         if (manifest->schemaVersion() >= 2 && !manifest->addedFiles().isEmpty()) {
             added = manifest->addedFileHashes();
@@ -274,6 +342,9 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
             else
                 rep.warnings << QStringLiteral("The backport manifest could not be updated.");
         }
+    } else if (manifest) {
+        rep.warnings << QStringLiteral("Files a backport added to this folder (such as fakelib/) were not removed: the "
+                                       "record used belongs to another folder.");
     }
     return rep;
 }

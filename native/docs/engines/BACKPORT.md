@@ -39,8 +39,7 @@ Whether a console loads the result is **UNVERIFIED** by this work.
 * `SelfFormat.h`, `SelfWriter.*`, `SelfReader.*` are a port of `make_fself.py` by john-tornblom
   (ps5-payload-dev/sdk, GNU GPL version 3), as modified by Nazky, and carry an attribution header.
   The reader is reimplemented from §2.7 rather than translated from `decrypt_fself.py`.
-  `THIRD_PARTY_NOTICES-native.md` needs a matching entry (outside this module; see "Core and
-  packaging changes").
+  make_fself is listed in `THIRD_PARTY_NOTICES-native.md`.
 * `SceParam.*`, `NidPatch.*` and the pipeline are clean-room from the spec's facts. No code from
   `Backport.py`, the SDK patcher gist or the Backport GUI was read or translated. The legacy app's
   own code (`core/backport_safety.py`, `ui/backport_profiles.py`, `exfat_builder.py` helpers such
@@ -66,6 +65,30 @@ needed"). Error details start with `[Code]` (`Common.h`, `codeOf()`).
 `backport.applyToGameFolder` defaults to **on**, as the legacy app always applied. Backport GUI
 defaults to off. This is the owner's decision (D5): flip the default in `BackportSettings.cpp`.
 
+## Backup records are per game folder
+
+Two folders can share a title ID (another version, or a copy of the same dump). Each folder has
+its own record, so one never replaces or restores the other:
+
+* `BackportBackup/<TitleID>/manifest.json` (the Python app's place) belongs to the folder named
+  in its `game_folder`. Another folder with the same title ID gets
+  `BackportBackup/<TitleID>/folders/<name>-<hash>/manifest.json`. A run only writes its own
+  folder's record.
+* The planner decides "differs" from the folder's own record. It also refuses as already
+  backported when the files match what a backport of **any** folder with that title ID wrote, for
+  example a copy of a backported folder.
+* Restore without a chosen ZIP uses only the folder's own record and its ZIP. A ZIP is never
+  picked by its name or title ID. A chosen ZIP is matched to the record that names it, by path or
+  SHA-256. A chosen ZIP that no record names is refused unless the job sets
+  `allowUnrecorded: true` (the user confirms it belongs to the folder).
+* A restore overwrites a file only when it holds the original or what the record says the backport
+  wrote there. Anything else is left as it is, listed as skipped, and fails the restore. Missing
+  files are recreated, and added files removed, only from the folder's own record; only that
+  record is updated.
+
+Job parameters: `backport.run {game, confirmDiffers?}`; `backport.restore {game, zip?,
+allowUnrecorded?}` or `{journal}`; `backport.scan {game?}` or `{folders?}` (library mode).
+
 ## Settings
 
 All keys are read by this module; blocked features have no setting.
@@ -77,7 +100,7 @@ All keys are read by this module; blocked features have no setting.
 | `backport.fakelibFolder` | Backport · Folders | DirPath, "" (a file path is refused) | per job | `optionsFromSettings` | `abp_fakelib` (a file path is dropped with a warning) |
 | `backport.applyToGameFolder` | Backport · Run | Bool, **true** | per job | `optionsFromSettings` → Apply phase, plan line | — |
 | `backport.notes` | Backport · Run | String ≤ 500, "" | per job | written into the manifest | `abp_notes` (cut to 500) |
-| `backport.scanFolders` | Backport · Game library | StringList, [] | — | `backport.scan` without a game (library mode) | `bp_folders` |
+| `backport.scanFolders` | Backport · Game library | StringList, [] | — | `backport.scan` without a game or `folders` (library mode) | `bp_folders` + `bp_scan_folder` (merged by a whole-file importer) |
 | `backport.scanDepth` | Backport · Game library | Int 1–12, 6 | — | `backport.scan` library mode | — |
 | `backport.encryptedSelfPolicy` | Backport · Safety | Enum refuse / leaveUnchanged, refuse | per job, advanced | planner (S32) | — |
 | `backport.verifyBuild` | Backport · Safety | Bool, true | advanced | engine (V1–V3); the job outcome says when it was off | — |
@@ -87,9 +110,7 @@ All keys are read by this module; blocked features have no setting.
 | `backport.nidPatchMode` | Firmware and SDK · Backport target | Enum auto / off, auto | advanced | engine | — |
 
 `storage.freeSpaceMarginMiB` (general module) is read as the S12 reserve when it is registered.
-`bp_scan_folder` is not imported: `importLegacy()` maps one legacy key to one setting and would
-overwrite `bp_folders` (see "Core and packaging changes"). `backport.results` (the Results list)
-is not implemented yet.
+`backport.results` (the Results list) is not implemented yet.
 
 ## Safety rules → tests
 
@@ -105,7 +126,7 @@ Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F
 | S4 target ≤ game SDK | Planner, game SDK from eboot.bin (D7) | P `targetSdkRules`, `gameSdkComesFromEbootNotParamJson` |
 | S5 eboot.bin at the root | Planner and `backport.run` validate() | P `ebootMustBeAtTheRoot`; R `jobsRunThroughTheFactory` |
 | S6 fakelib state "same" → already backported | Planner refusal | P `fakelibRules`; R `selfGameBackportedAndApplied`; Sc `fakelibStates` |
-| S7 manifest verdict | patched → refuse; differs → Confirm (job parameter `confirmDiffers`) | P `manifestVerdictRules`; Sc `manifestVerdicts`; R `selfGameBackportedAndApplied` |
+| S7 manifest verdict | patched (any record of the title) → refuse; differs (own record) → Confirm (job parameter `confirmDiffers`) | P `manifestVerdictRules`; Sc `manifestVerdicts`; R `selfGameBackportedAndApplied`, `copyOfABackportedDumpIsRefused` |
 | S8 fakelib folder rules | `fakelibProblems()` | Sc `fakelibGoodSet`, `fakelibNestedSetRejected`, `fakelibUndersizedAndNonElfRejected`, `fakelibEmptyOrMissing`, `fakelibInsideGameRejected`; P `fakelibRules` |
 | S9 originals ZIP folder required, checked first | Planner and validate() | P `originalsFolderRequired`; R `jobsRunThroughTheFactory` |
 | S10 ZIP folder: set, exists, not in game, ≤ 259, writable | `zipDestinationProblem()`; worst-case names | Z `destinationRules`, `unwritableDestinationRefused` (skipped when run as root, as in this sandbox); P `zipFolderRules` |
@@ -118,7 +139,7 @@ Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F
 | S17 .part → read-back → count → rename; never overwrite | `StagedZip`; `uniqueZipPath()` | Z `writesVerifiesAndNeverOverwrites`, `failureLeavesNothing`, `readBackDetectsChangedSource`, `corruptPartIsCaught`, `namesAndUniquePaths`; R `earlierZipsAreNeverOverwritten` |
 | S18 temp originals kept until the ZIP is verified | The game is never changed before Apply; a failed run's staging is kept and logged; rollback works from the ZIP alone | R `perFileFailureProducesNothing`, `crashDuringApplyIsRecoverable` |
 | S19 any failure is not success | Errors propagate; outcome mapping | R `perFileFailureProducesNothing`, `originalsZipFailureProducesNothing` |
-| S20 restore: zip slip refused; partial = failure | The whole restore is refused before writing anything when one entry is unsafe | R `restoreRefusesZipSlipBeforeWriting`, `safeMemberTargets`, `partialRestoreIsAFailure` |
+| S20 restore: zip slip refused; partial = failure | The whole restore is refused before writing anything when one entry is unsafe; skipped files fail the restore | R `restoreRefusesZipSlipBeforeWriting`, `safeMemberTargets`, `partialRestoreIsAFailure`, `restoreLeavesFilesWithUnrecordedContent` |
 | S21 manifest after each run, atomic | `writeManifest()` via `writeFileAtomic` | R `selfGameBackportedAndApplied`; Sc `pythonSchema1ManifestReadAndUpgraded` |
 | S22 batch: same checks, doubtful → skip | Each game is its own `backport.run`; Confirm blocks unless `confirmDiffers` | P `manifestVerdictRules` |
 | S23 archive handles closed | Core reader opens per read; rename/delete after use | Z `writesVerifiesAndNeverOverwrites` |
@@ -130,13 +151,13 @@ Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F
 | S29 Partial is explicit and names the originals | "Partial: … originals: <zip>" | R `backportZipFailureIsPartialAndAppliesNothing`, `applyFailureRollsBackExactly` |
 | S30 ZIP folder inside the game refused | `zipDestinationProblem()` | Z `destinationRules`; P `zipFolderRules` |
 | S31 nothing in the game changes before Apply | Staging only | P `okPlanWritesNothing`; R `buildOnlyLeavesGameUntouched` and every failure test |
-| S32 encrypted / compressed SELFs found while scanning | Refuse by default; `leaveUnchanged` → Partial | F `encryptedAndCompressedDetected`; Sc `encryptedSelfDetectedUpFront`; P `encryptedSelfRefusedUpFront`; R `encryptedRefusedOrLeftUnchanged` |
+| S32 encrypted / compressed SELFs found while scanning | Refuse by default; `leaveUnchanged` → Partial | F `encryptedAndCompressedDetected`; Sc `encryptedSelfDetectedUpFront`; P `encryptedSelfRefusedUpFront`; R `encryptedRefusedOrLeftUnchanged`, `zipFolderThatIsTheGamesParentHidesNothing` |
 | S33 fakelib/ and decrypted/ never processed | Scanner areas | Sc `fakelibAndDecryptedAreNeverProcessed`; R `anotherToolsFakelibKeptInOriginals` |
 | S34 any per-file failure → no backport ZIP, no apply | Runner | R `perFileFailureProducesNothing`, `verificationCatchesAParamOutsideTheSignedSegments` |
 | S35 journal, rollback, recovery at start-up | `ApplyJournal`; a pending journal refuses a new run on that game; `interruptedApplies()` for the app | R `applyFailureRollsBackExactly`, `cancelDuringApplyRollsBack`, `crashDuringApplyIsRecoverable`, `rollbackLeavesForeignContentAlone`, `journalsArePrunedByAge` |
-| S36 restore removes added files, checks hashes | Manifest `added_files` (schema 2) or fakelib post hashes (schema 1) | R `restoreRemovesAddedFilesAndAllowsANewRun`, `restoreRefusesAChangedZip` |
+| S36 restore removes added files, checks hashes | Manifest `added_files` (schema 2) or fakelib post hashes (schema 1); records per game folder; a file is only overwritten when it holds the original or the recorded backported content | R `restoreRemovesAddedFilesAndAllowsANewRun`, `restoreRefusesAChangedZip`, `restoreNeverUsesAnotherDumpsOriginals`, `backportOfAnotherDumpKeepsBothRecords`, `restoreLeavesFilesWithUnrecordedContent`, `restoreWithoutRecordNeedsConsent` |
 | S37 the originals ZIP is never deleted automatically | Nothing in the module deletes a ZIP | R `restoreRemovesAddedFilesAndAllowsANewRun` |
-| S38 ZIP folders not scanned; nested ZIP folders refused | Scanner and discovery exclusions; planner | P `zipFolderRules`; Sc `nestedEbootAndExcludedFolders`, `discoverGamesHonoursDepthAndExcludes` |
+| S38 ZIP folders not scanned; nested ZIP folders refused | Scanner and discovery exclude ZIP folders that lie inside the scanned folder; a ZIP folder that is the game (or library) folder or one of its parents is ignored for it, so it never hides the game's sub-folders; planner | P `zipFolderRules`; Sc `nestedEbootAndExcludedFolders`, `discoverGamesHonoursDepthAndExcludes`, `excludeThatContainsTheRootIsIgnored`; R `zipFolderThatIsTheGamesParentHidesNothing` |
 
 Implementable rules S1, S3–S23, S27–S38: each has at least one test. S2 holds by construction;
 S24, S25 (features not built yet) and S26 (process) have no test.
@@ -171,6 +192,14 @@ same hashes on the files applied to the game); every pair 1–10 (F `eachPairIsW
 ## Where this differs from the spec, and why
 
 * **S11** is a warning, not a refusal: staging I/O goes through `fw::toLongPath`, which S28 allows.
+* **SELF input is untrusted.** A SELF whose program headers point past 1 GiB (the same limit
+  `readFileBytes()` applies) or wrap around is malformed. The unwrap only writes inside its own
+  bounded buffer (F `hostileProgramHeadersAreRefused`, `reviewerReproducerIsRefused`,
+  `mutatedHeadersNeverCrash` (a seeded mutation fuzz of SELF and ELF headers through every parser
+  and the per-file pipeline; run it under ASan); Sc `hostileSelfInALibraryScan`).
+* **Restore** never picks a ZIP by name or title ID ("Backup records are per game folder" above).
+  The legacy "newest ZIP whose name holds the title ID" fallback is not kept, because it restored
+  another dump's originals.
 * **Restore** refuses the whole ZIP when any entry would escape the game, before writing anything.
   Python restored the safe entries and reported the rest; a ZIP with such entries was not written
   by this app.
@@ -194,22 +223,19 @@ same hashes on the files applied to the game); every pair 1–10 (F `eachPairIsW
 * Executables are processed one at a time (not in a pool) to keep memory at about three copies of
   the largest executable.
 
-## Core and packaging changes this module needs (not made here)
+## Core and packaging changes this module needs
 
-1. `THIRD_PARTY_NOTICES-native.md`: add make_fself (john-tornblom, ps5-payload-dev/sdk, GPL-3.0;
-   modified by Nazky) for `SelfFormat.h` / `SelfWriter.*` / `SelfReader.*`.
-2. App start-up: call `fw::backport::interruptedApplies()` and offer "Roll back the interrupted
+Done in core (commit 9c90166): the make_fself entry in `THIRD_PARTY_NOTICES-native.md`; a
+whole-file legacy importer that merges `bp_folders` and `bp_scan_folder` (registered in
+`BackportSettings.cpp`); the `ProgressReporter::beginPhase()` clamp; validators only on set.
+
+Still open:
+
+1. App start-up: call `fw::backport::interruptedApplies()` and offer "Roll back the interrupted
    backport of <game>" by queueing `backport.restore` with `{journal: <path>}`.
-3. `SettingsSchema::addLegacyKey`: a converter that sees the whole legacy object (or merge
-   semantics for StringList), so `bp_scan_folder` can be merged into `bp_folders`.
-4. Optional: `fw::zip::Writer` could offer a `finish()` that does not rename (or a verify hook
-   before the rename), so callers need not stage through `<final>.part`.
-5. `ProgressReporter::beginPhase()` calls `std::clamp(index, 0, size - 1)`, which is undefined
-   behaviour when no phases were declared (lo > hi). The queue always declares phases; tests must
-   too.
-6. DirPath validators that reject missing folders (the pattern in `general` and here) make
-   `SettingsStore::load()` reset a ZIP folder on an unplugged drive to empty. Consider checking
-   existence only when the setting is used.
+2. Optional: `StagedZip` (`BackupArchive.cpp`) still stages through `<final>.part`. It could use
+   the new `fw::zip::Writer::finish(verifyBeforeCommit)`, but it also needs the SHA-256 of every
+   member against its source, which that verify does not check.
 
 ## Running the tests
 

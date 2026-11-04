@@ -161,6 +161,21 @@ Result<SelfInfo> inspect(QByteArrayView data)
             return info;
         }
     }
+    // Every program header the unwrap may place must describe a range inside
+    // an executable this tool can hold (overflow-safe; kMaxExecBytes is the
+    // same limit readFileBytes() applies), so unwrap() never allocates or
+    // writes outside a sane buffer.
+    for (const ProgramHeader& ph : info.phdrs) {
+        if (!within(quint64(kMaxExecBytes), ph.offset, ph.filesz)) {
+            info.kind = SelfKind::Malformed;
+            info.problem = QStringLiteral("program header %1 points outside any executable this tool can rewrite "
+                                          "(offset 0x%2, size 0x%3)")
+                               .arg(ph.index)
+                               .arg(ph.offset, 0, 16)
+                               .arg(ph.filesz, 0, 16);
+            return info;
+        }
+    }
     info.kind = SelfKind::FakeSigned;
     info.problem.clear();
     return info;
@@ -178,12 +193,20 @@ Result<QByteArray> unwrap(QByteArrayView data, QStringList* warnings)
 
     const quint64 size = quint64(data.size());
     QByteArray out;
-    const auto place = [&out](quint64 at, QByteArrayView bytes, quint64 padTo) {
-        const quint64 end = std::max<quint64>(at + quint64(bytes.size()), padTo);
+    bool inBounds = true;
+    // Writes `bytes` at `at`, zero-filling up to `padTo`; refuses anything past
+    // kMaxExecBytes (checked without overflow) instead of writing it.
+    const auto place = [&out, &inBounds](quint64 at, QByteArrayView bytes, quint64 padTo) {
+        const quint64 n = quint64(bytes.size());
+        if (!within(quint64(kMaxExecBytes), at, n) || padTo > quint64(kMaxExecBytes)) {
+            inBounds = false;
+            return;
+        }
+        const quint64 end = std::max<quint64>(at + n, padTo);
         if (quint64(out.size()) < end)
             out.append(QByteArray(qsizetype(end - quint64(out.size())), '\0'));
-        if (!bytes.isEmpty())
-            std::memcpy(out.data() + at, bytes.data(), size_t(bytes.size()));
+        if (n > 0)
+            std::memcpy(out.data() + at, bytes.data(), size_t(n));
     };
 
     // ELF header at 0 and the program header table at e_phoff (P10: not
@@ -222,6 +245,8 @@ Result<QByteArray> unwrap(QByteArrayView data, QStringList* warnings)
                              .arg(info.fileSize <= size ? size - info.fileSize : 0);
         }
     }
+    if (!inBounds)
+        return makeError(Code::SelfMalformed, QStringLiteral("a segment lies outside any executable this tool can rewrite"));
     return out;
 }
 
