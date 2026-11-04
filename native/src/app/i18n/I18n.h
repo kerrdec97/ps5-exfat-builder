@@ -36,6 +36,10 @@ namespace i18n {
 // labels, section and group names). Empty in → empty out.
 QString trs(const QString& text);
 
+// A value quoted inside a sentence: lower case in English ("is fixed amount"),
+// unchanged in other languages (German nouns keep their capital).
+QString midSentence(const QString& value);
+
 // A copy of `def` with label, description, unit, file filter and the choice
 // labels/descriptions translated. key, section, group and choice values are
 // untouched: they are identifiers.

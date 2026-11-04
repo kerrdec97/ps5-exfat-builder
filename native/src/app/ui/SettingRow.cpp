@@ -549,8 +549,10 @@ void JobOptionsPanel::refreshDependencies()
             row->setDisabledReason({});
         } else {
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
-            const QString otherLabel = other ? other->label : d->enabledWhenKey;
-            const QString want = other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString();
+            // The other setting's label and value in the interface language.
+            const SettingDef shown = other ? i18n::localized(*other) : SettingDef{};
+            const QString otherLabel = other ? shown.label : d->enabledWhenKey;
+            const QString want = other ? i18n::midSentence(SettingRow::displayValue(shown, d->enabledWhenValue)) : d->enabledWhenValue.toString();
             row->setDisabledReason(tr("Only available when \"%1\" is %2.").arg(otherLabel, want));
         }
     }

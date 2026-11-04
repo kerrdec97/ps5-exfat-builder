@@ -505,9 +505,10 @@ void SettingsPage::refreshDependencyStates()
             it.value()->setDisabledReason({});
         else {
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
+            const SettingDef shown = other ? i18n::localized(*other) : SettingDef{}; // in the interface language
             it.value()->setDisabledReason(tr("Only available when \"%1\" is %2.")
-                                              .arg(other ? other->label : d->enabledWhenKey,
-                                                   other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString()));
+                                              .arg(other ? shown.label : d->enabledWhenKey,
+                                                   other ? i18n::midSentence(SettingRow::displayValue(shown, d->enabledWhenValue)) : d->enabledWhenValue.toString()));
         }
     }
 }

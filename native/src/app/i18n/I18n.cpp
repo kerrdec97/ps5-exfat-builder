@@ -89,4 +89,9 @@ QString currentLanguage()
     return g_current;
 }
 
+QString midSentence(const QString& value)
+{
+    return g_current == QLatin1String("en") ? value.toLower() : value;
+}
+
 } // namespace fw::i18n
