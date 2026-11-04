@@ -80,7 +80,7 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
 
 ## How it was tested
 
-* **Automated tests** (35 test programs, run on every change): Linux with
+* **Automated tests** (36 test programs, run on every change): Linux with
   AddressSanitizer/UBSan and Windows (MSVC 2022, Qt 6.8) in CI. They include
   byte-for-byte comparisons with UFS2Tool and Lazy_MkPFS output, the legacy
   app's own JSON/INI/GP5 output as goldens, crash and cancel recovery, and —
@@ -93,6 +93,22 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
   their findings were fixed with regression tests.
 * **Not tested**: your PC, a PS5 console, real Sony Publishing Tools, a real
   game dump. These are the owner's checklist below.
+
+## Known limitations
+
+* Images and packages from untrusted sources are checked as they are read
+  (names that would leave the output folder, sizes beyond the file, damaged
+  tables are refused), but the app is not a sandbox: only open images you
+  trust.
+* Y2JB writes a new copy of the console's database and renames it over the
+  old one (the legacy app overwrote it in place). Whether a running system
+  process keeps the old copy until the console restarts is unverified.
+* When Windows refuses to move a locked file aside (for example an old
+  package still open in another program), Qt first tries a full copy before
+  giving up, so the error can take a while for a very large file. Nothing is
+  lost: the new package is kept under a numbered name.
+* A file you created yourself named exactly like an output plus `.part`
+  (for example `Game.exfat.part`) is overwritten by a build of that output.
 
 ## Not in this release
 
