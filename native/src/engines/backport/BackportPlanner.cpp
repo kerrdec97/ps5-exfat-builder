@@ -1,6 +1,8 @@
 #include "engines/backport/BackportPlanner.h"
 
 #include "engines/backport/CanonicalTrio.h"
+#include "engines/backport/ElfImage.h"
+#include "engines/backport/SelfReader.h"
 #include "engines/backport/RightSprx.h"
 
 #include "core/FileUtil.h"
@@ -265,14 +267,40 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
 
     // #41: imported module names that match a sce_module/ library only when
     // letter case is ignored (detector only; nothing is renamed).
-    plan.moduleCase = moduleCaseMismatches(scan);
-    for (const ModuleCaseMismatch& m : plan.moduleCase)
+    plan.moduleCaseImports = moduleCaseMismatches(scan);
+    for (const ModuleCaseMismatch& m : plan.moduleCaseImports)
         add(Code::ModuleNameCase, Severity::Warn,
             QStringLiteral("%1 imports the module %2, but the file is %3 (the letters differ in case). Firmware that "
                            "looks modules up case-sensitively may not load it and the game can crash at launch. "
                            "This is reported only; the file is not renamed.")
                 .arg(m.importer, m.imported, m.file),
             {m.importer, m.file});
+
+    // #41 fix (ModuleCaseFix.h): the module paths the eboot loads by name
+    // ("%s/Modules/<Name>.prx"); a dump file spelled differently is staged,
+    // zipped and applied under the game's spelling.
+    if (const ExecFile* eb = scan.eboot(); eb && eb->isProcessable()) {
+        auto bytes = readFileBytes(joinPath(game, eb->rel));
+        if (bytes.ok()) {
+            QByteArray image = bytes.value();
+            if (!elf::hasElfMagic(image)) {
+                auto u = selfio::unwrap(image);
+                image = u.ok() ? u.value() : QByteArray();
+            }
+            plan.moduleCase = planModuleCase(scan, requestedModulePaths(image));
+        }
+    }
+    for (const ModuleCaseRename& m : plan.moduleCase.renames)
+        add(Code::ModuleNameCase, Severity::Warn,
+            QStringLiteral("%1: eboot.bin loads it as %2 (the console looks it up by exact name), so the backport ZIP and "
+                           "Apply write it with that spelling; the originals ZIP and Restore keep the dump's. Not yet "
+                           "confirmed on a console.%3")
+                .arg(m.from, m.to.section(u'/', -1),
+                     m.folderCaseDiffers ? QStringLiteral(" The folder's letter case also differs and is not changed.")
+                                         : QString()),
+            {m.from});
+    for (const QString& n : std::as_const(plan.moduleCase.notes))
+        add(Code::ModuleNameCase, Severity::Info, n);
 
     // S8 / S6 / S14 / D3: fakelib. #34: the user's AMPR/PlayGo providers take
     // the place of the same-named libraries of the set (or are added to it).

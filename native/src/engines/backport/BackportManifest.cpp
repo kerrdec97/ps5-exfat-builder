@@ -178,6 +178,20 @@ QMap<QString, QSet<QString>> Manifest::sdkFixHashes() const
     return out;
 }
 
+QMap<QString, QString> Manifest::renamedFiles() const
+{
+    QMap<QString, QString> out;
+    const Value& targets = doc.value(QStringLiteral("targets"));
+    if (!targets.isObject())
+        return out;
+    for (const QString& k : targets.keys()) {
+        const auto m = stringMap(targets.value(k).value(QStringLiteral("renamed_files")));
+        for (auto it = m.cbegin(); it != m.cend(); ++it)
+            out.insert(it.key(), it.value());
+    }
+    return out;
+}
+
 bool Manifest::applied() const
 {
     return doc.value(QStringLiteral("applied")).toBool(false);
@@ -349,6 +363,8 @@ void recordTarget(Manifest& m, const TargetRecord& t)
     target.insert(QStringLiteral("post_hashes"), objectOf(t.postHashes));
     target.insert(QStringLiteral("applied"), Value(t.applied));
     target.insert(QStringLiteral("files_after"), after);
+    if (!t.renamedFiles.isEmpty())
+        target.insert(QStringLiteral("renamed_files"), objectOf(t.renamedFiles));
     if (!m.doc.value(QStringLiteral("targets")).isObject())
         m.doc.insert(QStringLiteral("targets"), Value::object());
     m.doc[QStringLiteral("targets")].insert(key, target);

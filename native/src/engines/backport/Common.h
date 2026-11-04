@@ -102,6 +102,14 @@ Status replaceFileAtomic(const QString& src, const QString& dst);
 void clearReadOnly(const QString& path);
 // QFile::remove, retried once after clearReadOnly().
 bool removeFileForce(const QString& path);
+// The name a file has in `dir`: `name` itself when a file is spelled exactly
+// so, else the first file whose name matches without case; empty if none.
+QString onDiskName(const QString& dir, const QString& name);
+// Renames the file `from` in `dir` to `to`, names that differ only in letter
+// case (a direct rename first, then through a temporary name). Never
+// replaces another file spelled `to` (case-sensitive file systems). Checks
+// the result by listing the folder.
+Status renameCaseOnly(const QString& dir, const QString& from, const QString& to);
 // Reads the first `n` bytes of a file (fewer if the file is shorter).
 Result<QByteArray> readHead(const QString& path, qint64 n);
 

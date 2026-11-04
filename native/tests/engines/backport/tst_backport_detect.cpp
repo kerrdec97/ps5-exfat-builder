@@ -136,9 +136,9 @@ private slots:
         const auto before = snapshotTree(e.game);
         auto plan = planBackport(e.options(), e.ctx.token);
         QVERIFY(plan.ok());
-        QCOMPARE(plan->moduleCase.size(), size_t(1));
-        QCOMPARE(plan->moduleCase.front().importer, QStringLiteral("eboot.bin"));
-        QCOMPARE(plan->moduleCase.front().file, QStringLiteral("sce_module/Il2cppUserAssemblies.prx"));
+        QCOMPARE(plan->moduleCaseImports.size(), size_t(1));
+        QCOMPARE(plan->moduleCaseImports.front().importer, QStringLiteral("eboot.bin"));
+        QCOMPARE(plan->moduleCaseImports.front().file, QStringLiteral("sce_module/Il2cppUserAssemblies.prx"));
         const Issue* i = findIssue(plan.value(), Code::ModuleNameCase);
         QVERIFY(i);
         QCOMPARE(i->severity, Severity::Warn); // detector only: the backport is not blocked
@@ -161,7 +161,7 @@ private slots:
         writeBytes(e.game + "/sce_module/Il2CppUserAssemblies.prx", selfOf(f2(5)));
         auto plan = planBackport(e.options(), e.ctx.token);
         QVERIFY(plan.ok());
-        QVERIFY(plan->moduleCase.empty()); // libc.prx is also there, in the same case
+        QVERIFY(plan->moduleCaseImports.empty()); // libc.prx is also there, in the same case
         QVERIFY(!findIssue(plan.value(), Code::ModuleNameCase));
     }
 

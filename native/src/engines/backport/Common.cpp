@@ -243,6 +243,63 @@ bool removeFileForce(const QString& path)
     return QFile::remove(path);
 }
 
+QString onDiskName(const QString& dir, const QString& name)
+{
+    const QStringList entries =
+        QDir(dir).entryList(QDir::Files | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+    for (const QString& e : entries)
+        if (e == name)
+            return e;
+    for (const QString& e : entries)
+        if (e.compare(name, Qt::CaseInsensitive) == 0)
+            return e;
+    return {};
+}
+
+namespace {
+bool nativeRename(const QString& src, const QString& dst)
+{
+#ifdef Q_OS_WIN
+    const std::wstring s = toLongPath(src).toStdWString();
+    const std::wstring d = toLongPath(dst).toStdWString();
+    return MoveFileExW(s.c_str(), d.c_str(), MOVEFILE_WRITE_THROUGH) != 0; // no REPLACE_EXISTING
+#else
+    return std::rename(QFile::encodeName(src).constData(), QFile::encodeName(dst).constData()) == 0;
+#endif
+}
+} // namespace
+
+Status renameCaseOnly(const QString& dir, const QString& from, const QString& to)
+{
+    const auto fail = [&](const QString& why) {
+        return makeError(Code::ApplyFailed,
+                         QStringLiteral("Could not rename %1 to %2 in %3: %4")
+                             .arg(from, to, QDir::toNativeSeparators(dir), why));
+    };
+    if (from == to)
+        return success();
+    if (from.compare(to, Qt::CaseInsensitive) != 0)
+        return fail(QStringLiteral("the names differ by more than letter case"));
+    if (onDiskName(dir, from) != from)
+        return fail(QStringLiteral("there is no file spelled %1").arg(from));
+    if (onDiskName(dir, to) == to)
+        return fail(QStringLiteral("another file is already spelled %1").arg(to));
+    const QString src = QDir(dir).filePath(from), dst = QDir(dir).filePath(to);
+    if (!nativeRename(src, dst)) {
+        // Through a temporary name (file systems that refuse a case-only rename).
+        const QString tmp = src + QStringLiteral(".fwcase");
+        if (QFileInfo::exists(tmp) || !nativeRename(src, tmp))
+            return fail(QStringLiteral("the file system refused the rename"));
+        if (!nativeRename(tmp, dst)) {
+            nativeRename(tmp, src);
+            return fail(QStringLiteral("the file system refused the rename"));
+        }
+    }
+    if (onDiskName(dir, to) != to)
+        return fail(QStringLiteral("the folder still lists the old spelling"));
+    return success();
+}
+
 Status replaceFileAtomic(const QString& src, const QString& dst)
 {
 #ifdef Q_OS_WIN

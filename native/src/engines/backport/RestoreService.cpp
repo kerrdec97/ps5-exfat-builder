@@ -216,6 +216,29 @@ Result<RestoreReport> restoreOriginals(const RestoreOptions& opt, const Cancella
         }
     }
 
+    // #41 fix: a module the backport wrote under the game's spelling gets the
+    // dump's spelling back first, when it still holds what the backport wrote.
+    if (manifest) {
+        const QMap<QString, QString> renamed = manifest->renamedFiles();
+        for (auto it = renamed.cbegin(); it != renamed.cend(); ++it) {
+            const QString dir = QFileInfo(joinPath(game, it.value())).absolutePath();
+            const QString now = it.key().section(u'/', -1), was = it.value().section(u'/', -1);
+            if (now == was || onDiskName(dir, now) != now)
+                continue; // not renamed (ZIP-only run) or already back
+            if (onDiskName(dir, was) == was) {
+                rep.warnings << QStringLiteral("%1 and %2 both exist; %1 was left as it is.").arg(it.key(), it.value());
+                continue;
+            }
+            if (!written.value(relKey(it.key())).contains(hashOf(QDir(dir).filePath(now)))) {
+                rep.skipped << QStringLiteral("%1 has content this backport did not write; its name was not changed.")
+                                   .arg(it.key());
+                continue;
+            }
+            if (Status st = renameCaseOnly(dir, now, was); !st.ok())
+                rep.errors << QStringLiteral("%1: %2").arg(it.key(), st.error().message);
+        }
+    }
+
     std::sort(work.begin(), work.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
     QSet<QString> zipKeys;
     for (const auto& w : work)

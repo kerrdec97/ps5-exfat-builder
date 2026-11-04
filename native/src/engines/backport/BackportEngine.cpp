@@ -331,7 +331,17 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
         if (!proc->patch.patched.empty())
             fr.sdkAfter = pair.n;
         fr.stage = FileStage::Stage;
-        const QString out = joinPath(stageDir, e->rel);
+        // #41 fix: a module the game loads under another letter case is staged
+        // (and so zipped and applied) under the game's spelling.
+        QString outRel = e->rel;
+        for (const ModuleCaseRename& m : plan.moduleCase.renames)
+            if (m.from == e->rel)
+                outRel = m.to;
+        if (outRel != e->rel) {
+            fr.renamedTo = outRel;
+            fr.patchMessages << QStringLiteral("Module name case: written as %1, the spelling the game loads").arg(outRel);
+        }
+        const QString out = joinPath(stageDir, outRel);
         if (Status st = writeFileBytes(out, proc->output); !st.ok())
             return makeError(Code::Unreadable,
                              QStringLiteral("Could not write %1 to the staging folder: %2").arg(e->rel, st.error().message),
@@ -344,7 +354,7 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
             ctx.log.debug(QStringLiteral("%1: %2").arg(e->rel, m));
         if (fr.nid.action == NidAction::Applied || fr.nid.action == NidAction::Reverted)
             ctx.log.debug(QStringLiteral("%1: libc NID %2 (%3)").arg(e->rel, nidActionName(fr.nid.action)).arg(fr.nid.count));
-        r.staged.push_back({e->rel, out, fr.shaAfter, fr.sizeAfter, true});
+        r.staged.push_back({outRel, out, fr.shaAfter, fr.sizeAfter, true});
         r.files.push_back(fr);
         if (ctx.progress) {
             ctx.progress->advance(e->size);
@@ -510,7 +520,7 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
     for (const StagedFile& s : r.staged) {
         if (s.executable) {
             for (const FileResult& f : r.files)
-                if (f.rel == s.rel && f.shaBefore != s.sha256)
+                if (relKey(f.rel) == relKey(s.rel) && (f.shaBefore != s.sha256 || !f.renamedTo.isEmpty()))
                     unchanged = false;
         } else if (!sameAsGame.contains(s.rel)) {
             unchanged = false;

@@ -13,6 +13,7 @@
 #include "engines/backport/ExecutableScanner.h"
 #include "engines/backport/FakelibSet.h"
 #include "engines/backport/GameMetadata.h"
+#include "engines/backport/ModuleCaseFix.h"
 #include "engines/backport/ModuleImports.h"
 
 #include <QList>
@@ -54,7 +55,8 @@ struct BackportPlan {
     std::optional<FakelibSource> providers; // #34: the user's AMPR/PlayGo libraries
     QStringList providersIgnored;           // other libraries in the provider folder
     bool pinProvidersOnRun = false;         // the provider folder has no pins yet (trust on first use)
-    std::vector<ModuleCaseMismatch> moduleCase; // #41 detector
+    std::vector<ModuleCaseMismatch> moduleCaseImports; // #41 detector (DT_NEEDED against sce_module/, report only)
+    ModuleCasePlan moduleCase;                         // #41 fix: modules staged under the game's spelling
     FakelibState fakelibState = FakelibState::None;
     QStringList fakelibExtras;          // the dump's own fakelib files the set does not replace
     QStringList stagedFakelibTargets;   // game-relative targets of the staged set

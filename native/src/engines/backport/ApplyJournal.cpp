@@ -75,6 +75,10 @@ Status ApplyJournal::save() const
         j.insert(QStringLiteral("staged"), QDir::toNativeSeparators(e.stagedPath));
         j.insert(QStringLiteral("backup_zip_member"), e.backupZipMember);
         j.insert(QStringLiteral("backup_staging"), QDir::toNativeSeparators(e.backupStagingPath));
+        if (!e.renameTo.isEmpty()) {
+            j.insert(QStringLiteral("rename_to"), e.renameTo);
+            j.insert(QStringLiteral("renamed"), e.renamed);
+        }
         j.insert(QStringLiteral("done"), e.done);
         entries.append(j);
     }
@@ -132,6 +136,8 @@ Result<ApplyJournal> ApplyJournal::load(const QString& path)
         je.stagedPath = QDir::fromNativeSeparators(e.value(QStringLiteral("staged")).toString());
         je.backupZipMember = e.value(QStringLiteral("backup_zip_member")).toString();
         je.backupStagingPath = QDir::fromNativeSeparators(e.value(QStringLiteral("backup_staging")).toString());
+        je.renameTo = e.value(QStringLiteral("rename_to")).toString();
+        je.renamed = e.value(QStringLiteral("renamed")).toBool();
         je.done = e.value(QStringLiteral("done")).toBool();
         if (je.rel.isEmpty())
             return makeError(Code::Internal, QStringLiteral("The apply journal %1 is damaged.").arg(QDir::toNativeSeparators(path)));
@@ -214,6 +220,18 @@ Status ApplyJournal::rollback(const CancellationToken& token, QStringList* probl
         JournalEntry& e = *it;
         const QString target = joinPath(m_game, e.rel);
         removeTemp(target + QStringLiteral(".fwpart"));
+        // #41 fix: a module renamed to the game's spelling gets the dump's
+        // spelling back before its bytes are judged (decided by the folder
+        // listing, so a crash before or after the rename is handled alike).
+        if (!e.renameTo.isEmpty()) {
+            const QString dir = QFileInfo(target).absolutePath();
+            const QString was = e.rel.section(u'/', -1), now = e.renameTo.section(u'/', -1);
+            if (onDiskName(dir, now) == now && now != was) {
+                if (Status st = renameCaseOnly(dir, now, was); !st.ok())
+                    problems << QStringLiteral("%1: %2").arg(e.rel, st.error().message);
+            }
+            e.renamed = false;
+        }
         const bool exists = QFileInfo(target).isFile();
         const QString cur = exists ? hashOf(target) : QString();
         if (e.action == ApplyAction::Replace) {
@@ -373,6 +391,20 @@ Status ApplyJournal::apply(const CancellationToken& token, ProgressReporter* pro
             failed = true;
             break;
         }
+        if (!e.renameTo.isEmpty()) {
+            // #41 fix: the bytes are in place under the dump's name; now the
+            // name takes the game's letter case.
+            if (Status st = renameCaseOnly(QFileInfo(target).absolutePath(), e.rel.section(u'/', -1),
+                                           e.renameTo.section(u'/', -1));
+                !st.ok()) {
+                failure = makeError(Code::ApplyFailed, QStringLiteral("Applying failed at %1: %2").arg(e.rel, st.error().message),
+                                    st.error().detail);
+                failed = true;
+                break;
+            }
+            e.renamed = true;
+            (void)save();
+        }
         e.done = true;
         if (progress)
             progress->advanceFiles(1);
@@ -384,7 +416,7 @@ Status ApplyJournal::apply(const CancellationToken& token, ProgressReporter* pro
         (void)save();
         // V7: every applied file holds exactly the staged bytes.
         for (const JournalEntry& e : m_entries) {
-            if (hashOf(joinPath(m_game, e.rel)) != e.sha256After) {
+            if (hashOf(joinPath(m_game, e.renamed ? e.renameTo : e.rel)) != e.sha256After) {
                 failure = makeError(Code::VerifyFailed,
                                     QStringLiteral("Applying failed at %1: the file in the game does not match the backport.").arg(e.rel));
                 failed = true;

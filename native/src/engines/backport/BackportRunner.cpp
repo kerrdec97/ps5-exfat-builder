@@ -66,6 +66,8 @@ QJsonObject fileJson(const FileResult& f)
         o.insert(QStringLiteral("substitutedStandard"), true);
     if (f.criRackPatched)
         o.insert(QStringLiteral("criAudioFix"), true);
+    if (!f.renamedTo.isEmpty())
+        o.insert(QStringLiteral("writtenAs"), f.renamedTo);
     if (f.shaderTrapNops > 0)
         o.insert(QStringLiteral("shaderTrapNops"), f.shaderTrapNops);
     return o;
@@ -138,6 +140,8 @@ QJsonObject fileReportJson(const FileResult& f, const BackportPlan& plan, int ta
             why += QStringLiteral("; PS5 Pro fix: %1 shader-assert trap(s) -> s_nop 0").arg(f.shaderTrapNops);
         if (f.criRackPatched)
             why += QStringLiteral("; CRI audio fix: 12-channel speaker rack -> 8 channels");
+        if (!f.renamedTo.isEmpty())
+            why += QStringLiteral("; written as %1, the spelling the game loads").arg(f.renamedTo);
         why += u'.';
     }
     o.insert(QStringLiteral("result"), result);
@@ -522,6 +526,9 @@ Result<RunResult> runBackportImpl(const BackportOptions& optIn, JobContext& ctx,
         if (s.executable)
             target.postHashes.insert(s.rel, s.sha256);
         target.filesAfter.insert(s.rel, qMakePair(s.sha256, s.size));
+        // #41 fix: written under the game's spelling; Restore renames it back.
+        if (const QString existing = plan.scan.resolve(s.rel); !existing.isEmpty() && existing != s.rel)
+            target.renamedFiles.insert(s.rel, existing);
     }
     recordTarget(manifest, target);
     if (Status st = writeManifest(manifest); !st.ok())
@@ -554,6 +561,8 @@ Result<RunResult> runBackportImpl(const BackportOptions& optIn, JobContext& ctx,
             } else {
                 e.rel = existing;
                 e.action = ApplyAction::Replace;
+                if (existing != s.rel)
+                    e.renameTo = s.rel; // #41 fix: the game's spelling of this module
                 for (const StagedFile& o : build.originals)
                     if (relKey(o.rel) == relKey(existing)) {
                         e.sha256Before = o.sha256;

@@ -41,6 +41,10 @@ struct JournalEntry {
     QString stagedPath;   // the new content
     QString backupZipMember;   // arcname in the originals ZIP (Replace)
     QString backupStagingPath; // staging snapshot (may be gone after a crash)
+    // #41 fix: after the bytes are in place the file is renamed to this rel
+    // (same folder, the game's letter case); rollback renames it back first.
+    QString renameTo;
+    bool renamed = false;
     bool done = false;
 };
 

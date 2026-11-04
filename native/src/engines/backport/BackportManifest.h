@@ -41,6 +41,9 @@ struct Manifest {
     QMap<QString, QSet<QString>> patchedHashes() const;
     // relKey → every hash an in-place SDK fix of this folder wrote (sdk_fixes).
     QMap<QString, QSet<QString>> sdkFixHashes() const;
+    // #41 fix: rel as the backport wrote it (the game's spelling) → the dump's
+    // rel, over every target ("renamed_files").
+    QMap<QString, QString> renamedFiles() const;
     bool applied() const;
 };
 
@@ -89,6 +92,7 @@ struct TargetRecord {
     QMap<QString, QPair<QString, qint64>> filesAfter; // every staged file: sha256, size
     bool applied = false;
     QStringList addedFiles;                         // created in the game by Apply
+    QMap<QString, QString> renamedFiles;            // #41 fix: written rel → the dump's rel
     QString journal;
     QString notes;
 };

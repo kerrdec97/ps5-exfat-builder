@@ -43,6 +43,7 @@ struct FileResult {
     int shaderTrapNops = 0; // #32 Pro fix sites patched in this file
     bool substitutedStandard = false; // #35: the standard right.sprx, converted, took the dump's copy's place
     bool criRackPatched = false;      // #40: the CRI Unity rack became 8 channels in this file
+    QString renamedTo;                // #41 fix: staged under the game's spelling of this module
 };
 
 struct StagedFile {
