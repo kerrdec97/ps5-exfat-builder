@@ -112,6 +112,20 @@ Result<Geometry> computeGeometry(const FormatParams& p, qint64 totalBytes)
     g.dblkno = g.iblkno + inodeblks;
     if (g.dblkno + g.fpb > g.fpg)
         return Error(ErrorCode::Unsupported, QStringLiteral("These FFPKG settings leave no room for data in a cylinder group."));
+    // Deviation from UFS2Tool, following FreeBSD mkfs.c: a last cylinder group
+    // shorter than its own metadata (header + inode table) is dropped.
+    // UFS2Tool keeps it and writes that metadata past the end of the file
+    // system, without the group's superblock copy, which fsck_ffs rejects.
+    {
+        const qint64 last = g.totalFrags - qint64(g.ncg - 1) * g.fpg;
+        if (last < g.dblkno) {
+            if (g.ncg == 1)
+                return Error(ErrorCode::InvalidArgument, QStringLiteral("The image would be too small."));
+            --g.ncg;
+            g.totalFrags = qint64(g.ncg) * g.fpg;
+            g.totalBytes = g.totalFrags * g.fsize;
+        }
+    }
 
     g.maxContig = std::max(1, kMaxBSize / g.bsize);
     g.contigSumSize = std::min(g.maxContig, 16); // FS_MAXCONTIG

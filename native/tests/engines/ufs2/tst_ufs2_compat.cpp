@@ -159,6 +159,61 @@ private slots:
         compareWithUfs2Tool(QStringLiteral("huge"), src, FormatParams{32768, 32768, 0, 262144});
     }
 
+    void identical_lastGroupJustFits()
+    {
+        // A 143,196,160-byte file: UFS2Tool's size leaves a last cylinder group
+        // of exactly dblkno fragments (metadata only). Still identical.
+        const QString src = m_tmp.filePath("lastfits");
+        QVERIFY(QDir().mkpath(src));
+        QFile f(src + "/big.bin");
+        QVERIFY(f.open(QIODevice::WriteOnly) && f.resize(143196160));
+        f.close();
+        compareWithUfs2Tool(QStringLiteral("lastfits"), src, FormatParams{});
+    }
+
+    void lastGroupTooShortIsDropped()
+    {
+        // A 142,868,480-byte file leaves a 1-fragment last group. UFS2Tool
+        // writes its header and inode table past fs_size and has no superblock
+        // copy there; the native writer drops the group like FreeBSD newfs.
+        const QString src = m_tmp.filePath("lasttiny");
+        QVERIFY(QDir().mkpath(src));
+        QFile f(src + "/big.bin");
+        QVERIFY(f.open(QIODevice::WriteOnly) && f.resize(142868480));
+        f.close();
+        const QString mine = m_tmp.filePath("lasttiny-native.ffpkg");
+        PlanSummary s;
+        QVERIFY(buildImage(src, mine, {}, &s).ok());
+        QCOMPARE(s.autoSizeBytes, qint64(167837696));         // UFS2Tool's size: 2561 fragments
+        QCOMPARE(s.geometry.ncg, 5);                           // instead of 6
+        QCOMPARE(QFileInfo(mine).size(), qint64(2560) * 65536); // fs_size * fsize
+        auto r = Ufs2Reader::open(mine);
+        QVERIFY(r.ok());
+        QCOMPARE(r.value()->sb().size, qint64(2560));
+        const QString fsck = fsckUfs();
+        if (!fsck.isEmpty()) {
+            const ToolRun run = runTool(fsck, {QStringLiteral("-n"), mine});
+            QVERIFY2(run.exitCode == 0 && run.output.contains(QStringLiteral("Phase 5")) && !run.output.contains(QStringLiteral("BAD")),
+                     qPrintable(run.output));
+        }
+        if (!ufs2toolDll().isEmpty() && !dotnet().isEmpty()) {
+            const QString ref = m_tmp.filePath("lasttiny-ufs2tool.ffpkg");
+            const ToolRun run = runUfs2Tool({QStringLiteral("newfs"), QStringLiteral("-O"), QStringLiteral("2"), QStringLiteral("-b"),
+                                             QStringLiteral("65536"), QStringLiteral("-f"), QStringLiteral("65536"), QStringLiteral("-m"),
+                                             QStringLiteral("0"), QStringLiteral("-S"), QStringLiteral("512"), QStringLiteral("-i"),
+                                             QStringLiteral("262144"), QStringLiteral("-D"), src, ref});
+            QCOMPARE(run.exitCode, 0);
+            auto rr = Ufs2Reader::open(ref);
+            QVERIFY(rr.ok());
+            QCOMPARE(rr.value()->sb().ncg, 6);
+            QVERIFY(QFileInfo(ref).size() > rr.value()->sb().bytes()); // metadata past the end
+            if (!fsck.isEmpty()) {
+                const ToolRun bad = runTool(fsck, {QStringLiteral("-n"), ref});
+                QVERIFY2(bad.output.contains(QStringLiteral("FIRST ALTERNATE")), qPrintable(bad.output));
+            }
+        }
+    }
+
     void freebsdFsckAcceptsNativeImages()
     {
         const QString fsck = fsckUfs();
