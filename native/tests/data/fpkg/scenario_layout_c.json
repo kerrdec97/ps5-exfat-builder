@@ -1,0 +1,29 @@
+{
+  "chunkDefaultLanguage": "en-US",
+  "chunkSupportedLanguages": [
+    "en-US",
+    "fr-FR",
+    "de-DE"
+  ],
+  "scenarioCount": 2,
+  "scenarioDefaultId": 0,
+  "scenarioDefaultLanguage": "en-US",
+  "scenarios": [
+    {
+      "id": 0,
+      "type": "playmode",
+      "en-US": {
+        "title": "Main",
+        "description": "All game data is installed before the game starts."
+      }
+    },
+    {
+      "id": 1,
+      "type": "playmode",
+      "en-US": {
+        "title": "Second",
+        "description": "All game data is installed before the game starts."
+      }
+    }
+  ]
+}

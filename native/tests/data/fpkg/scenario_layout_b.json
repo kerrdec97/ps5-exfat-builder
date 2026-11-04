@@ -1,0 +1,32 @@
+{
+  "chunkDefaultLanguage": "en-US",
+  "chunkSupportedLanguages": [
+    "en-US",
+    "fr-FR"
+  ],
+  "scenarioCount": 2,
+  "scenarioDefaultId": 0,
+  "scenarioDefaultLanguage": "en-US",
+  "scenarios": [
+    {
+      "id": 0,
+      "type": "playmode",
+      "en-US": {
+        "title": "Main game",
+        "description": "Everything"
+      }
+    },
+    {
+      "id": 1,
+      "type": "mp",
+      "en-US": {
+        "title": "Multiplayer",
+        "description": "Online"
+      },
+      "fr-FR": {
+        "title": "Multi",
+        "description": "En ligne"
+      }
+    }
+  ]
+}

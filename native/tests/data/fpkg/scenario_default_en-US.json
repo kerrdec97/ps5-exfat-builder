@@ -1,0 +1,19 @@
+{
+  "chunkDefaultLanguage": "en-US",
+  "chunkSupportedLanguages": [
+    "en-US"
+  ],
+  "scenarioCount": 1,
+  "scenarioDefaultId": 0,
+  "scenarioDefaultLanguage": "en-US",
+  "scenarios": [
+    {
+      "id": 0,
+      "type": "playmode",
+      "en-US": {
+        "title": "Scenario #0",
+        "description": "All game data is installed before the game starts."
+      }
+    }
+  ]
+}

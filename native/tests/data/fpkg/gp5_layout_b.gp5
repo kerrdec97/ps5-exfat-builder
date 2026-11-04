@@ -1,0 +1,38 @@
+<?xml version='1.0' encoding='utf-8'?>
+<psproject fmt="gp5">
+  <volume>
+    <volume_type>prospero_app</volume_type>
+    <package passcode="00000000000000000000000000000000" content_id="UP0000-PPSA01234_00-GOLDENTEST000000" />
+    <chunk_info chunk_count="3" scenario_count="2">
+      <chunks supported_languages="en-US fr-FR" default_language="en-US">
+        <chunk id="0" label="Chunk #0" layer_no="0" languages="en-US" />
+        <chunk id="1" label="Chunk #1" layer_no="0" languages="fr-FR" />
+        <chunk id="2" label="Chunk #2" layer_no="0" languages="en-US fr-FR" />
+      </chunks>
+      <scenarios default_id="0">
+        <scenario id="0" type="playmode" initial_chunk_count="3" label="Main game">0-2</scenario>
+        <scenario id="1" type="mp" initial_chunk_count="3" label="Multiplayer">0-2</scenario>
+      </scenarios>
+    </chunk_info>
+  </volume>
+  <files>
+    <file dst_path="sce_sys/playgo-scenario.json" src_path="C:\out\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.playgo-scenario.json" chunk="0" />
+    <file dst_path="playgo-languages/01-en-US.bin" src_path="C:\out\.gp5-assets\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100\playgo-languages\01-en-US.bin" chunk="0" pfs_compression="disable" />
+    <file dst_path="playgo-languages/02-fr-FR.bin" src_path="C:\out\.gp5-assets\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100\playgo-languages\02-fr-FR.bin" chunk="1" pfs_compression="disable" />
+    <file dst_path="playgo-chunks/002.bin" src_path="C:\out\.gp5-assets\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100\playgo-chunks\002.bin" chunk="2" pfs_compression="disable" />
+    <file dst_path="Data/1.bin" src_path="C:\dump\Data\1.bin" chunk="0" />
+    <file dst_path="Data/_x.bin" src_path="C:\dump\Data\_x.bin" chunk="0" />
+    <file dst_path="Data/a&amp;b.bin" src_path="C:\dump\Data\a&amp;b.bin" chunk="0" />
+    <file dst_path="Data/A.pak" src_path="C:\dump\Data\A.pak" chunk="0" />
+    <file dst_path="Data/b.pak" src_path="C:\dump\Data\b.pak" chunk="0" />
+    <file dst_path="dlc_emu.ini" src_path="C:\dump\dlc_emu.ini" chunk="0" />
+    <file dst_path="eboot.bin" src_path="C:\dump\eboot.bin" chunk="0" />
+    <file dst_path="sce_module/libc.prx" src_path="C:\dump\sce_module\libc.prx" chunk="0" />
+    <file dst_path="sce_sys/icon0.png" src_path="C:\dump\sce_sys\icon0.png" chunk="0" />
+    <file dst_path="sce_sys/keystone" src_path="C:\dump\sce_sys\keystone" chunk="0" />
+    <file dst_path="sce_sys/param.json" src_path="C:\out\.gp5-assets\UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100\sce_sys\param.json" chunk="0" />
+    <empty_dir dst_path="addcont0" />
+    <empty_dir dst_path="Data/Empty" />
+    <empty_dir dst_path="Data/JunkOnly" />
+  </files>
+</psproject>
