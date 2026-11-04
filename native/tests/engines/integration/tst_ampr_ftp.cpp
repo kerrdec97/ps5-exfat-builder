@@ -195,7 +195,11 @@ private slots:
         QVERIFY(!QFileInfo::exists(app0 + QStringLiteral("/ampr_emu.index.tmp")));
         QCOMPARE(out->details.value(QStringLiteral("files")).toInt(), 9);
         QCOMPARE(out->details.value(QStringLiteral("backup")).toString(), QStringLiteral("/data/etaHEN/games/PPSA00001-app0/ampr_emu.index.bak"));
-        QCOMPARE(out->details.value(QStringLiteral("collisions")).toArray().size(), 1);
+        // Data/CASE.bin + Data/case.bin are two files only on a case-sensitive
+        // file system (one file on NTFS, so nothing collides there).
+        const QStringList dataFiles = QDir(app0 + QStringLiteral("/Data")).entryList(QDir::Files);
+        const bool caseTwins = dataFiles.contains(QStringLiteral("CASE.bin")) && dataFiles.contains(QStringLiteral("case.bin"));
+        QCOMPARE(out->details.value(QStringLiteral("collisions")).toArray().size(), caseTwins ? 1 : 0);
         QVERIFY(out->details.value(QStringLiteral("hasAmprLibrary")).toBool());
         QCOMPARE(srv.sawCommand(QStringLiteral("MDTM")), !mlsd);
 
