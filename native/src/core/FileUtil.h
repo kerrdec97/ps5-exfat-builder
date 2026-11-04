@@ -31,6 +31,8 @@ QString toLongPath(const QString& path);
 bool isSameOrInside(const QString& child, const QString& parent);
 // Removes characters Windows forbids in file names.
 QString sanitizeFileName(const QString& name);
+// `path` if nothing exists there (nor its .part), else "name (2).ext", "name (3).ext"...
+QString uniquePath(const QString& path);
 
 // ---- writes ------------------------------------------------------------------
 // Writes via a temporary file and atomic rename (QSaveFile).

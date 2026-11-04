@@ -235,6 +235,16 @@ private slots:
         QCOMPARE(f.readAll(), QByteArray("v2"));
     }
 
+    void uniquePathAvoidsExistingFiles()
+    {
+        const QString p = m_root.filePath(QStringLiteral("u/report.zip"));
+        QCOMPARE(uniquePath(p), p);
+        QVERIFY(fwtest::writeTextFile(p, "1"));
+        QCOMPARE(uniquePath(p), m_root.filePath(QStringLiteral("u/report (2).zip")));
+        QVERIFY(fwtest::writeTextFile(m_root.filePath(QStringLiteral("u/report (2).zip.part")), "partial"));
+        QCOMPARE(uniquePath(p), m_root.filePath(QStringLiteral("u/report (3).zip")));
+    }
+
     void tempDirIsRemoved()
     {
         QString path;

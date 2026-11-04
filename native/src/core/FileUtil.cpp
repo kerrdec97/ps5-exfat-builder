@@ -112,6 +112,23 @@ QString sanitizeFileName(const QString& name)
     return out.isEmpty() ? QStringLiteral("_") : out;
 }
 
+QString uniquePath(const QString& path)
+{
+    const auto taken = [](const QString& p) { return QFileInfo::exists(p) || QFileInfo::exists(p + QStringLiteral(".part")); };
+    if (!taken(path))
+        return path;
+    const QFileInfo fi(path);
+    const QString dir = fi.absolutePath();
+    const QString base = fi.completeBaseName();
+    const QString suffix = fi.suffix().isEmpty() ? QString() : QStringLiteral(".") + fi.suffix();
+    for (int i = 2; i < 10000; ++i) {
+        const QString candidate = QDir(dir).filePath(QStringLiteral("%1 (%2)%3").arg(base).arg(i).arg(suffix));
+        if (!taken(candidate))
+            return candidate;
+    }
+    return path;
+}
+
 // ---- writes ------------------------------------------------------------------
 
 Status writeFileAtomic(const QString& path, const QByteArray& data)
