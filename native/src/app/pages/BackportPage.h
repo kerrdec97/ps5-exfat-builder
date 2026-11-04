@@ -66,6 +66,9 @@ private:
     void addGameFolder(const QString& folder);
     void scan();
     void restoreOriginals();
+    // True when the run may start: Apply is off, or the user confirmed that
+    // the listed game folders will be changed (the Backport GUI asks too).
+    bool confirmApply(const QStringList& folders);
     void onJobFinished(const QString& id);
     void fixSdk(const QString& folder, bool inPlace);
     void undoSdkFix(const QString& folder);

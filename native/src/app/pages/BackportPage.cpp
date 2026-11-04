@@ -304,6 +304,8 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     connect(m_table, &GameTable::contextRequested, this, [this](const QString& folder, const QPoint& pos) {
         QMenu menu(this);
         menu.addAction(QStringLiteral("Backport this game"), this, [this, folder] {
+            if (!confirmApply({folder}))
+                return;
             auto r = jobs::submitBackport(m_ctx, {folder}, m_options->overrides());
             if (r.ok()) {
                 m_ctx.queue().holdQueue(false);
@@ -562,10 +564,35 @@ void BackportPage::onJobFinished(const QString& id)
     }
 }
 
+bool BackportPage::confirmApply(const QStringList& folders)
+{
+    if (!m_options->effectiveValue(backport::keys::kApplyToGameFolder).toBool())
+        return true;
+    constexpr int kShown = 12;
+    QStringList lines;
+    for (int i = 0; i < folders.size() && i < kShown; ++i)
+        lines << Sheet::monoSpan(nativePath(folders[i]));
+    if (folders.size() > kShown)
+        lines << QStringLiteral("and %1 more").arg(folders.size() - kShown);
+    const QString originals = m_ctx.settings().value(backport::keys::kOriginalsZipFolder).toString().trimmed();
+    const QString text =
+        QStringLiteral("Apply to game folders is on, so the backported files are copied into %1:<br>%2<br><br>"
+                       "Only the backport files are written. The original files are saved first to an originals ZIP "
+                       "in %3 and read back, and an interrupted copy is rolled back.")
+            .arg(folders.size() == 1 ? QStringLiteral("this folder") : QStringLiteral("these folders"),
+                 lines.join(QStringLiteral("<br>")),
+                 originals.isEmpty() ? QStringLiteral("the originals ZIP folder") : Sheet::monoSpan(nativePath(originals)));
+    return Sheet::confirm(window(), QStringLiteral("Change the game folders?"), text,
+                          QStringLiteral("Keep folders unchanged"), QStringLiteral("Apply to game folders"), false,
+                          Sheet::Icon::Warning);
+}
+
 void BackportPage::primaryAction()
 {
     const QStringList checked = m_table->checkedFolders();
     if (checked.isEmpty() || !m_backport->isEnabled())
+        return;
+    if (!confirmApply(checked))
         return;
     auto r = jobs::submitBackport(m_ctx, checked, m_options->overrides());
     if (!r.ok()) {
