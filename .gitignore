@@ -103,3 +103,4 @@ native/out/
 native/.vs/
 native/CMakeUserPresets.json
 .claude/worktrees/
+!native/src/app/windows/app.manifest
