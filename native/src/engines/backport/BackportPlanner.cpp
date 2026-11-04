@@ -1,0 +1,416 @@
+#include "engines/backport/BackportPlanner.h"
+
+#include "core/FileUtil.h"
+#include "core/Paths.h"
+#include "engines/backport/BackupArchive.h"
+
+#include <QDir>
+#include <QFileInfo>
+#include <QMap>
+
+#include <algorithm>
+
+namespace fw::backport {
+
+QString severityName(Severity s)
+{
+    switch (s) {
+    case Severity::Refuse: return QStringLiteral("refuse");
+    case Severity::Confirm: return QStringLiteral("confirm");
+    case Severity::Warn: return QStringLiteral("warn");
+    case Severity::Info: return QStringLiteral("info");
+    }
+    return QStringLiteral("info");
+}
+
+const Issue* BackportPlan::blocking() const
+{
+    for (const Issue& i : issues)
+        if (i.severity == Severity::Refuse)
+            return &i;
+    if (!options.confirmDiffers)
+        for (const Issue& i : issues)
+            if (i.severity == Severity::Confirm)
+                return &i;
+    return nullptr;
+}
+
+bool BackportPlan::canRun() const
+{
+    return blocking() == nullptr;
+}
+
+Error BackportPlan::blockingError() const
+{
+    const Issue* i = blocking();
+    if (!i)
+        return makeError(Code::Internal, QStringLiteral("Nothing blocks this backport."));
+    QString detail;
+    if (!i->files.isEmpty())
+        detail = i->files.join(QStringLiteral(", "));
+    return makeError(i->code, i->message, detail);
+}
+
+QList<Issue> BackportPlan::issuesOf(Severity s) const
+{
+    QList<Issue> out;
+    for (const Issue& i : issues)
+        if (i.severity == s)
+            out << i;
+    return out;
+}
+
+QString BackportPlan::summary() const
+{
+    const QString zips = options.backportDir.isEmpty() ? QStringLiteral("originals ZIP only")
+                                                       : QStringLiteral("backport + originals ZIPs");
+    const QString game = options.applyToGame ? QStringLiteral("game folder patched")
+                                             : QStringLiteral("game folder unchanged");
+    return QStringLiteral("Next run: SDK %1 · %2 · %3").arg(options.targetSdk).arg(zips, game);
+}
+
+namespace {
+
+QString native(const QString& p)
+{
+    return QDir::toNativeSeparators(p);
+}
+
+QString listFiles(const QStringList& files, int max = 3)
+{
+    QStringList shown = files.mid(0, max);
+    QString s = shown.join(QStringLiteral(", "));
+    if (files.size() > max)
+        s += QStringLiteral(" and %1 more").arg(files.size() - max);
+    return s;
+}
+
+} // namespace
+
+Result<BackportPlan> planBackport(const BackportOptions& opt, const CancellationToken& token)
+{
+    BackportPlan plan;
+    plan.options = opt;
+    auto add = [&plan](Code c, Severity s, const QString& msg, const QStringList& files = {}) {
+        plan.issues << Issue{c, s, msg, files};
+    };
+
+    // S3: a supported pair, never clamped.
+    plan.pair = sdkPair(opt.targetSdk);
+    if (!plan.pair)
+        add(Code::TargetSdkInvalid, Severity::Refuse,
+            QStringLiteral("Target SDK %1 is not supported. Choose SDK %2 to %3.")
+                .arg(opt.targetSdk)
+                .arg(kMinTargetSdk)
+                .arg(kMaxTargetSdk));
+
+    const QFileInfo gi(opt.game);
+    if (opt.game.trimmed().isEmpty() || !gi.isDir()) {
+        add(Code::NotAGame, Severity::Refuse,
+            QStringLiteral("The game folder %1 does not exist.").arg(native(opt.game)));
+        return plan;
+    }
+    const QString game = QDir::cleanPath(gi.absoluteFilePath());
+    plan.options.game = game;
+    plan.folderName = QFileInfo(game).fileName();
+
+    // S9: the originals ZIP folder is required.
+    if (opt.originalsDir.trimmed().isEmpty())
+        add(Code::ZipFolderInvalid, Severity::Refuse,
+            QStringLiteral("Choose where the originals ZIP is saved (Settings > Backport). Without it the original "
+                           "files would have no lasting copy. Nothing was changed."));
+    if (!opt.applyToGame && opt.backportDir.trimmed().isEmpty())
+        add(Code::ZipFolderInvalid, Severity::Refuse,
+            QStringLiteral("Apply to game folders is off and no backport ZIP folder is set, so the run would "
+                           "produce nothing. Choose a backport ZIP folder or turn Apply on."));
+    // S38: nested ZIP folders are refused; equal folders are fine.
+    if (!opt.originalsDir.isEmpty() && !opt.backportDir.isEmpty()) {
+        const bool a = isSameOrInside(opt.originalsDir, opt.backportDir);
+        const bool b = isSameOrInside(opt.backportDir, opt.originalsDir);
+        if (a != b)
+            add(Code::ZipFolderInvalid, Severity::Refuse,
+                QStringLiteral("The backport ZIP folder and the originals ZIP folder must not be inside each other "
+                               "(%1, %2). Use the same folder or two separate ones.")
+                    .arg(native(opt.backportDir), native(opt.originalsDir)));
+    }
+
+    // Scan (read-only). The ZIP folders are never entered (S38).
+    QStringList excludes;
+    for (const QString& d : {opt.originalsDir, opt.backportDir})
+        if (!d.isEmpty())
+            excludes << QDir::cleanPath(QFileInfo(d).absoluteFilePath());
+    FW_TRY_ASSIGN(plan.scan, scanGame(game, token, ScanMode::Full, excludes));
+    const ScanResult& scan = plan.scan;
+
+    // S5
+    if (!scan.hasEboot)
+        add(Code::NotAGame, Severity::Refuse,
+            QStringLiteral("eboot.bin is not in %1. Pick the game's root folder.").arg(native(game)));
+
+    // S32: encrypted / compressed SELFs, reported before anything changes.
+    QStringList enc;
+    for (const ExecFile* e : scan.encryptedOrCompressed())
+        enc << e->rel;
+    if (!enc.isEmpty()) {
+        if (opt.encryptedPolicy == EncryptedPolicy::Refuse) {
+            add(Code::SelfEncrypted, Severity::Refuse,
+                QStringLiteral("%1 %2 still encrypted or compressed. The dump may not be fully decrypted; dump the "
+                               "game again or choose \"Leave encrypted files unchanged\". Nothing was changed.")
+                    .arg(listFiles(enc), enc.size() == 1 ? QStringLiteral("is") : QStringLiteral("are")),
+                enc);
+        } else {
+            plan.leaveUnchanged = enc;
+            add(Code::SelfEncrypted, Severity::Warn,
+                QStringLiteral("%1 will be left unchanged because %2 encrypted or compressed. The result is marked "
+                               "Partial; whether the game loads is UNVERIFIED.")
+                    .arg(listFiles(enc), enc.size() == 1 ? QStringLiteral("it is") : QStringLiteral("they are")),
+                enc);
+        }
+    }
+
+    // Every executable the run would rewrite must be rewritable (D4 up front).
+    for (const ExecFile& e : scan.executables) {
+        if (e.area != Area::Game || e.isEncryptedOrCompressed() || e.problemCode == Code::Ok)
+            continue;
+        QString msg;
+        switch (e.problemCode) {
+        case Code::ParamMissing:
+        case Code::ParamSizeInvalid:
+        case Code::ParamMagicInvalid:
+        case Code::ParamOutOfRange:
+            msg = QStringLiteral("%1: %2.").arg(e.rel, e.problem);
+            break;
+        case Code::SignUnsupported:
+            msg = QStringLiteral("The SDK %1 build was refused: %2 is not a PS5 executable this tool can rewrite (%3).")
+                      .arg(opt.targetSdk)
+                      .arg(e.rel, e.problem);
+            break;
+        default:
+            msg = QStringLiteral("%1 is not a PS5 executable this tool can rewrite (%2).").arg(e.rel, e.problem);
+            break;
+        }
+        add(e.problemCode, Severity::Refuse, msg, {e.rel});
+    }
+
+    // D7 / S4: the game's own SDK comes from eboot.bin.
+    plan.meta = readGameMetadata(game);
+    plan.gameSdk = scan.gameSdk();
+    if (scan.hasEboot && plan.pair) {
+        const ExecFile* eb = scan.eboot();
+        if (!plan.gameSdk) {
+            add(Code::GameSdkUnknown, Severity::Refuse,
+                QStringLiteral("The game's own SDK could not be read from eboot.bin%1, so the target SDK cannot be "
+                               "checked.")
+                    .arg(eb && !eb->problem.isEmpty() ? QStringLiteral(" (%1)").arg(eb->problem) : QString()));
+        } else if (opt.targetSdk > *plan.gameSdk) {
+            add(Code::TargetAboveGameSdk, Severity::Refuse,
+                QStringLiteral("Target SDK %1 is higher than this game's own SDK %2. Choose SDK %2 or lower.")
+                    .arg(opt.targetSdk)
+                    .arg(*plan.gameSdk));
+        }
+        if (plan.meta.paramSdk && plan.gameSdk && *plan.meta.paramSdk != *plan.gameSdk)
+            add(Code::Ok, Severity::Info,
+                QStringLiteral("param.json says SDK %1; eboot.bin says SDK %2, which is used.")
+                    .arg(*plan.meta.paramSdk)
+                    .arg(*plan.gameSdk));
+    }
+
+    // S8 / S6 / S14 / D3: fakelib.
+    if (!opt.fakelibDir.trimmed().isEmpty()) {
+        FakelibSource src;
+        const QStringList problems = fakelibProblems(opt.fakelibDir, game, &src, token);
+        if (!problems.isEmpty()) {
+            add(Code::FakelibInvalid, Severity::Refuse,
+                QStringLiteral("The fakelib folder %1 cannot be used: %2")
+                    .arg(native(opt.fakelibDir), problems.join(QStringLiteral(" "))),
+                problems);
+        } else {
+            plan.fakelib = src;
+            plan.fakelibState = fakelibState(game, &src, token);
+            if (plan.fakelibState == FakelibState::Same) {
+                add(Code::AlreadyBackported, Severity::Refuse,
+                    QStringLiteral("This game folder already contains backport files: fakelib/ matches the chosen "
+                                   "set, so the originals can't be captured from it. Restore the originals first."),
+                    {QStringLiteral("fakelib/")});
+            } else if (plan.fakelibState == FakelibState::Other) {
+                plan.fakelibExtras = fakelibExtras(game, src);
+                add(Code::Ok, Severity::Warn,
+                    QStringLiteral("The game already has a fakelib folder from another tool. Its files that the set "
+                                   "replaces are kept in the originals ZIP.%1")
+                        .arg(plan.fakelibExtras.isEmpty()
+                                 ? QString()
+                                 : QStringLiteral(" These are carried over unchanged: %1.")
+                                       .arg(plan.fakelibExtras.join(QStringLiteral(", ")))),
+                    plan.fakelibExtras);
+            }
+            QStringList dirs = {QString()};
+            dirs << scan.nestedEbootDirs;
+            for (const QString& d : std::as_const(dirs)) {
+                for (const FakelibLib& l : src.libs) {
+                    const QString wanted = (d.isEmpty() ? QString() : d + u'/') + QStringLiteral("fakelib/") + l.name;
+                    const QString existing = scan.resolve(wanted);
+                    plan.stagedFakelibTargets << (existing.isEmpty() ? wanted : existing);
+                    if (!existing.isEmpty())
+                        plan.replacedFakelibFiles << existing;
+                }
+            }
+        }
+    } else if (!scan.fakelibFiles.isEmpty()) {
+        add(Code::Ok, Severity::Info,
+            QStringLiteral("The dump's own fakelib/ (%1 files) is carried over unchanged; no fakelib set was chosen.")
+                .arg(scan.fakelibFiles.size()));
+    }
+
+    // S10 / S30 / S28: ZIP folders.
+    plan.prefix = zipPrefix(plan.meta, plan.folderName);
+    plan.titleId = manifestTitleId(plan.meta, game);
+    if (!opt.originalsDir.trimmed().isEmpty()) {
+        const QString why = zipDestinationProblem(opt.originalsDir, game, originalsZipName(plan.prefix));
+        if (!why.isEmpty())
+            add(Code::ZipFolderInvalid, Severity::Refuse,
+                QStringLiteral("Originals ZIP folder %1: %2").arg(native(opt.originalsDir), why));
+        else
+            plan.originalsZipPath = uniqueZipPath(QDir(opt.originalsDir).filePath(originalsZipName(plan.prefix)));
+    }
+    if (!opt.backportDir.trimmed().isEmpty()) {
+        const QString why = zipDestinationProblem(opt.backportDir, game, backportZipName(plan.prefix, kMaxTargetSdk));
+        if (!why.isEmpty())
+            add(Code::ZipFolderInvalid, Severity::Refuse,
+                QStringLiteral("Backport ZIP folder %1: %2").arg(native(opt.backportDir), why));
+        else if (plan.pair)
+            plan.backportZipPath =
+                uniqueZipPath(QDir(opt.backportDir).filePath(backportZipName(plan.prefix, opt.targetSdk)));
+    }
+
+    // S7: manifest verdict.
+    if (!opt.originalsDir.trimmed().isEmpty() && QFileInfo(opt.originalsDir).isDir()) {
+        plan.manifestPath = manifestPathFor(opt.originalsDir, plan.titleId);
+        auto m = readManifest(plan.manifestPath);
+        if (!m.ok()) {
+            add(Code::Ok, Severity::Warn,
+                QStringLiteral("%1 It is treated as missing and will be replaced.").arg(m.error().message));
+        } else {
+            plan.manifest = m.value();
+            auto [verdict, files] = manifestVerdict(scan, plan.manifest ? &*plan.manifest : nullptr, token);
+            plan.verdict = verdict;
+            plan.verdictFiles = files;
+            if (verdict == Verdict::Patched)
+                add(Code::AlreadyBackported, Severity::Refuse,
+                    QStringLiteral("This game folder already contains backport files: %1 match the files an earlier "
+                                   "backport produced. Restore the originals first.")
+                        .arg(listFiles(files)),
+                    files);
+            else if (verdict == Verdict::Differs)
+                add(Code::DiffersFromOriginals, opt.confirmDiffers ? Severity::Warn : Severity::Confirm,
+                    QStringLiteral("%1 differ from the recorded originals (already patched, or another version of the "
+                                   "game). Continue only if this folder holds the unmodified game.")
+                        .arg(listFiles(files)),
+                    files);
+        }
+    }
+
+    // NothingToDo: no executable to rewrite and no fakelib to add.
+    const auto processable = scan.processable();
+    int toRewrite = 0;
+    for (const ExecFile* e : processable)
+        if (!plan.leaveUnchanged.contains(e->rel))
+            ++toRewrite;
+    if (scan.hasEboot && toRewrite == 0 && plan.stagedFakelibTargets.isEmpty())
+        add(Code::NothingToDo, Severity::Refuse,
+            QStringLiteral("No backport is needed: %1 has no executable this tool can rewrite.").arg(native(game)));
+
+    // S16 / S15: reported, kept.
+    if (!scan.leftoverBaks.isEmpty())
+        add(Code::Ok, Severity::Info,
+            QStringLiteral("Existing .bak files are left alone: %1.").arg(listFiles(scan.leftoverBaks)),
+            scan.leftoverBaks);
+    if (!scan.skippedSymlinks.isEmpty())
+        add(Code::Ok, Severity::Warn,
+            QStringLiteral("Links are not followed and not backported: %1.").arg(listFiles(scan.skippedSymlinks)),
+            scan.skippedSymlinks);
+
+    // S11 / S28: staging paths are long-path aware (\\?\ via fw::toLongPath),
+    // so a long path is a warning, not a refusal.
+    const QString stagingBase = !opt.stagingHint.isEmpty()
+        ? opt.stagingHint
+        : QDir(Paths::tempRoot()).filePath(QStringLiteral("fw-job-00000000-00000000000000-000000"));
+    int longest = 0;
+    QString longestRel;
+    for (const ExecFile* e : processable)
+        if (e->rel.size() > longestRel.size())
+            longestRel = e->rel;
+    for (const QString& t : std::as_const(plan.stagedFakelibTargets))
+        if (t.size() > longestRel.size())
+            longestRel = t;
+    if (!longestRel.isEmpty()) {
+        // "<staging>/staging/unwrapped/<rel>"; 32 characters of slack for the
+        // folder name a failed run's staging is moved to.
+        longest = int(native(QDir(stagingBase).filePath(QStringLiteral("staging/unwrapped/") + longestRel)).size()) + 32;
+        plan.longestStagingPath = longest;
+        if (longest > kMaxWinPath)
+            add(Code::PathTooLong, Severity::Warn,
+                QStringLiteral("%1 will be staged under a path of about %2 characters; the app uses long-path "
+                               "handling for it. If your system refuses long paths, choose a shorter temporary "
+                               "folder in Settings > Storage.")
+                    .arg(longestRel)
+                    .arg(longest),
+                {longestRel});
+    }
+
+    // S12: free space for staging, both ZIPs and (Apply on) the game.
+    {
+        const qint64 exec = scan.processableBytes();
+        const qint64 fakelibStaged = plan.fakelib ? plan.fakelib->totalBytes() * (1 + scan.nestedEbootDirs.size()) : 0;
+        qint64 replacedFakelib = 0;
+        for (const QString& r : std::as_const(plan.replacedFakelibFiles))
+            replacedFakelib += QFileInfo(joinPath(game, r)).size();
+        qint64 largest = 0;
+        for (const ExecFile* e : processable)
+            largest = std::max(largest, e->size);
+        qint64 added = 0;
+        if (plan.fakelib)
+            for (const QString& t : std::as_const(plan.stagedFakelibTargets))
+                if (scan.resolve(t).isEmpty())
+                    if (const FakelibLib* l = plan.fakelib->find(t.section(u'/', -1)))
+                        added += l->size;
+
+        struct Need {
+            QString path;
+            QString use;
+            qint64 bytes;
+        };
+        std::vector<Need> needs;
+        needs.push_back({stagingBase, QStringLiteral("staging"), 3 * exec + fakelibStaged + replacedFakelib});
+        if (!opt.originalsDir.isEmpty())
+            needs.push_back({opt.originalsDir, QStringLiteral("originals ZIP"),
+                             qint64(1.1 * double(exec + scan.paramJsonBytes + scan.decryptedBytes + replacedFakelib))});
+        if (!opt.backportDir.isEmpty())
+            needs.push_back({opt.backportDir, QStringLiteral("backport ZIP"), qint64(1.1 * double(exec + fakelibStaged))});
+        if (opt.applyToGame)
+            needs.push_back({game, QStringLiteral("game folder"),
+                             added + largest + 64 * 1024 * qint64(processable.size())});
+        QMap<QString, SpaceNeed> byVolume;
+        for (const Need& n : needs) {
+            auto ds = opt.diskSpaceProbe ? opt.diskSpaceProbe(n.path) : diskSpace(n.path);
+            if (!ds.ok())
+                continue; // a missing folder is already refused above
+            SpaceNeed& s = byVolume[ds->rootPath];
+            s.volume = ds->rootPath;
+            s.uses << n.use;
+            s.needBytes += n.bytes;
+            s.availableBytes = ds->available;
+        }
+        for (const SpaceNeed& s : std::as_const(byVolume)) {
+            plan.space.push_back(s);
+            if (s.availableBytes < s.needBytes + opt.freeSpaceMarginBytes)
+                add(Code::InsufficientSpace, Severity::Refuse,
+                    QStringLiteral("Not enough space on %1 for the %2: about %3 needed (with the free-space reserve), "
+                                   "%4 free.")
+                        .arg(native(s.volume), s.uses.join(QStringLiteral(", ")),
+                             formatBytes(s.needBytes + opt.freeSpaceMarginBytes), formatBytes(s.availableBytes)));
+        }
+    }
+    return plan;
+}
+
+} // namespace fw::backport
