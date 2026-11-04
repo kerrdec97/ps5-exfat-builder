@@ -1,0 +1,10 @@
+#pragma once
+
+namespace fw::build {
+inline constexpr const char* kProductName = "@FW_PRODUCT_NAME@";
+inline constexpr const char* kEditionName = "@FW_EDITION_NAME@";
+inline constexpr const char* kVersion = "@PROJECT_VERSION@";
+inline constexpr int kVersionMajor = @PROJECT_VERSION_MAJOR@;
+inline constexpr int kVersionMinor = @PROJECT_VERSION_MINOR@;
+inline constexpr int kVersionPatch = @PROJECT_VERSION_PATCH@;
+} // namespace fw::build

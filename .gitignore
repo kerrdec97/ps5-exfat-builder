@@ -96,3 +96,9 @@ exfat_builder_v*.zip
 
 # Scratch prototype (not imported by the app — design exploration only)
 elevation_prototype.py
+
+# Native C++ rebuild (native/)
+native/build*/
+native/out/
+native/.vs/
+native/CMakeUserPresets.json
