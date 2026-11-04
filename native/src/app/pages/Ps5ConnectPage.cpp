@@ -390,7 +390,8 @@ QWidget* Ps5ConnectPage::buildFtpTab()
     m_remote->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_remote, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         if (row >= 0 && row < int(m_listing.entries.size()) && m_listing.entries[size_t(row)].isDir)
-            listRemote(ps5::joinRemote(m_remoteDir, m_listing.entries[size_t(row)].name));
+            if (const auto child = ps5::remoteChild(m_remoteDir, m_listing.entries[size_t(row)].name))
+                listRemote(*child);
     });
     connect(m_remote, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& p) {
         if (!m_remote->itemAt(p))
@@ -399,7 +400,10 @@ QWidget* Ps5ConnectPage::buildFtpTab()
         const int row = m_remote->itemAt(p)->row();
         const bool dir = row < int(m_listing.entries.size()) && m_listing.entries[size_t(row)].isDir;
         if (dir)
-            menu.addAction(QStringLiteral("Open"), this, [this, row] { listRemote(ps5::joinRemote(m_remoteDir, m_listing.entries[size_t(row)].name)); });
+            menu.addAction(QStringLiteral("Open"), this, [this, row] {
+                if (const auto child = ps5::remoteChild(m_remoteDir, m_listing.entries[size_t(row)].name))
+                    listRemote(*child);
+            });
         menu.addAction(QStringLiteral("Download"), this, &Ps5ConnectPage::downloadSelected)->setEnabled(m_btnDownload->isEnabled());
         menu.addAction(QStringLiteral("Rename…"), this, &Ps5ConnectPage::renameSelected);
         menu.addAction(QStringLiteral("Copy path"), this, [this] {
@@ -517,7 +521,9 @@ QStringList Ps5ConnectPage::selectedRemotePaths() const
     QStringList out;
     for (const QModelIndex& i : m_remote->selectionModel()->selectedRows())
         if (i.row() < int(m_listing.entries.size()))
-            out << ps5::joinRemote(m_remoteDir, m_listing.entries[size_t(i.row())].name);
+            // Names from the console's listing: one with a slash, a backslash or ".." never becomes a path.
+            if (const auto child = ps5::remoteChild(m_remoteDir, m_listing.entries[size_t(i.row())].name))
+                out << *child;
     return out;
 }
 
@@ -580,7 +586,8 @@ void Ps5ConnectPage::deleteSelected()
     for (const QModelIndex& i : m_remote->selectionModel()->selectedRows())
         if (i.row() < int(m_listing.entries.size())) {
             const auto& e = m_listing.entries[size_t(i.row())];
-            m_session->remove(ps5::joinRemote(m_remoteDir, e.name), e.isDir);
+            if (const auto child = ps5::remoteChild(m_remoteDir, e.name))
+                m_session->remove(*child, e.isDir);
         }
 }
 
@@ -602,8 +609,12 @@ void Ps5ConnectPage::renameSelected()
     if (s->exec() != 1)
         return;
     const QString n = name->text().trimmed();
-    if (n.isEmpty() || n.contains(u'/') || n == ps5::remoteFileName(sel.first()))
+    if (n.isEmpty() || n == ps5::remoteFileName(sel.first()))
         return;
+    if (const QString why = ps5::remoteNameProblem(n); !why.isEmpty()) {
+        emit toastRequested(Tone::Warn, QStringLiteral("Not renamed"), why);
+        return;
+    }
     m_session->rename(sel.first(), ps5::joinRemote(m_remoteDir, n));
 }
 
@@ -620,8 +631,12 @@ void Ps5ConnectPage::newFolder()
     if (s->exec() != 1)
         return;
     const QString n = name->text().trimmed();
-    if (n.isEmpty() || n.contains(u'/'))
+    if (n.isEmpty())
         return;
+    if (const QString why = ps5::remoteNameProblem(n); !why.isEmpty()) {
+        emit toastRequested(Tone::Warn, QStringLiteral("Folder not created"), why);
+        return;
+    }
     m_session->mkdir(ps5::joinRemote(m_remoteDir, n));
 }
 
