@@ -30,6 +30,8 @@ public:
     const SettingsSchema& schema() const { return *m_schema; }
     DependencyRegistry& dependencies() { return m_deps; }
     const JobFactory& jobFactory() const { return m_factory; }
+    // Tests register fake job kinds here; the app never adds kinds after start-up.
+    JobFactory& mutableJobFactory() { return m_factory; }
     JobQueue& queue() { return *m_queue; }
     JobHistory& history() { return *m_history; }
     std::shared_ptr<RingBufferSink> logBuffer() const { return m_ring; }

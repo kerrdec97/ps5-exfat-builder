@@ -1,0 +1,140 @@
+#pragma once
+
+// Page base classes.
+//
+//  * Page        — scrollable content under a PageHeader; navigation, F5,
+//                  drops, Ctrl+B and screenshot "demo states" are virtuals.
+//  * JobFormPage — the "Form + dock" template (§2.4): a left form column
+//                  (max 760 px) and the 400 px Jobs dock; it owns the
+//                  Add-to-queue / primary buttons, the unavailable state when a
+//                  job kind is not registered, the job options panel and the
+//                  submit flow through services/JobSubmit.
+
+#include "app/ui/JobRows.h"
+#include "app/ui/SettingRow.h"
+#include "app/ui/Shell.h"
+#include "app/ui/Widgets.h"
+#include "core/Result.h"
+
+#include <QScrollArea>
+#include <QUrl>
+#include <QVariantMap>
+#include <QWidget>
+
+namespace fw {
+class AppContext;
+class JobQueueModel;
+class LogModel;
+} // namespace fw
+
+namespace fw::pages {
+
+struct NavRequest {
+    QString page;
+    QVariantMap args; // e.g. {"source": "D:/Dumps/PPSA01325"}, {"jobId": "..."}, {"section": "Tools"}
+};
+
+class Page : public QWidget {
+    Q_OBJECT
+public:
+    Page(AppContext& ctx, const QString& key, const QString& title, const QString& caption, QWidget* parent = nullptr);
+    QString key() const { return m_key; }
+    QString title() const { return m_title; }
+    ui::PageHeader* header() { return m_header; }
+    QVBoxLayout* content() { return m_content; }
+    QScrollArea* scrollArea() { return m_scroll; }
+
+    virtual bool hasPrimaryAction() const { return false; }
+    virtual void primaryAction() {}
+    virtual void refresh() {}                                  // F5
+    virtual bool acceptsDrop(const QList<QUrl>& urls) const { Q_UNUSED(urls); return false; }
+    virtual void dropUrls(const QList<QUrl>& urls) { Q_UNUSED(urls); }
+    virtual void setDragHighlight(bool on) { Q_UNUSED(on); }
+    virtual void navigateWith(const QVariantMap& args) { Q_UNUSED(args); }
+    virtual QString statusContext() const { return {}; }     // status bar, right side
+    virtual void onShown() {}
+    // Screenshot states (CI evidence): names and how to enter/leave them.
+    virtual QStringList demoStates() const { return {}; }
+    virtual void applyDemoState(const QString& name) { Q_UNUSED(name); }
+    virtual void clearDemoState() {}
+signals:
+    void navigateRequested(const fw::pages::NavRequest& request);
+    void toastRequested(fw::ui::Tone tone, const QString& title, const QString& body);
+    void statusContextChanged();
+
+protected:
+    AppContext& m_ctx;
+
+private:
+    QString m_key, m_title;
+    ui::PageHeader* m_header;
+    QScrollArea* m_scroll;
+    QVBoxLayout* m_content;
+};
+
+class JobFormPage : public Page {
+    Q_OBJECT
+public:
+    JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QString& key, const QString& title,
+                const QString& caption, const QString& primaryText, const QString& featureName, QWidget* parent = nullptr);
+    bool hasPrimaryAction() const override { return true; }
+    void primaryAction() override { submitClicked(true); }
+    ui::JobsDock* dock() { return m_dock; }
+    QVBoxLayout* form() { return m_form; }
+    QVBoxLayout* aside() { return m_aside; }
+    QPushButton* primaryButton() { return m_primary; }
+    QPushButton* queueButton() { return m_queue; }
+    bool isAvailable() const { return m_available; }
+    QStringList demoStates() const override { return {QStringLiteral("error")}; }
+    void applyDemoState(const QString& name) override;
+    void clearDemoState() override;
+    void setDragHighlight(bool on) override;
+    ui::Card* sourceCard() const { return m_sourceCard; }
+    bool openOutputWhenDone() const;
+signals:
+    void jobSubmitted(const QString& id, bool openOutputFolderWhenDone);
+
+protected:
+    // Job kinds the page needs; the unavailable state shows when any is missing.
+    void setRequiredKinds(const QStringList& kinds);
+    void refreshAvailability();
+    // Pages implement validation + submission; return the job id.
+    virtual Result<QString> submit(bool buildNow) = 0;
+    // Called before submit; return a user-facing message to block submission.
+    virtual QString validateForm() { return {}; }
+    void showFormError(const QString& title, const QString& message);
+    void clearFormError();
+    void setSourceCard(ui::Card* card) { m_sourceCard = card; }
+    // Standard "job settings" card with the schema's perJob settings.
+    ui::JobOptionsPanel* addJobOptionsCard(const QString& title, const QStringList& sections,
+                                          const QStringList& excludeKeys, const QString& settingsLink = {},
+                                          bool withOpenFolderRow = true);
+    ui::JobOptionsPanel* options() { return m_options; }
+    QString featureName() const { return m_feature; }
+
+private:
+    void submitClicked(bool buildNow);
+    QString m_feature;
+    QStringList m_kinds;
+    bool m_available = true;
+    ui::JobsDock* m_dock;
+    QVBoxLayout* m_form;
+    QVBoxLayout* m_aside;
+    QPushButton* m_primary;
+    QPushButton* m_queue;
+    ui::UnavailableState* m_unavailable = nullptr;
+    ui::Card* m_unavailableCard = nullptr;
+    ui::InfoBar* m_error;
+    ui::JobOptionsPanel* m_options = nullptr;
+    ui::Switch* m_openFolder = nullptr;
+    ui::Card* m_sourceCard = nullptr;
+};
+
+// Shared helpers for pages
+QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
+QString relativeTime(const QDateTime& t);         // "2 min ago"
+QString driveLabel(const QString& path);          // "D:" / "/"
+
+} // namespace fw::pages
+
+Q_DECLARE_METATYPE(fw::pages::NavRequest)

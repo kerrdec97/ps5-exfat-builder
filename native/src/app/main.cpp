@@ -1,7 +1,9 @@
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/ui/Theme.h"
 
 #include "core/BuildInfo.h"
+#include "core/CrashHandler.h"
 #include "core/Log.h"
 #include "core/Paths.h"
 
@@ -24,6 +26,7 @@ int main(int argc, char* argv[])
     QApplication::setApplicationName(QStringLiteral("exFAT Image Builder Farewell"));
     QApplication::setApplicationDisplayName(QStringLiteral("exFAT Image Builder"));
     QApplication::setApplicationVersion(QString::fromLatin1(fw::build::kVersion));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/drive.svg")));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("PS5 exFAT Image Builder — Farewell Edition"));
@@ -43,7 +46,9 @@ int main(int argc, char* argv[])
     parser.process(app);
 
     fw::Paths::initialize();
+    fw::crash::install(QDir(fw::Paths::logsDir()).filePath(QStringLiteral("crashes")));
     fw::Logger::installQtMessageHandler();
+    fw::theme::apply(&app);
 
     fw::AppContext context;
     if (auto st = context.initialize(); !st.ok()) {
