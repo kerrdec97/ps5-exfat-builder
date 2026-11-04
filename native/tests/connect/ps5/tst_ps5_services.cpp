@@ -213,6 +213,26 @@ const QByteArray kParam = "{\n  \"contentVersion\": \"01.020.000\",\n  \"masterV
                           "  \"versionFileUri\": \"http://gs-sec.ww.np.dl.playstation.net/x.xml\",\n  \"size\": 12345678901234567890,\n"
                           "  \"titleId\": \"PPSA01650\"\n}\n";
 
+// A fake console holding the YouTube metadata files Y2JB patches.
+struct Console {
+    QString root;
+    QByteArray appDb, appInfoDb;
+};
+
+Console makeConsole(const QString& root)
+{
+    Console k;
+    k.root = root;
+    const QString tid = QStringLiteral("PPSA01650");
+    fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("user/appmeta/%1/param.json").arg(tid)), kParam);
+    QDir().mkpath(QDir(root).filePath(QStringLiteral("system_data/priv/mms")));
+    makeAppInfoDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")), tid);
+    makeAppDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")), tid, true);
+    k.appDb = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")));
+    k.appInfoDb = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")));
+    return k;
+}
+
 struct Module {
     std::shared_ptr<SettingsSchema> schema = std::make_shared<SettingsSchema>();
     DependencyRegistry deps;
@@ -382,7 +402,7 @@ private slots:
                 stopped = true;
         });
         client.start();
-        QVERIFY(QTest::qWaitFor([&] { return stopped.load(); }, 5000));
+        QVERIFY(QTest::qWaitFor([&] { return stopped.load(); }, 15000)); // Windows takes ~2 s to refuse
         QCOMPARE(client.connections(), 0);
     }
 
@@ -408,26 +428,49 @@ private slots:
         Error err;
         auto none = waitForKlogLine(QStringLiteral("127.0.0.1"), 1, [](const QString&) { return true; }, 1000, 1000, {}, &err);
         QCOMPARE(none.outcome, KlogSession::Outcome::ConnectionLost);
-        QVERIFY(err.message.contains(QStringLiteral("kernel log")));
+        // Refused, or (Windows, 1 s connect timeout) no answer: both name the service.
+        QVERIFY2(err.message.contains(QStringLiteral("kernel log server")), qPrintable(err.message));
+        QVERIFY(err.message.contains(QStringLiteral("refused")));
     }
 
     // ---- ShadowMount+ stop handshake ----------------------------------------------------------------
-    void stopTrackerFollowsTheLegacyMarkers()
+    void stopTrackerFollowsTheMarkersAndSettles()
     {
-        StopConfirmTracker a;
-        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount start: x unit=1"))); // before the ack: ignored
-        QVERIFY(!a.feed(QStringLiteral("[SHUTDOWN] stop requested during scanner wait")));
+        // Matching counts are not enough: ShadowMount+ may unmount images one
+        // after another, so the counts must stay matched for the settle time.
+        StopConfirmTracker a(1000);
+        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount start: x unit=1"), 0)); // before the ack: ignored
+        QVERIFY(!a.feed(QStringLiteral("[SHUTDOWN] stop requested during scanner wait"), 10));
         QVERIFY(a.sawAck());
-        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount start: a unit=1")));
-        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount start: b unit=2")));
-        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount complete: a unit=1")));
-        QVERIFY(a.feed(QStringLiteral("[IMG][LVD] unmount complete: b unit=2")));
+        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount start: a unit=1"), 20));
+        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount complete: a unit=1"), 100)); // counts match: settling
+        QVERIFY(!a.poll(1099));
+        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount start: b unit=2"), 600)); // a second image: not settled
+        QVERIFY(!a.poll(1200));
+        QVERIFY(!a.feed(QStringLiteral("[IMG][LVD] unmount complete: b unit=2"), 1300));
+        QVERIFY(!a.poll(2299));
+        QVERIFY(a.poll(2300));
         QCOMPARE(a.unmountsStarted(), 2);
-        StopConfirmTracker b;
-        QVERIFY(b.feed(QStringLiteral("# process pid=12, shadowmountplus.elf calls exit() exit_value=0.")));
-        StopConfirmTracker c;
-        QVERIFY(!c.feed(QStringLiteral("[shutdown] stop requested")));
-        QVERIFY(!c.feed(QStringLiteral("nothing else"))); // an ack alone is not enough
+        QCOMPARE(a.unmountsCompleted(), 2);
+        QVERIFY(!a.sawExit());
+
+        // The exit line is final at once.
+        StopConfirmTracker b(1000);
+        QVERIFY(b.feed(QStringLiteral("# process pid=12, shadowmountplus.elf calls exit() exit_value=0."), 5));
+        QVERIFY(b.sawExit());
+        StopConfirmTracker c(1000);
+        QVERIFY(!c.feed(QStringLiteral("[shutdown] stop requested"), 0));
+        QVERIFY(!c.poll(60000)); // an ack alone is never enough
+
+        // The default quiet period.
+        QCOMPARE(StopConfirmTracker::kSettleMs, 6000);
+        StopConfirmTracker d;
+        QCOMPARE(d.settleMs(), StopConfirmTracker::kSettleMs);
+        d.feed(QStringLiteral("[shutdown] stop requested"), 0);
+        d.feed(QStringLiteral("unmount start u=1"), 0);
+        QVERIFY(!d.feed(QStringLiteral("unmount complete u=1"), 1000));
+        QVERIFY(!d.poll(1000 + StopConfirmTracker::kSettleMs - 1));
+        QVERIFY(d.poll(1000 + StopConfirmTracker::kSettleMs));
     }
 
     void safeToUnplugFlow()
@@ -436,21 +479,47 @@ private slots:
         fake::FakeFtpServer::Options fo;
         fo.root = root;
         fake::FakeFtpServer ftp(fo);
+        // Two images released one after the other: the counts match after the
+        // first one, but the second unmount starts 300 ms later.
         fake::FakeLineServer klog({{{0, "[IMG][LVD] unmount start: old unit=0\n"},
                                     {300, "[SHUTDOWN] stop requested during scanner wait\n"},
                                     {20, "[IMG][LVD] unmount start: g unit=1\n"},
-                                    {20, "[IMG][LVD] unmount complete: g unit=1\n"}}},
+                                    {20, "[IMG][LVD] unmount complete: g unit=1\n"},
+                                    {300, "[IMG][LVD] unmount start: h unit=2\n"},
+                                    {100, "[IMG][LVD] unmount complete: h unit=2\n"}}},
                                   false);
         ConsoleEndpoint ep = endpoint(ftp.port());
         ep.klogPort = klog.port();
         QStringList status;
-        auto r = stopShadowMount(ep, {}, [&](const QString& s) { status << s; }, 5000, 2000);
+        QElapsedTimer t;
+        t.start();
+        auto r = stopShadowMount(ep, {}, [&](const QString& s) { status << s; }, 5000, 2000, 800);
         QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
         QCOMPARE(r->outcome, StopOutcome::Confirmed);
-        QCOMPARE(r->unmountsStarted, 1);
+        QCOMPARE(r->unmountsStarted, 2); // did not stop at the first match
+        QCOMPARE(r->unmountsCompleted, 2);
+        QVERIFY(t.elapsed() >= 1500);    // the second unmount + the settle time
         QVERIFY(QFileInfo(QDir(root).filePath(QStringLiteral("data/shadowmount/STOP"))).isFile());
         QCOMPARE(QFileInfo(QDir(root).filePath(QStringLiteral("data/shadowmount/STOP"))).size(), 0);
         QVERIFY(status.first().contains(QStringLiteral("klog")));
+
+        // Balanced but the settle time does not fit before the timeout: amber.
+        fake::FakeLineServer late({{{0, "[shutdown] stop requested\n"}, {10, "unmount start x\n"}, {10, "unmount complete x\n"}}},
+                                  false);
+        ep.klogPort = late.port();
+        auto early = stopShadowMount(ep, {}, {}, 600, 1000, 5000);
+        QCOMPARE(early->outcome, StopOutcome::Timeout);
+
+        // The exit line confirms without waiting.
+        fake::FakeLineServer exitLine({{{100, "x shadowmountplus.elf calls exit() exit_value=0\n"}}}, false);
+        ep.klogPort = exitLine.port();
+        auto ex = stopShadowMount(ep, {}, {}, 5000, 1000, 60000); // settle longer than the timeout
+        QCOMPARE(ex->outcome, StopOutcome::Confirmed);
+
+        // klog closes while waiting: amber.
+        fake::FakeLineServer closing({{{0, "[shutdown] stop requested\n"}}}, true);
+        ep.klogPort = closing.port();
+        QCOMPARE(stopShadowMount(ep, {}, {}, 3000, 1000, 500)->outcome, StopOutcome::KlogLost);
 
         // No klog server: STOP is still sent, the result is amber.
         ep.klogPort = 1;
@@ -740,6 +809,10 @@ private slots:
         QVERIFY(verifyParamJsonText(readAll(QDir(root).filePath(QStringLiteral("user/appmeta/%1/param.json").arg(tid)))).ok);
         QVERIFY(verifyAppDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")), tid).ok);
         QVERIFY(verifyAppInfoDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")), tid).ok);
+        QCOMPARE(QDir(QDir(root).filePath(QStringLiteral("system_data/priv/mms"))).entryList(QDir::Files),
+                 (QStringList{QStringLiteral("app.db"), QStringLiteral("app.db.bak"), QStringLiteral("appinfo.db"),
+                              QStringLiteral("appinfo.db.bak")}));
+        QVERIFY(r->ok());
 
         // Wrong region: databases are not uploaded (0 rows), reported as failures.
         const QByteArray before = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")));
@@ -824,6 +897,116 @@ private slots:
             QVERIFY(r.error().message.contains(QStringLiteral("not changed")));
         }
 #endif
+    }
+
+    // ---- Y2JB review fixes: never truncate the live database, restore on failure -------------
+    void y2jbDropMidUploadKeepsTheLiveDatabase()
+    {
+        const Console k = makeConsole(fresh(QStringLiteral("y2-drop")));
+        fake::FakeFtpServer::Options fo;
+        fo.root = k.root;
+        fo.dropAfterBytes = 2048;
+        fo.dropOnlyPath = QStringLiteral("/system_data/priv/mms/app.db.uploading");
+        fake::FakeFtpServer srv(fo);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto r = autoBlockOverFtp(c, Y2jbRegion::USA, fresh(QStringLiteral("y2-drop-bak")));
+        QVERIFY(r.ok());
+        QCOMPARE(r->files[3].name, QStringLiteral("app.db"));
+        QCOMPARE(r->files[3].status, QStringLiteral("!"));
+        QVERIFY2(r->files[3].detail.contains(QStringLiteral("still in place")), qPrintable(r->files[3].detail));
+        QVERIFY(!r->ok());
+        QCOMPARE(r->errors.size(), 1);
+        // The live database was never truncated, and no temporary file is left.
+        QCOMPARE(readAll(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db"))), k.appDb);
+        QVERIFY(!srv.sawCommand(QStringLiteral("STOR /system_data/priv/mms/app.db\r")));
+        for (const QString& cmd : srv.commands())
+            QVERIFY2(cmd != QStringLiteral("STOR /system_data/priv/mms/app.db"), "STOR over the live database");
+        QVERIFY(!QFileInfo::exists(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db.uploading"))));
+        // The others went through the temporary name and were verified.
+        QCOMPARE(r->files[0].status, QStringLiteral("✓"));
+        QCOMPARE(r->files[2].status, QStringLiteral("✓"));
+        QVERIFY(srv.sawCommand(QStringLiteral("STOR /system_data/priv/mms/appinfo.db.uploading")));
+        QVERIFY(srv.sawCommand(QStringLiteral("RNTO /system_data/priv/mms/appinfo.db")));
+    }
+
+    void y2jbBadReadBackIsRolledBack()
+    {
+        const Console k = makeConsole(fresh(QStringLiteral("y2-corrupt")));
+        fake::FakeFtpServer::Options fo;
+        fo.root = k.root;
+        fo.corruptStorPath = QStringLiteral("/system_data/priv/mms/app.db.uploading"); // 226, but half the file
+        fake::FakeFtpServer srv(fo);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        const QString backups = fresh(QStringLiteral("y2-corrupt-bak"));
+        auto r = autoBlockOverFtp(c, Y2jbRegion::USA, backups);
+        QVERIFY(r.ok());
+        QCOMPARE(r->files[3].status, QStringLiteral("✗"));
+        QVERIFY2(r->files[3].detail.contains(QStringLiteral("restored from the local backup")), qPrintable(r->files[3].detail));
+        QCOMPARE(readAll(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db"))), k.appDb);
+        QVERIFY(!r->allVerified());
+        QCOMPARE(readAll(r->files[3].backup), k.appDb);
+    }
+
+    void y2jbIncompleteDownloadIsNeverUsed()
+    {
+        const Console k = makeConsole(fresh(QStringLiteral("y2-short")));
+        fake::FakeFtpServer::Options fo;
+        fo.root = k.root;
+        fo.shortRetrPath = QStringLiteral("/system_data/priv/mms/app.db");
+        fake::FakeFtpServer srv(fo);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        const QString backups = fresh(QStringLiteral("y2-short-bak"));
+        auto r = autoBlockOverFtp(c, Y2jbRegion::USA, backups);
+        QVERIFY(r.ok());
+        QCOMPARE(r->files[3].status, QStringLiteral("!"));
+        QVERIFY(r->files[3].detail.contains(QStringLiteral("incomplete")));
+        QVERIFY(r->files[3].backup.isEmpty());
+        QVERIFY(!srv.sawCommand(QStringLiteral("STOR /system_data/priv/mms/app.db.uploading")));
+        QCOMPARE(readAll(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db"))), k.appDb);
+        // The generic backup helper refuses a short read too.
+        auto b = backupRemoteFile(c, QStringLiteral("/system_data/priv/mms/app.db"), backups);
+        QVERIFY(!b.ok());
+        QVERIFY(b.error().message.contains(QStringLiteral("incomplete")));
+    }
+
+    void sqliteIntegrityCheck()
+    {
+        const QString dir = fresh(QStringLiteral("integrity"));
+        const QString good = QDir(dir).filePath(QStringLiteral("good.db"));
+        makeAppDb(good, QStringLiteral("PPSA01650"), true);
+        QVERIFY(checkSqliteIntegrity(good).ok);
+        // A database whose index no longer matches its table.
+        const QString bad = QDir(dir).filePath(QStringLiteral("bad.db"));
+        const QString name = QUuid::createUuid().toString();
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+            db.setDatabaseName(bad);
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY(q.exec(QStringLiteral("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)")));
+            QVERIFY(q.exec(QStringLiteral("CREATE INDEX ib ON t (b)")));
+            QVERIFY(db.transaction());
+            for (int i = 0; i < 2000; ++i)
+                QVERIFY(q.exec(QStringLiteral("INSERT INTO t (b) VALUES ('row %1 %2')").arg(i).arg(QString(40, u'x'))));
+            QVERIFY(db.commit());
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(name);
+        // Change one stored value in place: the table and its index now disagree.
+        QByteArray bytes = readAll(bad);
+        const qsizetype at = bytes.indexOf("row 1000 xxxx");
+        QVERIFY(at > 0);
+        bytes[at] = 'R';
+        QFile f(bad);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(bytes);
+        f.close();
+        const PatchCheck v = checkSqliteIntegrity(bad);
+        QVERIFY2(!v.ok, qPrintable(v.reason));
+        QVERIFY(!checkSqliteIntegrity(QDir(dir).filePath(QStringLiteral("none.db"))).ok);
     }
 
     // ---- jobs ------------------------------------------------------------------------------------------

@@ -239,6 +239,9 @@ public:
             return cancelledWithCleanup(rep.value());
         JobOutcome o;
         fillTransferOutcome(o, rep.value());
+        for (const QString& s : plan.skipped)
+            o.warnings << QStringLiteral("Not downloaded (unsafe name): %1").arg(s);
+        o.details.insert(QStringLiteral("skippedNames"), toJsonArray(plan.skipped));
         o.summary = QStringLiteral("%1 file(s) downloaded to %2").arg(rep->transferred).arg(QDir::toNativeSeparators(localDir));
         if (rep->skipped)
             o.summary += QStringLiteral(", %1 skipped").arg(rep->skipped);
@@ -424,9 +427,9 @@ public:
         o.details.insert(QStringLiteral("files"), files);
         o.details.insert(QStringLiteral("backupDir"), QDir::toNativeSeparators(backupDir));
         o.summary = QStringLiteral("%1 file(s) patched and verified for %2").arg(verified).arg(regionName());
-        if (!rep->allVerified()) {
+        if (!rep->ok()) {
             o.verification = Verification::Failed;
-            o.verificationDetail = rep->verifyFailures.join(QStringLiteral("; ")) +
+            o.verificationDetail = (rep->verifyFailures + rep->errors).join(QStringLiteral("; ")) +
                                    QStringLiteral(". The originals are saved in %1.").arg(QDir::toNativeSeparators(backupDir));
         } else if (verified == 0) {
             o.verification = Verification::Inconclusive;

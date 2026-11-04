@@ -15,7 +15,7 @@ namespace {
 
 QString localPathFor(const QString& remotePath, const QString& backupDir)
 {
-    QString rel = normalizeRemotePath(remotePath).mid(1);
+    QString rel = cleanRemotePath(remotePath).mid(1);
     QStringList parts = rel.split(u'/', Qt::SkipEmptyParts);
     for (QString& p : parts)
         p = sanitizeFileName(p);
@@ -71,6 +71,17 @@ Result<QString> backupRemoteFile(FtpClient& c, const QString& remotePath, const 
         return Error(st.error().code,
                      QStringLiteral("%1 could not be backed up, so it was not changed. %2").arg(remotePath, st.error().message),
                      st.error().detail);
+    }
+    // A short read must never stand in for the original.
+    auto size = c.size(remotePath);
+    if (size.ok() && size.value() != QFileInfo(part).size()) {
+        const qint64 got = QFileInfo(part).size();
+        QFile::remove(part);
+        return Error(ErrorCode::CorruptData,
+                     QStringLiteral("%1 arrived incomplete (%2 of %3 bytes), so it was not backed up or changed.")
+                         .arg(remotePath)
+                         .arg(got)
+                         .arg(size.value()));
     }
     if (!QFile::rename(part, local)) {
         QFile::remove(part);

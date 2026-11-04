@@ -62,15 +62,18 @@ QString socketErrorMessage(QAbstractSocket::SocketError error, const QString& ho
     case QAbstractSocket::HostNotFoundError:
         return QStringLiteral("The address %1 could not be found. Check the PS5 IP address in Settings.").arg(host);
     case QAbstractSocket::NetworkError:
-        return QStringLiteral("No network route to the PS5 at %1. Check the IP address and that the PS5 and "
+        return QStringLiteral("No network route to the PS5 at %1 (%2). Check the IP address and that the PS5 and "
                               "this PC are on the same network.")
-            .arg(where);
+            .arg(where, service);
     case QAbstractSocket::SocketTimeoutError:
-        return QStringLiteral("The PS5 at %1 did not answer in time. Check that it is on (not in rest mode), "
-                              "that the IP address is right and that both are on the same network.")
-            .arg(where);
+        // Windows retries a refused connection for about two seconds, so with a
+        // short timeout "refused" can arrive as "no answer": say both.
+        return QStringLiteral("The PS5 at %1 did not answer in time: the %2 refused or ignored the connection. "
+                              "Check that the console is on (not in rest mode), that the %2 is running, that the "
+                              "IP address and port are right and that both are on the same network.")
+            .arg(where, service);
     case QAbstractSocket::RemoteHostClosedError:
-        return QStringLiteral("The PS5 (%1) closed the connection.").arg(service);
+        return QStringLiteral("The PS5 at %1 (%2) closed the connection.").arg(where, service);
     default:
         return QStringLiteral("The connection to the PS5 %1 at %2 failed.").arg(service, where);
     }

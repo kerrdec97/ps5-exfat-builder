@@ -18,6 +18,8 @@
 #include <QVariant>
 #include <QtEndian>
 
+#include <functional>
+
 namespace fw::ps5 {
 
 namespace json = fw::gameinfo::json;
@@ -329,6 +331,24 @@ PatchCheck verifyAppDb(const QString& dbPath, const QString& titleId)
     return {true, QStringLiteral("top-level CONTENT_VERSION and VERSION_FILE_URI confirmed for ") + titleId};
 }
 
+PatchCheck checkSqliteIntegrity(const QString& dbPath)
+{
+    if (!QFileInfo(dbPath).isFile())
+        return {false, QStringLiteral("file missing")};
+    Sqlite s(dbPath, true);
+    if (!s.ok())
+        return {false, s.error()};
+    QSqlQuery q(s.db());
+    if (!q.exec(QStringLiteral("PRAGMA integrity_check")))
+        return {false, q.lastError().text()};
+    QStringList rows;
+    while (q.next())
+        rows << q.value(0).toString();
+    if (rows == QStringList{QStringLiteral("ok")})
+        return {true, QStringLiteral("integrity_check ok")};
+    return {false, QStringLiteral("integrity_check: ") + rows.mid(0, 5).join(QStringLiteral("; "))};
+}
+
 // ---- local folder ---------------------------------------------------------------------------
 
 namespace {
@@ -451,82 +471,151 @@ void remoteBestEffortBackup(FtpClient& c, const QString& backupPath, const QByte
         log.warn(QStringLiteral("[Y2JB] Could not write the remote backup %1 (the local backup is still there).").arg(backupPath));
 }
 
-Y2jbFileResult patchDbOverFtp(FtpClient& c, const QString& remote, const QString& label, const QString& tid,
-                              DbPatch patch, DbVerify verify, const QString& backupDir, const CancellationToken& token,
-                              const Log& log, QStringList& verifyFailures)
+// RETR, then the size the server reports (when it reports one) must match:
+// a short read must never become the "backup" or the base of a patch.
+Result<QByteArray> downloadChecked(FtpClient& c, const QString& remote, const CancellationToken& token)
+{
+    FW_TRY_ASSIGN(QByteArray bytes, c.download(remote, token));
+    auto size = c.size(remote);
+    if (size.ok() && size.value() != bytes.size())
+        return Error(ErrorCode::CorruptData,
+                     QStringLiteral("%1 arrived incomplete (%2 of %3 bytes), so it was not changed.")
+                         .arg(remote)
+                         .arg(bytes.size())
+                         .arg(size.value()));
+    return bytes;
+}
+
+// After a failed write or read-back: make sure the console holds the
+// original again (never cancellable). Returns a sentence for the report.
+QString restoreOriginal(FtpClient& c, const QString& remote, const QByteArray& original, const QString& localBackup,
+                        const Log& log)
+{
+    const QString saved = QDir::toNativeSeparators(localBackup);
+    if (!c.isConnected() && !c.open(c.host(), c.port()).ok())
+        return QStringLiteral("could not reconnect to restore it; the original is saved at %1").arg(saved);
+    auto now = c.download(remote);
+    if (now.ok() && now.value() == original)
+        return QStringLiteral("the original is still in place");
+    if (c.uploadReplace(remote, original).ok()) {
+        auto again = c.download(remote);
+        if (again.ok() && again.value() == original) {
+            log.warn(QStringLiteral("[Y2JB] Restored the original %1 from the local backup.").arg(remote));
+            return QStringLiteral("the original was restored from the local backup");
+        }
+    }
+    log.error(QStringLiteral("[Y2JB] Could NOT restore %1; the original is saved at %2").arg(remote, saved));
+    return QStringLiteral("the original could NOT be restored automatically; it is saved at %1").arg(saved);
+}
+
+// Writes `patched` without ever truncating the live file (temp + rename),
+// reads it back and checks it; restores the original when either step fails.
+void writeVerified(FtpClient& c, Y2jbFileResult& r, const QByteArray& original, const QByteArray& patched,
+                   const std::function<PatchCheck(const QByteArray&)>& verify, const CancellationToken& token,
+                   const Log& log, Y2jbReport& rep)
+{
+    if (auto st = c.uploadReplace(r.path, patched, QStringLiteral(".uploading"), token); !st.ok()) {
+        r.status = QStringLiteral("!");
+        r.detail = QStringLiteral("%1 — %2").arg(st.error().message, restoreOriginal(c, r.path, original, r.backup, log));
+        rep.errors << QStringLiteral("%1 @ %2: %3").arg(r.name, r.path, r.detail);
+        return;
+    }
+    if (!c.isConnected())
+        (void)c.open(c.host(), c.port());
+    auto back = downloadChecked(c, r.path, token);
+    const PatchCheck v = back.ok() ? verify(back.value())
+                                   : PatchCheck{false, QStringLiteral("verify pass errored: ") + back.error().message};
+    if (v.ok) {
+        r.status = QStringLiteral("✓");
+        r.detail = QStringLiteral("patched + verified (%1)").arg(v.reason);
+    } else {
+        r.status = QStringLiteral("✗");
+        r.detail = QStringLiteral("VERIFY FAILED: %1 — %2").arg(v.reason, restoreOriginal(c, r.path, original, r.backup, log));
+        rep.verifyFailures << QStringLiteral("%1 @ %2: %3").arg(r.name, r.path, v.reason);
+    }
+    log.info(QStringLiteral("[Y2JB] %1 %2 %3").arg(r.status, r.name, r.detail));
+}
+
+void fail(Y2jbFileResult& r, Y2jbReport& rep, const QString& why)
+{
+    r.status = QStringLiteral("!");
+    r.detail = why;
+    rep.errors << QStringLiteral("%1 @ %2: %3").arg(r.name, r.path, why);
+}
+
+void patchDbOverFtp(FtpClient& c, const QString& remote, const QString& label, const QString& tid, DbPatch patch,
+                    DbVerify verify, const QString& backupDir, const CancellationToken& token, const Log& log,
+                    Y2jbReport& rep)
 {
     Y2jbFileResult r{label, remote, {}, {}, {}};
-    auto bytes = c.download(remote, token);
+    auto bytes = downloadChecked(c, remote, token);
     if (!bytes.ok()) {
         if (bytes.error().code == ErrorCode::NotFound && c.isConnected()) {
             log.info(QStringLiteral("[Y2JB] Not found on PS5: %1").arg(label));
             r.status = QStringLiteral("○");
             r.detail = QStringLiteral("not found on PS5");
         } else {
-            r.status = QStringLiteral("!");
-            r.detail = bytes.error().message;
+            fail(r, rep, bytes.error().message);
         }
-        return r;
+        rep.files.push_back(r);
+        return;
     }
     log.info(QStringLiteral("[Y2JB] Downloaded %1 (%2 bytes)").arg(label).arg(bytes.value().size()));
     auto local = saveRemoteCopy(bytes.value(), remote, backupDir);
     if (!local.ok()) {
-        r.status = QStringLiteral("!");
-        r.detail = local.error().message;
-        return r;
+        fail(r, rep, local.error().message);
+        rep.files.push_back(r);
+        return;
     }
     r.backup = local.value();
     TempDir tmp(QStringLiteral("y2jb"));
     const QString work = tmp.filePath(QStringLiteral("work.db"));
     if (auto st = writeFileAtomic(work, bytes.value()); !st.ok()) {
-        r.status = QStringLiteral("!");
-        r.detail = st.error().message;
-        return r;
+        fail(r, rep, st.error().message);
+        rep.files.push_back(r);
+        return;
     }
-    remoteBestEffortBackup(c, remote + QStringLiteral(".bak"), bytes.value(), log);
     auto rows = patch(work, tid);
     if (!rows.ok()) {
-        r.status = QStringLiteral("!");
-        r.detail = rows.error().message;
-        return r;
+        fail(r, rep, rows.error().message + QStringLiteral(" Nothing was uploaded."));
+        rep.files.push_back(r);
+        return;
     }
     if (rows.value() == 0) {
         log.warn(QStringLiteral("[Y2JB] ✗ %1: 0 rows matched %2 — NOT uploading (would be a no-op).").arg(label, tid));
         r.status = QStringLiteral("✗");
         r.detail = QStringLiteral("0 rows matched %1 (wrong region or YouTube not installed)").arg(tid);
-        verifyFailures << QStringLiteral("%1: 0 rows matched %2").arg(label, tid);
-        return r;
+        rep.verifyFailures << QStringLiteral("%1: 0 rows matched %2").arg(label, tid);
+        rep.files.push_back(r);
+        return;
+    }
+    if (const PatchCheck ic = checkSqliteIntegrity(work); !ic.ok) {
+        fail(r, rep, QStringLiteral("the patched copy failed SQLite's integrity check (%1); nothing was uploaded.").arg(ic.reason));
+        rep.files.push_back(r);
+        return;
     }
     QFile pf(work);
     if (!pf.open(QIODevice::ReadOnly)) {
-        r.status = QStringLiteral("!");
-        r.detail = pf.errorString();
-        return r;
+        fail(r, rep, pf.errorString());
+        rep.files.push_back(r);
+        return;
     }
     const QByteArray patched = pf.readAll();
     pf.close();
-    if (auto st = c.upload(remote, patched, token); !st.ok()) {
-        r.status = QStringLiteral("!");
-        r.detail = st.error().message;
-        return r;
-    }
-    log.info(QStringLiteral("[Y2JB] Uploaded patched %1 (%2 rows changed)").arg(label).arg(rows.value()));
-    auto back = c.download(remote, token);
-    if (!back.ok()) {
-        r.status = QStringLiteral("✗");
-        r.detail = QStringLiteral("verify pass errored: ") + back.error().message;
-        verifyFailures << label + QStringLiteral(": ") + r.detail;
-        return r;
-    }
+    remoteBestEffortBackup(c, remote + QStringLiteral(".bak"), bytes.value(), log);
+    log.info(QStringLiteral("[Y2JB] Uploading patched %1 (%2 rows changed)").arg(label).arg(rows.value()));
     const QString vpath = tmp.filePath(QStringLiteral("verify.db"));
-    (void)writeFileAtomic(vpath, back.value());
-    const PatchCheck v = verify(vpath, tid);
-    r.status = v.ok ? QStringLiteral("✓") : QStringLiteral("✗");
-    r.detail = v.ok ? QStringLiteral("patched + verified (%1)").arg(v.reason) : QStringLiteral("VERIFY FAILED: ") + v.reason;
-    if (!v.ok)
-        verifyFailures << label + QStringLiteral(": ") + v.reason;
-    log.info(QStringLiteral("[Y2JB] %1 %2 %3").arg(r.status, label, r.detail));
-    return r;
+    writeVerified(
+        c, r, bytes.value(), patched,
+        [&](const QByteArray& back) {
+            if (auto st = writeFileAtomic(vpath, back); !st.ok())
+                return PatchCheck{false, st.error().message};
+            if (const PatchCheck ic = checkSqliteIntegrity(vpath); !ic.ok)
+                return ic;
+            return verify(vpath, tid);
+        },
+        token, log, rep);
+    rep.files.push_back(r);
 }
 
 } // namespace
@@ -545,28 +634,30 @@ Result<Y2jbReport> autoBlockOverFtp(FtpClient& c, Y2jbRegion region, const QStri
         if (!token.checkpoint())
             return Error::cancelled();
         Y2jbFileResult r{QStringLiteral("param.json"), remote, {}, {}, {}};
-        auto bytes = c.download(remote, token);
+        auto bytes = downloadChecked(c, remote, token);
         if (!bytes.ok()) {
             if (bytes.error().isCancelled())
                 return bytes.takeError();
-            r.status = bytes.error().code == ErrorCode::NotFound ? QStringLiteral("○") : QStringLiteral("!");
-            r.detail = bytes.error().code == ErrorCode::NotFound ? QStringLiteral("not found") : bytes.error().message;
-            log.info(QStringLiteral("[Y2JB] Not found: %1").arg(remote));
+            if (bytes.error().code == ErrorCode::NotFound) {
+                r.status = QStringLiteral("○");
+                r.detail = QStringLiteral("not found");
+                log.info(QStringLiteral("[Y2JB] Not found: %1").arg(remote));
+            } else {
+                fail(r, rep, bytes.error().message);
+            }
             rep.files.push_back(r);
             continue;
         }
         auto local = saveRemoteCopy(bytes.value(), remote, backupDir);
         if (!local.ok()) {
-            r.status = QStringLiteral("!");
-            r.detail = local.error().message;
+            fail(r, rep, local.error().message);
             rep.files.push_back(r);
             continue;
         }
         r.backup = local.value();
         auto patched = patchParamJsonText(bytes.value());
         if (!patched.ok()) {
-            r.status = QStringLiteral("!");
-            r.detail = patched.error().message;
+            fail(r, rep, patched.error().message);
             rep.files.push_back(r);
             continue;
         }
@@ -574,29 +665,23 @@ Result<Y2jbReport> autoBlockOverFtp(FtpClient& c, Y2jbRegion region, const QStri
         backupName.replace(QLatin1String("param.json"), QLatin1String("param_backup.json"));
         remoteBestEffortBackup(c, backupName, bytes.value(), log);
         if (patched.value() != bytes.value()) {
-            if (auto st = c.upload(remote, patched.value(), token); !st.ok()) {
-                r.status = QStringLiteral("!");
-                r.detail = st.error().message;
-                rep.files.push_back(r);
-                continue;
-            }
+            writeVerified(c, r, bytes.value(), patched.value(), verifyParamJsonText, token, log, rep);
+        } else {
+            // Already blocked (or nothing to change): only check it.
+            const PatchCheck v = verifyParamJsonText(bytes.value());
+            r.status = v.ok ? QStringLiteral("✓") : QStringLiteral("✗");
+            r.detail = v.ok ? QStringLiteral("already patched (%1)").arg(v.reason) : QStringLiteral("VERIFY FAILED: ") + v.reason;
+            if (!v.ok)
+                rep.verifyFailures << QStringLiteral("param.json @ %1: %2").arg(remote, v.reason);
         }
-        auto back = c.download(remote, token);
-        const PatchCheck v = back.ok() ? verifyParamJsonText(back.value())
-                                       : PatchCheck{false, QStringLiteral("verify pass errored: ") + back.error().message};
-        r.status = v.ok ? QStringLiteral("✓") : QStringLiteral("✗");
-        r.detail = v.ok ? QStringLiteral("patched + verified at %1").arg(remote) : QStringLiteral("VERIFY FAILED: ") + v.reason;
-        if (!v.ok)
-            rep.verifyFailures << QStringLiteral("param.json @ %1: %2").arg(remote, v.reason);
-        log.info(QStringLiteral("[Y2JB] %1 param.json %2").arg(r.status, r.detail));
         rep.files.push_back(r);
     }
-    rep.files.push_back(patchDbOverFtp(c, QStringLiteral("/system_data/priv/mms/appinfo.db"), QStringLiteral("appinfo.db"),
-                                       tid, &patchAppInfoDb, &verifyAppInfoDb, backupDir, token, log, rep.verifyFailures));
+    patchDbOverFtp(c, QStringLiteral("/system_data/priv/mms/appinfo.db"), QStringLiteral("appinfo.db"), tid,
+                   &patchAppInfoDb, &verifyAppInfoDb, backupDir, token, log, rep);
     if (!token.checkpoint())
         return Error::cancelled();
-    rep.files.push_back(patchDbOverFtp(c, QStringLiteral("/system_data/priv/mms/app.db"), QStringLiteral("app.db"), tid,
-                                       &patchAppDb, &verifyAppDb, backupDir, token, log, rep.verifyFailures));
+    patchDbOverFtp(c, QStringLiteral("/system_data/priv/mms/app.db"), QStringLiteral("app.db"), tid, &patchAppDb,
+                   &verifyAppDb, backupDir, token, log, rep);
     return rep;
 }
 

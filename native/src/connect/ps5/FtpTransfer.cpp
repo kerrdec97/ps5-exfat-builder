@@ -68,11 +68,19 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
     TransferPlan plan;
     plan.directories << QDir::cleanPath(localDir);
     for (const QString& srcIn : remoteSources) {
-        const QString src = normalizeRemotePath(srcIn);
+        // Paths picked in the browser keep their exact characters.
+        const QString src = cleanRemotePath(srcIn);
         if (!token.checkpoint())
             return Error::cancelled();
+        const QString base = remoteFileName(src);
+        if (src != u"/") {
+            if (const QString why = localNameProblem(base); !why.isEmpty()) {
+                plan.skipped << QStringLiteral("%1: %2").arg(src, why);
+                continue;
+            }
+        }
         if (c.isDirectory(src)) {
-            const QString localBase = QDir(localDir).filePath(remoteFileName(src));
+            const QString localBase = src == u"/" ? QDir::cleanPath(localDir) : QDir(localDir).filePath(base);
             plan.directories << localBase;
             std::deque<std::pair<QString, QString>> dirs{{src, localBase}};
             int visited = 0;
@@ -85,13 +93,22 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
                 for (const FtpEntry& e : entries) {
                     if (e.isLink)
                         continue; // never follow links on the console
-                    const QString r = joinRemote(rdir, e.name);
+                    // Names come from the server: one safe path segment only, so a
+                    // name with '/', '\' or ':' can neither leave the download
+                    // folder nor make RETR act on another path.
+                    const QString why = localNameProblem(e.name);
+                    const auto r = remoteChild(rdir, e.name);
+                    if (!why.isEmpty() || !r) {
+                        plan.skipped << QStringLiteral("%1/%2: %3").arg(rdir == u"/" ? QString() : rdir, e.name,
+                                                                        why.isEmpty() ? remoteNameProblem(e.name) : why);
+                        continue;
+                    }
                     const QString l = QDir(ldir).filePath(e.name);
                     if (e.isDir) {
                         plan.directories << l;
-                        dirs.emplace_back(r, l);
+                        dirs.emplace_back(*r, l);
                     } else {
-                        plan.files.push_back({l, r, e.size});
+                        plan.files.push_back({l, *r, e.size});
                         plan.totalBytes += std::max<qint64>(0, e.size);
                     }
                 }
@@ -102,12 +119,41 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
                 return Error(ErrorCode::NotFound, QStringLiteral("%1 was not found on the PS5.").arg(src),
                              sz.error().detail);
             const qint64 size = sz.ok() ? sz.value() : -1;
-            plan.files.push_back({QDir(localDir).filePath(remoteFileName(src)), src, size});
+            plan.files.push_back({QDir(localDir).filePath(base), src, size});
             plan.totalBytes += std::max<qint64>(0, size);
         }
     }
     plan.directories.removeDuplicates();
     return plan;
+}
+
+Status commitDownloadedFile(const QString& part, const QString& finalPath)
+{
+    const QString name = QDir::toNativeSeparators(finalPath);
+    const QString kept = QDir::toNativeSeparators(part);
+    if (!QFileInfo::exists(finalPath)) {
+        if (QFile::rename(part, finalPath))
+            return success();
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("The finished download could not be renamed to %1; it was kept as %2.").arg(name, kept));
+    }
+    // Set the old file aside first so a failed rename can be undone (as
+    // fw::PartFile::commit(true) does), and keep the .part on failure.
+    QString aside = finalPath + QStringLiteral(".fw-old");
+    for (int n = 2; QFileInfo::exists(aside); ++n)
+        aside = finalPath + QStringLiteral(".fw-old%1").arg(n);
+    if (!QFile::rename(finalPath, aside))
+        return Error(ErrorCode::PermissionDenied,
+                     QStringLiteral("Could not replace %1 (close any program using it). The download was kept as %2.")
+                         .arg(name, kept));
+    if (!QFile::rename(part, finalPath)) {
+        QFile::rename(aside, finalPath);
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("Could not replace %1; the old file was kept and the download was kept as %2.")
+                         .arg(name, kept));
+    }
+    QFile::remove(aside);
+    return success();
 }
 
 namespace {
@@ -199,10 +245,21 @@ void removeRemotePartial(Shared& sh, FtpClient* existing, const QString& remote)
     if (existing && existing->isConnected())
         st = existing->dele(remote);
     if (!st.ok()) {
+        // Right after an aborted STOR the server may still hold the file open
+        // (a Windows-hosted server cannot delete it until then), so try a few
+        // times over about two seconds. Never cancellable: this is the cleanup.
         FtpClient fresh(sh.ftp);
-        st = fresh.open(sh.opt.endpoint.host, sh.opt.endpoint.ftpPort, CancellationToken());
-        if (st.ok())
+        for (int attempt = 0; attempt < 6 && !st.ok(); ++attempt) {
+            if (attempt > 0)
+                QThread::msleep(350);
+            if (!fresh.isConnected() && !fresh.open(sh.opt.endpoint.host, sh.opt.endpoint.ftpPort, CancellationToken()).ok())
+                continue;
             st = fresh.dele(remote);
+            if (!st.ok() && st.error().code == ErrorCode::NotFound && !fresh.fileExists(remote)) {
+                st = success(); // already gone
+                break;
+            }
+        }
     }
     std::lock_guard lock(sh.mutex);
     if (st.ok()) {
@@ -231,6 +288,12 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
         sh.progress->setCurrentItem(QFileInfo(f.local).fileName());
 
     qint64 offset = 0;
+    // Remote bytes the caller asked to keep (resume of an earlier partial).
+    // After a failure, the remote SIZE is trusted only if this run's STOR was
+    // accepted for this file; otherwise the remote file is not ours to extend.
+    qint64 approvedOffset = 0;
+    bool startedHere = false;  // a STOR/APPE of this run was sent (cleanup)
+    bool acceptedHere = false; // ... and accepted with a 1xx (resume point is ours)
     if (sh.opt.resume) {
         auto sz = c.size(f.remote);
         if (sz.ok() && sz.value() == f.size) {
@@ -242,6 +305,7 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
         }
         if (sz.ok() && sz.value() > 0 && sz.value() < f.size) {
             offset = sz.value();
+            approvedOffset = offset;
             advance(offset);
             sh.log.info(QStringLiteral("[FTP] Resuming %1 at %2").arg(f.remote, formatBytes(offset)));
         }
@@ -257,6 +321,8 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
         }
         sh.mark(f.remote);
         const Status st = c.store(f.remote, in, offset, advance, sh.token, append);
+        startedHere = startedHere || c.lastTransferStarted();
+        acceptedHere = acceptedHere || c.lastTransferAccepted();
         if (st.ok()) {
             auto sz = c.size(f.remote);
             if (sz.ok() && sz.value() != f.size) {
@@ -276,12 +342,12 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             return Outcome::Done;
         }
         if (st.error().isCancelled() || sh.token.isCancelled()) {
-            if (!c.lastTransferStarted())
+            if (!startedHere)
                 sh.unmark(f.remote);
             return Outcome::Cancelled; // partial removed after all workers stop
         }
-        if (!c.lastTransferStarted())
-            sh.unmark(f.remote); // refused before anything changed on the console
+        if (!startedHere)
+            sh.unmark(f.remote); // nothing of this run reached the console for this file
         if (st.error().code == ErrorCode::Unsupported && offset > 0 && !append && c.isConnected()) {
             append = true; // REST refused: try APPE from the same point
             continue;
@@ -296,19 +362,19 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
                 return Outcome::Cancelled;
             if (!ensureConnected(sh, c, attempt, f, out))
                 return out;
-            auto sz = c.size(f.remote);
-            if (sz.ok() && sz.value() > 0 && sz.value() <= f.size) {
-                advance(sz.value() - counted);
-                offset = sz.value();
-            } else {
-                advance(-counted);
-                offset = 0;
+            qint64 next = approvedOffset;
+            if (acceptedHere) {
+                // The remote file now starts with this run's bytes.
+                auto sz = c.size(f.remote);
+                next = sz.ok() && sz.value() > 0 && sz.value() <= f.size ? sz.value() : 0;
             }
+            advance(next - counted);
+            offset = next;
             append = false;
             continue;
         }
         sh.fail(f, st.error().message);
-        if (c.lastTransferStarted())
+        if (startedHere)
             removeRemotePartial(sh, &c, f.remote);
         sh.unmark(f.remote);
         return Outcome::Failed;
@@ -365,12 +431,11 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
                 sh.unmark(part);
                 return Outcome::Failed;
             }
-            if (QFileInfo::exists(f.local))
-                QFile::remove(f.local); // only reached with overwrite on
-            if (!QFile::rename(part, f.local)) {
-                sh.fail(f, QStringLiteral("could not rename the finished download"));
-                QFile::remove(part);
+            // An existing file (only reached with overwrite on) is set aside and
+            // restored if the rename fails; the complete .part is then kept.
+            if (const Status cs = commitDownloadedFile(part, f.local); !cs.ok()) {
                 sh.unmark(part);
+                sh.fail(f, cs.error().message);
                 return Outcome::Failed;
             }
             sh.unmark(part);

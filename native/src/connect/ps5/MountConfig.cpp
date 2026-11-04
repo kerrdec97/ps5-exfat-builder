@@ -5,8 +5,10 @@
 #include "connect/ps5/KlogClient.h"
 #include "connect/ps5/RemotePath.h"
 
+#include <QElapsedTimer>
 #include <QRegularExpression>
 
+#include <algorithm>
 #include <memory>
 
 namespace fw::ps5 {
@@ -351,12 +353,39 @@ Result<MountPushResult> pushMountConfig(FtpClient& c, MountTool tool, const QStr
 
 // ---- Safe to unplug -----------------------------------------------------------------------
 
+namespace {
+
+qint64 monotonicMs()
+{
+    static QElapsedTimer clock = [] {
+        QElapsedTimer t;
+        t.start();
+        return t;
+    }();
+    return clock.elapsed();
+}
+
+} // namespace
+
+StopConfirmTracker::StopConfirmTracker(int settleMs) : m_settleMs(std::max(0, settleMs)), m_clockStart(monotonicMs()) {}
+
 bool StopConfirmTracker::feed(const QString& line)
+{
+    return feed(line, monotonicMs() - m_clockStart);
+}
+
+bool StopConfirmTracker::poll()
+{
+    return poll(monotonicMs() - m_clockStart);
+}
+
+bool StopConfirmTracker::feed(const QString& line, qint64 nowMs)
 {
     if (m_confirmed)
         return true;
     const QString low = line.toLower();
     if (low.contains(QLatin1String("shadowmountplus.elf calls exit"))) {
+        m_exit = true;
         m_confirmed = true;
         return true;
     }
@@ -366,7 +395,17 @@ bool StopConfirmTracker::feed(const QString& line)
         ++m_started;
     if (m_ack && low.contains(QLatin1String("unmount complete")))
         ++m_completed;
-    if (m_ack && m_started > 0 && m_completed >= m_started)
+    const bool balanced = m_ack && m_started > 0 && m_completed >= m_started;
+    if (!balanced)
+        m_balancedSince = -1;
+    else if (m_balancedSince < 0)
+        m_balancedSince = nowMs;
+    return poll(nowMs);
+}
+
+bool StopConfirmTracker::poll(qint64 nowMs)
+{
+    if (!m_confirmed && m_balancedSince >= 0 && nowMs - m_balancedSince >= m_settleMs)
         m_confirmed = true;
     return m_confirmed;
 }
@@ -390,7 +429,7 @@ QString stopOutcomeMessage(StopOutcome outcome)
 
 Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const CancellationToken& token,
                                    const std::function<void(const QString&)>& status, int confirmTimeoutMs,
-                                   int klogConnectTimeoutMs)
+                                   int klogConnectTimeoutMs, int settleMs)
 {
     auto say = [&](const QString& s) {
         if (status)
@@ -418,19 +457,43 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
         res.outcome = StopOutcome::NoKlog;
         return res;
     }
-    // 3. Watch for the confirmation.
+    // 3. Watch for the confirmation. Lines are read in short slices so the
+    //    settle period can complete while klog is quiet.
     say(QStringLiteral("Waiting for ShadowMountPlus confirmation..."));
-    StopConfirmTracker tracker;
-    const auto w = klog->waitFor([&](const QString& line) { return tracker.feed(line); }, confirmTimeoutMs, token);
-    res.klogLines = w.lines;
+    StopConfirmTracker tracker(settleMs);
+    QElapsedTimer clock;
+    clock.start();
+    res.outcome = StopOutcome::Timeout;
+    while (true) {
+        if (tracker.poll(clock.elapsed())) {
+            res.outcome = StopOutcome::Confirmed;
+            break;
+        }
+        const qint64 left = confirmTimeoutMs - clock.elapsed();
+        if (left <= 0)
+            break; // Timeout
+        const auto r = klog->read(int(std::min<qint64>(left, 200)), token);
+        if (r.cancelled)
+            return Error::cancelled();
+        bool done = false;
+        for (const QString& line : r.lines) {
+            res.klogLines << line;
+            if (tracker.feed(line, clock.elapsed())) {
+                done = true;
+                break;
+            }
+        }
+        if (done) {
+            res.outcome = StopOutcome::Confirmed;
+            break;
+        }
+        if (r.closed) {
+            res.outcome = StopOutcome::KlogLost;
+            break;
+        }
+    }
     res.unmountsStarted = tracker.unmountsStarted();
     res.unmountsCompleted = tracker.unmountsCompleted();
-    switch (w.outcome) {
-    case KlogSession::Outcome::Matched: res.outcome = StopOutcome::Confirmed; break;
-    case KlogSession::Outcome::ConnectionLost: res.outcome = StopOutcome::KlogLost; break;
-    case KlogSession::Outcome::Timeout: res.outcome = StopOutcome::Timeout; break;
-    case KlogSession::Outcome::Cancelled: return Error::cancelled();
-    }
     return res;
 }
 

@@ -61,22 +61,38 @@ Result<MountPushResult> pushMountConfig(FtpClient& client, MountTool tool, const
 
 // ---- ShadowMount+ "Safe to unplug" ----------------------------------------------------
 
-// Feeds klog lines; confirmed by "shadowmountplus.elf calls exit", or by the
-// "[shutdown] stop requested" ack followed by every "unmount start" (counted
-// only after the ack) reaching "unmount complete".
+// Feeds klog lines. Confirmed at once by "shadowmountplus.elf calls exit"
+// (the process ends only after every mount is released). Otherwise, after the
+// "[shutdown] stop requested" ack, every "unmount start" (counted only after
+// the ack) must have reached "unmount complete" AND no new "unmount start" may
+// appear for `settleMs`: ShadowMount+ may unmount images one after another, so
+// matching counts alone are not enough (the legacy app confirmed on the first
+// match). Times are milliseconds on any monotonic clock.
 class StopConfirmTracker {
 public:
-    bool feed(const QString& line); // true once confirmed
+    static constexpr int kSettleMs = 6000;
+
+    explicit StopConfirmTracker(int settleMs = kSettleMs);
+    bool feed(const QString& line, qint64 nowMs); // true once confirmed
+    bool poll(qint64 nowMs);                      // re-checks the settle time without a line
+    bool feed(const QString& line);               // same, on the tracker's own clock
+    bool poll();
     bool confirmed() const { return m_confirmed; }
     bool sawAck() const { return m_ack; }
+    bool sawExit() const { return m_exit; }
     int unmountsStarted() const { return m_started; }
     int unmountsCompleted() const { return m_completed; }
+    int settleMs() const { return m_settleMs; }
 
 private:
+    int m_settleMs;
+    qint64 m_clockStart;
     bool m_confirmed = false;
     bool m_ack = false;
+    bool m_exit = false;
     int m_started = 0;
     int m_completed = 0;
+    qint64 m_balancedSince = -1; // when the counts last became equal (-1: not equal)
 };
 
 enum class StopOutcome {
@@ -95,9 +111,11 @@ struct StopResult {
 };
 
 // Connects a private klog socket first (5 s), writes the empty
-// /data/shadowmount/STOP sentinel over FTP, then watches klog up to 45 s.
+// /data/shadowmount/STOP sentinel over FTP, then watches klog up to 45 s
+// (see StopConfirmTracker; `settleMs` is its quiet period).
 Result<StopResult> stopShadowMount(const ConsoleEndpoint& endpoint, const CancellationToken& token = {},
                                    const std::function<void(const QString&)>& status = {},
-                                   int confirmTimeoutMs = 45000, int klogConnectTimeoutMs = 5000);
+                                   int confirmTimeoutMs = 45000, int klogConnectTimeoutMs = 5000,
+                                   int settleMs = StopConfirmTracker::kSettleMs);
 
 } // namespace fw::ps5

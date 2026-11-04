@@ -108,6 +108,15 @@ public:
     WaitResult waitFor(const std::function<bool(const QString& line)>& matcher, int timeoutMs,
                        const CancellationToken& token = {});
 
+    struct ReadResult {
+        QStringList lines;
+        bool closed = false;    // the stream ended (nothing more will come)
+        bool cancelled = false;
+    };
+    // Waits at most `waitMs` for data and returns the complete lines received
+    // (possibly none), for callers that must also act when nothing arrives.
+    ReadResult read(int waitMs, const CancellationToken& token = {});
+
 private:
     KlogSession() = default;
     std::unique_ptr<QTcpSocket> m_socket;

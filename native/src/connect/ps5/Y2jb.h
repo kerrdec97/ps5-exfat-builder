@@ -9,9 +9,12 @@
 // there); appinfo.db tbl_appinfo VERSION_FILE_URI / CONTENT_VERSION rows of the
 // title; app.db tbl_contentinfo.AppInfoJson (entries of $.field_list[] by key
 // when that array exists, else top-level keys). Every patch is verified by
-// reading it back. Over FTP each file goes RETR -> local backup (new) ->
-// remote backup (legacy, best effort) -> patch a temporary copy -> STOR -> RETR
-// again -> verify. 0 matching rows = nothing is uploaded.
+// reading it back. Over FTP each file goes RETR (size checked against SIZE)
+// -> local backup -> remote backup (legacy, best effort) -> patch a temporary
+// copy (databases: PRAGMA integrity_check must pass) -> upload to a temporary
+// name and rename over the live file (never truncated in place) -> RETR again
+// -> verify. A failed upload or read-back puts the original back from the
+// local backup. 0 matching rows = nothing is uploaded.
 //
 // param.json is edited in place in its original text (only the targeted
 // values change; the legacy app re-serialised the whole file).
@@ -53,6 +56,8 @@ Result<int> patchAppInfoDb(const QString& dbPath, const QString& titleId);
 PatchCheck verifyAppInfoDb(const QString& dbPath, const QString& titleId);
 Result<int> patchAppDb(const QString& dbPath, const QString& titleId);
 PatchCheck verifyAppDb(const QString& dbPath, const QString& titleId);
+// PRAGMA integrity_check must answer exactly "ok".
+PatchCheck checkSqliteIntegrity(const QString& dbPath);
 
 struct Y2jbFileResult {
     QString name;        // "param.json", "appinfo.db", "app.db"
@@ -64,8 +69,10 @@ struct Y2jbFileResult {
 
 struct Y2jbReport {
     std::vector<Y2jbFileResult> files;
-    QStringList verifyFailures;
+    QStringList verifyFailures; // "✗": written but not confirmed (the original is put back), or 0 rows
+    QStringList errors;         // "!": the file could not be patched (nothing of ours is left on the console)
     bool allVerified() const { return verifyFailures.isEmpty(); }
+    bool ok() const { return verifyFailures.isEmpty() && errors.isEmpty(); }
     QString summary() const;
 };
 

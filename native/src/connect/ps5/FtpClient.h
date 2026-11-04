@@ -83,6 +83,11 @@ public:
     // was accepted (1xx) or the connection broke before any reply. False when
     // the server refused it, so nothing on the console changed.
     bool lastTransferStarted() const { return m_transferStarted; }
+    // True only when the server accepted the last retrieve()/store() command
+    // (a 1xx reply arrived), i.e. it really opened the target. Resume offsets
+    // must only be trusted after this; lastTransferStarted() may also be true
+    // when the connection broke right after the command was written.
+    bool lastTransferAccepted() const { return m_transferAccepted; }
 
     // One command, one reply (1xx replies are read through).
     Result<FtpReply> command(const QString& line);
@@ -141,6 +146,7 @@ private:
     QString m_welcome;
     FtpReply m_last;
     bool m_transferStarted = false;
+    bool m_transferAccepted = false;
 };
 
 // User-facing error for a negative FTP reply to `what` ("Uploading x").

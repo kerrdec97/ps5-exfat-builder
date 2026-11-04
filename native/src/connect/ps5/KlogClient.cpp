@@ -238,6 +238,24 @@ KlogSession::WaitResult KlogSession::waitFor(const std::function<bool(const QStr
     }
 }
 
+KlogSession::ReadResult KlogSession::read(int waitMs, const CancellationToken& token)
+{
+    ReadResult r;
+    QTcpSocket& s = *m_socket;
+    if (s.bytesAvailable() == 0 && s.state() == QAbstractSocket::ConnectedState) {
+        const auto w = waitUntil([&] { return s.bytesAvailable() > 0 || s.state() != QAbstractSocket::ConnectedState; },
+                                 waitMs, token, {&s});
+        if (w == detail::WaitResult::Cancelled) {
+            r.cancelled = true;
+            return r;
+        }
+    }
+    if (s.bytesAvailable() > 0)
+        r.lines = m_split.feed(s.readAll());
+    r.closed = s.state() != QAbstractSocket::ConnectedState && s.bytesAvailable() == 0;
+    return r;
+}
+
 KlogSession::WaitResult waitForKlogLine(const QString& host, quint16 port,
                                         const std::function<bool(const QString&)>& matcher, int timeoutMs,
                                         int connectTimeoutMs, const CancellationToken& token, Error* connectError)

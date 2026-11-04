@@ -276,7 +276,7 @@ Status FtpClient::mkd(const QString& path)
 
 Status FtpClient::mkdirs(const QString& pathIn)
 {
-    const QString path = normalizeRemotePath(pathIn);
+    const QString path = cleanRemotePath(pathIn);
     if (path == u"/")
         return success();
     QString cur;
@@ -416,10 +416,13 @@ struct Transfer {
 // Opens the data connection, sends `cmd` and waits for the 1xx reply.
 static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, char& type, char wantType,
                                       const QString& cmd, qint64 offset, const FtpOptions& opt,
-                                      const CancellationToken& token, bool* started = nullptr)
+                                      const CancellationToken& token, bool* started = nullptr,
+                                      FtpReply* last = nullptr, bool* accepted = nullptr)
 {
     if (started)
         *started = false;
+    if (accepted)
+        *accepted = false;
     FW_TRY(setTypeOn(c, type, wantType));
     Transfer t;
     if (opt.passive) {
@@ -486,6 +489,12 @@ static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useE
         FW_TRY_ASSIGN(FtpReply r2, readReplyOn(ctrl, opt.replyTimeoutMs, token));
         r = r2;
     }
+    // The reply to the transfer command itself (e.g. "425 Can't open data
+    // connection", "451 Local error") is what callers judge retries by.
+    if (last)
+        *last = r;
+    if (accepted)
+        *accepted = r.isPreliminary();
     if (!r.isPreliminary() && started)
         *started = false; // refused: nothing changed on the console
     if (!r.isPreliminary())
@@ -511,8 +520,9 @@ Status FtpClient::retrieve(const QString& remote, QIODevice& out, qint64 offset,
 {
     if (!isConnected())
         return Error(ErrorCode::IoError, QStringLiteral("Not connected to the PS5 FTP server."));
+    m_last = FtpReply{}; // lastReply() describes this transfer only
     auto t = startTransfer(*this, *d->ctrl, d->useEpsv, d->type, 'I', QStringLiteral("RETR ") + remote, offset, m_opt,
-                           token, &m_transferStarted);
+                           token, &m_transferStarted, &m_last, &m_transferAccepted);
     if (!t.ok()) {
         if (t.error().isCancelled() || t.error().code == ErrorCode::Timeout)
             abort();
@@ -576,8 +586,9 @@ Status FtpClient::store(const QString& remote, QIODevice& in, qint64 offset, con
     if (offset > 0 && !in.isSequential() && !in.seek(offset))
         return Error(ErrorCode::IoError, QStringLiteral("Could not read the local file."), in.errorString());
     const QString cmd = (append ? QStringLiteral("APPE ") : QStringLiteral("STOR ")) + remote;
+    m_last = FtpReply{}; // lastReply() describes this transfer only
     auto t = startTransfer(*this, *d->ctrl, d->useEpsv, d->type, 'I', cmd, append ? 0 : offset, m_opt, token,
-                           &m_transferStarted);
+                           &m_transferStarted, &m_last, &m_transferAccepted);
     if (!t.ok()) {
         if (t.error().isCancelled() || t.error().code == ErrorCode::Timeout)
             abort();
@@ -673,7 +684,7 @@ namespace {
 Result<QByteArray> transferText(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, char& type, const QString& cmd,
                                 const FtpOptions& opt, const CancellationToken& token, FtpReply& last)
 {
-    auto t = startTransfer(c, ctrl, useEpsv, type, 'A', cmd, 0, opt, token);
+    auto t = startTransfer(c, ctrl, useEpsv, type, 'A', cmd, 0, opt, token, nullptr, &last);
     if (!t.ok())
         return t.takeError();
     QTcpSocket* s = t->sock;
@@ -764,7 +775,7 @@ Status FtpClient::upload(const QString& remote, const QByteArray& data, const Ca
 Status FtpClient::uploadReplace(const QString& remoteFinal, const QByteArray& data, const QString& tempSuffix,
                                 const CancellationToken& token)
 {
-    const QString finalPath = normalizeRemotePath(remoteFinal);
+    const QString finalPath = cleanRemotePath(remoteFinal);
     const QString temp = finalPath + tempSuffix;
     const QString bak = finalPath + QStringLiteral(".replacing.bak");
     (void)mkdirs(remoteParent(finalPath));
@@ -799,21 +810,31 @@ Status FtpClient::uploadReplace(const QString& remoteFinal, const QByteArray& da
 
 Status FtpClient::removeTree(const QString& pathIn, const CancellationToken& token)
 {
-    const QString path = normalizeRemotePath(pathIn);
+    const QString path = cleanRemotePath(pathIn);
     if (path == u"/")
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Refusing to delete the console's root folder."));
     if (!isDirectory(path))
         return dele(path);
     FW_TRY_ASSIGN(std::vector<FtpEntry> entries, list(path, FtpListMode::Auto, token));
+    QStringList refused;
     for (const FtpEntry& e : entries) {
         if (!token.checkpoint())
             return Error::cancelled();
-        const QString child = joinRemote(path, e.name);
+        // A name the server sent must stay one path segment ("..\\x", "a/b"...).
+        const auto child = remoteChild(path, e.name);
+        if (!child) {
+            refused << e.name;
+            continue;
+        }
         if (e.isDir && !e.isLink)
-            FW_TRY(removeTree(child, token));
+            FW_TRY(removeTree(*child, token));
         else
-            FW_TRY(dele(child));
+            FW_TRY(dele(*child));
     }
+    if (!refused.isEmpty())
+        return Error(ErrorCode::InvalidArgument,
+                     QStringLiteral("%1 was not removed: it holds entries with names that cannot be used safely (%2).")
+                         .arg(path, refused.join(QStringLiteral(", "))));
     FW_TRY(cwd(QStringLiteral("/")));
     return rmd(path);
 }

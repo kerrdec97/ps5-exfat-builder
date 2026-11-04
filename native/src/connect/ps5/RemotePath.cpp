@@ -2,10 +2,12 @@
 
 namespace fw::ps5 {
 
-QString normalizeRemotePath(const QString& pathIn)
+namespace {
+
+// Collapses empty and "." segments; ".." removes the previous segment and can
+// never climb above "/". No trimming, no backslash conversion.
+QString collapse(const QString& p)
 {
-    QString p = pathIn.trimmed();
-    p.replace(u'\\', u'/');
     QStringList parts;
     for (const QString& seg : p.split(u'/', Qt::SkipEmptyParts)) {
         if (seg == u".")
@@ -20,21 +22,88 @@ QString normalizeRemotePath(const QString& pathIn)
     return u'/' + parts.join(u'/');
 }
 
+} // namespace
+
+QString normalizeRemotePath(const QString& pathIn)
+{
+    QString p = pathIn.trimmed();
+    p.replace(u'\\', u'/');
+    return collapse(p);
+}
+
+QString cleanRemotePath(const QString& path)
+{
+    return collapse(path);
+}
+
 QString joinRemote(const QString& dir, const QString& name)
 {
-    return normalizeRemotePath(dir + u'/' + name);
+    // `name` is a trusted relative path ('/'-separated, e.g. from a local
+    // folder scan). Its characters are kept exactly: no trimming, no '\\'
+    // conversion; "." and ".." segments are dropped so it can never climb.
+    QStringList parts;
+    for (const QString& seg : name.split(u'/', Qt::SkipEmptyParts))
+        if (seg != u"." && seg != u"..")
+            parts << seg;
+    const QString base = cleanRemotePath(dir);
+    if (parts.isEmpty())
+        return base;
+    return (base == u"/" ? QString() : base) + u'/' + parts.join(u'/');
+}
+
+QString remoteNameProblem(const QString& name)
+{
+    if (name.isEmpty())
+        return QStringLiteral("empty name");
+    if (name == u"." || name == u"..")
+        return QStringLiteral("reserved name \"%1\"").arg(name);
+    for (QChar c : name) {
+        if (c == u'/' || c == u'\\' || c == u':')
+            return QStringLiteral("the name contains \"%1\"").arg(c);
+        if (c.unicode() < 0x20)
+            return QStringLiteral("the name contains a control character");
+    }
+    return {};
+}
+
+QString localNameProblem(const QString& name)
+{
+    if (const QString why = remoteNameProblem(name); !why.isEmpty())
+        return why;
+#ifdef Q_OS_WIN
+    for (QChar c : name)
+        if (c == u'<' || c == u'>' || c == u'"' || c == u'|' || c == u'?' || c == u'*')
+            return QStringLiteral("the name contains \"%1\", which Windows does not allow").arg(c);
+    if (name.endsWith(u'.') || name.endsWith(u' '))
+        return QStringLiteral("the name ends with a dot or a space, which Windows removes");
+    static const QStringList reserved = {QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
+                                         QStringLiteral("NUL")};
+    const QString stem = name.section(u'.', 0, 0).toUpper();
+    if (reserved.contains(stem) || ((stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT")))
+                                    && stem.size() == 4 && stem.at(3) >= u'1' && stem.at(3) <= u'9'))
+        return QStringLiteral("\"%1\" is a reserved device name on Windows").arg(name);
+#endif
+    return {};
+}
+
+std::optional<QString> remoteChild(const QString& dir, const QString& name)
+{
+    if (!remoteNameProblem(name).isEmpty())
+        return std::nullopt;
+    const QString base = cleanRemotePath(dir);
+    return (base == u"/" ? QString() : base) + u'/' + name;
 }
 
 QString remoteParent(const QString& path)
 {
-    const QString p = normalizeRemotePath(path);
+    const QString p = cleanRemotePath(path);
     const qsizetype i = p.lastIndexOf(u'/');
     return i <= 0 ? QStringLiteral("/") : p.left(i);
 }
 
 QString remoteFileName(const QString& path)
 {
-    const QString p = normalizeRemotePath(path);
+    const QString p = cleanRemotePath(path);
     return p.mid(p.lastIndexOf(u'/') + 1);
 }
 

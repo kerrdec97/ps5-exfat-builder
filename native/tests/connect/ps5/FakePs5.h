@@ -23,6 +23,7 @@
 #include <QMutex>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -107,6 +108,13 @@ public:
         qint64 stallAfterBytes = -1;     // stop moving data after N bytes (no close)
         QStringList readOnlyPaths;       // STOR/APPE/DELE refused (550) for these virtual paths
         bool renameRefused = false;      // RNFR answers 502
+        QString dropOnlyPath;            // dropAfterBytes applies to this virtual path only
+        int dropControlOnPasv = 0;       // close the control connection on the first N PASV commands
+        QByteArray failFirstTransferReply; // answer the first RETR/STOR/APPE with this (e.g. "425 ...")
+        QString shortRetrPath;           // RETR of this path sends half the file, then 226
+        QString corruptStorPath;         // after a STOR to this path completes, keep only half (once)
+        QStringList extraListNames;      // fake file entries added to every LIST/MLSD (unsafe-name tests)
+        bool refuseDeleteWhileOpen = false; // DELE of a file still being written answers 550 (like Windows)
     };
 
     explicit FakeFtpServer(Options o) : m_opt(std::move(o))
@@ -326,14 +334,20 @@ private:
     }
 
     // Server -> client.
-    void sendBytes(Session* s, const QByteArray& bytes)
+    bool dropsHere(const QString& vpath) const
     {
+        return m_opt.dropAfterBytes >= 0 && !m_dropped && (m_opt.dropOnlyPath.isEmpty() || m_opt.dropOnlyPath == vpath);
+    }
+
+    void sendBytes(Session* s, const QByteArray& bytes, const QString& vpath)
+    {
+        const bool drop = dropsHere(vpath);
         reply(s, "150 Opening BINARY mode data connection");
         beginActive();
         auto pos = std::make_shared<qint64>(0);
         auto timer = new QTimer(m_t.ctx());
         timer->setInterval(m_opt.throttleBytesPerSec > 0 ? 20 : 0);
-        QObject::connect(timer, &QTimer::timeout, timer, [this, s, bytes, pos, timer] {
+        QObject::connect(timer, &QTimer::timeout, timer, [this, s, bytes, pos, timer, drop] {
             QTcpSocket* d = s->data;
             if (!d) {
                 timer->deleteLater();
@@ -344,7 +358,7 @@ private:
             if (m_opt.stallAfterBytes >= 0 && *pos >= m_opt.stallAfterBytes)
                 return; // stall forever
             qint64 n = m_opt.throttleBytesPerSec > 0 ? std::max<qint64>(1, m_opt.throttleBytesPerSec / 50) : 256 * 1024;
-            if (m_opt.dropAfterBytes >= 0 && !m_dropped)
+            if (drop && !m_dropped)
                 n = std::min(n, std::max<qint64>(0, m_opt.dropAfterBytes - *pos));
             if (m_opt.stallAfterBytes >= 0)
                 n = std::min(n, m_opt.stallAfterBytes - *pos);
@@ -353,15 +367,23 @@ private:
                 d->write(bytes.constData() + *pos, n);
                 *pos += n;
             }
-            if (m_opt.dropAfterBytes >= 0 && !m_dropped && *pos >= m_opt.dropAfterBytes && *pos < bytes.size()) {
+            if (drop && !m_dropped && *pos >= m_opt.dropAfterBytes && *pos < bytes.size()) {
                 m_dropped = true;
                 timer->stop();
                 timer->deleteLater();
-                d->abort();
-                d->deleteLater();
+                // Close after the bytes already written (FIN, not RST): on
+                // Windows an RST discards data the client has not read yet.
                 s->data = nullptr;
                 m_active.fetch_sub(1);
-                reply(s, "426 Connection closed; transfer aborted.");
+                QObject::connect(d, &QTcpSocket::disconnected, d, [this, s, d] {
+                    d->deleteLater();
+                    reply(s, "426 Connection closed; transfer aborted.");
+                });
+                d->disconnectFromHost();
+                if (d->state() == QAbstractSocket::UnconnectedState) {
+                    d->deleteLater();
+                    reply(s, "426 Connection closed; transfer aborted.");
+                }
                 return;
             }
             if (*pos >= bytes.size()) {
@@ -374,8 +396,9 @@ private:
     }
 
     // Client -> server, appended to `file` (opened by the caller).
-    void receiveInto(Session* s, std::shared_ptr<QFile> file)
+    void receiveInto(Session* s, std::shared_ptr<QFile> file, const QString& vpath)
     {
+        const bool drop = dropsHere(vpath);
         reply(s, "150 Ok to send data");
         beginActive();
         QTcpSocket* d = s->data;
@@ -383,13 +406,14 @@ private:
         auto done = std::make_shared<bool>(false);
         if (m_opt.throttleBytesPerSec > 0 || m_opt.stallAfterBytes >= 0)
             d->setReadBufferSize(64 * 1024);
-        auto pump = [this, s, d, file, got, done] {
+        m_openForWrite.insert(file->fileName());
+        auto pump = [this, s, d, file, got, done, drop, vpath] {
             if (*done)
                 return;
             qint64 budget = m_opt.throttleBytesPerSec > 0 ? std::max<qint64>(1, m_opt.throttleBytesPerSec / 50) : (1LL << 40);
             if (m_opt.stallAfterBytes >= 0)
                 budget = std::min(budget, m_opt.stallAfterBytes - *got);
-            if (m_opt.dropAfterBytes >= 0 && !m_dropped)
+            if (drop && !m_dropped)
                 budget = std::min(budget, m_opt.dropAfterBytes - *got);
             if (budget > 0 && d->bytesAvailable() > 0) {
                 const QByteArray b = d->read(std::min(budget, d->bytesAvailable()));
@@ -398,9 +422,10 @@ private:
                 *got += b.size();
                 m_received.fetch_add(b.size());
             }
-            if (m_opt.dropAfterBytes >= 0 && !m_dropped && *got >= m_opt.dropAfterBytes) {
+            if (drop && !m_dropped && *got >= m_opt.dropAfterBytes) {
                 m_dropped = true;
                 *done = true;
+                m_openForWrite.remove(file->fileName());
                 file->close();
                 d->abort();
                 s->data = nullptr;
@@ -411,7 +436,13 @@ private:
             }
             if (d->state() != QAbstractSocket::ConnectedState && d->bytesAvailable() == 0) {
                 *done = true;
+                const QString local = file->fileName();
+                m_openForWrite.remove(local);
                 file->close();
+                if (!m_opt.corruptStorPath.isEmpty() && vpath == m_opt.corruptStorPath && m_corruptLeft > 0) {
+                    --m_corruptLeft; // silent corruption: the reply still says 226
+                    QFile::resize(local, QFileInfo(local).size() / 2);
+                }
                 finishData(s, "226 Transfer complete");
             }
         };
@@ -480,6 +511,10 @@ private:
             reply(s, "200 OK");
         } else if (cmd == u"NOOP") {
             reply(s, "200 NOOP ok.");
+        } else if (cmd == u"PASV" && m_pasvDrops < m_opt.dropControlOnPasv) {
+            ++m_pasvDrops; // e.g. a Wi-Fi blip before the STOR is sent
+            s->inbuf.clear();
+            s->ctrl->abort();
         } else if (cmd == u"PASV") {
             if (m_opt.refusePasv)
                 reply(s, "502 PASV not implemented.");
@@ -536,7 +571,9 @@ private:
             else
                 reply(s, "550 Remove directory operation failed.");
         } else if (cmd == u"DELE") {
-            if (!readOnly(s, arg) && QFileInfo(local(s, arg)).isFile() && QFile::remove(local(s, arg)))
+            if (m_opt.refuseDeleteWhileOpen && m_openForWrite.contains(local(s, arg)))
+                reply(s, "550 The process cannot access the file because it is being used by another process.");
+            else if (!readOnly(s, arg) && QFileInfo(local(s, arg)).isFile() && QFile::remove(local(s, arg)))
                 reply(s, "250 Delete operation successful.");
             else
                 reply(s, "550 Delete operation failed.");
@@ -586,6 +623,12 @@ private:
                 else
                     out += listLine(fi).toUtf8() + "\r\n";
             }
+            for (const QString& extra : m_opt.extraListNames) {
+                if (cmd == u"MLSD")
+                    out += "type=file;size=5;modify=20240101000000; " + extra.toUtf8() + "\r\n";
+                else if (cmd == u"LIST")
+                    out += "-rw-r--r-- 1 root wheel 5 Jan 01 00:00 " + extra.toUtf8() + "\r\n";
+            }
             if (cmd == u"MLSD")
                 out.prepend("type=cdir;modify=20240101000000; .\r\ntype=pdir;modify=20240101000000; ..\r\n");
             withData(s, [this, s, out] {
@@ -594,6 +637,11 @@ private:
                 s->data->write(out);
                 finishData(s, "226 Directory send OK.");
             });
+        } else if ((cmd == u"RETR" || cmd == u"STOR" || cmd == u"APPE") && !m_opt.failFirstTransferReply.isEmpty()
+                   && !m_failedTransfer) {
+            m_failedTransfer = true;
+            s->rest = 0;
+            reply(s, m_opt.failFirstTransferReply);
         } else if (cmd == u"RETR") {
             QFile f(local(s, arg));
             if (!QFileInfo(f.fileName()).isFile() || !f.open(QIODevice::ReadOnly)) {
@@ -604,8 +652,11 @@ private:
             const qint64 offset = s->rest;
             s->rest = 0;
             f.seek(std::min(offset, f.size()));
-            const QByteArray bytes = f.readAll();
-            withData(s, [this, s, bytes] { sendBytes(s, bytes); });
+            QByteArray bytes = f.readAll();
+            const QString vpath = virtualPath(s, arg);
+            if (!m_opt.shortRetrPath.isEmpty() && vpath == m_opt.shortRetrPath)
+                bytes.truncate(bytes.size() / 2);
+            withData(s, [this, s, bytes, vpath] { sendBytes(s, bytes, vpath); });
         } else if (cmd == u"STOR" || cmd == u"APPE") {
             const QString p = local(s, arg);
             if (readOnly(s, arg) || !QFileInfo(QFileInfo(p).absolutePath()).isDir()) {
@@ -628,7 +679,8 @@ private:
                 reply(s, "553 Could not create file.");
                 return;
             }
-            withData(s, [this, s, f] { receiveInto(s, f); });
+            const QString vpath = virtualPath(s, arg);
+            withData(s, [this, s, f, vpath] { receiveInto(s, f, vpath); });
         } else {
             reply(s, "502 Command not implemented.");
         }
@@ -646,6 +698,10 @@ private:
     std::atomic<int> m_maxActive{0};
     std::atomic<qint64> m_received{0};
     bool m_dropped = false;
+    int m_pasvDrops = 0;
+    bool m_failedTransfer = false;
+    int m_corruptLeft = 1;
+    QSet<QString> m_openForWrite; // local paths of STORs still receiving (server thread only)
 };
 
 // ---------------------------------------------------------------------------------------

@@ -14,9 +14,11 @@
 //  * downloads write <name>.part and rename it only when complete; existing
 //    local files are skipped unless overwrite is set;
 //  * a dropped connection is retried `retries` times, resuming with REST (or
-//    APPE) from what already arrived; `resume` also continues partial files
-//    left by an earlier run (and skips remote files that already have the
-//    full size);
+//    APPE) from what already arrived — but only when this run's STOR for that
+//    file was accepted; otherwise the file is rewritten from the start, so an
+//    older remote file is never extended; `resume` also continues partial
+//    files left by an earlier run (and skips remote files that already have
+//    the full size);
 //  * every transferred file's size is checked afterwards (SIZE / local size).
 
 #include "connect/ps5/Endpoint.h"
@@ -43,6 +45,10 @@ struct TransferPlan {
     std::vector<TransferFile> files;
     QStringList directories; // remote (upload) or local (download) folders to create
     qint64 totalBytes = 0;
+    // Download: console entries left out because their names are unsafe
+    // ("path: reason"), e.g. containing '/', '\\' or ':' (remoteNameProblem /
+    // localNameProblem). They are reported, never written.
+    QStringList skipped;
 };
 
 struct TransferOptions {
@@ -87,5 +93,10 @@ Result<TransferReport> runUpload(const TransferPlan& plan, const TransferOptions
 Result<TransferReport> runDownload(const TransferPlan& plan, const TransferOptions& options,
                                    const CancellationToken& token, ProgressReporter* progress = nullptr,
                                    const Log& log = Log(QStringLiteral("ps5.ftp")));
+
+// Renames a finished `<name>.part` over `finalPath`. An existing final file is
+// set aside first and put back if the rename fails; on any failure the .part
+// is kept and the error says where.
+Status commitDownloadedFile(const QString& part, const QString& finalPath);
 
 } // namespace fw::ps5
