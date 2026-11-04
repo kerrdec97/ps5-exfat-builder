@@ -299,7 +299,10 @@ public:
         }
         outcome.summary = outcome.verification == Verification::Passed ? QStringLiteral("Verified: %1").arg(outcome.verificationDetail)
                                                                         : QStringLiteral("Problems found: %1").arg(outcome.verificationDetail);
-        (outcome.verification == Verification::Passed ? ctx.log.info(outcome.summary) : ctx.log.warn(outcome.summary));
+        if (outcome.verification == Verification::Passed)
+            ctx.log.info(outcome.summary);
+        else
+            ctx.log.warn(outcome.summary);
         return outcome;
     }
 

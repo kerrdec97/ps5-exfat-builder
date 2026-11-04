@@ -13,6 +13,9 @@
 
 #include "Ufs2TestUtil.h"
 
+#include "engines/ufs2/Ufs2Check.h"
+
+#include <QElapsedTimer>
 #include <QTemporaryDir>
 
 using namespace ufs2test;
@@ -140,6 +143,17 @@ private slots:
         compareWithUfs2Tool(QStringLiteral("wide"), src, FormatParams{32768, 32768, 0, 262144});
     }
 
+    void identical_wideRootDirectory()
+    {
+        // The root's first block is reserved by newfs; its other blocks and
+        // its indirect block come after all the content.
+        const QString src = m_tmp.filePath("wideroot");
+        QVERIFY(makeWideDir(src, 1700, 200, 300));
+        QVERIFY(QDir().mkpath(src + "/zz_subdir"));
+        QVERIFY(mkfile(src + "/zz_subdir/x.bin", 5000, 1));
+        compareWithUfs2Tool(QStringLiteral("wideroot"), src, FormatParams{32768, 32768, 0, 262144});
+    }
+
     void identical_doubleIndirect_manyGroups()
     {
         // 130 MiB file at 32 KiB blocks: past the single-indirect range
@@ -249,6 +263,59 @@ private slots:
         }
     }
 
+    void benchmarkAgainstUfs2Tool()
+    {
+        if (ufs2toolDll().isEmpty() || dotnet().isEmpty())
+            QSKIP("UFS2Tool.dll (FW_UFS2TOOL_DLL) or dotnet not available");
+        // ~300 MiB: large files plus 3000 small ones. Both writers run on the
+        // same tree right after each other (warm cache, same disk).
+        const QString src = m_tmp.filePath("bench");
+        for (int i = 0; i < 8; ++i)
+            QVERIFY(mkfile(src + QStringLiteral("/big%1.bin").arg(i), 36 * 1024 * 1024 + i * 4097, quint32(700 + i)));
+        for (int i = 0; i < 3000; ++i)
+            QVERIFY(mkfile(src + QStringLiteral("/small/%1/f%2.bin").arg(i % 30).arg(i), 3000 + i, quint32(9000 + i)));
+        const QString ref = m_tmp.filePath("bench-ufs2tool.ffpkg");
+        const QString mine = m_tmp.filePath("bench-native.ffpkg");
+        const QString sync = QStandardPaths::findExecutable(QStringLiteral("sync"));
+        auto flush = [&] {
+            if (!sync.isEmpty())
+                runTool(sync, {});
+        };
+        // Alternate the two writers, flushing dirty pages in between, and keep
+        // the best of two runs each (write-back throttling dominates otherwise).
+        qint64 toolMs = LLONG_MAX, nativeMs = LLONG_MAX;
+        PlanSummary s;
+        for (int round = 0; round < 2; ++round) {
+            QFile::remove(ref);
+            QFile::remove(mine);
+            flush();
+            QElapsedTimer t;
+            t.start();
+            const ToolRun run = runUfs2Tool({QStringLiteral("newfs"), QStringLiteral("-O"), QStringLiteral("2"), QStringLiteral("-b"),
+                                             QStringLiteral("65536"), QStringLiteral("-f"), QStringLiteral("65536"), QStringLiteral("-m"),
+                                             QStringLiteral("0"), QStringLiteral("-S"), QStringLiteral("512"), QStringLiteral("-i"),
+                                             QStringLiteral("262144"), QStringLiteral("-D"), src, ref});
+            toolMs = std::min<qint64>(toolMs, std::max<qint64>(1, t.elapsed()));
+            QCOMPARE(run.exitCode, 0);
+            flush();
+            t.restart();
+            QVERIFY(buildImage(src, mine, {}, &s).ok());
+            nativeMs = std::min<qint64>(nativeMs, std::max<qint64>(1, t.elapsed()));
+        }
+        const double mib = double(s.dataBytes) / 1048576.0;
+        qInfo("benchmark (%.0f MiB, %lld files): UFS2Tool %lld ms (%.0f MiB/s), native %lld ms (%.0f MiB/s), %.1fx",
+              mib, s.files, toolMs, mib * 1000.0 / double(toolMs), nativeMs, mib * 1000.0 / double(nativeMs),
+              double(toolMs) / double(nativeMs));
+        // Same content (the order is the same listing, times differ).
+        const RefMeta meta = refMeta(ref);
+        WriterOptions opt;
+        opt.formatTime = meta.t1;
+        opt.populateTime = meta.t2;
+        opt.fsId1 = meta.fsId1;
+        QVERIFY(buildImage(src, mine, opt).ok());
+        QCOMPARE(firstDifference(readAll(ref), readAll(mine)), qint64(-1));
+    }
+
     void freebsdDumpfsReadsNativeImage()
     {
         const QString dumpfs = dumpfsUfs();
@@ -306,6 +373,10 @@ private slots:
         auto tree = reader.value()->loadTree(token);
         QVERIFY2(tree.ok(), tree.ok() ? "" : qPrintable(tree.error().toLogString()));
         QCOMPARE(tree->fileCount, qint64(8));
+        // The native structure check accepts an image written by another tool.
+        auto check = checkImage(*reader.value(), token);
+        QVERIFY(check.ok());
+        QVERIFY2(check->ok(), qPrintable(check->problems.join(u'\n')));
         // Every file reads back identically.
         const auto expected = snapshotFolder(src);
         for (auto it = expected.begin(); it != expected.end(); ++it) {

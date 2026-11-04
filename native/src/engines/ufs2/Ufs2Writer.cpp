@@ -199,7 +199,7 @@ namespace {
 
 class Planner {
 public:
-    Planner(Ufs2Writer::Plan& plan, const SourceTree& tree, const Geometry& g) : p(plan), t(tree), g(g) {}
+    Planner(Ufs2Writer::Plan& plan, const SourceTree& tree, const Geometry& geometry) : p(plan), t(tree), g(geometry) {}
     Status run();
 
 private:

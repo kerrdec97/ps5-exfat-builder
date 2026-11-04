@@ -329,7 +329,7 @@ Result<ExtractReport> extractTree(const SourceTree& tree, const QString& dest, c
                 rep.renamed << QStringLiteral("%1 → %2").arg(tree.relativePath(c), local);
             const QString path = dirPath + u'/' + local;
             if (n.isDir()) {
-                if (!QDir().mkpath(toLongPath(path)))
+                if (!QDir().mkpath(path))
                     return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(path)));
                 ++rep.dirs;
                 stack.emplace_back(c, path);
@@ -383,7 +383,7 @@ Result<CompareReport> verifyExtracted(const SourceTree& tree, const ExtractRepor
     for (const auto& [node, path] : report.written) {
         const TreeNode& n = tree.nodes[size_t(node)];
         const QString rel = tree.relativePath(node);
-        const QFileInfo fi(path);
+        const QFileInfo fi(toLongPath(path));
         ++rep.filesCompared;
         if (!fi.exists()) {
             rep.missing << rel;
