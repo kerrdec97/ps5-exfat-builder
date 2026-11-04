@@ -207,8 +207,15 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     content()->addWidget(statusRow);
 
     m_tabs = new QTabBar(this);
-    for (const auto& t : {QStringLiteral("FTP browser"), QStringLiteral("Payloads"), QStringLiteral("Kernel log"), QStringLiteral("Y2JB"), QStringLiteral("Mount config"), QStringLiteral("Diagnostics")})
-        m_tabs->addTab(t);
+    // Stable keys in the tab data: other pages open a tab by key, never by position.
+    const std::pair<QString, QString> tabs[] = {{QStringLiteral("ftp"), QStringLiteral("FTP browser")},
+                                                {QStringLiteral("payloads"), QStringLiteral("Payloads")},
+                                                {QStringLiteral("klog"), QStringLiteral("Kernel log")},
+                                                {QStringLiteral("y2jb"), QStringLiteral("Y2JB")},
+                                                {QStringLiteral("mount"), QStringLiteral("Mount config")},
+                                                {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics")}};
+    for (const auto& [key, label] : tabs)
+        m_tabs->setTabData(m_tabs->addTab(label), key);
     m_tabs->setExpanding(false);
     m_tabs->setDrawBase(false);
     m_tabs->setProperty("fwNoRing", true);
@@ -1327,14 +1334,17 @@ void Ps5ConnectPage::dropUrls(const QList<QUrl>& urls)
 void Ps5ConnectPage::navigateWith(const QVariantMap& args)
 {
     if (args.contains(QStringLiteral("tab"))) {
-        // An index, or a tab's title ("Diagnostics").
+        // A key ("payloads", "klog"...) or, for older callers, an index.
         const QVariant tab = args.value(QStringLiteral("tab"));
         bool isIndex = false;
-        int index = tab.toInt(&isIndex);
-        for (int i = 0; !isIndex && i < m_tabs->count(); ++i)
-            if (m_tabs->tabText(i).compare(tab.toString(), Qt::CaseInsensitive) == 0)
-                index = i;
-        m_tabs->setCurrentIndex(index);
+        const int index = tab.toInt(&isIndex);
+        if (isIndex && tab.typeId() != QMetaType::QString) {
+            m_tabs->setCurrentIndex(index);
+        } else {
+            for (int i = 0; i < m_tabs->count(); ++i)
+                if (m_tabs->tabData(i).toString() == tab.toString())
+                    m_tabs->setCurrentIndex(i);
+        }
     }
     if (args.contains(QStringLiteral("upload"))) {
         m_tabs->setCurrentIndex(0);

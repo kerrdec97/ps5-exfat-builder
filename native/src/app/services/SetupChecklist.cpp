@@ -129,7 +129,7 @@ QList<ChecklistItem> setupChecklist(const ChecklistInputs& in)
     ChecklistItem f;
     f.id = QStringLiteral("ftp");
     f.fixPage = QStringLiteral("ps5");
-    f.fixArgs = {{QStringLiteral("tab"), QStringLiteral("Diagnostics")}};
+    f.fixArgs = {{QStringLiteral("tab"), QStringLiteral("diagnostics")}}; // Ps5ConnectPage tab key
     const QString where = QStringLiteral("%1:%2").arg(in.consoleIp).arg(in.ftpPort);
     if (!ip) {
         f.label = QStringLiteral("FTP not checked");
@@ -186,7 +186,7 @@ QList<ChecklistItem> setupChecklist(const ChecklistInputs& in)
                       : QStringLiteral("Add your .elf / .bin payloads on PS5 connect › Payloads.");
     l.fixText = l.done ? QString() : QStringLiteral("Add payloads");
     l.fixPage = QStringLiteral("ps5");
-    l.fixArgs = {{QStringLiteral("tab"), QStringLiteral("Payloads")}};
+    l.fixArgs = {{QStringLiteral("tab"), QStringLiteral("payloads")}};
     out << l;
     return out;
 }

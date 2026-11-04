@@ -35,6 +35,19 @@
 //   Image edit     image.exfat.edit {image, operations: [{op: add|replace|delete|mkdir, imagePath, localPath}]}
 //                  image.ffpkg.edit {image, operations: [{op: add|replace|delete|rename|mkdir, path, source, newName}]}
 //   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfsc"), output (file path)}
+//   Compare        image.compare    {a (image), b (image or folder), depth ("full" (default) | "structure")}
+//                  Images: .exfat / .ffpkg / .ffpfs / .ffpfsc (either side may also be a folder).
+//                  The job succeeds whatever it finds and leaves outcome.verification NotRun;
+//                  summary = one line; details = {
+//                    a, b: {path, kind, files, dirs, bytes}, depth, identical: bool,
+//                    counts: {missing, extra, missingDirs, extraDirs, sizeDifferent, contentDifferent,
+//                             unreadable, differences, filesInBoth, contentCompared, bytesCompared, padded},
+//                    missing, extra, missingDirs, extraDirs: [path]   ("missing" = only in A, "extra" = only in B),
+//                    sizeDifferent: [{path, a, b}], contentDifferent: [{path, offset (first differing byte)}],
+//                    unreadable: [{path, message}], listLimit (500), truncated: bool, warnings: [..] }
+//                  Lists hold at most listLimit entries; counts are exact.
+//   Hex preview    no job: services/HexPreview reads slices of a file inside an image on a
+//                  worker thread (read-only, the image is not kept open between slices).
 //   Dump rename    library.rename   {mode: preview|apply|undo, source, preset?, destination?, items: [{source, name, selected}], undoLog}
 //                  backport.restore {journal} rolls back an interrupted apply
 //   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate)
@@ -107,6 +120,8 @@ Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJs
                                 const QVariantMap& overrides);
 Result<QString> submitConvert(AppContext& ctx, const QString& image, const QString& format, const QString& output,
                               const QVariantMap& overrides);
+// `depth` = "full" | "structure".
+Result<QString> submitCompare(AppContext& ctx, const QString& a, const QString& b, const QString& depth);
 Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
                                     const QString& destination, const QJsonArray& items, const QString& undoLog);
 Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPath);

@@ -39,6 +39,8 @@ struct Manifest {
     // relKey → every hash a backport recorded for that file (post_hashes and
     // files_after of every target, and the last applied files_after).
     QMap<QString, QSet<QString>> patchedHashes() const;
+    // relKey → every hash an in-place SDK fix of this folder wrote (sdk_fixes).
+    QMap<QString, QSet<QString>> sdkFixHashes() const;
     bool applied() const;
 };
 
@@ -93,14 +95,25 @@ struct TargetRecord {
 
 void recordOriginals(Manifest& m, const OriginalsRecord& o);
 void recordTarget(Manifest& m, const TargetRecord& t);
+// An in-place SDK fix of this folder (SdkFixer.h), appended to "sdk_fixes".
+// Its files_after count as backport output for the verdict and for restore.
+struct SdkFixRecord {
+    int sdk = 0;
+    QString backupZip;
+    QString backupZipSha256;
+    QString record;                                   // the kept apply journal
+    QMap<QString, QPair<QString, qint64>> filesAfter; // rel → sha256, size
+};
+void recordSdkFix(Manifest& m, const SdkFixRecord& fix);
 void recordRestore(Manifest& m, const QString& zip);
 void addHistory(Manifest& m, const QString& action, const std::optional<QString>& target);
 
 enum class Verdict { Unknown, Patched, Differs, Original };
 QString verdictName(Verdict v);
 
-// Python backported_by_manifest(): any recorded post hash (outside fakelib/)
-// matching the current file → Patched; else any recorded original executable
+// Python backported_by_manifest(): any recorded post hash (outside fakelib/),
+// or any file an in-place SDK fix of the folder wrote, matching the current
+// file → Patched; else any recorded original executable
 // (not decrypted/ or fakelib/) differing → Differs; else any match →
 // Original; else Unknown. Keys compare case-insensitively; files are
 // resolved through the scan's index so the result is the same on every OS.

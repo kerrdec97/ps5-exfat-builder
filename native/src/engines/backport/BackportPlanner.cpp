@@ -4,6 +4,7 @@
 #include "core/Paths.h"
 #include "engines/backport/ApplyJournal.h"
 #include "engines/backport/BackupArchive.h"
+#include "engines/backport/ProviderSet.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -225,16 +226,80 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
                     .arg(*plan.gameSdk));
     }
 
-    // S8 / S6 / S14 / D3: fakelib.
+    // #41: imported module names that match a sce_module/ library only when
+    // letter case is ignored (detector only; nothing is renamed).
+    plan.moduleCase = moduleCaseMismatches(scan);
+    for (const ModuleCaseMismatch& m : plan.moduleCase)
+        add(Code::ModuleNameCase, Severity::Warn,
+            QStringLiteral("%1 imports the module %2, but the file is %3 (the letters differ in case). Firmware that "
+                           "looks modules up case-sensitively may not load it and the game can crash at launch. "
+                           "This is reported only; the file is not renamed.")
+                .arg(m.importer, m.imported, m.file),
+            {m.importer, m.file});
+
+    // S8 / S6 / S14 / D3: fakelib. #34: the user's AMPR/PlayGo providers take
+    // the place of the same-named libraries of the set (or are added to it).
+    std::optional<FakelibSource> set;
+    bool setUsable = true;
     if (!opt.fakelibDir.trimmed().isEmpty()) {
         FakelibSource src;
         const QStringList problems = fakelibProblems(opt.fakelibDir, game, &src, token);
         if (!problems.isEmpty()) {
+            setUsable = false;
             add(Code::FakelibInvalid, Severity::Refuse,
                 QStringLiteral("The fakelib folder %1 cannot be used: %2")
                     .arg(native(opt.fakelibDir), problems.join(QStringLiteral(" "))),
                 problems);
         } else {
+            set = src;
+        }
+    }
+    if (!opt.providerDir.trimmed().isEmpty()) {
+        FakelibSource prov;
+        QStringList ignored;
+        const QStringList problems = providerProblems(opt.providerDir, game, &prov, &ignored, token);
+        if (!problems.isEmpty()) {
+            setUsable = false;
+            add(Code::FakelibInvalid, Severity::Refuse,
+                QStringLiteral("The AMPR/PlayGo folder %1 cannot be used: %2")
+                    .arg(native(opt.providerDir), problems.join(QStringLiteral(" "))),
+                problems);
+        } else {
+            plan.providers = prov;
+            plan.providersIgnored = ignored;
+            const QString pinsPath = opt.providerPinsPath.isEmpty() ? defaultProviderPinsPath() : opt.providerPinsPath;
+            const ProviderPinCheck pins = checkProviderPins(prov, pinsPath);
+            QStringList names;
+            for (const FakelibLib& l : prov.libs)
+                names << QStringLiteral("%1 (%2…)").arg(l.name, l.sha256.left(8));
+            if (!pins.pinned) {
+                plan.pinProvidersOnRun = true;
+                add(Code::Ok, Severity::Info,
+                    QStringLiteral("The AMPR/PlayGo libraries in %1 are not pinned yet; this backport pins them: %2. A "
+                                   "later change to them is refused until you pin them again.")
+                        .arg(native(prov.dir), names.join(QStringLiteral(", "))));
+            } else if (!pins.ok()) {
+                setUsable = false;
+                add(Code::ProviderChanged, Severity::Refuse,
+                    QStringLiteral("The AMPR/PlayGo libraries in %1 differ from the ones pinned on %2 (%3). If you "
+                                   "replaced them on purpose, pin them again on the Backport page; nothing was changed.")
+                        .arg(native(prov.dir), pins.pinnedAt, pins.describe()));
+            } else {
+                add(Code::Ok, Severity::Info,
+                    QStringLiteral("AMPR/PlayGo libraries from %1 match their pins: %2.")
+                        .arg(native(prov.dir), names.join(QStringLiteral(", "))));
+            }
+            if (!ignored.isEmpty())
+                add(Code::Ok, Severity::Info,
+                    QStringLiteral("Only libSceAmpr and libScePlayGo are used from %1; ignored: %2.")
+                        .arg(native(prov.dir), listFiles(ignored)),
+                    ignored);
+            set = withProviders(set, prov);
+        }
+    }
+    if (set && setUsable) {
+        {
+            const FakelibSource& src = *set;
             plan.fakelib = src;
             plan.fakelibState = fakelibState(game, &src, token);
             if (plan.fakelibState == FakelibState::Same) {
@@ -265,7 +330,7 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
                 }
             }
         }
-    } else if (!scan.fakelibFiles.isEmpty()) {
+    } else if (opt.fakelibDir.trimmed().isEmpty() && opt.providerDir.trimmed().isEmpty() && !scan.fakelibFiles.isEmpty()) {
         add(Code::Ok, Severity::Info,
             QStringLiteral("The dump's own fakelib/ (%1 files) is carried over unchanged; no fakelib set was chosen.")
                 .arg(scan.fakelibFiles.size()));

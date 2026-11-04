@@ -193,7 +193,7 @@ private slots:
         fake::FakeFtpServer server(o);
         (void)m_ctx->settings().setValue(ps5::keys::kConsoleIp, QStringLiteral("127.0.0.1"));
         (void)m_ctx->settings().setValue(ps5::keys::kFtpPort, int(server.port()));
-        m_window->navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("Diagnostics")}});
+        m_window->navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("diagnostics")}});
         auto* tab = ps5Page()->diagnosticsTab();
         QVERIFY(tab);
         QTRY_VERIFY(tab->isVisible());

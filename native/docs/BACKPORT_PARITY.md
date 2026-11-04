@@ -372,7 +372,7 @@ C++: data-driven table `NidSubstitution{from, to, applyWhenTargetSdkAtMost=6, re
 | GUI overlay (step 4 of §2.2) | Copies each file of the set to `game/fakelib/<rel>`, backing up an existing file to `originals/fakelib/<rel>` (Backport All: only if no backup exists yet) | Staged; applied in the Apply phase; backup recorded in the journal and the originals ZIP |
 | Engine copy | If the source doesn't exist: success "(skipping)"; if it isn't a dir: fail; otherwise `rmtree(out/fakelib)` then `copytree(src, out/fakelib)` | `stage/fakelib/` = the source set |
 | Nested eboots | For every `eboot.bin` anywhere under the output (including `decrypted/`!) whose folder isn't the output root: `rmtree(<dir>/fakelib)`, `copytree(src, <dir>/fakelib)` | For each `eboot.bin` in a sub-folder of the **game**: stage `<dir>/fakelib/` |
-| Dump's own fakelib | Processed by the engine (unwrap → SDK patch → re-sign). Files in the set are then replaced by the set's copy; **extras such as `libSceAmpr.sprx` or `libSceAppContent.sprx` stay re-signed** and are copied back with a backup | Extras are carried over unchanged, with a warning listing them (AMPR/PlayGo/AppContent named, #17/#27). Replacing them is part of "Switch AMPR/PlayGo" (later). |
+| Dump's own fakelib | Processed by the engine (unwrap → SDK patch → re-sign). Files in the set are then replaced by the set's copy; **extras such as `libSceAmpr.sprx` or `libSceAppContent.sprx` stay re-signed** and are copied back with a backup | Extras are carried over unchanged, with a warning listing them (AMPR/PlayGo/AppContent named, #17/#27). Replacing libSceAmpr / libScePlayGo is "Switch AMPR/PlayGo" (#34, `backport.amprPlaygoFolder`). |
 | State check | `backport_fakelib_state(game, src)`: `none` (no or empty `game/fakelib`), `same` (every set file exists with the same size and SHA-256), `other` | Same |
 
 ### 2.11 `.bak` handling
@@ -414,7 +414,7 @@ The image-level "Apply backport" in File Manager (`ui/tab_files.py:673`) and the
 | Writing | `<zip>.part` → ZIP_DEFLATED with ZIP64 allowed → re-open → `testzip()` (CRC of every member) → member count must equal the distinct names → `os.replace` to the final name. On any error the `.part` is deleted and the error raised. Arcnames use `/` and are deduplicated case-insensitively (first one wins). |
 | Originals ZIP contents | (1) the `originals/` staging tree minus any `decrypted/` dir: every executable from the snapshot, `fakelib/<rel>` of another tool's replaced files, and any original file the copy-back overwrote; (2) `sce_sys/param.json` ← the first `param.json` found (`sce_sys/param.json`, `param.json`, then a walk ≤ 3 levels deep), **always stored under that arcname**; (3) every non-empty file under any `decrypted` dir ≤ 4 levels deep, with its arcname relative to the game root |
 | Backport ZIP contents | The `patched/` tree minus `decrypted/`: signed executables at their relative paths, `fakelib/` (the set), `<subdir>/fakelib/` for nested eboots, and the dump's re-signed fakelib extras (§2.10) |
-| Backport GUI difference | Its originals ZIP holds "the untouched originals of **only the replaced files**" [R]. Ours is a superset: all executables plus param.json plus the dump's `decrypted/`. C++ keeps the superset (restore and re-patch need it) and adds `_backport_details/` reports later. |
+| Backport GUI difference | Its originals ZIP holds "the untouched originals of **only the replaced files**" [R]. Ours is a superset: all executables plus param.json plus the dump's `decrypted/`. C++ keeps the superset (restore and re-patch need it). Instead of a `_backport_details/` folder, each run writes a report (JSON + HTML) to `BackportBackup/<TitleID>/…/reports/` (matrix #24). |
 | Retagged ZIP (Batch SDK Retag) | Same name with the first `FW\s*\d+\.?xx` replaced by `FW <tgt>xx`, or that tag prepended; `_retagged_` prefix if it would equal the source path; written as `.part`, then renamed |
 
 C++ entry order: sorted by arcname, for deterministic ZIPs.
@@ -508,11 +508,11 @@ C++ schema 2 adds `engine` (name, version, SDK table hash), `added_files` (paths
 
 | Tool | Behaviour | Hazards → C++ |
 |---|---|---|
-| SDK Fixer (`E:15736`) | Re-patches the SDK marker only (fakelib off, libc patch off) on a folder (full dump or backport files). Copy mode → `<name> SDK <N>` (name cleaned of FW tags, IDs and `- Copy`); overwrite mode keeps `.bak`. Verifies: no fakelib added, libc pattern not introduced, `param.json`/`param.sfo` unchanged, output exists. Restores executables on failure. | On an **ELF-only** folder, the engine patches the **source** in place even in copy mode. C++: staging only. |
+| SDK Fixer (`E:15736`) | Re-patches the SDK marker only (fakelib off, libc patch off) on a folder (full dump or backport files). Copy mode → `<name> SDK <N>` (name cleaned of FW tags, IDs and `- Copy`); overwrite mode keeps `.bak`. Verifies: no fakelib added, libc pattern not introduced, `param.json`/`param.sfo` unchanged, output exists. Restores executables on failure. | On an **ELF-only** folder, the engine patches the **source** in place even in copy mode. C++ (`SdkFixer.*`, job `backport.sdkFix`): staging only. Copy → `<output>/<name> SDK <N>` via `.fwpart`, executables and param files checked by SHA-256, the rest by size, removed on failure or cancel; the title ID stays in the name. In place → a verified backup ZIP `<prefix> SDK <N> fix original files.zip` in the originals ZIP folder, then the apply journal (rollback, start-up recovery); no `.bak`. The finished journal is kept in `BackportBackup/<TitleID>/…/sdk-fixes/` and undoes the fix (`backport.restore {game, undoSdkFix: true}`). A folder with its own backport record gets an `sdk_fixes` entry, so restore and the S7 verdict recognise the fixed files. |
 | Batch SDK Retag (`E:16514`) | For each `*.zip` in a source folder: free temp space ≥ 1.05 × uncompressed size; `extractall` → find `eboot.bin` (root or one level down) → read its SDK → skip if equal / unreadable / no eboot; warn if it crosses SDK 6; engine (no fakelib, no libc, no backup) on the eboot's folder; copy back only the executables that existed; ZIP the whole tree to `<out>/<retagged name>.part` → rename. The output folder must differ from the source. | Becomes Backport GUI's "Rebuild ZIP with another SDK" (single ZIP and batch) |
 | Results (`E:13665-13950`) | Settings list `bpr_log` of `{game, orig_zip, pat_zip, status pending/worked/failed, ts}`. **It worked** deletes the **originals ZIP** immediately, with no confirmation. **Didn't work** deletes the backport ZIP. Also: add manually, clear completed, clear all (keeps files). | D10: no automatic deletion. Never delete the originals ZIP while the manifest says the game is patched. |
 | Notes field | Saved as `abp_notes`; not written anywhere else | Stored in the manifest and the results entry |
-| Audio fix scanner / test patch (`ui/audio_*.py`) | Read-only scanners (cluster `c7 45 94 00 0C`, `c7 03 0C 00 00 00`, `6a 0C 58`; profile DBSparklingZero PPSA15210) and a gated test-patch on a copy. Its sub-tab `advfixes` is **not registered** (unreachable). | Later, report-only |
+| Audio fix scanner / test patch (`ui/audio_*.py`) | Read-only scanners (cluster `c7 45 94 00 0C`, `c7 03 0C 00 00 00`, `6a 0C 58`; profile DBSparklingZero PPSA15210) and a gated test-patch on a copy. Its sub-tab `advfixes` is **not registered** (unreachable). | C++: report only (`AudioScan.*`, job `backport.audioScan`): the cluster (12 or 8 channels), twin branches, audio API names, loose leads and the two confirmed profiles (DBSparklingZero PPSA15210, SpiderMan2 PPSA03016), on the raw bytes of `eboot.bin` (or every executable). No test patch: profiles need console evidence. |
 
 ### 2.19 Python defects the C++ must not copy
 
@@ -531,7 +531,7 @@ C++ schema 2 adds `engine` (name, version, SDK table hash), `added_files` (paths
 | P11 | AMPR key folding and FTP mtime | §2.17 |
 | P12 | Backport All has no free-space check; the temp-path check uses `patched/<game>` while the longest real path is `patched/decrypted/<rel>` | §2.2, `backport_safety.temp_path_problem` |
 | P13 | The Games scan covers only 2 levels and does not exclude the ZIP folders | `tab_backports.py:1607` |
-| P14 | SDK Fixer copy mode modifies an ELF-only source | §2.18 |
+| P14 | SDK Fixer copy mode modifies an ELF-only source (fixed in C++: the source is only read) | §2.18 |
 
 ---
 
@@ -611,7 +611,7 @@ Legend: **Y** = in our Python, **P** = partial, **N** = no. C++ plan: **Impl** =
 | 21 | Originals ZIP with only the replaced files | R | P (superset) | Impl (superset) | Superset kept for restore and re-patch |
 | 22 | Never overwrite | R | Y | Impl | `(N)` suffix |
 | 23 | Per-run manifests with SHA-256 of every file | R | P | Impl | Schema 2 |
-| 24 | `_backport_details/` (loose files, reports, manifests) | I | N (`BackportBackup/<ID>/manifest.json`) | Later | Keep BackportBackup compatibility; add a run report JSON/HTML |
+| 24 | `_backport_details/` (loose files, reports, manifests) | I | N (`BackportBackup/<ID>/manifest.json`) | Impl (run report) | `RunReport.*`: every run that passes preflight (and every SDK fix and audio report) writes `<stamp> <kind>.json` + a self-contained `.html` (inline CSS, no scripts, CSP `default-src 'none'`, every value escaped) to `BackportBackup/<TitleID>[/folders/<name>-<hash>]/reports/`; `manifest.json` and its place are unchanged. Inputs, target pair, per-file results (rewritten / unchanged / added / replaced / left unchanged / failed, with why), skipped files, ZIP paths and SHA-256s, verification, apply journal, issues, warnings. A failed run names its report in the error detail. "Open report" on the Backport page. No loose-file copy. |
 | 25 | Apply to game folders (opt-in), after a verified backup | R | Always on, no option | Impl | D5 |
 | 26 | Write journal, automatic rollback, rollback offer at next start | R,T | N | Impl | §2.12 |
 | 27 | Restore originals (Settings) | R | Y (single, multi) | Impl | D6 |
@@ -621,19 +621,19 @@ Legend: **Y** = in our Python, **P** = partial, **N** = no. C++ plan: **Impl** =
 | 31 | Rebuild a ZIP with another SDK (row menu) | R | P (Batch SDK Retag) | Impl | Single and batch; fakelib/NID off. The "keeps FW 4.xx save fixes" part is blocked (#39). |
 | 32 | PS5 Pro fix | R | N | Blocked | Fix set and evidence only in the D:\ source |
 | 33 | PS5 Pro build / PSSR 2 test (+ from an existing backport) | C,S5 | N | Blocked | PSSR files (game-derived), AGC library change, D:\ source |
-| 34 | Switch AMPR / PlayGo | N,S5 | N | Later | User-supplied library set with hash pinning. Bundling ampr_emu 0.4.2.1 (GPL-3.0, upstream LICENSE verified) needs reproducible-build provenance first. Engine providers: blocked. |
+| 34 | Switch AMPR / PlayGo | N,S5 | N | Impl (user-supplied) / Blocked (bundled) | `ProviderSet.*`, setting `backport.amprPlaygoFolder`: the user's own `libSceAmpr` / `libScePlayGo` (S8 rules) take the place of the same-named libraries wherever the fakelib set is staged (also replacing a dump's own copies, kept in the originals ZIP). SHA-256 and size pinned per folder in `<dataDir>/backport/provider-pins.json` at the first backport (trust on first use); a changed, added or missing file is refused (`ProviderChanged`) until re-pinned (`backport.pinProviders`, "Pin them again" on the page). Bundling ampr_emu 0.4.2.1 (GPL-3.0, upstream LICENSE verified) needs reproducible-build provenance first. Engine providers: blocked. Swapping the providers inside an existing backport ZIP: not built (a new backport with the folder set does it). |
 | 35 | `right.sprx` "Invalid param magic" → standard copy | C | N (counted as failure) | Blocked (replacement) / Impl (detection) | The standard copy is Sony-derived. C++: S32 + policy `leaveUnchanged` (console result **UNVERIFIED**) |
 | 36 | Dump with another tool's fakelib (#27) | R | P (overlay + backup; extras re-signed) | Impl | Overlay, extras unchanged with a warning (D3). Replacing extras → #34. |
 | 37 | OS metadata ignored | R | Y | Impl | S15 |
 | 38 | Already-backported detection | T | Y (fakelib + manifest) | Impl | S6, S7 |
 | 39 | Save-data fixes (FW 4.xx), save-mount check | IA, S5 | N | Blocked | D:\ source |
-| 40 | Audio fixes (0.3.1 families, CRI 7.1.4 → 7.1) | IA | P (hidden scanner, one profile) | Later | Report-only first; patch profiles need console evidence |
-| 41 | Unity / Il2Cpp module-name case (#2) | IA | N | Later (detector) / Blocked (fix) | Detector: compare the import module names in DYNLIBDATA with `sce_module/` case-sensitively |
+| 40 | Audio fixes (0.3.1 families, CRI 7.1.4 → 7.1) | IA | P (hidden scanner, one profile) | Impl (report only) / Blocked (patches) | `backport.audioScan`: the legacy scanner's patterns as a read-only report (§2.18). Patch profiles need console evidence; the audio band check stays blocked (#15). |
+| 41 | Unity / Il2Cpp module-name case (#2) | IA | N | Impl (detector) / Blocked (fix) | `ModuleImports.*`: DT_NEEDED and DT_SCE_NEEDED_MODULE names from the dynamic table in DYNLIBDATA (string table at DT_SCE_STRTAB from the segment start; fallback: the NUL-separated names in DYNLIBDATA), compared with the files in `sce_module/` case-sensitively. A name that matches only when case is ignored is a Warn issue (`ModuleNameCase`) in the plan and the library scan. Nothing is renamed. That PS5 executables use these tag values is **UNVERIFIED** on real titles. |
 | 42 | Destination rules (both set, different, not nested, not in game, free space, folder named in the message) | T | P (backport folder optional; same folder allowed; nesting not checked) | Impl | S9, S10, S12, S38 |
 | 43 | Free-space check | R | P (single only) | Impl | S12 |
 | 44 | Failure message set (higher SDK / SDK N refused / no safe backport / no backport needed / Partial) | T | P | Impl | §6.3 |
-| 45 | Console Logs: payload send to ELF loader (9021), live klog | R | P (klog viewer on 3232, payload sender) | Later | PS5 connection module |
-| 46 | Crash dump auto-download ZIP, hang snapshots | R | N | Later | PS5 connection module |
+| 45 | Console Logs: payload send to ELF loader (9021), live klog | R | P (klog viewer on 3232, payload sender) | Impl (shortcut) | The Backport page links to the PS5 connect page's Payloads and Kernel log tabs (no new protocol work; the features are the PS5 connection module's). |
+| 46 | Crash dump auto-download ZIP, hang snapshots | R | N | Later | PS5 connection module. The console paths of crash dumps are not documented in this repository, so no download was built. |
 | 47 | Export logs ZIP (activity, per-run plan/log/report/trace, settings, system; no game files) | RI | P (text report) | Impl | `<Desktop>/…_logs_<date>_<time>.zip` |
 | 48 | Report a problem with prefilled form | C,BR | P (link) | Impl | GitHub issue-form query parameters: title, PPSA, version, SDK, fakelib |
 | 49 | Settings: subfolder depth, open logs folder, restore, applied list | I | P | Impl | §5 |
@@ -646,14 +646,14 @@ Our features not in Backport GUI:
 
 | Feature | Python | C++ plan |
 |---|---|---|
-| SDK Fixer (SDK marker only, copy or overwrite) | Y | Later (staging only, P14) |
+| SDK Fixer (SDK marker only, copy or overwrite) | Y | Impl (`backport.sdkFix`; staging only, P14 fixed; in place = backup ZIP + journal, undoable) |
 | Batch SDK Retag | Y | Merged into #31 |
 | libc NID patch (SDK ≤ 6 apply / > 6 revert) | Y | Impl (data-driven, `backport.nidPatchMode`) |
 | Results tracker | Y | Impl without automatic deletion (D10) |
 | Restore multiple by TITLE_ID | Y | Impl |
 | AMPR index (build-time + tool + FTP upload) | Y | Impl (GPL port of current upstream; fixes P11) |
 | Apply backport folder to a mounted image or ffpkg | Y (File Manager, ffpkg editor) | Owned by those modules |
-| Profile manager / target switcher, audio fix sub-tab | Code present, sub-tabs unregistered | Folded into the manifest and restore; audio later |
+| Profile manager / target switcher, audio fix sub-tab | Code present, sub-tabs unregistered | Folded into the manifest and restore; audio: read-only report (#40) |
 | Notes per game | Y (stored only) | In the manifest and results |
 
 ---
@@ -666,6 +666,7 @@ Our features not in Backport GUI:
 | `backport.backportZipFolder` | DirPath | "" | S10 when set. Required when `applyToGameFolder` is off (otherwise the run produces nothing). | Backport ZIP location; empty = no backport ZIP | `abp_zip_pat_dest` |
 | `backport.targetSdk` | Enum `1`…`10` | `4` | Must be a pair in the table; at run time ≤ the game SDK (S4) | SDK pair to write; labels "SDK N · loads on FW N.00+" (perJob) | `abp_target_sdk`, `abp_last_sdk` (values > 10 dropped with a warning) |
 | `backport.fakelibFolder` | DirPath | "" | S8 (a file path is dropped with a warning) | Fakelib set to stage into `fakelib/` and nested eboot dirs (perJob) | `abp_fakelib` |
+| `backport.amprPlaygoFolder` | DirPath | "" | S8 rules for the provider names; pins (#34) | The user's own `libSceAmpr` / `libScePlayGo`, staged in place of the same-named libraries (perJob) | — |
 | `backport.applyToGameFolder` | Bool | `true` (**owner decision**; Backport GUI: false) | — | Apply phase on or off (perJob); the plan line shows "game folder patched" or "game folder unchanged" | — |
 | `backport.nidPatchMode` | Enum `auto` / `off` | `auto` | — | `auto` = Python behaviour (≤ 6 apply, > 6 revert) (advanced) | — |
 | `backport.encryptedSelfPolicy` | Enum `refuse` / `leaveUnchanged` | `refuse` | — | S32. `leaveUnchanged` copies such files untouched and marks the run Partial (experimental, **UNVERIFIED** on console) (advanced, perJob) | — |

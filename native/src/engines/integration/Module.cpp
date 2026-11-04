@@ -5,6 +5,8 @@
 #include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatReader.h"
 #include "engines/fpkg/SourceStager.h"
+#include "engines/integration/ImageCompare.h"
+#include "engines/integration/ImageFiles.h"
 #include "engines/pfs/PfsVerify.h"
 #include "engines/ufs2/Ufs2Reader.h"
 #include "engines/ufs2/Ufs2Verify.h"
@@ -178,6 +180,127 @@ private:
     const JobFactory* m_factory;
 };
 
+// ---- image.compare ------------------------------------------------------------------
+
+class CompareJob final : public Job {
+public:
+    explicit CompareJob(QJsonObject p) : m_p(std::move(p)) {}
+    QString kind() const override { return kCompareJob; }
+    QString title() const override
+    {
+        return QStringLiteral("%1 ↔ %2").arg(QFileInfo(a()).fileName(), QFileInfo(b()).fileName());
+    }
+    QString subtitle() const override
+    {
+        return depth() == CompareDepth::Full ? QStringLiteral("Compare names, sizes and contents")
+                                             : QStringLiteral("Compare names and sizes");
+    }
+    QStringList phases() const override
+    {
+        return {QStringLiteral("Reading A"), QStringLiteral("Reading B"), QStringLiteral("Comparing")};
+    }
+    QList<double> phaseWeights() const override
+    {
+        return depth() == CompareDepth::Full ? QList<double>{1, 1, 18} : QList<double>{1, 1, 1};
+    }
+    QJsonObject parameters() const override { return m_p; }
+    QStringList busyPaths() const override
+    {
+        QStringList out;
+        for (const QString& p : {a(), b()})
+            if (!p.isEmpty())
+                out << QDir::cleanPath(QFileInfo(p).absoluteFilePath());
+        return out;
+    }
+
+    Status validate(const SettingsValues&) const override
+    {
+        if (a().isEmpty())
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the image to compare (A)."));
+        if (b().isEmpty())
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the image or folder to compare it with (B)."));
+        for (const QString& p : {a(), b()}) {
+            const QFileInfo fi(p);
+            if (!fi.exists())
+                return Error(ErrorCode::NotFound, QStringLiteral("%1 does not exist.").arg(QDir::toNativeSeparators(p)));
+            if (!fi.isDir() && !isTreeImage(p))
+                return Error(ErrorCode::InvalidArgument,
+                             QStringLiteral("%1 is not an .exfat, .ffpkg, .ffpfs or .ffpfsc image or a folder.").arg(QDir::toNativeSeparators(p)));
+        }
+        if (QDir::cleanPath(QFileInfo(a()).absoluteFilePath()) == QDir::cleanPath(QFileInfo(b()).absoluteFilePath()))
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose two different images (or an image and a folder)."));
+        const QString d = m_p.value(QStringLiteral("depth")).toString();
+        if (!d.isEmpty() && d != u"full" && d != u"structure")
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Unknown comparison depth \"%1\".").arg(d));
+        return success();
+    }
+
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        FW_TRY(validate(ctx.settings));
+        const CompareDepth dep = depth();
+        ctx.log.info(QStringLiteral("Comparing %1 (A) with %2 (B), %3")
+                         .arg(QDir::toNativeSeparators(a()), QDir::toNativeSeparators(b()),
+                              dep == CompareDepth::Full ? QStringLiteral("names, sizes and contents") : QStringLiteral("names and sizes")));
+        ctx.progress->beginPhase(0, 0);
+        ctx.progress->setCurrentItem(QFileInfo(a()).fileName());
+        FW_TRY_ASSIGN(auto treeA, openFileTree(a(), ctx.token));
+        ctx.log.info(QStringLiteral("A: %1, %2 files, %3 folders, %4")
+                         .arg(treeA->describe(), formatCount(treeA->fileCount()), formatCount(treeA->dirCount()), formatBytes(treeA->totalBytes())));
+        ctx.progress->beginPhase(1, 0);
+        ctx.progress->setCurrentItem(QFileInfo(b()).fileName());
+        FW_TRY_ASSIGN(auto treeB, openFileTree(b(), ctx.token));
+        ctx.log.info(QStringLiteral("B: %1, %2 files, %3 folders, %4")
+                         .arg(treeB->describe(), formatCount(treeB->fileCount()), formatCount(treeB->dirCount()), formatBytes(treeB->totalBytes())));
+
+        CompareOptions opt;
+        opt.depth = dep;
+        FW_TRY_ASSIGN(CompareReport rep, compareTrees(*treeA, *treeB, opt, ctx.token, ctx.progress, 2));
+
+        JobOutcome out;
+        out.verification = Verification::NotRun; // a comparison is a report, not a build check
+        out.summary = rep.summary();
+        for (const QString& w : treeA->warnings())
+            out.warnings << QStringLiteral("A: %1").arg(w);
+        for (const QString& w : treeB->warnings())
+            out.warnings << QStringLiteral("B: %1").arg(w);
+        out.warnings << rep.warnings;
+        out.details = rep.toJson();
+        ctx.log.info(out.summary);
+        int logged = 0;
+        const auto logSome = [&](const QString& line) {
+            if (logged++ < 20)
+                ctx.log.info(line);
+        };
+        for (const QString& p : rep.missing)
+            logSome(QStringLiteral("Only in A: %1").arg(p));
+        for (const QString& p : rep.missingDirs)
+            logSome(QStringLiteral("Folder only in A: %1").arg(p));
+        for (const QString& p : rep.extra)
+            logSome(QStringLiteral("Only in B: %1").arg(p));
+        for (const QString& p : rep.extraDirs)
+            logSome(QStringLiteral("Folder only in B: %1").arg(p));
+        for (const SizeDifference& d : rep.sizeDifferent)
+            logSome(QStringLiteral("Different size: %1 (A %2 bytes, B %3 bytes)").arg(d.path, formatCount(d.a), formatCount(d.b)));
+        for (const ContentDifference& d : rep.contentDifferent)
+            logSome(QStringLiteral("Different content: %1 (first difference at byte %2)").arg(d.path, formatCount(d.offset)));
+        for (const UnreadableFile& u : rep.unreadable)
+            logSome(QStringLiteral("Could not read %1: %2").arg(u.path, u.message));
+        if (logged > 20)
+            ctx.log.info(QStringLiteral("… %1 more differences (see the job's result).").arg(logged - 20));
+        return out;
+    }
+
+private:
+    QString a() const { return m_p.value(QStringLiteral("a")).toString(); }
+    QString b() const { return m_p.value(QStringLiteral("b")).toString(); }
+    CompareDepth depth() const
+    {
+        return m_p.value(QStringLiteral("depth")).toString() == u"structure" ? CompareDepth::Structure : CompareDepth::Full;
+    }
+    QJsonObject m_p;
+};
+
 const QStringList& buildKinds()
 {
     static const QStringList k = {QStringLiteral("image.exfat.build"), QStringLiteral("image.ffpkg.build"),
@@ -235,6 +358,9 @@ void registerModule(ModuleContext& ctx)
                  [factory](const QJsonObject& p) -> Result<std::unique_ptr<Job>> {
                      return std::unique_ptr<Job>(new ConvertJob(p, factory));
                  });
+    ctx.jobs.add(kCompareJob, QStringLiteral("Compare images"), [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> {
+        return std::unique_ptr<Job>(new CompareJob(p));
+    });
 
     SettingDef d;
     d.key = keys::kAutoUpload;
