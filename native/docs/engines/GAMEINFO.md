@@ -37,7 +37,7 @@ Extra facts (not in the legacy chain): `contentId` (param.json, else SFO `CONTEN
 
 | Result | Rule |
 |---|---|
-| PS5 | a readable `param.json`; else title ID `PPSA…`; else `eboot.bin` starting with the retail PS5 SELF magic `54 14 F5 EE` |
+| PS5 | a `param.json` (even a damaged one); else title ID `PPSA…`; else `eboot.bin` starting with the retail PS5 SELF magic `54 14 F5 EE` |
 | PS4 | title ID `CUSA…`, or a `param.sfo` without any `param.json` |
 | Game / Patch / Add-on (PS4) | SFO `CATEGORY` `gd`/`gde` / `gp` / `ac` |
 | Add-on (PS5) | `param.json` with no `eboot.bin` (an add-on content folder carries its own `sce_sys/param.json`, `core/fpkg/dlc.py`) |

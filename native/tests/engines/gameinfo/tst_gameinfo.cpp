@@ -466,6 +466,7 @@ private slots:
         QVERIFY(m->titleId.isEmpty());
         QCOMPARE(m->notes.size(), 2);
         QCOMPARE(m->kind, ContentKind::Application);
+        QCOMPARE(m->platform, Platform::PS5); // a damaged param.json still means PS5
         const QJsonObject j = m->toJson();
         QCOMPARE(j.value(QStringLiteral("notes")).toArray().size(), 2);
     }

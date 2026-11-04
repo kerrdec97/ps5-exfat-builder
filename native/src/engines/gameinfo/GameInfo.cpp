@@ -105,7 +105,8 @@ void decideKind(GameMetadata& m)
 
 void decidePlatform(GameMetadata& m)
 {
-    if (m.paramJson) {
+    // PS4 dumps never carry a param.json, so even a damaged one means PS5.
+    if (m.paramJson || !m.paramJsonPath.isEmpty()) {
         m.platform = Platform::PS5;
         return;
     }
