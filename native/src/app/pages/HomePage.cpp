@@ -217,7 +217,8 @@ void HomePage::refreshChecklist()
         if (!item.fixText.isEmpty()) {
             auto* fix = new Link(item.fixText, row);
             const NavRequest nav{item.fixPage, item.fixArgs};
-            connect(fix, &Link::activated, this, [this, nav] { emit navigateRequested(nav); });
+            // Queued: the rows are rebuilt on many signals; never inside the link's own click.
+            connect(fix, &Link::activated, this, [this, nav] { emit navigateRequested(nav); }, Qt::QueuedConnection);
             h->addWidget(fix, 0, Qt::AlignVCenter);
         }
         rows->addWidget(row);
