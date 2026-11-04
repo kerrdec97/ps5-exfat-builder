@@ -290,10 +290,24 @@ void MainWindow::showBanner(InfoBar* bar)
 
 // ---- status bar and chips ------------------------------------------------------------
 
+static void countUserJobs(const JobQueueModel& model, int& running, int& queued)
+{
+    running = queued = 0;
+    for (int r = 0; r < model.rowCount(); ++r) {
+        const JobRecord* rec = model.recordAt(r);
+        if (!rec || jobs::isSystemKind(rec->kind))
+            continue;
+        if (rec->state == JobState::Running || rec->state == JobState::Paused)
+            ++running;
+        else if (rec->state == JobState::Queued)
+            ++queued;
+    }
+}
+
 void MainWindow::updateChips()
 {
-    const int running = m_queueModel->countInState(JobState::Running) + m_queueModel->countInState(JobState::Paused);
-    const int queued = m_queueModel->countInState(JobState::Queued);
+    int running = 0, queued = 0;
+    countUserJobs(*m_queueModel, running, queued);
     m_sidebar->setCount(QStringLiteral("queue"), running + queued);
     if (running == 0 && queued == 0)
         m_header->setQueueChip(QStringLiteral("Queue idle"), Tone::Neutral, true);
@@ -303,9 +317,13 @@ void MainWindow::updateChips()
 
 void MainWindow::updateStatus()
 {
+    int runningUser = 0, queuedUser = 0;
+    countUserJobs(*m_queueModel, runningUser, queuedUser);
+    Q_UNUSED(runningUser);
     const JobRecord* running = nullptr;
     for (int r = 0; r < m_queueModel->rowCount(); ++r)
-        if (const JobRecord* rec = m_queueModel->recordAt(r); rec && (rec->state == JobState::Running || rec->state == JobState::Paused)) {
+        if (const JobRecord* rec = m_queueModel->recordAt(r);
+            rec && !jobs::isSystemKind(rec->kind) && (rec->state == JobState::Running || rec->state == JobState::Paused)) {
             running = rec;
             break;
         }
@@ -315,7 +333,7 @@ void MainWindow::updateStatus()
                             running->state == JobState::Paused ? Tone::Neutral : Tone::Info);
     } else if (const int n = m_settingsPage ? m_settingsPage->attentionCount() : 0; n > 0) {
         m_status->setStatus(QStringLiteral("%1 setting%2 need%3 attention").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(n == 1 ? QStringLiteral("s") : QString()), Tone::Warn);
-    } else if (m_ctx.queue().isHeld() && m_queueModel->countInState(JobState::Queued) > 0) {
+    } else if (m_ctx.queue().isHeld() && queuedUser > 0) {
         m_status->setStatus(QStringLiteral("Queue paused"), Tone::Neutral);
     } else {
         m_status->setStatus(QStringLiteral("Ready"), Tone::Ok);
