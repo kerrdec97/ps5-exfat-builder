@@ -33,6 +33,7 @@ ENV/
 .exfat_builder_settings*.json
 .exfat_builder_history*.json
 exfat_builder_settings*.json
+!native/tests/data/legacy/exfat_builder_settings.json
 exfat_builder_history*.json
 
 # Session logs + the rotating log folder
