@@ -21,8 +21,15 @@ void CancelRegistration::reset()
     if (m_id == 0)
         return;
     if (auto s = m_state.lock()) {
-        std::lock_guard lock(s->mutex);
-        s->callbacks.erase(m_id);
+        {
+            std::lock_guard lock(s->mutex);
+            s->callbacks.erase(m_id);
+        }
+        // If cancel() is running callbacks on another thread, wait for it so
+        // the callback cannot outlive the objects it captured.
+        if (s->runningThread.load() != std::this_thread::get_id()) {
+            std::lock_guard runLock(s->runMutex);
+        }
     }
     m_id = 0;
     m_state.reset();
@@ -79,9 +86,12 @@ void CancellationSource::cancel(const QString& reason)
         m_state->callbacks.clear();
     }
     m_state->cv.notify_all();
+    std::lock_guard runLock(m_state->runMutex);
+    m_state->runningThread.store(std::this_thread::get_id());
     for (auto& fn : toRun)
         if (fn)
             fn();
+    m_state->runningThread.store(std::thread::id{});
 }
 
 void CancellationSource::pause()

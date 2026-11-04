@@ -77,6 +77,22 @@ private slots:
         QCOMPARE(calls, 0);
     }
 
+    void unregisterWaitsForRunningCallback()
+    {
+        CancellationSource src;
+        std::atomic<bool> started{false}, finished{false};
+        auto reg = std::make_unique<CancelRegistration>(src.token().onCancel([&] {
+            started = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            finished = true;
+        }));
+        std::thread canceller([&] { src.cancel(); });
+        QVERIFY(QTest::qWaitFor([&] { return started.load(); }, 2000));
+        reg.reset(); // must block until the callback has returned
+        QVERIFY(finished.load());
+        canceller.join();
+    }
+
     void pauseBlocksCheckpointUntilResume()
     {
         CancellationSource src;

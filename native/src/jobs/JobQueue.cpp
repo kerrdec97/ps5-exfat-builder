@@ -42,6 +42,10 @@ JobQueue::JobQueue(SettingsStore& settings, const JobFactory& factory, QObject* 
 JobQueue::~JobQueue()
 {
     shutdown(15000);
+    // Workers hold raw pointers into m_entries (their progress reporters), so
+    // they must all be gone before the members are destroyed. Cancellation has
+    // been requested and tool processes killed; this returns promptly.
+    m_pool.waitForDone(-1);
 }
 
 QString JobQueue::newId()

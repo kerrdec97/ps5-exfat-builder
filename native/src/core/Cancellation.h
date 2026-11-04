@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace fw {
 
@@ -31,6 +32,10 @@ struct CancelState {
     std::map<std::uint64_t, std::function<void()>> callbacks;
     std::uint64_t nextId = 1;
     QString reason;
+    // Held while cancel callbacks run, so unregistering waits for a callback
+    // that is executing on another thread (its captures must stay valid).
+    std::mutex runMutex;
+    std::atomic<std::thread::id> runningThread{};
 };
 } // namespace detail
 
