@@ -51,6 +51,40 @@ class TstZip : public QObject {
 private slots:
     void initTestCase() { QVERIFY(m_root.isValid()); fwtest::isolateAppData(m_root); }
 
+    // An entry that inflates to more than its declared size is damaged; the
+    // reader stops at the declared size (readAll's limit cannot be bypassed).
+    void entryLargerThanDeclaredIsRefused()
+    {
+        const QString z = m_root.filePath(QStringLiteral("liar.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("zeros.bin"), QByteArray(4 * 1024 * 1024, '\0')).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        // Declare 10 bytes in the local header (offset 22) and the central directory (offset 24).
+        const auto put32 = [&](qsizetype at, quint32 v) {
+            for (int i = 0; i < 4; ++i)
+                bytes[at + i] = char((v >> (8 * i)) & 0xFF);
+        };
+        QVERIFY(bytes.startsWith("PK\x03\x04"));
+        put32(22, 10);
+        const qsizetype cd = bytes.indexOf(QByteArray("PK\x01\x02"));
+        QVERIFY(cd > 0);
+        put32(cd + 24, 10);
+        QFile f(z);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(bytes);
+        f.close();
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QCOMPARE(qint64(r.entries().front().uncompressedSize), qint64(10));
+        auto all = r.readAll(r.entries().front(), 1024);
+        QVERIFY(!all.ok());
+        QCOMPARE(all.error().code, ErrorCode::CorruptData);
+    }
+
     void roundTrip_data()
     {
         QTest::addColumn<bool>("zip64");

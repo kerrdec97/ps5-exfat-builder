@@ -204,20 +204,22 @@ private slots:
         QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
         QCOMPARE(r->verification, Verification::Passed);
         QVERIFY(r->verificationDetail.contains(QStringLiteral("not compared")));
-        auto reader = ExfatReader::open(out);
-        QVERIFY(reader.ok());
-        QCOMPARE(reader.value()->geometry().clusterBytes(), 131072);
-        QCOMPARE(reader.value()->geometry().sectorBytes(), 4096);
-        QCOMPARE(reader.value()->volume().label, QStringLiteral("PPSA01234")); // from sce_sys/param.json
-        CancellationToken token;
-        auto tree = reader.value()->readTree(token);
-        QVERIFY(tree.ok());
-        QVERIFY(tree->find(QStringLiteral("skip.tmp")) < 0);
-        QVERIFY(tree->find(QStringLiteral("data/also.skip")) < 0);
+        {   // closed before the image is rebuilt (Windows cannot replace an open file)
+            auto reader = ExfatReader::open(out);
+            QVERIFY(reader.ok());
+            QCOMPARE(reader.value()->geometry().clusterBytes(), 131072);
+            QCOMPARE(reader.value()->geometry().sectorBytes(), 4096);
+            QCOMPARE(reader.value()->volume().label, QStringLiteral("PPSA01234")); // from sce_sys/param.json
+            CancellationToken token;
+            auto tree = reader.value()->readTree(token);
+            QVERIFY(tree.ok());
+            QVERIFY(tree->find(QStringLiteral("skip.tmp")) < 0);
+            QVERIFY(tree->find(QStringLiteral("data/also.skip")) < 0);
 #ifndef Q_OS_WIN
-        QVERIFY(tree->find(QStringLiteral(".hidden")) < 0);
+            QVERIFY(tree->find(QStringLiteral(".hidden")) < 0);
 #endif
-        QVERIFY(!tree->entries[size_t(tree->find(QStringLiteral("data/big.bin")))].noFatChain);
+            QVERIFY(!tree->entries[size_t(tree->find(QStringLiteral("data/big.bin")))].noFatChain);
+        }
 
         // An explicit label wins; "none" leaves the volume unnamed.
         p.insert(QStringLiteral("label"), QStringLiteral("CUSTOM"));

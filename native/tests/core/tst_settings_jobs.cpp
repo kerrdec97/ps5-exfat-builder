@@ -16,6 +16,9 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QMutex>
+#include <QJsonArray>
+#include <QDir>
+#include <QFileInfo>
 #include <QTest>
 
 using namespace fw;
@@ -402,6 +405,67 @@ private slots:
         QCOMPARE(maxSeen, 2);
     }
 
+    void busyPathsOverlapRules()
+    {
+        const QString a = QDir::cleanPath(m_root.filePath(QStringLiteral("x/game")));
+        QVERIFY(busyPathsOverlap({a}, {a}));
+        QVERIFY(busyPathsOverlap({a}, {a + QStringLiteral("/sce_sys/param.json")}));
+        QVERIFY(busyPathsOverlap({a + QStringLiteral("/eboot.bin")}, {a}));
+        QVERIFY(!busyPathsOverlap({a}, {a + QStringLiteral("2")})); // "game2" is not inside "game"
+        QVERIFY(!busyPathsOverlap({}, {a}));
+#ifdef Q_OS_WIN
+        QVERIFY(busyPathsOverlap({a}, {a.toUpper()}));
+#endif
+        FakeJob j(QJsonObject{{QStringLiteral("image"), QStringLiteral("rel/x.exfat")}, {QStringLiteral("steps"), 3}});
+        QCOMPARE(j.busyPaths(), QStringList{QDir::cleanPath(QDir::current().absoluteFilePath(QStringLiteral("rel/x.exfat")))});
+    }
+
+    // Two jobs on the same image never run at the same time, even when the
+    // concurrency limit would allow it; a job on another image runs alongside.
+    void jobsOnTheSamePathNeverRunTogether()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q9/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kMaxConcurrentJobs, 3).ok());
+        JobQueue q(store, reg.jobs);
+        const QString img = m_root.filePath(QStringLiteral("q9/game.exfat"));
+        const QString other = m_root.filePath(QStringLiteral("q9/other.exfat"));
+        auto a = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("image"), img}, {QStringLiteral("steps"), 30}});
+        auto b = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("image"), img}, {QStringLiteral("steps"), 30}});
+        auto c = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("image"), other}, {QStringLiteral("steps"), 30}});
+        QVERIFY(a.ok() && b.ok() && c.ok());
+        bool together = false;
+        int maxSeen = 0;
+        connect(&q, &JobQueue::jobChanged, this, [&] {
+            const auto ra = q.record(a.value()), rb = q.record(b.value());
+            if (ra && rb && ra->state == JobState::Running && rb->state == JobState::Running)
+                together = true;
+            maxSeen = std::max(maxSeen, q.runningCount());
+        });
+        QSignalSpy finished(&q, &JobQueue::jobFinished);
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 3; }, 15000));
+        QVERIFY(!together);
+        QCOMPARE(maxSeen, 2);
+        QCOMPARE(q.record(b.value())->state, JobState::Succeeded);
+    }
+
+    void failedJobKeepsItsProgress()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q10/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAutoRetryCount, 0).ok());
+        JobQueue q(store, reg.jobs);
+        auto id = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("fail"), true}, {QStringLiteral("steps"), 4}});
+        QVERIFY(id.ok());
+        QVERIFY(waitForState(q, id.value(), JobState::Failed));
+        QVERIFY2(q.record(id.value())->progress.overallFraction > 0.4,
+                 qPrintable(QString::number(q.record(id.value())->progress.overallFraction)));
+    }
+
     void reorderAndRemove()
     {
         fwtest::Registry reg;
@@ -520,16 +584,48 @@ private slots:
         }
         JobQueue q2(store, reg.jobs);
         q2.setPersistencePath(queueFile);
-        q2.holdQueue(true);
-        QVERIFY(q2.restoreQueue().ok());
+        QVERIFY(q2.restoreQueue().ok()); // restored jobs wait for the user without an explicit hold
         const auto recs = q2.records();
         QCOMPARE(int(recs.size()), 2);
         QCOMPARE(recs[0].title, QStringLiteral("Running"));
         QCOMPARE(recs[0].state, JobState::Interrupted);
         QCOMPARE(recs[1].title, QStringLiteral("Waiting"));
         QCOMPARE(recs[1].state, JobState::Queued);
+        QTest::qWait(200);
+        QCOMPARE(q2.record(recs[1].id)->state, JobState::Queued);
         q2.holdQueue(false);
         QVERIFY(waitForState(q2, recs[1].id, JobState::Succeeded));
+    }
+
+    // A waiting job that no longer validates (its drive is unplugged) is kept
+    // as Interrupted with the reason, not dropped from the queue.
+    void restoredJobThatCannotRunIsKept()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        const QString queueFile = m_root.filePath(QStringLiteral("q11/queue.json"));
+        QVERIFY(QDir().mkpath(QFileInfo(queueFile).absolutePath()));
+        {
+            QFile f(queueFile);
+            QVERIFY(f.open(QIODevice::WriteOnly));
+            f.write(QJsonDocument(QJsonObject{{QStringLiteral("jobs"), QJsonArray{QJsonObject{
+                {QStringLiteral("kind"), QStringLiteral("test.fake")},
+                {QStringLiteral("state"), jobStateName(JobState::Queued)},
+                {QStringLiteral("params"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Unplugged")},
+                                                       {QStringLiteral("invalid"), true}}}}}}})
+                        .toJson());
+        }
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q11/settings.json")));
+        QVERIFY(store.load().ok());
+        JobQueue q(store, reg.jobs);
+        q.setPersistencePath(queueFile);
+        QVERIFY(q.restoreQueue().ok());
+        const auto recs = q.records();
+        QCOMPARE(int(recs.size()), 1);
+        QCOMPARE(recs[0].title, QStringLiteral("Unplugged"));
+        QCOMPARE(recs[0].state, JobState::Interrupted);
+        QVERIFY(recs[0].error.has_value());
+        QVERIFY2(recs[0].error->message.contains(QStringLiteral("Bad job")), qPrintable(recs[0].error->message));
     }
 };
 
