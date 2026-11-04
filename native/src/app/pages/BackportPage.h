@@ -3,12 +3,18 @@
 // Backport (Backport artboard): Game library table · Target/Options/Folders
 // (schema-driven, section "Backport") · Activity. Scans go through
 // backport.scan or library.scan; folders can also be added by hand.
+// Per game (row menu): SDK fix on a copy or in place (backport.sdkFix), undo
+// the last SDK fix, read-only audio report (backport.audioScan), open the
+// last run report. "Open report" in Activity opens the newest report of a
+// backport, SDK fix or audio report. AMPR/PlayGo pins (backport.pinProviders)
+// and shortcuts to the PS5 connect page (payloads, kernel log).
 
 #include "app/pages/Page.h"
 #include "app/services/AppStores.h"
 #include "app/services/GameInfo.h"
 #include "app/ui/LogView.h"
 
+#include <QHash>
 #include <QTableWidget>
 
 namespace fw::pages {
@@ -47,6 +53,11 @@ public:
     void navigateWith(const QVariantMap& args) override;
     QString statusContext() const override;
     void setDragHighlight(bool on) override;
+    // Screenshots: "report" (the Open report link after a run), "pins" (the
+    // AMPR/PlayGo card at the end of the options).
+    QStringList demoStates() const override { return {QStringLiteral("report"), QStringLiteral("pins")}; }
+    void applyDemoState(const QString& name) override;
+    void clearDemoState() override;
 
 private:
     void rebuildTable();
@@ -56,6 +67,13 @@ private:
     void scan();
     void restoreOriginals();
     void onJobFinished(const QString& id);
+    void fixSdk(const QString& folder, bool inPlace);
+    void undoSdkFix(const QString& folder);
+    void audioReport(const QString& folder);
+    void pinProviders();
+    void openReport(const QString& htmlPath);
+    void refreshProviderBar();
+    Result<QString> enqueueBackportJob(const QString& kind, const QJsonObject& params, const QString& notStarted);
 
     JobQueueModel& m_model;
     ui::LibraryStore& m_library;
@@ -73,8 +91,12 @@ private:
     QPushButton* m_restore;
     ui::JobOptionsPanel* m_options;
     ui::ActivityWell* m_activity;
+    ui::Link* m_openReport;
+    ui::InfoBar* m_providers;
     QString m_scanJobId;
     QStringList m_pendingAdds;
+    QString m_lastReport;               // newest run report (HTML) of this session
+    QHash<QString, QString> m_reports;  // game folder → its newest report
 };
 
 } // namespace fw::pages
