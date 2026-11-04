@@ -102,3 +102,4 @@ native/build*/
 native/out/
 native/.vs/
 native/CMakeUserPresets.json
+.claude/worktrees/
