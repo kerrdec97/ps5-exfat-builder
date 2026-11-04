@@ -1,1 +1,1 @@
-fw_add_module(fw_engine_ufs2 DEPENDS fw_engine_gameinfo)
+fw_add_module(fw_engine_ufs2 DEPENDS fw_engine_gameinfo fw_engine_general)
