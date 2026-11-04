@@ -58,6 +58,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           FW_OFFLINE: '1'
+          # The runner is an administrator: mount VHDs to test against the real Windows exFAT driver.
+          FW_WINDOWS_MOUNT_TEST: '1'
         run: |
           New-Item -ItemType Directory -Force ci-out | Out-Null
           ctest --test-dir build --timeout 900 --output-junit "$PWD\ci-out\ctest-junit.xml" 2>&1 | Tee-Object ci-out\ctest.txt
