@@ -436,6 +436,78 @@ private slots:
         QVERIFY(invocations().isEmpty()); // refused before packing
     }
 
+    // The finished package cannot always take its name (on Windows the old one
+    // may be open in another program). It is then kept under a free numbered
+    // name, or as its .partial.pkg, and the error says where: it is never
+    // deleted. An update and its .remastered.pkg move together, so the old
+    // pair is never left half replaced.
+    void placementFailureKeepsNewPackages()
+    {
+        // With every "name (n).pkg" taken, "Keep both" cannot move the existing
+        // file aside: a failure every platform can reproduce.
+        const auto takeNumberedNames = [](const QString& finalPath) {
+            const QFileInfo fi(finalPath);
+            for (int n = 1; n < 10000; ++n) {
+                QFile f(fi.dir().filePath(numberedName(fi.fileName(), n)));
+                if (!f.open(QIODevice::WriteOnly))
+                    return false;
+            }
+            return true;
+        };
+
+        // A full package: the existing one stays, the new one is kept as its partial file.
+        const QString game = dir(QStringLiteral("place/game"));
+        const QString out = dir(QStringLiteral("place/out"));
+        makeSimpleDump(game);
+        const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        QVERIFY(put(out, QFileInfo(pkg).fileName(), "previous"));
+        QVERIFY(takeNumberedNames(pkg));
+        auto job = buildJob(game, out);
+        auto rr = run(job);
+        QVERIFY(!rr.result.ok());
+        QCOMPARE(rr.result.error().code, ErrorCode::AlreadyExists);
+        const QString keptPkg = QDir(out).filePath(kStem + QStringLiteral(".partial.pkg"));
+        QVERIFY2(rr.result.error().message.contains(QDir::toNativeSeparators(keptPkg)),
+                 qPrintable(rr.result.error().toLogString()));
+        QVERIFY(checkPackageHeader(keptPkg).ok);
+        QCOMPARE(readAll(pkg), QByteArray("previous"));
+        QVERIFY(logged(QStringLiteral("The finished package was kept as")));
+
+        // An update: the old UPDATE_ package could be moved aside, the old
+        // .remastered.pkg could not. Neither is replaced; the new update is
+        // kept under the first free number, its .remastered.pkg as a partial.
+        const QString base = dir(QStringLiteral("place/base-game"));
+        makeSimpleDump(base);
+        QVERIFY(put(m_root.filePath(QStringLiteral("place/base")), QStringLiteral("base.pkg"), fullPackageBytes()));
+        const QString update = dir(QStringLiteral("place/patch"));
+        put(update, QStringLiteral("sce_sys/param.json"),
+            QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.001.000\",\"applicationCategoryType\":0}").arg(kCid).toUtf8());
+        put(update, QStringLiteral("Data/A.pak"), QByteArray(10, 'u'));
+        const QString out2 = dir(QStringLiteral("place/out-update"));
+        const QString stem = kCid + QStringLiteral("-A0101-V0101");
+        const QString updPkg = QDir(out2).filePath(QStringLiteral("UPDATE_") + stem + QStringLiteral(".pkg"));
+        const QString fullPkg = QDir(out2).filePath(stem + QStringLiteral(".remastered.pkg"));
+        QVERIFY(put(out2, QFileInfo(updPkg).fileName(), "old update"));
+        QVERIFY(put(out2, QFileInfo(fullPkg).fileName(), "old full"));
+        QVERIFY(takeNumberedNames(fullPkg));
+        auto ujob = buildJob(update, out2,
+                             QJsonObject{{QStringLiteral("basePackage"), m_root.filePath(QStringLiteral("place/base/base.pkg"))},
+                                         {QStringLiteral("baseFolder"), base}});
+        auto ur = run(ujob);
+        QVERIFY(!ur.result.ok());
+        const QString msg = ur.result.error().message;
+        QCOMPARE(readAll(updPkg), QByteArray("old update"));
+        QCOMPARE(readAll(fullPkg), QByteArray("old full"));
+        const QString keptUpd = QDir(out2).filePath(QStringLiteral("UPDATE_") + stem + QStringLiteral(" (1).pkg"));
+        const QString keptFull = QDir(out2).filePath(stem + QStringLiteral(".partial.pkg.remastered.pkg"));
+        QVERIFY2(msg.contains(QDir::toNativeSeparators(keptUpd)), qPrintable(msg));
+        QVERIFY2(msg.contains(QDir::toNativeSeparators(keptFull)), qPrintable(msg));
+        QVERIFY(QFileInfo(keptUpd).size() > 0);
+        QVERIFY(!checkPackageHeader(keptUpd).hasFih); // the delta
+        QVERIFY(checkPackageHeader(keptFull).ok);
+        QVERIFY(!QFileInfo::exists(QDir(out2).filePath(stem + QStringLiteral(".partial.pkg"))));
+    }
+
     void cancelKillsTreeAndCleansUp()
     {
         EnvVar mode("FAKE_PUBCMD_MODE", "slow");

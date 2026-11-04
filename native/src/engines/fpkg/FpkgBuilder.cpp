@@ -265,53 +265,148 @@ QString keepBothName(const QString& finalPath)
     return {};
 }
 
+namespace {
+
+// A name is taken by anything there, a dangling link included.
+bool nameTaken(const QString& path)
+{
+    const QFileInfo fi(path);
+    return fi.exists() || fi.isSymLink();
+}
+
+QString joinNative(const QStringList& paths)
+{
+    QStringList shown;
+    for (const QString& p : paths)
+        shown << QDir::toNativeSeparators(p);
+    return shown.join(QStringLiteral(", "));
+}
+
+} // namespace
+
+Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy, QStringList& notes, QStringList* kept,
+                    const RenameFn& renameFn)
+{
+    const RenameFn doRename = renameFn ? renameFn : RenameFn([](const QString& from, const QString& to) {
+        return QFile::rename(from, to);
+    });
+    const auto fileName = [](const QString& p) { return QFileInfo(p).fileName(); };
+    struct Aside {
+        QString finalPath;
+        QString aside;
+    };
+    std::vector<Aside> asides;
+    std::optional<Error> failure;
+
+    // 1. Every existing output is set aside before anything new takes its name.
+    for (const OutputMove& m : moves) {
+        if (!nameTaken(m.finalPath))
+            continue;
+        if (policy == OutputConflict::Fail) {
+            failure = Error(ErrorCode::AlreadyExists,
+                            QStringLiteral("%1 already exists. Choose another output folder, or change \"When the "
+                                           "package already exists\".").arg(fileName(m.finalPath)));
+            break;
+        }
+        QString aside;
+        if (policy == OutputConflict::KeepBoth) {
+            aside = keepBothName(m.finalPath);
+        } else {
+            aside = m.finalPath + QStringLiteral(".fw-replaced");
+            for (int n = 2; nameTaken(aside); ++n)
+                aside = m.finalPath + QStringLiteral(".fw-replaced-%1").arg(n);
+        }
+        if (aside.isEmpty() || !doRename(m.finalPath, aside)) {
+            failure = policy == OutputConflict::KeepBoth
+                ? Error(ErrorCode::AlreadyExists,
+                        QStringLiteral("%1 already exists and could not be renamed to keep both. Close any program "
+                                       "using it and try again.").arg(fileName(m.finalPath)))
+                : Error(ErrorCode::PermissionDenied,
+                        QStringLiteral("Could not replace %1. Close any program using it and try again.")
+                            .arg(fileName(m.finalPath)));
+            failure->detail = QStringLiteral("rename %1 -> %2 failed").arg(m.finalPath, aside);
+            break;
+        }
+        asides.push_back({m.finalPath, aside});
+    }
+
+    // 2. Then every new file takes its name.
+    size_t placed = 0; // moves[0, placed) are at their final names
+    for (; !failure && placed < moves.size(); ++placed) {
+        const OutputMove& m = moves[placed];
+        if (!doRename(m.partial, m.finalPath)) {
+            failure = Error(ErrorCode::IoError,
+                            QStringLiteral("Could not rename the finished package to %1.").arg(fileName(m.finalPath)),
+                            QStringLiteral("rename %1 -> %2 failed").arg(m.partial, m.finalPath));
+            break;
+        }
+    }
+
+    if (!failure) {
+        for (const Aside& a : asides) {
+            if (policy == OutputConflict::KeepBoth)
+                notes << QStringLiteral("The existing %1 was renamed to %2.").arg(fileName(a.finalPath), fileName(a.aside));
+            else if (QFile::remove(a.aside))
+                notes << QStringLiteral("The existing %1 was replaced.").arg(fileName(a.finalPath));
+            else
+                notes << QStringLiteral("The existing %1 was replaced, but its old copy could not be deleted: %2")
+                             .arg(fileName(a.finalPath), QDir::toNativeSeparators(a.aside));
+        }
+        return success();
+    }
+
+    // 3. Undo everything: new files back to their partial names, then the
+    // files that were set aside back to their own names.
+    QStringList userNotes;
+    QStringList detail{failure->detail};
+    std::vector<bool> stuckAtFinal(moves.size(), false);
+    for (size_t i = placed; i-- > 0;) {
+        if (!doRename(moves[i].finalPath, moves[i].partial)) {
+            stuckAtFinal[i] = true;
+            detail << QStringLiteral("rollback %1 -> %2 failed").arg(moves[i].finalPath, moves[i].partial);
+        }
+    }
+    for (auto it = asides.rbegin(); it != asides.rend(); ++it) {
+        if (nameTaken(it->finalPath) || !doRename(it->aside, it->finalPath)) {
+            userNotes << QStringLiteral("The previous %1 is now %2.")
+                             .arg(fileName(it->finalPath), QDir::toNativeSeparators(it->aside));
+            detail << QStringLiteral("restore %1 -> %2 failed").arg(it->aside, it->finalPath);
+        }
+    }
+
+    // 4. Keep the new files (they may be hours of packing): under a free
+    // numbered name, else under their partial name.
+    QStringList keptHere;
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const OutputMove& m = moves[i];
+        if (stuckAtFinal[i]) {
+            keptHere << m.finalPath;
+            continue;
+        }
+        if (!nameTaken(m.partial))
+            continue;
+        const QString numbered = keepBothName(m.finalPath);
+        if (!numbered.isEmpty() && doRename(m.partial, numbered))
+            keptHere << numbered;
+        else
+            keptHere << m.partial;
+    }
+    if (kept)
+        *kept = keptHere;
+
+    QString message = failure->message;
+    for (const QString& n : std::as_const(userNotes))
+        message += u' ' + n;
+    if (keptHere.size() == 1)
+        message += QStringLiteral(" The new package was kept as %1.").arg(joinNative(keptHere));
+    else if (!keptHere.isEmpty())
+        message += QStringLiteral(" The new packages were kept as %1.").arg(joinNative(keptHere));
+    return Error(failure->code, message, detail.join(QStringLiteral("; ")));
+}
+
 Status placeOutput(const QString& partial, const QString& finalPath, OutputConflict policy, QStringList& notes)
 {
-    QString movedAside;
-    QString restoreTo;
-    if (QFileInfo::exists(finalPath)) {
-        switch (policy) {
-        case OutputConflict::Fail:
-            return Error(ErrorCode::AlreadyExists,
-                         QStringLiteral("%1 already exists. Choose another output folder, or change \"When the package "
-                                        "already exists\".").arg(QFileInfo(finalPath).fileName()));
-        case OutputConflict::KeepBoth: {
-            const QString numbered = keepBothName(finalPath);
-            if (numbered.isEmpty() || !QFile::rename(finalPath, numbered))
-                return Error(ErrorCode::AlreadyExists,
-                             QStringLiteral("%1 already exists and could not be renamed to keep both. Close any program "
-                                            "using it and try again.").arg(QFileInfo(finalPath).fileName()));
-            notes << QStringLiteral("The existing %1 was renamed to %2.")
-                         .arg(QFileInfo(finalPath).fileName(), QFileInfo(numbered).fileName());
-            restoreTo = numbered;
-            break;
-        }
-        case OutputConflict::Overwrite: {
-            QString aside = finalPath + QStringLiteral(".fw-replaced");
-            for (int n = 2; QFileInfo::exists(aside); ++n)
-                aside = finalPath + QStringLiteral(".fw-replaced-%1").arg(n);
-            if (!QFile::rename(finalPath, aside))
-                return Error(ErrorCode::PermissionDenied,
-                             QStringLiteral("Could not replace %1. Close any program using it and try again.")
-                                 .arg(QFileInfo(finalPath).fileName()));
-            movedAside = aside;
-            break;
-        }
-        }
-    }
-    if (!QFile::rename(partial, finalPath)) {
-        if (!movedAside.isEmpty())
-            QFile::rename(movedAside, finalPath);
-        if (!restoreTo.isEmpty())
-            QFile::rename(restoreTo, finalPath);
-        return Error(ErrorCode::IoError, QStringLiteral("Could not rename the finished package to %1.").arg(QFileInfo(finalPath).fileName()),
-                     partial + QStringLiteral(" -> ") + finalPath);
-    }
-    if (!movedAside.isEmpty()) {
-        QFile::remove(movedAside);
-        notes << QStringLiteral("The existing %1 was replaced.").arg(QFileInfo(finalPath).fileName());
-    }
-    return success();
+    return placeOutputs({OutputMove{partial, finalPath}}, policy, notes);
 }
 
 // ---- planning ----------------------------------------------------------------------------
@@ -1012,9 +1107,10 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     const QStringList partials{partial, partialCompanion, metric};
     for (const QString& p : partials)
         QFile::remove(p);
+    QStringList keptPartials; // finished packages that could not be put in place: never deleted
     ScopeExit dropPartials([&] {
         for (const QString& p : partials)
-            if (QFileInfo::exists(p) && !QFile::remove(p))
+            if (!keptPartials.contains(p) && QFileInfo::exists(p) && !QFile::remove(p))
                 log.warn(QStringLiteral("Could not remove %1.").arg(native(p)));
     });
 
@@ -1085,30 +1181,36 @@ Result<JobOutcome> packAndFinish(PackJob& j)
                      QStringLiteral("The package failed the header check: %1.").arg(hc.summary()));
     log.info(QStringLiteral("Header check passed: %1").arg(hc.summary()));
 
-    // Place the outputs.
+    // Place the outputs, all of them in one step (an update and its
+    // .remastered.pkg are never left half replaced).
     QStringList notes;
     QStringList placed;
     QString fullPackage; // the file img_verify and SHA-256 look at
+    std::vector<OutputMove> moves;
     if (!j.update) {
-        const QString final = QDir(j.outputDir).filePath(fullPackageName(j.stem));
-        FW_TRY(placeOutput(partial, final, s.outputConflict, notes));
-        placed << final;
-        fullPackage = final;
+        moves.push_back({partial, QDir(j.outputDir).filePath(fullPackageName(j.stem))});
+        fullPackage = moves.back().finalPath;
     } else {
-        if (j.updateOutput != UpdateOutput::FullOnly) {
-            const QString final = QDir(j.outputDir).filePath(updatePackageName(j.stem));
-            FW_TRY(placeOutput(partial, final, s.outputConflict, notes));
-            placed << final;
-        }
+        if (j.updateOutput != UpdateOutput::FullOnly)
+            moves.push_back({partial, QDir(j.outputDir).filePath(updatePackageName(j.stem))});
         if (j.updateOutput != UpdateOutput::UpdateOnly) {
-            const QString final = QDir(j.outputDir).filePath(companionName(j.stem));
-            FW_TRY(placeOutput(partialCompanion, final, s.outputConflict, notes));
-            placed << final;
-            fullPackage = final;
+            moves.push_back({partialCompanion, QDir(j.outputDir).filePath(companionName(j.stem))});
+            fullPackage = moves.back().finalPath;
         } else {
             fullPackage = partialCompanion; // checked below, then removed
         }
     }
+    {
+        QStringList kept;
+        if (Status st = placeOutputs(moves, s.outputConflict, notes, &kept); !st.ok()) {
+            keptPartials = kept;
+            for (const QString& k : std::as_const(kept))
+                log.warn(QStringLiteral("The finished package was kept as %1.").arg(native(k)));
+            return st.takeError();
+        }
+    }
+    for (const OutputMove& m : moves)
+        placed << m.finalPath;
     QFile::remove(metric);
     for (const QString& n : notes)
         log.info(n);

@@ -997,6 +997,117 @@ private slots:
         QCOMPARE(readAll(final), QByteArray("4"));
     }
 
+    // An update and its .remastered.pkg are placed as one step: every existing
+    // file is set aside first, a failure anywhere undoes all of it, and the new
+    // packages (hours of packing) are kept under another name, never deleted.
+    void placementIsAllOrNothing()
+    {
+        const QString d = dir(QStringLiteral("placeall"));
+        const auto at = [&](const char* name) { return QDir(d).filePath(QString::fromLatin1(name)); };
+        const QString upd = at("UPDATE_x.pkg"), full = at("x.remastered.pkg");
+        const QString pUpd = at("x.partial.pkg"), pFull = at("x.partial.pkg.remastered.pkg");
+        const QString keptUpd = at("UPDATE_x (1).pkg"), keptFull = at("x (1).remastered.pkg");
+        const std::vector<OutputMove> moves{{pUpd, upd}, {pFull, full}};
+        const auto reset = [&] {
+            QDir(d).removeRecursively();
+            QDir().mkpath(d);
+            put(d, QStringLiteral("UPDATE_x.pkg"), "old update");
+            put(d, QStringLiteral("x.remastered.pkg"), "old full");
+            put(d, QStringLiteral("x.partial.pkg"), "new update");
+            put(d, QStringLiteral("x.partial.pkg.remastered.pkg"), "new full");
+        };
+        // A rename that fails for one source (and target, when given), as for
+        // a file another program holds open on Windows.
+        const auto failing = [](const QString& badFrom, const QString& badTo) {
+            return RenameFn([=](const QString& from, const QString& to) {
+                if (from == badFrom && (badTo.isEmpty() || to == badTo))
+                    return false;
+                return QFile::rename(from, to);
+            });
+        };
+        const auto files = [&] { return QDir(d).entryList(QDir::Files, QDir::Name); };
+
+        // The existing .remastered.pkg cannot be set aside (the update's could):
+        // both old files are back, both new packages are kept and named.
+        for (const OutputConflict policy : {OutputConflict::Overwrite, OutputConflict::KeepBoth}) {
+            reset();
+            QStringList notes, kept;
+            const Status st = placeOutputs(moves, policy, notes, &kept, failing(full, {}));
+            QVERIFY(!st.ok());
+            QCOMPARE(readAll(upd), QByteArray("old update"));
+            QCOMPARE(readAll(full), QByteArray("old full"));
+            QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
+            QCOMPARE(readAll(keptUpd), QByteArray("new update"));
+            QCOMPARE(readAll(keptFull), QByteArray("new full"));
+            QVERIFY2(st.error().message.contains(QDir::toNativeSeparators(keptUpd)), qPrintable(st.error().message));
+            QVERIFY(st.error().message.contains(QDir::toNativeSeparators(keptFull)));
+            QVERIFY(notes.isEmpty());
+            QCOMPARE(files().size(), 4); // nothing set aside is left over
+        }
+
+        // The update took its name, then the .remastered.pkg could not: the
+        // update is rolled back too, so old and new are never mixed.
+        reset();
+        {
+            QStringList notes, kept;
+            const Status st = placeOutputs(moves, OutputConflict::Overwrite, notes, &kept, failing(pFull, full));
+            QVERIFY(!st.ok());
+            QCOMPARE(st.error().code, ErrorCode::IoError);
+            QCOMPARE(readAll(upd), QByteArray("old update"));
+            QCOMPARE(readAll(full), QByteArray("old full"));
+            QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
+            QCOMPARE(readAll(keptUpd), QByteArray("new update"));
+            QCOMPARE(readAll(keptFull), QByteArray("new full"));
+            QCOMPARE(files().size(), 4);
+        }
+
+        // Nothing can be renamed at all: the packages stay under their partial names.
+        reset();
+        {
+            QStringList notes, kept;
+            const Status st = placeOutputs(moves, OutputConflict::Overwrite, notes, &kept,
+                                           [](const QString&, const QString&) { return false; });
+            QVERIFY(!st.ok());
+            QCOMPARE(kept, (QStringList{pUpd, pFull}));
+            QCOMPARE(readAll(pUpd), QByteArray("new update"));
+            QCOMPARE(readAll(pFull), QByteArray("new full"));
+            QCOMPARE(readAll(upd), QByteArray("old update"));
+            QVERIFY(st.error().message.contains(QDir::toNativeSeparators(pUpd)));
+        }
+
+        // A new file appearing at a final name under "Fail" stops the step,
+        // keeps the existing file and still keeps the new packages.
+        reset();
+        {
+            QStringList notes, kept;
+            const Status st = placeOutputs(moves, OutputConflict::Fail, notes, &kept);
+            QCOMPARE(st.error().code, ErrorCode::AlreadyExists);
+            QCOMPARE(readAll(upd), QByteArray("old update"));
+            QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
+        }
+
+        // Success: both replaced, or both old ones renamed.
+        reset();
+        {
+            QStringList notes;
+            QVERIFY(placeOutputs(moves, OutputConflict::Overwrite, notes).ok());
+            QCOMPARE(readAll(upd), QByteArray("new update"));
+            QCOMPARE(readAll(full), QByteArray("new full"));
+            QCOMPARE(files(), (QStringList{QStringLiteral("UPDATE_x.pkg"), QStringLiteral("x.remastered.pkg")}));
+            QCOMPARE(notes.size(), 2);
+        }
+        reset();
+        {
+            QStringList notes;
+            QVERIFY(placeOutputs(moves, OutputConflict::KeepBoth, notes).ok());
+            QCOMPARE(readAll(upd), QByteArray("new update"));
+            QCOMPARE(readAll(keptUpd), QByteArray("old update"));
+            QCOMPARE(readAll(keptFull), QByteArray("old full"));
+            QCOMPARE(files().size(), 4);
+            QCOMPARE(notes.size(), 2);
+        }
+    }
+
     // ---- settings, toolchain, stagers ---------------------------------------------------------------
     void settingsAndLegacyKeys()
     {
