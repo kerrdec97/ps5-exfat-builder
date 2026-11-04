@@ -4,8 +4,8 @@
 // module: optionsFromSettings() (backport.run, backport.scan, backport.sdkFix,
 // backport.pinProviders), the scan job (library folders and depth) and the
 // restore job (originals folder). Blocked
-// features (PS5 Pro fix / Pro build, default fakelib set, right.sprx copy,
-// import-table audit, audio check, save-data fixes, SDK 11-13) have no
+// features (PS5 Pro build / PSSR 2, AGCDriver hook, bundled fakelib set,
+// import-table audit, audio firmware gate, save-data fixes) have no
 // settings on purpose.
 
 #include "core/Settings.h"

@@ -13,7 +13,7 @@ Whether a console loads the result is **UNVERIFIED** by this work.
 
 | Component | Status | Files |
 |---|---|---|
-| SDK pair table 1–10, BCD decoding, labels, table hash | Implemented | `SdkTable.*` |
+| SDK pair table 1–13 (11–13 from the owner's engine, BACKPORT_PARITY §2.6), BCD decoding, labels, table hash | Implemented | `SdkTable.*` |
 | ELF64 parser with the signer's header rules | Implemented | `ElfImage.*` |
 | SDK patch of process/module param +0x10/+0x14 (clean-room, §2.5) | Implemented | `SceParam.*` |
 | Fake-SELF writer (GPL-3.0 port of make_fself) | Implemented, golden hashes match | `SelfFormat.h`, `SelfWriter.*` |
@@ -37,7 +37,13 @@ Whether a console loads the result is **UNVERIFIED** by this work.
 | Audio report, read-only (#40) | Implemented (report only) | `AudioScan.*` |
 | User-supplied AMPR/PlayGo libraries with hash pinning (#34) | Implemented | `ProviderSet.*` |
 | Rebuild a ZIP with another SDK (#31), Results tracker, AMPR index | Later (not in this pass) | — |
-| Import-table audit, fix families, audio check and audio patches, Il2Cpp case fix, PS5 Pro fix / Pro build, `right.sprx` copy, default fakelib set, bundled AMPR/PlayGo providers, save-data fixes, SDK pairs 11–13 | **Blocked** (§7 of the spec); no code and no settings | — |
+| PS5 Pro fix, shader-assert part (#32): guarded `s_trap 1` → `s_nop 0` in the root eboot.bin, opt-in | Ported · build pending | `ProFix.*` |
+| Standard right.sprx substitute (#35): the user's hash-pinned copy replaces an unconvertible game-root one | Ported · build pending | `RightSprx.*` |
+| CRI Unity audio fix (#40): 12-channel rack → 8, exact rules | Ported · build pending | `CriAudio.*` |
+| Module-name case fix (#41): game's spelling from the eboot's loader strings, journaled case-only rename, Restore renames back | Ported · build pending | `ModuleCaseFix.*`, `ApplyJournal.*`, `RestoreService.*` |
+| Canonical fakelib trio pins and the plain-ELF dump note (#12) | Ported · build pending | `CanonicalTrio.*`, `BackportPlanner.cpp` |
+| Apply checks every file before the first write; read-only targets; durable copies | Ported · build pending | `ApplyJournal.cpp`, `Common.cpp`, `core/FileUtil.cpp` |
+| Import-table audit, audio firmware gate, decoder-based fix families (save data, mouse, Wwise, GamePresets, Set3), PS5 Pro build / PSSR 2, AGCDriver hook, bundled fakelib/AMPR/PlayGo providers | **Blocked** (§4 #13–#15, #33, #39 and §7 of the spec: firmware-table provenance, an x86 decoder, Sony/game-derived files); no code and no settings | — |
 
 ## Licences
 
@@ -54,6 +60,7 @@ Whether a console loads the result is **UNVERIFIED** by this work.
   dynamic-tag layout (DT_NEEDED, DT_SCE_NEEDED_MODULE, DT_SCE_STRTAB, DT_SCE_STRSZ); no code from
   any loader or from the Backport GUI. The SDK Fixer reuses this module's own pipeline.
 * No `right.sprx`, PSSR, kernel files, firmware tables or fakelib binaries are bundled or downloaded.
+* Ported 2026-11-04 from the owner's own Backport engine on D:\ (read only; `docs/farewell/BACKPORT_HANDOFF.md`): the SDK pairs 11–13, the Pro fix shader-trap rule, the right.sprx substitute rule, the CRI rack rule, the module-name case fix, the canonical trio pins and the export-layer safety checks. Only facts, rules and hashes were taken; none of its Sony-derived files.
 
 ## A run
 
@@ -152,6 +159,7 @@ new backport of the fixed folder is refused as already backported.
   is not blocked and nothing is renamed. The fix stays blocked. That real PS5 executables use the
   documented tag values is **UNVERIFIED**; without a readable table the NUL-separated names in
   DYNLIBDATA are used (import NIDs, which contain `#`, are ignored).
+* **Module-name case fix (#41).** Separate from the detector above: `ModuleCaseFix.h` reads the paths the decoded eboot.bin loads by name (`%s/Modules/<Name>.prx`) and stages, zips and applies a dump file spelled differently under the game's spelling (a case-only rename in the journal; rollback and Restore rename it back). See the status table.
 * **Audio (#40).** `backport.audioScan` scans the raw bytes of `eboot.bin` (or every game
   executable): the channel-config cluster (unpatched 12 / patched 8 channels), twin branches, audio
   API names, loose leads (at most 200) and the two confirmed profiles. It writes a report with kind
@@ -188,8 +196,11 @@ All keys are read by this module; blocked features have no setting.
 | `backport.verifyBuild` | Backport · Safety | Bool, true | advanced | engine (V1–V3); the job outcome says when it was off | — |
 | `backport.keepStagingOnFailure` | Backport · Safety | Bool, true | advanced | runner: a failed run's staging is moved to `<temp>/fw-backport-staging-*` | — |
 | `backport.journalRetentionDays` | Backport · Safety | Int 1–365, 30 | advanced | runner: `ApplyJournal::prune()` before each Apply | — |
-| `backport.targetSdk` | Firmware and SDK · Backport target | Enum "1"…"10", "4"; labels "SDK N · loads on FW N.00+" | per job | `optionsFromSettings` | `abp_target_sdk`, `abp_last_sdk` (values outside 1–10 dropped with a warning) |
-| `backport.nidPatchMode` | Firmware and SDK · Backport target | Enum auto / off, auto | advanced | engine | — |
+| `backport.targetSdk` | Backport · Target | Enum "1"…"13", "4"; labels "SDK N · loads on FW N.00+" | per job | `optionsFromSettings` | `abp_target_sdk`, `abp_last_sdk` (values outside 1–10 dropped with a warning; the legacy app wrote pair 10 for its "11") |
+| `backport.proFix` | Backport · Target | Bool, false | per job | engine (root eboot.bin, `ProFix.h`); ZIP name | — |
+| `backport.criAudioFix` | Backport · Target | Bool, true | per job | engine (every game executable, `CriAudio.h`) | — |
+| `backport.standardRightSprx` | Backport · Folders | FilePath, "" (SHA-256 `81544cbb…` required) | — | planner and engine (`RightSprx.h`) | — |
+| `backport.nidPatchMode` | Backport · Target | Enum auto / off, auto | advanced | engine | — |
 
 `storage.freeSpaceMarginMiB` (general module) is read as the S12 reserve when it is registered.
 `backport.results` (the Results list) is not implemented yet. AMPR/PlayGo pins are data, not a
@@ -206,7 +217,7 @@ Test files are in `native/tests/engines/backport/`: `tst_backport_format.cpp` (F
 |---|---|---|
 | S1 no fallback patching | A file that cannot be rewritten fails the build; nothing is written into the game. | R `perFileFailureProducesNothing`, `verificationCatchesAParamOutsideTheSignedSegments`; P `unrewritableExecutableRefusedUpFront` |
 | S2 no engine code from a user-writable place | Native code; nothing is extracted or run from disk. | by construction (no test possible) |
-| S3 target is a pair 1–10, never clamped | `sdkPair()`; planner refusal; enum choices; legacy 11 dropped | F `sdkTableValues`; P `targetSdkRules`; Sc `settingsRegisteredAndWellFormed`, `legacyKeysImport` |
+| S3 target is a pair 1–13, never clamped | `sdkPair()`; planner refusal; enum choices; legacy 11 dropped | F `sdkTableValues`; P `targetSdkRules`; Sc `settingsRegisteredAndWellFormed`, `legacyKeysImport` |
 | S4 target ≤ game SDK | Planner, game SDK from eboot.bin (D7) | P `targetSdkRules`, `gameSdkComesFromEbootNotParamJson` |
 | S5 eboot.bin at the root | Planner and `backport.run` validate() | P `ebootMustBeAtTheRoot`; R `jobsRunThroughTheFactory` |
 | S6 fakelib state "same" → already backported | Planner refusal | P `fakelibRules`; R `selfGameBackportedAndApplied`; Sc `fakelibStates` |
@@ -260,7 +271,7 @@ Later rows built in this pass and their tests: #24 run report (Rp `successfulRun
 
 Format and build checks: golden SHA-256 for F1/F2 × pairs 4/10 and the NID golden (F
 `goldenHashes`, `workedExampleHeader`, `nidGolden`; R `selfGameBackportedAndApplied` checks the
-same hashes on the files applied to the game); every pair 1–10 (F `eachPairIsWritten`, R
+same hashes on the files applied to the game); every pair 1–13 (F `eachPairIsWritten`, R
 `eachTargetSdkLandsInTheGame`); NID boundary (F `nidBoundaryAndModes`); F3–F13 (F
 `moduleWithoutParamIsSkipped`, `paramErrors`, `everyParamSegmentIsPatched`,
 `ps5MagicUnwrapsLikeFake`, `paddedHeaderRoundTrips`, `truncatedSelfIsMalformed`,
@@ -341,8 +352,9 @@ cmake --build native/build-backport --target tst_backport_format tst_backport_sc
 ctest --test-dir native/build-backport -R backport --output-on-failure
 ```
 
-(The four newer test executables are `tst_backport_report`, `tst_backport_sdkfix`,
-`tst_backport_detect` and `tst_backport_providers`; `-R backport` runs them too.)
+(The newer test executables are `tst_backport_report`, `tst_backport_sdkfix`,
+`tst_backport_detect`, `tst_backport_providers`, and from 2026-11-04 `tst_backport_profix`,
+`tst_backport_rightsprx`, `tst_backport_criaudio` and `tst_backport_modulecase`; `-R backport` runs them too.)
 
 Each test links only `fw_engine_backport` and the core test support. The fixtures are in
 `BackportFixtures.h` (F1–F13, and `f1WithImports()` for the #41 dynamic table) and

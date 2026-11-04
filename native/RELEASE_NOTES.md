@@ -33,7 +33,14 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
 * **Backport** rebuilt with 38 safety rules: nothing in the game folder
   changes until the backport and originals ZIPs are written and read back;
   applying is journaled and rolls back after a crash; restore removes what the
-  backport added.
+  backport added. Apply now asks before it changes game folders, checks every
+  file before the first write and flushes each file to the drive.
+* **From the PS5 Backport GUI engine** (ported from its own source): target
+  SDK 11–13; the PS5 Pro fix's shader-assert part (opt-in, `… Pro fix backport
+  files.zip`); the CRI Unity no-sound fix (12 → 8 channels, on by default);
+  the Unity module-name case fix (MGS4, issue #2); an unconvertible
+  `right.sprx` replaced by your own standard copy (hash-checked, nothing
+  bundled); folders that already hold the canonical fakelib set are refused.
 * **Integrated queue** with concurrency, pause, cancel (stops whole process
   trees), retry, automatic retries for transient errors, restart recovery,
   history with CSV export, keep-awake, and an optional sleep/shut-down
@@ -125,13 +132,18 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
 
 ## Not in this release
 
-* **Blocked** (licence or provenance, or the Backport GUI source on the
-  owner's D:\ drive): firmware import-table audit, fix families, audio gate,
-  PS5 Pro fix/Pro build, `right.sprx` replacement, default fakelib set,
-  save-data fixes, SDK pairs 11–13.
+* **Blocked**: the firmware import-table audit and the audio firmware gate
+  (the firmware tables need a provenance note; the gate needs an x86
+  decoder), the Backport GUI fix families that find their sites by
+  disassembly (save-data, mouse, Wwise, GamePresets, Set3DLatency), the PS5
+  Pro build / PSSR 2 test and the AGCDriver hook, and any bundled
+  Sony-derived file (fakelib set, AMPR/PlayGo providers, `right.sprx`).
+* **Later**: crash-dump download and hang snapshots on the PS5 connect page
+  (fully specified from the PS5 Log Sender; needs a console to test).
 * **Not ported**: interface translations (only English for now), Dokan
-  "mount as drive", autoloader editor, AMPR index over FTP, the zftpd web-UI
-  (ZHTTP) probe of the FTP diagnostics.
+  "mount as drive", the zftpd web-UI (ZHTTP) probe of the FTP diagnostics.
+  (The autoloader editor and the AMPR index over FTP are on the PS5 connect
+  page.)
 
 ## Before release (owner's checklist)
 
