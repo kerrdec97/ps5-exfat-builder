@@ -26,6 +26,9 @@ file(GLOB_RECURSE FW_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tst_*.c
 foreach(test_src ${FW_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     file(RELATIVE_PATH rel ${CMAKE_CURRENT_SOURCE_DIR} ${test_src})
+    if(rel MATCHES "^app/" AND NOT FW_BUILD_APP)
+        continue() # UI tests need the app library
+    endif()
     add_executable(${test_name} ${test_src})
     if(rel MATCHES "^engines/([^/]+)/")
         target_link_libraries(${test_name} PRIVATE fw_test_support_core fw_engine_${CMAKE_MATCH_1})
