@@ -20,6 +20,8 @@ QPixmap iconPixmap(const QString& name, int size, const QColor& color, qreal dpr
 QIcon icon(const QString& name, const QColor& rest, const QColor& active = {}, const QColor& selected = {},
            const QColor& disabled = {});
 
+// Registers the icon resources (static library); safe to call repeatedly.
+void initIcons();
 bool hasIcon(const QString& name);
 QStringList iconNames();
 

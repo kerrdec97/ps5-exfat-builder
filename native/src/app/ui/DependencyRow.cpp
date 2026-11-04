@@ -1,0 +1,165 @@
+#include "app/ui/DependencyRow.h"
+
+#include "app/AppContext.h"
+#include "app/ui/Icons.h"
+
+#include <QDir>
+#include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QPainter>
+#include <QVBoxLayout>
+
+namespace fw::ui {
+
+using namespace theme;
+
+DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* parent) : QWidget(parent), m_id(id)
+{
+    setProperty("fwNoRing", true);
+    auto* h = hbox(this, space::md, QMargins(0, 6, 0, 6));
+    m_icon = new QLabel(this);
+    m_icon->setFixedSize(size::icon, size::icon);
+    h->addWidget(m_icon, 0, Qt::AlignVCenter);
+    auto* col = new QVBoxLayout;
+    col->setSpacing(2);
+    m_name = label(name, TextStyle::Body, color::fg_1, this);
+    m_detail = caption({}, this);
+    col->addWidget(m_name);
+    col->addWidget(m_detail);
+    h->addLayout(col, 1);
+    m_badge = new Badge(QStringLiteral("Checking…"), Tone::Neutral, this);
+    h->addWidget(m_badge);
+    m_fix = new Link(QStringLiteral("How to fix…"), this);
+    m_fix->hide();
+    connect(m_fix, &Link::activated, this, [this] { emit fixRequested(m_id, m_info.howToFix, m_info.settingKey); });
+    h->addWidget(m_fix);
+    setChecking();
+}
+
+void DependencyRow::setChecking()
+{
+    m_icon->setPixmap(iconPixmap(QStringLiteral("loader"), size::icon, color::fg_3, devicePixelRatioF()));
+    m_badge->set(QStringLiteral("Checking…"), Tone::Neutral);
+    m_badge->setIconName(QStringLiteral("clock"));
+}
+
+void DependencyRow::setInfo(const DependencyInfo& info)
+{
+    m_info = info;
+    m_name->setText(info.version.isEmpty() ? info.name : QStringLiteral("%1 %2").arg(info.name, info.version));
+    QString detail = info.detail;
+    if (!info.path.isEmpty())
+        detail = detail.isEmpty() ? QDir::toNativeSeparators(info.path) : QStringLiteral("%1 · %2").arg(detail, QDir::toNativeSeparators(info.path));
+    if (detail.isEmpty())
+        detail = info.purpose;
+    m_detail->setText(detail);
+    m_detail->setFont(info.path.isEmpty() ? font::caption() : font::mono());
+    QString iconName;
+    QColor c;
+    Tone tone = Tone::Neutral;
+    QString word;
+    switch (info.status) {
+    case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = QStringLiteral("Ready"); break;
+    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = QStringLiteral("Version unknown"); break;
+    case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Not found"); break;
+    case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Error"); break;
+    case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = QStringLiteral("Not needed"); break;
+    }
+    m_icon->setPixmap(iconPixmap(iconName, size::icon, c, devicePixelRatioF()));
+    m_badge->set(word, tone);
+    m_badge->setIconName(tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone));
+    const bool fixable = !info.howToFix.isEmpty() && info.status != DependencyStatus::Ready;
+    m_fix->setVisible(fixable);
+    m_fix->setText(!info.settingKey.isEmpty() ? QStringLiteral("Set path…") : QStringLiteral("How to fix…"));
+    setToolTip(info.howToFix);
+}
+
+void DependencyRow::setDivider(bool on)
+{
+    m_divider = on;
+    update();
+}
+
+void DependencyRow::paintEvent(QPaintEvent*)
+{
+    if (!m_divider)
+        return;
+    QPainter p(this);
+    p.fillRect(QRect(0, height() - 1, width(), 1), color::border_1);
+}
+
+// ---------------------------------------------------------------------------
+
+DependencyList::DependencyList(AppContext& ctx, const QStringList& ids, QWidget* parent)
+    : QWidget(parent), m_ctx(ctx), m_ids(ids)
+{
+    setProperty("fwNoRing", true);
+    auto* l = vbox(this, 0);
+    const auto all = m_ctx.dependencies().ids();
+    QStringList order;
+    for (const auto& id : all)
+        if (m_ids.isEmpty() || m_ids.contains(id))
+            order << id;
+    for (int i = 0; i < order.size(); ++i) {
+        const QString id = order[i];
+        const DependencyInfo last = m_ctx.dependencies().last(id);
+        auto* row = new DependencyRow(id, last.name.isEmpty() ? id : last.name, this);
+        row->setDivider(i + 1 < order.size());
+        connect(row, &DependencyRow::fixRequested, this, &DependencyList::fixRequested);
+        m_rows.insert(id, row);
+        l->addWidget(row);
+    }
+    connect(&m_ctx, &AppContext::dependenciesChecked, this, &DependencyList::refresh);
+    refresh();
+}
+
+void DependencyList::refresh()
+{
+    m_last.clear();
+    for (auto it = m_rows.begin(); it != m_rows.end(); ++it) {
+        const DependencyInfo info = m_ctx.dependencies().last(it.key());
+        if (info.id.isEmpty())
+            it.value()->setChecking();
+        else {
+            it.value()->setInfo(info);
+            m_last << info;
+        }
+    }
+    emit changed();
+}
+
+void DependencyList::checkAgain()
+{
+    for (auto* row : m_rows)
+        row->setChecking();
+    m_ctx.checkDependenciesAsync();
+}
+
+int DependencyList::readyCount() const
+{
+    int n = 0;
+    for (const auto& i : m_last)
+        if (i.status == DependencyStatus::Ready || i.status == DependencyStatus::NotApplicable)
+            ++n;
+    return n;
+}
+
+int DependencyList::problemCount() const
+{
+    int n = 0;
+    for (const auto& i : m_last)
+        if (i.status == DependencyStatus::Missing || i.status == DependencyStatus::Outdated || i.status == DependencyStatus::Error)
+            ++n;
+    return n;
+}
+
+QString DependencyList::report() const
+{
+    QJsonArray arr;
+    for (const auto& i : m_last)
+        arr.append(i.toJson());
+    return QString::fromUtf8(QJsonDocument(arr).toJson());
+}
+
+} // namespace fw::ui

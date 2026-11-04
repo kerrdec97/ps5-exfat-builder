@@ -10,12 +10,23 @@
 
 #include <cmath>
 
+// The icons live in a static library: pull the resource initialiser in.
+static void ensureIconResources()
+{
+    static const bool once = [] {
+        Q_INIT_RESOURCE(icons);
+        return true;
+    }();
+    Q_UNUSED(once);
+}
+
 namespace fw::ui {
 
 namespace {
 
 QByteArray svgSource(const QString& name)
 {
+    ensureIconResources();
     static QHash<QString, QByteArray> cache;
     static QMutex mutex;
     QMutexLocker lock(&mutex);
@@ -100,6 +111,8 @@ private:
 
 } // namespace
 
+void initIcons() { ensureIconResources(); }
+
 QPixmap iconPixmap(const QString& name, int size, const QColor& color, qreal dpr)
 {
     static QHash<QString, QPixmap> cache;
@@ -126,11 +139,13 @@ QIcon icon(const QString& name, const QColor& rest, const QColor& active, const 
 
 bool hasIcon(const QString& name)
 {
+    ensureIconResources();
     return QFile::exists(QStringLiteral(":/icons/%1.svg").arg(name));
 }
 
 QStringList iconNames()
 {
+    ensureIconResources();
     QStringList out;
     for (const QString& f : QDir(QStringLiteral(":/icons")).entryList({QStringLiteral("*.svg")}))
         out << f.chopped(4);
