@@ -31,4 +31,7 @@ QString toolsDir();    // where user-chosen tool paths are remembered / extracte
 // audit M9). Returns how many were removed.
 int sweepStaleTemp(int maxAgeHours = 24);
 
+// Bytes used by this app's temp folders (Settings > Storage).
+qint64 tempUsageBytes();
+
 } // namespace fw::Paths

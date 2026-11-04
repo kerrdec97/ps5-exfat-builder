@@ -36,6 +36,8 @@ public:
     Status append(const JobRecord& record);
     std::vector<HistoryEntry> recent(int limit = 50) const; // newest first
     Status clear();
+    // Writes every entry (oldest first) as RFC 4180 CSV with a header row.
+    Status exportCsv(const QString& path) const;
     QString path() const { return m_path; }
 
 private:

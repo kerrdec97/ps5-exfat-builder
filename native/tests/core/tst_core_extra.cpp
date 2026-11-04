@@ -1,7 +1,10 @@
 // Ordered JSON (Python-compatible writer), junctions/links, raw process output,
 // the started hook and the CPU limit.
 
+#include "core/CrashHandler.h"
+#include "core/FileUtil.h"
 #include "core/FsLinks.h"
+#include "core/Paths.h"
 #include "core/OrderedJson.h"
 #include "core/ProcessRunner.h"
 #include "support/TestSupport.h"
@@ -108,6 +111,43 @@ private slots:
         QVERIFY(startedPid > 0);
         QVERIFY(raw.contains("progress 50%\r"));
         QVERIFY(raw.endsWith("done\n") || raw.endsWith("done\r\n"));
+    }
+
+    void outputVolumeChecks()
+    {
+        auto ok = checkOutputVolume(m_root.path(), 1024);
+        QVERIFY(ok.ok());
+        const QString cloud = m_root.filePath(QStringLiteral("Users/me/OneDrive/Games"));
+        QDir().mkpath(cloud);
+        auto warn = checkOutputVolume(cloud, 1024);
+        QVERIFY(warn.ok());
+        QCOMPARE(warn->size(), 1);
+        QVERIFY(warn->first().contains(QStringLiteral("cloud")));
+        const VolumeInfo v = volumeInfo(m_root.path());
+        QVERIFY(!v.fileSystem.isEmpty());
+        QVERIFY(volumeInfo(m_root.filePath(QStringLiteral("not/yet/created"))).rootPath == v.rootPath);
+    }
+
+    void tempUsageCountsOwnTemp()
+    {
+        const qint64 before = Paths::tempUsageBytes();
+        {
+            TempDir t(QStringLiteral("usage"));
+            QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("a.bin")), QByteArray(5000, 'x')));
+            QCOMPARE(Paths::tempUsageBytes(), before + 5000);
+        }
+        QCOMPARE(Paths::tempUsageBytes(), before);
+    }
+
+    void crashFilesAreListedNewestFirst()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("crashes"));
+        crash::install(dir);
+        QVERIFY(QFileInfo(dir).isDir());
+        QVERIFY(crash::previousCrashFiles(dir).isEmpty());
+        QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/crash-20260101-000000.txt"), "old"));
+        QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/other.txt"), "x"));
+        QCOMPARE(crash::previousCrashFiles(dir).size(), 1);
     }
 
     void cpuLimitCanBeAppliedWhileRunning()

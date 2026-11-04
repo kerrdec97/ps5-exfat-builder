@@ -261,6 +261,30 @@ private slots:
         QCOMPARE(recent.front().state, QStringLiteral("Done"));
     }
 
+    void historyExportsCsv()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("csv/settings.json")));
+        QVERIFY(store.load().ok());
+        JobHistory history(m_root.filePath(QStringLiteral("csv/history.jsonl")));
+        JobQueue q(store, reg.jobs);
+        q.setHistory(&history);
+        QSignalSpy finished(&q, &JobQueue::jobFinished);
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Game, \"Deluxe\"")}}).ok());
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Second")}, {QStringLiteral("fail"), true}}).ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 2; }, 10000));
+        const QString csv = m_root.filePath(QStringLiteral("csv/history.csv"));
+        QVERIFY(history.exportCsv(csv).ok());
+        QFile f(csv);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QByteArray all = f.readAll();
+        QVERIFY(all.startsWith("\xEF\xBB\xBF" "finished,started,title"));
+        QVERIFY(all.contains("\"Game, \"\"Deluxe\"\"\""));
+        QVERIFY(all.contains("Second,test.fake,Failed"));
+        QCOMPARE(all.count("\r\n"), 3);
+    }
+
     void invalidJobIsRejectedAtEnqueue()
     {
         fwtest::Registry reg;

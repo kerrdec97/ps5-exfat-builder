@@ -99,6 +99,28 @@ Status JobHistory::clear()
     return success();
 }
 
+Status JobHistory::exportCsv(const QString& path) const
+{
+    auto entries = recent(1000000);
+    std::reverse(entries.begin(), entries.end());
+    const auto cell = [](QString v) {
+        if (v.contains(u'"') || v.contains(u',') || v.contains(u'\n') || v.contains(u'\r')) {
+            v.replace(QStringLiteral("\""), QStringLiteral("\"\""));
+            v = u'"' + v + u'"';
+        }
+        return v;
+    };
+    QString csv = QStringLiteral("finished,started,title,kind,state,verification,summary,error,outputs\r\n");
+    for (const auto& e : entries) {
+        csv += QStringList{cell(e.finished.toString(Qt::ISODate)), cell(e.started.toString(Qt::ISODate)), cell(e.title),
+                           cell(e.kind), cell(e.state), cell(e.verification), cell(e.summary), cell(e.error),
+                           cell(e.outputs.join(QStringLiteral("; ")))}
+                   .join(u',');
+        csv += QStringLiteral("\r\n");
+    }
+    return writeFileAtomic(path, QByteArray("\xEF\xBB\xBF") + csv.toUtf8()); // BOM: Excel reads UTF-8
+}
+
 void JobHistory::compactIfNeeded()
 {
     // Called with m_mutex held.

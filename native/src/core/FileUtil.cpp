@@ -13,6 +13,10 @@
 #include <QSaveFile>
 #include <QStorageInfo>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -256,6 +260,62 @@ Status ensureFreeSpace(const QString& path, qint64 requiredBytes, qint64 marginB
                  QStringLiteral("Not enough space on %1. Free %2 or choose another output folder.")
                      .arg(drive, formatBytes(need - ds->available)),
                  QStringLiteral("need %1 bytes, available %2").arg(need).arg(ds->available));
+}
+
+// ---- volume checks ---------------------------------------------------------------
+
+VolumeInfo volumeInfo(const QString& anyPathOnVolume)
+{
+    VolumeInfo v;
+    QString probe = QFileInfo(anyPathOnVolume).absoluteFilePath();
+    while (!probe.isEmpty() && !QFileInfo::exists(probe)) {
+        const QString up = QFileInfo(probe).absolutePath();
+        if (up == probe)
+            break;
+        probe = up;
+    }
+    const QStorageInfo si(probe);
+    v.rootPath = si.rootPath();
+    v.fileSystem = QString::fromLatin1(si.fileSystemType());
+#ifdef Q_OS_WIN
+    const QString root = QDir::toNativeSeparators(si.rootPath());
+    if (root.startsWith(QStringLiteral("\\\\"))) {
+        v.isNetwork = true;
+    } else if (!root.isEmpty()) {
+        const UINT type = GetDriveTypeW(reinterpret_cast<LPCWSTR>(root.utf16()));
+        v.isNetwork = type == DRIVE_REMOTE;
+        v.isRemovable = type == DRIVE_REMOVABLE;
+    }
+#else
+    const QString fs = v.fileSystem.toLower();
+    v.isNetwork = fs.startsWith(QStringLiteral("nfs")) || fs == u"cifs" || fs == u"smb3" || fs.startsWith(QStringLiteral("fuse.sshfs"));
+#endif
+    static const QStringList cloud = {QStringLiteral("onedrive"), QStringLiteral("google drive"), QStringLiteral("googledrive"),
+                                      QStringLiteral("dropbox"), QStringLiteral("iclouddrive"), QStringLiteral("icloud drive"),
+                                      QStringLiteral("creative cloud")};
+    const QString lower = QFileInfo(anyPathOnVolume).absoluteFilePath().toLower();
+    v.isCloudSynced = std::any_of(cloud.begin(), cloud.end(), [&](const QString& c) { return lower.contains(c); });
+    return v;
+}
+
+Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 largestFileBytes)
+{
+    const VolumeInfo v = volumeInfo(outputFolder);
+    const QString fs = v.fileSystem.toUpper();
+    QString drive = QDir::toNativeSeparators(v.rootPath);
+    if (drive.endsWith(u'\\') && drive.size() > 1)
+        drive.chop(1);
+    constexpr qint64 k4GiB = 4LL * 1024 * 1024 * 1024;
+    if ((fs == u"FAT32" || fs == u"FAT" || fs == u"VFAT" || fs == u"MSDOS") && largestFileBytes >= k4GiB - 1)
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 is formatted as FAT32, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.").arg(drive),
+                     QStringLiteral("largest file %1 bytes").arg(largestFileBytes));
+    QStringList warnings;
+    if (v.isNetwork)
+        warnings << QStringLiteral("%1 is a network drive. Building there is much slower and a dropped connection fails the job.").arg(drive);
+    if (v.isCloudSynced)
+        warnings << QStringLiteral("The output folder is synced to the cloud. Pause syncing while building, or the sync client may lock or upload half-written files.");
+    return warnings;
 }
 
 // ---- streaming I/O -------------------------------------------------------------

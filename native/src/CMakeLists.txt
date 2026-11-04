@@ -6,7 +6,7 @@ target_include_directories(fw_core PUBLIC
     ${PROJECT_BINARY_DIR}/generated)
 target_link_libraries(fw_core PUBLIC Qt6::Core Qt6::Concurrent ZLIB::ZLIB)
 if(WIN32)
-    target_link_libraries(fw_core PUBLIC advapi32 shell32 ole32 powrprof user32)
+    target_link_libraries(fw_core PUBLIC advapi32 shell32 ole32 powrprof user32 dbghelp)
 endif()
 fw_configure_target(fw_core)
 

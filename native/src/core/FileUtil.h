@@ -90,6 +90,21 @@ Result<DiskSpace> diskSpace(const QString& anyPathOnVolume);
 // `requiredBytes + marginBytes` are free on the volume holding `path`.
 Status ensureFreeSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes = 256LL * 1024 * 1024);
 
+// ---- volume checks ---------------------------------------------------------------
+struct VolumeInfo {
+    QString rootPath;
+    QString fileSystem;   // "NTFS", "exFAT", "FAT32", "ext4"...
+    bool isNetwork = false;
+    bool isRemovable = false;
+    bool isCloudSynced = false; // OneDrive, Google Drive, Dropbox, iCloud, Creative Cloud folders
+};
+VolumeInfo volumeInfo(const QString& anyPathOnVolume);
+
+// Checks that `outputFolder` can hold a file of `largestFileBytes`: refuses
+// FAT/FAT32 for files of 4 GiB or more; returns warnings (shown, not fatal) for
+// network drives and cloud-synced folders.
+Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 largestFileBytes);
+
 // ---- streaming I/O -------------------------------------------------------------
 inline constexpr qint64 kIoChunk = 4 * 1024 * 1024;
 

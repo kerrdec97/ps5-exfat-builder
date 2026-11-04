@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QStandardPaths>
 
@@ -132,6 +133,17 @@ int sweepStaleTemp(int maxAgeHours)
         Logger::instance().log(LogLevel::Info, QStringLiteral("paths"),
                                QStringLiteral("Removed %1 stale temporary folder(s)").arg(removed));
     return removed;
+}
+
+qint64 tempUsageBytes()
+{
+    qint64 total = 0;
+    QDirIterator it(tempRoot(), QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        total += it.fileInfo().size();
+    }
+    return total;
 }
 
 } // namespace fw::Paths
