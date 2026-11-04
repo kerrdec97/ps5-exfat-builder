@@ -70,7 +70,6 @@ const QMap<QString, QString>& notImported()
         {QStringLiteral("klog_ip"), QStringLiteral("one console address (ps5.consoleIp)")},
         {QStringLiteral("pl_ip"), QStringLiteral("one console address (ps5.consoleIp)")},
         {QStringLiteral("payloads"), QStringLiteral("payload list lives in the UI's payloads.json store")},
-        {QStringLiteral("al_dir"), QStringLiteral("autoloader editor not ported")},
         {QStringLiteral("shadowmount_config"), QStringLiteral("edited on the console (config.ini over FTP), not cached locally")},
         {QStringLiteral("micromount_config"), QStringLiteral("edited on the console (config.ini over FTP), not cached locally")},
         {QStringLiteral("smp_payload_path"), QStringLiteral("chosen per send")},

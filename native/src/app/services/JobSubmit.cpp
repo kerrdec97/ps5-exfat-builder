@@ -358,4 +358,19 @@ Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPa
     return enqueue(ctx, QStringLiteral("backport.restore"), QJsonObject{{QStringLiteral("journal"), journalPath}}, {});
 }
 
+Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force)
+{
+    QJsonObject p{{QStringLiteral("folder"), folder}};
+    if (force)
+        p.insert(QStringLiteral("force"), true);
+    return enqueue(ctx, QStringLiteral("ampr.index.local"), p, {});
+}
+
+Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder)
+{
+    QJsonObject p{{QStringLiteral("remoteFolder"), remoteFolder}};
+    putEndpoint(p, host, port);
+    return enqueue(ctx, QStringLiteral("ampr.index.ftp"), p, {});
+}
+
 } // namespace fw::jobs

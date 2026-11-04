@@ -5,6 +5,7 @@
 #include "engines/pfs/Module.h"
 
 #include "engines/general/Module.h"
+#include "engines/pfs/AmprJobs.h"
 #include "engines/pfs/PfsJobs.h"
 
 #include <QThread>
@@ -390,6 +391,7 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("pfs_delete_source_after_convert"), keys::kDeleteSourceAfterConvert);
 
     registerJobs(ctx);
+    registerAmprJobs(ctx);
 }
 
 } // namespace fw::pfs

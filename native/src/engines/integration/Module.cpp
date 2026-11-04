@@ -1,6 +1,7 @@
 #include "engines/integration/Module.h"
 
 #include "connect/ps5/Module.h"
+#include "engines/integration/AmprFtp.h"
 #include "core/FileUtil.h"
 #include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatReader.h"
@@ -374,6 +375,8 @@ void registerModule(ModuleContext& ctx)
     d.order = 90;
     ctx.settings.add(d);
     ctx.settings.addLegacyKey(QStringLiteral("adv_auto_upload"), keys::kAutoUpload);
+
+    registerAmprFtpJob(ctx);
 }
 
 } // namespace fw::integration

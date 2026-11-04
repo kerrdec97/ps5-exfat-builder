@@ -22,6 +22,7 @@ inline const QString kConnectTimeout = QStringLiteral("ps5.connectTimeoutSeconds
 inline const QString kIdleTimeout = QStringLiteral("ps5.idleTimeoutSeconds");
 inline const QString kParallelTransfers = QStringLiteral("ps5.parallelTransfers");
 inline const QString kPassiveMode = QStringLiteral("ps5.passiveMode");
+inline const QString kAutoloaderFolder = QStringLiteral("ps5.autoloaderFolder");   // legacy al_dir (local folder)
 } // namespace keys
 
 namespace jobkinds {

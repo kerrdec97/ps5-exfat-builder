@@ -16,7 +16,12 @@
 //           (open addressing, linear probing, 2^n >= 2 * rows slots; bit 0
 //           marks a slot whose 64-bit hash is shared by a later row)
 
+#include "core/Cancellation.h"
+#include "core/Result.h"
+
 #include <QByteArray>
+#include <QString>
+#include <QStringList>
 
 #include <vector>
 
@@ -35,5 +40,46 @@ quint64 amprPathHash(const QByteArray& path);
 // lower-cased path. Returns an empty array when there are no rows (Lazy then
 // writes no index).
 QByteArray buildAmprIndex(const std::vector<AmprRow>& rows);
+
+// ---- the stand-alone AMPR index tool (local folder or console folder) -------------------
+//
+// Rules of drakmor ampr_emu tools/build_ampr_index.py (current upstream,
+// GPL-3.0; the legacy ui/build_ampr_index.py is an older revision): the files
+// below /app0 are indexed except the index itself and its temporaries
+// (ampr_emu.index, .tmp, .bak) and the emulator's own runtime files at the top
+// (ampr_commands.bin, apr_emu.log); paths containing a tab, CR or LF are
+// skipped with a warning; of paths that differ only in ASCII case the first
+// (in byte order of the relative path) is kept with a warning — the legacy
+// tool ran with collisions allowed. The same rules apply to a local folder
+// and to a folder on the console, so both give the same bytes.
+
+inline const QString kAmprIndexName = QStringLiteral("ampr_emu.index");
+
+struct AmprFile {
+    QByteArray relPath; // UTF-8, '/'-separated, relative to app0
+    qint64 size = 0;
+    qint64 mtime = 0;   // whole seconds since the epoch (UTC)
+};
+
+struct AmprToolRows {
+    std::vector<AmprRow> rows;
+    QStringList skippedOwn;      // the index, its temporaries, the emulator's files
+    QStringList skippedControl;  // paths with a tab, CR or LF
+    QStringList collisions;      // "kept <- dropped" for case-only differences
+};
+
+// True for the /app0 paths the tool never indexes (ASCII case-insensitive).
+bool amprToolSkips(const QByteArray& indexedPath);
+AmprToolRows amprToolRows(std::vector<AmprFile> files);
+
+struct AmprLocalScan {
+    std::vector<AmprFile> files;
+    int folders = 0;
+    bool hasAmprLibrary = false; // fakelib/libSceAmpr.sprx exists
+};
+// Every file under `folder` (hidden files included, symbolic links skipped).
+Result<AmprLocalScan> scanAmprFolder(const QString& folder, const CancellationToken& token = {});
+// fakelib/libSceAmpr.sprx among the relative paths (case-insensitive).
+bool hasAmprLibrary(const std::vector<AmprFile>& files);
 
 } // namespace fw::pfs

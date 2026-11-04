@@ -3,6 +3,10 @@
 #include "app/AppContext.h"
 #include "app/pages/ps5/DiagnosticsTab.h"
 #include "app/pages/ps5/FindConsole.h"
+#include "app/pages/ps5/AmprTab.h"
+#include "app/pages/ps5/AutoloaderTab.h"
+#include "app/pages/ps5/FakelibTab.h"
+#include "app/pages/ps5/ManagerTab.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
 #include "app/ui/LogView.h"
@@ -235,6 +239,25 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     m_stack->addWidget(buildMountTab());
     m_diagnostics = new DiagnosticsTab(ctx, {[this] { return host(); }, [this] { return ftpPort(); }, [this] { return m_remoteDir; }}, m_stack);
     m_stack->addWidget(m_diagnostics);
+    // Console-content tools (pages/ps5/*Tab): their own connections. The stable tab key
+    // ("manager", "fakelib", "autoloader", "ampr") is also the tool's demo-state name.
+    {
+        const auto endpoint = [this] {
+            ps5::ConsoleEndpoint ep = ps5::endpointFromSettings(m_ctx.settings().snapshot());
+            ep.host = host();
+            ep.ftpPort = quint16(ftpPort());
+            return ep;
+        };
+        const QList<QPair<QString, ConsoleToolTab*>> tools = {{QStringLiteral("Manager"), new Ps5ManagerTab(ctx, endpoint, m_stack)},
+                                                              {QStringLiteral("Fakelib"), new FakelibTab(ctx, endpoint, m_stack)},
+                                                              {QStringLiteral("Autoloader"), new AutoloaderTab(ctx, endpoint, m_stack)},
+                                                              {QStringLiteral("AMPR index"), new AmprTab(ctx, endpoint, m_stack)}};
+        for (const auto& [title, tool] : tools) {
+            m_tabs->setTabData(m_tabs->addTab(title), tool->demoKey());
+            m_stack->addWidget(tool);
+            connect(tool, &ConsoleToolTab::toastRequested, this, &Page::toastRequested);
+        }
+    }
 
     connect(m_session, &ConsoleSession::connected, this, [this](const QString& welcome) {
         setConnectedUi(true, welcome.simplified());
@@ -1374,7 +1397,11 @@ QString Ps5ConnectPage::statusContext() const
 
 QStringList Ps5ConnectPage::demoStates() const
 {
-    return {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount"), QStringLiteral("diagnostics"), QStringLiteral("find")};
+    QStringList states = {QStringLiteral("payloads"), QStringLiteral("klog"), QStringLiteral("y2jb"), QStringLiteral("mount"), QStringLiteral("diagnostics"), QStringLiteral("find")};
+    for (int t = 0; t < m_stack->count(); ++t) // console-content tools: their tab key
+        if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t)))
+            states << tool->demoKey();
+    return states;
 }
 
 void Ps5ConnectPage::applyDemoState(const QString& name)
@@ -1389,6 +1416,11 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
     }
     if (name == QLatin1String("find"))
         m_demoSheet = m_find->openSpecimen();
+    for (int t = 0; t < m_stack->count(); ++t)
+        if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t)); tool && tool->demoKey() == name) {
+            navigateWith({{QStringLiteral("tab"), name}}); // by key, not by position
+            tool->applyDemo();
+        }
     if (name == QLatin1String("klog") && m_klog->rowCount() == 0) {
         // Specimen lines so the viewer's tags are visible in the evidence.
         for (const QString& t : {QStringLiteral("[KERNEL] sceKernelLoadStartModule: libSceNpTrophy2.sprx"), QStringLiteral("[shadowmount] unmount start /mnt/ext0"),
@@ -1409,6 +1441,9 @@ void Ps5ConnectPage::clearDemoState()
     m_diagnostics->clearResult();
     m_klog->clear();
     klogFilterChanged();
+    for (int t = 0; t < m_stack->count(); ++t)
+        if (auto* tool = qobject_cast<ConsoleToolTab*>(m_stack->widget(t)))
+            tool->clearDemo();
     m_tabs->setCurrentIndex(0);
 }
 

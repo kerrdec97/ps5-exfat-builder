@@ -815,6 +815,21 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
 
+    {
+        SettingDef d;
+        d.key = keys::kAutoloaderFolder;
+        d.section = QStringLiteral("PS5 connection");
+        d.group = QStringLiteral("Autoloader");
+        d.label = QStringLiteral("ps5_autoloader folder");
+        d.description = QStringLiteral("The local ps5_autoloader folder the Autoloader tab edits (autoload.txt and the "
+                                       "payloads next to it). Copy the folder to a USB drive or /data on the console "
+                                       "yourself; nothing is sent from here.");
+        d.type = SettingType::DirPath;
+        d.defaultValue = QString();
+        d.order = order++;
+        s.add(d);
+    }
+
     s.addLegacyKey(QStringLiteral("ftp_ip"), keys::kConsoleIp, nonEmpty);
     s.addLegacyKey(QStringLiteral("ps5_ip"), keys::kConsoleIp, nonEmpty); // never written by the legacy app
     s.addLegacyKey(QStringLiteral("ftp_port"), keys::kFtpPort, nonEmpty);
@@ -824,6 +839,7 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("mm_payload_port"), keys::kMicroMountPort, nonEmpty);
     s.addLegacyKey(QStringLiteral("klog_port"), keys::kKlogPort, nonEmpty);
     s.addLegacyKey(QStringLiteral("y2jb_dpi_port"), keys::kDpiPort, nonEmpty);
+    s.addLegacyKey(QStringLiteral("al_dir"), keys::kAutoloaderFolder, nonEmpty);
 
     ctx.dependencies.add(QStringLiteral("qt.sqlite"), QStringLiteral("SQLite database support (Qt SQL)"),
                          QStringLiteral("Y2JB update blocking edits app.db and appinfo.db."), probeSqlite);
