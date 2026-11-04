@@ -39,7 +39,9 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
 * **PS5 connection**: FTP with parallel transfers and resume, payload sender,
   kernel log, Y2JB tools with backups and read-back checks,
   ShadowMount+/MicroMount configuration, optional upload of every verified
-  image.
+  image; "Find my PS5" network search, FTP diagnostics with a 16 MiB speed
+  test, and a setup checklist on Home. Optional Discord message when the
+  queue finishes (Settings › General, advanced).
 * **Tools**: Language Stripper (always backs up first, restorable), DLC-emu
   editor, library scan and dump rename with undo, problem reports with your
   user name hidden, update checker that only installs SHA-256-verified
@@ -80,7 +82,7 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
 
 ## How it was tested
 
-* **Automated tests** (36 test programs, run on every change): Linux with
+* **Automated tests** (39 test programs, run on every change): Linux with
   AddressSanitizer/UBSan and Windows (MSVC 2022, Qt 6.8) in CI. They include
   byte-for-byte comparisons with UFS2Tool and Lazy_MkPFS output, the legacy
   app's own JSON/INI/GP5 output as goldens, crash and cancel recovery, and —
@@ -126,8 +128,8 @@ faster than Lazy_MkPFS at the default level with byte-identical output. See
   PS5 Pro fix/Pro build, `right.sprx` replacement, default fakelib set,
   save-data fixes, SDK pairs 11–13.
 * **Not ported**: interface translations (only English for now), Dokan
-  "mount as drive", FTP speed test and IP sweep, autoloader editor, AMPR index
-  over FTP, Discord webhook.
+  "mount as drive", autoloader editor, AMPR index over FTP, the zftpd web-UI
+  (ZHTTP) probe of the FTP diagnostics.
 
 ## Before release (owner's checklist)
 
@@ -142,7 +144,8 @@ Nothing below can be done from the cloud session that built this edition.
    multi-language one); install on the console.
 5. Backport one game to a lower SDK; launch it on the target firmware;
    restore it from the originals ZIP.
-6. Connect to the PS5 (FTP browse, upload, payload, kernel log).
+6. Connect to the PS5 (Find my PS5, FTP browse, upload, payload, kernel log,
+   Diagnostics with the speed test).
 7. Only then: publish a release (`v5.0.0`) with the installer, portable zip
    and `SHA256SUMS.txt` (the update checker requires the checksum file).
 

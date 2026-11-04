@@ -24,6 +24,8 @@ Target `fw_connect_ps5` (`native/src/connect/ps5/`), links Qt Network, **Qt SQL*
 | `ConsoleBackup.h` | `backupRemoteFile()`, `saveRemoteCopy()`, `newConsoleBackupDir()` |
 | `MountConfig.h` | ShadowMount+/MicroMount `parse/render/validate`, `loadMountConfig()`, `pushMountConfig()`, `fetchMountDebugLog()`, `StopConfirmTracker`, `stopShadowMount()` |
 | `Endpoint.h` | `ConsoleEndpoint`, `endpointFromSettings()` |
+| `Discovery.h` | "Find my PS5": `subnetPrefixesFor()`, `localIpv4Addresses()`, `localSubnetPrefixes()`, `subnetHosts()`, `discoverConsoles()` |
+| `FtpDiagnostics.h` | `diagnoseFtp()` (checks + speed test), `FtpDiagnosis` (JSON round trip), `classifyFtpServer()`, `kSpeedTestBytes` |
 | `SocketWait.h` | internal: local-event-loop waits, connect with timeout, socket error messages |
 | `Module.h` | `registerModule()`, setting keys, job kinds |
 
@@ -62,6 +64,32 @@ All sockets are blocking-style: waits run a short local `QEventLoop` (25 ms tick
 * Protected paths (legacy `_BR_PROTECTED`): `/system /system_ex /preinst /preinst2 /mini-syscore /sandcastle /update /dev /proc`, case-insensitive, after normalising `..` and doubled slashes. The legacy app asked for confirmation; the upload job refuses them unless `allowProtectedPaths: true` (the UI should show `protectedPathWarning()` and set it). Destination class (External USB / Internal / Unknown) is in the job details.
 
 Upload parameters: `sources` (local files/folders), `remoteDir` (default `ps5.gamesFolder`), `host`, `port`, `parallel`, `resume`, `retries`, `allowProtectedPaths`. Download: `sources` (remote paths), `localDir`, `overwrite`, `resume`, `parallel`, `retries`, `host`, `port`.
+
+## Find my PS5 (`Discovery.h`, legacy `_auto_detect_ip`)
+
+* Subnets: the /24 around every IPv4 address of this PC's interfaces that are up and running (QNetworkInterface), skipping loopback interfaces and addresses, link-local 169.254/16, 0.0.0.0, multicast/reserved and `Virtual` (VPN tunnel) interfaces; duplicates removed. The legacy app used only the default-route interface (a UDP "connect" to 8.8.8.8). Hosts are `.1`–`.254` without the PC's own addresses.
+* Probe (legacy values): ports 2121 then 2122, 300 ms connect timeout, 50 probes at a time. Every port of a host is tried (the legacy stopped at the first hit); `port` is the first open one, `openPorts` all of them, `rttMs` the first connect time. When a port accepts, the probe waits up to `bannerWaitMs` (400 ms) for an FTP greeting and keeps the `220` text as `banner`; nothing is sent (no login, no QUIT).
+* Threads: `discoverConsoles()` blocks; each probe runs on a private `QThreadPool` (Qt-started threads, as Qt sockets require), the caller's thread waits in 25 ms steps, reports progress `(probed, total, found)` and, on cancel, drops the probes not started yet; running probes stop at their next 25 ms tick. Results are sorted by address.
+* `DiscoveryOptions::hosts` replaces the sweep (tests use 127.0.0.1). No usable interface → `InvalidArgument` with advice.
+* UI: PS5 connect › **Find my PS5** (`pages/ps5/FindConsole`): a sheet with the progress and the servers found; *Use this console* saves `ps5.consoleIp` and `ps5.ftpPort` (the legacy also filled both).
+
+## FTP diagnostics and speed test (`FtpDiagnostics.h`, job `ps5.ftp.diagnose`)
+
+Legacy `_ftpdiag_run` and `_ftpspeed_run` (LEGACY_UI_INVENTORY FTP-18). Parameters `{host?, port?, folder?, speedTest: bool}` (`folder` empty = `ps5.gamesFolder`; `speedTestBytes` only for tests). Checks, each recorded in `JobOutcome.details` (`FtpDiagnosis::toJson()`):
+
+| Check | How | Legacy |
+|---|---|---|
+| Reachable, RTT | plain TCP connect to the FTP port, timed (`ps5.connectTimeoutSeconds`) | same (5 s) |
+| Server banner, login | `FtpClient::connectToHost()` greeting; anonymous login | same |
+| FEAT | `FtpClient::features()` (the legacy flags) and the raw reply | same |
+| Passive mode | `PASV` (227), else `EPSV` (229) | same |
+| Binary mode | `TYPE I` (2xx) | same |
+| Writable | STOR 28 bytes as `<folder>/.exfatbuilder_wtest_<epoch>.tmp`, then DELE; a probe that cannot be removed is reported ("Wrote the probe but could NOT delete it…"); after a dropped STOR the probe is deleted over a fresh connection | same file and size |
+| Destination | `classifyDestination(folder)` | `_ps5_dest_class` |
+| Server type | `classifyFtpServer()`: XCRYPT +2, server-side copy +2, MLSD+UTF8+REST +1, banner "zftpd" +3 | same, **without the ZHTTP web-UI probe (+2), not ported** |
+| Speed test (optional) | 16 MiB (1 MiB of random bytes repeated, like the legacy) STOR then RETR of `<folder>/.exfatbuilder_speedtest_<epoch>.bin`, MB/s = MiB per second each way; the read-back is compared byte for byte (new); then DELE, retried over fresh connections for about 2 s; a file that stays is reported. Cancel or a dropped transfer also deletes it (fresh connection, not cancellable) | same file, size and arithmetic; the legacy deleted only after a complete upload and never compared |
+
+Outcome: **Failed** (the job fails, outcome kept) when the FTP server cannot be used (not reachable, no greeting, login refused) or the speed-test read-back differs; **Inconclusive** with warnings when passive or binary mode was refused, the folder is not writable, a probe or speed-test file was left behind, or the speed test did not finish; **Passed** otherwise. The summary reads e.g. "Reachable in 3 ms · logged in · /data/etaHEN/games writable · upload 38 MB/s, download 61 MB/s". Log lines start with `[FTP]`. Phases: Connecting · Checking · Speed test (bytes). UI: PS5 connect › **Diagnostics** (`pages/ps5/DiagnosticsTab`), and Home's setup checklist ("FTP reachable") reads the last result.
 
 ## Payloads (`ps5.payload.send`)
 
@@ -124,7 +152,7 @@ Dependency probe `qt.sqlite` ("SQLite database support (Qt SQL)"): Ready when th
 
 ## Job kinds
 
-`ps5.ftp.upload`, `ps5.ftp.download`, `ps5.payload.send`, `ps5.dpi.install`, `ps5.y2jb.autoBlock`, `ps5.shadowmount.stop`. Mount-config load/push, Y2JB local patching and file placement, the klog viewer and FTP browsing are APIs for the pages (run them off the UI thread).
+`ps5.ftp.upload`, `ps5.ftp.download`, `ps5.payload.send`, `ps5.dpi.install`, `ps5.y2jb.autoBlock`, `ps5.shadowmount.stop`, `ps5.ftp.diagnose`. Network discovery (`discoverConsoles()`), mount-config load/push, Y2JB local patching and file placement, the klog viewer and FTP browsing are APIs for the pages (run them off the UI thread).
 
 ## What was tested, and against what
 
@@ -152,9 +180,12 @@ Dependency probe `qt.sqlite` ("SQLite database support (Qt SQL)"): Ready when th
 | download0.dat / icon / art set placement with local backups | fake FTP | — |
 | Mount config render = legacy output (generated from the legacy functions), parse, validation, load/push | golden text + fake FTP | — |
 | Settings, legacy import, jobs end-to-end | in-process | the UI |
+| Find my PS5: open ports and greeting on 127.0.0.1, a silent port, a closed port, an address nobody has (TEST-NET-1), progress counts, cancel during a 30 s greeting wait, subnet rules (loopback, link-local, multicast, duplicates) | `tst_ps5_diagnostics` (FakeFtpServer, local listeners); `tst_ps5_tools_ui` (sheet → settings, cancel) | a real /24 with a console and Windows' firewall prompt |
+| Diagnostics: every check passing (MLSD+XCRYPT server), EPSV fallback, no passive mode, unreachable, refused login, unwritable folder, probe that cannot be deleted (left and reported), JSON round trip, the job's Passed/Failed/Inconclusive rules | `tst_ps5_diagnostics` (FakeFtpServer options `greeting`, `extraFeatures`, `refuseEpsv`, `refuseDeletePaths`) | ftpsrv / etaHEN FTP / zftpd replies |
+| Speed test: 16 MiB both ways byte-exact, progress bytes, cleanup; silent corruption detected; undeletable file reported; cancel mid-upload (throttled server) deletes the file | `tst_ps5_diagnostics`; `tst_ps5_tools_ui` (Diagnostics tab end to end) | real Wi-Fi/Ethernet speeds |
 
 Builds and tests ran here on Linux (GCC 13 and Clang, Qt 6.4.2). The project's Windows CI (MSVC 2022, Qt 6.8.3) reported five connect/ps5 failures on the first version: two timing/message differences of a refused localhost connect, an RST that discards in-flight data in the fake, and a DELE refused while the aborted STOR still held the file; all are fixed (code where Windows behaves differently, test fakes where they assumed Linux), but the fixed version has not yet been re-run on that CI from here. Under root, the "remote file exists but is unreadable" backup refusal could not be exercised (the test skips it).
 
 ## Not implemented (legacy features outside this task or deferred)
 
-FTP diagnostics (RTT, writable probe, ZHTTP/zftpd classification) and the 16 MiB speed test; the auto-detect /24 port sweep; the PS5 Manager game compare (`SITE AVAIL` is available as `siteAvail()`); the ShadowMount+ fakelib manager; the AMPR index FTP walker; the autoloader editor; Discord/notification hooks; TLS (the legacy had none).
+The ZHTTP web-UI probe of the diagnostics (HTTP GET on the FTP port, "Open Web UI"); the PS5 Manager game compare (`SITE AVAIL` is available as `siteAvail()`); the ShadowMount+ fakelib manager; the AMPR index FTP walker; the autoloader editor; TLS (the legacy had none). The Discord webhook lives in `connect/notify` (`DiscordWebhook.h`).

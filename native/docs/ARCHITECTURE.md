@@ -42,6 +42,7 @@ native/
       integration/          cross-engine workflows: image.convert, FPKG image stagers, post-build upload
     connect/ps5/            fw_connect_ps5 — FTP, payload sender, kernel log, DPI/Y2JB, mount configs
     connect/update/         fw_connect_update — release check and verified download
+    connect/notify/         fw_connect_notify — Discord webhook message when the queue finishes
     registration/           calls every module's registerModule()
     app/                    the Qt Widgets application (theme, widgets, pages, main.cpp)
   tests/
@@ -106,6 +107,7 @@ Each module exposes `void fw::<name>::registerModule(fw::ModuleContext&)` in
 | gameinfo | + Gui (QImage only) | cover normalisation; no widgets, no GUI application object |
 | connect/ps5 | + Network, Sql | sockets; SQLite edits of the console's app.db/appinfo.db (ships `sqldrivers/qsqlite.dll`) |
 | connect/update | + Network | HTTPS to GitHub |
+| connect/notify | + Network | HTTPS POST to a Discord webhook |
 | app | + Gui, Widgets, Svg, Network | the interface |
 
 Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
@@ -114,7 +116,7 @@ Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
 ## Testing switches
 
 `FW_DATA_DIR` isolates all app data (tests, CI). `FW_OFFLINE=1` stops the
-silent update check (set for every test and CI run). Module tests link only
+silent update check and the Discord webhook (set for every test and CI run). Module tests link only
 their own module (`tests/engines/<m>/`, `tests/connect/<m>/`); helper
 executables come from a module's `tests/.../extra.cmake`.
 

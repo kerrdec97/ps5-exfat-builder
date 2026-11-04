@@ -92,7 +92,8 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Child processes killed on close (audit H3/H4) | Windows job objects (suspended start), POSIX process groups | Done | tst_core (spawned grandchild killed) | — |
 | Update check + self-update | `connect/update` (native installer only, SHA-256 required, fails closed) | Done · field check | tst_update (local HTTP server) | First real release |
 | Translations (16 languages) | — | Not ported | — | Legacy tables covered 62 of 1,559 strings; Qt Linguist infrastructure to follow |
-| Discord webhook, write benchmark, theme | — | Not ported | — | Dead/orphan keys in the legacy app |
+| Discord webhook (hidden `discord_webhook` key, POST on finish) | `connect/notify` (`DiscordNotifier`, `discordPayload`): real setting `general.discordWebhookUrl` (General, advanced; empty = off; only discord.com / discordapp.com webhook addresses), legacy key imported, one embed per finished run from `QueueCompletionWatcher` (counts + up to 10 jobs; folders cut to file names; mentions disabled; update checks and diagnostics left out), nothing sent with `FW_OFFLINE`; token never logged and hidden in problem reports | Done · field check | tst_notify (local HTTP stub: POST body and headers, 404 reported, offline/empty/invalid send nothing, legacy import), tst_tools (report redaction), tst_legacy_import, tst_ps5_tools_ui (setting) | A real Discord channel was not contacted |
+| Write benchmark, theme | — | Not ported | — | Dead/orphan keys in the legacy app |
 
 ## 6. Library, dump rename, tools
 
@@ -114,7 +115,9 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Kernel log viewer | `KlogClient` (reconnect, tags, wait-for-line) | Done · field check | tst_ps5_services; tst_app_ui (kernel-log model bounds) | Real console |
 | Y2JB (DPI install, auto-block with backups and read-back) | `DpiInstaller`, `Y2jb` | Done · field check | tst_ps5_services | Real console |
 | ShadowMount+/MicroMount config + Safe to unplug | `MountConfig`, `ps5.shadowmount.stop` | Done · field check | tst_ps5_services (INI goldens from the legacy code) | Real console |
-| IP auto-detect sweep, FTP diagnostics/speed test, autoloader editor | — | Not ported | — | Later release |
+| IP auto-detect sweep | `ps5::discoverConsoles` (/24 of every IPv4 interface, ports 2121/2122, 0.3 s, 50 probes on a private `QThreadPool`, cancellable, greeting captured); PS5 connect › Find my PS5 sheet fills `ps5.consoleIp`/`ps5.ftpPort` | Done · field check | tst_ps5_diagnostics (subnetsSkipLoopbackAndLinkLocal, discoveryFindsListenersOnInjectedHosts, discoveryIsCancellable), tst_ps5_tools_ui (findMyPs5FillsTheAddress, cancellingTheSearchChangesNothing) | A real network with a console |
+| FTP diagnostics and 16 MiB speed test (FTP-18) | `ps5::diagnoseFtp` + job `ps5.ftp.diagnose` (reachable/RTT, banner, login, FEAT, PASV/EPSV, TYPE I, writable probe, destination, zftpd score; speed test STOR/RETR with byte-for-byte read-back and cleanup, leftovers reported); PS5 connect › Diagnostics tab; Home setup checklist (MGR-5) | Done · field check | tst_ps5_diagnostics (diagnosticsPassAgainstTheFakeServer, passiveFallbackAndRefusal, unreachableAndRefusedLogin, notWritableAndLeftoverProbeAreReported, speedTestMeasuresBothWaysAndCleansUp, speedTestReportsCorruptionAndLeftover, cancelledSpeedTestRemovesItsFile, diagnoseJobEndToEnd), tst_ps5_tools_ui (diagnosticsTabRunsTheJob, diagnosticsShowAnUnreachableConsole, homeChecklistCountsTheSteps) | Real console FTP servers; the ZHTTP web-UI probe is not ported |
+| Autoloader editor | — | Not ported | — | Later release |
 
 ## 8. Packaging and platform
 
