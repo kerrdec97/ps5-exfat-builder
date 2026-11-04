@@ -122,7 +122,9 @@ public:
                 const qint64 take = std::min<qint64>(qint64(kBlocksPerTask) * kPfscBlock, it.size - prodOff);
                 const int nblocks = int(ceilDiv(take, kPfscBlock));
                 auto task = m_pool.makeTask(nblocks);
+                m_clock.restart();
                 FW_TRY_ASSIGN(const qint64 got, prodSrc->read(task->raw.data(), take));
+                readNs += m_clock.nsecsElapsed();
                 if (got != take)
                     return Error(ErrorCode::IoError, QStringLiteral("%1 ended early.").arg(prodSrc->describe()));
                 if (qint64(task->raw.size()) > take)
@@ -152,7 +154,10 @@ public:
                 FW_TRY(onRaw(p.item));
                 continue;
             }
+            m_clock.restart();
             m_pool.wait(p.task);
+            waitNs += m_clock.nsecsElapsed();
+            m_clock.restart();
             if (!m_token.checkpoint())
                 return Error::cancelled();
             const CompressPool::Task& t = *p.task;
@@ -183,6 +188,7 @@ public:
                 pos += len;
                 offsets.push_back(offsets.back() + len);
             }
+            writeNs += m_clock.nsecsElapsed();
             if (m_advanceRaw && m_hooks.advance)
                 m_hooks.advance(t.rawBytes);
             if (p.last) {
@@ -208,6 +214,12 @@ public:
     }
 
 private:
+public:
+    // Time the calling thread spent reading input, waiting for compression and writing.
+    qint64 readNs = 0, waitNs = 0, writeNs = 0;
+
+private:
+    QElapsedTimer m_clock;
     CompressPool& m_pool;
     ImageWriter& m_out;
     const PfscParams& m_params;
@@ -252,6 +264,9 @@ Status writeSingleFile(SeqSource& src, const QByteArray& name, const BuildOption
                 return success();
             },
             [](int) { return success(); }));
+        st.readSeconds += pipeline.readNs / 1e9;
+        st.waitSeconds += pipeline.waitNs / 1e9;
+        st.writeSeconds += pipeline.writeNs / 1e9;
         if (!r.compressed) {
             // Lazy writes the raw file over the attempt; bytes of the attempt
             // beyond the file's end stay in its last block.
@@ -386,6 +401,9 @@ Status writeCompressedFolder(const SourcePlan& plan, const BuildOptions& o, Imag
             cursor = placeFile(L, i, cursor, f.size, f.size, false);
             return success();
         }));
+    st.readSeconds += pipeline.readNs / 1e9;
+    st.waitSeconds += pipeline.waitNs / 1e9;
+    st.writeSeconds += pipeline.writeNs / 1e9;
     FW_TRY(finishLayout(L, cursor));
     const QByteArray header = layoutHeader(L);
     FW_TRY(out.writeAt(0, header.constData(), header.size()));
@@ -473,10 +491,14 @@ Result<BuildStats> writeImage(const BuildInput& input, OutputFormat format, cons
     }
     FW_TRY(out.close());
     st.seconds = double(timer.nsecsElapsed()) / 1e9;
-    log.debug(QStringLiteral("PFS image written: %1 bytes in %2 s with %3 thread(s)")
+    log.debug(QStringLiteral("PFS image written: %1 bytes in %2 s with %3 thread(s); writer thread: read %4 s, "
+                             "waiting for compression %5 s, write %6 s")
                   .arg(st.imageBytes)
                   .arg(st.seconds, 0, 'f', 2)
-                  .arg(st.threads));
+                  .arg(st.threads)
+                  .arg(st.readSeconds, 0, 'f', 2)
+                  .arg(st.waitSeconds, 0, 'f', 2)
+                  .arg(st.writeSeconds, 0, 'f', 2));
     return st;
 }
 

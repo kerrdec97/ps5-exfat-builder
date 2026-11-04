@@ -455,6 +455,44 @@ private slots:
         QCOMPARE(vr3.outcome.error().code, ErrorCode::CorruptData);
     }
 
+    // Lazy_MkPFS pack_folder: a wrapper folder is searched for the game (eboot.bin).
+    void findsGameRootInWrapperFolder()
+    {
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("root/settings.json")));
+        QTemporaryDir tmp;
+        const QString inner = makeGame(tmp);
+        const QString wrapper = tmp.filePath(QStringLiteral("wrapper"));
+        QVERIFY(QDir().mkpath(wrapper));
+        QVERIFY(pfstest::writeFile(wrapper + QStringLiteral("/readme.txt"), "not part of the game", -1));
+        QVERIFY(QDir().rename(inner, wrapper + QStringLiteral("/PPSA01234-app")));
+        const QString a = tmp.filePath(QStringLiteral("a.ffpfsc"));
+        const QString b = tmp.filePath(QStringLiteral("b.ffpfsc"));
+        auto ra = runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper}, {QStringLiteral("output"), a},
+                                                                  {QStringLiteral("timestamp"), 1700000000}})),
+                         store.snapshot());
+        QVERIFY(ra.outcome.ok());
+        QCOMPARE(ra.outcome->details.value(QStringLiteral("gameRoot")).toString(),
+                 QDir::cleanPath(wrapper + QStringLiteral("/PPSA01234-app")));
+        auto rb = runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper + QStringLiteral("/PPSA01234-app")},
+                                                                  {QStringLiteral("output"), b},
+                                                                  {QStringLiteral("timestamp"), 1700000000}})),
+                         store.snapshot());
+        QVERIFY(rb.outcome.ok());
+        QCOMPARE(pfstest::sha256(a), pfstest::sha256(b));
+        auto vr = runJob(**env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), a}, {QStringLiteral("source"), wrapper}})),
+                         store.snapshot());
+        QVERIFY(vr.outcome.ok());
+        QCOMPARE(vr.outcome->verification, Verification::Passed);
+        // Without detection the wrapper itself is packed.
+        const QString c = tmp.filePath(QStringLiteral("c.ffpfsc"));
+        auto rc = runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper}, {QStringLiteral("output"), c},
+                                                                  {QStringLiteral("findGameRoot"), false}})),
+                         store.snapshot());
+        QVERIFY(rc.outcome.ok());
+        QCOMPARE(rc.outcome->details.value(QStringLiteral("gameRoot")).toString(), QDir::cleanPath(wrapper));
+    }
+
     void extractJob()
     {
         Env env;

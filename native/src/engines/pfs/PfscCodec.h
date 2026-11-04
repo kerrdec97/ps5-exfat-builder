@@ -27,7 +27,7 @@ inline constexpr int kBlocksPerTask = 16;
 class CompressPool {
 public:
     struct Task {
-        QByteArray raw;      // nblocks * 64 KiB; the tail of the last block is zero-filled
+        QByteArray raw;      // nblocks * 64 KiB; the caller fills it and zero-fills the tail of the last block
         qint64 rawBytes = 0; // real input bytes in `raw`
         int nblocks = 0;
         QByteArray out;      // compressed blocks, block i at i * bound()

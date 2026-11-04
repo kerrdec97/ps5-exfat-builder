@@ -45,8 +45,10 @@ CompressPool::CompressPool(int threads, int level) : m_threads(std::max(1, threa
 CompressPool::~CompressPool()
 {
     {
+        // Queued work is dropped (cancel / error): workers only finish the task in hand.
         std::lock_guard<std::mutex> lock(m_mutex);
         m_stop = true;
+        m_queue.clear();
     }
     m_work.notify_all();
     for (auto& t : m_workers)
@@ -57,7 +59,7 @@ std::shared_ptr<CompressPool::Task> CompressPool::makeTask(int nblocks) const
 {
     auto t = std::make_shared<Task>();
     t->nblocks = nblocks;
-    t->raw = QByteArray(qsizetype(nblocks) * kPfscBlock, '\0');
+    t->raw = QByteArray(qsizetype(nblocks) * kPfscBlock, Qt::Uninitialized); // the caller fills it and zero-pads the tail
     t->out.resize(qsizetype(nblocks) * m_bound);
     t->outLen.assign(size_t(nblocks), 0);
     return t;

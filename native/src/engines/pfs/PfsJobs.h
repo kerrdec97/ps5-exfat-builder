@@ -2,14 +2,16 @@
 
 // Queue jobs of the PFS engine.
 //
-//   image.pfs.build   {source, output, format?, replaceExisting?, timestamp?, title?}
+//   image.pfs.build   {source, output, format?, replaceExisting?, timestamp?, title?, findGameRoot?}
 //                     phases Scanning → Compressing and writing → Verifying
-//   image.pfs.verify  {image, source?, depth?}
+//   image.pfs.verify  {image, source?, depth?, findGameRoot?}
 //   image.pfs.extract {image, output, deep?, overwrite?}
 //
 // `format` is "ffpfsc" (compressed container) or "ffpfs" (folder image);
 // without it the output extension decides (.ffpfs → folder image).
 // `timestamp` pins the inode time (seconds) for reproducible builds.
+// `findGameRoot` (default true): a folder without eboot.bin / sce_sys/param.json
+// is searched for the game folder inside it, as Lazy_MkPFS pack_folder does.
 
 #include "jobs/Job.h"
 #include "jobs/Module.h"

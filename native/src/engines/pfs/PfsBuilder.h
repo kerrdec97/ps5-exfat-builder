@@ -79,6 +79,10 @@ struct BuildStats {
     bool containerCompressed = false;
     int threads = 1;
     double seconds = 0;
+    // Where the writing thread spent its time (compression runs on the pool).
+    double readSeconds = 0;
+    double waitSeconds = 0;  // waiting for the next block in order to be compressed
+    double writeSeconds = 0;
 };
 
 struct BuildHooks {

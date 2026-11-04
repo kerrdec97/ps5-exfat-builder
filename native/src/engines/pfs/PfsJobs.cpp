@@ -57,6 +57,32 @@ QJsonObject statsJson(const BuildStats& st)
     return o;
 }
 
+bool hasEntry(const QDir& d, const QString& name)
+{
+    for (const QString& n : d.entryList(QDir::Files | QDir::Hidden | QDir::System))
+        if (n.compare(name, Qt::CaseInsensitive) == 0)
+            return true;
+    return false;
+}
+
+// Lazy_MkPFS pack_folder find_game_root(): the source itself when it holds
+// eboot.bin (or sce_sys/param.json, the legacy PFS tab's test), otherwise the
+// first sub-folder (depth first, name order) that holds eboot.bin.
+QString findGameRoot(const QString& dir, int depth = 0)
+{
+    const QDir d(dir);
+    if (hasEntry(d, QStringLiteral("eboot.bin")) || (depth == 0 && QFileInfo(dir + QStringLiteral("/sce_sys/param.json")).isFile()))
+        return dir;
+    if (depth >= 8)
+        return {};
+    for (const QFileInfo& sub : d.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::Name)) {
+        const QString r = findGameRoot(sub.absoluteFilePath(), depth + 1);
+        if (!r.isEmpty())
+            return r;
+    }
+    return {};
+}
+
 ProgressHooks hooksFor(ProgressReporter* p)
 {
     ProgressHooks h;
@@ -144,6 +170,7 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     const OutputFormat fmt = format();
     const BuildOptions opts = buildOptionsFrom(ctx.settings, now);
     const bool isFolder = QFileInfo(m_source).isDir();
+    QStringList outcomeWarnings;
 
     // ---- Scanning ----
     if (pr)
@@ -151,7 +178,18 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     BuildInput in;
     in.isFolder = isFolder;
     if (isFolder) {
-        FW_TRY_ASSIGN(in.plan, planFolder(m_source, planOptionsFrom(ctx.settings, now), ctx.token));
+        QString root = m_source;
+        if (m_params.value(QStringLiteral("findGameRoot")).toBool(true)) {
+            const QString found = findGameRoot(m_source);
+            if (!found.isEmpty() && found != m_source) {
+                root = QDir::cleanPath(found);
+                ctx.log.info(QStringLiteral("Game found in %1").arg(native(root)));
+            } else if (found.isEmpty()) {
+                outcomeWarnings << QStringLiteral("No eboot.bin or sce_sys/param.json found; the whole folder was packed.");
+                ctx.log.warn(outcomeWarnings.back());
+            }
+        }
+        FW_TRY_ASSIGN(in.plan, planFolder(root, planOptionsFrom(ctx.settings, now), ctx.token));
         const SourcePlan& p = in.plan;
         ctx.log.info(QStringLiteral("Packing %1 files (%2) from %3").arg(formatCount(qint64(p.files.size())),
                                                                           formatBytes(p.totalBytes), native(m_source)));
@@ -199,8 +237,11 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
                      .arg(formatRate(st.seconds > 0 ? double(st.sourceBytes) / st.seconds : 0)));
 
     JobOutcome outcome;
+    outcome.warnings = outcomeWarnings;
     outcome.details = statsJson(st);
     outcome.details.insert(QStringLiteral("format"), formatName(fmt));
+    if (isFolder)
+        outcome.details.insert(QStringLiteral("gameRoot"), in.plan.root);
     outcome.details.insert(QStringLiteral("timestamp"), now);
 
     // ---- Verifying ----
@@ -314,7 +355,13 @@ Result<JobOutcome> PfsVerifyJob::run(JobContext& ctx)
         if (QFileInfo(m_source).isDir()) {
             // The same plan the build made: settings snapshot + the image's own build time
             // (generated files carry it), so exclusions never cause false failures (H2).
-            FW_TRY_ASSIGN(plan, planFolder(m_source, planOptionsFrom(ctx.settings, sum.timestamp), ctx.token));
+            QString root = m_source;
+            if (m_params.value(QStringLiteral("findGameRoot")).toBool(true)) {
+                const QString found = findGameRoot(m_source);
+                if (!found.isEmpty())
+                    root = QDir::cleanPath(found);
+            }
+            FW_TRY_ASSIGN(plan, planFolder(root, planOptionsFrom(ctx.settings, sum.timestamp), ctx.token));
             ex.kind = VerifyExpectation::Kind::Folder;
             ex.plan = &plan;
             ex.format = sum.nested ? OutputFormat::Container : OutputFormat::FolderImage;
