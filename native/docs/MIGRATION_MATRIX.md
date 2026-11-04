@@ -134,5 +134,5 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | exFAT images with the real Windows driver | `tst_exfat_windows`: image wrapped in a VHD, mounted with Mount-DiskImage, read back and `chkdsk`ed; a Windows-formatted exFAT volume read by the native reader | Done | Windows CI (test log printed in the run) |
 | Installer + portable zip + SHA256SUMS | Inno Setup (per-user, no admin), zip, checksums | Done | CI artifacts |
 | No admin rights, no .NET, no OSFMount, no Python | Native engines | Done | — |
-| Windows CI acceptance of the release candidate | Commit `b29d7b5`, run 41804192710 | Done | 36/36 tests, deployed-exe self-test, 41 page screenshots, 30 s launch, installer + portable zip + SHA256SUMS |
-| Real PC acceptance test (owner's machine) | — | Pending | No Windows PC was connected to this session; see RELEASE_NOTES "Before release" |
+| Windows CI acceptance of the release candidate | Commit `ce1bb27`, run 41849510788 | Done | 49/49 tests, deployed-exe self-test, 52 page screenshots, 30 s launch, installer + portable zip + SHA256SUMS |
+| Real PC acceptance test (owner's machine) | Built on the owner's PC with VS Build Tools 2022 (owner report); CTest run was interrupted at tst_app_ps5_tools | Pending | DESKTOP-VQT9FV5 does not serve its Remote Control folders to the cloud session, so the run could not be resumed from here |
