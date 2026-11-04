@@ -189,12 +189,17 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
         }
 
         // Stable, case-insensitive order (what Windows lists for NTFS folders).
-        std::sort(kids.begin(), kids.end(), [&](int a, int b) {
-            const QString& na = tree.nodes[size_t(a)].name;
-            const QString& nb = tree.nodes[size_t(b)].name;
-            const int c = up.upcase(na).compare(up.upcase(nb), Qt::CaseSensitive);
-            return c != 0 ? c < 0 : na.compare(nb, Qt::CaseSensitive) < 0;
+        std::vector<std::pair<QString, int>> keyed;
+        keyed.reserve(kids.size());
+        for (int k : kids)
+            keyed.emplace_back(up.upcase(tree.nodes[size_t(k)].name), k);
+        std::sort(keyed.begin(), keyed.end(), [&](const auto& a, const auto& b) {
+            const int c = a.first.compare(b.first, Qt::CaseSensitive);
+            return c != 0 ? c < 0
+                          : tree.nodes[size_t(a.second)].name.compare(tree.nodes[size_t(b.second)].name, Qt::CaseSensitive) < 0;
         });
+        for (size_t k = 0; k < keyed.size(); ++k)
+            kids[k] = keyed[k].second;
         tree.nodes[size_t(cur.node)].children = kids;
         // Depth-first in name order: push in reverse so the first child is next.
         for (auto it = kids.rbegin(); it != kids.rend(); ++it)
