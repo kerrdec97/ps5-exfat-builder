@@ -8,6 +8,24 @@
 
 namespace fw::general {
 
+qint64 ioBufferBytes(const SettingsValues& settings)
+{
+    return std::clamp<qint64>(settings.integer(keys::kIoBufferMiB), 1, 64) * 1024 * 1024;
+}
+
+qint64 freeSpaceMarginBytes(const SettingsValues& settings)
+{
+    return std::max<qint64>(0, settings.integer(keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
+}
+
+QString tempParentDir(const SettingsValues& settings)
+{
+    const QString custom = settings.string(keys::kTempFolder).trimmed();
+    if (!custom.isEmpty() && QFileInfo(custom).isDir())
+        return custom;
+    return {};
+}
+
 int workerThreads(const SettingsValues& settings)
 {
     const int cores = std::max(1, QThread::idealThreadCount());
@@ -33,20 +51,6 @@ void registerModule(ModuleContext& ctx)
     int order = 0;
 
     // ---- General --------------------------------------------------------------
-    {
-        SettingDef d;
-        d.key = keys::kLanguage;
-        d.section = QStringLiteral("General");
-        d.group = QStringLiteral("Interface");
-        d.label = QStringLiteral("Language");
-        d.description = QStringLiteral("Interface language. English is complete; other languages fall back to English where a translation is missing.");
-        d.type = SettingType::Enum;
-        d.defaultValue = QStringLiteral("en");
-        d.choices = {{QStringLiteral("en"), QStringLiteral("English"), {}}};
-        d.restartRequired = true;
-        d.order = order++;
-        s.add(d);
-    }
     {
         SettingDef d;
         d.key = keys::kConfirmOnClose;
@@ -302,7 +306,6 @@ void registerModule(ModuleContext& ctx)
     }
 
     // Legacy (Python app) settings that map onto these.
-    s.addLegacyKey(QStringLiteral("language"), keys::kLanguage);
     s.addLegacyKey(QStringLiteral("output_dir"), keys::kDefaultOutputDir);
 }
 

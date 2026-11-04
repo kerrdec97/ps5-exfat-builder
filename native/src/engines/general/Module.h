@@ -10,7 +10,6 @@ void registerModule(ModuleContext& ctx);
 
 // Keys declared here (consumers: JobQueue, main.cpp, FileUtil callers).
 namespace keys {
-inline const QString kLanguage = QStringLiteral("general.language");
 inline const QString kConfirmOnClose = QStringLiteral("general.confirmCloseWhileBusy");
 inline const QString kNotifyOnFinish = QStringLiteral("general.notifyOnFinish");
 inline const QString kRestoreQueue = QStringLiteral("general.restoreQueueOnStart");
@@ -32,5 +31,12 @@ inline const QString kVerifyMode = QStringLiteral("verification.mode");
 
 // Effective worker-thread count for engines (0 = all logical cores).
 int workerThreads(const SettingsValues& settings);
+// Read/write buffer size for streaming engines (performance.ioBufferMiB).
+qint64 ioBufferBytes(const SettingsValues& settings);
+// Free-space reserve every writer must keep (storage.freeSpaceMarginMiB);
+// pass it as the margin to fw::ensureFreeSpace().
+qint64 freeSpaceMarginBytes(const SettingsValues& settings);
+// The user's temporary folder (storage.tempFolder) or empty for the default.
+QString tempParentDir(const SettingsValues& settings);
 
 } // namespace fw::general

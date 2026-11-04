@@ -2,10 +2,12 @@
 
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Power.h"
 #include "jobs/JobHistory.h"
 
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
@@ -308,7 +310,9 @@ void JobQueue::schedule()
     }
     for (const auto& e : toStart)
         startEntry(e);
-    if (toStart.empty() && runningCount() == 0 && pendingCount() == 0)
+    const bool busy = runningCount() > 0;
+    power::setKeepAwake(busy && m_settings.snapshot().boolean(QStringLiteral("performance.keepComputerAwake")));
+    if (toStart.empty() && !busy && pendingCount() == 0)
         emit idle();
 }
 
@@ -343,7 +347,9 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
     m_pool.start([self, id, job = std::shared_ptr<Job>(std::move(job)), settings, token, reporter]() mutable {
         Result<JobOutcome> result = Error(ErrorCode::Internal, QStringLiteral("The job did not run."));
         {
-            TempDir temp(QStringLiteral("job-") + id);
+            const QString tempParent = settings.string(QStringLiteral("storage.tempFolder")).trimmed();
+            TempDir temp(QStringLiteral("job-") + id,
+                         (!tempParent.isEmpty() && QFileInfo(tempParent).isDir()) ? tempParent : QString());
             JobContext ctx;
             ctx.jobId = id;
             ctx.token = token;
@@ -515,6 +521,7 @@ bool JobQueue::shutdown(int msecs)
         return m_pool.waitForDone(0);
     (void)saveQueue();
     m_shuttingDown = true;
+    power::setKeepAwake(false);
     {
         std::lock_guard lock(m_mutex);
         for (const auto& e : m_entries)

@@ -1,0 +1,132 @@
+// Ordered JSON (Python-compatible writer), junctions/links, raw process output,
+// the started hook and the CPU limit.
+
+#include "core/FsLinks.h"
+#include "core/OrderedJson.h"
+#include "core/ProcessRunner.h"
+#include "support/TestSupport.h"
+
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
+#include <QTest>
+#include <QThread>
+
+using namespace fw;
+
+namespace {
+QByteArray readAll(const QString& path)
+{
+    QFile f(path);
+    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+} // namespace
+
+class TstCoreExtra : public QObject {
+    Q_OBJECT
+    QTemporaryDir m_root;
+
+private slots:
+    void initTestCase() { QVERIFY(m_root.isValid()); fwtest::isolateAppData(m_root); }
+
+    void jsonRoundTripIsByteIdenticalToPython()
+    {
+        const QByteArray pretty = readAll(fwtest::dataDir() + QStringLiteral("/json/python_indent2.json"));
+        QVERIFY(!pretty.isEmpty());
+        auto doc = json::parse(pretty);
+        QVERIFY2(doc.ok(), doc.ok() ? "" : qPrintable(doc.error().toLogString()));
+        QCOMPARE(json::write(doc.value(), {2, false, false}), pretty);
+
+        const QByteArray compactAscii = readAll(fwtest::dataDir() + QStringLiteral("/json/python_compact_ascii.json"));
+        QCOMPARE(json::write(doc.value(), {-1, true, false}), compactAscii);
+    }
+
+    void jsonPreservesOrderAndNumbers()
+    {
+        auto doc = json::parse(R"({"z":1,"a":{"y":2,"b":3},"n":12345678901234567890,"f":1.50})");
+        QVERIFY(doc.ok());
+        json::Value v = doc.value();
+        QCOMPARE(v.keys(), (QStringList{QStringLiteral("z"), QStringLiteral("a"), QStringLiteral("n"), QStringLiteral("f")}));
+        QCOMPARE(v.value(QStringLiteral("n")).numberText(), QStringLiteral("12345678901234567890"));
+        QCOMPARE(v.value(QStringLiteral("f")).numberText(), QStringLiteral("1.50"));
+        QCOMPARE(v.path(QStringLiteral("a.b")).toInt(), qint64(3));
+        v[QStringLiteral("a")].insert(QStringLiteral("y"), json::Value(QStringLiteral("changed")));
+        v.insert(QStringLiteral("new"), json::Value(true));
+        QVERIFY(v.remove(QStringLiteral("z")));
+        QCOMPARE(json::write(v, {-1, false, false}),
+                 QByteArray(R"({"a": {"y": "changed", "b": 3}, "n": 12345678901234567890, "f": 1.50, "new": true})"));
+        QCOMPARE(json::write(json::Value(2.0), {-1}), QByteArray("2.0"));
+    }
+
+    void jsonRejectsMalformedWithPosition()
+    {
+        for (const char* bad : {"{", "{\"a\":}", "[1,]", "{\"a\" 1}", "tru", "\"unterminated", "{} x", "01", "1.", "\"\\x\""}) {
+            auto r = json::parse(QByteArray(bad));
+            QVERIFY2(!r.ok(), bad);
+            QCOMPARE(r.error().code, ErrorCode::CorruptData);
+            QVERIFY(r.error().message.contains(QStringLiteral("line 1")));
+        }
+        json::ParseOptions tolerant;
+        tolerant.allowTrailingCommas = true;
+        tolerant.allowComments = true;
+        QVERIFY(json::parse("// c\n{\"a\": [1,2,], /* x */ \"b\": 1,}", tolerant).ok());
+        QVERIFY(json::parse("\xEF\xBB\xBF{\"bom\":true}").ok());
+        QVERIFY(json::parse(QByteArray(600, '[') + QByteArray(600, ']')).ok() == false); // depth limit
+    }
+
+    void junctionPointsAtTargetAndRemovesOnlyTheLink()
+    {
+        const QString target = m_root.filePath(QStringLiteral("Trò chơi ÄÖ/sub"));
+        QVERIFY(fwtest::writeTextFile(target + QStringLiteral("/file.txt"), "content"));
+        const QString link = m_root.filePath(QStringLiteral("ascii-link"));
+        auto st = createDirectoryJunction(link, target);
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        QVERIFY(isLinkOrReparsePoint(link));
+        QCOMPARE(readAll(link + QStringLiteral("/file.txt")), QByteArray("content"));
+        QVERIFY(!createDirectoryJunction(link, target).ok()); // exists
+        {
+            JunctionGuard guard(link);
+        }
+        QVERIFY(!QFileInfo::exists(link) && !isLinkOrReparsePoint(link));
+        QCOMPARE(readAll(target + QStringLiteral("/file.txt")), QByteArray("content")); // target untouched
+        // A real folder is never removed as if it were a link.
+        QVERIFY(!removeDirectoryJunction(target).ok());
+        QVERIFY(QFileInfo::exists(target + QStringLiteral("/file.txt")));
+    }
+
+    void rawOutputAndStartedHook()
+    {
+        ProcessSpec spec;
+        spec.program = fwtest::helperPath();
+        spec.arguments = {QStringLiteral("cr")};
+        QByteArray raw;
+        qint64 startedPid = 0;
+        spec.onRawOutput = [&](const QByteArray& chunk, bool) { raw += chunk; };
+        spec.onStarted = [&](qint64 pid) { startedPid = pid; };
+        auto r = runProcess(spec, CancellationToken());
+        QVERIFY(r.ok());
+        QVERIFY(startedPid > 0);
+        QVERIFY(raw.contains("progress 50%\r"));
+        QVERIFY(raw.endsWith("done\n") || raw.endsWith("done\r\n"));
+    }
+
+    void cpuLimitCanBeAppliedWhileRunning()
+    {
+        ProcessSpec spec;
+        spec.program = fwtest::helperPath();
+        spec.arguments = {QStringLiteral("sleep"), QStringLiteral("300")};
+        bool applied = false, widened = false;
+        spec.onStarted = [&](qint64 pid) {
+            applied = setProcessCpuLimit(pid, 1);
+            widened = setProcessCpuLimit(pid, 0);
+        };
+        auto r = runProcess(spec, CancellationToken());
+        QVERIFY(r.ok());
+        QVERIFY(applied);
+        QVERIFY(widened);
+        QVERIFY(!setProcessCpuLimit(0, 1));
+    }
+};
+
+QTEST_GUILESS_MAIN(TstCoreExtra)
+#include "tst_core_extra.moc"

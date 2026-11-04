@@ -30,6 +30,12 @@ struct ProcessSpec {
     OutputEncoding encoding = OutputEncoding::Utf8;
     bool keepOutput = true;       // collect output into ProcessResult
     qint64 maxKeptOutputChars = 4 * 1024 * 1024;
+    // Raw bytes as they arrive, before line splitting (tools that draw
+    // progress bars without newlines). Called on the running thread.
+    std::function<void(const QByteArray& chunk, bool isStderr)> onRawOutput;
+    // Called once right after the process started (and joined the kill-tree
+    // job object), with its process id — e.g. to apply a CPU affinity limit.
+    std::function<void(qint64 pid)> onStarted;
 };
 
 struct ProcessResult {
@@ -60,5 +66,10 @@ QString findExecutable(const QString& name, const QStringList& extraDirs = {});
 
 // Quotes a command line for logs only (never for execution).
 QString describeCommandLine(const ProcessSpec& spec);
+
+// Restricts a running process to the first `cores` logical processors
+// (0 = all). Processes it starts afterwards inherit the limit. Can be called
+// again while it runs. Returns false if the limit could not be applied.
+bool setProcessCpuLimit(qint64 pid, int cores);
 
 } // namespace fw

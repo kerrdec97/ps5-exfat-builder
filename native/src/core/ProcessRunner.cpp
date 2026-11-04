@@ -8,15 +8,19 @@
 #include <QProcess>
 #include <QStandardPaths>
 
+#include <algorithm>
 #include <atomic>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #else
 #include <csignal>
+#include <sched.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
+
+#include <QThread>
 
 namespace fw {
 
@@ -48,6 +52,41 @@ QString findExecutable(const QString& name, const QStringList& extraDirs)
     if (found.isEmpty())
         found = QStandardPaths::findExecutable(name);
     return found;
+}
+
+bool setProcessCpuLimit(qint64 pid, int cores)
+{
+    if (pid <= 0)
+        return false;
+    const int total = std::max(1, QThread::idealThreadCount());
+    const int n = (cores <= 0 || cores >= total) ? total : cores;
+#ifdef Q_OS_WIN
+    HANDLE h = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!h)
+        return false;
+    DWORD_PTR processMask = 0, systemMask = 0;
+    BOOL ok = GetProcessAffinityMask(h, &processMask, &systemMask);
+    if (ok) {
+        DWORD_PTR mask = 0;
+        int picked = 0;
+        for (int bit = 0; bit < int(sizeof(DWORD_PTR) * 8) && picked < n; ++bit) {
+            const DWORD_PTR b = DWORD_PTR(1) << bit;
+            if (systemMask & b) {
+                mask |= b;
+                ++picked;
+            }
+        }
+        ok = mask != 0 && SetProcessAffinityMask(h, mask);
+    }
+    CloseHandle(h);
+    return ok != FALSE;
+#else
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int i = 0; i < n && i < CPU_SETSIZE; ++i)
+        CPU_SET(i, &set);
+    return sched_setaffinity(pid_t(pid), sizeof(set), &set) == 0;
+#endif
 }
 
 QString describeCommandLine(const ProcessSpec& spec)
@@ -187,6 +226,8 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
 #ifdef Q_OS_WIN
     jobObject.assign(pid);
 #endif
+    if (spec.onStarted)
+        spec.onStarted(pid);
 
     std::atomic<bool> cancelRequested{false};
     auto killTree = [&, pid] {
@@ -234,9 +275,18 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     bool killed = false;
     while (proc.state() != QProcess::NotRunning) {
         proc.waitForReadyRead(100);
-        outSplit.feed(proc.readAllStandardOutput(), handleOut);
-        if (!spec.mergeStderr)
-            errSplit.feed(proc.readAllStandardError(), handleErr);
+        {
+            const QByteArray out = proc.readAllStandardOutput();
+            if (spec.onRawOutput && !out.isEmpty())
+                spec.onRawOutput(out, false);
+            outSplit.feed(out, handleOut);
+        }
+        if (!spec.mergeStderr) {
+            const QByteArray err = proc.readAllStandardError();
+            if (spec.onRawOutput && !err.isEmpty())
+                spec.onRawOutput(err, true);
+            errSplit.feed(err, handleErr);
+        }
 
         if (!killed && cancelRequested.load()) {
             killed = true;
@@ -256,10 +306,18 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
         if (killed)
             proc.waitForFinished(5000);
     }
-    outSplit.feed(proc.readAllStandardOutput(), handleOut);
-    outSplit.finish(handleOut);
+    {
+        const QByteArray out = proc.readAllStandardOutput();
+        if (spec.onRawOutput && !out.isEmpty())
+            spec.onRawOutput(out, false);
+        outSplit.feed(out, handleOut);
+        outSplit.finish(handleOut);
+    }
     if (!spec.mergeStderr) {
-        errSplit.feed(proc.readAllStandardError(), handleErr);
+        const QByteArray err = proc.readAllStandardError();
+        if (spec.onRawOutput && !err.isEmpty())
+            spec.onRawOutput(err, true);
+        errSplit.feed(err, handleErr);
         errSplit.finish(handleErr);
     }
 

@@ -31,7 +31,7 @@ int MainWindow::screenshotAllPages(const QString& dir)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
-    if (m_ctx.queue().isBusy()) {
+    if (m_ctx.queue().isBusy() && m_ctx.settings().value(QStringLiteral("general.confirmCloseWhileBusy")).toBool()) {
         const auto answer = QMessageBox::question(this, QStringLiteral("Stop running jobs?"),
                                                   QStringLiteral("Jobs are still running. Closing stops them; their partial output is removed."),
                                                   QMessageBox::Cancel | QMessageBox::Close, QMessageBox::Cancel);
