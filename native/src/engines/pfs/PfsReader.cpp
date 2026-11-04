@@ -93,24 +93,6 @@ private:
     QString m_name;
 };
 
-class MemoryByteSource final : public ByteSource {
-public:
-    MemoryByteSource(QByteArray data, QString name) : m_data(std::move(data)), m_name(std::move(name)) {}
-    qint64 size() const override { return m_data.size(); }
-    Status readAt(qint64 offset, char* dst, qint64 len) override
-    {
-        if (offset < 0 || len < 0 || offset + len > m_data.size())
-            return Error(ErrorCode::CorruptData, QStringLiteral("Read past the end of %1.").arg(m_name));
-        std::memcpy(dst, m_data.constData() + offset, size_t(len));
-        return success();
-    }
-    QString describe() const override { return m_name; }
-
-private:
-    QByteArray m_data;
-    QString m_name;
-};
-
 // The image's bytes as the header describes them (a short tail reads as zeros).
 class ImageView final : public ByteSource {
 public:
@@ -286,50 +268,6 @@ Status PfsImage::readBytes(qint64 offset, char* dst, qint64 len) const
     return success();
 }
 
-Result<std::vector<qint64>> PfsImage::signedBlocks(const Inode& ino) const
-{
-    // resolve_signed_inode_blocks
-    const qint64 bs = m_header.blockSize;
-    const int bits = m_header.inodeBits();
-    const int entry = kSigSize + (bits == 64 ? 8 : 4);
-    const qint64 perBlock = bs / entry;
-    std::vector<qint64> blocks;
-    const qint64 direct = std::min<qint64>(ino.blocks, kMaxDirectBlocks);
-    for (qint64 i = 0; i < direct; ++i)
-        blocks.push_back(ino.db[size_t(i)]);
-    qint64 remaining = qint64(ino.blocks) - direct;
-    QByteArray rec(qsizetype(bs), Qt::Uninitialized);
-    auto records = [&](qint64 block, qint64 take, std::vector<qint64>& out) -> Status {
-        if (block <= 0 || block >= m_header.ndblock)
-            return damaged(QStringLiteral("inode %1 has an invalid indirect block").arg(ino.number), describe());
-        FW_TRY(readBytes(block * bs, rec.data(), bs));
-        for (qint64 i = 0; i < take && i < perBlock; ++i) {
-            const char* p = rec.constData() + i * entry + kSigSize;
-            out.push_back(bits == 64 ? getI64(p) : getI32(p));
-        }
-        return success();
-    };
-    if (remaining > 0) {
-        const qint64 take = std::min(remaining, perBlock);
-        FW_TRY(records(ino.ib[0], take, blocks));
-        remaining -= take;
-    }
-    if (remaining > 0) {
-        std::vector<qint64> parents;
-        FW_TRY(records(ino.ib[1], perBlock, parents));
-        for (qint64 child : parents) {
-            if (remaining <= 0)
-                break;
-            const qint64 take = std::min(remaining, perBlock);
-            FW_TRY(records(child, take, blocks));
-            remaining -= take;
-        }
-    }
-    if (remaining > 0)
-        return damaged(QStringLiteral("inode %1 uses an unsupported indirection depth").arg(ino.number), describe());
-    return blocks;
-}
-
 Result<QByteArray> PfsImage::readPayload(const Inode& ino) const
 {
     if (ino.blocks == 0)
@@ -341,18 +279,6 @@ Result<QByteArray> PfsImage::readPayload(const Inode& ino) const
     if (stored > 256LL * 1024 * 1024)
         return damaged(QStringLiteral("inode %1 metadata is implausibly large").arg(ino.number), describe());
     QByteArray data(qsizetype(stored), Qt::Uninitialized);
-    if (m_header.isSigned()) {
-        FW_TRY_ASSIGN(const std::vector<qint64> blocks, signedBlocks(ino));
-        qint64 off = 0;
-        for (qint64 b : blocks) {
-            if (off >= stored)
-                break;
-            const qint64 take = std::min(bs, stored - off);
-            FW_TRY(readBytes(b * bs, data.data() + off, take));
-            off += take;
-        }
-        return data;
-    }
     FW_TRY(readBytes(ino.db[0] * bs, data.data(), stored));
     return data;
 }
@@ -384,6 +310,10 @@ Status PfsImage::parse()
         return Error(ErrorCode::Unsupported,
                      QStringLiteral("%1 is an encrypted PFS image. Encrypted images are not supported.")
                          .arg(QFileInfo(name).fileName()));
+    if (H.mode & kModeSigned)
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 is a signed PFS image. Signed images are not supported.")
+                         .arg(QFileInfo(name).fileName()));
     const qint64 bs = H.blockSize;
     if (bs < 0x400 || bs > 0x100000 || (bs & (bs - 1)) != 0)
         return damaged(QStringLiteral("invalid block size %1").arg(bs), name);
@@ -391,9 +321,7 @@ Status PfsImage::parse()
         m_warnings << QStringLiteral("header read-only byte is %1, expected 1").arg(H.readonly);
     if (H.version != kVersionPs4 && H.version != kVersionPs5)
         m_warnings << QStringLiteral("unknown PFS version %1").arg(H.version);
-    const bool isSigned = H.isSigned();
-    const int bits = isSigned ? H.inodeBits() : 32;
-    const int isz = inodeSizeFor(isSigned, bits);
+    const int isz = kInodeD32Size;
     const qint64 perBlock = bs / isz;
     if (perBlock <= 0 || H.inodeBlockCount < 1 || H.inodeCount < 3 || H.inodeCount > H.inodeBlockCount * perBlock
         || H.ndblock <= 1 + H.inodeBlockCount || H.ndblock > (qint64(1) << 40) / bs || H.inodeCount > 50'000'000)
@@ -415,7 +343,7 @@ Status PfsImage::parse()
     for (qint64 b = 0; b < H.inodeBlockCount && qint64(m_inodes.size()) < H.inodeCount; ++b) {
         FW_TRY(readBytes((1 + b) * bs, block.data(), bs));
         for (qint64 i = 0; i < perBlock && qint64(m_inodes.size()) < H.inodeCount; ++i)
-            m_inodes.push_back(parseInode(block.constData() + i * isz, quint32(m_inodes.size()), isSigned, bits));
+            m_inodes.push_back(parseInode(block.constData() + i * isz, quint32(m_inodes.size()), false, 32));
     }
 
     // ---- validate_inode_layout ----
@@ -442,14 +370,12 @@ Status PfsImage::parse()
                             .arg(H.ndblock));
             ranges.push_back({start, end, ino.number});
         }
-        if (!isSigned) {
-            std::sort(ranges.begin(), ranges.end(), [](const Range& a, const Range& b) {
-                return a.start != b.start ? a.start < b.start : a.ino < b.ino;
-            });
-            for (size_t i = 1; i < ranges.size(); ++i)
-                if (ranges[i].start <= ranges[i - 1].end)
-                    problem(QStringLiteral("inodes %1 and %2 overlap").arg(ranges[i - 1].ino).arg(ranges[i].ino));
-        }
+        std::sort(ranges.begin(), ranges.end(), [](const Range& a, const Range& b) {
+            return a.start != b.start ? a.start < b.start : a.ino < b.ino;
+        });
+        for (size_t i = 1; i < ranges.size(); ++i)
+            if (ranges[i].start <= ranges[i - 1].end)
+                problem(QStringLiteral("inodes %1 and %2 overlap").arg(ranges[i - 1].ino).arg(ranges[i].ino));
     }
     if (!m_problems.isEmpty())
         return damaged(m_problems.front(), name, m_problems);
@@ -683,22 +609,6 @@ Status PfsImage::readFile(const Inode& ino, const Sink& sink, const Cancellation
     if (ino.blocks == 0 || logical <= 0)
         return success();
     const qint64 bs = m_header.blockSize;
-    if (m_header.isSigned()) {
-        FW_TRY_ASSIGN(const QByteArray payload, readPayload(ino));
-        if (!ino.isCompressed())
-            return sink(payload.constData(), std::min<qint64>(logical, payload.size()));
-        auto mem = std::make_shared<MemoryByteSource>(payload, describe());
-        FW_TRY_ASSIGN(auto reader, PfscReader::open(mem, 0, payload.size(), logical));
-        QByteArray out(qsizetype(kPfscBlock), Qt::Uninitialized);
-        qint64 emitted = 0;
-        for (qint64 b = 0; b < reader->blockCount() && emitted < logical; ++b) {
-            FW_TRY(reader->decodeBlock(b, out.data()));
-            const qint64 take = std::min(kPfscBlock, logical - emitted);
-            FW_TRY(sink(out.constData(), take));
-            emitted += take;
-        }
-        return success();
-    }
     const qint64 base = ino.db[0] * bs;
     if (!ino.isCompressed()) {
         if (qint64(ino.blocks) * bs < logical)
@@ -745,15 +655,6 @@ Result<std::shared_ptr<ByteSource>> PfsImage::openFile(const Inode& ino) const
     const qint64 logical = ino.logicalSize();
     const qint64 bs = m_header.blockSize;
     const QString name = describe() + QStringLiteral(" (inode %1)").arg(ino.number);
-    if (m_header.isSigned()) {
-        // Signed payloads are size-limited by their layout: decode them in memory.
-        QByteArray all;
-        FW_TRY(readFile(ino, [&](const char* d, qint64 l) {
-            all.append(d, l);
-            return success();
-        }, CancellationToken()));
-        return std::shared_ptr<ByteSource>(std::make_shared<MemoryByteSource>(all, name));
-    }
     auto view = std::make_shared<ImageView>(this);
     if (!ino.isCompressed())
         return std::shared_ptr<ByteSource>(std::make_shared<SubSource>(view, ino.db[0] * bs, logical, name));

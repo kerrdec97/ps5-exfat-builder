@@ -9,8 +9,9 @@
 // validate_fpt_maps, orphan check) and iter_inode_logical_blocks.
 // GPL-3.0-or-later.
 //
-// Damage is reported as ErrorCode::CorruptData. Encrypted images are not
-// supported (ErrorCode::Unsupported).
+// Damage is reported as ErrorCode::CorruptData. Signed and encrypted images
+// are not supported (ErrorCode::Unsupported): no tool available here produces
+// them (Lazy_MkPFS's signed build path fails), so that code could not be tested.
 
 #include "core/Cancellation.h"
 #include "core/Result.h"
@@ -108,7 +109,6 @@ private:
     PfsImage() = default;
     Status parse();
     Result<QByteArray> readPayload(const Inode& inode) const;
-    Result<std::vector<qint64>> signedBlocks(const Inode& inode) const;
     void problem(const QString& what) { m_problems << what; }
 
     std::shared_ptr<ByteSource> m_source;
