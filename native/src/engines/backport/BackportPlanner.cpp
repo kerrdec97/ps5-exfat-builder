@@ -1,5 +1,6 @@
 #include "engines/backport/BackportPlanner.h"
 
+#include "engines/backport/CanonicalTrio.h"
 #include "engines/backport/RightSprx.h"
 
 #include "core/FileUtil.h"
@@ -370,6 +371,66 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
         add(Code::Ok, Severity::Info,
             QStringLiteral("The dump's own fakelib/ (%1 files) is carried over unchanged; no fakelib set was chosen.")
                 .arg(scan.fakelibFiles.size()));
+    }
+
+    // The owner's canonical AGC/AGCDriver/PSML trio (CanonicalTrio.h): one of
+    // those exact files in the game's fakelib/ means the folder was backported
+    // before, so its files are not originals (the Backport GUI refuses too).
+    {
+        QStringList pinnedHere;
+        for (const QString& rel : scan.fakelibFiles) {
+            const QString name = rel.section(u'/', -1);
+            if (rel.count(u'/') != 1 || !isCanonicalTrioName(name))
+                continue; // root fakelib/ only
+            const QString path = joinPath(game, rel);
+            const qint64 size = QFileInfo(path).size();
+            if (std::none_of(kCanonicalTrio.begin(), kCanonicalTrio.end(),
+                             [size](const PinnedLibrary& p) { return p.size == size; }))
+                continue; // only size matches are hashed
+            auto h = sha256File(path, token);
+            if (!h.ok()) {
+                if (h.error().isCancelled())
+                    return h.takeError();
+                continue;
+            }
+            if (canonicalTrioMember(name, size, h.value()))
+                pinnedHere << rel;
+        }
+        if (!pinnedHere.isEmpty())
+            add(Code::AlreadyBackported, Severity::Refuse,
+                QStringLiteral("This game folder already contains backport files (%1 of the canonical fakelib set). "
+                               "Use an unmodified game folder, or restore its originals first.")
+                    .arg(listFiles(pinnedHere)),
+                pinnedHere);
+    }
+    // Dump note (the owner's engine, make_baseline.unsigned_fakelibs): a plain
+    // decoded ELF among the dump's own fakelib/ libraries is kept as it is.
+    // Several confirmed-working backports ship such providers; it is only a
+    // lead when the game fails to start (PRX_PROCESS_STARTUP_FAILURE 0xa0020104).
+    {
+        QStringList plain;
+        for (const ExecFile& e : scan.executables)
+            if (e.area == Area::Fakelib && e.cls == FileClass::Elf && e.rel.count(u'/') == 1
+                && e.rel.startsWith(QStringLiteral("fakelib/"), Qt::CaseInsensitive)
+                && !isCanonicalTrioName(e.rel.section(u'/', -1)))
+                plain << e.rel;
+        if (!plain.isEmpty())
+            add(Code::Ok, Severity::Info,
+                QStringLiteral("Dump note: plain (not signed) ELF libraries in fakelib/ are kept as they are: %1. "
+                               "Several working backports ship such libraries; if the game fails to start with "
+                               "PRX_PROCESS_STARTUP_FAILURE (0xa0020104), check these first.")
+                    .arg(listFiles(plain)),
+                plain);
+    }
+    if (plan.fakelib) {
+        int pinned = 0;
+        for (const FakelibLib& l : plan.fakelib->libs)
+            if (canonicalTrioMember(l.name, l.size, l.sha256))
+                ++pinned;
+        if (pinned == int(kCanonicalTrio.size()))
+            add(Code::Ok, Severity::Info,
+                QStringLiteral("The fakelib folder holds the canonical AGC/AGCDriver/PSML trio (all three match their "
+                               "pinned SHA-256)."));
     }
 
     // S10 / S30 / S28: ZIP folders.

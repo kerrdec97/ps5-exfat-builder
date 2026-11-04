@@ -10,6 +10,7 @@
 #include "engines/backport/BackportJobs.h"
 #include "engines/backport/BackportPlanner.h"
 #include "engines/backport/BackportSettings.h"
+#include "engines/backport/CanonicalTrio.h"
 #include "engines/backport/Module.h"
 #include "engines/backport/ModuleImports.h"
 #include "engines/backport/RunReport.h"
@@ -315,6 +316,51 @@ private slots:
                      .value()
                      ->validate(SettingsValues(schema, values, {}))
                      .ok());
+    }
+
+    // ---- canonical trio pins and the plain-ELF dump note (CanonicalTrio.h) ---------------
+
+    void canonicalTrioIsMatchedByNameSizeAndHash()
+    {
+        QCOMPARE(int(kCanonicalTrio.size()), 3);
+        QVERIFY(isCanonicalTrioName(QStringLiteral("LIBSCEAGCDRIVER.SPRX")));
+        QVERIFY(!isCanonicalTrioName(QStringLiteral("libSceAmpr.sprx")));
+        const PinnedLibrary* agc = canonicalTrioMember(
+            QStringLiteral("libsceagc.sprx"), 326986,
+            QStringLiteral("EACE8AC152404132E632A7E170DDCCA47F230E7C0C02CD4B76F29CA9604037FF"));
+        QVERIFY(agc);
+        QCOMPARE(QLatin1String(agc->name), QLatin1String("libSceAgc.sprx"));
+        QVERIFY(!canonicalTrioMember(QStringLiteral("libSceAgc.sprx"), 326985, QLatin1String(agc->sha256)));
+        QVERIFY(!canonicalTrioMember(QStringLiteral("libScePsml.sprx"), 326986, QLatin1String(agc->sha256)));
+    }
+
+    void aSameSizedLookAlikeIsNotTakenForTheTrio()
+    {
+        Env e;
+        QByteArray fake = f2(5);
+        fake.append(QByteArray(326986 - fake.size(), '\0')); // the pinned size, other content
+        QVERIFY(writeBytes(e.game + "/fakelib/libSceAgc.sprx", fake));
+        auto p = planBackport(e.options(), CancellationToken());
+        QVERIFY(p.ok());
+        for (const Issue& i : p->issues)
+            QVERIFY2(!(i.code == Code::AlreadyBackported && i.message.contains(QStringLiteral("canonical"))),
+                     qPrintable(i.message));
+    }
+
+    void plainElfFakelibIsANoteNotARefusal()
+    {
+        Env e(OtherFakelib);
+        QVERIFY(writeBytes(e.game + "/fakelib/libSceAmpr.sprx", f2(88))); // decoded ELF, as some dumps ship it
+        auto p = planBackport(e.options(false), CancellationToken());
+        QVERIFY(p.ok());
+        const Issue* note = nullptr;
+        for (const Issue& i : p->issues)
+            if (i.message.startsWith(QStringLiteral("Dump note")))
+                note = &i;
+        QVERIFY(note);
+        QCOMPARE(note->severity, Severity::Info);
+        QCOMPARE(note->files, QStringList{QStringLiteral("fakelib/libSceAmpr.sprx")}); // the SELF libSceAgc is not listed
+        QVERIFY(p->canRun());
     }
 };
 
