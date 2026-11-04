@@ -833,7 +833,7 @@ private slots:
             QVERIFY(!d->description.isEmpty());
             ++n;
         }
-        QCOMPARE(n, 12);
+        QCOMPARE(n, 13);
         QVERIFY(!mod.schema->normalize(keys::kFtpPort, 70000).ok());
         QVERIFY(!mod.schema->normalize(keys::kGamesFolder, QStringLiteral("data/x")).ok());
         QVERIFY(!mod.schema->normalize(keys::kConsoleIp, QStringLiteral("not an ip!")).ok());

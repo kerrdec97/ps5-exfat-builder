@@ -1,11 +1,15 @@
 // AMPRIDX3 builder. Port of Lazy_MkPFS lazy_mkpfs/ampr_index.py
 // (Nazky; format from the AMPR resolver's build_ampr_index.py). GPL-3.0-or-later.
+// The stand-alone tool's row rules follow drakmor ampr_emu
+// tools/build_ampr_index.py (current upstream, GPL-3.0).
 
 #include "engines/pfs/AmprIndex.h"
 
+#include "core/FileUtil.h"
 #include "engines/pfs/PfsFormat.h"
 
 #include <algorithm>
+#include <map>
 #include <set>
 
 namespace fw::pfs {
@@ -116,6 +120,71 @@ QByteArray buildAmprIndex(const std::vector<AmprRow>& input)
         putU32(s + 12, slot.flags);
         s += 16;
     }
+    return out;
+}
+
+// ---- the stand-alone tool --------------------------------------------------------------
+
+bool amprToolSkips(const QByteArray& indexedPath)
+{
+    static const std::set<QByteArray> own = {
+        QByteArrayLiteral("/app0/ampr_emu.index"),     QByteArrayLiteral("/app0/ampr_emu.index.tmp"),
+        QByteArrayLiteral("/app0/ampr_emu.index.bak"), QByteArrayLiteral("/app0/ampr_commands.bin"),
+        QByteArrayLiteral("/app0/apr_emu.log"),
+    };
+    return own.count(keyFor(indexedPath)) > 0;
+}
+
+AmprToolRows amprToolRows(std::vector<AmprFile> files)
+{
+    // Byte order of the relative paths decides which of two case-only
+    // variants is kept, whatever order the folder was walked in.
+    std::stable_sort(files.begin(), files.end(), [](const AmprFile& a, const AmprFile& b) {
+        return std::lexicographical_compare(a.relPath.begin(), a.relPath.end(), b.relPath.begin(), b.relPath.end(),
+                                            [](char x, char y) { return quint8(x) < quint8(y); });
+    });
+    AmprToolRows out;
+    std::map<QByteArray, QByteArray> seen; // key -> kept path
+    for (const AmprFile& f : files) {
+        const QByteArray indexed = QByteArrayLiteral("/app0/") + f.relPath;
+        if (amprToolSkips(indexed)) {
+            out.skippedOwn << QString::fromUtf8(f.relPath);
+            continue;
+        }
+        if (indexed.contains('\t') || indexed.contains('\n') || indexed.contains('\r')) {
+            out.skippedControl << QString::fromUtf8(f.relPath);
+            continue;
+        }
+        const QByteArray key = keyFor(indexed);
+        const auto it = seen.find(key);
+        if (it != seen.end()) {
+            out.collisions << QStringLiteral("%1 <- %2").arg(QString::fromUtf8(it->second), QString::fromUtf8(indexed));
+            continue;
+        }
+        seen.emplace(key, indexed);
+        out.rows.push_back({f.size, f.mtime, indexed});
+    }
+    return out;
+}
+
+bool hasAmprLibrary(const std::vector<AmprFile>& files)
+{
+    return std::any_of(files.begin(), files.end(),
+                       [](const AmprFile& f) { return asciiLower(f.relPath) == "fakelib/libsceampr.sprx"; });
+}
+
+Result<AmprLocalScan> scanAmprFolder(const QString& folder, const CancellationToken& token)
+{
+    FW_TRY_ASSIGN(FileTree tree, scanTree(folder, token));
+    AmprLocalScan out;
+    out.folders = int(tree.dirCount) + 1;
+    out.files.reserve(size_t(tree.fileCount));
+    for (const FileEntry& e : tree.entries) {
+        if (e.isDir)
+            continue;
+        out.files.push_back({e.relativePath.toUtf8(), e.size, e.modified.toSecsSinceEpoch()});
+    }
+    out.hasAmprLibrary = hasAmprLibrary(out.files);
     return out;
 }
 
