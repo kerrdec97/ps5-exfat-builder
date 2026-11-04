@@ -1,1 +1,1 @@
-fw_add_module(fw_engine_exfat DEPENDS fw_engine_gameinfo)
+fw_add_module(fw_engine_exfat DEPENDS fw_engine_gameinfo fw_engine_general)
