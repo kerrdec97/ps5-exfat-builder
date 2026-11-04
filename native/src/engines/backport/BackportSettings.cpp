@@ -3,6 +3,8 @@
 #include "core/Log.h"
 
 #include <QDir>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QFileInfo>
 
 namespace fw::backport {
@@ -283,7 +285,21 @@ void registerBackportSettings(SettingsSchema& s)
     s.addLegacyKey(QStringLiteral("abp_notes"), keys::kNotes, [](const QVariant& v) -> std::optional<QVariant> {
         return QVariant(v.toString().left(kMaxNotesLength));
     });
-    s.addLegacyKey(QStringLiteral("bp_folders"), keys::kScanFolders);
+    // bp_folders (list) and bp_scan_folder (single folder) both feed the scan
+    // folder list: merged by a whole-file importer instead of a per-key map.
+    s.addLegacyImporter([](const QJsonObject& legacy) {
+        QStringList folders;
+        for (const QJsonValue& v : legacy.value(QStringLiteral("bp_folders")).toArray())
+            if (!v.toString().trimmed().isEmpty() && !folders.contains(v.toString().trimmed(), Qt::CaseInsensitive))
+                folders << v.toString().trimmed();
+        const QString single = legacy.value(QStringLiteral("bp_scan_folder")).toString().trimmed();
+        if (!single.isEmpty() && !folders.contains(single, Qt::CaseInsensitive))
+            folders << single;
+        QVariantMap out;
+        if (!folders.isEmpty())
+            out.insert(keys::kScanFolders, folders);
+        return out;
+    });
 }
 
 BackportOptions optionsFromSettings(const SettingsValues& v, const QString& game)

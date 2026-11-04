@@ -288,7 +288,7 @@ Status Writer::addDirectory(const QString& archiveName, const QDateTime& modifie
                       CancellationToken(), nullptr);
 }
 
-Status Writer::finish()
+Status Writer::finish(bool verifyBeforeCommit, const CancellationToken& token)
 {
     if (m_finished)
         return success();
@@ -369,6 +369,20 @@ Status Writer::finish()
     if (!m_file.flush())
         return ioError(QStringLiteral("Could not write %1.").arg(QFileInfo(m_path).fileName()), m_file);
     m_file.close();
+    if (verifyBeforeCommit) {
+        Reader r;
+        Status st = r.open(m_part->partPath());
+        if (st.ok() && r.entries().size() != m_entries.size())
+            st = Error(ErrorCode::CorruptData, QStringLiteral("The archive lost entries while it was written."));
+        if (st.ok())
+            st = r.verifyAll(token);
+        if (!st.ok()) {
+            m_part->abandon();
+            return Error(ErrorCode::VerificationFailed,
+                         QStringLiteral("%1 did not pass its read-back check and was deleted.").arg(QFileInfo(m_path).fileName()),
+                         st.error().toLogString());
+        }
+    }
     FW_TRY(m_part->commit(m_replace));
     m_finished = true;
     return success();

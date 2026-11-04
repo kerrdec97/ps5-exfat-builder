@@ -78,7 +78,9 @@ public:
     // Coerces `value` to the setting's type. Returns an error message for
     // values that cannot be accepted (wrong type, out of range, unknown choice,
     // custom validator failure).
-    Result<QVariant> normalize(const QString& key, const QVariant& value) const;
+    // `runValidator` = false applies only type/range/choice checks: used when
+    // loading, so e.g. a folder on an unplugged drive is kept, not reset.
+    Result<QVariant> normalize(const QString& key, const QVariant& value, bool runValidator = true) const;
 
     // Legacy (Python app) key mapping for importLegacy().
     using LegacyConverter = std::function<std::optional<QVariant>(const QVariant&)>;
@@ -89,10 +91,17 @@ public:
     };
     const std::map<QString, LegacyMapping>& legacyKeys() const { return m_legacy; }
 
+    // Whole-file legacy importers, for settings that combine several legacy
+    // keys (e.g. merging two folder lists). Return new-key → value.
+    using LegacyImporter = std::function<QVariantMap(const QJsonObject& legacyFile)>;
+    void addLegacyImporter(LegacyImporter importer) { m_importers.push_back(std::move(importer)); }
+    const std::vector<LegacyImporter>& legacyImporters() const { return m_importers; }
+
 private:
     std::vector<SettingDef> m_defs;
     std::map<QString, std::size_t> m_index;
     std::map<QString, LegacyMapping> m_legacy;
+    std::vector<LegacyImporter> m_importers;
 };
 
 class SettingsValues {

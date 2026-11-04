@@ -10,6 +10,8 @@ following third-party components. Full licence texts are in LICENSES/.
 | zlib | Compression | zlib licence |
 | Lazy_MkPFS / PSBrew MkPFS | The PFS/FFPFSC engine is a C++ port of this code | GPL-3.0 |
 | UFS2Tool (SvenGDK) | The UFS2/FFPKG engine follows its image layout | BSD-2-Clause (LICENSES/UFS2Tool-BSD-2-Clause.txt) |
+| make_fself (john-tornblom, modified by Nazky) | The Backport engine's fake-SELF writer/reader (`SelfFormat.h`, `SelfWriter.*`, `SelfReader.*`) is a port | GPL-3.0 |
+| LibProsperoPKG (SvenGDK) | Facts used by the FPKG engine: PS5 flat-path hash, UCP layout | GPL-3.0-or-later |
 | Lucide icons | Interface icons | ISC (LICENSES/Lucide-ISC.txt) |
 
 No Sony software is included. FPKG packages are built with the user's own

@@ -79,6 +79,16 @@ private slots:
         QVERIFY(text && text->method == zip::Method::Deflate && text->compressedSize < 2000);
     }
 
+    void verifyBeforeCommit()
+    {
+        const QString z = m_root.filePath(QStringLiteral("verified.zip"));
+        zip::Writer w;
+        QVERIFY(w.open(z).ok());
+        QVERIFY(w.addData(QStringLiteral("a.txt"), QByteArray(100000, 'v')).ok());
+        QVERIFY(w.finish(true).ok());
+        QVERIFY(QFile::exists(z) && !QFile::exists(z + QStringLiteral(".part")));
+    }
+
     void neverOverwritesWithoutConsent()
     {
         const QString z = makeSample(QStringLiteral("b.zip"));

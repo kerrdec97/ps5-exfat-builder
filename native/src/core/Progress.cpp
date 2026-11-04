@@ -28,7 +28,7 @@ void ProgressReporter::beginPhase(int index, qint64 total, qint64 filesTotal, bo
 {
     {
         std::lock_guard lock(m_mutex);
-        m_phaseIndex = std::clamp(index, 0, int(m_phaseNames.size()) - 1);
+        m_phaseIndex = std::clamp(index, 0, std::max(0, int(m_phaseNames.size()) - 1));
         m_total = std::max<qint64>(0, total);
         m_filesTotal = std::max<qint64>(0, filesTotal);
         m_unitIsBytes = unitIsBytes;

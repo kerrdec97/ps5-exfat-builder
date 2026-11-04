@@ -53,8 +53,10 @@ public:
                    const QDateTime& modified = QDateTime::currentDateTime());
     Status addDirectory(const QString& archiveName, const QDateTime& modified = QDateTime::currentDateTime());
 
-    // Writes the central directory, flushes and renames .part → final.
-    Status finish();
+    // Writes the central directory and flushes. With `verifyBeforeCommit`, the
+    // finished .part archive is read back in full (CRC and size of every
+    // entry) before it is renamed to its final name; a failure deletes it.
+    Status finish(bool verifyBeforeCommit = false, const CancellationToken& token = {});
 
     const std::vector<Entry>& entries() const { return m_entries; }
     QString path() const { return m_path; }

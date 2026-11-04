@@ -93,7 +93,7 @@ QStringList SettingsSchema::sections() const
     return out;
 }
 
-Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& value) const
+Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& value, bool runValidator) const
 {
     const SettingDef* def = find(key);
     if (!def)
@@ -161,7 +161,7 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
         break;
     }
 
-    if (def->validator) {
+    if (runValidator && def->validator) {
         const QString why = def->validator(out);
         if (!why.isEmpty())
             return bad(why);
@@ -256,7 +256,7 @@ Status SettingsStore::load()
                     warnings << QStringLiteral("Ignored unknown setting \"%1\".").arg(it.key());
                     continue;
                 }
-                auto norm = m_schema->normalize(it.key(), it.value().toVariant());
+                auto norm = m_schema->normalize(it.key(), it.value().toVariant(), /*runValidator=*/false);
                 if (!norm.ok()) {
                     warnings << QStringLiteral("Reset \"%1\" to its default: %2").arg(it.key(), norm.error().message);
                     continue;
@@ -410,6 +410,16 @@ Result<int> SettingsStore::importLegacy(const QString& legacySettingsPath)
         else
             Logger::instance().log(LogLevel::Warning, QStringLiteral("settings"),
                                    QStringLiteral("Legacy setting %1 not imported (invalid value)").arg(legacyKey));
+    }
+    for (const auto& importer : m_schema->legacyImporters()) {
+        const QVariantMap values = importer(o);
+        for (auto it = values.cbegin(); it != values.cend(); ++it) {
+            if (setValue(it.key(), it.value()).ok())
+                ++imported;
+            else
+                Logger::instance().log(LogLevel::Warning, QStringLiteral("settings"),
+                                       QStringLiteral("Legacy value for %1 not imported (invalid value)").arg(it.key()));
+        }
     }
     return imported;
 }

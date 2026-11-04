@@ -190,6 +190,37 @@ private slots:
         QCOMPARE(store.value(general::keys::kLogLevel).toString(), QStringLiteral("debug"));
     }
 
+    void folderOnMissingDriveIsKeptAtLoad()
+    {
+        fwtest::Registry reg;
+        const QString path = m_root.filePath(QStringLiteral("s7/settings.json"));
+        const QString gone = m_root.filePath(QStringLiteral("unplugged-drive/Images"));
+        QVERIFY(fwtest::writeTextFile(path, QStringLiteral(R"({"schemaVersion":1,"values":{"storage.defaultOutputFolder":"%1"}})").arg(gone).toUtf8()));
+        SettingsStore store(reg.schema, path);
+        QVERIFY(store.load().ok());
+        QCOMPARE(store.value(general::keys::kDefaultOutputDir).toString(), gone); // kept
+        QVERIFY(store.loadWarnings().isEmpty());
+        QVERIFY(!store.setValue(general::keys::kDefaultOutputDir, gone).ok()); // but cannot be chosen now
+    }
+
+    void legacyImportersSeeTheWholeFile()
+    {
+        fwtest::Registry reg;
+        const QString legacy = m_root.filePath(QStringLiteral("legacy2.json"));
+        const QString a = m_root.filePath(QStringLiteral("lib-a")), b = m_root.filePath(QStringLiteral("lib-b"));
+        QDir().mkpath(a);
+        QDir().mkpath(b);
+        QVERIFY(fwtest::writeTextFile(legacy, QStringLiteral(R"({"bp_folders": ["%1"], "bp_scan_folder": "%2", "shutdown_action": "sleep", "retry_count": 9})").arg(a, b).toUtf8()));
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("s8/settings.json")));
+        QVERIFY(store.load().ok());
+        auto n = store.importLegacy(legacy);
+        QVERIFY(n.ok());
+        QVERIFY(n.value() >= 3);
+        QCOMPARE(store.value(QStringLiteral("backport.scanFolders")).toStringList(), (QStringList{a, b}));
+        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("sleep"));
+        QCOMPARE(store.value(general::keys::kAutoRetryCount).toInt(), 5); // clamped
+    }
+
     void migrationsRunFromOlderVersions()
     {
         fwtest::Registry reg;
