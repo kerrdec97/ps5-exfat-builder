@@ -100,6 +100,28 @@ Embedded as base64 (`_BACKPORT_B64`, `_SRC_ARCHIVE_B64`) — the orchestration t
 drives the three tools above plus archive extraction. Part of Nazky's
 Auto-Backport work; carries the licenses of the components it invokes.
 
+### ampr_emu — AMPR file index builder (`ampr_emu.index`)
+- **Bundled as:** `ui/build_ampr_index.py` (Python source; also inside the
+  Windows executable). It writes `/app0/ampr_emu.index` during builds when
+  `fakelib/libSceAmpr.sprx` is present, and from the Advanced tab's AMPR
+  Index Builder.
+- **Author:** drakmor (Roman Tarasov) — <https://github.com/drakmor/ampr_emu>,
+  file `tools/build_ampr_index.py`
+- **License: GPL-3.0 — verified.** The upstream repository's `LICENSE` file is
+  the GPL v3 text, byte-identical to `LICENSES/GPL-3.0.txt`. Checked at
+  upstream commits `6c8d669` and `cfa85df`. The upstream file has no licence
+  notice of its own. The other ampr_emu sources are marked
+  `GPL-3.0-or-later`.
+- **Verified source:** the copy first committed here (v3.6.4) is byte-identical
+  to `tools/build_ampr_index.py` at upstream commit
+  `6c8d669eef6cd06be0504de3bd7554b1597bc916` (tag `0.3.1`, 2026-08-16).
+  Compared with upstream HEAD `cfa85df` (2026-09-06). Upstream changed the
+  file later (`0.3.4`, `0.3.6`). Those changes are not in this copy.
+- **Local modifications:** optional `progress=` and `stats_out=` parameters
+  for the UI. They default to `None`, and the index bytes written are
+  unchanged. An attribution and GPL-3.0 header was added to the file. The
+  details are in that header.
+
 ### make_image.bat / PowerShell image builder
 Embedded as base64 (`_BAT_B64`). Project's own build glue; invokes **OSFMount**
 (OSForensics) at runtime — OSFMount is **not** bundled and is installed by the
@@ -142,8 +164,9 @@ Sent to the console by the app. Separate programs — but if you redistribute th
 - **BestPig** — PS5 backport research and the BackPork/BackPort payload
   (users download BackPork themselves; it is not bundled).
 - **Nazky** — Auto-Backport pipeline and Lazy_MkPFS.
-- **drakmor** — ShadowMount+/MicroMount, and reference work used for exFAT
-  creation, DLC-emu, and the AMPR index generator.
+- **drakmor** — reference work used for exFAT creation and DLC-emu.
+  (Code by drakmor is listed above: the AMPR index builder from ampr_emu is
+  bundled, and ShadowMountPlus/MicroMount is a distributed payload.)
 - **john-tornblom** — PS5 payload SDK, the basis of the fake-signing tooling.
 - **idlesauce** — original SDK version patcher.
 - **NookieAI · stonemodder (Porkfolio)** — inspiration.
@@ -154,7 +177,8 @@ Sent to the console by the app. Separate programs — but if you redistribute th
 ## LICENSING NOTE (read before public release)
 
 This project vendors and distributes **GPL-3.0-derived code** (Lazy_MkPFS, from
-MkPFS). Under GPL-3.0's copyleft, a distributed program that incorporates GPL-3.0
+MkPFS; `ui/build_ampr_index.py`, from drakmor/ampr_emu). Under GPL-3.0's
+copyleft, a distributed program that incorporates GPL-3.0
 code is normally required to be licensed under GPL-3.0 as a whole, with complete
 corresponding source available and all notices preserved.
 
@@ -177,9 +201,9 @@ with the upstream authors and/or someone qualified before publishing.
 > **[VERIFY]** payload you distribute.
 
 ### GNU General Public License v3.0
-Applies to Lazy_MkPFS, MkPFS, ShadowMountPlus, the ps5-payload-dev SDK
-tooling, ftpsrv and klogsrv. The complete, unmodified text is in
-[`LICENSES/GPL-3.0.txt`](LICENSES/GPL-3.0.txt) (also shipped inside the
+Applies to Lazy_MkPFS, MkPFS, the ampr_emu index builder, ShadowMountPlus,
+the ps5-payload-dev SDK tooling, ftpsrv and klogsrv. The complete, unmodified
+text is in [`LICENSES/GPL-3.0.txt`](LICENSES/GPL-3.0.txt) (also shipped inside the
 executable and at `vendor/lazy_mkpfs/LICENSE`).
 
 ### UFS2Tool — BSD 2-Clause License

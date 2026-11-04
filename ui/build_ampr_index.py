@@ -1,4 +1,42 @@
 #!/usr/bin/env python3
+# ---------------------------------------------------------------------------
+# Third-party code: ampr_emu, tools/build_ampr_index.py
+#
+#   Original author: drakmor (Roman Tarasov)
+#   Upstream:        https://github.com/drakmor/ampr_emu
+#                    file tools/build_ampr_index.py
+#   Upstream commit: 6c8d669eef6cd06be0504de3bd7554b1597bc916 (tag 0.3.1,
+#                    2026-08-16). The copy first committed here (v3.6.4) is
+#                    byte-identical to the file at that commit (git blob
+#                    6083ec49cfa5b8363bd4fae54443b12da640df86). Upstream
+#                    changed the file later (0.3.4, 0.3.6). Those changes are
+#                    not in this copy. Compared with upstream HEAD cfa85df
+#                    (2026-09-06).
+#
+#   Licence: GNU General Public License, version 3 (GPL-3.0). This is the
+#   licence of the upstream repository: its LICENSE file is the GPL v3 text
+#   (checked at 6c8d669 and cfa85df). The upstream file has no licence
+#   notice of its own.
+#
+#   This program is free software: you can redistribute it and/or modify it
+#   under the terms of the GNU General Public License as published by the
+#   Free Software Foundation, version 3. It is distributed WITHOUT ANY
+#   WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+#   FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+#   details. The full text is in LICENSES/GPL-3.0.txt. See also
+#   THIRD_PARTY_NOTICES.md.
+#
+#   Local modifications (exFAT Image Builder, between v3.6.4 and v4.0.2):
+#     - build_index_local(), build_index_ftp() and collect_ftp_rows() take an
+#       optional progress= callback. The UI uses it to show scan, build and
+#       upload status. Calls are throttled with time.monotonic(), so the
+#       module imports time.
+#     - build_index_local() and build_index_ftp() take an optional
+#       stats_out= dict. It receives the folder and file counts.
+#     - This header.
+#   Both new parameters default to None. With the defaults, the functions and
+#   the command line behave as upstream 0.3.1 and write the same index bytes.
+# ---------------------------------------------------------------------------
 """
 Build /app0/ampr_emu.index for the AMPR APR file resolver.
 
