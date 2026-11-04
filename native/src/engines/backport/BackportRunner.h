@@ -36,6 +36,7 @@ struct RunResult {
     QStringList warnings;
     QStringList leftUnchanged;
     int filesRewritten = 0;
+    bool buildVerified = true; // backport.verifyBuild (V1-V3 per executable)
     QJsonObject details;
 };
 

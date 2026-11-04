@@ -259,6 +259,40 @@ private slots:
         QVERIFY(!stagingKeptIn(e.tmp.filePath("temp")).isEmpty()); // backport.keepStagingOnFailure
     }
 
+    void snapshotErrorStopsTheRun() // S13
+    {
+        Env e;
+        const QString victim = e.game + "/sce_module/libc.prx";
+        auto o = e.options();
+        o.testHook = [victim](const QString& p, const QString& i) -> Status {
+            if (p == u"build.file" && i.endsWith(QStringLiteral("libc.prx")))
+                QFile::remove(victim); // the copy of this file will fail
+            return success();
+        };
+        auto r = runBackport(o, e.ctx);
+        QVERIFY(!r.ok());
+        QCOMPARE(codeOf(r.error()), Code::Unreadable);
+        QVERIFY(r.error().message.contains(QStringLiteral("before patching")));
+        QCOMPARE(zipsIn(e.orig), QStringList());
+        QCOMPARE(zipsIn(e.bp), QStringList());
+    }
+
+    void fileChangedDuringTheRunIsRefused()
+    {
+        Env e;
+        const QString victim = e.game + "/sce_module/libc.prx";
+        auto o = e.options();
+        o.testHook = [victim](const QString& p, const QString& i) -> Status {
+            if (p == u"build.file" && i.endsWith(QStringLiteral("libc.prx")))
+                writeBytes(victim, selfOf(f2(42))); // changed after the scan hashed it
+            return success();
+        };
+        auto r = runBackport(o, e.ctx);
+        QVERIFY(!r.ok());
+        QCOMPARE(codeOf(r.error()), Code::GameChanged);
+        QCOMPARE(zipsIn(e.bp), QStringList());
+    }
+
     void verificationCatchesAParamOutsideTheSignedSegments() // V3, A.5; backport.verifyBuild
     {
         // PROCPARAM in a gap no SELF segment covers: the patch would be lost.
@@ -272,6 +306,16 @@ private slots:
         QVERIFY(!p.ok());
         QCOMPARE(codeOf(p.error()), Code::VerifyFailed);
         QVERIFY(processExecutable(elf, *sdkPair(4), NidMode::Auto, false).ok());
+        {
+            Env off;
+            writeBytes(off.game + "/eboot.bin", elf);
+            auto oo = off.options(false);
+            oo.verifyBuild = false; // the setting is read: the same file now builds
+            oo.applyToGame = false;
+            auto ro = runBackport(oo, off.ctx);
+            QVERIFY2(ro.ok(), qPrintable(ro.ok() ? QString() : ro.error().toLogString()));
+            QVERIFY(toOutcome(ro.value()).verificationDetail.contains(QStringLiteral("build checks turned off")));
+        }
 
         Env e;
         writeBytes(e.game + "/eboot.bin", elf);
@@ -510,6 +554,9 @@ private slots:
         QVERIFY(again->originalsZip.endsWith(QStringLiteral("(2).zip")));
         // findOriginalsZip picks the recorded one.
         QCOMPARE(findOriginalsZip(e.game, e.orig), again->originalsZip);
+        // S37: nothing ever deletes an originals ZIP (both are still there).
+        QVERIFY(QFileInfo::exists(r->originalsZip));
+        QVERIFY(QFileInfo::exists(again->originalsZip));
     }
 
     void restoreRefusesZipSlipBeforeWriting() // port of Restore.test_zip_slip_refused

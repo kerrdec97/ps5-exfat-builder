@@ -178,6 +178,7 @@ Result<RunResult> runBackport(const BackportOptions& optIn, JobContext& ctx)
         return result;
     }
     result.leftUnchanged = build.leftUnchanged;
+    result.buildVerified = opt.verifyBuild;
     result.filesRewritten = build.okCount();
 
     // ---- Package -----------------------------------------------------------------
@@ -425,9 +426,11 @@ JobOutcome toOutcome(const RunResult& r)
         break;
     case RunStatus::Succeeded:
         o.verification = Verification::Passed;
-        o.verificationDetail = QStringLiteral("%1 files staged and verified; ZIPs read back (CRC and SHA-256)%2.")
+        o.verificationDetail = QStringLiteral("%1 files staged%2; ZIPs read back (CRC and SHA-256)%3.")
                                    .arg(r.filesRewritten)
-                                   .arg(r.applied ? QStringLiteral("; applied files checked") : QString());
+                                   .arg(r.buildVerified ? QStringLiteral(" and verified")
+                                                        : QStringLiteral(" (build checks turned off)"),
+                                        r.applied ? QStringLiteral("; applied files checked") : QString());
         break;
     }
     return o;
