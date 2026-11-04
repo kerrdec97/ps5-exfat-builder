@@ -784,6 +784,9 @@ private slots:
         QVERIFY(job.ok());
         QVERIFY(!job.value()->validate(noIp).ok());
         QVERIFY(job.value()->validate(s).ok());
+        // The local game folder is busy while it is being read.
+        QCOMPARE(job.value()->busyPaths(), QStringList{QDir::cleanPath(QFileInfo(src).absoluteFilePath())});
+        QVERIFY(busyPathsOverlap(job.value()->busyPaths(), {QDir(src).filePath(QStringLiteral("eboot.bin"))}));
         ProgressReporter progress;
         progress.setPhases(job.value()->phases());
         JobContext ctx;

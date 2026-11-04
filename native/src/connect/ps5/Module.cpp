@@ -114,6 +114,14 @@ public:
     }
     QString subtitle() const override { return m_p.value(QStringLiteral("remoteDir")).toString(); }
     QStringList phases() const override { return {QStringLiteral("Preparing"), QStringLiteral("Uploading")}; }
+    // The local files and folders being read: no other job may rewrite them meanwhile.
+    QStringList busyPaths() const override
+    {
+        QStringList out;
+        for (const QString& s : stringArray(m_p.value(QStringLiteral("sources"))))
+            out << QDir::cleanPath(QFileInfo(s).absoluteFilePath());
+        return out;
+    }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues& s) const override

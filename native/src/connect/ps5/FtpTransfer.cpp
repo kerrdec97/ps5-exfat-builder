@@ -421,7 +421,10 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             return Outcome::Failed;
         }
         sh.mark(part);
-        const Status st = c.retrieve(f.remote, outFile, offset, advance, sh.token);
+        Status st = c.retrieve(f.remote, outFile, offset, advance, sh.token);
+        // On the drive before it can replace anything (power cut safety).
+        if (st.ok())
+            st = flushToDisk(outFile, QFileInfo(f.local).fileName());
         outFile.close();
         if (st.ok()) {
             const qint64 got = QFileInfo(part).size();
