@@ -23,6 +23,33 @@ QByteArray readFile(const QString& p)
 }
 } // namespace
 
+namespace {
+
+// A Python that really runs. On Windows the Microsoft Store "App execution
+// alias" stubs in ...\WindowsApps only print "Python was not found", so
+// those folders are not searched, and the interpreter is probed first.
+QString usablePython()
+{
+    QStringList dirs;
+    for (const QString& d : qEnvironmentVariable("PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts))
+        if (!QDir::fromNativeSeparators(d).contains(QStringLiteral("/WindowsApps"), Qt::CaseInsensitive))
+            dirs << d;
+    for (const QString& name : {QStringLiteral("python3"), QStringLiteral("python")}) {
+        const QString py = QStandardPaths::findExecutable(name, dirs);
+        if (py.isEmpty())
+            continue;
+        ProcessSpec spec;
+        spec.program = py;
+        spec.arguments = {QStringLiteral("-I"), QStringLiteral("-c"), QStringLiteral("import zipfile")};
+        auto r = runProcess(spec, CancellationToken());
+        if (r.ok() && r->exitCode == 0)
+            return py;
+    }
+    return {};
+}
+
+} // namespace
+
 class TstZip : public QObject {
     Q_OBJECT
     QTemporaryDir m_root;
@@ -209,7 +236,7 @@ private slots:
         const QString z64 = makeSample(QStringLiteral("interop64.zip"), true);
         const QString z = makeSample(QStringLiteral("interop.zip"));
         bool checked = false;
-        const QString py = QStandardPaths::findExecutable(QStringLiteral("python3"));
+        const QString py = usablePython();
         if (!py.isEmpty()) {
             for (const QString& file : {z, z64}) {
                 ProcessSpec spec;

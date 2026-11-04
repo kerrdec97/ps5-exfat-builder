@@ -11,6 +11,9 @@
 #include "jobs/JobHistory.h"
 #include "jobs/JobQueue.h"
 
+#include <QFuture>
+#include <QList>
+#include <QMutex>
 #include <QObject>
 
 #include <memory>
@@ -38,6 +41,8 @@ public:
     QString logFilePath() const;
 
     // Runs every dependency probe on a worker thread; emits dependenciesChecked.
+    // Runs one at a time (the probes share the registry), and the destructor
+    // waits for any that is still running.
     void checkDependenciesAsync();
 
     static AppContext* instance();
@@ -60,6 +65,10 @@ private:
     std::shared_ptr<RingBufferSink> m_ring;
     std::shared_ptr<FileLogSink> m_file;
     std::shared_ptr<CallbackSink> m_uiSink;
+    // Dependency checks in flight (checkDependenciesAsync); m_depMutex
+    // serialises them: two probe runs must not use m_deps at once.
+    QList<QFuture<void>> m_depChecks;
+    QMutex m_depMutex;
 };
 
 } // namespace fw

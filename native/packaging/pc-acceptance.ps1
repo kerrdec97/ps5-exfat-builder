@@ -51,6 +51,27 @@ $results = [ordered]@{}
 
 function Write-Step([string]$text) { Write-Host "== $text" }
 
+# Runs a native command with stdout and stderr in one UTF-8 log (and on the
+# console) and returns its exit code. Windows PowerShell turns a native
+# command's stderr into terminating errors under ErrorActionPreference Stop,
+# so the preference is Continue while it runs.
+function Invoke-Logged([string]$logName, [scriptblock]$command) {
+    $log = Join-Path $evidence $logName
+    [IO.File]::WriteAllText($log, '', (New-Object Text.UTF8Encoding($false)))
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $command 2>&1 | ForEach-Object {
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+            [IO.File]::AppendAllText($log, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+            Write-Host $line
+        }
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 function Save-Text([string]$name, [string]$text) {
     [IO.File]::WriteAllText((Join-Path $evidence $name), $text, (New-Object Text.UTF8Encoding($false)))
 }
@@ -129,14 +150,13 @@ $tools.GetEnumerator() | ForEach-Object { Write-Host ("  {0}: {1}" -f $_.Key, ($
 # ---- 2. Configure and build ---------------------------------------------------
 if (-not $SkipBuild) {
     Write-Step 'Configure'
-    & cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF 2>&1 |
-        Tee-Object -FilePath (Join-Path $evidence 'configure.log')
-    if ($LASTEXITCODE -ne 0) { $results.configure = 'FAILED'; throw 'CMake configure failed (configure.log)' }
+    $code = Invoke-Logged 'configure.log' { & cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF }
+    if ($code -ne 0) { $results.configure = 'FAILED'; throw 'CMake configure failed (configure.log)' }
     $results.configure = 'passed'
 
     Write-Step 'Build'
-    & cmake --build $BuildDir --parallel 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'build.log')
-    if ($LASTEXITCODE -ne 0) { $results.build = 'FAILED'; throw 'Build failed (build.log)' }
+    $code = Invoke-Logged 'build.log' { & cmake --build $BuildDir --parallel }
+    if ($code -ne 0) { $results.build = 'FAILED'; throw 'Build failed (build.log)' }
     $results.build = 'passed'
 }
 
@@ -145,9 +165,7 @@ Write-Step 'CTest'
 $env:QT_QPA_PLATFORM = 'offscreen'
 $env:FW_OFFLINE = '1'
 Remove-Item Env:FW_WINDOWS_MOUNT_TEST -ErrorAction SilentlyContinue # mounting a VHD needs administrator rights
-& ctest --test-dir $BuildDir --timeout 900 --output-on-failure --output-junit (Join-Path $evidence 'ctest-junit.xml') 2>&1 |
-    Tee-Object -FilePath (Join-Path $evidence 'ctest.log')
-$ctestCode = $LASTEXITCODE
+$ctestCode = Invoke-Logged 'ctest.log' { & ctest --test-dir $BuildDir --timeout 900 --output-on-failure --output-junit (Join-Path $evidence 'ctest-junit.xml') }
 $summaryLine = (Select-String -Path (Join-Path $evidence 'ctest.log') -Pattern 'tests passed' | Select-Object -Last 1).Line
 $results.ctest = $(if ($ctestCode -eq 0) { "passed ($summaryLine)" } else { "FAILED ($summaryLine)" })
 Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
@@ -160,9 +178,8 @@ New-Item -ItemType Directory -Force $dist | Out-Null
 $built = Join-Path $BuildDir 'bin\exFAT Image Builder.exe'
 Copy-Item $built $dist
 $exe = Join-Path $dist 'exFAT Image Builder.exe'
-& (Join-Path $QtDir 'bin\windeployqt.exe') --release --no-translations --no-system-d3d-compiler --no-opengl-sw --compiler-runtime $exe 2>&1 |
-    Tee-Object -FilePath (Join-Path $evidence 'windeployqt.log') | Out-Null
-if ($LASTEXITCODE -ne 0) { $results.deploy = 'FAILED'; throw 'windeployqt failed (windeployqt.log)' }
+$code = Invoke-Logged 'windeployqt.log' { & (Join-Path $QtDir 'bin\windeployqt.exe') --release --no-translations --no-system-d3d-compiler --no-opengl-sw --compiler-runtime $exe }
+if ($code -ne 0) { $results.deploy = 'FAILED'; throw 'windeployqt failed (windeployqt.log)' }
 Copy-Item (Join-Path $native 'packaging\README-portable.txt') (Join-Path $dist 'README.txt')
 Copy-Item (Join-Path $repo 'LICENSES') -Recurse (Join-Path $dist 'LICENSES')
 if (Test-Path (Join-Path $native 'packaging\licenses')) { Copy-Item (Join-Path $native 'packaging\licenses\*') (Join-Path $dist 'LICENSES\') }

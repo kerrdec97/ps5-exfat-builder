@@ -7,6 +7,7 @@
 #include "registration/Registration.h"
 
 #include <QFileInfo>
+#include <QMutexLocker>
 #include <QPointer>
 #include <QThreadPool>
 #include <QtConcurrent/QtConcurrentRun>
@@ -37,6 +38,9 @@ AppContext::AppContext(QObject* parent) : QObject(parent), m_schema(std::make_sh
 
 AppContext::~AppContext()
 {
+    // A dependency check still running uses m_deps: wait for it first.
+    for (QFuture<void>& f : m_depChecks)
+        f.waitForFinished();
     if (m_queue)
         m_queue->shutdown(15000);
     if (m_uiSink)
@@ -109,7 +113,10 @@ void AppContext::checkDependenciesAsync()
     QPointer<AppContext> self(this);
     const SettingsValues snap = m_settings->snapshot();
     auto* deps = &m_deps;
-    (void)QtConcurrent::run([self, snap, deps] {
+    auto* mutex = &m_depMutex;
+    m_depChecks.removeIf([](const QFuture<void>& f) { return f.isFinished(); });
+    m_depChecks << QtConcurrent::run([self, snap, deps, mutex] {
+        const QMutexLocker lock(mutex); // one probe run at a time
         deps->probeAll(snap);
         if (self)
             QMetaObject::invokeMethod(self.data(), [self] {
