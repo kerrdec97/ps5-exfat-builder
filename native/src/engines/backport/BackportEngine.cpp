@@ -3,6 +3,7 @@
 #include "core/FileUtil.h"
 #include "engines/backport/ElfImage.h"
 #include "engines/backport/ProFix.h"
+#include "engines/backport/RightSprx.h"
 #include "engines/backport/SceParam.h"
 #include "engines/backport/SelfFormat.h"
 #include "engines/backport/SelfReader.h"
@@ -248,6 +249,8 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
             r.files.push_back(fr);
             continue;
         }
+        if (e->rel == plan.rightSprxSubstitute)
+            continue; // #35: staged from the standard copy below
         if (ctx.progress)
             ctx.progress->setCurrentItem(e->rel);
         if (opt.testHook) {
@@ -332,6 +335,77 @@ Result<BuildResult> buildBackport(const BackportPlan& plan, const QString& stagi
             ctx.progress->advance(e->size);
             ctx.progress->advanceFiles(1);
         }
+    }
+
+    // #35: the user's standard right.sprx in place of the dump's copy that
+    // cannot be converted. The dump's copy is snapshotted like every
+    // executable (originals ZIP, rollback, Restore); the standard copy goes
+    // through the normal pipeline (unwrap, SDK patch, sign, V1-V3).
+    if (!plan.rightSprxSubstitute.isEmpty()) {
+        if (!ctx.token.checkpoint())
+            return Error::cancelled();
+        const QString rel = plan.rightSprxSubstitute;
+        FileResult fr;
+        fr.rel = rel;
+        fr.substitutedStandard = true;
+        auto own = readFileBytes(joinPath(game, rel));
+        if (!own.ok())
+            return makeError(codeOf(own.error()),
+                             QStringLiteral("Could not copy %1 before replacing it: %2").arg(rel, own.error().message),
+                             own.error().detail);
+        fr.shaBefore = sha256Hex(own.value());
+        fr.sizeBefore = own->size();
+        const ExecFile* scanned = plan.scan.find(rel);
+        auto standard = readFileBytes(opt.standardRightSprx, 1024 * 1024);
+        if (scanned && !scanned->sha256.isEmpty() && fr.shaBefore != scanned->sha256) {
+            fr.code = Code::GameChanged;
+            fr.message = QStringLiteral("%1 changed while the backport was being prepared.").arg(rel);
+        } else if (!standard.ok() || sha256Hex(standard.value()) != opt.standardRightSprxSha256.toLower()) {
+            fr.code = Code::RightSprxInvalid;
+            fr.message = QStringLiteral("The standard right.sprx changed or cannot be read: %1")
+                             .arg(standardRightSprxProblem(opt.standardRightSprx, opt.standardRightSprxSha256));
+        } else {
+            const QString snap = joinPath(origDir, rel);
+            if (Status st = writeFileBytes(snap, own.value()); !st.ok())
+                return makeError(Code::Unreadable,
+                                 QStringLiteral("Could not copy %1 to the staging folder: %2").arg(rel, st.error().message),
+                                 st.error().detail);
+            r.originals.push_back({rel, snap, fr.shaBefore, fr.sizeBefore, true});
+            QStringList warnings;
+            fr.stage = FileStage::Unwrap;
+            auto proc = processExecutable(standard.value(), pair, opt.nidMode, opt.verifyBuild, &warnings);
+            for (const QString& w : std::as_const(warnings))
+                r.warnings << QStringLiteral("%1 (standard copy): %2").arg(rel, w);
+            if (!proc.ok()) {
+                fr.code = codeOf(proc.error());
+                fr.stage = stageFor(fr.code);
+                fr.message = QStringLiteral("%1 (standard copy): %2").arg(rel, proc.error().message);
+            } else {
+                const QString out = joinPath(stageDir, rel);
+                if (Status st = writeFileBytes(out, proc->output); !st.ok())
+                    return makeError(Code::Unreadable,
+                                     QStringLiteral("Could not write %1 to the staging folder: %2").arg(rel, st.error().message),
+                                     st.error().detail);
+                fr.patchMessages = proc->patch.messages;
+                fr.patchMessages << QStringLiteral("%1: the dump's copy cannot be converted (%2); the standard right.sprx "
+                                                   "(SHA-256 %3) was converted in its place")
+                                        .arg(QLatin1String(kRightSprxFamily), plan.rightSprxReason,
+                                             opt.standardRightSprxSha256.left(8));
+                fr.nid = proc->nid;
+                fr.sdkBefore = proc->patch.sdkBefore();
+                if (!proc->patch.patched.empty())
+                    fr.sdkAfter = pair.n;
+                fr.shaAfter = sha256Hex(proc->output);
+                fr.sizeAfter = proc->output.size();
+                fr.ok = true;
+                fr.stage = FileStage::Done;
+                r.staged.push_back({rel, out, fr.shaAfter, fr.sizeAfter, true});
+                ctx.log.info(fr.patchMessages.back());
+            }
+        }
+        if (!fr.ok)
+            ctx.log.warn(fr.message);
+        r.files.push_back(fr);
     }
 
     // Fakelib set: staged unchanged (never re-signed, D3), checked (V4).

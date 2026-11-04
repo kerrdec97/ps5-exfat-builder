@@ -29,6 +29,7 @@ inline const QString kKeepStagingOnFailure = QStringLiteral("backport.keepStagin
 inline const QString kJournalRetentionDays = QStringLiteral("backport.journalRetentionDays");
 inline const QString kNotes = QStringLiteral("backport.notes");
 inline const QString kProFix = QStringLiteral("backport.proFix"); // #32 shader-assert part (ProFix.h)
+inline const QString kStandardRightSprx = QStringLiteral("backport.standardRightSprx"); // #35 (RightSprx.h)
 // Read from the general module's schema when it is registered.
 inline const QString kFreeSpaceMarginMiB = QStringLiteral("storage.freeSpaceMarginMiB");
 } // namespace keys

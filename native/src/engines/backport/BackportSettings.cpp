@@ -1,6 +1,7 @@
 #include "engines/backport/BackportSettings.h"
 
 #include "core/Log.h"
+#include "engines/backport/RightSprx.h"
 
 #include <QDir>
 #include <QJsonArray>
@@ -98,6 +99,27 @@ void registerBackportSettings(SettingsSchema& s)
         d.defaultValue = QString();
         d.validator = dirMustExistIfSet;
         d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+
+    {
+        SettingDef d;
+        d.key = keys::kStandardRightSprx;
+        d.section = kBackport;
+        d.group = QStringLiteral("Folders");
+        d.label = QStringLiteral("Standard right.sprx");
+        d.description = QStringLiteral("Some dumps carry a sce_sys/about/right.sprx that cannot be converted (still "
+                                       "encrypted; for example MGS4, 007 First Light, Planet of Lana). Pick your own copy "
+                                       "of the standard Sony right.sprx (the one most dumps carry, SHA-256 81544cbb...) and "
+                                       "it takes that file's place, converted like every executable; the dump's copy is "
+                                       "kept in the originals ZIP. Nothing is bundled. Empty: such a dump is refused.");
+        d.type = SettingType::FilePath;
+        d.defaultValue = QString();
+        d.validator = [](const QVariant& v) -> QString {
+            const QString p = v.toString().trimmed();
+            return p.isEmpty() ? QString() : standardRightSprxProblem(p);
+        };
         d.order = order++;
         s.add(d);
     }
@@ -358,6 +380,7 @@ BackportOptions optionsFromSettings(const SettingsValues& v, const QString& game
     o.targetSdk = v.string(keys::kTargetSdk).toInt();
     o.fakelibDir = v.string(keys::kFakelibFolder).trimmed();
     o.providerDir = v.string(keys::kAmprPlaygoFolder).trimmed();
+    o.standardRightSprx = v.string(keys::kStandardRightSprx).trimmed();
     o.applyToGame = v.boolean(keys::kApplyToGameFolder);
     o.nidMode = v.string(keys::kNidPatchMode) == u"off" ? NidMode::Off : NidMode::Auto;
     o.encryptedPolicy = v.string(keys::kEncryptedSelfPolicy) == u"leaveUnchanged" ? EncryptedPolicy::LeaveUnchanged

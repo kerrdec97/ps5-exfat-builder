@@ -6,6 +6,7 @@
 #include "core/FileUtil.h"
 #include "core/Result.h"
 #include "engines/backport/NidPatch.h"
+#include "engines/backport/RightSprx.h"
 #include "engines/backport/SdkTable.h"
 
 #include <QString>
@@ -24,6 +25,8 @@ struct BackportOptions {
     QString providerDir;
     // Where the provider pins are kept (default: <dataDir>/backport/provider-pins.json).
     QString providerPinsPath;
+    // #35: the user's own standard right.sprx (RightSprx.h); empty: none.
+    QString standardRightSprx;
     QString originalsDir;
     QString backportDir;      // empty: no backport ZIP
     bool applyToGame = true;  // D5 (owner decision; Backport GUI defaults to off)
@@ -49,6 +52,9 @@ struct BackportOptions {
     QString reportDir;
 
     // ---- test seams -----------------------------------------------------------
+    // #35: the SHA-256 the standard right.sprx must have (the pinned value;
+    // tests use a synthetic file because Sony's file is never bundled).
+    QString standardRightSprxSha256 = QString::fromLatin1(kStandardRightSprxSha256);
     // Free-space probe (default fw::diskSpace).
     std::function<Result<DiskSpace>(const QString&)> diskSpaceProbe;
     // Fault injection: called at "build.file", "zip.member", "zip.commit" and

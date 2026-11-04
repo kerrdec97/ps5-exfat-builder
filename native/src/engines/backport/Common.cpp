@@ -53,6 +53,7 @@ QString codeName(Code code)
     case Code::ManifestMismatch: return QStringLiteral("ManifestMismatch");
     case Code::ModuleNameCase: return QStringLiteral("ModuleNameCase");
     case Code::ProviderChanged: return QStringLiteral("ProviderChanged");
+    case Code::RightSprxInvalid: return QStringLiteral("RightSprxInvalid");
     case Code::Cancelled: return QStringLiteral("Cancelled");
     case Code::Internal: return QStringLiteral("Internal");
     }
@@ -75,6 +76,7 @@ ErrorCode toErrorCode(Code code)
     case Code::PathTooLong:
     case Code::NothingToDo:
     case Code::ModuleNameCase:
+    case Code::RightSprxInvalid:
     case Code::InterruptedApply: return ErrorCode::InvalidArgument;
     case Code::InsufficientSpace: return ErrorCode::InsufficientSpace;
     case Code::ElfInvalid:

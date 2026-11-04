@@ -61,6 +61,7 @@ enum class Code {
     ManifestMismatch,
     ModuleNameCase,  // #41 detector: an imported module differs from sce_module/ only in letter case
     ProviderChanged, // #34: a pinned AMPR/PlayGo library changed (or is not pinned yet)
+    RightSprxInvalid, // #35: the standard right.sprx setting is not the pinned file
     Cancelled,
     Internal,
 };

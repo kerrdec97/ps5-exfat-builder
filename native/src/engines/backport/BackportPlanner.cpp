@@ -1,5 +1,7 @@
 #include "engines/backport/BackportPlanner.h"
 
+#include "engines/backport/RightSprx.h"
+
 #include "core/FileUtil.h"
 #include "core/Paths.h"
 #include "engines/backport/ApplyJournal.h"
@@ -161,10 +163,40 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
         add(Code::NotAGame, Severity::Refuse,
             QStringLiteral("eboot.bin is not in %1. Pick the game's root folder.").arg(native(game)));
 
+    // #35: a game-root sce_sys/about/right.sprx that cannot be converted takes
+    // the user's standard copy (pinned SHA-256) instead of refusing the run.
+    for (const ExecFile& e : scan.executables) {
+        if (e.area != Area::Game || !isRightSprx(e.rel))
+            continue;
+        if (!e.isEncryptedOrCompressed() && e.problemCode == Code::Ok)
+            break; // converts normally
+        const QString reason = e.problem.isEmpty() ? fileClassName(e.cls) : e.problem;
+        if (opt.standardRightSprx.trimmed().isEmpty()) {
+            add(Code::Ok, Severity::Info,
+                QStringLiteral("%1 cannot be converted (%2). To use the standard right.sprx in its place, set Backport "
+                               "> Standard right.sprx to your own copy.")
+                    .arg(e.rel, reason),
+                {e.rel});
+        } else if (const QString why = standardRightSprxProblem(opt.standardRightSprx, opt.standardRightSprxSha256);
+                   !why.isEmpty()) {
+            add(Code::RightSprxInvalid, Severity::Refuse, QStringLiteral("Standard right.sprx: %1").arg(why), {e.rel});
+        } else {
+            plan.rightSprxSubstitute = e.rel;
+            plan.rightSprxReason = reason;
+            add(Code::Ok, Severity::Info,
+                QStringLiteral("%1 cannot be converted (%2); the standard right.sprx takes its place. The dump's copy is "
+                               "kept in the originals ZIP.")
+                    .arg(e.rel, reason),
+                {e.rel});
+        }
+        break;
+    }
+
     // S32: encrypted / compressed SELFs, reported before anything changes.
     QStringList enc;
     for (const ExecFile* e : scan.encryptedOrCompressed())
-        enc << e->rel;
+        if (e->rel != plan.rightSprxSubstitute)
+            enc << e->rel;
     if (!enc.isEmpty()) {
         if (opt.encryptedPolicy == EncryptedPolicy::Refuse) {
             add(Code::SelfEncrypted, Severity::Refuse,
@@ -184,7 +216,8 @@ Result<BackportPlan> planBackport(const BackportOptions& opt, const Cancellation
 
     // Every executable the run would rewrite must be rewritable (D4 up front).
     for (const ExecFile& e : scan.executables) {
-        if (e.area != Area::Game || e.isEncryptedOrCompressed() || e.problemCode == Code::Ok)
+        if (e.area != Area::Game || e.isEncryptedOrCompressed() || e.problemCode == Code::Ok
+            || e.rel == plan.rightSprxSubstitute)
             continue;
         QString msg;
         switch (e.problemCode) {

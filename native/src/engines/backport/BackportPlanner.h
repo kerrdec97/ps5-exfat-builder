@@ -60,6 +60,10 @@ struct BackportPlan {
     QStringList stagedFakelibTargets;   // game-relative targets of the staged set
     QStringList replacedFakelibFiles;   // existing game files the set replaces (S14)
     QStringList leaveUnchanged;         // encrypted files carried over (policy)
+    // #35: the dump's sce_sys/about/right.sprx that cannot be converted and is
+    // replaced by the user's standard copy (empty: no substitute), and why.
+    QString rightSprxSubstitute;
+    QString rightSprxReason;
     QString manifestPath;
     std::optional<Manifest> manifest;
     Verdict verdict = Verdict::Unknown;

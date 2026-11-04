@@ -62,6 +62,10 @@ QJsonObject fileJson(const FileResult& f)
         o.insert(QStringLiteral("sha256After"), f.shaAfter);
     if (f.nid.action != NidAction::None)
         o.insert(QStringLiteral("nid"), nidActionName(f.nid.action));
+    if (f.substitutedStandard)
+        o.insert(QStringLiteral("substitutedStandard"), true);
+    if (f.shaderTrapNops > 0)
+        o.insert(QStringLiteral("shaderTrapNops"), f.shaderTrapNops);
     return o;
 }
 
@@ -100,6 +104,12 @@ QJsonObject fileReportJson(const FileResult& f, const BackportPlan& plan, int ta
     } else if (f.stage == FileStage::LeftUnchanged) {
         result = QStringLiteral("left unchanged");
         why = QStringLiteral("Encrypted or compressed; carried over as it is (policy: leave unchanged).");
+    } else if (f.substitutedStandard) {
+        result = QStringLiteral("replaced");
+        why = QStringLiteral("The dump's copy cannot be converted (%1); the standard right.sprx was converted to SDK %2 "
+                             "and takes its place. The dump's copy is in the originals ZIP.")
+                  .arg(plan.rightSprxReason)
+                  .arg(targetSdk);
     } else if (fakelibTarget) {
         const QString name = f.rel.section(u'/', -1);
         const bool provider = plan.providers && plan.providers->find(name);
@@ -161,6 +171,8 @@ void tracePlan(RunTrace& t, const BackportPlan& plan, const BackportOptions& opt
     in.insert(QStringLiteral("backportZipFolder"), native(opt.backportDir));
     in.insert(QStringLiteral("fakelibFolder"), native(opt.fakelibDir));
     in.insert(QStringLiteral("amprPlaygoFolder"), native(opt.providerDir));
+    if (!plan.rightSprxSubstitute.isEmpty())
+        in.insert(QStringLiteral("standardRightSprx"), native(opt.standardRightSprx));
     if (plan.providers) {
         QJsonObject prov;
         for (const FakelibLib& l : plan.providers->libs)

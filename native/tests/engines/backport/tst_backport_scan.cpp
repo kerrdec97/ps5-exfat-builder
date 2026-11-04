@@ -446,7 +446,8 @@ private slots:
                                       keys::kFakelibFolder, keys::kApplyToGameFolder, keys::kNidPatchMode,
                                       keys::kEncryptedSelfPolicy, keys::kVerifyBuild, keys::kScanFolders,
                                       keys::kScanDepth, keys::kKeepStagingOnFailure, keys::kJournalRetentionDays,
-                                      keys::kNotes, keys::kAmprPlaygoFolder, keys::kProFix};
+                                      keys::kNotes, keys::kAmprPlaygoFolder, keys::kProFix,
+                                      keys::kStandardRightSprx};
         int count = 0;
         for (const auto* d : schema.all()) {
             QVERIFY2(d->key.startsWith(QStringLiteral("backport.")), qPrintable(d->key));
@@ -508,6 +509,7 @@ private slots:
                            {keys::kEncryptedSelfPolicy, QStringLiteral("leaveUnchanged")},
                            {keys::kVerifyBuild, false},
                            {keys::kProFix, true},
+                           {keys::kStandardRightSprx, d.filePath("right.sprx")},
                            {keys::kKeepStagingOnFailure, false},
                            {keys::kJournalRetentionDays, 7},
                            {keys::kNotes, QStringLiteral("tested on 4.03")}};
@@ -523,6 +525,7 @@ private slots:
         QCOMPARE(o.encryptedPolicy, EncryptedPolicy::LeaveUnchanged);
         QCOMPARE(o.verifyBuild, false);
         QCOMPARE(o.proFix, true);
+        QCOMPARE(o.standardRightSprx, d.filePath("right.sprx"));
         QCOMPARE(o.keepStagingOnFailure, false);
         QCOMPARE(o.journalRetentionDays, 7);
         QCOMPARE(o.notes, QStringLiteral("tested on 4.03"));

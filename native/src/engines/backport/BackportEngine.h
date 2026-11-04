@@ -40,6 +40,7 @@ struct FileResult {
     NidResult nid;
     QStringList patchMessages;
     int shaderTrapNops = 0; // #32 Pro fix sites patched in this file
+    bool substitutedStandard = false; // #35: the standard right.sprx, converted, took the dump's copy's place
 };
 
 struct StagedFile {
