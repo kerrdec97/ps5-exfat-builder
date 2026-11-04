@@ -9,6 +9,8 @@
 #include <QFileInfo>
 #include <QJsonArray>
 
+#include <memory>
+
 namespace fw::gameinfo {
 
 namespace {

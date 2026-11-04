@@ -28,6 +28,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -247,6 +248,15 @@ private:
 
     void openPassive(Session* s, bool extended)
     {
+        // A data connection the client opened for a refused command is stale.
+        if (s->data) {
+            s->data->disconnect();
+            s->data->abort();
+            if (s->data->parent() != s->pasv)
+                s->data->deleteLater();
+            s->data = nullptr;
+        }
+        s->pending = nullptr;
         delete s->pasv;
         s->pasv = new QTcpServer(m_t.ctx());
         s->pasv->listen(QHostAddress::LocalHost, 0);

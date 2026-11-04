@@ -18,6 +18,9 @@
 #include <QSqlQuery>
 #include <QUuid>
 
+#include <algorithm>
+#include <memory>
+
 namespace fw::ps5 {
 
 namespace {

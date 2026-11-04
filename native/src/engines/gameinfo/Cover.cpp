@@ -11,6 +11,7 @@
 #include <QImageReader>
 #include <QSaveFile>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 

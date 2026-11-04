@@ -21,6 +21,8 @@
 #include <QTest>
 #include <QTimeZone>
 
+#include <memory>
+
 
 using namespace fw;
 using namespace fw::ps5;
@@ -636,3 +638,4 @@ private slots:
 
 QTEST_GUILESS_MAIN(TstPs5Ftp)
 #include "tst_ps5_ftp.moc"
+

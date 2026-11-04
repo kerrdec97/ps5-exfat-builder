@@ -6,6 +6,8 @@
 #include <QTcpSocket>
 #include <QThread>
 
+#include <memory>
+
 namespace fw::ps5 {
 
 using detail::waitUntil;

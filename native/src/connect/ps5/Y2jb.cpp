@@ -626,7 +626,7 @@ Status placeDownload0Dat(FtpClient& c, Y2jbRegion region, const QString& localFi
     if (!QFileInfo(localFile).isFile())
         return Error(ErrorCode::NotFound, QStringLiteral("Select a download0.dat file first."));
     const QString remote = y2jbDownload0Path(region);
-    (void)c.mkd(remoteParent(remote)); // already exists is fine
+    (void)c.mkdirs(remoteParent(remote)); // already exists is fine
     FW_TRY(backupRemoteFile(c, remote, backupDir, token));
     return storeFile(c, remote, localFile, token);
 }
@@ -658,7 +658,7 @@ Result<QStringList> uploadY2jbIcon(FtpClient& c, const QList<Y2jbRegion>& region
     QStringList done;
     for (Y2jbRegion r : regions) {
         const QString remote = QStringLiteral("/user/appmeta/%1/icon0.png").arg(y2jbTitleId(r));
-        (void)c.mkd(remoteParent(remote));
+        (void)c.mkdirs(remoteParent(remote));
         FW_TRY(backupRemoteFile(c, remote, backupDir, token));
         FW_TRY(storeFile(c, remote, pngPath, token));
         done << remote;
@@ -691,7 +691,7 @@ Result<ArtSetReport> uploadY2jbArtSet(FtpClient& c, const QList<Y2jbRegion>& reg
     for (Y2jbRegion r : regions) {
         for (const auto& [dirTemplate, names] : plan) {
             const QString dir = dirTemplate.arg(y2jbTitleId(r));
-            (void)c.mkd(dir);
+            (void)c.mkdirs(dir);
             for (const QString& name : names) {
                 const QString local = QDir(folder).filePath(name);
                 if (!QFileInfo(local).isFile())

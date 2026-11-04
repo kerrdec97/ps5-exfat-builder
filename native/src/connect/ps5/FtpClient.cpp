@@ -11,6 +11,8 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 
+#include <algorithm>
+#include <memory>
 #include <optional>
 
 namespace fw::ps5 {

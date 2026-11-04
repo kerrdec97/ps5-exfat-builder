@@ -333,7 +333,7 @@ Result<MountPushResult> pushMountConfig(FtpClient& c, MountTool tool, const QStr
 {
     MountPushResult out;
     const QString remote = mountConfigRemotePath(tool);
-    (void)c.mkd(mountRemoteDir(tool)); // best effort, like the legacy push
+    (void)c.mkdirs(mountRemoteDir(tool)); // best effort, like the legacy MKD
     FW_TRY_ASSIGN(out.backupPath, backupRemoteFile(c, remote, backupDir, token));
     const QByteArray bytes = text.toUtf8();
     const Status swap = c.uploadReplace(remote, bytes, QStringLiteral(".new"), token);
@@ -409,7 +409,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
     {
         FtpClient c(ftpOptionsFor(ep));
         FW_TRY(c.open(ep.host, ep.ftpPort, token));
-        (void)c.mkd(mountRemoteDir(MountTool::ShadowMountPlus));
+        (void)c.mkdirs(mountRemoteDir(MountTool::ShadowMountPlus)); // best effort
         FW_TRY(c.upload(mountRemoteDir(MountTool::ShadowMountPlus) + QStringLiteral("/STOP"), QByteArray(), token));
         c.quit();
     }

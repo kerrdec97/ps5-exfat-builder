@@ -25,6 +25,7 @@
 #include <QTest>
 #include <QtEndian>
 
+#include <memory>
 #include <zlib.h>
 
 using namespace fw;
