@@ -142,7 +142,7 @@ From the ppr-pkg Companion's DLC Converter:
   logs are left out — one copy of the game, not two. It goes next to the
   output (not on the app data drive) and is removed afterwards.
 
-
+### Image tools (was Extract & verify + Edit image)
 * Open an image once, then **Extract**, **Verify** (its own checksums, or
   compare with a folder or another image), **Convert** (exFAT, FFPKG, FFPFSC,
   FFPFS; exFAT/FFPKG → FFPFSC packs the image as it is, without a temporary
@@ -197,8 +197,9 @@ Fixed or made obsolete by the rewrite: #86, #85, #84, #82, #81, #80, #79,
 #77, #76, #74, #73, #72, #71, #69, #68, #65, #61, #60, #53, #43, #39, #36,
 #33, #27, #21, #20, #19, #67 (ZIP dumps; #37 asked to stream without
 unpacking: ZIPs are unpacked to a temporary folder) and PR #57 superseded.
-Not in this release: 7z/RAR archives, interface translations (#35, #23), a
-dump checker (#26).
+Still open: 7z/RAR archives and streaming from archives (#37), interface
+translations (#35), a dump checker (#26), antivirus false positives until the
+exe is code-signed (#78).
 
 ## How it was tested
 * **Automated tests** (53 test programs) on Windows (MSVC 2022, Qt 6.10):
