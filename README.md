@@ -36,6 +36,7 @@ verify and send them to your console — from one app, in one download.**
   <img src="docs/screenshots/backport.png" width="49%" alt="Backport">
   <img src="docs/screenshots/imagetools.png" width="49%" alt="Image tools">
   <img src="docs/screenshots/library.png" width="49%" alt="Library">
+  <img src="docs/screenshots/ps5.png" width="98%" alt="PS5 connect">
 </p>
 
 ## ⚡ Quick start

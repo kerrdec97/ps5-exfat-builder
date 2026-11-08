@@ -69,7 +69,27 @@ program, with a new interface and the PS5 Backport engine built in.
   tools.
 
 ### PS5 connect
-@@PS5@@
+* A console card with live service chips (FTP server and version, kernel
+  log, payload loader, ShadowMount+ version, package installer) and five
+  clear groups: **Files**, **Payloads**, **Logs**, **ShadowMount+** and
+  **Console tools**.
+* A real **file manager**: places (games, USB, extended storage, M.2,
+  ShadowMount+, etaHEN), breadcrumbs, sortable list, multi-select, drag and
+  drop, keyboard shortcuts, and a transfers panel with per-file progress,
+  speed, time left, pause, cancel and retry.
+* **ShadowMount+ 1.7**: reads and writes the 1.6/1.7 flat and the new
+  sectioned format (, ), changes only the keys you
+  edit (comments and unknown keys are kept), drops the removed 
+  keys, uses its HTTP API (port 10101) for version, free space, USB eject and
+  logs, and confirms **Safe to unplug** from its own shutdown messages.
+* **ftpsrv 0.21**: SELF decryption is switched off after login, so uploads
+  and backups of fake-signed files keep their exact bytes.
+* Payloads default to **port 9021** (elfldr); a stored 9090 (etaHEN's package
+  installer) is moved once. Package install only reports success when the
+  console says so. Autoloader rules follow the current format; the AMPR index
+  refuses folders that use ampr_emu 0.4.2.1 asset packs; Find my PS5 also
+  probes ports 1337 and 2120; Y2JB shows the firmware → YouTube version table;
+  crash-dump capture saves each console crash as a ZIP.
 
 ### Single-file download
 * One exe with a small native launcher (no VC++ runtime needed); cached start

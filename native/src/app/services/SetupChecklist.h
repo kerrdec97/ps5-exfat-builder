@@ -62,7 +62,7 @@ struct ChecklistInputs {
     QString consoleIp;
     int ftpPort = 2121;
     int klogPort = 3232;
-    int payloadPort = 9090;
+    int payloadPort = 9021; // elfldr (9090 is etaHEN's package installer)
     std::optional<FtpCheckRecord> lastCheck;
     bool browserConnected = false; // FTP browser session open to consoleIp
     int payloadsReady = 0;         // payload list entries whose file exists

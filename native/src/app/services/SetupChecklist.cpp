@@ -108,7 +108,7 @@ ChecklistInputs checklistInputs(const SettingsValues& s)
     in.consoleIp = s.string(ps5::keys::kConsoleIp).trimmed();
     in.ftpPort = portOf(s, ps5::keys::kFtpPort, 2121);
     in.klogPort = portOf(s, ps5::keys::kKlogPort, 3232);
-    in.payloadPort = portOf(s, ps5::keys::kPayloadPort, 9090);
+    in.payloadPort = portOf(s, ps5::keys::kPayloadPort, 9021);
     return in;
 }
 
