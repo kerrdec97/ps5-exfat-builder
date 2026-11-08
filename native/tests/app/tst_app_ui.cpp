@@ -129,7 +129,7 @@ private slots:
     void everyPageOpens()
     {
         const QStringList keys = m_window->pageKeys();
-        QVERIFY(keys.size() >= 11);
+        QVERIFY(keys.size() >= 10); // v5: FPKG is a Build format; Extract and Edit are Image tools actions
         for (const QString& key : keys) {
             m_window->navigate(key);
             QCOMPARE(m_window->currentPage(), key);

@@ -714,9 +714,14 @@ void SettingsPage::updateSectionBadges()
 
 int SettingsPage::attentionCount() const
 {
+    // The status bar only nags about real problems: values that were refused,
+    // and tools that are set up but broken or too old. Optional tools that are
+    // simply not installed (e.g. Sony Publishing Tools for FPKG) are listed in
+    // Settings › Tools and on the page that needs them, not here.
     int n = m_errors.size();
     for (const auto& info : m_ctx.dependencies().lastAll())
-        if (info.status == DependencyStatus::Missing || info.status == DependencyStatus::Outdated || info.status == DependencyStatus::Error)
+        if (info.status == DependencyStatus::Outdated || info.status == DependencyStatus::Error
+            || (info.status == DependencyStatus::Missing && info.required))
             ++n;
     return n;
 }
