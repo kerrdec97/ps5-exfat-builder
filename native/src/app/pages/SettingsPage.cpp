@@ -1,11 +1,13 @@
 #include "app/pages/SettingsPage.h"
 
 #include "app/AppContext.h"
+#include "app/ui/Components.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
 
+#include <QAction>
 #include <QButtonGroup>
 #include <QClipboard>
 #include <QDir>
@@ -16,6 +18,7 @@
 #include <QPointer>
 #include <QScrollBar>
 #include <QSet>
+#include <QShortcut>
 #include <QStandardPaths>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -28,39 +31,96 @@ using namespace theme;
 
 namespace {
 
-// A 32 px section row for the left list.
+QString sectionIcon(const QString& section)
+{
+    static const QHash<QString, QString> icons = {
+        {QStringLiteral("General"), QStringLiteral("settings")},
+        {QStringLiteral("Build"), QStringLiteral("build")},
+        {QStringLiteral("FPKG"), QStringLiteral("package")},
+        {QStringLiteral("PFS"), QStringLiteral("compress")},
+        {QStringLiteral("PlayGo"), QStringLiteral("boxes")},
+        {QStringLiteral("Backport"), QStringLiteral("backports")},
+        {QStringLiteral("Firmware and SDK"), QStringLiteral("cpu")},
+        {QStringLiteral("Tools"), QStringLiteral("wrench")},
+        {QStringLiteral("Performance"), QStringLiteral("gauge")},
+        {QStringLiteral("Storage"), QStringLiteral("hard_drive")},
+        {QStringLiteral("Verification"), QStringLiteral("shield_check")},
+        {QStringLiteral("PS5 connection"), QStringLiteral("plug")},
+        {QStringLiteral("Logging"), QStringLiteral("file_text")},
+        {QStringLiteral("Advanced"), QStringLiteral("advanced")},
+    };
+    return icons.value(section, QStringLiteral("settings"));
+}
+
+// A 34 px section row for the left list: icon + name (+ count badge).
 class SectionButton : public QAbstractButton {
 public:
-    SectionButton(const QString& text, QWidget* parent) : QAbstractButton(parent)
+    SectionButton(const QString& text, const QString& iconName, QWidget* parent) : QAbstractButton(parent), m_icon(iconName)
     {
         setText(text);
+        setAccessibleName(text);
         setCheckable(true);
-        setFixedHeight(32);
+        setFixedHeight(34);
         setFocusPolicy(Qt::TabFocus);
         setAttribute(Qt::WA_Hover);
-        setProperty("fwRadius", radius::sm);
+        setCursor(Qt::PointingHandCursor);
+        setProperty("fwRadius", radius::control);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
-    void setBadge(Badge* b) { m_badge = b; }
+    void setBadge(Badge* b)
+    {
+        m_badge = b;
+        placeBadge();
+    }
+    void placeBadge()
+    {
+        if (!m_badge)
+            return;
+        m_badge->adjustSize();
+        if (m_compact)
+            m_badge->move(width() - m_badge->width(), 0); // corner of the icon-only row
+        else
+            m_badge->move(width() - m_badge->width() - 8, (height() - m_badge->height()) / 2);
+    }
+    // Icon only (narrow windows); the name moves to the tooltip.
+    void setCompact(bool on)
+    {
+        m_compact = on;
+        setToolTip(on ? text() : QString());
+        placeBadge();
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent*) override
     {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        if (isChecked() || underMouse()) {
-            p.setPen(Qt::NoPen);
-            p.setBrush(isChecked() ? color::bg_3 : color::bg_2);
-            p.drawRoundedRect(rect(), radius::sm, radius::sm);
-        }
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         if (isChecked()) {
-            p.setBrush(color::accent);
-            p.drawRoundedRect(QRect(0, (height() - 16) / 2, 3, 16), radius::xs, radius::xs);
+            p.setPen(Qt::NoPen);
+            p.setBrush(accentGradient(r, 46));
+            p.drawRoundedRect(r, radius::control, radius::control);
+            p.setBrush(accentGradient(QRectF(0, (height() - 16) / 2.0, 3, 16)));
+            p.drawRoundedRect(QRectF(0, (height() - 16) / 2.0, 3, 16), 1.5, 1.5);
+        } else if (underMouse()) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(color::bg_3);
+            p.drawRoundedRect(r, radius::control, radius::control);
         }
+        p.drawPixmap(QRect(m_compact ? (width() - 16) / 2 : 12, (height() - 16) / 2, 16, 16),
+                     iconPixmap(m_icon, 16, isChecked() ? color::accent_hi : color::fg_4, devicePixelRatioF()));
+        if (m_compact)
+            return;
         p.setPen(isChecked() ? color::fg_0 : color::fg_2);
         p.setFont(isChecked() ? font::bodyStrong() : font::body());
         const int right = m_badge && m_badge->isVisible() ? m_badge->width() + 16 : 8;
-        p.drawText(rect().adjusted(12, 0, -right, 0), Qt::AlignVCenter | Qt::AlignLeft, text());
+        p.drawText(rect().adjusted(38, 0, -right, 0), Qt::AlignVCenter | Qt::AlignLeft, text());
+    }
+    void resizeEvent(QResizeEvent* e) override
+    {
+        QAbstractButton::resizeEvent(e);
+        placeBadge();
     }
     void keyPressEvent(QKeyEvent* e) override
     {
@@ -72,33 +132,39 @@ protected:
     }
 
 private:
+    QString m_icon;
     Badge* m_badge = nullptr;
+    bool m_compact = false;
 };
 
 } // namespace
 
 SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     : Page(ctx, QStringLiteral("settings"), QStringLiteral("Settings"),
-           QStringLiteral("Defaults for every new job. A job page can override any of them; the override shows a marker on that job only."), parent)
+           QStringLiteral("Defaults for new jobs; a job page can override any of them."), parent)
 {
-    m_search = textInput(QStringLiteral("Search settings"), false, this);
-    m_search->setFixedWidth(260);
+    m_search = textInput(QStringLiteral("Search all settings"), false, this);
+    m_search->setFixedWidth(340);
     m_search->setClearButtonEnabled(true);
     m_search->setAccessibleName(QStringLiteral("Search settings"));
+    m_search->setToolTip(QStringLiteral("Search every section (Ctrl+F)"));
+    m_search->addAction(icon(QStringLiteral("search"), color::fg_4), QLineEdit::LeadingPosition);
     header()->addAction(m_search);
-    auto* import = button(QStringLiteral("Import legacy settings…"), ButtonVariant::Secondary, QStringLiteral("file_down"), this);
-    header()->addAction(import);
-    auto* resetAll = button(QStringLiteral("Reset all…"), ButtonVariant::Secondary, QStringLiteral("undo"), this);
-    header()->addAction(resetAll);
-    connect(import, &QPushButton::clicked, this, &SettingsPage::importLegacy);
-    connect(resetAll, &QPushButton::clicked, this, &SettingsPage::resetAll);
+    auto* find = new QShortcut(QKeySequence::Find, this);
+    find->setContext(Qt::WindowShortcut); // only while this page is the visible one
+    connect(find, &QShortcut::activated, this, [this] {
+        m_search->setFocus(Qt::ShortcutFocusReason);
+        m_search->selectAll();
+    });
     connect(m_search, &QLineEdit::textChanged, this, &SettingsPage::setSearchText);
 
     auto* columns = new QWidget(this);
+    m_columns = columns;
+    columns->installEventFilter(this);
     auto* h = hbox(columns, space::xxl);
     h->setAlignment(Qt::AlignTop);
     m_sectionList = new QWidget(columns);
-    m_sectionList->setFixedWidth(size::settingsList);
+    m_sectionList->setFixedWidth(size::settingsList + 16);
     m_sectionLayout = vbox(m_sectionList, 2);
     auto* group = new QButtonGroup(this);
     group->setExclusive(true);
@@ -114,7 +180,7 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     for (const QString& s : m_sections) {
         auto* wrap = new QWidget(m_sectionList);
         auto* wl = hbox(wrap, 0);
-        auto* b = new SectionButton(s, wrap);
+        auto* b = new SectionButton(s, sectionIcon(s), wrap);
         auto* badge = new Badge(QString(), Tone::Warn, b);
         badge->setCount(true);
         badge->setIconName({});
@@ -127,27 +193,48 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         m_sectionLayout->addWidget(wrap);
         connect(b, &QAbstractButton::clicked, this, [this, s] { showSection(s); });
     }
+    // Whole-app actions live under the list, away from the section's own.
+    m_sectionLayout->addSpacing(space::lg);
+    m_sectionLayout->addWidget(hairline(m_sectionList));
+    m_sectionLayout->addSpacing(space::sm);
+    auto* import = m_importBtn = button(QStringLiteral("Import legacy settings…"), ButtonVariant::Subtle, QStringLiteral("file_down"), m_sectionList);
+    import->setToolTip(QStringLiteral("Take over the values of the Python edition's settings.json"));
+    import->setStyleSheet(QStringLiteral("text-align:left;"));
+    auto* resetAllBtn = m_resetAllBtn = button(QStringLiteral("Reset all settings…"), ButtonVariant::Subtle, QStringLiteral("undo"), m_sectionList);
+    resetAllBtn->setStyleSheet(QStringLiteral("text-align:left;"));
+    resetAllBtn->setToolTip(QStringLiteral("Put every setting back to its default"));
+    m_sectionLayout->addWidget(import);
+    m_sectionLayout->addWidget(resetAllBtn);
     m_sectionLayout->addStretch(1);
+    connect(import, &QPushButton::clicked, this, &SettingsPage::importLegacy);
+    connect(resetAllBtn, &QPushButton::clicked, this, &SettingsPage::resetAll);
     h->addWidget(m_sectionList, 0, Qt::AlignTop);
 
     m_pane = new QWidget(columns);
     m_pane->setMaximumWidth(size::formMax);
+    m_pane->installEventFilter(this);
     m_paneLayout = vbox(m_pane, space::lg);
     auto* secHeader = new QWidget(m_pane);
     auto* sh = hbox(secHeader, space::lg);
     sh->setAlignment(Qt::AlignTop);
     auto* scol = new QVBoxLayout;
     scol->setSpacing(2);
-    m_secTitle = heading({}, TextStyle::Subtitle, secHeader);
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(space::sm);
+    m_secTitle = heading({}, TextStyle::Title, secHeader);
+    titleRow->addWidget(m_secTitle);
+    m_secChanged = new Badge({}, Tone::Info, secHeader);
+    m_secChanged->setIconName(QStringLiteral("advanced"));
+    m_secChanged->hide();
+    titleRow->addWidget(m_secChanged, 0, Qt::AlignVCenter);
+    titleRow->addStretch(1);
+    scol->addLayout(titleRow);
     m_secCaption = caption({}, secHeader);
-    scol->addWidget(m_secTitle);
+    m_secCaption->setWordWrap(true);
     scol->addWidget(m_secCaption);
     sh->addLayout(scol, 1);
-    sh->addWidget(label(QStringLiteral("Show advanced"), TextStyle::Body, color::fg_1, secHeader), 0, Qt::AlignVCenter);
-    m_advancedSwitch = new Switch(secHeader);
-    m_advancedSwitch->setAccessibleName(QStringLiteral("Show advanced settings"));
-    sh->addWidget(m_advancedSwitch, 0, Qt::AlignVCenter);
     m_resetSection = button(QStringLiteral("Reset section"), ButtonVariant::Subtle, QStringLiteral("undo"), secHeader);
+    m_resetSection->setToolTip(QStringLiteral("Put this section's settings back to their defaults"));
     sh->addWidget(m_resetSection, 0, Qt::AlignVCenter);
     m_paneLayout->addWidget(secHeader);
     m_cards = new QWidget(m_pane);
@@ -155,7 +242,6 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     m_paneLayout->addWidget(m_cards);
     h->addWidget(m_pane, 1, Qt::AlignTop);
     content()->addWidget(columns);
-    connect(m_advancedSwitch, &QAbstractButton::toggled, this, &SettingsPage::setShowAdvanced);
     connect(m_resetSection, &QPushButton::clicked, this, [this] {
         if (m_section == QLatin1String("Tools") && m_ctx.schema().inSection(m_section).empty())
             return;
@@ -190,13 +276,13 @@ QString SettingsPage::sectionCaption(const QString& section) const
         {QStringLiteral("PlayGo"), QStringLiteral("PlayGo chunk layout and AMPR index.")},
         {QStringLiteral("Backport"), QStringLiteral("Defaults for Backport jobs.")},
         {QStringLiteral("Firmware and SDK"), QStringLiteral("Firmware targets and SDK versions.")},
-        {QStringLiteral("Tools"), QStringLiteral("External tools the app can use. Nothing is downloaded or bundled.")},
+        {QStringLiteral("Tools"), QStringLiteral("External tools the app can use; none are downloaded or bundled.")},
         {QStringLiteral("Performance"), QStringLiteral("Threads, buffers and the queue.")},
         {QStringLiteral("Storage"), QStringLiteral("Folders and free-space safety.")},
         {QStringLiteral("Verification"), QStringLiteral("What happens after a build.")},
         {QStringLiteral("PS5 connection"), QStringLiteral("How the app reaches the console.")},
         {QStringLiteral("Logging"), QStringLiteral("Log files and problem reports.")},
-        {QStringLiteral("Advanced"), QStringLiteral("Troubleshooting. Change these only when asked to.")},
+        {QStringLiteral("Advanced"), QStringLiteral("Troubleshooting; change these only when asked to.")},
     };
     return captions.value(section, QStringLiteral("Defaults for %1.").arg(section));
 }
@@ -218,9 +304,8 @@ void SettingsPage::setShowAdvanced(bool on)
     if (m_advanced == on)
         return;
     m_advanced = on;
-    if (m_advancedSwitch->isChecked() != on)
-        m_advancedSwitch->setChecked(on);
-    rebuild();
+    if (m_advancedFold && m_advancedFold->isExpanded() != on)
+        m_advancedFold->setExpanded(on);
 }
 
 void SettingsPage::setSearchText(const QString& text)
@@ -230,6 +315,58 @@ void SettingsPage::setSearchText(const QString& text)
     rebuild();
 }
 
+bool SettingsPage::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::Resize) {
+        if (watched == m_pane)
+            fitLabels();
+        else if (watched == m_columns)
+            setCompactList(m_columns->width() < 860);
+    }
+    return Page::eventFilter(watched, event);
+}
+
+void SettingsPage::setCompactList(bool compact)
+{
+    if (compact == m_compactList)
+        return;
+    m_compactList = compact;
+    m_sectionList->setFixedWidth(compact ? 44 : size::settingsList + 16);
+    for (QAbstractButton* b : std::as_const(m_sectionButtons))
+        static_cast<SectionButton*>(b)->setCompact(compact);
+    m_importBtn->setText(compact ? QString() : QStringLiteral("Import legacy settings…"));
+    m_resetAllBtn->setText(compact ? QString() : QStringLiteral("Reset all settings…"));
+    m_importBtn->setToolTip(compact ? QStringLiteral("Import legacy settings…") : QStringLiteral("Take over the values of the Python edition's settings.json"));
+    m_resetAllBtn->setToolTip(compact ? QStringLiteral("Reset all settings…") : QStringLiteral("Put every setting back to its default"));
+    updateSectionBadges();
+}
+
+// SettingRow labels word-wrap; inside a row they would otherwise shrink to a
+// narrow column ("Ask before closing / while jobs run"). Keep each label on
+// one line up to ~40 % of the pane.
+void SettingsPage::fitLabels()
+{
+    const int cap = std::max(140, int((m_pane->width() - 2 * space::lg) * 0.42));
+    for (SettingRow* row : std::as_const(m_rows)) {
+        QLabel* l = row->labelWidget();
+        const int natural = l->fontMetrics().horizontalAdvance(l->text()) + 2;
+        l->setMinimumWidth(std::min(natural, cap));
+    }
+}
+
+SettingRow* SettingsPage::addRow(const SettingDef& def, QWidget* parent, QVBoxLayout* layout, bool divider)
+{
+    auto* row = new SettingRow(def, parent);
+    row->setDivider(divider);
+    row->setRestartNote(def.restartRequired);
+    m_rows.insert(def.key, row);
+    const QString key = def.key;
+    connect(row->editor(), &SettingEditor::edited, this, [this, key](const QVariant& v) { applyValue(key, v); });
+    layout->addWidget(row);
+    refreshRow(key);
+    return row;
+}
+
 void SettingsPage::rebuild()
 {
     while (QLayoutItem* it = m_cardsLayout->takeAt(0)) {
@@ -237,6 +374,8 @@ void SettingsPage::rebuild()
         delete it;
     }
     m_rows.clear();
+    m_advancedKeys.clear();
+    m_advancedFold = nullptr;
     m_fixBar = nullptr;
     m_deps = nullptr;
     m_tempUsage = nullptr;
@@ -244,80 +383,75 @@ void SettingsPage::rebuild()
     const QString query = m_search->text().trimmed();
     if (!query.isEmpty()) {
         m_secTitle->setText(QStringLiteral("Search results"));
+        m_secChanged->hide();
         m_resetSection->hide();
         int n = 0;
         for (const QString& s : m_sections) {
-            Card* card = nullptr;
             std::vector<const SettingDef*> hits;
             for (const SettingDef* d : m_ctx.schema().inSection(s))
                 if (d->label.contains(query, Qt::CaseInsensitive) || d->description.contains(query, Qt::CaseInsensitive) || d->key.contains(query, Qt::CaseInsensitive))
                     hits.push_back(d);
             if (hits.empty())
                 continue;
-            card = new Card(m_cards);
+            auto* card = new Card(m_cards);
             card->body()->setSpacing(0);
-            card->setTitle(s);
+            auto* open = new Link(QStringLiteral("Open section"), card);
+            card->setTitle(s, open);
+            connect(open, &Link::activated, this, [this, s] { showSection(s); }, Qt::QueuedConnection);
             for (size_t i = 0; i < hits.size(); ++i) {
-                auto* row = new SettingRow(*hits[i], card);
-                row->setDivider(i + 1 < hits.size());
-                row->setRestartNote(hits[i]->restartRequired);
-                m_rows.insert(hits[i]->key, row);
-                const QString key = hits[i]->key;
-                connect(row->editor(), &SettingEditor::edited, this, [this, key](const QVariant& v) { applyValue(key, v); });
-                card->body()->addWidget(row);
-                refreshRow(key);
+                addRow(*hits[i], card, card->body(), i + 1 < hits.size());
                 ++n;
             }
             m_cardsLayout->addWidget(card);
         }
-        m_secCaption->setText(n == 0 ? QStringLiteral("No setting matches \"%1\".").arg(query) : QStringLiteral("%1 setting%2 match \"%3\".").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(query));
+        if (n == 0)
+            m_cardsLayout->addWidget(new EmptyState(QStringLiteral("search"), QStringLiteral("No setting matches"),
+                                                    QStringLiteral("Try a shorter word, or browse the sections."), m_cards));
+        m_secCaption->setText(n == 0 ? QStringLiteral("Nothing matches “%1”.").arg(query)
+                                     : QStringLiteral("%1 setting%2 match “%3”.").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(query));
         refreshDependencyStates();
+        fitLabels();
         return;
     }
     m_resetSection->show();
     buildSection(m_section);
     updateSectionHeader();
     refreshDependencyStates();
+    fitLabels();
 }
 
 void SettingsPage::buildSection(const QString& section)
 {
     const auto defs = m_ctx.schema().inSection(section);
     QStringList groups;
-    for (const SettingDef* d : defs)
+    bool allAdvanced = !defs.empty();
+    for (const SettingDef* d : defs) {
         if (!groups.contains(d->group))
             groups << d->group;
-    int hiddenAdvanced = 0;
+        allAdvanced = allAdvanced && d->advanced;
+    }
+    // Rare settings fold into one "Advanced" disclosure at the end of the
+    // section; a section that is advanced as a whole shows them directly.
+    std::vector<std::pair<QString, std::vector<const SettingDef*>>> advanced;
     QStringList depIds;
     for (const QString& g : groups) {
-        std::vector<const SettingDef*> rows;
+        std::vector<const SettingDef*> rows, rare;
         for (const SettingDef* d : defs) {
             if (d->group != g)
                 continue;
             if (!d->dependencyId.isEmpty() && !depIds.contains(d->dependencyId))
                 depIds << d->dependencyId;
-            if (d->advanced && !m_advanced) {
-                ++hiddenAdvanced;
-                continue;
-            }
-            rows.push_back(d);
+            (d->advanced && !allAdvanced ? rare : rows).push_back(d);
         }
+        if (!rare.empty())
+            advanced.emplace_back(g.isEmpty() ? section : g, rare);
         if (rows.empty())
             continue;
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
         card->setTitle(g.isEmpty() ? section : g);
-        for (size_t i = 0; i < rows.size(); ++i) {
-            const SettingDef* d = rows[i];
-            auto* row = new SettingRow(*d, card);
-            row->setDivider(i + 1 < rows.size());
-            row->setRestartNote(d->restartRequired);
-            m_rows.insert(d->key, row);
-            const QString key = d->key;
-            connect(row->editor(), &SettingEditor::edited, this, [this, key](const QVariant& v) { applyValue(key, v); });
-            card->body()->addWidget(row);
-            refreshRow(key);
-        }
+        for (size_t i = 0; i < rows.size(); ++i)
+            addRow(*rows[i], card, card->body(), i + 1 < rows.size());
         m_cardsLayout->addWidget(card);
     }
     if (section == QLatin1String("Storage")) {
@@ -352,7 +486,9 @@ void SettingsPage::buildSection(const QString& section)
     if (section == QLatin1String("Advanced")) {
         auto* card = new Card(m_cards);
         card->setTitle(QStringLiteral("Import settings from the old app"));
-        card->body()->addWidget(caption(QStringLiteral("Reads the Python edition's settings.json and takes over every value the native app understands. Nothing is deleted; values the native app does not use are skipped."), card));
+        auto* note = caption(QStringLiteral("Takes over every value this app understands. Nothing is deleted."), card);
+        note->setToolTip(QStringLiteral("Reads the Python edition's settings.json; values the native app does not use are skipped."));
+        card->body()->addWidget(note);
         auto* pf = new PathField(PathField::Mode::OpenFile, card);
         pf->setFilter(QStringLiteral("JSON files (*.json)"));
         pf->setDialogTitle(QStringLiteral("Choose the old settings.json"));
@@ -365,7 +501,7 @@ void SettingsPage::buildSection(const QString& section)
         auto* row = new QWidget(card);
         auto* rh = hbox(row, space::sm);
         rh->addStretch(1);
-        auto* go = button(QStringLiteral("Import"), ButtonVariant::Primary, QStringLiteral("file_down"), row);
+        auto* go = button(QStringLiteral("Import"), ButtonVariant::Secondary, QStringLiteral("file_down"), row);
         connect(go, &QPushButton::clicked, this, [this, pf] {
             if (pf->path().isEmpty()) {
                 pf->setError(QStringLiteral("Choose the old settings file first."));
@@ -385,16 +521,16 @@ void SettingsPage::buildSection(const QString& section)
         auto* row = card->setTitle(QStringLiteral("Components and tools"), badge);
         auto* again = button(QStringLiteral("Check again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
         setButtonSmall(again, true);
-        auto* copyReport = button(QStringLiteral("Copy report"), ButtonVariant::Subtle, QStringLiteral("copy"), card);
-        setButtonSmall(copyReport, true);
-        row->addWidget(copyReport);
+        auto* copyReport = new IconButton(QStringLiteral("copy"), QStringLiteral("Copy report"), IconButton::Size::Small, card);
+        copyReport->setToolTip(QStringLiteral("Copy the tool report (JSON)"));
         row->addWidget(again);
+        row->addWidget(copyReport);
         m_deps = new DependencyList(m_ctx, {}, card);
         card->body()->addWidget(m_deps);
         if (m_deps->isEmpty())
             card->body()->addWidget(caption(QStringLiteral("No external tools are registered in this build."), card));
         connect(again, &QPushButton::clicked, m_deps, &DependencyList::checkAgain);
-        connect(copyReport, &QPushButton::clicked, this, [this] {
+        connect(copyReport, &QToolButton::clicked, this, [this] {
             QGuiApplication::clipboard()->setText(m_deps->report());
             emit toastRequested(Tone::Ok, QStringLiteral("Report copied"), QStringLiteral("Dependency statuses are on the clipboard as JSON."));
         });
@@ -416,7 +552,7 @@ void SettingsPage::buildSection(const QString& section)
         card->body()->setSpacing(0);
         auto* again = button(QStringLiteral("Detect again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
         setButtonSmall(again, true);
-        card->setTitle(QStringLiteral("Tools this section depends on"), again);
+        card->setTitle(QStringLiteral("Tools this section uses"), again);
         auto* list = new DependencyList(m_ctx, depIds, card);
         card->body()->addWidget(list);
         connect(again, &QPushButton::clicked, list, &DependencyList::checkAgain);
@@ -425,10 +561,33 @@ void SettingsPage::buildSection(const QString& section)
         });
         m_cardsLayout->addWidget(card);
     }
-    if (hiddenAdvanced > 0) {
-        auto* note = caption(QStringLiteral("%1 advanced setting%2 hidden. Turn on Show advanced to see %3.")
-                                 .arg(hiddenAdvanced).arg(hiddenAdvanced == 1 ? QString() : QStringLiteral("s")).arg(hiddenAdvanced == 1 ? QStringLiteral("it") : QStringLiteral("them")), m_cards);
-        m_cardsLayout->addWidget(note);
+    if (!advanced.empty()) {
+        QStringList names;
+        for (const auto& entry : advanced)
+            names << entry.first;
+        auto* fold = new Disclosure(QStringLiteral("Advanced"), elideMiddle(names.join(QStringLiteral(", ")), 80), m_cards);
+        fold->setObjectName(QStringLiteral("settings-advanced"));
+        fold->body()->setSpacing(0);
+        for (size_t gi = 0; gi < advanced.size(); ++gi) {
+            const auto& [g, list] = advanced[gi];
+            if (advanced.size() > 1) {
+                auto* head = label(g, TextStyle::Overline, color::fg_4, fold);
+                head->setContentsMargins(0, gi == 0 ? 2 : space::lg, 0, 2);
+                fold->body()->addWidget(head);
+            }
+            for (size_t i = 0; i < list.size(); ++i) {
+                addRow(*list[i], fold, fold->body(), i + 1 < list.size());
+                m_advancedKeys << list[i]->key;
+            }
+        }
+        fold->setExpanded(m_advanced);
+        connect(fold, &Disclosure::toggled, this, [this](bool on) {
+            m_advanced = on;
+            if (on)
+                fitLabels();
+        });
+        m_advancedFold = fold;
+        m_cardsLayout->addWidget(fold);
     }
     if (m_cardsLayout->count() == 0)
         m_cardsLayout->addWidget(new EmptyState(QStringLiteral("settings"), QStringLiteral("Nothing to set here yet"),
@@ -513,11 +672,27 @@ void SettingsPage::updateSectionHeader()
     for (const SettingDef* d : m_ctx.schema().inSection(m_section))
         if (!m_ctx.settings().isDefault(d->key))
             ++differ;
-    QString cap = sectionCaption(m_section);
+    m_secCaption->setText(sectionCaption(m_section));
+    m_secChanged->setText(QStringLiteral("%1 changed").arg(differ));
+    m_secChanged->setToolTip(QStringLiteral("%1 setting%2 in this section differ%3 from the defaults")
+                                 .arg(differ).arg(differ == 1 ? QString() : QStringLiteral("s")).arg(differ == 1 ? QStringLiteral("s") : QString()));
+    m_secChanged->setVisible(differ > 0);
+    m_resetSection->setVisible(differ > 0);
+    updateAdvancedSummary();
+}
+
+void SettingsPage::updateAdvancedSummary()
+{
+    if (!m_advancedFold)
+        return;
+    int differ = 0;
+    for (const QString& key : std::as_const(m_advancedKeys))
+        if (!m_ctx.settings().isDefault(key))
+            ++differ;
     if (differ > 0)
-        cap += QStringLiteral(" %1 setting%2 differ%3 from the defaults.").arg(differ).arg(differ == 1 ? QString() : QStringLiteral("s")).arg(differ == 1 ? QStringLiteral("s") : QString());
-    m_secCaption->setText(cap);
-    m_resetSection->setEnabled(differ > 0);
+        m_advancedFold->setSummary(QStringLiteral("%1 changed").arg(differ), Tone::Info);
+    else
+        m_advancedFold->setSummary(QStringLiteral("%1 setting%2").arg(m_advancedKeys.size()).arg(m_advancedKeys.size() == 1 ? QString() : QStringLiteral("s")));
 }
 
 void SettingsPage::updateSectionBadges()
@@ -530,8 +705,7 @@ void SettingsPage::updateSectionBadges()
         b->setText(QString::number(problems));
         b->setVisible(problems > 0);
         if (auto* btn = m_sectionButtons.value(QStringLiteral("Tools"))) {
-            b->adjustSize();
-            b->move(btn->width() - b->width() - 8, (btn->height() - b->height()) / 2);
+            static_cast<SectionButton*>(btn)->placeBadge();
             btn->update();
         }
     }
@@ -660,8 +834,8 @@ void SettingsPage::applyDemoState(const QString& name)
     for (const QString& sct : m_sections)
         if (name == QStringLiteral("section-") + QString(sct).toLower().replace(u' ', u'-')) {
             showSection(sct);
-            if (sct == QLatin1String("Advanced") || sct == QLatin1String("General"))
-                setShowAdvanced(true);
+            // General shows the Advanced fold open; the other sections as people first see them.
+            setShowAdvanced(sct == QLatin1String("General"));
         }
 }
 

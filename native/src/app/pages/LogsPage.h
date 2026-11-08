@@ -1,8 +1,9 @@
 #pragma once
 
-// Logs (Logs artboard): level segmented, source and job filters, search,
-// Follow switch, structured rows, selected-line detail, footer; Copy shown,
-// Export…, Clear, Open log folder.
+// Logs: one card that fills the page — search, level chips (All / Info /
+// Warnings n / Errors n), source and job filters; structured rows; the
+// selected line's full text; a footer with the line count and Follow.
+// Header: Copy shown, Clear view, Export…, Open log folder.
 
 #include "app/pages/Page.h"
 #include "app/ui/LogView.h"
@@ -22,6 +23,7 @@ public:
     void setLevelIndex(int index);
     void setSearch(const QString& text);
     void setJobFilter(const QString& jobId);
+    void clearFilters();
 
 private:
     void updateFooter();
@@ -38,12 +40,15 @@ private:
     QLineEdit* m_search;
     ui::Switch* m_follow;
     ui::LogTable* m_table;
+    ui::EmptyState* m_noLines;   // filters hide every line
+    ui::EmptyState* m_noLog;     // nothing logged (or the view was cleared)
     QWidget* m_detail;
+    QWidget* m_detailLine;
     QLabel* m_detailMeta;
     QLabel* m_detailText;
     ui::Link* m_openJob;
     ui::ElideLabel* m_footerLeft;
-    ui::ElideLabel* m_footerRight;
+    QPushButton* m_openFolder;
     QString m_selectedJob;
 };
 

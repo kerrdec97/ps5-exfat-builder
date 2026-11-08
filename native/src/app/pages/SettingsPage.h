@@ -1,17 +1,23 @@
 #pragma once
 
-// Settings (Settings artboard), generated from the SettingsSchema: section
-// list (200 px) · section header ("n settings differ", Show advanced, Reset
-// section) · cards per group of SettingRows · dependency rows (Tools and
-// "Tools this section depends on") · search · Import legacy settings… ·
-// Reset all… · temporary-files row (Storage).
+// Settings, generated from the SettingsSchema: search (Ctrl+F) in the page
+// header · section list with icons, Import legacy settings… and Reset all…
+// under it · section header ("n changed" badge, Reset section) · cards per
+// group of SettingRows, with the section's advanced settings folded into an
+// "Advanced" Disclosure · dependency rows (Tools and "Tools this section
+// depends on") · temporary-files row (Storage) · legacy import (Advanced).
 
 #include "app/pages/Page.h"
 #include "app/ui/DependencyRow.h"
 #include "app/ui/SettingRow.h"
 
 #include <QHash>
+#include <QPointer>
 #include <QPushButton>
+
+namespace fw::ui {
+class Disclosure;
+}
 
 namespace fw::pages {
 
@@ -36,14 +42,21 @@ public:
 signals:
     void attentionChanged();
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     void buildSection(const QString& section);
     void rebuild();
+    ui::SettingRow* addRow(const SettingDef& def, QWidget* parent, QVBoxLayout* layout, bool divider);
     void applyValue(const QString& key, const QVariant& value);
     void refreshRow(const QString& key);
     void refreshDependencyStates();
     void updateSectionHeader();
     void updateSectionBadges();
+    void updateAdvancedSummary();
+    void fitLabels();
+    void setCompactList(bool compact); // icon-only section list on narrow windows
     void importLegacy();
     void importLegacyFrom(const QString& path);
     void resetAll();
@@ -54,18 +67,24 @@ private:
     QString m_section;
     bool m_advanced = false;
     QLineEdit* m_search;
+    QWidget* m_columns;
     QWidget* m_sectionList;
+    QPushButton* m_importBtn;
+    QPushButton* m_resetAllBtn;
+    bool m_compactList = false;
     QVBoxLayout* m_sectionLayout;
     QHash<QString, QAbstractButton*> m_sectionButtons;
     QHash<QString, ui::Badge*> m_sectionBadges;
     QWidget* m_pane;
     QVBoxLayout* m_paneLayout;
     QLabel* m_secTitle;
+    ui::Badge* m_secChanged;
     QLabel* m_secCaption;
-    ui::Switch* m_advancedSwitch;
     QPushButton* m_resetSection;
     QWidget* m_cards;
     QVBoxLayout* m_cardsLayout;
+    QPointer<ui::Disclosure> m_advancedFold;
+    QStringList m_advancedKeys;
     QHash<QString, ui::SettingRow*> m_rows;
     QHash<QString, QString> m_errors;
     ui::InfoBar* m_fixBar = nullptr;

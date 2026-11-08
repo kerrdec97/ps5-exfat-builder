@@ -2,11 +2,15 @@
 
 #include "app/AppContext.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
+#include "app/ui/HomeKit.h"
 #include "core/BuildInfo.h"
 #include "core/Paths.h"
 
 #include <QDesktopServices>
 #include <QGridLayout>
+#include <QPainter>
+#include <QPainterPath>
 #include <QUrl>
 
 namespace fw::pages {
@@ -14,12 +18,49 @@ namespace fw::pages {
 using namespace ui;
 using namespace theme;
 
+namespace {
+
+const char* const kRepoUrl = "https://github.com/kerrdec97/ps5-exfat-builder";
+
+// The product card: a quiet surface with a soft brand glow behind the mark.
+class ProductCard : public QWidget {
+public:
+    explicit ProductCard(QWidget* parent) : QWidget(parent) { setProperty("fwNoRing", true); }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainterPath clip;
+        clip.addRoundedRect(r, radius::lg, radius::lg);
+        p.setClipPath(clip);
+        QLinearGradient base(r.topLeft(), r.bottomLeft());
+        base.setColorAt(0, QColor(0x15, 0x1a, 0x27));
+        base.setColorAt(1, color::bg_2);
+        p.fillRect(r, base);
+        QRadialGradient glow(QPointF(r.left() + 70, r.center().y()), 220);
+        glow.setColorAt(0, QColor(0x3d, 0x7b, 0xff, 60));
+        glow.setColorAt(0.5, QColor(0x8b, 0x5c, 0xf6, 28));
+        glow.setColorAt(1, QColor(0x8b, 0x5c, 0xf6, 0));
+        p.fillRect(r, glow);
+        p.setClipping(false);
+        p.setPen(QPen(color::border_2, 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(r, radius::lg, radius::lg);
+    }
+};
+
+} // namespace
+
 QList<ShortcutInfo> shortcutTable()
 {
     return {{QStringLiteral("Ctrl+B"), QStringLiteral("Run the current page's primary action (Build now, Build package, Backport…)")},
             {QStringLiteral("Esc"), QStringLiteral("Cancel the running job (after confirming)")},
             {QStringLiteral("Ctrl+L"), QStringLiteral("Open Logs")},
             {QStringLiteral("Ctrl+,"), QStringLiteral("Open Settings")},
+            {QStringLiteral("Ctrl+F"), QStringLiteral("Search settings (on Settings)")},
             {QStringLiteral("Ctrl+1 … Ctrl+9"), QStringLiteral("Jump to the nth page in the sidebar")},
             {QStringLiteral("F5"), QStringLiteral("Rescan on Library and Backport; refresh elsewhere")},
             {QStringLiteral("Ctrl+Q"), QStringLiteral("Quit")},
@@ -28,47 +69,81 @@ QList<ShortcutInfo> shortcutTable()
 }
 
 AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
-    : Page(ctx, QStringLiteral("about"), QStringLiteral("About"), QStringLiteral("Version, licences and the people behind this tool."), parent)
+    : Page(ctx, QStringLiteral("about"), QStringLiteral("About"), QStringLiteral("Version, licence and the people behind this tool."), parent)
 {
-    auto* version = new Card(this);
-    m_updateBadge = new Badge(QStringLiteral("Updates not checked"), Tone::Neutral, version);
+    // ---- Product
+    auto* product = new ProductCard(this);
+    product->setObjectName(QStringLiteral("about-product"));
+    auto* ph = hbox(product, space::xl, QMargins(28, 24, 24, 24));
+    ph->addWidget(new BrandMark(72, product), 0, Qt::AlignVCenter);
+    auto* pcol = new QVBoxLayout;
+    pcol->setSpacing(6);
+    auto* nameRow = new QHBoxLayout;
+    nameRow->setSpacing(space::md);
+    nameRow->addWidget(label(QLatin1String(build::kProductName), TextStyle::Display, color::fg_0, product));
+    auto* version = new Badge(QStringLiteral("Version %1").arg(QLatin1String(build::kVersion)), Tone::Info, product);
+    version->setIconName({});
+    nameRow->addWidget(version, 0, Qt::AlignVCenter);
+    nameRow->addStretch(1);
+    pcol->addLayout(nameRow);
+    auto* tagline = label(QStringLiteral("Build, backport and send PS5 game images. Native C++ and Qt."), TextStyle::Body, color::fg_2, product);
+    tagline->setWordWrap(true);
+    pcol->addWidget(tagline);
+    auto* statusRow = new QHBoxLayout;
+    statusRow->setSpacing(space::sm);
+    m_updateBadge = new Badge(QStringLiteral("Updates not checked"), Tone::Neutral, product);
     m_updateBadge->setIconName({});
-    version->setTitle(QStringLiteral("%1 — %2").arg(QLatin1String(build::kProductName), QLatin1String(build::kEditionName)), m_updateBadge);
-    version->body()->addWidget(label(QStringLiteral("Version %1 · native edition").arg(QLatin1String(build::kVersion)), TextStyle::Body, color::fg_1, version));
-    version->body()->addWidget(caption(QStringLiteral("The final release of exFAT Image Builder, rebuilt in C++ with Qt. Licensed under the GNU General Public License, version 3 or later. "
-                                                      "Use it only with games and content you legally own and dumped yourself. Not affiliated with or endorsed by Sony Interactive Entertainment."), version));
-    auto* actions = new QWidget(version);
-    auto* al = new FlowLayout(actions, space::sm, space::sm);
-    m_checkUpdates = button(QStringLiteral("Check for updates"), ButtonVariant::Secondary, QStringLiteral("refresh"), actions);
+    statusRow->addWidget(m_updateBadge);
+    auto* licence = new Badge(QStringLiteral("GPL-3.0-or-later"), Tone::Neutral, product);
+    licence->setIconName(QStringLiteral("shield"));
+    statusRow->addWidget(licence);
+    statusRow->addStretch(1);
+    pcol->addSpacing(4);
+    pcol->addLayout(statusRow);
+    ph->addLayout(pcol, 1);
+    auto* pactions = new QVBoxLayout;
+    pactions->setSpacing(space::sm);
+    m_checkUpdates = button(QStringLiteral("Check for updates"), ButtonVariant::Primary, QStringLiteral("refresh"), product);
     m_checkUpdates->setEnabled(jobs::isAvailable(ctx, QStringLiteral("update.check")));
-    m_checkUpdates->setToolTip(m_checkUpdates->isEnabled() ? QString() : QStringLiteral("Not available in this build"));
+    m_checkUpdates->setToolTip(m_checkUpdates->isEnabled() ? QStringLiteral("Asks GitHub for the latest release") : QStringLiteral("Not available in this build"));
     connect(m_checkUpdates, &QPushButton::clicked, this, &AboutPage::checkForUpdatesRequested);
-    al->addWidget(m_checkUpdates);
-    auto* report = button(QStringLiteral("Report a problem…"), ButtonVariant::Secondary, QStringLiteral("bug"), actions);
-    connect(report, &QPushButton::clicked, this, &AboutPage::reportProblemRequested);
-    al->addWidget(report);
-    auto* repo = button(QStringLiteral("GitHub repository"), ButtonVariant::Secondary, QStringLiteral("github"), actions);
-    connect(repo, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/kerrdec97/ps5-exfat-builder"))); });
-    al->addWidget(repo);
-    auto* changelog = button(QStringLiteral("Changelog"), ButtonVariant::Secondary, QStringLiteral("file_text"), actions);
-    connect(changelog, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/kerrdec97/ps5-exfat-builder/blob/main/CHANGELOG.md"))); });
-    al->addWidget(changelog);
-    auto* shortcuts = button(QStringLiteral("Keyboard shortcuts"), ButtonVariant::Secondary, QStringLiteral("keyboard"), actions);
-    connect(shortcuts, &QPushButton::clicked, this, &AboutPage::shortcutsRequested);
-    al->addWidget(shortcuts);
-    auto* logs = button(QStringLiteral("Open logs folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), actions);
+    pactions->addWidget(m_checkUpdates);
+    auto* logs = button(QStringLiteral("Open logs folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), product);
     connect(logs, &QPushButton::clicked, this, [] { openInFileManager(Paths::logsDir()); });
-    al->addWidget(logs);
-    version->body()->addWidget(actions);
-    content()->addWidget(version);
+    pactions->addWidget(logs);
+    ph->addLayout(pactions, 0);
+    content()->addWidget(product);
 
-    auto* credits = new Card(this);
+    // ---- Links
+    auto* links = new QWidget(this);
+    auto* lg = new TileGrid(links, 230, 4);
+    lg->setBalanced(true);
+    auto* repo = new ActionCard(QStringLiteral("github"), QStringLiteral("GitHub repository"), QStringLiteral("Source code, releases and discussions."), links);
+    repo->setToolTip(QString::fromLatin1(kRepoUrl));
+    connect(repo, &QAbstractButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kRepoUrl))); });
+    auto* report = new ActionCard(QStringLiteral("bug"), QStringLiteral("Report a problem"), QStringLiteral("Bundle the logs into a report you can share."), links);
+    connect(report, &QAbstractButton::clicked, this, &AboutPage::reportProblemRequested);
+    auto* changes = new ActionCard(QStringLiteral("sparkles"), QStringLiteral("What's new"), QStringLiteral("The changelog of every release."), links);
+    connect(changes, &QAbstractButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QString::fromLatin1(kRepoUrl) + QStringLiteral("/blob/main/CHANGELOG.md")));
+    });
+    auto* keys = new ActionCard(QStringLiteral("keyboard"), QStringLiteral("Keyboard shortcuts"), QStringLiteral("Every shortcut on one sheet."), links);
+    connect(keys, &QAbstractButton::clicked, this, &AboutPage::shortcutsRequested);
+    for (QWidget* w : {static_cast<QWidget*>(repo), static_cast<QWidget*>(report), static_cast<QWidget*>(changes), static_cast<QWidget*>(keys)})
+        lg->addWidget(w);
+    content()->addWidget(links);
+
+    // ---- Credits | licence
+    auto* columns = new QWidget(this);
+    auto* cl = new TwoColumnLayout(columns, 380, 100000);
+    auto* credits = new Card(columns);
     credits->setTitle(QStringLiteral("Credits"));
-    credits->body()->addWidget(label(QStringLiteral("Created and maintained by DecKerr97 (kerrdec97). Inspired by NookieAI and stonemodder (Porkfolio)."), TextStyle::Body, color::fg_1, credits));
-    auto* grid = new QGridLayout;
-    grid->setHorizontalSpacing(space::lg);
-    grid->setVerticalSpacing(space::xs);
-    const QList<QPair<QString, QString>> people = {
+    auto* lead = label(QStringLiteral("Created and maintained by DecKerr97 (kerrdec97). Inspired by NookieAI and stonemodder (Porkfolio)."), TextStyle::Body, color::fg_1, credits);
+    lead->setWordWrap(true);
+    credits->body()->addWidget(lead);
+    auto* people = new QWidget(credits);
+    auto* pg = new TileGrid(people, 220, 2, space::lg, space::md);
+    const QList<QPair<QString, QString>> list = {
         {QStringLiteral("Nazky"), QStringLiteral("Auto-Backport pipeline and Lazy_MkPFS")},
         {QStringLiteral("BestPig"), QStringLiteral("Backport research and the BackPork payload")},
         {QStringLiteral("SvenGDK"), QStringLiteral("UFS2Tool")},
@@ -79,25 +154,45 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
         {QStringLiteral("idlesauce, NookieAI, stonemodder"), QStringLiteral("Research and inspiration")},
         {QStringLiteral("alik70952"), QStringLiteral("UI modernisation proposal (pull request #57)")},
     };
-    int row = 0;
-    for (const auto& [name, what] : people) {
-        grid->addWidget(label(name, TextStyle::BodyStrong, color::fg_0, credits), row, 0, Qt::AlignTop);
-        auto* w = label(what, TextStyle::Body, color::fg_2, credits);
+    for (const auto& [name, what] : list) {
+        auto* cell = new QWidget(people);
+        auto* v = vbox(cell, 1);
+        v->addWidget(label(name, TextStyle::BodyStrong, color::fg_0, cell));
+        auto* w = label(what, TextStyle::Caption, color::fg_3, cell);
         w->setWordWrap(true);
-        grid->addWidget(w, row, 1);
-        ++row;
+        v->addWidget(w);
+        v->addStretch(1);
+        pg->addWidget(cell);
     }
-    grid->setColumnStretch(1, 1);
-    credits->body()->addLayout(grid);
-    credits->body()->addWidget(caption(QStringLiteral("…and every translator, tester, issue reporter and supporter of the Python edition."), credits));
-    content()->addWidget(credits);
+    credits->body()->addSpacing(space::xs);
+    credits->body()->addWidget(people);
+    credits->body()->addSpacing(space::xs);
+    credits->body()->addWidget(meta(QStringLiteral("…and every translator, tester, issue reporter and supporter of the Python edition."), credits));
+    cl->setLeft(credits);
 
-    auto* third = new Card(this);
-    third->setTitle(QStringLiteral("Third-party notices"));
-    third->body()->addWidget(caption(QStringLiteral("The native app contains or links these components. Full licence texts ship in the LICENSES folder next to the application."), third));
+    auto* legal = new Card(columns);
+    legal->setTitle(QStringLiteral("Licence"));
+    auto* gpl = label(QStringLiteral("Free software under the GNU General Public License, version 3 or later."), TextStyle::Body, color::fg_1, legal);
+    gpl->setWordWrap(true);
+    legal->body()->addWidget(gpl);
+    auto* own = caption(QStringLiteral("Use it only with games and content you own and dumped yourself."), legal);
+    own->setWordWrap(true);
+    legal->body()->addWidget(own);
+    auto* sony = caption(QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. No Sony software is included."), legal);
+    sony->setWordWrap(true);
+    sony->setToolTip(QStringLiteral("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
+    legal->body()->addWidget(sony);
+    legal->body()->addStretch(1);
+    cl->setRight(legal);
+    content()->addWidget(columns);
+
+    // ---- Third-party notices (folded)
+    auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("Full licence texts ship in the LICENSES folder next to the app."), this);
+    third->setObjectName(QStringLiteral("about-notices"));
+    third->setSummary(QStringLiteral("6 components"));
     auto* tgrid = new QGridLayout;
     tgrid->setHorizontalSpacing(space::lg);
-    tgrid->setVerticalSpacing(space::xs);
+    tgrid->setVerticalSpacing(space::sm);
     const QList<QStringList> rows = {
         {QStringLiteral("Qt 6 (Core, Gui, Widgets, Svg, Network, Concurrent)"), QStringLiteral("Application framework, dynamically linked"), QStringLiteral("LGPL-3.0")},
         {QStringLiteral("zlib"), QStringLiteral("Compression and ZIP archives"), QStringLiteral("zlib licence")},
@@ -106,22 +201,24 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
         {QStringLiteral("Lucide icons"), QStringLiteral("Interface icons"), QStringLiteral("ISC")},
         {QStringLiteral("ampr_emu (drakmor)"), QStringLiteral("AMPR index format"), QStringLiteral("GPL-3.0")},
     };
-    row = 0;
-    tgrid->addWidget(caption(QStringLiteral("Component"), third), row, 0);
-    tgrid->addWidget(caption(QStringLiteral("Use"), third), row, 1);
-    tgrid->addWidget(caption(QStringLiteral("Licence"), third), row, 2);
+    int row = 0;
+    tgrid->addWidget(label(QStringLiteral("Component"), TextStyle::Overline, color::fg_4, third), row, 0);
+    tgrid->addWidget(label(QStringLiteral("Use"), TextStyle::Overline, color::fg_4, third), row, 1);
+    tgrid->addWidget(label(QStringLiteral("Licence"), TextStyle::Overline, color::fg_4, third), row, 2);
     ++row;
     for (const auto& r : rows) {
-        tgrid->addWidget(label(r[0], TextStyle::BodyStrong, color::fg_0, third), row, 0, Qt::AlignTop);
+        auto* name = label(r[0], TextStyle::BodyStrong, color::fg_0, third);
+        name->setWordWrap(true);
+        tgrid->addWidget(name, row, 0, Qt::AlignTop);
         auto* use = label(r[1], TextStyle::Body, color::fg_2, third);
         use->setWordWrap(true);
-        tgrid->addWidget(use, row, 1);
+        tgrid->addWidget(use, row, 1, Qt::AlignTop);
         tgrid->addWidget(label(r[2], TextStyle::Mono, color::fg_1, third), row, 2, Qt::AlignTop);
         ++row;
     }
-    tgrid->setColumnStretch(1, 1);
+    tgrid->setColumnStretch(0, 2);
+    tgrid->setColumnStretch(1, 3);
     third->body()->addLayout(tgrid);
-    third->body()->addWidget(caption(QStringLiteral("No Sony software is included. FPKG packages are built with your own Publishing Tools, located through Settings › Tools."), third));
     content()->addWidget(third);
 }
 

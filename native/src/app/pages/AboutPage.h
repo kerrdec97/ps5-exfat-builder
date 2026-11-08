@@ -1,7 +1,8 @@
 #pragma once
 
-// About: version and licence, Check for updates, Report a problem…, keyboard
-// shortcuts, credits (from the legacy README), third-party notices.
+// About: the product card (brand mark, name, version, update status, Check
+// for updates), link cards (GitHub, Report a problem, What's new, Keyboard
+// shortcuts), credits, licence and the folded third-party notices.
 
 #include "app/pages/Page.h"
 

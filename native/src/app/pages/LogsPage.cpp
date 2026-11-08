@@ -1,10 +1,12 @@
 #include "app/pages/LogsPage.h"
 
 #include "app/AppContext.h"
+#include "app/ui/Icons.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
 
+#include <QAction>
 #include <QClipboard>
 #include <QDir>
 #include <QFile>
@@ -13,34 +15,38 @@
 #include <QGuiApplication>
 #include <QItemSelectionModel>
 
+#include <algorithm>
+
 namespace fw::pages {
 
 using namespace ui;
 using namespace theme;
 
 LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
-    : Page(ctx, QStringLiteral("logs"), QStringLiteral("Logs"),
-           QStringLiteral("Everything the app and its engines report, in one place. Raw tool output is kept here, never in error messages."), parent),
+    : Page(ctx, QStringLiteral("logs"), QStringLiteral("Logs"), QStringLiteral("Everything the app and its engines report, in one place."), parent),
       m_model(logModel)
 {
     m_filter = new LogFilterModel(this);
     m_filter->setSourceModel(&m_model);
 
-    auto* copy = button(QStringLiteral("Copy shown"), ButtonVariant::Secondary, QStringLiteral("copy"), this);
+    auto* copy = new IconButton(QStringLiteral("copy"), QStringLiteral("Copy the shown lines"), IconButton::Size::Regular, this);
+    copy->setToolTip(QStringLiteral("Copy the shown lines"));
+    auto* clear = new IconButton(QStringLiteral("trash"), QStringLiteral("Clear the view"), IconButton::Size::Regular, this);
+    clear->setToolTip(QStringLiteral("Clear the view (the log file is kept)"));
     auto* exportBtn = button(QStringLiteral("Export…"), ButtonVariant::Secondary, QStringLiteral("download"), this);
-    auto* folder = button(QStringLiteral("Open log folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), this);
-    auto* clear = button(QStringLiteral("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
+    exportBtn->setToolTip(QStringLiteral("Save the shown lines as a text file"));
+    m_openFolder = button(QStringLiteral("Open log folder"), ButtonVariant::Secondary, QStringLiteral("folder_open"), this);
     header()->addAction(copy);
-    header()->addAction(exportBtn);
-    header()->addAction(folder);
     header()->addAction(clear);
-    connect(copy, &QPushButton::clicked, this, [this] {
+    header()->addAction(exportBtn);
+    header()->addAction(m_openFolder);
+    connect(copy, &QToolButton::clicked, this, [this] {
         QGuiApplication::clipboard()->setText(shownText());
         emit toastRequested(Tone::Ok, QStringLiteral("Copied"), QStringLiteral("%1 lines on the clipboard").arg(formatCount(m_filter->rowCount())));
     });
     connect(exportBtn, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Export the shown log lines"),
-                                                          QDir::homePath() + QStringLiteral("/farewell-log.txt"), QStringLiteral("Text files (*.txt)"));
+                                                          QDir::homePath() + QStringLiteral("/exfat-image-builder-log.txt"), QStringLiteral("Text files (*.txt)"));
         if (path.isEmpty())
             return;
         auto st = writeFileAtomic(path, shownText().toUtf8());
@@ -49,60 +55,70 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
         else
             emit toastRequested(Tone::Err, QStringLiteral("Export failed"), st.error().message);
     });
-    connect(folder, &QPushButton::clicked, this, [this] {
+    connect(m_openFolder, &QPushButton::clicked, this, [this] {
         const QString f = m_ctx.logFilePath().isEmpty() ? Paths::logsDir() : QFileInfo(m_ctx.logFilePath()).absolutePath();
         openInFileManager(f);
     });
-    connect(clear, &QPushButton::clicked, this, [this] {
+    connect(clear, &QToolButton::clicked, this, [this] {
         m_model.clearView();
+        updateCounts();
         updateFooter();
     });
 
     auto* card = new Card(this, Card::Variant::Table);
+    card->setObjectName(QStringLiteral("logs-card"));
     auto* h = card->header();
     h->setSpacing(space::md);
+    m_search = textInput(QStringLiteral("Search messages"), false, card);
+    m_search->setMinimumWidth(180);
+    m_search->setClearButtonEnabled(true);
+    m_search->setAccessibleName(QStringLiteral("Search messages"));
+    m_search->addAction(icon(QStringLiteral("search"), color::fg_4), QLineEdit::LeadingPosition);
+    h->addWidget(m_search, 1);
     m_level = new Segmented(card);
     m_level->addSegment(QStringLiteral("All"));
     m_level->addSegment(QStringLiteral("Info"));
-    m_level->addSegment(QStringLiteral("Warnings"), QStringLiteral("warning"));
-    m_level->addSegment(QStringLiteral("Errors"), QStringLiteral("error"));
+    m_level->addSegment(QStringLiteral("Warnings"));
+    m_level->addSegment(QStringLiteral("Errors"));
     m_level->setAccessibleName(QStringLiteral("Level"));
     h->addWidget(m_level);
     m_source = dropdown(card);
-    m_source->setMinimumWidth(160);
+    m_source->setMinimumWidth(130);
     m_source->setAccessibleName(QStringLiteral("Source"));
+    m_source->setToolTip(QStringLiteral("Show one part of the app only"));
     h->addWidget(m_source);
     m_job = dropdown(card);
-    m_job->setMinimumWidth(160);
+    m_job->setMinimumWidth(130);
+    m_job->setMaximumWidth(220);
     m_job->setAccessibleName(QStringLiteral("Job"));
+    m_job->setToolTip(QStringLiteral("Show one job only"));
     h->addWidget(m_job);
-    m_search = textInput(QStringLiteral("Search messages"), false, card);
-    m_search->setFixedWidth(260);
-    m_search->setClearButtonEnabled(true);
-    m_search->setAccessibleName(QStringLiteral("Search messages"));
-    h->addWidget(m_search);
-    h->addStretch(1);
-    h->addWidget(label(QStringLiteral("Follow"), TextStyle::Body, color::fg_1, card));
-    m_follow = new Switch(card);
-    m_follow->setChecked(true);
-    m_follow->setAccessibleName(QStringLiteral("Follow new lines"));
-    h->addWidget(m_follow);
 
     m_table = new LogTable(card);
     m_table->setModel(m_filter);
-    m_table->setColumnWidth(LogModel::TimeColumn, 116);
-    m_table->setColumnWidth(LogModel::LevelColumn, 92);
-    m_table->setColumnWidth(LogModel::SourceColumn, 120);
-    m_table->setColumnWidth(LogModel::JobColumn, 90);
-    m_table->setMinimumHeight(12 * size::rowCompact + 40);
+    m_table->setColumnWidth(LogModel::TimeColumn, 112);
+    m_table->setColumnWidth(LogModel::LevelColumn, 88);
+    m_table->setColumnWidth(LogModel::SourceColumn, 110);
+    m_table->setColumnWidth(LogModel::JobColumn, 112);
+    m_table->setMinimumHeight(10 * size::rowCompact + 40);
     card->body()->addWidget(m_table, 1);
+    m_noLines = new EmptyState(QStringLiteral("file_search"), QStringLiteral("No line matches"), QStringLiteral("Try another level, source or search."), card);
+    auto* clearFiltersBtn = m_noLines->addAction(QStringLiteral("Clear filters"));
+    connect(clearFiltersBtn, &QPushButton::clicked, this, &LogsPage::clearFilters);
+    m_noLines->hide();
+    card->body()->addWidget(m_noLines, 1);
+    m_noLog = new EmptyState(QStringLiteral("file_text"), QStringLiteral("Nothing logged yet"), QStringLiteral("New lines appear here as the app works."), card);
+    m_noLog->hide();
+    card->body()->addWidget(m_noLog, 1);
 
     m_detail = new QWidget(card);
+    m_detail->setObjectName(QStringLiteral("logs-detail"));
     auto* dl = vbox(m_detail, 6, QMargins(space::lg, space::md, space::lg, space::md));
     auto* dh = new QHBoxLayout;
-    dh->setSpacing(space::sm);
+    dh->setSpacing(space::md);
     dh->addWidget(label(QStringLiteral("Selected line"), TextStyle::Overline, color::fg_4, m_detail));
     m_detailMeta = caption({}, m_detail);
+    m_detailMeta->setWordWrap(false);
     dh->addWidget(m_detailMeta);
     dh->addStretch(1);
     m_openJob = new Link(QStringLiteral("Open job"), m_detail);
@@ -114,26 +130,37 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     m_detailText->setWordWrap(true);
     m_detailText->setTextInteractionFlags(Qt::TextSelectableByMouse);
     dl->addWidget(m_detailText);
-    card->body()->addWidget(hairline(card, true));
+    auto* detailLine = hairline(card, true);
+    card->body()->addWidget(detailLine);
     card->body()->addWidget(m_detail);
     m_detail->hide();
+    detailLine->hide();
     connect(m_openJob, &Link::activated, this, [this] {
         if (!m_selectedJob.isEmpty())
             emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), m_selectedJob}}});
     });
     connect(copyLine, &Link::activated, this, [this] { QGuiApplication::clipboard()->setText(m_detailText->text()); });
+    m_detailLine = detailLine;
 
     auto* f = card->footer();
     m_footerLeft = new ElideLabel({}, Qt::ElideRight, card);
     m_footerLeft->setFont(font::caption());
     setTextColor(m_footerLeft, color::fg_3);
-    m_footerRight = new ElideLabel({}, Qt::ElideMiddle, card);
-    m_footerRight->setFont(font::monoSmall());
-    setTextColor(m_footerRight, color::fg_3);
-    m_footerRight->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     f->addWidget(m_footerLeft, 1);
-    f->addWidget(m_footerRight, 1);
+    f->addWidget(label(QStringLiteral("Follow new lines"), TextStyle::Caption, color::fg_2, card));
+    m_follow = new Switch(card);
+    m_follow->setChecked(true);
+    m_follow->setAccessibleName(QStringLiteral("Follow new lines"));
+    m_follow->setToolTip(QStringLiteral("Keep the newest line in view"));
+    f->addWidget(m_follow);
     content()->addWidget(card, 1);
+    // The log card takes the page's height instead of the bottom spacer.
+    if (auto* outer = qobject_cast<QBoxLayout*>(scrollArea()->widget()->layout())) {
+        outer->setStretchFactor(content(), 1);
+        for (int i = 0; i < outer->count(); ++i)
+            if (outer->itemAt(i)->spacerItem())
+                outer->setStretch(i, 0);
+    }
 
     connect(m_level, &Segmented::currentChanged, this, &LogsPage::setLevelIndex);
     connect(m_source, &QComboBox::currentIndexChanged, this, [this](int) {
@@ -187,6 +214,15 @@ void LogsPage::setJobFilter(const QString& jobId)
         i = m_job->count() - 1;
     }
     m_job->setCurrentIndex(std::max(0, i));
+    m_job->setVisible(m_job->count() > 1);
+}
+
+void LogsPage::clearFilters()
+{
+    setSearch({});
+    setLevelIndex(0);
+    m_source->setCurrentIndex(0);
+    m_job->setCurrentIndex(0);
 }
 
 void LogsPage::refreshSources()
@@ -205,8 +241,15 @@ void LogsPage::refreshSources()
     m_job->addItem(QStringLiteral("All jobs"), QString());
     for (const auto& rec : m_ctx.queue().records())
         m_job->addItem(rec.title, rec.id);
-    m_job->setCurrentIndex(std::max(0, m_job->findData(curJob)));
+    int j = m_job->findData(curJob);
+    if (j < 0 && !curJob.isEmpty()) {
+        m_job->addItem(curJob, curJob);
+        j = m_job->count() - 1;
+    }
+    m_job->setCurrentIndex(std::max(0, j));
     m_job->blockSignals(false);
+    // Only worth a control when there is a job to pick.
+    m_job->setVisible(m_job->count() > 1);
 }
 
 void LogsPage::updateCounts()
@@ -224,32 +267,39 @@ void LogsPage::updateCounts()
 void LogsPage::updateFooter()
 {
     QStringList by;
-    by << QStringLiteral("level: %1").arg(QStringList{QStringLiteral("All"), QStringLiteral("Info"), QStringLiteral("Warnings"), QStringLiteral("Errors")}.value(m_level->currentIndex()));
-    by << QStringLiteral("source: %1").arg(m_source->currentData().toString().isEmpty() ? QStringLiteral("All") : m_source->currentData().toString());
+    if (m_level->currentIndex() > 0)
+        by << QStringList{QString(), QStringLiteral("info and up"), QStringLiteral("warnings and errors"), QStringLiteral("errors")}.value(m_level->currentIndex());
+    if (!m_source->currentData().toString().isEmpty())
+        by << m_source->currentData().toString();
     if (!m_job->currentData().toString().isEmpty())
-        by << QStringLiteral("job: %1").arg(m_job->currentText());
+        by << QStringLiteral("job %1").arg(m_job->currentText());
     if (!m_search->text().trimmed().isEmpty())
-        by << QStringLiteral("search: \"%1\"").arg(m_search->text().trimmed());
-    m_footerLeft->setFullText(QStringLiteral("Showing %1 of %2 lines · filtered by %3").arg(formatCount(m_filter->rowCount()), formatCount(m_model.rowCount()), by.join(QStringLiteral(" · "))));
+        by << QStringLiteral("“%1”").arg(m_search->text().trimmed());
+    const int shown = m_filter->rowCount(), total = m_model.rowCount();
+    m_footerLeft->setFullText(by.isEmpty() ? QStringLiteral("%1 lines").arg(formatCount(total))
+                                           : QStringLiteral("Showing %1 of %2 lines · %3").arg(formatCount(shown), formatCount(total), by.join(QStringLiteral(" · "))));
     const QString path = m_ctx.logFilePath();
     const QFileInfo fi(path);
-    m_footerRight->setFullText(path.isEmpty() ? QString() : QStringLiteral("%1 · %2").arg(nativePath(path), formatBytes(fi.size())));
+    const QString file = path.isEmpty() ? QString() : QStringLiteral("%1 · %2").arg(nativePath(path), formatBytes(fi.size()));
+    m_footerLeft->setToolTip(file);
+    m_openFolder->setToolTip(file.isEmpty() ? QStringLiteral("Open the folder with the log files") : file);
+
+    // Nothing to show: say why and offer the way back.
+    const bool none = shown == 0;
+    m_table->setVisible(!none);
+    m_noLines->setVisible(none && total > 0);
+    m_noLog->setVisible(none && total == 0);
     emit statusContextChanged();
 }
 
 void LogsPage::updateDetail()
 {
     const QModelIndex cur = m_table->currentIndex();
-    if (!cur.isValid()) {
-        m_detail->hide();
+    const LogRecord* rec = cur.isValid() ? m_model.recordAt(m_filter->mapToSource(cur).row()) : nullptr;
+    m_detail->setVisible(rec != nullptr);
+    m_detailLine->setVisible(rec != nullptr);
+    if (!rec)
         return;
-    }
-    const QModelIndex src = m_filter->mapToSource(cur);
-    const LogRecord* rec = m_model.recordAt(src.row());
-    if (!rec) {
-        m_detail->hide();
-        return;
-    }
     m_selectedJob = rec->jobId;
     QStringList metaParts{rec->time.toString(QStringLiteral("HH:mm:ss.zzz")), rec->source, logLevelName(rec->level)};
     if (!rec->jobId.isEmpty())
@@ -264,7 +314,6 @@ void LogsPage::updateDetail()
     }
     m_detailText->setText(text);
     m_openJob->setVisible(!rec->jobId.isEmpty());
-    m_detail->show();
 }
 
 QString LogsPage::shownText() const
