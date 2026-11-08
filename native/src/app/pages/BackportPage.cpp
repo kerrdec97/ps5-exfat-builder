@@ -900,7 +900,7 @@ bool BackportPage::persistAllowed() const { return !m_demo && !testMode(); }
 void BackportPage::persistSettings()
 {
     if (persistAllowed())
-        persistSettings();
+        bp::saveSettings(m_settings);
 }
 
 void BackportPage::log(const QString& level, const QString& message, bool toBox)

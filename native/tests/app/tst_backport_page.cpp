@@ -30,6 +30,11 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
+#include <chrono>
+#include <fstream>
+#include <thread>
+
 using namespace fw;
 
 namespace {
@@ -205,8 +210,24 @@ private slots:
             f.write(out.join(QLatin1Char('\n')).toUtf8());
         });
         heartbeat.start();
-        QTest::mouseClick(start, Qt::LeftButton);
-        QTest::qWaitFor([this] { return page()->isBusy(); }, 60000);
+        static std::atomic<int> phase{0};
+        std::atomic<bool> stopWatch{false};
+        std::thread watch([&stopWatch, hbFile] {
+            while (!stopWatch.load()) {
+                if (!hbFile.isEmpty()) {
+                    std::ofstream o((hbFile + QStringLiteral(".phase")).toStdWString(), std::ios::trunc);
+                    o << "phase " << phase.load() << std::endl;
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        });
+        phase = 1;
+        QMetaObject::invokeMethod(start, &QPushButton::click, Qt::QueuedConnection);
+        phase = 2;
+        QTest::qWaitFor([this] { phase = 3; return page()->isBusy(); }, 60000);
+        phase = 4;
+        stopWatch = true;
+        watch.join();
         if (!page()->isBusy())
             for (auto* t : page()->findChildren<QTextEdit*>())
                 qInfo().noquote() << "activity:" << t->toPlainText();
