@@ -41,6 +41,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A release published by hand (the owner uploads the exe himself) is left as it is.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "The release $GITHUB_REF_NAME already exists (published by hand); not replacing it."
+            exit 0
+          fi
           # GitHub stores asset names without spaces ("exFAT.Image.Builder.exe"); the label keeps the readable name.
           test -f "dist/exFAT Image Builder.exe"
           gh release create "$GITHUB_REF_NAME" \
