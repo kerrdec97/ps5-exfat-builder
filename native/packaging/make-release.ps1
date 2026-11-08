@@ -34,6 +34,12 @@ param(
     # native\cmake\BackportEngine.cmake). Empty: CMake downloads the official
     # release and checks its SHA-256.
     [string]$BackportEngine = '',
+    # PRIVATE builds only: your own Sony Publishing Tools folder (the one with
+    # prospero-pub-cmd.exe, or toolchain\/bin\ holding it). It is copied into
+    # the exe as tools\fpkg-toolkit so FPKG works with nothing to set up, and
+    # the output goes to dist-private\ unless -OutDir is given. Never publish a
+    # build made with this: those files are Sony's, licensed to you.
+    [string]$PrivateToolkit = '',
     [int]$Parallel = 0,
     [switch]$SkipBuild,
     [switch]$SkipTests,
@@ -46,7 +52,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $native = Join-Path $repo 'native'
 if (-not $BuildDir) { $BuildDir = Join-Path $native 'build-release' }
-if (-not $OutDir) { $OutDir = Join-Path $repo 'dist' }
+if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($PrivateToolkit) { 'dist-private' } else { 'dist' }) }
 $version = (Select-String -Path (Join-Path $native 'CMakeLists.txt') -Pattern 'VERSION (\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
 
 function Write-Step([string]$text) { Write-Host "== $text" }
@@ -120,6 +126,27 @@ if (-not (Test-Path (Join-Path $engines 'backport\PS5BackportGUI.exe'))) {
     throw "The PS5 Backport engine is missing from $engines (configure with -BackportEngine <exe> or let CMake fetch it)"
 }
 Copy-Item $engines -Recurse (Join-Path $dist 'engines')
+if ($PrivateToolkit) {
+    $tk = (Resolve-Path $PrivateToolkit).Path
+    $exeIn = @('prospero-pub-cmd.exe', 'toolchain\prospero-pub-cmd.exe', 'bin\prospero-pub-cmd.exe') |
+        ForEach-Object { Join-Path $tk $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $exeIn) { throw "prospero-pub-cmd.exe was not found in $tk (or its toolchain\ or bin\ folder)" }
+    $tkOut = Join-Path $dist 'tools\fpkg-toolkit'
+    Write-Step "Private build: bundling the toolkit from $tk"
+    New-Item -ItemType Directory -Force $tkOut | Out-Null
+    Copy-Item (Join-Path $tk '*') $tkOut -Recurse -Force
+    # The tool loads the VC++ runtime from its own folder or System32; put the
+    # app's copies next to it so it also runs on a PC without the redistributable.
+    $toolDir = Split-Path (Join-Path $tkOut ($exeIn.Substring($tk.Length).TrimStart('\'))) -Parent
+    $crt = @()
+    if ($env:VCToolsRedistDir) { $crt = Get-ChildItem -Path (Join-Path $env:VCToolsRedistDir 'x64') -Directory -Filter 'Microsoft.VC14*.CRT' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($crt) {
+        Get-ChildItem -Path $crt.FullName -Filter '*.dll' | ForEach-Object {
+            $dest = Join-Path $toolDir $_.Name
+            if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest }
+        }
+    } else { Write-Host 'Note: the VC++ runtime folder was not found; the tool will use the PC''s installed runtime.' }
+}
 
 # ---- 5. Single-file exe -------------------------------------------------------------
 Write-Step 'Single-file exe'

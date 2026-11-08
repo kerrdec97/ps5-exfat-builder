@@ -1216,6 +1216,27 @@ private slots:
                                                 QStringLiteral("fpkg.extract"), QStringLiteral("fpkg.verify")}));
     }
 
+    void bundledToolkitIsTheLastFallback()
+    {
+        // A private build ships the owner's toolkit as <app>/tools/fpkg-toolkit;
+        // it is used only when nothing is configured.
+        const QString bundled = bundledToolkitDir();
+        QVERIFY(!bundled.isEmpty());
+        QVERIFY2(!QFileInfo::exists(bundled), "leftover bundled toolkit next to the test");
+        QVERIFY(!locatePubTools(QString(), QString()).ok());
+        put(bundled, QStringLiteral("toolchain/prospero-pub-cmd.exe"), "exe");
+        put(bundled, QStringLiteral("prospero-dds2png.exe"), "exe");
+        const PubToolchain t = locatePubTools(QString(), QString());
+        QVERIFY(t.ok());
+        QCOMPARE(QDir::cleanPath(t.toolkitRoot), QDir::cleanPath(bundled));
+        QCOMPARE(QFileInfo(locateDds2png(t, QString())).fileName(), kDds2pngExeName);
+        // A configured path still wins (and a wrong one is reported, not replaced).
+        QVERIFY(!locatePubTools(dir(QStringLiteral("elsewhere")), QString()).ok());
+        QVERIFY(QDir(QFileInfo(bundled).absoluteFilePath()).removeRecursively());
+        QDir().rmdir(QFileInfo(bundled).absolutePath()); // tools/ when empty
+        QVERIFY(!locatePubTools(QString(), QString()).ok());
+    }
+
     void toolchainLookup()
     {
         const QString root = dir(QStringLiteral("tk"));

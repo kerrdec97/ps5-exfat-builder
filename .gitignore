@@ -108,3 +108,6 @@ native/CMakeUserPresets.json
 
 # PC acceptance run (native/packaging/pc-acceptance.ps1): evidence stays local
 /_PC_TEST_EVIDENCE/
+
+# Private builds that carry the owner's own Sony toolkit: never commit or publish.
+dist-private/

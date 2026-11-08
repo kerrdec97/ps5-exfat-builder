@@ -3,8 +3,9 @@
 // The user's Sony Publishing Tools: where prospero-pub-cmd.exe is, whether its
 // folder looks complete, the optional prospero-dds2png.exe, the VC++ x64
 // runtime it needs on Windows, and the dependency probes shown in
-// Settings > Tools. Nothing is searched for beyond the configured path and the
-// SCE_PROSPERO_PUBTOOLS environment variable, and nothing is downloaded.
+// Settings > Tools. Nothing is searched for beyond the configured path, the
+// SCE_PROSPERO_PUBTOOLS environment variable and <app>\tools\fpkg-toolkit (a
+// private build's own copy), and nothing is downloaded.
 
 #include "core/Dependencies.h"
 
@@ -30,9 +31,13 @@ struct PubToolchain {
 };
 
 // `configured` may be the exe, its folder, or a toolkit root holding
-// toolchain\ or bin\. Falls back to `envValue` when `configured` is empty.
+// toolchain\ or bin\. Falls back to `envValue` when `configured` is empty,
+// then to a toolkit bundled with a private build (bundledToolkitDir()).
 PubToolchain locatePubTools(const QString& configured, const QString& envValue);
 PubToolchain locatePubTools(const QString& configured); // env from SCE_PROSPERO_PUBTOOLS
+
+// <app folder>/tools/fpkg-toolkit ("" without a QCoreApplication).
+QString bundledToolkitDir();
 
 // prospero-dds2png.exe: the configured path, else next to the toolkit root or
 // the exe. "" when not found.

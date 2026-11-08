@@ -4,6 +4,7 @@
 #include "core/Settings.h"
 #include "engines/fpkg/FpkgSettings.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -90,6 +91,13 @@ PubToolchain validate(const QString& exe)
 
 } // namespace
 
+QString bundledToolkitDir()
+{
+    if (!QCoreApplication::instance())
+        return {};
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools/fpkg-toolkit"));
+}
+
 PubToolchain locatePubTools(const QString& configured, const QString& envValue)
 {
     const auto tryBase = [](const QString& base, const QString& where) -> std::optional<PubToolchain> {
@@ -107,6 +115,11 @@ PubToolchain locatePubTools(const QString& configured, const QString& envValue)
         return *t;
     if (auto t = tryBase(envValue, kPubToolsEnvVar))
         return *t;
+    // A private build carries the owner's own toolkit next to the app
+    // (make-release.ps1 -PrivateToolkit); public builds have none.
+    for (const QString& cand : candidates(bundledToolkitDir()))
+        if (QFileInfo(cand).isFile())
+            return validate(cand);
     PubToolchain t;
     t.problems << QStringLiteral("The Sony Publishing Tools are not set. Choose your own %1 in Settings > Tools.")
                       .arg(kPubCmdExeName);
