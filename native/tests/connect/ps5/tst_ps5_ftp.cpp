@@ -833,12 +833,12 @@ private slots:
             QVERIFY(!d->description.isEmpty());
             ++n;
         }
-        QCOMPARE(n, 13);
+        QCOMPARE(n, 14);
         QVERIFY(!mod.schema->normalize(keys::kFtpPort, 70000).ok());
         QVERIFY(!mod.schema->normalize(keys::kGamesFolder, QStringLiteral("data/x")).ok());
         QVERIFY(!mod.schema->normalize(keys::kConsoleIp, QStringLiteral("not an ip!")).ok());
         for (const QString& kind : {jobkinds::kUpload, jobkinds::kDownload, jobkinds::kPayloadSend, jobkinds::kDpiInstall,
-                                    jobkinds::kY2jbAutoBlock, jobkinds::kShadowMountStop})
+                                    jobkinds::kY2jbAutoBlock, jobkinds::kShadowMountStop, jobkinds::kShadowMountEject})
             QVERIFY(mod.jobs.contains(kind));
 
         const QString legacy = QDir(fresh(QStringLiteral("legacy"))).filePath(QStringLiteral("s.json"));
@@ -859,6 +859,135 @@ private slots:
         QCOMPARE(ep.parallelTransfers, 2);
         QVERIFY(ep.passive);
         QCOMPARE(ftpOptionsFor(ep).connectTimeoutMs, 10000);
+    }
+
+    // ---- research §5: the payload port is elfldr's 9021, never etaHEN's DPI v1 9090 --------
+    void payloadPortDefaultsAndMigration()
+    {
+        Module mod;
+        QCOMPARE(mod.schema->find(keys::kPayloadPort)->defaultValue.toInt(), 9021);
+        QCOMPARE(mod.schema->find(keys::kSmpApiPort)->defaultValue.toInt(), 10101);
+        QCOMPARE(ConsoleEndpoint{}.payloadPort, quint16(9021));
+        QVERIFY(mod.schema->find(keys::kFtpPort)->description.contains(QStringLiteral("2120")));
+        QVERIFY(mod.schema->find(keys::kKlogPort)->description.contains(QStringLiteral("9081")));
+        QVERIFY(mod.schema->find(keys::kDpiPort)->description.contains(QStringLiteral("DPI_v2=1")));
+
+        // The legacy app's 9090 is imported as 9021.
+        const QString legacy = QDir(fresh(QStringLiteral("legacy9090"))).filePath(QStringLiteral("s.json"));
+        QVERIFY(fwtest::writeTextFile(legacy, "{\"pl_port\":\"9090\"}"));
+        SettingsStore imported(mod.schema, QDir(fresh(QStringLiteral("store9090"))).filePath(QStringLiteral("s.json")));
+        QVERIFY(imported.load().ok());
+        QCOMPARE(imported.importLegacy(legacy).value(), 1);
+        QCOMPARE(imported.value(keys::kPayloadPort).toInt(), 9021);
+
+        // A stored 9090 becomes 9021 once; a 9090 set again afterwards stays.
+        SettingsStore store(mod.schema, QDir(fresh(QStringLiteral("migr"))).filePath(QStringLiteral("s.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(keys::kPayloadPort, 9090).ok());
+        const QString marker = QDir(fresh(QStringLiteral("marker"))).filePath(QStringLiteral("ps5-migrations.txt"));
+        QVERIFY(migrateLegacyPayloadPort(store, marker));
+        QCOMPARE(store.value(keys::kPayloadPort).toInt(), 9021);
+        QVERIFY(QFileInfo::exists(marker));
+        QVERIFY(store.setValue(keys::kPayloadPort, 9090).ok());
+        QVERIFY(!migrateLegacyPayloadPort(store, marker));
+        QCOMPARE(store.value(keys::kPayloadPort).toInt(), 9090);
+        // Another port is never touched.
+        SettingsStore other(mod.schema, QDir(fresh(QStringLiteral("migr2"))).filePath(QStringLiteral("s.json")));
+        QVERIFY(other.load().ok());
+        QVERIFY(other.setValue(keys::kPayloadPort, 9020).ok());
+        QVERIFY(!migrateLegacyPayloadPort(other, QDir(fresh(QStringLiteral("marker2"))).filePath(QStringLiteral("m.txt"))));
+        QCOMPARE(other.value(keys::kPayloadPort).toInt(), 9020);
+    }
+
+    // ---- research §4.1: ftpsrv SELF decryption, identity, FEAT, no NLST -------------------------
+    void ftpsrvSelfModeIsTurnedOffAfterLogin()
+    {
+        const QString root = fresh(QStringLiteral("ftpsrv"));
+        const QString local = fresh(QStringLiteral("ftpsrv-local"));
+        // An fself eboot: SELF magic, then data. In SELF mode ftpsrv reports and
+        // sends a "decrypted" ELF instead (16 bytes shorter in the fake).
+        QByteArray self = QByteArray("\x4f\x15\x3d\x1d", 4);
+        for (int i = 0; i < 4000; ++i)
+            self += char(i * 7);
+        const QString eboot = QDir(local).filePath(QStringLiteral("eboot.bin"));
+        QVERIFY(fwtest::writeTextFile(eboot, self));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.ftpsrv = true;
+        QDir().mkpath(root + QStringLiteral("/data/etaHEN/games"));
+        FakeFtpServer srv(o);
+
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        QCOMPARE(c.selfMode(), SelfMode::Disabled);
+        QVERIFY(srv.sawCommand(QStringLiteral("SELF")));
+        QVERIFY(!srv.sawCommand(QStringLiteral("PASS"))); // USER answers 230 on ftpsrv
+        const FtpServerIdentity id = c.serverIdentity();
+        QCOMPARE(id.name, QStringLiteral("ftpsrv"));
+        QCOMPARE(id.version, QStringLiteral("v0.21.1"));
+        QCOMPARE(id.label(), QStringLiteral("ftpsrv v0.21.1"));
+        auto feats = c.features();
+        QVERIFY(feats->ftpsrv && feats->mlsd && feats->rest && feats->size); // FEAT lists only MLSD KILL MTRW SELF
+
+        // Upload with the size check: the file stays, byte for byte.
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        auto rep = runUpload(planUpload({eboot}, QStringLiteral("/data/etaHEN/games")).value(), opt, {});
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->failed, 0);
+        QCOMPARE(rep->verified, 1);
+        QCOMPARE(readAll(srv.path(QStringLiteral("/data/etaHEN/games/eboot.bin"))), self);
+        QCOMPARE(c.size(QStringLiteral("/data/etaHEN/games/eboot.bin")).value(), qint64(self.size()));
+        QCOMPARE(c.download(QStringLiteral("/data/etaHEN/games/eboot.bin")).value(), self); // raw bytes, not the ELF
+
+        // No NLST on ftpsrv: existence comes from the folder listing.
+        QVERIFY(c.fileExists(QStringLiteral("/data/etaHEN/games/eboot.bin")));
+        QVERIFY(!c.fileExists(QStringLiteral("/data/etaHEN/games/none.bin")));
+        QVERIFY(!c.fileExists(QStringLiteral("/data/missing/none.bin")));
+        QCOMPARE(c.listedSize(QStringLiteral("/data/etaHEN/games/eboot.bin")).value(), qint64(self.size()));
+        QCOMPARE(c.pwd().value(), QStringLiteral("/")); // the listing did not move the working folder
+        QVERIFY(!c.siteAvail().ok());                   // 502: free space is not an FTP feature here
+        QVERIFY(!srv.sawCommand(QStringLiteral("KILL")));
+    }
+
+    void ftpsrvThatKeepsSelfModeDoesNotLoseUploads()
+    {
+        // A build where SELF cannot be turned off: SIZE lies about fself
+        // files, the listing does not, and the upload is kept (it used to be
+        // deleted as "the PS5 reports N bytes, expected M").
+        const QString root = fresh(QStringLiteral("ftpsrv-self"));
+        const QString local = fresh(QStringLiteral("ftpsrv-self-local"));
+        const QByteArray self = QByteArray("\x54\x14\xf5\xee", 4) + QByteArray(5000, 'x');
+        const QString lib = QDir(local).filePath(QStringLiteral("libSceAmpr.sprx"));
+        QVERIFY(fwtest::writeTextFile(lib, self));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.ftpsrv = true;
+        o.selfIgnored = true;
+        QDir().mkpath(root + QStringLiteral("/up"));
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        QCOMPARE(c.selfMode(), SelfMode::StillEnabled);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        auto rep = runUpload(planUpload({lib}, QStringLiteral("/up")).value(), opt, {});
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->failed, 0);
+        QCOMPARE(readAll(srv.path(QStringLiteral("/up/libSceAmpr.sprx"))), self);
+        QVERIFY(srv.sawCommand(QStringLiteral("MLSD")));
+
+        // Other servers never get SELF.
+        FakeFtpServer::Options plain;
+        plain.root = root;
+        FakeFtpServer other(plain);
+        FtpClient c2(quick());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), other.port()).ok());
+        QCOMPARE(c2.selfMode(), SelfMode::NotApplicable);
+        QVERIFY(!other.sawCommand(QStringLiteral("SELF")));
+        QCOMPARE(identifyFtpServer(QStringLiteral("Service ready for new user.")).name, QStringLiteral("etaHEN"));
+        QCOMPARE(identifyFtpServer(QStringLiteral("zftpd v1.7.0 ready")).version, QStringLiteral("v1.7.0"));
+        QCOMPARE(identifyFtpServer(QStringLiteral("FakePS5 FTP ready")).label(), QStringLiteral("FTP server"));
     }
 };
 

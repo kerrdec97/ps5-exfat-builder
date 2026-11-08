@@ -212,6 +212,14 @@ private slots:
         f.copy = true;
         QCOMPARE(classifyFtpServer(f, {}).confidence, QStringLiteral("very likely"));
         QCOMPARE(classifyFtpServer({}, QStringLiteral("zftpd 2.0")).confidence, QStringLiteral("likely"));
+        // ftpsrv (research §4.1): the banner with its version, and FEAT with KILL/MTRW/SELF.
+        FtpFeatures ftpsrv;
+        ftpsrv.ftpsrv = true;
+        const auto fs = classifyFtpServer(ftpsrv, QStringLiteral("Welcome to ftpsrv.elf running on pid 77 Version: v0.21.1 (built x) Service is ready"));
+        QCOMPARE(fs.label, QStringLiteral("ftpsrv v0.21.1"));
+        QCOMPARE(fs.confidence, QStringLiteral("very likely"));
+        QCOMPARE(classifyFtpServer(ftpsrv, {}).label, QStringLiteral("ftpsrv"));
+        QCOMPARE(classifyFtpServer({}, QStringLiteral("Service ready for new user.")).label, QStringLiteral("etaHEN FTP"));
     }
 
     void diagnosticsPassAgainstTheFakeServer()

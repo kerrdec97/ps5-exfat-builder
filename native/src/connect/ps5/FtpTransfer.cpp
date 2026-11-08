@@ -325,6 +325,19 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
         acceptedHere = acceptedHere || c.lastTransferAccepted();
         if (st.ok()) {
             auto sz = c.size(f.remote);
+            if (sz.ok() && sz.value() != f.size && c.isConnected()) {
+                // SIZE may describe a decrypted fself (ftpsrv SELF mode): the
+                // folder listing (stat) is the second opinion before anything
+                // that was just uploaded is deleted.
+                if (auto listed = c.listedSize(f.remote); listed.ok() && listed.value() == f.size) {
+                    sh.log.warn(QStringLiteral("[FTP] SIZE of %1 says %2 bytes, the listing %3 (the server may decrypt SELF "
+                                               "files); the listing size matches.")
+                                    .arg(f.remote)
+                                    .arg(sz.value())
+                                    .arg(listed.value()));
+                    sz = listed.value();
+                }
+            }
             if (sz.ok() && sz.value() != f.size) {
                 sh.fail(f, QStringLiteral("the PS5 reports %1 bytes, expected %2").arg(sz.value()).arg(f.size));
                 removeRemotePartial(sh, &c, f.remote);

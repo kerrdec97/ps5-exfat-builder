@@ -48,6 +48,7 @@ private:
     QPushButton* m_remove;
     ui::IconButton* m_refresh;
     ps5::fakelib::Listing m_listing;
+    ui::InfoBar* m_legacy = nullptr; // overlays still in the old fakelib/disabled folder
 };
 
 } // namespace fw::pages

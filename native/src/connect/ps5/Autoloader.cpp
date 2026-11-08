@@ -45,14 +45,37 @@ Status needFolder(const QString& folder)
     return success();
 }
 
-// A payload name as one plain file name (no folders, no "..").
-QString payloadNameProblem(const QString& name)
+bool isScriptName(const QString& name)
+{
+    return name.toLower().endsWith(QStringLiteral(".js"));
+}
+
+// A file the editor manages as one plain file name (no folders, no ".."):
+// payloads, and (only to delete them) old .js files.
+QString fileNameProblem(const QString& name, bool allowScripts)
 {
     if (const QString why = localNameProblem(name); !why.isEmpty())
         return why;
-    if (!isPayloadName(name))
-        return QStringLiteral("Only .elf, .bin and .js payloads can be autoloaded.");
+    if (!isPayloadName(name) && !(allowScripts && isScriptName(name)))
+        return QStringLiteral("Only .elf and .bin payloads can be autoloaded.");
     return {};
+}
+
+// The part of a line before its comment, with trailing spaces and tabs removed
+// (ps5-unified-autoloader: '#' anywhere starts a comment; leading spaces stay).
+QString lineContent(const QString& raw, bool* hadComment = nullptr)
+{
+    QString s = raw;
+    while (s.endsWith(u'\r') || s.endsWith(u'\n'))
+        s.chop(1);
+    const qsizetype hash = s.indexOf(u'#');
+    if (hadComment)
+        *hadComment = hash >= 0;
+    if (hash >= 0)
+        s.truncate(hash);
+    while (s.endsWith(u' ') || s.endsWith(u'\t'))
+        s.chop(1);
+    return s;
 }
 
 } // namespace
@@ -64,26 +87,28 @@ QString folderFromSettings(const SettingsValues& settings)
 
 QString defaultHeader()
 {
-    // Verbatim from the legacy _al_load (exfat_builder.py).
+    // The rules of itsPLK/ps5-unified-autoloader 0.1.7 (Y2JB, BD-JB, Lua,
+    // WebKit and yarpe autoloaders; research §9).
     return QStringLiteral(
         "# ps5_autoloader\n"
         "# autoload config file\n"
         "# --------------------------------------------------------------------------------\n"
-        "# The loader looks for ps5_autoloader/autoload.txt in this order (highest priority first):\n"
-        "# 1) USB drives\n"
-        "# 2) /data directory\n"
-        "# 3) savedata directory\n"
-        "# Only the first autoload.txt found will be used.\n"
+        "# The loader uses the first autoload.txt it finds, in this order:\n"
+        "# 1) /mnt/usbN/ps5_autoloader_<TITLEID>/  (USB, one entry app, e.g. PPSA01650)\n"
+        "# 2) /data/ps5_autoloader_<TITLEID>/\n"
+        "# 3) /mnt/usbN/ps5_autoloader/\n"
+        "# 4) /data/ps5_autoloader/\n"
         "#\n"
         "# Usage:\n"
-        "# - Put one filename per line (e.g., payload.elf or script.js).\n"
-        "# - Supported payload types: .elf, .bin, .js\n"
-        "# - Lines starting with '!' are sleep commands (example: !1000 sleeps for 1000 ms).\n"
+        "# - One payload per line: a file in this folder, or an absolute path (/data/...).\n"
+        "# - Payload types: .elf and .bin (.js files are not run by the autoloader).\n"
+        "# - !1000 waits 1000 ms. # starts a comment, also after a file name.\n"
+        "# - @sync: after a clean run from USB, copy this folder to /data and remove it from USB.\n"
         "#\n"
         "# Notes:\n"
-        "# - The kernel exploit will start automatically - do NOT include it here!\n"
-        "# - You can use custom elf loader by putting it here and adding\n"
-        "#   elfldr.elf (must be that filename!) line before other ELFs.\n"
+        "# - The kernel exploit starts by itself - do NOT include it here!\n"
+        "# - To send payloads from a PC, put elfldr.elf (exactly that name) in this\n"
+        "#   folder, list it first and follow it with !4000.\n"
         "# --------------------------------------------------------------------------------\n");
 }
 
@@ -102,7 +127,7 @@ QString normalize(const QString& text)
 bool isPayloadName(const QString& name)
 {
     const QString low = name.toLower();
-    return low.endsWith(QStringLiteral(".elf")) || low.endsWith(QStringLiteral(".bin")) || low.endsWith(QStringLiteral(".js"));
+    return low.endsWith(QStringLiteral(".elf")) || low.endsWith(QStringLiteral(".bin"));
 }
 
 std::vector<Line> parse(const QString& text)
@@ -118,12 +143,19 @@ std::vector<Line> parse(const QString& text)
             break;
         Line l;
         l.number = i + 1;
-        l.text = lines[i].trimmed();
+        bool hadComment = false;
+        const QString content = lineContent(lines[i], &hadComment);
+        l.text = content.trimmed();
         if (l.text.isEmpty()) {
-            l.kind = LineKind::Blank;
-        } else if (l.text.startsWith(u'#')) {
-            l.kind = LineKind::Comment;
-        } else if (l.text.startsWith(u'!')) {
+            l.kind = hadComment ? LineKind::Comment : LineKind::Blank;
+            out.push_back(l);
+            continue;
+        }
+        if (content.front().isSpace())
+            l.warning = QStringLiteral("Line %1: starts with spaces; the autoloader keeps them, so \"%2\" would not be found.")
+                            .arg(l.number)
+                            .arg(l.text);
+        if (l.text.startsWith(u'!')) {
             const QString ms = l.text.mid(1).trimmed();
             bool ok = false;
             const qint64 v = ms.toLongLong(&ok);
@@ -134,12 +166,25 @@ std::vector<Line> parse(const QString& text)
                 l.kind = LineKind::Invalid;
                 l.problem = QStringLiteral("Line %1: \"%2\" is not a sleep. Write ! and the milliseconds, e.g. !1000.").arg(l.number).arg(l.text);
             }
-        } else if (isPayloadName(l.text)) {
+        } else if (l.text.startsWith(u'@')) {
+            l.kind = LineKind::Directive;
+            l.directive = l.text.mid(1).trimmed().toLower();
+            if (l.directive != u"sync")
+                l.warning = QStringLiteral("Line %1: %2 is not a directive the autoloader knows (only @sync).").arg(l.number).arg(l.text);
+        } else if (isPayloadName(l.text) || isScriptName(l.text)) {
             l.kind = LineKind::Payload;
             l.payload = l.text;
+            l.absolute = l.text.startsWith(u'/');
+            if (isScriptName(l.text))
+                l.warning = QStringLiteral("Line %1: %2 is a .js file; the autoloader sends every line to elfldr, so it would fail. "
+                                           "Run .js payloads through Y2JB's JS server (port 50000).")
+                                .arg(l.number)
+                                .arg(l.text);
         } else {
             l.kind = LineKind::Invalid;
-            l.problem = QStringLiteral("Line %1: \"%2\" is not an .elf, .bin or .js file. Start comments with #.").arg(l.number).arg(l.text);
+            l.problem = QStringLiteral("Line %1: \"%2\" is not an .elf or .bin file.").arg(l.number).arg(l.text);
+            if (hadComment)
+                l.problem += QStringLiteral(" Everything after # is a comment, so file names cannot contain #.");
         }
         out.push_back(l);
     }
@@ -151,6 +196,8 @@ Validation validate(const QString& text, const QStringList& folderFiles, bool ch
     Validation v;
     int firstPayloadLine = 0;
     for (const Line& l : parse(text)) {
+        if (!l.warning.isEmpty())
+            v.warnings << l.warning;
         switch (l.kind) {
         case LineKind::Invalid:
             v.errors << l.problem;
@@ -162,18 +209,21 @@ Validation validate(const QString& text, const QStringList& folderFiles, bool ch
             else if (l.sleepMs > 60000)
                 v.warnings << QStringLiteral("Line %1: waits %2 s; the editor's usual range is 0.1–60 s.").arg(l.number).arg(l.sleepMs / 1000);
             break;
+        case LineKind::Directive:
+            break;
         case LineKind::Payload: {
             ++v.payloads;
-            const bool isLoader = l.payload == kElfLoader;
-            if (!isLoader && l.payload.compare(kElfLoader, Qt::CaseInsensitive) == 0)
+            const QString name = remoteFileName(l.payload);
+            const bool isLoader = name == kElfLoader;
+            if (!isLoader && name.compare(kElfLoader, Qt::CaseInsensitive) == 0)
                 v.warnings << QStringLiteral("Line %1: the custom ELF loader must be named exactly elfldr.elf.").arg(l.number);
             if (isLoader && firstPayloadLine != 0)
                 v.warnings << QStringLiteral("Line %1: elfldr.elf must come before the other payloads (line %2 is loaded first).").arg(l.number).arg(firstPayloadLine);
             if (firstPayloadLine == 0)
                 firstPayloadLine = l.number;
-            if (l.payload.contains(u'/') || l.payload.contains(u'\\'))
-                v.warnings << QStringLiteral("Line %1: \"%2\" is a path; the autoloader loads files from its own folder.").arg(l.number).arg(l.payload);
-            else if (checkFiles && !folderFiles.contains(l.payload)) {
+            if (l.payload.contains(u'\\'))
+                v.warnings << QStringLiteral("Line %1: \"%2\" uses \\; paths on the PS5 use /.").arg(l.number).arg(l.payload);
+            else if (checkFiles && !l.absolute && !l.payload.contains(u'/') && !folderFiles.contains(l.payload)) {
                 const auto it = std::find_if(folderFiles.begin(), folderFiles.end(),
                                              [&](const QString& f) { return f.compare(l.payload, Qt::CaseInsensitive) == 0; });
                 if (it != folderFiles.end())
@@ -232,8 +282,8 @@ QString removePayloadLines(const QString& text, const QString& fileName)
     QStringList kept;
     bool skipSleeps = false;
     for (const QString& line : lines) {
-        const QString stripped = line.trimmed();
-        if (stripped == fileName) {
+        const QString stripped = lineContent(line).trimmed();
+        if (!stripped.isEmpty() && stripped == fileName) {
             skipSleeps = true; // and the sleeps right after it
             continue;
         }
@@ -292,8 +342,8 @@ Result<QString> addPayload(const QString& folder, const QString& sourceFile, boo
     if (!src.isFile())
         return Error(ErrorCode::NotFound, QStringLiteral("The file %1 does not exist.").arg(QDir::toNativeSeparators(sourceFile)));
     const QString name = src.fileName();
-    if (const QString why = payloadNameProblem(name); !why.isEmpty())
-        return Error(ErrorCode::InvalidArgument, why);
+    if (const QString why = fileNameProblem(name, false); !why.isEmpty())
+        return Error(ErrorCode::InvalidArgument, isScriptName(name) ? why + QStringLiteral(" .js files are not run by the autoloader.") : why);
     const QString dst = QDir(folder).filePath(name);
     if (QFileInfo(dst).exists() && QFileInfo(dst).canonicalFilePath() == src.canonicalFilePath())
         return name; // already the folder's own file
@@ -306,7 +356,7 @@ Result<QString> addPayload(const QString& folder, const QString& sourceFile, boo
 Status deletePayload(const QString& folder, const QString& fileName, bool toRecycleBin, bool* trashed)
 {
     FW_TRY(needFolder(folder));
-    if (const QString why = payloadNameProblem(fileName); !why.isEmpty())
+    if (const QString why = fileNameProblem(fileName, true); !why.isEmpty())
         return Error(ErrorCode::InvalidArgument, why);
     const QString path = QDir(folder).filePath(fileName);
     if (!QFileInfo(path).isFile())

@@ -17,7 +17,8 @@ public:
     void clearDemo() override;
 
     // Test hooks (no dialogs). Return the queued job id, or empty.
-    QString submitLocal(const QString& folder, bool force);
+    // allowAssetPacks: rebuild even over ampr_emu asset packs (they then stop working).
+    QString submitLocal(const QString& folder, bool force, bool allowAssetPacks = false);
     QString submitConsole(const QString& remoteFolder);
 
 private:

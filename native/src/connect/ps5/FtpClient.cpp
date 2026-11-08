@@ -213,7 +213,60 @@ Status FtpClient::login()
 Status FtpClient::open(const QString& host, quint16 port, const CancellationToken& token)
 {
     FW_TRY(connectToHost(host, port, token));
-    return login();
+    FW_TRY(login());
+    m_selfMode = SelfMode::NotApplicable;
+    if (identifyFtpServer(m_welcome).name != u"ftpsrv")
+        return success();
+    // ftpsrv toggles SELF decryption per connection ("226 SELF transfer mode
+    // disabled|enabled"); it starts enabled. Never a KILL: that stops the server.
+    m_selfMode = SelfMode::StillEnabled;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        auto r = command(QStringLiteral("SELF"));
+        if (!r.ok())
+            return r.takeError();
+        const QString text = r->text.toLower();
+        if (!r->isPositive())
+            break; // an ftpsrv build without the command: nothing to turn off
+        if (text.contains(QLatin1String("disabled"))) {
+            m_selfMode = SelfMode::Disabled;
+            break;
+        }
+        if (!text.contains(QLatin1String("enabled")))
+            break;
+    }
+    if (m_selfMode == SelfMode::StillEnabled)
+        ftpLog().warn(QStringLiteral("ftpsrv did not confirm that SELF decryption is off (\"%1\"); sizes of fself files may be "
+                                     "reported decrypted.").arg(m_last.text));
+    return success();
+}
+
+QString FtpServerIdentity::label() const
+{
+    if (name.isEmpty())
+        return QStringLiteral("FTP server");
+    if (name == u"etaHEN")
+        return version.isEmpty() ? QStringLiteral("etaHEN FTP") : QStringLiteral("etaHEN FTP %1").arg(version);
+    return version.isEmpty() ? name : QStringLiteral("%1 %2").arg(name, version);
+}
+
+FtpServerIdentity identifyFtpServer(const QString& welcome, const FtpFeatures* features)
+{
+    FtpServerIdentity id;
+    const QString low = welcome.toLower();
+    if (low.contains(QLatin1String("ftpsrv")) || (features && features->ftpsrv)) {
+        id.name = QStringLiteral("ftpsrv");
+        static const QRegularExpression ver(QStringLiteral("Version:\\s*(\\S+)"), QRegularExpression::CaseInsensitiveOption);
+        if (const auto m = ver.match(welcome); m.hasMatch())
+            id.version = m.captured(1);
+    } else if (low.contains(QLatin1String("zftpd")) || (features && (features->xcrypt || features->copy))) {
+        id.name = QStringLiteral("zftpd");
+        static const QRegularExpression ver(QStringLiteral("zftpd[\\s/-]*(v?\\d+(?:\\.\\d+)+)"), QRegularExpression::CaseInsensitiveOption);
+        if (const auto m = ver.match(welcome); m.hasMatch())
+            id.version = m.captured(1);
+    } else if (low.contains(QLatin1String("service ready for new user"))) {
+        id.name = QStringLiteral("etaHEN");
+    }
+    return id;
 }
 
 void FtpClient::quit()
@@ -243,6 +296,10 @@ Result<FtpFeatures> FtpClient::features()
         f.utf8 = up.contains(QLatin1String("UTF8"));
         f.xcrypt = up.contains(QLatin1String("XCRYPT"));
         f.copy = up.contains(QLatin1String("CPFR")) || up.contains(QLatin1String("CPTO")) || up.contains(QLatin1String(" COPY"));
+        static const QRegularExpression ftpsrvCmds(QStringLiteral("(^|\\s)(KILL|MTRW|SELF)(\\s|$)"));
+        f.ftpsrv = ftpsrvCmds.match(up).hasMatch();
+        if (f.ftpsrv)
+            f.rest = f.size = true; // implemented, just not advertised
     }
     d->features = f;
     return f;
@@ -385,10 +442,31 @@ bool FtpClient::isDirectory(const QString& path)
     return true;
 }
 
+Result<qint64> FtpClient::listedSize(const QString& path)
+{
+    auto here = pwd();
+    auto entries = list(remoteParent(path), FtpListMode::Auto);
+    if (here.ok() && isConnected())
+        (void)cwd(here.value());
+    if (!entries.ok())
+        return entries.takeError();
+    const QString base = remoteFileName(path);
+    for (const FtpEntry& e : entries.value())
+        if (e.name == base && !e.isDir)
+            return e.size;
+    return Error(ErrorCode::NotFound, QStringLiteral("%1 is not on the console.").arg(path));
+}
+
 bool FtpClient::fileExists(const QString& path)
 {
     if (size(path).ok())
         return true;
+    if (!isConnected())
+        return false;
+    if (auto listed = listedSize(path); listed.ok())
+        return true;
+    else if (listed.error().code == ErrorCode::NotFound && isConnected())
+        return false;
     if (!isConnected())
         return false;
     auto names = nameList(remoteParent(path));

@@ -23,6 +23,15 @@ inline const QString kAmprLocalJob = QStringLiteral("ampr.index.local");
 
 void registerAmprJobs(ModuleContext& ctx);
 
+// ampr_emu 0.4.2.1 asset packs (ampr_assets.index[.runtime] + *.pak) are
+// bound to the exact ampr_emu.index they were built from; an index rebuilt
+// over a packed /app0 lists the .pak files and lacks the packed originals,
+// which breaks the set. Both AMPR jobs refuse such a folder unless the
+// parameter "allowAssetPacks" is true.
+bool isAmprAssetPackMarker(const QString& fileName); // ampr_assets.index, ampr_assets.index.runtime (any case)
+QString folderAmprAssetPack(const QString& folder);  // the marker found in `folder`, empty when none
+QString amprAssetPackProblem(const QString& folder, const QString& marker);
+
 // True when <folder>/fakelib/libSceAmpr.sprx exists (any letter case).
 bool folderHasAmprLibrary(const QString& folder);
 

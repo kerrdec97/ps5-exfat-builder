@@ -4,7 +4,15 @@
 // _fakelib_*): the global library-overlay folder on the console.
 //
 //   /data/shadowmount/fakelib            enabled overlays (.prx / .sprx)
-//   /data/shadowmount/fakelib/disabled   disabled overlays (moved there by rename)
+//   /data/shadowmount/fakelib.disabled   disabled overlays (moved there by rename)
+//
+// The disabled folder used to be /data/shadowmount/fakelib/disabled. ShadowMount+
+// 1.7 copies the global folder recursively into every title's cache, so that
+// subfolder showed up as common/lib/disabled/ in every game (research §1.2-10);
+// overlays still there are listed (legacyFolder) and moveLegacyDisabled()
+// moves them out. libkernel.sprx is refused: ShadowMount+ deletes it from
+// writable fakelib folders. Do not run BackPork next to the ShadowMount+
+// fakelib (1.7 stops it at startup).
 //
 // Rules kept from the legacy app:
 //  * only .prx/.sprx files are listed; folders and the temporary names of a
@@ -31,7 +39,8 @@
 namespace fw::ps5::fakelib {
 
 inline const QString kFolder = QStringLiteral("/data/shadowmount/fakelib");
-inline const QString kDisabledFolder = QStringLiteral("/data/shadowmount/fakelib/disabled");
+inline const QString kDisabledFolder = QStringLiteral("/data/shadowmount/fakelib.disabled");
+inline const QString kLegacyDisabledFolder = QStringLiteral("/data/shadowmount/fakelib/disabled");
 inline constexpr qint64 kMaxOverlayBytes = 256LL * 1024 * 1024; // uploads are held in memory
 
 struct Overlay {
@@ -39,7 +48,8 @@ struct Overlay {
     bool enabled = true;
     qint64 size = -1; // -1 = unknown
     QDateTime modified;
-    QString folder() const { return enabled ? kFolder : kDisabledFolder; }
+    bool legacyFolder = false; // disabled, still in the old fakelib/disabled subfolder
+    QString folder() const { return enabled ? kFolder : legacyFolder ? kLegacyDisabledFolder : kDisabledFolder; }
     QString path() const;
 };
 
@@ -51,6 +61,7 @@ struct Listing {
     QStringList skipped;           // names from the console that cannot be used safely
     bool folderExists = true;      // false: /data/shadowmount/fakelib is not there yet
     int enabledCount() const;
+    int legacyCount() const; // overlays still in fakelib/disabled
 };
 
 // Lists both folders. A missing folder (fresh console) is an empty list.
@@ -71,7 +82,11 @@ Status add(FtpClient& client, const QString& localPath, bool confirmed, const Ca
 Status replace(FtpClient& client, const Overlay& target, const QString& localPath, bool confirmed,
                const CancellationToken& token = {});
 Status remove(FtpClient& client, const Overlay& target);
-// Moves `target` to the other folder (creates "disabled" when needed).
+// Moves `target` to the other folder (creates fakelib.disabled when needed).
 Status setEnabled(FtpClient& client, const Overlay& target, bool enabled);
+// Moves every overlay of the old fakelib/disabled subfolder to
+// fakelib.disabled (an existing one of the same name is kept, that one is
+// reported) and removes the old folder when it is empty. Returns how many moved.
+Result<int> moveLegacyDisabled(FtpClient& client, const CancellationToken& token = {});
 
 } // namespace fw::ps5::fakelib

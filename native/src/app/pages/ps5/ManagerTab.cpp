@@ -139,14 +139,19 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     h->addWidget(m_filter);
     m_search = textInput(QStringLiteral("Search"), false, list);
     m_search->setClearButtonEnabled(true);
-    m_search->setFixedWidth(200);
+    m_search->setMinimumWidth(110);
+    m_search->setMaximumWidth(200);
     h->addWidget(m_search);
     h->addStretch(1);
     m_upload = button(QStringLiteral("Upload"), ButtonVariant::Secondary, QStringLiteral("upload"), list);
     m_compareRow = button(QStringLiteral("Compare…"), ButtonVariant::Secondary, QStringLiteral("file_search"), list);
-    m_openLocal = button(QStringLiteral("Show local file"), ButtonVariant::Secondary, QStringLiteral("folder_open"), list);
+    m_openLocal = button(QStringLiteral("Show file"), ButtonVariant::Secondary, QStringLiteral("folder_open"), list);
+    m_openLocal->setToolTip(QStringLiteral("Show the local image in the file manager"));
     for (auto* b : {m_upload, m_compareRow, m_openLocal})
+    {
+        setButtonSmall(b, true);
         h->addWidget(b);
+    }
     m_games = new QTableWidget(0, GColumnCount, list);
     m_games->setHorizontalHeaderLabels({QStringLiteral("Game"), QStringLiteral("Status"), QStringLiteral("Local"), QStringLiteral("PS5"), QStringLiteral("Path on the PS5")});
     styleToolTable(m_games, 8);
@@ -282,9 +287,9 @@ void Ps5ManagerTab::refresh()
         folders << endpoint().gamesFolder;
     const QString local = m_localFolder->path().trimmed();
     const bool started = runOnConsole<Refreshed>(
-        [folders, local](ps5::FtpClient& c, const CancellationToken& t) -> Result<Refreshed> {
+        [folders, local, api = endpoint().smpApiPort](ps5::FtpClient& c, const CancellationToken& t) -> Result<Refreshed> {
             Refreshed out;
-            FW_TRY_ASSIGN(out.console, ps5::listConsoleGames(c, folders, t));
+            FW_TRY_ASSIGN(out.console, ps5::listConsoleGames(c, folders, t, api));
             out.local = ps5::scanLocalImages(local);
             return out;
         },
@@ -315,7 +320,10 @@ void Ps5ManagerTab::setStats(int remote, int local, std::optional<qint64> freeBy
     m_statRemoteCaption->setText(QStringLiteral("images and game folders"));
     m_statLocalCaption->setText(QStringLiteral("in the local images folder"));
     m_statImagesCaption->setText(QStringLiteral("total size of the images"));
-    m_statFreeCaption->setText(freeText.isEmpty() ? QStringLiteral("SITE AVAIL not supported") : QStringLiteral("SITE AVAIL: %1").arg(freeText.simplified()));
+    // ShadowMount+ 1.7 API first; SITE AVAIL is best effort (no current console server has it).
+    m_statFreeCaption->setText(freeText.isEmpty() ? QStringLiteral("unknown: needs the ShadowMount+ 1.7 API")
+                               : freeText.contains(QLatin1String("ShadowMount+")) ? freeText.simplified()
+                                                                                 : QStringLiteral("SITE AVAIL: %1").arg(freeText.simplified()));
     setTextColor(m_statFree, freeBytes && imageBytes > 0 && *freeBytes < (*freeBytes + imageBytes) / 10 ? color::warn_hi : color::fg_0);
 }
 

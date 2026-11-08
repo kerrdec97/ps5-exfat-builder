@@ -52,7 +52,7 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     auto* edit = new Card(this, Card::Variant::Table);
     auto* h = edit->header();
     h->addWidget(heading(QStringLiteral("autoload.txt"), TextStyle::Subtitle, edit));
-    auto* hint = new ElideLabel(QStringLiteral("One .elf, .bin or .js per line · !1000 waits 1 s · # comment"), Qt::ElideRight, edit);
+    auto* hint = new ElideLabel(QStringLiteral("One .elf or .bin per line (or /absolute/path) · !1000 waits 1 s · # comment · @sync"), Qt::ElideRight, edit);
     hint->setFont(fontFor(TextStyle::Caption));
     setTextColor(hint, color::fg_3);
     h->addWidget(hint, 1);
@@ -84,7 +84,7 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_chips = new QWidget(files);
     m_chipLayout = new FlowLayout(m_chips, space::sm, space::sm);
     files->body()->addWidget(m_chips);
-    m_noChips = caption(QStringLiteral("No .elf, .bin or .js files in the folder."), files);
+    m_noChips = caption(QStringLiteral("No .elf or .bin files in the folder."), files);
     files->body()->addWidget(m_noChips);
     l->addWidget(files);
     l->addStretch(1);
@@ -329,12 +329,12 @@ void AutoloaderTab::saveNow()
 void AutoloaderTab::addPayload()
 {
     const QString src = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose a payload to add"), QString(),
-                                                     QStringLiteral("Payloads (*.elf *.bin *.js);;All files (*)"));
+                                                     QStringLiteral("Payloads (*.elf *.bin);;All files (*)"));
     if (src.isEmpty())
         return;
     const QString name = QFileInfo(src).fileName();
     if (!al::isPayloadName(name)) {
-        Sheet::message(window(), QStringLiteral("Not a payload"), QStringLiteral("Only .elf, .bin and .js files can be autoloaded."), Sheet::Icon::Warning);
+        Sheet::message(window(), QStringLiteral("Not a payload"), QStringLiteral("Only .elf and .bin files can be autoloaded; .js files are not run by the autoloader."), Sheet::Icon::Warning);
         return;
     }
     bool overwrite = false;
@@ -425,7 +425,8 @@ void AutoloaderTab::applyDemo()
     m_folder->blockSignals(false);
     m_folder->setError({});
     setFiles({QStringLiteral("elfldr.elf"), QStringLiteral("ftpsrv.elf"), QStringLiteral("kstuff.elf"), QStringLiteral("shadowmountplus.elf")});
-    m_editor->setPlainText(al::defaultHeader() + QStringLiteral("elfldr.elf\n!1000\nkstuff.elf\n!3000\nftpsrv.elf\nshadowmountplus.elf\n"));
+    // The order the ShadowMount+ README shows, behind a LAN-reachable elfldr (!4000).
+    m_editor->setPlainText(al::defaultHeader() + QStringLiteral("elfldr.elf\n!4000\nshadowmountplus.elf\n!3000\nkstuff.elf\nftpsrv.elf  # FTP on 2121\n@sync\n"));
     m_badge->set(QStringLiteral("autoload.txt loaded"), Tone::Ok);
     m_saved->clear();
     revalidate();

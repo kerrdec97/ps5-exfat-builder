@@ -95,10 +95,11 @@ private slots:
         QCOMPARE(normalize(QStringLiteral("x.js\ry.js")), QStringLiteral("x.js\ny.js\n"));
         QCOMPARE(normalize(QString()), QStringLiteral("\n"));
         QVERIFY(defaultHeader().startsWith(QStringLiteral("# ps5_autoloader\n")));
-        QVERIFY(defaultHeader().contains(QStringLiteral("elfldr.elf (must be that filename!) line before other ELFs.")));
+        QVERIFY(defaultHeader().contains(QStringLiteral("follow it with !4000.")));
         QCOMPARE(normalize(defaultHeader()), defaultHeader());
         QCOMPARE(sleepLine(5000), QStringLiteral("!5000"));
-        QVERIFY(isPayloadName(QStringLiteral("A.ELF")) && isPayloadName(QStringLiteral("b.bin")) && isPayloadName(QStringLiteral("c.js")));
+        QVERIFY(isPayloadName(QStringLiteral("A.ELF")) && isPayloadName(QStringLiteral("b.bin")));
+        QVERIFY(!isPayloadName(QStringLiteral("c.js"))); // the autoloader does not run .js
         QVERIFY(!isPayloadName(QStringLiteral("autoload.txt")));
     }
 
@@ -133,6 +134,52 @@ private slots:
         QVERIFY(ok.warnings.join(u'\n').contains(QStringLiteral("differs in case")));
         QVERIFY(validate(defaultHeader()).ok());
         QVERIFY(validate(defaultHeader()).warnings.join(u' ').contains(QStringLiteral("no payloads")));
+    }
+
+    // Today's autoloader rules (ps5-unified-autoloader 0.1.7, research §9).
+    void autoloaderFollowsTheUnifiedAutoloaderRules()
+    {
+        using namespace autoloader;
+        const QString text = QStringLiteral("elfldr.elf   # LAN loader\n!4000\n@sync\n@later\n/data/payloads/kstuff.elf\nsub/x.bin\n"
+                                            "script.js\nmy#file.elf\n\t ftpsrv.elf\n# only a comment\n");
+        const auto lines = parse(text);
+        QCOMPARE(int(lines.size()), 10);
+        QCOMPARE(lines[0].kind, LineKind::Payload);
+        QCOMPARE(lines[0].payload, QStringLiteral("elfldr.elf")); // inline comment
+        QVERIFY(lines[0].warning.isEmpty());
+        QCOMPARE(lines[1].sleepMs, 4000);
+        QCOMPARE(lines[2].kind, LineKind::Directive);
+        QCOMPARE(lines[2].directive, QStringLiteral("sync"));
+        QVERIFY(lines[2].warning.isEmpty());
+        QCOMPARE(lines[3].kind, LineKind::Directive);
+        QVERIFY(lines[3].warning.contains(QStringLiteral("only @sync")));
+        QCOMPARE(lines[4].kind, LineKind::Payload);
+        QVERIFY(lines[4].absolute); // absolute paths are allowed now
+        QCOMPARE(lines[5].kind, LineKind::Payload);
+        QCOMPARE(lines[6].kind, LineKind::Payload); // sent to elfldr upstream, so it is listed, with a warning
+        QVERIFY(lines[6].warning.contains(QStringLiteral(".js")));
+        QCOMPARE(lines[7].kind, LineKind::Invalid); // "my" before the comment
+        QVERIFY(lines[7].problem.contains(QStringLiteral("cannot contain #")));
+        QCOMPARE(lines[8].kind, LineKind::Payload);
+        QVERIFY(lines[8].warning.contains(QStringLiteral("starts with spaces")));
+        QCOMPARE(lines[9].kind, LineKind::Comment);
+        const Validation v = validate(text, {QStringLiteral("elfldr.elf")}, true);
+        QCOMPARE(v.errors.size(), 1);
+        const QString w = v.warnings.join(u'\n');
+        QVERIFY(!w.contains(QStringLiteral("kstuff.elf is not in the folder"))); // absolute: not checked against the folder
+        QVERIFY(!w.contains(QStringLiteral("is a path")));
+        QVERIFY(w.contains(QStringLiteral("only @sync")));
+        QVERIFY(w.contains(QStringLiteral("script.js")));
+        QVERIFY(w.contains(QStringLiteral("ftpsrv.elf is not in the folder")));
+        QVERIFY(!w.contains(QStringLiteral("must come before")));
+        // Deleting a payload also finds its lines with an inline comment.
+        QCOMPARE(removePayloadLines(QStringLiteral("a.elf # x\n!100\nb.elf\n"), QStringLiteral("a.elf")), QStringLiteral("b.elf\n"));
+        // The header documents the four places and the LAN loader.
+        const QString h = defaultHeader();
+        QVERIFY(h.contains(QStringLiteral("/data/ps5_autoloader_<TITLEID>/")));
+        QVERIFY(h.contains(QStringLiteral("@sync")));
+        QVERIFY(!h.contains(QStringLiteral("savedata")));
+        QVERIFY(!h.contains(QStringLiteral(".elf, .bin, .js")));
     }
 
     void autoloaderEditingHelpers()
@@ -204,7 +251,8 @@ private slots:
         QCOMPARE(addPayload(dir, QDir(src).filePath(QStringLiteral("notes.txt")), false).error().code, ErrorCode::InvalidArgument);
         QVERIFY(writeBytes(QDir(dir).filePath(QStringLiteral("Alpha.bin")), "b"));
         QVERIFY(writeBytes(QDir(dir).filePath(QStringLiteral("zeta.js")), "j"));
-        QCOMPARE(payloadFiles(dir), (QStringList{QStringLiteral("Alpha.bin"), QStringLiteral("kstuff.elf"), QStringLiteral("zeta.js")}));
+        QCOMPARE(payloadFiles(dir), (QStringList{QStringLiteral("Alpha.bin"), QStringLiteral("kstuff.elf")})); // no .js
+        QCOMPARE(addPayload(dir, QDir(dir).filePath(QStringLiteral("zeta.js")), false).error().code, ErrorCode::InvalidArgument);
         QVERIFY(!deletePayload(dir, QStringLiteral("../outside.elf"), false).ok());
         QVERIFY(!deletePayload(dir, QStringLiteral("autoload.txt"), false).ok());
         bool trashed = true;
@@ -253,6 +301,10 @@ private slots:
         QCOMPARE(checkLocalFile(put(QStringLiteral("game.exfat"), "x")).verdict, Verdict::Reject);
         QCOMPARE(checkLocalFile(put(QStringLiteral("game.ffpfsc"), "x")).verdict, Verdict::Reject);
         QCOMPARE(checkLocalFile(put(QStringLiteral("notes.txt"), "x")).verdict, Verdict::Reject);
+        // ShadowMount+ deletes libkernel.sprx from fakelib folders (research §1.2-10).
+        const LocalCheck kernel = checkLocalFile(put(QStringLiteral("libkernel.sprx"), kElf));
+        QCOMPARE(kernel.verdict, Verdict::Reject);
+        QVERIFY(kernel.message.contains(QStringLiteral("deletes libkernel")));
         QVERIFY(isListedName(QStringLiteral("libA.sprx")));
         QVERIFY(!isListedName(QStringLiteral("libA.sprx.uploading")));
         QVERIFY(!isListedName(QStringLiteral("libA.sprx.replacing.bak")));
@@ -304,23 +356,23 @@ private slots:
         QVERIFY(two->overlays[1].enabled);
         QCOMPARE(two->overlays[1].path(), QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"));
 
-        // Disable: moved into disabled/ (created), listed as disabled.
+        // Disable: moved into fakelib.disabled (created; outside the overlay folder), listed as disabled.
         Overlay ampr = two->overlays[1];
         QVERIFY(setEnabled(c, ampr, false).ok());
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))));
-        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libSceAmpr.sprx"))), kElf);
+        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))), kElf);
         auto after = list(c);
         QCOMPARE(int(after->overlays.size()), 2);
         QCOMPARE(after->enabledCount(), 1);
         ampr = after->overlays[1];
         QVERIFY(!ampr.enabled);
-        QCOMPARE(ampr.path(), QStringLiteral("/data/shadowmount/fakelib/disabled/libSceAmpr.sprx"));
+        QCOMPARE(ampr.path(), QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"));
 
         // A copy of the same name in the other folder is never overwritten.
         QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx")), kSelf2));
         QCOMPARE(setEnabled(c, ampr, true).error().code, ErrorCode::AlreadyExists);
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))), kSelf2);
-        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libSceAmpr.sprx"))), kElf);
+        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))), kElf);
         QVERIFY(QFile::remove(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))));
         QVERIFY(setEnabled(c, ampr, true).ok());
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))), kElf);
@@ -339,6 +391,25 @@ private slots:
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))));
         auto last = list(c);
         QCOMPARE(int(last->overlays.size()), 1);
+
+        // Overlays disabled by older versions sit in fakelib/disabled, which
+        // ShadowMount+ 1.7 copies into every title's cache: listed, then moved out.
+        QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libOld.sprx")), kElf));
+        QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libTwin.sprx")), kElf));
+        QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libTwin.sprx")), kSelf1));
+        auto legacy = list(c);
+        QCOMPARE(legacy->legacyCount(), 2);
+        const auto old = std::find_if(legacy->overlays.begin(), legacy->overlays.end(), [](const Overlay& x) { return x.name == u"libOld.sprx"; });
+        QVERIFY(old != legacy->overlays.end() && old->legacyFolder && !old->enabled);
+        QCOMPARE(old->path(), QStringLiteral("/data/shadowmount/fakelib/disabled/libOld.sprx"));
+        auto moved = moveLegacyDisabled(c);
+        QCOMPARE(moved.error().code, ErrorCode::AlreadyExists); // libTwin is in both: that one stays
+        QVERIFY(moved.error().message.contains(QStringLiteral("libTwin.sprx")));
+        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libOld.sprx"))), kElf);
+        QVERIFY(QFile::remove(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libTwin.sprx"))));
+        QCOMPARE(moveLegacyDisabled(c).value(), 0);
+        QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled")))); // removed once empty
+        QCOMPARE(list(c)->legacyCount(), 0);
     }
 
     void fakelibKeepsTheOriginalWhenTheServerCannotRename()

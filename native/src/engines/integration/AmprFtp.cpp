@@ -82,6 +82,11 @@ public:
         FW_TRY_ASSIGN(std::vector<ps5::FtpEntry> top, c.list(folder, ps5::FtpListMode::Auto, ctx.token));
         if (const QString why = app0Problem(top, folder); !why.isEmpty())
             return Error(ErrorCode::InvalidArgument, why);
+        // ampr_emu asset packs are bound to the index they were built from.
+        if (!m_p.value(QStringLiteral("allowAssetPacks")).toBool())
+            for (const ps5::FtpEntry& e : top)
+                if (!e.isDir && pfs::isAmprAssetPackMarker(e.name))
+                    return Error(ErrorCode::InvalidArgument, pfs::amprAssetPackProblem(folder, e.name));
 
         // 2. Walk.
         ctx.progress->beginPhase(1, 0, 0, false);

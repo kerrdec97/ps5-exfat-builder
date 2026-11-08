@@ -3,7 +3,8 @@
 // Raw TCP payload push (legacy _pl_send and the ShadowMount+/MicroMount ELF
 // senders): connect (10 s), send the file's bytes in 64 KiB chunks (30 s
 // without progress = failure), close. No framing, no handshake, nothing is
-// read back. Default ports: 9090 (Payloads page), 9021 (ELF loaders).
+// read back. Default port: 9021 (elfldr) for every target; 9090 is etaHEN's
+// DPI v1 service and discards an ELF.
 
 #include "core/Cancellation.h"
 #include "core/Result.h"

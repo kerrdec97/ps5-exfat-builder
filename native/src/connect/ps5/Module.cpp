@@ -9,10 +9,14 @@
 #include "connect/ps5/MountConfig.h"
 #include "connect/ps5/PayloadSender.h"
 #include "connect/ps5/RemotePath.h"
+#include "connect/ps5/SmpApi.h"
 #include "connect/ps5/Y2jb.h"
 #include "core/FileUtil.h"
+#include "core/Settings.h"
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QRegularExpression>
@@ -367,14 +371,21 @@ public:
                 ctx.progress->beginPhase(1, 0);
             }
         });
-        if (!r.ok())
+        if (!r.ok()) {
+            if (!r.error().isCancelled())
+                (void)clearDpiTemp(ep.host, port, opt); // a half-received upload stays in /user/data/tmp
             return r.takeError();
-        if (!r->accepted)
+        }
+        if (!r->accepted) {
+            // DPIv2 streams the upload to /user/data/tmp first; free it again.
+            if (clearDpiTemp(ep.host, port, opt).ok())
+                ctx.log.info(QStringLiteral("[Y2JB] Cleared the installer's temporary folder (/user/data/tmp)."));
             return Error(ErrorCode::ExternalToolFailed,
-                         QStringLiteral("The PS5 did not accept the package (HTTP %1). Make sure etaHEN is running with "
-                                        "Direct Package Installer V2 enabled in Services.")
-                             .arg(r->status),
+                         QStringLiteral("The PS5 did not accept the package: %1 Make sure etaHEN runs with Direct Package "
+                                        "Installer V2 on (DPI_v2=1 in /data/etaHEN/config.ini, or the etaHEN toolbox).")
+                             .arg(dpiFailureReason(r->status, r->body)),
                          QString::fromUtf8(r->body.left(200)));
+        }
         JobOutcome o;
         o.summary = QStringLiteral("%1 is now installing on the PS5 — check the console's download queue.")
                         .arg(QFileInfo(pkg).fileName());
@@ -482,12 +493,110 @@ public:
         o.summary = stopOutcomeMessage(r->outcome);
         o.details.insert(QStringLiteral("unmountsStarted"), r->unmountsStarted);
         o.details.insert(QStringLiteral("unmountsCompleted"), r->unmountsCompleted);
+        o.details.insert(QStringLiteral("source"), r->source);
+        o.details.insert(QStringLiteral("problems"), toJsonArray(r->problems));
         o.verification = r->outcome == StopOutcome::Confirmed ? Verification::Passed : Verification::Inconclusive;
         o.verificationDetail = r->outcome == StopOutcome::Confirmed
-                                   ? QStringLiteral("released %1/%2 mounts").arg(r->unmountsCompleted).arg(r->unmountsStarted)
+                                   ? (r->unmountsStarted > 0 ? QStringLiteral("cleanup confirmed (%1), released %2/%3 mounts")
+                                                                   .arg(r->source).arg(r->unmountsCompleted).arg(r->unmountsStarted)
+                                                             : QStringLiteral("cleanup confirmed (%1)").arg(r->source))
                                    : stopOutcomeMessage(r->outcome);
         if (r->outcome != StopOutcome::Confirmed)
             o.warnings << stopOutcomeMessage(r->outcome);
+        for (const QString& p : r->problems)
+            o.warnings << QStringLiteral("ShadowMount+: %1").arg(p);
+        return o;
+    }
+
+private:
+    QJsonObject m_p;
+};
+
+// ---- ps5.shadowmount.eject (ShadowMount+ 1.7 API) -------------------------------------------
+
+class EjectJob final : public Job {
+public:
+    explicit EjectJob(QJsonObject p) : m_p(std::move(p)) {}
+    QString kind() const override { return jobkinds::kShadowMountEject; }
+    QString title() const override
+    {
+        const QString path = m_p.value(QStringLiteral("path")).toString();
+        return path.isEmpty() ? QStringLiteral("Eject the USB drive") : QStringLiteral("Eject %1").arg(path);
+    }
+    QStringList phases() const override { return {QStringLiteral("Asking ShadowMount+"), QStringLiteral("Ejecting")}; }
+    QJsonObject parameters() const override { return m_p; }
+    Status validate(const SettingsValues& s) const override { return needHost(endpointFor(m_p, s)); }
+
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        const ConsoleEndpoint ep = endpointFor(m_p, ctx.settings);
+        const quint16 port = quint16(std::clamp(m_p.value(QStringLiteral("apiPort")).toInt(ep.smpApiPort), 1, 65535));
+        const int pollMs = std::clamp(m_p.value(QStringLiteral("pollMs")).toInt(1000), 50, 10000);
+        smp::ApiOptions api;
+        api.connectTimeoutMs = ep.connectTimeoutMs;
+        ctx.progress->beginPhase(0, 0);
+        FW_TRY_ASSIGN(std::vector<smp::StorageItem> items, smp::storage(ep.host, port, api, ctx.token));
+        const QString wanted = m_p.value(QStringLiteral("path")).toString().trimmed();
+        const smp::StorageItem* target = nullptr;
+        QStringList ejectable;
+        for (const smp::StorageItem& i : items) {
+            if (!i.ejectable)
+                continue;
+            ejectable << i.mountPoint;
+            if (wanted.isEmpty() ? !target : i.mountPoint == wanted)
+                target = &i;
+        }
+        if (!target)
+            return Error(ErrorCode::NotFound, wanted.isEmpty() ? QStringLiteral("ShadowMount+ reports no USB drive that can be ejected.")
+                                                               : QStringLiteral("%1 is not an ejectable USB drive (ejectable: %2).")
+                                                                     .arg(wanted, ejectable.isEmpty() ? QStringLiteral("none") : ejectable.join(QStringLiteral(", "))));
+        if (wanted.isEmpty() && ejectable.size() > 1)
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("More than one USB drive is connected (%1); choose which one to eject.")
+                                                         .arg(ejectable.join(QStringLiteral(", "))));
+        const smp::StorageItem drive = *target;
+        ctx.log.info(QStringLiteral("[ShadowMount+] Ejecting %1 (%2)").arg(drive.mountPoint, drive.source));
+        FW_TRY_ASSIGN(qint64 jobId, smp::eject(ep.host, port, drive, api, ctx.token));
+        ctx.progress->beginPhase(1, 0);
+        ctx.progress->setCurrentItem(drive.mountPoint);
+        QElapsedTimer clock;
+        clock.start();
+        const int timeoutMs = std::clamp(m_p.value(QStringLiteral("timeoutMs")).toInt(120000), 1000, 600000);
+        smp::JobStatus st;
+        while (true) {
+            if (!ctx.token.sleepFor(pollMs))
+                return Error::cancelled();
+            auto r = smp::jobStatus(ep.host, port, jobId, api, ctx.token);
+            if (!r.ok()) {
+                if (r.error().isCancelled())
+                    return Error::cancelled();
+                if (clock.elapsed() > timeoutMs)
+                    return r.takeError();
+                continue; // the API may be busy for a moment
+            }
+            st = r.value();
+            if (!st.state.isEmpty())
+                ctx.progress->setCurrentItem(QStringLiteral("%1 · %2").arg(drive.mountPoint, st.state));
+            if (st.finished)
+                break;
+            if (clock.elapsed() > timeoutMs)
+                return Error(ErrorCode::Timeout, QStringLiteral("ShadowMount+ did not finish ejecting %1 in time. Keep the drive "
+                                                                "connected and check the console.").arg(drive.mountPoint));
+        }
+        JobOutcome o;
+        o.details.insert(QStringLiteral("path"), drive.mountPoint);
+        o.details.insert(QStringLiteral("state"), st.state);
+        if (!st.succeeded) {
+            QString why = st.unconfirmed ? QStringLiteral("the console could not confirm the unmount (usb_eject_unconfirmed)")
+                                         : st.error.isEmpty() ? st.state : st.error;
+            if (!st.blocking.isEmpty())
+                why += QStringLiteral("; in use by %1").arg(st.blocking);
+            return Error(ErrorCode::ExternalToolFailed,
+                         QStringLiteral("%1 was not ejected: %2. Keep the drive connected.").arg(drive.mountPoint, why));
+        }
+        o.summary = QStringLiteral("%1 was ejected — safe to unplug.").arg(drive.mountPoint);
+        o.verification = Verification::Passed;
+        o.verificationDetail = QStringLiteral("ShadowMount+ reported the eject as completed");
+        ctx.log.info(o.summary);
         return o;
     }
 
@@ -805,7 +914,7 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
     addPort(s, keys::kFtpPort, QStringLiteral("Console"), QStringLiteral("FTP port"),
-            QStringLiteral("Port of the FTP server running on the PS5. ftpsrv uses 2121; etaHEN's FTP uses 1337."), 2121, order++);
+            QStringLiteral("Port of the FTP server running on the PS5: ftpsrv 2121, etaHEN 1337, zftpd 2120."), 2121, order++);
     {
         SettingDef d;
         d.key = keys::kGamesFolder;
@@ -820,16 +929,18 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
     addPort(s, keys::kPayloadPort, QStringLiteral("Payloads"), QStringLiteral("Payload port"),
-            QStringLiteral("Port the payload loader listens on for the Payloads page (usually 9090)."), 9090, order++);
+            QStringLiteral("Port of the ELF loader for the Payloads page: elfldr 9021 (9020 is the exploit's own loader). 9090 is etaHEN's package installer, not a loader."), 9021, order++);
     addPort(s, keys::kShadowMountPort, QStringLiteral("Payloads"), QStringLiteral("ShadowMount+ ELF port"),
             QStringLiteral("Port used to send shadowmountplus.elf (the ELF loader, usually 9021)."), 9021, order++);
     addPort(s, keys::kMicroMountPort, QStringLiteral("Payloads"), QStringLiteral("MicroMount ELF port"),
             QStringLiteral("Port used to send micromount.elf (the ELF loader, usually 9021)."), 9021, order++);
     addPort(s, keys::kKlogPort, QStringLiteral("Services"), QStringLiteral("Kernel log port"),
-            QStringLiteral("Port of klogsrv, the kernel log streamer (usually 3232). ShadowMount+ \"Safe to unplug\" "
+            QStringLiteral("Port of the kernel log streamer: klogsrv 3232, etaHEN 9081 (turn on Klog=1). ShadowMount+ \"Safe to unplug\" "
                            "watches it."), 3232, order++);
     addPort(s, keys::kDpiPort, QStringLiteral("Services"), QStringLiteral("Package installer port"),
-            QStringLiteral("Port of etaHEN's Direct Package Installer V2 (usually 12800), used by Y2JB installs."), 12800, order++);
+            QStringLiteral("Port of etaHEN's Direct Package Installer V2 (12800; off by default: set DPI_v2=1 in /data/etaHEN/config.ini), used by Y2JB installs."), 12800, order++);
+    addPort(s, keys::kSmpApiPort, QStringLiteral("Services"), QStringLiteral("ShadowMount+ API port"),
+            QStringLiteral("Port of the ShadowMount+ 1.7 HTTP API (10101): version, free space, USB eject and logs. Optional; FTP and the kernel log are used when it does not answer."), 10101, order++);
     {
         SettingDef d;
         d.key = keys::kConnectTimeout;
@@ -912,7 +1023,12 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("ps5_ip"), keys::kConsoleIp, nonEmpty); // never written by the legacy app
     s.addLegacyKey(QStringLiteral("ftp_port"), keys::kFtpPort, nonEmpty);
     s.addLegacyKey(QStringLiteral("ftp_path"), keys::kGamesFolder, nonEmpty);
-    s.addLegacyKey(QStringLiteral("pl_port"), keys::kPayloadPort, nonEmpty);
+    s.addLegacyKey(QStringLiteral("pl_port"), keys::kPayloadPort, [](const QVariant& v) -> std::optional<QVariant> {
+        // The legacy default 9090 is etaHEN DPI v1, never a payload loader.
+        if (v.toString().trimmed().isEmpty())
+            return std::nullopt;
+        return v.toInt() == ports::kEtaHenDpiV1 ? QVariant(int(ports::kElfLoader)) : QVariant(v.toString().trimmed());
+    });
     s.addLegacyKey(QStringLiteral("smp_payload_port"), keys::kShadowMountPort, nonEmpty);
     s.addLegacyKey(QStringLiteral("mm_payload_port"), keys::kMicroMountPort, nonEmpty);
     s.addLegacyKey(QStringLiteral("klog_port"), keys::kKlogPort, nonEmpty);
@@ -931,8 +1047,21 @@ void registerModule(ModuleContext& ctx)
     add(jobkinds::kDpiInstall, QStringLiteral("Install package (DPI)"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new DpiJob(p)); });
     add(jobkinds::kY2jbAutoBlock, QStringLiteral("Y2JB auto-block"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new AutoBlockJob(p)); });
     add(jobkinds::kShadowMountStop, QStringLiteral("ShadowMount+ safe to unplug"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new StopJob(p)); });
+    add(jobkinds::kShadowMountEject, QStringLiteral("ShadowMount+ eject USB"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new EjectJob(p)); });
     add(jobkinds::kFtpDiagnose, QStringLiteral("FTP diagnostics"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new DiagnoseJob(p)); });
     add(jobkinds::kCrashDumps, QStringLiteral("Capture crash dumps"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new CrashDumpsJob(p)); });
+}
+
+bool migrateLegacyPayloadPort(SettingsStore& settings, const QString& markerPath)
+{
+    if (markerPath.isEmpty() || QFileInfo::exists(markerPath))
+        return false;
+    bool changed = false;
+    if (settings.value(keys::kPayloadPort).toInt() == ports::kEtaHenDpiV1)
+        changed = settings.setValue(keys::kPayloadPort, int(ports::kElfLoader)).ok();
+    QDir().mkpath(QFileInfo(markerPath).absolutePath());
+    (void)writeFileAtomic(markerPath, QByteArrayLiteral("ps5.payloadPort: 9090 -> 9021 checked\n"));
+    return changed;
 }
 
 } // namespace fw::ps5
