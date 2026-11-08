@@ -9,6 +9,7 @@
 #include "core/FileUtil.h"
 #include "engines/gameinfo/DumpRename.h"
 #include "engines/gameinfo/Module.h"
+#include "engines/gameinfo/Naming.h"
 #include "engines/general/Module.h"
 #include "engines/tools/Module.h"
 
@@ -620,7 +621,21 @@ void LibraryPage::buildSelected()
             dir = QFileInfo(f).absolutePath();
         const QJsonObject extra{{QStringLiteral("title"), info.title}, {QStringLiteral("titleId"), info.titleId},
                                 {QStringLiteral("version"), info.version}, {QStringLiteral("sourceBytes"), info.bytes}};
-        auto r = jobs::submitImageBuild(m_ctx, format, f, dir, defaultImageStem(info) + jobs::outputExtension(format), {}, extra);
+        // The same name the Build page proposes (Settings › Build › Output name).
+        const auto& st = m_ctx.settings();
+        const auto preset = gameinfo::imageNamePresetFromKey(st.value(gameinfo::keys::kNamePreset).toString())
+                                .value_or(gameinfo::ImageNamePreset::TitleIdTitleVersion);
+        gameinfo::ImageNameFields nf;
+        nf.titleId = info.titleId;
+        nf.title = info.title;
+        nf.version = info.version;
+        const QString fwOverride = st.value(gameinfo::keys::kFirmwareOverride).toString();
+        nf.firmware = fwOverride.isEmpty() || fwOverride == QLatin1String("auto") ? gameinfo::firmwareMajor(info.requiredFw) : fwOverride;
+        nf.sdk = info.sdk;
+        nf.type = format == jobs::kFormatExfat ? QStringLiteral("exFAT") : format == jobs::kFormatFfpkg ? QStringLiteral("ffpkg") : QStringLiteral("PFS");
+        nf.folderName = QFileInfo(f).fileName();
+        const QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), nf);
+        auto r = jobs::submitImageBuild(m_ctx, format, f, dir, name + jobs::outputExtension(format), QVariantMap{}, extra);
         if (r.ok())
             ++queued;
         else

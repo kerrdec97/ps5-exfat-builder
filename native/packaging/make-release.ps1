@@ -30,6 +30,10 @@ param(
     [string]$BuildDir = '',
     [string]$OutDir = '',
     [string[]]$Extra = @(),
+    # The bundled PS5 Backport engine (PS5BackportGUI-0.3.4.exe, hash-pinned in
+    # native\cmake\BackportEngine.cmake). Empty: CMake downloads the official
+    # release and checks its SHA-256.
+    [string]$BackportEngine = '',
     [int]$Parallel = 0,
     [switch]$SkipBuild,
     [switch]$SkipTests,
@@ -81,7 +85,8 @@ if (Test-Path $windeployqt) {
 # ---- 2./3. Build and test -------------------------------------------------------
 if (-not $SkipBuild) {
     Write-Step 'Configure'
-    if ((Invoke-Native { cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF }) -ne 0) { throw 'Configure failed' }
+    $engineArg = if ($BackportEngine) { "-DFW_BACKPORT_ENGINE_EXE=$BackportEngine" } else { '-DFW_FETCH_BACKPORT_ENGINE=ON' }
+    if ((Invoke-Native { cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF $engineArg }) -ne 0) { throw 'Configure failed' }
     Write-Step 'Build'
     $jobs = if ($Parallel -gt 0) { @('--parallel', "$Parallel") } else { @('--parallel') }
     if ((Invoke-Native { cmake --build $BuildDir @jobs }) -ne 0) { throw 'Build failed' }
@@ -108,6 +113,13 @@ Copy-Item (Join-Path $native 'packaging\README-portable.txt') (Join-Path $dist '
 Copy-Item (Join-Path $repo 'LICENSES') -Recurse (Join-Path $dist 'LICENSES')
 Copy-Item (Join-Path $native 'packaging\licenses\*') (Join-Path $dist 'LICENSES\')
 Copy-Item (Join-Path $native 'packaging\THIRD_PARTY_NOTICES-native.md') (Join-Path $dist 'THIRD_PARTY_NOTICES.md')
+# The Backport tab's engine (built into bin\engines by CMake). A release
+# without it would show "engine missing", so it is required.
+$engines = Join-Path $BuildDir 'bin\engines'
+if (-not (Test-Path (Join-Path $engines 'backport\PS5BackportGUI.exe'))) {
+    throw "The PS5 Backport engine is missing from $engines (configure with -BackportEngine <exe> or let CMake fetch it)"
+}
+Copy-Item $engines -Recurse (Join-Path $dist 'engines')
 
 # ---- 5. Single-file exe -------------------------------------------------------------
 Write-Step 'Single-file exe'

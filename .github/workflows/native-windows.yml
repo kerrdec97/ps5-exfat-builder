@@ -50,7 +50,7 @@ jobs:
 
       - name: Configure
         shell: pwsh
-        run: cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFW_WARNINGS_AS_ERRORS=OFF
+        run: cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFW_WARNINGS_AS_ERRORS=OFF -DFW_FETCH_BACKPORT_ENGINE=ON
 
       - name: Build
         shell: pwsh
@@ -114,6 +114,7 @@ jobs:
           Copy-Item LICENSES -Recurse "$dist\LICENSES"
           Copy-Item native\packaging\licenses\* "$dist\LICENSES\"
           Copy-Item native\packaging\THIRD_PARTY_NOTICES-native.md "$dist\THIRD_PARTY_NOTICES.md"
+          Copy-Item build\bin\engines -Recurse "$dist\engines"
           Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
 
       - name: Single-file exe (the main download)

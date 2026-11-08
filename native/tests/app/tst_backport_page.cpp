@@ -186,6 +186,25 @@ private slots:
             }
         });
         sheetWatch.start();
+        // Heartbeat for diagnosing hangs: FW_TEST_HEARTBEAT=<file>.
+        QTimer heartbeat;
+        heartbeat.setInterval(3000);
+        const QString hbFile = qEnvironmentVariable("FW_TEST_HEARTBEAT");
+        QObject::connect(&heartbeat, &QTimer::timeout, this, [this, hbFile] {
+            if (hbFile.isEmpty())
+                return;
+            QFile f(hbFile);
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                return;
+            QStringList out;
+            out << QStringLiteral("busy=%1 status=%2").arg(page()->isBusy()).arg(page()->statusContext());
+            for (auto* sh : m_window->findChildren<ui::Sheet*>())
+                out << QStringLiteral("sheet visible=%1").arg(sh->isVisible());
+            for (auto* t : page()->findChildren<QTextEdit*>())
+                out << t->toPlainText();
+            f.write(out.join(QLatin1Char('\n')).toUtf8());
+        });
+        heartbeat.start();
         QTest::mouseClick(start, Qt::LeftButton);
         QTest::qWaitFor([this] { return page()->isBusy(); }, 60000);
         if (!page()->isBusy())
