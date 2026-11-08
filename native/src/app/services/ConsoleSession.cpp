@@ -95,6 +95,7 @@ public slots:
             return;
         }
         Status st = isDir ? m_client->removeTree(path, token()) : m_client->dele(path);
+        noteDroppedLink(st);
         emit m_session->operationDone(QStringLiteral("delete"), st.ok(), st.ok() ? QStringLiteral("Deleted %1").arg(path) : st.error().message);
     }
     void doRename(const QString& from, const QString& to)
@@ -104,6 +105,7 @@ public slots:
             return;
         }
         auto st = m_client->rename(from, to);
+        noteDroppedLink(st);
         emit m_session->operationDone(QStringLiteral("rename"), st.ok(), st.ok() ? QStringLiteral("Renamed to %1").arg(ps5::remoteFileName(to)) : st.error().message);
     }
     void doMkdir(const QString& path)
@@ -113,6 +115,7 @@ public slots:
             return;
         }
         auto st = m_client->mkd(path);
+        noteDroppedLink(st);
         emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? QStringLiteral("Created %1").arg(path) : st.error().message);
     }
     void doLoadMount(int tool)
@@ -153,6 +156,14 @@ public slots:
     }
 
 private:
+    // A command that failed because the link is gone ends the session (like a listing does).
+    void noteDroppedLink(const Status& st)
+    {
+        if (!st.ok() && m_client && !m_client->isConnected()) {
+            m_client.reset();
+            emit m_session->disconnected(st.error().message);
+        }
+    }
     CancellationToken token()
     {
         std::lock_guard lock(m_cancelMutex);
@@ -174,8 +185,19 @@ ConsoleSession::ConsoleSession(QObject* parent) : QObject(parent)
     m_worker->moveToThread(&m_thread);
     m_thread.setObjectName(QStringLiteral("ps5-session"));
     m_thread.start();
-    connect(this, &ConsoleSession::connected, this, [this] { m_connected = true; });
-    connect(this, &ConsoleSession::disconnected, this, [this] { m_connected = false; });
+    // The worker's signals arrive here on the UI thread; the state follows them.
+    connect(this, &ConsoleSession::connected, this, [this](const QString& welcome) { setState(ConnectionState::Connected, welcome); });
+    connect(this, &ConsoleSession::disconnected, this, [this](const QString& reason) {
+        setState(reason.isEmpty() ? ConnectionState::Offline : ConnectionState::Failed, reason);
+    });
+}
+
+void ConsoleSession::setState(ConnectionState state, const QString& detail)
+{
+    if (m_state == state && detail.isEmpty())
+        return;
+    m_state = state;
+    emit stateChanged(state, detail);
 }
 
 ConsoleSession::~ConsoleSession()
@@ -197,13 +219,18 @@ void ConsoleSession::post(std::function<void()> request)
 
 void ConsoleSession::connectTo(const QString& host, quint16 port, int connectTimeoutMs, bool passive)
 {
+    if (m_state == ConnectionState::Connecting || m_state == ConnectionState::Connected)
+        return; // one connection at a time (Return in the host field while connecting)
     m_host = host;
+    setState(ConnectionState::Connecting, {});
     post([w = m_worker, host, port, connectTimeoutMs, passive] { w->doConnect(host, port, connectTimeoutMs, passive); });
 }
 
 void ConsoleSession::disconnect()
 {
-    m_worker->cancelRunning(); // a long listing or delete stops now
+    if (m_state == ConnectionState::Offline)
+        return;
+    m_worker->cancelRunning(); // a long listing, delete or connect attempt stops now
     post([w = m_worker] { w->doDisconnect(); });
 }
 

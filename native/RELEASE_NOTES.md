@@ -26,6 +26,25 @@ program, with a new interface and the PS5 Backport engine built in.
 * Fewer, clearer pages: **Build image** · **Image tools** · **Backport** ·
   **DLC** · Queue · PS5 connect · Library · Logs · Settings · About.
 
+### Watching a job: the monitor
+* Press **Build image** (or Extract, Convert, Convert DLC…) and the page
+  turns into that job's monitor: a big progress bar with the percentage, the
+  stage it is in, speed, time left and the file being written; five live
+  numbers (elapsed, remaining, speed with a small graph, done, stage); the
+  **stage timeline** with the time each stage took; the **live log** — every
+  line the job and the Sony tools write, as it happens, warnings and errors
+  marked, a Verbose switch for the tools' own output, Copy and Open in Logs;
+  the result (verification, warnings, outputs) and the job's buttons (Pause,
+  Cancel, Show in folder, Retry / Run again, New build).
+* **Add to queue** keeps the form; **Watch** on the Jobs dock opens any
+  running job in the monitor; the Queue page shows the same monitor for the
+  selected job.
+* A cancelled job now shows **Cancelling…** until it has stopped at its safe
+  point (before, a paused job that was cancelled kept saying "Paused").
+* **Build now / Retry / Run again start that one job**: a queue you paused
+  stays paused for everything else. Update checks and problem reports also
+  no longer resume a paused queue.
+
 ### Build image
 * Drop a dump folder (or the folder above it: the game inside is found for
   you), pick **exFAT**, **FFPKG**, **PFS** or **FPKG**, done. Each format
@@ -204,7 +223,9 @@ exe is code-signed (#78).
 ## How it was tested
 * **Automated tests** (53 test programs) on Windows (MSVC 2022, Qt 6.10):
   every engine, byte-for-byte golden comparisons with UFS2Tool and
-  Lazy_MkPFS, every page opening, the Build page submitting every format,
+  Lazy_MkPFS, every page opening, the job monitor following a real job
+  (stages, clocks, live log, Run again) and the form → monitor switch,
+  the Build page submitting every format,
   Image tools jobs, the Library, the PS5 tools against a fake console, the
   single-file launcher (arguments, exit codes, caches, damaged payloads,
   concurrent first starts, portable mode), zstd packs (format, multi-volume
@@ -236,6 +257,54 @@ exe is code-signed (#78).
   Deliverance II, Metal Gear Solid 4, Ratchet & Clank: Rift Apart, Wolverine,
   7 Days to Die, Astro Bot. Keep your original dump.
 * LZ4 packs are only read (unpacked), never written.
+
+## Reliability and safety fixes from the engineering audit
+A read of every engine, the queue, the launcher, the console code and the
+interface before this release. What changed:
+* **Queue**: a job's context menu, drag or cancel confirmation can no longer
+  outlive the row it belongs to (a crash when the job ended under an open
+  menu); jobs cancelled while waiting and jobs interrupted by a crash are in
+  the history and survive a restart until you retry or remove them; the
+  "queue finished" notification and the after-queue power action fire when
+  the queue finishes even if you paused it, and never for a run you cancelled
+  in full; the job history is kept in memory (it was re-read from disk on
+  every queue change); the free-space probes no longer run on the interface
+  thread (a sleeping network drive froze the window).
+* **Interface**: a confirmation sheet now blocks the window's shortcuts,
+  drops and Esc; Esc never offers to cancel an update check or a problem
+  report; settings of another build of the app (the private one with more
+  engines) are kept in settings.json instead of being deleted; search fields
+  wait for a pause in typing; progress updates no longer rebuild widgets ten
+  times a second.
+* **Extraction and files**: "Extract" of a game or image goes to a `.part`
+  folder first and is renamed only after it verified (an unverified or
+  cancelled extraction never sits under the final name); a hidden
+  `desktop.ini` in the output folder no longer throws a finished exFAT
+  extraction away; read-only folders left by an extraction can be removed
+  again; a source file deleted during a build is reported as such.
+* **FPKG / DLC / packs**: an `img_extract` that printed `[Error]` with exit
+  code 0 is a failure (a partly extracted base could become a delta that
+  deletes files); passcodes are masked in the logs and problem reports; the
+  free-space checks before extracting a package ask for twice the package
+  size (the tree is larger than the Kraken-compressed file); an image staged
+  onto a FAT32 drive is refused before copying; a DLC conversion cancelled
+  half-way is reported as cancelled with the packages it did not build; the
+  publisher's progress bar can no longer run backwards.
+* **PS5 connect**: cancelling an upload against a console that went to rest
+  mode returns in seconds (it retried the cleanup for minutes); a listing
+  without a size fact no longer breaks downloads; a stalled listing drops the
+  connection instead of answering the next command with the old reply;
+  Connect, Return in the address field and the chips follow one connection
+  state (no double connects, "not connected" after you disconnect instead of
+  "not reachable"); downloads of two files whose names differ only in case
+  are skipped instead of written over each other; `/system_data`, `/user/app`,
+  `/user/home` and `/mnt/sandbox` ask for the extra confirmation; a
+  ShadowMount+ `profiles.ini` section whose image name holds `]` is parsed
+  right, and a flat-format value with `#` or `;` is refused instead of
+  silently truncated on the console; the diagnostics speed test will not
+  write into a system folder; Y2JB's small files are swapped in place
+  instead of overwritten; an interrupted update download is reported as
+  interrupted.
 
 ## Known limitations
 * Not code-signed; some antivirus engines flag unsigned self-extracting

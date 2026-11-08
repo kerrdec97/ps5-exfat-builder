@@ -158,6 +158,35 @@ private slots:
         QCOMPARE(p.snapshot().overallFraction, 1.0);
     }
 
+    void progressTracksPhaseTimes()
+    {
+        ProgressReporter p({}, 50);
+        p.setPhases({QStringLiteral("Scan"), QStringLiteral("Write"), QStringLiteral("Verify")});
+        QCOMPARE(p.snapshot().elapsedMs, qint64(0));
+        QCOMPARE(p.snapshot().phaseMs, (QList<qint64>{0, 0, 0}));
+        p.beginPhase(0, 0);
+        QTest::qWait(40);
+        p.beginPhase(1, 100);
+        p.beginPhase(1, 200); // entered again with the real total: the clock keeps running
+        QTest::qWait(40);
+        auto s = p.snapshot();
+        QVERIFY(!s.finished);
+        QVERIFY2(s.phaseMs.value(0) >= 30, qPrintable(QString::number(s.phaseMs.value(0))));
+        QVERIFY2(s.phaseMs.value(1) >= 30, qPrintable(QString::number(s.phaseMs.value(1))));
+        QCOMPARE(s.phaseMs.value(2), qint64(0));
+        QVERIFY(s.phaseElapsedMs >= 30);
+        QVERIFY(s.elapsedMs >= s.phaseMs.value(0) + s.phaseMs.value(1) - 2);
+        p.finish();
+        const auto done = p.snapshot();
+        QVERIFY(done.finished);
+        QTest::qWait(30);
+        const auto later = p.snapshot();
+        QCOMPARE(later.elapsedMs, done.elapsedMs); // frozen
+        QCOMPARE(later.phaseMs, done.phaseMs);
+        QCOMPARE(done.phaseMs.size(), 3);
+        QVERIFY(done.elapsedMs >= 80);
+    }
+
     void formatsFollowTheDesignSystem()
     {
         QCOMPARE(formatBytes(0), QStringLiteral("0 B"));

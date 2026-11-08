@@ -531,7 +531,7 @@ void LibraryPage::scan()
         return;
     }
     m_scanJobId = r.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(m_scanJobId); // this job only; a paused queue stays paused
     scanImages();
 }
 
@@ -613,6 +613,7 @@ void LibraryPage::buildSelected()
     const QString format = fmt->currentValue().toString();
     int queued = 0;
     QStringList failed;
+    QStringList started;
     for (const QString& f : folders) {
         const LibraryGame* g = game(f);
         const GameSummary info = g ? g->info : readGameSummary(f, false);
@@ -636,13 +637,15 @@ void LibraryPage::buildSelected()
         nf.folderName = QFileInfo(f).fileName();
         const QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), nf);
         auto r = jobs::submitImageBuild(m_ctx, format, f, dir, name + jobs::outputExtension(format), QVariantMap{}, extra);
-        if (r.ok())
+        if (r.ok()) {
             ++queued;
-        else
+            started << r.value();
+        } else
             failed << QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), r.error().message);
     }
-    if (queued > 0)
-        m_ctx.queue().holdQueue(false);
+    // These jobs run now, in this order, ahead of other waiting jobs; a paused queue stays paused for the rest.
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it);
     if (!failed.isEmpty())
         emit toastRequested(Tone::Err, QStringLiteral("%1 not queued").arg(plural(failed.size(), QStringLiteral("build"), QStringLiteral("builds"))), failed.join(u'\n'));
     if (queued > 0)
@@ -740,7 +743,7 @@ void LibraryPage::renameDumps()
             emit toastRequested(Tone::Err, QStringLiteral("Undo not started"), res.error().message);
         else {
             m_renameUndoId = res.value();
-            m_ctx.queue().holdQueue(false);
+            m_ctx.queue().startNow(m_renameUndoId); // this job only; a paused queue stays paused
         }
         return;
     }
@@ -755,7 +758,7 @@ void LibraryPage::renameDumps()
         return;
     }
     m_renamePreviewId = res.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(m_renamePreviewId); // this job only; a paused queue stays paused
     emit toastRequested(Tone::Info, QStringLiteral("Previewing names…"), nativePath(m_renameSource));
 }
 
@@ -828,7 +831,7 @@ void LibraryPage::applyRename(const QJsonArray& items)
         return;
     }
     m_renameApplyId = res.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(m_renameApplyId); // this job only; a paused queue stays paused
 }
 
 // ---- Images ------------------------------------------------------------------------
@@ -1043,11 +1046,15 @@ void LibraryPage::verifyImages(const QStringList& paths)
     if (m_demo)
         return;
     int queued = 0;
+    QStringList started;
     for (const QString& p : paths)
-        if (jobs::submitVerify(m_ctx, p, {}).ok())
+        if (auto r = jobs::submitVerify(m_ctx, p, {}); r.ok()) {
             ++queued;
+            started << r.value();
+        }
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
     if (queued > 0) {
-        m_ctx.queue().holdQueue(false);
         emit toastRequested(Tone::Info, QStringLiteral("%1 queued").arg(plural(queued, QStringLiteral("verify job"), QStringLiteral("verify jobs"))), QString());
     } else {
         emit toastRequested(Tone::Err, QStringLiteral("Nothing was verified"), QStringLiteral("Verifying images is not available in this build."));
@@ -1303,7 +1310,7 @@ void LibraryPage::languageScan()
         return;
     }
     m_langJobId = r.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(m_langJobId); // this job only; a paused queue stays paused
     m_langSummary->setText(QStringLiteral("Scanning…"));
 }
 
@@ -1312,6 +1319,8 @@ void LibraryPage::onJobFinished(const QString& id)
     auto rec = m_ctx.queue().record(id);
     if (!rec)
         return;
+    if (id == m_scanJobId && !rec->outcome)
+        m_scanJobId.clear(); // a failed or cancelled scan is over too
     if (id == m_scanJobId && rec->outcome) {
         std::vector<LibraryGame> games;
         for (const auto& v : rec->outcome->details.value(QStringLiteral("games")).toArray()) {
@@ -1475,6 +1484,7 @@ void LibraryPage::stripLanguages()
                                       QStringLiteral("Go back"), QStringLiteral("Remove every language anyway"), true, Sheet::Icon::Error))
         return;
     int queued = 0;
+    QStringList started;
     for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it) {
         auto r = jobs::submitLanguageStrip(m_ctx, it.key(), it.value(), backup);
         if (!r.ok()) {
@@ -1482,8 +1492,10 @@ void LibraryPage::stripLanguages()
             return;
         }
         ++queued;
+        started << r.value();
     }
-    m_ctx.queue().holdQueue(false);
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
     emit toastRequested(Tone::Info, QStringLiteral("Removing languages"), QStringLiteral("%1 queued; each one backs up first.").arg(plural(queued, QStringLiteral("job"), QStringLiteral("jobs"))));
 }
 
@@ -1502,7 +1514,7 @@ void LibraryPage::restoreLanguages()
     if (!r.ok())
         emit toastRequested(Tone::Err, QStringLiteral("Restore not started"), r.error().message);
     else
-        m_ctx.queue().holdQueue(false);
+        m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
 }
 
 // ---- page hooks --------------------------------------------------------------------------

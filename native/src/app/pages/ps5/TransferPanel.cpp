@@ -111,6 +111,7 @@ void TransferRow::setRecord(const JobRecord& r)
     case JobState::Queued: word = QStringLiteral("Waiting"); tone = Tone::Neutral; stats = QStringLiteral("Waits for the queue"); break;
     case JobState::Running: word = thinPercent(p.overallFraction); tone = Tone::Info; break;
     case JobState::Paused: word = QStringLiteral("Paused"); tone = Tone::Warn; break;
+    case JobState::Cancelling: word = QStringLiteral("Cancelling…"); tone = Tone::Neutral; stats = QStringLiteral("Stopping the transfer"); break;
     case JobState::Succeeded:
         word = QStringLiteral("Done");
         tone = r.outcome && !r.outcome->warnings.isEmpty() ? Tone::Warn : Tone::Ok;
@@ -235,7 +236,7 @@ void TransferPanel::sync(const QString& id)
         connect(row, &TransferRow::retryRequested, this, [this](const QString& jid) {
             if (auto r2 = m_ctx.queue().retry(jid); r2.ok()) {
                 m_ctx.queue().remove(jid);
-                m_ctx.queue().holdQueue(false);
+                m_ctx.queue().startNow(r2.value()); // this job only; a paused queue stays paused
             }
         });
         connect(row, &TransferRow::removeRequested, &q, [&q](const QString& jid) { q.remove(jid); });

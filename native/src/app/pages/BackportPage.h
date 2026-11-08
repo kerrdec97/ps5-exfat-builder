@@ -125,7 +125,7 @@ public:
     void clearDemoState() override;
 
     // Close handling (MainWindow): a run or restore in progress.
-    bool isBusy() const { return m_running; }
+    bool isBusy() const { return isRunning(); }
     // Cancels, then pumps events until the current worker exits (at most `ms`).
     void cancelAndWait(int ms);
 
@@ -212,9 +212,15 @@ private:
     Engine m_engine = Engine::Unknown;
     QString m_engineRevision, m_engineError;
     QPointer<bp::Worker> m_worker;
-    bool m_running = false;
-    bool m_cancelRequested = false;
-    bool m_scanning = false;
+    // The page's run lifecycle; setRunState() is its only writer:
+    //   Idle ─▶ Scanning ─▶ Idle                       (rescan / clearList)
+    //   Idle ─▶ Running ─▶ Cancelling ─▶ Idle           (a Restore cannot be cancelled)
+    enum class RunState { Idle, Scanning, Running, Cancelling };
+    RunState m_runState = RunState::Idle;
+    void setRunState(RunState state);
+    bool isRunning() const { return m_runState == RunState::Running || m_runState == RunState::Cancelling; }
+    bool isCancelling() const { return m_runState == RunState::Cancelling; }
+    bool isScanning() const { return m_runState == RunState::Scanning; }
     quint64 m_scanGen = 0;
     std::shared_ptr<std::atomic_bool> m_scanCancel;
     Kind m_kind = Kind::Backport;

@@ -1,4 +1,5 @@
 #include "connect/ps5/ConsoleBackup.h"
+#include "core/PathSafety.h"
 
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
@@ -18,7 +19,7 @@ QString localPathFor(const QString& remotePath, const QString& backupDir)
     QString rel = cleanRemotePath(remotePath).mid(1);
     QStringList parts = rel.split(u'/', Qt::SkipEmptyParts);
     for (QString& p : parts)
-        p = sanitizeFileName(p);
+        p = hostEntryName(sanitizeFileName(p)); // a remote "nul" must not become the NUL device
     QString path = QDir(backupDir).filePath(parts.join(u'/'));
     QString candidate = path;
     for (int n = 2; QFileInfo::exists(candidate) || QFileInfo::exists(candidate + QStringLiteral(".part")); ++n)

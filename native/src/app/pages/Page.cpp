@@ -7,9 +7,12 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QPointer>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QStorageInfo>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 
@@ -51,21 +54,40 @@ JobFormPage::JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QStri
                          const QString& caption, const QString& primaryText, const QString& featureName, QWidget* parent)
     : Page(ctx, key, title, caption, parent), m_feature(featureName)
 {
-    m_queue = button(QStringLiteral("Add to queue"), ButtonVariant::Secondary, QStringLiteral("plus"), this);
-    m_primary = button(primaryText, ButtonVariant::Primary, QStringLiteral("play"), this);
-    header()->addAction(m_queue);
-    header()->addAction(m_primary);
+    m_submitBar = new QWidget(this);
+    auto* sb = hbox(m_submitBar, space::sm);
+    m_queue = button(QStringLiteral("Add to queue"), ButtonVariant::Secondary, QStringLiteral("plus"), m_submitBar);
+    m_primary = button(primaryText, ButtonVariant::Primary, QStringLiteral("play"), m_submitBar);
+    sb->addWidget(m_queue);
+    sb->addWidget(m_primary);
+    m_newJob = button(QStringLiteral("Start another"), ButtonVariant::Secondary, QStringLiteral("plus"), this);
+    m_newJob->setToolTip(QStringLiteral("Back to the form. The job keeps running in the queue."));
+    m_newJob->hide();
+    header()->addAction(m_newJob);
+    header()->addAction(m_submitBar);
     connect(m_queue, &QPushButton::clicked, this, [this] { submitClicked(false); });
     connect(m_primary, &QPushButton::clicked, this, [this] { submitClicked(true); });
+    connect(m_newJob, &QPushButton::clicked, this, &JobFormPage::showForm);
 
     auto* columns = new QWidget(this);
     auto* layout = new TwoColumnLayout(columns);
     auto* left = new QWidget(columns);
-    m_form = vbox(left, space::lg);
-    m_error = new InfoBar(Tone::Err, left);
+    auto* leftLayout = vbox(left, 0);
+    // The monitor takes the form's place while a job the page started runs.
+    m_monitorHost = new QWidget(left);
+    auto* mh = vbox(m_monitorHost, space::lg);
+    m_monitor = new JobMonitor(ctx, ctx.logModel(), JobMonitor::Variant::Wide, m_monitorHost);
+    m_monitor->setFeatures(JobMonitor::ShowOpenQueue | JobMonitor::ShowNewJob);
+    mh->addWidget(m_monitor);
+    m_monitorHost->hide();
+    leftLayout->addWidget(m_monitorHost);
+    m_formWidget = new QWidget(left);
+    m_form = vbox(m_formWidget, space::lg);
+    m_error = new InfoBar(Tone::Err, m_formWidget);
     m_error->setDismissable(true);
     m_error->hide();
     m_form->addWidget(m_error);
+    leftLayout->addWidget(m_formWidget);
     auto* right = new QWidget(columns);
     m_aside = vbox(right, space::lg);
     m_dock = new JobsDock(ctx, queueModel, right);
@@ -78,6 +100,71 @@ JobFormPage::JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QStri
     connect(m_dock, &JobsDock::openJobRequested, this, [this](const QString& id) {
         emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), id}}});
     });
+    connect(m_dock, &JobsDock::cancelRequested, this, [this](const QString& id) { jobs::cancelWithConfirm(m_ctx, this, id); });
+    connect(m_dock, &JobsDock::watchRequested, this, &JobFormPage::showMonitor);
+    connect(m_monitor, &JobMonitor::cancelRequested, this, [this](const QString& id) { jobs::cancelWithConfirm(m_ctx, this, id); });
+    connect(m_monitor, &JobMonitor::openLogsRequested, this, [this](const QString& id) {
+        emit navigateRequested({QStringLiteral("logs"), {{QStringLiteral("jobId"), id}}});
+    });
+    connect(m_monitor, &JobMonitor::openQueueRequested, this, [this](const QString& id) {
+        emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), id}}});
+    });
+    connect(m_monitor, &JobMonitor::newJobRequested, this, &JobFormPage::showForm);
+    connect(m_monitor, &JobMonitor::jobGone, this, &JobFormPage::showForm);
+    connect(m_monitor, &JobMonitor::jobSwitched, this, [this](const QString& id) { m_dock->setWatchedJob(id); });
+}
+
+void JobFormPage::setNewJobText(const QString& text)
+{
+    m_newJob->setText(text);
+    m_monitor->setNewJobText(text);
+}
+
+// The one place that moves between the two views; everything visible follows
+// from m_view, so no widget can be left in the other view's state.
+void JobFormPage::setView(View view)
+{
+    const bool monitor = view == View::Monitor;
+    m_submitBar->setVisible(!monitor);
+    m_newJob->setVisible(monitor);
+    m_formWidget->setVisible(!monitor);
+    m_monitorHost->setVisible(monitor);
+    if (!monitor)
+        m_monitor->setJobId({});
+    scrollArea()->verticalScrollBar()->setValue(0);
+    if (m_view != view) {
+        m_view = view;
+        emit monitorShownChanged(monitor);
+    }
+}
+
+void JobFormPage::showMonitor(const QString& id)
+{
+    if (id.isEmpty())
+        return;
+    clearFormError();
+    m_monitor->setJobId(id);
+    m_dock->setWatchedJob(id);
+    setView(View::Monitor);
+}
+
+void JobFormPage::showForm()
+{
+    m_dock->setWatchedJob({});
+    if (m_view == View::Form)
+        return;
+    setView(View::Form);
+}
+
+void JobFormPage::showEvent(QShowEvent* e)
+{
+    Page::showEvent(e);
+    // Coming back long after the watched job ended: the user wants the form.
+    if (m_view == View::Monitor) {
+        auto rec = m_ctx.queue().record(m_monitor->jobId());
+        if (!rec || (isTerminal(rec->state) && rec->finished.isValid() && rec->finished.secsTo(QDateTime::currentDateTime()) > 600))
+            showForm();
+    }
 }
 
 void JobFormPage::setRequiredKinds(const QStringList& kinds)
@@ -197,20 +284,14 @@ void JobFormPage::submitClicked(bool buildNow)
     }
     const QString id = r.value();
     auto& q = m_ctx.queue();
-    if (buildNow) {
-        // Put it right after the running jobs and make sure the queue runs.
-        int firstQueued = 0;
-        const auto recs = q.records();
-        for (const auto& rec : recs) {
-            if (rec.state == JobState::Running || rec.state == JobState::Paused)
-                ++firstQueued;
-            else
-                break;
-        }
-        q.move(id, firstQueued);
-        q.holdQueue(false);
-    }
+    if (buildNow)
+        q.startNow(id); // ahead of the other waiting jobs; a paused queue stays paused for them
     emit jobSubmitted(id, openOutputWhenDone());
+    if (buildNow && m_monitorOnStart) {
+        // The monitor is the feedback: stages, clocks and the live log.
+        showMonitor(id);
+        return;
+    }
     emit toastRequested(Tone::Info, buildNow ? QStringLiteral("Started") : QStringLiteral("Added to the queue"),
                         q.record(id) ? q.record(id)->title : QString());
 }
@@ -228,7 +309,11 @@ void JobFormPage::applyDemoState(const QString& name)
                       QStringLiteral("This image needs 48.5 GB; 34.1 GB is free. Free 14.4 GB or choose another output folder."));
 }
 
-void JobFormPage::clearDemoState() { clearFormError(); }
+void JobFormPage::clearDemoState()
+{
+    clearFormError();
+    showForm();
+}
 
 // ---- helpers ------------------------------------------------------------------------
 
@@ -258,6 +343,28 @@ QString driveLabel(const QString& path)
     if (root.size() >= 2 && root[1] == u':')
         return root.left(2);
     return root.isEmpty() ? QStringLiteral("this drive") : root;
+}
+
+void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done)
+{
+    QPointer<QObject> guard(context);
+    (void)QtConcurrent::run([guard, folder, done = std::move(done)] {
+        const QString path = folder.isEmpty() ? QDir::homePath() : folder;
+        const QStorageInfo si(path);
+        const bool ready = si.isValid() && si.isReady();
+        const qint64 available = ready ? si.bytesAvailable() : -1;
+        QString label = si.rootPath();
+        if (label.size() >= 2 && label[1] == u':')
+            label = label.left(2);
+        else if (label.isEmpty())
+            label = QStringLiteral("this drive");
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(guard.data(), [guard, ready, available, label, done] {
+            if (guard)
+                done(ready, available, label);
+        }, Qt::QueuedConnection);
+    });
 }
 
 } // namespace fw::pages

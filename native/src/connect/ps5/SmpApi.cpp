@@ -63,14 +63,15 @@ bool decodeChunked(const QByteArray& raw, QByteArray* out)
             return false;
         bool ok = false;
         const qint64 n = raw.mid(pos, nl - pos).split(';').front().trimmed().toLongLong(&ok, 16);
-        if (!ok)
+        // A negative or absurd size (a hostile or broken peer) must not loop or allocate without bound.
+        if (!ok || n < 0 || n > 64LL * 1024 * 1024)
             return false;
         pos = nl + 2;
         if (n == 0) {
             *out = body;
             return true;
         }
-        if (raw.size() < pos + n + 2)
+        if (qint64(raw.size()) - qint64(pos) < n + 2)
             return false;
         body += raw.mid(pos, n);
         pos += n + 2;

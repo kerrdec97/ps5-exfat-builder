@@ -637,6 +637,7 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
                 return ioError(QStringLiteral("Could not write %1.").arg(rel), out);
             return success();
         }, token, progress));
+        out.flush(); // the time stamp must come after the last write
         out.setFileTime(e.modified, QFileDevice::FileModificationTime);
         out.close();
         FW_TRY(part.commit(overwrite));

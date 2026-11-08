@@ -116,6 +116,8 @@ public:
     void uploadFiles(const QStringList& localPaths, const QString& remoteDir = {});
 signals:
     void reachabilityChanged(bool reachable, const QString& host);
+    // The connection's state (Offline / Connecting / Connected / Failed), for the header chip and Home.
+    void connectionChanged(fw::ui::ConsoleSession::ConnectionState state, const QString& host, const QString& detail);
 
 private:
     struct Group {
@@ -129,7 +131,8 @@ private:
     int settingPort(const QString& key, int fallback) const;
     ps5::ConsoleEndpoint endpoint() const;
     void toggleConnection();
-    void setConnectedUi(bool on, const QString& detail);
+    // Every view of the connection (hero, chips, file manager, status) follows the session's state.
+    void applyConnectionState(ui::ConsoleSession::ConnectionState state, const QString& detail);
     void updateHeroSubtitle();
     void checkServices();
     void showServices(const ps5::ConsoleServices& s);
@@ -181,7 +184,7 @@ private:
     QLineEdit* m_ftpPort;
     QPushButton* m_connect;
     FindConsoleButton* m_find = nullptr;
-    bool m_reachable = false; // last state sent with reachabilityChanged
+    ui::ConsoleSession::ConnectionState m_lastState = ui::ConsoleSession::ConnectionState::Offline; // last state announced
     QTabBar* m_groups;
     ToolStack* m_groupStack;
     std::vector<Group> m_groupList;

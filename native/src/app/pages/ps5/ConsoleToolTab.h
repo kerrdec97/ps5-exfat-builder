@@ -51,6 +51,11 @@ public:
 
     bool isBusy() const { return m_busy; }
     void cancelWork();
+    // Why the last runOnConsole() / runLocal() did not start, in the user's words
+    // ("" when it did): a tab shows this instead of guessing the reason.
+    enum class NotStarted { None, NoHost, Busy };
+    NotStarted lastNotStarted() const { return m_notStarted; }
+    QString whyNotStarted() const;
 
 signals:
     void toastRequested(fw::ui::Tone tone, const QString& title, const QString& body);
@@ -86,6 +91,7 @@ private:
     EndpointFn m_endpoint;
     QString m_demoKey;
     bool m_busy = false;
+    NotStarted m_notStarted = NotStarted::None;
     std::unique_ptr<CancellationSource> m_cancel;
     QFuture<void> m_future;
 };
@@ -95,6 +101,7 @@ bool ConsoleToolTab::runOnConsole(ConsoleWork<T> work, Done<T> done)
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
+        m_notStarted = NotStarted::NoHost;
         emit toastRequested(ui::Tone::Warn, QStringLiteral("No console address"),
                             QStringLiteral("Enter the console's IP address at the top of the page first."));
         return false;
@@ -114,8 +121,11 @@ bool ConsoleToolTab::runOnConsole(ConsoleWork<T> work, Done<T> done)
 template <typename T>
 bool ConsoleToolTab::runLocal(LocalWork<T> work, Done<T> done)
 {
-    if (!beginWork())
+    if (!beginWork()) {
+        m_notStarted = NotStarted::Busy;
         return false;
+    }
+    m_notStarted = NotStarted::None;
     const CancellationToken token = m_cancel->token();
     QPointer<ConsoleToolTab> self(this);
     m_future = QtConcurrent::run([self, token, work, done]() {

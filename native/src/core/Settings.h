@@ -177,6 +177,7 @@ private:
     QString m_path;
     mutable std::mutex m_mutex;
     QVariantMap m_values;
+    QJsonObject m_foreign; // settings this build's schema does not know (other builds, newer versions): written back as read
     QStringList m_warnings;
 };
 

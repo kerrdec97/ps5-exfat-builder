@@ -64,6 +64,8 @@
 #include <QStringList>
 #include <QVariantMap>
 
+class QWidget;
+
 namespace fw {
 class AppContext;
 }
@@ -139,5 +141,10 @@ QString imageEditKind(const QString& image); // "image.exfat.edit" / "image.ffpk
 
 // Kinds the Queue page hides (system jobs: update checks).
 bool isSystemKind(const QString& kind);
+
+// Asks "Cancel the running job?" (with "Also remove it from the queue") in a
+// sheet over `host`'s window, then cancels. Returns true when it was cancelled.
+// Queued jobs are removed without asking; finished jobs are left alone.
+bool cancelWithConfirm(AppContext& ctx, QWidget* host, const QString& id);
 
 } // namespace fw::jobs

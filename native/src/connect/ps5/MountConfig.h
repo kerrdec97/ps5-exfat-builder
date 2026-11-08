@@ -142,7 +142,9 @@ MountConfigFiles applyMountConfigChanges(MountTool tool, const QString& config, 
 // Problems that make SMP reject or misread the values; empty when they may be
 // pushed. Ranges, enums, power-of-two sector sizes, title-ID shapes and the
 // upstream rule limits (research §1.3).
-QStringList validateMountConfig(MountTool tool, const MountConfigValues& values);
+// `flatFormat`: the console's config is the 1.6/1.7 flat file, whose reader
+// ends an unquoted value at the first '#' or ';' (so such values are refused).
+QStringList validateMountConfig(MountTool tool, const MountConfigValues& values, bool flatFormat = false);
 // Things that are allowed but probably wrong (debug off breaks Safe to
 // unplug, an exFAT sector size other than 512, ...).
 QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& values);

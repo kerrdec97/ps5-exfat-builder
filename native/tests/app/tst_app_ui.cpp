@@ -15,6 +15,7 @@
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Shell.h"
@@ -82,6 +83,25 @@ public:
 
 protected:
     Result<QString> submit(bool) override { return jobs::unavailable(QStringLiteral("test.never.registered")); }
+};
+
+// A form page whose primary action starts a fake job (the monitor flow).
+class FakeFormPage : public pages::JobFormPage {
+public:
+    FakeFormPage(AppContext& ctx, JobQueueModel& model)
+        : JobFormPage(ctx, model, QStringLiteral("fakeform"), QStringLiteral("Fake form"), QStringLiteral("caption"),
+                      QStringLiteral("Run"), QStringLiteral("Fake jobs"))
+    {
+        setRequiredKinds({QStringLiteral("test.fake")});
+    }
+    int steps = 40;
+
+protected:
+    Result<QString> submit(bool) override
+    {
+        return m_ctx.queue().enqueue(QStringLiteral("test.fake"),
+                                     QJsonObject{{QStringLiteral("title"), QStringLiteral("Delta")}, {QStringLiteral("steps"), steps}, {QStringLiteral("stepMs"), 25}});
+    }
 };
 
 bool waitForState(JobQueue& q, const QString& id, JobState st, int ms = 10000)
@@ -259,6 +279,162 @@ private slots:
         // System jobs stay out of the visible queue.
         QVERIFY(jobs::isSystemKind(QStringLiteral("update.check")));
         QVERIFY(!jobs::isSystemKind(QStringLiteral("test.fake")));
+    }
+
+    void jobMonitorFollowsAJob()
+    {
+        m_window->navigate(QStringLiteral("queue"));
+        auto* page = qobject_cast<pages::QueuePage*>(m_window->page(QStringLiteral("queue")));
+        QVERIFY(page);
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        auto a = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Gamma")}, {QStringLiteral("steps"), 60}, {QStringLiteral("stepMs"), 20}});
+        QVERIFY(a.ok());
+        QTRY_COMPARE(page->list()->visibleCount(), 1);
+        page->selectJob(a.value());
+        ui::JobMonitor* m = page->monitor();
+        QCOMPARE(m->jobId(), a.value());
+        QVERIFY(m->isVisibleTo(page));
+        QCOMPARE(m->stageTexts().size(), 2);
+        QVERIFY2(m->stageTexts().first().endsWith(QStringLiteral("pending")), qPrintable(m->stageTexts().first()));
+        QCOMPARE(m->stateText(), QStringLiteral("Queued"));
+        QVERIFY(m->detailText().startsWith(QStringLiteral("Waiting")));
+        QVERIFY(m->cancelButton()->isVisibleTo(m)); // "Remove" for a queued job
+        QCOMPARE(m->cancelButton()->text(), QStringLiteral("Remove"));
+        QVERIFY(!m->pauseButton()->isVisibleTo(m));
+
+        q.holdQueue(false);
+        QVERIFY(waitForState(q, a.value(), JobState::Running));
+        QTRY_VERIFY2(m->stateText().startsWith(QStringLiteral("Running")), qPrintable(m->stateText()));
+        QTRY_VERIFY2(m->stageTexts().first().endsWith(QStringLiteral("running")), qPrintable(m->stageTexts().first()));
+        QTRY_VERIFY(m->console()->lineCount() >= 2); // "Queued:" and "Started:" from the queue
+        QVERIFY2(m->console()->plainLines().contains(QStringLiteral("Started: Gamma")), qPrintable(m->console()->plainLines()));
+        QVERIFY(m->console()->follow());
+        QVERIFY(m->pauseButton()->isVisibleTo(m));
+        QVERIFY(m->cancelButton()->isVisibleTo(m));
+        QCOMPARE(m->cancelButton()->text(), QStringLiteral("Cancel"));
+        QVERIFY(!m->retryButton()->isVisibleTo(m));
+        QCOMPARE(m->metricValues().value(4), QStringLiteral("1 of 2")); // stage
+
+        QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
+        QTRY_VERIFY2(m->stateText().startsWith(QStringLiteral("Done")), qPrintable(m->stateText()));
+        QCOMPARE(m->percentText(), QStringLiteral("100 %"));
+        QVERIFY2(m->stageTexts().at(0).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(0)));
+        QVERIFY2(m->stageTexts().at(1).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(1)));
+        QVERIFY(m->retryButton()->isVisibleTo(m));
+        QCOMPARE(m->retryButton()->text(), QStringLiteral("Run again"));
+        QVERIFY(!m->pauseButton()->isVisibleTo(m));
+        QTRY_VERIFY(m->console()->plainLines().contains(QStringLiteral("Finished: Gamma")));
+        QCOMPARE(m->metricValues().value(4), QStringLiteral("2 of 2"));
+        QVERIFY(m->metricValues().value(0) != QStringLiteral("—")); // elapsed
+
+        // Run again: the monitor and the list follow the new job.
+        m->retryButton()->click();
+        QVERIFY(!m->jobId().isEmpty());
+        QVERIFY(m->jobId() != a.value());
+        QCOMPARE(page->list()->selectedId(), m->jobId());
+        QVERIFY(waitForState(q, m->jobId(), JobState::Succeeded));
+        q.clearFinished();
+        QTRY_COMPARE(page->list()->visibleCount(), 0);
+        QTRY_VERIFY(m->jobId().isEmpty()); // the job left the queue
+    }
+
+    void formPageSwitchesToTheMonitor()
+    {
+        auto& q = m_ctx->queue();
+        FakeFormPage page(*m_ctx, m_window->queueModel());
+        page.resize(1240, 820);
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        QVERIFY(!page.isMonitorShown());
+        QWidget* formWidget = page.form()->parentWidget();
+        QVERIFY(formWidget->isVisibleTo(&page));
+
+        // "Add to queue" keeps the form.
+        q.holdQueue(true);
+        page.queueButton()->click();
+        QVERIFY(!page.isMonitorShown());
+        QCOMPARE(q.pendingCount(), 1);
+        const QString queued = q.records().back().id;
+
+        // The primary button starts the job and the monitor takes the form's place.
+        page.primaryButton()->click();
+        QVERIFY(page.isMonitorShown());
+        const QString started = page.monitor()->jobId();
+        QVERIFY(!started.isEmpty());
+        QVERIFY(started != queued);
+        QVERIFY(!formWidget->isVisibleTo(&page));
+        QVERIFY(page.newJobButton()->isVisibleTo(&page));
+        QVERIFY(!page.primaryButton()->isVisibleTo(&page));
+        QVERIFY(!page.queueButton()->isVisibleTo(&page));
+        QCOMPARE(page.dock()->watchedJob(), started);
+        QVERIFY(waitForState(q, started, JobState::Running));
+        QCOMPARE(q.records().front().id, started); // moved ahead of the queued job
+        QTRY_VERIFY(page.monitor()->stateText().startsWith(QStringLiteral("Running")));
+        QVERIFY(waitForState(q, started, JobState::Succeeded));
+        QTRY_VERIFY(page.monitor()->stateText().startsWith(QStringLiteral("Done")));
+
+        // "Start another" brings the form back and the dock its running block.
+        page.monitor()->newJobButton()->click();
+        QVERIFY(!page.isMonitorShown());
+        QVERIFY(formWidget->isVisibleTo(&page));
+        QVERIFY(page.primaryButton()->isVisibleTo(&page));
+        QVERIFY(page.queueButton()->isVisibleTo(&page));
+        QVERIFY(!page.newJobButton()->isVisibleTo(&page));
+        QVERIFY(page.dock()->watchedJob().isEmpty());
+        QVERIFY(page.monitor()->jobId().isEmpty());
+
+        // The queue the user paused stays paused for the other waiting job.
+        QCOMPARE(q.record(queued)->state, JobState::Queued);
+        QVERIFY(q.isHeld());
+        q.holdQueue(false);
+        // "Watch" on the dock's running block opens that job in the monitor.
+        QVERIFY(waitForState(q, queued, JobState::Succeeded));
+        auto b = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Epsilon")}, {QStringLiteral("steps"), 200}, {QStringLiteral("stepMs"), 20}});
+        QVERIFY(b.ok());
+        QVERIFY(waitForState(q, b.value(), JobState::Running));
+        QTRY_COMPARE(page.dock()->runningJob(), b.value());
+        emit page.dock()->watchRequested(b.value());
+        QVERIFY(page.isMonitorShown());
+        QCOMPARE(page.monitor()->jobId(), b.value());
+        QTRY_VERIFY(page.monitor()->pauseButton()->isVisibleTo(page.monitor()));
+        q.cancel(b.value());
+        QVERIFY(waitForState(q, b.value(), JobState::Cancelled));
+        QTRY_COMPARE(page.monitor()->stateText(), QStringLiteral("Cancelled"));
+        QVERIFY(page.monitor()->retryButton()->isVisibleTo(page.monitor()));
+        QCOMPARE(page.monitor()->retryButton()->text(), QStringLiteral("Retry"));
+        // The job leaves the queue: the page returns to the form by itself.
+        q.clearFinished();
+        QTRY_VERIFY(!page.isMonitorShown());
+        QCOMPARE(q.records().size(), size_t(0));
+    }
+
+    void monitorDemoStatesRender()
+    {
+        m_window->navigate(QStringLiteral("build"));
+        auto* page = qobject_cast<pages::JobFormPage*>(m_window->page(QStringLiteral("build")));
+        QVERIFY(page);
+        for (const QString& state : {QStringLiteral("building"), QStringLiteral("built"), QStringLiteral("build-failed")}) {
+            page->applyDemoState(state);
+            QVERIFY2(page->isMonitorShown(), qPrintable(state));
+            QCOMPARE(page->monitor()->stageTexts().size(), 9);
+            QVERIFY(page->monitor()->console()->lineCount() >= 10);
+            if (state == QLatin1String("building")) {
+                QVERIFY(page->monitor()->stateText().startsWith(QStringLiteral("Running")));
+                QCOMPARE(page->monitor()->metricValues().value(2), QStringLiteral("418 MB/s"));
+                QVERIFY2(page->monitor()->stageTexts().at(4).endsWith(QStringLiteral("running")), qPrintable(page->monitor()->stageTexts().at(4)));
+                QVERIFY2(page->monitor()->stageTexts().at(0).contains(QStringLiteral("4 s")), qPrintable(page->monitor()->stageTexts().at(0)));
+            } else if (state == QLatin1String("built")) {
+                QVERIFY(page->monitor()->stateText().startsWith(QStringLiteral("Done")));
+                QVERIFY(page->monitor()->folderButton()->isVisibleTo(page->monitor()));
+            } else {
+                QCOMPARE(page->monitor()->stateText(), QStringLiteral("Failed"));
+                QVERIFY(page->monitor()->percentText().startsWith(QStringLiteral("Failed at")));
+                QVERIFY2(page->monitor()->stageTexts().at(7).endsWith(QStringLiteral("failed")), qPrintable(page->monitor()->stageTexts().at(7)));
+            }
+            page->clearDemoState();
+            QVERIFY(!page->isMonitorShown());
+        }
     }
 
     void logsFilter()

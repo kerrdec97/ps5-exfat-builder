@@ -307,6 +307,8 @@ public:
 
 private:
     QStringList m_names;
+    int m_current = -2;
+    bool m_failed = false;
     QHBoxLayout* m_layout;
 };
 

@@ -323,7 +323,8 @@ void Ps5ManagerTab::setStats(int remote, int local, std::optional<qint64> freeBy
     // ShadowMount+ 1.7 API first; SITE AVAIL is best effort (no current console server has it).
     m_statFreeCaption->setText(freeText.isEmpty() ? QStringLiteral("unknown: needs the ShadowMount+ 1.7 API")
                                : freeText.contains(QLatin1String("ShadowMount+")) ? freeText.simplified()
-                                                                                 : QStringLiteral("SITE AVAIL: %1").arg(freeText.simplified()));
+                                                                                 : QStringLiteral("reported by the console's FTP server"));
+    m_statFreeCaption->setToolTip(freeText.simplified());
     setTextColor(m_statFree, freeBytes && imageBytes > 0 && *freeBytes < (*freeBytes + imageBytes) / 10 ? color::warn_hi : color::fg_0);
 }
 
@@ -425,7 +426,7 @@ void Ps5ManagerTab::uploadSelected()
         emit toastRequested(Tone::Err, QStringLiteral("Upload not started"), r.error().message);
         return;
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     emit toastRequested(Tone::Info, QStringLiteral("Upload queued"), QStringLiteral("%1 → %2").arg(g.name, dir));
 }
 

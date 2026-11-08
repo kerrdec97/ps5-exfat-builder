@@ -174,7 +174,7 @@ Status FtpClient::connectToHost(const QString& host, quint16 port, const Cancell
     return success();
 }
 
-Result<FtpReply> FtpClient::command(const QString& line)
+Result<FtpReply> FtpClient::command(const QString& line, const CancellationToken& token)
 {
     if (!isConnected())
         return Error(ErrorCode::IoError, QStringLiteral("Not connected to the PS5 FTP server."));
@@ -182,7 +182,7 @@ Result<FtpReply> FtpClient::command(const QString& line)
     d->ctrl->write(line.toUtf8() + "\r\n");
     d->ctrl->flush();
     while (true) {
-        auto r = readReplyOn(*d->ctrl, m_opt.replyTimeoutMs, {});
+        auto r = readReplyOn(*d->ctrl, m_opt.replyTimeoutMs, token);
         if (!r.ok()) {
             abort();
             return r.takeError();
@@ -195,14 +195,14 @@ Result<FtpReply> FtpClient::command(const QString& line)
     return m_last;
 }
 
-Status FtpClient::login()
+Status FtpClient::login(const CancellationToken& token)
 {
     const bool anon = m_opt.user.isEmpty();
     const QString user = anon ? QStringLiteral("anonymous") : m_opt.user;
     const QString pass = anon ? QStringLiteral("anonymous@") : m_opt.password;
-    FW_TRY_ASSIGN(FtpReply r, command(QStringLiteral("USER ") + user));
+    FW_TRY_ASSIGN(FtpReply r, command(QStringLiteral("USER ") + user, token));
     if (r.code == 331 || r.code == 332) {
-        FW_TRY_ASSIGN(FtpReply p, command(QStringLiteral("PASS ") + pass));
+        FW_TRY_ASSIGN(FtpReply p, command(QStringLiteral("PASS ") + pass, token));
         r = p;
     }
     if (r.code != 230 && r.code != 202)
@@ -213,7 +213,7 @@ Status FtpClient::login()
 Status FtpClient::open(const QString& host, quint16 port, const CancellationToken& token)
 {
     FW_TRY(connectToHost(host, port, token));
-    FW_TRY(login());
+    FW_TRY(login(token));
     m_selfMode = SelfMode::NotApplicable;
     if (identifyFtpServer(m_welcome).name != u"ftpsrv")
         return success();
@@ -221,7 +221,7 @@ Status FtpClient::open(const QString& host, quint16 port, const CancellationToke
     // disabled|enabled"); it starts enabled. Never a KILL: that stops the server.
     m_selfMode = SelfMode::StillEnabled;
     for (int attempt = 0; attempt < 2; ++attempt) {
-        auto r = command(QStringLiteral("SELF"));
+        auto r = command(QStringLiteral("SELF"), token);
         if (!r.ok())
             return r.takeError();
         const QString text = r->text.toLower();
@@ -596,6 +596,7 @@ static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useE
 Status FtpClient::retrieve(const QString& remote, QIODevice& out, qint64 offset, const FtpProgress& progress,
                            const CancellationToken& token)
 {
+    m_transferStarted = m_transferAccepted = false; // never the previous transfer's answer
     if (!isConnected())
         return Error(ErrorCode::IoError, QStringLiteral("Not connected to the PS5 FTP server."));
     m_last = FtpReply{}; // lastReply() describes this transfer only
@@ -659,6 +660,7 @@ Status FtpClient::retrieve(const QString& remote, QIODevice& out, qint64 offset,
 Status FtpClient::store(const QString& remote, QIODevice& in, qint64 offset, const FtpProgress& progress,
                         const CancellationToken& token, bool append)
 {
+    m_transferStarted = m_transferAccepted = false; // never the previous transfer's answer
     if (!isConnected())
         return Error(ErrorCode::IoError, QStringLiteral("Not connected to the PS5 FTP server."));
     if (offset > 0 && !in.isSequential() && !in.seek(offset))
@@ -778,10 +780,14 @@ Result<QByteArray> transferText(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, c
             break;
         const WaitResult w = waitUntil(
             [&] { return s->bytesAvailable() > 0 || s->state() != QAbstractSocket::ConnectedState; }, kSliceMs, token, {s});
-        if (w == WaitResult::Cancelled)
+        if (w == WaitResult::Cancelled) {
+            c.abort(); // the listing's reply is still owed: the control connection is out of step until dropped
             return Error::cancelled();
-        if (w == WaitResult::Timeout && idle.elapsed() >= opt.idleTimeoutMs)
+        }
+        if (w == WaitResult::Timeout && idle.elapsed() >= opt.idleTimeoutMs) {
+            c.abort();
             return Error(ErrorCode::Timeout, QStringLiteral("The folder listing stalled."));
+        }
     }
     FW_TRY_ASSIGN(FtpReply r, readReplyOn(ctrl, opt.idleTimeoutMs, token));
     last = r;
@@ -807,9 +813,11 @@ Result<std::vector<FtpEntry>> FtpClient::list(const QString& path, FtpListMode m
         auto data = transferText(*this, *d->ctrl, d->useEpsv, d->type, QStringLiteral("MLSD"), m_opt, token, m_last);
         if (data.ok())
             return parseListing(data.value(), true);
-        if (mode == FtpListMode::Mlsd || !isConnected() || data.error().isCancelled())
+        // Legacy: MLSD was refused, try LIST. Never after a stall or a cancel
+        // (the connection was dropped) nor on a connection error.
+        if (mode == FtpListMode::Mlsd || !isConnected() || data.error().isCancelled() || data.error().code == ErrorCode::Timeout
+            || data.error().code == ErrorCode::IoError)
             return data.takeError();
-        // Legacy: MLSD failed, try LIST.
     }
     auto data = transferText(*this, *d->ctrl, d->useEpsv, d->type, QStringLiteral("LIST"), m_opt, token, m_last);
     if (!data.ok()) {

@@ -22,10 +22,22 @@
 
 namespace fw {
 
-enum class JobState { Queued, Running, Paused, Succeeded, Failed, Cancelled, Interrupted };
+// The lifecycle of a job in the queue. Only JobQueue moves a job between
+// states:
+//   Queued ─▶ Running ◀─▶ Paused
+//               │  │        │
+//               │  └─ cancel ┴─▶ Cancelling ─▶ Cancelled   (the worker is winding down)
+//               └─▶ Succeeded | Failed
+//   Queued ─▶ Cancelled (removed before it ran)
+//   restored from a previous run while it was running ─▶ Interrupted
+// A failed job that the queue retries by itself goes back to Queued with
+// JobRecord::notBefore set (JobRecord::isWaitingToRetry()).
+enum class JobState { Queued, Running, Paused, Cancelling, Succeeded, Failed, Cancelled, Interrupted };
 
 QString jobStateName(JobState state);
 bool isTerminal(JobState state);
+// Running, Paused or Cancelling: a worker thread holds the job.
+bool isActive(JobState state);
 
 enum class Verification { NotRun, Passed, Failed, Skipped, Inconclusive };
 
@@ -71,6 +83,10 @@ public:
     // the parameters "image", "output", "source", "game", "package",
     // "destination", "folder" and "file", made absolute.
     virtual QStringList busyPaths() const;
+
+    // System jobs (update checks, problem reports) start even while the user
+    // has paused the queue; everything else waits for Resume.
+    virtual bool runsWhileHeld() const { return false; }
 
     // Cheap pre-flight check before the job is accepted into the queue.
     virtual Status validate(const SettingsValues& settings) const

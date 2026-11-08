@@ -15,15 +15,16 @@ bool isSectionLine(const QString& t, QString* name)
 {
     if (!t.startsWith(u'['))
         return false;
-    const qsizetype close = t.indexOf(u']');
-    if (close < 0)
-        return false;
-    // Anything after the ']' must be a comment.
-    const QString rest = t.mid(close + 1).trimmed();
-    if (!rest.isEmpty() && !rest.startsWith(u'#') && !rest.startsWith(u';'))
-        return false;
-    *name = t.mid(1, close - 1).trimmed();
-    return true;
+    // The header ends at the first ']' that only a comment (or nothing)
+    // follows: a name may hold brackets itself ("[image:Game [EU].exfat]").
+    for (qsizetype close = t.indexOf(u']'); close >= 0; close = t.indexOf(u']', close + 1)) {
+        const QString rest = t.mid(close + 1).trimmed();
+        if (!rest.isEmpty() && !rest.startsWith(u'#') && !rest.startsWith(u';'))
+            continue;
+        *name = t.mid(1, close - 1).trimmed();
+        return true;
+    }
+    return false;
 }
 
 bool needsQuotes(const QString& v)

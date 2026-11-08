@@ -38,6 +38,10 @@ public:
     void close(int result = -1);
     bool isOpen() const { return isVisible(); }
     int result() const { return m_result; }
+    // Sheets open right now, in any window. The main window's shortcuts, Esc
+    // handling and drops stand down while one is up (a sheet is a child
+    // widget, not a modal window, so Qt does not block them by itself).
+    static int openCount();
 
     // Convenience: a confirm dialog. Returns true when the action button was chosen.
     static bool confirm(QWidget* host, const QString& title, const QString& text, const QString& safeText,
@@ -65,6 +69,7 @@ private:
     QList<Role> m_roles;
     int m_width;
     int m_result = -1;
+    bool m_counted = false; // in openCount()
     QPointer<QEventLoop> m_loop;
     QPointer<QWidget> m_previousFocus;
 };

@@ -1,5 +1,6 @@
 #include "app/AppContext.h"
 
+#include "app/models/LogModel.h"
 #include "core/BuildInfo.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
@@ -50,6 +51,13 @@ AppContext::~AppContext()
         g_instance = nullptr;
 }
 
+LogModel& AppContext::logModel()
+{
+    if (!m_logModel)
+        m_logModel = new LogModel(*this, this);
+    return *m_logModel;
+}
+
 Status AppContext::initialize()
 {
     m_ring = std::make_shared<RingBufferSink>(20000);
@@ -81,11 +89,15 @@ Status AppContext::initialize()
     Logger::instance().addSink(m_uiSink);
 
     Log log(QStringLiteral("app"));
-    log.info(QStringLiteral("%1 %2 %3 starting").arg(QLatin1String(build::kProductName), QLatin1String(build::kEditionName),
-                                                    QLatin1String(build::kVersion)),
-             QJsonObject{{QStringLiteral("dataDir"), Paths::dataDir()},
+    log.info(QStringLiteral("%1 %2 starting").arg(QLatin1String(build::kProductName), QLatin1String(build::kVersion)),
+             QJsonObject{{QStringLiteral("edition"), QLatin1String(build::kEditionName)},
+                         {QStringLiteral("dataDir"), Paths::dataDir()},
                          {QStringLiteral("portable"), Paths::isPortable()}});
     Paths::sweepStaleTemp(24);
+    // Jobs run in the temporary folder chosen in Settings when there is one:
+    // a crash leaves their folders there, not under the app's own temp root.
+    if (const QString custom = snap.string(general::keys::kTempFolder).trimmed(); !custom.isEmpty())
+        Paths::sweepStaleTempIn(custom, 24);
 
     if (snap.boolean(general::keys::kRestoreQueue)) {
         auto st = m_queue->restoreQueue();

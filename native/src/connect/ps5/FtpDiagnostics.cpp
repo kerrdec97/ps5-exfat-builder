@@ -200,12 +200,16 @@ bool removeProbe(FtpClient& c, const ConsoleEndpoint& ep, const QString& path, Q
     Status st = c.isConnected() ? c.dele(path) : Status(Error(ErrorCode::IoError, QStringLiteral("not connected")));
     if (st.ok())
         return true;
-    FtpClient fresh(ftpOptionsFor(ep));
-    for (int attempt = 0; attempt < 6 && !st.ok(); ++attempt) {
+    FtpOptions quick = ftpOptionsFor(ep);
+    quick.connectTimeoutMs = std::min(quick.connectTimeoutMs, 3000);
+    FtpClient fresh(quick);
+    QElapsedTimer clock;
+    clock.start();
+    for (int attempt = 0; attempt < 6 && !st.ok() && clock.elapsed() < 4000; ++attempt) {
         if (attempt > 0)
             QThread::msleep(350);
         if (!fresh.isConnected() && !fresh.open(ep.host, ep.ftpPort, CancellationToken()).ok())
-            continue;
+            break; // the console does not answer: nothing more can be done now
         st = fresh.dele(path);
         if (!st.ok() && st.error().code == ErrorCode::NotFound && !fresh.fileExists(path))
             return true; // already gone

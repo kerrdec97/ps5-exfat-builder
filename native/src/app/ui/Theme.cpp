@@ -197,6 +197,9 @@ QLineEdit, QAbstractSpinBox, QPlainTextEdit, QTextEdit {
 QLineEdit:hover, QAbstractSpinBox:hover { border-color: {border_control}; }
 QLineEdit:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus { border-color: {accent}; }
 QPlainTextEdit, QTextEdit { max-height: 100000px; padding: 8px 12px; }
+/* Live log console (JobMonitor): a terminal-like well on bg_0. */
+QPlainTextEdit#fwConsole { background: {bg_0}; border: 1px solid {border_2}; border-radius: 8px; padding: 6px 8px; color: {fg_1}; }
+QPlainTextEdit#fwConsole:focus { border-color: {border_3}; }
 QLineEdit[error="true"] { border-color: {danger}; }
 QLineEdit:read-only { border-color: {border_2}; color: {fg_2}; background: {bg_2}; }
 QLineEdit:disabled, QAbstractSpinBox:disabled, QPlainTextEdit:disabled { background: {bg_2}; border-color: {border_2}; color: {fg_5}; }

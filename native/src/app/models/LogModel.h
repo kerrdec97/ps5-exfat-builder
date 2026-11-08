@@ -49,6 +49,7 @@ private:
     QTimer m_timer;
     QStringList m_sources;
     int m_maxRows = 20000;
+    quint64 m_lastSeq = 0; // the newest record this model holds or has queued
 };
 
 class LogFilterModel : public QSortFilterProxyModel {

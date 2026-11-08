@@ -982,9 +982,16 @@ QString renderSmpProfiles(const MountConfigValues& values)
 
 // ---- validation -------------------------------------------------------------------------------
 
-QStringList validateMountConfig(MountTool tool, const MountConfigValues& data)
+QStringList validateMountConfig(MountTool tool, const MountConfigValues& data, bool flatFormat)
 {
     QStringList problems;
+    if (flatFormat) {
+        // The flat file cannot quote: the console would read "/mnt/usb0/Games #2" as "/mnt/usb0/Games".
+        for (auto it = data.cbegin(); it != data.cend(); ++it)
+            if (it.value().contains(u'#') || it.value().contains(u';'))
+                problems << QStringLiteral("%1 cannot contain # or ; in this config format (the console reads the value up to that character). Got: %2")
+                                .arg(it.key(), it.value().simplified());
+    }
     if (tool == MountTool::MicroMount) {
         for (const char* k : {"scan_interval_seconds", "lvd_sector_size", "lvd_secondary_unit", "lvd_image_type"}) {
             const QString v = data.value(QLatin1String(k)).trimmed();

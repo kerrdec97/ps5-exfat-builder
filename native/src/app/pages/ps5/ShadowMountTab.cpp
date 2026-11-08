@@ -405,7 +405,7 @@ void ShadowMountTab::refreshMarks()
         it->reset->setVisible(!atDefault || (changed && current != rowDefault(*it->def)));
     }
     // Problems and warnings for what would be pushed.
-    const QStringList problems = ps5::validateMountConfig(ps5::MountTool::ShadowMountPlus, edited);
+    const QStringList problems = ps5::validateMountConfig(ps5::MountTool::ShadowMountPlus, edited, m_hasLoaded && m_format != ps5::SmpConfigFormat::V2);
     const QStringList warnings = ps5::mountConfigWarnings(ps5::MountTool::ShadowMountPlus, edited);
     if (!problems.isEmpty()) {
         m_problems->setTone(Tone::Err);
@@ -527,7 +527,7 @@ void ShadowMountTab::load()
             finishLoad(r->state);
         });
     if (!started)
-        setStatus(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Warn);
+        setStatus(whyNotStarted(), Tone::Warn);
 }
 
 void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s)
@@ -540,6 +540,7 @@ void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s)
     m_format = s.format;
     m_loaded = ps5::parseMountConfig(ps5::MountTool::ShadowMountPlus, s.config, s.profiles);
     m_hasLoaded = true;
+    m_loadedHost = endpoint().host; // Push is for this console only
     populate(m_loaded);
     updateHeader();
     setStatus(s.configExists ? QStringLiteral("Loaded. Only the settings you change are written back.")
@@ -554,8 +555,12 @@ void ShadowMountTab::push(bool confirmed)
         setStatus(QStringLiteral("Load the config from the console first."), Tone::Warn);
         return;
     }
+    if (!m_loadedHost.isEmpty() && m_loadedHost != endpoint().host) {
+        setStatus(QStringLiteral("This config was loaded from %1. Load it from this console first.").arg(m_loadedHost), Tone::Warn);
+        return;
+    }
     const MountConfigValues edited = editedValues();
-    const QStringList problems = ps5::validateMountConfig(ps5::MountTool::ShadowMountPlus, edited);
+    const QStringList problems = ps5::validateMountConfig(ps5::MountTool::ShadowMountPlus, edited, m_hasLoaded && m_format != ps5::SmpConfigFormat::V2);
     if (!problems.isEmpty()) {
         setStatus(problems.first(), Tone::Err);
         return;
@@ -629,7 +634,7 @@ void ShadowMountTab::safeToUnplug()
         emit toastRequested(Tone::Err, QStringLiteral("Not started"), r.error().message);
         return;
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     setStatus(QStringLiteral("STOP sent. Wait for the green confirmation on the Queue page before unplugging."), Tone::Info);
     emit toastRequested(Tone::Info, QStringLiteral("Stopping ShadowMount+"), QStringLiteral("Wait for the green confirmation before unplugging."));
 }
@@ -680,12 +685,12 @@ void ShadowMountTab::ejectUsb()
                 setStatus(id.error().message, Tone::Err);
                 return;
             }
-            m_ctx.queue().holdQueue(false);
+            m_ctx.queue().startNow(id.value()); // this job only; a paused queue stays paused
             setStatus(QStringLiteral("Ejecting %1. Unplug it when the Queue says it was ejected.").arg(path), Tone::Info);
             emit toastRequested(Tone::Info, QStringLiteral("Ejecting %1").arg(path), QStringLiteral("Unplug it when the queue says it was ejected."));
         });
     if (!started)
-        setStatus(QStringLiteral("Wait for the current step to finish."), Tone::Neutral);
+        setStatus(whyNotStarted(), Tone::Neutral);
 }
 
 void ShadowMountTab::sendLoader()
@@ -704,7 +709,7 @@ void ShadowMountTab::sendLoader()
         emit toastRequested(Tone::Err, QStringLiteral("Payload not sent"), r.error().message);
         return;
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     setStatus(QStringLiteral("Sending %1 to %2:%3.").arg(QFileInfo(file).fileName(), ep.host).arg(ep.shadowMountPort), Tone::Info);
 }
 

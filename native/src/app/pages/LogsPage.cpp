@@ -171,7 +171,12 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
         m_filter->setJobId(m_job->currentData().toString());
         updateFooter();
     });
-    connect(m_search, &QLineEdit::textChanged, this, &LogsPage::setSearch);
+    // Typing re-filters up to 20,000 rows: wait for a short pause first.
+    auto* searchDelay = new QTimer(this);
+    searchDelay->setSingleShot(true);
+    searchDelay->setInterval(150);
+    connect(m_search, &QLineEdit::textChanged, searchDelay, qOverload<>(&QTimer::start));
+    connect(searchDelay, &QTimer::timeout, this, [this] { setSearch(m_search->text()); });
     connect(m_follow, &QAbstractButton::toggled, m_table, &LogTable::setFollow);
     connect(m_table->selectionModel(), &QItemSelectionModel::currentRowChanged, this, [this](const QModelIndex&, const QModelIndex&) { updateDetail(); });
     connect(&m_model, &LogModel::sourcesChanged, this, &LogsPage::refreshSources);

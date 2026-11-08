@@ -1,11 +1,15 @@
 #include "app/services/JobSubmit.h"
 
 #include "app/AppContext.h"
+#include "app/ui/Sheet.h"
+#include "app/ui/Widgets.h"
 #include "core/Paths.h"
 #include "engines/ampr/Module.h"
 
 #include <QDir>
 #include <QFileInfo>
+#include <QMetaObject>
+#include <QWidget>
 
 namespace fw::jobs {
 
@@ -66,6 +70,45 @@ Error unavailable(const QString& kind)
 bool isSystemKind(const QString& kind)
 {
     return kind.startsWith(QLatin1String("update."));
+}
+
+bool cancelWithConfirm(AppContext& ctx, QWidget* host, const QString& id)
+{
+    auto rec = ctx.queue().record(id);
+    if (!rec)
+        return false;
+    if (rec->state == JobState::Queued) {
+        ctx.queue().remove(id);
+        return true;
+    }
+    if (rec->state != JobState::Running && rec->state != JobState::Paused)
+        return false; // finished, or already cancelling
+    const QString pct = rec->progress.indeterminate ? QString() : QStringLiteral(" is %1 done").arg(ui::thinPercent(rec->progress.overallFraction));
+    bool remove = false;
+    const bool ok = ui::Sheet::confirm(host ? host->window() : nullptr, QStringLiteral("Cancel the running job?"),
+                                       QStringLiteral("%1%2. The job stops at its next safe point and removes what it had not finished.")
+                                           .arg(rec->title.toHtmlEscaped(), pct),
+                                       QStringLiteral("Keep running"), QStringLiteral("Cancel job"), true, ui::Sheet::Icon::Warning,
+                                       QStringLiteral("Also remove the job from the queue"), &remove);
+    if (!ok)
+        return false;
+    // The sheet ran a nested event loop: the job may have finished meanwhile.
+    rec = ctx.queue().record(id);
+    if (!rec || isTerminal(rec->state))
+        return false;
+    ctx.queue().cancel(id);
+    if (remove) {
+        // The job leaves the queue once the worker reports Cancelled.
+        auto* conn = new QMetaObject::Connection;
+        *conn = QObject::connect(&ctx.queue(), &JobQueue::jobFinished, &ctx, [&ctx, id, conn](const QString& fin) {
+            if (fin != id)
+                return;
+            ctx.queue().remove(id);
+            QObject::disconnect(*conn);
+            delete conn;
+        });
+    }
+    return true;
 }
 
 static Result<QString> enqueue(AppContext& ctx, const QString& kind, const QJsonObject& params, const QVariantMap& overrides)

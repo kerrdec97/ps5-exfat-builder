@@ -97,6 +97,7 @@ DlcPage::DlcPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
                   QStringLiteral("Turn DLC lists (.ini) and DLC packages into installable PS5 DLC packages."),
                   QStringLiteral("Convert DLC"), QStringLiteral("DLC conversion"), parent)
 {
+    setNewJobText(QStringLiteral("Back to the list"));
     setRequiredKinds({dlc::kJobConvert});
     m_cacheDir = QDir(Paths::cacheDir()).filePath(QStringLiteral("dlc-lookup"));
     m_iconDir = QDir(Paths::tempRoot()).filePath(QStringLiteral("dlc-icons"));

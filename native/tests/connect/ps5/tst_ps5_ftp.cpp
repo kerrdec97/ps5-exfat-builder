@@ -143,9 +143,10 @@ private slots:
         QCOMPARE(joinRemote(QStringLiteral("/data/"), QStringLiteral("x y")), QStringLiteral("/data/x y"));
         QCOMPARE(remoteParent(QStringLiteral("/a")), QStringLiteral("/"));
         QCOMPARE(remoteFileName(QStringLiteral("/a/b.bin")), QStringLiteral("b.bin"));
-        for (const char* p : {"/system", "/SYSTEM/lib", "/dev/", "system_ex/x", "/preinst2", "/data/../system", "//proc"})
+        for (const char* p : {"/system", "/SYSTEM/lib", "/dev/", "system_ex/x", "/preinst2", "/data/../system", "//proc",
+                              "/system_data/priv/mms/app.db", "/user/app/PPSA01325", "/user/home/1234/savedata", "/mnt/sandbox/x"})
             QVERIFY2(isProtectedRemotePath(QString::fromLatin1(p)), p);
-        for (const char* p : {"/system_data/priv", "/data/system", "/mnt/usb0", "/systemx", "", "/"})
+        for (const char* p : {"/data/system", "/mnt/usb0", "/systemx", "/user/data/tmp", "/user/appmeta", "/data/etaHEN/games", "", "/"})
             QVERIFY2(!isProtectedRemotePath(QString::fromLatin1(p)), p);
         QVERIFY(protectedPathWarning(QStringLiteral("/system"), QStringLiteral("delete")).contains(QStringLiteral("BRICK")));
         QCOMPARE(classifyDestination(QStringLiteral("/mnt/usb0/games")).kind, DestinationKind::External);

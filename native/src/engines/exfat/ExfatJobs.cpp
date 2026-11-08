@@ -466,7 +466,8 @@ public:
         if (m_output.isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the folder to extract to."));
         const QFileInfo fi(m_output);
-        if (fi.exists() && (!fi.isDir() || !QDir(m_output).isEmpty()))
+        // Hidden entries count too (a desktop.ini would make the final rename fail after the whole extraction).
+        if (fi.exists() && (!fi.isDir() || !QDir(m_output).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)))
             return Error(ErrorCode::AlreadyExists,
                          QStringLiteral("%1 already exists and is not empty. Choose a new or empty folder.").arg(native(m_output)));
         if (isSameOrInside(m_output, m_image) || isSameOrInside(m_image, m_output))

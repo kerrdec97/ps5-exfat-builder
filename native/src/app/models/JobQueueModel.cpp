@@ -132,7 +132,7 @@ QVariant JobQueueModel::data(const QModelIndex& index, int role) const
     case RateTextRole: return p.unitIsBytes && p.ratePerSec > 0 ? formatRate(p.ratePerSec) : QString();
     case EtaTextRole: return formatTimeLeft(p.etaMs);
     case DetailTextRole:
-        if (r.state == JobState::Running || r.state == JobState::Paused)
+        if (r.isActive())
             return progressDetailText(p);
         if (r.state == JobState::Succeeded && r.outcome)
             return r.outcome->summary;

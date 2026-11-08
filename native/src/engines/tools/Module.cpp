@@ -147,6 +147,7 @@ class ReportJob : public Job {
 public:
     explicit ReportJob(QJsonObject p) : m_p(std::move(p)) {}
     QString kind() const override { return QStringLiteral("tools.report"); }
+    bool runsWhileHeld() const override { return true; } // the user asked for it now, whatever the queue does
     QString title() const override { return QStringLiteral("Create a problem report"); }
     QStringList phases() const override { return {QStringLiteral("Collecting")}; }
     QJsonObject parameters() const override { return m_p; }

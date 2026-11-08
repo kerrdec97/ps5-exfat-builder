@@ -90,7 +90,7 @@ public:
     // Connects and reads the greeting.
     Status connectToHost(const QString& host, quint16 port, const CancellationToken& token = {});
     // USER/PASS; anonymous ("anonymous" / "anonymous@") when options().user is empty.
-    Status login();
+    Status login(const CancellationToken& token = {});
     // connectToHost() + login(), then (ftpsrv only) SELF to turn off the
     // SELF decryption mode, checked from the reply (see SelfMode).
     Status open(const QString& host, quint16 port, const CancellationToken& token = {});
@@ -113,8 +113,9 @@ public:
     // when the connection broke right after the command was written.
     bool lastTransferAccepted() const { return m_transferAccepted; }
 
-    // One command, one reply (1xx replies are read through).
-    Result<FtpReply> command(const QString& line);
+    // One command, one reply (1xx replies are read through). A cancelled token
+    // stops the wait for the reply (and drops the connection).
+    Result<FtpReply> command(const QString& line, const CancellationToken& token = {});
 
     Result<FtpFeatures> features(); // FEAT, cached per connection
     Result<QString> pwd();

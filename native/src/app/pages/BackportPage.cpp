@@ -124,13 +124,24 @@ QString modeNote(const QJsonObject& pssr2)
     return s;
 }
 
-QPixmap coverFor(const BackportRow& r, int px, qreal dpr)
+// Covers drawn so far, by icon path (or title initials) and size. A rescan
+// clears it (clearCoverCache), so paint never asks the file system for the
+// icon's modification time.
+QHash<QString, QPixmap>& coverCache()
 {
     static QHash<QString, QPixmap> cache;
+    return cache;
+}
+
+void clearCoverCache() { coverCache().clear(); }
+
+QPixmap coverFor(const BackportRow& r, int px, qreal dpr)
+{
+    QHash<QString, QPixmap>& cache = coverCache();
     const QString title = r.game.title.isEmpty() ? QFileInfo(r.game.path).fileName() : r.game.title;
     QString key;
     if (!r.game.icon.isEmpty())
-        key = r.game.icon + u'|' + QString::number(QFileInfo(r.game.icon).lastModified().toMSecsSinceEpoch()) + u'|' + QString::number(px);
+        key = r.game.icon + u'|' + QString::number(px);
     else
         key = QStringLiteral("initials|") + title + u'|' + QString::number(px);
     auto it = cache.find(key);
@@ -623,7 +634,7 @@ void BackportPage::buildLibraryCard()
     connect(m_rootsBtn, &QPushButton::clicked, this, &BackportPage::editScanLocations);
     connect(clear, &Link::activated, this, &BackportPage::clearList);
     auto setVisible = [this](bool on) {
-        if (m_running)
+        if (isRunning())
             return;
         for (int i = 0; i < m_proxy->rowCount(); ++i)
             m_model->rows()[size_t(m_proxy->mapToSource(m_proxy->index(i, 0)).row())].checked = on;
@@ -648,7 +659,7 @@ void BackportPage::buildLibraryCard()
         m_table->horizontalHeader()->setSortIndicator(section, order);
     });
     connect(m_table, &QTableView::clicked, this, [this](const QModelIndex& i) {
-        if (i.column() == BackportGameModel::SelectCol && !m_running) {
+        if (i.column() == BackportGameModel::SelectCol && !isRunning()) {
             auto& r = m_model->rows()[size_t(m_proxy->mapToSource(i).row())];
             r.checked = !r.checked;
             m_model->rowChanged(r.game.key);
@@ -668,7 +679,7 @@ void BackportPage::buildLibraryCard()
     });
     auto* space = new QShortcut(QKeySequence(Qt::Key_Space), m_table, nullptr, nullptr, Qt::WidgetShortcut);
     connect(space, &QShortcut::activated, this, [this] {
-        if (m_running)
+        if (isRunning())
             return;
         for (const QString& k : selectedKeys())
             if (auto* r = m_model->rowByKey(k)) {
@@ -1007,15 +1018,20 @@ void BackportPage::updateModeLine()
     m_modeLine->setText(QStringLiteral("Next run: ") + parts.join(QStringLiteral(" \u00b7 ")));
 }
 
+void BackportPage::setRunState(RunState state)
+{
+    if (m_runState == state)
+        return;
+    m_runState = state;
+    updateButtons();
+    updateLibraryState();
+}
+
 void BackportPage::updateButtons()
 {
-    const bool busy = m_running;
-    if (busy && m_kind == Kind::Backport) {
-        m_start->setText(QStringLiteral("Cancel"));
-        setButtonVariant(m_start, ButtonVariant::Danger);
-        setButtonIcon(m_start, QStringLiteral("stop"));
-    } else if (busy) {
-        m_start->setText(QStringLiteral("Cancel"));
+    const bool busy = isRunning();
+    if (busy) {
+        m_start->setText(isCancelling() ? QStringLiteral("Cancelling\u2026") : QStringLiteral("Cancel"));
         setButtonVariant(m_start, ButtonVariant::Danger);
         setButtonIcon(m_start, QStringLiteral("stop"));
     } else {
@@ -1023,9 +1039,10 @@ void BackportPage::updateButtons()
         setButtonVariant(m_start, ButtonVariant::Primary);
         setButtonIcon(m_start, QStringLiteral("play"));
     }
-    m_start->setEnabled(!(busy && (m_cancelRequested || m_kind == Kind::Restore)));
-    m_switchBtn->setEnabled(!busy && !m_scanning);
-    m_rescanBtn->setEnabled(!busy && !m_scanning);
+    // Cancelling already, or a restore (which must finish): nothing to press.
+    m_start->setEnabled(!(busy && (isCancelling() || m_kind == Kind::Restore)));
+    m_switchBtn->setEnabled(!busy && !isScanning());
+    m_rescanBtn->setEnabled(!busy && !isScanning());
     m_addBtn->setEnabled(!busy);
     m_rootsBtn->setEnabled(!busy);
     for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild})
@@ -1070,17 +1087,17 @@ void BackportPage::updateLibraryState()
 {
     const bool noRoots = m_settings.scanRoots.isEmpty() && m_model->rowCount() == 0;
     const bool empty = m_proxy->rowCount() == 0;
-    m_emptyDrop->setVisible(noRoots && !m_scanning);
+    m_emptyDrop->setVisible(noRoots && !isScanning());
     m_table->setVisible(!empty);
     QString text;
     if (empty && !noRoots) {
         if (m_model->rowCount() > 0)
             text = QStringLiteral("No game matches the search.");
-        else if (m_scanning)
+        else if (isScanning())
             text = QStringLiteral("Scanning\u2026");
         else
             text = QStringLiteral("No game folders found in the scan locations.");
-    } else if (empty && m_scanning) {
+    } else if (empty && isScanning()) {
         text = QStringLiteral("Scanning\u2026");
     }
     m_emptyText->setText(text);
@@ -1089,7 +1106,7 @@ void BackportPage::updateLibraryState()
 
 QString BackportPage::statusContext() const
 {
-    if (m_running)
+    if (isRunning())
         return m_current->text();
     return QStringLiteral("PS5 Backport %1 \u00b7 %2").arg(QLatin1String(bp::kEngineVersion), m_engineBadge->text());
 }
@@ -1180,7 +1197,7 @@ void BackportPage::engineReady()
 void BackportPage::offerInterruptedRestores()
 {
     for (const QJsonObject& row : bp::interruptedApplies()) {
-        if (m_running)
+        if (isRunning())
             return;
         const QString game = QDir::toNativeSeparators(row.value(QStringLiteral("game_dir")).toString());
         const QString backup = QDir::toNativeSeparators(row.value(QStringLiteral("backup_dir")).toString());
@@ -1236,7 +1253,7 @@ void BackportPage::navigateWith(const QVariantMap& args)
 
 void BackportPage::addRoots(const QStringList& dirs)
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -1258,7 +1275,7 @@ void BackportPage::addRoots(const QStringList& dirs)
 
 void BackportPage::rescan()
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish before rescanning."));
         return;
     }
@@ -1273,9 +1290,9 @@ void BackportPage::rescan()
     for (const auto& r : m_model->rows())
         previous.insert(r.game.key, r);
     m_model->clear();
-    m_scanning = true;
+    clearCoverCache(); // icons may have changed on disk since the last scan
+    setRunState(RunState::Scanning);
     m_scanLabel->setText(QStringLiteral("Scanning\u2026"));
-    updateButtons();
     updateLibraryState();
     const QStringList roots = m_settings.scanRoots;
     if (roots.isEmpty()) {
@@ -1343,7 +1360,7 @@ void BackportPage::onScanFinished(quint64 gen, int count)
 {
     if (gen != m_scanGen)
         return;
-    m_scanning = false;
+    setRunState(RunState::Idle);
     m_scanLabel->setText(QStringLiteral("Last scan %1").arg(QTime::currentTime().toString(QStringLiteral("HH:mm"))));
     if (!m_settings.scanRoots.isEmpty())
         log(QStringLiteral("INFO"), QStringLiteral("Found %1 game folder(s)").arg(count));
@@ -1414,14 +1431,21 @@ void BackportPage::editScanLocations()
 
 void BackportPage::clearList()
 {
-    if (m_running)
+    if (isRunning())
         return;
     if (m_model->rowCount() > 0
         && !Sheet::confirm(window(), QStringLiteral("Clear the game list?"),
                            QStringLiteral("Clear the game list and forget all scan locations?\nNothing is deleted from disk."),
                            QStringLiteral("Keep"), QStringLiteral("Clear list"), true, Sheet::Icon::Warning))
         return;
+    // A scan still in flight would report to a list that no longer exists.
     ++m_scanGen;
+    if (m_scanCancel)
+        m_scanCancel->store(true);
+    if (isScanning()) {
+        setRunState(RunState::Idle);
+        m_scanLabel->clear();
+    }
     m_settings.scanRoots.clear();
     persistSettings();
     m_model->clear();
@@ -1435,7 +1459,7 @@ void BackportPage::clearList()
 
 void BackportPage::startOrCancel()
 {
-    if (m_running) {
+    if (isRunning()) {
         requestCancel();
         return;
     }
@@ -1444,7 +1468,7 @@ void BackportPage::startOrCancel()
 
 void BackportPage::startRun(const QStringList& keysIn)
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -1552,8 +1576,7 @@ void BackportPage::beginRun(const QStringList& keys)
                     {QStringLiteral("pssr2"), m_proBuild->isChecked()}};
     m_runKeys = keys;
     m_runIndex = 0;
-    m_cancelRequested = false;
-    m_running = true;
+    setRunState(RunState::Running);
     for (const QString& k : keys)
         if (auto* r = m_model->rowByKey(k)) {
             r->status = QStringLiteral("Queued");
@@ -1581,10 +1604,9 @@ void BackportPage::beginRun(const QStringList& keys)
 
 void BackportPage::requestCancel()
 {
-    if (!m_running || m_cancelRequested)
+    if (m_runState != RunState::Running)
         return;
-    m_cancelRequested = true;
-    m_start->setEnabled(false);
+    setRunState(RunState::Cancelling);
     setState(QStringLiteral("Cancelling\u2026"), Tone::Warn);
     log(QStringLiteral("WARN"), QStringLiteral("Cancelling: stopping at the next safe point"));
     if (m_worker)
@@ -1594,7 +1616,7 @@ void BackportPage::requestCancel()
 void BackportPage::runNext()
 {
     const int total = m_kind == Kind::Backport ? int(m_runKeys.size()) : int(m_items.size());
-    if (m_runIndex >= total || (m_cancelRequested && m_kind != Kind::Backport)) {
+    if (m_runIndex >= total || (isCancelling() && m_kind != Kind::Backport)) {
         if (m_kind == Kind::Backport)
             runFinished();
         else
@@ -1605,7 +1627,7 @@ void BackportPage::runNext()
     if (m_kind == Kind::Backport) {
         const QString key = m_runKeys[m_runIndex];
         BackportRow* r = m_model->rowByKey(key);
-        if (m_cancelRequested) {
+        if (isCancelling()) {
             for (int i = m_runIndex; i < total; ++i)
                 if (auto* rr = m_model->rowByKey(m_runKeys[i])) {
                     rr->status = QStringLiteral("Cancelled");
@@ -1668,7 +1690,7 @@ void BackportPage::runNext()
         onFinished({{QStringLiteral("status"), QStringLiteral("FAILED")}, {QStringLiteral("headline"), err}});
         return;
     }
-    if (m_cancelRequested && m_kind != Kind::Restore)
+    if (isCancelling() && m_kind != Kind::Restore)
         w->cancel();
 }
 
@@ -1831,8 +1853,8 @@ void BackportPage::rowResult(BackportRow& row, const QJsonObject& r)
 
 void BackportPage::runFinished()
 {
-    const bool cancelled = m_cancelRequested;
-    m_running = false;
+    const bool cancelled = isCancelling();
+    setRunState(RunState::Idle);
     m_worker.clear();
     if (!cancelled) {
         m_bar->setFraction(1);
@@ -1840,7 +1862,6 @@ void BackportPage::runFinished()
     }
     m_current->setText(cancelled ? QStringLiteral("Run cancelled") : QStringLiteral("Run complete"));
     m_stage->clear();
-    m_cancelRequested = false;
     updateButtons();
     setState(m_engine == Engine::Ready ? QStringLiteral("Ready") : QStringLiteral("Not checked"), m_engine == Engine::Ready ? Tone::Ok : Tone::Neutral);
     int done = 0;
@@ -1880,7 +1901,7 @@ void BackportPage::runFinished()
 
 void BackportPage::retryFailed()
 {
-    if (m_running)
+    if (isRunning())
         return;
     QStringList keys;
     for (auto& r : m_model->rows()) {
@@ -1903,8 +1924,7 @@ void BackportPage::startBatch(Kind kind, std::vector<Item> items)
     m_batchResults.clear();
     m_runIndex = 0;
     m_runKeys.clear();
-    m_cancelRequested = false;
-    m_running = true;
+    setRunState(RunState::Running);
     m_bar->setState(ProgressBar::State::Determinate);
     m_bar->setFraction(0);
     updateButtons();
@@ -1932,8 +1952,7 @@ void BackportPage::startBatch(Kind kind, std::vector<Item> items)
 void BackportPage::batchFinished()
 {
     const Kind kind = m_kind;
-    m_running = false;
-    m_cancelRequested = false;
+    setRunState(RunState::Idle);
     m_kind = Kind::Backport;
     updateButtons();
     setState(m_engine == Engine::Ready ? QStringLiteral("Ready") : QStringLiteral("Not checked"), m_engine == Engine::Ready ? Tone::Ok : Tone::Neutral);
@@ -2046,7 +2065,7 @@ QStringList BackportPage::chooseBackportFiles(const QString& question, const QSt
 
 void BackportPage::rebuildWithSdk(const QStringList& keys)
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -2100,7 +2119,7 @@ void BackportPage::rebuildWithSdk(const QStringList& keys)
 
 void BackportPage::makeProBuild(const QStringList& keys)
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -2145,7 +2164,7 @@ void BackportPage::makeProBuild(const QStringList& keys)
 
 void BackportPage::switchFakelib(const QStringList& keys)
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -2306,7 +2325,7 @@ bool BackportPage::chooseFakelib(const QStringList& names, QJsonValue* ampr, QJs
 
 void BackportPage::pickRestore()
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -2354,7 +2373,7 @@ void BackportPage::pickRestore()
 
 void BackportPage::runRestore(const QString& backupRun)
 {
-    if (m_running) {
+    if (isRunning()) {
         Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
         return;
     }
@@ -2385,7 +2404,7 @@ void BackportPage::showRowMenu(const QPoint& globalPos)
         if (!p.isEmpty())
             menu.addAction(text, this, [this, p] { openPath(p); });
     }
-    if (!m_running) {
+    if (!isRunning()) {
         menu.addSeparator();
         const int n = targetSdk();
         if (n > 4) {
@@ -2430,7 +2449,7 @@ void BackportPage::showRowMenu(const QPoint& globalPos)
         if (auto* r = m_model->rowByKey(key))
             QApplication::clipboard()->setText(r->game.path);
     });
-    if (!m_running)
+    if (!isRunning())
         menu.addAction(icon(QStringLiteral("close"), color::fg_3), QStringLiteral("Remove from list"), this, [this, sel] {
             for (const QString& k : sel)
                 m_model->removeKey(k);
@@ -2635,12 +2654,12 @@ bool BackportPage::eventFilter(QObject* watched, QEvent* event)
 
 void BackportPage::cancelAndWait(int ms)
 {
-    if (!m_running)
+    if (!isRunning())
         return;
     requestCancel();
     QElapsedTimer t;
     t.start();
-    while (m_running && t.elapsed() < ms)
+    while (isRunning() && t.elapsed() < ms)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
 }
 
@@ -2657,7 +2676,8 @@ void BackportPage::applyDemoState(const QString& name)
     ++m_scanGen;
     if (m_scanCancel)
         m_scanCancel->store(true);
-    m_scanning = false;
+    if (isScanning())
+        setRunState(RunState::Idle);
     m_model->clear();
     auto add = [this](const QString& id, const QString& title, const QString& ver, const QString& sdk, const QString& fw,
                       const QString& status, const QString& tone, int pct = 0) {

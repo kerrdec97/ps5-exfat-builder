@@ -172,9 +172,13 @@ public:
         o.packPhase = 1;
         o.verifyPhase = 2;
         const QString out = QFileInfo(output()).absoluteFilePath();
+        const bool created = !QFileInfo::exists(out);
         auto r = packGame(files, out, o, ctx.token, ctx.progress, ctx.log);
         if (!r.ok()) {
+            // Nothing half-written stays; a folder the user made is left empty, not removed.
             (void)removeTreeSafely(out, QFileInfo(out).absolutePath());
+            if (!created)
+                QDir().mkpath(out);
             return r.takeError();
         }
         JobOutcome outcome;
@@ -203,9 +207,12 @@ public:
             return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 has no zstd or LZ4 packs.").arg(QFileInfo(source()).fileName()));
         ctx.progress->beginPhase(1, 0);
         const QString out = QFileInfo(output()).absoluteFilePath();
+        const bool created = !QFileInfo::exists(out);
         auto r = unpackGame(files, out, {}, ctx.token, ctx.progress, ctx.log);
         if (!r.ok()) {
             (void)removeTreeSafely(out, QFileInfo(out).absolutePath());
+            if (!created)
+                QDir().mkpath(out);
             return r.takeError();
         }
         JobOutcome outcome;

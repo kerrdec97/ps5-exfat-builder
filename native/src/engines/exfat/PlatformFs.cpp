@@ -132,6 +132,9 @@ Result<std::unique_ptr<QFile>> openForRead(const QString& path, int retries, int
         if (!token.sleepFor(waitMs))
             return Error::cancelled();
     }
+    if (!QFileInfo::exists(path))
+        return Error(ErrorCode::NotFound, QStringLiteral("%1 was removed while the image was being built.").arg(QDir::toNativeSeparators(path)),
+                     f->errorString());
     return Error(ErrorCode::IoError,
                  QStringLiteral("Could not open %1. Close any program using it (antivirus, Windows Search) and try again.")
                      .arg(QDir::toNativeSeparators(path)),

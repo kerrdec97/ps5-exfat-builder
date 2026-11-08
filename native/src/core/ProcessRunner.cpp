@@ -138,8 +138,22 @@ QString describeCommandLine(const ProcessSpec& spec)
         return (s.contains(u' ') || s.isEmpty()) ? QStringLiteral("\"%1\"").arg(s) : s;
     };
     parts << quote(QDir::toNativeSeparators(spec.program));
-    for (const auto& a : spec.arguments)
-        parts << quote(a);
+    // Secrets stay out of logs and problem reports: the value after a
+    // --passcode (Sony's publisher, fpkg-cli) is masked.
+    bool maskNext = false;
+    for (const auto& a : spec.arguments) {
+        if (maskNext) {
+            parts << QStringLiteral("********");
+            maskNext = false;
+        } else if (a.compare(QLatin1String("--passcode"), Qt::CaseInsensitive) == 0) {
+            parts << a;
+            maskNext = true;
+        } else if (a.startsWith(QLatin1String("--passcode="), Qt::CaseInsensitive)) {
+            parts << QStringLiteral("--passcode=********");
+        } else {
+            parts << quote(a);
+        }
+    }
     return parts.join(u' ');
 }
 
@@ -409,8 +423,12 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     result.elapsedMs = timer.elapsed();
     result.crashed = !killed && proc.exitStatus() == QProcess::CrashExit;
     result.exitCode = proc.exitCode();
-    if (cancelRequested.load())
+    if (cancelRequested.load()) {
+        // One outcome: a cancel that arrived while the timeout was killing the
+        // process is still a cancel, never "timed out" as well.
         result.cancelled = true;
+        result.timedOut = false;
+    }
     log.debug(QStringLiteral("Finished %1: exit %2%3 in %4 ms")
                   .arg(QFileInfo(spec.program).fileName())
                   .arg(result.exitCode)

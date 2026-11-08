@@ -134,9 +134,13 @@ QString cacheDir() { return sub(localDir(), QStringLiteral("cache")); }
 QString tempRoot() { return sub(localDir(), QStringLiteral("temp")); }
 QString toolsDir() { return sub(localDir(), QStringLiteral("tools")); }
 
-int sweepStaleTemp(int maxAgeHours)
+int sweepStaleTemp(int maxAgeHours) { return sweepStaleTempIn(tempRoot(), maxAgeHours); }
+
+int sweepStaleTempIn(const QString& folder, int maxAgeHours)
 {
-    QDir root(tempRoot());
+    QDir root(folder);
+    if (folder.isEmpty() || !root.exists())
+        return 0;
     const QDateTime cutoff = QDateTime::currentDateTime().addSecs(-qint64(maxAgeHours) * 3600);
     int removed = 0;
     const auto entries = root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden);

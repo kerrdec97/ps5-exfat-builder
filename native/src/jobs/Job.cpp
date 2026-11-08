@@ -12,6 +12,7 @@ QString jobStateName(JobState state)
     case JobState::Queued: return QStringLiteral("Queued");
     case JobState::Running: return QStringLiteral("Running");
     case JobState::Paused: return QStringLiteral("Paused");
+    case JobState::Cancelling: return QStringLiteral("Cancelling");
     case JobState::Succeeded: return QStringLiteral("Done");
     case JobState::Failed: return QStringLiteral("Failed");
     case JobState::Cancelled: return QStringLiteral("Cancelled");
@@ -24,6 +25,11 @@ bool isTerminal(JobState state)
 {
     return state == JobState::Succeeded || state == JobState::Failed || state == JobState::Cancelled
         || state == JobState::Interrupted;
+}
+
+bool isActive(JobState state)
+{
+    return state == JobState::Running || state == JobState::Paused || state == JobState::Cancelling;
 }
 
 QString verificationName(Verification v)

@@ -305,7 +305,8 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     connect(m_host, &QLineEdit::editingFinished, this, [this] { (void)m_ctx.settings().setValue(ps5::keys::kConsoleIp, m_host->text().trimmed()); });
     connect(m_ftpPort, &QLineEdit::editingFinished, this, [this] { (void)m_ctx.settings().setValue(ps5::keys::kFtpPort, m_ftpPort->text().toInt()); });
     connect(m_host, &QLineEdit::returnPressed, this, [this] {
-        if (!m_session->isConnected())
+        // Return connects when there is no connection and none on its way.
+        if (!m_session->isConnected() && !m_session->isConnecting())
             toggleConnection();
     });
     connect(m_connect, &QPushButton::clicked, this, &Ps5ConnectPage::toggleConnection);
@@ -380,15 +381,15 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
               {QStringLiteral("install"), QStringLiteral("Install package"), QStringLiteral("package_plus"), m_installTab},
               {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), QStringLiteral("gauge"), m_diagnostics}});
 
-    connect(m_session, &ConsoleSession::connected, this, [this](const QString& welcome) {
-        setConnectedUi(true, welcome.simplified());
+    // Every view of the connection follows the session's state.
+    connect(m_session, &ConsoleSession::stateChanged, this, &Ps5ConnectPage::applyConnectionState);
+    connect(m_session, &ConsoleSession::connected, this, [this] {
         const QString start = m_remoteDir.isEmpty() ? m_ctx.settings().value(ps5::keys::kGamesFolder).toString() : m_remoteDir;
         m_history.clear();
         m_historyIndex = -1;
         listRemote(start);
         checkServices();
     });
-    connect(m_session, &ConsoleSession::disconnected, this, [this](const QString& reason) { setConnectedUi(false, reason); });
     connect(m_session, &ConsoleSession::listed, this, &Ps5ConnectPage::onListed);
     connect(m_session, &ConsoleSession::operationDone, this, [this](const QString&, bool ok, const QString& message) {
         emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? QStringLiteral("Done") : QStringLiteral("The console refused"), message);
@@ -396,8 +397,14 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
             listRemote(m_remoteDir);
     });
     connect(m_session, &ConsoleSession::freeSpace, this, [this](const QString& text) {
-        if (m_storage.empty())
-            m_remoteFree->setText(text.isEmpty() ? QString() : QStringLiteral("SITE AVAIL: %1").arg(text));
+        if (m_storage.empty()) {
+            // The FTP server's SITE AVAIL answer: bytes when it is a plain number.
+            bool isNumber = false;
+            const qint64 bytes = text.toLongLong(&isNumber);
+            m_remoteFree->setText(text.isEmpty() ? QString()
+                                  : isNumber && bytes > 0 ? QStringLiteral("%1 free").arg(formatBytes(bytes))
+                                                          : QStringLiteral("Free: %1").arg(text));
+        }
     });
     connect(&m_payloads, &PayloadStore::changed, this, &Ps5ConnectPage::rebuildPayloads);
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, [this](const QString& id) {
@@ -409,7 +416,7 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
             m_hero->setChip(QStringLiteral("shadowmount"), Tone::Ok, QStringLiteral("config loaded"));
     });
     rebuildPayloads();
-    setConnectedUi(false, {});
+    applyConnectionState(m_session->state(), {});
     updatePayloadChip();
 }
 
@@ -510,7 +517,7 @@ QString Ps5ConnectPage::currentTool() const
 
 void Ps5ConnectPage::toggleConnection()
 {
-    if (m_session->isConnected()) {
+    if (m_session->isConnected() || m_session->isConnecting()) {
         m_session->disconnect();
         return;
     }
@@ -523,8 +530,7 @@ void Ps5ConnectPage::toggleConnection()
     setInputError(m_host, false);
     (void)m_ctx.settings().setValue(ps5::keys::kConsoleIp, host());
     (void)m_ctx.settings().setValue(ps5::keys::kFtpPort, ftpPort());
-    m_hero->setState(ConsoleHero::State::Connecting);
-    m_hero->setSubtitle(QStringLiteral("Connecting to %1:%2…").arg(host()).arg(ftpPort()));
+    // The hero shows "Connecting" through the session's state change.
     m_session->connectTo(host(), quint16(ftpPort()), settingPort(ps5::keys::kConnectTimeout, 10) * 1000,
                          m_ctx.settings().value(ps5::keys::kPassiveMode).toBool());
 }
@@ -537,30 +543,45 @@ void Ps5ConnectPage::updateHeroSubtitle()
                                          : QStringLiteral("%1 · FTP %2 · not connected").arg(host()).arg(ftpPort()));
 }
 
-void Ps5ConnectPage::setConnectedUi(bool on, const QString& detail)
+void Ps5ConnectPage::applyConnectionState(ConsoleSession::ConnectionState state, const QString& detail)
 {
-    if (on) {
+    using State = ConsoleSession::ConnectionState;
+    const bool on = state == State::Connected;
+    switch (state) {
+    case State::Connected: {
         const ps5::FtpServerIdentity id = ps5::identifyFtpServer(detail);
-        m_hero->setState(ConsoleHero::State::Connected, detail);
+        m_hero->setState(ConsoleHero::State::Connected, detail.simplified());
         m_hero->setSubtitle(QStringLiteral("%1 · FTP %2 · %3").arg(host()).arg(ftpPort()).arg(id.label()));
-        m_hero->setChip(QStringLiteral("ftp"), Tone::Ok, id.name.isEmpty() ? QString::number(ftpPort()) : id.label(), detail);
-    } else {
-        m_hero->setState(detail.isEmpty() ? ConsoleHero::State::Offline : ConsoleHero::State::Failed, detail);
-        if (detail.isEmpty())
-            updateHeroSubtitle();
-        else
+        m_hero->setChip(QStringLiteral("ftp"), Tone::Ok, id.name.isEmpty() ? QString::number(ftpPort()) : id.label(), detail.simplified());
+        break;
+    }
+    case State::Connecting:
+        m_hero->setState(ConsoleHero::State::Connecting);
+        m_hero->setSubtitle(QStringLiteral("Connecting to %1:%2…").arg(host()).arg(ftpPort()));
+        m_hero->setChip(QStringLiteral("ftp"), Tone::Info, QStringLiteral("connecting…"));
+        break;
+    case State::Offline:
+    case State::Failed: {
+        const bool failed = state == State::Failed;
+        m_hero->setState(failed ? ConsoleHero::State::Failed : ConsoleHero::State::Offline, detail);
+        if (failed)
             m_hero->setSubtitle(detail);
-        m_hero->setChip(QStringLiteral("ftp"), detail.isEmpty() ? Tone::Neutral : Tone::Err, detail.isEmpty() ? QString::number(ftpPort()) : QStringLiteral("not reachable"), detail);
+        else
+            updateHeroSubtitle();
+        m_hero->setChip(QStringLiteral("ftp"), failed ? Tone::Err : Tone::Neutral, failed ? QStringLiteral("not reachable") : QString::number(ftpPort()), detail);
         if (!m_specimenListing) {
             m_listing = {};
             m_remote->setRowCount(0);
         }
+        break;
+    }
     }
     m_remoteArea->setVisible(on || m_specimenListing);
     m_remoteEmpty->setVisible(!on && !m_specimenListing);
     updateActions();
-    if (on != m_reachable) {
-        m_reachable = on;
+    if (state != m_lastState) {
+        m_lastState = state;
+        emit connectionChanged(state, host(), detail);
         emit reachabilityChanged(on, host());
     }
     emit statusContextChanged();
@@ -1084,6 +1105,7 @@ void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& r
     else
         batches << localPaths;
     int queued = 0;
+    QStringList started;
     for (const QStringList& batch : batches) {
         auto r = jobs::submitFtpUploadMany(m_ctx, host(), ftpPort(), batch, remoteDir, protectedDir);
         if (!r.ok()) {
@@ -1091,10 +1113,13 @@ void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& r
             break;
         }
         ++queued;
+        started << r.value();
     }
     if (queued == 0)
         return;
-    m_ctx.queue().holdQueue(false);
+    // These transfers run now, in this order; a paused queue stays paused for the rest.
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it);
     showTool(QStringLiteral("ftp"));
     emit toastRequested(Tone::Info, QStringLiteral("Upload queued"),
                         QStringLiteral("%1 item%2 → %3").arg(localPaths.size()).arg(localPaths.size() == 1 ? QString() : QStringLiteral("s")).arg(remoteDir));
@@ -1114,14 +1139,17 @@ void Ps5ConnectPage::downloadSelected()
             batches << QStringList{p};
     else
         batches << sel;
+    QStringList started;
     for (const QStringList& batch : batches) {
         auto r = jobs::submitFtpDownload(m_ctx, host(), ftpPort(), batch, dir, false);
         if (!r.ok()) {
             emit toastRequested(Tone::Err, QStringLiteral("Download not started"), r.error().message);
             return;
         }
+        started << r.value();
     }
-    m_ctx.queue().holdQueue(false);
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
     emit toastRequested(Tone::Info, QStringLiteral("Download queued"), nativePath(dir));
 }
 
@@ -1508,7 +1536,7 @@ void Ps5ConnectPage::sendPayload(int index)
         return;
     }
     m_payloadSendId = r.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     m_payloads.markSent(e.path);
     m_hero->setChip(QStringLiteral("payload"), Tone::Info, QStringLiteral("%1 · sending").arg(port));
     emit toastRequested(Tone::Info, QStringLiteral("Sending payload"), QStringLiteral("%1 → %2:%3").arg(e.name, host()).arg(port));
@@ -1737,7 +1765,7 @@ void Ps5ConnectPage::installYoutube(const QString& path)
         emit toastRequested(Tone::Err, QStringLiteral("Install not started"), r.error().message);
         return;
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     emit toastRequested(Tone::Info, QStringLiteral("Install queued"), QFileInfo(path).fileName());
 }
 
@@ -2022,7 +2050,7 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
             emit toastRequested(Tone::Err, QStringLiteral("Not started"), r.error().message);
             return;
         }
-        m_ctx.queue().holdQueue(false);
+        m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
         emit toastRequested(Tone::Info, QStringLiteral("Auto-block queued"), QStringLiteral("%1 · %2 — reboot the PS5 when it is done").arg(reg, tid));
     });
     l->addWidget(block);
@@ -2336,7 +2364,7 @@ void Ps5ConnectPage::clearDemoState()
         m_remoteDir = m_ctx.settings().value(ps5::keys::kGamesFolder).toString().isEmpty() ? QStringLiteral("/") : m_ctx.settings().value(ps5::keys::kGamesFolder).toString();
         rebuildBreadcrumb();
     }
-    setConnectedUi(m_session->isConnected(), {});
+    applyConnectionState(m_session->state(), {});
     for (const char* k : {"klog", "shadowmount", "installer"})
         m_hero->setChip(QLatin1String(k), Tone::Neutral, QStringLiteral("—"));
     updatePayloadChip();

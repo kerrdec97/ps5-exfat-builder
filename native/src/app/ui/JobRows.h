@@ -38,9 +38,13 @@ public:
     void setCanMoveUp(bool on);
     void setCanMoveDown(bool on);
     QSize sizeHint() const override;
+    // A drag of this row is running (its nested loop): the list must not
+    // delete the row until it ends.
+    bool isBusy() const { return m_dragging; }
 signals:
     void clicked(const QString& id);
     void activated(const QString& id);
+    void focusNeighbourRequested(const QString& id, int delta); // Up / Down
     void pauseRequested(const QString& id);
     void resumeRequested(const QString& id);
     void cancelRequested(const QString& id);
@@ -70,6 +74,7 @@ private:
     bool m_divider = true;
     bool m_reorderable = false;
     bool m_canUp = true, m_canDown = true;
+    bool m_dragging = false;
     QPoint m_pressPos;
     QWidget* m_grip;
     QLabel* m_stateIcon;
@@ -98,6 +103,7 @@ public:
 signals:
     void selectionChanged(const QString& id);
     void activated(const QString& id);
+    void cancelRequested(const QString& id); // the page confirms, then cancels
     void countChanged();
 
 protected:
@@ -108,7 +114,11 @@ protected:
     void paintEvent(QPaintEvent* e) override;
 
 private:
+    // Model changes arrive inside the rows' own handlers (a context menu, a
+    // drag, a confirm sheet): rebuild() only schedules; rebuildNow() runs on
+    // the next event-loop turn, and waits while a row is busy.
     void rebuild();
+    void rebuildNow();
     void refreshRow(int modelRow);
     void wire(JobRow* row);
     int dropIndexAt(const QPoint& p) const;
@@ -123,16 +133,26 @@ private:
     int m_dropIndex = -1;
     QWidget* m_empty = nullptr;
     QTimer m_tick;
+    bool m_rebuildPending = false;
 };
+
+class ActivityWell;
 
 class JobsDock : public Card {
     Q_OBJECT
 public:
     JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent = nullptr);
     void refresh();
+    // The job the page's monitor shows: the dock hides its own running block
+    // for it (nothing is shown twice). "" = none.
+    void setWatchedJob(const QString& id);
+    QString watchedJob() const { return m_watched; }
+    QString runningJob() const { return m_runningId; }
 signals:
     void openQueueRequested();
     void openJobRequested(const QString& id);
+    void cancelRequested(const QString& id); // the page confirms, then cancels
+    void watchRequested(const QString& id); // "Watch" on the running block
 
 private:
     AppContext& m_ctx;
@@ -143,12 +163,15 @@ private:
     ElideLabel* m_runTitle;
     ElideLabel* m_runMeta;
     ProgressBlock* m_progress;
+    ActivityWell* m_tail;
+    IconButton* m_runWatch;
     IconButton* m_runPause;
     IconButton* m_runCancel;
     JobList* m_list;
     QLabel* m_footer;
     EmptyState* m_empty;
     QString m_runningId;
+    QString m_watched;
 };
 
 } // namespace fw::ui

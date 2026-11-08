@@ -2,20 +2,29 @@
 
 #include "app/AppContext.h"
 
+#include <algorithm>
+
 namespace fw {
 
 LogModel::LogModel(AppContext& ctx, QObject* parent) : QAbstractTableModel(parent)
 {
     if (auto ring = ctx.logBuffer()) {
         m_rows = ring->records();
-        for (const auto& r : m_rows)
+        for (const auto& r : m_rows) {
             if (!m_sources.contains(r.source))
                 m_sources << r.source;
+            m_lastSeq = std::max(m_lastSeq, r.seq);
+        }
     }
     m_timer.setInterval(150);
     m_timer.setSingleShot(true);
     connect(&m_timer, &QTimer::timeout, this, &LogModel::flushPending);
     connect(&ctx, &AppContext::logRecordAdded, this, [this](const LogRecord& r) {
+        // Records logged before this model existed came from the ring buffer
+        // already; their queued notifications must not add them twice.
+        if (r.seq <= m_lastSeq)
+            return;
+        m_lastSeq = r.seq;
         m_pending.push_back(r);
         if (!m_timer.isActive())
             m_timer.start();
@@ -174,9 +183,16 @@ bool LogFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex& sourcePa
         return false;
     if (!m_job.isEmpty() && sourceModel()->data(idx, LogModel::JobRole).toString() != m_job)
         return false;
-    if (!m_text.isEmpty()
-        && !sourceModel()->data(idx, LogModel::RecordTextRole).toString().contains(m_text, Qt::CaseInsensitive))
-        return false;
+    if (!m_text.isEmpty()) {
+        // The message, source and job id (not the formatted line: that would
+        // build a string for each of 20,000 rows per keystroke).
+        const auto* model = sourceModel();
+        const bool hit = model->data(model->index(sourceRow, LogModel::MessageColumn, sourceParent)).toString().contains(m_text, Qt::CaseInsensitive)
+            || model->data(idx, LogModel::SourceRole).toString().contains(m_text, Qt::CaseInsensitive)
+            || model->data(idx, LogModel::JobRole).toString().contains(m_text, Qt::CaseInsensitive);
+        if (!hit)
+            return false;
+    }
     return true;
 }
 

@@ -701,6 +701,10 @@ Status storeFile(FtpClient& c, const QString& remote, const QString& local, cons
     if (!f.open(QIODevice::ReadOnly))
         return Error(ErrorCode::IoError, QStringLiteral("%1 could not be read.").arg(QDir::toNativeSeparators(local)),
                      f.errorString());
+    // Icons, art and download0.dat are small: upload beside the live file and
+    // swap, so a dropped connection never leaves the console's copy truncated.
+    if (f.size() <= 32LL * 1024 * 1024)
+        return c.uploadReplace(remote, f.readAll(), QStringLiteral(".uploading"), token);
     return c.store(remote, f, 0, {}, token);
 }
 

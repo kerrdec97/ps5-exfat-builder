@@ -86,6 +86,7 @@ private:
     QSet<QString> m_reset; // keys the user reset to the default (removed on push)
     bool m_populating = false;
     bool m_hasLoaded = false;
+    QString m_loadedHost; // the console the shown config came from
     QString m_apiVersion;
     QString m_logVersion;
     ps5::MountConfigValues m_loaded;

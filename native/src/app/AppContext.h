@@ -19,6 +19,10 @@
 #include <memory>
 
 namespace fw {
+class LogModel;
+}
+
+namespace fw {
 
 class AppContext : public QObject {
     Q_OBJECT
@@ -38,6 +42,9 @@ public:
     JobQueue& queue() { return *m_queue; }
     JobHistory& history() { return *m_history; }
     std::shared_ptr<RingBufferSink> logBuffer() const { return m_ring; }
+    // The UI-thread log model every log view and job monitor shares (created
+    // on first use, after initialize()).
+    LogModel& logModel();
     QString logFilePath() const;
 
     // Runs every dependency probe on a worker thread; emits dependenciesChecked.
@@ -69,6 +76,7 @@ private:
     // serialises them: two probe runs must not use m_deps at once.
     QList<QFuture<void>> m_depChecks;
     QMutex m_depMutex;
+    LogModel* m_logModel = nullptr; // owned (QObject child)
 };
 
 } // namespace fw

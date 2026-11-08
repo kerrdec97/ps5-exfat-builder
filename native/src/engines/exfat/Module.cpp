@@ -85,7 +85,7 @@ void registerModule(ModuleContext& ctx)
         d.group = gImage;
         d.label = QStringLiteral("Image size");
         d.description = QStringLiteral(
-            "0 sizes each image automatically. Any other value makes every image exactly this size (in GB of "
+            "0 = sized to fit the game. Any other value makes every image exactly this size (in GB of "
             "1024 MB); a build fails if the game does not fit.");
         d.type = SettingType::Double;
         d.defaultValue = 0.0;

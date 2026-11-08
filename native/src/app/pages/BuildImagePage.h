@@ -25,10 +25,12 @@
 #include "app/pages/Page.h"
 #include "app/services/GameInfo.h"
 #include "app/ui/Components.h"
+#include "core/FileUtil.h"
 
 #include <QComboBox>
 #include <QHash>
 #include <QPointer>
+#include <QSet>
 
 #include "core/Cancellation.h"
 
@@ -117,7 +119,9 @@ private:
     void applyLiveCpuLimit();
     void pickFromDlcEmu();
     void onPackageTypeChanged();
-    QString packageType() const;   // app / addon / update / backport
+    enum class PackageType { App, Addon, Update, Backport };
+    QString packageType() const;   // the tile's value: app / addon / update / backport
+    PackageType packageTypeKind() const;
     bool hasBackports() const;     // a 4.xx or 5.xx+ backport is chosen
     void inspectBase();            // reads the base .pkg (title, version) for Backport
     void browseBackport(ui::PathField* field, const QString& label);
@@ -133,6 +137,8 @@ private:
     ui::GameInfoReader* m_reader = nullptr;
     ui::GameSummary m_summary;
     QString m_sourcePath;
+    QString m_sourceKind;              // sourceKindOf(m_sourcePath), decided when the source is set (never a stat per repaint)
+    QSet<QString> m_liveLimitApplied;  // package builds whose live CPU limit was applied on start
     ui::Card* m_sourceCard = nullptr;
     ui::Badge* m_sourceBadge = nullptr;
     QWidget* m_strip = nullptr;
@@ -201,6 +207,11 @@ private:
     QComboBox* m_liveCores = nullptr;
     QLabel* m_liveNote = nullptr;
 
+    // The free-space check of the output folder; validateForm() refuses to
+    // start on Insufficient and Unavailable and finishes a Checking one first.
+    enum class SpaceCheck { Unknown, Checking, Ok, Warn, Insufficient, Unavailable };
+    SpaceCheck m_spaceState = SpaceCheck::Unknown;
+    void applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists);
     quint64 m_spaceGen = 0;
     bool m_spaceOk = true;
     QString m_spaceProblem;

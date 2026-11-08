@@ -31,6 +31,10 @@ void QueueCompletionWatcher::onIdle()
     m_succeeded = m_failed = m_cancelled = 0;
     m_lastRun = m_runIds;
     m_runIds.clear();
+    // A run the user cancelled in full did nothing worth a notification or a
+    // shutdown; the counters are still reset so the next run starts clean.
+    if (ok + failed == 0)
+        return;
     emit queueFinished(ok, failed, cancelled);
 
     const SettingsValues snap = m_settings.snapshot();

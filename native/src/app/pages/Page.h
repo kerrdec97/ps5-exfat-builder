@@ -8,8 +8,13 @@
 //                  (max 760 px) and the 400 px Jobs dock; it owns the
 //                  Add-to-queue / primary buttons, the unavailable state when a
 //                  job kind is not registered, the job options panel and the
-//                  submit flow through services/JobSubmit.
+//                  submit flow through services/JobSubmit. When the primary
+//                  button starts a job, the form column gives way to the job
+//                  monitor (stages, clocks, live log) until the user asks for
+//                  the form back ("New build") or the job has been over for a
+//                  while; "Watch" in the dock opens any running job there.
 
+#include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Shell.h"
@@ -91,10 +96,27 @@ public:
     void setDragHighlight(bool on) override;
     ui::Card* sourceCard() const { return m_sourceCard; }
     bool openOutputWhenDone() const;
+
+    // What the left column shows: the form, or the job monitor that replaces
+    // it while a job the page started runs.
+    enum class View { Form, Monitor };
+    View view() const { return m_view; }
+    ui::JobMonitor* monitor() { return m_monitor; }
+    bool isMonitorShown() const { return m_view == View::Monitor; }
+    void showMonitor(const QString& id);
+    void showForm();
+    void setNewJobText(const QString& text); // the header button that brings the form back
+    QPushButton* newJobButton() { return m_newJob; }
+    // Whether the primary button switches to the monitor (default) or keeps
+    // the form, for actions whose result lives in the form (Image tools › Compare).
+    void setMonitorOnStart(bool on) { m_monitorOnStart = on; }
+    bool monitorOnStart() const { return m_monitorOnStart; }
 signals:
     void jobSubmitted(const QString& id, bool openOutputFolderWhenDone);
+    void monitorShownChanged(bool shown);
 
 protected:
+    void showEvent(QShowEvent* e) override;
     // Job kinds the page needs; the unavailable state shows when any is missing.
     void setRequiredKinds(const QStringList& kinds);
     void refreshAvailability();
@@ -117,11 +139,19 @@ private:
     QString m_feature;
     QStringList m_kinds;
     bool m_available = true;
+    void setView(View view);
     ui::JobsDock* m_dock;
+    QWidget* m_formWidget;
+    QWidget* m_monitorHost;
+    ui::JobMonitor* m_monitor;
+    View m_view = View::Form;
+    bool m_monitorOnStart = true;
     QVBoxLayout* m_form;
     QVBoxLayout* m_aside;
+    QWidget* m_submitBar; // Add to queue + the primary button (hidden as one in the Monitor view)
     QPushButton* m_primary;
     QPushButton* m_queue;
+    QPushButton* m_newJob;
     ui::UnavailableState* m_unavailable = nullptr;
     ui::Card* m_unavailableCard = nullptr;
     ui::InfoBar* m_error;
@@ -134,6 +164,11 @@ private:
 QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
 QString relativeTime(const QDateTime& t);         // "2 min ago"
 QString driveLabel(const QString& path);          // "D:" / "/"
+// Asks the drive of `folder` for its free space on a worker thread (a mapped
+// network drive or an unplugged letter can block for seconds) and calls
+// `done(ready, bytesAvailable, driveLabel)` on the UI thread while `context`
+// still exists. Callers keep a generation counter to drop stale answers.
+void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done);
 
 } // namespace fw::pages
 

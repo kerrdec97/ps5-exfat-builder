@@ -140,8 +140,8 @@ std::optional<FtpEntry> parseMlsdLine(const QString& lineIn)
         return std::nullopt;
     e.isDir = type == u"dir";
     e.isLink = type.startsWith(QLatin1String("os.unix=slink")) || type.startsWith(QLatin1String("os.unix=symlink"));
-    if (e.size < 0 && !e.isDir)
-        e.size = 0; // legacy: missing size = 0
+    // No size fact (it is optional): -1 = unknown, so a download asks SIZE
+    // instead of expecting 0 bytes.
     return e;
 }
 

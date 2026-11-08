@@ -69,13 +69,17 @@ Status JobHistory::append(const JobRecord& r)
     f.write(QJsonDocument(h.toJson()).toJson(QJsonDocument::Compact));
     f.write("\n");
     f.close();
+    if (m_cache) {
+        m_cache->insert(m_cache->begin(), h);
+        if (int(m_cache->size()) > kCached)
+            m_cache->resize(kCached);
+    }
     compactIfNeeded();
     return success();
 }
 
-std::vector<HistoryEntry> JobHistory::recent(int limit) const
+std::vector<HistoryEntry> JobHistory::readRecent(int limit) const
 {
-    std::lock_guard lock(m_mutex);
     std::vector<HistoryEntry> out;
     QFile f(m_path);
     if (!f.open(QIODevice::ReadOnly))
@@ -91,9 +95,21 @@ std::vector<HistoryEntry> JobHistory::recent(int limit) const
     return out;
 }
 
+std::vector<HistoryEntry> JobHistory::recent(int limit) const
+{
+    std::lock_guard lock(m_mutex);
+    if (limit > kCached)
+        return readRecent(limit); // exports: the whole file, uncached
+    if (!m_cache)
+        m_cache = readRecent(kCached);
+    std::vector<HistoryEntry> out(m_cache->begin(), m_cache->begin() + std::min<std::size_t>(m_cache->size(), std::size_t(std::max(0, limit))));
+    return out;
+}
+
 Status JobHistory::clear()
 {
     std::lock_guard lock(m_mutex);
+    m_cache = std::vector<HistoryEntry>{};
     if (QFile::exists(m_path) && !QFile::remove(m_path))
         return Error(ErrorCode::IoError, QStringLiteral("Could not clear the job history."));
     return success();

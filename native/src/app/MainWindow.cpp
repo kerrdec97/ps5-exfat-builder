@@ -66,7 +66,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     setAutoFillBackground(true);
 
     m_queueModel = new JobQueueModel(ctx.queue(), this);
-    m_logModel = new LogModel(ctx, this);
+    m_logModel = &ctx.logModel();
     m_library = new LibraryStore(this);
     m_payloads = new PayloadStore(this);
     m_watcher = new QueueCompletionWatcher(ctx.queue(), ctx.settings(), this);
@@ -218,19 +218,43 @@ void MainWindow::buildPages()
     connect(m_aboutPage, &pages::AboutPage::checkForUpdatesRequested, this, [this] { checkForUpdates(false); });
     connect(m_aboutPage, &pages::AboutPage::reportProblemRequested, this, [this] { reportProblem(); });
     connect(m_aboutPage, &pages::AboutPage::shortcutsRequested, this, &MainWindow::showShortcuts);
-    connect(m_ps5Page, &pages::Ps5ConnectPage::reachabilityChanged, this, [this](bool ok, const QString& host) {
-        m_header->setConsoleChip(ok ? QStringLiteral("PS5 reachable · %1").arg(host) : QStringLiteral("PS5 not reachable"), ok ? Tone::Ok : Tone::Neutral, true);
-        m_home->setConsoleStatus(ok ? host : QStringLiteral("Not reachable"), ok ? Tone::Ok : Tone::Neutral);
-    });
+    connect(m_ps5Page, &pages::Ps5ConnectPage::connectionChanged, this,
+            [this](ui::ConsoleSession::ConnectionState state, const QString& host, const QString&) {
+                using State = ui::ConsoleSession::ConnectionState;
+                switch (state) {
+                case State::Connected:
+                    m_header->setConsoleChip(QStringLiteral("PS5 connected · %1").arg(host), Tone::Ok, true);
+                    m_home->setConsoleStatus(host, Tone::Ok);
+                    break;
+                case State::Connecting:
+                    m_header->setConsoleChip(QStringLiteral("Connecting to %1…").arg(host), Tone::Info, true);
+                    m_home->setConsoleStatus(QStringLiteral("Connecting…"), Tone::Info);
+                    break;
+                case State::Failed:
+                    m_header->setConsoleChip(QStringLiteral("PS5 not reachable"), Tone::Warn, true);
+                    m_home->setConsoleStatus(QStringLiteral("Not reachable"), Tone::Warn);
+                    break;
+                case State::Offline:
+                    m_header->setConsoleChip(QStringLiteral("PS5 not connected"), Tone::Neutral, true);
+                    m_home->setConsoleStatus(QStringLiteral("Not connected"), Tone::Neutral);
+                    break;
+                }
+            });
     connect(m_settingsPage, &pages::SettingsPage::attentionChanged, this, &MainWindow::updateStatus);
 }
 
 void MainWindow::buildShortcuts()
 {
+    // A sheet (confirm, countdown) is a child widget, not a modal window: the
+    // shortcuts stand down while one is open so Ctrl+B cannot start a job
+    // under "Cancel the running job?".
     auto add = [this](const QKeySequence& seq, auto fn) {
         auto* s = new QShortcut(seq, this);
         s->setContext(Qt::WindowShortcut);
-        connect(s, &QShortcut::activated, this, fn);
+        connect(s, &QShortcut::activated, this, [fn] {
+            if (Sheet::openCount() == 0)
+                fn();
+        });
     };
     add(QKeySequence(QStringLiteral("Ctrl+B")), [this] {
         if (auto* p = currentPageWidget(); p && p->hasPrimaryAction())
@@ -327,7 +351,7 @@ static void countUserJobs(const JobQueueModel& model, int& running, int& queued)
         const JobRecord* rec = model.recordAt(r);
         if (!rec || jobs::isSystemKind(rec->kind))
             continue;
-        if (rec->state == JobState::Running || rec->state == JobState::Paused)
+        if (rec->isActive())
             ++running;
         else if (rec->state == JobState::Queued)
             ++queued;
@@ -353,14 +377,16 @@ void MainWindow::updateStatus()
     const JobRecord* running = nullptr;
     for (int r = 0; r < m_queueModel->rowCount(); ++r)
         if (const JobRecord* rec = m_queueModel->recordAt(r);
-            rec && !jobs::isSystemKind(rec->kind) && (rec->state == JobState::Running || rec->state == JobState::Paused)) {
+            rec && !jobs::isSystemKind(rec->kind) && rec->isActive()) {
             running = rec;
             break;
         }
     if (running) {
         const QString pct = running->progress.indeterminate ? QString() : QStringLiteral(" · %1").arg(thinPercent(running->progress.overallFraction));
-        m_status->setStatus(QStringLiteral("%1 %2%3").arg(running->state == JobState::Paused ? QStringLiteral("Paused:") : QStringLiteral("Running:"), running->title, pct),
-                            running->state == JobState::Paused ? Tone::Neutral : Tone::Info);
+        const QString verb = running->state == JobState::Paused ? QStringLiteral("Paused:")
+                             : running->state == JobState::Cancelling ? QStringLiteral("Cancelling:") : QStringLiteral("Running:");
+        m_status->setStatus(QStringLiteral("%1 %2%3").arg(verb, running->title, pct),
+                            running->state == JobState::Running ? Tone::Info : Tone::Neutral);
     } else if (const int n = m_settingsPage ? m_settingsPage->attentionCount() : 0; n > 0) {
         m_status->setStatus(QStringLiteral("%1 setting%2 need%3 attention").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(n == 1 ? QStringLiteral("s") : QString()), Tone::Warn);
     } else if (m_ctx.queue().isHeld() && queuedUser > 0) {
@@ -377,11 +403,13 @@ void MainWindow::refreshFreeSpace()
     QString folder = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
     if (folder.isEmpty())
         folder = QDir::homePath();
-    const QStorageInfo si(folder);
-    if (si.isValid() && si.isReady())
-        m_status->setFreeSpace(QStringLiteral("%1 %2 free").arg(pages::driveLabel(folder), formatBytes(si.bytesAvailable())));
-    else
-        m_status->setFreeSpace({});
+    // Off the UI thread: a network or unplugged drive answers slowly.
+    const quint64 gen = ++m_freeSpaceGen;
+    pages::probeFreeSpace(this, folder, [this, gen](bool ready, qint64 available, const QString& label) {
+        if (gen != m_freeSpaceGen)
+            return;
+        m_status->setFreeSpace(ready ? QStringLiteral("%1 %2 free").arg(label, formatBytes(available)) : QString());
+    });
 }
 
 // ---- jobs ------------------------------------------------------------------------------
@@ -410,16 +438,21 @@ void MainWindow::onJobFinished(const QString& id)
         actions << ToastHost::Action{QStringLiteral("Open queue"), [this, id] { navigate(QStringLiteral("queue"), {{QStringLiteral("jobId"), id}}); }};
         if (rec->kind == QLatin1String("tools.report") && id == m_reportJobId) {
             m_reportJobId.clear();
-            auto* s = new Sheet(this, QStringLiteral("Problem report ready"), Sheet::Icon::Info);
-            s->addText(QStringLiteral("The report was saved as %1. Attach it to a new GitHub issue and describe what happened.").arg(Sheet::monoSpan(nativePath(out))));
-            s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
-            s->addButton(QStringLiteral("Show in folder"), Sheet::Role::Primary);
-            s->addButton(QStringLiteral("Open GitHub issue"), Sheet::Role::Primary);
-            const int r = s->exec();
-            if (r == 1)
-                openInFileManager(out);
-            else if (r == 2)
-                QDesktopServices::openUrl(QUrl(rec->outcome ? rec->outcome->details.value(QStringLiteral("issueUrl")).toString(tools::kNewIssueUrl) : tools::kNewIssueUrl));
+            // After this signal returns: the queue schedules its next job only
+            // once jobFinished has been delivered, and a sheet blocks here.
+            const QString issueUrl = rec->outcome ? rec->outcome->details.value(QStringLiteral("issueUrl")).toString(tools::kNewIssueUrl) : tools::kNewIssueUrl;
+            QTimer::singleShot(0, this, [this, out, issueUrl] {
+                auto* s = new Sheet(this, QStringLiteral("Problem report ready"), Sheet::Icon::Info);
+                s->addText(QStringLiteral("The report was saved as %1. Attach it to a new GitHub issue and describe what happened.").arg(Sheet::monoSpan(nativePath(out))));
+                s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
+                s->addButton(QStringLiteral("Show in folder"), Sheet::Role::Primary);
+                s->addButton(QStringLiteral("Open GitHub issue"), Sheet::Role::Primary);
+                const int r = s->exec();
+                if (r == 1)
+                    openInFileManager(out);
+                else if (r == 2)
+                    QDesktopServices::openUrl(QUrl(issueUrl));
+            });
             return;
         }
         const bool warnings = rec->outcome && !rec->outcome->warnings.isEmpty();
@@ -435,7 +468,10 @@ void MainWindow::onJobFinished(const QString& id)
         if (m_openFolderWhenDone.remove(id) && !out.isEmpty())
             openInFileManager(out);
     } else if (rec->state == JobState::Failed || rec->state == JobState::Interrupted) {
-        actions << ToastHost::Action{QStringLiteral("Retry"), [this, id] { (void)m_ctx.queue().retry(id); m_ctx.queue().holdQueue(false); }};
+        actions << ToastHost::Action{QStringLiteral("Retry"), [this, id] {
+                                         if (auto r = m_ctx.queue().retry(id); r.ok())
+                                             m_ctx.queue().startNow(r.value());
+                                     }};
         actions << ToastHost::Action{QStringLiteral("Open log"), [this, id] { navigate(QStringLiteral("logs"), {{QStringLiteral("jobId"), id}, {QStringLiteral("level"), QStringLiteral("error")}}); }};
         toast(Tone::Err, QStringLiteral("%1 failed").arg(kindName), QStringLiteral("%1 · %2").arg(rec->title, rec->error ? rec->error->message : QStringLiteral("See the log.")), actions);
         m_openFolderWhenDone.remove(id);
@@ -506,14 +542,18 @@ void MainWindow::checkForUpdates(bool silent)
     // Automated tests and CI runs set FW_OFFLINE so nothing contacts GitHub.
     if (silent && qEnvironmentVariableIsSet("FW_OFFLINE"))
         return;
+    // One check at a time, and never over a download or an install.
+    if (m_updateState == UpdateState::Checking || m_updateState == UpdateState::Downloading
+        || m_updateState == UpdateState::PendingInstall || m_updateState == UpdateState::Installing)
+        return;
     auto r = jobs::submitUpdateCheck(m_ctx);
     if (!r.ok()) {
         if (!silent)
             toast(Tone::Warn, QStringLiteral("Update check not available"), r.error().message);
         return;
     }
-    m_updateCheckId = r.value();
-    m_ctx.queue().holdQueue(false);
+    m_updateCheckId = r.value(); // runs even while the queue is paused (Job::runsWhileHeld)
+    m_updateState = UpdateState::Checking;
     if (!silent)
         m_aboutPage->setUpdateStatus(QStringLiteral("Checking…"), Tone::Info);
 }
@@ -522,6 +562,7 @@ void MainWindow::onUpdateCheckFinished(const JobRecord& rec)
 {
     m_updateCheckId.clear();
     if (rec.state != JobState::Succeeded || !rec.outcome) {
+        m_updateState = UpdateState::Idle;
         m_aboutPage->setUpdateStatus(QStringLiteral("Check failed"), Tone::Warn);
         return;
     }
@@ -529,9 +570,11 @@ void MainWindow::onUpdateCheckFinished(const JobRecord& rec)
     const bool newer = m_release.value(QStringLiteral("newer")).toBool() || m_release.value(QStringLiteral("newerThanRunning")).toBool();
     const QString version = m_release.value(QStringLiteral("version")).toString();
     if (!newer) {
+        m_updateState = UpdateState::UpToDate;
         m_aboutPage->setUpdateStatus(QStringLiteral("Up to date"), Tone::Ok);
         return;
     }
+    m_updateState = UpdateState::Available;
     m_aboutPage->setUpdateStatus(QStringLiteral("Version %1 available").arg(version), Tone::Info);
     if (m_updateBanner)
         m_updateBanner->deleteLater();
@@ -544,13 +587,19 @@ void MainWindow::onUpdateCheckFinished(const JobRecord& rec)
     connect(notes, &Link::activated, this, [page] { QDesktopServices::openUrl(QUrl(page)); });
     auto* install = bar->addLink(QStringLiteral("Download and install"));
     connect(install, &Link::activated, this, [this] {
+        if (m_updateState == UpdateState::Downloading) {
+            toast(Tone::Info, QStringLiteral("Already downloading"), QStringLiteral("The installer starts when the download is verified."));
+            return;
+        }
+        if (m_updateState != UpdateState::Available)
+            return;
         auto r = jobs::submitUpdateDownload(m_ctx, m_release);
         if (!r.ok()) {
             toast(Tone::Err, QStringLiteral("Download not started"), r.error().message);
             return;
         }
         m_updateDownloadId = r.value();
-        m_ctx.queue().holdQueue(false);
+        m_updateState = UpdateState::Downloading;
         toast(Tone::Info, QStringLiteral("Downloading the update"), QStringLiteral("You can keep working; the installer starts when the download is verified."));
     });
     m_updateBanner = bar;
@@ -561,6 +610,7 @@ void MainWindow::onUpdateDownloadFinished(const JobRecord& rec)
 {
     m_updateDownloadId.clear();
     if (rec.state != JobState::Succeeded || !rec.outcome || rec.outcome->outputs.isEmpty()) {
+        m_updateState = UpdateState::Available; // the banner's link can try again
         toast(Tone::Err, QStringLiteral("Update download failed"), rec.error ? rec.error->message : QStringLiteral("The installer could not be verified."));
         return;
     }
@@ -569,8 +619,13 @@ void MainWindow::onUpdateDownloadFinished(const JobRecord& rec)
 
 void MainWindow::installUpdate(const QString& installer)
 {
+    if (m_updateState == UpdateState::Installing)
+        return;
     if (m_ctx.queue().isBusy()) {
         m_pendingInstaller = installer;
+        if (m_updateState == UpdateState::PendingInstall && m_installBanner)
+            return; // the banner and the idle connection exist already
+        m_updateState = UpdateState::PendingInstall;
         auto* bar = new InfoBar(Tone::Info, this);
         bar->setDismissable(true);
         bar->setTitle(QStringLiteral("Install after the queue finishes"));
@@ -583,18 +638,22 @@ void MainWindow::installUpdate(const QString& installer)
             }
             installUpdate(installer);
         });
+        m_installBanner = bar;
         showBanner(bar);
+        QPointer<InfoBar> banner(bar);
         auto* conn = new QMetaObject::Connection;
-        *conn = connect(&m_ctx.queue(), &JobQueue::idle, this, [this, installer, conn] {
+        *conn = connect(&m_ctx.queue(), &JobQueue::idle, this, [this, installer, conn, banner] {
             QObject::disconnect(*conn);
             delete conn;
-            if (!m_pendingInstaller.isEmpty())
+            if (!m_pendingInstaller.isEmpty() && m_updateState == UpdateState::PendingInstall)
                 installUpdate(installer);
         });
         return;
     }
     m_pendingInstaller.clear();
     if (QProcess::startDetached(installer, {})) {
+        m_updateState = UpdateState::Installing;
+        saveWindowState(); // quit() below skips closeEvent
         m_closing = true;
         QApplication::quit();
     } else {
@@ -662,7 +721,6 @@ void MainWindow::reportProblem(const QStringList& extraFiles)
         return;
     }
     m_reportJobId = r.value();
-    m_ctx.queue().holdQueue(false);
     toast(Tone::Info, QStringLiteral("Creating the problem report"), QStringLiteral("It appears on the Desktop in a moment."));
 }
 
@@ -722,10 +780,12 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
-    if (event->key() == Qt::Key_Escape) {
+    if (event->key() == Qt::Key_Escape && Sheet::openCount() == 0) {
+        // The user's own running job (never an update check or a problem report).
         for (int r = 0; r < m_queueModel->rowCount(); ++r)
-            if (const JobRecord* rec = m_queueModel->recordAt(r); rec && (rec->state == JobState::Running || rec->state == JobState::Paused)) {
-                m_queuePage->cancelWithConfirm(rec->id);
+            if (const JobRecord* rec = m_queueModel->recordAt(r);
+                rec && !jobs::isSystemKind(rec->kind) && (rec->state == JobState::Running || rec->state == JobState::Paused)) {
+                m_queuePage->cancelWithConfirm(rec->id); // a Cancelling job is already on its way out
                 return;
             }
     }
@@ -737,6 +797,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // A backport run or restore in progress (the PS5 Backport engine runs it):
     // cancel at the next safe point and wait for the worker (an apply in
     // progress is rolled back from the verified backup first).
+    if (!m_closing && Sheet::openCount() > 0) {
+        event->ignore(); // a question is still open; answer it first
+        return;
+    }
     if (auto* bpPage = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); bpPage && bpPage->isBusy()) {
         const bool stop = Sheet::confirm(this, QStringLiteral("Cancel the backport run?"),
                                          QStringLiteral("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
@@ -764,7 +828,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (!event->mimeData()->hasUrls())
+    if (!event->mimeData()->hasUrls() || Sheet::openCount() > 0)
         return;
     event->acceptProposedAction();
     m_dragging = true;
@@ -791,7 +855,7 @@ void MainWindow::dropEvent(QDropEvent* event)
     const auto urls = event->mimeData()->urls();
     if (auto* p = currentPageWidget())
         p->setDragHighlight(false);
-    if (urls.isEmpty())
+    if (urls.isEmpty() || Sheet::openCount() > 0)
         return;
     pages::Page* p = currentPageWidget();
     if (p && p->acceptsDrop(urls)) {

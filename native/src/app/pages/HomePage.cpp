@@ -224,9 +224,10 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
         if (m_continueId.isEmpty())
             return;
         auto r = m_ctx.queue().retry(m_continueId);
-        m_ctx.queue().holdQueue(false);
-        if (r.ok())
+        if (r.ok()) {
+            m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
             emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), r.value()}}});
+        }
     });
     connect(openJob, &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), m_continueId}}});
@@ -433,6 +434,7 @@ void HomePage::refreshQueueTile()
     int running = 0, queued = 0, failed = 0;
     double fraction = -1;
     bool indeterminate = false;
+    QString stage; // "Packing · About 3 min left" of the first running job
     for (int r = 0; r < m_model.rowCount(); ++r) {
         const JobRecord* rec = m_model.recordAt(r);
         if (!rec || jobs::isSystemKind(rec->kind))
@@ -440,10 +442,15 @@ void HomePage::refreshQueueTile()
         switch (rec->state) {
         case JobState::Running:
         case JobState::Paused:
+        case JobState::Cancelling:
             ++running;
             if (fraction < 0) {
                 fraction = rec->progress.overallFraction;
                 indeterminate = rec->progress.indeterminate && rec->state == JobState::Running;
+                stage = rec->state == JobState::Paused ? QStringLiteral("Paused")
+                        : rec->state == JobState::Cancelling ? QStringLiteral("Cancelling") : rec->progress.phase;
+                if (rec->state == JobState::Running && rec->progress.etaMs >= 0)
+                    stage += QStringLiteral(" · ") + formatTimeLeft(rec->progress.etaMs).toLower();
             }
             break;
         case JobState::Queued: ++queued; break;
@@ -459,6 +466,8 @@ void HomePage::refreshQueueTile()
     else
         m_queueTile->setValue(QStringLiteral("Idle"));
     QStringList qc;
+    if (running > 0 && !stage.isEmpty())
+        qc << stage;
     if (queued > 0 && running > 0)
         qc << QStringLiteral("%1 waiting").arg(queued);
     if (failed > 0)
@@ -506,14 +515,19 @@ void HomePage::refresh()
     const bool nextToSource = folder.isEmpty();
     if (nextToSource)
         folder = QDir::homePath();
-    const QStorageInfo si(folder);
-    if (si.isValid() && si.isReady()) {
-        m_spaceTile->setValue(formatBytes(si.bytesAvailable()));
-        m_spaceTile->setCaption(QStringLiteral("on %1 · %2").arg(driveLabel(folder), nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder")));
-    } else {
-        m_spaceTile->setValue(QStringLiteral("—"));
-        m_spaceTile->setCaption(QStringLiteral("Output drive not available"));
-    }
+    // Off the UI thread (refresh() runs on every queue change; a network drive answers slowly).
+    const quint64 gen = ++m_spaceGen;
+    probeFreeSpace(this, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
+        if (gen != m_spaceGen)
+            return;
+        if (ready) {
+            m_spaceTile->setValue(formatBytes(available));
+            m_spaceTile->setCaption(QStringLiteral("on %1 · %2").arg(label, nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder")));
+        } else {
+            m_spaceTile->setValue(QStringLiteral("—"));
+            m_spaceTile->setCaption(QStringLiteral("Output drive not available"));
+        }
+    });
 
     // Pick up where you left off: the most recent failed / interrupted / cancelled job.
     m_continueId.clear();

@@ -1,4 +1,5 @@
 #include "connect/ps5/CrashDumps.h"
+#include "core/PathSafety.h"
 
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/FtpTransfer.h"
@@ -29,7 +30,9 @@ QString safeCrashFolderName(const QString& name)
         out.chop(1);
     while (!out.isEmpty() && out.startsWith(u' '))
         out.remove(0, 1);
-    return out.isEmpty() ? QStringLiteral("crash") : out;
+    if (out.isEmpty())
+        return QStringLiteral("crash");
+    return hostEntryName(out); // reserved device names (CON, NUL, COM1...) too
 }
 
 QString crashIpTag(const QString& host)

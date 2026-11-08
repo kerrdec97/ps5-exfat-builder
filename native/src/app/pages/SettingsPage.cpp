@@ -157,7 +157,12 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         m_search->setFocus(Qt::ShortcutFocusReason);
         m_search->selectAll();
     });
-    connect(m_search, &QLineEdit::textChanged, this, &SettingsPage::setSearchText);
+    // Every keystroke rebuilds the matching rows: wait for a short pause first.
+    auto* searchDelay = new QTimer(this);
+    searchDelay->setSingleShot(true);
+    searchDelay->setInterval(150);
+    connect(m_search, &QLineEdit::textChanged, searchDelay, qOverload<>(&QTimer::start));
+    connect(searchDelay, &QTimer::timeout, this, [this] { setSearchText(m_search->text()); });
 
     auto* columns = new QWidget(this);
     m_columns = columns;

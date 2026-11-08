@@ -69,14 +69,15 @@ bool decodeChunked(const QByteArray& raw, QByteArray* out)
             return false;
         bool ok = false;
         const qint64 n = raw.mid(pos, nl - pos).split(';').front().trimmed().toLongLong(&ok, 16);
-        if (!ok)
+        // A negative or absurd size (a hostile or broken peer) must not loop or allocate without bound.
+        if (!ok || n < 0 || n > 64LL * 1024 * 1024)
             return false;
         pos = nl + 2;
         if (n == 0) {
             *out = body;
             return true;
         }
-        if (raw.size() < pos + n + 2)
+        if (qint64(raw.size()) - qint64(pos) < n + 2)
             return false;
         body += raw.mid(pos, n);
         pos += n + 2;
@@ -158,8 +159,10 @@ QByteArray dpiPartFooter()
 QByteArray dpiRequestHead(const QString& host, quint16 port, const QString& fileName, qint64 fileSize)
 {
     const qint64 total = dpiPartHeader(fileName).size() + fileSize + dpiPartFooter().size();
+    // Connection: close, so a reply without Content-Length ends when the
+    // server closes instead of after the idle timeout.
     return "POST /upload HTTP/1.1\r\nHost: " + host.toUtf8() + ':' + QByteArray::number(port)
-         + "\r\nAccept-Encoding: identity\r\nContent-Type: multipart/form-data; boundary=" + kBoundary
+         + "\r\nConnection: close\r\nAccept-Encoding: identity\r\nContent-Type: multipart/form-data; boundary=" + kBoundary
          + "\r\nContent-Length: " + QByteArray::number(total) + "\r\n\r\n";
 }
 
@@ -249,9 +252,13 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
         if (head.headDone) {
             const QByteArray raw = buf.mid(head.bodyStart);
             QByteArray body;
-            const bool complete = head.chunked ? decodeChunked(raw, &body)
-                                : head.contentLength >= 0 ? raw.size() >= head.contentLength
-                                                          : false;
+            bool complete = head.chunked ? decodeChunked(raw, &body)
+                          : head.contentLength >= 0 ? raw.size() >= head.contentLength
+                                                    : false;
+            // No length and no closing (a kept-alive server): an answer that
+            // already reads as accepted, quiet for a second, is the answer.
+            if (!complete && !head.chunked && head.contentLength < 0 && idle.elapsed() >= 1000 && dpiAccepted(head.status, raw))
+                complete = true;
             if (complete || (s.state() != QAbstractSocket::ConnectedState && s.bytesAvailable() == 0)) {
                 DpiResponse r;
                 r.status = head.status;

@@ -457,6 +457,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
                   QStringLiteral("Turn a game dump into an exFAT image that ShadowMount+ and PCs can mount."),
                   QStringLiteral("Build image"), QStringLiteral("Image building"), parent)
 {
+    setNewJobText(QStringLiteral("New build"));
     m_reader = new GameInfoReader(this);
     m_reader->setFindGameRoots(true);
     connect(m_reader, &GameInfoReader::ready, this, &BuildImagePage::onSummary);
@@ -489,9 +490,17 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     });
     connect(&ctx, &AppContext::dependenciesChecked, this, &BuildImagePage::updateToolsStatus);
     connect(&m_ctx.queue(), &JobQueue::jobChanged, this, [this](const QString& id) {
+        // Once per package build, when it starts (jobChanged also fires for every progress tick).
+        if (m_liveLimitApplied.contains(id)) {
+            if (auto rec = m_ctx.queue().record(id); !rec || rec->isTerminal())
+                m_liveLimitApplied.remove(id);
+            return;
+        }
         auto rec = m_ctx.queue().record(id);
-        if (rec && rec->state == JobState::Running && (rec->kind == QLatin1String("fpkg.build") || rec->kind == QLatin1String("fpkg.addon")))
+        if (rec && rec->state == JobState::Running && (rec->kind == QLatin1String("fpkg.build") || rec->kind == QLatin1String("fpkg.addon"))) {
+            m_liveLimitApplied.insert(id);
             applyLiveCpuLimit();
+        }
     });
     onFormatChanged();
     onPackageTypeChanged();
@@ -1238,7 +1247,7 @@ void BuildImagePage::updateToolsStatus()
 
 QString BuildImagePage::source() const { return m_sourcePath; }
 
-QString BuildImagePage::sourceKind() const { return sourceKindOf(m_sourcePath); }
+QString BuildImagePage::sourceKind() const { return m_sourceKind; }
 
 void BuildImagePage::setDragHighlight(bool on)
 {
@@ -1333,6 +1342,7 @@ void BuildImagePage::browseSource()
 void BuildImagePage::setSource(const QString& path)
 {
     m_sourcePath = QDir::fromNativeSeparators(path);
+    m_sourceKind = sourceKindOf(m_sourcePath); // one stat here, not one per status-bar refresh
     clearFormError();
     m_sourceMsg->clear();
     m_rootsBox->hide();
@@ -1396,7 +1406,7 @@ void BuildImagePage::onSummary(const GameSummary& s)
             m_contentId->setText(s.contentId);
         if (!s.title.isEmpty())
             m_title->setText(s.title);
-        if (!s.version.isEmpty() && !(packageType() == QLatin1String("backport") && !m_autoVersion.isEmpty()))
+        if (!s.version.isEmpty() && !(packageTypeKind() == PackageType::Backport && !m_autoVersion.isEmpty()))
             m_version->setText(s.version);
     }
     if (m_estSize)
@@ -1529,6 +1539,18 @@ QString BuildImagePage::sourceMessage() const { return m_sourceMsg->text(); }
 
 QString BuildImagePage::packageType() const { return m_packageType->currentValue().toString(); }
 
+BuildImagePage::PackageType BuildImagePage::packageTypeKind() const
+{
+    const QString t = packageType();
+    if (t == QLatin1String("addon"))
+        return PackageType::Addon;
+    if (t == QLatin1String("update"))
+        return PackageType::Update;
+    if (t == QLatin1String("backport"))
+        return PackageType::Backport;
+    return PackageType::App;
+}
+
 bool BuildImagePage::hasBackports() const
 {
     return m_backport4 && (!m_backport4->path().trimmed().isEmpty() || !m_backport5->path().trimmed().isEmpty());
@@ -1590,7 +1612,7 @@ void BuildImagePage::browseBackport(PathField* f, const QString& label)
 
 void BuildImagePage::inspectBase()
 {
-    if (packageType() != QLatin1String("backport")) {
+    if (packageTypeKind() != PackageType::Backport) {
         m_baseInfo->hide();
         return;
     }
@@ -1672,7 +1694,7 @@ void BuildImagePage::pickFromDlcEmu()
 
 QString BuildImagePage::expectedPackagePath() const
 {
-    if (packageType() == QLatin1String("backport")) {
+    if (packageTypeKind() == PackageType::Backport) {
         if (m_baseTitleId.isEmpty() || !hasBackports())
             return {};
         const QString tag = m_backport4->path().trimmed().isEmpty() ? QStringLiteral("5xxplus") : QStringLiteral("4xx");
@@ -1710,7 +1732,7 @@ QString BuildImagePage::outputFolder() const
     if (!m_output->path().isEmpty())
         return m_output->path();
     const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
-    if (isFpkg() && packageType() == QLatin1String("backport") && QFileInfo(m_basePackage->path().trimmed()).isFile())
+    if (isFpkg() && packageTypeKind() == PackageType::Backport && QFileInfo(m_basePackage->path().trimmed()).isFile())
         return QFileInfo(m_basePackage->path().trimmed()).absolutePath();
     if (isFpkg())
         return m_summary.exists ? fpkg::defaultOutputFolder(m_summary.folder, def) : def;
@@ -1741,11 +1763,11 @@ void BuildImagePage::renderFileName()
     m_fileExt->setText(ext);
     if (isFpkg()) {
         QString name = QFileInfo(expectedPackagePath()).fileName();
-        if (packageType() == QLatin1String("backport") && !m_backport4->path().trimmed().isEmpty()
+        if (packageTypeKind() == PackageType::Backport && !m_backport4->path().trimmed().isEmpty()
             && !m_backport5->path().trimmed().isEmpty() && !name.isEmpty())
             name += QStringLiteral(" + %1").arg(fpkg::backportPackageName(m_baseTitleId, QStringLiteral("5xxplus")));
         m_fileName->setText(name);
-        m_fileName->setPlaceholderText(packageType() == QLatin1String("backport")
+        m_fileName->setPlaceholderText(packageTypeKind() == PackageType::Backport
                                            ? QStringLiteral("<TITLEID>-backport-4xx.pkg / -5xxplus.pkg")
                                            : QStringLiteral("Named from the content ID"));
         m_fileName->setCursorPosition(0);
@@ -1784,7 +1806,7 @@ qint64 BuildImagePage::neededBytes() const
     if (m_summary.bytes <= 0)
         return 0;
     // Backport updates hold only the backport files; the job checks its own space.
-    if (isFpkg() && packageType() == QLatin1String("backport"))
+    if (isFpkg() && packageTypeKind() == PackageType::Backport)
         return 0;
     const QString f = format();
     if (f == jobs::kFormatFfpfsc || f == kFormatFpkg)
@@ -1815,9 +1837,11 @@ void BuildImagePage::checkSpace()
     m_spaceBar->hide();
     m_spaceOk = true;
     m_spaceProblem.clear();
+    m_spaceState = SpaceCheck::Checking;
     if (m_demo) {
         ++m_spaceGen; // drop results of checks still running
-        m_spaceRow->set(isFpkg() && packageType() == QLatin1String("backport") ? QStringLiteral("412 GB free on D:.")
+        m_spaceState = SpaceCheck::Ok;
+        m_spaceRow->set(isFpkg() && packageTypeKind() == PackageType::Backport ? QStringLiteral("412 GB free on D:.")
                         : isFpkg() ? QStringLiteral("412 GB free on D:. The package needs up to 31.6 GB.")
                                    : QStringLiteral("412 GB free on D:. This image needs about 31.8 GB."), Tone::Ok);
         if (m_freeSpace)
@@ -1825,6 +1849,7 @@ void BuildImagePage::checkSpace()
         return;
     }
     if (folder.isEmpty()) {
+        m_spaceState = SpaceCheck::Unknown;
         m_spaceRow->clear();
         if (m_freeSpace)
             m_freeSpace->setText(QStringLiteral("\u2014"));
@@ -1845,47 +1870,55 @@ void BuildImagePage::checkSpace()
         if (!self)
             return;
         QMetaObject::invokeMethod(self.data(), [self, ds, vol, folder, needed, gen, pkg, exists] {
-            if (!self || gen != self->m_spaceGen)
-                return;
-            self->m_output->setError({});
-            if (!ds.ok()) {
-                self->m_spaceRow->set(QStringLiteral("The output drive is not available."), Tone::Warn);
-                if (self->m_freeSpace)
-                    self->m_freeSpace->setText(QStringLiteral("\u2014"));
-                return;
-            }
-            if (self->m_freeSpace)
-                self->m_freeSpace->setText(formatBytes(ds->available));
-            const QString drive = driveLabel(folder);
-            if (!vol.ok()) {
-                self->m_spaceOk = false;
-                self->m_spaceProblem = vol.error().message;
-                self->m_output->setError(vol.error().message);
-                self->m_spaceRow->clear();
-                return;
-            }
-            if (needed > 0 && ds->available < needed + general::freeSpaceMarginBytes(self->m_ctx.settings().snapshot())) {
-                self->showSpaceError(needed, ds->available, drive);
-                return;
-            }
-            QString text = QStringLiteral("%1 free on %2.").arg(formatBytes(ds->available), drive);
-            if (needed > 0)
-                text += pkg ? QStringLiteral(" The package needs up to %1.").arg(formatBytes(needed))
-                            : QStringLiteral(" This image needs about %1.").arg(formatBytes(needed));
-            if (!exists)
-                text += QStringLiteral(" The folder is created when the build starts.");
-            Tone tone = Tone::Ok;
-            if (!vol->isEmpty()) {
-                text += u' ' + vol->join(u' ');
-                tone = Tone::Warn;
-            }
-            self->m_spaceRow->set(text, tone);
+            if (self && gen == self->m_spaceGen)
+                self->applySpaceCheck(ds, vol, folder, needed, pkg, exists);
         }, Qt::QueuedConnection);
     });
 }
 
+void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists)
+{
+    m_output->setError({});
+    if (!ds.ok()) {
+        m_spaceState = SpaceCheck::Unavailable;
+        m_spaceRow->set(QStringLiteral("The output drive is not available."), Tone::Warn);
+        if (m_freeSpace)
+            m_freeSpace->setText(QStringLiteral("\u2014"));
+        return;
+    }
+    if (m_freeSpace)
+        m_freeSpace->setText(formatBytes(ds->available));
+    const QString drive = driveLabel(folder);
+    if (!vol.ok()) {
+        m_spaceState = SpaceCheck::Insufficient;
+        m_spaceOk = false;
+        m_spaceProblem = vol.error().message;
+        m_output->setError(vol.error().message);
+        m_spaceRow->clear();
+        return;
+    }
+    if (needed > 0 && ds->available < needed + general::freeSpaceMarginBytes(m_ctx.settings().snapshot())) {
+        showSpaceError(needed, ds->available, drive);
+        return;
+    }
+    QString text = QStringLiteral("%1 free on %2.").arg(formatBytes(ds->available), drive);
+    if (needed > 0)
+        text += pkg ? QStringLiteral(" The package needs up to %1.").arg(formatBytes(needed))
+                    : QStringLiteral(" This image needs about %1.").arg(formatBytes(needed));
+    if (!exists)
+        text += QStringLiteral(" The folder is created when the build starts.");
+    Tone tone = Tone::Ok;
+    if (!vol->isEmpty()) {
+        text += u' ' + vol->join(u' ');
+        tone = Tone::Warn;
+    }
+    m_spaceState = tone == Tone::Warn ? SpaceCheck::Warn : SpaceCheck::Ok;
+    m_spaceRow->set(text, tone);
+}
+
 void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QString& drive)
 {
+    m_spaceState = SpaceCheck::Insufficient;
     m_spaceOk = false;
     m_spaceProblem = QStringLiteral("Not enough space on %1.").arg(drive);
     m_spaceRow->clear();
@@ -1921,7 +1954,7 @@ void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QStri
 QString BuildImagePage::validateForm()
 {
     const FormatOptions* fo = current();
-    const bool backportType = isFpkg() && packageType() == QLatin1String("backport");
+    const bool backportType = isFpkg() && packageTypeKind() == PackageType::Backport;
     if (backportType && m_sourcePath.isEmpty()) {
         // The game folder is optional: without it the base package is unpacked.
         if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
@@ -1976,9 +2009,10 @@ QString BuildImagePage::validateForm()
         if (!v.isEmpty() && !ver.match(v).hasMatch())
             return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.000.");
         const QString type = m_packageType->currentValue().toString();
-        if (type == QLatin1String("update") && m_basePackage->path().isEmpty())
+        const PackageType ptype = packageTypeKind();
+        if (ptype == PackageType::Update && m_basePackage->path().isEmpty())
             return QStringLiteral("An update needs the base package that is installed on the console.");
-        if (type == QLatin1String("backport")) {
+        if (ptype == PackageType::Backport) {
             if (kind != QLatin1String("folder"))
                 return QStringLiteral("The game for a backport update is a game folder (or leave it empty to unpack the base package).");
             if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
@@ -1986,7 +2020,7 @@ QString BuildImagePage::validateForm()
             if (!hasBackports())
                 return QStringLiteral("Choose at least one backport folder: 4.xx or 5.xx+.");
         }
-        if (type == QLatin1String("app") && hasBackports()) {
+        if (ptype == PackageType::App && hasBackports()) {
             if (kind != QLatin1String("folder"))
                 return QStringLiteral("Backport updates require a game folder source. GP5 sources and images cannot be combined "
                                       "with backport inputs.");
@@ -1996,7 +2030,7 @@ QString BuildImagePage::validateForm()
                 return QStringLiteral("Content ID, version and title changes cannot be combined with backport updates (the "
                                       "updates must match the game exactly). Clear them, or build the backports separately.");
         }
-        if (type == QLatin1String("addon")) {
+        if (ptype == PackageType::Addon) {
             static const QRegularExpression hex32(QStringLiteral("^[0-9A-Fa-f]{32}$"));
             setInputError(m_entitlementKey, !hex32.match(m_entitlementKey->text().trimmed()).hasMatch());
             if (!hex32.match(m_entitlementKey->text().trimmed()).hasMatch())
@@ -2005,6 +2039,19 @@ QString BuildImagePage::validateForm()
                 return QStringLiteral("An add-on needs its Content ID.");
         }
     }
+    if (m_spaceState == SpaceCheck::Checking) {
+        // The answer is still on its way: ask the drive now rather than start on a guess.
+        const QString folder = outputFolder();
+        QString probe = folder;
+        while (!probe.isEmpty() && !QFileInfo::exists(probe))
+            probe = QFileInfo(probe).absolutePath() == probe ? QString() : QFileInfo(probe).absolutePath();
+        const qint64 needed = neededBytes();
+        ++m_spaceGen; // the pending answer is superseded by this one
+        applySpaceCheck(diskSpace(probe.isEmpty() ? folder : probe), checkOutputVolume(probe.isEmpty() ? folder : probe, needed), folder, needed,
+                        isFpkg(), QFileInfo::exists(folder));
+    }
+    if (m_spaceState == SpaceCheck::Unavailable)
+        return QStringLiteral("The output drive is not available. Choose another output folder.");
     if (!m_spaceOk)
         return m_spaceProblem;
     if (fo && fo->panel->hasErrors())
@@ -2033,9 +2080,10 @@ Result<QString> BuildImagePage::submit(bool)
         if (!m_version->text().trimmed().isEmpty())
             details.insert(QStringLiteral("contentVersion"), m_version->text().trimmed());
         const QString type = m_packageType->currentValue().toString();
-        if (type == QLatin1String("backport") || (type == QLatin1String("app") && hasBackports())) {
+        const PackageType ptype = packageTypeKind();
+        if (ptype == PackageType::Backport || (ptype == PackageType::App && hasBackports())) {
             QJsonObject p;
-            const bool buildBase = type == QLatin1String("app");
+            const bool buildBase = ptype == PackageType::App;
             if (!buildBase)
                 p.insert(QStringLiteral("package"), m_basePackage->path().trimmed());
             if (!m_sourcePath.isEmpty() && sourceKind() == QLatin1String("folder"))
@@ -2054,9 +2102,9 @@ Result<QString> BuildImagePage::submit(bool)
             return r;
         }
         details.insert(QStringLiteral("packageType"), type);
-        if (type == QLatin1String("update"))
+        if (ptype == PackageType::Update)
             details.insert(QStringLiteral("basePackage"), m_basePackage->path());
-        if (type == QLatin1String("addon")) {
+        if (ptype == PackageType::Addon) {
             details.insert(QStringLiteral("entitlementKey"), m_entitlementKey->text().trimmed());
             details.insert(QStringLiteral("volumeType"), m_volumeType->currentData().toString());
         }
@@ -2099,13 +2147,33 @@ QStringList BuildImagePage::demoStates() const
 {
     return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
             QStringLiteral("format-fpkg"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
-            QStringLiteral("fpkg-backport")};
+            QStringLiteral("fpkg-backport"), QStringLiteral("building"), QStringLiteral("built"), QStringLiteral("build-failed")};
 }
+
+namespace {
+
+// The job monitor with a made-up FPKG build (screenshots): running at 63 %,
+// finished and verified, or failed in the publisher.
+void applyMonitorDemo(JobFormPage& page, const QString& name)
+{
+    QStringList lines;
+    const JobRecord rec = JobMonitor::demoRecord(name == QLatin1String("building") ? QStringLiteral("running")
+                                                 : name == QLatin1String("built") ? QStringLiteral("done") : QStringLiteral("failed"),
+                                                 &lines);
+    page.showMonitor(rec.id);
+    page.monitor()->setDemoRecord(rec, lines);
+}
+
+} // namespace
 
 void BuildImagePage::applyDemoState(const QString& name)
 {
     if (name == QLatin1String("space-error")) {
         showSpaceError(48500000000LL, 34100000000LL, QStringLiteral("C:"));
+        return;
+    }
+    if (name == QLatin1String("building") || name == QLatin1String("built") || name == QLatin1String("build-failed")) {
+        applyMonitorDemo(*this, name);
         return;
     }
     m_demo = true;
@@ -2145,6 +2213,7 @@ void BuildImagePage::applyDemoState(const QString& name)
         fmt = kFormatFpkg;
     setFormat(fmt);
     m_sourcePath = s.folder;
+    m_sourceKind = QStringLiteral("folder");
     onSummary(s);
     if (name == QLatin1String("fpkg-backport")) {
         m_packageType->setCurrentValue(QStringLiteral("backport"));
@@ -2174,6 +2243,7 @@ void BuildImagePage::clearDemoState()
     m_spaceBar->hide();
     m_output->setError({});
     m_spaceOk = true;
+    m_spaceState = SpaceCheck::Unknown;
     if (m_demo) {
         m_demo = false;
         m_advanced->setExpanded(false);

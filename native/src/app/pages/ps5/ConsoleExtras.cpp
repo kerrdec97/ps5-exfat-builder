@@ -227,7 +227,7 @@ void CrashDumpsTab::start()
         return;
     }
     m_jobId = id.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(id.value()); // this job only; a paused queue stays paused
     m_status->set(QStringLiteral("Watching. Reproduce the crash on the console now."), Tone::Info);
     m_start->hide();
     m_stop->show();
@@ -343,7 +343,7 @@ void InstallTab::install()
         m_status->set(r.error().message, Tone::Err);
         return;
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     m_status->set(QStringLiteral("Queued: %1 → %2:%3").arg(QFileInfo(m_package).fileName(), ep.host).arg(ep.dpiPort), Tone::Info);
     emit toastRequested(Tone::Info, QStringLiteral("Install queued"), QFileInfo(m_package).fileName());
 }

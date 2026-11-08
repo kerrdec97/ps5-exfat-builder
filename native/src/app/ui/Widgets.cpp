@@ -227,7 +227,10 @@ static const char* variantName(ButtonVariant v)
 
 void setButtonVariant(QPushButton* b, ButtonVariant variant)
 {
-    b->setProperty("variant", QString::fromLatin1(variantName(variant)));
+    const QString name = QString::fromLatin1(variantName(variant));
+    if (b->property("variant").toString() == name)
+        return; // unchanged: no repolish (views call this on every progress tick)
+    b->setProperty("variant", name);
     b->setFont(variant == ButtonVariant::Primary || variant == ButtonVariant::Danger ? font::bodyStrong() : font::body());
     const QColor iconColor = (variant == ButtonVariant::Primary || variant == ButtonVariant::Danger) ? color::on_accent
                                                                                                      : color::fg_3;
@@ -244,6 +247,8 @@ void setButtonSmall(QPushButton* b, bool small)
 
 void setButtonIcon(QPushButton* b, const QString& iconName, const QColor& c)
 {
+    if (!c.isValid() && b->property("fwIcon").toString() == iconName && (iconName.isEmpty() || !b->icon().isNull()))
+        return; // the same icon for the same variant
     b->setProperty("fwIcon", iconName);
     if (iconName.isEmpty()) {
         b->setIcon(QIcon());
@@ -483,10 +488,14 @@ Badge::Badge(const QString& text, Tone tone, QWidget* parent) : QWidget(parent),
 
 void Badge::set(const QString& text, Tone tone)
 {
+    if (m_text == text && m_tone == tone)
+        return;
+    const bool resize = m_text != text;
     m_text = text;
     m_tone = tone;
     setToolTip(text.size() > 32 ? text : QString());
-    updateGeometry();
+    if (resize)
+        updateGeometry();
     update();
 }
 
@@ -495,6 +504,8 @@ void Badge::setTone(Tone tone) { set(m_text, tone); }
 
 void Badge::setIconName(const QString& iconName)
 {
+    if (m_iconSet && m_icon == iconName)
+        return;
     m_icon = iconName;
     m_iconSet = true;
     updateGeometry();
@@ -620,7 +631,7 @@ void Segmented::addSegment(const QString& text, const QString& iconName, const Q
 
 void Segmented::setSegmentText(int index, const QString& text)
 {
-    if (index < 0 || index >= count())
+    if (index < 0 || index >= count() || m_segments[size_t(index)].text == text)
         return;
     m_segments[size_t(index)].text = text;
     updateGeometry();
@@ -914,7 +925,11 @@ StageStepper::StageStepper(QWidget* parent) : QWidget(parent)
 
 void StageStepper::setStages(const QStringList& names, int current, bool failed)
 {
+    if (names == m_names && current == m_current && failed == m_failed && (m_layout->count() > 0 || names.isEmpty()))
+        return; // the dock calls this on every progress tick
     m_names = names;
+    m_current = current;
+    m_failed = failed;
     while (QLayoutItem* it = m_layout->takeAt(0)) {
         delete it->widget();
         delete it;

@@ -257,6 +257,7 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
                   QStringLiteral("Extract, verify, convert or edit an image you already have."),
                   QStringLiteral("Extract"), QStringLiteral("Image tools"), parent)
 {
+    setNewJobText(QStringLiteral("Back to the image"));
     m_info = new ImageSummaryReader(this);
     connect(m_info, &ImageSummaryReader::ready, this, &ImageToolsPage::onSummary);
     m_reader = new ImageTreeReader(this);
@@ -591,6 +592,9 @@ void ImageToolsPage::openImage(const QString& path)
         m_convertOutput->setPath({});
         m_compareB->setPath({});
         m_compareB->setError({});
+        // The last comparison was about the previous image.
+        m_compareJobId.clear();
+        m_compareResult = {};
     }
     const QFileInfo fi(path);
     if (path.isEmpty()) {
@@ -728,6 +732,8 @@ void ImageToolsPage::updateActions()
         m_destination->setPlaceholder(nativePath(fi.absolutePath() + u'/' + fi.completeBaseName()));
     }
     queueButton()->setVisible(!(m_action == Action::Edit || (m_action == Action::Verify && cmp)) || !open);
+    // A comparison's result is the row in this card (and its sheet): keep the form.
+    setMonitorOnStart(!(m_action == Action::Verify && cmp));
     rebuildConvertChoices();
     updateConvert();
     updateAdvanced();

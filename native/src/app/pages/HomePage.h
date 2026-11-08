@@ -63,6 +63,7 @@ private:
     // Pick up where you left off
     ui::InfoBar* m_continue;
     QString m_continueId;
+    quint64 m_spaceGen = 0; // the free-space probe in flight; older answers are dropped
     QString m_continueDismissed;
     // Recent jobs
     ui::Card* m_recentCard;

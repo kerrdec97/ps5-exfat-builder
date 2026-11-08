@@ -109,10 +109,15 @@ QString remoteFileName(const QString& path)
 
 const QStringList& protectedRemoteRoots()
 {
+    // Firmware, the app registry (/system_data/priv), installed apps, saves and
+    // trophies (/user/app, /user/home, /user/system) and the sandbox mounts:
+    // deleting or overwriting there needs the extra confirmation.
     static const QStringList roots = {
-        QStringLiteral("/system"),       QStringLiteral("/system_ex"),  QStringLiteral("/preinst"),
-        QStringLiteral("/preinst2"),     QStringLiteral("/mini-syscore"), QStringLiteral("/sandcastle"),
-        QStringLiteral("/update"),       QStringLiteral("/dev"),        QStringLiteral("/proc"),
+        QStringLiteral("/system"),       QStringLiteral("/system_ex"),    QStringLiteral("/system_data"),
+        QStringLiteral("/system_tmp"),   QStringLiteral("/preinst"),      QStringLiteral("/preinst2"),
+        QStringLiteral("/mini-syscore"), QStringLiteral("/sandcastle"),   QStringLiteral("/update"),
+        QStringLiteral("/dev"),          QStringLiteral("/proc"),         QStringLiteral("/user/app"),
+        QStringLiteral("/user/home"),    QStringLiteral("/user/system"),  QStringLiteral("/mnt/sandbox"),
     };
     return roots;
 }

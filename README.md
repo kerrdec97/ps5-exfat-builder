@@ -37,7 +37,7 @@ verify and send them to your console — from one app, in one download.**
 | **Image tools** | Open an image to **extract** it (packed games come out as plain files; an image inside an .ffpfsc is read straight through), **verify** it (or compare it with a folder), **convert** between exFAT, FFPKG, FFPFSC and FFPFS, or **edit** it (add, replace, rename, delete files). |
 | **PS5 connect** | A real FTP file manager with a transfer queue, payload sender, kernel log and crash-dump capture, **ShadowMount+ 1.7** configuration (new format, safe-to-unplug), Fakelib manager, autoloader, AMPR index, Y2JB tools (firmware → YouTube version table, one-click install from your own YouTube packages) and package install. |
 | **Library** | Your dumps and images in a cover-art grid: formats at a glance, bulk build, backport, rename. |
-| **Queue** | Everything runs in a queue you can pause, reorder, cancel and retry while you keep working. |
+| **Queue** | Everything runs in a queue you can pause, reorder, cancel and retry while you keep working. The page you start a job from turns into its monitor: every stage with its time, a live progress bar, speed and time left, and the job's log as it is written. |
 
 <p align="center">
   <img src="docs/screenshots/build.png" width="49%" alt="Build image">

@@ -946,6 +946,9 @@ QStringList addonPhases() { return buildPhases(); }
 namespace {
 
 const QList<double> kBuildWeights = {8, 0.5, 0.5, 3, 90, 0.5, 1, 8, 6};
+// An extracted package tree against the size of the (Kraken-compressed) .pkg:
+// the free-space checks before img_extract ask for this much.
+constexpr qint64 kExtractedTreeFactor = 2;
 enum Phase { PhPrepare = 0, PhPlan, PhGenerate, PhPrescan, PhPack, PhFinish, PhCheck, PhVerify, PhSha };
 
 QStringList aliasBases(const QString& jobTemp, const QString& output)
@@ -1158,7 +1161,11 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     ro.cpuCoreLimit = s.cpuCoreLimit;
     ro.priorityMode = s.priorityMode;
     ro.liveLimitKey = ctx.jobId;
-    ro.onBar = [pr](int steps) { pr->setDone(qint64(steps) * 1000 / kBarSteps); };
+    // Monotonic: a second ruler line from the tool must not send the bar backwards.
+    ro.onBar = [pr, best = std::make_shared<int>(0)](int steps) {
+        *best = std::max(*best, steps);
+        pr->setDone(qint64(*best) * 1000 / kBarSteps);
+    };
     ro.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(QStringLiteral("%1 written").arg(formatBytes(b))); };
     ro.onLine = [&log](const ToolLine& l) { logToolLine(log, l); };
 
@@ -1355,8 +1362,9 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolcha
     if (!QDir().mkpath(dest))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create a folder for the base package's files."));
     // The base's files are needed only where the update folder lacks them.
-    // img_extract cannot pick files, so the whole base is extracted.
-    FW_TRY(ensureFreeSpace(dest, QFileInfo(basePackage).size(), s.freeSpaceMarginBytes));
+    // img_extract cannot pick files, so the whole base is extracted; packages
+    // are Kraken-compressed, so the tree is usually larger than the file.
+    FW_TRY(ensureFreeSpace(dest, kExtractedTreeFactor * QFileInfo(basePackage).size(), s.freeSpaceMarginBytes));
     FW_TRY(mapDir(aliases, QFileInfo(basePackage).absolutePath(), QStringLiteral("ref")));
     auto destTool = aliases.map(dest, QStringLiteral("base"));
     if (!destTool.ok())
@@ -1444,8 +1452,15 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             if (!QDir().mkpath(stage))
                 return Error(ErrorCode::IoError, QStringLiteral("Could not create the staging folder."));
         }
-        const qint64 est = stager->estimateStagedBytes(req.source) > 0 ? stager->estimateStagedBytes(req.source) : srcInfo.size();
+        const qint64 estimated = stager->estimateStagedBytes(req.source); // opens the image once
+        const qint64 est = estimated > 0 ? estimated : srcInfo.size();
         FW_TRY(ensureFreeSpace(stage, est + est / 50, s.freeSpaceMarginBytes));
+        if (s.userTempFolder.isEmpty()) {
+            // Staged onto the output drive: a FAT32 drive cannot hold the game's
+            // files above 4 GiB (nor the package), so stop before copying anything.
+            FW_TRY_ASSIGN(const QStringList volumeNotes, checkOutputVolume(output, est));
+            outcome.warnings << volumeNotes;
+        }
         const QString note = stager->stagingNote(req.source);
         log.info(note.isEmpty() ? QStringLiteral("Copying the files of %1 (%2) to a temporary folder.").arg(srcInfo.fileName(), stager->displayName())
                                 : note);
@@ -2030,7 +2045,7 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
             QDir().rmdir(dest);
     });
     const QString target = toolTargetFor(req.package, ctx.log);
-    FW_TRY(ensureFreeSpace(dest, QFileInfo(target).size(), s.freeSpaceMarginBytes));
+    FW_TRY(ensureFreeSpace(dest, kExtractedTreeFactor * QFileInfo(target).size(), s.freeSpaceMarginBytes));
     AsciiAliases aliases(aliasBases(ctx.tempDir, dest), {}, ctx.log);
     auto pkgDir = aliases.map(QFileInfo(target).absolutePath(), QStringLiteral("pkg"));
     if (!pkgDir.ok())
@@ -2220,7 +2235,7 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
         return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 is not empty.").arg(native(destination)));
     if (!QDir().mkpath(destination))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(destination)));
-    FW_TRY(ensureFreeSpace(destination, fi.size(), s.freeSpaceMarginBytes));
+    FW_TRY(ensureFreeSpace(destination, kExtractedTreeFactor * fi.size(), s.freeSpaceMarginBytes));
     AsciiAliases aliases(aliasBases(ctx.tempDir, destination), {}, ctx.log);
     FW_TRY(mapDir(aliases, fi.absolutePath(), QStringLiteral("ref")));
     auto destTool = aliases.map(destination, QStringLiteral("base"));
@@ -2248,9 +2263,10 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
         return r.takeError();
     if (r->cancelled || ctx.token.isCancelled())
         return Error::cancelled();
-    if (r->exitCode != 0)
-        return Error(ErrorCode::ExternalToolFailed, QStringLiteral("img_extract failed with exit code %1").arg(r->exitCode),
-                     r->failureText());
+    // Exit code 0 with an [Error] line is a failure too (§4.4): a partly
+    // extracted base must never become the tree an update delta is planned on.
+    if (!r->ok())
+        return packFailure(r.value(), QStringLiteral("img_extract"));
     const QString root = findAppRoot(destination, 2);
     return root.isEmpty() ? destination : root;
 }

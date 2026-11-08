@@ -39,6 +39,11 @@ struct JobRecord {
     QVariantMap overrides;
     int attempt = 1;          // automatic retries increase this (general.autoRetryCount)
     QDateTime notBefore;      // a retry waits until then (general.autoRetryDelaySeconds)
+
+    bool isActive() const { return fw::isActive(state); }
+    bool isTerminal() const { return fw::isTerminal(state); }
+    // Queued after an automatic retry, until notBefore has passed.
+    bool isWaitingToRetry() const { return state == JobState::Queued && notBefore.isValid() && notBefore > QDateTime::currentDateTime(); }
 };
 
 class JobHistory;
@@ -62,6 +67,10 @@ public:
 
     void pauseJob(const QString& id);
     void resumeJob(const QString& id);
+    // Runs this queued job next (ahead of the other waiting jobs, and even
+    // while the queue is paused) without resuming the rest of the queue:
+    // "Build now", Retry.
+    void startNow(const QString& id);
     void cancel(const QString& id);
     void cancelAll();
     Result<QString> retry(const QString& id); // new job from the same parameters
@@ -88,6 +97,7 @@ signals:
     void jobFinished(const QString& id);
     void jobRemoved(const QString& id);
     void orderChanged();
+    void heldChanged(bool held); // holdQueue()
     void idle();
 
 private:

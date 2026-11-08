@@ -547,6 +547,11 @@ bool removeTreeNoFollow(const QString& dir)
                 ok = false;
         }
     }
+    if (QDir().rmdir(dir))
+        return ok;
+    // A read-only folder (Explorer sets the attribute on customised folders;
+    // extraction keeps it): Windows refuses to remove it until it is cleared.
+    QFile::setPermissions(dir, QFileInfo(dir).permissions() | QFileDevice::WriteOwner | QFileDevice::WriteUser);
     return QDir().rmdir(dir) && ok;
 }
 

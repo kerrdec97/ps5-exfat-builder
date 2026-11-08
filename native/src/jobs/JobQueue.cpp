@@ -26,6 +26,7 @@ struct JobQueue::Entry {
     std::atomic<bool> progressPending{false};
     std::unique_ptr<ProgressReporter> reporter;
     QStringList busy;                  // busyPaths() taken when the job starts
+    bool startDespiteHold = false;     // startNow(): may start while the queue is held
 };
 
 namespace {
@@ -105,7 +106,10 @@ Result<QString> JobQueue::enqueue(const QString& kind, const QJsonObject& params
 
 void JobQueue::holdQueue(bool hold)
 {
+    if (m_held == hold)
+        return;
     m_held = hold;
+    emit heldChanged(hold);
     if (!hold)
         schedule();
 }
@@ -149,6 +153,29 @@ void JobQueue::resumeJob(const QString& id)
     emit jobChanged(id);
 }
 
+void JobQueue::startNow(const QString& id)
+{
+    auto e = find(id);
+    if (!e)
+        return;
+    {
+        std::lock_guard lock(m_mutex);
+        if (e->rec.state != JobState::Queued)
+            return;
+        e->startDespiteHold = true;
+        e->rec.notBefore = QDateTime();
+        // Ahead of every other waiting job, behind the running and finished ones.
+        auto it = std::find(m_entries.begin(), m_entries.end(), e);
+        if (it != m_entries.end())
+            m_entries.erase(it);
+        auto firstQueued = std::find_if(m_entries.begin(), m_entries.end(), [](const auto& x) { return x->rec.state == JobState::Queued; });
+        m_entries.insert(firstQueued, e);
+    }
+    emit orderChanged();
+    (void)saveQueue();
+    schedule();
+}
+
 void JobQueue::cancel(const QString& id)
 {
     auto e = find(id);
@@ -157,13 +184,17 @@ void JobQueue::cancel(const QString& id)
     bool wasQueued = false;
     {
         std::lock_guard lock(m_mutex);
-        if (isTerminal(e->rec.state))
+        if (isTerminal(e->rec.state) || e->rec.state == JobState::Cancelling)
             return;
         if (e->rec.state == JobState::Queued) {
             wasQueued = true;
             e->rec.state = JobState::Cancelled;
             e->rec.finished = QDateTime::currentDateTime();
             e->rec.error = Error::cancelled();
+        } else {
+            // The worker winds down (it checks the token at its next checkpoint
+            // and removes its partial output); Cancelled follows from it.
+            e->rec.state = JobState::Cancelling;
         }
     }
     Log(QStringLiteral("queue"), id).info(QStringLiteral("Cancel requested"));
@@ -172,6 +203,14 @@ void JobQueue::cancel(const QString& id)
     emit jobChanged(id);
     if (wasQueued) {
         e->job.reset();
+        if (m_history) {
+            JobRecord snapshot;
+            {
+                std::lock_guard lock(m_mutex);
+                snapshot = e->rec;
+            }
+            (void)m_history->append(snapshot); // every ending is in the history
+        }
         emit jobFinished(id);
         (void)saveQueue();
         schedule();
@@ -203,7 +242,7 @@ bool JobQueue::remove(const QString& id)
         auto it = std::find_if(m_entries.begin(), m_entries.end(), [&](const auto& e) { return e->rec.id == id; });
         if (it == m_entries.end())
             return false;
-        if ((*it)->rec.state == JobState::Running || (*it)->rec.state == JobState::Paused)
+        if ((*it)->rec.isActive())
             return false;
         removed = *it;
         m_entries.erase(it);
@@ -256,7 +295,7 @@ std::vector<JobRecord> JobQueue::records() const
     out.reserve(m_entries.size());
     for (const auto& e : m_entries) {
         JobRecord r = e->rec;
-        if (e->reporter && (r.state == JobState::Running || r.state == JobState::Paused))
+        if (e->reporter && r.isActive())
             r.progress = e->reporter->snapshot();
         out.push_back(std::move(r));
     }
@@ -269,7 +308,7 @@ std::optional<JobRecord> JobQueue::record(const QString& id) const
     for (const auto& e : m_entries)
         if (e->rec.id == id) {
             JobRecord r = e->rec;
-            if (e->reporter && (r.state == JobState::Running || r.state == JobState::Paused))
+            if (e->reporter && r.isActive())
                 r.progress = e->reporter->snapshot();
             return r;
         }
@@ -279,9 +318,7 @@ std::optional<JobRecord> JobQueue::record(const QString& id) const
 int JobQueue::runningCount() const
 {
     std::lock_guard lock(m_mutex);
-    return int(std::count_if(m_entries.begin(), m_entries.end(), [](const auto& e) {
-        return e->rec.state == JobState::Running || e->rec.state == JobState::Paused;
-    }));
+    return int(std::count_if(m_entries.begin(), m_entries.end(), [](const auto& e) { return e->rec.isActive(); }));
 }
 
 int JobQueue::pendingCount() const
@@ -293,7 +330,7 @@ int JobQueue::pendingCount() const
 
 void JobQueue::schedule()
 {
-    if (m_held || m_shuttingDown)
+    if (m_shuttingDown)
         return;
     const int maxConcurrent = std::max<int>(1, int(m_settings.snapshot().integer(QStringLiteral("performance.maxConcurrentJobs"))));
     std::vector<std::shared_ptr<Entry>> toStart;
@@ -302,7 +339,7 @@ void JobQueue::schedule()
         int running = 0;
         QList<QStringList> busy; // paths in use by running jobs
         for (const auto& e : m_entries)
-            if (e->rec.state == JobState::Running || e->rec.state == JobState::Paused) {
+            if (e->rec.isActive()) {
                 ++running;
                 busy << e->busy;
             }
@@ -311,6 +348,10 @@ void JobQueue::schedule()
                 break;
             if (e->rec.state == JobState::Queued && e->job
                 && (!e->rec.notBefore.isValid() || e->rec.notBefore <= QDateTime::currentDateTime())) {
+                // A paused queue holds the user's jobs; system jobs and a job
+                // the user started by hand (startNow) go through.
+                if (m_held && !e->startDespiteHold && !e->job->runsWhileHeld())
+                    continue;
                 // Never two jobs on the same image or game at once (a verify
                 // must not roll back an edit that is still being applied).
                 const QStringList paths = e->job->busyPaths();
@@ -320,6 +361,7 @@ void JobQueue::schedule()
                 busy << paths;
                 e->rec.state = JobState::Running;
                 e->rec.started = QDateTime::currentDateTime();
+                e->rec.notBefore = QDateTime(); // the retry wait is over
                 toStart.push_back(e);
                 ++running;
             }
@@ -468,6 +510,10 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
     auto e = find(id);
     if (!e)
         return;
+    // Stop the job's clocks before the final snapshot is taken (only this
+    // thread creates and resets the reporter; the reporter itself is thread-safe).
+    if (e->reporter)
+        e->reporter->finish();
     if (!result.ok() && !result.error().isCancelled() && !e->cancel.isCancelled()) {
         {
             std::lock_guard lock(m_mutex);
@@ -532,7 +578,8 @@ Status JobQueue::saveQueue() const
     {
         std::lock_guard lock(m_mutex);
         for (const auto& e : m_entries) {
-            if (isTerminal(e->rec.state))
+            // Interrupted records stay until the user retries or removes them.
+            if (isTerminal(e->rec.state) && e->rec.state != JobState::Interrupted)
                 continue;
             QJsonObject o;
             o.insert(QStringLiteral("kind"), e->rec.kind);
@@ -541,6 +588,8 @@ Status JobQueue::saveQueue() const
             o.insert(QStringLiteral("overrides"), variantMapToJson(e->rec.overrides));
             o.insert(QStringLiteral("state"), jobStateName(e->rec.state));
             o.insert(QStringLiteral("added"), e->rec.added.toString(Qt::ISODate));
+            if (e->rec.state == JobState::Interrupted && e->rec.error)
+                o.insert(QStringLiteral("error"), e->rec.error->message);
             arr.append(o);
         }
     }
@@ -573,7 +622,8 @@ Status JobQueue::restoreQueue()
             continue;
         }
         // A record the user can retry, but that never starts by itself.
-        const auto keepInterrupted = [&](std::unique_ptr<Job>& j, const QString& why) {
+        const QString savedState = o.value(QStringLiteral("state")).toString();
+        const auto keepInterrupted = [&](std::unique_ptr<Job>& j, const QString& why, bool fresh) {
             auto e = std::make_shared<Entry>();
             e->rec.id = newId();
             e->rec.kind = kind;
@@ -589,11 +639,20 @@ Status JobQueue::restoreQueue()
                 std::lock_guard lock(m_mutex);
                 m_entries.push_back(e);
             }
+            // A job that ended this way is part of the history too (once).
+            if (fresh && m_history)
+                (void)m_history->append(e->rec);
             emit jobAdded(e->rec.id);
         };
+        if (savedState == jobStateName(JobState::Interrupted)) {
+            // Kept from an earlier restart: shown again with the same explanation.
+            const QString why = o.value(QStringLiteral("error")).toString();
+            keepInterrupted(job.value(), why.isEmpty() ? QStringLiteral("The app closed while this job was running. Retry to run it again.") : why, false);
+            continue;
+        }
         if (wasRunning) {
             keepInterrupted(job.value(),
-                            QStringLiteral("The app closed while this job was running. Its partial output was not kept. Retry to run it again."));
+                            QStringLiteral("The app closed while this job was running. Its partial output was not kept. Retry to run it again."), true);
             continue;
         }
         // enqueue() validates the job's inputs (a USB drive may not be plugged
@@ -606,7 +665,7 @@ Status JobQueue::restoreQueue()
             if (again.ok())
                 keepInterrupted(again.value(), QStringLiteral("This job was waiting when the app closed, but it cannot run now: %1 "
                                                               "Retry it when that is fixed.")
-                                                   .arg(added.error().message));
+                                                   .arg(added.error().message), true);
         }
     }
     // Restored jobs wait for the user to resume the queue.

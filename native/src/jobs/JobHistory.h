@@ -10,6 +10,7 @@
 #include <QString>
 
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace fw {
@@ -34,7 +35,10 @@ class JobHistory {
 public:
     explicit JobHistory(QString path, int maxEntries = 2000);
     Status append(const JobRecord& record);
-    std::vector<HistoryEntry> recent(int limit = 50) const; // newest first
+    // Newest first. The newest entries are kept in memory after the first
+    // read (and kept current by append), so Home can ask on every queue
+    // change without touching the file.
+    std::vector<HistoryEntry> recent(int limit = 50) const;
     Status clear();
     // Writes every entry (oldest first) as RFC 4180 CSV with a header row.
     Status exportCsv(const QString& path) const;
@@ -42,9 +46,12 @@ public:
 
 private:
     void compactIfNeeded();
+    std::vector<HistoryEntry> readRecent(int limit) const; // from the file; m_mutex held
     QString m_path;
     int m_max;
     mutable std::mutex m_mutex;
+    static constexpr int kCached = 200;
+    mutable std::optional<std::vector<HistoryEntry>> m_cache; // newest first, at most kCached
 };
 
 } // namespace fw

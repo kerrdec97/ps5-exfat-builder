@@ -112,7 +112,7 @@ QString AmprTab::submitLocal(const QString& folder, bool force, bool allowAssetP
         m_localStatus->set(r.error().message, Tone::Err);
         return {};
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     m_localStatus->set(QStringLiteral("Queued: %1").arg(nativePath(folder)), Tone::Info);
     return r.value();
 }
@@ -125,7 +125,7 @@ QString AmprTab::submitConsole(const QString& remoteFolder)
         m_remoteStatus->set(r.error().message, Tone::Err);
         return {};
     }
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     m_remoteStatus->set(QStringLiteral("Queued: %1").arg(remoteFolder), Tone::Info);
     return r.value();
 }

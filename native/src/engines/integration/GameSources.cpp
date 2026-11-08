@@ -351,16 +351,37 @@ public:
                                        : QStringLiteral(", keeping its %1 packs").arg(ampr::packKindName(kind))));
         ctx.progress->beginPhase(1, 0);
         const QString out = QFileInfo(output()).absoluteFilePath();
+        // Everything goes to "<output>.part" first and is renamed once it has
+        // verified, so an unverified or cancelled extraction never sits under
+        // the final name. The marker next to it says a leftover is ours.
+        const QString stage = out + QStringLiteral(".part");
+        const QString marker = out + QStringLiteral(".part.extracting");
+        const QString parent = QFileInfo(out).absolutePath();
+        if (QFileInfo::exists(stage)) {
+            if (!QFileInfo::exists(marker))
+                return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Move or delete it, then try again.").arg(native(stage)));
+            FW_TRY(removeTreeSafely(stage, parent));
+        }
+        if (!QDir().mkpath(parent) || !QFile(marker).open(QIODevice::WriteOnly))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(parent)));
+        struct StageGuard {
+            QString stage, marker, parent;
+            bool keep = false;
+            ~StageGuard()
+            {
+                if (!keep)
+                    (void)removeTreeSafely(stage, parent);
+                QFile::remove(marker);
+            }
+        } guard{stage, marker, parent};
         ampr::UnpackOptions uo;
         uo.freeSpaceMarginBytes = qint64(ctx.settings.integer(general::keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
         std::shared_ptr<ampr::GameFiles> from = files;
         if (!unpack && kind != ampr::PackKind::None)
             from = std::make_shared<PlainView>(files); // the packs as files
-        auto r = ampr::unpackGame(from, out, uo, ctx.token, ctx.progress, ctx.log);
-        if (!r.ok()) {
-            (void)removeTreeSafely(out, QFileInfo(out).absolutePath());
+        auto r = ampr::unpackGame(from, stage, uo, ctx.token, ctx.progress, ctx.log);
+        if (!r.ok())
             return r.takeError();
-        }
         JobOutcome o;
         if (verify) {
             // Every written file read back against the source (through the packs).
@@ -380,7 +401,7 @@ public:
                     continue;
                 if (it.path.compare(QStringLiteral("ampr_emu.index"), Qt::CaseInsensitive) == 0 && r->amprIndexWritten)
                     continue; // rewritten for the unpacked files
-                QFile f(QDir(out).filePath(it.path));
+                QFile f(QDir(stage).filePath(it.path));
                 if (!f.exists() && r->droppedFiles.contains(it.path))
                     continue; // left out on purpose (old journal and logs)
                 if (!f.open(QIODevice::ReadOnly) || f.size() != it.size)
@@ -400,6 +421,13 @@ public:
             o.verification = Verification::Passed;
             o.verificationDetail = QStringLiteral("%1 files read back, all identical").arg(formatCount(compared));
         }
+        // Into place: a pre-existing empty folder goes, the stage takes its name.
+        if (QFileInfo(out).isDir() && !QDir().rmdir(out))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(out)));
+        if (!QDir().rename(stage, out))
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.").arg(native(out)));
+        guard.keep = true;
         o.outputs = {out};
         o.summary = r->kind == ampr::PackKind::None
                         ? QStringLiteral("Extracted %1 files (%2).").arg(formatCount(r->files), formatBytes(r->bytes))

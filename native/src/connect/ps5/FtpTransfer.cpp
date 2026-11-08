@@ -2,8 +2,10 @@
 
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
@@ -90,6 +92,7 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
                 if (++visited > 100000)
                     return Error(ErrorCode::Unsupported, QStringLiteral("The remote folder has too many sub-folders."));
                 FW_TRY_ASSIGN(std::vector<FtpEntry> entries, c.list(rdir, FtpListMode::Auto, token));
+                QSet<QString> localKeys; // names as this PC's file system compares them
                 for (const FtpEntry& e : entries) {
                     if (e.isLink)
                         continue; // never follow links on the console
@@ -103,6 +106,15 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
                                                                         why.isEmpty() ? remoteNameProblem(e.name) : why);
                         continue;
                     }
+                    // /data is case-sensitive, NTFS is not: two entries that collide here
+                    // would write the same .part file from two workers.
+                    const QString key = hostNameKey(e.name);
+                    if (localKeys.contains(key)) {
+                        plan.skipped << QStringLiteral("%1/%2: another entry of this folder has the same name on this PC (the names differ only in case)")
+                                            .arg(rdir == u"/" ? QString() : rdir, e.name);
+                        continue;
+                    }
+                    localKeys.insert(key);
                     const QString l = QDir(ldir).filePath(e.name);
                     if (e.isDir) {
                         plan.directories << l;
@@ -248,12 +260,18 @@ void removeRemotePartial(Shared& sh, FtpClient* existing, const QString& remote)
         // Right after an aborted STOR the server may still hold the file open
         // (a Windows-hosted server cannot delete it until then), so try a few
         // times over about two seconds. Never cancellable: this is the cleanup.
-        FtpClient fresh(sh.ftp);
-        for (int attempt = 0; attempt < 6 && !st.ok(); ++attempt) {
+        // A console that does not answer any more (rest mode, reboot: the
+        // usual reason for a cancel) ends it at once instead of retrying.
+        FtpOptions quick = sh.ftp;
+        quick.connectTimeoutMs = std::min(quick.connectTimeoutMs, 3000);
+        FtpClient fresh(quick);
+        QElapsedTimer clock;
+        clock.start();
+        for (int attempt = 0; attempt < 6 && !st.ok() && clock.elapsed() < 4000; ++attempt) {
             if (attempt > 0)
                 QThread::msleep(350);
             if (!fresh.isConnected() && !fresh.open(sh.opt.endpoint.host, sh.opt.endpoint.ftpPort, CancellationToken()).ok())
-                continue;
+                break; // not reachable: the partial file is reported, not retried
             st = fresh.dele(remote);
             if (!st.ok() && st.error().code == ErrorCode::NotFound && !fresh.fileExists(remote)) {
                 st = success(); // already gone

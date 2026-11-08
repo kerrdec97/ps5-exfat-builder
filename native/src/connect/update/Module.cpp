@@ -85,6 +85,10 @@ Result<int> httpGet(const QUrl& url, const CancellationToken& token, const std::
         return Error(ErrorCode::IoError, QStringLiteral("Could not save the download."));
     if (err != QNetworkReply::NoError && status == 0)
         return Error(ErrorCode::IoError, QStringLiteral("Could not reach GitHub. Check your internet connection and try again."), errText);
+    // A transport failure after the headers (connection closed mid-body, a
+    // timeout) is not a 200: only an HTTP error status is reported as one.
+    if (err != QNetworkReply::NoError && status < 400)
+        return Error(ErrorCode::IoError, QStringLiteral("The download from GitHub was interrupted. Check your internet connection and try again."), errText);
     return status;
 }
 
@@ -92,6 +96,7 @@ class CheckJob : public Job {
 public:
     explicit CheckJob(QJsonObject p) : m_p(std::move(p)) {}
     QString kind() const override { return kCheckJob; }
+    bool runsWhileHeld() const override { return true; } // never resumes the user's paused queue
     QString title() const override { return QStringLiteral("Check for updates"); }
     QStringList phases() const override { return {QStringLiteral("Checking")}; }
     QJsonObject parameters() const override { return m_p; }
@@ -146,6 +151,7 @@ class DownloadJob : public Job {
 public:
     explicit DownloadJob(QJsonObject p) : m_p(std::move(p)), m_rel(ReleaseInfo::fromJson(m_p.value(QStringLiteral("release")).toObject())) {}
     QString kind() const override { return kDownloadJob; }
+    bool runsWhileHeld() const override { return true; }
     QString title() const override { return QStringLiteral("Download version %1").arg(m_rel.version); }
     QStringList phases() const override { return {QStringLiteral("Checksums"), QStringLiteral("Downloading"), QStringLiteral("Verifying")}; }
     QJsonObject parameters() const override { return m_p; }

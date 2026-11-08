@@ -7,6 +7,7 @@
 #include "app/models/LogModel.h"
 #include "app/ui/Widgets.h"
 
+#include <QPlainTextEdit>
 #include <QStyledItemDelegate>
 #include <QTableView>
 
@@ -43,6 +44,7 @@ class ActivityWell : public Card {
 public:
     ActivityWell(LogModel& model, QWidget* parent = nullptr);
     void setJobId(const QString& jobId);     // "" = any job
+    QString jobId() const { return m_job; }
     void setSource(const QString& source);   // "" = any source
     void setMaxLines(int n) { m_max = n; refresh(); }
     void setSmall(bool small);               // mono-sm (dock / detail panels)
@@ -55,6 +57,46 @@ private:
     bool m_small = false;
     QVBoxLayout* m_lines;
     QLabel* m_emptyLabel;
+};
+
+// The live log console of the job monitor: a terminal-like well (bg_0, mono)
+// that shows one job's records as they arrive — time, a level tag for
+// warnings and errors, the message — follows the newest line unless the user
+// scrolled up, and keeps the last `maxLines` lines. Text is selectable.
+class LogConsole : public QPlainTextEdit {
+    Q_OBJECT
+public:
+    explicit LogConsole(LogModel& model, QWidget* parent = nullptr);
+    void setJobId(const QString& jobId);          // "" = every job (with its source)
+    QString jobId() const { return m_job; }
+    void setMinimumLevel(LogLevel level);         // default Info; Debug shows the tools' own output
+    LogLevel minimumLevel() const { return m_min; }
+    void setMaxLines(int n);
+    void setLive(bool live);                      // false: lines come from appendLine() only (screenshots)
+    bool follow() const { return m_follow; }
+    void jumpToLatest();
+    int lineCount() const { return m_lines; }
+    QString plainLines() const;                   // the shown lines, for Copy
+    void appendLine(const QDateTime& time, LogLevel level, const QString& message, const QString& source = {});
+    void clearLines();
+signals:
+    void followChanged(bool follow);
+    void lineCountChanged(int count);
+
+private:
+    void refill();
+    void onAppended(int count);
+    bool accepts(const LogRecord& r) const;
+    void appendRecord(const LogRecord& r);
+    LogModel& m_model;
+    QString m_job;
+    LogLevel m_min = LogLevel::Info;
+    quint64 m_lastSeq = 0;
+    bool m_follow = true;
+    bool m_adjusting = false;
+    bool m_live = true;
+    int m_lines = 0;
+    int m_max = 4000;
 };
 
 } // namespace fw::ui

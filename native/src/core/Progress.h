@@ -36,6 +36,15 @@ struct ProgressSnapshot {
     QString currentItem;     // file being processed (relative path)
     double overallFraction = 0.0; // 0..1 across all phases (weighted)
 
+    // Timing (for the job monitor's stage list and clocks). elapsedMs counts
+    // from the first phase; phaseMs holds the time spent in each phase so far,
+    // index-aligned with the phases (0 = not entered yet). Both freeze when
+    // the reporter is finished.
+    qint64 elapsedMs = 0;
+    qint64 phaseElapsedMs = 0;
+    QList<qint64> phaseMs;
+    bool finished = false;
+
     double phaseFraction() const { return total > 0 ? double(done) / double(total) : 0.0; }
 };
 
@@ -61,10 +70,15 @@ public:
     // Push a snapshot now, ignoring the throttle (phase change, completion).
     void flush();
 
+    // The job ended (whatever the outcome): closes the current phase so the
+    // clocks stop. Snapshots taken afterwards keep the final times.
+    void finish();
+
     ProgressSnapshot snapshot() const;
 
 private:
     void maybeEmit(bool force);
+    ProgressSnapshot snapshotLocked() const; // m_mutex held
 
     Sink m_sink;
     std::chrono::milliseconds m_throttle;
@@ -73,6 +87,13 @@ private:
     QStringList m_phaseNames;
     QList<double> m_weights;
     int m_phaseIndex = 0;
+    // timing
+    std::chrono::steady_clock::time_point m_startedAt{};
+    std::chrono::steady_clock::time_point m_phaseStartedAt{};
+    QList<qint64> m_phaseMs;      // closed time per phase
+    qint64 m_totalMs = 0;         // valid once finished
+    bool m_started = false;
+    bool m_finished = false;
     qint64 m_total = 0;
     qint64 m_filesTotal = 0;
     bool m_unitIsBytes = true;

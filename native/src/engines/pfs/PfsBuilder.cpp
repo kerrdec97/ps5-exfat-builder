@@ -453,7 +453,7 @@ Result<BuildStats> writeImage(const BuildInput& input, OutputFormat format, cons
                               const QString& path, const CancellationToken& token, const BuildHooks& hooks,
                               const Log& log)
 {
-    if (options.level < 0 || options.level > 9)
+    if (options.level < 1 || options.level > 9)
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Compression level must be between 1 and 9."));
     QElapsedTimer timer;
     timer.start();

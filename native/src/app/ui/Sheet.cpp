@@ -58,8 +58,18 @@ Sheet::Sheet(QWidget* host, const QString& title, Icon icon, int width) : QWidge
     host->installEventFilter(this);
 }
 
+namespace {
+int g_openSheets = 0;
+}
+
+int Sheet::openCount() { return g_openSheets; }
+
 Sheet::~Sheet()
 {
+    if (m_counted) {
+        m_counted = false;
+        --g_openSheets;
+    }
     if (m_loop)
         m_loop->exit(m_result);
 }
@@ -114,6 +124,10 @@ void Sheet::relayout()
 
 void Sheet::open()
 {
+    if (!m_counted) {
+        m_counted = true;
+        ++g_openSheets;
+    }
     m_previousFocus = QApplication::focusWidget();
     relayout();
     raise();
@@ -158,6 +172,10 @@ void Sheet::close(int result)
             }
     }
     m_result = result;
+    if (m_counted) {
+        m_counted = false;
+        --g_openSheets;
+    }
     hide();
     if (m_previousFocus)
         m_previousFocus->setFocus(Qt::OtherFocusReason);

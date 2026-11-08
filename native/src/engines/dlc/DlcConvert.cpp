@@ -626,9 +626,21 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
     if (ok == 0)
         return Error(ErrorCode::ExternalToolFailed,
                      failed == 1 ? errors.join(QString()).trimmed() : QStringLiteral("No DLC package was built (%1 failed).").arg(failed));
-    o.verification = Verification::Passed;
-    o.verificationDetail = QStringLiteral("%1 structural verification passed; DLC compatibility on the console is unverified.")
-                               .arg(s.fullVerify ? QStringLiteral("Full") : QStringLiteral("Quick"));
+    if (cancelled) {
+        // Some packages exist, so the job is kept; the ones never reached are named.
+        QStringList skipped;
+        for (int n = 0; n < total; ++n)
+            if (outputs[n].isEmpty() && errors[n].isEmpty())
+                skipped << req.items[size_t(n)].contentId;
+        if (!skipped.isEmpty())
+            o.warnings.prepend(QStringLiteral("Cancelled before %1 DLC package%2 could be built: %3")
+                                   .arg(skipped.size()).arg(skipped.size() == 1 ? QString() : QStringLiteral("s"), skipped.join(QStringLiteral(", "))));
+    }
+    o.verification = cancelled ? Verification::Inconclusive : Verification::Passed;
+    o.verificationDetail = cancelled ? QStringLiteral("Cancelled: the %1 packages that were built passed the %2 structural verification; the rest were not built.")
+                                           .arg(ok).arg(s.fullVerify ? QStringLiteral("full") : QStringLiteral("quick"))
+                                     : QStringLiteral("%1 structural verification passed; DLC compatibility on the console is unverified.")
+                                           .arg(s.fullVerify ? QStringLiteral("Full") : QStringLiteral("Quick"));
     o.summary = status;
     o.warnings << QStringLiteral("Identifier mappings and structural checks do not confirm in-game DLC compatibility.");
     if (!report.isEmpty())

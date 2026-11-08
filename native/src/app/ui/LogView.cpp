@@ -5,6 +5,8 @@
 #include <QHeaderView>
 #include <QPainter>
 #include <QScrollBar>
+#include <QTextBlock>
+#include <QTextCursor>
 #include <QVBoxLayout>
 
 namespace fw::ui {
@@ -205,6 +207,204 @@ void ActivityWell::refresh()
         h->addWidget(m, 1);
         m_lines->addWidget(row);
     }
+}
+
+// ---- live console ---------------------------------------------------------------
+
+LogConsole::LogConsole(LogModel& model, QWidget* parent) : QPlainTextEdit(parent), m_model(model)
+{
+    setObjectName(QStringLiteral("fwConsole"));
+    setReadOnly(true);
+    setUndoRedoEnabled(false);
+    setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    setMaximumBlockCount(m_max);
+    setFont(font::mono());
+    document()->setDefaultFont(font::mono());
+    document()->setDocumentMargin(2);
+    setFrameShape(QFrame::NoFrame);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    setMinimumHeight(120);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setProperty("fwNoRing", true);
+    setAccessibleName(QStringLiteral("Live log"));
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        if (m_adjusting)
+            return;
+        const bool atEnd = value >= verticalScrollBar()->maximum() - 2;
+        if (atEnd != m_follow) {
+            m_follow = atEnd;
+            emit followChanged(m_follow);
+        }
+    });
+    connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int max) {
+        if (!m_follow)
+            return;
+        m_adjusting = true;
+        verticalScrollBar()->setValue(max);
+        m_adjusting = false;
+    });
+    connect(&m_model, &LogModel::rowsAppended, this, &LogConsole::onAppended);
+    connect(&m_model, &QAbstractItemModel::modelReset, this, [this] {
+        if (m_live)
+            refill();
+    });
+    refill();
+}
+
+void LogConsole::setJobId(const QString& jobId)
+{
+    if (m_job == jobId && m_live)
+        return;
+    m_job = jobId;
+    m_live = true;
+    refill();
+}
+
+void LogConsole::setMinimumLevel(LogLevel level)
+{
+    if (m_min == level)
+        return;
+    m_min = level;
+    if (m_live)
+        refill();
+}
+
+void LogConsole::setMaxLines(int n)
+{
+    m_max = std::max(50, n);
+    setMaximumBlockCount(m_max);
+}
+
+void LogConsole::setLive(bool live)
+{
+    if (m_live == live)
+        return;
+    m_live = live;
+    if (live)
+        refill();
+}
+
+void LogConsole::jumpToLatest()
+{
+    m_adjusting = true;
+    verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+    m_adjusting = false;
+    if (!m_follow) {
+        m_follow = true;
+        emit followChanged(true);
+    }
+}
+
+bool LogConsole::accepts(const LogRecord& r) const
+{
+    if (r.level < m_min)
+        return false;
+    if (!m_job.isEmpty() && r.jobId != m_job)
+        return false;
+    return true;
+}
+
+void LogConsole::clearLines()
+{
+    clear();
+    m_lines = 0;
+    m_lastSeq = 0;
+    emit lineCountChanged(0);
+}
+
+void LogConsole::refill()
+{
+    const bool wasFollowing = m_follow;
+    m_adjusting = true;
+    clear();
+    m_lines = 0;
+    m_lastSeq = 0;
+    // The console keeps the last m_max lines: start at the first row that fits.
+    int first = 0;
+    {
+        int kept = 0;
+        for (int r = m_model.rowCount() - 1; r >= 0; --r) {
+            const LogRecord* rec = m_model.recordAt(r);
+            if (rec && accepts(*rec) && ++kept >= m_max) {
+                first = r;
+                break;
+            }
+        }
+    }
+    for (int r = first; r < m_model.rowCount(); ++r)
+        if (const LogRecord* rec = m_model.recordAt(r); rec && accepts(*rec))
+            appendRecord(*rec);
+    if (const LogRecord* last = m_model.recordAt(m_model.rowCount() - 1))
+        m_lastSeq = std::max(m_lastSeq, last->seq);
+    m_adjusting = false;
+    m_follow = true;
+    jumpToLatest();
+    if (!wasFollowing)
+        emit followChanged(true);
+    emit lineCountChanged(m_lines);
+}
+
+void LogConsole::onAppended(int count)
+{
+    if (!m_live)
+        return;
+    const int rows = m_model.rowCount();
+    const int before = m_lines;
+    for (int r = std::max(0, rows - count); r < rows; ++r) {
+        const LogRecord* rec = m_model.recordAt(r);
+        if (!rec || rec->seq <= m_lastSeq)
+            continue;
+        m_lastSeq = rec->seq;
+        if (accepts(*rec))
+            appendRecord(*rec);
+    }
+    if (m_lines != before)
+        emit lineCountChanged(m_lines);
+}
+
+void LogConsole::appendRecord(const LogRecord& r)
+{
+    appendLine(r.time, r.level, r.message, m_job.isEmpty() ? r.source : QString());
+}
+
+void LogConsole::appendLine(const QDateTime& time, LogLevel level, const QString& message, const QString& source)
+{
+    QTextCursor c(document());
+    c.movePosition(QTextCursor::End);
+    if (m_lines > 0)
+        c.insertBlock();
+    QTextCharFormat dim;
+    dim.setForeground(color::fg_4);
+    dim.setFont(font::mono());
+    c.insertText(time.toString(QStringLiteral("HH:mm:ss.zzz")) + QStringLiteral("  "), dim);
+    if (!source.isEmpty()) {
+        QTextCharFormat src;
+        src.setForeground(color::fg_3);
+        src.setFont(font::mono());
+        c.insertText(QStringLiteral("[%1] ").arg(source), src);
+    }
+    QTextCharFormat msg;
+    msg.setFont(font::mono());
+    msg.setForeground(level >= LogLevel::Warning ? levelColor(level) : level == LogLevel::Info ? color::fg_1 : color::fg_3);
+    if (level >= LogLevel::Warning) {
+        QTextCharFormat tag = msg;
+        QFont f = font::mono();
+        f.setWeight(QFont::DemiBold);
+        tag.setFont(f);
+        c.insertText(level == LogLevel::Error ? QStringLiteral("ERROR  ") : QStringLiteral("WARN   "), tag);
+    }
+    QString text = message;
+    text.replace(u'\r', u' ');
+    c.insertText(text.trimmed(), msg);
+    m_lines = std::min(m_lines + 1, m_max);
+}
+
+QString LogConsole::plainLines() const
+{
+    return toPlainText();
 }
 
 } // namespace fw::ui

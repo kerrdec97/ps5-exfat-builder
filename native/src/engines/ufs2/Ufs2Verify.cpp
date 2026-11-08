@@ -315,7 +315,9 @@ Result<ExtractReport> extractTree(const SourceTree& tree, const QString& dest, c
             used.insert(nameKey(local));
             if (local != n.name)
                 rep.renamed << QStringLiteral("%1 → %2").arg(tree.relativePath(c), local);
-            const QString path = dirPath + u'/' + local;
+            // The reader already refuses '/' and '.'/'..' names; this keeps every
+            // extractor on the same guard should that ever change.
+            FW_TRY_ASSIGN(const QString path, childPathInside(dirPath, local));
             if (n.isDir()) {
                 if (!QDir().mkpath(path))
                     return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(path)));

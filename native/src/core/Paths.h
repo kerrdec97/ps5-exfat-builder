@@ -38,6 +38,9 @@ QString toolsDir();    // where user-chosen tool paths are remembered / extracte
 // Removes this app's own temp folders older than `maxAgeHours` (startup sweep,
 // audit M9). Returns how many were removed.
 int sweepStaleTemp(int maxAgeHours = 24);
+// The same sweep in another folder (the temporary folder chosen in Settings):
+// only "fw-" folders older than maxAgeHours go.
+int sweepStaleTempIn(const QString& folder, int maxAgeHours = 24);
 
 // Bytes used by this app's temp folders (Settings > Storage).
 qint64 tempUsageBytes();

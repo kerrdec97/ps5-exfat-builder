@@ -254,7 +254,7 @@ void DiagnosticsTab::run(bool speedTest)
         return;
     }
     m_jobId = r.value();
-    m_ctx.queue().holdQueue(false);
+    m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     setRunning(true);
     setStatus(QStringLiteral("%1 queued for %2:%3…").arg(speedTest ? QStringLiteral("Speed test") : QStringLiteral("Diagnostics"), host).arg(port));
 }

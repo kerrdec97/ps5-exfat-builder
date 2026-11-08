@@ -235,6 +235,7 @@ SettingsStore::SettingsStore(std::shared_ptr<const SettingsSchema> schema, QStri
 Status SettingsStore::load()
 {
     QVariantMap loaded;
+    QJsonObject foreign;
     QStringList warnings;
 
     QFile f(m_path);
@@ -261,7 +262,10 @@ Status SettingsStore::load()
             }
             for (auto it = values.begin(); it != values.end(); ++it) {
                 if (!m_schema->contains(it.key())) {
-                    warnings << QStringLiteral("Ignored unknown setting \"%1\".").arg(it.key());
+                    // Another build of the app (a private one with more
+                    // engines, a newer version) owns it: kept as it is.
+                    foreign.insert(it.key(), it.value());
+                    warnings << QStringLiteral("Kept the setting \"%1\" for the build that knows it.").arg(it.key());
                     continue;
                 }
                 auto norm = m_schema->normalize(it.key(), it.value().toVariant(), /*runValidator=*/false);
@@ -277,6 +281,7 @@ Status SettingsStore::load()
     {
         std::lock_guard lock(m_mutex);
         m_values = loaded;
+        m_foreign = foreign;
         m_warnings = warnings;
     }
     for (const auto& w : warnings)
@@ -289,6 +294,9 @@ Status SettingsStore::save() const
     QJsonObject values;
     {
         std::lock_guard lock(m_mutex);
+        // Settings of other builds first, so this build's own values win.
+        for (auto it = m_foreign.constBegin(); it != m_foreign.constEnd(); ++it)
+            values.insert(it.key(), it.value());
         for (auto it = m_values.cbegin(); it != m_values.cend(); ++it)
             values.insert(it.key(), QJsonValue::fromVariant(it.value()));
     }

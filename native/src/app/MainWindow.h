@@ -115,10 +115,17 @@ private:
     pages::Ps5ConnectPage* m_ps5Page = nullptr;
     pages::LogsPage* m_logsPage = nullptr;
     QSet<QString> m_openFolderWhenDone;
+    quint64 m_freeSpaceGen = 0; // refreshFreeSpace(): the newest probe wins
+    // The app-update lifecycle (one owner: the update slots):
+    //   Idle ─▶ Checking ─▶ UpToDate | Available ─▶ Downloading ─▶ PendingInstall ─▶ Installing
+    // A second check, download or install request while one is under way is ignored.
+    enum class UpdateState { Idle, Checking, UpToDate, Available, Downloading, PendingInstall, Installing };
+    UpdateState m_updateState = UpdateState::Idle;
     QString m_updateCheckId, m_updateDownloadId, m_reportJobId;
     QJsonObject m_release;
     QString m_pendingInstaller;
     QPointer<ui::InfoBar> m_updateBanner;
+    QPointer<ui::InfoBar> m_installBanner; // "Install after the queue finishes"
     QPointer<ui::InfoBar> m_crashBanner;
     QPointer<ui::Sheet> m_countdown;
     QTimer m_freeSpaceTimer;

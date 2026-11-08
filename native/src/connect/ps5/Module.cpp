@@ -709,8 +709,20 @@ public:
     }
     QJsonObject parameters() const override { return m_p; }
 
-    // The folder is normalised like typed input ("games" → "/games").
-    Status validate(const SettingsValues& s) const override { return needHost(endpointFor(m_p, s)); }
+    // The folder is normalised like typed input ("games" → "/games"). The
+    // speed test writes there, so a system folder needs the same confirmation
+    // as an upload.
+    Status validate(const SettingsValues& s) const override
+    {
+        FW_TRY(needHost(endpointFor(m_p, s)));
+        const QString folder = m_p.value(QStringLiteral("folder")).toString().trimmed();
+        if (!folder.isEmpty()) {
+            const QString dir = normalizeRemotePath(folder);
+            if (isProtectedRemotePath(dir) && !m_p.value(QStringLiteral("allowProtectedPaths")).toBool())
+                return Error(ErrorCode::PermissionDenied, protectedPathWarning(dir, QStringLiteral("write test files into")));
+        }
+        return success();
+    }
 
     Result<JobOutcome> run(JobContext& ctx) override
     {

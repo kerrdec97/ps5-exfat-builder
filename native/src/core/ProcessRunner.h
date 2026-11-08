@@ -3,8 +3,8 @@
 // Runs external tools (user-supplied Sony Publishing Tools, UFS2Tool, ...)
 // from a worker thread with line-by-line output, timeouts and cancellation that
 // stops the whole process tree (Windows job object + taskkill fallback; POSIX
-// process group). Output from Windows console tools is decoded with the OEM
-// code page (audit M10).
+// process group). Output is decoded as UTF-8 unless the spec asks for the OEM
+// or ANSI code page (Sony's tools and fpkg-cli print UTF-8).
 
 #include "core/Cancellation.h"
 #include "core/Result.h"
