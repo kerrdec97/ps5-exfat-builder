@@ -1,10 +1,12 @@
 name: Native (C++) release
 
 # Pushing a tag v5.* builds, tests and packages the native Farewell Edition on
-# Windows (the same workflow as every push), then publishes the installer, the
-# portable zip and SHA256SUMS.txt as a GitHub *pre-release*. A pre-release is
-# not "latest", so the legacy app's update check does not offer it; promote it
-# by hand once it has been tested on a real PC and console.
+# Windows (the same workflow as every push), then publishes the single-file
+# exe (the main download: one file, nothing to unzip or install), the
+# installer, the portable zip and SHA256SUMS.txt as a GitHub *pre-release*. A
+# pre-release is not "latest", so the legacy app's update check does not offer
+# it; promote it by hand once it has been tested on a real PC and console.
+# (The app's own update check looks for the installer asset; keep it.)
 
 on:
   push:
@@ -39,7 +41,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.exe dist/SHA256SUMS.txt \
+          # GitHub stores asset names without spaces ("exFAT.Image.Builder.exe"); the label keeps the readable name.
+          test -f "dist/exFAT Image Builder.exe"
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/exFAT Image Builder.exe#exFAT Image Builder.exe (single file: download and run)" \
+            dist/*-setup.exe dist/*.zip dist/SHA256SUMS.txt \
             --prerelease --verify-tag \
             --title "exFAT Image Builder ${GITHUB_REF_NAME#v} — Farewell Edition (native, pre-release)" \
             --notes-file native/RELEASE_NOTES.md

@@ -13,6 +13,7 @@ following third-party components. Full licence texts are in LICENSES/.
 | make_fself (john-tornblom, modified by Nazky) | The fake-SELF reader used by the Backport tab's game list (`engines/backport/SelfFormat.h`, `SelfReader.*`) is a port | GPL-3.0 |
 | LibProsperoPKG (SvenGDK) | Facts used by the FPKG engine: PS5 flat-path hash, UCP layout | GPL-3.0-or-later |
 | Lucide icons | Interface icons | ISC (LICENSES/Lucide-ISC.txt) |
+| Microsoft Visual C++ runtime (`vcruntime140*.dll`, `msvcp140*.dll`, ...) | Shipped next to the program inside the single-file exe | Microsoft Visual Studio redistributable files ("Distributable Code") |
 
 ## Bundled separate program: PS5 Backport engine
 

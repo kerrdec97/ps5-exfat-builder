@@ -6,6 +6,12 @@ update check does not offer it. Not yet run on the owner's PC, a PS5 console
 or with real Sony Publishing Tools — see *Before release* below. It becomes the
 "latest" release only after those checks.
 
+**Download `exFAT Image Builder.exe`** (GitHub lists it as
+`exFAT.Image.Builder.exe`) and run it: one file, nothing to unzip or install,
+no administrator rights, no VC++ Redistributable. Its first start unpacks the
+program once to `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime`. The
+installer and the portable zip are still there for those who prefer them.
+
 ## What it is
 
 A complete rebuild of the exFAT Image Builder as a native C++20 / Qt 6

@@ -2,8 +2,9 @@
 .SYNOPSIS
   PC acceptance run of the native Farewell Edition on a real Windows PC:
   build native/ with MSVC + Qt, run CTest, deploy the Qt runtime, run the
-  deployed exe's --self-test and --screenshot-pages, launch it for real and
-  check it is still running, package a portable zip and record SHA-256s.
+  deployed exe's --self-test and --screenshot-pages, pack the single-file exe
+  and run its --self-test, launch it for real and check it is still running,
+  package a portable zip and record SHA-256s.
 
 .DESCRIPTION
   Everything goes into one evidence folder (default: <repo>\_PC_TEST_EVIDENCE\
@@ -197,6 +198,36 @@ $p = Start-Process -FilePath $exe -ArgumentList '--self-test' -RedirectStandardO
     -RedirectStandardError (Join-Path $evidence 'self-test.err') -PassThru -Wait -NoNewWindow
 $results.selfTest = $(if ($p.ExitCode -eq 0) { 'passed' } else { "FAILED (exit $($p.ExitCode))" })
 
+# ---- 5b. Single-file exe: pack it, then --self-test from a fresh folder (first and cached start)
+Write-Step 'Single-file exe'
+$onefile = Join-Path $evidence 'exFAT Image Builder.exe'
+$code = Invoke-Logged 'onefile.log' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $native 'packaging\make-onefile.ps1') -DeployDir $dist -Output $onefile -BuildDir $BuildDir -Version $version }
+if ($code -ne 0) {
+    $results.onefile = 'FAILED (make-onefile.ps1, see onefile.log)'
+} else {
+    $runDir = Join-Path $evidence 'onefile-run'
+    New-Item -ItemType Directory -Force $runDir | Out-Null
+    Copy-Item $onefile $runDir -Force
+    $savedLocal = $env:LOCALAPPDATA
+    $env:LOCALAPPDATA = Join-Path $evidence 'onefile-cache' # never the user's own cache
+    if (Test-Path $env:LOCALAPPDATA) { Remove-Item -Recurse -Force $env:LOCALAPPDATA }
+    New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+    $times = @()
+    $ok = $true
+    foreach ($round in 'first', 'cached') {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $p = Start-Process -FilePath (Join-Path $runDir 'exFAT Image Builder.exe') -ArgumentList '--self-test' `
+            -RedirectStandardOutput (Join-Path $evidence "onefile-self-test-$round.json") `
+            -RedirectStandardError (Join-Path $evidence "onefile-self-test-$round.err") -PassThru -Wait -NoNewWindow
+        $sw.Stop()
+        $times += "$round start $($sw.ElapsedMilliseconds) ms"
+        if ($p.ExitCode -ne 0) { $ok = $false }
+    }
+    $env:LOCALAPPDATA = $savedLocal
+    $size = [math]::Round((Get-Item $onefile).Length / 1MB, 1)
+    $results.onefile = $(if ($ok) { "passed ($size MiB; --self-test $($times -join ', '))" } else { "FAILED (--self-test: $($times -join ', '))" })
+}
+
 # ---- 6. Screenshot every page --------------------------------------------------
 Write-Step 'Page screenshots'
 $pages = Join-Path $evidence 'pages'
@@ -238,8 +269,9 @@ $zip = Join-Path $evidence "exFAT-Image-Builder-Farewell-$version-win64-portable
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path $dist -DestinationPath $zip
 $sums = @()
-foreach ($f in @($exe, $zip)) {
-    $sums += ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() + '  ' + (Split-Path $f -Leaf))
+foreach ($f in @($onefile, $exe, $zip)) {
+    if (-not (Test-Path -LiteralPath $f)) { continue }
+    $sums +=((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() + '  ' + (Split-Path $f -Leaf))
 }
 Save-Text 'SHA256SUMS.txt' (($sums -join "`n") + "`n")
 $exeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower()
@@ -256,6 +288,7 @@ $summary = @"
 * Tool chain: $($tools.cl); $($tools.cmake); Ninja $($tools.ninja); Qt $($tools.qt) ($QtDir)
 * Executable: ``$exe``
 * **SHA-256 of the executable: ``$exeSha``**
+* Single-file exe (the release download): ``$onefile`` (SHA-256 in SHA256SUMS.txt)
 
 ## PC tests (this machine)
 
