@@ -1,9 +1,12 @@
 #include "app/services/GameInfo.h"
 
 #include "core/FileUtil.h"
+#include "engines/gameinfo/GameInfo.h"
+#include "engines/gameinfo/Version.h"
 
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -63,22 +66,8 @@ GameSummary GameSummary::fromJson(const QJsonObject& o)
     return s;
 }
 
-static QString hexVersionToDotted(const QJsonValue& v)
-{
-    // "0x0900000000000000" → "9.00"; numbers are accepted too.
-    QString s = v.isString() ? v.toString() : (v.isDouble() ? QString::number(qint64(v.toDouble())) : QString());
-    if (s.isEmpty())
-        return {};
-    bool ok = false;
-    const quint64 n = s.startsWith(QLatin1String("0x"), Qt::CaseInsensitive) ? s.mid(2).toULongLong(&ok, 16) : s.toULongLong(&ok);
-    if (!ok)
-        return {};
-    const int major = int((n >> 56) & 0xFF);
-    const int minor = int((n >> 48) & 0xFF);
-    return QStringLiteral("%1.%2").arg(major).arg(minor, 2, 16, QLatin1Char('0')).toUpper().replace(QLatin1Char('X'), QLatin1Char('x'));
-}
-
-GameSummary readGameSummary(const QString& folder, bool countFiles)
+GameSummary readGameSummary(const QString& folder, bool countFiles, const CancellationToken& token,
+                            const std::function<void(qint64, qint64)>& onProgress, bool findRoots)
 {
     GameSummary s;
     s.folder = folder;
@@ -97,7 +86,7 @@ GameSummary readGameSummary(const QString& folder, bool countFiles)
     s.isGame = QFile::exists(param) || hasEboot;
     if (QFile::exists(param)) {
         QFile f(param);
-        if (f.open(QIODevice::ReadOnly)) {
+        if (f.size() < 16 * 1024 * 1024 && f.open(QIODevice::ReadOnly)) {
             const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
             s.titleId = o.value(QStringLiteral("titleId")).toString();
             s.contentId = o.value(QStringLiteral("contentId")).toString();
@@ -109,24 +98,49 @@ GameSummary readGameSummary(const QString& folder, bool countFiles)
                 s.title = loc.value(QStringLiteral("en-US")).toObject().value(QStringLiteral("titleName")).toString();
             if (s.title.isEmpty())
                 s.title = o.value(QStringLiteral("titleName")).toString();
-            s.sdk = hexVersionToDotted(o.value(QStringLiteral("sdkVersion")));
-            s.requiredFw = hexVersionToDotted(o.value(QStringLiteral("requiredSystemSoftwareVersion")));
+            // Packed BCD ("0x1270000000000000" is 12.70), read like the legacy app.
+            if (const auto v = gameinfo::parseVersionField(o.value(QStringLiteral("sdkVersion"))); v.isValid())
+                s.sdk = v.toString();
+            for (const char* key : {"requiredSystemSoftwareVersion", "systemVersion"})
+                if (const auto v = gameinfo::parseVersionField(o.value(QLatin1String(key))); v.isValid()) {
+                    s.requiredFw = v.toString();
+                    break;
+                }
         }
     }
     if (s.titleId.isEmpty()) {
         static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);
-        const auto m = re.match(fi.fileName());
-        if (m.hasMatch())
+        if (const auto m = re.match(fi.fileName()); m.hasMatch())
             s.titleId = (m.captured(1) + m.captured(2)).toUpper();
     }
     if (s.title.isEmpty())
         s.title = fi.fileName();
+    if (!s.isGame && findRoots) {
+        // A wrapper folder: look for game folders below it instead of totalling
+        // what may be a whole drive (#84, #53).
+        const gameinfo::RootSearch r = gameinfo::findGameRoots(folder, token, 5, 4000);
+        s.gameRoots = r.candidates;
+        s.rootsTruncated = r.truncated;
+        s.cancelled = r.cancelled;
+        return s;
+    }
     if (countFiles) {
-        QDirIterator it(folder, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        QElapsedTimer clock;
+        clock.start();
+        qint64 lastReport = 0;
+        QDirIterator it(folder, QDir::Files | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
         while (it.hasNext()) {
+            if ((s.files & 0xFF) == 0 && token.isCancelled()) {
+                s.cancelled = true;
+                break;
+            }
             it.next();
             s.bytes += it.fileInfo().size();
             ++s.files;
+            if (onProgress && clock.elapsed() - lastReport >= 250) {
+                lastReport = clock.elapsed();
+                onProgress(s.files, s.bytes);
+            }
             if (s.files > 2'000'000)
                 break;
         }
@@ -134,40 +148,46 @@ GameSummary readGameSummary(const QString& folder, bool countFiles)
     return s;
 }
 
-QString defaultImageStem(const GameSummary& s)
-{
-    QString title = s.title;
-    title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9]+")), QStringLiteral("_"));
-    title = title.trimmed();
-    while (title.startsWith(u'_'))
-        title.remove(0, 1);
-    while (title.endsWith(u'_'))
-        title.chop(1);
-    QStringList parts;
-    if (!s.titleId.isEmpty())
-        parts << s.titleId;
-    if (!title.isEmpty())
-        parts << title;
-    if (!s.version.isEmpty())
-        parts << QStringLiteral("v%1").arg(s.version);
-    if (parts.isEmpty())
-        parts << QStringLiteral("image");
-    return sanitizeFileName(parts.join(u'_'));
-}
-
 GameInfoReader::GameInfoReader(QObject* parent) : QObject(parent)
 {
     qRegisterMetaType<GameSummary>();
 }
 
+GameInfoReader::~GameInfoReader()
+{
+    if (m_cancel)
+        m_cancel->cancel();
+}
+
+void GameInfoReader::cancel()
+{
+    if (m_cancel)
+        m_cancel->cancel();
+    ++m_generation;
+    m_busy = false;
+}
+
 void GameInfoReader::summarize(const QString& folder, bool countFiles)
 {
+    if (m_cancel)
+        m_cancel->cancel(); // the previous walk stops at its next file
+    m_cancel = std::make_shared<CancellationSource>();
+    const CancellationToken token = m_cancel->token();
     const quint64 gen = ++m_generation;
     m_busy = true;
+    const bool findRoots = m_findRoots;
     QPointer<GameInfoReader> self(this);
-    (void)QtConcurrent::run([self, folder, countFiles, gen] {
-        const GameSummary s = readGameSummary(folder, countFiles);
-        if (!self)
+    (void)QtConcurrent::run([self, folder, countFiles, gen, token, findRoots] {
+        const auto progress = [self, gen](qint64 files, qint64 bytes) {
+            if (!self)
+                return;
+            QMetaObject::invokeMethod(self.data(), [self, gen, files, bytes] {
+                if (self && gen == self->m_generation)
+                    emit self->progress(files, bytes);
+            }, Qt::QueuedConnection);
+        };
+        const GameSummary s = readGameSummary(folder, countFiles, token, progress, findRoots);
+        if (!self || token.isCancelled())
             return;
         QMetaObject::invokeMethod(self.data(), [self, s, gen] {
             if (!self || gen != self->m_generation)

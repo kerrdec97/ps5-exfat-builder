@@ -11,7 +11,7 @@
 // Kinds and parameter names used by the UI (to reconcile with the engines):
 //
 //   Image builds   image.exfat.build / image.ffpkg.build / image.pfs.build
-//                  {source, output (full file path), format ("ffpfsc" for PFS)}
+//                  {source, output (full file path), format ("ffpfsc" or "ffpfs" for PFS)}
 //   Image verify   image.<fmt>.verify   {image}  (no source: standalone integrity check)
 //   Image extract  image.<fmt>.extract  {image, output, deep (PFS)}
 //                  <fmt> from the extension: .exfat → exfat, .ffpkg → ffpkg,
@@ -77,6 +77,7 @@ namespace fw::jobs {
 inline const QString kFormatExfat = QStringLiteral("exfat");
 inline const QString kFormatFfpkg = QStringLiteral("ffpkg");
 inline const QString kFormatFfpfsc = QStringLiteral("ffpfsc");
+inline const QString kFormatFfpfs = QStringLiteral("ffpfs"); // uncompressed PFS folder image (image.pfs.build, format=ffpfs)
 
 QString imageBuildKind(const QString& format);     // "image.exfat.build", ...
 QString imageKindForFile(const QString& path, const QString& op); // op = "verify" | "extract"; "" if unknown

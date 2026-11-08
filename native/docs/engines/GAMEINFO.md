@@ -65,6 +65,7 @@ Children are visited in name order (legacy used unsorted `os.scandir` order).
 * `sanitizeTitle()` = legacy `sanitize_filename` (E:275): curly quotes/dashes/ellipsis normalised, ®©™℠ dropped, bullets to spaces, C0/C1 controls dropped, `\ / : * ? " < > |` and `& ^ % ! \` $` removed, whitespace collapsed, leading/trailing spaces **and dots** trimmed (so a trailing `…` disappears, as in the legacy), 80 code points (never splitting a surrogate pair), `game` when nothing is left.
 * Dump Rename presets (legacy keys): `ppsa` → `PPSA01234`; `ppsa_title` → `PPSA01234 Spider-Man`; `ppsa_title_v` → `PPSA01234 Spider-Man (01.050.000)`. ID upper-cased and sanitising on (the legacy defaults; neither had a UI).
 * `buildImageBaseName()` = `build_exfat_name` without `.exfat`.
+* `renderImageName()` = the legacy Build tab `_gen_name` (`ui/tab_unibuild.py:1318`) used by the Build page: presets `ppsa`, `ppsa_title`, `ppsa_title_ver` (default), `ppsa_title_ver_fw` (`… (FW<major>)`, firmware = the dump's `requiredSystemSoftwareVersion` or `build.firmwareOverride`), `folder` (the source folder's name, #43) and `custom` (template tokens `%TITLE% %PPSA% %VERSION% %FIRMWARE% %TYPE% %DATE%` plus `%FOLDER% %SDK%`, case-insensitive, replaced in one pass; then empty `()`/`[]`/`{}` removed in up to 4 passes, whitespace collapsed, spaces inside brackets trimmed, ` -_–—` stripped at both ends). Empty result → the folder name → `game`. Cleaned with `sanitizeImageName()`: unlike `sanitizeTitle()` it keeps Unicode letters, apostrophes and `& ^ % ! $` and removes only what Windows forbids (`< > : " / \ | ? *`, control characters), trims spaces/dots, caps at 150 code points and suffixes reserved device names with `_`.
 * `isValidContentId()` = `^[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_[0-9]{2}-[A-Z0-9]{16}$` (36 characters, `core/fpkg/param.py`); `titleIdFromContentId()` = characters 8–16.
 
 ## Covers (legacy `_normalize_cover` E:721)
@@ -96,6 +97,9 @@ Parameters: `mode`, `source`, `preset` (default the `library.renamePreset` setti
 | `library.folders` | General › Library | string list, empty | `library.scan` when `folders` is not given | `lib_folders` |
 | `library.renamePreset` | General › Library | enum `ppsa` / `ppsa_title` / `ppsa_title_v`, `ppsa_title_v` | `library.rename` when `preset` is not given | — (the legacy radio was not persisted; code default `ppsa_title_v`) |
 | `library.coverCacheFolder` | Storage › Folders (advanced) | folder, empty = `<local app data>/cache/covers` | `library.scan` | — (legacy fixed `~/exfat_builder_logs/covers_norm`) |
+| `build.namePreset` | Build › Output name | enum `ppsa_title_ver` / `ppsa_title_ver_fw` / `ppsa_title` / `ppsa` / `folder` / `custom`, `ppsa_title_ver` | Build page file name (`renderImageName`) | `name_preset` |
+| `build.nameTemplate` | Build › Output name (enabled for `custom`) | string, `%TITLE% (%VERSION%) (%FIRMWARE%) (%PPSA%)` | Build page file name | `name_custom_template` |
+| `build.firmwareOverride` | Build › Output name (advanced) | enum `auto` / `1`…`15`, `auto` | `%FIRMWARE%` and the firmware preset | — (the legacy Build tab override was not persisted) |
 
 `lib_auto_scan` and `dumps_last_src` are UI-side and not declared here (no consumer in this module).
 

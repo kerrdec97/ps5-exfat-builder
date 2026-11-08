@@ -45,11 +45,11 @@ void registerModule(ModuleContext& ctx)
         d.group = gImage;
         d.label = QStringLiteral("Cluster size");
         d.description = QStringLiteral(
-            "Allocation unit of the image. Automatic uses 64 KB when the average file is at least 1 MB and 32 KB "
-            "otherwise, like earlier versions of this app. PS5 loaders are tested with 32 KB and 64 KB.");
+            "ShadowMount+ 1.7 and later need 64 KB, which Automatic always uses. Other sizes are for other "
+            "loaders; earlier versions of this app picked 32 KB for games with many small files.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("auto");
-        d.choices = {{QStringLiteral("auto"), QStringLiteral("Automatic (32 or 64 KB)"), {}},
+        d.choices = {{QStringLiteral("auto"), QStringLiteral("Automatic (64 KB)"), {}},
                      {QStringLiteral("16384"), QStringLiteral("16 KB"), {}},
                      {QStringLiteral("32768"), QStringLiteral("32 KB"), {}},
                      {QStringLiteral("65536"), QStringLiteral("64 KB"), {}},

@@ -48,7 +48,7 @@ Result<std::unique_ptr<NodeReader>> openLocalNode(const SourceNode& node, const 
 
 struct WriterOptions {
     int sectorBytes = 512;
-    int clusterBytes = 0;          // 0 = automatic (legacy rule)
+    int clusterBytes = 0;          // 0 = automatic (kAutoClusterBytes)
     qint64 volumeBytes = 0;        // > 0: use this image size (legacy "image size override")
     SpareMode spare = SpareMode::Legacy;
     qint64 spareBytes = 0;         // SpareMode::Fixed
@@ -90,10 +90,11 @@ struct ImagePlan {
     }
 };
 
-// The legacy automatic cluster size (New-OsfExfatImage.ps1,
-// Get-OptimalExfatClusterSizeFromStats): 64 KiB when the average file is at
-// least 1 MiB, else 32 KiB.
-int legacyAutoClusterBytes(qint64 fileCount, qint64 totalBytes);
+// The automatic cluster size: always 64 KiB. ShadowMount+ 1.7 mounts exFAT
+// images through its LVD type-5 / BFS fast path only with 64 KiB clusters
+// (SMP 1.7 New-OsfExfatImage.ps1 and mkexfat.sh fix it at 65536). Earlier
+// versions of this app picked 32 KiB when the average file was below 1 MiB.
+inline constexpr int kAutoClusterBytes = 65536;
 // The legacy automatic image size (Get-OptimalImageSizeBytesFromStats).
 qint64 legacyImageBytes(const SourceTree& tree, int clusterBytes);
 

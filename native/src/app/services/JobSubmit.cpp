@@ -12,7 +12,7 @@ QString imageBuildKind(const QString& format)
 {
     if (format == kFormatFfpkg)
         return QStringLiteral("image.ffpkg.build");
-    if (format == kFormatFfpfsc)
+    if (format == kFormatFfpfsc || format == kFormatFfpfs)
         return QStringLiteral("image.pfs.build");
     return QStringLiteral("image.exfat.build");
 }
@@ -23,6 +23,8 @@ QString outputExtension(const QString& format)
         return QStringLiteral(".ffpkg");
     if (format == kFormatFfpfsc)
         return QStringLiteral(".ffpfsc");
+    if (format == kFormatFfpfs)
+        return QStringLiteral(".ffpfs");
     return QStringLiteral(".exfat");
 }
 
@@ -84,8 +86,8 @@ Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const Q
     QJsonObject p = extra;
     p.insert(QStringLiteral("source"), source);
     p.insert(QStringLiteral("output"), QDir(outputDir).filePath(fileName));
-    if (format == kFormatFfpfsc)
-        p.insert(QStringLiteral("format"), QStringLiteral("ffpfsc"));
+    if (format == kFormatFfpfsc || format == kFormatFfpfs)
+        p.insert(QStringLiteral("format"), format);
     return enqueue(ctx, imageBuildKind(format), p, overrides);
 }
 

@@ -181,15 +181,35 @@ private slots:
         QVERIFY(!checkVolumeLabel(QStringLiteral("A:B")).isEmpty());
     }
 
-    void legacyClusterRuleMatchesThePowerShellScript()
+    void automaticClusterIs64KiB()
     {
-        // Get-OptimalExfatClusterSizeFromStats.
-        QCOMPARE(legacyAutoClusterBytes(0, 0), 32768);
-        QCOMPARE(legacyAutoClusterBytes(10, 10 * kMiB), 65536);
-        QCOMPARE(legacyAutoClusterBytes(10, 10 * kMiB - 5), 65536);  // 1048575.5 rounds (to even) to 1048576
-        QCOMPARE(legacyAutoClusterBytes(10, 10 * kMiB - 10), 32768); // exactly 1048575
-        QCOMPARE(legacyAutoClusterBytes(10, 10 * kMiB - 15), 32768); // 1048574.5 rounds (to even) to 1048574
-        QCOMPARE(legacyAutoClusterBytes(1000, 50 * kMiB), 32768);
+        // ShadowMount+ 1.7 mounts exFAT through its LVD/BFS fast path only with
+        // 64 KiB clusters, so Automatic no longer picks 32 KiB for small files
+        // (the rule of earlier versions, Get-OptimalExfatClusterSizeFromStats).
+        QCOMPARE(kAutoClusterBytes, 65536);
+        SourceTree t;
+        t.nodes.resize(3);
+        t.nodes[0].isDir = true;
+        t.nodes[0].children = {1, 2};
+        for (int i = 1; i <= 2; ++i) {
+            t.nodes[size_t(i)].name = QStringLiteral("small%1.bin").arg(i);
+            t.nodes[size_t(i)].relativePath = t.nodes[size_t(i)].name;
+            t.nodes[size_t(i)].size = 10;
+            t.nodes[size_t(i)].parent = 0;
+        }
+        t.fileCount = 2;
+        t.totalBytes = 20; // average file far below 1 MiB
+        WriterOptions o;
+        auto plan = planImage(t, o);
+        QVERIFY2(plan.ok(), qPrintable(plan.ok() ? QString() : plan.error().toLogString()));
+        QCOMPARE(plan->geo.clusterBytes(), 65536);
+        QVERIFY(plan->clusterChoice.contains(QStringLiteral("automatic")));
+        // An explicit size is kept for experts; the log says what ShadowMount+ needs.
+        o.clusterBytes = 32768;
+        plan = planImage(t, o);
+        QVERIFY(plan.ok());
+        QCOMPARE(plan->geo.clusterBytes(), 32768);
+        QVERIFY(plan->clusterChoice.contains(QStringLiteral("ShadowMount+")));
     }
 
     void legacySizeRuleMatchesThePowerShellScript()

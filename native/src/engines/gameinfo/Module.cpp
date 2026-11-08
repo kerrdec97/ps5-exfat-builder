@@ -317,6 +317,71 @@ void registerModule(ModuleContext& ctx)
     }
     s.addLegacyKey(QStringLiteral("lib_folders"), keys::kLibraryFolders);
 
+    // ---- Build › Output name (legacy Build tab naming presets) --------------------------
+    {
+        SettingDef d;
+        d.key = keys::kNamePreset;
+        d.section = QStringLiteral("Build");
+        d.group = QStringLiteral("Output name");
+        d.label = QStringLiteral("File name");
+        d.description = QStringLiteral("How the Build page names new images. You can still edit the name for each job.");
+        d.type = SettingType::Enum;
+        d.defaultValue = imageNamePresetKey(ImageNamePreset::TitleIdTitleVersion);
+        d.choices = {{QStringLiteral("ppsa_title_ver"), QStringLiteral("Title ID, title and version"),
+                      QStringLiteral("PPSA01234 Spider-Man (01.050.000)")},
+                     {QStringLiteral("ppsa_title_ver_fw"), QStringLiteral("Title ID, title, version and firmware"),
+                      QStringLiteral("PPSA01234 Spider-Man (01.050.000) (FW4)")},
+                     {QStringLiteral("ppsa_title"), QStringLiteral("Title ID and title"), QStringLiteral("PPSA01234 Spider-Man")},
+                     {QStringLiteral("ppsa"), QStringLiteral("Title ID only"), QStringLiteral("PPSA01234")},
+                     {QStringLiteral("folder"), QStringLiteral("Source folder name"), QStringLiteral("The dump folder's own name")},
+                     {QStringLiteral("custom"), QStringLiteral("Custom template"), QStringLiteral("The template below")}};
+        d.order = 10;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kNameTemplate;
+        d.section = QStringLiteral("Build");
+        d.group = QStringLiteral("Output name");
+        d.label = QStringLiteral("Template");
+        d.description = QStringLiteral("Tokens: %TITLE% %PPSA% %VERSION% %FIRMWARE% %SDK% %TYPE% %DATE% %FOLDER%. "
+                                       "Empty brackets left by a missing value are removed.");
+        d.type = SettingType::String;
+        d.defaultValue = kDefaultImageNameTemplate;
+        d.enabledWhenKey = keys::kNamePreset;
+        d.enabledWhenValue = QStringLiteral("custom");
+        d.order = 11;
+        s.add(d);
+    }
+    {
+        SettingDef d;
+        d.key = keys::kFirmwareOverride;
+        d.section = QStringLiteral("Build");
+        d.group = QStringLiteral("Output name");
+        d.label = QStringLiteral("Firmware in names");
+        d.description = QStringLiteral("Automatic uses the system software the dump requires (param.json). "
+                                       "Choose a number to name images for another firmware.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("auto");
+        d.choices = {{QStringLiteral("auto"), QStringLiteral("Automatic"), {}}};
+        for (int fw = 1; fw <= 15; ++fw)
+            d.choices.push_back({QString::number(fw), QStringLiteral("FW%1").arg(fw), {}});
+        d.advanced = true;
+        d.order = 12;
+        s.add(d);
+    }
+    s.addLegacyKey(QStringLiteral("name_preset"), keys::kNamePreset, [](const QVariant& v) -> std::optional<QVariant> {
+        const auto p = imageNamePresetFromKey(v.toString());
+        if (!p)
+            return std::nullopt;
+        return QVariant(imageNamePresetKey(*p));
+    });
+    s.addLegacyKey(QStringLiteral("name_custom_template"), keys::kNameTemplate,
+                   [](const QVariant& v) -> std::optional<QVariant> {
+                       const QString t = v.toString().trimmed();
+                       return t.isEmpty() ? std::nullopt : std::optional<QVariant>(t);
+                   });
+
     ctx.jobs.add(jobkinds::kLibraryScan, QStringLiteral("Scan library"),
                  [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new LibraryScanJob(p)); });
     ctx.jobs.add(jobkinds::kLibraryRename, QStringLiteral("Rename dumps"),

@@ -16,6 +16,12 @@ inline const QString kLibraryFolders = QStringLiteral("library.folders");
 inline const QString kRenamePreset = QStringLiteral("library.renamePreset");
 // Where normalised covers are kept; empty = the app's cache folder.
 inline const QString kCoverCacheFolder = QStringLiteral("library.coverCacheFolder");
+// Build page file names (legacy name_preset / name_custom_template, see
+// Naming.h renderImageName): preset key, custom template, and the firmware
+// used for %FIRMWARE% ("auto" = the dump's required system software, or 1..15).
+inline const QString kNamePreset = QStringLiteral("build.namePreset");
+inline const QString kNameTemplate = QStringLiteral("build.nameTemplate");
+inline const QString kFirmwareOverride = QStringLiteral("build.firmwareOverride");
 } // namespace keys
 
 namespace jobkinds {

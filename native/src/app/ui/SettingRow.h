@@ -103,6 +103,9 @@ public:
     SettingRow* row(const QString& key) const { return m_rows.value(key); }
     QStringList keys() const { return m_order; }
     void setGroupCards(bool cards) { m_cards = cards; } // before build(); default: cards per group
+    // Before build(): only keys equal to, or starting with, one of these
+    // ("exfat.", "verification.mode"); empty = every perJob key of the sections.
+    void setKeyFilter(const QStringList& keysOrPrefixes) { m_include = keysOrPrefixes; }
     void build();
     QVariant effectiveValue(const QString& key) const;
 signals:
@@ -113,7 +116,7 @@ private:
     void refreshRow(const QString& key);
     void refreshDependencies();
     AppContext& m_ctx;
-    QStringList m_sections, m_exclude, m_order;
+    QStringList m_sections, m_exclude, m_order, m_include;
     QHash<QString, SettingRow*> m_rows;
     QVariantMap m_overrides;
     QHash<QString, QString> m_errors;

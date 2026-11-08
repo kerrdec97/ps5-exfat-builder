@@ -67,4 +67,49 @@ QString buildImageBaseName(const NameParts& parts);
 // it is fine.
 QString folderNameProblem(const QString& name);
 
+// ---- image file names (Build page) ------------------------------------------------
+// The legacy Build tab presets (ui/tab_unibuild.py _gen_name; keys as in the
+// legacy name_preset setting) plus "folder" (the source folder's own name).
+enum class ImageNamePreset {
+    TitleId,                     // "ppsa"              PPSA01234
+    TitleIdTitle,                // "ppsa_title"        PPSA01234 Spider-Man
+    TitleIdTitleVersion,         // "ppsa_title_ver"    PPSA01234 Spider-Man (01.050.000)   (default)
+    TitleIdTitleVersionFirmware, // "ppsa_title_ver_fw" PPSA01234 Spider-Man (01.050.000) (FW4)
+    Folder,                      // "folder"            the source folder name
+    Custom,                      // "custom"            the template below
+};
+QString imageNamePresetKey(ImageNamePreset preset);
+std::optional<ImageNamePreset> imageNamePresetFromKey(const QString& key);
+
+// The legacy default template (name_custom_template).
+inline const QString kDefaultImageNameTemplate = QStringLiteral("%TITLE% (%VERSION%) (%FIRMWARE%) (%PPSA%)");
+
+struct ImageNameFields {
+    QString titleId;    // %PPSA%
+    QString title;      // %TITLE%
+    QString version;    // %VERSION%
+    QString firmware;   // major of the required system software ("4", "10"); %FIRMWARE% = "FW4"
+    QString sdk;        // %SDK% ("9.00")
+    QString type;       // %TYPE% (legacy labels: exFAT, ffpkg, PFS, FPKG)
+    QString folderName; // %FOLDER%, and the fallback when nothing else is known
+    QString date;       // %DATE% (yyyy-MM-dd); empty = today
+};
+
+// Legacy _gen_name(): the preset (or, for Custom, the template with the tokens
+// %TITLE% %PPSA% %VERSION% %FIRMWARE% %TYPE% %DATE% and the new %FOLDER% %SDK%,
+// case-insensitive) → empty (), [] and {} removed, whitespace collapsed,
+// spaces inside brackets trimmed, " -_–—" stripped at both ends → the folder
+// name when nothing is left → sanitizeImageName(). Never empty ("game").
+QString renderImageName(ImageNamePreset preset, const QString& customTemplate, const ImageNameFields& fields);
+
+// File-name cleanup for image names: keeps Unicode letters, apostrophes and
+// brackets ("Ghost of Yōtei", "Demon's Souls"), and removes only what Windows
+// forbids in a file name (< > : " / \ | ? * and control characters).
+// Whitespace is collapsed, spaces and dots are trimmed at both ends, reserved
+// device names get a trailing "_", and the name is capped at 150 characters.
+QString sanitizeImageName(const QString& name);
+
+// "4.50" → "4", "10.00" → "10"; empty for anything else.
+QString firmwareMajor(const QString& systemVersion);
+
 } // namespace fw::gameinfo
