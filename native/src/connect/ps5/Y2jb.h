@@ -39,6 +39,17 @@ QString y2jbRegionName(Y2jbRegion region); // "USA", "EU", "JP"
 std::optional<Y2jbRegion> y2jbRegionFromName(const QString& name);
 QList<Y2jbRegion> allY2jbRegions();
 
+// The YouTube app version Y2JB needs per firmware (Gezine/Y2JB 1.6 README;
+// research §8). Install exactly that version, then block its updates.
+struct Y2jbYoutubeVersion {
+    QString firmwareFrom; // "4.03"
+    QString firmwareTo;   // "12.40"
+    QString youtube;      // "v01.000.003"
+};
+const QList<Y2jbYoutubeVersion>& y2jbYoutubeVersions();
+// The version for a firmware such as "12.60" or "13.2"; empty outside 4.03–13.60.
+QString y2jbYoutubeVersionFor(const QString& firmware);
+
 inline constexpr const char* kBlockedContentVersion = "99.999.999";
 inline constexpr const char* kBlockedVersionFileUri = "http://127.0.0.2";
 

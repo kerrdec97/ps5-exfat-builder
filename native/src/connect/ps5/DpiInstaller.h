@@ -24,16 +24,27 @@ struct DpiResponse {
     bool accepted = false;
 };
 
-// Legacy success rule was "HTTP 200, or the body mentions success/install".
-// Kept, except that a 4xx/5xx status or a body that mentions a failure or an
-// error is never taken as success.
+// etaHEN DPIv2 (Source Code/util/source/DirectPKGInstaller.cpp) always answers
+// HTTP 200 with plain text: "SUCCESS: PKG installation started ...",
+// "FAILED: Install failed with error <name>, code <n> (0x...) ..." or
+// "No data received" (research §7). Accepted only for a 2xx status whose body
+// starts with SUCCESS, or (another installer) names a success and no failure;
+// "No data received", an empty body and any failure are refused. The legacy
+// rule accepted every HTTP 200.
 bool dpiAccepted(int status, const QByteArray& body);
+// User-facing reason for a refused reply: the FAILED text with its code, or
+// what came back instead ("the installer received no data").
+QString dpiFailureReason(int status, const QByteArray& body);
 
 struct DpiOptions {
     int connectTimeoutMs = 10000;
     int idleTimeoutMs = 30000;  // legacy: 30 s HTTP timeout
     int chunkSize = 512 * 1024;
 };
+
+// POST /cleartmp: DPIv2 empties /user/data/tmp, where uploads are staged.
+// Best effort after a failed or cancelled install.
+Status clearDpiTemp(const QString& host, quint16 port, const DpiOptions& options = {});
 
 // progress(sent, total) counts package bytes only.
 Result<DpiResponse> installPackage(const QString& host, quint16 port, const QString& pkgPath,

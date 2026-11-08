@@ -7,12 +7,16 @@
 #include "app/pages/Ps5ConnectPage.h"
 #include "app/pages/ps5/AmprTab.h"
 #include "app/pages/ps5/AutoloaderTab.h"
+#include "app/pages/ps5/ConsoleHero.h"
 #include "app/pages/ps5/FakelibTab.h"
 #include "app/pages/ps5/ManagerTab.h"
+#include "app/pages/ps5/ShadowMountTab.h"
+#include "app/pages/ps5/TransferPanel.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Theme.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/ps5/Module.h"
+#include "connect/ps5/MountConfig.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
@@ -190,19 +194,19 @@ private slots:
         tab.table()->selectRow(0);
         tab.toggleSelected();
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && badgeText(tab.table(), 0, 0) == QStringLiteral("Disabled"), 10000);
-        QVERIFY(QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libSceAmpr.sprx"))));
+        QVERIFY(QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))));
 
         tab.table()->selectRow(0);
         const QString newer = fresh(QStringLiteral("fl-newer")) + QStringLiteral("/libSceAmpr.sprx");
         QVERIFY(writeBytes(newer, QByteArray("\x4f\x15\x3d\x1d", 4) + QByteArray(10, 'n')));
         tab.replaceSelected(newer, false);
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy(), 10000);
-        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libSceAmpr.sprx"))).left(4), QByteArray("\x4f\x15\x3d\x1d", 4));
+        QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))).left(4), QByteArray("\x4f\x15\x3d\x1d", 4));
 
         tab.table()->selectRow(0);
         tab.removeSelected();
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && tab.table()->rowCount() == 0, 10000);
-        QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libSceAmpr.sprx"))));
+        QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))));
 
         // A file without an ELF/SELF header needs the user's answer; without it nothing is uploaded.
         const QString odd = fresh(QStringLiteral("fl-odd")) + QStringLiteral("/libOdd.prx");
@@ -305,10 +309,28 @@ private slots:
         const QString written = waitForSuccess(m_ctx->queue(), forced);
         QVERIFY2(written.isEmpty(), qPrintable(written));
         QVERIFY(readAll(plain + QStringLiteral("/ampr_emu.index")).startsWith("AMPRIDX3"));
+
+        // ampr_emu 0.4.2.1 asset packs are bound to the index they came with: refused unless forced.
+        const QString packed = fresh(QStringLiteral("ampr-packed"));
+        QVERIFY(writeBytes(packed + QStringLiteral("/eboot.bin"), "e"));
+        QVERIFY(writeBytes(packed + QStringLiteral("/fakelib/libSceAmpr.sprx"), kElf));
+        QVERIFY(writeBytes(packed + QStringLiteral("/ampr_assets.index"), "pack"));
+        QVERIFY(writeBytes(packed + QStringLiteral("/ampr_emu.index"), "original"));
+        QVERIFY(tab.submitLocal(packed, false).isEmpty());
+        QCOMPARE(readAll(packed + QStringLiteral("/ampr_emu.index")), QByteArray("original"));
+        const QString overridden = tab.submitLocal(packed, false, true);
+        QVERIFY(!overridden.isEmpty());
+        QVERIFY(waitForSuccess(m_ctx->queue(), overridden).isEmpty());
+        QVERIFY(readAll(packed + QStringLiteral("/ampr_emu.index")).startsWith("AMPRIDX3"));
+        QVERIFY(writeBytes(app0 + QStringLiteral("/ampr_assets.index.runtime"), "pack"));
+        const QString onConsole = tab.submitConsole(QStringLiteral("/g/app0"));
+        QVERIFY(!onConsole.isEmpty());
+        const QString refused = waitForSuccess(m_ctx->queue(), onConsole);
+        QVERIFY2(refused.contains(QStringLiteral("asset packs")), qPrintable(refused));
         m_ctx->queue().clearFinished();
     }
 
-    void pageHasTheToolTabsAndDemoStates()
+    void pageGroupsToolsAndDemoStates()
     {
         MainWindow window(*m_ctx);
         window.resize(1440, 920);
@@ -317,45 +339,171 @@ private slots:
         auto* page = qobject_cast<pages::Ps5ConnectPage*>(window.page(QStringLiteral("ps5")));
         QVERIFY(page);
         window.navigate(QStringLiteral("ps5"));
-        auto* tabs = page->findChild<QTabBar*>();
+        auto* tabs = page->findChild<QTabBar*>(QStringLiteral("ps5Groups"));
         QVERIFY(tabs);
+        QCOMPARE(tabs, page->groupBar());
         QStringList titles;
         for (int i = 0; i < tabs->count(); ++i)
             titles << tabs->tabText(i);
-        for (const QString& t : {QStringLiteral("Manager"), QStringLiteral("Fakelib"), QStringLiteral("Autoloader"), QStringLiteral("AMPR index")})
-            QVERIFY2(titles.contains(t), qPrintable(titles.join(u',')));
-        QStringList states = page->demoStates();
-        QCOMPARE(states.removeDuplicates(), qsizetype(0)); // every tab carries a key; no state twice
-        const QString shots = qEnvironmentVariable("FW_TAB_SHOTS");
-        for (const QString& key : {QStringLiteral("manager"), QStringLiteral("fakelib"), QStringLiteral("autoloader"), QStringLiteral("ampr")}) {
-            QVERIFY(states.contains(key));
-            // Stable key in the tab data; other pages open the tab by key.
-            int keyed = -1;
-            for (int i = 0; i < tabs->count(); ++i)
-                if (tabs->tabData(i).toString() == key)
-                    keyed = i;
-            QVERIFY(keyed > 0);
+        QCOMPARE(titles, (QStringList{QStringLiteral("Files"), QStringLiteral("Payloads"), QStringLiteral("Logs"), QStringLiteral("ShadowMount+"),
+                                      QStringLiteral("Console tools")}));
+        QCOMPARE(page->currentTool(), QStringLiteral("ftp"));
+        // Every stable key other pages use still opens its tool (Home: "payloads", "diagnostics"; Backport: "klog").
+        const QStringList keys = {QStringLiteral("ftp"), QStringLiteral("manager"), QStringLiteral("payloads"), QStringLiteral("klog"),
+                                  QStringLiteral("smplog"), QStringLiteral("crashdumps"), QStringLiteral("mount"), QStringLiteral("fakelib"),
+                                  QStringLiteral("autoloader"), QStringLiteral("ampr"), QStringLiteral("y2jb"), QStringLiteral("install"),
+                                  QStringLiteral("diagnostics")};
+        for (const QString& key : keys) {
             window.navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), key}});
-            QCOMPARE(tabs->currentIndex(), keyed);
-            window.navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("ftp")}});
-            QCOMPARE(tabs->currentIndex(), 0);
+            QCOMPARE(page->currentTool(), key);
+        }
+        window.navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("logs")}});
+        QCOMPARE(page->currentGroup(), QStringLiteral("logs"));
+        window.navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), 3}}); // older callers: a group index
+        QCOMPARE(page->currentGroup(), QStringLiteral("shadowmount"));
+
+        QStringList states = page->demoStates();
+        QCOMPARE(states.removeDuplicates(), qsizetype(0));
+        for (const QString& key : {QStringLiteral("manager"), QStringLiteral("fakelib"), QStringLiteral("autoloader"), QStringLiteral("ampr"),
+                                   QStringLiteral("mount"), QStringLiteral("smplog"), QStringLiteral("crashdumps"), QStringLiteral("install")}) {
+            QVERIFY2(states.contains(key), qPrintable(key));
             page->applyDemoState(key);
-            QCOMPARE(tabs->currentIndex(), keyed);
-            QCOMPARE(tabs->tabText(tabs->currentIndex()).toLower().left(4), key.left(4));
+            QCOMPARE(page->currentTool(), key);
             pages::ConsoleToolTab* tool = nullptr;
             for (auto* t : page->findChildren<pages::ConsoleToolTab*>())
                 if (t->demoKey() == key)
                     tool = t;
             QVERIFY(tool);
             QVERIFY(tool->isVisible());
-            if (!shots.isEmpty()) { // full-height render of the tab for review
-                QDir().mkpath(shots);
-                tool->resize(tool->width(), std::max(tool->height(), tool->sizeHint().height()));
-                QVERIFY(tool->grab().save(QDir(shots).filePath(key + QStringLiteral(".png"))));
-            }
             page->clearDemoState();
             QCOMPARE(tabs->currentIndex(), 0);
+            QCOMPARE(page->currentTool(), QStringLiteral("ftp"));
         }
+        // The browser example: a listing (folders first) and example transfers; cleared after.
+        page->applyDemoState(QStringLiteral("ftp"));
+        QVERIFY(page->remoteTable()->rowCount() > 3);
+        QCOMPARE(page->remoteNames().first(), QStringLiteral("backports"));
+        QCOMPARE(page->transfers()->rowCount(), 0); // example rows are not queue rows
+        QCOMPARE(page->hero()->state(), pages::ConsoleHero::State::Connected);
+        page->clearDemoState();
+        QCOMPARE(page->remoteTable()->rowCount(), 0);
+        QCOMPARE(page->hero()->state(), pages::ConsoleHero::State::Offline);
+
+        // Review shots of every state, wide and narrow (FW_PS5_SHOTS=<folder>).
+        const QString shots = qEnvironmentVariable("FW_PS5_SHOTS");
+        if (!shots.isEmpty()) {
+            QDir().mkpath(shots);
+            for (const QSize size : {QSize(1440, 920), QSize(1100, 760)}) {
+                window.resize(size);
+                for (const QString& state : QStringList{QString()} + states) {
+                    if (!state.isEmpty())
+                        page->applyDemoState(state);
+                    for (int i = 0; i < 8; ++i)
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                    QVERIFY(window.grab().save(QDir(shots).filePath(QStringLiteral("%1-%2.png").arg(size.width()).arg(state.isEmpty() ? QStringLiteral("base") : state))));
+                    if (QWidget* content = page->scrollArea()->widget()) // the whole page, below the fold too
+                        QVERIFY(content->grab().save(QDir(shots).filePath(QStringLiteral("%1-%2-full.png").arg(size.width()).arg(state.isEmpty() ? QStringLiteral("base") : state))));
+                    if (!state.isEmpty())
+                        page->clearDemoState();
+                }
+            }
+            window.resize(1440, 920);
+        }
+    }
+
+    // The browser against an ftpsrv-like server: identity in the console card,
+    // folders first in both sort directions, one transfer row per uploaded file.
+    void browserUploadsAndListsOnFtpsrv()
+    {
+        const QString root = fresh(QStringLiteral("ftpsrv-root"));
+        QVERIFY(writeBytes(root + QStringLiteral("/data/etaHEN/games/zeta.exfat"), QByteArray(5000, 'z')));
+        QVERIFY(writeBytes(root + QStringLiteral("/data/etaHEN/games/alpha.bin"), QByteArray(10, 'a')));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/data/etaHEN/games/Middle")));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.ftpsrv = true;
+        FakeFtpServer srv(o);
+        MainWindow window(*m_ctx);
+        window.resize(1440, 920);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto* page = qobject_cast<pages::Ps5ConnectPage*>(window.page(QStringLiteral("ps5")));
+        window.navigate(QStringLiteral("ps5"));
+        (void)m_ctx->settings().setValue(ps5::keys::kConsoleIp, QStringLiteral("127.0.0.1"));
+        (void)m_ctx->settings().setValue(ps5::keys::kFtpPort, int(srv.port()));
+        (void)m_ctx->settings().setValue(ps5::keys::kGamesFolder, QStringLiteral("/data/etaHEN/games/"));
+        page->session()->connectTo(QStringLiteral("127.0.0.1"), srv.port(), 5000, true);
+        QTRY_VERIFY_WITH_TIMEOUT(page->isReachable(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(page->hero()->chip(QStringLiteral("ftp"))->detail() == QStringLiteral("ftpsrv v0.21.1"), 10000);
+        QCOMPARE(page->hero()->state(), pages::ConsoleHero::State::Connected);
+        QTRY_VERIFY_WITH_TIMEOUT(page->remoteTable()->rowCount() == 3, 10000);
+        QCOMPARE(page->remoteNames(), (QStringList{QStringLiteral("Middle"), QStringLiteral("alpha.bin"), QStringLiteral("zeta.exfat")}));
+        page->remoteTable()->sortByColumn(1, Qt::DescendingOrder); // by size, largest first
+        QCOMPARE(page->remoteNames(), (QStringList{QStringLiteral("Middle"), QStringLiteral("zeta.exfat"), QStringLiteral("alpha.bin")}));
+        page->remoteTable()->sortByColumn(0, Qt::AscendingOrder);
+
+        // Two files: two transfer rows, each with its own progress, then cleared.
+        const QString local = fresh(QStringLiteral("ftpsrv-up"));
+        QVERIFY(writeBytes(local + QStringLiteral("/one.bin"), QByteArray(70000, '1')));
+        QVERIFY(writeBytes(local + QStringLiteral("/eboot.bin"), QByteArray("\x4f\x15\x3d\x1d", 4) + QByteArray(9000, 'e'))); // fself: SELF mode is off
+        m_ctx->queue().clearFinished();
+        page->uploadFiles({local + QStringLiteral("/one.bin"), local + QStringLiteral("/eboot.bin")});
+        QTRY_COMPARE_WITH_TIMEOUT(page->transfers()->rowCount(), 2, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(page->transfers()->activeCount() == 0, 30000);
+        QCOMPARE(page->transfers()->row(0)->stateText(), QStringLiteral("Done"));
+        QCOMPARE(page->transfers()->row(1)->stateText(), QStringLiteral("Done"));
+        QCOMPARE(readAll(root + QStringLiteral("/data/etaHEN/games/one.bin")), QByteArray(70000, '1'));
+        QCOMPARE(readAll(root + QStringLiteral("/data/etaHEN/games/eboot.bin")).size(), qsizetype(9004));
+        QVERIFY(srv.sawCommand(QStringLiteral("SELF")));
+        page->transfers()->clearFinished();
+        QTRY_COMPARE_WITH_TIMEOUT(page->transfers()->rowCount(), 0, 5000);
+        page->session()->disconnect();
+        QTRY_VERIFY_WITH_TIMEOUT(!page->isReachable(), 10000);
+        m_ctx->queue().clearFinished();
+    }
+
+    // ShadowMount+ settings: load a 1.7 flat config, change one value, push
+    // only that line; unknown keys and comments stay, kstuff_* go.
+    void shadowMountTabPushesOnlyChangedKeys()
+    {
+        const QString root = fresh(QStringLiteral("smp-tab"));
+        const QByteArray original = "# my config\ndebug=1\nfuture_option = keep\nkstuff_delay=PPSA01234:30\nscanpath=/mnt/usb0/games\n";
+        QVERIFY(writeBytes(root + QStringLiteral("/data/shadowmount/config.ini"), original));
+        QVERIFY(writeBytes(root + QStringLiteral("/data/shadowmount/debug.log"), "ShadowMount+ v1.7beta11 exFAT/UFS/PFS/LVD/MD. FW: 9.60.\n"));
+        FakeFtpServer::Options o;
+        o.root = root;
+        FakeFtpServer srv(o);
+        auto ep = fakeConsole(srv.port());
+        pages::ShadowMountTab tab(*m_ctx, [ep] {
+            auto e = ep();
+            e.smpApiPort = 1; // no API: version from the debug.log banner
+            return e;
+        });
+        tab.resize(1100, 900);
+        tab.load();
+        QTRY_VERIFY_WITH_TIMEOUT(tab.hasLoaded() && !tab.isBusy(), 15000);
+        QCOMPARE(tab.format(), ps5::SmpConfigFormat::Flat17);
+        QCOMPARE(tab.value(QStringLiteral("scan_interval_seconds")), QStringLiteral("15")); // the 1.7 default, not in the file
+        QVERIFY(tab.changes().isEmpty());
+        tab.setValue(QStringLiteral("scan_interval_seconds"), QStringLiteral("30"));
+        QCOMPARE(tab.changes(), (ps5::MountConfigValues{{QStringLiteral("scan_interval_seconds"), QStringLiteral("30")}}));
+        tab.push(true);
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && tab.statusText().contains(QStringLiteral("written")), 15000);
+        QCOMPARE(readAll(root + QStringLiteral("/data/shadowmount/config.ini")),
+                 QByteArray("# my config\ndebug=1\nfuture_option = keep\nscanpath=/mnt/usb0/games\nscan_interval_seconds=30\n"));
+        QVERIFY(tab.changes().isEmpty()); // reloaded after the push
+        // Back to the default: the line goes.
+        tab.resetToDefault(QStringLiteral("scan_interval_seconds"));
+        QCOMPARE(tab.changes(), (ps5::MountConfigValues{{QStringLiteral("scan_interval_seconds"), QString()}}));
+        tab.push(true);
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && tab.changes().isEmpty(), 15000);
+        QVERIFY(!readAll(root + QStringLiteral("/data/shadowmount/config.ini")).contains("scan_interval_seconds"));
+        // Changed on the console meanwhile: refused, nothing written.
+        QVERIFY(writeBytes(root + QStringLiteral("/data/shadowmount/config.ini"), "debug=0\n"));
+        tab.setValue(QStringLiteral("quiet_mode"), QStringLiteral("1"));
+        tab.push(true);
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && tab.statusText().contains(QStringLiteral("changed on the console")), 15000);
+        QCOMPARE(readAll(root + QStringLiteral("/data/shadowmount/config.ini")), QByteArray("debug=0\n"));
     }
 };
 

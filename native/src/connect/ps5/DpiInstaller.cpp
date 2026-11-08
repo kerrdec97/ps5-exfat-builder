@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QTcpSocket>
 
 #include <algorithm>
@@ -94,10 +95,53 @@ QString safeFileName(const QString& name)
 
 bool dpiAccepted(int status, const QByteArray& body)
 {
-    const QByteArray low = body.toLower();
-    if (status >= 400 || low.contains("fail") || low.contains("error"))
+    if (status < 200 || status >= 300)
         return false;
-    return status == 200 || (status >= 200 && status < 300) || low.contains("success") || low.contains("install");
+    const QByteArray low = body.trimmed().toLower();
+    if (low.startsWith("success"))
+        return true;
+    if (low.isEmpty() || low.contains("fail") || low.contains("error") || low.contains("no data"))
+        return false;
+    return low.contains("success");
+}
+
+QString dpiFailureReason(int status, const QByteArray& body)
+{
+    const QString text = QString::fromUtf8(body).trimmed();
+    if (text.isEmpty())
+        return status >= 200 && status < 300 ? QStringLiteral("the installer gave an empty answer.")
+                                             : QStringLiteral("HTTP %1 without an explanation.").arg(status);
+    if (text.contains(QLatin1String("No data received"), Qt::CaseInsensitive))
+        return QStringLiteral("the installer received no package data.");
+    // "FAILED: Install failed with error <name>, code <n> (0x...) for file: ..."
+    static const QRegularExpression code(QStringLiteral("error\\s+(\\S+?),?\\s+code\\s+(-?\\d+)\\s*\\((0x[0-9a-fA-F]+)\\)"),
+                                         QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = code.match(text); m.hasMatch())
+        return QStringLiteral("%1 (code %2, %3).").arg(m.captured(1), m.captured(2), m.captured(3));
+    QString first = text.section(u'\n', 0, 0).left(160);
+    if (status >= 300 || status < 200)
+        first = QStringLiteral("HTTP %1: %2").arg(status).arg(first);
+    return first.endsWith(u'.') ? first : first + u'.';
+}
+
+Status clearDpiTemp(const QString& host, quint16 port, const DpiOptions& opt)
+{
+    QTcpSocket s;
+    FW_TRY(detail::connectSocket(s, host, port, opt.connectTimeoutMs, {}, QStringLiteral("Direct Package Installer")));
+    s.write("POST /cleartmp HTTP/1.1\r\nHost: " + host.toUtf8() + ':' + QByteArray::number(port)
+            + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    s.flush();
+    QByteArray buf;
+    const WaitResult w = waitUntil(
+        [&] {
+            buf += s.readAll();
+            return buf.contains("\r\n\r\n") || s.state() != QAbstractSocket::ConnectedState;
+        },
+        5000, {}, {&s});
+    s.abort();
+    if (w != WaitResult::Ready || !buf.startsWith("HTTP/"))
+        return Error(ErrorCode::IoError, QStringLiteral("The installer did not answer /cleartmp."));
+    return success();
 }
 
 QByteArray dpiPartHeader(const QString& fileName)
@@ -134,7 +178,7 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
 
     QTcpSocket s;
     FW_TRY(detail::connectSocket(s, host, port, opt.connectTimeoutMs, token,
-                                 QStringLiteral("Direct Package Installer (enable DPI V2 in etaHEN Services)")));
+                                 QStringLiteral("Direct Package Installer (turn on DPI_v2=1 in /data/etaHEN/config.ini)")));
     const QByteArray prefix = dpiRequestHead(host, port, name, size) + dpiPartHeader(name);
     s.write(prefix);
 

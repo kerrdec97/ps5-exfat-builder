@@ -7,7 +7,9 @@ Target `fw_connect_ps5` (`native/src/connect/ps5/`), links Qt Network, **Qt SQL*
 > against in-process fakes written for the tests (`native/tests/connect/ps5/FakePs5.h`).
 > Protocol details for the console-side services (ftpsrv / etaHEN FTP, klogsrv,
 > the ELF loader, etaHEN DPI V2, ShadowMount+, MicroMount) come from the legacy
-> code, not from their sources (inventory U4, U5).
+> code; the parts listed in the research of 2026-11-08 (ftpsrv SELF mode, elfldr port,
+> etaHEN DPIv2 replies, ShadowMount+ 1.7 config/API/shutdown lines, autoloader rules,
+> ampr_emu asset packs) were checked against the upstream sources (inventory U4, U5).
 
 ## Headers
 
@@ -19,10 +21,13 @@ Target `fw_connect_ps5` (`native/src/connect/ps5/`), links Qt Network, **Qt SQL*
 | `RemotePath.h` | remote path helpers (`normalizeRemotePath()` for typed input, `cleanRemotePath()`/`joinRemote()` that keep characters), untrusted-name checks `remoteNameProblem()`/`localNameProblem()`/`remoteChild()`, the protected-path guard, `classifyDestination()` |
 | `PayloadSender.h` | `sendPayloadFile()`, `sendPayloadData()`, `probeTcpPort()` |
 | `KlogClient.h` | `klogTag()`, `KlogLineSplitter`, `KlogClient` (background, reconnecting), `KlogSession` (`waitFor()`, `read()`) + `waitForKlogLine()` |
-| `DpiInstaller.h` | `installPackage()` (HTTP multipart to `:12800/upload`), `dpiAccepted()` |
+| `DpiInstaller.h` | `installPackage()` (HTTP multipart to `:12800/upload`), `dpiAccepted()` (etaHEN DPIv2 always answers 200: only `SUCCESS…` counts; `No data received` and `FAILED … code n (0x…)` do not), `dpiFailureReason()`, `clearDpiTemp()` (`POST /cleartmp` after a failed install) |
 | `Y2jb.h` | regions, the param.json / appinfo.db / app.db patches and checks, `patchLocalFolder()`, `autoBlockOverFtp()`, `placeDownload0Dat()`, `validateY2jbIcon()`, `uploadY2jbIcon()`, `uploadY2jbArtSet()` |
 | `ConsoleBackup.h` | `backupRemoteFile()`, `saveRemoteCopy()`, `newConsoleBackupDir()` |
 | `MountConfig.h` | ShadowMount+/MicroMount `parse/render/validate`, `loadMountConfig()`, `pushMountConfig()`, `fetchMountDebugLog()`, `StopConfirmTracker`, `stopShadowMount()` |
+| `IniDocument.h` | line-preserving INI editor (flat and v2 sectioned, ShadowMount+ quoting and inline-comment rules) |
+| `SmpApi.h` | ShadowMount+ 1.7 HTTP/JSON API v1 client: `version()`, `storage()`, `eject()`, `jobStatus()`, `debugLog()`, `kernelLog()`, `settings()` |
+| `ConsoleServices.h` | `probeConsoleServices()`: kernel log, DPI v2 and ShadowMount+ API checks for the console card (the payload loader is never probed) |
 | `Fakelib.h` | ShadowMount+ fakelib manager: `fakelib::list()`, `checkLocalFile()`, `add()`, `replace()`, `remove()`, `setEnabled()` |
 | `RemoteTree.h` | `walkRemoteTree()`: recursive console listing (names only through `remoteChild()`, links not followed, MLSD times or MDTM, SIZE for missing sizes) |
 | `ConsoleGames.h` | PS5 Manager: `listConsoleGames()` (+ `parseSiteAvail()`), `scanLocalImages()`, `mergeGames()`; folder compare `compareConsoleFolder()`, `compareFiles()`, `localFolderFiles()` |
@@ -46,8 +51,9 @@ All sockets are blocking-style: waits run a short local `QEventLoop` (25 ms tick
 | Data connection | passive by default: `PASV`, and `EPSV` once a server refuses `PASV`; connects to the control connection's host, not the PASV address (ftplib default). Active mode (`ps5.passiveMode` off): `PORT`/`EPRT` on the control socket's local address |
 | Types | `TYPE I` for RETR/STOR/SIZE, `TYPE A` for listings, sent only when it changes |
 | Listing | `CWD` into the folder, then `MLSD` when FEAT advertises MLSD/MLST (falls back to `LIST` on failure, like the legacy browser), else `LIST`. Parsers: Unix `ls -l` with owner+group (9 fields, the legacy format), Unix without a group column, DOS/IIS, MLSD facts; names keep inner spaces; symlinks reported, never followed |
-| FEAT flags | the legacy `_ftp_probe_feat` rules (MLSD/MLST, REST STREAM, SIZE, MDTM, UTF8, XCRYPT, CPFR/CPTO/COPY) |
-| Commands | CWD, PWD, MKD (+ `mkdirs` chain, existing segments ignored like `ensure_dir`), RMD, DELE, RNFR/RNTO, SIZE, MDTM, NLST, SITE AVAIL, NOOP, QUIT, recursive `removeTree` (children first, refuses `/`) |
+| FEAT flags | the legacy `_ftp_probe_feat` rules (MLSD/MLST, REST STREAM, SIZE, MDTM, UTF8, XCRYPT, CPFR/CPTO/COPY); FEAT with ftpsrv's own KILL/MTRW/SELF sets `ftpsrv` and REST/SIZE (implemented, not advertised) |
+| ftpsrv SELF mode | ps5-payload-dev ftpsrv (greeting `Welcome to ftpsrv.elf …` / `Version: v0.21.1`) decrypts SELF files per connection by default: SIZE and RETR of a file starting with `4F 15 3D 1D` / `54 14 F5 EE` give the decrypted ELF. `open()` sends `SELF` after every ftpsrv login and checks the `… disabled` reply (`selfMode()`); an upload whose SIZE still differs is checked against the folder listing (stat) before anything is deleted. `identifyFtpServer()` gives ftpsrv + version, etaHEN (port 1337) or zftpd |
+| Commands | CWD, PWD, MKD (+ `mkdirs` chain, existing segments ignored like `ensure_dir`), RMD, DELE, RNFR/RNTO, SIZE, MDTM, NLST, SITE AVAIL (best effort only: ftpsrv answers 502, etaHEN 504), NOOP, QUIT, recursive `removeTree` (children first, refuses `/`); `fileExists()` falls back to a LIST/MLSD of the parent (ftpsrv has no NLST), `listedSize()` |
 | Transfers | `retrieve`/`store` stream through a `QIODevice` with 256 KiB chunks, ≤ 1 MiB queued, byte progress callback; `REST n` before RETR/STOR for resume, `APPE` when REST+STOR is refused |
 | Timeouts | connect `ps5.connectTimeoutSeconds`; command replies max(connect, 5 s); a transfer that moves nothing for `ps5.idleTimeoutSeconds` fails ("stalled"); after a cancelled or timed-out transfer the client disconnects |
 | Errors | user messages from reply codes (550 path rejected/not found, 552/452 out of space, 553 name not allowed, 5xx unsupported) and socket errors (refused → "no FTP server is listening on that port. Start it on the console…", the legacy `_friendly_ftp_error` advice). Every socket message names the console address and the service; the timeout text says the service "refused or ignored" the connection, because Windows retries a refused connect for about 2 s and a short timeout then reports no answer |
@@ -72,7 +78,7 @@ Upload parameters: `sources` (local files/folders), `remoteDir` (default `ps5.ga
 ## Find my PS5 (`Discovery.h`, legacy `_auto_detect_ip`)
 
 * Subnets: the /24 around every IPv4 address of this PC's interfaces that are up and running (QNetworkInterface), skipping loopback interfaces and addresses, link-local 169.254/16, 0.0.0.0, multicast/reserved and `Virtual` (VPN tunnel) interfaces; duplicates removed. The legacy app used only the default-route interface (a UDP "connect" to 8.8.8.8). Hosts are `.1`–`.254` without the PC's own addresses.
-* Probe (legacy values): ports 2121 then 2122, 300 ms connect timeout, 50 probes at a time. Every port of a host is tried (the legacy stopped at the first hit); `port` is the first open one, `openPorts` all of them, `rttMs` the first connect time. When a port accepts, the probe waits up to `bannerWaitMs` (400 ms) for an FTP greeting and keeps the `220` text as `banner`; nothing is sent (no login, no QUIT).
+* Probe: ports 2121 (ftpsrv), 1337 (etaHEN), 2120 (zftpd ≥ 1.5.0), 2122 (legacy), 300 ms connect timeout, 50 probes at a time. Every port of a host is tried (the legacy stopped at the first hit); `port` is the first open one, `openPorts` all of them, `rttMs` the first connect time. When a port accepts, the probe waits up to `bannerWaitMs` (400 ms) for an FTP greeting and keeps the `220` text as `banner`; nothing is sent (no login, no QUIT).
 * Threads: `discoverConsoles()` blocks; each probe runs on a private `QThreadPool` (Qt-started threads, as Qt sockets require), the caller's thread waits in 25 ms steps, reports progress `(probed, total, found)` and, on cancel, drops the probes not started yet; running probes stop at their next 25 ms tick. Results are sorted by address.
 * `DiscoveryOptions::hosts` replaces the sweep (tests use 127.0.0.1). No usable interface → `InvalidArgument` with advice.
 * UI: PS5 connect › **Find my PS5** (`pages/ps5/FindConsole`): a sheet with the progress and the servers found; *Use this console* saves `ps5.consoleIp` and `ps5.ftpPort` (the legacy also filled both).
@@ -97,7 +103,7 @@ Outcome: **Failed** (the job fails, outcome kept) when the FTP server cannot be 
 
 ## Payloads (`ps5.payload.send`)
 
-Raw TCP like `_pl_send`: connect (`ps5.connectTimeoutSeconds`, legacy 10 s), 64 KiB chunks, fail after `ps5.idleTimeoutSeconds` without progress (legacy 30 s), close; nothing read back. `target`: `payload` → `ps5.payloadPort` (9090), `shadowmount` → `ps5.shadowMountPort` (9021), `micromount` → `ps5.microMountPort` (9021); `port` overrides. The outcome carries the legacy warning about resident payloads.
+Raw TCP like `_pl_send`: connect (`ps5.connectTimeoutSeconds`, legacy 10 s), 64 KiB chunks, fail after `ps5.idleTimeoutSeconds` without progress (legacy 30 s), close; nothing read back. `target`: `payload` → `ps5.payloadPort` (9021, elfldr), `shadowmount` → `ps5.shadowMountPort` (9021), `micromount` → `ps5.microMountPort` (9021); `port` overrides (the UI offers 9020 for the exploit's own loader and 50000 for Y2JB's JS server). The old default 9090 is etaHEN's DPI v1 and discards an ELF: a stored 9090 is moved to 9021 once (`migrateLegacyPayloadPort()`, marker file in the data folder) and the legacy `pl_port` 9090 imports as 9021. A refused 9021 adds the autoloader hint (its bundled elfldr is localhost-only: list a normal `elfldr.elf` + `!4000`). The outcome carries the legacy warning about resident payloads.
 
 ## Kernel log
 
@@ -106,18 +112,21 @@ Raw TCP like `_pl_send`: connect (`ps5.connectTimeoutSeconds`, legacy 10 s), 64 
 
 ## ShadowMount+ "Safe to unplug" (`ps5.shadowmount.stop`, legacy `_stop_shadowmount`)
 
-1. Open a private klog session first (5 s); 2. create `/data/shadowmount` (best effort) and STOR an empty `/data/shadowmount/STOP`; 3. watch klog ≤ 45 s: confirmed at once by `shadowmountplus.elf calls exit`; otherwise, after `[shutdown] stop requested`, every `unmount start` seen after it must have reached `unmount complete` **and no new `unmount start` may appear for `StopConfirmTracker::kSettleMs` (6 s)** — ShadowMount+ may release images one after another, so matching counts alone are not proof (the legacy app confirmed on the first match). Lines are read in 200 ms slices (`KlogSession::read()`) so the quiet period can complete. Green only on confirmation; NoKlog / KlogLost / Timeout are amber (`Verification::Inconclusive` + warning).
+1. Open a private klog session first (5 s); 2. create `/data/shadowmount` (best effort) and STOR an empty `/data/shadowmount/STOP`; 3. watch klog ≤ 45 s. ShadowMount+ 1.7 (`src/main.c` @1.7beta11): after the ack (`[SHUTDOWN] requested by STOP file …` or `[SHUTDOWN] stop requested …`), `[SHUTDOWN] cleanup complete for …` is logged last in every case; it confirms unless a problem line came first (`… some image mounts or devices were not fully released`, `… image teardown skipped while title layers remain`, `[KSTUFF] keeping automount disabled after incomplete teardown`, the per-image `filesystem release pending` / `… device detach pending` / `… mount directory remains`), which makes the outcome **Incomplete** (amber, the lines in the warnings). 1.7 mounts images on demand, so zero unmounts is normal. Fallback for older builds (kept): `shadowmountplus.elf calls exit`, or every `unmount start` after the ack reaching `unmount complete` with no new one for `StopConfirmTracker::kSettleMs` (6 s). An ack alone is never enough. When klog cannot be reached, the tail of `/data/shadowmount/debug.log` (same `log_debug` sink, offset from SIZE before STOP, REST reads) is polled every 1.5 s instead. Note: with `debug=0` ShadowMount+ logs nothing, so nothing can confirm (the UI warns before STOP). Green only on confirmation; NoKlog / KlogLost / Timeout / Incomplete are amber (`Verification::Inconclusive` + warning).
 
-## Config editors (`MountConfig.h`)
+`ps5.shadowmount.eject` (1.7 HTTP API, `SmpApi.h`): `/api/v1/storage` → the ejectable drive (`path` parameter or the only one) → `/api/v1/storage/eject` (HTTP 202, `job_id`) → `/api/v1/games/storage/status` until finished; `usb_eject_unconfirmed` and blocking mounts fail with the reason. ShadowMount+ keeps running.
 
-ShadowMount+ `/data/shadowmount/config.ini` and MicroMount `/data/micromount/config.ini`: defaults, `parseMountConfig()` and `renderMountConfig()` are the legacy `_parse_ini`/`_render_ini` (render output is compared in the tests with output **generated by running the legacy Python functions**): list keys (`kstuff_no_pause`, `kstuff_delay`, `scanpath`, `global_fakelib_exclude`; MicroMount `scanpath`, plus its `scan_paths` comma/semicolon variant) are one repeated key per line, `#` lines dropped; `image_ro/image_rw/image_sector` collected as `per_image_rules` (lines without `=` dropped); empty values omitted. `validateMountConfig()` = the legacy push checks (ShadowMount+: delays/intervals whole numbers 0–3600, `kstuff_delay` = `TITLEID:SECONDS`; MicroMount: `int(v, 0)` ≥ 0).
-`pushMountConfig()`: local backup of the current remote config, best-effort `MKD`, STOR `config.ini.new` and swap it in (the ShadowMount+ legacy pattern, now also for MicroMount, whose legacy push was a direct STOR); a server that cannot rename gets the legacy direct-STOR fallback. `loadMountConfig()` reports "does not exist yet" as `NotFound` (normal on first use).
+## Config editors (`MountConfig.h`, `IniDocument.h`)
+
+Three ShadowMount+ formats: **1.6 flat**, **1.7 flat** (1.7beta11: `kstuff_*`/`legacy_mount_*` removed, new keys, defaults `scan_interval_seconds` 15, `lvd_pfs_sector_size` 4096, `md_ufs_sector_size` 4096) and **v2** (branch 1.7 after beta11: `[config] version = 2` required, sections, `profiles.ini` for `[game:TITLEID]` / `[image:FILE]` rules, `[smb:NAME]` connections). `detectSmpConfigFormat()`: v2 when the file says so, else 1.7 flat when the running version (HTTP API, else the `debug.log` banner) is ≥ 1.7, else 1.6 flat. `smpKeys()` is the key schema (flat name, v2 section/key, type, upstream default, range/choices, aliases). Values are a flat key map whatever the format (v2 booleans as 1/0, `mode = ro|rw` as `mount_read_only`, rules as the flat repeatable keys; unknown v2 keys as `section.key`).
+Pushing never re-renders a loaded file: `applyMountConfigChanges()` edits only the changed keys in the text as loaded (`IniDocument`: comments, order, unknown keys and `[smb:*]` sections kept; quoting and `#`/`;` inline comments like ShadowMount+'s own readers; last occurrence wins). New keys go next to their section's last key; a key whose new value is the default and that is not in the file is not written (defaults are never pinned); on 1.7 flat and v2 the obsolete `kstuff_*` lines are removed (1.6 keeps them). `renderMountConfig()` (a file from nothing) writes only the non-default keys. `validateMountConfig()` checks ranges, enums, power-of-two sectors, title IDs, rule shapes and the 128-rule limits; `mountConfigWarnings()` flags `debug=0`, a non-512 exFAT sector, the `md` exFAT backend and obsolete keys. MicroMount (archived upstream) keeps the legacy parse/render.
+`pushMountConfig()` / `pushSmpProfiles()`: with `expectedRemote`, the file is downloaded first and the push refused (`AlreadyExists`) when it changed since it was loaded (the ShadowMount+ web UI or API may have saved it); then local backup, best-effort `MKD`, STOR `<file>.new` and swap it in; a server that cannot rename gets the direct-STOR fallback. `loadMountConfig()` reports "does not exist yet" as `NotFound` (normal on first use); `loadSmpState()` reads config.ini, profiles.ini and the banner (debug.log ≤ 2 MiB) together.
 
 ## Fakelib manager (`Fakelib.h`, legacy ShadowMount+ › Fakelib Manager, SMP-24)
 
 | Topic | Behaviour |
 |---|---|
-| Folders | `/data/shadowmount/fakelib` (enabled) and `/data/shadowmount/fakelib/disabled`; a missing folder lists as empty (`Listing::folderExists` false for a fresh console) |
+| Folders | `/data/shadowmount/fakelib` (enabled) and `/data/shadowmount/fakelib.disabled` (disabled; outside the overlay folder because ShadowMount+ 1.7 copies the global folder recursively into every title cache). Overlays in the old `fakelib/disabled` are listed (`legacyFolder`) and `moveLegacyDisabled()` moves them out. A missing folder lists as empty (`Listing::folderExists` false for a fresh console). `libkernel.sprx` is refused (ShadowMount+ deletes it from fakelib folders) |
 | Listing | `.prx`/`.sprx` files only (any case); folders, other files and the temporaries of a safe replace (`*.uploading`, `*.replacing.bak`) are skipped (legacy `FAKELIB_SKIP_SUFFIX`); names that fail `remoteNameProblem()` are skipped and reported (`Listing::skipped`); sorted by name, enabled first |
 | Local file check (`checkLocalFile()`) | **Reject**: a folder, `eboot.bin`, anything with an `sce_sys` path segment, images (`.exfat .ffpkg .ffpfs .ffpfsc`), not `.prx/.sprx`, a name the console cannot take. **Confirm** (legacy warning cases): the first 4 bytes are not ELF `7F 45 4C 46` or SELF `4F 15 3D 1D` / `54 14 F5 EE`, or the file cannot be read. The legacy messages are kept. `add()`/`replace()` refuse a Confirm file unless `confirmed` is true |
 | Add / Replace | `uploadReplace()` (legacy `_ftp_upload_to`): STOR `<name>.uploading`, old file to `<name>.replacing.bak`, rename into place, backup deleted; on failure the temporary is removed and the old overlay is left as it was. Add creates the folder (`mkdirs`) and uses the local file name; Replace keeps the overlay's name and folder. Uploads are held in memory (refused above 256 MiB) |
@@ -127,7 +136,7 @@ ShadowMount+ `/data/shadowmount/config.ini` and MicroMount `/data/micromount/con
 
 ## Autoloader (`Autoloader.h`, legacy Y2JB › Autoloader, Y2J-16, `E:18825-19031`)
 
-A **local** `ps5_autoloader` folder (setting `ps5.autoloaderFolder`, legacy `al_dir`); nothing is sent to the console. `autoload.txt`: one `.elf`/`.bin`/`.js` per line, `!<ms>` sleeps, `#` comments.
+A **local** `ps5_autoloader` folder (setting `ps5.autoloaderFolder`, legacy `al_dir`); nothing is sent to the console. `autoload.txt` (ps5-unified-autoloader 0.1.7 rules): one `.elf`/`.bin` per line (a file of the folder, or an absolute path), `!<ms>` sleeps, `#` starts a comment anywhere, `@sync`; `.js` lines are warned (sent to elfldr upstream, they fail).
 
 | Topic | Behaviour |
 |---|---|
@@ -146,7 +155,7 @@ A **local** `ps5_autoloader` folder (setting `ps5.autoloaderFolder`, legacy `al_
 | Topic | Behaviour |
 |---|---|
 | Game list | each configured console folder (UI field, `;`-separated, defaults to `ps5.gamesFolder`) listed with `LIST`/`MLSD`: images (`.exfat .ffpkg .ffpfs .ffpfsc`, legacy `_LIBRARY_IMAGE_EXTS`) with their sizes, plus sub-folders (game dumps, new); a folder that cannot be listed is reported, the others still listed |
-| Free space | `SITE AVAIL` (raw reply shown); `parseSiteAvail()` takes the first number with an optional unit (B, KB/KiB … TB/TiB, 1024-based). The legacy took every digit of the whole reply as bytes |
+| Free space | the ShadowMount+ 1.7 API (`/api/v1/storage` `available_bytes` of the first folder's filesystem) when `smpApiPort` is given; else `SITE AVAIL` (best effort: no current console server implements it) with `parseSiteAvail()` (first number, optional unit, 1024-based) |
 | Local images | image files directly in one local folder (non-recursive like the legacy `img_scan_dirs` scan; UI default `storage.defaultOutputFolder`) |
 | Merge | by file name (legacy): **On PS5** (same size or console size unknown), **Size mismatch**, **Local only**, **PS5 only**; folders are PS5 only. The legacy "total = free + listed sizes" estimate is not shown (it was not the drive size) |
 | Folder compare (new) | `compareConsoleFolder()`: the console folder walked (`fillMissingSizes`) and matched by relative path, case-sensitive, against a local dump folder (`localFolderFiles()`) or the files of an `.exfat`/`.ffpkg` image (UI: `ImageTree`): **Missing on the PS5**, **Only on the PS5**, **Different size**; a size the console did not report is counted separately, not as a difference; unreadable folders, skipped names and links become warnings. Contents are not compared (that would download the game) |
@@ -189,11 +198,12 @@ Patches: param.json `contentVersion = "99.999.999"`, `versionFileUri = "http://1
 | `ps5.consoleIp` | empty | every job (`host` parameter overrides) | `ftp_ip`; `ps5_ip` (never written by the legacy app; empty values are not imported) |
 | `ps5.ftpPort` | 2121 | FTP jobs, Y2JB, Safe to unplug | `ftp_port` |
 | `ps5.gamesFolder` | `/data/etaHEN/games/` | upload job default `remoteDir` | `ftp_path` |
-| `ps5.payloadPort` | 9090 | payload job, target `payload` | `pl_port` |
+| `ps5.payloadPort` | 9021 | payload job, target `payload` | `pl_port` (9090 → 9021) |
 | `ps5.shadowMountPort` | 9021 | payload job, target `shadowmount` | `smp_payload_port` |
 | `ps5.microMountPort` | 9021 | payload job, target `micromount` | `mm_payload_port` |
 | `ps5.klogPort` | 3232 | Safe to unplug (and `KlogClient` callers via `endpointFromSettings`) | `klog_port` |
 | `ps5.dpiPort` | 12800 | DPI job | `y2jb_dpi_port` |
+| `ps5.shadowMountApiPort` | 10101 | ShadowMount+ 1.7 API (version, storage, eject, logs) | new |
 | `ps5.connectTimeoutSeconds` | 10 (1–120) | all connections | legacy fixed 10 s |
 | `ps5.idleTimeoutSeconds` | 30 (5–600) | FTP transfers, payload sends, DPI | legacy fixed 30 s (payload send) |
 | `ps5.parallelTransfers` | 2 (1–8, per job) | upload/download jobs | new (legacy serial) |

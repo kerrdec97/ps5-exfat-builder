@@ -59,11 +59,10 @@ DiagnosticsTab::DiagnosticsTab(AppContext& ctx, Source source, QWidget* parent)
     m_verdict = new Badge(QStringLiteral("Not run yet"), Tone::Neutral, card);
     m_verdict->setIconName({});
     card->setTitle(QStringLiteral("Connection diagnostics"), m_verdict);
-    auto* intro = label(QStringLiteral("Checks the console's FTP server step by step: the connection and its round trip, the greeting "
-                                       "and login, the advertised features, passive and binary mode, and whether the folder below can "
-                                       "be written (a 28-byte probe file is written and removed). The speed test also sends 16 MiB, "
-                                       "reads it back and deletes it."),
-                        TextStyle::Body, color::fg_2, card);
+    auto* intro = caption(QStringLiteral("Checks the console's FTP server step by step; the speed test also moves 16 MiB each way."), card);
+    intro->setToolTip(QStringLiteral("The connection and its round trip, the greeting and login, the advertised features, passive and "
+                                     "binary mode, and whether the folder below can be written (a 28-byte probe file is written and "
+                                     "removed). The speed test also sends 16 MiB, reads it back and deletes it."));
     intro->setWordWrap(true);
     card->body()->addWidget(intro);
     m_folder = textInput(QStringLiteral("/data/etaHEN/games"), true, card);

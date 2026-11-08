@@ -25,7 +25,16 @@ Result<PayloadResult> sendDevice(const QString& host, quint16 port, QIODevice& i
     QElapsedTimer clock;
     clock.start();
     QTcpSocket s;
-    FW_TRY(detail::connectSocket(s, host, port, opt.connectTimeoutMs, token, QStringLiteral("payload loader")));
+    if (auto st = detail::connectSocket(s, host, port, opt.connectTimeoutMs, token, QStringLiteral("payload loader")); !st.ok()) {
+        Error e = st.takeError();
+        if (!e.isCancelled() && port == 9021)
+            // itsPLK's elfldr (Y2JB / BD-JB / Lua autoloaders) accepts localhost only (research §5).
+            e.message += QStringLiteral(" With the Y2JB, BD-JB or Lua autoloader, add a normal elfldr.elf to autoload.txt "
+                                        "followed by !4000 so the PC can send payloads.");
+        else if (!e.isCancelled() && port == 9090)
+            e.message += QStringLiteral(" Port 9090 is etaHEN's package installer (DPI v1), not a payload loader; use 9021.");
+        return e;
+    }
     const qint64 chunk = std::max(1024, opt.chunkSize);
     qint64 queued = 0, reported = 0;
     QElapsedTimer idle;

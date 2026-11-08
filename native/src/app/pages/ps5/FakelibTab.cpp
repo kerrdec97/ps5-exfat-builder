@@ -26,11 +26,26 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     : ConsoleToolTab(ctx, std::move(endpointFn), QStringLiteral("fakelib"), parent)
 {
     auto* l = vbox(this, space::lg);
-    auto* warn = new InfoBar(Tone::Warn, this);
-    warn->setMessage(QStringLiteral("The fakelib manager only handles library overlays (.prx / .sprx) that ShadowMount+ lays over "
-                                    "every game. It cannot replace eboot.bin, game content or files inside images; rebuild those. "
-                                    "Changes may need the game remounted or restarted."));
+    auto* warn = new InfoBar(Tone::Info, this);
+    warn->setMessage(QStringLiteral("Library overlays (.prx / .sprx) that ShadowMount+ lays over every game; restart a game to pick up a change. "
+                                    "Do not run BackPork as well: ShadowMount+ 1.7 stops it at startup."));
+    warn->setToolTip(QStringLiteral("Overlays cannot replace eboot.bin, game content or files inside images; rebuild those. "
+                                    "libkernel.sprx is refused: ShadowMount+ deletes it from fakelib folders."));
     l->addWidget(warn);
+    m_legacy = new InfoBar(Tone::Warn, this);
+    m_legacy->setTitle(QStringLiteral("Disabled overlays inside the overlay folder"));
+    m_legacy->setMessage(QStringLiteral("fakelib/disabled is copied into every game by ShadowMount+ 1.7. Move them to fakelib.disabled."));
+    auto* move = m_legacy->addLink(QStringLiteral("Move them"));
+    connect(move, &Link::activated, this, [this] {
+        runAndRefresh(QStringLiteral("Move the disabled overlays"), [](ps5::FtpClient& c, const CancellationToken& t) -> Status {
+            auto r = fl::moveLegacyDisabled(c, t);
+            if (!r.ok())
+                return r.takeError();
+            return success();
+        });
+    });
+    m_legacy->hide();
+    l->addWidget(m_legacy);
 
     auto* card = new Card(this, Card::Variant::Table);
     auto* h = card->header();
@@ -59,7 +74,7 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     m_table->setAccessibleName(QStringLiteral("Fakelib overlays"));
     card->body()->addWidget(m_table);
     m_empty = new EmptyState(QStringLiteral("layers"), QStringLiteral("Overlays not listed yet"),
-                             QStringLiteral("Refresh lists the .prx and .sprx files in /data/shadowmount/fakelib and its disabled folder."), card);
+                             QStringLiteral("Refresh lists the .prx and .sprx files in /data/shadowmount/fakelib and fakelib.disabled."), card);
     auto* listBtn = m_empty->addAction(QStringLiteral("Refresh"), ButtonVariant::Primary);
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
@@ -67,7 +82,7 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     f->addWidget(m_status, 1);
     l->addWidget(card);
     l->addWidget(caption(QStringLiteral("Add and Replace upload under a temporary name and swap it in only when complete, so a dropped "
-                                        "connection never leaves a half-written library. Disable moves an overlay to fakelib/disabled."), this));
+                                        "connection never leaves a half-written library."), this));
     l->addStretch(1);
 
     connect(m_refresh, &QToolButton::clicked, this, &FakelibTab::refresh);
@@ -164,6 +179,7 @@ void FakelibTab::showListing(const fl::Listing& listing)
     if (!m_listing.skipped.isEmpty())
         text += QStringLiteral(" · %1 name%2 skipped (not usable safely)").arg(m_listing.skipped.size()).arg(m_listing.skipped.size() == 1 ? QString() : QStringLiteral("s"));
     m_status->setText(text);
+    m_legacy->setVisible(m_listing.legacyCount() > 0);
     setTextColor(m_status, color::fg_3);
     updateActions();
 }

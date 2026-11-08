@@ -195,7 +195,7 @@ void FindConsolePanel::setResults(std::vector<ps5::DiscoveredConsole> results)
         setTextColor(m_status, color::fg_2);
         m_table->selectRow(0);
     } else {
-        m_status->setText(QStringLiteral("Nothing answered on %1 at %2. Start the FTP server on the console (ftpsrv or etaHEN), check that "
+        m_status->setText(QStringLiteral("Nothing answered on %1 at %2. Start the FTP server on the console (ftpsrv, etaHEN or zftpd), check that "
                                          "the PS5 and this PC are on the same network, then search again.")
                               .arg(portsText(m_options), m_scope));
         setTextColor(m_status, color::fg_2);
@@ -239,7 +239,7 @@ FindConsoleButton::FindConsoleButton(AppContext& ctx, QWidget* parent) : QPushBu
     setText(QStringLiteral("Find my PS5"));
     setButtonVariant(this, ButtonVariant::Secondary);
     setButtonIcon(this, QStringLiteral("search"));
-    setToolTip(QStringLiteral("Search this PC's network for the console's FTP server (ports 2121 and 2122)"));
+    setToolTip(QStringLiteral("Search this PC's network for the console's FTP server (ftpsrv 2121, etaHEN 1337, zftpd 2120, 2122)"));
     setAccessibleName(QStringLiteral("Find my PS5"));
     connect(this, &QPushButton::clicked, this, [this] { (void)run(); });
 }

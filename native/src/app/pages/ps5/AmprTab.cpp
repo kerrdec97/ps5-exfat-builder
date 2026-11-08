@@ -10,6 +10,7 @@
 #include "jobs/JobQueue.h"
 
 #include <QFileInfo>
+#include <QJsonObject>
 
 namespace fw::pages {
 
@@ -26,7 +27,7 @@ AmprTab::AmprTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
 {
     auto* l = vbox(this, space::lg);
     auto* info = new InfoBar(Tone::Info, this);
-    info->setMessage(QStringLiteral("ampr_emu.index lets the AMPR emulator (fakelib/libSceAmpr.sprx) find a game's files whatever "
+    info->setMessage(QStringLiteral("ampr_emu.index lets the AMPR emulator (libSceAmpr.sprx) find a game's files whatever "
                                     "their letter case. Image builds add it by themselves (Settings › PFS › AMPR file index); use "
                                     "this for a dump you do not rebuild, or for a game already on the console."));
     l->addWidget(info);
@@ -96,9 +97,17 @@ void AmprTab::updateAvailability()
     m_remoteGo->setEnabled(jobs::isAvailable(m_ctx, kFtpKind));
 }
 
-QString AmprTab::submitLocal(const QString& folder, bool force)
+QString AmprTab::submitLocal(const QString& folder, bool force, bool allowAssetPacks)
 {
-    auto r = jobs::submitAmprIndexLocal(m_ctx, folder, force);
+    Result<QString> r = Error(ErrorCode::Internal, {});
+    if (allowAssetPacks) {
+        QJsonObject p{{QStringLiteral("folder"), folder}, {QStringLiteral("allowAssetPacks"), true}};
+        if (force)
+            p.insert(QStringLiteral("force"), true);
+        r = m_ctx.queue().enqueue(kLocalKind, p);
+    } else {
+        r = jobs::submitAmprIndexLocal(m_ctx, folder, force);
+    }
     if (!r.ok()) {
         m_localStatus->set(r.error().message, Tone::Err);
         return {};
@@ -129,6 +138,17 @@ void AmprTab::generateLocal()
         return;
     }
     m_localFolder->setError({});
+    // ampr_emu 0.4.2.1 asset packs are bound to the index they were built from.
+    bool allowPacks = false;
+    if (const QString pack = pfs::folderAmprAssetPack(folder); !pack.isEmpty()) {
+        if (!Sheet::confirm(window(), QStringLiteral("This game uses AMPR asset packs"),
+                            QStringLiteral("%1 holds %2 and .pak volumes. They only work with the ampr_emu.index they were built from; a new "
+                                           "index breaks them. Rebuild the packs with ampr_emu's own tools instead.")
+                                .arg(Sheet::monoSpan(nativePath(folder)), Sheet::monoSpan(pack)),
+                            QStringLiteral("Cancel"), QStringLiteral("Rebuild anyway"), true, Sheet::Icon::Warning))
+            return;
+        allowPacks = true;
+    }
     bool force = false;
     if (!pfs::folderHasAmprLibrary(folder)) {
         // Legacy "Not an APR title?" question.
@@ -138,7 +158,7 @@ void AmprTab::generateLocal()
             return;
         force = true;
     }
-    if (!submitLocal(folder, force).isEmpty())
+    if (!submitLocal(folder, force, allowPacks).isEmpty())
         emit toastRequested(Tone::Info, QStringLiteral("AMPR index queued"), nativePath(folder));
 }
 

@@ -82,13 +82,26 @@ int Listing::enabledCount() const
     return int(std::count_if(overlays.begin(), overlays.end(), [](const Overlay& o) { return o.enabled; }));
 }
 
+int Listing::legacyCount() const
+{
+    return int(std::count_if(overlays.begin(), overlays.end(), [](const Overlay& o) { return o.legacyFolder; }));
+}
+
 Result<Listing> list(FtpClient& c, const CancellationToken& token)
 {
     Listing out;
-    for (const bool enabled : {true, false}) {
+    struct Source {
+        QString folder;
+        bool enabled;
+        bool legacy;
+    };
+    const Source sources[] = {{kFolder, true, false}, {kDisabledFolder, false, false}, {kLegacyDisabledFolder, false, true}};
+    for (const Source& src : sources) {
+        if (src.legacy && !out.folderExists)
+            continue; // no fakelib folder: no old disabled subfolder either
         bool exists = true;
-        FW_TRY_ASSIGN(std::vector<FtpEntry> entries, listFolder(c, enabled ? kFolder : kDisabledFolder, token, &exists));
-        if (enabled)
+        FW_TRY_ASSIGN(std::vector<FtpEntry> entries, listFolder(c, src.folder, token, &exists));
+        if (src.enabled)
             out.folderExists = exists;
         for (const FtpEntry& e : entries) {
             if (e.isDir || !isListedName(e.name))
@@ -99,13 +112,12 @@ Result<Listing> list(FtpClient& c, const CancellationToken& token)
             }
             Overlay o;
             o.name = e.name;
-            o.enabled = enabled;
+            o.enabled = src.enabled;
+            o.legacyFolder = src.legacy;
             o.size = e.size;
             o.modified = e.modified;
             out.overlays.push_back(o);
         }
-        if (!out.folderExists)
-            break; // no fakelib folder: no disabled folder either
     }
     std::stable_sort(out.overlays.begin(), out.overlays.end(), [](const Overlay& a, const Overlay& b) {
         const int c = a.name.compare(b.name, Qt::CaseInsensitive);
@@ -125,6 +137,8 @@ LocalCheck checkLocalFile(const QString& localPath)
     norm.replace(u'\\', u'/');
     if (fi.isDir())
         return {Verdict::Reject, QStringLiteral("Folders cannot be deployed as overlays. Select a single .prx or .sprx library file.")};
+    if (low == u"libkernel.sprx" || low == u"libkernel.prx")
+        return {Verdict::Reject, QStringLiteral("ShadowMount+ deletes libkernel.sprx from fakelib folders, so it cannot be used as an overlay.")};
     if (low == u"eboot.bin")
         return {Verdict::Reject, QStringLiteral("eboot.bin cannot be replaced via fakelib overlays — it lives inside the image. Use the normal rebuild workflow.")};
     for (const QString& part : norm.split(u'/', Qt::SkipEmptyParts))
@@ -182,10 +196,13 @@ Status setEnabled(FtpClient& c, const Overlay& target, bool enabled)
 {
     if (!remoteNameProblem(target.name).isEmpty() || !isListedName(target.name))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("\"%1\" is not an overlay the manager can move.").arg(target.name));
-    if (target.enabled == enabled)
+    if (target.enabled == enabled && !target.legacyFolder)
         return success();
     Overlay moved = target;
     moved.enabled = enabled;
+    moved.legacyFolder = false; // never back into fakelib/disabled
+    if (moved.path() == target.path())
+        return success();
     if (!enabled)
         FW_TRY(c.mkdirs(kDisabledFolder));
     if (c.fileExists(moved.path()))
@@ -195,6 +212,38 @@ Status setEnabled(FtpClient& c, const Overlay& target, bool enabled)
     if (auto st = c.rename(target.path(), moved.path()); !st.ok())
         return Error(st.error().code, QStringLiteral("Could not move %1: %2").arg(target.name, st.error().message), st.error().detail);
     return success();
+}
+
+Result<int> moveLegacyDisabled(FtpClient& c, const CancellationToken& token)
+{
+    bool exists = false;
+    FW_TRY_ASSIGN(std::vector<FtpEntry> entries, listFolder(c, kLegacyDisabledFolder, token, &exists));
+    if (!exists)
+        return 0;
+    int moved = 0;
+    QStringList kept;
+    for (const FtpEntry& e : entries) {
+        if (e.isDir || !isListedName(e.name) || !remoteNameProblem(e.name).isEmpty())
+            continue;
+        Overlay o;
+        o.name = e.name;
+        o.enabled = false;
+        o.legacyFolder = true;
+        if (auto st = setEnabled(c, o, false); st.ok())
+            ++moved;
+        else if (st.error().code == ErrorCode::AlreadyExists)
+            kept << e.name;
+        else
+            return st.error();
+    }
+    if (kept.isEmpty())
+        (void)c.rmd(kLegacyDisabledFolder); // only when it is empty now; best effort
+    else
+        return Error(ErrorCode::AlreadyExists,
+                     QStringLiteral("Moved %1 overlay(s); %2 also exist(s) in fakelib.disabled and stayed in fakelib/disabled.")
+                         .arg(moved)
+                         .arg(kept.join(QStringLiteral(", "))));
+    return moved;
 }
 
 } // namespace fw::ps5::fakelib

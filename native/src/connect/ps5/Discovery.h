@@ -1,8 +1,8 @@
 #pragma once
 
 // "Find my PS5": the legacy auto-detect IP sweep (_auto_detect_ip): every
-// address .1–.254 of the PC's /24 networks is probed on the FTP ports 2121 and
-// 2122 with a 0.3 s connect timeout, 50 probes at a time. A host that accepts
+// address .1–.254 of the PC's /24 networks is probed on the FTP ports 2121,
+// 1337, 2120 and 2122 with a 0.3 s connect timeout, 50 probes at a time. A host that accepts
 // a connection is reported with its open ports and, when an FTP greeting
 // arrives within a moment, the server's banner.
 //
@@ -32,7 +32,8 @@ struct DiscoveredConsole {
 };
 
 struct DiscoveryOptions {
-    QList<quint16> ports = {2121, 2122}; // legacy order
+    // ftpsrv 2121, etaHEN 1337, zftpd 2120 (since 1.5.0), then the legacy 2122.
+    QList<quint16> ports = {2121, 1337, 2120, 2122};
     int connectTimeoutMs = 300;          // legacy 0.3 s
     int bannerWaitMs = 400;              // how long an open port may take to greet
     int workers = 50;                    // probes at the same time (legacy 50)

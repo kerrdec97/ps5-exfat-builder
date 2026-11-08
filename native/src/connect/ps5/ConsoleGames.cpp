@@ -4,6 +4,7 @@
 #include "connect/ps5/ConsoleGames.h"
 
 #include "connect/ps5/RemotePath.h"
+#include "connect/ps5/SmpApi.h"
 #include "core/FileUtil.h"
 
 #include <QDir>
@@ -89,7 +90,7 @@ QStringList splitConsoleFolders(const QString& text)
     return out;
 }
 
-Result<ConsoleGameList> listConsoleGames(FtpClient& c, const QStringList& folders, const CancellationToken& token)
+Result<ConsoleGameList> listConsoleGames(FtpClient& c, const QStringList& folders, const CancellationToken& token, quint16 smpApiPort)
 {
     ConsoleGameList out;
     for (const QString& folderIn : folders) {
@@ -123,8 +124,22 @@ Result<ConsoleGameList> listConsoleGames(FtpClient& c, const QStringList& folder
             out.games.push_back(g);
         }
     }
-    auto avail = c.siteAvail();
-    if (avail.ok()) {
+    if (smpApiPort > 0 && !folders.isEmpty()) {
+        smp::ApiOptions api;
+        api.connectTimeoutMs = 1500;
+        api.replyTimeoutMs = 4000;
+        if (auto items = smp::storage(c.host(), smpApiPort, api, token); items.ok()) {
+            if (const smp::StorageItem* fs = smp::storageFor(items.value(), cleanRemotePath(folders.front())); fs && fs->availableBytes >= 0) {
+                out.freeBytes = fs->availableBytes;
+                out.freeText = QStringLiteral("%1 free on %2 (ShadowMount+)").arg(formatBytes(fs->availableBytes), fs->mountPoint);
+            }
+        } else if (items.error().isCancelled()) {
+            return Error::cancelled();
+        }
+    }
+    if (out.freeBytes) {
+        // known from the ShadowMount+ API
+    } else if (auto avail = c.siteAvail(); avail.ok()) {
         out.freeText = avail.value();
         out.freeBytes = parseSiteAvail(avail.value());
     } else if (!c.isConnected()) {

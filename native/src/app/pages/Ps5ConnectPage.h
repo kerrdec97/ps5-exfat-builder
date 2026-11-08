@@ -1,17 +1,28 @@
 #pragma once
 
-// PS5 connect (Connect artboard): console address bound to the ps5.* settings,
-// a live FTP session on a worker thread, and tabs: FTP browser · Payloads ·
-// Kernel log · Y2JB · Mount config · Diagnostics. Transfers, payloads, DPI
-// installs, the Y2JB auto-block, "Safe to unplug" and the FTP diagnostics are
-// queue jobs. "Find my PS5" in the header sweeps the network (FindConsole.h).
+// PS5 connect: the console card (address, ports, state, Find my PS5,
+// Connect, detected services) and the tools in five groups:
+//
+//   Files         Browser (FTP file manager + transfer queue) · Games on the console
+//   Payloads      the payload library and where to send it
+//   Logs          Kernel log · ShadowMount+ log · Crash dumps
+//   ShadowMount+  Settings · Fakelib · Autoloader · AMPR index (+ unplug / eject)
+//   Console tools Y2JB · Install package · Diagnostics
+//
+// Other pages open a tool by its stable key through navigateWith({"tab": key}):
+// files, ftp, manager, payloads, logs, klog, smplog, crashdumps, shadowmount,
+// mount, fakelib, autoloader, ampr, tools, y2jb, install, diagnostics.
+// Transfers, payloads, installs, Y2JB, Safe to unplug, eject and diagnostics
+// are queue jobs.
 
 #include "app/pages/Page.h"
 #include "app/services/AppStores.h"
 #include "app/services/ConsoleSession.h"
+#include "connect/ps5/ConsoleServices.h"
 #include "connect/ps5/KlogClient.h"
 
 #include <QAbstractTableModel>
+#include <QFuture>
 #include <QListWidget>
 #include <QSortFilterProxyModel>
 #include <QStackedWidget>
@@ -21,11 +32,30 @@
 
 #include <deque>
 #include <memory>
+#include <vector>
+
+class QComboBox;
+
+namespace fw::ui {
+class Segmented;
+}
 
 namespace fw::pages {
 
+class AmprTab;
+class AutoloaderTab;
+class ConsoleHero;
+class ConsoleToolTab;
+class CrashDumpsTab;
 class DiagnosticsTab;
+class FakelibTab;
 class FindConsoleButton;
+class InstallTab;
+class Ps5ManagerTab;
+class ShadowMountTab;
+class SmpLogTab;
+class ToolStack;
+class TransferPanel;
 
 // Bounded kernel-log buffer for the viewer (legacy defect 4: unbounded).
 class KlogModel : public QAbstractTableModel {
@@ -64,6 +94,7 @@ public:
     bool isReachable() const { return m_session->isConnected(); }
     bool acceptsDrop(const QList<QUrl>& urls) const override;
     void dropUrls(const QList<QUrl>& urls) override;
+    void setDragHighlight(bool on) override;
     QStringList demoStates() const override;
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
@@ -74,80 +105,126 @@ public:
     KlogModel* klogModel() { return m_klog; }
     DiagnosticsTab* diagnosticsTab() { return m_diagnostics; }
     FindConsoleButton* findConsoleButton() { return m_find; }
+    ConsoleHero* hero() { return m_hero; }
+    TransferPanel* transfers() { return m_transfers; }
+    ShadowMountTab* shadowMountTab() { return m_smp; }
+    QTabBar* groupBar() { return m_groups; }
+    QString currentGroup() const;
+    QString currentTool() const; // the stable key of the visible tool
+    QStringList remoteNames() const; // names in the browser, in display order
     void listRemote(const QString& path);
+    void uploadFiles(const QStringList& localPaths, const QString& remoteDir = {});
 signals:
     void reachabilityChanged(bool reachable, const QString& host);
 
 private:
+    struct Group {
+        QString key;
+        QWidget* page = nullptr;
+        ui::Segmented* sub = nullptr; // null for single-view groups
+        ToolStack* stack = nullptr;
+        QStringList toolKeys;
+    };
     // header / settings
     int settingPort(const QString& key, int fallback) const;
+    ps5::ConsoleEndpoint endpoint() const;
     void toggleConnection();
     void setConnectedUi(bool on, const QString& detail);
+    void updateHeroSubtitle();
+    void checkServices();
+    void showServices(const ps5::ConsoleServices& s);
+    void updatePayloadChip();
+    void showTool(const QString& key);
+    Group* addGroup(const QString& key, const QString& title, const QString& icon,
+                    const QList<std::tuple<QString, QString, QString, QWidget*>>& tools);
     // FTP
-    QWidget* buildFtpTab();
+    QWidget* buildFilesBrowser(QWidget* parent);
     void onListed(const ui::RemoteListing& listing);
+    void showListing(const ui::RemoteListing& listing);
     void rebuildBreadcrumb();
+    void rebuildPlaces();
+    void updateFooter();
+    void updateActions();
+    int entryIndex(int row) const;
     QStringList selectedRemotePaths() const;
     bool confirmProtected(const QString& path, const QString& action);
-    void uploadFiles(const QStringList& localPaths);
+    void uploadDialog(bool folder);
     void downloadSelected();
     void deleteSelected();
     void renameSelected();
     void newFolder();
+    void goBack();
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void applyCompact(bool compact); // narrow windows: places as a menu, icon-only secondary actions
     // Payloads
-    QWidget* buildPayloadsTab();
+    QWidget* buildPayloads(QWidget* parent);
     void rebuildPayloads();
     void showPayload(int index);
     void addOrEditPayload(int index);
     void sendPayload(int index);
     // Kernel log
-    QWidget* buildKlogTab();
+    QWidget* buildKlog(QWidget* parent);
     void klogToggle();
     void klogState(ps5::KlogState state, const QString& detail);
     void klogExport();
     void klogFilterChanged();
+    void klogSnapshot();
     // Y2JB
-    QWidget* buildY2jbTab();
+    QWidget* buildY2jb(QWidget* parent);
     QString region() const;
-    // Mount config
-    QWidget* buildMountTab();
-    ps5::MountTool mountTool() const;
-    void mountLoadDefaults();
-    void mountLoad();
-    void mountPush();
-    ps5::MountConfigValues mountValuesFromTable() const;
-    void mountSetValues(const ps5::MountConfigValues& values);
 
     ui::PayloadStore& m_payloads;
     ui::ConsoleSession* m_session;
+    ConsoleHero* m_hero;
     QLineEdit* m_host;
     QLineEdit* m_ftpPort;
     QPushButton* m_connect;
-    ui::Badge* m_badge;
-    QLabel* m_welcome;
-    QTabBar* m_tabs;
-    QStackedWidget* m_stack;
+    FindConsoleButton* m_find = nullptr;
+    bool m_reachable = false; // last state sent with reachabilityChanged
+    QTabBar* m_groups;
+    ToolStack* m_groupStack;
+    std::vector<Group> m_groupList;
+    QHash<QString, QString> m_toolGroup; // tool key -> group key
+    // services
+    QFuture<void> m_probe;
+    bool m_probing = false;
+    std::vector<ps5::smp::StorageItem> m_storage;
+    QString m_smpVersion;
+    QString m_payloadSendId;
     // ftp
     QString m_remoteDir;
     ui::RemoteListing m_listing;
+    QStringList m_history;
+    int m_historyIndex = -1;
+    bool m_specimenListing = false;
+    ui::Card* m_filesCard = nullptr;
     QWidget* m_crumbs;
     QHBoxLayout* m_crumbLayout;
+    QListWidget* m_places;
     QTableWidget* m_remote;
+    QWidget* m_remoteArea;
     ui::EmptyState* m_remoteEmpty;
     QLabel* m_remoteFooter;
     QLabel* m_remoteFree;
+    QLineEdit* m_filter;
     QPushButton* m_btnUpload;
     QPushButton* m_btnUploadFolder;
     QPushButton* m_btnDownload;
     QPushButton* m_btnNewFolder;
     QPushButton* m_btnRename;
     QPushButton* m_btnDelete;
+    ui::IconButton* m_btnBack;
     ui::IconButton* m_btnUp;
     ui::IconButton* m_btnRefresh;
+    ui::IconButton* m_btnPlaces = nullptr;
+    bool m_compact = false;
     QLabel* m_destClass;
+    TransferPanel* m_transfers = nullptr;
     // payloads
     QListWidget* m_payloadList;
     ui::Card* m_payloadDetail;
+    QWidget* m_payloadArea;
     QLabel* m_pName;
     ui::Badge* m_pBadge;
     QLabel* m_pFile;
@@ -157,7 +234,8 @@ private:
     QPushButton* m_pEdit;
     QPushButton* m_pRemove;
     ui::EmptyState* m_payloadEmpty;
-    ui::Segmented* m_payloadTarget;
+    QComboBox* m_payloadTarget;
+    QLabel* m_targetHint;
     int m_currentPayload = -1;
     // klog
     KlogModel* m_klog;
@@ -180,18 +258,19 @@ private:
     ui::PathField* m_patchFolder;
     QPushButton* m_patchLocal;
     QLabel* m_dpiStatus;
-    // mount
-    ui::Segmented* m_tool;
-    QTableWidget* m_mountTable;
-    QLabel* m_mountStatus;
-    QPushButton* m_mountLoad;
-    QPushButton* m_mountPush;
-    QPushButton* m_mountStop;
-    QPushButton* m_mountSendElf;
-    ui::PathField* m_mountElf;
+    QLineEdit* m_firmware;
+    QLabel* m_youtubeVersion;
+    // tools
     QPointer<QWidget> m_demoSheet;
-    DiagnosticsTab* m_diagnostics = nullptr; // pages/ps5/DiagnosticsTab
-    FindConsoleButton* m_find = nullptr;     // pages/ps5/FindConsole
+    DiagnosticsTab* m_diagnostics = nullptr;
+    Ps5ManagerTab* m_manager = nullptr;
+    FakelibTab* m_fakelib = nullptr;
+    AutoloaderTab* m_autoloader = nullptr;
+    AmprTab* m_ampr = nullptr;
+    ShadowMountTab* m_smp = nullptr;
+    SmpLogTab* m_smpLog = nullptr;
+    CrashDumpsTab* m_crash = nullptr;
+    InstallTab* m_installTab = nullptr;
 };
 
 } // namespace fw::pages

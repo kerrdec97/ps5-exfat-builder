@@ -35,6 +35,9 @@ public:
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the game's app0 folder."));
         if (!QFileInfo(f).isDir())
             return Error(ErrorCode::NotFound, QStringLiteral("The folder %1 does not exist.").arg(nativeFolder(f)));
+        if (!m_p.value(QStringLiteral("allowAssetPacks")).toBool())
+            if (const QString pack = folderAmprAssetPack(f); !pack.isEmpty())
+                return Error(ErrorCode::InvalidArgument, amprAssetPackProblem(nativeFolder(f), pack));
         if (!m_p.value(QStringLiteral("force")).toBool() && !folderHasAmprLibrary(f))
             return Error(ErrorCode::InvalidArgument,
                          QStringLiteral("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an APR "
@@ -98,6 +101,27 @@ private:
 };
 
 } // namespace
+
+bool isAmprAssetPackMarker(const QString& fileName)
+{
+    return fileName.compare(QLatin1String("ampr_assets.index"), Qt::CaseInsensitive) == 0
+        || fileName.compare(QLatin1String("ampr_assets.index.runtime"), Qt::CaseInsensitive) == 0;
+}
+
+QString folderAmprAssetPack(const QString& folder)
+{
+    for (const QFileInfo& f : QDir(folder).entryInfoList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot))
+        if (isAmprAssetPackMarker(f.fileName()))
+            return f.fileName();
+    return {};
+}
+
+QString amprAssetPackProblem(const QString& folder, const QString& marker)
+{
+    return QStringLiteral("%1 uses ampr_emu asset packs (%2 and .pak volumes). They only work with the ampr_emu.index they "
+                          "were built from; a new index would break them. Rebuild the packs with ampr_emu's own tools instead.")
+        .arg(folder, marker);
+}
 
 bool folderHasAmprLibrary(const QString& folder)
 {

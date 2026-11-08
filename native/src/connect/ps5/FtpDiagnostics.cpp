@@ -21,6 +21,24 @@ namespace fw::ps5 {
 ServerGuess classifyFtpServer(const FtpFeatures& f, const QString& banner)
 {
     ServerGuess g;
+    // ps5-payload-dev ftpsrv: its greeting names it; FEAT lists KILL/MTRW/SELF.
+    const bool ftpsrvBanner = banner.contains(QLatin1String("ftpsrv"), Qt::CaseInsensitive);
+    if (ftpsrvBanner || f.ftpsrv) {
+        const FtpServerIdentity id = identifyFtpServer(banner, &f);
+        g.label = id.version.isEmpty() ? QStringLiteral("ftpsrv") : QStringLiteral("ftpsrv %1").arg(id.version);
+        g.confidence = ftpsrvBanner && f.ftpsrv ? QStringLiteral("very likely") : QStringLiteral("likely");
+        if (ftpsrvBanner)
+            g.evidence << QStringLiteral("Welcome banner names ftpsrv");
+        if (f.ftpsrv)
+            g.evidence << QStringLiteral("FEAT lists ftpsrv's own commands (KILL/MTRW/SELF)");
+        return g;
+    }
+    if (banner.contains(QLatin1String("Service ready for new user"), Qt::CaseInsensitive)) {
+        g.label = QStringLiteral("etaHEN FTP");
+        g.confidence = QStringLiteral("likely");
+        g.evidence << QStringLiteral("Welcome banner matches etaHEN's FTP server (port 1337)");
+        return g;
+    }
     int score = 0;
     if (f.xcrypt) {
         score += 2;
@@ -54,7 +72,7 @@ QJsonObject featuresJson(const FtpFeatures& f)
 {
     return {{QStringLiteral("mlsd"), f.mlsd}, {QStringLiteral("rest"), f.rest},   {QStringLiteral("size"), f.size},
             {QStringLiteral("mdtm"), f.mdtm}, {QStringLiteral("utf8"), f.utf8},   {QStringLiteral("xcrypt"), f.xcrypt},
-            {QStringLiteral("copy"), f.copy}, {QStringLiteral("raw"), f.raw}};
+            {QStringLiteral("copy"), f.copy}, {QStringLiteral("ftpsrv"), f.ftpsrv}, {QStringLiteral("raw"), f.raw}};
 }
 
 FtpFeatures featuresFrom(const QJsonObject& o)
@@ -67,6 +85,7 @@ FtpFeatures featuresFrom(const QJsonObject& o)
     f.utf8 = o.value(QStringLiteral("utf8")).toBool();
     f.xcrypt = o.value(QStringLiteral("xcrypt")).toBool();
     f.copy = o.value(QStringLiteral("copy")).toBool();
+    f.ftpsrv = o.value(QStringLiteral("ftpsrv")).toBool();
     f.raw = o.value(QStringLiteral("raw")).toString();
     return f;
 }

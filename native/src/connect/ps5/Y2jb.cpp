@@ -805,4 +805,36 @@ Result<ArtSetReport> uploadY2jbArtSet(FtpClient& c, const QList<Y2jbRegion>& reg
     return rep;
 }
 
+const QList<Y2jbYoutubeVersion>& y2jbYoutubeVersions()
+{
+    static const QList<Y2jbYoutubeVersion> v = {
+        {QStringLiteral("4.03"), QStringLiteral("12.40"), QStringLiteral("v01.000.003")},
+        {QStringLiteral("12.60"), QStringLiteral("13.20"), QStringLiteral("v01.000.030")},
+        {QStringLiteral("13.40"), QStringLiteral("13.60"), QStringLiteral("v01.009.253")},
+    };
+    return v;
+}
+
+QString y2jbYoutubeVersionFor(const QString& firmware)
+{
+    // "12.6" and "12.60" are the same firmware: compare as hundredths.
+    auto hundredths = [](const QString& fw) {
+        const QStringList p = fw.trimmed().split(u'.');
+        bool ok1 = false, ok2 = true;
+        const int major = p.value(0).toInt(&ok1);
+        QString minor = p.value(1, QStringLiteral("0")).left(2);
+        if (minor.size() == 1)
+            minor += u'0';
+        const int m = minor.toInt(&ok2);
+        return ok1 && ok2 ? major * 100 + m : -1;
+    };
+    const int f = hundredths(firmware);
+    if (f < 0)
+        return {};
+    for (const Y2jbYoutubeVersion& v : y2jbYoutubeVersions())
+        if (f >= hundredths(v.firmwareFrom) && f <= hundredths(v.firmwareTo))
+            return v.youtube;
+    return {};
+}
+
 } // namespace fw::ps5

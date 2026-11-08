@@ -14,11 +14,12 @@ namespace fw::ps5 {
 struct ConsoleEndpoint {
     QString host;
     quint16 ftpPort = 2121;
-    quint16 payloadPort = 9090;      // Payloads page
+    quint16 payloadPort = 9021;      // Payloads page: elfldr (9090 is etaHEN DPI v1, not a loader)
     quint16 shadowMountPort = 9021;  // ShadowMount+ ELF
     quint16 microMountPort = 9021;   // MicroMount ELF
     quint16 klogPort = 3232;
     quint16 dpiPort = 12800;         // etaHEN Direct Package Installer V2
+    quint16 smpApiPort = 10101;      // ShadowMount+ 1.7 HTTP API
     int connectTimeoutMs = 10000;
     int idleTimeoutMs = 30000;       // no progress for this long = stalled
     bool passive = true;

@@ -8,6 +8,13 @@
 //  * FakeTcpSink    — accepts connections and records every byte (payloads).
 //  * FakeLineServer — sends scripted text per connection (klogsrv).
 //  * FakeHttpUpload — records one HTTP request and answers it (DPI).
+//  * FakeHttpApi    — a JSON-over-POST API with a handler (ShadowMount+ 1.7).
+//
+// FakeFtpServer::Options::ftpsrv behaves like ps5-payload-dev ftpsrv v0.21:
+// the three-line greeting, USER answered 230 at once, FEAT listing only MLSD
+// KILL MTRW SELF, 502 for NLST and SITE AVAIL, and the per-connection SELF
+// decryption mode (on at login): SIZE and RETR of a file that starts with
+// SELF magic give a "decrypted" copy (ELF magic, 16 bytes shorter).
 //
 // Every server runs on its own thread with an event loop, so the code under
 // test can block the test thread the way a queue worker would. Header-only
@@ -20,6 +27,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHostAddress>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMutex>
 #include <QPointer>
 #include <QRegularExpression>
@@ -119,6 +128,8 @@ public:
         QByteArray extraFeatures;        // added to the FEAT reply, e.g. " XCRYPT\r\n CPFR\r\n"
         bool refuseEpsv = false;         // EPSV answers 502 (with refusePasv: no passive mode at all)
         QStringList refuseDeletePaths;   // DELE refused (550) for these virtual paths; STOR still allowed
+        bool ftpsrv = false;             // behave like ftpsrv v0.21 (see the header)
+        bool selfIgnored = false;        // ftpsrv: SELF answers "enabled" every time (cannot be turned off)
     };
 
     explicit FakeFtpServer(Options o) : m_opt(std::move(o))
@@ -183,6 +194,7 @@ private:
         QHostAddress activeHost;
         quint16 activePort = 0;
         std::function<void()> pending; // transfer waiting for its data connection
+        bool selfDecrypt = true;       // ftpsrv: SELF->ELF decryption mode of this connection
     };
 
     void log(const QString& c)
@@ -199,7 +211,9 @@ private:
         sock->setParent(m_t.ctx());
         m_sessions.push_back(s);
         m_connections.fetch_add(1);
-        if (!m_opt.silentGreeting)
+        if (m_opt.ftpsrv && !m_opt.silentGreeting)
+            reply(s.get(), "220-Welcome to ftpsrv.elf running on pid 77\r\n220-Version: v0.21.1 (built Aug 20 2026)\r\n220 Service is ready");
+        else if (!m_opt.silentGreeting)
             reply(s.get(), m_opt.greeting);
         Session* raw = s.get();
         QObject::connect(sock, &QTcpSocket::readyRead, sock, [this, raw] {
@@ -459,6 +473,16 @@ private:
         pump();
     }
 
+    static bool isSelfBytes(const QByteArray& b)
+    {
+        return b.startsWith(QByteArray("\x4f\x15\x3d\x1d", 4)) || b.startsWith(QByteArray("\x54\x14\xf5\xee", 4));
+    }
+    static bool isSelfFile(const QString& path)
+    {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) && isSelfBytes(f.read(4));
+    }
+
     void handle(Session* s, const QString& line)
     {
         const qsizetype sp = line.indexOf(u' ');
@@ -466,6 +490,23 @@ private:
         const QString arg = sp < 0 ? QString() : line.mid(sp + 1);
         log(cmd == u"PASS" ? QStringLiteral("PASS ****") : line);
 
+        if (cmd == u"USER" && m_opt.ftpsrv) {
+            s->user = arg; // ftpsrv has no PASS: 230 at once
+            s->loggedIn = true;
+            reply(s, "230 User logged in");
+            return;
+        }
+        if (m_opt.ftpsrv && (cmd == u"PASS" || cmd == u"NLST" || cmd == u"EPSV" || cmd == u"MDTM"
+                             || (cmd == u"SITE" && arg.compare(QLatin1String("AVAIL"), Qt::CaseInsensitive) == 0))) {
+            reply(s, "502 Command not implemented");
+            return;
+        }
+        if (m_opt.ftpsrv && (cmd == u"SELF" || (cmd == u"SITE" && arg.compare(QLatin1String("SELF"), Qt::CaseInsensitive) == 0))) {
+            if (!m_opt.selfIgnored)
+                s->selfDecrypt = !s->selfDecrypt;
+            reply(s, s->selfDecrypt ? "226 SELF transfer mode enabled" : "226 SELF transfer mode disabled");
+            return;
+        }
         if (cmd == u"USER") {
             s->user = arg;
             reply(s, "331 Password required");
@@ -491,6 +532,8 @@ private:
         }
         if (cmd == u"SYST") {
             reply(s, "215 UNIX Type: L8");
+        } else if (cmd == u"FEAT" && m_opt.ftpsrv) {
+            reply(s, "211-Features:\r\n MLSD\r\n KILL\r\n MTRW\r\n SELF\r\n211 End");
         } else if (cmd == u"FEAT") {
             QByteArray f = "211-Features:\r\n";
             if (m_opt.mlsd)
@@ -556,7 +599,9 @@ private:
             reply(s, "350 Restart position accepted.");
         } else if (cmd == u"SIZE") {
             const QFileInfo fi(local(s, arg));
-            if (fi.isFile())
+            if (fi.isFile() && m_opt.ftpsrv && s->selfDecrypt && isSelfFile(fi.filePath()))
+                reply(s, "213 " + QByteArray::number(fi.size() - 16)); // the "decrypted" ELF
+            else if (fi.isFile())
                 reply(s, "213 " + QByteArray::number(fi.size()));
             else
                 reply(s, "550 Could not get file size.");
@@ -610,7 +655,7 @@ private:
             else
                 reply(s, "502 Unknown SITE command.");
         } else if (cmd == u"LIST" || cmd == u"NLST" || cmd == u"MLSD") {
-            if (cmd == u"MLSD" && !m_opt.mlsd) {
+            if (cmd == u"MLSD" && !m_opt.mlsd && !m_opt.ftpsrv) {
                 reply(s, "500 Unknown command.");
                 return;
             }
@@ -662,6 +707,8 @@ private:
             s->rest = 0;
             f.seek(std::min(offset, f.size()));
             QByteArray bytes = f.readAll();
+            if (m_opt.ftpsrv && s->selfDecrypt && offset == 0 && isSelfBytes(bytes))
+                bytes = QByteArray("\x7f" "ELF", 4) + bytes.mid(20); // what SELF mode sends
             const QString vpath = virtualPath(s, arg);
             if (!m_opt.shortRetrPath.isEmpty() && vpath == m_opt.shortRetrPath)
                 bytes.truncate(bytes.size() / 2);
@@ -878,6 +925,81 @@ private:
     quint16 m_port = 0;
     mutable std::mutex m_mutex;
     QByteArray m_request;
+};
+
+// ---------------------------------------------------------------------------------------
+// ShadowMount+ 1.7 HTTP/JSON API stand-in: every POST is answered by the
+// handler (HTTP status + JSON object); requests are recorded.
+class FakeHttpApi {
+public:
+    struct Reply {
+        int status = 200;
+        QJsonObject body;
+    };
+    using Handler = std::function<Reply(const QString& path, const QJsonObject& request)>;
+
+    explicit FakeHttpApi(Handler handler) : m_handler(std::move(handler))
+    {
+        m_t.run([this] {
+            m_server = new QTcpServer(m_t.ctx());
+            m_server->listen(QHostAddress::LocalHost, 0);
+            QObject::connect(m_server, &QTcpServer::newConnection, m_server, [this] {
+                while (QTcpSocket* s = m_server->nextPendingConnection()) {
+                    auto buf = std::make_shared<QByteArray>();
+                    QObject::connect(s, &QTcpSocket::readyRead, s, [this, s, buf] {
+                        *buf += s->readAll();
+                        const qsizetype end = buf->indexOf("\r\n\r\n");
+                        if (end < 0)
+                            return;
+                        static const QRegularExpression cl(QStringLiteral("Content-Length: (\\d+)"), QRegularExpression::CaseInsensitiveOption);
+                        const QString head = QString::fromLatin1(buf->left(end));
+                        const auto m = cl.match(head);
+                        const qint64 len = m.hasMatch() ? m.captured(1).toLongLong() : 0;
+                        if (buf->size() < end + 4 + len)
+                            return;
+                        const QString path = head.section(u' ', 1, 1);
+                        const QJsonObject req = QJsonDocument::fromJson(buf->mid(end + 4, len)).object();
+                        Reply r = m_handler ? m_handler(path, req) : Reply{404, {{QStringLiteral("status"), 2}}};
+                        {
+                            std::lock_guard l(m_mutex);
+                            m_paths << path;
+                            m_requests << req;
+                        }
+                        const QByteArray body = QJsonDocument(r.body).toJson(QJsonDocument::Compact);
+                        s->write("HTTP/1.1 " + QByteArray::number(r.status) + " X\r\nContent-Type: application/json\r\nContent-Length: "
+                                 + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                        s->disconnectFromHost();
+                    });
+                }
+            });
+            m_port = m_server->serverPort();
+        });
+    }
+    ~FakeHttpApi()
+    {
+        m_t.destroyChildren();
+        m_server = nullptr;
+    }
+    quint16 port() const { return m_port; }
+    QStringList paths() const
+    {
+        std::lock_guard l(m_mutex);
+        return m_paths;
+    }
+    QList<QJsonObject> requests() const
+    {
+        std::lock_guard l(m_mutex);
+        return m_requests;
+    }
+
+private:
+    Handler m_handler;
+    ServerThread m_t;
+    QTcpServer* m_server = nullptr;
+    quint16 m_port = 0;
+    mutable std::mutex m_mutex;
+    QStringList m_paths;
+    QList<QJsonObject> m_requests;
 };
 
 } // namespace fake

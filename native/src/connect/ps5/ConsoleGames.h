@@ -48,8 +48,8 @@ struct ConsoleGame {
 struct ConsoleGameList {
     std::vector<ConsoleGame> games;
     QStringList folderErrors;           // "<folder>: <message>" for folders that could not be listed
-    std::optional<qint64> freeBytes;    // from SITE AVAIL
-    QString freeText;                   // the raw SITE AVAIL reply (empty if unsupported)
+    std::optional<qint64> freeBytes;    // ShadowMount+ API available_bytes, else SITE AVAIL
+    QString freeText;                   // where it came from / the raw SITE AVAIL reply (empty if unknown)
     qint64 imageBytes = 0;              // sum of the image sizes listed
 };
 
@@ -60,7 +60,11 @@ std::optional<qint64> parseSiteAvail(const QString& reply);
 
 // Lists the folders (unusable names skipped). Fails only when no folder could
 // be listed and the connection is gone, or on cancel.
-Result<ConsoleGameList> listConsoleGames(FtpClient& client, const QStringList& folders, const CancellationToken& token = {});
+// Free space: the ShadowMount+ 1.7 API (`smpApiPort` > 0) for the first
+// folder's filesystem, else SITE AVAIL (best effort: no current console
+// server implements it).
+Result<ConsoleGameList> listConsoleGames(FtpClient& client, const QStringList& folders, const CancellationToken& token = {},
+                                         quint16 smpApiPort = 0);
 
 // "/a/; /b" -> {"/a/", "/b"} (';' or newline separated, empty parts dropped,
 // each normalised with normalizeRemotePath(), duplicates removed).

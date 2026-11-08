@@ -49,8 +49,29 @@ struct FtpReply {
 
 struct FtpFeatures {
     bool mlsd = false, rest = false, size = false, mdtm = false, utf8 = false, xcrypt = false, copy = false;
+    // ps5-payload-dev ftpsrv: FEAT lists only MLSD KILL MTRW SELF, although
+    // REST and SIZE work (srv.c/cmd.c), so those are set too.
+    bool ftpsrv = false;
     QString raw;
 };
+
+// Which console FTP server answered, from the greeting (and FEAT when known):
+//   ftpsrv  "220-Welcome to ftpsrv.elf running on pid N" / "220-Version: v0.21.1 (built ...)"
+//   etaHEN  "220 Service ready for new user." (port 1337)
+//   zftpd   a banner naming zftpd, or FEAT with XCRYPT / server-side copy
+struct FtpServerIdentity {
+    QString name;    // "ftpsrv", "etaHEN", "zftpd"; empty = unknown
+    QString version; // "v0.21.1" when the greeting says it
+    QString label() const; // "ftpsrv v0.21.1", "etaHEN FTP", "FTP server"
+};
+FtpServerIdentity identifyFtpServer(const QString& welcome, const FtpFeatures* features = nullptr);
+
+// ftpsrv's per-connection SELF->ELF decryption (on by default): SIZE and RETR
+// of a file that starts with SELF magic (4F 15 3D 1D / 54 14 F5 EE: fself
+// eboot.bin, .sprx, .prx) return the decrypted ELF, so a size check after an
+// upload fails and a backup gets other bytes than the console holds. The
+// client sends SELF after every ftpsrv login to turn it off.
+enum class SelfMode { NotApplicable, Disabled, StillEnabled };
 
 enum class FtpListMode { Auto, List, Mlsd };
 
@@ -70,8 +91,11 @@ public:
     Status connectToHost(const QString& host, quint16 port, const CancellationToken& token = {});
     // USER/PASS; anonymous ("anonymous" / "anonymous@") when options().user is empty.
     Status login();
-    // connectToHost() + login().
+    // connectToHost() + login(), then (ftpsrv only) SELF to turn off the
+    // SELF decryption mode, checked from the reply (see SelfMode).
     Status open(const QString& host, quint16 port, const CancellationToken& token = {});
+    SelfMode selfMode() const { return m_selfMode; }
+    FtpServerIdentity serverIdentity() const { return identifyFtpServer(m_welcome); }
     bool isConnected() const;
     void quit();  // QUIT then close
     void abort(); // close at once
@@ -105,9 +129,16 @@ public:
     Result<qint64> size(const QString& path);
     Result<QDateTime> mdtm(const QString& path);
     Status noop();
-    Result<QString> siteAvail(); // raw reply text of SITE AVAIL
-    // True when `path` is an existing file (SIZE, then NLST of the parent).
+    // Raw reply text of SITE AVAIL. No current console server implements it
+    // (ftpsrv 502, etaHEN 504, zftpd: not listed); best effort only.
+    Result<QString> siteAvail();
+    // True when `path` is an existing file (SIZE, then a LIST/MLSD of the
+    // parent: ftpsrv answers 502 to NLST; NLST is the last resort).
     bool fileExists(const QString& path);
+    // The size of `path` as its parent folder's listing reports it (stat
+    // based on every console server, also when SIZE is not). NotFound when
+    // the listing has no such file.
+    Result<qint64> listedSize(const QString& path);
     // True when `path` is a folder (CWD into it and back).
     bool isDirectory(const QString& path);
 
@@ -144,6 +175,7 @@ private:
     QString m_host;
     quint16 m_port = 0;
     QString m_welcome;
+    SelfMode m_selfMode = SelfMode::NotApplicable;
     FtpReply m_last;
     bool m_transferStarted = false;
     bool m_transferAccepted = false;
