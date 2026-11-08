@@ -113,7 +113,6 @@ This app stands on the work of these people and projects — thank you.
 | DLC package builder | Lapy | — |
 | fpkg-cli (PSVIETHOA FPKG Builder) | PSVIETHOA — Nguyễn Thanh Sơn, Ngô Phi Phương | [thanhsondev/PSVIETHOA-FPKG-Builder](https://github.com/thanhsondev/PSVIETHOA-FPKG-Builder) |
 | LibProsperoPkg (the engine behind fpkg-cli) | drakmor | [drakmor/LibProsperoPkg](https://github.com/drakmor/LibProsperoPkg) |
-| Publishing Tools | Sony Interactive Entertainment | the owner's own copy |
 
 **Code ported or formats followed**
 
