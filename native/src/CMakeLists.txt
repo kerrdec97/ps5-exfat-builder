@@ -39,3 +39,8 @@ fw_configure_target(fw_registration)
 if(FW_BUILD_APP)
     add_subdirectory(app)
 endif()
+
+# --- single-file release launcher (plain Win32, no Qt) -------------------------
+if(WIN32)
+    add_subdirectory(onefile)
+endif()

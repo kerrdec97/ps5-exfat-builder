@@ -43,7 +43,7 @@ void ensure()
         s.data = QDir(env).filePath(QStringLiteral("data"));
         s.local = QDir(env).filePath(QStringLiteral("local"));
     } else {
-        const QString exeDir = QCoreApplication::instance() ? QCoreApplication::applicationDirPath() : QString();
+        const QString exeDir = appDir();
         if (!exeDir.isEmpty() && QFileInfo::exists(QDir(exeDir).filePath(QStringLiteral("portable.txt")))) {
             s.portable = true;
             s.data = QDir(exeDir).filePath(QStringLiteral("data"));
@@ -76,6 +76,24 @@ void initialize()
     if (QCoreApplication::applicationName().isEmpty())
         QCoreApplication::setApplicationName(QStringLiteral("exFAT Image Builder Farewell"));
     ensure();
+}
+
+QString appDir()
+{
+    const QString launcher = qEnvironmentVariable("FW_LAUNCHER_DIR");
+    if (!launcher.isEmpty() && QFileInfo(launcher).isDir())
+        return QDir::cleanPath(QDir::fromNativeSeparators(launcher));
+    return QCoreApplication::instance() ? QCoreApplication::applicationDirPath() : QString();
+}
+
+void resetForTests()
+{
+    State& s = state();
+    std::lock_guard lock(s.mutex);
+    s.initialized = false;
+    s.portable = false;
+    s.data.clear();
+    s.local.clear();
 }
 
 void overrideRoot(const QString& root)

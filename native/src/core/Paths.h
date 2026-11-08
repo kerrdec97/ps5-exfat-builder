@@ -3,9 +3,9 @@
 // Where the application keeps its own files.
 //
 // Default: settings and history in the roaming app-data folder, logs, temp and
-// caches in the local app-data folder. Portable mode (a `portable.txt` next to
-// the executable) keeps everything in `<exe dir>/data`. The FW_DATA_DIR
-// environment variable overrides both (tests, CI).
+// caches in the local app-data folder. Portable mode (a `portable.txt` in the
+// app folder, see appDir()) keeps everything in `<app dir>/data`. The
+// FW_DATA_DIR environment variable overrides both (tests, CI).
 
 #include <QString>
 
@@ -15,6 +15,14 @@ namespace fw::Paths {
 void initialize();
 // Tests: force every location under `root`.
 void overrideRoot(const QString& root);
+// Tests: forget the resolved locations; the next call resolves them again.
+void resetForTests();
+
+// The folder the user keeps the program in. Started through the single-file
+// launcher (src/onefile) the program runs from an unpacked copy, so this is
+// the launcher's folder (FW_LAUNCHER_DIR, which the launcher sets); otherwise
+// the executable's own folder.
+QString appDir();
 
 bool isPortable();
 QString dataDir();     // settings, history, queue

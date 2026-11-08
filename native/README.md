@@ -22,12 +22,26 @@ until this edition passes its acceptance tests (`docs/MIGRATION_MATRIX.md`).
 
 ## Install
 
+* **Single file (recommended)**: download `exFAT Image Builder.exe` and run
+  it; nothing to unzip or install, no admin prompt, no VC++ Redistributable
+  needed. The first start of each version unpacks the program once (about
+  60 MB, a second or less) to
+  `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime\` (or `%TEMP%` if that
+  is not writable); later starts run it from there at once, and older versions
+  are removed. A damaged download refuses to start. With an empty
+  `portable.txt` next to the exe, the unpacked copy goes to
+  `exFAT Image Builder.data\` and settings and logs to `data\` beside it.
+  To remove the app, delete the exe and that `runtime` folder.
 * **Installer**: `exFAT-Image-Builder-Farewell-<version>-win64-setup.exe`
   installs per user (no admin prompt) or for all users.
 * **Portable**: unzip `exFAT-Image-Builder-Farewell-<version>-win64-portable.zip`
   anywhere. Create an empty `portable.txt` next to the exe to keep settings and
   logs in a `data` folder beside it.
 * Verify downloads with `SHA256SUMS.txt` from the same release.
+* Release build on a PC: `native\packaging\make-release.ps1 [-Zip]` writes
+  `dist\exFAT Image Builder.exe` and `dist\SHA256SUMS.txt`;
+  `native\packaging\make-onefile.ps1` packs any deployed folder (every file
+  under it, e.g. `engines\backport\...`, or `-Extra '<source>=<path inside>'`).
 
 ## Where things are stored
 
@@ -47,7 +61,9 @@ imported from Settings › Advanced.
 ```
 
 * `--self-test` prints a JSON report of every dependency and the registered
-  settings and job types, then exits.
+  settings and job types, then exits. The single-file exe passes the command
+  line, working folder and exit code through, and shows the output in the
+  console it was started from (or wherever it is redirected).
 * `--screenshot-pages <dir>` renders every page to PNG files (used by CI).
 
 ## Building from source

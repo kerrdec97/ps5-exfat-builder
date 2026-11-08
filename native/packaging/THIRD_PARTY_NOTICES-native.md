@@ -13,6 +13,7 @@ following third-party components. Full licence texts are in LICENSES/.
 | make_fself (john-tornblom, modified by Nazky) | The Backport engine's fake-SELF writer/reader (`SelfFormat.h`, `SelfWriter.*`, `SelfReader.*`) is a port | GPL-3.0 |
 | LibProsperoPKG (SvenGDK) | Facts used by the FPKG engine: PS5 flat-path hash, UCP layout | GPL-3.0-or-later |
 | Lucide icons | Interface icons | ISC (LICENSES/Lucide-ISC.txt) |
+| Microsoft Visual C++ runtime (`vcruntime140*.dll`, `msvcp140*.dll`, ...) | Shipped next to the program inside the single-file exe | Microsoft Visual Studio redistributable files ("Distributable Code") |
 
 No Sony software is included. FPKG packages are built with the user's own
 Publishing Tools, located through Settings > Tools.

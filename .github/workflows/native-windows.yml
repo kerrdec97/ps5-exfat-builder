@@ -1,9 +1,11 @@
 name: Native (C++) Windows build and test
 
 # Builds the native Farewell Edition (native/) with MSVC 2022 + Qt 6.8 on
-# Windows, runs the automated tests, deploys the Qt runtime, packages a portable
-# zip and an installer, launches the real .exe (self-test, page screenshots,
-# 30 s alive check) and uploads everything as evidence. Nothing is published.
+# Windows, runs the automated tests, deploys the Qt runtime, packs the
+# single-file exe (the main download), packages a portable zip and an
+# installer, launches the real .exe and the single-file exe (self-test, page
+# screenshots, alive checks) and uploads everything as evidence. Nothing is
+# published.
 
 on:
   push:
@@ -113,6 +115,45 @@ jobs:
           Copy-Item native\packaging\licenses\* "$dist\LICENSES\"
           Copy-Item native\packaging\THIRD_PARTY_NOTICES-native.md "$dist\THIRD_PARTY_NOTICES.md"
           Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
+
+      - name: Single-file exe (the main download)
+        shell: pwsh
+        run: |
+          # Packs everything under dist\exFAT Image Builder (plus app-local VC++ runtime DLLs) into one exe.
+          native\packaging\make-onefile.ps1 -DeployDir "dist\exFAT Image Builder" -Output "dist\exFAT Image Builder.exe" -BuildDir build
+          build\bin\fw_onefile_pack.exe list "dist\exFAT Image Builder.exe" | Tee-Object ci-out\onefile-contents.txt
+
+      - name: Self-test and launch of the single-file exe
+        shell: pwsh
+        run: |
+          # A fresh folder and an empty cache, as on a user's PC.
+          $dir = Join-Path $PWD 'ci-onefile'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item "dist\exFAT Image Builder.exe" $dir
+          $exe = Join-Path $dir 'exFAT Image Builder.exe'
+          $env:LOCALAPPDATA = Join-Path $PWD 'ci-onefile-cache'
+          $env:FW_DATA_DIR = Join-Path $PWD 'ci-onefile-data'
+          $env:FW_OFFLINE = '1'
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          $times = @()
+          foreach ($round in 'first', 'cached') {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $exe -ArgumentList '--self-test' -RedirectStandardOutput "ci-out\onefile-self-test-$round.json" -RedirectStandardError "ci-out\onefile-self-test-$round.err" -PassThru -Wait -NoNewWindow
+            $sw.Stop()
+            $times += "$round start: $($sw.ElapsedMilliseconds) ms, exit $($p.ExitCode)"
+            if ($p.ExitCode -ne 0) { throw "single-file self-test ($round) exit code $($p.ExitCode)" }
+            $null = Get-Content -Raw "ci-out\onefile-self-test-$round.json" | ConvertFrom-Json
+          }
+          $times | Tee-Object ci-out\onefile-times.txt
+          # Real start: the launcher waits for the program; ending the launcher ends the program too.
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 20
+          $child = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($p.Id)"
+          "launcher alive: $(-not $p.HasExited); program: $($child.ExecutablePath)" | Tee-Object ci-out\onefile-launch.txt
+          if ($p.HasExited -or -not $child) { throw "The single-file exe did not keep the program running" }
+          Stop-Process -Id $p.Id -Force
+          Start-Sleep -Seconds 3
+          if (Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue) { throw "The program outlived its launcher" }
 
       - name: Self-test of the deployed exe
         shell: pwsh

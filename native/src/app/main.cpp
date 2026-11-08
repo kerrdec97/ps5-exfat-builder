@@ -1,5 +1,6 @@
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/services/LauncherIdentity.h"
 #include "app/ui/Theme.h"
 
 #include "core/BuildInfo.h"
@@ -84,6 +85,7 @@ int main(int argc, char* argv[])
 
     fw::MainWindow window(context);
     window.show();
+    fw::launcher::applyTaskbarIdentity(&window); // pin the single-file launcher, not its unpacked copy
 
     if (parser.isSet(screenshotOpt)) {
         const QString dir = parser.value(screenshotOpt);
