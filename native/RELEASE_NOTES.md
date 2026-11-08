@@ -58,7 +58,8 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
 * **New interface** on the Farewell design system: one accent colour, real
   focus rings, every setting generated from the engines that use it (no
   decorative controls), per-job overrides with clear badges, structured logs.
-  Pages: Home, Build image, FPKG, Extract & verify, Edit image (stage changes,
+  Pages: Home, Build image (exFAT, FFPKG, PFS and FPKG on one page, each
+  showing only its own options), Extract & verify, Edit image (stage changes,
   apply in one verified job, convert between formats), Backport, Queue, PS5
   connect (FTP browser, payloads, kernel log, Y2JB, mount config), Library
   (scan, covers, dump rename with undo, DLC-emu editor), Logs, Settings, About.
@@ -74,10 +75,20 @@ now built in, so the new app needs **no administrator rights, no OSFMount, no
   Advanced). Keys that no longer apply (OSFMount, robocopy, Python back-ends)
   are not imported.
 * PFS verification now follows the app-wide Verification settings.
-* exFAT "Auto" cluster size is described as it really behaves (32 KiB for
-  small-file games, 64 KiB otherwise); the legacy label said "Auto (64K)".
-* SDK versions from `param.sfo` are read correctly (SDK 10 no longer shows as
-  16).
+* exFAT "Automatic" cluster size is always 64 KiB, which ShadowMount+ 1.7 and
+  later need (the legacy rule picked 32 KiB for games with many small files).
+  The other sizes stay available for other loaders.
+* Image names: the Build page proposes "PPSA01342 Demon's Souls
+  (01.000.000)" (Settings › Build › Output name: Title ID / title / version /
+  firmware presets, the source folder's name, or a custom template with
+  %TITLE% %PPSA% %VERSION% %FIRMWARE% %SDK% %TYPE% %DATE% %FOLDER%), keeps
+  letters such as "ō" and can be edited for each job. The legacy
+  `name_preset` and `name_custom_template` settings are imported.
+* The Build page finds the game when you choose a folder that holds it one
+  or more levels down, and offers a choice when there are several games.
+* PFS images can also be built uncompressed (.ffpfs).
+* SDK and required firmware versions are read correctly (SDK 10 no longer
+  shows as 16).
 * Fixed while porting: the Language Stripper crashed on its first match; the
   legacy PFS tab double-compressed `.ffpfsc`; DLC-emu and dump-rename edge
   cases; several data-safety issues listed in `docs/BACKPORT_PARITY.md`.

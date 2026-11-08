@@ -265,6 +265,73 @@ private slots:
         QVERIFY(!folderNameProblem(QStringLiteral("trailing.")).isEmpty());
     }
 
+    void nameTemplatesMatchLegacy()
+    {
+        // Legacy Build tab _gen_name (#60, #43): presets, template tokens,
+        // bracket clean-up, firmware, Unicode titles and the folder fallback.
+        ImageNameFields f;
+        f.titleId = QStringLiteral("PPSA01342");
+        f.title = QStringLiteral("Demon's Souls");
+        f.version = QStringLiteral("01.000.000");
+        f.firmware = QStringLiteral("2");
+        f.sdk = QStringLiteral("2.00");
+        f.type = QStringLiteral("exFAT");
+        f.folderName = QStringLiteral("Demons Souls dump");
+        f.date = QStringLiteral("2026-11-08");
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitleVersion, {}, f), QStringLiteral("PPSA01342 Demon's Souls (01.000.000)"));
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitleVersionFirmware, {}, f),
+                 QStringLiteral("PPSA01342 Demon's Souls (01.000.000) (FW2)")); // the v4.0.2 name in #76
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitle, {}, f), QStringLiteral("PPSA01342 Demon's Souls"));
+        QCOMPARE(renderImageName(ImageNamePreset::TitleId, {}, f), QStringLiteral("PPSA01342"));
+        QCOMPARE(renderImageName(ImageNamePreset::Folder, {}, f), QStringLiteral("Demons Souls dump"));
+        // Every token, case-insensitive; unknown tokens stay as typed.
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, kDefaultImageNameTemplate, f),
+                 QStringLiteral("Demon's Souls (01.000.000) (FW2) (PPSA01342)"));
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, QStringLiteral("%ppsa%_%Type%_%date%_SDK %sdk% %folder% %NOPE%"), f),
+                 QStringLiteral("PPSA01342_exFAT_2026-11-08_SDK 2.00 Demons Souls dump %NOPE%"));
+        // Missing values: empty brackets go, spaces inside brackets are trimmed, ends are stripped.
+        ImageNameFields bare = f;
+        bare.firmware.clear();
+        bare.version.clear();
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, kDefaultImageNameTemplate, bare), QStringLiteral("Demon's Souls (PPSA01342)"));
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, QStringLiteral("- [ %VERSION% ] %TITLE% ( %PPSA% ) {%FIRMWARE%} _"), bare),
+                 QStringLiteral("Demon's Souls (PPSA01342)"));
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, QStringLiteral("((%FIRMWARE%)) %TITLE%"), bare), QStringLiteral("Demon's Souls"));
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitleVersionFirmware, {}, bare), QStringLiteral("PPSA01342 Demon's Souls"));
+        // Unicode survives; only characters Windows forbids are removed (no more "Y_tei").
+        ImageNameFields yotei;
+        yotei.titleId = QStringLiteral("PPSA26344");
+        yotei.title = QStringLiteral("Ghost of Yōtei: Director’s Cut");
+        yotei.version = QStringLiteral("01.512.000");
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitleVersion, {}, yotei),
+                 QStringLiteral("PPSA26344 Ghost of Yōtei Director’s Cut (01.512.000)"));
+        ImageNameFields jp;
+        jp.titleId = QStringLiteral("PPSA00001");
+        jp.title = QStringLiteral("ファイナルファンタジー 🎮 <Remake>?");
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitle, {}, jp), QStringLiteral("PPSA00001 ファイナルファンタジー 🎮 Remake"));
+        // Fallbacks: the folder name, then "game"; reserved names and the length cap.
+        ImageNameFields none;
+        none.folderName = QStringLiteral("My Dump.");
+        QCOMPARE(renderImageName(ImageNamePreset::TitleIdTitleVersion, {}, none), QStringLiteral("My Dump"));
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, QStringLiteral("(%VERSION%)"), none), QStringLiteral("My Dump"));
+        QCOMPARE(renderImageName(ImageNamePreset::TitleId, {}, {}), QStringLiteral("game"));
+        QCOMPARE(sanitizeImageName(QStringLiteral("con")), QStringLiteral("con_"));
+        QCOMPARE(sanitizeImageName(QStringLiteral(" a\tb\u0001c | d ")), QStringLiteral("a bc d"));
+        const QString longName = sanitizeImageName(QString(100, u'x') + QStringLiteral("🎮").repeated(80));
+        QVERIFY(longName.size() <= 300);
+        QCOMPARE(longName.left(100), QString(100, u'x'));
+        QVERIFY(!longName.back().isHighSurrogate());
+        QVERIFY(folderNameProblem(renderImageName(ImageNamePreset::TitleIdTitleVersion, {}, yotei)).isEmpty());
+        // Preset keys round-trip (legacy name_preset values).
+        for (auto p : {ImageNamePreset::TitleId, ImageNamePreset::TitleIdTitle, ImageNamePreset::TitleIdTitleVersion,
+                       ImageNamePreset::TitleIdTitleVersionFirmware, ImageNamePreset::Folder, ImageNamePreset::Custom})
+            QCOMPARE(*imageNamePresetFromKey(imageNamePresetKey(p)), p);
+        QVERIFY(!imageNamePresetFromKey(QStringLiteral("nope")));
+        QCOMPARE(firmwareMajor(QStringLiteral("4.50")), QStringLiteral("4"));
+        QCOMPARE(firmwareMajor(QStringLiteral("10.00")), QStringLiteral("10"));
+        QVERIFY(firmwareMajor(QStringLiteral("x")).isEmpty());
+    }
+
     // ---- param.sfo ------------------------------------------------------------------
     void sfoParsesStringsAndIntegers()
     {
@@ -863,24 +930,32 @@ private slots:
         Module mod;
         int n = 0;
         for (const auto* d : mod.schema->all()) {
-            QVERIFY(d->key.startsWith(QStringLiteral("library.")));
+            QVERIFY2(d->key.startsWith(QStringLiteral("library.")) || d->key.startsWith(QStringLiteral("build.")), qPrintable(d->key));
             QVERIFY(mod.schema->normalize(d->key, d->defaultValue).ok());
             QVERIFY(!d->description.isEmpty());
             ++n;
         }
-        QCOMPARE(n, 3);
+        QCOMPARE(n, 6); // library.folders / renamePreset / coverCacheFolder, build.namePreset / nameTemplate / firmwareOverride
         QVERIFY(mod.jobs.contains(jobkinds::kLibraryScan));
         QVERIFY(mod.jobs.contains(jobkinds::kLibraryRename));
         QVERIFY(!mod.schema->normalize(keys::kRenamePreset, QStringLiteral("nope")).ok());
+        // Build page naming: the legacy default preset and template.
+        QCOMPARE(mod.schema->find(keys::kNamePreset)->defaultValue.toString(), QStringLiteral("ppsa_title_ver"));
+        QCOMPARE(mod.schema->find(keys::kNameTemplate)->defaultValue.toString(), kDefaultImageNameTemplate);
+        QVERIFY(!mod.schema->normalize(keys::kNamePreset, QStringLiteral("nope")).ok());
+        QVERIFY(mod.schema->normalize(keys::kFirmwareOverride, QStringLiteral("13")).ok());
 
         const QString legacy = QDir(fresh(QStringLiteral("legacy"))).filePath(QStringLiteral("settings.json"));
-        QVERIFY(write(legacy, R"({"lib_folders": ["D:\\Games", "E:\\More"], "unrelated": 1})"));
+        QVERIFY(write(legacy, R"({"lib_folders": ["D:\\Games", "E:\\More"], "unrelated": 1,
+            "name_preset": "custom", "name_custom_template": "%PPSA% %TITLE%"})"));
         SettingsStore store(mod.schema, QDir(fresh(QStringLiteral("store"))).filePath(QStringLiteral("s.json")));
         QVERIFY(store.load().ok());
         auto imported = store.importLegacy(legacy);
         QVERIFY(imported.ok());
-        QCOMPARE(imported.value(), 1);
+        QCOMPARE(imported.value(), 3);
         QCOMPARE(store.value(keys::kLibraryFolders).toStringList().size(), 2);
+        QCOMPARE(store.value(keys::kNamePreset).toString(), QStringLiteral("custom"));
+        QCOMPARE(store.value(keys::kNameTemplate).toString(), QStringLiteral("%PPSA% %TITLE%"));
     }
 };
 

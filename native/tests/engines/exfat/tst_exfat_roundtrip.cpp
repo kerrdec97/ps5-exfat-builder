@@ -127,11 +127,11 @@ private slots:
         const QString src = path(QStringLiteral("legacy-size"));
         makeSampleTree(src);
         const QString image = path(QStringLiteral("legacy-size.exfat"));
-        auto plan = build(src, image); // default: legacy automatic size and cluster
+        auto plan = build(src, image); // default: legacy automatic size, automatic cluster
         QVERIFY2(plan.ok(), qPrintable(plan.ok() ? QString() : err(plan.error())));
         QCOMPARE(QFileInfo(image).size(), plan->geo.volumeBytes());
         QVERIFY(plan->geo.volumeBytes() >= kGiB); // legacy 1 GiB minimum slack
-        QCOMPARE(plan->geo.clusterBytes(), 32768); // small average file
+        QCOMPARE(plan->geo.clusterBytes(), 65536); // automatic = 64 KiB (ShadowMount+ 1.7), even for small files
         expectFsckClean(image);
         compareImageWithFolder(image, src);
         // Manual cross-checks with other exFAT drivers: keep the sample.

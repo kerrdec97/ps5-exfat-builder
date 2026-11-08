@@ -440,6 +440,10 @@ void JobOptionsPanel::build()
         for (const SettingDef* d : schema.inSection(section)) {
             if (!d->perJob || m_exclude.contains(d->key))
                 continue;
+            if (!m_include.isEmpty() && std::none_of(m_include.cbegin(), m_include.cend(), [d](const QString& k) {
+                    return d->key == k || (k.endsWith(u'.') && d->key.startsWith(k));
+                }))
+                continue;
             const QString title = m_sections.size() > 1 && !d->group.isEmpty() && d->group != section
                                       ? QStringLiteral("%1 · %2").arg(section, d->group)
                                       : (d->group.isEmpty() ? section : d->group);

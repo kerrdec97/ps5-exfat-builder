@@ -36,8 +36,6 @@ const QMap<QString, QString>& notImported()
         {QStringLiteral("pfs_intermediate_via"), QStringLiteral("folder→.ffpfsc builds the nested image in memory, no intermediate")},
         {QStringLiteral("ffpkg_output_dir"), QStringLiteral("one output folder setting (storage.defaultOutputFolder)")},
         {QStringLiteral("ffpkg_extract_outdir"), QStringLiteral("extraction asks for its destination per job")},
-        {QStringLiteral("name_preset"), QStringLiteral("the Build page proposes Title ID + title + version (the legacy default) and the name is editable per job")},
-        {QStringLiteral("name_custom_template"), QStringLiteral("custom naming template not offered; presets only")},
         {QStringLiteral("lowercase_names"), QStringLiteral("orphan key in the legacy app")},
         {QStringLiteral("last_tab"), QStringLiteral("UI state (kept in QSettings by the new UI)")},
         {QStringLiteral("sidebar_collapsed"), QStringLiteral("UI state")},
@@ -134,6 +132,28 @@ private slots:
         QCOMPARE(store.value(QStringLiteral("performance.workerThreads")).toInt(), 8);
         QCOMPARE(store.value(QStringLiteral("ps5.consoleIp")).toString(), QStringLiteral("192.168.1.50"));
         QCOMPARE(store.value(QStringLiteral("ps5.autoUploadAfterBuild")).toBool(), true);
+        // Build tab naming (name_preset / name_custom_template): the Build page
+        // proposes the name from these and the name stays editable per job.
+        QCOMPARE(store.value(QStringLiteral("build.namePreset")).toString(), QStringLiteral("ppsa_title_ver"));
+        QCOMPARE(store.value(QStringLiteral("build.nameTemplate")).toString(), QStringLiteral("%TITLE% (%VERSION%) (%FIRMWARE%) (%PPSA%)"));
+    }
+
+    void namingPresetsImport()
+    {
+        fwtest::Registry reg;
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("n/settings.json")));
+        QVERIFY(store.load().ok());
+        const QString legacy = m_root.filePath(QStringLiteral("naming.json"));
+        QVERIFY(fwtest::writeTextFile(legacy, R"({"name_preset": "ppsa_title_ver_fw", "name_custom_template": "%PPSA% - %TITLE% [%FIRMWARE%]"})"));
+        auto n = store.importLegacy(legacy);
+        QVERIFY2(n.ok(), n.ok() ? "" : qPrintable(n.error().toLogString()));
+        QCOMPARE(n.value(), 2);
+        QCOMPARE(store.value(QStringLiteral("build.namePreset")).toString(), QStringLiteral("ppsa_title_ver_fw"));
+        QCOMPARE(store.value(QStringLiteral("build.nameTemplate")).toString(), QStringLiteral("%PPSA% - %TITLE% [%FIRMWARE%]"));
+        // An unknown preset is not imported (the default stays).
+        QVERIFY(fwtest::writeTextFile(legacy, R"({"name_preset": "something_else"})"));
+        QVERIFY(store.importLegacy(legacy).ok());
+        QCOMPARE(store.value(QStringLiteral("build.namePreset")).toString(), QStringLiteral("ppsa_title_ver_fw"));
     }
 };
 

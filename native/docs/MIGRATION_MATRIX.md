@@ -22,11 +22,11 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 
 | Legacy feature | C++ implementation | Status | Tests | Remaining |
 |---|---|---|---|---|
-| exFAT image build (OSFMount + format.com + robocopy, admin) | `engines/exfat` native writer from the Microsoft spec: bare volume, 512 B sectors, label OSFIMG, legacy cluster rule (64 KiB if avg file ≥ 1 MiB else 32 KiB), legacy size formula, contiguous NoFatChain files, sparse zero runs; no admin, no OSFMount | Done · field check | tst_exfat_roundtrip/format/jobs/bench; fsck.exfat clean; FUSE exfat read-back (manual) | Mount on a real PS5 and in Windows |
+| exFAT image build (OSFMount + format.com + robocopy, admin) | `engines/exfat` native writer from the Microsoft spec: bare volume, 512 B sectors, label OSFIMG, automatic cluster always 64 KiB (ShadowMount+ 1.7 needs it; the legacy 32/64 KiB rule is obsolete), legacy size formula, contiguous NoFatChain files, sparse zero runs; no admin, no OSFMount | Done · field check | tst_exfat_roundtrip/format/jobs/bench; fsck.exfat clean; FUSE exfat read-back (manual) | Mount on a real PS5 and in Windows |
 | Image size override, cluster/sector settings, hidden-file exclusion | `exfat.*` settings (18), legacy keys mapped | Done | tst_exfat_jobs (every setting read) | — |
 | FFPKG (UFS2) build via UFS2Tool (.NET 8) | `engines/ufs2` native port of UFS2Tool `newfs -D` with the legacy parameters; byte-identical to UFS2Tool 4.0.0 (9 layouts); UTF-8 names (UFS2Tool wrote `?`) | Done · field check | tst_ufs2_reference (UFS2Tool images rebuilt byte for byte), compat (fsck_ffs, dumpfs, UFS2Tool fsck/ls/extract) | Console mount test |
 | FFPFSC / FFPFS (mkpfs / Lazy_MkPFS) | `engines/pfs` GPL port of Lazy_MkPFS: folder→.ffpfs, folder→.ffpfsc (two-step, nested image in memory), image→.ffpfsc, AMPR index, multithreaded deterministic compression | Done · field check | tst_pfs_golden (20 cases byte-identical to Lazy), roundtrip, jobs, benchmark | zlib-ng/ISA-L back-ends not ported (zlib only) |
-| Build-tab metadata, naming presets, collision handling | `engines/gameinfo` (metadata chain, Naming), `PartFile`/`uniquePath`, UI Build page | Done | tst_gameinfo, tst_core | — |
+| Build-tab metadata, naming presets, collision handling | `engines/gameinfo` (metadata chain, Naming: `renderImageName` with the legacy presets `ppsa` / `ppsa_title` / `ppsa_title_ver` / `ppsa_title_ver_fw` / `custom` template `%TITLE% %PPSA% %VERSION% %FIRMWARE% %TYPE% %DATE%`, plus `folder` and `%FOLDER% %SDK%`; settings `build.namePreset`, `build.nameTemplate`, `build.firmwareOverride`, legacy `name_preset` / `name_custom_template` imported), editable file name on the Build page (Unicode kept; only characters Windows forbids are removed), wrapper folders resolved with `findGameRoots`, `PartFile`/`uniquePath` | Done | tst_gameinfo (nameTemplatesMatchLegacy), tst_build_page, tst_legacy_import, tst_core | — |
 | Output-inside-source refusal, FAT32 refusal (≥ 4 GiB), cloud/network warnings | `Job::validate`, `checkOutputVolume()` | Done | tst_core_extra, engine job tests | — |
 | Free-space pre-flight (+ reserve) | `ensureFreeSpace` + `storage.freeSpaceMarginMiB` | Done | tst_core, engine tests | — |
 | Previous image set aside / restored on failure (audit M2) | `PartFile::commit(replace)` with unique `.fw-old` | Done | tst_core, tst_exfat_jobs, tst_ufs2_jobs | — |
@@ -62,7 +62,7 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Update packages (base package), add-ons (`prospero_ac`) | `fpkg.build {basePackage}`, `fpkg.addon` | Done · field check | tst_fpkg_build | Real tools |
 | Verify / extract existing .pkg | `fpkg.verify`, `fpkg.extract` via the user's tool | Done · field check | tst_fpkg_build | Real tools |
 | Reference app settings (PSVIETHOA v3.0.0) | 24 `fpkg.*` settings + PlayGo/Verification; built-in engine (Kraken/PFS v3) and online metadata deliberately absent | Done | tst_fpkg_rules | — |
-| Live CPU-core limit, Defender pre-scan, keep-awake | `setLiveCpuLimit`, `fpkg.prescan`, app-wide keep-awake | Done | tst_fpkg_build; FPKG page live CPU combo | — |
+| Live CPU-core limit, Defender pre-scan, keep-awake | `setLiveCpuLimit`, `fpkg.prescan`, app-wide keep-awake | Done | tst_fpkg_build; Build page (FPKG) live CPU combo | — |
 | Bundled Sony tools / LibProsperoPkg built-in engine | — | Not ported | — | Licence: Sony binaries are never bundled; built-in engine out of scope |
 
 ## 4. Backport (see BACKPORT_PARITY.md, docs/engines/BACKPORT.md)

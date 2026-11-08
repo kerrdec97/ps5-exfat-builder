@@ -1,5 +1,7 @@
 #include "engines/gameinfo/Naming.h"
 
+#include <QDate>
+#include <QHash>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -165,6 +167,177 @@ QString folderNameProblem(const QString& name)
     if (name.size() > 240)
         return QStringLiteral("The name is too long.");
     return {};
+}
+
+// ---- image file names --------------------------------------------------------------
+
+QString imageNamePresetKey(ImageNamePreset preset)
+{
+    switch (preset) {
+    case ImageNamePreset::TitleId: return QStringLiteral("ppsa");
+    case ImageNamePreset::TitleIdTitle: return QStringLiteral("ppsa_title");
+    case ImageNamePreset::TitleIdTitleVersion: return QStringLiteral("ppsa_title_ver");
+    case ImageNamePreset::TitleIdTitleVersionFirmware: return QStringLiteral("ppsa_title_ver_fw");
+    case ImageNamePreset::Folder: return QStringLiteral("folder");
+    case ImageNamePreset::Custom: return QStringLiteral("custom");
+    }
+    return QStringLiteral("ppsa_title_ver");
+}
+
+std::optional<ImageNamePreset> imageNamePresetFromKey(const QString& key)
+{
+    static const QHash<QString, ImageNamePreset> map = {
+        {QStringLiteral("ppsa"), ImageNamePreset::TitleId},
+        {QStringLiteral("ppsa_title"), ImageNamePreset::TitleIdTitle},
+        {QStringLiteral("ppsa_title_ver"), ImageNamePreset::TitleIdTitleVersion},
+        {QStringLiteral("ppsa_title_ver_fw"), ImageNamePreset::TitleIdTitleVersionFirmware},
+        {QStringLiteral("folder"), ImageNamePreset::Folder},
+        {QStringLiteral("custom"), ImageNamePreset::Custom},
+    };
+    const auto it = map.constFind(key.trimmed().toLower());
+    if (it == map.cend())
+        return std::nullopt;
+    return *it;
+}
+
+QString firmwareMajor(const QString& systemVersion)
+{
+    static const QRegularExpression re(QStringLiteral("^\\s*(\\d{1,2})(?:\\.\\d+)?\\s*$"));
+    const auto m = re.match(systemVersion);
+    if (!m.hasMatch())
+        return {};
+    const int major = m.captured(1).toInt();
+    return major >= 1 ? QString::number(major) : QString();
+}
+
+QString sanitizeImageName(const QString& input)
+{
+    QString name;
+    name.reserve(input.size());
+    for (QChar ch : input) {
+        const char16_t u = ch.unicode();
+        if (u == u'\t' || u == u'\n' || u == u'\r') {
+            name.append(u' ');
+            continue;
+        }
+        if (u < 0x20 || u == 0x7f || (u >= 0x80 && u <= 0x9f))
+            continue; // control characters
+        if (u == u'<' || u == u'>' || u == u':' || u == u'"' || u == u'/' || u == u'\\' || u == u'|' || u == u'?' || u == u'*')
+            continue; // forbidden in Windows file names
+        name.append(ch);
+    }
+    static const QRegularExpression ws(QStringLiteral("\\s+"), QRegularExpression::UseUnicodePropertiesOption);
+    name.replace(ws, QStringLiteral(" "));
+    const auto trimEnds = [](QString& s) {
+        while (!s.isEmpty() && (s.front() == u' ' || s.front() == u'.'))
+            s.remove(0, 1);
+        while (!s.isEmpty() && (s.back() == u' ' || s.back() == u'.'))
+            s.chop(1);
+    };
+    trimEnds(name);
+    // At most 150 code points (a surrogate pair is one character).
+    qsizetype units = 0;
+    int points = 0;
+    while (units < name.size() && points < 150) {
+        units += (name.at(units).isHighSurrogate() && units + 1 < name.size()) ? 2 : 1;
+        ++points;
+    }
+    name.truncate(units);
+    trimEnds(name);
+    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$"),
+                                             QRegularExpression::CaseInsensitiveOption);
+    if (reserved.match(name).hasMatch())
+        name += u'_';
+    return name;
+}
+
+QString renderImageName(ImageNamePreset preset, const QString& customTemplate, const ImageNameFields& f)
+{
+    const QString tid = f.titleId.trimmed();
+    const QString title = f.title.trimmed();
+    const QString ver = f.version.trimmed();
+    const QString fw = f.firmware.trimmed();
+    const auto idAndTitle = [&] { return title.isEmpty() || title == tid ? tid : (tid + u' ' + title).trimmed(); };
+    QString base;
+    switch (preset) {
+    case ImageNamePreset::TitleId:
+        base = tid;
+        break;
+    case ImageNamePreset::TitleIdTitle:
+        base = idAndTitle();
+        break;
+    case ImageNamePreset::TitleIdTitleVersionFirmware:
+        base = idAndTitle();
+        if (!ver.isEmpty())
+            base += QStringLiteral(" (") + ver + u')';
+        if (!fw.isEmpty())
+            base += QStringLiteral(" (FW") + fw + u')';
+        break;
+    case ImageNamePreset::Folder:
+        base = f.folderName.trimmed();
+        break;
+    case ImageNamePreset::Custom: {
+        const QHash<QString, QString> tokens = {
+            {QStringLiteral("TITLE"), title},
+            {QStringLiteral("PPSA"), tid},
+            {QStringLiteral("VERSION"), ver},
+            {QStringLiteral("FIRMWARE"), fw.isEmpty() ? QString() : QStringLiteral("FW") + fw},
+            {QStringLiteral("TYPE"), f.type.trimmed()},
+            {QStringLiteral("DATE"), f.date.isEmpty() ? QDate::currentDate().toString(Qt::ISODate) : f.date},
+            {QStringLiteral("FOLDER"), f.folderName.trimmed()},
+            {QStringLiteral("SDK"), f.sdk.trimmed()},
+        };
+        // One pass, so a value that looks like a token is not replaced again.
+        static const QRegularExpression tokenRe(QStringLiteral("%([A-Za-z]+)%"));
+        QString out;
+        qsizetype last = 0;
+        auto it = tokenRe.globalMatch(customTemplate);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const QString key = m.captured(1).toUpper();
+            if (!tokens.contains(key))
+                continue; // unknown tokens stay as typed
+            out += customTemplate.mid(last, m.capturedStart() - last);
+            out += tokens.value(key);
+            last = m.capturedEnd();
+        }
+        out += customTemplate.mid(last);
+        // Empty brackets left by missing values, then whitespace (legacy order).
+        static const QRegularExpression emptyBrackets(QStringLiteral("\\(\\s*\\)|\\[\\s*\\]|\\{\\s*\\}"));
+        for (int i = 0; i < 4; ++i) {
+            const QString next = QString(out).remove(emptyBrackets);
+            if (next == out)
+                break;
+            out = next;
+        }
+        static const QRegularExpression spaces(QStringLiteral("\\s{2,}"));
+        out.replace(spaces, QStringLiteral(" "));
+        out = out.trimmed();
+        static const QRegularExpression spaceBeforeClose(QStringLiteral("\\s+([)\\]}])"));
+        static const QRegularExpression spaceAfterOpen(QStringLiteral("([(\\[{])\\s+"));
+        out.replace(spaceBeforeClose, QStringLiteral("\\1"));
+        out.replace(spaceAfterOpen, QStringLiteral("\\1"));
+        static const QString strip = QStringLiteral(" -_–—");
+        while (!out.isEmpty() && strip.contains(out.front()))
+            out.remove(0, 1);
+        while (!out.isEmpty() && strip.contains(out.back()))
+            out.chop(1);
+        base = out;
+        break;
+    }
+    case ImageNamePreset::TitleIdTitleVersion:
+    default:
+        base = idAndTitle();
+        if (!ver.isEmpty())
+            base += QStringLiteral(" (") + ver + u')';
+        break;
+    }
+    if (base.trimmed().isEmpty())
+        base = f.folderName;
+    QString name = sanitizeImageName(base);
+    if (name.isEmpty())
+        name = sanitizeImageName(f.folderName);
+    return name.isEmpty() ? QStringLiteral("game") : name;
 }
 
 } // namespace fw::gameinfo

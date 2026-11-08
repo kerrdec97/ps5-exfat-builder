@@ -18,15 +18,6 @@ namespace fw::exfat {
 
 // ---- legacy sizing rules ---------------------------------------------------------
 
-int legacyAutoClusterBytes(qint64 fileCount, qint64 totalBytes)
-{
-    if (fileCount <= 0)
-        return 32768;
-    // PowerShell: [Int64]($RawBytes / [Int64]$FileCount) rounds half to even.
-    const qint64 avg = qint64(std::nearbyint(double(totalBytes) / double(fileCount)));
-    return avg >= kMiB ? 65536 : 32768;
-}
-
 qint64 legacyImageBytes(const SourceTree& tree, int clusterBytes)
 {
     const qint64 c = clusterBytes;
@@ -103,14 +94,13 @@ Result<ImagePlan> planImage(const SourceTree& tree, const WriterOptions& o)
 
     // Cluster size.
     ImagePlan plan;
-    const int cluster = o.clusterBytes > 0 ? o.clusterBytes : legacyAutoClusterBytes(tree.fileCount, tree.totalBytes);
-    if (o.clusterBytes > 0)
+    const int cluster = o.clusterBytes > 0 ? o.clusterBytes : kAutoClusterBytes;
+    if (o.clusterBytes <= 0)
+        plan.clusterChoice = QStringLiteral("%1 KiB (automatic)").arg(cluster / 1024);
+    else if (cluster == kAutoClusterBytes)
         plan.clusterChoice = QStringLiteral("%1 KiB (set in Settings)").arg(cluster / 1024);
     else
-        plan.clusterChoice = QStringLiteral("%1 KiB (automatic: average file %2 %3 1 MiB)")
-                                 .arg(cluster / 1024)
-                                 .arg(formatBytes(tree.fileCount ? tree.totalBytes / tree.fileCount : 0),
-                                      cluster == 65536 ? QStringLiteral(">=") : QStringLiteral("<"));
+        plan.clusterChoice = QStringLiteral("%1 KiB (set in Settings; ShadowMount+ 1.7 and later need 64 KiB)").arg(cluster / 1024);
 
     // Clusters needed, apart from the allocation bitmap (which depends on the
     // volume size).
