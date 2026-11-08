@@ -114,6 +114,7 @@ jobs:
           Copy-Item LICENSES -Recurse "$dist\LICENSES"
           Copy-Item native\packaging\licenses\* "$dist\LICENSES\"
           Copy-Item native\packaging\THIRD_PARTY_NOTICES-native.md "$dist\THIRD_PARTY_NOTICES.md"
+          Copy-Item native\packaging\LICENCE.txt "$dist\LICENCE.txt"
           Copy-Item build\bin\engines -Recurse "$dist\engines"
           Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
 

@@ -106,6 +106,8 @@ QString typeLabel(const QString& tile)
         return QStringLiteral("PFS");
     if (tile == kFormatFpkg)
         return QStringLiteral("FPKG");
+    if (tile == kFormatZstdFolder)
+        return QStringLiteral("zstd");
     return QStringLiteral("exFAT");
 }
 
@@ -160,12 +162,15 @@ QString sourceKindLabel(const QString& kind)
 }
 
 // ---- format tiles ------------------------------------------------------------------
-// Four large choices in one row (two by two when narrow). ChoiceTiles lays four
-// tiles out three-plus-one at form width, so the page draws its own row in the
-// same visual language (selected: gradient border, tint and check bubble).
+// Five large choices: one row when it fits, otherwise three and two (the three
+// images on the first row, the package and the packed folder below), two by
+// two when narrow. ChoiceTiles lays them out three-plus-one at form width, so
+// the page draws its own grid in the same visual language (selected: gradient
+// border, tint and check bubble).
 constexpr int kTileGap = 12;
 constexpr int kTileH = 132;
-constexpr int kTileMin4 = 150; // narrowest tile in a row of four
+constexpr int kTileMinRow = 150; // narrowest tile in one full row
+constexpr int kTileMin3 = 170;   // three per row
 constexpr int kTileMin2 = 190;
 
 QStringList wrapText(const QString& text, const QFont& font, int width, int maxLines)
@@ -243,7 +248,7 @@ public:
     }
     QSize sizeHint() const override
     {
-        const int w = count() * (kTileMin4 + 40);
+        const int w = std::min(count(), 3) * (kTileMin3 + 40);
         return {w, heightForWidth(w)};
     }
     QSize minimumSizeHint() const override { return {kTileMin2, kTileH}; }
@@ -381,8 +386,10 @@ private:
     {
         if (count() <= 1)
             return 1;
-        if (w >= count() * kTileMin4 + (count() - 1) * kTileGap)
+        if (w >= count() * kTileMinRow + (count() - 1) * kTileGap)
             return count();
+        if (count() >= 5 && w >= 3 * kTileMin3 + 2 * kTileGap)
+            return 3;
         return w >= 2 * kTileMin2 + kTileGap ? 2 : 1;
     }
     QRect tileRect(int i) const
@@ -579,7 +586,9 @@ void BuildImagePage::buildFormatCard()
                    QStringLiteral("compress"), jobs::kFormatFfpfsc);
     tiles->addTile(QStringLiteral("FPKG"), QStringLiteral("Installable package. Needs your own Sony Publishing Tools."),
                    QStringLiteral("package_check"), kFormatFpkg);
-    tiles->setAccessibleName(QStringLiteral("Image format"));
+    tiles->addTile(QStringLiteral("Packed folder"), QStringLiteral("No image: the game folder with its files in zstd packs, for a USB drive or FTP."),
+                   QStringLiteral("archive"), kFormatZstdFolder, QStringLiteral("zstd"));
+    tiles->setAccessibleName(QStringLiteral("Output format"));
     tiles->onChanged = [this](int) { onFormatChanged(); };
     card->body()->addWidget(tiles);
 
@@ -623,7 +632,7 @@ void BuildImagePage::buildFormatCard()
 
     // One options panel per format: only that format's settings.
     const QStringList shared = {kVerify, kVerifyMode, kKeepTemp};
-    m_formats.resize(4);
+    m_formats.resize(5);
     m_formats[0].tile = jobs::kFormatExfat;
     // Every format shows the speed row (Performance mode) up front, and the
     // image formats the zstd packs switch; their details are under Advanced.
@@ -652,6 +661,18 @@ void BuildImagePage::buildFormatCard()
                         QStringLiteral("Performance"), QStringLiteral("Advanced")},
                        {QStringLiteral("fpkg."), kVerify, kThreads, kSpeed, kKeepTemp}, {fpkg::keys::kPubToolsPath},
                        {kSpeed, fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify});
+    // Packed folder: the zstd pack settings (level and what to pack up front,
+    // the check after packing under Advanced), speed, threads and temporary
+    // files. No image verification and no PS5 upload: a folder is not uploaded
+    // after the build. The "Compress game files" switch is what this output is,
+    // so it is always on and never shown.
+    m_formats[4].tile = kFormatZstdFolder;
+    buildFormatOptions(m_formats[4], {QStringLiteral("Build"), QStringLiteral("Performance"), QStringLiteral("Advanced")},
+                       {zstd, kThreads, kSpeed, kKeepTemp}, {}, {kSpeed, ampr::keys::kZstdLevel, ampr::keys::kPackStrategy});
+    if (SettingRow* on = m_formats[4].panel->row(ampr::keys::kZstdPack)) {
+        on->hide();
+        m_formats[4].panel->setOverride(ampr::keys::kZstdPack, true);
+    }
     for (auto& fo : m_formats)
         if (SettingRow* row = fo.panel->row(kSpeed))
             row->setMessage(speedNote(), Tone::Neutral);
@@ -1085,6 +1106,7 @@ void BuildImagePage::onFormatChanged()
 {
     const QString t = tile();
     const bool pkg = t == kFormatFpkg;
+    const bool folder = t == kFormatZstdFolder;
     for (auto& fo : m_formats) {
         const bool on = fo.tile == t;
         fo.essentials->setVisible(on && (!fo.essentialKeys.isEmpty() || fo.tile == jobs::kFormatFfpfsc || fo.tile == kFormatFpkg));
@@ -1098,9 +1120,11 @@ void BuildImagePage::onFormatChanged()
         header()->setCaption(QStringLiteral("Turn a game dump into an FFPKG (UFS2) image that ShadowMount+ mounts as it is."));
     else if (t == jobs::kFormatFfpfsc)
         header()->setCaption(QStringLiteral("Turn a game dump into a PFS image, compressed (.ffpfsc) or not (.ffpfs)."));
+    else if (folder)
+        header()->setCaption(QStringLiteral("Pack a game dump into a folder of zstd packs: smaller on the drive, read on the console by ampr-emu-ng, no image."));
     else
         header()->setCaption(QStringLiteral("Package a game folder, an image or a .gp5 project as an installable .pkg."));
-    primaryButton()->setText(pkg ? QStringLiteral("Build package") : QStringLiteral("Build image"));
+    primaryButton()->setText(pkg ? QStringLiteral("Build package") : folder ? QStringLiteral("Pack game") : QStringLiteral("Build image"));
     m_sourceCard->setTitleText(pkg ? QStringLiteral("Source") : QStringLiteral("Game dump"));
     m_drop->setTitle(pkg ? QStringLiteral("Drop a game folder, an image or a .gp5 project here") : QStringLiteral("Drop a game dump folder here"));
     m_drop->setText(pkg ? QStringLiteral("or click to browse \u2014 a folder, an .exfat, .ffpfsc or .ffpkg image, or a .gp5 project")
@@ -1111,21 +1135,27 @@ void BuildImagePage::onFormatChanged()
         m_advanced->setCaption(QStringLiteral("Block and fragment size, inodes, verification"));
     else if (t == jobs::kFormatFfpfsc)
         m_advanced->setCaption(QStringLiteral("Threads, PFS format, source folder, verification"));
+    else if (folder)
+        m_advanced->setCaption(QStringLiteral("Check after packing, threads, temporary files"));
     else
         m_advanced->setCaption(QStringLiteral("Packing, param.json, files, PlayGo, verification"));
     m_settingsLink->setText(t == jobs::kFormatExfat ? QStringLiteral("All exFAT settings")
                             : t == jobs::kFormatFfpkg ? QStringLiteral("All FFPKG settings")
                             : t == jobs::kFormatFfpfsc ? QStringLiteral("All PFS settings")
-                                                       : QStringLiteral("All FPKG settings"));
-    m_fileLabel->setText(pkg ? QStringLiteral("Package name") : QStringLiteral("File name"));
+                            : folder ? QStringLiteral("All zstd settings")
+                                     : QStringLiteral("All FPKG settings"));
+    m_fileLabel->setText(pkg ? QStringLiteral("Package name") : folder ? QStringLiteral("Folder name") : QStringLiteral("File name"));
     m_fileName->setReadOnly(pkg);
-    m_fileExt->setVisible(!pkg);
+    m_fileExt->setVisible(!pkg && !folder);
     m_nameMenuButton->setVisible(!pkg);
     if (pkg)
         m_resetName->hide();
     else
         m_resetName->setVisible(m_nameEdited);
-    setRequiredKinds({pkg ? QStringLiteral("fpkg.build") : jobs::imageBuildKind(format())});
+    if (folder)
+        if (FormatOptions* fo = current()) // the switch stays on whatever the global setting does
+            fo->panel->setOverride(ampr::keys::kZstdPack, true);
+    setRequiredKinds({pkg ? QStringLiteral("fpkg.build") : folder ? ampr::kPackJob : jobs::imageBuildKind(format())});
     applyRowVisibility();
     updateAdvancedSummary();
     updateClusterNote();
@@ -1155,6 +1185,8 @@ void BuildImagePage::applyRowVisibility()
             bool hide = false;
             if (fo.tile == jobs::kFormatFfpfsc)
                 hide = (f == jobs::kFormatFfpfsc && fileOnly.contains(key)) || (f == jobs::kFormatFfpfs && containerOnly.contains(key));
+            if (fo.tile == kFormatZstdFolder && key == ampr::keys::kZstdPack)
+                hide = true; // always on for this output
             row->setHidden(hide);
         }
         // Dividers between visible rows; a heading only above a bucket with rows.
@@ -1364,7 +1396,7 @@ void BuildImagePage::setSource(const QString& path)
     // A new source gets its own name again (#16).
     m_nameEdited = false;
     const QFileInfo fi(path);
-    if (fi.isDir()) {
+    if (fi.isDir() || m_sourceKind == QLatin1String("zip")) {
         m_sourceBadge->set(QStringLiteral("Scanning\u2026"), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
         m_summary = {}; // nothing stale while the new folder is read
@@ -1754,12 +1786,14 @@ QString BuildImagePage::fileName() const
     if (isFpkg())
         return QFileInfo(expectedPackagePath()).fileName();
     const QString stem = m_fileName->text().trimmed();
-    return stem.isEmpty() ? QString() : stem + jobs::outputExtension(format());
+    if (stem.isEmpty())
+        return {};
+    return isZstdFolder() ? stem : stem + jobs::outputExtension(format());
 }
 
 void BuildImagePage::renderFileName()
 {
-    const QString ext = jobs::outputExtension(format());
+    const QString ext = isZstdFolder() ? QString() : jobs::outputExtension(format());
     m_fileExt->setText(ext);
     if (isFpkg()) {
         QString name = QFileInfo(expectedPackagePath()).fileName();
@@ -1797,7 +1831,13 @@ void BuildImagePage::renderFileName()
     f.sdk = m_summary.sdk;
     f.type = typeLabel(tile());
     f.folderName = sourceKind() == QLatin1String("zip") ? QFileInfo(m_summary.folder).completeBaseName() : QFileInfo(m_summary.folder).fileName();
-    m_fileName->setText(gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), f));
+    QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), f);
+    // A packed folder next to the dump under the dump's own name would be the dump itself.
+    if (isZstdFolder() && sourceKind() == QLatin1String("folder") && !name.isEmpty()
+        && QString::compare(QDir::cleanPath(QDir(outputFolder()).filePath(name)),
+                            QDir::cleanPath(QFileInfo(m_summary.folder).absoluteFilePath()), Qt::CaseInsensitive) == 0)
+        name += QStringLiteral(" (zstd)");
+    m_fileName->setText(name);
     m_fileName->setCursorPosition(0);
 }
 
@@ -1809,7 +1849,7 @@ qint64 BuildImagePage::neededBytes() const
     if (isFpkg() && packageTypeKind() == PackageType::Backport)
         return 0;
     const QString f = format();
-    if (f == jobs::kFormatFfpfsc || f == kFormatFpkg)
+    if (f == jobs::kFormatFfpfsc || f == kFormatFpkg || f == kFormatZstdFolder)
         return m_summary.bytes; // compressed: never more than the source
     return qint64(double(m_summary.bytes) * 1.006) + 64LL * 1024 * 1024;
 }
@@ -1819,7 +1859,7 @@ void BuildImagePage::updateOutput()
     if (!m_nameEdited || isFpkg())
         renderFileName();
     else
-        m_fileExt->setText(jobs::outputExtension(format()));
+        m_fileExt->setText(isZstdFolder() ? QString() : jobs::outputExtension(format()));
     QString placeholder;
     const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
     if (isFpkg())
@@ -1843,7 +1883,8 @@ void BuildImagePage::checkSpace()
         m_spaceState = SpaceCheck::Ok;
         m_spaceRow->set(isFpkg() && packageTypeKind() == PackageType::Backport ? QStringLiteral("412 GB free on D:.")
                         : isFpkg() ? QStringLiteral("412 GB free on D:. The package needs up to 31.6 GB.")
-                                   : QStringLiteral("412 GB free on D:. This image needs about 31.8 GB."), Tone::Ok);
+                        : isZstdFolder() ? QStringLiteral("412 GB free on D:. The packed folder needs up to 31.6 GB.")
+                                         : QStringLiteral("412 GB free on D:. This image needs about 31.8 GB."), Tone::Ok);
         if (m_freeSpace)
             m_freeSpace->setText(QStringLiteral("412 GB"));
         return;
@@ -1904,7 +1945,8 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
     QString text = QStringLiteral("%1 free on %2.").arg(formatBytes(ds->available), drive);
     if (needed > 0)
         text += pkg ? QStringLiteral(" The package needs up to %1.").arg(formatBytes(needed))
-                    : QStringLiteral(" This image needs about %1.").arg(formatBytes(needed));
+                : isZstdFolder() ? QStringLiteral(" The packed folder needs up to %1.").arg(formatBytes(needed))
+                                 : QStringLiteral(" This image needs about %1.").arg(formatBytes(needed));
     if (!exists)
         text += QStringLiteral(" The folder is created when the build starts.");
     Tone tone = Tone::Ok;
@@ -1926,7 +1968,8 @@ void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QStri
     m_spaceBar->setTone(Tone::Err);
     m_spaceBar->setTitle(QStringLiteral("Not enough space on %1").arg(drive));
     m_spaceBar->setMessage(QStringLiteral("This %1 needs %2; %3 is free. Free %4 or choose another output folder.")
-                               .arg(isFpkg() ? QStringLiteral("package") : QStringLiteral("image"), formatBytes(needed), formatBytes(freeBytes),
+                               .arg(isFpkg() ? QStringLiteral("package") : isZstdFolder() ? QStringLiteral("packed folder") : QStringLiteral("image"),
+                                    formatBytes(needed), formatBytes(freeBytes),
                                     formatBytes(std::max<qint64>(0, needed - freeBytes))));
     m_spaceBar->clearLinks();
     // Suggest the volume with the most free space.
@@ -1981,16 +2024,27 @@ QString BuildImagePage::validateForm()
             if (!m_summary.isGame)
                 return QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).");
         } else if (kind != QLatin1String("folder"))
-            return QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.");
+            return isZstdFolder() ? QStringLiteral("A packed folder is made from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.")
+                                  : QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
                                                   : QStringLiteral("The source folder is not a game dump: sce_sys\\param.json or eboot.bin is missing.");
         const QString stem = m_fileName->text().trimmed();
         if (stem.isEmpty())
-            return QStringLiteral("Enter a file name.");
+            return isZstdFolder() ? QStringLiteral("Enter a folder name.") : QStringLiteral("Enter a file name.");
         if (const QString why = gameinfo::folderNameProblem(fileName()); !why.isEmpty()) {
             setInputError(m_fileName, true);
-            return QStringLiteral("The file name cannot be used: %1").arg(why);
+            return QStringLiteral("The %1 name cannot be used: %2").arg(isZstdFolder() ? QStringLiteral("folder") : QStringLiteral("file"), why);
+        }
+        if (isZstdFolder()) {
+            // The job refuses these too; here the message comes before anything is queued.
+            const QString out = QDir::cleanPath(QDir(outputFolder()).filePath(stem));
+            const QString src = QDir::cleanPath(QFileInfo(m_summary.folder).absoluteFilePath());
+            if (kind == QLatin1String("folder") && (isSameOrInside(out, src) || isSameOrInside(src, out)))
+                return QStringLiteral("The packed folder cannot be the game folder itself, inside it or above it. Change the folder name or the output folder.");
+            if (QFileInfo::exists(out)
+                && (!QFileInfo(out).isDir() || !QDir(out).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)))
+                return QStringLiteral("%1 already exists. Choose another folder name.").arg(nativePath(out));
         }
     } else {
         if (kind == QLatin1String("zip"))
@@ -2070,7 +2124,10 @@ Result<QString> BuildImagePage::submit(bool)
             out = outputFolder();
         QJsonObject extra{{QStringLiteral("title"), m_summary.title}, {QStringLiteral("titleId"), m_summary.titleId},
                           {QStringLiteral("version"), m_summary.version}, {QStringLiteral("sourceBytes"), m_summary.bytes}};
-        r = jobs::submitImageBuild(m_ctx, format(), m_summary.folder, out, fileName(), overrides, extra);
+        if (isZstdFolder())
+            r = jobs::submitPackFolder(m_ctx, m_summary.folder, QDir(out).filePath(fileName()), overrides, extra);
+        else
+            r = jobs::submitImageBuild(m_ctx, format(), m_summary.folder, out, fileName(), overrides, extra);
     } else {
         QJsonObject details;
         if (!m_contentId->text().trimmed().isEmpty())
@@ -2146,7 +2203,7 @@ QString BuildImagePage::statusContext() const
 QStringList BuildImagePage::demoStates() const
 {
     return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
-            QStringLiteral("format-fpkg"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
+            QStringLiteral("format-fpkg"), QStringLiteral("format-zstd"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-zstd"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
             QStringLiteral("fpkg-backport"), QStringLiteral("building"), QStringLiteral("built"), QStringLiteral("build-failed")};
 }
 
@@ -2196,6 +2253,8 @@ void BuildImagePage::applyDemoState(const QString& name)
         fmt = jobs::kFormatFfpfsc;
     else if (name.endsWith(QLatin1String("fpkg")))
         fmt = kFormatFpkg;
+    else if (name.endsWith(QLatin1String("zstd")))
+        fmt = kFormatZstdFolder;
     setFormat(fmt);
     if (name == QLatin1String("several-games")) {
         s.folder = QStringLiteral("D:/PS5/Dumps");

@@ -6,7 +6,7 @@ verify and send them to your console — from one app, in one download.**
 ![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-3d7bff)
 ![Release](https://img.shields.io/github/v/release/kerrdec97/ps5-exfat-builder?include_prereleases&color=8b5cf6)
 ![Downloads](https://img.shields.io/github/downloads/kerrdec97/ps5-exfat-builder/total?color=3d7bff)
-![Licence](https://img.shields.io/badge/licence-GPL--3.0-8b5cf6)
+![Licence](https://img.shields.io/badge/licence-proprietary-8b5cf6)
 
 ![Home](docs/screenshots/home.png)
 
@@ -14,10 +14,9 @@ verify and send them to your console — from one app, in one download.**
 > writes exFAT, UFS2 and PFS images itself, so it needs **no administrator
 > rights, no OSFMount, no .NET and no Python**, and it ships as **one .exe**.
 >
-> 🚧 **v5 is being finished.** Its download will appear on the
-> [Releases page](https://github.com/kerrdec97/ps5-exfat-builder/releases) as
-> a pre-release soon; until then the latest download there is 4.x. You can
-> also build v5 from source (below).
+> ⬇️ **Download 5.0.1** from the
+> [Releases page](https://github.com/kerrdec97/ps5-exfat-builder/releases):
+> one exe, nothing to install.
 
 > ⚠️ For games and content **you legally own and dumped yourself**. The app
 > does not download games, decrypt retail packages or bypass DRM, and it is
@@ -29,8 +28,8 @@ verify and send them to your console — from one app, in one download.**
 
 | | |
 |---|---|
-| **Build image** | Drop a dump folder (or a zipped dump), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`) and installable **FPKG** `.pkg` (with your own Sony Publishing Tools; from a folder, any image or a packed game). Each format shows only its own options; experts get the rest under *Advanced options*. **Performance mode** (Low impact / Balanced / Maximum) on every format. Every image is read back and verified before it gets its final name. |
-| **zstd packs** | *Compress game files*: the game's files go into zstd packs inside the image, served on the console by the bundled **ampr-emu-ng 0.3.3** runtime. Packed games (zstd or LZ4) are read through their packs everywhere: extract, convert, FPKG. |
+| **Build image** | Drop a dump folder (or a zipped dump), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`) installable **FPKG** `.pkg` (with your own Sony Publishing Tools; from a folder, any image or a packed game), or a **Packed folder** (no image: the game folder with its files in zstd packs, for a USB drive or FTP). Each output shows only its own options; experts get the rest under *Advanced options*. **Performance mode** (Low impact / Balanced / Maximum) on every format. Every image is read back and verified before it gets its final name. |
+| **zstd packs** | *Compress game files*: the game's files go into zstd packs inside the image, served on the console by the bundled **ampr-emu-ng 0.3.3** runtime. Packed games (zstd or LZ4) are read through their packs everywhere: extract, convert, FPKG. Or skip the image: **Packed folder** packs the game folder itself. |
 | **Backport** | Make games run on older firmware with the built-in **PS5 Backport engine 0.3.4 by Deckerr97** — the same engine as the standalone PS5 Backport GUI, so results are identical. Target SDK 4–13, PS5 Pro fix, PS5 Pro build, AMPR / PlayGo switch, and optional apply to the game folder with a verified originals backup and one-click restore. |
 | **Backport updates** | Ship a backport as its own small **update package** that installs over the game's base package, so the base stays the original game: Build image › FPKG › **Backport** (4.xx and/or 5.xx+ backport files, folder or ZIP). Each update is checked against the base before it gets its name. |
 | **DLC** | Turn DLC lists (`dlc_emu.ini` and other DLC INIs) and DLC `.pkg` files into installable PS5 DLC packages, retarget them to another region's game, and save updated INIs (needs your own fpkg-cli). |
@@ -77,8 +76,7 @@ GitHub replaces the spaces in the file name with dots; the hash is the same.
 The exe is not code-signed and it is a self-extracting program (it unpacks
 the app and the backport engine to your user folder on first start), which
 some antivirus engines flag by heuristics (`Wacatac`, `!ml`). These are
-guesses, not matches. You can check the hash, scan it on VirusTotal, read the
-source, or build it yourself (below).
+guesses, not matches. You can check the hash or scan it on VirusTotal.
 
 ## 🧰 Requirements
 
@@ -90,26 +88,6 @@ source, or build it yourself (below).
   Drakmor) for the DLC page.
 * For console features: a jailbroken PS5 running an FTP server (ftpsrv or
   etaHEN), and ShadowMount+ to mount images.
-
-## 🔨 Building from source
-
-See [native/README.md](native/README.md). In short (Visual Studio 2022 Build
-Tools, Qt 6.8+, CMake and Ninja):
-
-```bash
-cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFW_FETCH_BACKPORT_ENGINE=ON
-```
-
-```bash
-cmake --build build --parallel
-```
-
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File native\packaging\make-release.ps1
-```
-
-`make-release.ps1` builds, runs the test suite and writes
-`dist\exFAT Image Builder.exe` plus `SHA256SUMS.txt`.
 
 ## 🙏 Credits
 
@@ -173,6 +151,9 @@ Full notices: [native/packaging/THIRD_PARTY_NOTICES-native.md](native/packaging/
 
 ## 📜 Licence
 
-GPL-3.0-or-later (see [LICENSES](LICENSES)). The bundled PS5 Backport engine
-is a separate program under its own terms. Earlier Python versions (v1–v4)
-remain in the git history and the v4.x tags.
+Proprietary: Copyright © 2026 Deckerr97 (kerrdec97), all rights reserved
+([LICENCE.txt](native/packaging/LICENCE.txt)). Third-party components keep
+their own licences ([notices](native/packaging/THIRD_PARTY_NOTICES-native.md),
+[LICENSES](LICENSES)). The bundled PS5 Backport engine is a separate program
+under its own terms. Earlier Python versions (v1–v4) stay available under the
+v4.x tags with the licence they were released under.

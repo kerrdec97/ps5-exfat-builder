@@ -11,8 +11,8 @@
 // Dependency: ampr.runtime (the bundled ampr-emu-ng libSceAmpr.sprx).
 //
 // Jobs:
-//   ampr.pack   {source (folder), output (new folder), level?, strategy?}
-//               a packed copy of a game folder
+//   ampr.pack   {source (folder or zipped dump), output (new folder), level?, strategy?, verifyPacks?}
+//               a packed copy of a game: the Build page's "Packed folder" output
 //   ampr.unpack {source (folder), output (new folder)}
 //               a packed game folder (zstd or LZ4) as plain files
 // Image builds with packs and image sources are jobs of the integration module.

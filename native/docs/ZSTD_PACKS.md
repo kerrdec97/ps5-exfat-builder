@@ -12,6 +12,7 @@ docs, 36 issues and PRs), November 2026.
 | Format, packer, reader | `src/engines/ampr/ZstdPack.*` |
 | Rules (what stays loose) | `src/engines/ampr/PackRules.*` |
 | Packing / unpacking a game | `src/engines/ampr/GamePack.*` |
+| Jobs `ampr.pack` (Build page › Packed folder, Library › Pack with zstd…; a zipped dump is unpacked first) and `ampr.unpack` | `src/engines/ampr/Module.cpp` |
 | Packed game as plain files, folder reader | `src/engines/ampr/GameFiles.*` |
 | LZ4 (AMPRPAK4) reader, read only | `src/engines/ampr/Lz4Pack.*` |
 | Bundled runtime (pinned SHA-256) | `src/engines/ampr/Runtime.*`, `cmake/AmprRuntime.cmake` |

@@ -12,6 +12,8 @@
 //
 //   Image builds   image.exfat.build / image.ffpkg.build / image.pfs.build
 //                  {source, output (full file path), format ("ffpfsc" or "ffpfs" for PFS)}
+//   Packed folder  ampr.pack {source (folder | .zip), output (the new folder)}
+//                  the Build page's zstd output: the game's files in zstd packs, no image
 //   Image verify   image.<fmt>.verify   {image}  (no source: standalone integrity check)
 //   Image extract  image.<fmt>.extract  {image, output, deep (PFS)}
 //                  <fmt> from the extension: .exfat → exfat, .ffpkg → ffpkg,
@@ -88,6 +90,11 @@ Error unavailable(const QString& kind);
 
 Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const QString& source, const QString& outputDir,
                                  const QString& label, const QVariantMap& overrides, const QJsonObject& extra = {});
+// ampr.pack: the game (a folder or a zipped dump) as a new folder whose files
+// are in zstd packs next to the bundled runtime; no image. `output` is the new
+// folder itself (it must not exist, or be empty).
+Result<QString> submitPackFolder(AppContext& ctx, const QString& source, const QString& output, const QVariantMap& overrides,
+                                 const QJsonObject& extra = {});
 Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, const QVariantMap& overrides);
 // game.extract: a game (folder or image, an image inside a PFS container
 // included) into a new folder, zstd/LZ4 packs unpacked unless `unpackPacks` is false.

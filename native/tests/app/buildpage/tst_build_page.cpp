@@ -1,5 +1,5 @@
-// The Build page with its four formats (exFAT, FFPKG, PFS, FPKG), driven in the
-// real main window with a small fake game dump:
+// The Build page with its five outputs (exFAT, FFPKG, PFS, FPKG and the zstd
+// Packed folder), driven in the real main window with a small fake game dump:
 //
 //  * each format shows only its own settings, with the 2-3 common ones in the
 //    Format card and the rest folded in Advanced options;
@@ -12,6 +12,9 @@
 //  * the file name follows Settings › Build › Output name (presets, template,
 //    firmware), keeps Unicode and can be edited per job (#60, #43);
 //  * PFS offers uncompressed .ffpfs (#36, #19);
+//  * Packed folder packs the dump (and a zipped dump) into a folder of zstd
+//    packs with the bundled runtime, refuses the dump's own folder and an
+//    existing folder, and shows the zstd settings only;
 //  * the former "fpkg" page key opens the Build page with FPKG selected.
 
 #include "app/AppContext.h"
@@ -21,7 +24,9 @@
 #include "app/ui/SettingRow.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/Zip.h"
 #include "engines/ampr/Module.h"
+#include "engines/ampr/ZstdPack.h"
 #include "engines/exfat/Module.h"
 #include "engines/fpkg/FpkgSettings.h"
 #include "engines/gameinfo/Module.h"
@@ -33,6 +38,7 @@
 #include "support/TestSupport.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -242,6 +248,13 @@ private slots:
               fpkg::keys::kPlayGoFallback, fpkg::keys::kComputeSha256, kVerify, kSpeed},
              {kMode, kUpload, fpkg::keys::kPubToolsPath, ampr::keys::kZstdPack},
              {kSpeed, fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify}},
+            // Packed folder: the zstd settings (the switch itself is implied and hidden), speed,
+            // threads and temporary files; no image verification, no PS5 upload.
+            {pages::kFormatZstdFolder, QStringLiteral("ampr."), ampr::kPackJob, {},
+             {kThreads, kSpeed, kKeepTemp},
+             {ampr::keys::kZstdLevel, ampr::keys::kPackStrategy, ampr::keys::kVerifyPacks, kSpeed, kThreads, kKeepTemp},
+             {ampr::keys::kZstdPack, kVerify, kMode, kUpload, fpkg::keys::kPubToolsPath, exfat::keys::kClusterSize, pfs::keys::kCompressionLevel},
+             {kSpeed, ampr::keys::kZstdLevel, ampr::keys::kPackStrategy}},
         };
         m_page->advancedSection()->setExpanded(true);
         for (const Case& c : cases) {
@@ -273,7 +286,16 @@ private slots:
             QCOMPARE(onScreen, expected);
             QCOMPARE(m_page->packageCard()->isVisibleTo(m_page), c.format == pages::kFormatFpkg);
             QCOMPARE(m_page->primaryButton()->text(),
-                     c.format == pages::kFormatFpkg ? QStringLiteral("Build package") : QStringLiteral("Build image"));
+                     c.format == pages::kFormatFpkg ? QStringLiteral("Build package")
+                     : c.format == pages::kFormatZstdFolder ? QStringLiteral("Pack game") : QStringLiteral("Build image"));
+            if (c.format == pages::kFormatZstdFolder) {
+                // Its level and strategy are usable although the global "Compress game files" switch is off.
+                ui::JobOptionsPanel* panel = m_page->optionsPanel(c.format);
+                QVERIFY(!m_ctx->settings().value(ampr::keys::kZstdPack).toBool());
+                QVERIFY(panel->row(ampr::keys::kZstdLevel)->editor()->widget()->isEnabled());
+                QVERIFY(panel->row(ampr::keys::kPackStrategy)->editor()->widget()->isEnabled());
+                QVERIFY(panel->row(ampr::keys::kZstdPack)->isHidden());
+            }
             if (!c.ext.isEmpty())
                 QCOMPARE(jobs::outputExtension(c.format), c.ext);
         }
@@ -296,6 +318,7 @@ private slots:
             {jobs::kFormatFfpfsc, QStringLiteral("image.pfs.build"), QStringLiteral(".ffpfsc"), pfs::keys::kCompressionLevel, 6},
             {jobs::kFormatFfpfs, QStringLiteral("image.pfs.build"), QStringLiteral(".ffpfs"), pfs::keys::kCompressFiles, true},
             {pages::kFormatFpkg, QStringLiteral("fpkg.build"), QStringLiteral(".pkg"), fpkg::keys::kPlayGoChunkCount, 7},
+            {pages::kFormatZstdFolder, ampr::kPackJob, {}, ampr::keys::kZstdLevel, QStringLiteral("9")},
         };
         // An override set on another format's panel never travels with this job.
         m_page->optionsPanel(jobs::kFormatExfat)->setOverride(exfat::keys::kOverwriteExisting, false);
@@ -429,6 +452,88 @@ private slots:
               qPrintable(rec->outcome->verificationDetail));
         q.clearFinished();
         m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    void packedFolderOfADummyDump()
+    {
+        // Packed folder: the dump's files in zstd packs next to the loose system
+        // files and the bundled runtime, from the folder and from a zipped dump.
+        auto& q = m_ctx->queue();
+        m_page->setFormat(pages::kFormatZstdFolder);
+        QVERIFY(selectSource(m_game));
+        QCOMPARE(m_page->fileName(), QStringLiteral("PPSA01342 Ghost of Yōtei (01.000.000)"));
+        const QString outDir = path(QStringLiteral("e2e-zstd"));
+        m_page->setOutputFolder(outDir);
+        q.holdQueue(true);
+        const QString id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        auto rec = q.record(id);
+        QCOMPARE(rec->kind, ampr::kPackJob);
+        QCOMPARE(rec->overrides.value(ampr::keys::kZstdPack).toBool(), true);
+        QCOMPARE(clean(rec->parameters.value(QStringLiteral("output")).toString()),
+                 clean(QDir(outDir).filePath(QStringLiteral("PPSA01342 Ghost of Yōtei (01.000.000)"))));
+        q.holdQueue(false);
+        QVERIFY(QTest::qWaitFor([&] {
+            auto r = q.record(id);
+            return r && isTerminal(r->state);
+        }, 120000));
+        rec = q.record(id);
+        QVERIFY2(rec->state == JobState::Succeeded, qPrintable(rec->error ? rec->error->toLogString() : QString()));
+        QCOMPARE(rec->outcome->verification, Verification::Passed);
+        const QDir out(QDir(outDir).filePath(QStringLiteral("PPSA01342 Ghost of Yōtei (01.000.000)")));
+        QCOMPARE(clean(rec->outcome->outputs.value(0)), clean(out.path()));
+        QVERIFY(QFileInfo(out.filePath(ampr::kZstdIndexName)).isFile());
+        QVERIFY(QFileInfo(out.filePath(QStringLiteral("ampr_zstd-000.pak"))).isFile());
+        QVERIFY(QFileInfo(out.filePath(QStringLiteral("eboot.bin"))).isFile());
+        QVERIFY(QFileInfo(out.filePath(QStringLiteral("sce_sys/param.json"))).isFile());
+        QVERIFY(QFileInfo(out.filePath(QStringLiteral("fakelib/libSceAmpr.sprx"))).isFile());
+        QVERIFY(rec->outcome->details.value(QStringLiteral("packedFiles")).toInt() >= 1);
+        qInfo("zstd folder: %s", qPrintable(rec->outcome->summary));
+
+        // The same folder again is refused before anything is queued, and so is
+        // the dump folder itself (next to the dump under the dump's own name the
+        // page proposes " (zstd)").
+        q.holdQueue(true);
+        QVERIFY(addToQueue().isEmpty());
+        QVERIFY(m_ctx->settings().setValue(gameinfo::keys::kNamePreset, QStringLiteral("folder")).ok());
+        m_page->setOutputFolder(QFileInfo(m_game).absolutePath());
+        QCOMPARE(m_page->fileName(), QStringLiteral("Ghost of Yōtei (zstd)"));
+        m_page->setFileStem(QStringLiteral("Ghost of Yōtei"));
+        QVERIFY(addToQueue().isEmpty());
+        resetNaming();
+
+        // A zipped dump packs the same way (the ZIP is read for its title and version).
+        const QString zipPath = path(QStringLiteral("zips/PPSA01234-app.zip"));
+        {
+            QDir().mkpath(QFileInfo(zipPath).absolutePath());
+            zip::Writer w;
+            QVERIFY(w.open(zipPath, true).ok());
+            QDirIterator it(m_asciiGame, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString p = it.next();
+                QVERIFY(w.addFile(QStringLiteral("PPSA01234-app/") + QDir(m_asciiGame).relativeFilePath(p), p, zip::Method::Deflate, {}).ok());
+            }
+            QVERIFY(w.finish(true).ok());
+        }
+        m_page->setSource(zipPath);
+        QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && clean(m_page->summary().folder) == clean(zipPath); }, 15000));
+        QCOMPARE(m_page->fileName(), QStringLiteral("PPSA01234 Test Game (01.000.000)"));
+        m_page->setOutputFolder(path(QStringLiteral("e2e-zstd-zip")));
+        const QString zipJob = addToQueue();
+        QVERIFY(!zipJob.isEmpty());
+        q.holdQueue(false);
+        QVERIFY(QTest::qWaitFor([&] {
+            auto r = q.record(zipJob);
+            return r && isTerminal(r->state);
+        }, 120000));
+        rec = q.record(zipJob);
+        QVERIFY2(rec->state == JobState::Succeeded, qPrintable(rec->error ? rec->error->toLogString() : QString()));
+        const QDir zout(path(QStringLiteral("e2e-zstd-zip/PPSA01234 Test Game (01.000.000)")));
+        QVERIFY(QFileInfo(zout.filePath(ampr::kZstdIndexName)).isFile());
+        QVERIFY(QFileInfo(zout.filePath(QStringLiteral("eboot.bin"))).isFile());
+        q.clearFinished();
+        m_page->setFormat(jobs::kFormatExfat);
+        m_page->setSource({});
     }
 
     void wrapperFoldersFindTheGame()

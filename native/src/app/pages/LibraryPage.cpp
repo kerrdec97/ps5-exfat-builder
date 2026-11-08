@@ -1,6 +1,7 @@
 #include "app/pages/LibraryPage.h"
 
 #include "app/AppContext.h"
+#include "app/pages/BuildImagePage.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
@@ -556,6 +557,9 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
     }
     menu.addAction(QStringLiteral("Build image…"), this, [this, folder] { emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), folder}}}); });
     menu.addAction(QStringLiteral("Build FPKG…"), this, [this, folder] { emit navigateRequested({QStringLiteral("fpkg"), {{QStringLiteral("source"), folder}}}); });
+    menu.addAction(QStringLiteral("Pack with zstd…"), this, [this, folder] {
+        emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatZstdFolder}, {QStringLiteral("source"), folder}}});
+    });
     menu.addAction(QStringLiteral("Backport…"), this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
     if (const LibraryGame* g = game(folder); g && !g->info.titleId.isEmpty()) {
         QMenu* images = nullptr;
@@ -599,6 +603,8 @@ void LibraryPage::buildSelected()
     fmt->addSegment(QStringLiteral("exFAT"), QStringLiteral("drive"), jobs::kFormatExfat);
     fmt->addSegment(QStringLiteral("FFPKG"), QStringLiteral("package"), jobs::kFormatFfpkg);
     fmt->addSegment(QStringLiteral("FFPFSC"), QStringLiteral("compress"), jobs::kFormatFfpfsc);
+    fmt->addSegment(QStringLiteral("Packed folder"), QStringLiteral("archive"), pages::kFormatZstdFolder);
+    fmt->setToolTip(QStringLiteral("Packed folder: no image, the game folder with its files in zstd packs (Build image › Packed folder)."));
     fmt->setCurrentIndex(0);
     s->body()->addWidget(field(QStringLiteral("Format"), fmt, {}, s));
     auto* out = new PathField(PathField::Mode::Directory, s);
@@ -633,10 +639,19 @@ void LibraryPage::buildSelected()
         const QString fwOverride = st.value(gameinfo::keys::kFirmwareOverride).toString();
         nf.firmware = fwOverride.isEmpty() || fwOverride == QLatin1String("auto") ? gameinfo::firmwareMajor(info.requiredFw) : fwOverride;
         nf.sdk = info.sdk;
-        nf.type = format == jobs::kFormatExfat ? QStringLiteral("exFAT") : format == jobs::kFormatFfpkg ? QStringLiteral("ffpkg") : QStringLiteral("PFS");
+        nf.type = format == jobs::kFormatExfat ? QStringLiteral("exFAT") : format == jobs::kFormatFfpkg ? QStringLiteral("ffpkg")
+                : format == pages::kFormatZstdFolder ? QStringLiteral("zstd") : QStringLiteral("PFS");
         nf.folderName = QFileInfo(f).fileName();
-        const QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), nf);
-        auto r = jobs::submitImageBuild(m_ctx, format, f, dir, name + jobs::outputExtension(format), QVariantMap{}, extra);
+        QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), nf);
+        Result<QString> r = Error(ErrorCode::Internal, QStringLiteral("Nothing to build."));
+        if (format == pages::kFormatZstdFolder) {
+            // A packed folder next to the dump under the dump's own name would be the dump itself (as on the Build page).
+            if (QString::compare(QDir::cleanPath(QDir(dir).filePath(name)), QDir::cleanPath(QFileInfo(f).absoluteFilePath()), Qt::CaseInsensitive) == 0)
+                name += QStringLiteral(" (zstd)");
+            r = jobs::submitPackFolder(m_ctx, f, QDir(dir).filePath(name), QVariantMap{}, extra);
+        } else {
+            r = jobs::submitImageBuild(m_ctx, format, f, dir, name + jobs::outputExtension(format), QVariantMap{}, extra);
+        }
         if (r.ok()) {
             ++queued;
             started << r.value();

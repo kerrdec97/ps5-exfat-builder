@@ -29,7 +29,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\exFAT Image Builder.exe
-LicenseFile={#SourceDir}\LICENSES\GPL-3.0.txt
+LicenseFile={#SourceDir}\LICENCE.txt
 MinVersion=10.0.17763
 
 [Files]

@@ -2,6 +2,14 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
+## [5.0.1] - 2026-11-08 — version 5
+
+A complete rewrite as a native C++20 / Qt 6 Windows program, with a new
+interface, the PS5 Backport engine built in, zstd packs, a Packed folder
+output, backport update packages and DLC packages. The full notes are in
+`native/RELEASE_NOTES.md` and on the release page. From this version the app
+is proprietary (see `native/packaging/LICENCE.txt`).
+
 ## [4.1.0] - 2026-11-03 — Farewell Edition
 
 The final release of exFAT Image Builder. It restores the v4.0.2 source that

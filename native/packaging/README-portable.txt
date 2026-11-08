@@ -14,5 +14,6 @@ Portable build. Run "exFAT Image Builder.exe".
 * For your own legally dumped games only. Not affiliated with or endorsed by
   Sony Interactive Entertainment.
 
-Licence: GPL-3.0-or-later. Third-party notices: THIRD_PARTY_NOTICES.md and
-the LICENSES folder.
+Licence: proprietary, Copyright (c) 2026 Deckerr97 (kerrdec97), all rights
+reserved (LICENCE.txt). Third-party notices: THIRD_PARTY_NOTICES.md and the
+LICENSES folder.

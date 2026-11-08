@@ -20,7 +20,7 @@ BEGIN
             VALUE "FileDescription", "PS5 exFAT Image Builder"
             VALUE "FileVersion", "@PROJECT_VERSION@"
             VALUE "InternalName", "exFAT Image Builder"
-            VALUE "LegalCopyright", "GPL-3.0-or-later. See LICENSE and THIRD_PARTY_NOTICES."
+            VALUE "LegalCopyright", "Copyright (c) 2026 Deckerr97 (kerrdec97). All rights reserved. See LICENCE.txt and THIRD_PARTY_NOTICES.md."
             VALUE "OriginalFilename", "exFAT Image Builder.exe"
             VALUE "ProductName", "exFAT Image Builder"
             VALUE "ProductVersion", "@PROJECT_VERSION@"

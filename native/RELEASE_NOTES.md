@@ -1,4 +1,4 @@
-# exFAT Image Builder 5.0.0 · release notes
+# exFAT Image Builder 5.0.1 · release notes
 
 **Download `exFAT Image Builder.exe`** (GitHub lists it as
 `exFAT.Image.Builder.exe`) and run it: one file, nothing to unzip or install,
@@ -6,9 +6,6 @@ no administrator rights, no OSFMount, no .NET, no Python, no VC++
 Redistributable. The first start unpacks the program once to
 `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime` (with `portable.txt`
 next to the exe: beside the exe instead). Check it against `SHA256SUMS.txt`.
-
-**Status: pre-release** until it has been run on a PS5 console (checklist at
-the end).
 
 ## What's new
 
@@ -47,8 +44,8 @@ program, with a new interface and the PS5 Backport engine built in.
 
 ### Build image
 * Drop a dump folder (or the folder above it: the game inside is found for
-  you), pick **exFAT**, **FFPKG**, **PFS** or **FPKG**, done. Each format
-  shows only its own options.
+  you), pick **exFAT**, **FFPKG**, **PFS**, **FPKG** or **Packed folder**,
+  done. Each output shows only its own options.
 * **Zipped dumps**: drop a .zip of a game and build exFAT, FFPKG or PFS from
   it directly; it is unpacked to a temporary folder and checked as it goes.
 * **FPKG** packages moved onto the Build page (built with your own Sony
@@ -131,6 +128,14 @@ From the ppr-pkg Companion's DLC Converter:
   and the bundled **ampr-emu-ng 0.3.3** runtime goes to
   `fakelib/libSceAmpr.sprx`. A smaller image; mount it with ShadowMount+ with
   "Update game fakelib emulators" off.
+* **Packed folder**, the fifth output on the Build page: no image, the game
+  folder itself with its files in zstd packs and the runtime in `fakelib`,
+  ready for a USB drive or an FTP upload. The same settings (level, what to
+  pack, check after packing), from a dump folder or a zipped dump; **Pack
+  game** turns the page into the job's monitor like every build. The Library
+  has **Pack with zstd…** on a game and **Packed folder** in the bulk Build
+  images… sheet. A packed folder next to the dump gets " (zstd)" after its
+  name, and the dump folder itself is never the output.
 * Advanced: zstd level (3, 5 default, 9, 15, 19), what to pack ("everything
   except system files", or "compatible": containers, configs and media stay
   loose for games that do not start fully packed), check after packing.
@@ -225,7 +230,8 @@ exe is code-signed (#78).
   every engine, byte-for-byte golden comparisons with UFS2Tool and
   Lazy_MkPFS, every page opening, the job monitor following a real job
   (stages, clocks, live log, Run again) and the form → monitor switch,
-  the Build page submitting every format,
+  the Build page submitting every output and packing a dump into a zstd
+  folder (from the folder and from a ZIP),
   Image tools jobs, the Library, the PS5 tools against a fake console, the
   single-file launcher (arguments, exit codes, caches, damaged payloads,
   concurrent first starts, portable mode), zstd packs (format, multi-volume
@@ -308,7 +314,7 @@ interface before this release. What changed:
 
 ## Known limitations
 * Not code-signed; some antivirus engines flag unsigned self-extracting
-  programs by heuristics. Check the SHA-256, or build it yourself.
+  programs by heuristics. Check the SHA-256.
 * English only for now.
 * Images from untrusted sources are checked as they are read, but the app is
   not a sandbox: open only images you trust.
@@ -323,10 +329,14 @@ interface before this release. What changed:
 5. A backport update package over its base, and one DLC package; install them.
 6. One game with zstd packs (ShadowMount+, fakelib updates off); launch it and
    check that "ampr-emu-ng: v0.3.3 (zstd) running" shows.
+7. One game as a Packed folder on a USB drive (or sent over FTP); launch it
+   the same way.
 
 ## Requirements
 Windows 10 1809+ or 11, 64-bit.
 
 ## Licence
-GPL-3.0-or-later. The bundled PS5 Backport engine is a separate program
-under its own terms (see THIRD_PARTY_NOTICES.md).
+Proprietary from this release: Copyright © 2026 Deckerr97 (kerrdec97), all
+rights reserved (`LICENCE.txt` next to the app). Third-party components keep
+their own licences (`THIRD_PARTY_NOTICES.md`); the bundled PS5 Backport engine
+is a separate program under its own terms.

@@ -132,6 +132,7 @@ Copy-Item (Join-Path $native 'packaging\README-portable.txt') (Join-Path $dist '
 Copy-Item (Join-Path $repo 'LICENSES') -Recurse (Join-Path $dist 'LICENSES')
 Copy-Item (Join-Path $native 'packaging\licenses\*') (Join-Path $dist 'LICENSES\')
 Copy-Item (Join-Path $native 'packaging\THIRD_PARTY_NOTICES-native.md') (Join-Path $dist 'THIRD_PARTY_NOTICES.md')
+Copy-Item (Join-Path $native 'packaging\LICENCE.txt') (Join-Path $dist 'LICENCE.txt')
 # The Backport tab's engine (built into bin\engines by CMake). A release
 # without it would show "engine missing", so it is required.
 $engines = Join-Path $BuildDir 'bin\engines'

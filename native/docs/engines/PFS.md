@@ -3,9 +3,9 @@
 Native C++ port of **Lazy_MkPFS** (Nazky, <https://github.com/Nazky/Lazy_MkPFS>,
 vendored at `vendor/lazy_mkpfs`, upstream commit
 `78bdd00c5645b1170420df051c586dd0ca4f918d`), which is itself derived from
-**MkPFS** by PSBrew (<https://github.com/PSBrew/MkPFS>). Both are GPL-3.0; this
-port is distributed under GPL-3.0-or-later with the native app, and every
-source file names what it was ported from. The legacy Python app and the
+**MkPFS** by PSBrew (<https://github.com/PSBrew/MkPFS>). Both are GPL-3.0, which
+continues to apply to this port (see `packaging/THIRD_PARTY_NOTICES-native.md`);
+every source file names what it was ported from. The legacy Python app and the
 vendored package are not modified.
 
 For the same input and options the engine writes **byte-identical** images to

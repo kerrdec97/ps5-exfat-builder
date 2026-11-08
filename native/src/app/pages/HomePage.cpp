@@ -45,8 +45,8 @@ QString kindIcon(const QString& kind)
         return QStringLiteral("extract");
     if (kind.startsWith(QLatin1String("ps5.")))
         return QStringLiteral("ps5");
-    if (kind.endsWith(QLatin1String(".build")))
-        return QStringLiteral("build");
+    if (kind.endsWith(QLatin1String(".build")) || kind == QLatin1String("ampr.pack"))
+        return QStringLiteral("build"); // ampr.pack: the Build page's packed folder
     return QStringLiteral("layers");
 }
 

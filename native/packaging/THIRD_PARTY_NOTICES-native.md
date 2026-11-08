@@ -1,8 +1,9 @@
 # Third-party notices — exFAT Image Builder v5 (native)
 
-The native application is licensed under the GNU General Public License,
-version 3 or later (LICENSES/GPL-3.0.txt). It contains or links the
-following third-party components. Full licence texts are in LICENSES/.
+exFAT Image Builder 5 is proprietary software (Copyright (c) 2026 Deckerr97,
+all rights reserved; LICENCE.txt). It contains or links the following
+third-party components, each of which keeps its own licence. Full licence
+texts are in LICENSES/.
 
 | Component | Use | Licence |
 |---|---|---|

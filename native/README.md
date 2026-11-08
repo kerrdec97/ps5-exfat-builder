@@ -37,10 +37,6 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
   anywhere. Create an empty `portable.txt` next to the exe to keep settings and
   logs in a `data` folder beside it.
 * Verify downloads with `SHA256SUMS.txt` from the same release.
-* Release build on a PC: `native\packaging\make-release.ps1 [-Zip]` writes
-  `dist\exFAT Image Builder.exe` and `dist\SHA256SUMS.txt`;
-  `native\packaging\make-onefile.ps1` packs any deployed folder (every file
-  under it, e.g. `engines\backport\...`, or `-Extra '<source>=<path inside>'`).
 
 ## Where things are stored
 
@@ -63,66 +59,13 @@ imported from Settings › Advanced.
   settings and job types, then exits. The single-file exe passes the command
   line, working folder and exit code through, and shows the output in the
   console it was started from (or wherever it is redirected).
-* `--screenshot-pages <dir>` renders every page to PNG files (used by CI).
-
-## Building from source
-
-Requirements: CMake 3.24+, Ninja, a C++20 compiler (MSVC 2022, GCC 13 or
-Clang 16), Qt 6.4 or later (Core, Gui, Widgets, Svg, Network, Concurrent,
-Test). zlib is used from the system or fetched automatically.
-
-Windows (Developer PowerShell for VS 2022, Qt 6.8 MSVC kit on `PATH`):
-
-```bash
-cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFW_FETCH_BACKPORT_ENGINE=ON
-```
-
-The Backport tab needs the PS5 Backport engine next to the app
-(`engines/backport/PS5BackportGUI.exe`). `-DFW_FETCH_BACKPORT_ENGINE=ON`
-downloads the pinned release once and checks its SHA-256;
-`-DFW_BACKPORT_ENGINE_EXE=<path>` uses a local copy instead. Without either the
-app builds and the Backport tab says the engine is missing
-(`cmake/BackportEngine.cmake`).
-
-```bash
-cmake --build build --parallel
-```
-
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-```bash
-windeployqt --release --no-translations "build\bin\exFAT Image Builder.exe"
-```
-
-Linux (development and CI; the app is a Windows product but the engines and
-tests are portable):
-
-```bash
-sudo apt-get install ninja-build qt6-base-dev qt6-base-dev-tools libqt6svg6-dev zlib1g-dev exfatprogs
-```
-
-```bash
-cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build build && QT_QPA_PLATFORM=offscreen ctest --test-dir build
-```
-
-Continuous integration: `.github/workflows/native-windows.yml` (MSVC + Qt 6.8:
-build, tests, deploy, launch the real exe, portable zip + installer) and
-`.github/workflows/native-linux.yml` (GCC with AddressSanitizer and UBSan).
-
-## Project layout
-
-See `docs/ARCHITECTURE.md`. In short: `src/core` (errors, cancellation,
-progress, logging, settings, files, processes, ZIP, JSON), `src/jobs` (queue,
-history), `src/engines/*` and `src/connect/*` (one module per feature, each
-registering its settings, dependency checks and job types), `src/app` (the Qt
-Widgets interface built on the design system in `docs/DESIGN_PROPOSAL.md`),
-`tests/` (Qt Test suites, one executable per file).
+* `--screenshot-pages <dir>` renders every page to PNG files.
 
 ## Licence
 
-GPL-3.0-or-later. The PFS engine is a port of Lazy_MkPFS / PSBrew MkPFS
-(GPL-3.0); the UFS2 engine follows UFS2Tool's layout (BSD-2-Clause); Qt is
-used under the LGPL-3.0; icons are Lucide (ISC). See
-`packaging/THIRD_PARTY_NOTICES-native.md` and the `LICENSES` folder.
+Proprietary: Copyright © 2026 Deckerr97 (kerrdec97), all rights reserved
+(`packaging/LICENCE.txt`). Third-party components keep their own licences:
+the PFS engine is a port of Lazy_MkPFS / PSBrew MkPFS (GPL-3.0), the UFS2
+engine follows UFS2Tool's layout (BSD-2-Clause), Qt is used under the
+LGPL-3.0, icons are Lucide (ISC). See `packaging/THIRD_PARTY_NOTICES-native.md`
+and the `LICENSES` folder.

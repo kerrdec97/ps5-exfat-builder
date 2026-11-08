@@ -97,7 +97,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     m_updateBadge = new Badge(QStringLiteral("Updates not checked"), Tone::Neutral, product);
     m_updateBadge->setIconName({});
     statusRow->addWidget(m_updateBadge);
-    auto* licence = new Badge(QStringLiteral("GPL-3.0-or-later"), Tone::Neutral, product);
+    auto* licence = new Badge(QStringLiteral("All rights reserved"), Tone::Neutral, product);
     licence->setIconName(QStringLiteral("shield"));
     statusRow->addWidget(licence);
     statusRow->addStretch(1);
@@ -121,7 +121,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* links = new QWidget(this);
     auto* lg = new TileGrid(links, 230, 4);
     lg->setBalanced(true);
-    auto* repo = new ActionCard(QStringLiteral("github"), QStringLiteral("GitHub repository"), QStringLiteral("Source code, releases and discussions."), links);
+    auto* repo = new ActionCard(QStringLiteral("github"), QStringLiteral("GitHub repository"), QStringLiteral("Releases, issues and discussions."), links);
     repo->setToolTip(QString::fromLatin1(kRepoUrl));
     connect(repo, &QAbstractButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kRepoUrl))); });
     auto* report = new ActionCard(QStringLiteral("bug"), QStringLiteral("Report a problem"), QStringLiteral("Bundle the logs into a report you can share."), links);
@@ -187,9 +187,14 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
 
     auto* legal = new Card(columns);
     legal->setTitle(QStringLiteral("Licence"));
-    auto* gpl = label(QStringLiteral("Free software under the GNU General Public License, version 3 or later."), TextStyle::Body, color::fg_1, legal);
-    gpl->setWordWrap(true);
-    legal->body()->addWidget(gpl);
+    auto* terms = label(QStringLiteral("Copyright \u00a9 2026 Deckerr97 (kerrdec97). All rights reserved. Proprietary software for personal, "
+                                       "non-commercial use: no modification, redistribution or reverse engineering without permission."),
+                        TextStyle::Body, color::fg_1, legal);
+    terms->setWordWrap(true);
+    legal->body()->addWidget(terms);
+    auto* thirdParty = caption(QStringLiteral("Third-party components keep their own licences (below and in THIRD_PARTY_NOTICES.md)."), legal);
+    thirdParty->setWordWrap(true);
+    legal->body()->addWidget(thirdParty);
     auto* own = caption(QStringLiteral("Use it only with games and content you own and dumped yourself."), legal);
     own->setWordWrap(true);
     legal->body()->addWidget(own);
@@ -259,7 +264,7 @@ void AboutPage::setUpdateStatus(const QString& text, Tone tone)
 
 QString AboutPage::statusContext() const
 {
-    return QStringLiteral("Version %1 · GPL-3.0-or-later").arg(QLatin1String(build::kVersion));
+    return QStringLiteral("Version %1 · All rights reserved").arg(QLatin1String(build::kVersion));
 }
 
 } // namespace fw::pages

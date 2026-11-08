@@ -1,5 +1,6 @@
 #include "engines/ampr/Module.h"
 
+#include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
 #include "engines/ampr/GamePack.h"
 #include "engines/ampr/Runtime.h"
@@ -118,16 +119,22 @@ class FolderJob : public Job {
 public:
     explicit FolderJob(QJsonObject p) : m_p(std::move(p)) {}
     QJsonObject parameters() const override { return m_p; }
-    QString title() const override { return QFileInfo(source()).fileName(); }
+    QString title() const override { return isZip() ? QFileInfo(source()).completeBaseName() : QFileInfo(source()).fileName(); }
     QString subtitle() const override { return QStringLiteral("→ %1").arg(native(output())); }
     QStringList busyPaths() const override
     {
         return {QDir::cleanPath(QFileInfo(source()).absoluteFilePath()), QDir::cleanPath(QFileInfo(output()).absoluteFilePath())};
     }
+    // Pack also takes a zipped dump (#67), unpacked to the job's temporary folder first.
+    virtual bool acceptsZip() const { return false; }
+    bool isZip() const { return acceptsZip() && archive::isZipSource(source()); }
     Status validate(const SettingsValues&) const override
     {
-        if (!QFileInfo(source()).isDir())
-            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the game folder."));
+        if (!QFileInfo(source()).isDir() && !isZip())
+            return Error(ErrorCode::InvalidArgument, acceptsZip() ? QStringLiteral("Choose the game folder or a zipped dump.")
+                                                                  : QStringLiteral("Choose the game folder."));
+        if (isZip())
+            FW_TRY(archive::checkZipSource(source()));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the new folder."));
         const QString s = QFileInfo(source()).absoluteFilePath(), o = QFileInfo(output()).absoluteFilePath();
@@ -148,7 +155,9 @@ class PackJob final : public FolderJob {
 public:
     using FolderJob::FolderJob;
     QString kind() const override { return kPackJob; }
-    QStringList phases() const override { return {QStringLiteral("Scanning"), QStringLiteral("Packing"), QStringLiteral("Checking packs")}; }
+    bool acceptsZip() const override { return true; }
+    QString subtitle() const override { return QStringLiteral("zstd packs → %1").arg(native(output())); }
+    QStringList phases() const override { return {QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs")}; }
     Status validate(const SettingsValues& s) const override
     {
         FW_TRY(FolderJob::validate(s));
@@ -162,17 +171,29 @@ public:
         FW_TRY(validate(ctx.settings));
         const PackSettings ps = readPackSettings(ctx.settings, m_p);
         ctx.progress->beginPhase(0, 0);
-        FW_TRY_ASSIGN(auto files, openFolderGame(source(), ctx.token));
+        QString src = QFileInfo(source()).absoluteFilePath();
+        if (isZip()) {
+            FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress));
+            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
+        }
+        FW_TRY_ASSIGN(auto files, openFolderGame(src, ctx.token));
         PackGameOptions o;
         o.level = ps.level;
         o.threads = ps.threads;
         o.strategy = ps.strategy;
         o.verify = ps.verify;
-        o.linkFromFolder = QFileInfo(source()).absoluteFilePath();
+        o.linkFromFolder = src;
+        o.freeSpaceMarginBytes = qint64(ctx.settings.integer(general::keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
         o.packPhase = 1;
         o.verifyPhase = 2;
         const QString out = QFileInfo(output()).absoluteFilePath();
         const bool created = !QFileInfo::exists(out);
+        ctx.log.info(QStringLiteral("Packing %1 with zstd level %2 (%3) into %4")
+                         .arg(native(src))
+                         .arg(ps.level)
+                         .arg(ps.strategy == PackStrategy::Compatible ? QStringLiteral("compatible: containers, configs and media stay loose")
+                                                                      : QStringLiteral("everything except system files"),
+                              native(out)));
         auto r = packGame(files, out, o, ctx.token, ctx.progress, ctx.log);
         if (!r.ok()) {
             // Nothing half-written stays; a folder the user made is left empty, not removed.
@@ -181,14 +202,35 @@ public:
                 QDir().mkpath(out);
             return r.takeError();
         }
+        for (const QString& l : r->looseSummary)
+            ctx.log.info(QStringLiteral("Kept loose: %1").arg(l));
+        if (!r->droppedFiles.isEmpty())
+            ctx.log.info(QStringLiteral("Left out (old AMPR journal, logs or packs): %1").arg(r->droppedFiles.join(QStringLiteral(", "))));
+        ctx.log.info(QStringLiteral("Packed: %1. Runtime: %2%3.")
+                         .arg(r->summary(), r->runtime,
+                              r->previousRuntime.kind == RuntimeKind::None || r->previousRuntime.bundled
+                                  ? QString()
+                                  : QStringLiteral(" (replaced %1)").arg(r->previousRuntime.describe())));
         JobOutcome outcome;
         outcome.outputs = {out};
-        outcome.summary = r->summary();
+        outcome.summary = QStringLiteral("zstd: %1").arg(r->summary());
         outcome.warnings = r->warnings;
+        outcome.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
+                                           "runtime is replaced and the game cannot read its packs.");
         outcome.verification = ps.verify ? Verification::Passed : Verification::NotRun;
         outcome.verificationDetail = ps.verify ? QStringLiteral("every pack chunk read back and matched") : QString();
         outcome.details.insert(QStringLiteral("packedFiles"), r->packedFiles);
         outcome.details.insert(QStringLiteral("storedBytes"), r->storedBytes);
+        outcome.details.insert(QStringLiteral("zstd"),
+                               QJsonObject{{QStringLiteral("level"), r->level},
+                                           {QStringLiteral("strategy"), packStrategyName(ps.strategy)},
+                                           {QStringLiteral("packedFiles"), r->packedFiles},
+                                           {QStringLiteral("packedBytes"), r->packedBytes},
+                                           {QStringLiteral("storedBytes"), r->storedBytes},
+                                           {QStringLiteral("looseFiles"), r->looseFiles},
+                                           {QStringLiteral("volumes"), r->volumes},
+                                           {QStringLiteral("runtime"), r->runtime},
+                                           {QStringLiteral("previousRuntime"), r->previousRuntime.describe()}});
         return outcome;
     }
 };

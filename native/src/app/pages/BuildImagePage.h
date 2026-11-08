@@ -5,8 +5,10 @@
 //   Source       drop zone → game strip. A folder for every format; with FPKG
 //                also an .exfat / .ffpfsc / .ffpkg image or a .gp5 project.
 //                A wrapper folder is searched for the game folder below it.
-//   Format       four tiles (exFAT, FFPKG, PFS, FPKG) and, under them, the two
-//                or three settings people change for that format.
+//   Format       five tiles (exFAT, FFPKG, PFS, FPKG, Packed folder) and, under
+//                them, the two or three settings people change for that output.
+//                Packed folder is no image: the game folder with its files in
+//                zstd packs (ampr.pack), for a USB drive or an FTP upload.
 //   Package      FPKG only: package type (App, Add-on, Update, Backport),
 //                content ID, title, version, add-on / update fields, and the
 //                backport updates (4.xx / 5.xx+ backport files, folder or ZIP):
@@ -43,6 +45,8 @@ namespace fw::pages {
 // Format values of the page (navigateWith {"format": ...}); images use the
 // jobs::kFormat* values ("exfat", "ffpkg", "ffpfsc", "ffpfs").
 inline const QString kFormatFpkg = QStringLiteral("fpkg");
+// The game folder with its files in zstd packs (ampr.pack): a folder, no image.
+inline const QString kFormatZstdFolder = QStringLiteral("zstd");
 
 class BuildImagePage : public JobFormPage {
     Q_OBJECT
@@ -61,10 +65,10 @@ public:
 
     void setSource(const QString& path);
     QString source() const;
-    // "exfat", "ffpkg", "ffpfsc", "ffpfs" (PFS tile, uncompressed) or "fpkg".
+    // "exfat", "ffpkg", "ffpfsc", "ffpfs" (PFS tile, uncompressed), "fpkg" or "zstd" (packed folder).
     void setFormat(const QString& format);
     QString format() const;
-    // Image formats: the file name with its extension; FPKG: the expected package name.
+    // Image formats: the file name with its extension; FPKG: the expected package name; packed folder: the folder name.
     QString fileName() const;
     void setFileStem(const QString& stem); // as if typed by the user
     void setOutputFolder(const QString& dir); // as if chosen with Browse…
@@ -87,7 +91,7 @@ protected:
 
 private:
     struct FormatOptions {
-        QString tile; // exfat / ffpkg / ffpfsc / fpkg
+        QString tile; // exfat / ffpkg / ffpfsc / fpkg / zstd
         ui::JobOptionsPanel* panel = nullptr;
         QWidget* essentials = nullptr; // in the Format card
         QWidget* advanced = nullptr;   // in the Advanced section
@@ -128,6 +132,7 @@ private:
     qint64 neededBytes() const;
     QString tile() const;
     bool isFpkg() const { return tile() == kFormatFpkg; }
+    bool isZstdFolder() const { return tile() == kFormatZstdFolder; }
     QString sourceKind() const; // folder / exfat / ffpfsc / ffpkg / gp5
     QString outputFolder() const; // where the output goes (resolved defaults)
     QString expectedPackagePath() const;

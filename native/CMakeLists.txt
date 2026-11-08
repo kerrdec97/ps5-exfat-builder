@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.24)
 # project is self-contained under native/.
 
 project(FarewellEdition
-    VERSION 5.0.0
+    VERSION 5.0.1
     DESCRIPTION "PS5 exFAT Image Builder v5 (native)"
     LANGUAGES CXX)
 

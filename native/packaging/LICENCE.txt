@@ -1,0 +1,32 @@
+exFAT Image Builder 5
+Copyright (c) 2026 Deckerr97 (kerrdec97). All rights reserved.
+
+exFAT Image Builder is proprietary software. It is provided as a ready-to-run
+program for personal, non-commercial use with games and content you own and
+dumped yourself.
+
+You may
+  * run the program on computers you control;
+  * keep copies for your own use;
+  * share the link to the official download page.
+
+You may not, without the author's written permission,
+  * modify, decompile, disassemble or otherwise reverse engineer the program;
+  * redistribute the program or any part of it, alone or bundled with other
+    software, including copies you have renamed or repackaged;
+  * sell, rent, lease or lend the program, or offer it as a service.
+
+THE PROGRAM IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE PROGRAM OR ITS USE, INCLUDING LOSS OF DATA.
+
+Third-party components ship with their own licences, which continue to apply
+to those components: see THIRD_PARTY_NOTICES.md and the LICENSES folder next
+to this file. The bundled PS5 Backport engine is a separate program under its
+own terms.
+
+Not affiliated with or endorsed by Sony Interactive Entertainment. The program
+includes no Sony software and does not download games, decrypt retail packages
+or bypass DRM.

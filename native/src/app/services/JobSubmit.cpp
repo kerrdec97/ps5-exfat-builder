@@ -142,6 +142,15 @@ Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const Q
     return enqueue(ctx, imageBuildKind(format), p, overrides);
 }
 
+Result<QString> submitPackFolder(AppContext& ctx, const QString& source, const QString& output, const QVariantMap& overrides,
+                                 const QJsonObject& extra)
+{
+    QJsonObject p = extra;
+    p.insert(QStringLiteral("source"), source);
+    p.insert(QStringLiteral("output"), output);
+    return enqueue(ctx, ampr::kPackJob, p, overrides);
+}
+
 Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, const QVariantMap& overrides)
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("verify"));
