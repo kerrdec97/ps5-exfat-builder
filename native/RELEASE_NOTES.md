@@ -78,8 +78,8 @@ program, with a new interface and the PS5 Backport engine built in.
   drop, keyboard shortcuts, and a transfers panel with per-file progress,
   speed, time left, pause, cancel and retry.
 * **ShadowMount+ 1.7**: reads and writes the 1.6/1.7 flat and the new
-  sectioned format (, ), changes only the keys you
-  edit (comments and unknown keys are kept), drops the removed 
+  sectioned format (`version = 2`, `profiles.ini`), changes only the keys you
+  edit (comments and unknown keys are kept), drops the removed `kstuff_*`
   keys, uses its HTTP API (port 10101) for version, free space, USB eject and
   logs, and confirms **Safe to unplug** from its own shutdown messages.
 * **ftpsrv 0.21**: SELF decryption is switched off after login, so uploads
