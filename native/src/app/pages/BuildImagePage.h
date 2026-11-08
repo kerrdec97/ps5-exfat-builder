@@ -5,6 +5,7 @@
 
 #include "app/pages/Page.h"
 #include "app/services/GameInfo.h"
+#include "app/ui/Components.h"
 
 namespace fw::pages {
 
@@ -20,6 +21,7 @@ public:
     QStringList demoStates() const override { return {QStringLiteral("space-error")}; }
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
+    void setDragHighlight(bool on) override;
     void setSource(const QString& folder);
     QString format() const;
     void showSpaceError(qint64 needed, qint64 free, const QString& drive); // real flow + demo state
@@ -42,7 +44,11 @@ private:
     QWidget* m_strip;
     ui::ElideLabel* m_stripTitle;
     ui::ElideLabel* m_stripMeta;
-    ui::Segmented* m_format;
+    ui::ChoiceTiles* m_format;
+    ui::DropZone* m_drop;
+    ui::IconTile* m_stripTile;
+    ui::ElideLabel* m_stripPath;
+    ui::MessageRow* m_sourceMsg;
     QLabel* m_formatHelp;
     ui::PathField* m_output;
     ui::MessageRow* m_spaceRow;

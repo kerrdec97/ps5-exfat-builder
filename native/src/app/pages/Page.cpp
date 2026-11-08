@@ -3,6 +3,7 @@
 #include "app/AppContext.h"
 #include "app/models/JobQueueModel.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -122,13 +123,22 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
                                                 const QStringList& excludeKeys, const QString& settingsLink,
                                                 bool withOpenFolderRow)
 {
-    auto* card = new Card(this);
+    // v5: the per-job settings live in a folded "Advanced options" section so a
+    // page shows only the decisions most people make; the header says how many
+    // settings differ from the defaults for this job.
+    auto* card = new Disclosure(QStringLiteral("Advanced options"), title, this);
     card->body()->setSpacing(0);
-    card->setTitle(title);
     m_options = new JobOptionsPanel(m_ctx, sections, excludeKeys, card);
     m_options->setGroupCards(false);
     m_options->build();
     card->body()->addWidget(m_options);
+    auto updateSummary = [card, this] {
+        const int n = int(m_options->overrides().size());
+        card->setSummary(n > 0 ? QStringLiteral("%1 changed for this job").arg(n) : QStringLiteral("Defaults"),
+                         n > 0 ? Tone::Info : Tone::Neutral);
+    };
+    connect(m_options, &JobOptionsPanel::overridesChanged, card, updateSummary);
+    updateSummary();
     if (withOpenFolderRow) {
         auto* row = new QWidget(card);
         auto* h = hbox(row, space::lg, QMargins(0, 6, 0, 6));

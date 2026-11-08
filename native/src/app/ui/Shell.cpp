@@ -7,6 +7,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QRadialGradient>
 #include <QVBoxLayout>
 
 namespace fw::ui {
@@ -44,7 +45,7 @@ void NavItem::setCount(int count)
 
 QSize NavItem::sizeHint() const
 {
-    return {m_compact ? 40 : 216, size::navItem};
+    return {m_compact ? 44 : 224, size::navItem};
 }
 
 void NavItem::paintEvent(QPaintEvent*)
@@ -54,54 +55,53 @@ void NavItem::paintEvent(QPaintEvent*)
     const bool sel = isChecked();
     const bool hover = underMouse();
     const bool down = isDown();
-    QColor fill;
-    if (down)
-        fill = color::bg_4;
-    else if (sel)
-        fill = color::bg_3;
-    else if (hover)
-        fill = color::bg_2;
-    if (fill.isValid()) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(fill);
-        p.drawRoundedRect(rect(), radius::sm, radius::sm);
-    }
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (sel) {
-        p.setBrush(color::accent);
-        p.drawRoundedRect(QRect(0, (height() - 16) / 2, 3, 16), radius::xs, radius::xs);
+        // Selected: a soft gradient wash with a hairline edge and a glowing bar.
+        p.setPen(QPen(QColor(141, 181, 255, 40), 1));
+        p.setBrush(accentGradient(r, 46));
+        p.drawRoundedRect(r, 9, 9);
+        QLinearGradient bar(QPointF(0, (height() - 18) / 2.0), QPointF(0, (height() + 18) / 2.0));
+        bar.setColorAt(0, color::accent_hi);
+        bar.setColorAt(1, color::accent_2_hi);
+        p.setPen(Qt::NoPen);
+        p.setBrush(bar);
+        p.drawRoundedRect(QRectF(1, (height() - 18) / 2.0, 3, 18), 1.5, 1.5);
+    } else if (down || hover) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(down ? color::bg_4 : color::bg_3);
+        p.drawRoundedRect(r, 9, 9);
     }
-    const QColor iconColor = sel ? color::accent_hi : hover ? color::fg_0 : color::fg_3;
-    const QColor textColor = sel || hover ? color::fg_0 : color::fg_2;
-    const int ix = m_compact ? (width() - size::icon) / 2 : 12;
+    const QColor iconColor = sel ? color::accent_hi : hover ? color::fg_0 : color::fg_4;
+    const QColor textColor = sel ? color::fg_0 : hover ? color::fg_0 : color::fg_2;
+    const int ix = m_compact ? (width() - size::icon) / 2 : 14;
     p.drawPixmap(QRect(ix, (height() - size::icon) / 2, size::icon, size::icon),
                  iconPixmap(m_icon, size::icon, iconColor, devicePixelRatioF()));
     if (!m_compact) {
         p.setPen(textColor);
         p.setFont(sel ? font::bodyStrong() : font::body());
-        int right = width() - 8;
+        int right = width() - 10;
         if (m_count > 0) {
             const QString n = QString::number(m_count);
             const QFontMetrics fm(font::caption());
-            const int bw = fm.horizontalAdvance(n) + 12;
-            const QRect br(width() - 8 - bw, (height() - 18) / 2, bw, 18);
+            const int bw = std::max(20, fm.horizontalAdvance(n) + 12);
+            const QRect br(width() - 10 - bw, (height() - 18) / 2, bw, 18);
             p.setPen(Qt::NoPen);
-            p.setBrush(color::bg_3);
-            if (sel)
-                p.setBrush(color::bg_5);
+            p.setBrush(accentGradient(br, 255));
             p.drawRoundedRect(br, 9, 9);
-            p.setPen(color::fg_2);
+            p.setPen(color::on_accent);
             p.setFont(font::caption());
             p.drawText(br, Qt::AlignCenter, n);
             right = br.left() - 6;
             p.setPen(textColor);
             p.setFont(sel ? font::bodyStrong() : font::body());
         }
-        const QRect tr(12 + size::icon + 10, 0, right - (12 + size::icon + 10), height());
+        const QRect tr(14 + size::icon + 12, 0, right - (14 + size::icon + 12), height());
         p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width()));
     } else if (m_count > 0) {
         p.setPen(Qt::NoPen);
         p.setBrush(color::accent_hi);
-        p.drawEllipse(QRect(width() - 12, 8, 6, 6));
+        p.drawEllipse(QRect(width() - 13, 8, 7, 7));
     }
 }
 
@@ -119,38 +119,46 @@ void NavItem::keyPressEvent(QKeyEvent* e)
 Sidebar::Sidebar(QWidget* parent) : QWidget(parent)
 {
     setFixedWidth(size::sidebar);
-    setAutoFillBackground(true);
-    QPalette p = palette();
-    p.setColor(QPalette::Window, color::bg_0);
-    setPalette(p);
     setProperty("fwNoRing", true);
     auto* outer = new QHBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
     auto* inner = new QWidget(this);
-    m_layout = vbox(inner, space::xs, QMargins(space::sm, space::md, space::sm, space::md));
+    m_layout = vbox(inner, 3, QMargins(space::md, space::md, space::md, space::md));
     outer->addWidget(inner, 1);
     auto* line = new QFrame(this);
     line->setFixedWidth(1);
     line->setAutoFillBackground(true);
     QPalette lp = line->palette();
-    lp.setColor(QPalette::Window, color::border_2);
+    lp.setColor(QPalette::Window, color::border_1);
     line->setPalette(lp);
     outer->addWidget(line);
     m_group = new QButtonGroup(this);
     m_group->setExclusive(true);
     m_version = label({}, TextStyle::Caption, color::fg_5, this);
-    m_version->setContentsMargins(12, 8, 12, 4);
+    m_version->setContentsMargins(14, 10, 14, 2);
     connect(m_group, &QButtonGroup::buttonClicked, this, [this](QAbstractButton* b) {
         if (auto* n = qobject_cast<NavItem*>(b))
             emit selected(n->key());
     });
 }
 
+void Sidebar::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.fillRect(rect(), color::bg_0);
+    QLinearGradient glow(QPointF(0, 0), QPointF(0, 260));
+    QColor a = color::accent;
+    a.setAlpha(16);
+    glow.setColorAt(0, a);
+    glow.setColorAt(1, QColor(0, 0, 0, 0));
+    p.fillRect(QRect(0, 0, width(), 260), glow);
+}
+
 void Sidebar::addGroup(const QString& overline)
 {
-    auto* l = label(overline, TextStyle::Overline, color::fg_4, this);
-    l->setContentsMargins(12, 12, 12, 4);
+    auto* l = label(overline, TextStyle::Overline, color::fg_5, this);
+    l->setContentsMargins(14, 16, 14, 6);
     m_groupLabels << l;
     m_layout->addWidget(l);
 }
@@ -245,10 +253,14 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     m_menu = new IconButton(QStringLiteral("sidebar"), QStringLiteral("Toggle sidebar"), IconButton::Size::Regular, this);
     h->addWidget(m_menu);
     auto* brand = new QWidget(this);
-    auto* bl = hbox(brand, space::sm, QMargins(4, 0, 0, 0));
-    bl->setAlignment(Qt::AlignBaseline);
-    bl->addWidget(label(QStringLiteral("exFAT Image Builder"), TextStyle::BodyStrong, color::fg_0, brand), 0, Qt::AlignBaseline);
-    bl->addWidget(label(QStringLiteral("Farewell Edition"), TextStyle::Body, color::fg_3, brand), 0, Qt::AlignBaseline);
+    auto* bl = hbox(brand, 10, QMargins(4, 0, 0, 0));
+    bl->addWidget(new BrandMark(28, brand), 0, Qt::AlignVCenter);
+    auto* name = label(QStringLiteral("exFAT Image Builder"), TextStyle::Subtitle, color::fg_0, brand);
+    bl->addWidget(name, 0, Qt::AlignVCenter);
+    m_versionPill = new Badge(QString(), Tone::Info, brand);
+    m_versionPill->setIconName(QString());
+    m_versionPill->hide();
+    bl->addWidget(m_versionPill, 0, Qt::AlignVCenter);
     h->addWidget(brand);
     h->addStretch(1);
     m_consoleChipWrap = new QWidget(this);
@@ -298,11 +310,31 @@ void AppHeader::setConsoleChip(const QString& text, Tone tone, bool visible)
     m_consoleChipWrap->setVisible(visible);
 }
 
+void AppHeader::setVersion(const QString& version)
+{
+    m_versionPill->set(version, Tone::Info);
+    m_versionPill->setVisible(!version.isEmpty());
+}
+
 void AppHeader::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), color::bg_0);
-    p.fillRect(QRect(0, height() - 1, width(), 1), color::border_2);
+    // A faint brand glow under the logo and a gradient hairline along the bottom.
+    QRadialGradient glow(QPointF(70, height() / 2.0), 220);
+    QColor g = color::accent;
+    g.setAlpha(28);
+    glow.setColorAt(0, g);
+    glow.setColorAt(1, QColor(0, 0, 0, 0));
+    p.fillRect(rect(), glow);
+    QLinearGradient line(QPointF(0, 0), QPointF(width(), 0));
+    QColor a = color::accent, b = color::accent_2, c = color::border_1;
+    a.setAlpha(110);
+    b.setAlpha(60);
+    line.setColorAt(0, a);
+    line.setColorAt(0.35, b);
+    line.setColorAt(1, c);
+    p.fillRect(QRect(0, height() - 1, width(), 1), line);
 }
 
 // ---- status bar -------------------------------------------------------------------
@@ -351,19 +383,23 @@ void StatusBar::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), color::bg_0);
-    p.fillRect(QRect(0, 0, width(), 1), color::border_2);
+    p.fillRect(QRect(0, 0, width(), 1), color::border_1);
 }
 
 // ---- page header --------------------------------------------------------------------
 
 PageHeader::PageHeader(const QString& title, const QString& captionText, QWidget* parent) : QWidget(parent)
 {
-    auto* h = hbox(this, space::lg, QMargins(0, 0, 0, 0));
+    auto* h = hbox(this, space::lg, QMargins(0, 0, 0, space::xs));
     h->setAlignment(Qt::AlignTop);
+    m_icon = new IconTile(QString(), 46, this);
+    m_icon->hide();
+    h->addWidget(m_icon, 0, Qt::AlignTop);
     auto* col = new QVBoxLayout;
-    col->setSpacing(2);
+    col->setSpacing(3);
     m_title = heading(title, TextStyle::Title, this);
-    m_caption = caption(captionText, this);
+    m_caption = label(captionText, TextStyle::Body, color::fg_3, this);
+    m_caption->setWordWrap(true);
     m_caption->setMaximumWidth(760);
     col->addWidget(m_title);
     col->addWidget(m_caption);
@@ -380,6 +416,12 @@ void PageHeader::setCaption(const QString& text)
 }
 
 void PageHeader::setTitle(const QString& title) { m_title->setText(title); }
+
+void PageHeader::setIcon(const QString& iconName)
+{
+    m_icon->setIconName(iconName);
+    m_icon->setVisible(!iconName.isEmpty());
+}
 
 void PageHeader::addAction(QWidget* w) { m_actions->addWidget(w); }
 

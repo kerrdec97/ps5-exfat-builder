@@ -1,6 +1,7 @@
 #include "connect/ps5/Module.h"
 
 #include "connect/ps5/ConsoleBackup.h"
+#include "connect/ps5/CrashDumps.h"
 #include "connect/ps5/DpiInstaller.h"
 #include "connect/ps5/Endpoint.h"
 #include "connect/ps5/FtpDiagnostics.h"
@@ -15,6 +16,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QUuid>
@@ -493,6 +495,82 @@ private:
     QJsonObject m_p;
 };
 
+// ---- ps5.crashdumps.capture ------------------------------------------------------------------
+
+QString defaultCrashDumpFolder()
+{
+    const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    return QDir(desktop.isEmpty() ? QDir::homePath() : desktop).filePath(QStringLiteral("PS5 Logs"));
+}
+
+class CrashDumpsJob final : public Job {
+public:
+    explicit CrashDumpsJob(QJsonObject p) : m_p(std::move(p)) {}
+    QString kind() const override { return jobkinds::kCrashDumps; }
+    QString title() const override { return QStringLiteral("Capture PS5 crash dumps"); }
+    QString subtitle() const override { return QDir::toNativeSeparators(outputDir()); }
+    QStringList phases() const override { return {QStringLiteral("Watching")}; }
+    QJsonObject parameters() const override { return m_p; }
+    Status validate(const SettingsValues& s) const override { return needHost(endpointFor(m_p, s)); }
+
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        ConsoleEndpoint ep = endpointFor(m_p, ctx.settings);
+        ep.ftpPort = portParam(m_p, ep.ftpPort);
+        CrashCaptureOptions opt;
+        opt.outputDir = outputDir();
+        opt.runForMs = qint64(std::clamp(m_p.value(QStringLiteral("minutes")).toInt(0), 0, 24 * 60)) * 60 * 1000;
+        if (m_p.contains(QStringLiteral("root")))
+            opt.root = m_p.value(QStringLiteral("root")).toString();
+        if (m_p.contains(QStringLiteral("settleMs"))) // tests
+            opt.settleMs = std::clamp(m_p.value(QStringLiteral("settleMs")).toInt(), 100, 60000);
+        ctx.progress->beginPhase(0, 0);
+        auto r = captureCrashDumps(ep, opt, ctx.token, [&](const QString& text) {
+            ctx.progress->setCurrentItem(text);
+            ctx.log.info(QStringLiteral("[Crash dumps] %1").arg(text));
+        });
+        if (!r.ok())
+            return r.takeError();
+        const CrashCaptureReport& rep = r.value();
+        JobOutcome o;
+        QJsonArray crashes;
+        int withCore = 0;
+        for (const CapturedCrash& c : rep.crashes) {
+            QJsonObject j;
+            j.insert(QStringLiteral("folder"), c.folder);
+            j.insert(QStringLiteral("localDir"), QDir::toNativeSeparators(c.localDir));
+            j.insert(QStringLiteral("files"), toJsonArray(c.files));
+            j.insert(QStringLiteral("core"), c.hasCore);
+            j.insert(QStringLiteral("zip"), QDir::toNativeSeparators(c.zipPath));
+            crashes.append(j);
+            if (c.hasCore)
+                ++withCore;
+            if (!c.zipPath.isEmpty())
+                o.outputs << c.zipPath;
+        }
+        o.details.insert(QStringLiteral("crashes"), crashes);
+        o.details.insert(QStringLiteral("baseline"), toJsonArray(rep.baseline));
+        o.details.insert(QStringLiteral("outputDir"), QDir::toNativeSeparators(opt.outputDir));
+        o.warnings = rep.warnings;
+        o.summary = rep.crashes.empty()
+            ? QStringLiteral("No new crash on the console%1").arg(rep.stoppedByUser ? QStringLiteral(" (stopped)") : QString())
+            : QStringLiteral("%1 crash dump(s) saved, %2 with a core, in %3")
+                  .arg(rep.crashes.size())
+                  .arg(withCore)
+                  .arg(QDir::toNativeSeparators(opt.outputDir));
+        o.verification = Verification::Skipped;
+        return o;
+    }
+
+private:
+    QString outputDir() const
+    {
+        const QString d = m_p.value(QStringLiteral("outputDir")).toString().trimmed();
+        return d.isEmpty() ? defaultCrashDumpFolder() : d;
+    }
+    QJsonObject m_p;
+};
+
 // ---- ps5.ftp.diagnose ----------------------------------------------------------------------
 
 QString mbps(double v)
@@ -854,6 +932,7 @@ void registerModule(ModuleContext& ctx)
     add(jobkinds::kY2jbAutoBlock, QStringLiteral("Y2JB auto-block"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new AutoBlockJob(p)); });
     add(jobkinds::kShadowMountStop, QStringLiteral("ShadowMount+ safe to unplug"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new StopJob(p)); });
     add(jobkinds::kFtpDiagnose, QStringLiteral("FTP diagnostics"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new DiagnoseJob(p)); });
+    add(jobkinds::kCrashDumps, QStringLiteral("Capture crash dumps"), [](const QJsonObject& p) { return std::unique_ptr<Job>(new CrashDumpsJob(p)); });
 }
 
 } // namespace fw::ps5

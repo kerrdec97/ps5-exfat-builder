@@ -113,6 +113,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
 
     buildPages();
     m_sidebar->setVersionText(QStringLiteral("Version %1").arg(QLatin1String(build::kVersion)));
+    m_header->setVersion(QStringLiteral("v%1").arg(QLatin1String(build::kVersion)));
     connect(m_sidebar, &Sidebar::selected, this, [this](const QString& key) { navigate(key); });
     connect(m_header->menuButton(), &QToolButton::clicked, this, [this] {
         m_userCompact = !m_sidebar->isCompact();
@@ -176,6 +177,7 @@ void MainWindow::addPage(pages::Page* page, const QString& iconName, const QStri
 {
     m_pages.insert(page->key(), page);
     m_order << page->key();
+    page->header()->setIcon(iconName);
     m_stack->addWidget(page);
     if (footer)
         m_sidebar->addFooterItem(page->key(), iconName, text);

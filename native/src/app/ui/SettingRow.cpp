@@ -243,6 +243,35 @@ QString SettingRow::displayValue(const SettingDef& def, const QVariant& value)
     return value.toString();
 }
 
+// The first sentence of a description (at most ~130 characters), so rows stay
+// one or two lines; the rest is in the tooltip.
+QString SettingRow::conciseHelp(const QString& text)
+{
+    const QString t = text.simplified();
+    int end = -1;
+    for (int i = 0; i < t.size(); ++i) {
+        const QChar c = t.at(i);
+        if (c != u'.' && c != u'!' && c != u'?')
+            continue;
+        if (i + 1 < t.size() && t.at(i + 1) != u' ')
+            continue; // 1.5, .bin, e.g.x
+        const QString before = t.left(i + 1).right(5).toLower();
+        if (before.endsWith(QStringLiteral("e.g.")) || before.endsWith(QStringLiteral("i.e.")) || before.endsWith(QStringLiteral("etc."))
+            || before.endsWith(QStringLiteral("vs.")))
+            continue;
+        end = i + 1;
+        break;
+    }
+    QString first = end > 0 ? t.left(end) : t;
+    if (first.size() > 140) {
+        int cut = first.lastIndexOf(u' ', 125);
+        if (cut < 60)
+            cut = 125;
+        first = first.left(cut).trimmed() + QChar(0x2026);
+    }
+    return first;
+}
+
 SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent), m_def(def)
 {
     setProperty("fwNoRing", true);
@@ -255,8 +284,14 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     labelRow->setSpacing(space::sm);
     m_label = label(def.label, TextStyle::Body, color::fg_1, left);
     m_label->setWordWrap(true);
-    m_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    labelRow->addWidget(m_label, 1);
+    m_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    labelRow->addWidget(m_label, 0);
+    m_info = new QLabel(left);
+    m_info->setPixmap(iconPixmap(QStringLiteral("info"), 14, color::fg_5, devicePixelRatioF()));
+    m_info->setFixedSize(16, 16);
+    m_info->setCursor(Qt::WhatsThisCursor);
+    m_info->hide();
+    labelRow->addWidget(m_info, 0, Qt::AlignVCenter);
     m_badge = new Badge(QStringLiteral("Overridden for this job"), Tone::Neutral, left);
     m_badge->setIconName(QStringLiteral("advanced"));
     m_badge->hide();
@@ -298,11 +333,19 @@ void SettingRow::updateHelp()
     else if (m_overridden && !m_defaultText.isEmpty())
         parts << QStringLiteral("Default is %1.").arg(m_defaultText);
     else if (!m_def.description.isEmpty())
-        parts << m_def.description;
+        parts << conciseHelp(m_def.description);
     if (m_restart)
         parts << QStringLiteral("Takes effect after a restart.");
     m_help->setText(parts.join(u' '));
     m_help->setVisible(!parts.isEmpty());
+    // The full description is one hover away; the row itself stays short.
+    const bool shortened = !m_def.description.isEmpty() && conciseHelp(m_def.description) != m_def.description;
+    const QString tip = m_def.description.isEmpty() ? QString()
+                                                    : QStringLiteral("<p style='white-space:normal'>%1</p>").arg(m_def.description.toHtmlEscaped());
+    m_info->setVisible(shortened);
+    m_info->setToolTip(tip);
+    m_label->setToolTip(tip);
+    m_help->setToolTip(shortened ? tip : QString());
     m_useDefault->setVisible(m_overridden);
     const bool disabled = !m_disabledReason.isEmpty();
     setTextColor(m_label, disabled ? color::fg_5 : color::fg_1);

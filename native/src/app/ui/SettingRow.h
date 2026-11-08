@@ -59,6 +59,7 @@ public:
     void setDivider(bool on);                         // border_1 under the row
     void setRestartNote(bool on);
     QLabel* labelWidget() { return m_label; }
+    static QString conciseHelp(const QString& description); // first sentence, <= ~130 chars
     static QString displayValue(const SettingDef& def, const QVariant& value); // "128 KB", "On", "D:\\Images"
 signals:
     void useDefaultRequested();
@@ -75,6 +76,7 @@ private:
     SettingDef m_def;
     SettingEditor* m_editor;
     QLabel* m_label;
+    QLabel* m_info = nullptr;
     QLabel* m_help;
     Badge* m_badge;
     Link* m_useDefault;

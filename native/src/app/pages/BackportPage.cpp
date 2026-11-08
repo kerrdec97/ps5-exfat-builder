@@ -373,6 +373,15 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel&
     connect(console->addLink(QStringLiteral("Open the kernel log")), &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("klog")}}});
     });
+    // #46: watch the console for crash folders and save each one as a ZIP
+    // (Desktop\PS5 Logs); stop it from the Queue page.
+    connect(console->addLink(QStringLiteral("Capture crash dumps")), &Link::activated, this, [this] {
+        if (enqueueBackportJob(QStringLiteral("ps5.crashdumps.capture"), QJsonObject{},
+                               QStringLiteral("Crash-dump capture not started"))
+                .ok())
+            emit toastRequested(Tone::Info, QStringLiteral("Watching the PS5 for crashes"),
+                                QStringLiteral("Each crash is saved as a ZIP in Desktop\\PS5 Logs. Stop it on the Queue page."));
+    });
     ll->addWidget(console);
 
     auto* right = new QWidget(columns);

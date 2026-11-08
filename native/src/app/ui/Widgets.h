@@ -164,6 +164,39 @@ QColor toneMark(Tone tone);  // glyph / fill colour
 QColor toneText(Tone tone);  // text colour
 QColor toneTint(Tone tone);  // background tint
 
+// ---- brand mark / icon tile ---------------------------------------------------
+// The app's logo: a gradient (accent -> accent_2) rounded square with a glyph.
+class BrandMark : public QWidget {
+    Q_OBJECT
+public:
+    explicit BrandMark(int px = 28, QWidget* parent = nullptr);
+
+protected:
+    void paintEvent(QPaintEvent* e) override;
+
+private:
+    int m_px;
+};
+
+// A rounded square holding an icon: page headers, feature cards, stat tiles.
+// Default: translucent brand gradient with an accent_hi glyph; a tone tints it.
+class IconTile : public QWidget {
+    Q_OBJECT
+public:
+    IconTile(const QString& iconName, int px = 40, QWidget* parent = nullptr);
+    void setIconName(const QString& iconName);
+    void setTone(Tone tone);
+
+protected:
+    void paintEvent(QPaintEvent* e) override;
+
+private:
+    QString m_icon;
+    int m_px;
+    Tone m_tone = Tone::Info;
+    bool m_toned = false;
+};
+
 // ---- switch --------------------------------------------------------------------
 class Switch : public QAbstractButton {
     Q_OBJECT

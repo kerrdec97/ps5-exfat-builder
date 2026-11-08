@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
 #include "app/ui/Icons.h"
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
@@ -26,63 +27,76 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     m_reader = new GameInfoReader(this);
     connect(m_reader, &GameInfoReader::ready, this, &BuildImagePage::onSummary);
 
-    // ---- Source
+    // ---- Source: a drop zone until a dump is chosen, then the game card.
     auto* source = new Card(this);
     setSourceCard(source);
-    m_sourceBadge = new Badge(QStringLiteral("Choose a dump"), Tone::Neutral, source);
-    source->setTitle(QStringLiteral("Source"), m_sourceBadge);
+    m_sourceBadge = new Badge(QStringLiteral("Step 1"), Tone::Neutral, source);
+    m_sourceBadge->setIconName(QString());
+    source->setTitle(QStringLiteral("Game dump"), m_sourceBadge);
     m_source = new PathField(PathField::Mode::Directory, source);
     m_source->setDialogTitle(QStringLiteral("Choose the game dump folder"));
     m_source->setPlaceholder(QStringLiteral("Folder that holds sce_sys\\param.json"));
     m_source->setStartDir(ctx.settings().value(general::keys::kLastSourceDir).toString());
-    source->body()->addWidget(field(QStringLiteral("Game dump folder"), m_source,
-                                    QStringLiteral("Drop a folder anywhere on this page. Title, ID and version are read from sce_sys\\param.json."), source));
+    m_source->hide(); // the model behind the drop zone and the Change button
+    source->body()->addWidget(m_source);
+    m_drop = new DropZone(QStringLiteral("folder_open"), QStringLiteral("Drop a game dump folder here"),
+                          QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys"), source);
+    connect(m_drop, &DropZone::clicked, m_source->browseButton(), &QPushButton::click);
+    source->body()->addWidget(m_drop);
     m_strip = new Card(source, Card::Variant::Inset);
     auto* strip = static_cast<Card*>(m_strip);
-    strip->body()->setContentsMargins(0, 2, 0, 2);
+    strip->body()->setContentsMargins(2, 4, 2, 4);
     auto* sh = new QHBoxLayout;
     sh->setSpacing(space::md);
-    auto* tile = new QLabel(strip);
-    tile->setFixedSize(size::cover, size::cover);
-    tile->setAlignment(Qt::AlignCenter);
-    tile->setStyleSheet(QStringLiteral("background:%1;border-radius:%2px;").arg(hex(color::bg_3)).arg(radius::sm));
-    tile->setPixmap(iconPixmap(QStringLiteral("image"), size::icon, color::fg_5, devicePixelRatioF()));
-    sh->addWidget(tile);
+    m_stripTile = new IconTile(QStringLiteral("game"), 48, strip);
+    sh->addWidget(m_stripTile);
     auto* scol = new QVBoxLayout;
-    scol->setSpacing(2);
+    scol->setSpacing(3);
     m_stripTitle = new ElideLabel({}, Qt::ElideRight, strip);
-    m_stripTitle->setFont(font::bodyStrong());
+    m_stripTitle->setFont(font::subtitle());
     setTextColor(m_stripTitle, color::fg_0);
     m_stripMeta = new ElideLabel({}, Qt::ElideMiddle, strip);
-    m_stripMeta->setFont(font::mono());
+    m_stripMeta->setFont(font::caption());
     setTextColor(m_stripMeta, color::fg_3);
+    m_stripPath = new ElideLabel({}, Qt::ElideMiddle, strip);
+    m_stripPath->setFont(font::monoSmall());
+    setTextColor(m_stripPath, color::fg_4);
     scol->addWidget(m_stripTitle);
     scol->addWidget(m_stripMeta);
+    scol->addWidget(m_stripPath);
     sh->addLayout(scol, 1);
-    auto* rescan = button(QStringLiteral("Rescan"), ButtonVariant::Subtle, QStringLiteral("refresh"), strip);
-    connect(rescan, &QPushButton::clicked, this, &BuildImagePage::refresh);
+    auto* rescan = new IconButton(QStringLiteral("refresh"), QStringLiteral("Read the dump again"), IconButton::Size::Regular, strip);
+    connect(rescan, &QToolButton::clicked, this, &BuildImagePage::refresh);
     sh->addWidget(rescan);
+    auto* change = button(QStringLiteral("Change\u2026"), ButtonVariant::Secondary, QStringLiteral("folder"), strip);
+    connect(change, &QPushButton::clicked, m_source->browseButton(), &QPushButton::click);
+    sh->addWidget(change);
     strip->body()->addLayout(sh);
     m_strip->hide();
     source->body()->addWidget(m_strip);
+    m_sourceMsg = new MessageRow(source);
+    source->body()->addWidget(m_sourceMsg);
     form()->addWidget(source);
 
-    // ---- Output
+    // ---- Format: three big tiles.
     auto* output = new Card(this);
-    output->setTitle(QStringLiteral("Output"));
-    m_format = new Segmented(output);
-    m_format->addSegment(QStringLiteral("exFAT"), QStringLiteral("drive"), jobs::kFormatExfat);
-    m_format->addSegment(QStringLiteral("FFPKG (UFS2)"), QStringLiteral("package"), jobs::kFormatFfpkg);
-    m_format->addSegment(QStringLiteral("FFPFSC (PFS compressed)"), QStringLiteral("compress"), jobs::kFormatFfpfsc);
+    output->setTitle(QStringLiteral("Image format"));
+    m_format = new ChoiceTiles(output);
+    m_format->addChoice(QStringLiteral("exFAT"), QStringLiteral("Fastest to build. Mounts with ShadowMount+, any loader and on a PC."),
+                        QStringLiteral("drive"), jobs::kFormatExfat, QStringLiteral("Popular"));
+    m_format->addChoice(QStringLiteral("FFPKG \u00b7 UFS2"), QStringLiteral("The UFS2 image ShadowMount+ mounts without extracting."),
+                        QStringLiteral("package"), jobs::kFormatFfpkg);
+    m_format->addChoice(QStringLiteral("FFPFSC \u00b7 PFS"), QStringLiteral("Compressed PFS image. Smallest on disk; takes longer to build."),
+                        QStringLiteral("compress"), jobs::kFormatFfpfsc, QStringLiteral("Smallest"));
     m_format->setAccessibleName(QStringLiteral("Image format"));
     m_formatHelp = caption({}, output);
-    auto* fw = new QWidget(output);
-    auto* fl = vbox(fw, space::xs);
-    fl->addWidget(label(QStringLiteral("Image format"), TextStyle::Body, color::fg_1, fw));
-    fl->addWidget(m_format, 0, Qt::AlignLeft);
-    fl->addWidget(m_formatHelp);
-    output->body()->addWidget(fw);
-    connect(m_format, &Segmented::currentChanged, this, [this](int) { updateOutput(); });
+    m_formatHelp->hide();
+    output->body()->addWidget(m_format);
+    form()->addWidget(output);
+    auto* dest = new Card(this);
+    dest->setTitle(QStringLiteral("Save to"));
+    output = dest;
+    connect(m_format, &ChoiceTiles::currentChanged, this, [this](int) { updateOutput(); });
 
     auto* grid = new QWidget(output);
     auto* gh = hbox(grid, space::md);
@@ -92,7 +106,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     m_output->setPlaceholder(QStringLiteral("Default output folder"));
     auto* outField = new QWidget(grid);
     auto* ol = vbox(outField, space::xs);
-    ol->addWidget(label(QStringLiteral("Output folder"), TextStyle::Body, color::fg_1, outField));
+    ol->addWidget(label(QStringLiteral("Folder"), TextStyle::Body, color::fg_1, outField));
     ol->addWidget(m_output);
     m_spaceRow = new MessageRow(outField);
     ol->addWidget(m_spaceRow);
@@ -100,7 +114,8 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     m_fileName = textInput({}, true, grid);
     m_fileName->setReadOnly(true);
     m_fileName->setAccessibleName(QStringLiteral("File name"));
-    gh->addWidget(field(QStringLiteral("File name"), m_fileName, QStringLiteral("From the title ID, name and version of the dump."), grid), 1);
+    m_fileName->setToolTip(QStringLiteral("From the title ID, name and version of the dump (Settings › Build › Output name)."));
+    gh->addWidget(field(QStringLiteral("File name"), m_fileName, {}, grid), 1);
     output->body()->addWidget(grid);
     m_spaceBar = new InfoBar(Tone::Err, output);
     m_spaceBar->hide();
@@ -109,7 +124,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     connect(m_output, &PathField::pathChanged, this, [this](const QString&) { checkSpace(); });
 
     // ---- Job settings
-    addJobOptionsCard(QStringLiteral("Verification and job settings"),
+    addJobOptionsCard(QStringLiteral("Cluster size, image size, verification, threads, temporary folder"),
                       {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Storage"), QStringLiteral("PFS")},
                       {general::keys::kDefaultOutputDir}, QStringLiteral("All build settings"));
 
@@ -120,6 +135,12 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     });
     setRequiredKinds({jobs::imageBuildKind(jobs::kFormatExfat), jobs::imageBuildKind(jobs::kFormatFfpkg), jobs::imageBuildKind(jobs::kFormatFfpfsc)});
     updateOutput();
+}
+
+void BuildImagePage::setDragHighlight(bool on)
+{
+    JobFormPage::setDragHighlight(on);
+    m_drop->setHighlighted(on);
 }
 
 QString BuildImagePage::format() const { return m_format->currentValue().toString(); }
@@ -156,7 +177,10 @@ void BuildImagePage::setSource(const QString& folder)
     clearFormError();
     if (folder.isEmpty()) {
         m_strip->hide();
-        m_sourceBadge->set(QStringLiteral("Choose a dump"), Tone::Neutral);
+        m_drop->show();
+        m_sourceMsg->clear();
+        m_sourceBadge->set(QStringLiteral("Step 1"), Tone::Neutral);
+        m_sourceBadge->setIconName(QString());
         m_source->setError({});
         m_summary = {};
         updateOutput();
@@ -171,22 +195,28 @@ void BuildImagePage::setSource(const QString& folder)
 void BuildImagePage::onSummary(const GameSummary& s)
 {
     m_summary = s;
+    m_stripPath->setFullText(QDir::toNativeSeparators(s.folder.isEmpty() ? m_source->path() : s.folder));
     if (!s.exists) {
         m_strip->hide();
-        m_source->setError(QStringLiteral("This folder does not exist. Choose another or check the drive."));
+        m_drop->show();
+        m_sourceMsg->set(QStringLiteral("This folder does not exist. Choose another or check the drive."), Tone::Err);
         m_sourceBadge->set(QStringLiteral("Not found"), Tone::Err);
     } else if (!s.isGame) {
-        m_source->setError({});
+        m_sourceMsg->set(QStringLiteral("No sce_sys\param.json or eboot.bin here. Choose the folder that holds them."), Tone::Warn);
+        m_drop->hide();
         m_strip->show();
+        m_stripTile->setTone(Tone::Warn);
         m_stripTitle->setFullText(s.title);
         m_stripMeta->setFullText(s.metaLine());
         m_sourceBadge->set(QStringLiteral("Not a game dump"), Tone::Warn);
     } else {
-        m_source->setError({});
+        m_sourceMsg->clear();
+        m_drop->hide();
         m_strip->show();
+        m_stripTile->setTone(Tone::Ok);
         m_stripTitle->setFullText(s.title);
         m_stripMeta->setFullText(s.metaLine());
-        m_sourceBadge->set(QStringLiteral("Ready to build"), Tone::Ok);
+        m_sourceBadge->set(QStringLiteral("Ready"), Tone::Ok);
     }
     updateOutput();
     emit statusContextChanged();

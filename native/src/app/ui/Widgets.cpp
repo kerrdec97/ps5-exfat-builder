@@ -395,10 +395,25 @@ void Card::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    const QColor fill = m_variant == Variant::Inset ? color::bg_0 : m_selected ? color::accent_lo : color::bg_2;
-    p.setPen(QPen(color::border_2, 1));
-    p.setBrush(fill);
-    p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (m_variant == Variant::Inset) {
+        p.setPen(QPen(color::border_1, 1));
+        p.setBrush(color::field_bg);
+        p.drawRoundedRect(r, radius::control + 2, radius::control + 2);
+    } else {
+        // Cards sit slightly lifted: a faint top-down sheen over bg_2.
+        QLinearGradient sheen(r.topLeft(), r.bottomLeft());
+        sheen.setColorAt(0, QColor(0x15, 0x1a, 0x27));
+        sheen.setColorAt(1, color::bg_2);
+        p.setPen(QPen(color::border_2, 1));
+        p.setBrush(sheen);
+        p.drawRoundedRect(r, radius::md, radius::md);
+        if (m_selected) {
+            p.setBrush(accentGradient(r, 26));
+            p.setPen(QPen(QColor(141, 181, 255, 90), 1));
+            p.drawRoundedRect(r, radius::md, radius::md);
+        }
+    }
     if (m_drop) {
         QPen pen(color::accent_hi, 2, Qt::DashLine);
         pen.setDashPattern({4, 3});
@@ -560,16 +575,21 @@ void Switch::paintEvent(QPaintEvent*)
         border = color::border_3;
         knob = color::fg_5;
     } else if (on) {
-        fill = border = m_hover ? color::accent_hover : color::accent;
+        border = Qt::transparent;
         knob = color::on_accent;
     } else {
         fill = color::field_bg;
         border = m_hover ? color::border_4 : color::border_control;
         knob = color::fg_3;
     }
-    p.setPen(QPen(border, 1));
-    p.setBrush(fill);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (enabled && on) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(accentGradient(r, m_hover ? 235 : 255));
+    } else {
+        p.setPen(QPen(border, 1));
+        p.setBrush(fill);
+    }
     p.drawRoundedRect(r, r.height() / 2, r.height() / 2);
     p.setPen(Qt::NoPen);
     p.setBrush(knob);
@@ -660,7 +680,7 @@ QSize Segmented::sizeHint() const
     for (int i = 0; i < count(); ++i)
         w += segmentWidth(i) + (i ? 2 : 0);
     w += 3;
-    return {w, 32};
+    return {w, 34};
 }
 
 int Segmented::segmentAt(const QPoint& pt) const
@@ -681,7 +701,7 @@ void Segmented::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(QPen(color::border_3, 1));
     p.setBrush(color::field_bg);
-    p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
+    p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::control + 1, radius::control + 1);
     int x = 3;
     for (int i = 0; i < count(); ++i) {
         const auto& s = m_segments[size_t(i)];
@@ -689,10 +709,14 @@ void Segmented::paintEvent(QPaintEvent*)
         const QRect r(x, 3, w, height() - 6);
         const bool sel = i == m_current;
         const bool hov = i == m_hover && s.enabled && !sel;
-        if (sel || hov) {
+        if (sel) {
+            p.setPen(QPen(QColor(141, 181, 255, 80), 1));
+            p.setBrush(accentGradient(QRectF(r), 70));
+            p.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
+        } else if (hov) {
             p.setPen(Qt::NoPen);
-            p.setBrush(sel ? color::bg_5 : color::bg_3);
-            p.drawRoundedRect(r, 3, 3);
+            p.setBrush(color::bg_3);
+            p.drawRoundedRect(r, radius::sm, radius::sm);
         }
         QColor fg = !s.enabled ? color::fg_5 : sel ? color::fg_0 : hov ? color::fg_1 : color::fg_3;
         p.setPen(fg);
@@ -790,10 +814,11 @@ void ProgressBar::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
-    p.setBrush(color::bg_5);
-    p.drawRoundedRect(rect(), radius::xs, radius::xs);
+    p.setBrush(color::bg_4);
+    p.drawRoundedRect(rect(), height() / 2.0, height() / 2.0);
     QColor fill = color::accent;
     double frac = m_fraction;
+    const bool gradient = m_state == State::Determinate || m_state == State::Indeterminate;
     switch (m_state) {
     case State::Done: fill = color::success; frac = 1.0; break;
     case State::Failed: fill = color::danger; break;
@@ -803,15 +828,19 @@ void ProgressBar::paintEvent(QPaintEvent*)
         const double segW = width() * 0.35;
         const double x = -segW + t * (width() + segW);
         p.setClipRect(rect());
-        p.setBrush(fill);
-        p.drawRoundedRect(QRectF(x, 0, segW, height()), radius::xs, radius::xs);
+        p.setBrush(accentGradient(QRectF(x, 0, segW, height())));
+        p.drawRoundedRect(QRectF(x, 0, segW, height()), height() / 2.0, height() / 2.0);
         return;
     }
     case State::Determinate: break;
     }
     if (frac > 0) {
-        p.setBrush(fill);
-        p.drawRoundedRect(QRectF(0, 0, std::max(double(size::progress), width() * frac), height()), radius::xs, radius::xs);
+        const QRectF fr(0, 0, std::max(double(size::progress), width() * frac), height());
+        if (gradient)
+            p.setBrush(accentGradient(QRectF(0, 0, width(), height())));
+        else
+            p.setBrush(fill);
+        p.drawRoundedRect(fr, height() / 2.0, height() / 2.0);
     }
 }
 
@@ -1533,6 +1562,89 @@ void openInFileManager(const QString& path)
 #endif
     const QString dir = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
     QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
+// ---- brand mark / icon tile ------------------------------------------------------
+
+BrandMark::BrandMark(int px, QWidget* parent) : QWidget(parent), m_px(px)
+{
+    setFixedSize(px, px);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+}
+
+void BrandMark::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    QLinearGradient g(r.topLeft(), r.bottomRight());
+    g.setColorAt(0, color::accent);
+    g.setColorAt(1, color::accent_2);
+    p.setPen(QPen(QColor(255, 255, 255, 45), 1));
+    p.setBrush(g);
+    const qreal rad = m_px * 0.3;
+    p.drawRoundedRect(r, rad, rad);
+    // Gloss on the upper half.
+    QLinearGradient gloss(r.topLeft(), QPointF(r.left(), r.center().y()));
+    gloss.setColorAt(0, QColor(255, 255, 255, 50));
+    gloss.setColorAt(1, QColor(255, 255, 255, 0));
+    p.setPen(Qt::NoPen);
+    p.setBrush(gloss);
+    p.drawRoundedRect(r, rad, rad);
+    const int is = int(m_px * 0.58);
+    p.drawPixmap(QRect((m_px - is) / 2, (m_px - is) / 2, is, is),
+                 iconPixmap(QStringLiteral("layers"), is, color::on_accent, devicePixelRatioF()));
+}
+
+IconTile::IconTile(const QString& iconName, int px, QWidget* parent) : QWidget(parent), m_icon(iconName), m_px(px)
+{
+    setFixedSize(px, px);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+}
+
+void IconTile::setIconName(const QString& iconName)
+{
+    m_icon = iconName;
+    update();
+}
+
+void IconTile::setTone(Tone tone)
+{
+    m_tone = tone;
+    m_toned = true;
+    update();
+}
+
+void IconTile::paintEvent(QPaintEvent*)
+{
+    if (m_icon.isEmpty())
+        return;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal rad = m_px * 0.28;
+    QColor glyph = color::accent_hi;
+    if (m_toned && m_tone != Tone::Info) {
+        QColor tint = toneMark(m_tone);
+        QColor fillc = tint;
+        fillc.setAlpha(34);
+        tint.setAlpha(70);
+        p.setPen(QPen(tint, 1));
+        p.setBrush(fillc);
+        glyph = toneText(m_tone);
+    } else {
+        QLinearGradient g(r.topLeft(), r.bottomRight());
+        QColor a = color::accent, b = color::accent_2;
+        a.setAlpha(58);
+        b.setAlpha(40);
+        g.setColorAt(0, a);
+        g.setColorAt(1, b);
+        p.setPen(QPen(QColor(141, 181, 255, 70), 1));
+        p.setBrush(g);
+    }
+    p.drawRoundedRect(r, rad, rad);
+    const int is = std::max(14, int(m_px * 0.46));
+    p.drawPixmap(QRect((m_px - is) / 2, (m_px - is) / 2, is, is), iconPixmap(m_icon, is, glyph, devicePixelRatioF()));
 }
 
 } // namespace fw::ui

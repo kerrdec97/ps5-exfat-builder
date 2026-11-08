@@ -34,6 +34,9 @@ inline const QString kY2jbAutoBlock = QStringLiteral("ps5.y2jb.autoBlock");
 inline const QString kShadowMountStop = QStringLiteral("ps5.shadowmount.stop");
 // {host?, port?, folder?, speedTest: bool, speedTestBytes? (tests)} → details = FtpDiagnosis::toJson()
 inline const QString kFtpDiagnose = QStringLiteral("ps5.ftp.diagnose");
+// {host?, port?, outputDir? (default <Desktop>/PS5 Logs), minutes? (0 = until stopped), root?, settleMs? (tests)}
+// → details {crashes: [{folder, localDir, files, core, zip}], baseline, outputDir} (CrashDumps.h)
+inline const QString kCrashDumps = QStringLiteral("ps5.crashdumps.capture");
 } // namespace jobkinds
 
 } // namespace fw::ps5

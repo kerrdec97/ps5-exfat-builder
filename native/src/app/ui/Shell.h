@@ -54,6 +54,9 @@ public:
 signals:
     void selected(const QString& key);
 
+protected:
+    void paintEvent(QPaintEvent* e) override;
+
 private:
     QVBoxLayout* m_layout;
     QButtonGroup* m_group;
@@ -73,6 +76,7 @@ public:
     Badge* consoleChip() { return m_consoleChip; }
     void setQueueChip(const QString& text, Tone tone, bool visible);
     void setConsoleChip(const QString& text, Tone tone, bool visible);
+    void setVersion(const QString& version); // pill next to the product name
 signals:
     void queueChipClicked();
     void consoleChipClicked();
@@ -88,6 +92,7 @@ private:
     Badge* m_consoleChip;
     QWidget* m_queueChipWrap;
     QWidget* m_consoleChipWrap;
+    Badge* m_versionPill = nullptr;
 };
 
 class StatusBar : public QWidget {
@@ -114,10 +119,12 @@ public:
     PageHeader(const QString& title, const QString& caption, QWidget* parent = nullptr);
     void setCaption(const QString& caption);
     void setTitle(const QString& title);
+    void setIcon(const QString& iconName); // gradient tile left of the title
     void addAction(QWidget* w);
     QHBoxLayout* actions() { return m_actions; }
 
 private:
+    IconTile* m_icon;
     QLabel* m_title;
     QLabel* m_caption;
     QHBoxLayout* m_actions;
