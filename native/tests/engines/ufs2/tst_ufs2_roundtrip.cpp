@@ -9,11 +9,65 @@
 #include "engines/ufs2/Ufs2Verify.h"
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
+#include <QStorageInfo>
 #include <QTemporaryDir>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <winioctl.h>
+#else
+#include <sys/stat.h>
+#endif
 
 using namespace ufs2test;
 
 namespace {
+
+constexpr qint64 kGiB = 1024LL * 1024 * 1024;
+
+// A sparse file of `size` bytes holding `marks` (offset, bytes) and zeros
+// elsewhere. Returns the bytes it takes on disk, -1 when it could not be made.
+qint64 makeSparseFile(const QString& path, qint64 size, const QList<QPair<qint64, QByteArray>>& marks)
+{
+#ifdef Q_OS_WIN
+    const std::wstring native = QDir::toNativeSeparators(path).toStdWString();
+    HANDLE h = CreateFileW(native.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return -1;
+    DWORD ret = 0;
+    bool ok = DeviceIoControl(h, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &ret, nullptr);
+    LARGE_INTEGER li;
+    li.QuadPart = size;
+    ok = ok && SetFilePointerEx(h, li, nullptr, FILE_BEGIN) && SetEndOfFile(h);
+    for (const auto& m : marks) {
+        li.QuadPart = m.first;
+        DWORD written = 0;
+        ok = ok && SetFilePointerEx(h, li, nullptr, FILE_BEGIN)
+             && WriteFile(h, m.second.constData(), DWORD(m.second.size()), &written, nullptr) && written == DWORD(m.second.size());
+    }
+    CloseHandle(h);
+    if (!ok)
+        return -1;
+    DWORD high = 0;
+    const DWORD low = GetCompressedFileSizeW(native.c_str(), &high);
+    if (low == INVALID_FILE_SIZE && GetLastError() != NO_ERROR)
+        return -1;
+    return (qint64(high) << 32) | low;
+#else
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly) || !f.resize(size))
+        return -1;
+    for (const auto& m : marks)
+        if (!f.seek(m.first) || f.write(m.second) != m.second.size())
+            return -1;
+    f.close();
+    struct stat sb;
+    if (::stat(QFile::encodeName(path).constData(), &sb) != 0)
+        return -1;
+    return qint64(sb.st_blocks) * 512;
+#endif
+}
 
 // Reads the whole image back into a snapshot like snapshotFolder().
 QMap<QString, QByteArray> snapshotImage(const QString& image)
@@ -406,6 +460,81 @@ private slots:
         auto sub = r.value()->loadTree(token, nullptr, QStringLiteral("/sce_sys"));
         QVERIFY(sub.ok());
         QCOMPARE(sub->fileCount, qint64(2));
+    }
+
+    // #65 / #21: a single file larger than 4 GiB goes into an .ffpkg and comes
+    // back out intact (64-bit offsets, double-indirect blocks, streamed copy).
+    // The source is sparse; the image and the extracted copy are real data.
+    void extractFileLargerThan4GiB()
+    {
+        const qint64 size = 4 * kGiB + 3 * 1024 * 1024 + 7;
+        if (QStorageInfo(m_tmp.path()).bytesAvailable() < 2 * size + 2 * kGiB)
+            QSKIP("not enough free space for a 4 GiB image and its extracted copy");
+        const QString src = m_tmp.filePath(QStringLiteral("huge-src"));
+        const QString img = m_tmp.filePath(QStringLiteral("huge.ffpkg"));
+        const QString dest = m_tmp.filePath(QStringLiteral("huge-out"));
+        // Gives the disk space back as soon as the test ends (after the reader closed the image).
+        const auto cleanup = qScopeGuard([&] {
+            QFile::remove(img);
+            QDir(dest).removeRecursively();
+            QDir(src).removeRecursively();
+        });
+        QVERIFY(QDir().mkpath(src));
+        const QList<QPair<qint64, QByteArray>> marks = {
+            {0, QByteArrayLiteral("head")}, {4 * kGiB - 5, QByteArrayLiteral("edge!")},
+            {4 * kGiB + 1, QByteArrayLiteral("past 4 GiB")}, {size - 5, QByteArrayLiteral("tail!")}};
+        const qint64 allocated = makeSparseFile(src + QStringLiteral("/huge.bin"), size, marks);
+        if (allocated < 0 || allocated > 64 * 1024 * 1024)
+            QSKIP("this file system does not create sparse files");
+        QVERIFY(mktext(src + QStringLiteral("/small.txt"), "small"));
+
+        QElapsedTimer t;
+        t.start();
+        auto st = buildImage(src, img);
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        QVERIFY(QFileInfo(img).size() > size);
+        qInfo() << "4 GiB file imaged in" << t.restart() << "ms";
+
+        auto r = Ufs2Reader::open(img);
+        QVERIFY(r.ok());
+        auto ino = r.value()->resolve(QStringLiteral("/huge.bin"));
+        QVERIFY(ino.ok());
+        auto inode = r.value()->readInode(ino.value());
+        QVERIFY(inode.ok());
+        QCOMPARE(qint64(inode->size), size);
+        auto ext = r.value()->extents(inode.value(), ino.value());
+        QVERIFY(ext.ok());
+        const auto readFileAt = [&](qint64 off, qint64 len) {
+            for (const FileExtent& e : ext.value())
+                if (off >= e.fileOffset && off + len <= e.fileOffset + e.length) {
+                    if (e.imageOffset < 0)
+                        return QByteArray(int(len), '\0');
+                    QByteArray b(int(len), '\0');
+                    return r.value()->readAt(e.imageOffset + (off - e.fileOffset), b.data(), len).ok() ? b : QByteArray();
+                }
+            return QByteArray();
+        };
+        for (const auto& m : marks)
+            QCOMPARE(readFileAt(m.first, m.second.size()), m.second);
+
+        // Extraction streams it to disk.
+        CancellationToken token;
+        auto tree = r.value()->loadTree(token);
+        QVERIFY(tree.ok());
+        QVERIFY(QDir().mkpath(dest));
+        auto ex = extractTree(tree.value(), dest, token, nullptr);
+        QVERIFY2(ex.ok(), ex.ok() ? "" : qPrintable(ex.error().toLogString()));
+        QCOMPARE(ex->files, qint64(2));
+        qInfo() << "extracted in" << t.elapsed() << "ms";
+        QFile out(dest + QStringLiteral("/huge.bin"));
+        QVERIFY(out.open(QIODevice::ReadOnly));
+        QCOMPARE(out.size(), size);
+        for (const auto& m : marks) {
+            QVERIFY(out.seek(m.first));
+            QCOMPARE(out.read(m.second.size()), m.second);
+        }
+        out.close();
+        QCOMPARE(readAll(dest + QStringLiteral("/small.txt")), QByteArray("small"));
     }
 
     void windowsFileNames()

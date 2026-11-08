@@ -300,11 +300,14 @@ Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJs
 }
 
 Result<QString> submitConvert(AppContext& ctx, const QString& image, const QString& format, const QString& output,
-                              const QVariantMap& overrides)
+                              const QVariantMap& overrides, const QString& method, bool replaceExisting)
 {
-    return enqueue(ctx, QStringLiteral("image.convert"),
-                   QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("format"), format}, {QStringLiteral("output"), output}},
-                   overrides);
+    QJsonObject p{{QStringLiteral("image"), image}, {QStringLiteral("format"), format}, {QStringLiteral("output"), output}};
+    if (!method.isEmpty())
+        p.insert(QStringLiteral("method"), method);
+    if (replaceExisting)
+        p.insert(QStringLiteral("replaceExisting"), true);
+    return enqueue(ctx, QStringLiteral("image.convert"), p, overrides);
 }
 
 Result<QString> submitCompare(AppContext& ctx, const QString& a, const QString& b, const QString& depth)

@@ -1,6 +1,6 @@
 #pragma once
 
-// Read-only hex preview of one file inside an image (Edit image › Preview…):
+// Read-only hex preview of one file inside an image (Image tools › Edit › Preview…):
 // the first 64 KiB as offset / hex / ASCII, "Load more" appends the next
 // 64 KiB. Bytes are read by services/HexPreview on a worker thread; the sheet
 // only shows them.

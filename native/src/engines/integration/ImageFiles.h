@@ -12,7 +12,7 @@
 //   a folder          the files on disk (hidden and system files included,
 //                     links followed, loops skipped)
 //
-// Used by image.compare and by the Edit image page's hex preview. A FileTree
+// Used by image.compare and by the Image tools page's hex preview. A FileTree
 // keeps its image open while it lives and must be used by one thread at a
 // time; callers that are not jobs (the preview) open it per request and close
 // it right away, so no handle stays on an image a queued edit may replace.

@@ -8,7 +8,7 @@
 #include "app/MainWindow.h"
 #include "app/models/LogModel.h"
 #include "app/pages/DlcEmuEditor.h"
-#include "app/pages/ImageEditorPage.h"
+#include "app/pages/ImageToolsPage.h"
 #include "app/pages/LogsPage.h"
 #include "app/pages/Ps5ConnectPage.h"
 #include "app/pages/Page.h"
@@ -303,7 +303,7 @@ private slots:
 
     void imageEditorStagesAndOpensRealImage()
     {
-        auto* page = qobject_cast<pages::ImageEditorPage*>(m_window->page(QStringLiteral("edit")));
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         QVERIFY(page);
         // Staged operations map to the engine's JSON shape (exFAT by default).
         page->clearStaged();

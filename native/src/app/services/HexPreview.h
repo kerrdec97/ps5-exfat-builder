@@ -1,6 +1,6 @@
 #pragma once
 
-// Reads slices of a file inside an image for the Edit image page's hex
+// Reads slices of a file inside an image for the Image tools page's hex
 // preview (integration::readFileSlice: .exfat, .ffpkg, .ffpfs/.ffpfsc or a
 // folder) on a worker thread, and formats them as offset / hex / ASCII lines.
 // The image is opened and closed for every slice, so the preview never keeps

@@ -1,18 +1,23 @@
-// Offscreen tests of the image tools on the Extract & verify and Edit image
-// pages, against images built by the real engines: the hex preview's byte
-// service (formatting, synchronous and worker-thread reads of .exfat and
-// .ffpkg images), the Preview… sheet with "Load more", and the Compare card
+// Offscreen tests of the Image tools page (Extract, Verify / compare, Convert,
+// Edit) against images built by the real engines: the old "extract" / "edit"
+// navigation keys, the image strip's metadata read from inside each format,
+// extract / verify / convert jobs submitted from the page, the hex preview's
+// byte service (formatting, synchronous and worker-thread reads of .exfat and
+// .ffpkg images), the Preview… sheet with "Load more", and comparing
 // (validation, image.compare through the queue, the result sheet and its
 // plain-text report).
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
 #include "app/pages/CompareResultSheet.h"
-#include "app/pages/ExtractVerifyPage.h"
 #include "app/pages/HexPreviewSheet.h"
-#include "app/pages/ImageEditorPage.h"
+#include "app/pages/ImageToolsPage.h"
+#include "app/pages/LibraryPage.h"
 #include "app/services/HexPreview.h"
+#include "app/services/ImageInfo.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/LibraryGrid.h"
+#include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "support/TestSupport.h"
 
@@ -23,10 +28,39 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 using namespace fw;
 
 namespace {
+
+const QByteArray kParam = R"({"titleId":"PPSA00002","contentVersion":"01.020.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Image Test"}}})";
+
+// Answers the confirmation sheet that a page action is about to open.
+void answerSheetSoon(QObject* ctx, QWidget* window, int button)
+{
+    QTimer::singleShot(300, ctx, [window, button] {
+        for (auto* s : window->findChildren<ui::Sheet*>())
+            if (s->isOpen()) {
+                s->close(button);
+                return;
+            }
+    });
+}
+
+// Runs `fn` and returns the id of the one job it queued ("" when it queued none or several).
+QString newJob(JobQueue& q, const std::function<void()>& fn)
+{
+    QSet<QString> before;
+    for (const JobRecord& r : q.records())
+        before.insert(r.id);
+    fn();
+    QStringList added;
+    for (const JobRecord& r : q.records())
+        if (!before.contains(r.id))
+            added << r.id;
+    return added.size() == 1 ? added.first() : QString();
+}
 
 bool waitTerminal(JobQueue& q, const QString& id, int ms = 120000)
 {
@@ -49,7 +83,7 @@ class TstImageTools : public QObject {
     QTemporaryDir m_root;
     std::unique_ptr<AppContext> m_ctx;
     std::unique_ptr<MainWindow> m_window;
-    QString m_src, m_exfat, m_ffpkg;
+    QString m_src, m_exfat, m_ffpkg, m_ffpfsc;
 
     QString build(const QString& format, const QString& source, const QString& name)
     {
@@ -81,7 +115,7 @@ private slots:
                 QSKIP("image engines not registered in this build");
 
         m_src = m_root.filePath(QStringLiteral("game"));
-        QVERIFY(fwtest::writeTextFile(m_src + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00002\"}"));
+        QVERIFY(fwtest::writeTextFile(m_src + QStringLiteral("/sce_sys/param.json"), kParam));
         QVERIFY(fwtest::writeRandomFile(m_src + QStringLiteral("/eboot.bin"), 150000, 11));
         QVERIFY(fwtest::writeRandomFile(m_src + QStringLiteral("/data/big.bin"), 3 * 65536 + 100, 12));
         QVERIFY(fwtest::writeTextFile(m_src + QStringLiteral("/data/notes.txt"), "Hello, image!\n"));
@@ -89,7 +123,159 @@ private slots:
         QVERIFY(!m_exfat.isEmpty());
         m_ffpkg = build(jobs::kFormatFfpkg, m_src, QStringLiteral("game"));
         QVERIFY(!m_ffpkg.isEmpty());
+        if (jobs::isAvailable(*m_ctx, QStringLiteral("image.pfs.build"))) {
+            m_ffpfsc = build(jobs::kFormatFfpfsc, m_src, QStringLiteral("game"));
+            QVERIFY(!m_ffpfsc.isEmpty());
+        }
         m_ctx->queue().clearFinished();
+    }
+
+    // The v5.0 keys still work: they open Image tools with the action selected.
+    void oldKeysOpenImageTools()
+    {
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        QVERIFY(page);
+        QVERIFY(!m_window->pageKeys().contains(QStringLiteral("extract")));
+        QVERIFY(!m_window->pageKeys().contains(QStringLiteral("edit")));
+        m_window->navigate(QStringLiteral("extract"), {{QStringLiteral("source"), m_exfat}, {QStringLiteral("mode"), QStringLiteral("verify")}});
+        QCOMPARE(m_window->currentPage(), QStringLiteral("imagetools"));
+        QCOMPARE(page->imagePath(), m_exfat);
+        QCOMPARE(page->action(), pages::ImageToolsPage::Action::Verify);
+        QVERIFY(page->verifyOnly());
+        QCOMPARE(page->primaryButton()->text(), QStringLiteral("Verify"));
+        m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_ffpkg}});
+        QCOMPARE(m_window->currentPage(), QStringLiteral("imagetools"));
+        QCOMPARE(page->action(), pages::ImageToolsPage::Action::Edit);
+        QCOMPARE(page->imagePath(), m_ffpkg);
+        // PFS images cannot be edited; the page falls back to Extract.
+        if (!m_ffpfsc.isEmpty()) {
+            m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_ffpfsc}});
+            QVERIFY(!page->isActionEnabled(pages::ImageToolsPage::Action::Edit));
+            QCOMPARE(page->action(), pages::ImageToolsPage::Action::Extract);
+        }
+        page->openImage({});
+        QVERIFY(!page->isActionEnabled(pages::ImageToolsPage::Action::Extract));
+    }
+
+    // The strip (and the Library's Images view) read the title from inside every format.
+    void imageSummariesComeFromInsideTheImages()
+    {
+        QStringList images{m_exfat, m_ffpkg};
+        if (!m_ffpfsc.isEmpty())
+            images << m_ffpfsc;
+        for (const QString& img : images) {
+            const ui::ImageSummary s = ui::readImageSummary(img);
+            QVERIFY2(s.error.isEmpty(), qPrintable(img + u' ' + s.error));
+            QVERIFY2(s.fromImage, qPrintable(img));
+            QCOMPARE(s.titleId, QStringLiteral("PPSA00002"));
+            QCOMPARE(s.title, QStringLiteral("Image Test"));
+            QCOMPARE(s.version, QStringLiteral("01.020.000"));
+            QCOMPARE(s.files, qint64(4));
+        }
+        // From the file name when the image holds no metadata.
+        ui::ImageSummary named;
+        named.path = QStringLiteral("D:/x/PPSA01325 Astro Bot (01.002).ffpfsc");
+        ui::guessFromFileName(named);
+        QCOMPARE(named.titleId, QStringLiteral("PPSA01325"));
+        QCOMPARE(named.version, QStringLiteral("01.002"));
+        QCOMPARE(named.title, QStringLiteral("Astro Bot"));
+        QCOMPARE(ui::findImageFiles({m_root.path()}).size(), images.size());
+
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}});
+        QTRY_COMPARE_WITH_TIMEOUT(page->imageSummary().title, QStringLiteral("Image Test"), 10000);
+        QVERIFY(page->imageSummary().metaLine().contains(QStringLiteral("PPSA00002")));
+        page->openImage({});
+    }
+
+    // Extract, verify and convert are submitted from the page as queue jobs.
+    void extractVerifyAndConvertFromThePage()
+    {
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_exfat}, {QStringLiteral("action"), QStringLiteral("extract")}});
+        const QString dest = m_root.filePath(QStringLiteral("extracted"));
+        page->setExtractDestination(dest);
+        const auto runPrimary = [&]() -> QString {
+            const QString id = newJob(q, [&] { page->primaryAction(); });
+            return !id.isEmpty() && waitTerminal(q, id) ? id : QString();
+        };
+        QString id = runPrimary();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->kind, QStringLiteral("image.exfat.extract"));
+        QCOMPARE(q.record(id)->state, JobState::Succeeded);
+        QCOMPARE(fileBytes(dest + QStringLiteral("/data/notes.txt")), QByteArray("Hello, image!\n"));
+
+        page->setAction(pages::ImageToolsPage::Action::Verify);
+        QVERIFY(page->verifyOnly());
+        id = runPrimary();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->kind, QStringLiteral("image.exfat.verify"));
+        QCOMPARE(q.record(id)->state, JobState::Succeeded);
+
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.convert")) || m_ffpfsc.isEmpty())
+            return;
+        // exFAT -> FFPFSC packs the image as it is by default.
+        page->setAction(pages::ImageToolsPage::Action::Convert);
+        page->setConvertTarget(jobs::kFormatFfpfsc);
+        QCOMPARE(page->convertMethod(), QStringLiteral("direct"));
+        QCOMPARE(page->convertOutput(), m_root.filePath(QStringLiteral("game.ffpfsc")));
+        const QString packed = m_root.filePath(QStringLiteral("packed ü.ffpfsc"));
+        page->setConvertOutput(packed);
+        id = runPrimary();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->kind, QStringLiteral("image.convert"));
+        QCOMPARE(q.record(id)->parameters.value(QStringLiteral("method")).toString(), QStringLiteral("direct"));
+        QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
+        QVERIFY(QFileInfo::exists(packed));
+        // FFPKG -> uncompressed FFPFS.
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}, {QStringLiteral("action"), QStringLiteral("convert")},
+                                                          {QStringLiteral("format"), jobs::kFormatFfpfs}});
+        QCOMPARE(page->convertTarget(), jobs::kFormatFfpfs);
+        QVERIFY(page->convertMethod().isEmpty());
+        id = runPrimary();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->parameters.value(QStringLiteral("format")).toString(), QStringLiteral("ffpfs"));
+        QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
+        QVERIFY(QFileInfo::exists(m_root.filePath(QStringLiteral("game.ffpfs"))));
+        // The same conversion again asks before replacing; "Replace" passes replaceExisting.
+        answerSheetSoon(this, m_window.get(), 1);
+        id = runPrimary();
+        QVERIFY(!id.isEmpty());
+        QVERIFY(q.record(id)->parameters.value(QStringLiteral("replaceExisting")).toBool());
+        QCOMPARE(q.record(id)->state, JobState::Succeeded);
+        page->openImage({});
+        q.clearFinished();
+    }
+
+    // Edit: staged changes are applied in one job after the confirmation.
+    void editAppliesStagedChanges()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
+            QSKIP("image editing not registered in this build");
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        const QString copy = m_root.filePath(QStringLiteral("edit-me.exfat"));
+        QVERIFY(QFile::copy(m_exfat, copy));
+        const QString extra = m_root.filePath(QStringLiteral("extra.txt"));
+        QVERIFY(fwtest::writeTextFile(extra, "added by the test"));
+        m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), copy}});
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+        page->stage({QStringLiteral("add"), QStringLiteral("data/extra.txt"), extra, {}});
+        page->stage({QStringLiteral("delete"), QStringLiteral("data/notes.txt"), {}, {}});
+        QCOMPARE(page->primaryButton()->text(), QStringLiteral("Apply 2 changes"));
+        answerSheetSoon(this, m_window.get(), 1);
+        const QString id = newJob(q, [&] { page->primaryAction(); });
+        QVERIFY(!id.isEmpty());
+        QVERIFY(waitTerminal(q, id));
+        QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
+        QVERIFY(page->staged().empty());
+        auto slice = ui::readHexSlice(copy, QStringLiteral("data/extra.txt"), 0);
+        QVERIFY(slice.ok());
+        QCOMPARE(slice.data, QByteArray("added by the test"));
+        QVERIFY(!ui::readHexSlice(copy, QStringLiteral("data/notes.txt"), 0).ok());
+        page->openImage({});
+        q.clearFinished();
     }
 
     void cleanupTestCase()
@@ -148,7 +334,7 @@ private slots:
 
     void editorPreviewLoadsMore()
     {
-        auto* page = qobject_cast<pages::ImageEditorPage*>(m_window->page(QStringLiteral("edit")));
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         QVERIFY(page);
         m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_ffpkg}});
         QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
@@ -176,7 +362,7 @@ private slots:
 
     void compareCardRunsTheJobAndShowsTheResult()
     {
-        auto* page = qobject_cast<pages::ExtractVerifyPage*>(m_window->page(QStringLiteral("extract")));
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         QVERIFY(page);
         m_window->navigate(QStringLiteral("extract"));
         QCOMPARE(page->compareStatus(), QStringLiteral("Not compared"));
@@ -208,7 +394,7 @@ private slots:
 
         // Against an edited folder: one file gone, one added, one resized.
         const QString edited = m_root.filePath(QStringLiteral("game-edited"));
-        QVERIFY(fwtest::writeTextFile(edited + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00002\"}"));
+        QVERIFY(fwtest::writeTextFile(edited + QStringLiteral("/sce_sys/param.json"), kParam));
         QVERIFY(fwtest::writeTextFile(edited + QStringLiteral("/data/notes.txt"), "Hello, edited image!\n"));
         QVERIFY(QFile::copy(m_src + QStringLiteral("/data/big.bin"), edited + QStringLiteral("/data/big.bin")));
         QVERIFY(fwtest::writeTextFile(edited + QStringLiteral("/data/new.bin"), "new"));
@@ -240,6 +426,41 @@ private slots:
         auto* again = page->showCompareResult();
         QVERIFY(again);
         again->close(0);
+    }
+
+    // Library: a folder of dumps and images; the game shows the formats it has,
+    // the Images view reads each image's title, and images rename by title.
+    void libraryListsGamesImagesAndRenames()
+    {
+        auto* lib = qobject_cast<pages::LibraryPage*>(m_window->page(QStringLiteral("library")));
+        QVERIFY(lib);
+        m_window->navigate(QStringLiteral("library"));
+        const QString dir = m_root.filePath(QStringLiteral("lib"));
+        QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/Image Test dump/sce_sys/param.json"), kParam));
+        QVERIFY(fwtest::writeRandomFile(dir + QStringLiteral("/Image Test dump/eboot.bin"), 5000, 3));
+        const QString image = dir + QStringLiteral("/my game.exfat");
+        QVERIFY(QFile::copy(m_exfat, image));
+        lib->dropUrls({QUrl::fromLocalFile(dir)});
+        QTRY_VERIFY_WITH_TIMEOUT(!lib->isScanningImages() && lib->images().size() == 1, 20000);
+        QCOMPARE(lib->images().first().titleId, QStringLiteral("PPSA00002"));
+        QCOMPARE(lib->imagesView()->count(), 1);
+        QCOMPARE(lib->imagesView()->items().front().title, QStringLiteral("Image Test"));
+        if (jobs::isAvailable(*m_ctx, QStringLiteral("library.scan"))) {
+            QTRY_COMPARE_WITH_TIMEOUT(lib->gamesView()->count(), 1, 20000);
+            QTRY_COMPARE_WITH_TIMEOUT(lib->gamesView()->items().front().chips, (QStringList{QStringLiteral("Folder"), QStringLiteral("exFAT")}), 20000);
+        }
+        // Rename by title ID, name and version; never over an existing file.
+        const QString name = pages::LibraryPage::imageFileName(lib->images().first(), QStringLiteral("id-title-version"));
+        QCOMPARE(name, QStringLiteral("PPSA00002 Image Test (01.020.000).exfat"));
+        QCOMPARE(pages::LibraryPage::imageFileName(lib->images().first(), QStringLiteral("id")), QStringLiteral("PPSA00002.exfat"));
+        QStringList skipped;
+        QCOMPARE(lib->renameImages({{image, name}}, &skipped), 1);
+        QVERIFY(QFileInfo::exists(dir + u'/' + name));
+        QVERIFY(QFile::copy(m_exfat, image));
+        QCOMPARE(lib->renameImages({{image, name}}, &skipped), 0);
+        QCOMPARE(skipped.size(), 1);
+        QVERIFY(QFileInfo::exists(image));
+        m_ctx->queue().clearFinished();
     }
 
     void reportListsTruncatedGroups()

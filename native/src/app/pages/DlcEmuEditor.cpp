@@ -29,11 +29,14 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     auto* pick = new Card(this);
     m_badge = new Badge(QStringLiteral("No folder"), Tone::Neutral, pick);
     m_badge->setIconName({});
-    pick->setTitle(QStringLiteral("DLC emulator (dlc_emu.ini)"), m_badge);
-    pick->body()->addWidget(caption(QStringLiteral("One entry per add-on the emulator should present to the game. The file lives in the game's app0 folder; it may hold at most 1,024 entries and 32 KiB."), pick));
+    pick->setTitle(QStringLiteral("Game folder"), m_badge);
     m_folder = new PathField(PathField::Mode::Directory, pick);
     m_folder->setDialogTitle(QStringLiteral("Choose the game folder (app0)"));
-    pick->body()->addWidget(field(QStringLiteral("Game folder (app0)"), m_folder, {}, pick));
+    m_folder->setPlaceholder(QStringLiteral("The game's app0 folder, where dlc_emu.ini lives"));
+    pick->body()->addWidget(m_folder);
+    auto* help = caption(QStringLiteral("dlc_emu.ini lists the add-ons the DLC emulator presents to the game."), pick);
+    help->setToolTip(QStringLiteral("One entry per add-on. The file lives in the game's app0 folder and may hold at most 1,024 entries and 32 KiB."));
+    pick->body()->addWidget(help);
     l->addWidget(pick);
     connect(m_folder, &PathField::pathChanged, this, [this](const QString&) { load(); });
 
@@ -41,12 +44,17 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     auto* h = card->header();
     h->addWidget(heading(QStringLiteral("Entries"), TextStyle::Subtitle, card));
     h->addStretch(1);
+    m_find = button(QStringLiteral("Find entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
+    m_find->setToolTip(QStringLiteral("Look through the dump for add-on content IDs"));
     m_add = button(QStringLiteral("Add entry"), ButtonVariant::Secondary, QStringLiteral("plus"), card);
-    m_duplicate = button(QStringLiteral("Duplicate"), ButtonVariant::Secondary, QStringLiteral("copy"), card);
-    m_remove = button(QStringLiteral("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
-    m_find = button(QStringLiteral("Find DLC entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
+    auto* dup = new IconButton(QStringLiteral("copy"), QStringLiteral("Duplicate"), IconButton::Size::Regular, card);
+    dup->setToolTip(QStringLiteral("Duplicate the selected entry"));
+    auto* rem = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove"), IconButton::Size::Regular, card);
+    rem->setToolTip(QStringLiteral("Remove the selected entry"));
+    m_duplicate = dup;
+    m_remove = rem;
     m_save = button(QStringLiteral("Save…"), ButtonVariant::Primary, QStringLiteral("save"), card);
-    for (auto* b : {m_add, m_duplicate, m_remove, m_find, m_save})
+    for (QWidget* b : std::initializer_list<QWidget*>{m_find, m_add, m_duplicate, m_remove, m_save})
         h->addWidget(b);
     m_table = new QTableWidget(0, ColumnCount, card);
     m_table->setHorizontalHeaderLabels({QStringLiteral("Section"), QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"), QStringLiteral("download_status"), QStringLiteral("entitlement_key")});
@@ -67,7 +75,7 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     m_table->setMinimumHeight(8 * size::row + 40);
     card->body()->addWidget(m_table);
     m_empty = new EmptyState(QStringLiteral("database"), QStringLiteral("No dlc_emu.ini yet"),
-                             QStringLiteral("Choose the game folder, then add entries by hand or let Find DLC entries look through the dump."), card);
+                             QStringLiteral("Choose the game folder, then add or find entries."), card);
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
     m_validation = new MessageRow(card);
@@ -78,8 +86,8 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     l->addStretch(1);
 
     connect(m_add, &QPushButton::clicked, this, &DlcEmuEditor::addEntry);
-    connect(m_duplicate, &QPushButton::clicked, this, &DlcEmuEditor::duplicateRow);
-    connect(m_remove, &QPushButton::clicked, this, &DlcEmuEditor::removeRow);
+    connect(m_duplicate, &QAbstractButton::clicked, this, &DlcEmuEditor::duplicateRow);
+    connect(m_remove, &QAbstractButton::clicked, this, &DlcEmuEditor::removeRow);
     connect(m_find, &QPushButton::clicked, this, &DlcEmuEditor::findEntries);
     connect(m_save, &QPushButton::clicked, this, &DlcEmuEditor::save);
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem*) { m_dirty = true; revalidate(); });

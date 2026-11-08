@@ -155,10 +155,23 @@ Status PfsBuildJob::validate(const SettingsValues& settings) const
         return Error(ErrorCode::AlreadyExists,
                      QStringLiteral("%1 already exists. Choose another name or allow replacing it.")
                          .arg(QFileInfo(m_output).fileName()));
-    if (!src.isDir() && !isAscii(src.fileName()))
-        return Error(ErrorCode::InvalidArgument,
-                     QStringLiteral("PFS images only support plain ASCII file names. Rename %1 first.").arg(src.fileName()));
+    if (!src.isDir()) {
+        const QString inner = innerName();
+        if (inner.isEmpty() || inner.contains(u'/') || inner.contains(u'\\') || inner == u"." || inner == u"..")
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("\"%1\" cannot be used as a file name inside the image.").arg(inner));
+        if (!isAscii(inner))
+            return Error(ErrorCode::InvalidArgument,
+                         m_params.contains(QStringLiteral("innerName"))
+                             ? QStringLiteral("The name inside the image must be plain ASCII: %1.").arg(inner)
+                             : QStringLiteral("PFS images only support plain ASCII file names. Rename %1 first.").arg(inner));
+    }
     return success();
+}
+
+QString PfsBuildJob::innerName() const
+{
+    const QString n = str(m_params, "innerName").trimmed();
+    return n.isEmpty() ? QFileInfo(m_source).fileName() : n;
 }
 
 Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
@@ -204,7 +217,9 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
             ctx.log.info(QStringLiteral("Added ampr_emu.index (fakelib/libSceAmpr.sprx found)"));
     } else {
         in.file = m_source;
-        in.fileName = QFileInfo(m_source).fileName().toLatin1();
+        in.fileName = innerName().toLatin1();
+        if (in.fileName != QFileInfo(m_source).fileName().toLatin1())
+            ctx.log.info(QStringLiteral("Packed as %1 inside the image").arg(QString::fromLatin1(in.fileName)));
     }
 
     // ---- free space (worst case: nothing compresses) ----
@@ -368,7 +383,8 @@ Result<JobOutcome> PfsVerifyJob::run(JobContext& ctx)
         } else {
             ex.kind = VerifyExpectation::Kind::File;
             ex.file = m_source;
-            ex.fileName = QFileInfo(m_source).fileName().toLatin1();
+            const QString inner = str(m_params, "innerName").trimmed();
+            ex.fileName = (inner.isEmpty() ? QFileInfo(m_source).fileName() : inner).toLatin1();
             ex.format = OutputFormat::Container;
         }
     }
