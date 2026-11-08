@@ -1,4 +1,5 @@
 #include "engines/exfat/ExfatJobs.h"
+#include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
 #include "engines/exfat/ExfatExtract.h"
@@ -166,13 +167,17 @@ public:
     Status validate(const SettingsValues& settings) const override
     {
         const ExfatSettings x = readSettings(settings);
-        FW_TRY(checkSourceFolder(m_source));
+        const bool zip = archive::isZipSource(m_source); // #67: a zipped dump, unpacked in run()
+        if (zip)
+            FW_TRY(archive::checkZipSource(m_source));
+        else
+            FW_TRY(checkSourceFolder(m_source));
         if (m_output.isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the image."));
         if (isSameOrInside(m_output, m_source))
             return Error(ErrorCode::InvalidArgument,
                          QStringLiteral("Save the image outside the folder it is built from."));
-        if (x.requireEboot && !QFileInfo::exists(m_source + QStringLiteral("/eboot.bin")))
+        if (!zip && x.requireEboot && !QFileInfo::exists(m_source + QStringLiteral("/eboot.bin")))
             return Error(ErrorCode::NotFound,
                          QStringLiteral("There is no eboot.bin in %1. Choose the game's top folder (the one that "
                                         "contains eboot.bin).")
@@ -202,6 +207,12 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         const ExfatSettings x = readSettings(ctx.settings);
+        if (archive::isZipSource(m_source)) {
+            const QString zip = m_source;
+            FW_TRY(validate(ctx.settings));
+            FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
+        }
         FW_TRY(validate(ctx.settings));
         ctx.progress->setPhases(phases(), {0.05, 0.6, 0.35});
         QElapsedTimer timer;

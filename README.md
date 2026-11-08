@@ -24,7 +24,7 @@ verify and send them to your console — from one app, in one download.**
 
 | | |
 |---|---|
-| **Build image** | Drop a dump folder, pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`) and installable **FPKG** `.pkg` (with your own Sony Publishing Tools). Each format shows only its own options; experts get the rest under *Advanced options*. Every image is read back and verified before it gets its final name. |
+| **Build image** | Drop a dump folder (or a zipped dump), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`) and installable **FPKG** `.pkg` (with your own Sony Publishing Tools). Each format shows only its own options; experts get the rest under *Advanced options*. Every image is read back and verified before it gets its final name. |
 | **Backport** | Make games run on older firmware with the built-in **PS5 Backport engine 0.3.4 by Deckerr97** — the same engine as the standalone PS5 Backport GUI, so results are identical. Target SDK 4–13, PS5 Pro fix, PS5 Pro build, AMPR / PlayGo switch, and optional apply to the game folder with a verified originals backup and one-click restore. |
 | **Image tools** | Open an image to **extract** it, **verify** it (or compare it with a folder), **convert** between exFAT, FFPKG, FFPFSC and FFPFS, or **edit** it (add, replace, rename, delete files). |
 | **PS5 connect** | A real FTP file manager with a transfer queue, payload sender, kernel log and crash-dump capture, **ShadowMount+ 1.7** configuration (new format, safe-to-unplug), Fakelib manager, autoloader, AMPR index, Y2JB tools and package install. |

@@ -1,5 +1,7 @@
 #include "app/services/GameInfo.h"
 
+#include "core/ArchiveSource.h"
+
 #include "core/FileUtil.h"
 #include "engines/gameinfo/GameInfo.h"
 #include "engines/gameinfo/Version.h"
@@ -66,6 +68,30 @@ GameSummary GameSummary::fromJson(const QJsonObject& o)
     return s;
 }
 
+// The fields the app shows, from sce_sys/param.json.
+static void fillFromParamJson(GameSummary& s, const QByteArray& json)
+{
+    const QJsonObject o = QJsonDocument::fromJson(json).object();
+    s.titleId = o.value(QStringLiteral("titleId")).toString();
+    s.contentId = o.value(QStringLiteral("contentId")).toString();
+    s.version = o.value(QStringLiteral("contentVersion")).toString();
+    const QJsonObject loc = o.value(QStringLiteral("localizedParameters")).toObject();
+    const QString defLang = loc.value(QStringLiteral("defaultLanguage")).toString(QStringLiteral("en-US"));
+    s.title = loc.value(defLang).toObject().value(QStringLiteral("titleName")).toString();
+    if (s.title.isEmpty())
+        s.title = loc.value(QStringLiteral("en-US")).toObject().value(QStringLiteral("titleName")).toString();
+    if (s.title.isEmpty())
+        s.title = o.value(QStringLiteral("titleName")).toString();
+    // Packed BCD ("0x1270000000000000" is 12.70), read like the legacy app.
+    if (const auto v = gameinfo::parseVersionField(o.value(QStringLiteral("sdkVersion"))); v.isValid())
+        s.sdk = v.toString();
+    for (const char* key : {"requiredSystemSoftwareVersion", "systemVersion"})
+        if (const auto v = gameinfo::parseVersionField(o.value(QLatin1String(key))); v.isValid()) {
+            s.requiredFw = v.toString();
+            break;
+        }
+}
+
 GameSummary readGameSummary(const QString& folder, bool countFiles, const CancellationToken& token,
                             const std::function<void(qint64, qint64)>& onProgress, bool findRoots)
 {
@@ -77,6 +103,29 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
         return s;
     }
     s.exists = true;
+    if (archive::isZipSource(folder)) {
+        // A zipped dump (#67): read it without unpacking.
+        auto g = archive::inspectZip(folder);
+        if (!g.ok()) {
+            s.error = g.error().message;
+            return s;
+        }
+        s.isGame = g->hasEboot || g->hasParam;
+        s.bytes = g->bytes;
+        s.files = g->files;
+        if (!g->paramJson.isEmpty())
+            fillFromParamJson(s, g->paramJson);
+        if (!g->otherGames.isEmpty())
+            s.error = QStringLiteral("This ZIP holds more than one game.");
+        if (s.titleId.isEmpty()) {
+            static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);
+            if (const auto m = re.match(fi.fileName()); m.hasMatch())
+                s.titleId = (m.captured(1) + m.captured(2)).toUpper();
+        }
+        if (s.title.isEmpty())
+            s.title = fi.completeBaseName();
+        return s;
+    }
     if (!fi.isDir()) {
         s.error = QStringLiteral("This is a file, not a game folder.");
         return s;
@@ -86,27 +135,8 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
     s.isGame = QFile::exists(param) || hasEboot;
     if (QFile::exists(param)) {
         QFile f(param);
-        if (f.size() < 16 * 1024 * 1024 && f.open(QIODevice::ReadOnly)) {
-            const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-            s.titleId = o.value(QStringLiteral("titleId")).toString();
-            s.contentId = o.value(QStringLiteral("contentId")).toString();
-            s.version = o.value(QStringLiteral("contentVersion")).toString();
-            const QJsonObject loc = o.value(QStringLiteral("localizedParameters")).toObject();
-            const QString defLang = loc.value(QStringLiteral("defaultLanguage")).toString(QStringLiteral("en-US"));
-            s.title = loc.value(defLang).toObject().value(QStringLiteral("titleName")).toString();
-            if (s.title.isEmpty())
-                s.title = loc.value(QStringLiteral("en-US")).toObject().value(QStringLiteral("titleName")).toString();
-            if (s.title.isEmpty())
-                s.title = o.value(QStringLiteral("titleName")).toString();
-            // Packed BCD ("0x1270000000000000" is 12.70), read like the legacy app.
-            if (const auto v = gameinfo::parseVersionField(o.value(QStringLiteral("sdkVersion"))); v.isValid())
-                s.sdk = v.toString();
-            for (const char* key : {"requiredSystemSoftwareVersion", "systemVersion"})
-                if (const auto v = gameinfo::parseVersionField(o.value(QLatin1String(key))); v.isValid()) {
-                    s.requiredFw = v.toString();
-                    break;
-                }
-        }
+        if (f.size() < 16 * 1024 * 1024 && f.open(QIODevice::ReadOnly))
+            fillFromParamJson(s, f.readAll());
     }
     if (s.titleId.isEmpty()) {
         static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);

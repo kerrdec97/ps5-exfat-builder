@@ -1,4 +1,5 @@
 #include "engines/ufs2/Ufs2Jobs.h"
+#include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
@@ -139,7 +140,9 @@ public:
     Status validate(const SettingsValues& settings) const override
     {
         const QString src = source(), out = output();
-        if (src.isEmpty() || !QFileInfo(src).isDir())
+        if (archive::isZipSource(src)) // #67: a zipped dump, unpacked in run()
+            FW_TRY(archive::checkZipSource(src));
+        else if (src.isEmpty() || !QFileInfo(src).isDir())
             return Error(ErrorCode::NotFound, QStringLiteral("Choose an existing game folder to build from."));
         if (out.isEmpty() || QFileInfo(out).fileName().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the .ffpkg image."));
@@ -156,6 +159,11 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         FW_TRY(validate(ctx.settings));
+        if (archive::isZipSource(source())) {
+            const QString zip = source();
+            FW_TRY_ASSIGN(m_unpacked, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_unpacked)));
+        }
         const QString src = source(), out = output();
         ProgressReporter& prog = *ctx.progress;
         JobOutcome outcome;
@@ -252,10 +260,13 @@ public:
     }
 
 private:
-    QString source() const { return absolute(m_p.value(QStringLiteral("source")).toString()); }
+    // A zipped dump is unpacked at the start of run(); from then on the game
+    // folder inside the job's temp folder is the source.
+    QString source() const { return m_unpacked.isEmpty() ? absolute(m_p.value(QStringLiteral("source")).toString()) : m_unpacked; }
     QString output() const { return absolute(m_p.value(QStringLiteral("output")).toString()); }
     bool replaceExisting() const { return m_p.value(QStringLiteral("replaceExisting")).toBool(false); }
     QJsonObject m_p;
+    QString m_unpacked;
 };
 
 // ---- verify -----------------------------------------------------------------------------

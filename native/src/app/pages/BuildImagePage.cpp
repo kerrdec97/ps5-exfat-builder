@@ -108,6 +108,8 @@ QString sourceKindOf(const QString& path)
         return QStringLiteral("ffpkg");
     if (ext == QLatin1String("gp5"))
         return QStringLiteral("gp5");
+    if (ext == QLatin1String("zip"))
+        return QStringLiteral("zip"); // a zipped dump (#67): exFAT, FFPKG and PFS unpack it first
     return fi.exists() ? QStringLiteral("file") : QStringLiteral("folder");
 }
 
@@ -121,6 +123,8 @@ QString sourceKindLabel(const QString& kind)
         return QStringLiteral("FFPKG image");
     if (kind == QLatin1String("gp5"))
         return QStringLiteral(".gp5 project");
+    if (kind == QLatin1String("zip"))
+        return QStringLiteral("ZIP archive");
     return QStringLiteral("Game folder");
 }
 
@@ -1157,6 +1161,8 @@ bool BuildImagePage::acceptsDrop(const QList<QUrl>& urls) const
         return true;
     static const QStringList exts = {QStringLiteral("exfat"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs"),
                                      QStringLiteral("ffpkg"), QStringLiteral("gp5")};
+    if (tile() != kFormatFpkg && fi.isFile() && fi.suffix().compare(QLatin1String("zip"), Qt::CaseInsensitive) == 0)
+        return true; // a zipped dump
     return tile() == kFormatFpkg && fi.isFile() && exts.contains(fi.suffix().toLower());
 }
 
@@ -1198,7 +1204,15 @@ void BuildImagePage::browseSource()
     const QString start = m_ctx.settings().value(general::keys::kLastSourceDir).toString();
     QString picked;
     if (!isFpkg()) {
-        picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game dump folder"), start);
+        QMenu menu(this);
+        auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
+        auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Zipped dump (.zip)\u2026"));
+        QAction* chosen = menu.exec(QCursor::pos());
+        if (chosen == folder)
+            picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game dump folder"), start);
+        else if (chosen == zip)
+            picked = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the zipped dump"), start,
+                                                  QStringLiteral("ZIP archives (*.zip)"));
     } else {
         QMenu menu(this);
         auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
@@ -1312,7 +1326,8 @@ void BuildImagePage::refreshSourceState()
         m_strip->show();
         m_stripTitle->setFullText(s.title);
         if (file) {
-            m_stripTile->setIconName(kind == QLatin1String("gp5") ? QStringLiteral("file_cog")
+            m_stripTile->setIconName(kind == QLatin1String("zip") ? QStringLiteral("archive")
+                                     : kind == QLatin1String("gp5") ? QStringLiteral("file_cog")
                                      : kind == QLatin1String("ffpfsc") ? QStringLiteral("compress")
                                      : kind == QLatin1String("ffpkg") ? QStringLiteral("package") : QStringLiteral("drive"));
             QStringList meta{sourceKindLabel(kind)};
@@ -1332,7 +1347,24 @@ void BuildImagePage::refreshSourceState()
                                                                 : QStringLiteral("Folder without a game"));
             }
         }
-        if (file && !isFpkg()) {
+        if (kind == QLatin1String("zip") && isFpkg()) {
+            m_stripTile->setTone(Tone::Warn);
+            m_sourceMsg->set(QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP, or pick exFAT, FFPKG or PFS."), Tone::Warn);
+            m_sourceBadge->set(QStringLiteral("Needs a folder"), Tone::Warn);
+            m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
+        } else if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
+            m_stripTile->setTone(Tone::Warn);
+            m_sourceMsg->set(s.error.isEmpty() ? QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
+            m_sourceBadge->set(QStringLiteral("Not a game"), Tone::Warn);
+            m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
+        } else if (kind == QLatin1String("zip")) {
+            m_stripTile->setTone(Tone::Ok);
+            m_sourceMsg->set(QStringLiteral("The ZIP is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
+                                 .arg(formatBytes(s.bytes)),
+                             Tone::Neutral);
+            m_sourceBadge->set(QStringLiteral("Ready"), Tone::Ok);
+            m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Ok));
+        } else if (file && !isFpkg()) {
             m_stripTile->setTone(Tone::Warn);
             m_sourceMsg->set(QStringLiteral("Only FPKG can use an image or a .gp5 project. Choose the game folder for this format."), Tone::Warn);
             m_sourceBadge->set(QStringLiteral("Needs a folder"), Tone::Warn);
@@ -1509,7 +1541,7 @@ void BuildImagePage::renderFileName()
     }
     m_resetName->hide();
     setInputError(m_fileName, false);
-    if (!m_summary.exists || sourceKind() != QLatin1String("folder")) {
+    if (!m_summary.exists || (sourceKind() != QLatin1String("folder") && sourceKind() != QLatin1String("zip"))) {
         m_fileName->clear();
         return;
     }
@@ -1524,7 +1556,7 @@ void BuildImagePage::renderFileName()
     f.firmware = fwOverride.isEmpty() || fwOverride == QLatin1String("auto") ? gameinfo::firmwareMajor(m_summary.requiredFw) : fwOverride;
     f.sdk = m_summary.sdk;
     f.type = typeLabel(tile());
-    f.folderName = QFileInfo(m_summary.folder).fileName();
+    f.folderName = sourceKind() == QLatin1String("zip") ? QFileInfo(m_summary.folder).completeBaseName() : QFileInfo(m_summary.folder).fileName();
     m_fileName->setText(gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), f));
     m_fileName->setCursorPosition(0);
 }
@@ -1675,9 +1707,14 @@ QString BuildImagePage::validateForm()
         return QStringLiteral("The source does not exist.");
     const QString kind = sourceKind();
     if (!isFpkg()) {
-        if (kind != QLatin1String("folder"))
-            return QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder. Choose the dump folder, or choose FPKG to package this file.");
-        if (!m_summary.isGame)
+        if (kind == QLatin1String("zip")) {
+            if (!m_summary.error.isEmpty())
+                return m_summary.error;
+            if (!m_summary.isGame)
+                return QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).");
+        } else if (kind != QLatin1String("folder"))
+            return QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.");
+        if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
                                                   : QStringLiteral("The source folder is not a game dump: sce_sys\\param.json or eboot.bin is missing.");
         const QString stem = m_fileName->text().trimmed();
@@ -1688,6 +1725,8 @@ QString BuildImagePage::validateForm()
             return QStringLiteral("The file name cannot be used: %1").arg(why);
         }
     } else {
+        if (kind == QLatin1String("zip"))
+            return QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP first.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
                                                   : QStringLiteral("The folder is not a game dump: sce_sys\\param.json is missing.");

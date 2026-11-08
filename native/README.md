@@ -1,12 +1,11 @@
-# exFAT Image Builder — Farewell Edition (native C++)
+# exFAT Image Builder 5 (native C++)
 
-The Farewell Edition is a native C++20 / Qt 6 rebuild of the PS5 exFAT Image
-Builder. It builds, verifies, extracts and edits PS5 game images (exFAT,
-FFPKG/UFS2, FFPFSC/PFS), builds FPKG packages with your own Sony Publishing
-Tools, backports games to older firmware, and talks to a PS5 over the network
-(FTP, payloads, kernel log). It is a new program: it does not wrap or call the
-legacy Python application, which stays in the repository root as the reference
-until this edition passes its acceptance tests (`docs/MIGRATION_MATRIX.md`).
+exFAT Image Builder 5 is a native C++20 / Qt 6 Windows application for PS5
+game dumps. It builds, verifies, extracts, converts and edits PS5 game images
+(exFAT, FFPKG/UFS2, FFPFSC and FFPFS/PFS), builds FPKG packages with your own
+Sony Publishing Tools, backports games to older firmware with the bundled PS5
+Backport engine, and talks to a PS5 over the network (FTP, payloads, kernel
+log, ShadowMount+). It replaces the Python application of v1–v4.
 
 > For games and content you legally own and dumped yourself. It does not
 > download games, decrypt retail packages or bypass DRM, and it is not
@@ -75,8 +74,15 @@ Test). zlib is used from the system or fetched automatically.
 Windows (Developer PowerShell for VS 2022, Qt 6.8 MSVC kit on `PATH`):
 
 ```bash
-cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFW_FETCH_BACKPORT_ENGINE=ON
 ```
+
+The Backport tab needs the PS5 Backport engine next to the app
+(`engines/backport/PS5BackportGUI.exe`). `-DFW_FETCH_BACKPORT_ENGINE=ON`
+downloads the pinned release once and checks its SHA-256;
+`-DFW_BACKPORT_ENGINE_EXE=<path>` uses a local copy instead. Without either the
+app builds and the Backport tab says the engine is missing
+(`cmake/BackportEngine.cmake`).
 
 ```bash
 cmake --build build --parallel

@@ -7,6 +7,7 @@
 // fails); the source image is deleted only after full verification passed.
 
 #include "engines/pfs/PfsJobs.h"
+#include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
 #include "engines/pfs/Module.h"
@@ -141,6 +142,13 @@ Status PfsBuildJob::validate(const SettingsValues& settings) const
         return Error(ErrorCode::NotFound, QStringLiteral("Choose an existing game folder or image to pack."));
     if (m_output.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the PFS image."));
+    if (archive::isZipSource(m_source)) { // #67: a zipped dump, unpacked in run()
+        FW_TRY(archive::checkZipSource(m_source));
+        if (QFileInfo::exists(m_output) && !m_params.value(QStringLiteral("replaceExisting")).toBool())
+            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Choose another name or allow replacing it.")
+                                                       .arg(QFileInfo(m_output).fileName()));
+        return success();
+    }
     if (QFileInfo(m_output).isDir())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The output must be a file name, not a folder."));
     const QFileInfo src(m_source);
@@ -177,6 +185,12 @@ QString PfsBuildJob::innerName() const
 Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
 {
     FW_TRY(validate(ctx.settings));
+    if (archive::isZipSource(m_source)) {
+        const QString zip = m_source;
+        FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+        ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
+        FW_TRY(validate(ctx.settings));
+    }
     ProgressReporter* pr = ctx.progress;
     const qint64 ts = m_params.value(QStringLiteral("timestamp")).toInteger(0);
     const qint64 now = ts > 0 ? ts : QDateTime::currentSecsSinceEpoch();
