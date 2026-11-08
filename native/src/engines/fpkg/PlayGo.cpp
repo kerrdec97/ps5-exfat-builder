@@ -504,7 +504,12 @@ Status planScript(PlayGoPlan& plan, const PlayGoInputs& in)
 {
     plan.layout = PlayGoLayout::Script;
     plan.chunkOnEveryFile = true;
-    const int n = in.chunkCount;
+    int n = in.chunkCount;
+    if (in.forcedLanguages.isEmpty() && in.allLanguages && n < int(playGoLanguages().size()) + 1) {
+        plan.notes << QStringLiteral("PlayGo: raising the chunk count from %1 to %2 so every language gets its own chunk.")
+                          .arg(n).arg(playGoLanguages().size() + 1);
+        n = int(playGoLanguages().size()) + 1;
+    }
     if (n < 1 || n > kMaxChunks)
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The PlayGo chunk count must be from 1 to 255."));
 
@@ -531,6 +536,29 @@ Status planScript(PlayGoPlan& plan, const PlayGoInputs& in)
         plan.notes << QStringLiteral("scenarios taken from sce_sys/playgo-scenario.json (%1 scenario(s), %2 language(s))")
                           .arg(info.scenarios.size())
                           .arg(info.supportedLanguages.size());
+    }
+    if (!in.forcedLanguages.isEmpty() || in.allLanguages) {
+        json::Value langs = json::Value::array();
+        for (const QString& code : in.forcedLanguages.isEmpty() ? playGoLanguages() : in.forcedLanguages)
+            if (!canonicalPlayGoLanguage(code).isEmpty())
+                langs.append(json::Value(canonicalPlayGoLanguage(code)));
+        const QStringList listed = in.forcedLanguages.isEmpty() ? playGoLanguages() : in.forcedLanguages;
+        const auto inList = [&](const QString& c) {
+            return !canonicalPlayGoLanguage(c).isEmpty() && listed.contains(canonicalPlayGoLanguage(c), Qt::CaseInsensitive);
+        };
+        QString def = doc.value(QStringLiteral("chunkDefaultLanguage")).toString();
+        if (!inList(def))
+            def = doc.value(QStringLiteral("scenarioDefaultLanguage")).toString();
+        if (!inList(def))
+            def = inList(QStringLiteral("en-US")) ? QStringLiteral("en-US") : listed.value(0);
+        doc.insert(QStringLiteral("chunkSupportedLanguages"), langs);
+        doc.insert(QStringLiteral("chunkDefaultLanguage"), json::Value(canonicalPlayGoLanguage(def)));
+        info = checkScenarioFile(doc);
+        if (!info.valid)
+            return Error(ErrorCode::Internal, QStringLiteral("The all-languages PlayGo scenario failed validation (%1).").arg(info.problem));
+        plan.notes << QStringLiteral("PlayGo: %1 language(s) forced (%2)")
+                          .arg(listed.size())
+                          .arg(in.forcedLanguages.isEmpty() ? QStringLiteral("all PlayGo languages") : QStringLiteral("the base package's own set"));
     }
     plan.scenarioBytes = scenarioFileBytes(doc);
 

@@ -34,6 +34,7 @@ namespace fw::ui {
 class ChoiceTiles;
 class Disclosure;
 class DropZone;
+class Switch;
 } // namespace fw::ui
 
 namespace fw::pages {
@@ -164,6 +165,8 @@ private:
     ui::MessageRow* m_imageMsg = nullptr;
     QWidget* m_actionsBar = nullptr; // ActionBar (anonymous namespace)
     QWidget* m_extractPanel = nullptr;
+    QWidget* m_unpackRow = nullptr;
+    ui::Switch* m_unpackPacks = nullptr;
     QWidget* m_verifyPanel = nullptr;
     QWidget* m_convertPanel = nullptr;
     QWidget* m_editPanel = nullptr;

@@ -1,5 +1,7 @@
 #include "core/FsLinks.h"
 
+#include "core/FileUtil.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -7,6 +9,9 @@
 #include <cstddef>
 #include <cstring>
 
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <winioctl.h>
@@ -48,10 +53,28 @@ QString lastErrorText()
 bool isLinkOrReparsePoint(const QString& path)
 {
 #ifdef Q_OS_WIN
-    const DWORD attrs = GetFileAttributesW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(path).utf16()));
+    const DWORD attrs = GetFileAttributesW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(toLongPath(path)).utf16()));
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT);
 #else
     return QFileInfo(path).isSymLink();
+#endif
+}
+
+Status createHardLink(const QString& link, const QString& target)
+{
+    if (QFileInfo::exists(link))
+        return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists.").arg(QDir::toNativeSeparators(link)));
+#ifdef Q_OS_WIN
+    const std::wstring l = toLongPath(QDir::toNativeSeparators(QFileInfo(link).absoluteFilePath())).toStdWString();
+    const std::wstring t = toLongPath(QDir::toNativeSeparators(QFileInfo(target).absoluteFilePath())).toStdWString();
+    if (!CreateHardLinkW(l.c_str(), t.c_str(), nullptr))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not link %1.").arg(QDir::toNativeSeparators(link)),
+                     QStringLiteral("CreateHardLinkW error %1").arg(GetLastError()));
+    return success();
+#else
+    if (::link(QFile::encodeName(target).constData(), QFile::encodeName(link).constData()) != 0)
+        return Error(ErrorCode::IoError, QStringLiteral("Could not link %1.").arg(link));
+    return success();
 #endif
 }
 

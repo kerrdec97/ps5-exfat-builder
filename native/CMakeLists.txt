@@ -55,6 +55,40 @@ if(NOT ZLIB_FOUND)
     endif()
 endif()
 
+# zstd (BSD) and LZ4 (BSD-2-Clause) for game asset packs: zstd packs
+# (ampr-emu-ng AMPRZPK1) are written and read; LZ4 packs (ampr_emu AMPRPAK4)
+# are only read, so LZ4-packed games can be unpacked (the app never writes
+# LZ4 packs). Only the libraries' C sources are compiled (no programs, no
+# assembly, no legacy formats); the source archives are pinned by hash.
+enable_language(C)
+include(FetchContent)
+FetchContent_Declare(fw_zstd_src
+    URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR fw-no-cmake)
+FetchContent_Declare(fw_lz4_src
+    URL https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
+    URL_HASH SHA256=537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR fw-no-cmake)
+FetchContent_MakeAvailable(fw_zstd_src fw_lz4_src)
+file(GLOB FW_ZSTD_SOURCES
+    ${fw_zstd_src_SOURCE_DIR}/lib/common/*.c
+    ${fw_zstd_src_SOURCE_DIR}/lib/compress/*.c
+    ${fw_zstd_src_SOURCE_DIR}/lib/decompress/*.c)
+add_library(fw_zstd STATIC ${FW_ZSTD_SOURCES})
+target_include_directories(fw_zstd PUBLIC ${fw_zstd_src_SOURCE_DIR}/lib)
+target_compile_definitions(fw_zstd PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0 XXH_NAMESPACE=FW_ZSTD_)
+add_library(fw_lz4 STATIC ${fw_lz4_src_SOURCE_DIR}/lib/lz4.c)
+target_include_directories(fw_lz4 PUBLIC ${fw_lz4_src_SOURCE_DIR}/lib)
+if(MSVC)
+    target_compile_options(fw_zstd PRIVATE /W0)
+    target_compile_options(fw_lz4 PRIVATE /W0)
+endif()
+
+include(AmprRuntime)
+
 configure_file(src/core/BuildInfo.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/core/BuildInfo.h @ONLY)
 
 add_subdirectory(src)

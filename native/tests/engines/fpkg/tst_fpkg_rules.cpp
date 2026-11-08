@@ -1212,8 +1212,9 @@ private slots:
         QCOMPARE(custom.outputConflict, OutputConflict::Overwrite);
         if (QThread::idealThreadCount() > 1)
             QCOMPARE(custom.cpuCoreLimit, 1);
-        QCOMPARE(env.jobs.kinds(), (QStringList{QStringLiteral("fpkg.addon"), QStringLiteral("fpkg.build"),
-                                                QStringLiteral("fpkg.extract"), QStringLiteral("fpkg.verify")}));
+        QCOMPARE(env.jobs.kinds(), (QStringList{QStringLiteral("fpkg.addon"), QStringLiteral("fpkg.backport"),
+                                                QStringLiteral("fpkg.build"), QStringLiteral("fpkg.extract"),
+                                                QStringLiteral("fpkg.verify")}));
     }
 
     void bundledToolkitIsTheLastFallback()

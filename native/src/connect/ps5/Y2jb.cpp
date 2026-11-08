@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -401,8 +402,8 @@ Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
             } else {
                 r.backup = bak;
                 QFile back(pj);
-                back.open(QIODevice::ReadOnly);
-                const PatchCheck v = verifyParamJsonText(back.readAll());
+                const PatchCheck v = back.open(QIODevice::ReadOnly) ? verifyParamJsonText(back.readAll())
+                                                                     : PatchCheck{false, QStringLiteral("could not read it back")};
                 r.status = v.ok ? QStringLiteral("✓") : QStringLiteral("✗");
                 r.detail = v.ok ? QStringLiteral("patched + verified (%1)").arg(v.reason)
                                 : QStringLiteral("patched but VERIFICATION FAILED: ") + v.reason;
@@ -808,11 +809,38 @@ Result<ArtSetReport> uploadY2jbArtSet(FtpClient& c, const QList<Y2jbRegion>& reg
 const QList<Y2jbYoutubeVersion>& y2jbYoutubeVersions()
 {
     static const QList<Y2jbYoutubeVersion> v = {
-        {QStringLiteral("4.03"), QStringLiteral("12.40"), QStringLiteral("v01.000.003")},
-        {QStringLiteral("12.60"), QStringLiteral("13.20"), QStringLiteral("v01.000.030")},
-        {QStringLiteral("13.40"), QStringLiteral("13.60"), QStringLiteral("v01.009.253")},
+        {QStringLiteral("4.03"), QStringLiteral("12.40"), QStringLiteral("v01.000.003"),
+         QStringLiteral("Y2JB 1.6 (Lapse up to 10.01, Y2JB's kernel exploit above)"), QStringLiteral("Gezine/Y2JB 1.6")},
+        {QStringLiteral("12.60"), QStringLiteral("13.20"), QStringLiteral("v01.000.030"), QStringLiteral("Y2JB 1.6"),
+         QStringLiteral("Gezine/Y2JB 1.6")},
+        {QStringLiteral("13.40"), QStringLiteral("13.60"), QStringLiteral("v01.009.253"), QStringLiteral("Relapse (notmaj0r)"),
+         QStringLiteral("itsPLK/ps5-y2jb-autoloader 1.1.0")},
     };
     return v;
+}
+
+QString normalizeYoutubeVersion(const QString& version)
+{
+    static const QRegularExpression re(QStringLiteral("^v?([0-9]{2})\\.([0-9]{3})\\.([0-9]{3})$"));
+    const auto m = re.match(version.trimmed());
+    return m.hasMatch() ? QStringLiteral("v%1.%2.%3").arg(m.captured(1), m.captured(2), m.captured(3)) : QString();
+}
+
+QString y2jbFirmwareRangeFor(const QString& youtubeVersion)
+{
+    const QString v = normalizeYoutubeVersion(youtubeVersion);
+    for (const Y2jbYoutubeVersion& row : y2jbYoutubeVersions())
+        if (row.youtube == v)
+            return QStringLiteral("%1 \u2013 %2").arg(row.firmwareFrom, row.firmwareTo);
+    return {};
+}
+
+std::optional<Y2jbRegion> y2jbRegionFromTitleId(const QString& titleId)
+{
+    for (const auto r : allY2jbRegions())
+        if (titleId.compare(y2jbTitleId(r), Qt::CaseInsensitive) == 0)
+            return r;
+    return std::nullopt;
 }
 
 QString y2jbYoutubeVersionFor(const QString& firmware)

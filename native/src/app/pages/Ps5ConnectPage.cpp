@@ -25,9 +25,12 @@
 #include "connect/ps5/Y2jb.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "engines/fpkg/PackageInspect.h"
 #include "jobs/JobQueue.h"
 
 #include <QClipboard>
+#include <QCoreApplication>
+#include <QRegularExpression>
 #include <QComboBox>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -1724,6 +1727,122 @@ void Ps5ConnectPage::klogSnapshot()
 
 // ---- Y2JB -----------------------------------------------------------------------------
 
+// The private build's own YouTube packages (make-release -PrivateYoutube).
+QString bundledYoutubeFolder() { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools/youtube")); }
+
+void Ps5ConnectPage::installYoutube(const QString& path)
+{
+    auto r = jobs::submitDpiInstall(m_ctx, host(), settingPort(ps5::keys::kDpiPort, 12800), path);
+    if (!r.ok()) {
+        emit toastRequested(Tone::Err, QStringLiteral("Install not started"), r.error().message);
+        return;
+    }
+    m_ctx.queue().holdQueue(false);
+    emit toastRequested(Tone::Info, QStringLiteral("Install queued"), QFileInfo(path).fileName());
+}
+
+void Ps5ConnectPage::scanYoutubePackages()
+{
+    QStringList folders;
+    if (QFileInfo(bundledYoutubeFolder()).isDir())
+        folders << bundledYoutubeFolder();
+    const QString mine = m_ytFolder ? m_ytFolder->path().trimmed() : QString();
+    if (!mine.isEmpty() && QFileInfo(mine).isDir())
+        folders << mine;
+    const quint64 gen = ++m_ytScan;
+    QPointer<Ps5ConnectPage> self(this);
+    const QString bundled = bundledYoutubeFolder();
+    (void)QtConcurrent::run([self, gen, folders, bundled] {
+        std::vector<YoutubePackage> found;
+        static const QRegularExpression tidRe(QStringLiteral("PPSA0165[0-2]"), QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression verRe(QStringLiteral("v?([0-9]{2}\\.[0-9]{3}\\.[0-9]{3})"));
+        for (const QString& folder : folders) {
+            const QFileInfoList pkgs = QDir(folder).entryInfoList({QStringLiteral("*.pkg")}, QDir::Files, QDir::Name);
+            for (const QFileInfo& fi : pkgs) {
+                YoutubePackage p;
+                p.path = fi.absoluteFilePath();
+                p.bundled = folder == bundled;
+                CancellationSource c;
+                if (auto id = fpkg::inspectPackage(p.path, c.token()); id.ok()) {
+                    p.titleId = id->titleId;
+                    p.version = ps5::normalizeYoutubeVersion(id->version);
+                }
+                // Fall back to the file name ("YouTube PPSA01650 v01.000.003.pkg").
+                if (p.titleId.isEmpty())
+                    if (const auto m = tidRe.match(fi.fileName()); m.hasMatch())
+                        p.titleId = m.captured(0).toUpper();
+                if (p.version.isEmpty())
+                    if (const auto m = verRe.match(fi.fileName()); m.hasMatch())
+                        p.version = ps5::normalizeYoutubeVersion(m.captured(1));
+                if (!ps5::y2jbRegionFromTitleId(p.titleId))
+                    continue; // not a YouTube package
+                p.firmware = ps5::y2jbFirmwareRangeFor(p.version);
+                found.push_back(p);
+            }
+        }
+        QMetaObject::invokeMethod(qApp, [self, gen, found] {
+            if (!self || gen != self->m_ytScan)
+                return;
+            self->m_ytPackages = found;
+            self->rebuildYoutubeList();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Ps5ConnectPage::rebuildYoutubeList()
+{
+    if (!m_ytList)
+        return;
+    QLayout* l = m_ytList->layout();
+    while (QLayoutItem* it = l->takeAt(0)) {
+        if (it->widget())
+            it->widget()->deleteLater();
+        delete it;
+    }
+    const QString want = ps5::y2jbYoutubeVersionFor(m_firmware->text());
+    const QString tid = ps5::y2jbTitleId(*ps5::y2jbRegionFromName(region()));
+    bool haveBest = false;
+    for (const YoutubePackage& p : m_ytPackages) {
+        auto* row = new QWidget(m_ytList);
+        auto* h = hbox(row, space::md, QMargins(0, space::xs, 0, space::xs));
+        h->addWidget(label(p.version.isEmpty() ? QStringLiteral("unknown version") : p.version, TextStyle::Mono, color::fg_1, row));
+        const auto reg = ps5::y2jbRegionFromTitleId(p.titleId);
+        QString meta = QStringLiteral("%1 · %2").arg(reg ? ps5::y2jbRegionName(*reg) : QString(), p.titleId);
+        meta += p.firmware.isEmpty() ? QStringLiteral(" · not a Y2JB version") : QStringLiteral(" · firmware %1").arg(p.firmware);
+        if (p.bundled)
+            meta += QStringLiteral(" · included");
+        auto* m = caption(meta, row);
+        m->setToolTip(QDir::toNativeSeparators(p.path));
+        h->addWidget(m, 1);
+        const bool best = !want.isEmpty() && p.version == want;
+        if (best) {
+            auto* b = new Badge(p.titleId == tid ? QStringLiteral("Your firmware") : QStringLiteral("Your firmware, other region"),
+                                p.titleId == tid ? Tone::Ok : Tone::Warn, row);
+            h->addWidget(b);
+            haveBest = true;
+        }
+        auto* install = button(QStringLiteral("Install"), ButtonVariant::Secondary, QStringLiteral("upload"), row);
+        install->setAccessibleName(QStringLiteral("Install %1").arg(QFileInfo(p.path).fileName()));
+        install->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kDpiInstall));
+        connect(install, &QPushButton::clicked, this, [this, path = p.path] { installYoutube(path); });
+        h->addWidget(install);
+        l->addWidget(row);
+    }
+    if (m_ytPackages.empty()) {
+        m_ytHint->setText(QStringLiteral("No YouTube packages yet. Put your own YouTube .pkg files in a folder and choose it above; "
+                                         "the list shows which firmware each one is for."));
+    } else if (want.isEmpty()) {
+        m_ytHint->setText(QStringLiteral("%1 package%2 found. Type the console's firmware in step 1 to pick the right one.")
+                              .arg(m_ytPackages.size())
+                              .arg(m_ytPackages.size() == 1 ? QString() : QStringLiteral("s")));
+    } else if (!haveBest) {
+        m_ytHint->setText(QStringLiteral("Firmware %1 needs YouTube %2, which is not in your packages.").arg(m_firmware->text().trimmed(), want));
+    } else {
+        m_ytHint->setText(QStringLiteral("Firmware %1 needs YouTube %2.").arg(m_firmware->text().trimmed(), want));
+    }
+    m_ytBest->setEnabled(haveBest && jobs::isAvailable(m_ctx, ps5::jobkinds::kDpiInstall));
+}
+
 QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
 {
     auto* tab = new QWidget(parent);
@@ -1759,18 +1878,26 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
     tg->setVerticalSpacing(space::xs);
     tg->addWidget(label(QStringLiteral("FIRMWARE"), TextStyle::Overline, color::fg_4, table), 0, 0);
     tg->addWidget(label(QStringLiteral("YOUTUBE"), TextStyle::Overline, color::fg_4, table), 0, 1);
+    tg->addWidget(label(QStringLiteral("EXPLOIT"), TextStyle::Overline, color::fg_4, table), 0, 2);
     int row = 1;
     for (const ps5::Y2jbYoutubeVersion& v : ps5::y2jbYoutubeVersions()) {
         tg->addWidget(label(QStringLiteral("%1 – %2").arg(v.firmwareFrom, v.firmwareTo), TextStyle::Mono, color::fg_2, table), row, 0);
         tg->addWidget(label(v.youtube, TextStyle::Mono, color::fg_1, table), row, 1);
+        auto* ex = label(v.exploit, TextStyle::Caption, color::fg_3, table);
+        ex->setToolTip(QStringLiteral("From %1").arg(v.source));
+        tg->addWidget(ex, row, 2);
         ++row;
     }
-    tg->setColumnStretch(2, 1);
+    tg->setColumnStretch(3, 1);
     ver->body()->addWidget(table);
+    ver->body()->addWidget(caption(QStringLiteral("Firmware 12.41 to 12.59 is not covered by any Y2JB release. Above 13.60 nothing is "
+                                                  "known to work yet."), ver));
     connect(m_firmware, &QLineEdit::textChanged, this, [this](const QString& fw) {
         m_youtubeVersion->setText(youtubeHelp(fw));
         setTextColor(m_youtubeVersion, ps5::y2jbYoutubeVersionFor(fw).isEmpty() && !fw.trimmed().isEmpty() ? color::warn_hi : color::fg_2);
+        rebuildYoutubeList();
     });
+    connect(m_region, &Segmented::currentChanged, this, [this](int) { rebuildYoutubeList(); });
     l->addWidget(ver);
 
     // 2. Install it.
@@ -1780,10 +1907,42 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
         b->setIconName({});
         return b;
     }(dpi));
+    m_ytFolder = new PathField(PathField::Mode::Directory, dpi);
+    m_ytFolder->setDialogTitle(QStringLiteral("Choose the folder with your YouTube .pkg files"));
+    m_ytFolder->setPlaceholder(QStringLiteral("The folder with your own YouTube .pkg files"));
+    m_ytFolder->setPath(m_ctx.settings().value(ps5::keys::kYoutubePackages).toString());
+    dpi->body()->addWidget(field(QStringLiteral("Your YouTube packages"), m_ytFolder, {}, dpi));
+    connect(m_ytFolder, &PathField::pathChanged, this, [this](const QString& p) {
+        (void)m_ctx.settings().setValue(ps5::keys::kYoutubePackages, p);
+        scanYoutubePackages();
+    });
+    m_ytList = new QWidget(dpi);
+    vbox(m_ytList, space::xs);
+    dpi->body()->addWidget(m_ytList);
+    auto* bestRow = new QWidget(dpi);
+    auto* besth = hbox(bestRow, space::sm);
+    m_ytHint = caption({}, bestRow);
+    m_ytHint->setWordWrap(true);
+    besth->addWidget(m_ytHint, 1);
+    m_ytBest = button(QStringLiteral("Install the right version"), ButtonVariant::Primary, QStringLiteral("upload"), bestRow);
+    m_ytBest->setAccessibleName(QStringLiteral("Install the right YouTube version"));
+    besth->addWidget(m_ytBest);
+    dpi->body()->addWidget(bestRow);
+    connect(m_ytBest, &QPushButton::clicked, this, [this] {
+        const QString want = ps5::y2jbYoutubeVersionFor(m_firmware->text());
+        const QString tid = ps5::y2jbTitleId(*ps5::y2jbRegionFromName(region()));
+        const YoutubePackage* pick = nullptr;
+        for (const auto& p : m_ytPackages)
+            if (p.version == want && (!pick || p.titleId == tid))
+                pick = &p;
+        if (pick)
+            installYoutube(pick->path);
+    });
+    dpi->body()->addWidget(hairline(dpi));
     m_pkg = new PathField(PathField::Mode::OpenFile, dpi);
     m_pkg->setFilter(QStringLiteral("Packages (*.pkg)"));
     m_pkg->setDialogTitle(QStringLiteral("Choose the YouTube .pkg"));
-    dpi->body()->addWidget(field(QStringLiteral("Package"), m_pkg, {}, dpi));
+    dpi->body()->addWidget(field(QStringLiteral("Or choose one package"), m_pkg, {}, dpi));
     auto* dpiRow = new QWidget(dpi);
     auto* dh = hbox(dpiRow, space::sm);
     m_dpiStatus = caption(QStringLiteral("Through etaHEN's Direct Package Installer V2 (DPI_v2=1 in /data/etaHEN/config.ini)."), dpiRow);
@@ -1825,14 +1984,9 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
             return;
         }
         m_pkg->setError({});
-        auto r = jobs::submitDpiInstall(m_ctx, host(), settingPort(ps5::keys::kDpiPort, 12800), m_pkg->path());
-        if (!r.ok()) {
-            emit toastRequested(Tone::Err, QStringLiteral("Install not started"), r.error().message);
-            return;
-        }
-        m_ctx.queue().holdQueue(false);
-        emit toastRequested(Tone::Info, QStringLiteral("Install queued"), QFileInfo(m_pkg->path()).fileName());
+        installYoutube(m_pkg->path());
     });
+    scanYoutubePackages();
 
     // 3. Block its updates, then reboot.
     auto* block = new Card(tab);

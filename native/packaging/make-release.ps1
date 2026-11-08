@@ -40,6 +40,16 @@ param(
     # the output goes to dist-private\ unless -OutDir is given. Never publish a
     # build made with this: those files are Sony's, licensed to you.
     [string]$PrivateToolkit = '',
+    # PRIVATE builds only: the folder holding your own fpkg-cli.exe (PSVIETHOA's
+    # command-line front end of Drakmor's LibProsperoPkg engine), used by the DLC
+    # page. Copied into the exe as tools\fpkg-cli. Never publish a build made
+    # with this either.
+    [string]$PrivateDlcEngine = '',
+    # PRIVATE builds only: a folder with your own YouTube app .pkg files for the
+    # Y2JB tab (PS5 connect). Copied into the exe as tools\youtube, where the tab
+    # lists them by version and firmware. Never publish a build made with this:
+    # those packages are Google's and Sony's software.
+    [string]$PrivateYoutube = '',
     [int]$Parallel = 0,
     [switch]$SkipBuild,
     [switch]$SkipTests,
@@ -52,7 +62,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $native = Join-Path $repo 'native'
 if (-not $BuildDir) { $BuildDir = Join-Path $native 'build-release' }
-if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($PrivateToolkit) { 'dist-private' } else { 'dist' }) }
+if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($PrivateToolkit -or $PrivateDlcEngine -or $PrivateYoutube) { 'dist-private' } else { 'dist' }) }
 $version = (Select-String -Path (Join-Path $native 'CMakeLists.txt') -Pattern 'VERSION (\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
 
 function Write-Step([string]$text) { Write-Host "== $text" }
@@ -94,7 +104,10 @@ if (-not $SkipBuild) {
     $engineArg = if ($BackportEngine) { "-DFW_BACKPORT_ENGINE_EXE=$BackportEngine" } else { '-DFW_FETCH_BACKPORT_ENGINE=ON' }
     if ((Invoke-Native { cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF $engineArg }) -ne 0) { throw 'Configure failed' }
     Write-Step 'Build'
-    $jobs = if ($Parallel -gt 0) { @('--parallel', "$Parallel") } else { @('--parallel') }
+    # Always an array: a one-element "if" result would be unrolled to a string,
+    # and splatting a string passes it character by character.
+    $jobs = @('--parallel')
+    if ($Parallel -gt 0) { $jobs += "$Parallel" }
     if ((Invoke-Native { cmake --build $BuildDir @jobs }) -ne 0) { throw 'Build failed' }
 }
 if (-not $SkipTests) {
@@ -141,11 +154,40 @@ if ($PrivateToolkit) {
     $crt = @()
     if ($env:VCToolsRedistDir) { $crt = Get-ChildItem -Path (Join-Path $env:VCToolsRedistDir 'x64') -Directory -Filter 'Microsoft.VC14*.CRT' -ErrorAction SilentlyContinue | Select-Object -First 1 }
     if ($crt) {
-        Get-ChildItem -Path $crt.FullName -Filter '*.dll' | ForEach-Object {
-            $dest = Join-Path $toolDir $_.Name
-            if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest }
+        # Every folder of the toolkit that holds a program (toolchain\ and its
+        # ext\ helpers such as p2d.exe and da.exe): Windows looks for the DLLs
+        # next to each program, not next to the one that started it.
+        $dirs = @($toolDir) + @(Get-ChildItem -Path $tkOut -Recurse -Include '*.exe', '*.dll' -File |
+            Select-Object -ExpandProperty DirectoryName -Unique)
+        foreach ($d in ($dirs | Select-Object -Unique)) {
+            Get-ChildItem -Path $crt.FullName -Filter '*.dll' | ForEach-Object {
+                $dest = Join-Path $d $_.Name
+                if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest }
+            }
         }
     } else { Write-Host 'Note: the VC++ runtime folder was not found; the tool will use the PC''s installed runtime.' }
+}
+if ($PrivateDlcEngine) {
+    $de = (Resolve-Path $PrivateDlcEngine).Path
+    if (Test-Path $de -PathType Leaf) { $de = Split-Path $de -Parent }
+    $cliIn = Join-Path $de 'fpkg-cli.exe'
+    if (-not (Test-Path $cliIn)) { throw "fpkg-cli.exe was not found in $de" }
+    $deOut = Join-Path $dist 'tools\fpkg-cli'
+    Write-Step "Private build: bundling the DLC engine from $de"
+    New-Item -ItemType Directory -Force $deOut | Out-Null
+    Copy-Item $cliIn $deOut
+    # Its native Oodle encoder (optional: it has a built-in one).
+    $oodle = Join-Path $de 'libScePubTools.dll'
+    if (Test-Path $oodle) { Copy-Item $oodle $deOut }
+}
+if ($PrivateYoutube) {
+    $yt = (Resolve-Path $PrivateYoutube).Path
+    $pkgs = @(Get-ChildItem -LiteralPath $yt -Filter '*.pkg' -File)
+    if ($pkgs.Count -eq 0) { throw "No .pkg files were found in $yt" }
+    $ytOut = Join-Path $dist 'tools\youtube'
+    Write-Step "Private build: bundling $($pkgs.Count) YouTube package(s) from $yt"
+    New-Item -ItemType Directory -Force $ytOut | Out-Null
+    foreach ($p in $pkgs) { Copy-Item -LiteralPath $p.FullName $ytOut }
 }
 
 # ---- 5. Single-file exe -------------------------------------------------------------

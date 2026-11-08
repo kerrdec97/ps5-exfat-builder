@@ -34,6 +34,13 @@ QStringList imgVerifyArgs(const QString& passcode, bool integrity, const QString
             QStringLiteral("--no_progress_bar"), package};
 }
 
+QStringList imgVerifyArgs(const QString& passcode, bool formatCheck, bool integrity, const QString& package)
+{
+    return {QStringLiteral("img_verify"), QStringLiteral("--passcode"), passcode, QStringLiteral("--format_check"),
+            formatCheck ? QStringLiteral("on") : QStringLiteral("off"), QStringLiteral("--integrity_check"),
+            integrity ? QStringLiteral("on") : QStringLiteral("off"), QStringLiteral("--no_progress_bar"), package};
+}
+
 QStringList imgExtractArgs(const QString& passcode, const QString& package, const QString& destination)
 {
     return {QStringLiteral("img_extract"), QStringLiteral("--passcode"), passcode, QStringLiteral("--no_progress_bar"),
@@ -393,6 +400,8 @@ Result<ToolRunResult> runPubTool(const ToolRunOptions& o, const CancellationToke
     spec.encoding = OutputEncoding::Utf8;
     spec.onRawOutput = [&](const QByteArray& chunk, bool isStderr) { (isStderr ? err : out).feed(chunk); };
     spec.onStarted = [&](qint64 pid) {
+        if (o.priorityMode >= 0)
+            (void)applyProcessPriority(pid, o.priorityMode);
         int applied = 0;
         if (o.liveLimitKey.isEmpty() || !liveCpuLimit(o.liveLimitKey)) {
             if (o.cpuCoreLimit > 0 && applyCpuLimit(pid, o.cpuCoreLimit))

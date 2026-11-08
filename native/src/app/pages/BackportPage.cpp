@@ -6,6 +6,7 @@
 #include "core/FileUtil.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "engines/fpkg/BackportUpdate.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -436,8 +437,9 @@ void BackportGameModel::allChanged()
 
 void BackportFilterModel::setSearch(const QString& text)
 {
+    beginFilterChange();
     m_search = text.trimmed();
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 bool BackportFilterModel::filterAcceptsRow(int row, const QModelIndex& parent) const
@@ -2392,6 +2394,29 @@ void BackportPage::showRowMenu(const QPoint& globalPos)
         } else {
             auto* a = menu.addAction(QStringLiteral("Rebuild its backport ZIP with another SDK: choose Target SDK 5-13 first"));
             a->setEnabled(false);
+        }
+        {
+            // The ppr-pkg Companion's Backport tab: the backport as its own update package.
+            const QString zip = row->result.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
+            const QString game = row->game.path;
+            const int sdk = targetSdk();
+            menu.addAction(icon(QStringLiteral("package"), color::fg_3), QStringLiteral("Package as an installable update (FPKG)\u2026"), this,
+                           [this, zip, game, sdk] {
+                               QVariantMap args{{QStringLiteral("format"), QStringLiteral("fpkg")},
+                                                {QStringLiteral("packageType"), QStringLiteral("backport")},
+                                                {QStringLiteral("source"), game}};
+                               // Only a ZIP whose name says its firmware group is placed; otherwise
+                               // the user picks the 4.xx or 5.xx+ slot (a wrong label would put a
+                               // 5.xx+ backport on a 4.xx console).
+                               if (!zip.isEmpty() && QFileInfo(zip).isFile()) {
+                                   const QString group = fpkg::firmwareGroupFromName(QFileInfo(zip).fileName());
+                                   if (!group.isEmpty())
+                                       args.insert(group == u"4xx" ? QStringLiteral("backport4xx") : QStringLiteral("backport5xx"),
+                                                   QDir::toNativeSeparators(zip));
+                               }
+                               Q_UNUSED(sdk);
+                               emit navigateRequested({QStringLiteral("build"), args});
+                           });
         }
         menu.addAction(icon(QStringLiteral("zap"), color::fg_3), QStringLiteral("Make a PS5 Pro build from its backport\u2026"), this,
                        [this, sel] { makeProBuild(sel); });

@@ -8,6 +8,7 @@
 // threads.
 
 #include "core/Cancellation.h"
+#include "core/RandomSource.h"
 #include "core/Result.h"
 #include "engines/ufs2/Ufs2Format.h"
 #include "engines/ufs2/Ufs2Tree.h"
@@ -79,6 +80,9 @@ struct FileExtent {
 class Ufs2Reader : public std::enable_shared_from_this<Ufs2Reader> {
 public:
     static Result<std::shared_ptr<Ufs2Reader>> open(const QString& path);
+    // An image that is not a file of its own (an .ffpkg inside an .ffpfsc);
+    // path() is then the source's description.
+    static Result<std::shared_ptr<Ufs2Reader>> open(std::shared_ptr<RandomSource> source);
 
     const SuperblockInfo& sb() const { return m_sb; }
     QString path() const { return m_path; }
@@ -107,6 +111,7 @@ public:
 
 private:
     Ufs2Reader() = default;
+    static Result<std::shared_ptr<Ufs2Reader>> findSuperblock(std::shared_ptr<Ufs2Reader> r);
     Status walkIndirect(qint64 ptr, int level, qint64 firstLbn, qint64 nblocks, InodeBlocks& out, quint32 ino,
                         int depth) const;
 
@@ -116,6 +121,7 @@ private:
     SuperblockInfo m_sb;
     mutable std::mutex m_mutex;
     mutable QFile m_file;
+    std::shared_ptr<RandomSource> m_source; // instead of m_file
 };
 
 } // namespace fw::ufs2

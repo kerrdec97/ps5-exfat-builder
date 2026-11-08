@@ -143,7 +143,7 @@ private slots:
     {
         m_window->navigate(QStringLiteral("backport"));
         QVERIFY(page());
-        QTest::qWaitFor([this] { return games() && games()->rowCount() == 1; }, 60000);
+        (void)QTest::qWaitFor([this] { return games() && games()->rowCount() == 1; }, 60000);
         if (!games() || games()->rowCount() != 1) {
             for (auto* t : page()->findChildren<QTextEdit*>())
                 qInfo().noquote() << "activity:" << t->toPlainText();
@@ -224,7 +224,7 @@ private slots:
         phase = 1;
         QMetaObject::invokeMethod(start, &QPushButton::click, Qt::QueuedConnection);
         phase = 2;
-        QTest::qWaitFor([this] { phase = 3; return page()->isBusy(); }, 60000);
+        (void)QTest::qWaitFor([this] { phase = 3; return page()->isBusy(); }, 60000);
         phase = 4;
         stopWatch = true;
         watch.join();

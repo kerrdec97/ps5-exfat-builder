@@ -39,16 +39,27 @@ QString y2jbRegionName(Y2jbRegion region); // "USA", "EU", "JP"
 std::optional<Y2jbRegion> y2jbRegionFromName(const QString& name);
 QList<Y2jbRegion> allY2jbRegions();
 
-// The YouTube app version Y2JB needs per firmware (Gezine/Y2JB 1.6 README;
-// research §8). Install exactly that version, then block its updates.
+// The YouTube app version Y2JB needs per firmware. Install exactly that
+// version, then block its updates. Sources: Gezine/Y2JB 1.6 README (4.03-13.20;
+// the README says "12.60 and up" for v01.000.030) and itsPLK
+// ps5-y2jb-autoloader 1.1.0 with notmaj0r's Relapse exploit (13.40-13.60).
+// 12.41-12.59 is not covered by any release.
 struct Y2jbYoutubeVersion {
     QString firmwareFrom; // "4.03"
     QString firmwareTo;   // "12.40"
     QString youtube;      // "v01.000.003"
+    QString exploit;      // "Y2JB 1.6 (Lapse up to 10.01, then Y2JB's kernel exploit)"
+    QString source;       // where the row comes from
 };
 const QList<Y2jbYoutubeVersion>& y2jbYoutubeVersions();
 // The version for a firmware such as "12.60" or "13.2"; empty outside 4.03–13.60.
 QString y2jbYoutubeVersionFor(const QString& firmware);
+// "4.03 – 12.40" for a YouTube version ("v01.000.003" or "01.000.003"), "" when unknown.
+QString y2jbFirmwareRangeFor(const QString& youtubeVersion);
+// "01.000.003" / "v01.000.003" -> "v01.000.003"; "" when it is not a version.
+QString normalizeYoutubeVersion(const QString& version);
+// The region of a YouTube title ID (PPSA01650/1/2), or nullopt.
+std::optional<Y2jbRegion> y2jbRegionFromTitleId(const QString& titleId);
 
 inline constexpr const char* kBlockedContentVersion = "99.999.999";
 inline constexpr const char* kBlockedVersionFileUri = "http://127.0.0.2";

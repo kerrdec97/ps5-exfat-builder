@@ -88,6 +88,7 @@ FpkgSettings FpkgSettings::from(const SettingsValues& v)
     s.playGoChunkCount = int(std::clamp<qint64>(v.integer(keys::kPlayGoChunkCount), 1, 255));
     s.fillEmptyChunks = v.boolean(keys::kFillEmptyChunks);
     s.useSourcePlayGoTable = v.boolean(keys::kUseSourcePlayGoTable);
+    s.playGoAllLanguages = v.boolean(keys::kPlayGoAllLanguages);
 
     const QString pv = v.string(keys::kPostVerify);
     s.postVerify = pv == u"headerOnly" ? PostVerify::HeaderOnly
@@ -99,12 +100,13 @@ FpkgSettings FpkgSettings::from(const SettingsValues& v)
     s.computeSha256 = v.boolean(keys::kComputeSha256);
 
     const int cores = std::max(1, QThread::idealThreadCount());
-    const qint64 wt = v.integer(general::keys::kWorkerThreads);
-    s.cpuCoreLimit = (wt <= 0 || wt >= cores) ? 0 : int(wt);
     s.workerThreads = general::workerThreads(v);
+    s.cpuCoreLimit = s.workerThreads >= cores ? 0 : s.workerThreads;
+    s.priorityMode = general::performanceMode(v);
     s.ioBufferBytes = general::ioBufferBytes(v);
     s.freeSpaceMarginBytes = general::freeSpaceMarginBytes(v);
     s.defaultOutputDir = v.string(general::keys::kDefaultOutputDir).trimmed();
+    s.userTempFolder = v.string(general::keys::kTempFolder).trimmed();
     return s;
 }
 
@@ -270,7 +272,7 @@ void registerFpkgSettings(SettingsSchema& s)
                                      "sdkVersion, it is lowered to that firmware. The Publishing Tools may rewrite "
                                      "this field again."),
                       true, order++));
-    s.add(boolSetting(keys::kAutoSizeClass, fpkg, paramGroup, QStringLiteral("Choose the package size class"),
+    s.add(boolSetting(keys::kAutoSizeClass, fpkg, paramGroup, QStringLiteral("Choose the package size class (attributePub, SDK Fix rule)"),
                       QStringLiteral("For full packages, sets attributePub from the estimated package size and lowers "
                                      "kernel.addcontMountLevel when the size requires it (the log warns, because "
                                      "separately installed DLC may then not mount). Updates keep their values."),
@@ -341,6 +343,12 @@ void registerFpkgSettings(SettingsSchema& s)
         d.order = order++;
         s.add(d);
     }
+    s.add(boolSetting(keys::kPlayGoAllLanguages, playgo, QStringLiteral("FPKG packages"),
+                      QStringLiteral("All 31 PlayGo languages"),
+                      QStringLiteral("Declares every PlayGo language in the package (one chunk each, at least 32 "
+                                     "chunks) instead of only the game's own list, like the ppr-pkg Companion's "
+                                     "option. Used when the package builds its own PlayGo layout."),
+                      false, order++));
     s.add(boolSetting(keys::kFillEmptyChunks, playgo, QStringLiteral("FPKG packages"),
                       QStringLiteral("Fill empty chunks"),
                       QStringLiteral("Adds a 1 MiB uncompressed placeholder to every chunk that would hold no data. An "

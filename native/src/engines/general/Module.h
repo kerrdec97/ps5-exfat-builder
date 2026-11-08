@@ -17,6 +17,7 @@ inline const QString kLastSourceDir = QStringLiteral("general.lastSourceFolder")
 inline const QString kDefaultOutputDir = QStringLiteral("storage.defaultOutputFolder");
 inline const QString kMaxConcurrentJobs = QStringLiteral("performance.maxConcurrentJobs");
 inline const QString kWorkerThreads = QStringLiteral("performance.workerThreads");
+inline const QString kPerformanceMode = QStringLiteral("performance.mode");
 inline const QString kIoBufferMiB = QStringLiteral("performance.ioBufferMiB");
 inline const QString kKeepAwake = QStringLiteral("performance.keepComputerAwake");
 inline const QString kFreeSpaceMarginMiB = QStringLiteral("storage.freeSpaceMarginMiB");
@@ -36,8 +37,13 @@ inline const QString kLogFolder = QStringLiteral("logging.folder");
 inline const QString kDeleteSource = QStringLiteral("storage.deleteSourceAfterVerifiedBuild");
 } // namespace keys
 
-// Effective worker-thread count for engines (0 = all logical cores).
+// Effective worker-thread count for engines. performance.workerThreads 0 =
+// automatic from the performance mode: low impact half the logical cores,
+// balanced three quarters, maximum all of them.
 int workerThreads(const SettingsValues& settings);
+// performance.mode as the int applyProcessPriority() takes (0 low impact,
+// 1 balanced, 2 maximum).
+int performanceMode(const SettingsValues& settings);
 // Read/write buffer size for streaming engines (performance.ioBufferMiB).
 qint64 ioBufferBytes(const SettingsValues& settings);
 // Free-space reserve every writer must keep (storage.freeSpaceMarginMiB);

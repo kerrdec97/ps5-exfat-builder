@@ -6,6 +6,7 @@
 #include "app/pages/AboutPage.h"
 #include "app/pages/BackportPage.h"
 #include "app/pages/BuildImagePage.h"
+#include "app/pages/DlcPage.h"
 #include "app/pages/HomePage.h"
 #include "app/pages/ImageToolsPage.h"
 #include "app/pages/LibraryPage.h"
@@ -199,6 +200,7 @@ void MainWindow::buildPages()
     addPage(new pages::BuildImagePage(m_ctx, *m_queueModel, this), QStringLiteral("build"), QStringLiteral("Build image"));
     addPage(new pages::ImageToolsPage(m_ctx, *m_queueModel, this), QStringLiteral("extract"), QStringLiteral("Image tools"));
     addPage(new pages::BackportPage(m_ctx, *m_queueModel, *m_logModel, *m_library, this), QStringLiteral("backports"), QStringLiteral("Backport"));
+    addPage(new pages::DlcPage(m_ctx, *m_queueModel, this), QStringLiteral("package_plus"), QStringLiteral("DLC"));
     m_sidebar->addGroup(QStringLiteral("Tools"));
     m_queuePage = new pages::QueuePage(m_ctx, *m_queueModel, *m_logModel, this);
     addPage(m_queuePage, QStringLiteral("queue"), QStringLiteral("Queue"));

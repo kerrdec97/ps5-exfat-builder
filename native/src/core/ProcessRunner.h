@@ -72,4 +72,12 @@ QString describeCommandLine(const ProcessSpec& spec);
 // again while it runs. Returns false if the limit could not be applied.
 bool setProcessCpuLimit(qint64 pid, int cores);
 
+// The ppr-pkg Companion's performance modes for external tools (Sony's
+// publisher, fpkg-cli): 0 = low impact (idle CPU, low disk, low memory
+// priority), 1 = balanced (below-normal CPU, low disk, below-normal memory),
+// 2 = maximum (normal everywhere). Returns a short description of what was
+// applied ("Below Normal") or "" when nothing could be applied. Windows only.
+QString applyProcessPriority(qint64 pid, int mode);
+QString processPriorityName(int mode); // "Idle" / "Below Normal" / "Normal"
+
 } // namespace fw

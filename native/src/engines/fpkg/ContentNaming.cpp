@@ -61,6 +61,21 @@ ContentVersion ContentVersion::next() const
     return v;
 }
 
+std::optional<ContentVersion> ContentVersion::nextPatch() const
+{
+    ContentVersion v = *this;
+    if (++v.patch > 999) {
+        v.patch = 0;
+        if (++v.minor > 999) {
+            v.minor = 0;
+            ++v.major;
+        }
+    }
+    if (v.major > 99)
+        return std::nullopt;
+    return v;
+}
+
 int ContentVersion::compare(const ContentVersion& o) const
 {
     if (major != o.major)

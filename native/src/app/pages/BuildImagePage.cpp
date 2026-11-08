@@ -6,8 +6,13 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "engines/ampr/Lz4Pack.h"
+#include "engines/ampr/Module.h"
+#include "engines/ampr/ZstdPack.h"
 #include "engines/exfat/Module.h"
+#include "engines/fpkg/BackportUpdate.h"
 #include "engines/fpkg/ContentNaming.h"
+#include "engines/fpkg/PackageInspect.h"
 #include "engines/fpkg/FpkgBuilder.h"
 #include "engines/fpkg/FpkgSettings.h"
 #include "engines/fpkg/PubCmd.h"
@@ -24,6 +29,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
@@ -53,6 +59,17 @@ const QString kShared = QStringLiteral("Verification & after the build");
 const QString kVerify = general::keys::kVerifyAfterBuild;
 const QString kVerifyMode = general::keys::kVerifyMode;
 const QString kThreads = general::keys::kWorkerThreads;
+const QString kSpeed = general::keys::kPerformanceMode;
+
+// What each performance mode uses on this computer.
+QString speedNote()
+{
+    const int cores = std::max(1, QThread::idealThreadCount());
+    return QStringLiteral("This PC: %1 logical cores. Maximum uses %1, Balanced %2, Low impact %3.")
+        .arg(cores)
+        .arg(std::max(1, cores * 3 / 4))
+        .arg(std::max(1, cores / 2));
+}
 const QString kKeepTemp = general::keys::kKeepJobTemp;
 const QString kAutoUpload = integration::keys::kAutoUpload;
 
@@ -111,6 +128,20 @@ QString sourceKindOf(const QString& path)
     if (ext == QLatin1String("zip"))
         return QStringLiteral("zip"); // a zipped dump (#67): exFAT, FFPKG and PFS unpack it first
     return fi.exists() ? QStringLiteral("file") : QStringLiteral("folder");
+}
+
+// " · zstd-packed" for a game folder whose files are in zstd or LZ4 packs.
+QString packedNote(const QString& folder, bool fpkg)
+{
+    if (folder.isEmpty() || !QFileInfo(folder).isDir())
+        return {};
+    const QDir d(folder);
+    const QString kind = QFileInfo(d.filePath(ampr::kZstdIndexName)).isFile() ? QStringLiteral("zstd")
+                         : QFileInfo(d.filePath(ampr::kLz4IndexName)).isFile() ? QStringLiteral("LZ4")
+                                                                              : QString();
+    if (kind.isEmpty())
+        return {};
+    return fpkg ? QStringLiteral(" \u00b7 %1-packed (unpacked for the package)").arg(kind) : QStringLiteral(" \u00b7 %1-packed").arg(kind);
 }
 
 QString sourceKindLabel(const QString& kind)
@@ -434,6 +465,9 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         m_sourceBadge->setIconName(QStringLiteral("loader"));
     });
 
+    // Work folders of backport builds that a crash or power loss left behind.
+    (void)QtConcurrent::run([] { fpkg::sweepStaleBackportWork(); });
+
     buildSourceCard();
     buildFormatCard();
     buildPackageCard();
@@ -460,6 +494,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
             applyLiveCpuLimit();
     });
     onFormatChanged();
+    onPackageTypeChanged();
 }
 
 void BuildImagePage::buildSourceCard()
@@ -531,8 +566,8 @@ void BuildImagePage::buildFormatCard()
                    QStringLiteral("drive"), jobs::kFormatExfat, QStringLiteral("Popular"));
     tiles->addTile(QStringLiteral("FFPKG"), QStringLiteral("UFS2 image (.ffpkg) that ShadowMount+ mounts as it is."),
                    QStringLiteral("package"), jobs::kFormatFfpkg);
-    tiles->addTile(QStringLiteral("PFS"), QStringLiteral("Compressed .ffpfsc, smallest on disk, or a plain .ffpfs."),
-                   QStringLiteral("compress"), jobs::kFormatFfpfsc, QStringLiteral("Smallest"));
+    tiles->addTile(QStringLiteral("PFS"), QStringLiteral("Compressed .ffpfsc or a plain .ffpfs."),
+                   QStringLiteral("compress"), jobs::kFormatFfpfsc);
     tiles->addTile(QStringLiteral("FPKG"), QStringLiteral("Installable package. Needs your own Sony Publishing Tools."),
                    QStringLiteral("package_check"), kFormatFpkg);
     tiles->setAccessibleName(QStringLiteral("Image format"));
@@ -549,8 +584,8 @@ void BuildImagePage::buildFormatCard()
     m_pfsKind->addSegment(QStringLiteral("Compressed"), {}, jobs::kFormatFfpfsc);
     m_pfsKind->addSegment(QStringLiteral("Uncompressed"), {}, jobs::kFormatFfpfs);
     m_pfsKind->setAccessibleName(QStringLiteral("PFS image type"));
-    m_pfsKind->setToolTip(QStringLiteral("Compressed (.ffpfsc) is smallest on disk. Uncompressed (.ffpfs) is about the size of "
-                                         "the dump and the fastest to read."));
+    m_pfsKind->setToolTip(QStringLiteral("Compressed (.ffpfsc) saves space with zlib; how much depends on the game. Uncompressed "
+                                         "(.ffpfs) is about the size of the dump and the fastest to read."));
     connect(m_pfsKind, &Segmented::currentChanged, this, [this](int) {
         applyRowVisibility();
         updatePfsRows();
@@ -581,32 +616,40 @@ void BuildImagePage::buildFormatCard()
     const QStringList shared = {kVerify, kVerifyMode, kKeepTemp};
     m_formats.resize(4);
     m_formats[0].tile = jobs::kFormatExfat;
+    // Every format shows the speed row (Performance mode) up front, and the
+    // image formats the zstd packs switch; their details are under Advanced.
+    const QString zstd = QStringLiteral("ampr.");
     buildFormatOptions(m_formats[0],
                        {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Advanced"),
                         QStringLiteral("PS5 connection")},
-                       QStringList{QStringLiteral("exfat."), kThreads, kAutoUpload} + shared,
+                       QStringList{QStringLiteral("exfat."), zstd, kThreads, kSpeed, kAutoUpload} + shared,
                        {exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads},
-                       {exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB});
+                       {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, ampr::keys::kZstdPack});
     m_formats[1].tile = jobs::kFormatFfpkg;
     buildFormatOptions(m_formats[1],
-                       {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Advanced"), QStringLiteral("PS5 connection")},
-                       QStringList{QStringLiteral("ufs2."), kAutoUpload} + shared, {}, {});
+                       {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Advanced"),
+                        QStringLiteral("PS5 connection")},
+                       QStringList{QStringLiteral("ufs2."), zstd, kThreads, kSpeed, kAutoUpload} + shared, {},
+                       {kSpeed, ampr::keys::kZstdPack});
     m_formats[2].tile = jobs::kFormatFfpfsc;
     buildFormatOptions(m_formats[2],
-                       {QStringLiteral("PFS"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Advanced"),
-                        QStringLiteral("PS5 connection")},
-                       QStringList{QStringLiteral("pfs."), kThreads, kAutoUpload} + shared, {pfs::keys::kDeleteSourceAfterConvert},
-                       {pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles});
+                       {QStringLiteral("PFS"), QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"),
+                        QStringLiteral("Advanced"), QStringLiteral("PS5 connection")},
+                       QStringList{QStringLiteral("pfs."), zstd, kThreads, kSpeed, kAutoUpload} + shared, {pfs::keys::kDeleteSourceAfterConvert},
+                       {kSpeed, pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles, ampr::keys::kZstdPack});
     m_formats[3].tile = kFormatFpkg;
     buildFormatOptions(m_formats[3],
                        {QStringLiteral("FPKG"), QStringLiteral("PlayGo"), QStringLiteral("Firmware and SDK"), QStringLiteral("Verification"),
                         QStringLiteral("Performance"), QStringLiteral("Advanced")},
-                       {QStringLiteral("fpkg."), kVerify, kThreads, kKeepTemp}, {fpkg::keys::kPubToolsPath},
-                       {fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify});
+                       {QStringLiteral("fpkg."), kVerify, kThreads, kSpeed, kKeepTemp}, {fpkg::keys::kPubToolsPath},
+                       {kSpeed, fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify});
+    for (auto& fo : m_formats)
+        if (SettingRow* row = fo.panel->row(kSpeed))
+            row->setMessage(speedNote(), Tone::Neutral);
     // The PFS type row leads the PFS essentials; the tools row leads FPKG's.
     // (layout items 0 and 1 are the hairline and the space under it)
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[2].essentials->layout())) {
-        m_pfsKindRow = plainRow(QStringLiteral("Image type"), QStringLiteral("Compressed (.ffpfsc) is smallest; uncompressed (.ffpfs) is fastest to read."),
+        m_pfsKindRow = plainRow(QStringLiteral("Image type"), QStringLiteral("Compressed (.ffpfsc) saves space; uncompressed (.ffpfs) is fastest to read."),
                                 m_pfsKind, m_formats[2].essentials);
         l->insertWidget(2, m_pfsKindRow);
     }
@@ -694,7 +737,10 @@ void BuildImagePage::buildPackageCard()
     m_packageType->addSegment(QStringLiteral("App"), {}, QStringLiteral("app"));
     m_packageType->addSegment(QStringLiteral("Add-on"), {}, QStringLiteral("addon"));
     m_packageType->addSegment(QStringLiteral("Update"), {}, QStringLiteral("update"));
+    m_packageType->addSegment(QStringLiteral("Backport"), {}, QStringLiteral("backport"));
     m_packageType->setAccessibleName(QStringLiteral("Package type"));
+    m_packageType->setToolTip(QStringLiteral("Backport: build backport files as their own update package that installs over "
+                                             "the game's base package, so the game package stays original."));
     details->body()->addWidget(field(QStringLiteral("Package type"), m_packageType, {}, details));
     connect(m_packageType, &Segmented::currentChanged, this, [this](int) { onPackageTypeChanged(); });
 
@@ -710,19 +756,67 @@ void BuildImagePage::buildPackageCard()
     m_version->setAccessibleName(QStringLiteral("Version"));
     gh->addWidget(field(QStringLiteral("Version"), m_version, {}, grid), 1);
     details->body()->addWidget(grid);
+    m_idRow = grid;
     m_title = textInput({}, false, details);
     m_title->setAccessibleName(QStringLiteral("Title"));
-    details->body()->addWidget(field(QStringLiteral("Title"), m_title, {}, details));
+    m_titleRow = field(QStringLiteral("Title"), m_title, {}, details);
+    details->body()->addWidget(m_titleRow);
+    connect(m_version, &QLineEdit::textEdited, this, [this] { m_autoVersion.clear(); });
     connect(m_contentId, &QLineEdit::textChanged, this, [this] { renderFileName(); });
     connect(m_version, &QLineEdit::textChanged, this, [this] { renderFileName(); });
 
     m_basePackage = new PathField(PathField::Mode::OpenFile, details);
     m_basePackage->setFilter(QStringLiteral("Packages (*.pkg)"));
     m_basePackage->setDialogTitle(QStringLiteral("Choose the base package installed on the console"));
-    m_baseField = field(QStringLiteral("Base package"), m_basePackage,
-                        QStringLiteral("The .pkg the console already has; updates are built against it."), details);
+    m_baseField = new QWidget(details);
+    {
+        auto* bl = vbox(m_baseField, space::xs);
+        bl->addWidget(field(QStringLiteral("Base package"), m_basePackage,
+                            QStringLiteral("The .pkg the console already has; updates are built against it."), m_baseField));
+        m_baseInfo = new MessageRow(m_baseField);
+        m_baseInfo->hide();
+        bl->addWidget(m_baseInfo);
+    }
     m_baseField->hide();
     details->body()->addWidget(m_baseField);
+    connect(m_basePackage, &PathField::pathChanged, this, [this](const QString&) { inspectBase(); });
+
+    // Backport updates: 4.xx and/or 5.xx+ backport files (game-root layout), a folder or the Backport tab's ZIP.
+    m_backportField = new QWidget(details);
+    {
+        auto* bl = vbox(m_backportField, space::md);
+        auto* row = new QWidget(m_backportField);
+        auto* rh = hbox(row, space::md);
+        rh->setAlignment(Qt::AlignTop);
+        const auto picker = [this, row](const QString& label, const QString& hint, const QString& name) {
+            auto* f = new PathField(PathField::Mode::Directory, row);
+            f->setPlaceholder(QStringLiteral("Optional \u00b7 folder or ZIP"));
+            f->edit()->setAccessibleName(name);
+            f->setToolTip(QStringLiteral("Backport files in game-root layout (eboot.bin, sce_module/, fakelib/ \u2026): a folder, "
+                                         "or the ZIP the Backport tab made. Leave empty to omit this firmware group."));
+            QObject::disconnect(f->browseButton(), &QPushButton::clicked, nullptr, nullptr);
+            connect(f->browseButton(), &QPushButton::clicked, this, [this, f, label] { browseBackport(f, label); });
+            connect(f, &PathField::pathChanged, this, [this](const QString&) {
+                renderFileName();
+                onPackageTypeChanged();
+            });
+            return std::pair<PathField*, QWidget*>(f, field(label, f, hint, row));
+        };
+        auto [p4, w4] = picker(QStringLiteral("Backport 4.xx"), QStringLiteral("Low firmware, optional."),
+                               QStringLiteral("Backport 4.xx files"));
+        auto [p5, w5] = picker(QStringLiteral("Backport 5.xx+"), QStringLiteral("All firmware, optional."),
+                               QStringLiteral("Backport 5.xx+ files"));
+        m_backport4 = p4;
+        m_backport5 = p5;
+        rh->addWidget(w4, 1);
+        rh->addWidget(w5, 1);
+        bl->addWidget(row);
+        m_backportNote = caption(QString(), m_backportField);
+        m_backportNote->setWordWrap(true);
+        bl->addWidget(m_backportNote);
+    }
+    m_backportField->hide();
+    details->body()->addWidget(m_backportField);
 
     m_addonField = new QWidget(details);
     auto* al = vbox(m_addonField, space::md);
@@ -1176,6 +1270,14 @@ void BuildImagePage::navigateWith(const QVariantMap& args)
 {
     if (args.contains(QStringLiteral("format")))
         setFormat(args.value(QStringLiteral("format")).toString());
+    if (args.contains(QStringLiteral("packageType")))
+        m_packageType->setCurrentValue(args.value(QStringLiteral("packageType")).toString());
+    if (args.contains(QStringLiteral("backport4xx")))
+        m_backport4->setPath(args.value(QStringLiteral("backport4xx")).toString());
+    if (args.contains(QStringLiteral("backport5xx")))
+        m_backport5->setPath(args.value(QStringLiteral("backport5xx")).toString());
+    if (args.contains(QStringLiteral("basePackage")))
+        m_basePackage->setPath(args.value(QStringLiteral("basePackage")).toString());
     if (args.contains(QStringLiteral("source"))) {
         const QString src = args.value(QStringLiteral("source")).toString();
         // Images and .gp5 projects can only be packaged.
@@ -1294,7 +1396,7 @@ void BuildImagePage::onSummary(const GameSummary& s)
             m_contentId->setText(s.contentId);
         if (!s.title.isEmpty())
             m_title->setText(s.title);
-        if (!s.version.isEmpty())
+        if (!s.version.isEmpty() && !(packageType() == QLatin1String("backport") && !m_autoVersion.isEmpty()))
             m_version->setText(s.version);
     }
     if (m_estSize)
@@ -1340,7 +1442,8 @@ void BuildImagePage::refreshSourceState()
             const QString line = s.metaLine();
             if (s.isGame) {
                 m_stripTile->setIconName(QStringLiteral("game"));
-                m_stripMeta->setFullText(line.isEmpty() ? sourceKindLabel(kind) : sourceKindLabel(kind) + QStringLiteral(" \u00b7 ") + line);
+                m_stripMeta->setFullText((line.isEmpty() ? sourceKindLabel(kind) : sourceKindLabel(kind) + QStringLiteral(" \u00b7 ") + line)
+                                         + packedNote(s.folder, isFpkg()));
             } else {
                 m_stripTile->setIconName(QStringLiteral("folder"));
                 m_stripMeta->setFullText(s.gameRoots.size() > 1 ? QStringLiteral("Folder \u00b7 %1 games inside").arg(s.gameRoots.size())
@@ -1424,12 +1527,112 @@ QString BuildImagePage::sourceMessage() const { return m_sourceMsg->text(); }
 
 // ---- package (FPKG) ---------------------------------------------------------------
 
+QString BuildImagePage::packageType() const { return m_packageType->currentValue().toString(); }
+
+bool BuildImagePage::hasBackports() const
+{
+    return m_backport4 && (!m_backport4->path().trimmed().isEmpty() || !m_backport5->path().trimmed().isEmpty());
+}
+
 void BuildImagePage::onPackageTypeChanged()
 {
-    const QString t = m_packageType->currentValue().toString();
-    m_baseField->setVisible(t == QLatin1String("update"));
+    const QString t = packageType();
+    const bool backport = t == QLatin1String("backport");
+    m_baseField->setVisible(t == QLatin1String("update") || backport);
     m_addonField->setVisible(t == QLatin1String("addon"));
+    m_backportField->setVisible(t == QLatin1String("app") || backport);
+    // A backport update takes its identity from the base package.
+    m_contentId->parentWidget()->setVisible(!backport);
+    m_titleRow->setVisible(!backport);
+    if (backport) {
+        m_backportNote->setText(QStringLiteral(
+            "Each backport becomes its own small update that installs over the base package, so the base stays the original "
+            "game. Choosing both makes two alternative updates. The game folder above is optional (without it the base is "
+            "unpacked). Needs a verified SDK Fix toolchain."));
+    } else {
+        m_backportNote->setText(hasBackports()
+                                    ? QStringLiteral("This game's package is built first, then a separate update for each "
+                                                     "backport against it. Install the package, then the update for your firmware.")
+                                    : QStringLiteral("Optional: add backport files to also get them as separate updates for "
+                                                     "this package (the package itself stays the original game)."));
+    }
+    if (backport) {
+        if (m_inspectedBase != m_basePackage->path().trimmed())
+            inspectBase();
+    } else if (!m_autoVersion.isEmpty()) {
+        if (m_version->text().trimmed() == m_autoVersion)
+            m_version->setText(m_summary.exists ? m_summary.version : QString());
+        m_autoVersion.clear();
+        m_inspectedBase.clear();
+    }
     renderFileName();
+    updateOutput();
+    checkSpace();
+}
+
+void BuildImagePage::browseBackport(PathField* f, const QString& label)
+{
+    QMenu menu(this);
+    menu.addAction(icon(QStringLiteral("folder"), color::fg_2), QStringLiteral("Choose a folder\u2026"), this, [this, f, label] {
+        const QString d = QFileDialog::getExistingDirectory(window(), QStringLiteral("%1 backport files (game-root layout)").arg(label),
+                                                            f->path());
+        if (!d.isEmpty())
+            f->setPath(QDir::toNativeSeparators(d));
+    });
+    menu.addAction(icon(QStringLiteral("archive"), color::fg_2), QStringLiteral("Choose a backport ZIP\u2026"), this, [this, f, label] {
+        const QString z = QFileDialog::getOpenFileName(window(), QStringLiteral("%1 backport ZIP").arg(label), f->path(),
+                                                       QStringLiteral("Backport ZIP (*.zip)"));
+        if (!z.isEmpty())
+            f->setPath(QDir::toNativeSeparators(z));
+    });
+    menu.exec(f->browseButton()->mapToGlobal(QPoint(0, f->browseButton()->height())));
+}
+
+void BuildImagePage::inspectBase()
+{
+    if (packageType() != QLatin1String("backport")) {
+        m_baseInfo->hide();
+        return;
+    }
+    const QString base = m_basePackage->path().trimmed();
+    const quint64 gen = ++m_baseGen;
+    m_inspectedBase = base;
+    m_baseTitleId.clear();
+    if (m_baseCancel)
+        m_baseCancel->cancel();
+    m_baseCancel = std::make_shared<CancellationSource>();
+    if (base.isEmpty() || !QFileInfo(base).isFile()) {
+        m_baseInfo->hide();
+        renderFileName();
+        return;
+    }
+    m_baseInfo->set(QStringLiteral("Reading the base package\u2026"), Tone::Neutral);
+    m_baseInfo->show();
+    auto* watcher = new QFutureWatcher<Result<fpkg::PackageIdentity>>(this);
+    connect(watcher, &QFutureWatcher<Result<fpkg::PackageIdentity>>::finished, this, [this, watcher, gen] {
+        watcher->deleteLater();
+        if (gen != m_baseGen)
+            return;
+        const auto r = watcher->result();
+        if (!r.ok()) {
+            m_baseInfo->set(r.error().message, Tone::Err);
+        } else if (r->kind != fpkg::PackageKind::Ps5) {
+            m_baseInfo->set(QStringLiteral("Not a full PS5 package (kind %1).").arg(fpkg::packageKindName(r->kind)), Tone::Err);
+        } else if (!r->hasParam) {
+            m_baseInfo->set(QStringLiteral("The base package has no readable param.json; it may be a retail (encrypted) package."), Tone::Err);
+        } else {
+            m_baseTitleId = r->titleId;
+            m_baseInfo->set(QStringLiteral("%1 [%2] %3").arg(r->title, r->titleId, r->version), Tone::Ok);
+            const QString current = m_version->text().trimmed();
+            if (current.isEmpty() || current == m_autoVersion || current == r->version || current == m_summary.version) {
+                m_autoVersion = fpkg::nextBackportVersion(r->version);
+                m_version->setText(m_autoVersion);
+            }
+        }
+        renderFileName();
+    });
+    const CancellationToken token = m_baseCancel->token();
+    watcher->setFuture(QtConcurrent::run([base, token] { return fpkg::inspectPackage(base, token); }));
 }
 
 void BuildImagePage::pickFromDlcEmu()
@@ -1469,6 +1672,14 @@ void BuildImagePage::pickFromDlcEmu()
 
 QString BuildImagePage::expectedPackagePath() const
 {
+    if (packageType() == QLatin1String("backport")) {
+        if (m_baseTitleId.isEmpty() || !hasBackports())
+            return {};
+        const QString tag = m_backport4->path().trimmed().isEmpty() ? QStringLiteral("5xxplus") : QStringLiteral("4xx");
+        const QString name = fpkg::backportPackageName(m_baseTitleId, tag);
+        const QString dir = outputFolder();
+        return dir.isEmpty() ? name : QDir(dir).filePath(name);
+    }
     const QString cid = m_contentId->text().trimmed();
     const auto ver = fpkg::ContentVersion::parse(m_version->text().trimmed().isEmpty() ? QStringLiteral("01.000.000") : m_version->text().trimmed());
     if (!fpkg::isValidContentId(cid) || !ver)
@@ -1499,6 +1710,8 @@ QString BuildImagePage::outputFolder() const
     if (!m_output->path().isEmpty())
         return m_output->path();
     const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
+    if (isFpkg() && packageType() == QLatin1String("backport") && QFileInfo(m_basePackage->path().trimmed()).isFile())
+        return QFileInfo(m_basePackage->path().trimmed()).absolutePath();
     if (isFpkg())
         return m_summary.exists ? fpkg::defaultOutputFolder(m_summary.folder, def) : def;
     if (!def.isEmpty())
@@ -1527,9 +1740,14 @@ void BuildImagePage::renderFileName()
     const QString ext = jobs::outputExtension(format());
     m_fileExt->setText(ext);
     if (isFpkg()) {
-        const QString name = QFileInfo(expectedPackagePath()).fileName();
+        QString name = QFileInfo(expectedPackagePath()).fileName();
+        if (packageType() == QLatin1String("backport") && !m_backport4->path().trimmed().isEmpty()
+            && !m_backport5->path().trimmed().isEmpty() && !name.isEmpty())
+            name += QStringLiteral(" + %1").arg(fpkg::backportPackageName(m_baseTitleId, QStringLiteral("5xxplus")));
         m_fileName->setText(name);
-        m_fileName->setPlaceholderText(QStringLiteral("Named from the content ID"));
+        m_fileName->setPlaceholderText(packageType() == QLatin1String("backport")
+                                           ? QStringLiteral("<TITLEID>-backport-4xx.pkg / -5xxplus.pkg")
+                                           : QStringLiteral("Named from the content ID"));
         m_fileName->setCursorPosition(0);
         setInputError(m_fileName, false);
         return;
@@ -1565,6 +1783,9 @@ qint64 BuildImagePage::neededBytes() const
 {
     if (m_summary.bytes <= 0)
         return 0;
+    // Backport updates hold only the backport files; the job checks its own space.
+    if (isFpkg() && packageType() == QLatin1String("backport"))
+        return 0;
     const QString f = format();
     if (f == jobs::kFormatFfpfsc || f == kFormatFpkg)
         return m_summary.bytes; // compressed: never more than the source
@@ -1596,8 +1817,9 @@ void BuildImagePage::checkSpace()
     m_spaceProblem.clear();
     if (m_demo) {
         ++m_spaceGen; // drop results of checks still running
-        m_spaceRow->set(isFpkg() ? QStringLiteral("412 GB free on D:. The package needs up to 31.6 GB.")
-                                 : QStringLiteral("412 GB free on D:. This image needs about 31.8 GB."), Tone::Ok);
+        m_spaceRow->set(isFpkg() && packageType() == QLatin1String("backport") ? QStringLiteral("412 GB free on D:.")
+                        : isFpkg() ? QStringLiteral("412 GB free on D:. The package needs up to 31.6 GB.")
+                                   : QStringLiteral("412 GB free on D:. This image needs about 31.8 GB."), Tone::Ok);
         if (m_freeSpace)
             m_freeSpace->setText(QStringLiteral("412 GB"));
         return;
@@ -1699,6 +1921,19 @@ void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QStri
 QString BuildImagePage::validateForm()
 {
     const FormatOptions* fo = current();
+    const bool backportType = isFpkg() && packageType() == QLatin1String("backport");
+    if (backportType && m_sourcePath.isEmpty()) {
+        // The game folder is optional: without it the base package is unpacked.
+        if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
+            return QStringLiteral("Choose the base package (.pkg).");
+        if (!hasBackports())
+            return QStringLiteral("Choose at least one backport folder: 4.xx or 5.xx+.");
+        static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
+        const QString v = m_version->text().trimmed();
+        if (!v.isEmpty() && !ver.match(v).hasMatch())
+            return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.001.");
+        return {};
+    }
     if (m_sourcePath.isEmpty())
         return isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump folder first.");
     if (m_reader->isBusy())
@@ -1743,6 +1978,24 @@ QString BuildImagePage::validateForm()
         const QString type = m_packageType->currentValue().toString();
         if (type == QLatin1String("update") && m_basePackage->path().isEmpty())
             return QStringLiteral("An update needs the base package that is installed on the console.");
+        if (type == QLatin1String("backport")) {
+            if (kind != QLatin1String("folder"))
+                return QStringLiteral("The game for a backport update is a game folder (or leave it empty to unpack the base package).");
+            if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
+                return QStringLiteral("Choose the base package (.pkg).");
+            if (!hasBackports())
+                return QStringLiteral("Choose at least one backport folder: 4.xx or 5.xx+.");
+        }
+        if (type == QLatin1String("app") && hasBackports()) {
+            if (kind != QLatin1String("folder"))
+                return QStringLiteral("Backport updates require a game folder source. GP5 sources and images cannot be combined "
+                                      "with backport inputs.");
+            // The fields are filled from the game's param.json; only a change is refused.
+            if ((!c.isEmpty() && c != m_summary.contentId) || (!v.isEmpty() && v != m_summary.version)
+                || (!m_title->text().trimmed().isEmpty() && m_title->text().trimmed() != m_summary.title))
+                return QStringLiteral("Content ID, version and title changes cannot be combined with backport updates (the "
+                                      "updates must match the game exactly). Clear them, or build the backports separately.");
+        }
         if (type == QLatin1String("addon")) {
             static const QRegularExpression hex32(QStringLiteral("^[0-9A-Fa-f]{32}$"));
             setInputError(m_entitlementKey, !hex32.match(m_entitlementKey->text().trimmed()).hasMatch());
@@ -1780,6 +2033,26 @@ Result<QString> BuildImagePage::submit(bool)
         if (!m_version->text().trimmed().isEmpty())
             details.insert(QStringLiteral("contentVersion"), m_version->text().trimmed());
         const QString type = m_packageType->currentValue().toString();
+        if (type == QLatin1String("backport") || (type == QLatin1String("app") && hasBackports())) {
+            QJsonObject p;
+            const bool buildBase = type == QLatin1String("app");
+            if (!buildBase)
+                p.insert(QStringLiteral("package"), m_basePackage->path().trimmed());
+            if (!m_sourcePath.isEmpty() && sourceKind() == QLatin1String("folder"))
+                p.insert(QStringLiteral("game"), m_summary.folder);
+            p.insert(QStringLiteral("backport4xx"), m_backport4->path().trimmed());
+            p.insert(QStringLiteral("backport5xx"), m_backport5->path().trimmed());
+            if (!buildBase)
+                if (m_version->text().trimmed() != m_summary.version)
+                    p.insert(QStringLiteral("version"), m_version->text().trimmed());
+            if (!m_output->path().isEmpty())
+                p.insert(QStringLiteral("output"), m_output->path());
+            p.insert(QStringLiteral("buildBase"), buildBase);
+            r = jobs::submitFpkgBackport(m_ctx, p, overrides);
+            if (r.ok() && m_openFolder->isChecked())
+                emit jobSubmitted(r.value(), true);
+            return r;
+        }
         details.insert(QStringLiteral("packageType"), type);
         if (type == QLatin1String("update"))
             details.insert(QStringLiteral("basePackage"), m_basePackage->path());
@@ -1825,7 +2098,8 @@ QString BuildImagePage::statusContext() const
 QStringList BuildImagePage::demoStates() const
 {
     return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
-            QStringLiteral("format-fpkg"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games")};
+            QStringLiteral("format-fpkg"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
+            QStringLiteral("fpkg-backport")};
 }
 
 void BuildImagePage::applyDemoState(const QString& name)
@@ -1867,8 +2141,26 @@ void BuildImagePage::applyDemoState(const QString& name)
         s.gameRoots = {QStringLiteral("D:/PS5/Dumps/PPSA01342 Demon's Souls"), QStringLiteral("D:/PS5/Dumps/PPSA03016 Returnal"),
                        QStringLiteral("D:/PS5/Dumps/Spider-Man 2/PPSA03420-app")};
     }
+    if (name == QLatin1String("fpkg-backport"))
+        fmt = kFormatFpkg;
+    setFormat(fmt);
     m_sourcePath = s.folder;
     onSummary(s);
+    if (name == QLatin1String("fpkg-backport")) {
+        m_packageType->setCurrentValue(QStringLiteral("backport"));
+        m_basePackage->setPath(QStringLiteral("D:/PS5/Packages/UP9000-PPSA01342_00-DEMONSSOULS00000-A0104-V0104.pkg"));
+        m_backport4->setPath(QStringLiteral("D:/Backports/FW 4xx PPSA01342 Demon's Souls (01.004.000) backport files.zip"));
+        m_backport5->setPath(QStringLiteral("D:/Backports/FW 5xx+ PPSA01342 Demon's Souls (01.004.000) backport files.zip"));
+        ++m_baseGen; // drop the inspection of the (missing) demo file
+        m_baseTitleId = QStringLiteral("PPSA01342");
+        m_baseInfo->set(QStringLiteral("Demon's Souls [PPSA01342] 01.004.000"), Tone::Ok);
+        m_baseInfo->show();
+        m_version->setText(QStringLiteral("01.004.001"));
+        renderFileName();
+        QTimer::singleShot(0, this, [this] {
+            scrollArea()->verticalScrollBar()->setValue(m_packageCard->mapTo(scrollArea()->widget(), QPoint(0, 0)).y() - space::xl);
+        });
+    }
     if (name.startsWith(QLatin1String("advanced-"))) {
         m_advanced->setExpanded(true);
         QTimer::singleShot(0, this, [this] {
@@ -1887,6 +2179,13 @@ void BuildImagePage::clearDemoState()
         m_advanced->setExpanded(false);
         setFormat(jobs::kFormatExfat);
         m_pfsKind->setCurrentValue(jobs::kFormatFfpfsc);
+        m_backport4->setPath({});
+        m_backport5->setPath({});
+        m_basePackage->setPath({});
+        m_version->clear();
+        m_autoVersion.clear();
+        m_baseTitleId.clear();
+        m_packageType->setCurrentValue(QStringLiteral("app"));
         setSource({});
         scrollArea()->verticalScrollBar()->setValue(0);
     }

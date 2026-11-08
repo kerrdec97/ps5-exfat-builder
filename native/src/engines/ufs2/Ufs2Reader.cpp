@@ -140,6 +140,20 @@ Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::open(const QString& path)
         return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(QDir::toNativeSeparators(path)),
                      r->m_file.errorString());
     r->m_fileSize = r->m_file.size();
+    return findSuperblock(std::move(r));
+}
+
+Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::open(std::shared_ptr<RandomSource> source)
+{
+    std::shared_ptr<Ufs2Reader> r(new Ufs2Reader());
+    r->m_path = source->describe();
+    r->m_fileSize = source->size();
+    r->m_source = std::move(source);
+    return findSuperblock(std::move(r));
+}
+
+Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::findSuperblock(std::shared_ptr<Ufs2Reader> r)
+{
     if (r->m_fileSize < kSuperblockOffset + kSuperblockSize)
         return corruptError(r->m_path, QStringLiteral("the file is too small to hold a UFS2 superblock."));
     // FreeBSD's search order (SBLOCKSEARCH without the floppy location). PS5
@@ -176,6 +190,8 @@ Status Ufs2Reader::readAt(qint64 offset, char* dst, qint64 len) const
 {
     if (offset < 0 || len < 0 || offset + len > m_fileSize)
         return corrupt(QStringLiteral("a read at byte %1 (%2 bytes) is outside the image.").arg(offset).arg(len));
+    if (m_source)
+        return m_source->readAt(offset, dst, len);
     std::lock_guard lock(m_mutex);
     if (!m_file.seek(offset))
         return Error(ErrorCode::IoError, QStringLiteral("Could not read %1.").arg(QFileInfo(m_path).fileName()),

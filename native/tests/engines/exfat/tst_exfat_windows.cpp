@@ -39,13 +39,14 @@ QByteArray mbrFor(qint64 volumeSectors)
     qToLittleEndian(sig, mbr.data() + 440);
     char* e = mbr.data() + 446;
     e[0] = 0x00;
-    e[1] = char(0xFE); e[2] = char(0xFF); e[3] = char(0xFF); // CHS start: use LBA
+    const auto byte = [](unsigned v) { return static_cast<char>(static_cast<unsigned char>(v)); };
+    e[1] = byte(0xFE); e[2] = byte(0xFF); e[3] = byte(0xFF); // CHS start: use LBA
     e[4] = 0x07;                                             // exFAT/NTFS
-    e[5] = char(0xFE); e[6] = char(0xFF); e[7] = char(0xFF);
+    e[5] = byte(0xFE); e[6] = byte(0xFF); e[7] = byte(0xFF);
     qToLittleEndian(quint32(kPartitionStart), e + 8);
     qToLittleEndian(quint32(volumeSectors), e + 12);
-    mbr[510] = char(0x55);
-    mbr[511] = char(0xAA);
+    mbr[510] = byte(0x55);
+    mbr[511] = byte(0xAA);
     return mbr;
 }
 

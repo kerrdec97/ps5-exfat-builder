@@ -55,12 +55,27 @@ bool deleteSourceAfterVerifiedBuild(const JobContext& ctx, const QString& source
     return true;
 }
 
+int performanceMode(const SettingsValues& settings)
+{
+    const QString m = settings.string(keys::kPerformanceMode);
+    if (m == u"lowImpact")
+        return 0;
+    if (m == u"balanced")
+        return 1;
+    return 2;
+}
+
 int workerThreads(const SettingsValues& settings)
 {
     const int cores = std::max(1, QThread::idealThreadCount());
     const qint64 v = settings.integer(keys::kWorkerThreads);
-    if (v <= 0)
-        return cores;
+    if (v <= 0) {
+        switch (performanceMode(settings)) {
+        case 0: return std::max(1, cores / 2);
+        case 1: return std::max(1, cores * 3 / 4);
+        default: return cores;
+        }
+    }
     return int(std::clamp<qint64>(v, 1, cores));
 }
 
@@ -223,11 +238,34 @@ void registerModule(ModuleContext& ctx)
     }
     {
         SettingDef d;
+        d.key = keys::kPerformanceMode;
+        d.section = QStringLiteral("Performance");
+        d.group = QStringLiteral("Processing");
+        d.label = QStringLiteral("Performance mode");
+        d.description = QStringLiteral(
+            "How hard builds may use the computer: Low impact keeps it responsive, Maximum is full speed. It sets the "
+            "cores used (when \"CPU threads per job\" is 0) and the CPU, disk and memory priority of Sony's publisher "
+            "and the DLC engine.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("maximum");
+        // Short labels: three buttons side by side (Settings and the Build page).
+        d.choices = {{QStringLiteral("lowImpact"), QStringLiteral("Low impact"),
+                      QStringLiteral("Keeps the PC responsive: idle CPU priority, low disk and memory priority, half the cores.")},
+                     {QStringLiteral("balanced"), QStringLiteral("Balanced"),
+                      QStringLiteral("Below-normal CPU priority, low disk priority, three quarters of the cores.")},
+                     {QStringLiteral("maximum"), QStringLiteral("Maximum"),
+                      QStringLiteral("Full speed: normal priority and every core.")}};
+        d.perJob = true; // also on the Build page, for one build
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
         d.key = keys::kWorkerThreads;
         d.section = QStringLiteral("Performance");
         d.group = QStringLiteral("Processing");
         d.label = QStringLiteral("CPU threads per job");
-        d.description = QStringLiteral("Threads used for compression, hashing and verification. 0 uses every logical core. Lower it to keep the computer responsive while building.");
+        d.description = QStringLiteral("Threads used for compression, hashing and verification. 0 = automatic from the performance mode (Maximum uses every logical core). Lower it to keep the computer responsive while building.");
         d.type = SettingType::Int;
         d.defaultValue = 0;
         d.minimum = 0;

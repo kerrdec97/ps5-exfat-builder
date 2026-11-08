@@ -119,6 +119,9 @@ public:
     bool isOverridden(const QString& key) const { return m_overrides.contains(key); }
     const QVariantMap& overrides() const { return m_overrides; }
     QVariantMap effective() const; // every schema key → effective value
+    // A copy with `extra` added to the per-job overrides (a composite job's
+    // child that must run with some settings forced).
+    SettingsValues withOverrides(const QVariantMap& extra) const;
 
 private:
     std::shared_ptr<const SettingsSchema> m_schema;

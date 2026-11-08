@@ -58,8 +58,6 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
     QElapsedTimer timer;
     timer.start();
     ExtractStats stats;
-    const Geometry& g = reader.geometry();
-    const QString image = reader.imagePath();
 
     // Where each entry goes. Parents come before their children (the tree is
     // read breadth first); names are mapped to what this drive can store.
@@ -110,7 +108,8 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
         // One reader thread streams the image in order; this thread writes.
         ChunkPipeline pipe(o.bufferCount, o.bufferBytes);
         ScopedThread producer(std::thread([&] {
-            ImageFileStream in(image, g);
+            auto stream = reader.openStream();
+            ImageFileStream& in = *stream;
             if (const Status st = in.open(); !st.ok()) {
                 pipe.setProducerError(st.error());
                 pipe.finishProducing();
@@ -214,7 +213,8 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
             stop = true;
         };
         const auto worker = [&] {
-            ImageFileStream in(image, g);
+            auto stream = reader.openStream();
+            ImageFileStream& in = *stream;
             if (const Status st = in.open(); !st.ok())
                 return fail(st.error());
             std::vector<char> buf(size_t(std::max<qint64>(64 * 1024, o.bufferBytes)));

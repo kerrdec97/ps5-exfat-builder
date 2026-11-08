@@ -90,6 +90,47 @@ bool setProcessCpuLimit(qint64 pid, int cores)
 #endif
 }
 
+QString processPriorityName(int mode)
+{
+    switch (mode) {
+    case 0: return QStringLiteral("Idle");
+    case 1: return QStringLiteral("Below Normal");
+    default: break;
+    }
+    return QStringLiteral("Normal");
+}
+
+QString applyProcessPriority(qint64 pid, int mode)
+{
+    if (pid <= 0 || mode < 0)
+        return {};
+#ifdef Q_OS_WIN
+    HANDLE h = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!h)
+        return {};
+    const DWORD cls = mode == 0 ? IDLE_PRIORITY_CLASS : mode == 1 ? BELOW_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS;
+    const bool cpu = SetPriorityClass(h, cls) != FALSE;
+    // I/O priority (ProcessIoPriority = 33): 1 = low, 2 = normal.
+    using NtSetInformationProcessFn = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG);
+    if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll")) {
+        if (auto fn = reinterpret_cast<NtSetInformationProcessFn>(
+                reinterpret_cast<void*>(GetProcAddress(ntdll, "NtSetInformationProcess")))) {
+            ULONG io = mode >= 2 ? 2 : 1;
+            (void)fn(h, 33, &io, sizeof(io));
+        }
+    }
+    // Memory priority: 2 = low, 4 = below normal, 5 = normal.
+    MEMORY_PRIORITY_INFORMATION mp{};
+    mp.MemoryPriority = mode == 0 ? MEMORY_PRIORITY_LOW : mode == 1 ? MEMORY_PRIORITY_BELOW_NORMAL : MEMORY_PRIORITY_NORMAL;
+    (void)SetProcessInformation(h, ProcessMemoryPriority, &mp, sizeof(mp));
+    CloseHandle(h);
+    return cpu ? processPriorityName(mode) : QString();
+#else
+    Q_UNUSED(mode);
+    return {};
+#endif
+}
+
 QString describeCommandLine(const ProcessSpec& spec)
 {
     QStringList parts;

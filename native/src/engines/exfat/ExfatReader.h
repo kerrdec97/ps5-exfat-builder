@@ -9,6 +9,7 @@
 // ("The image is damaged: ..."); the technical reason goes to Error::detail.
 
 #include "core/Cancellation.h"
+#include "core/RandomSource.h"
 #include "core/Result.h"
 #include "engines/exfat/ExfatFormat.h"
 
@@ -82,11 +83,19 @@ struct ImageTree {
     const ImageEntry& root() const { return entries.front(); }
 };
 
+class ImageFileStream;
+
 class ExfatReader {
 public:
     // Opens and validates the volume structures (boot region, root directory,
     // allocation bitmap, up-case table). Fails with CorruptData when damaged.
     static Result<std::unique_ptr<ExfatReader>> open(const QString& imagePath);
+    // The same for an image that is not a file of its own (an .exfat inside an
+    // .ffpfsc); imagePath() is then the source's description.
+    static Result<std::unique_ptr<ExfatReader>> open(std::shared_ptr<RandomSource> source);
+    // A content stream on the same image (file or source).
+    std::unique_ptr<ImageFileStream> openStream() const;
+    const std::shared_ptr<RandomSource>& source() const { return m_source; }
 
     const QString& imagePath() const { return m_path; }
     const VolumeInfo& volume() const { return m_vol; }
@@ -108,6 +117,8 @@ public:
 private:
     ExfatReader() = default;
     Status openImpl(const QString& path);
+    Status openVolume();
+    QIODevice* io() { return m_dev ? static_cast<QIODevice*>(m_dev.get()) : &m_file; }
     Result<quint32> fatEntry(quint32 cluster);
     // Follows a FAT chain. `expected` < 0: until end of chain.
     bool followChain(quint32 first, qint64 expected, std::vector<Extent>& out, QString& problem);
@@ -115,6 +126,8 @@ private:
 
     QString m_path;
     QFile m_file;
+    std::shared_ptr<RandomSource> m_source;
+    std::unique_ptr<SourceDevice> m_dev;
     VolumeInfo m_vol;
     UpcaseTable m_upcase;
     QHash<qint64, QByteArray> m_fatCache;
@@ -125,16 +138,25 @@ private:
 class ImageFileStream {
 public:
     ImageFileStream(const QString& imagePath, const Geometry& geo);
+    ImageFileStream(std::shared_ptr<RandomSource> source, const Geometry& geo);
     Status open();
-    void close() { m_file.close(); }
+    void close()
+    {
+        m_file.close();
+        m_dev.reset();
+    }
     // Reads up to `len` bytes of `e` from `offset`. Returns the bytes read
     // (0 at the end of the file). Bytes past ValidDataLength read as zero.
     Result<qint64> read(const ImageEntry& e, qint64 offset, char* buf, qint64 len);
 
 private:
+    QIODevice* io() { return m_dev ? static_cast<QIODevice*>(m_dev.get()) : &m_file; }
+
     QString m_path;
     Geometry m_geo;
     QFile m_file;
+    std::shared_ptr<RandomSource> m_source;
+    std::unique_ptr<SourceDevice> m_dev;
 };
 
 } // namespace fw::exfat

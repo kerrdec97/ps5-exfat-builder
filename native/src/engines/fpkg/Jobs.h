@@ -5,6 +5,8 @@
 //  fpkg.build    {source, output?, basePackage?, baseFolder?, exactSource?, updateOutput?,
 //                 contentId?, contentVersion?, title?}
 //  fpkg.addon    {payloadFolder, output?, contentId?, entitlementKey, volumeType?}
+//  fpkg.backport {package?, game?, backport4xx?, backport5xx?, version?, output?, buildBase?}
+//                (BackportUpdate.h)
 //  fpkg.verify   {package, passcode?, integrity?}
 //  fpkg.extract  {package, destination, passcode?}
 //

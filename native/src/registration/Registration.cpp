@@ -3,7 +3,9 @@
 #include "connect/notify/Module.h"
 #include "connect/ps5/Module.h"
 #include "connect/update/Module.h"
+#include "engines/ampr/Module.h"
 #include "engines/backport/Module.h"
+#include "engines/dlc/Module.h"
 #include "engines/exfat/Module.h"
 #include "engines/fpkg/Module.h"
 #include "engines/gameinfo/Module.h"
@@ -25,6 +27,8 @@ void registerAllModules(ModuleContext& ctx)
     ufs2::registerModule(ctx);
     fpkg::registerModule(ctx);
     backport::registerModule(ctx);
+    dlc::registerModule(ctx);
+    ampr::registerModule(ctx);
     ps5::registerModule(ctx);
     update::registerModule(ctx);
     notify::registerModule(ctx);
@@ -35,7 +39,7 @@ void registerAllModules(ModuleContext& ctx)
 QStringList registeredModuleNames()
 {
     return {QStringLiteral("general"), QStringLiteral("gameinfo"), QStringLiteral("exfat"), QStringLiteral("pfs"),
-            QStringLiteral("ufs2"),    QStringLiteral("fpkg"),     QStringLiteral("backport"), QStringLiteral("ps5"), QStringLiteral("update"), QStringLiteral("notify"), QStringLiteral("tools"), QStringLiteral("integration")};
+            QStringLiteral("ufs2"),    QStringLiteral("fpkg"),     QStringLiteral("backport"), QStringLiteral("dlc"), QStringLiteral("ampr"), QStringLiteral("ps5"), QStringLiteral("update"), QStringLiteral("notify"), QStringLiteral("tools"), QStringLiteral("integration")};
 }
 
 } // namespace fw

@@ -31,6 +31,8 @@ inline constexpr int kBarSteps = 51;
 QStringList imgCreateArgs(const QString& gp5, const QString& output, std::optional<int> compressionLevel,
                           const QString& refPackage = {});
 QStringList imgVerifyArgs(const QString& passcode, bool integrity, const QString& package);
+// Explicit on/off for both checks (the backport flow runs them as two passes).
+QStringList imgVerifyArgs(const QString& passcode, bool formatCheck, bool integrity, const QString& package);
 QStringList imgExtractArgs(const QString& passcode, const QString& package, const QString& destination);
 QStringList dds2pngArgs(const QString& dds, const QString& png, bool preserveAlpha);
 
@@ -78,6 +80,7 @@ struct ToolRunOptions {
     QString watchFile;            // size polled every 500 ms (img_create output)
     std::function<qint64()> pollBytes; // used instead of watchFile when set
     int cpuCoreLimit = 0;         // 0 = no limit
+    int priorityMode = -1;        // applyProcessPriority() mode; -1 = leave as started
     QString liveLimitKey;         // job id: setLiveCpuLimit() changes the limit while it runs
     bool withBar = true;
     std::function<void(int steps)> onBar;

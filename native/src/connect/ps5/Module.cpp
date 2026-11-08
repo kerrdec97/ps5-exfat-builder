@@ -1019,6 +1019,21 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
 
+    {
+        SettingDef d;
+        d.key = keys::kYoutubePackages;
+        d.section = QStringLiteral("PS5 connection");
+        d.group = QStringLiteral("Y2JB");
+        d.label = QStringLiteral("YouTube packages folder");
+        d.description = QStringLiteral("A folder with your own YouTube app .pkg files (for example v01.000.003 and "
+                                       "v01.000.030). The Y2JB tab lists them with the firmware each one is for and "
+                                       "installs the right one. Nothing is downloaded.");
+        d.type = SettingType::DirPath;
+        d.defaultValue = QString();
+        d.order = order++;
+        s.add(d);
+    }
+
     s.addLegacyKey(QStringLiteral("ftp_ip"), keys::kConsoleIp, nonEmpty);
     s.addLegacyKey(QStringLiteral("ps5_ip"), keys::kConsoleIp, nonEmpty); // never written by the legacy app
     s.addLegacyKey(QStringLiteral("ftp_port"), keys::kFtpPort, nonEmpty);

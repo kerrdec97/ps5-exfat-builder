@@ -22,6 +22,7 @@
 #include "engines/fpkg/ParamJson.h"
 #include "engines/fpkg/PlayGo.h"
 #include "engines/fpkg/SourceScanner.h"
+#include "engines/fpkg/Toolchain.h"
 #include "jobs/Job.h"
 
 #include <QJsonObject>
@@ -45,6 +46,9 @@ struct BuildRequest {
     QString contentId;       // optional; must equal param.json
     QString contentVersion;  // optional; written into the packaged param.json
     QString title;           // optional; written into the packaged param.json
+    // Not serialised; set by composite jobs (backport updates): keep Sony's
+    // <update>.naps_metric.json next to the update instead of deleting it.
+    bool keepNapsMetric = false;
 
     bool isUpdate() const { return !basePackage.isEmpty(); }
     QJsonObject toJson() const;
@@ -179,6 +183,24 @@ Result<JobOutcome> runBuild(const BuildRequest& request, const FpkgSettings& set
 Result<JobOutcome> runAddon(const AddonRequest& request, const FpkgSettings& settings, JobContext& ctx);
 Result<JobOutcome> runVerify(const VerifyRequest& request, const FpkgSettings& settings, JobContext& ctx);
 Result<JobOutcome> runExtract(const ExtractRequest& request, const FpkgSettings& settings, JobContext& ctx);
+
+// ---- helpers for composite jobs (backport updates) ------------------------------------
+// The ppr-pkg Companion's publisher check: img_verify with only the integrity
+// check (required: an error), then with only the format check (diagnostic: a
+// warning in the log). Commands go to the job log with the passcode redacted.
+struct PublisherVerifyReport {
+    QString package;
+    bool integrityPassed = false;
+    bool formatPassed = false;
+    int formatExitCode = 0;
+};
+Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, const PubToolchain& tools,
+                                                     const FpkgSettings& settings, JobContext& ctx);
+
+// img_extract of the whole package into `destination` (created; must be
+// empty). Returns the app root inside it (the folder holding sce_sys).
+Result<QString> extractPackage(const QString& package, const QString& destination, const PubToolchain& tools,
+                               const FpkgSettings& settings, JobContext& ctx);
 
 // dlc_emu.ini [PSAC] entries of a game folder, for the add-on dialog.
 struct AddonCandidate {

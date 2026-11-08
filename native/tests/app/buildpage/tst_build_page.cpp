@@ -21,6 +21,7 @@
 #include "app/ui/SettingRow.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "engines/ampr/Module.h"
 #include "engines/exfat/Module.h"
 #include "engines/fpkg/FpkgSettings.h"
 #include "engines/gameinfo/Module.h"
@@ -36,6 +37,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -205,34 +207,41 @@ private slots:
             QString format, prefix, kind, ext;
             QStringList shared, mustHave, mustNot, essentials;
         };
+        // Every format: the speed row (performance mode) up front; the image
+        // formats also the zstd packs switch, with its details under Advanced.
+        const QString kSpeed = general::keys::kPerformanceMode;
+        const QStringList zstd = {ampr::keys::kZstdPack, ampr::keys::kZstdLevel, ampr::keys::kPackStrategy, ampr::keys::kVerifyPacks};
         const QList<Case> cases = {
             {jobs::kFormatExfat, QStringLiteral("exfat."), QStringLiteral("image.exfat.build"), QStringLiteral(".exfat"),
-             {kVerify, kMode, kThreads, kKeepTemp, kUpload},
+             QStringList{kVerify, kMode, kThreads, kSpeed, kKeepTemp, kUpload} + zstd,
              {exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, exfat::keys::kLabelPolicy, exfat::keys::kExcludePatterns,
-              exfat::keys::kDeleteSourceAfterVerify, kVerify, kMode, kThreads, kKeepTemp, kUpload},
+              exfat::keys::kDeleteSourceAfterVerify, kVerify, kMode, kThreads, kKeepTemp, kUpload, kSpeed, ampr::keys::kZstdPack,
+              ampr::keys::kZstdLevel},
              {exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads},
-             {exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB}},
+             {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, ampr::keys::kZstdPack}},
             {jobs::kFormatFfpkg, QStringLiteral("ufs2."), QStringLiteral("image.ffpkg.build"), QStringLiteral(".ffpkg"),
-             {kVerify, kMode, kKeepTemp, kUpload},
-             {ufs2::keys::kBlockSize, ufs2::keys::kBytesPerInode, ufs2::keys::kDeleteSourceAfterBuild, kVerify, kMode},
-             {kThreads}, // the UFS2 writer does not read it
-             {}},
+             QStringList{kVerify, kMode, kThreads, kSpeed, kKeepTemp, kUpload} + zstd, // threads: the zstd packer
+             {ufs2::keys::kBlockSize, ufs2::keys::kBytesPerInode, ufs2::keys::kDeleteSourceAfterBuild, kVerify, kMode, kSpeed,
+              ampr::keys::kZstdPack},
+             {},
+             {kSpeed, ampr::keys::kZstdPack}},
             {jobs::kFormatFfpfsc, QStringLiteral("pfs."), QStringLiteral("image.pfs.build"), QStringLiteral(".ffpfsc"),
-             {kVerify, kMode, kThreads, kKeepTemp, kUpload},
-             {pfs::keys::kCompressionLevel, pfs::keys::kContainerMinCompressMiB, pfs::keys::kExcludes, pfs::keys::kThreads, kThreads},
+             QStringList{kVerify, kMode, kThreads, kSpeed, kKeepTemp, kUpload} + zstd,
+             {pfs::keys::kCompressionLevel, pfs::keys::kContainerMinCompressMiB, pfs::keys::kExcludes, pfs::keys::kThreads, kThreads,
+              ampr::keys::kZstdPack},
              {pfs::keys::kDeleteSourceAfterConvert, pfs::keys::kCompressFiles, pfs::keys::kFileMinCompressMiB},
-             {pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles}},
+             {kSpeed, pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles, ampr::keys::kZstdPack}},
             {jobs::kFormatFfpfs, QStringLiteral("pfs."), QStringLiteral("image.pfs.build"), QStringLiteral(".ffpfs"),
-             {kVerify, kMode, kThreads, kKeepTemp, kUpload},
+             QStringList{kVerify, kMode, kThreads, kSpeed, kKeepTemp, kUpload} + zstd,
              {pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles, pfs::keys::kFileMinCompressMiB, pfs::keys::kSkipExecutables},
              {pfs::keys::kDeleteSourceAfterConvert, pfs::keys::kContainerMinCompressMiB, pfs::keys::kContainerBlockGain},
-             {pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles}},
+             {kSpeed, pfs::keys::kCompressionLevel, pfs::keys::kCompressFiles, ampr::keys::kZstdPack}},
             {pages::kFormatFpkg, QStringLiteral("fpkg."), QStringLiteral("fpkg.build"), {},
-             {kVerify, kThreads, kKeepTemp},
+             {kVerify, kThreads, kSpeed, kKeepTemp},
              {fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify, fpkg::keys::kCompressionLevel, fpkg::keys::kClearVersionFileUri,
-              fpkg::keys::kPlayGoFallback, fpkg::keys::kComputeSha256, kVerify},
-             {kMode, kUpload, fpkg::keys::kPubToolsPath},
-             {fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify}},
+              fpkg::keys::kPlayGoFallback, fpkg::keys::kComputeSha256, kVerify, kSpeed},
+             {kMode, kUpload, fpkg::keys::kPubToolsPath, ampr::keys::kZstdPack},
+             {kSpeed, fpkg::keys::kPlayGoChunkCount, fpkg::keys::kPostVerify}},
         };
         m_page->advancedSection()->setExpanded(true);
         for (const Case& c : cases) {
@@ -629,6 +638,81 @@ private slots:
         m_window->resize(1440, 920);
         QCOMPARE(m_page->format(), jobs::kFormatExfat);
         QVERIFY(m_page->source().isEmpty());
+    }
+
+    // FPKG › Backport (the ppr-pkg Companion's Backport tab) and FPKG › App
+    // with backport files (its dual backports) enqueue fpkg.backport jobs.
+    void backportUpdatesSubmitBackportJobs()
+    {
+        auto& q = m_ctx->queue();
+        const QString base = path(QStringLiteral("Packages/UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.pkg"));
+        // A base package with its own param.json (version 01.000.000, like the test game).
+        QVERIFY(fwtest::writeTextFile(base, QByteArray("\x7F" "FIH", 4) + QByteArray(4096, '\0')
+                                                + QByteArray("{\"contentId\":\"UP0000-PPSA01234_00-GOLDENTEST000000\","
+                                                             "\"contentVersion\":\"01.000.000\",\"titleId\":\"PPSA01234\"}")
+                                                + QByteArray(512, '\0')));
+        const QString b4 = path(QStringLiteral("Backports/FW 4xx PPSA01234 Test (01.000.000) backport files"));
+        QVERIFY(fwtest::writeTextFile(b4 + QStringLiteral("/eboot.bin"), "backported"));
+        q.holdQueue(true);
+
+        // Backport type: base package + 4.xx folder, no game folder.
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatFpkg},
+                                                     {QStringLiteral("packageType"), QStringLiteral("backport")},
+                                                     {QStringLiteral("basePackage"), base},
+                                                     {QStringLiteral("backport4xx"), b4}});
+        QVERIFY(m_page->packageCard()->isVisible());
+        QString id = addToQueue();
+        QVERIFY2(!id.isEmpty(), "no backport job was added");
+        auto rec = q.record(id);
+        QVERIFY(rec);
+        QCOMPARE(rec->kind, QStringLiteral("fpkg.backport"));
+        QCOMPARE(clean(rec->parameters.value(QStringLiteral("package")).toString()), clean(base));
+        QCOMPARE(clean(rec->parameters.value(QStringLiteral("backport4xx")).toString()), clean(b4));
+        QCOMPARE(rec->parameters.value(QStringLiteral("buildBase")).toBool(), false);
+        QVERIFY(q.remove(id));
+
+        // With the game folder too: the game's version (= the base's) becomes base + 1.
+        m_page->setSource(m_asciiGame);
+        QVERIFY(selectSource(m_asciiGame));
+        QLineEdit* version = nullptr;
+        for (auto* e : m_page->findChildren<QLineEdit*>())
+            if (e->accessibleName() == QStringLiteral("Version"))
+                version = e;
+        QVERIFY(version);
+        QVERIFY(QTest::qWaitFor([&] { return version->text() == QStringLiteral("01.000.001"); }, 15000));
+        id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        rec = q.record(id);
+        QCOMPARE(rec->parameters.value(QStringLiteral("version")).toString(), QStringLiteral("01.000.001"));
+        QCOMPARE(clean(rec->parameters.value(QStringLiteral("game")).toString()), clean(m_asciiGame));
+        QVERIFY(q.remove(id));
+
+        // App type with a backport: the package and its update in one job.
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatFpkg},
+                                                     {QStringLiteral("packageType"), QStringLiteral("app")},
+                                                     {QStringLiteral("source"), m_asciiGame}});
+        QVERIFY(selectSource(m_asciiGame));
+        QCOMPARE(version->text(), QStringLiteral("01.000.000")); // leaving Backport puts the game's version back
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("backport4xx"), QString()}, {QStringLiteral("backport5xx"), b4}});
+        id = addToQueue();
+        if (id.isEmpty()) {
+            QStringList shown;
+            for (auto* bar : m_page->findChildren<ui::InfoBar*>())
+                if (bar->isVisible())
+                    for (auto* l : bar->findChildren<QLabel*>())
+                        shown << l->text();
+            qWarning() << "form error:" << shown;
+        }
+        QVERIFY2(!id.isEmpty(), "no dual backport job was added");
+        rec = q.record(id);
+        QCOMPARE(rec->kind, QStringLiteral("fpkg.backport"));
+        QCOMPARE(rec->parameters.value(QStringLiteral("buildBase")).toBool(), true);
+        QCOMPARE(clean(rec->parameters.value(QStringLiteral("game")).toString()), clean(m_asciiGame));
+        QCOMPARE(clean(rec->parameters.value(QStringLiteral("backport5xx")).toString()), clean(b4));
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("backport5xx"), QString()}});
+        m_page->setFormat(jobs::kFormatExfat);
     }
 };
 

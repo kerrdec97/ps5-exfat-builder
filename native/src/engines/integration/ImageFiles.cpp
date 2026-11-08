@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 
 namespace fw::integration {
 
@@ -113,6 +114,20 @@ public:
     Status open(const CancellationToken& token)
     {
         FW_TRY_ASSIGN(m_reader, exfat::ExfatReader::open(m_root));
+        return load(token);
+    }
+    // An exFAT image inside a container; `keep` owns what the source reads from.
+    Status open(std::shared_ptr<RandomSource> source, std::shared_ptr<void> keep, const CancellationToken& token)
+    {
+        m_keep = std::move(keep);
+        m_formatName = QStringLiteral("exFAT image (%1)").arg(source->describe());
+        FW_TRY_ASSIGN(m_reader, exfat::ExfatReader::open(std::move(source)));
+        return load(token);
+    }
+
+private:
+    Status load(const CancellationToken& token)
+    {
         FW_TRY_ASSIGN(m_tree, m_reader->readTree(token, false));
         if (!m_tree.problems.isEmpty())
             m_warnings << QStringLiteral("%1 is damaged (%2 problem%3), for example: %4")
@@ -130,12 +145,13 @@ public:
             item.handle = qint64(i);
             m_items.push_back(item);
         }
-        m_stream = std::make_unique<exfat::ImageFileStream>(m_root, m_reader->geometry());
+        m_stream = m_reader->openStream();
         FW_TRY(m_stream->open());
         finish();
         return success();
     }
 
+public:
     Result<qint64> read(int index, qint64 offset, char* buf, qint64 len) override
     {
         const TreeItem& it = m_items[size_t(index)];
@@ -143,6 +159,7 @@ public:
     }
 
 private:
+    std::shared_ptr<void> m_keep;
     std::unique_ptr<exfat::ExfatReader> m_reader;
     exfat::ImageTree m_tree;
     std::unique_ptr<exfat::ImageFileStream> m_stream;
@@ -157,6 +174,18 @@ public:
     Status open(const CancellationToken& token)
     {
         FW_TRY_ASSIGN(m_reader, ufs2::Ufs2Reader::open(m_root));
+        return load(token);
+    }
+    Status open(std::shared_ptr<RandomSource> source, std::shared_ptr<void> keep, const CancellationToken& token)
+    {
+        m_keep = std::move(keep);
+        m_formatName = QStringLiteral("FFPKG (UFS2) image (%1)").arg(source->describe());
+        FW_TRY_ASSIGN(m_reader, ufs2::Ufs2Reader::open(std::move(source)));
+        return load(token);
+    }
+
+    Status load(const CancellationToken& token)
+    {
         QStringList skipped;
         FW_TRY_ASSIGN(ufs2::SourceTree tree, m_reader->loadTree(token, &skipped));
         for (const QString& s : skipped)
@@ -217,6 +246,7 @@ public:
     }
 
 private:
+    std::shared_ptr<void> m_keep;
     std::shared_ptr<ufs2::Ufs2Reader> m_reader;
     std::vector<ufs2::FileExtent> m_extents;
     int m_extentsIndex = -1;
@@ -280,7 +310,49 @@ public:
         return len;
     }
 
+    // A container whose only file is an .exfat / .ffpkg / .ufs2 image (a direct
+    // conversion, or ps5-dump-forge's .ffpfsc with an inner image): that file
+    // as a random-access source, with its format ("exfat" or "ffpkg").
+    Result<std::shared_ptr<RandomSource>> wrappedImage(QString* format, QString* innerName = nullptr)
+    {
+        const pfs::PfsImage& img = target();
+        if (img.files().size() != 1 || !img.dirs().empty())
+            return std::shared_ptr<RandomSource>();
+        const pfs::PfsEntry& e = img.files().front();
+        const QString name = QString::fromUtf8(e.path);
+        const QString low = name.toLower();
+        if (low.endsWith(QLatin1String(".exfat")))
+            *format = QStringLiteral("exfat");
+        else if (low.endsWith(QLatin1String(".ffpkg")) || low.endsWith(QLatin1String(".ufs2")))
+            *format = QStringLiteral("ffpkg");
+        else
+            return std::shared_ptr<RandomSource>();
+        FW_TRY_ASSIGN(auto src, img.openFile(img.inodes()[e.inode]));
+        if (innerName)
+            *innerName = name;
+        return std::shared_ptr<RandomSource>(
+            std::make_shared<PfsFileSource>(std::move(src), QStringLiteral("%1 inside %2").arg(name, QFileInfo(m_root).fileName())));
+    }
+
 private:
+    // One file of a PFS image as a RandomSource (PFSC blocks decoded on demand).
+    class PfsFileSource final : public RandomSource {
+    public:
+        PfsFileSource(std::shared_ptr<pfs::ByteSource> src, QString name) : m_src(std::move(src)), m_name(std::move(name)) {}
+        qint64 size() const override { return m_src->size(); }
+        Status readAt(qint64 offset, char* dst, qint64 len) override
+        {
+            std::lock_guard lock(m_mutex);
+            return m_src->readAt(offset, dst, len);
+        }
+        QString describe() const override { return m_name; }
+
+    private:
+        std::shared_ptr<pfs::ByteSource> m_src;
+        QString m_name;
+        std::mutex m_mutex;
+    };
+
     const pfs::PfsImage& target() const { return m_inner ? *m_inner : *m_outer; }
 
     // A container that holds exactly one nested PFS image (PfsVerify's rule:
@@ -386,7 +458,23 @@ Result<std::unique_ptr<FileTree>> openFileTree(const QString& path, const Cancel
     if (ext == u"ffpfs" || ext == u"ffpfsc") {
         auto t = std::make_unique<PfsFileTree>(abs);
         FW_TRY(t->open(token));
-        return std::unique_ptr<FileTree>(std::move(t));
+        // A container around one exFAT or UFS2 image: open through to that image
+        // (the container tree stays alive as the source's owner).
+        QString inner, innerName;
+        FW_TRY_ASSIGN(std::shared_ptr<RandomSource> wrapped, t->wrappedImage(&inner, &innerName));
+        if (!wrapped)
+            return std::unique_ptr<FileTree>(std::move(t));
+        std::shared_ptr<PfsFileTree> keep(std::move(t));
+        if (inner == u"exfat") {
+            auto x = std::make_unique<ExfatTree>(abs);
+            FW_TRY(x->open(wrapped, keep, token));
+            x->setInnerImage(innerName);
+            return std::unique_ptr<FileTree>(std::move(x));
+        }
+        auto u = std::make_unique<Ufs2FileTree>(abs);
+        FW_TRY(u->open(wrapped, keep, token));
+        u->setInnerImage(innerName);
+        return std::unique_ptr<FileTree>(std::move(u));
     }
     return Error(ErrorCode::Unsupported,
                  QStringLiteral("%1 is not an .exfat, .ffpkg, .ffpfs or .ffpfsc image or a folder.").arg(nativeName(path)));

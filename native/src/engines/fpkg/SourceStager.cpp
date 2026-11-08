@@ -45,9 +45,18 @@ std::shared_ptr<SourceStager> sourceStagerFor(const QString& path)
     return it == stagers().end() ? nullptr : it->second;
 }
 
+std::shared_ptr<SourceStager> folderStagerFor(const QString& folder)
+{
+    std::lock_guard lock(stagerMutex());
+    for (const auto& [ext, s] : stagers())
+        if (s->handlesFolder(folder))
+            return s;
+    return nullptr;
+}
+
 QStringList imageSourceExtensions()
 {
-    return {QStringLiteral("exfat"), QStringLiteral("ffpfsc"), QStringLiteral("ffpkg")};
+    return {QStringLiteral("exfat"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs"), QStringLiteral("ffpkg")};
 }
 
 QString findAppRoot(const QString& dir, int maxDepth)

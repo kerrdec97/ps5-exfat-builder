@@ -30,6 +30,9 @@ struct ContentVersion {
     QString packageComponent() const;     // "0100"
     // Next update version: middle group + 1, patch reset; "01.999.x" -> "02.000.000".
     ContentVersion next() const;
+    // Backport updates (ppr-pkg Companion rule): last group + 1 with carry,
+    // "01.000.999" -> "01.001.000"; nullopt past "99.999.999".
+    std::optional<ContentVersion> nextPatch() const;
     int compare(const ContentVersion& o) const; // -1 / 0 / 1
     bool operator==(const ContentVersion& o) const { return compare(o) == 0; }
 };

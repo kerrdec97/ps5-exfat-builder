@@ -1,6 +1,6 @@
 name: Native (C++) release
 
-# Pushing a tag v5.* builds, tests and packages the native Farewell Edition on
+# Pushing a tag v5.* builds, tests and packages exFAT Image Builder v5 on
 # Windows (the same workflow as every push), then publishes the single-file
 # exe (the main download: one file, nothing to unzip or install), the
 # installer, the portable zip and SHA256SUMS.txt as a GitHub *pre-release*. A
@@ -47,5 +47,5 @@ jobs:
             "dist/exFAT Image Builder.exe#exFAT Image Builder.exe (single file: download and run)" \
             dist/*-setup.exe dist/*.zip dist/SHA256SUMS.txt \
             --prerelease --verify-tag \
-            --title "exFAT Image Builder ${GITHUB_REF_NAME#v} — Farewell Edition (native, pre-release)" \
+            --title "exFAT Image Builder ${GITHUB_REF_NAME#v} (pre-release)" \
             --notes-file native/RELEASE_NOTES.md

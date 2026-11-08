@@ -36,7 +36,7 @@ const QSet<QString>& sdkGeneratedSceSysFiles()
         QStringLiteral("license.info"),         QStringLiteral("license.dat"),
         QStringLiteral("origin-param.json"),    QStringLiteral("target-param.json"),
         QStringLiteral("pfs-region-hints.json"), QStringLiteral("origin-relocinfo.dat"),
-        QStringLiteral("target-relocinfo.dat"),
+        QStringLiteral("target-relocinfo.dat"), QStringLiteral("lem_notification.dat"),
     };
     return s;
 }

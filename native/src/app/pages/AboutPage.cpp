@@ -7,7 +7,10 @@
 #include "core/BuildInfo.h"
 #include "core/Paths.h"
 
+#include <QCoreApplication>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QPainter>
 #include <QPainterPath>
@@ -143,24 +146,36 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     credits->body()->addWidget(lead);
     auto* people = new QWidget(credits);
     auto* pg = new TileGrid(people, 220, 2, space::lg, space::md);
-    const QList<QPair<QString, QString>> list = {
-        {QStringLiteral("Nazky"), QStringLiteral("Auto-Backport pipeline and Lazy_MkPFS")},
-        {QStringLiteral("BestPig"), QStringLiteral("Backport research and the BackPork payload")},
-        {QStringLiteral("SvenGDK"), QStringLiteral("UFS2Tool")},
-        {QStringLiteral("drakmor"), QStringLiteral("ShadowMount+ / MicroMount, DLC-emu and AMPR research")},
-        {QStringLiteral("PSBrew"), QStringLiteral("MkPFS and PFS research")},
-        {QStringLiteral("john-tornblom"), QStringLiteral("PS5 payload SDK")},
-        {QStringLiteral("ps5-payload-dev"), QStringLiteral("klogsrv kernel log streamer")},
-        {QStringLiteral("idlesauce, NookieAI, stonemodder"), QStringLiteral("Research and inspiration")},
-        {QStringLiteral("alik70952"), QStringLiteral("UI modernisation proposal (pull request #57)")},
+    // Name, what they made, their GitHub (README "Credits" has the same list).
+    const QList<QStringList> list = {
+        {QStringLiteral("quer3q"), QStringLiteral("ampr-emu-ng (bundled zstd runtime) and ps5-dump-forge"), QStringLiteral("github.com/quer3q")},
+        {QStringLiteral("Lapy"), QStringLiteral("DLC package builder"), QString()},
+        {QStringLiteral("PSVIETHOA (Nguyễn Thanh Sơn, Ngô Phi Phương)"), QStringLiteral("fpkg-cli · PSVIETHOA FPKG Builder"), QStringLiteral("github.com/thanhsondev")},
+        {QStringLiteral("drakmor"), QStringLiteral("LibProsperoPkg, ShadowMount+, ampr_emu, dlc_emu"), QStringLiteral("github.com/drakmor")},
+        {QStringLiteral("Nazky"), QStringLiteral("Lazy_MkPFS, Lazy_AMPR and the Auto-Backport pipeline"), QStringLiteral("github.com/Nazky")},
+        {QStringLiteral("PSBrew"), QStringLiteral("MkPFS and PFS research"), QStringLiteral("github.com/PSBrew")},
+        {QStringLiteral("SvenGDK"), QStringLiteral("UFS2Tool and LibProsperoPKG"), QStringLiteral("github.com/SvenGDK")},
+        {QStringLiteral("john-tornblom · ps5-payload-dev"), QStringLiteral("PS5 payload SDK, ftpsrv, elfldr, klogsrv"), QStringLiteral("github.com/ps5-payload-dev")},
+        {QStringLiteral("BestPig"), QStringLiteral("Backport research and the BackPork payload"), QStringLiteral("github.com/BestPig")},
+        {QStringLiteral("Gezine · notmaj0r · itsPLK"), QStringLiteral("Y2JB, Relapse and the Y2JB autoloader"), QStringLiteral("github.com/Gezine")},
+        {QStringLiteral("etaHEN team · EchoStretch"), QStringLiteral("etaHEN and kstuff-lite"), QStringLiteral("github.com/etaHEN")},
+        {QStringLiteral("idlesauce, NookieAI, stonemodder"), QStringLiteral("Research and inspiration"), QString()},
+        {QStringLiteral("alik70952"), QStringLiteral("UI modernisation proposal (pull request #57)"), QStringLiteral("github.com/alik70952")},
     };
-    for (const auto& [name, what] : list) {
+    for (const QStringList& who : list) {
         auto* cell = new QWidget(people);
         auto* v = vbox(cell, 1);
-        v->addWidget(label(name, TextStyle::BodyStrong, color::fg_0, cell));
-        auto* w = label(what, TextStyle::Caption, color::fg_3, cell);
+        auto* n = label(who[0], TextStyle::BodyStrong, color::fg_0, cell);
+        n->setWordWrap(true);
+        v->addWidget(n);
+        auto* w = label(who[1], TextStyle::Caption, color::fg_3, cell);
         w->setWordWrap(true);
         v->addWidget(w);
+        if (!who[2].isEmpty()) {
+            auto* g = label(who[2], TextStyle::Caption, color::fg_4, cell);
+            g->setToolTip(QStringLiteral("https://") + who[2]);
+            v->addWidget(g);
+        }
         v->addStretch(1);
         pg->addWidget(cell);
     }
@@ -178,7 +193,16 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* own = caption(QStringLiteral("Use it only with games and content you own and dumped yourself."), legal);
     own->setWordWrap(true);
     legal->body()->addWidget(own);
-    auto* sony = caption(QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony software; the bundled PS5 Backport engine is a separate program with its own notices."), legal);
+    // A private build carries the owner's own Sony Publishing Tools and fpkg-cli.
+    const QDir tools(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools")));
+    const bool privateBuild = QFileInfo(tools.filePath(QStringLiteral("fpkg-toolkit"))).isDir()
+                              || QFileInfo(tools.filePath(QStringLiteral("fpkg-cli"))).isDir();
+    auto* sony = caption(privateBuild
+                             ? QStringLiteral("Private build: it carries your own copy of Sony's Publishing Tools and fpkg-cli for personal "
+                                              "use. Do not share this exe. Not affiliated with or endorsed by Sony Interactive Entertainment.")
+                             : QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony "
+                                              "software; the bundled PS5 Backport engine is a separate program with its own notices."),
+                         legal);
     sony->setWordWrap(true);
     sony->setToolTip(QStringLiteral("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
     legal->body()->addWidget(sony);
@@ -189,7 +213,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     // ---- Third-party notices (folded)
     auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("Full licence texts ship in the LICENSES folder next to the app."), this);
     third->setObjectName(QStringLiteral("about-notices"));
-    third->setSummary(QStringLiteral("7 components"));
+    third->setSummary(QStringLiteral("11 components"));
     auto* tgrid = new QGridLayout;
     tgrid->setHorizontalSpacing(space::lg);
     tgrid->setVerticalSpacing(space::sm);
@@ -201,6 +225,10 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
         {QStringLiteral("Lucide icons"), QStringLiteral("Interface icons"), QStringLiteral("ISC")},
         {QStringLiteral("ampr_emu (drakmor)"), QStringLiteral("AMPR index format"), QStringLiteral("GPL-3.0")},
         {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), QStringLiteral("Bundled separate program run by the Backport tab"), QStringLiteral("Its own terms")},
+        {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), QStringLiteral("Bundled PS5 runtime for zstd packs, unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("ps5-dump-forge (quer3q)"), QStringLiteral("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("zstd (Meta)"), QStringLiteral("zstd packs"), QStringLiteral("BSD-3-Clause")},
+        {QStringLiteral("LZ4 (Yann Collet)"), QStringLiteral("Reading LZ4 packs"), QStringLiteral("BSD-2-Clause")},
     };
     int row = 0;
     tgrid->addWidget(label(QStringLiteral("Component"), TextStyle::Overline, color::fg_4, third), row, 0);

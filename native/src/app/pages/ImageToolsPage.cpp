@@ -370,6 +370,21 @@ void ImageToolsPage::buildExtractPanel()
     m_destination->setToolTip(QStringLiteral("The folder is created if it does not exist. Existing files are never overwritten."));
     card->body()->addWidget(m_destination);
     card->body()->addWidget(caption(QStringLiteral("Existing files are never overwritten."), card));
+    // A game whose files are in zstd or LZ4 packs: extract them as plain files.
+    m_unpackRow = new QWidget(card);
+    auto* uh = hbox(m_unpackRow, space::lg, QMargins(0, space::sm, 0, 0));
+    auto* ul = new QWidget(m_unpackRow);
+    auto* uv = vbox(ul, 2);
+    uv->addWidget(label(QStringLiteral("Unpack the zstd and LZ4 packs"), TextStyle::Body, color::fg_1, ul));
+    uv->addWidget(caption(QStringLiteral("On: the game's own files come out of the packs (and ampr_emu.index is rewritten). "
+                                         "Off: the pack files are copied as they are."), ul));
+    uh->addWidget(ul, 1);
+    m_unpackPacks = new Switch(m_unpackRow);
+    m_unpackPacks->setChecked(true);
+    m_unpackPacks->setAccessibleName(QStringLiteral("Unpack the zstd and LZ4 packs"));
+    uh->addWidget(m_unpackPacks, 0, Qt::AlignTop);
+    m_unpackRow->setVisible(false);
+    card->body()->addWidget(m_unpackRow);
     m_extractPanel = card;
     form()->addWidget(card);
 }
@@ -634,6 +649,10 @@ void ImageToolsPage::showStrip()
     QString meta = s.metaLine();
     if (!s.inner.isEmpty())
         meta += QStringLiteral(" · holds %1").arg(s.inner);
+    if (!s.packs.isEmpty())
+        meta += QStringLiteral(" · %1-packed").arg(s.packs);
+    if (m_unpackRow)
+        m_unpackRow->setVisible(!s.packs.isEmpty());
     m_stripMeta->setFullText(meta);
     m_stripPath->setFullText(nativePath(s.path));
     m_stripPath->setToolTip(nativePath(s.path));
@@ -947,7 +966,7 @@ void ImageToolsPage::rebuildConvertChoices()
     const QList<Target> all = {
         {QStringLiteral("exFAT"), QStringLiteral("Mounts with ShadowMount+, any loader and on a PC."), QStringLiteral("drive"), jobs::kFormatExfat, {}},
         {QStringLiteral("FFPKG"), QStringLiteral("UFS2 image. ShadowMount+ mounts it without extracting."), QStringLiteral("package"), jobs::kFormatFfpkg, {}},
-        {QStringLiteral("FFPFSC"), QStringLiteral("Compressed PFS image. Smallest on disk."), QStringLiteral("compress"), jobs::kFormatFfpfsc, QStringLiteral("Smallest")},
+        {QStringLiteral("FFPFSC"), QStringLiteral("Compressed PFS image. Saves space; how much depends on the game."), QStringLiteral("compress"), jobs::kFormatFfpfsc, {}},
         {QStringLiteral("FFPFS"), QStringLiteral("Uncompressed PFS image. Fastest to read."), QStringLiteral("layers"), jobs::kFormatFfpfs, {}},
     };
     for (const Target& t : all)
@@ -1329,6 +1348,11 @@ Result<QString> ImageToolsPage::submit(bool)
             const QFileInfo fi(m_path);
             dest = fi.absolutePath() + u'/' + fi.completeBaseName();
         }
+        // Packed games and images inside a PFS container are read through the
+        // format-neutral reader (game.extract); everything else as before.
+        if (!m_summary.packs.isEmpty() || (!m_summary.inner.isEmpty() && m_summary.fromImage))
+            return jobs::submitGameExtract(m_ctx, m_path, dest, m_summary.packs.isEmpty() || m_unpackPacks->isChecked(),
+                                           options()->overrides());
         return jobs::submitExtract(m_ctx, m_path, dest, options()->overrides());
     }
     case Action::Verify: {

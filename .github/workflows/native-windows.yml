@@ -1,6 +1,6 @@
 name: Native (C++) Windows build and test
 
-# Builds the native Farewell Edition (native/) with MSVC 2022 + Qt 6.8 on
+# Builds exFAT Image Builder v5 (native/) with MSVC 2022 + Qt 6.8 on
 # Windows, runs the automated tests, deploys the Qt runtime, packs the
 # single-file exe (the main download), packages a portable zip and an
 # installer, launches the real .exe and the single-file exe (self-test, page
@@ -201,7 +201,7 @@ jobs:
         shell: pwsh
         run: |
           $ver = (Select-String -Path native\CMakeLists.txt -Pattern 'VERSION (\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
-          Compress-Archive -Path "dist\exFAT Image Builder" -DestinationPath "dist\exFAT-Image-Builder-Farewell-$ver-win64-portable.zip" -Force
+          Compress-Archive -Path "dist\exFAT Image Builder" -DestinationPath "dist\exFAT-Image-Builder-$ver-win64-portable.zip" -Force
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             $inno = 'C:\Program Files (x86)\Inno Setup 6'
             if (-not (Test-Path "$inno\ISCC.exe")) { choco install innosetup --no-progress -y | Out-Null }

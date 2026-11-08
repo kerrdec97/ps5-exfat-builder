@@ -87,10 +87,20 @@ Error unavailable(const QString& kind);
 Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const QString& source, const QString& outputDir,
                                  const QString& label, const QVariantMap& overrides, const QJsonObject& extra = {});
 Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, const QVariantMap& overrides);
+// game.extract: a game (folder or image, an image inside a PFS container
+// included) into a new folder, zstd/LZ4 packs unpacked unless `unpackPacks` is false.
+Result<QString> submitGameExtract(AppContext& ctx, const QString& source, const QString& destination, bool unpackPacks,
+                                  const QVariantMap& overrides = {});
 Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, const QString& destination,
                               const QVariantMap& overrides);
 Result<QString> submitFpkgBuild(AppContext& ctx, const QString& sourceType, const QString& source, const QString& output,
                                 const QJsonObject& details, const QVariantMap& overrides);
+// fpkg.backport (engines/fpkg/BackportUpdate.h): backport files as separate
+// update packages against a base .pkg, or with buildBase the game's package
+// first and the updates against it.
+Result<QString> submitFpkgBackport(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides = {});
+// dlc.convert (engines/dlc/DlcConvert.h).
+Result<QString> submitDlcConvert(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides = {});
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders);
 Result<QString> submitFtpUpload(AppContext& ctx, const QString& host, int port, const QString& localPath,
                                 const QString& remotePath);

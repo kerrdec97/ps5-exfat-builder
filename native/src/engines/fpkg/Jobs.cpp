@@ -1,5 +1,7 @@
 #include "engines/fpkg/Jobs.h"
 
+#include "engines/fpkg/BackportUpdate.h"
+
 #include "core/FileUtil.h"
 #include "engines/fpkg/SourceScanner.h"
 #include "engines/fpkg/Toolchain.h"
@@ -140,6 +142,13 @@ void registerFpkgJobs(JobFactory& jobs)
             return r.takeError();
         return std::unique_ptr<Job>(new FpkgAddonJob(std::move(r).value()));
     });
+    jobs.add(kJobBackport, QStringLiteral("Build backport update packages"),
+             [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> {
+                 auto r = BackportUpdateRequest::fromJson(p);
+                 if (!r.ok())
+                     return r.takeError();
+                 return std::unique_ptr<Job>(new FpkgBackportJob(std::move(r).value()));
+             });
     jobs.add(kJobVerify, QStringLiteral("Verify FPKG package"), [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> {
         auto r = VerifyRequest::fromJson(p);
         if (!r.ok())

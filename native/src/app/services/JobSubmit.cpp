@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "core/Paths.h"
+#include "engines/ampr/Module.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -86,6 +87,13 @@ Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const Q
     QJsonObject p = extra;
     p.insert(QStringLiteral("source"), source);
     p.insert(QStringLiteral("output"), QDir(outputDir).filePath(fileName));
+    // "Compress game files (zstd packs)": the game is packed first, then built.
+    const QString zstdKey = ampr::keys::kZstdPack;
+    const bool zstd = overrides.contains(zstdKey) ? overrides.value(zstdKey).toBool() : ctx.settings().value(zstdKey).toBool();
+    if (zstd) {
+        p.insert(QStringLiteral("format"), format);
+        return enqueue(ctx, QStringLiteral("image.build.zstd"), p, overrides);
+    }
     if (format == kFormatFfpfsc || format == kFormatFfpfs)
         p.insert(QStringLiteral("format"), format);
     return enqueue(ctx, imageBuildKind(format), p, overrides);
@@ -104,6 +112,14 @@ Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, con
         p.insert(QStringLiteral("image"), imageOrPackage);
     }
     return enqueue(ctx, kind, p, overrides);
+}
+
+Result<QString> submitGameExtract(AppContext& ctx, const QString& source, const QString& destination, bool unpackPacks,
+                                  const QVariantMap& overrides)
+{
+    return enqueue(ctx, QStringLiteral("game.extract"),
+                   {{QStringLiteral("source"), source}, {QStringLiteral("output"), destination}, {QStringLiteral("unpackPacks"), unpackPacks}},
+                   overrides);
 }
 
 Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, const QString& destination,
@@ -147,6 +163,16 @@ Result<QString> submitFpkgBuild(AppContext& ctx, const QString& sourceType, cons
         if (details.contains(QLatin1String(k)) && !details.value(QLatin1String(k)).toVariant().toString().isEmpty())
             p.insert(QLatin1String(k), details.value(QLatin1String(k)));
     return enqueue(ctx, QStringLiteral("fpkg.build"), p, overrides);
+}
+
+Result<QString> submitFpkgBackport(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides)
+{
+    return enqueue(ctx, QStringLiteral("fpkg.backport"), params, overrides);
+}
+
+Result<QString> submitDlcConvert(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides)
+{
+    return enqueue(ctx, QStringLiteral("dlc.convert"), params, overrides);
 }
 
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders)

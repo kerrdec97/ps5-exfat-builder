@@ -260,6 +260,23 @@ private:
     QLabel* m_dpiStatus;
     QLineEdit* m_firmware;
     QLabel* m_youtubeVersion;
+    // y2jb: the user's own YouTube packages (and the private build's)
+    struct YoutubePackage {
+        QString path;
+        QString version;  // "v01.000.003"
+        QString titleId;  // PPSA01650
+        QString firmware; // "4.03 – 12.40", "" when the version is not in the table
+        bool bundled = false;
+    };
+    void scanYoutubePackages();
+    void rebuildYoutubeList();
+    void installYoutube(const QString& path);
+    ui::PathField* m_ytFolder = nullptr;
+    QWidget* m_ytList = nullptr;
+    QPushButton* m_ytBest = nullptr;
+    QLabel* m_ytHint = nullptr;
+    std::vector<YoutubePackage> m_ytPackages;
+    quint64 m_ytScan = 0;
     // tools
     QPointer<QWidget> m_demoSheet;
     DiagnosticsTab* m_diagnostics = nullptr;

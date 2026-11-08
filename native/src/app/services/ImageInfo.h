@@ -37,6 +37,7 @@ struct ImageSummary {
     qint64 dirs = -1;
     qint64 contentBytes = -1;
     QString inner;           // a PFS container holding one image file: that file's name
+    QString packs;           // "zstd" / "LZ4" when the game's files are in asset packs
     bool fromImage = false;  // title / ID read from inside the image (not the file name)
     QString error;           // why the image could not be read (meta from the file name)
 

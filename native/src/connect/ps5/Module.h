@@ -28,6 +28,7 @@ inline const QString kIdleTimeout = QStringLiteral("ps5.idleTimeoutSeconds");
 inline const QString kParallelTransfers = QStringLiteral("ps5.parallelTransfers");
 inline const QString kPassiveMode = QStringLiteral("ps5.passiveMode");
 inline const QString kAutoloaderFolder = QStringLiteral("ps5.autoloaderFolder");   // legacy al_dir (local folder)
+inline const QString kYoutubePackages = QStringLiteral("ps5.y2jbPackagesFolder");   // the user's own YouTube .pkg files
 } // namespace keys
 
 // Ports the console tools use (research §4-§7), for hints and presets.

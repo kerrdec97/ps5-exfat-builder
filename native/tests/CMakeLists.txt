@@ -44,7 +44,7 @@ foreach(test_src ${FW_TESTS})
     add_test(NAME ${test_name} COMMAND ${test_name} -o -,txt)
     set_tests_properties(${test_name} PROPERTIES
         TIMEOUT 900
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FW_OFFLINE=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FW_OFFLINE=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE}")
 endforeach()
 
 # Module-owned extras (helper executables such as a stand-in external tool):

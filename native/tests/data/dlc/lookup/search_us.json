@@ -1,0 +1,12 @@
+{"links":[
+{"id":"UP0700-PPSA05678_00-EXAMPLEQUEST0000","name":"Example Quest","top_category":"downloadable_game","game_contentType":"Full Game","playable_platform":["PS5"]},
+{"id":"up0700-ppsa05678_00-dlcsuffix0000001","name":"Example Quest: Bonus Pack","top_category":"add_on","parent_name":"Example Quest","playable_platform":["PS5"]},
+{"id":"UP0700-PPSA09999_00-EXAMPLEQUEST2000","name":"Example Quest II","top_category":"downloadable_game","playable_platform":["PS5"]},
+{"id":"UP0700-PPSA05678_00-EXAMPLEQUESTDLX0","name":"Example Quest&#8482; Deluxe Edition","top_category":"downloadable_game","playable_platform":["PS5"]},
+{"id":"UP0700-PPSA05678_00-EXAMPLEQUESTDEMO","name":"Example Quest Demo","metadata":{"secondary_classification":{"values":["DEMO"]}},"playable_platform":["PS5"]},
+{"id":"UP0700-PPSA05678_00-PS4ONLYVERSION00","name":"Example Quest","top_category":"downloadable_game","playable_platform":["PS4"]},
+{"id":"NOTACID","name":"Example Quest"},
+{"id":"UP0700-PPSA05678_00-NAMELESSITEM0000","name":""},
+{"id":"UP0700-PPSA07777_00-OTHERGAME0000000","name":"Other Game","top_category":"downloadable_game"},
+{"id":"UP0700-PPSA07777_00-OTHERADDON000000","name":"Example Quest Costume","top_category":"add_on","parent_name":"Other Game"}
+],"total_results":10}

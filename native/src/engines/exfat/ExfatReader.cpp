@@ -84,6 +84,23 @@ Result<std::unique_ptr<ExfatReader>> ExfatReader::open(const QString& imagePath)
     return r;
 }
 
+Result<std::unique_ptr<ExfatReader>> ExfatReader::open(std::shared_ptr<RandomSource> source)
+{
+    std::unique_ptr<ExfatReader> r(new ExfatReader);
+    r->m_path = source->describe();
+    r->m_source = source;
+    r->m_dev = openSourceDevice(std::move(source));
+    FW_TRY(r->openVolume());
+    return r;
+}
+
+std::unique_ptr<ImageFileStream> ExfatReader::openStream() const
+{
+    if (m_source)
+        return std::make_unique<ImageFileStream>(m_source, m_vol.boot.geo);
+    return std::make_unique<ImageFileStream>(m_path, m_vol.boot.geo);
+}
+
 Status ExfatReader::openImpl(const QString& path)
 {
     m_path = path;
@@ -93,16 +110,21 @@ Status ExfatReader::openImpl(const QString& path)
     if (!m_file.open(QIODevice::ReadOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not open the image %1.").arg(QDir::toNativeSeparators(path)),
                      m_file.errorString());
-    m_vol.imageFileSize = m_file.size();
+    return openVolume();
+}
 
-    const QByteArray first = m_file.read(512);
+Status ExfatReader::openVolume()
+{
+    m_vol.imageFileSize = io()->size();
+
+    const QByteArray first = io()->read(512);
     if (first.size() < 512)
         return corruptImage(QStringLiteral("the file is too small to be an exFAT image"),
                             QStringLiteral("%1 bytes").arg(m_vol.imageFileSize));
     const int bps = std::max(512, bootSectorBytesPerSector(first));
-    m_file.seek(0);
-    const QByteArray main = m_file.read(qint64(bps) * kBootRegionSectors);
-    const QByteArray backup = m_file.read(qint64(bps) * kBootRegionSectors);
+    io()->seek(0);
+    const QByteArray main = io()->read(qint64(bps) * kBootRegionSectors);
+    const QByteArray backup = io()->read(qint64(bps) * kBootRegionSectors);
     auto parsed = parseBootRegion(main);
     if (!parsed.ok()) {
         Error e = parsed.takeError();
@@ -199,9 +221,9 @@ Result<quint32> ExfatReader::fatEntry(quint32 cluster)
     if (it == m_fatCache.cend()) {
         if (m_fatCache.size() > 1024)
             m_fatCache.clear();
-        if (!m_file.seek(block * kFatBlock))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), m_file.errorString());
-        QByteArray b = m_file.read(kFatBlock);
+        if (!io()->seek(block * kFatBlock))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), io()->errorString());
+        QByteArray b = io()->read(kFatBlock);
         if (b.size() < (off - block * kFatBlock) + 4)
             return corruptImage(QStringLiteral("its FAT is cut short"));
         it = m_fatCache.insert(block, b);
@@ -263,11 +285,11 @@ Result<QByteArray> ExfatReader::readExtents(const std::vector<Extent>& extents, 
         if (out.size() >= bytes)
             break;
         const qint64 n = std::min<qint64>(qint64(e.count) * g.clusterBytes(), bytes - out.size());
-        if (!m_file.seek(g.clusterOffset(e.cluster)))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), m_file.errorString());
-        const QByteArray part = m_file.read(n);
+        if (!io()->seek(g.clusterOffset(e.cluster)))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), io()->errorString());
+        const QByteArray part = io()->read(n);
         if (part.size() != n)
-            return corruptImage(QStringLiteral("the file is shorter than its contents"), m_file.errorString());
+            return corruptImage(QStringLiteral("the file is shorter than its contents"), io()->errorString());
         out += part;
     }
     return out;
@@ -513,8 +535,17 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
 
 ImageFileStream::ImageFileStream(const QString& imagePath, const Geometry& geo) : m_path(imagePath), m_geo(geo) {}
 
+ImageFileStream::ImageFileStream(std::shared_ptr<RandomSource> source, const Geometry& geo)
+    : m_path(source->describe()), m_geo(geo), m_source(std::move(source))
+{
+}
+
 Status ImageFileStream::open()
 {
+    if (m_source) {
+        m_dev = openSourceDevice(m_source);
+        return success();
+    }
     m_file.setFileName(toLongPath(m_path));
     if (!m_file.open(QIODevice::ReadOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not open the image %1.").arg(QDir::toNativeSeparators(m_path)),
@@ -552,13 +583,13 @@ Result<qint64> ImageFileStream::read(const ImageEntry& e, qint64 offset, char* b
         const qint64 runLeft = (start + ext->count - clusterIndex) * cb - within;
         const qint64 n = std::min({len - done, runLeft, e.validSize - pos});
         const qint64 at = m_geo.clusterOffset(quint32(ext->cluster + (clusterIndex - start))) + within;
-        if (!m_file.seek(at))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), m_file.errorString());
+        if (!io()->seek(at))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), io()->errorString());
         qint64 got = 0;
         while (got < n) {
-            const qint64 r = m_file.read(buf + done + got, n - got);
+            const qint64 r = io()->read(buf + done + got, n - got);
             if (r < 0)
-                return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), m_file.errorString());
+                return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), io()->errorString());
             if (r == 0)
                 return corruptImage(QStringLiteral("the file is shorter than its contents"));
             got += r;

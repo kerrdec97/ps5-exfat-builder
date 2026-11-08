@@ -25,6 +25,11 @@ Status removeDirectoryJunction(const QString& link);
 // True for junctions, symlinks and other reparse points.
 bool isLinkOrReparsePoint(const QString& path);
 
+// Creates `link` (must not exist) as a hard link to the existing file
+// `target`: no copy, no administrator rights; both must be on the same NTFS
+// volume. Fails otherwise (callers then copy).
+Status createHardLink(const QString& link, const QString& target);
+
 class JunctionGuard {
 public:
     JunctionGuard() = default;

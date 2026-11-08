@@ -227,6 +227,12 @@ ImageSummary readImageSummary(const QString& path, bool readInside, const Cancel
             s.contentBytes = t.totalBytes();
             if (t.fileCount() == 1 && t.items().size() == 1 && !imageFormatOf(t.items().front().path).isEmpty())
                 s.inner = t.items().front().path;
+            if (!t.innerImage().isEmpty())
+                s.inner = t.innerImage(); // opened straight through to it
+            if (t.find(QStringLiteral("ampr_zstd.index")) >= 0)
+                s.packs = QStringLiteral("zstd");
+            else if (t.find(QStringLiteral("ampr_assets.index")) >= 0)
+                s.packs = QStringLiteral("LZ4");
             if (const int pj = findMeta(t, QStringLiteral("sce_sys/param.json")); pj >= 0) {
                 auto p = gameinfo::parseParamJson(readWhole(t, pj, 4 * 1024 * 1024));
                 if (p.ok()) {

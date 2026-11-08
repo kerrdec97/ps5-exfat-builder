@@ -33,7 +33,7 @@ const QStringList& SettingsSchema::sectionOrder()
 {
     static const QStringList order = {
         QStringLiteral("General"),     QStringLiteral("Build"),        QStringLiteral("FPKG"),
-        QStringLiteral("PFS"),         QStringLiteral("PlayGo"),       QStringLiteral("Backport"),
+        QStringLiteral("PFS"),         QStringLiteral("PlayGo"),       QStringLiteral("Backport"),     QStringLiteral("DLC"),
         QStringLiteral("Firmware and SDK"), QStringLiteral("Tools"),   QStringLiteral("Performance"),
         QStringLiteral("Storage"),     QStringLiteral("Verification"), QStringLiteral("PS5 connection"),
         QStringLiteral("Logging"),     QStringLiteral("Advanced"),
@@ -179,6 +179,14 @@ void SettingsSchema::addLegacyKey(const QString& legacyKey, const QString& key, 
 SettingsValues::SettingsValues(std::shared_ptr<const SettingsSchema> schema, QVariantMap values, QVariantMap overrides)
     : m_schema(std::move(schema)), m_values(std::move(values)), m_overrides(std::move(overrides))
 {
+}
+
+SettingsValues SettingsValues::withOverrides(const QVariantMap& extra) const
+{
+    SettingsValues v = *this;
+    for (auto it = extra.cbegin(); it != extra.cend(); ++it)
+        v.m_overrides.insert(it.key(), it.value());
+    return v;
 }
 
 QVariant SettingsValues::value(const QString& key) const

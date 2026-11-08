@@ -1,4 +1,5 @@
 #include "engines/integration/Module.h"
+#include "engines/integration/GameSources.h"
 
 #include "connect/ps5/Module.h"
 #include "engines/integration/AmprFtp.h"
@@ -20,74 +21,6 @@
 namespace fw::integration {
 
 namespace {
-
-// ---- FPKG source stagers ----------------------------------------------------------
-
-class ExfatStager final : public fpkg::SourceStager {
-public:
-    QString displayName() const override { return QStringLiteral("exFAT image"); }
-    QStringList extensions() const override { return {QStringLiteral("exfat")}; }
-    Status probe(const QString& image) const override
-    {
-        auto r = exfat::ExfatReader::open(image);
-        return r.ok() ? success() : Status(r.takeError());
-    }
-    Status stage(const QString& image, const QString& destination, const CancellationToken& token,
-                 ProgressReporter* progress) override
-    {
-        FW_TRY_ASSIGN(auto reader, exfat::ExfatReader::open(image));
-        FW_TRY_ASSIGN(exfat::ImageTree tree, reader->readTree(token, true));
-        FW_TRY(exfat::ExfatReader::requireIntact(tree));
-        qint64 total = 0;
-        for (const auto& e : tree.entries)
-            if (!e.isDir)
-                total += e.size;
-        if (progress)
-            progress->setTotal(total);
-        exfat::ExtractOptions opt;
-        FW_TRY(exfat::extractTree(*reader, tree, destination, opt, token, progress));
-        return success();
-    }
-};
-
-class Ufs2Stager final : public fpkg::SourceStager {
-public:
-    QString displayName() const override { return QStringLiteral("FFPKG (UFS2) image"); }
-    QStringList extensions() const override { return {QStringLiteral("ffpkg")}; }
-    Status probe(const QString& image) const override
-    {
-        auto r = ufs2::Ufs2Reader::open(image);
-        return r.ok() ? success() : Status(r.takeError());
-    }
-    Status stage(const QString& image, const QString& destination, const CancellationToken& token,
-                 ProgressReporter* progress) override
-    {
-        FW_TRY_ASSIGN(auto reader, ufs2::Ufs2Reader::open(image));
-        FW_TRY_ASSIGN(ufs2::SourceTree tree, reader->loadTree(token));
-        FW_TRY(ufs2::extractTree(tree, destination, token, progress));
-        return success();
-    }
-};
-
-class PfsStager final : public fpkg::SourceStager {
-public:
-    QString displayName() const override { return QStringLiteral("PFS image"); }
-    QStringList extensions() const override { return {QStringLiteral("ffpfs"), QStringLiteral("ffpfsc")}; }
-    Status stage(const QString& image, const QString& destination, const CancellationToken& token,
-                 ProgressReporter* progress) override
-    {
-        pfs::ExtractOptions opt;
-        opt.deep = true;
-        opt.overwrite = true; // the staging folder exists and is empty
-        pfs::ProgressHooks hooks;
-        if (progress) {
-            hooks.advance = [progress](qint64 n) { progress->advance(n); };
-            hooks.item = [progress](const QString& item) { progress->setCurrentItem(item); };
-        }
-        FW_TRY(pfs::extractImage(image, destination, opt, token, hooks));
-        return success();
-    }
-};
 
 // ---- image.convert ------------------------------------------------------------------
 
@@ -530,9 +463,9 @@ void PostBuildActions::onFinished(const QString& id)
 
 void registerModule(ModuleContext& ctx)
 {
-    fpkg::registerSourceStager(std::make_shared<ExfatStager>());
-    fpkg::registerSourceStager(std::make_shared<Ufs2Stager>());
-    fpkg::registerSourceStager(std::make_shared<PfsStager>());
+    // FPKG builds from images and packed folders stage only what the package keeps.
+    registerFpkgGameStager();
+    registerGameJobs(ctx);
 
     const JobFactory* factory = &ctx.jobs;
     ctx.jobs.add(kConvertJob, QStringLiteral("Convert image"),

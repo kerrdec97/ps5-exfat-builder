@@ -53,6 +53,37 @@ QStringList missingVcRuntimeDlls(const QString& toolDir);
 QString exitCodeHint(int exitCode);
 bool exitCodeMeansMissingRuntime(int exitCode);
 
+// ---- SDK Fix toolchain (the ppr-pkg Companion's SdkFix.Check) -------------------
+// Backport update packages need Sony's publisher from a verified SDK Fix
+// release: prospero-pub-cmd.exe and libScePubTools.dll from the same release
+// (SHA-256 pairs below), and the seven ext\ helpers.
+struct SdkFixStatus {
+    enum class State { Ready, Missing, Wrong };
+    State state = State::Missing;
+    QString release;          // "sdk-fpkg279-fix13" / "sdk-fpkg279-fix12"
+    bool recommended = false; // fix13
+    QString text;             // the Companion's status line
+    bool ready() const { return state == State::Ready; }
+};
+struct SdkFixRelease {
+    QString label;
+    QString pubCmdSha256;
+    QString libSha256;
+    bool recommended;
+};
+const QList<SdkFixRelease>& sdkFixReleases();
+inline const QString kPprPkgOwnLibSha256 = QStringLiteral("1468B2BEEDB8C9642D7A8FC7C5ED7E6CEC1CC5A548E6912846DDE57F87CAF2C5");
+const QStringList& sdkFixExtFiles(); // da.exe fa.exe ispc_texcomp.dll libatrac9.dll p2d.exe ric.exe sc2.exe
+
+// Hashes are cached in memory per file stamp (path, size, modification time).
+SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools);
+
+// TEMP/TMP for Sony's publisher: the folder's 8.3 short-name alias when that
+// is shorter (the SDK fails on long temporary paths). `aliased` is set when
+// the alias is used. kPublisherTempMaxChars is the Companion's limit.
+inline constexpr int kPublisherTempMaxChars = 120;
+QString publisherTempPath(const QString& dir, bool* aliased = nullptr);
+
 DependencyInfo probePubCmd(const SettingsValues& settings);
 DependencyInfo probeDds2png(const SettingsValues& settings);
 

@@ -5,6 +5,10 @@
 #include "engines/fpkg/FpkgSettings.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QHash>
+#include <QMutex>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -191,6 +195,140 @@ QString exitCodeHint(int exitCode)
     default: break;
     }
     return {};
+}
+
+const QList<SdkFixRelease>& sdkFixReleases()
+{
+    static const QList<SdkFixRelease> r = {
+        {QStringLiteral("sdk-fpkg279-fix13"), QStringLiteral("763F731FAB92FBF01A5A7F02760EF8EE56AA811578A84DF78623444FAA227CCE"),
+         QStringLiteral("A73E8D1F6C9DCD6DD01735EDA11AAB5C2E5371D4790EEA52BD03E4781954820B"), true},
+        {QStringLiteral("sdk-fpkg279-fix12"), QStringLiteral("C9C48A6651EC8DE76FA30D30D36862CFCED35596AC98AAEC6BDA14736DEF3A1F"),
+         QStringLiteral("6C3DDF34B0EF07DE9CB40C2597D387E1F5F60AEE52C9D0E9C1F1D4EF58744BDB"), false},
+    };
+    return r;
+}
+
+const QStringList& sdkFixExtFiles()
+{
+    static const QStringList f = {QStringLiteral("da.exe"), QStringLiteral("fa.exe"), QStringLiteral("ispc_texcomp.dll"),
+                                  QStringLiteral("libatrac9.dll"), QStringLiteral("p2d.exe"), QStringLiteral("ric.exe"),
+                                  QStringLiteral("sc2.exe")};
+    return f;
+}
+
+namespace {
+
+QString cachedSha256(const QString& path)
+{
+    static QMutex mutex;
+    static QHash<QString, QString> cache;
+    const QFileInfo fi(path);
+    const QString stamp = QStringLiteral("%1|%2|%3").arg(fi.absoluteFilePath()).arg(fi.size())
+                              .arg(fi.lastModified().toMSecsSinceEpoch());
+    {
+        QMutexLocker lock(&mutex);
+        if (auto it = cache.constFind(stamp); it != cache.constEnd())
+            return *it;
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    if (!h.addData(&f))
+        return {};
+    const QString hex = QString::fromLatin1(h.result().toHex()).toUpper();
+    QMutexLocker lock(&mutex);
+    cache.insert(stamp, hex);
+    return hex;
+}
+
+} // namespace
+
+SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools)
+{
+    SdkFixStatus st;
+    if (tools.exe.isEmpty() || !QFileInfo(tools.exe).isFile()) {
+        st.state = SdkFixStatus::State::Missing;
+        st.text = QStringLiteral("SDK Fix toolchain not found. Choose the extracted sdk-fpkg279-fix13 folder (its "
+                                 "prospero-pub-cmd.exe) in Settings > Tools.");
+        return st;
+    }
+    const QDir bin(tools.binDir);
+    const QString lib = bin.filePath(QStringLiteral("libScePubTools.dll"));
+    st.state = SdkFixStatus::State::Wrong;
+    if (!QFileInfo(lib).isFile()) {
+        st.text = QStringLiteral("SDK Fix toolchain incomplete: libScePubTools.dll is missing beside prospero-pub-cmd.exe.");
+        return st;
+    }
+    const QString cmdSha = cachedSha256(tools.exe);
+    const QString libSha = cachedSha256(lib);
+    if (cmdSha.isEmpty() || libSha.isEmpty()) {
+        st.text = QStringLiteral("SDK Fix toolchain check failed in %1: the files could not be read.")
+                      .arg(QDir::toNativeSeparators(tools.binDir));
+        return st;
+    }
+    if (libSha == kPprPkgOwnLibSha256) {
+        st.text = QStringLiteral("This is ppr-pkg's own libScePubTools.dll, not the SDK Fix one. Use the patched DLL from "
+                                 "sdk-fpkg279-fix12.");
+        return st;
+    }
+    const SdkFixRelease* match = nullptr;
+    bool partial = false;
+    for (const SdkFixRelease& r : sdkFixReleases()) {
+        if (r.pubCmdSha256 == cmdSha && r.libSha256 == libSha)
+            match = &r;
+        else if (r.pubCmdSha256 == cmdSha || r.libSha256 == libSha)
+            partial = true;
+    }
+    if (!match) {
+        st.text = partial ? QStringLiteral("prospero-pub-cmd.exe and libScePubTools.dll come from different SDK Fix "
+                                           "releases (%1…, %2…). Copy both from the same release (fix13 recommended).")
+                                .arg(cmdSha.left(8), libSha.left(8))
+                          : QStringLiteral("Not a verified SDK Fix toolchain (prospero-pub-cmd %1…, libScePubTools "
+                                           "%2…). Use sdk-fpkg279-fix13.").arg(cmdSha.left(12), libSha.left(12));
+        return st;
+    }
+    QStringList missing;
+    for (const QString& e : sdkFixExtFiles())
+        if (!QFileInfo(bin.filePath(QStringLiteral("ext/") + e)).isFile())
+            missing << QStringLiteral("ext\\") + e;
+    if (!missing.isEmpty()) {
+        st.text = QStringLiteral("SDK Fix toolchain incomplete: %1 missing.").arg(missing.join(QStringLiteral(", ")));
+        return st;
+    }
+    st.state = SdkFixStatus::State::Ready;
+    st.release = match->label;
+    st.recommended = match->recommended;
+    st.text = QStringLiteral("SDK Fix toolchain verified: %1 in %2 (prospero-pub-cmd %3…, libScePubTools %4…)")
+                  .arg(match->label, QDir::toNativeSeparators(tools.binDir), match->pubCmdSha256.left(8),
+                       match->libSha256.left(8));
+    if (!match->recommended)
+        st.text += QStringLiteral(" - an older release; fix13 is recommended");
+    return st;
+}
+
+QString publisherTempPath(const QString& dir, bool* aliased)
+{
+    if (aliased)
+        *aliased = false;
+    const QString full = QDir::toNativeSeparators(QFileInfo(dir).absoluteFilePath());
+#ifdef Q_OS_WIN
+    const std::wstring w = full.toStdWString();
+    DWORD need = GetShortPathNameW(w.c_str(), nullptr, 0);
+    if (need > 0) {
+        std::wstring buf(need, L'\0');
+        const DWORD n = GetShortPathNameW(w.c_str(), buf.data(), need);
+        if (n > 0 && n < need) {
+            const QString shortPath = QString::fromWCharArray(buf.c_str(), int(n));
+            if (!shortPath.isEmpty() && shortPath.size() < full.size()) {
+                if (aliased)
+                    *aliased = true;
+                return shortPath;
+            }
+        }
+    }
+#endif
+    return full;
 }
 
 DependencyInfo probePubCmd(const SettingsValues& settings)

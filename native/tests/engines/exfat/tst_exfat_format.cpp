@@ -62,7 +62,7 @@ private slots:
     {
         // Entry-set checksum skips bytes 2 and 3.
         QByteArray set(3 * 32, '\0');
-        set[0] = char(0x85);
+        set[0] = static_cast<char>(static_cast<unsigned char>(0x85));
         set[1] = 2;
         auto* p = reinterpret_cast<uchar*>(set.data());
         const quint16 before = entrySetChecksum(p, 3);

@@ -1,0 +1,4 @@
+{"links":[
+{"id":"EP0700-PPSA01234_00-EXAMPLEQUEST0000","name":"Example Quest","metadata":{"top_category":{"values":["GAME"]}}},
+{"id":"EP0700-PPSA01234_01-DLCSUFFIX0000001","name":"Example Quest - Bonus Pack","top_category":"add_on","parent_name":"Example Quest"}
+]}

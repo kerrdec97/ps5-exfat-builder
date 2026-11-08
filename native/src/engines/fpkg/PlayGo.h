@@ -119,6 +119,13 @@ struct PlayGoInputs {
     bool fallback = true;
     bool fillEmptyChunks = true;
     int chunkCount = 100;
+    // The ppr-pkg Companion's "All 31 PlayGo languages" (layout B): the
+    // scenario's chunkSupportedLanguages become all 31 codes and the chunk
+    // count is raised to at least 32 so every language gets its own chunk.
+    bool allLanguages = false;
+    // Backport updates: the base package's own language list (its chunk
+    // count comes in chunkCount); wins over allLanguages.
+    QStringList forcedLanguages;
     // Package paths and sizes of every mapped file (game files, the scenario
     // sidecar, recovered images) and paths already taken (case-insensitive).
     std::vector<std::pair<QString, qint64>> files;

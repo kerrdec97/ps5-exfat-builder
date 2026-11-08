@@ -45,6 +45,7 @@ inline const QString kPlayGoFallback = QStringLiteral("fpkg.playGoFallback");
 inline const QString kPlayGoChunkCount = QStringLiteral("fpkg.playGoChunkCount");
 inline const QString kFillEmptyChunks = QStringLiteral("fpkg.fillEmptyChunks");
 inline const QString kUseSourcePlayGoTable = QStringLiteral("fpkg.useSourcePlayGoTable");
+inline const QString kPlayGoAllLanguages = QStringLiteral("fpkg.playGoAllLanguages");
 inline const QString kPostVerify = QStringLiteral("fpkg.postVerify");
 inline const QString kComputeSha256 = QStringLiteral("fpkg.computeSha256");
 } // namespace keys
@@ -95,17 +96,21 @@ struct FpkgSettings {
     int playGoChunkCount = 100;
     bool fillEmptyChunks = true;
     bool useSourcePlayGoTable = false;
+    bool playGoAllLanguages = false;
+    QStringList playGoForcedLanguages; // not a setting: backport updates keep the base's languages
 
     // Verification
     PostVerify postVerify = PostVerify::ToolFull; // effective value (HeaderOnly when verifyAfterBuild is off)
     bool computeSha256 = false;
 
     // App-wide values (engines/general)
-    int cpuCoreLimit = 0;          // performance.workerThreads; 0 = no limit
+    int cpuCoreLimit = 0;          // effective workers (performance.workerThreads / mode); 0 = no limit
+    int priorityMode = 2;          // performance.mode for Sony's publisher (applyProcessPriority)
     int workerThreads = 1;         // effective thread count (>= 1)
     qint64 ioBufferBytes = 4 * 1024 * 1024;
     qint64 freeSpaceMarginBytes = 512LL * 1024 * 1024;
     QString defaultOutputDir;      // storage.defaultOutputFolder
+    QString userTempFolder;        // storage.tempFolder ("" = not set: image sources are staged on the output drive)
 
     static FpkgSettings from(const SettingsValues& values);
 };

@@ -139,26 +139,30 @@ LogFilterModel::LogFilterModel(QObject* parent) : QSortFilterProxyModel(parent) 
 
 void LogFilterModel::setMinimumLevel(LogLevel level)
 {
+    beginFilterChange();
     m_min = level;
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 void LogFilterModel::setSource(const QString& source)
 {
+    beginFilterChange();
     m_source = source;
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 void LogFilterModel::setJobId(const QString& jobId)
 {
+    beginFilterChange();
     m_job = jobId;
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 void LogFilterModel::setText(const QString& text)
 {
+    beginFilterChange();
     m_text = text;
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 bool LogFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const

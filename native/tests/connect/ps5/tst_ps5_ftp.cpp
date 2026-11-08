@@ -457,8 +457,8 @@ private slots:
         QCOMPARE(drep->transferred, 1);
         QCOMPARE(readAll(QDir(down).filePath(QStringLiteral("big.bin"))), readAll(src));
         int rests = 0;
-        for (const QString& c : srv.commands())
-            rests += c.startsWith(QStringLiteral("REST ")) ? 1 : 0;
+        for (const QString& cmd : srv.commands())
+            rests += cmd.startsWith(QStringLiteral("REST ")) ? 1 : 0;
         QCOMPARE(rests, 2); // one resume per direction
         QVERIFY(srv.sawCommand(QStringLiteral("REST 512000"))); // the fake closes after exactly 500 KiB
     }
@@ -833,7 +833,7 @@ private slots:
             QVERIFY(!d->description.isEmpty());
             ++n;
         }
-        QCOMPARE(n, 14);
+        QCOMPARE(n, 15);
         QVERIFY(!mod.schema->normalize(keys::kFtpPort, 70000).ok());
         QVERIFY(!mod.schema->normalize(keys::kGamesFolder, QStringLiteral("data/x")).ok());
         QVERIFY(!mod.schema->normalize(keys::kConsoleIp, QStringLiteral("not an ip!")).ok());

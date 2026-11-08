@@ -7,8 +7,11 @@
 //                A wrapper folder is searched for the game folder below it.
 //   Format       four tiles (exFAT, FFPKG, PFS, FPKG) and, under them, the two
 //                or three settings people change for that format.
-//   Package      FPKG only: package type, content ID, title, version, add-on /
-//                update fields.
+//   Package      FPKG only: package type (App, Add-on, Update, Backport),
+//                content ID, title, version, add-on / update fields, and the
+//                backport updates (4.xx / 5.xx+ backport files, folder or ZIP):
+//                with App they are built as separate updates next to the new
+//                package; Backport builds them against an existing base .pkg.
 //   Save to      output folder and the file name (editable; preset from
 //                Settings › Build › Output name).
 //   Advanced     one folded section with the rest of that format's per-job
@@ -26,6 +29,10 @@
 #include <QComboBox>
 #include <QHash>
 #include <QPointer>
+
+#include "core/Cancellation.h"
+
+#include <memory>
 
 class QMenu;
 
@@ -110,6 +117,10 @@ private:
     void applyLiveCpuLimit();
     void pickFromDlcEmu();
     void onPackageTypeChanged();
+    QString packageType() const;   // app / addon / update / backport
+    bool hasBackports() const;     // a 4.xx or 5.xx+ backport is chosen
+    void inspectBase();            // reads the base .pkg (title, version) for Backport
+    void browseBackport(ui::PathField* field, const QString& label);
     qint64 neededBytes() const;
     QString tile() const;
     bool isFpkg() const { return tile() == kFormatFpkg; }
@@ -154,6 +165,18 @@ private:
     QWidget* m_baseField = nullptr;
     ui::PathField* m_basePackage = nullptr;
     QWidget* m_addonField = nullptr;
+    QWidget* m_idRow = nullptr;          // Content ID + version
+    QWidget* m_titleRow = nullptr;
+    QWidget* m_backportField = nullptr;  // the two backport pickers + note
+    ui::PathField* m_backport4 = nullptr;
+    ui::PathField* m_backport5 = nullptr;
+    QLabel* m_backportNote = nullptr;
+    ui::MessageRow* m_baseInfo = nullptr;
+    QString m_baseTitleId;               // from the inspected base package
+    QString m_autoVersion;               // the version this page filled in
+    quint64 m_baseGen = 0;
+    QString m_inspectedBase;             // the base path last inspected
+    std::shared_ptr<CancellationSource> m_baseCancel;
     QLineEdit* m_entitlementKey = nullptr;
     QComboBox* m_volumeType = nullptr;
 

@@ -53,6 +53,9 @@ public:
     const std::vector<TreeItem>& items() const { return m_items; } // sorted by path
     int find(const QString& path) const;                          // -1 when absent
     const QStringList& warnings() const { return m_warnings; }
+    // A PFS container around one image: that image's file name ("" otherwise).
+    const QString& innerImage() const { return m_innerImage; }
+    void setInnerImage(const QString& name) { m_innerImage = name; }
     qint64 fileCount() const { return m_files; }
     qint64 dirCount() const { return m_dirs; }
     qint64 totalBytes() const { return m_bytes; }
@@ -69,6 +72,7 @@ protected:
     TreeFormat m_format;
     QString m_root;
     QString m_formatName; // overrides describe() when set
+    QString m_innerImage;
     std::vector<TreeItem> m_items;
     QHash<QString, int> m_index;
     QStringList m_warnings;

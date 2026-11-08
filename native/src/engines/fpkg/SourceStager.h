@@ -54,6 +54,19 @@ public:
     // "Prepare source" phase; call setTotal() when the size becomes known.
     virtual Status stage(const QString& image, const QString& destination, const CancellationToken& token,
                          ProgressReporter* progress) = 0;
+    // True when a game FOLDER must be staged too instead of packaged as it is
+    // (a zstd- or LZ4-packed game: the package gets its files unpacked).
+    virtual bool handlesFolder(const QString& folder) const
+    {
+        Q_UNUSED(folder);
+        return false;
+    }
+    // One line for the log: why and how the source is staged.
+    virtual QString stagingNote(const QString& source) const
+    {
+        Q_UNUSED(source);
+        return {};
+    }
 };
 
 // Registration (thread-safe). A later registration for the same extension
@@ -61,6 +74,8 @@ public:
 void registerSourceStager(std::shared_ptr<SourceStager> stager);
 void unregisterSourceStagers(); // tests
 std::shared_ptr<SourceStager> sourceStagerFor(const QString& path); // by extension, or null
+// A stager that wants this game folder (handlesFolder), or null.
+std::shared_ptr<SourceStager> folderStagerFor(const QString& folder);
 QStringList imageSourceExtensions(); // every extension FPKG knows as an image source
 
 // Finds the app root (a folder containing sce_sys) under `dir`, breadth-first,
