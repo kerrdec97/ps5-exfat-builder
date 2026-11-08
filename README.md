@@ -13,6 +13,11 @@ verify and send them to your console — from one app, in one download.**
 > **Version 5 is a complete rewrite.** The app is now native C++/Qt: it
 > writes exFAT, UFS2 and PFS images itself, so it needs **no administrator
 > rights, no OSFMount, no .NET and no Python**, and it ships as **one .exe**.
+>
+> 🚧 **v5 is being finished.** Its download will appear on the
+> [Releases page](https://github.com/kerrdec97/ps5-exfat-builder/releases) as
+> a pre-release soon; until then the latest download there is 4.x. You can
+> also build v5 from source (below).
 
 > ⚠️ For games and content **you legally own and dumped yourself**. The app
 > does not download games, decrypt retail packages or bypass DRM, and it is
