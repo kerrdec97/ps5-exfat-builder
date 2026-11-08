@@ -82,6 +82,8 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    if (parser.isSet(screenshotOpt))
+        app.setProperty("fwScreenshotMode", true); // pages show demo data and touch no user files
     fw::MainWindow window(context);
     window.show();
 

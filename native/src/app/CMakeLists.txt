@@ -32,3 +32,6 @@ endif()
 fw_configure_target(fw_app)
 
 install(TARGETS fw_app RUNTIME DESTINATION .)
+
+# The bundled PS5 Backport engine (engines/backport/PS5BackportGUI.exe).
+include(${PROJECT_SOURCE_DIR}/cmake/BackportEngine.cmake)

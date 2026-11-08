@@ -1,20 +1,17 @@
 #pragma once
 
-#include "engines/backport/ApplyJournal.h"
-#include "jobs/Module.h"
+// Small PS5 executable readers kept from the native backport port (v5.0
+// previews): param.json version fields (GameMetadata), the SDK in an ELF's
+// process param (SceParam, SdkTable, NidPatch), SELF unwrapping (SelfReader,
+// SelfFormat, ElfImage) and the canonical fakelib trio pins (CanonicalTrio).
+// The Backport tab uses them for its game list (src/app/backport). Backports
+// themselves are made by the bundled PS5 Backport engine, so this module
+// registers no settings, dependencies or job kinds.
 
-#include <vector>
+#include "jobs/Module.h"
 
 namespace fw::backport {
 
-// Registers the backport settings (sections "Backport" and "Firmware and
-// SDK"), and the job kinds backport.run, backport.restore and backport.scan.
-// The module has no external tool, so it registers no dependency probe.
 void registerModule(ModuleContext& ctx);
-
-// Apply journals left pending by an interrupted backport (or a failed
-// rollback). The app offers "Roll back the interrupted backport of <game>"
-// for each at start-up by queueing backport.restore {journal: path}.
-std::vector<PendingJournal> interruptedApplies();
 
 } // namespace fw::backport

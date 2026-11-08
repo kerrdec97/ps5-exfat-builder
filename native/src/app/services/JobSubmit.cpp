@@ -147,31 +147,6 @@ Result<QString> submitFpkgBuild(AppContext& ctx, const QString& sourceType, cons
     return enqueue(ctx, QStringLiteral("fpkg.build"), p, overrides);
 }
 
-Result<QString> submitBackport(AppContext& ctx, const QStringList& gameFolders, const QVariantMap& overrides)
-{
-    // The engine backports one game per job, so each game can fail, be
-    // retried or be restored on its own.
-    if (gameFolders.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose at least one game."));
-    QString last;
-    for (const QString& game : gameFolders) {
-        auto r = enqueue(ctx, QStringLiteral("backport.run"), QJsonObject{{QStringLiteral("game"), game}}, overrides);
-        if (!r.ok())
-            return r;
-        last = r.value();
-    }
-    return last;
-}
-
-Result<QString> submitBackportRestore(AppContext& ctx, const QString& originalsZip, const QString& gameFolder)
-{
-    QJsonObject p;
-    if (!originalsZip.isEmpty())
-        p.insert(QStringLiteral("zip"), originalsZip);
-    p.insert(QStringLiteral("game"), gameFolder);
-    return enqueue(ctx, QStringLiteral("backport.restore"), p, {});
-}
-
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders)
 {
     QJsonObject p;
@@ -351,11 +326,6 @@ Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const 
     if (!undoLog.isEmpty())
         p.insert(QStringLiteral("undoLog"), undoLog);
     return enqueue(ctx, QStringLiteral("library.rename"), p, {});
-}
-
-Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPath)
-{
-    return enqueue(ctx, QStringLiteral("backport.restore"), QJsonObject{{QStringLiteral("journal"), journalPath}}, {});
 }
 
 Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force)

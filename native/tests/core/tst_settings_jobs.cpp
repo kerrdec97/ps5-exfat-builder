@@ -218,8 +218,7 @@ private slots:
         QVERIFY(store.load().ok());
         auto n = store.importLegacy(legacy);
         QVERIFY(n.ok());
-        QVERIFY(n.value() >= 3);
-        QCOMPARE(store.value(QStringLiteral("backport.scanFolders")).toStringList(), (QStringList{a, b}));
+        QVERIFY(n.value() >= 2);
         QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("sleep"));
         QCOMPARE(store.value(general::keys::kAutoRetryCount).toInt(), 5); // clamped
     }

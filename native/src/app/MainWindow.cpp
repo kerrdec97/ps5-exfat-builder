@@ -24,7 +24,6 @@
 #include "core/CrashHandler.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
-#include "engines/backport/Module.h"
 #include "engines/general/Module.h"
 #include "engines/tools/Module.h"
 #include "engines/tools/ReportBundle.h"
@@ -166,7 +165,6 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     updateStatus();
     ctx.checkDependenciesAsync();
     QTimer::singleShot(500, this, &MainWindow::checkCrashFiles);
-    QTimer::singleShot(700, this, &MainWindow::checkInterruptedBackports);
     if (ctx.settings().value(QStringLiteral("general.checkForUpdatesOnStart")).toBool())
         QTimer::singleShot(3000, this, [this] { checkForUpdates(true); });
 }
@@ -617,34 +615,6 @@ void MainWindow::checkCrashFiles()
     showBanner(bar);
 }
 
-void MainWindow::checkInterruptedBackports()
-{
-    for (const backport::PendingJournal& j : backport::interruptedApplies()) {
-        auto* bar = new InfoBar(Tone::Warn, this);
-        bar->setDismissable(true);
-        const QString game = QFileInfo(j.game).fileName();
-        bar->setTitle(QStringLiteral("Roll back the interrupted backport of %1?").arg(game));
-        bar->setMessage(QStringLiteral("A backport was applying files to %1 when the app stopped. Rolling back restores the originals from the journal; the game folder is not touched otherwise.").arg(nativePath(j.game)));
-        auto* roll = bar->addLink(QStringLiteral("Roll back now"));
-        const QString journal = j.path;
-        connect(roll, &Link::activated, this, [this, journal, bar] {
-            auto r = jobs::submitBackportRollback(m_ctx, journal);
-            if (!r.ok()) {
-                toast(Tone::Err, QStringLiteral("Rollback not started"), r.error().message);
-                return;
-            }
-            m_ctx.queue().holdQueue(false);
-            bar->hide();
-            emit bar->dismissed();
-            navigate(QStringLiteral("queue"), {{QStringLiteral("jobId"), r.value()}});
-        });
-        auto* open = bar->addLink(QStringLiteral("Show the game folder"));
-        const QString folder = j.game;
-        connect(open, &Link::activated, this, [folder] { openInFileManager(folder); });
-        showBanner(bar);
-    }
-}
-
 void MainWindow::reportProblem(const QStringList& extraFiles)
 {
     auto* s = new Sheet(this, QStringLiteral("Report a problem"), Sheet::Icon::Info, size::dialogWide);
@@ -749,6 +719,19 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // A backport run or restore in progress (the PS5 Backport engine runs it):
+    // cancel at the next safe point and wait for the worker (an apply in
+    // progress is rolled back from the verified backup first).
+    if (auto* bpPage = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); bpPage && bpPage->isBusy()) {
+        const bool stop = Sheet::confirm(this, QStringLiteral("Cancel the backport run?"),
+                                         QStringLiteral("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
+                                         QStringLiteral("Keep running"), QStringLiteral("Cancel and close"), true, Sheet::Icon::Warning);
+        if (!stop) {
+            event->ignore();
+            return;
+        }
+        bpPage->cancelAndWait(120000);
+    }
     if (!m_closing && m_ctx.queue().isBusy() && m_ctx.settings().value(general::keys::kConfirmOnClose).toBool()) {
         const bool stop = Sheet::confirm(this, QStringLiteral("Stop the running jobs?"),
                                          QStringLiteral("Jobs are still running. Closing stops them; partial output is removed and they come back as Interrupted so you can retry."),
@@ -814,6 +797,7 @@ void MainWindow::dropEvent(QDropEvent* event)
 
 int MainWindow::screenshotAllPages(const QString& dir)
 {
+    qApp->setProperty("fwScreenshotMode", true); // pages: demo data only, no user files touched
     QDir().mkpath(dir);
     int written = 0, index = 0;
     auto settle = [] {

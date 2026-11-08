@@ -85,7 +85,6 @@ private:
     void refreshFreeSpace();
     void showBanner(ui::InfoBar* bar);
     void checkCrashFiles();
-    void checkInterruptedBackports();
     void onUpdateCheckFinished(const JobRecord& rec);
     void onUpdateDownloadFinished(const JobRecord& rec);
     void installUpdate(const QString& installer);

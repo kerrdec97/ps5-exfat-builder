@@ -21,9 +21,6 @@
 //   FPKG add-on    fpkg.addon   {payloadFolder, output?, contentId?, entitlementKey, volumeType?}
 //   FPKG verify    fpkg.verify  {package, integrity: bool}
 //   FPKG extract   fpkg.extract {package, destination}
-//   Backport       backport.run     {game}  — one job per game (+ per-job overrides of backport.*)
-//                  backport.restore {game, zip?}  or {journal} to roll back an interrupted apply
-//                  backport.scan    {game} or {folders: [..]} (library mode) → details.games
 //   Library        library.scan     {folders: [..]} → details.games = [LibraryGame::toJson()]
 //   PS5            ps5.ftp.upload   {sources: [..], remoteDir?, host?, port?, allowProtectedPaths?}
 //                  ps5.ftp.download {sources: [remote..], localDir, overwrite?, host?, port?}
@@ -51,7 +48,6 @@
 //   Hex preview    no job: services/HexPreview reads slices of a file inside an image on a
 //                  worker thread (read-only, the image is not kept open between slices).
 //   Dump rename    library.rename   {mode: preview|apply|undo, source, preset?, destination?, items: [{source, name, selected}], undoLog}
-//                  backport.restore {journal} rolls back an interrupted apply
 //   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate)
 //                  update.download  {release: <details>} → outputs[0] = verified installer
 //   Tools          tools.languages.scan    {folder, batch}
@@ -93,8 +89,6 @@ Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, co
                               const QVariantMap& overrides);
 Result<QString> submitFpkgBuild(AppContext& ctx, const QString& sourceType, const QString& source, const QString& output,
                                 const QJsonObject& details, const QVariantMap& overrides);
-Result<QString> submitBackport(AppContext& ctx, const QStringList& gameFolders, const QVariantMap& overrides);
-Result<QString> submitBackportRestore(AppContext& ctx, const QString& originalsZip, const QString& gameFolder);
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders);
 Result<QString> submitFtpUpload(AppContext& ctx, const QString& host, int port, const QString& localPath,
                                 const QString& remotePath);
@@ -126,7 +120,6 @@ Result<QString> submitConvert(AppContext& ctx, const QString& image, const QStri
 Result<QString> submitCompare(AppContext& ctx, const QString& a, const QString& b, const QString& depth);
 Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
                                     const QString& destination, const QJsonArray& items, const QString& undoLog);
-Result<QString> submitBackportRollback(AppContext& ctx, const QString& journalPath);
 Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force);
 Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder);
 QString imageEditKind(const QString& image); // "image.exfat.edit" / "image.ffpkg.edit" / ""

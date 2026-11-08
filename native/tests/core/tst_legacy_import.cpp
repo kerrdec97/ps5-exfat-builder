@@ -79,6 +79,12 @@ const QMap<QString, QString>& notImported()
         {QStringLiteral("y2jb_pkg_eu"), QStringLiteral("chosen per install")},
         {QStringLiteral("y2jb_pkg_jp"), QStringLiteral("chosen per install")},
         {QStringLiteral("abp_output"), QStringLiteral("orphan in the legacy app")},
+        {QStringLiteral("abp_fakelib"), QStringLiteral("v5 Backport tab runs the bundled PS5 Backport engine; its options are chosen per run")},
+        {QStringLiteral("abp_last_sdk"), QStringLiteral("v5 Backport tab runs the bundled PS5 Backport engine; its options are chosen per run")},
+        {QStringLiteral("abp_notes"), QStringLiteral("v5 Backport tab runs the bundled PS5 Backport engine; its options are chosen per run")},
+        {QStringLiteral("abp_target_sdk"), QStringLiteral("v5 Backport tab runs the bundled PS5 Backport engine; its options are chosen per run")},
+        {QStringLiteral("abp_zip_orig_dest"), QStringLiteral("v5 Backport tab runs the bundled PS5 Backport engine; its options are chosen per run")},
+        {QStringLiteral("abp_zip_pat_dest"), QStringLiteral("v5 Backport tab runs the bundled PS5 Backport engine; its options are chosen per run")},
         {QStringLiteral("bpr_log"), QStringLiteral("legacy results log; history is in the job history")},
     };
     return m;
@@ -128,7 +134,6 @@ private slots:
         QCOMPARE(store.value(QStringLiteral("performance.workerThreads")).toInt(), 8);
         QCOMPARE(store.value(QStringLiteral("ps5.consoleIp")).toString(), QStringLiteral("192.168.1.50"));
         QCOMPARE(store.value(QStringLiteral("ps5.autoUploadAfterBuild")).toBool(), true);
-        QCOMPARE(store.value(QStringLiteral("backport.notes")).toString(), QStringLiteral("my notes"));
     }
 };
 

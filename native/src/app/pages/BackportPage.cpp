@@ -1,786 +1,2705 @@
 #include "app/pages/BackportPage.h"
 
 #include "app/AppContext.h"
-#include "app/models/JobQueueModel.h"
-#include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
-#include "engines/backport/BackportJobs.h"
-#include "engines/backport/BackportSettings.h"
-#include "engines/backport/RunReport.h"
-#include "engines/backport/SdkFixer.h"
+#include "core/Log.h"
+#include "core/Paths.h"
 
+#include <QApplication>
+#include <QClipboard>
+#include <QComboBox>
 #include <QDesktopServices>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QShortcut>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
-#include <QPixmapCache>
-#include <QScrollArea>
+#include <QProcess>
+#include <QRegularExpression>
 #include <QScrollBar>
+#include <QSpinBox>
+#include <QStyledItemDelegate>
+#include <QTableView>
+#include <QTextEdit>
 #include <QTimer>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <algorithm>
 
 namespace fw::pages {
-
-namespace {
-// backport.run takes one `game` per job; older queue files may hold `gameFolders`.
-QStringList gamesOf(const QJsonObject& params)
-{
-    QStringList out;
-    if (params.contains(QStringLiteral("game")))
-        out << params.value(QStringLiteral("game")).toString();
-    for (const auto& v : params.value(QStringLiteral("gameFolders")).toArray())
-        out << v.toString();
-    return out;
-}
-
-// The game folder a backport, SDK fix or audio report job is about.
-QString folderOf(const QJsonObject& params)
-{
-    const QString g = params.value(QStringLiteral("game")).toString();
-    return g.isEmpty() ? params.value(QStringLiteral("folder")).toString() : g;
-}
-
-// The run report a finished job names: its outcome, or the error detail of a failed run.
-QString reportOf(const JobRecord& rec)
-{
-    QString html;
-    if (rec.outcome)
-        html = rec.outcome->details.value(QStringLiteral("report")).toObject().value(QStringLiteral("html")).toString();
-    if (html.isEmpty() && rec.error)
-        html = backport::reportFromDetail(rec.error->detail);
-    return html;
-}
-} // namespace
 
 using namespace ui;
 using namespace theme;
 
-// ---- table ---------------------------------------------------------------------
+namespace {
 
-GameTable::GameTable(bool selectable, QWidget* parent) : QTableWidget(0, 7, parent), m_selectable(selectable)
+// ---- texts (PS5 Backport GUI 0.3.4, gui.py / pssr2_text.py) ------------------------------
+
+const char* const kSdkTip =
+    "The SDK version written into the game's executables. SDK 4 loads on firmware 4.00 and later; an SDK N build only "
+    "loads on firmware N.00 and later. It can not be higher than the game's own SDK. An SDK N build is planned for "
+    "firmware N.00+: FW4-only fixes that the native firmware no longer needs (for example the FW4 save-data "
+    "workarounds) are left out, so the game keeps its native behaviour there.";
+const char* const kProFixTip =
+    "PS5 Pro fix (the Assassin's Creed Black Flag V16 fix set): the Quality60 AGCDriver FW<12 hook and the shader-assert "
+    "trap fix. Use it when a backport shows a black screen or GPU hang on a PS5 Pro. The Pro identity gate and PSML Pro "
+    "overlay are added automatically where the game needs them.";
+const char* const kApplyTip =
+    "After the backport is built and verified and the originals are backed up and verified, copy only the backport files "
+    "into the selected game folders. You will be asked to confirm first.";
+const char* const kFakelibTip =
+    "Replace the AMPR / PlayGo libraries in the ticked games' backports (or in a backport ZIP / folder you choose) with "
+    "known-good ones. For dumps whose own libraries stop the game right after launch (0xa0020104) or leave it without "
+    "content or audio. The executables are not touched.";
+const char* const kBlackScreenNotice =
+    "Set Target SDK to 5 (or higher) and backport the unmodified game again. This fixes most cases. Keep the FW 4xx ZIP "
+    "for FW 4.xx consoles. A right-click rebuild of an old ZIP keeps its FW 4.xx save fixes.";
+const char* const kSdkRebuildCaveat =
+    "Rebuilt from an existing FW 4xx ZIP, so every FW 4.xx fix in it is kept, including save fixes that can break saving "
+    "on newer firmware. If saving fails, backport the unmodified game again with Target SDK set.";
+const char* const kPssr2Tip =
+    "PS5 Pro build. For a game that declares PS5 Pro support, the backport ZIP is built as a Pro-only ZIP named '... PS5 "
+    "Pro backport files.zip': the game's own Pro checks (IsTrinityMode, GetOperationMode, sceAgcGetIsTrinityMode) answer "
+    "Pro on every Pro firmware from 9.00, and a game that uses PSSR gets the Pro libScePsml.sprx with the model the game "
+    "declares. A game without PSSR gets only the eboot.bin change. A game that declares no PS5 Pro support keeps the "
+    "normal ZIP with a note: a PS5 Pro runs it in base mode, so there is nothing to force. Install only on a PS5 Pro with "
+    "firmware 9.00 or later; base PS5 consoles use the normal FW 4xx ZIP. The same changes are confirmed working on Black "
+    "Flag, UFC 6, F1 25 and Ghost of Yotei (Pro 13.20); every other game needs a console test. In every test so far the "
+    "game kept its original PSSR model and testers saw no image change from the PSSR part.";
+
+QString tip(const char* t)
 {
-    setHorizontalHeaderLabels({QString(), QStringLiteral("Title"), QStringLiteral("Title ID"), QStringLiteral("Version"),
-                               QStringLiteral("SDK"), QStringLiteral("Size"), QStringLiteral("Status")});
-    horizontalHeader()->setFixedHeight(32);
-    horizontalHeader()->setHighlightSections(false);
-    horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    horizontalHeader()->setStretchLastSection(false);
-    setColumnWidth(0, 36);
-    setColumnWidth(2, 110);
-    setColumnWidth(3, 100);
-    setColumnWidth(4, 70);
-    setColumnWidth(5, 90);
-    setColumnWidth(6, 190);
-    if (!selectable)
-        setColumnHidden(0, true);
-    verticalHeader()->hide();
-    verticalHeader()->setDefaultSectionSize(size::row);
-    setShowGrid(false);
-    setSelectionBehavior(QAbstractItemView::SelectRows);
-    setSelectionMode(QAbstractItemView::SingleSelection);
-    setEditTriggers(QAbstractItemView::NoEditTriggers);
-    setContextMenuPolicy(Qt::CustomContextMenu);
-    setMinimumHeight(6 * size::row + 40);
-    setIconSize(QSize(size::coverRow, size::coverRow));
-    connect(this, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
-        if (it->column() == 0)
-            emit checkedChanged();
-    });
-    connect(this, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& p) {
-        if (auto* it = itemAt(p))
-            emit contextRequested(item(it->row(), 1)->data(Qt::UserRole).toString(), viewport()->mapToGlobal(p));
-    });
-    connect(this, &QTableWidget::cellDoubleClicked, this, [this](int r, int) { emit activatedFolder(item(r, 1)->data(Qt::UserRole).toString()); });
+    return QStringLiteral("<p style='white-space:normal'>%1</p>").arg(QString::fromUtf8(t).toHtmlEscaped());
 }
 
-QPixmap GameTable::coverPixmap(const QString& coverPath, int px)
+QColor toneColor(const QString& tone)
 {
-    if (coverPath.isEmpty() || !QFileInfo::exists(coverPath))
-        return {};
-    const QString key = QStringLiteral("cover|%1|%2").arg(coverPath).arg(px);
-    QPixmap out;
-    if (QPixmapCache::find(key, &out))
-        return out;
-    QPixmap src(coverPath);
-    if (src.isNull())
-        return {};
-    src = src.scaled(px, px, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-    out = QPixmap(px, px);
+    if (tone == QLatin1String("idle") || tone == QLatin1String("good"))
+        return color::success;
+    if (tone == QLatin1String("warn"))
+        return color::warn;
+    if (tone == QLatin1String("bad"))
+        return color::danger;
+    if (tone == QLatin1String("busy"))
+        return color::accent_hi;
+    if (tone == QLatin1String("muted"))
+        return color::fg_5;
+    return color::fg_3; // info
+}
+
+QString nameOr(const BackportRow& r)
+{
+    return r.game.title.isEmpty() ? r.game.path : r.game.title;
+}
+QString idOr(const BackportRow& r, const QString& fallback = QStringLiteral("no PPSA"))
+{
+    return r.game.titleId.isEmpty() ? fallback : r.game.titleId;
+}
+
+QString modeNote(const QJsonObject& pssr2)
+{
+    const QString mode = pssr2.value(QStringLiteral("mode")).toString();
+    if (mode == QLatin1String("identity_only"))
+        return QStringLiteral("no PSSR in this game: only the eboot's own Pro checks are changed");
+    const QString v = pssr2.value(QStringLiteral("mfsr_version")).toString();
+    const QString model = pssr2.value(QStringLiteral("selected_model")).toString();
+    QString s = QStringLiteral("mfsrVersion %1 -> %2").arg(v.isEmpty() ? QStringLiteral("not declared") : v,
+                                                         model.isEmpty() ? QStringLiteral("default model") : model);
+    if (model.isEmpty() || model.startsWith(QLatin1String("r40")))
+        s += QStringLiteral(" (the game's original PSSR model; this build cannot switch it to the newer PSSR 2 models yet)");
+    return s;
+}
+
+QPixmap coverFor(const BackportRow& r, int px, qreal dpr)
+{
+    static QHash<QString, QPixmap> cache;
+    const QString title = r.game.title.isEmpty() ? QFileInfo(r.game.path).fileName() : r.game.title;
+    QString key;
+    if (!r.game.icon.isEmpty())
+        key = r.game.icon + u'|' + QString::number(QFileInfo(r.game.icon).lastModified().toMSecsSinceEpoch()) + u'|' + QString::number(px);
+    else
+        key = QStringLiteral("initials|") + title + u'|' + QString::number(px);
+    auto it = cache.find(key);
+    if (it != cache.end())
+        return *it;
+    const int dpx = int(px * dpr);
+    QPixmap out(dpx, dpx);
     out.fill(Qt::transparent);
-    QPainter p(&out);
-    p.setRenderHint(QPainter::Antialiasing);
-    QPainterPath clip;
-    clip.addRoundedRect(QRectF(0, 0, px, px), radius::sm, radius::sm);
-    p.setClipPath(clip);
-    p.drawPixmap((px - src.width()) / 2, (px - src.height()) / 2, src);
-    QPixmapCache::insert(key, out);
-    return out;
-}
-
-void GameTable::setGames(const std::vector<LibraryGame>& games, const QString& filter)
-{
-    const QStringList checked = checkedFolders();
-    blockSignals(true);
-    setRowCount(0);
-    m_count = 0;
-    for (const auto& g : games) {
-        const GameSummary& s = g.info;
-        if (!filter.isEmpty() && !s.title.contains(filter, Qt::CaseInsensitive) && !s.titleId.contains(filter, Qt::CaseInsensitive)
-            && !s.folder.contains(filter, Qt::CaseInsensitive))
-            continue;
-        const int r = rowCount();
-        insertRow(r);
-        auto* check = new QTableWidgetItem;
-        check->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        check->setCheckState(checked.contains(s.folder) ? Qt::Checked : Qt::Unchecked);
-        setItem(r, 0, check);
-        auto* title = new QTableWidgetItem(s.title.isEmpty() ? QFileInfo(s.folder).fileName() : s.title);
-        title->setFont(font::bodyStrong());
-        title->setForeground(color::fg_0);
-        title->setData(Qt::UserRole, s.folder);
-        QStringList tip{nativePath(s.folder)};
-        if (!s.platform.isEmpty())
-            tip << QStringLiteral("%1 %2").arg(s.platform, s.kind);
-        title->setToolTip(tip.join(QStringLiteral(" · ")));
-        const QPixmap cover = coverPixmap(s.coverPath, size::coverRow);
-        if (!cover.isNull())
-            title->setIcon(QIcon(cover));
-        setItem(r, 1, title);
-        auto mono = [](const QString& t, const QColor& c) {
-            auto* it = new QTableWidgetItem(t);
-            it->setFont(font::mono());
-            it->setForeground(c);
-            return it;
-        };
-        setItem(r, 2, mono(s.titleId, color::fg_1));
-        setItem(r, 3, mono(s.version, color::fg_3));
-        setItem(r, 4, mono(s.sdk, color::fg_3));
-        setItem(r, 5, mono(s.bytes > 0 ? formatBytes(s.bytes) : QString(), color::fg_3));
-        auto* statusItem = new QTableWidgetItem;
-        statusItem->setData(Qt::UserRole, s.folder);
-        setItem(r, 6, statusItem);
-        Tone tone = Tone::Neutral;
-        QString status = g.status.isEmpty() ? (s.isGame ? QStringLiteral("Ready") : QStringLiteral("Not a game dump")) : g.status;
-        QString issueTip = g.issues.join(u'\n');
-        if (!g.canRun && !g.issues.isEmpty()) {
-            status = QStringLiteral("Not ready: %1").arg(g.issues.first().section(QStringLiteral(": "), 1));
-            tone = Tone::Err;
-        } else if (!g.issues.isEmpty() && (g.status.isEmpty() || g.status == QLatin1String("Not backported"))) {
-            status = QStringLiteral("Ready · %1 note%2").arg(g.issues.size()).arg(g.issues.size() == 1 ? QString() : QStringLiteral("s"));
-            tone = Tone::Warn;
+    {
+        QPainter p(&out);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        QPainterPath clip;
+        clip.addRoundedRect(QRectF(0, 0, dpx, dpx), std::max(3.0, dpx / 6.0), std::max(3.0, dpx / 6.0));
+        p.setClipPath(clip);
+        QPixmap src;
+        if (!r.game.icon.isEmpty())
+            src.load(r.game.icon);
+        if (!src.isNull()) {
+            p.drawPixmap(QRect(0, 0, dpx, dpx), src.scaled(dpx, dpx, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+        } else {
+            QLinearGradient g(0, 0, dpx, dpx);
+            g.setColorAt(0, color::accent_lo);
+            g.setColorAt(1, QColor(0x2a, 0x1f, 0x55));
+            p.fillRect(QRect(0, 0, dpx, dpx), g);
+            QString initials;
+            for (const QString& w : title.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts)) {
+                if (initials.size() >= 2)
+                    break;
+                if (w.at(0).isLetterOrNumber())
+                    initials += w.at(0).toUpper();
+            }
+            if (initials.isEmpty())
+                initials = QStringLiteral("?");
+            QFont f = font::bodyStrong();
+            f.setPixelSize(int(dpx * 0.36));
+            p.setFont(f);
+            p.setPen(color::accent_hi);
+            p.drawText(QRect(0, 0, dpx, dpx), Qt::AlignCenter, initials);
         }
-        if (!s.isGame) tone = Tone::Warn;
-        else if (status.startsWith(QLatin1String("Backported")) || status == QLatin1String("Done")) tone = Tone::Ok;
-        else if (status.startsWith(QLatin1String("Failed"))) tone = Tone::Err;
-        else if (status.startsWith(QLatin1String("Queued")) || status.startsWith(QLatin1String("Running"))) tone = Tone::Info;
-        auto* wrap = new QWidget(this);
-        auto* h = hbox(wrap, 0, QMargins(8, 0, 8, 0));
-        auto* badge = new Badge(status, tone, wrap);
-        badge->setObjectName(QStringLiteral("statusBadge"));
-        if (!issueTip.isEmpty())
-            wrap->setToolTip(issueTip + (g.plan.isEmpty() ? QString() : QStringLiteral("\n\nPlan: ") + g.plan));
-        if (tone == Tone::Neutral)
-            badge->setIconName({});
-        h->addWidget(badge);
-        h->addStretch(1);
-        setCellWidget(r, 6, wrap);
-        ++m_count;
     }
-    blockSignals(false);
-    emit checkedChanged();
-}
-
-void GameTable::setStatusText(const QString& folder, const QString& text, Tone tone)
-{
-    for (int r = 0; r < rowCount(); ++r)
-        if (item(r, 1) && item(r, 1)->data(Qt::UserRole).toString() == folder)
-            if (auto* w = cellWidget(r, 6))
-                if (auto* b = w->findChild<Badge*>(QStringLiteral("statusBadge"))) {
-                    b->set(text, tone);
-                    b->setIconName(tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone));
-                }
-}
-
-QStringList GameTable::checkedFolders() const
-{
-    QStringList out;
-    for (int r = 0; r < rowCount(); ++r)
-        if (item(r, 0) && item(r, 0)->checkState() == Qt::Checked)
-            out << item(r, 1)->data(Qt::UserRole).toString();
+    out.setDevicePixelRatio(dpr);
+    cache.insert(key, out);
     return out;
 }
 
-QString GameTable::currentFolder() const
+// ---- delegate ---------------------------------------------------------------------------
+
+class GameDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem& o, const QModelIndex& i) const override
+    {
+        return {QStyledItemDelegate::sizeHint(o, i).width(), 58};
+    }
+
+    void paint(QPainter* p, const QStyleOptionViewItem& opt, const QModelIndex& idx) const override
+    {
+        const auto* row = static_cast<const BackportRow*>(idx.data(BackportGameModel::RowRole).value<void*>());
+        if (!row)
+            return;
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing);
+        const QRect r = opt.rect;
+        // Row background: selection / hover over the card.
+        if (opt.state & QStyle::State_Selected)
+            p->fillRect(r, color::accent_lo);
+        else if (opt.state & QStyle::State_MouseOver)
+            p->fillRect(r, color::bg_3);
+        p->fillRect(QRect(r.left(), r.bottom(), r.width(), 1), color::border_1);
+        const qreal dpr = p->device() ? p->device()->devicePixelRatioF() : 1.0;
+        switch (idx.column()) {
+        case BackportGameModel::SelectCol: {
+            const QRectF b(r.center().x() - 9.5, r.center().y() - 9.5, 19, 19);
+            if (row->checked) {
+                p->setPen(Qt::NoPen);
+                p->setBrush(accentGradient(b));
+                p->drawRoundedRect(b, 5, 5);
+                p->drawPixmap(QRectF(b.center().x() - 7, b.center().y() - 7, 14, 14).toRect(),
+                              iconPixmap(QStringLiteral("check"), 14, color::on_accent, dpr));
+            } else {
+                p->setPen(QPen(color::border_control, 1.3));
+                p->setBrush(color::field_bg);
+                p->drawRoundedRect(b.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
+            }
+            break;
+        }
+        case BackportGameModel::CoverCol: {
+            const int px = 40;
+            p->drawPixmap(QRect(r.left() + (r.width() - px) / 2, r.top() + (r.height() - px) / 2, px, px), coverFor(*row, px, dpr));
+            break;
+        }
+        case BackportGameModel::TitleCol: {
+            const QRect tr = r.adjusted(4, 9, -8, -9);
+            QFont tf = font::bodyStrong();
+            p->setFont(tf);
+            p->setPen(row->game.title.isEmpty() ? color::fg_4 : color::fg_0);
+            const QString title = row->game.title.isEmpty() ? QStringLiteral("Unknown title") : row->game.title;
+            p->drawText(QRect(tr.left(), tr.top(), tr.width(), 20), Qt::AlignLeft | Qt::AlignVCenter,
+                        QFontMetrics(tf).elidedText(title, Qt::ElideRight, tr.width()));
+            p->setFont(font::caption());
+            p->setPen(color::fg_4);
+            const QString sub = row->game.path;
+            p->drawText(QRect(tr.left(), tr.top() + 21, tr.width(), 18), Qt::AlignLeft | Qt::AlignVCenter,
+                        QFontMetrics(font::caption()).elidedText(sub, Qt::ElideMiddle, tr.width()));
+            break;
+        }
+        case BackportGameModel::PpsaCol: {
+            const QRect tr = r.adjusted(8, 9, -6, -9);
+            const QString id = row->game.titleId;
+            p->setFont(id.isEmpty() ? font::caption() : font::mono());
+            p->setPen(id.isEmpty() ? color::fg_5 : color::fg_1);
+            p->drawText(QRect(tr.left(), tr.top(), tr.width(), 20), Qt::AlignLeft | Qt::AlignVCenter, id.isEmpty() ? QStringLiteral("Unknown") : id);
+            p->setFont(font::caption());
+            p->setPen(color::fg_4);
+            p->drawText(QRect(tr.left(), tr.top() + 21, tr.width(), 18), Qt::AlignLeft | Qt::AlignVCenter,
+                        row->game.version.isEmpty() ? QStringLiteral("version unknown") : QStringLiteral("v%1").arg(row->game.version));
+            break;
+        }
+        case BackportGameModel::SdkCol:
+        case BackportGameModel::FwCol: {
+            const QString v = idx.data(Qt::DisplayRole).toString();
+            p->setFont(v.isEmpty() ? font::caption() : font::mono());
+            p->setPen(v.isEmpty() ? color::fg_5 : color::fg_1);
+            p->drawText(r.adjusted(8, 0, -6, 0), Qt::AlignLeft | Qt::AlignVCenter, v.isEmpty() ? QStringLiteral("Unknown") : v);
+            break;
+        }
+        case BackportGameModel::StatusCol: {
+            const QColor c = toneColor(row->tone);
+            const QRect sr = r.adjusted(8, 0, -10, 0);
+            QString text = row->status;
+            if (row->tone == QLatin1String("busy") && row->pct > 0)
+                text += QStringLiteral(" %1%").arg(row->pct);
+            const QFontMetrics fm(font::caption());
+            const int tw = std::min(fm.horizontalAdvance(text) + 34, sr.width());
+            const QRectF pill(sr.left(), r.center().y() - 11, tw, 22);
+            QColor fill = c;
+            fill.setAlpha(34);
+            p->setPen(Qt::NoPen);
+            p->setBrush(fill);
+            p->drawRoundedRect(pill, 11, 11);
+            p->setBrush(c);
+            p->drawEllipse(QPointF(pill.left() + 11, pill.center().y()), 3.5, 3.5);
+            p->setPen(row->tone == QLatin1String("muted") ? color::fg_4 : c.lighter(118));
+            p->setFont(font::caption());
+            p->drawText(pill.adjusted(20, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, fm.elidedText(text, Qt::ElideRight, int(pill.width()) - 28));
+            break;
+        }
+        default:
+            break;
+        }
+        p->restore();
+    }
+};
+
+} // namespace
+
+// ---- model --------------------------------------------------------------------------------
+
+BackportGameModel::BackportGameModel(QObject* parent) : QAbstractTableModel(parent) {}
+
+int BackportGameModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : int(m_rows.size()); }
+int BackportGameModel::columnCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : ColumnCount; }
+
+QVariant BackportGameModel::data(const QModelIndex& index, int role) const
 {
-    const int r = currentRow();
-    return r >= 0 && item(r, 1) ? item(r, 1)->data(Qt::UserRole).toString() : QString();
+    if (!index.isValid() || index.row() >= int(m_rows.size()))
+        return {};
+    const BackportRow& r = m_rows[size_t(index.row())];
+    if (role == RowRole)
+        return QVariant::fromValue(static_cast<void*>(const_cast<BackportRow*>(&r)));
+    if (role == FilterRole)
+        return QStringList{r.game.title, r.game.titleId, r.game.path}.join(u'\n');
+    if (role == SortRole) {
+        switch (index.column()) {
+        case TitleCol: return (r.game.title.isEmpty() ? r.game.path : r.game.title).toLower();
+        case PpsaCol: return r.game.titleId;
+        case SdkCol: return r.game.sdk.isEmpty() ? QStringLiteral("~") : r.game.sdk;
+        case FwCol: return r.game.fw.isEmpty() ? QStringLiteral("~") : r.game.fw;
+        case StatusCol: return r.status;
+        default: return index.row();
+        }
+    }
+    if (role == Qt::DisplayRole) {
+        switch (index.column()) {
+        case TitleCol: return r.game.title;
+        case PpsaCol: return r.game.titleId;
+        case SdkCol: return r.game.sdk;
+        case FwCol: return r.game.fw;
+        case StatusCol: return r.status;
+        default: return {};
+        }
+    }
+    if (role == Qt::CheckStateRole && index.column() == SelectCol)
+        return r.checked ? Qt::Checked : Qt::Unchecked;
+    if (role == Qt::ToolTipRole) {
+        QStringList t;
+        t << (r.game.title.isEmpty() ? QStringLiteral("Unknown title") : r.game.title);
+        t << QStringLiteral("Source folder: %1").arg(r.game.path);
+        t << QStringLiteral("PPSA: %1   Version: %2").arg(r.game.titleId.isEmpty() ? QStringLiteral("Unknown") : r.game.titleId,
+                                                         r.game.version.isEmpty() ? QStringLiteral("Unknown") : r.game.version);
+        t << QStringLiteral("Source SDK: %1   Required FW: %2").arg(r.game.sdk.isEmpty() ? QStringLiteral("Unknown") : r.game.sdk,
+                                                                   r.game.fw.isEmpty() ? QStringLiteral("Unknown") : r.game.fw);
+        for (const QString& n : r.game.notes)
+            t << QStringLiteral("Note: %1").arg(n);
+        if (!r.game.error.isEmpty())
+            t << QStringLiteral("Metadata: %1").arg(r.game.error);
+        if (!r.detail.isEmpty())
+            t << QStringLiteral("Status: %1 — %2").arg(r.status, r.detail);
+        t << QStringLiteral("Double-click for details, right-click for actions.");
+        return t.join(u'\n');
+    }
+    return {};
 }
 
-void GameTable::setAllChecked(bool on)
+QVariant BackportGameModel::headerData(int section, Qt::Orientation o, int role) const
 {
-    blockSignals(true);
-    for (int r = 0; r < rowCount(); ++r)
-        if (item(r, 0))
-            item(r, 0)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
-    blockSignals(false);
+    if (o != Qt::Horizontal || role != Qt::DisplayRole)
+        return {};
+    switch (section) {
+    case SelectCol: return QString();
+    case CoverCol: return QString();
+    case TitleCol: return QStringLiteral("Game title");
+    case PpsaCol: return QStringLiteral("PPSA");
+    case SdkCol: return QStringLiteral("SDK");
+    case FwCol: return QStringLiteral("Required FW");
+    case StatusCol: return QStringLiteral("Status");
+    default: return {};
+    }
+}
+
+Qt::ItemFlags BackportGameModel::flags(const QModelIndex& index) const
+{
+    if (!index.isValid())
+        return Qt::NoItemFlags;
+    return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+
+bool BackportGameModel::setData(const QModelIndex& index, const QVariant& value, int role)
+{
+    if (!index.isValid() || role != Qt::CheckStateRole || m_locked)
+        return false;
+    m_rows[size_t(index.row())].checked = value.toInt() == Qt::Checked;
+    emit dataChanged(this->index(index.row(), 0), this->index(index.row(), ColumnCount - 1));
+    emit checkedChanged();
+    return true;
+}
+
+int BackportGameModel::indexOfKey(const QString& key) const
+{
+    for (size_t i = 0; i < m_rows.size(); ++i)
+        if (m_rows[i].game.key == key)
+            return int(i);
+    return -1;
+}
+
+BackportRow* BackportGameModel::rowByKey(const QString& key)
+{
+    const int i = indexOfKey(key);
+    return i < 0 ? nullptr : &m_rows[size_t(i)];
+}
+
+void BackportGameModel::clear()
+{
+    beginResetModel();
+    m_rows.clear();
+    endResetModel();
     emit checkedChanged();
 }
 
-// ---- page ------------------------------------------------------------------------
-
-BackportPage::BackportPage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logModel, LibraryStore& library, QWidget* parent)
-    : Page(ctx, QStringLiteral("backport"), QStringLiteral("Backport"),
-           QStringLiteral("Lower the SDK a game needs so it runs on older firmware. Originals are zipped before anything is changed."), parent),
-      m_model(queueModel), m_library(library)
+void BackportGameModel::append(BackportRow row)
 {
-    m_reader = new GameInfoReader(this);
-    connect(m_reader, &GameInfoReader::ready, this, [this](const GameSummary& s) {
-        if (s.exists)
-            m_library.upsertGame(s, s.isGame ? QStringLiteral("Not backported") : QString());
-        if (!m_pendingAdds.isEmpty())
-            m_reader->summarize(m_pendingAdds.takeFirst(), true);
-    });
+    beginInsertRows({}, int(m_rows.size()), int(m_rows.size()));
+    m_rows.push_back(std::move(row));
+    endInsertRows();
+    emit checkedChanged();
+}
 
-    m_restore = button(QStringLiteral("Restore originals…"), ButtonVariant::Secondary, QStringLiteral("undo"), this);
-    m_backport = button(QStringLiteral("Backport"), ButtonVariant::Primary, QStringLiteral("backports"), this);
-    header()->addAction(m_restore);
-    header()->addAction(m_backport);
-    connect(m_restore, &QPushButton::clicked, this, &BackportPage::restoreOriginals);
-    connect(m_backport, &QPushButton::clicked, this, &BackportPage::primaryAction);
+void BackportGameModel::removeKey(const QString& key)
+{
+    const int i = indexOfKey(key);
+    if (i < 0)
+        return;
+    beginRemoveRows({}, i, i);
+    m_rows.erase(m_rows.begin() + i);
+    endRemoveRows();
+    emit checkedChanged();
+}
+
+void BackportGameModel::rowChanged(const QString& key)
+{
+    const int i = indexOfKey(key);
+    if (i >= 0)
+        emit dataChanged(index(i, 0), index(i, ColumnCount - 1));
+}
+
+void BackportGameModel::allChanged()
+{
+    if (!m_rows.empty())
+        emit dataChanged(index(0, 0), index(int(m_rows.size()) - 1, ColumnCount - 1));
+    emit checkedChanged();
+}
+
+void BackportFilterModel::setSearch(const QString& text)
+{
+    m_search = text.trimmed();
+    invalidateFilter();
+}
+
+bool BackportFilterModel::filterAcceptsRow(int row, const QModelIndex& parent) const
+{
+    if (m_search.isEmpty())
+        return true;
+    const QString hay = sourceModel()->index(row, 0, parent).data(BackportGameModel::FilterRole).toString();
+    return hay.contains(m_search, Qt::CaseInsensitive);
+}
+
+bool BackportFilterModel::lessThan(const QModelIndex& a, const QModelIndex& b) const
+{
+    const QVariant va = a.data(BackportGameModel::SortRole), vb = b.data(BackportGameModel::SortRole);
+    if (va.typeId() == QMetaType::Int)
+        return va.toInt() < vb.toInt();
+    return va.toString() < vb.toString(); // string sorts, as the original
+}
+
+// ---- page ----------------------------------------------------------------------------------
+
+BackportPage::BackportPage(AppContext& ctx, JobQueueModel&, LogModel&, LibraryStore&, QWidget* parent)
+    : Page(ctx, QStringLiteral("backport"), QStringLiteral("Backport"),
+           QStringLiteral("Make games run on older PS5 firmware. The originals are always backed up first."),
+           parent)
+{
+    m_settings = bp::loadSettings();
+    m_model = new BackportGameModel(this);
+    m_proxy = new BackportFilterModel(this);
+    m_proxy->setSourceModel(m_model);
+    m_proxy->setDynamicSortFilter(false);
+
+    m_switchBtn = button(QStringLiteral("Switch AMPR / PlayGo…"), ButtonVariant::Secondary, QStringLiteral("replace"), this);
+    m_switchBtn->setToolTip(tip(kFakelibTip));
+    m_start = button(QStringLiteral("Start Backport"), ButtonVariant::Primary, QStringLiteral("play"), this);
+    header()->addAction(m_switchBtn);
+    header()->addAction(m_start);
+    connect(m_start, &QPushButton::clicked, this, &BackportPage::startOrCancel);
+    connect(m_switchBtn, &QPushButton::clicked, this, [this] { switchFakelib(checkedKeys()); });
+
+    m_engineBar = new InfoBar(Tone::Warn, this);
+    m_engineBar->hide();
+    content()->addWidget(m_engineBar);
 
     auto* columns = new QWidget(this);
-    auto* layout = new TwoColumnLayout(columns);
-    layout->setLeftMax(100000);
+    auto* layout = new TwoColumnLayout(columns, 348, 4000);
     auto* left = new QWidget(columns);
     auto* ll = vbox(left, space::lg);
-
-    m_tableCard = new Card(left, Card::Variant::Table);
-    auto* h = m_tableCard->header();
-    h->addWidget(heading(QStringLiteral("Game library"), TextStyle::Subtitle, m_tableCard));
-    m_counts = caption({}, m_tableCard);
-    h->addWidget(m_counts);
-    h->addStretch(1);
-    m_search = textInput(QStringLiteral("Search title or ID"), false, m_tableCard);
-    m_search->setFixedWidth(220);
-    m_search->setClearButtonEnabled(true);
-    h->addWidget(m_search);
-    auto* add = button(QStringLiteral("Add folders…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), m_tableCard);
-    auto* rescan = button(QStringLiteral("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), m_tableCard);
-    h->addWidget(add);
-    h->addWidget(rescan);
-    connect(add, &QPushButton::clicked, this, &BackportPage::addFolders);
-    connect(rescan, &QPushButton::clicked, this, &BackportPage::scan);
-    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) { rebuildTable(); });
-
-    auto* locRow = new QWidget(m_tableCard);
-    auto* lh = hbox(locRow, space::md, QMargins(space::lg, 6, space::lg, 6));
-    m_locations = caption({}, locRow);
-    lh->addWidget(m_locations, 1);
-    auto* edit = new Link(QStringLiteral("Edit…"), locRow);
-    edit->setFont(font::caption());
-    connect(edit, &Link::activated, this, &BackportPage::addFolders);
-    lh->addWidget(edit);
-    auto* all = new Link(QStringLiteral("Select all"), locRow);
-    all->setFont(font::caption());
-    auto* none = new Link(QStringLiteral("Select none"), locRow);
-    none->setFont(font::caption());
-    lh->addWidget(all);
-    lh->addWidget(none);
-    m_tableCard->body()->addWidget(locRow);
-    m_tableCard->body()->addWidget(hairline(m_tableCard));
-    m_table = new GameTable(true, m_tableCard);
-    m_tableCard->body()->addWidget(m_table);
-    connect(all, &Link::activated, this, [this] { m_table->setAllChecked(true); });
-    connect(none, &Link::activated, this, [this] { m_table->setAllChecked(false); });
-    connect(m_table, &GameTable::checkedChanged, this, &BackportPage::updateCounts);
-    connect(m_table, &GameTable::activatedFolder, this, [](const QString& f) { openInFileManager(f); });
-    connect(m_table, &GameTable::contextRequested, this, [this](const QString& folder, const QPoint& pos) {
-        QMenu menu(this);
-        menu.addAction(QStringLiteral("Backport this game"), this, [this, folder] {
-            if (!confirmApply({folder}))
-                return;
-            auto r = jobs::submitBackport(m_ctx, {folder}, m_options->overrides());
-            if (r.ok()) {
-                m_ctx.queue().holdQueue(false);
-                m_table->setStatusText(folder, QStringLiteral("Queued"), Tone::Info);
-            } else
-                emit toastRequested(Tone::Err, QStringLiteral("Backport not started"), r.error().message);
-        });
-        const bool canFix = jobs::isAvailable(m_ctx, backport::kJobSdkFix);
-        menu.addAction(QStringLiteral("Fix the SDK marker on a copy…"), this, [this, folder] { fixSdk(folder, false); })->setEnabled(canFix);
-        menu.addAction(QStringLiteral("Fix the SDK marker in place…"), this, [this, folder] { fixSdk(folder, true); })->setEnabled(canFix);
-        menu.addAction(QStringLiteral("Undo the last SDK fix…"), this, [this, folder] { undoSdkFix(folder); })
-            ->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("backport.restore")));
-        menu.addAction(QStringLiteral("Audio report (read-only)"), this, [this, folder] { audioReport(folder); })
-            ->setEnabled(jobs::isAvailable(m_ctx, backport::kJobAudioScan));
-        const QString report = m_reports.value(folder);
-        menu.addAction(QStringLiteral("Open the last report"), this, [this, report] { openReport(report); })->setEnabled(!report.isEmpty());
-        menu.addSeparator();
-        menu.addAction(QStringLiteral("Build image from this dump"), this, [this, folder] {
-            emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), folder}}});
-        });
-        menu.addAction(QStringLiteral("Show in folder"), this, [folder] { openInFileManager(folder); });
-        menu.addSeparator();
-        menu.addAction(QStringLiteral("Remove from library"), this, [this, folder] { m_library.removeGame(folder); });
-        menu.exec(pos);
-    });
-    m_empty = new EmptyState(QStringLiteral("library"), QStringLiteral("No games found"),
-                             QStringLiteral("Add a folder that holds game dumps. Each dump is a folder with sce_sys\\param.json or eboot.bin."), m_tableCard);
-    auto* emptyAdd = m_empty->addAction(QStringLiteral("Add folders…"), ButtonVariant::Primary);
-    connect(emptyAdd, &QPushButton::clicked, this, &BackportPage::addFolders);
-    m_tableCard->body()->addWidget(m_empty);
-    m_unavailable = new UnavailableState(QStringLiteral("Backporting"), QStringLiteral("backport.run"), m_tableCard);
-    m_tableCard->body()->addWidget(m_unavailable);
-    auto* f = m_tableCard->footer();
-    m_footerLeft = caption({}, m_tableCard);
-    m_footerRight = caption({}, m_tableCard);
-    f->addWidget(m_footerLeft, 1);
-    f->addWidget(m_footerRight);
-    ll->addWidget(m_tableCard);
-
-    auto* activity = new Card(left);
-    auto* activityLinks = new QWidget(activity);
-    auto* alh = hbox(activityLinks, space::md);
-    m_openReport = new Link(QStringLiteral("Open report"), activityLinks);
-    m_openReport->setVisible(false);
-    connect(m_openReport, &Link::activated, this, [this] { openReport(m_lastReport); });
-    auto* openLogs = new Link(QStringLiteral("Open in Logs"), activityLinks);
-    connect(openLogs, &Link::activated, this, [this] {
-        emit navigateRequested({QStringLiteral("logs"), {{QStringLiteral("source"), QStringLiteral("backport")}}});
-    });
-    alh->addWidget(m_openReport);
-    alh->addWidget(openLogs);
-    activity->setTitle(QStringLiteral("Activity"), activityLinks);
-    activity->body()->setSpacing(space::sm);
-    m_activity = new ActivityWell(logModel, activity);
-    m_activity->setSource(QStringLiteral("backport"));
-    activity->body()->addWidget(m_activity);
-    ll->addWidget(activity);
-    // Shortcuts to the PS5 connect page (Payloads and Kernel log tabs); no protocol work here.
-    auto* console = new InfoBar(Tone::Info, left);
-    console->setTitle(QStringLiteral("Testing on a console?"));
-    console->setMessage(QStringLiteral("Send the kernel-log or debug payload and watch the kernel log on the PS5 connect page while the game starts."));
-    connect(console->addLink(QStringLiteral("Send a payload…")), &Link::activated, this, [this] {
-        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("payloads")}}});
-    });
-    connect(console->addLink(QStringLiteral("Open the kernel log")), &Link::activated, this, [this] {
-        emit navigateRequested({QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("klog")}}});
-    });
-    // #46: watch the console for crash folders and save each one as a ZIP
-    // (Desktop\PS5 Logs); stop it from the Queue page.
-    connect(console->addLink(QStringLiteral("Capture crash dumps")), &Link::activated, this, [this] {
-        if (enqueueBackportJob(QStringLiteral("ps5.crashdumps.capture"), QJsonObject{},
-                               QStringLiteral("Crash-dump capture not started"))
-                .ok())
-            emit toastRequested(Tone::Info, QStringLiteral("Watching the PS5 for crashes"),
-                                QStringLiteral("Each crash is saved as a ZIP in Desktop\\PS5 Logs. Stop it on the Queue page."));
-    });
-    ll->addWidget(console);
-
     auto* right = new QWidget(columns);
     auto* rl = vbox(right, space::lg);
-    m_options = new JobOptionsPanel(ctx, {QStringLiteral("Backport")}, {}, right);
-    m_options->setGroupCards(true);
-    m_options->build();
-    rl->addWidget(m_options);
-    auto* tip = new InfoBar(Tone::Info, right);
-    tip->setTitle(QStringLiteral("Black screen on FW 5.00 or newer?"));
-    tip->setMessage(QStringLiteral("Set Target SDK to 5 or higher and backport the unmodified game again. Keep the SDK 4 ZIP for FW 4.xx consoles."));
-    rl->addWidget(tip);
-    m_providers = new InfoBar(Tone::Info, right);
-    m_providers->setTitle(QStringLiteral("AMPR / PlayGo libraries"));
-    connect(m_providers->addLink(QStringLiteral("Pin them again…")), &Link::activated, this, &BackportPage::pinProviders);
-    rl->addWidget(m_providers);
-    connect(m_options, &JobOptionsPanel::overridesChanged, this, &BackportPage::refreshProviderBar);
-    connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
-        if (key == backport::keys::kAmprPlaygoFolder)
-            refreshProviderBar();
-    });
-    rl->addStretch(1);
     layout->setLeft(left);
     layout->setRight(right);
     content()->addWidget(columns);
 
-    connect(&m_library, &LibraryStore::changed, this, &BackportPage::rebuildTable);
-    connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &BackportPage::onJobFinished);
-    connect(&m_ctx.queue(), &JobQueue::jobChanged, this, [this](const QString& id) {
-        auto rec = m_ctx.queue().record(id);
-        if (!rec || rec->kind != QLatin1String("backport.run"))
-            return;
-        for (const QString& game : gamesOf(rec->parameters))
-            m_table->setStatusText(game, rec->state == JobState::Running ? QStringLiteral("Running · %1").arg(thinPercent(rec->progress.overallFraction)) : jobStateName(rec->state),
-                                   rec->state == JobState::Running ? Tone::Info : toneForState(rec->state));
+    buildLibraryCard();
+    ll->addWidget(m_libraryCard, 1);
+    buildProgressCard();
+    ll->addWidget(m_progressCard);
+    ll->addWidget(m_activityCard);
+    buildSideColumn(rl);
+    rl->addStretch(1);
+
+    connect(m_model, &BackportGameModel::checkedChanged, this, [this] {
+        updateStats();
+        updateLibraryState();
     });
-    rebuildTable();
-    refreshProviderBar();
+    updateModeLine();
+    updateButtons();
+    updateLibraryState();
+    updateStats();
+
+    // An apply interrupted by a crash or power loss: say so even before the
+    // page is opened (the restore itself is offered on the page).
+    if (!qEnvironmentVariableIsSet("FW_OFFLINE")) {
+        QTimer::singleShot(1500, this, [this] {
+            const auto rows = bp::interruptedApplies();
+            if (!rows.empty())
+                emit toastRequested(Tone::Warn, QStringLiteral("A backport apply was interrupted"),
+                                    QStringLiteral("Open Backport to restore the original files from the verified backup."));
+        });
+    }
 }
 
-void BackportPage::rebuildTable()
+BackportPage::~BackportPage()
 {
-    m_table->setGames(m_library.games(), m_search->text().trimmed());
-    const bool available = jobs::isAvailable(m_ctx, QStringLiteral("backport.run"));
-    const bool any = m_table->gameCount() > 0;
-    m_table->setVisible(any);
-    m_empty->setVisible(!any && available);
-    m_unavailable->setVisible(!available);
-    const QStringList folders = m_library.scanFolders();
-    QStringList shown;
-    for (const QString& f : folders)
-        shown << nativePath(f);
-    m_locations->setText(folders.isEmpty() ? QStringLiteral("Scan locations: none yet") : QStringLiteral("Scan locations: %1").arg(shown.join(QStringLiteral(", "))));
-    const QDateTime last = m_library.lastScan();
-    m_footerLeft->setText(QStringLiteral("%1 · %2 game%3 in %4 location%5")
-                              .arg(last.isValid() ? QStringLiteral("Last scan %1").arg(relativeTime(last)) : QStringLiteral("Not scanned yet"))
-                              .arg(m_library.games().size()).arg(m_library.games().size() == 1 ? QString() : QStringLiteral("s"))
-                              .arg(folders.size()).arg(folders.size() == 1 ? QString() : QStringLiteral("s")));
-    updateCounts();
+    if (m_scanCancel)
+        m_scanCancel->store(true);
 }
 
-void BackportPage::updateCounts()
+void BackportPage::buildLibraryCard()
 {
-    const QStringList checked = m_table->checkedFolders();
-    qint64 bytes = 0;
-    for (const auto& g : m_library.games())
-        if (checked.contains(g.info.folder))
-            bytes += g.info.bytes;
-    m_counts->setText(QStringLiteral("%1 games · %2 selected").arg(m_table->gameCount()).arg(checked.size()));
-    m_footerRight->setText(checked.isEmpty() ? QString() : QStringLiteral("Selected: %1 game%2 · %3").arg(checked.size()).arg(checked.size() == 1 ? QString() : QStringLiteral("s")).arg(formatBytes(bytes)));
-    m_backport->setText(checked.size() == 1 ? QStringLiteral("Backport 1 game") : checked.isEmpty() ? QStringLiteral("Backport") : QStringLiteral("Backport %1 games").arg(checked.size()));
-    const bool available = jobs::isAvailable(m_ctx, QStringLiteral("backport.run"));
-    m_backport->setEnabled(available && !checked.isEmpty());
-    m_backport->setToolTip(!available ? QStringLiteral("Not available in this build") : checked.isEmpty() ? QStringLiteral("Select at least one game") : QString());
-    m_restore->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("backport.restore")));
+    m_libraryCard = new Card(this);
+    auto* tools = new QWidget(m_libraryCard);
+    auto* th = hbox(tools, space::sm);
+    m_search = new QLineEdit(tools);
+    m_search->setPlaceholderText(QStringLiteral("Search title or PPSA…"));
+    m_search->setClearButtonEnabled(true);
+    m_search->setMinimumWidth(200);
+    m_search->setMaximumWidth(320);
+    m_search->addAction(icon(QStringLiteral("search"), color::fg_4), QLineEdit::LeadingPosition);
+    m_rootsBtn = button(QStringLiteral("Locations (0)"), ButtonVariant::Secondary, QStringLiteral("folders"), tools);
+    m_rootsBtn->setToolTip(QStringLiteral("Show, add or remove the folders that are scanned"));
+    th->addWidget(m_rootsBtn);
+    m_rescanBtn = new IconButton(QStringLiteral("refresh"), QStringLiteral("Rescan"), IconButton::Size::Regular, tools);
+    th->addWidget(m_rescanBtn);
+    m_addBtn = button(QStringLiteral("Add folders…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), tools);
+    m_addBtn->setToolTip(QStringLiteral("Add one or more folders to scan (game folders, or folders that contain games). "
+                                        "Subfolders are scanned. You can also drag folders onto this window."));
+    th->addWidget(m_addBtn);
+    auto* titleRow = m_libraryCard->setTitle(QStringLiteral("Game library"), tools);
+    m_countBadge = new Badge(QStringLiteral("No games yet"), Tone::Neutral, m_libraryCard);
+    m_countBadge->setIconName(QString());
+    titleRow->insertWidget(1, m_countBadge);
+
+    auto* sub = new QWidget(m_libraryCard);
+    auto* sh = hbox(sub, space::md);
+    m_search->setParent(sub);
+    sh->addWidget(m_search, 1);
+    sh->addSpacing(space::sm);
+    auto* all = new Link(QStringLiteral("Select all"), sub);
+    auto* none = new Link(QStringLiteral("Select none"), sub);
+    auto* clear = new Link(QStringLiteral("Clear list"), sub);
+    clear->setToolTip(QStringLiteral("Remove every game and scan location from the list. Nothing is deleted from disk."));
+    sh->addWidget(all);
+    sh->addWidget(none);
+    sh->addWidget(clear);
+    m_scanLabel = label({}, TextStyle::Caption, color::fg_4, sub);
+    sh->addSpacing(space::sm);
+    sh->addWidget(m_scanLabel);
+    m_libraryCard->body()->addWidget(sub);
+
+    m_table = new QTableView(m_libraryCard);
+    m_table->setModel(m_proxy);
+    m_table->setItemDelegate(new GameDelegate(m_table));
+    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_table->setShowGrid(false);
+    m_table->setMouseTracking(true);
+    m_table->setWordWrap(false);
+    m_table->verticalHeader()->hide();
+    m_table->verticalHeader()->setDefaultSectionSize(58);
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_table->setSortingEnabled(false);
+    m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_table->setMinimumHeight(380);
+    m_table->setAccessibleName(QStringLiteral("Games"));
+    auto* hh = m_table->horizontalHeader();
+    hh->setSectionResizeMode(QHeaderView::Fixed);
+    hh->setSectionResizeMode(BackportGameModel::TitleCol, QHeaderView::Stretch);
+    hh->resizeSection(BackportGameModel::SelectCol, 40);
+    hh->resizeSection(BackportGameModel::CoverCol, 52);
+    hh->resizeSection(BackportGameModel::PpsaCol, 112);
+    hh->resizeSection(BackportGameModel::SdkCol, 60);
+    hh->resizeSection(BackportGameModel::FwCol, 96);
+    hh->resizeSection(BackportGameModel::StatusCol, 186);
+    m_table->viewport()->installEventFilter(this);
+    hh->setSectionsClickable(true);
+    hh->setHighlightSections(false);
+    hh->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_libraryCard->body()->addWidget(m_table, 1);
+
+    m_emptyDrop = new DropZone(QStringLiteral("folder_plus"), QStringLiteral("Add the folders that contain your extracted games"),
+                               QStringLiteral("Click to browse, or drag folders here. A game folder is one with eboot.bin at its root."),
+                               m_libraryCard);
+    m_libraryCard->body()->addWidget(m_emptyDrop);
+    m_emptyText = label({}, TextStyle::Body, color::fg_3, m_libraryCard);
+    m_emptyText->setAlignment(Qt::AlignCenter);
+    m_emptyText->setMinimumHeight(120);
+    m_libraryCard->body()->addWidget(m_emptyText);
+
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString& t) {
+        m_proxy->setSearch(t);
+        updateLibraryState();
+    });
+    connect(m_addBtn, &QPushButton::clicked, this, [this] {
+        const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Add a folder to scan (repeat to add more)"));
+        if (!d.isEmpty())
+            addRoots({d});
+    });
+    connect(m_emptyDrop, &DropZone::clicked, m_addBtn, &QPushButton::click);
+    connect(m_rescanBtn, &QToolButton::clicked, this, &BackportPage::rescan);
+    connect(m_rootsBtn, &QPushButton::clicked, this, &BackportPage::editScanLocations);
+    connect(clear, &Link::activated, this, &BackportPage::clearList);
+    auto setVisible = [this](bool on) {
+        if (m_running)
+            return;
+        for (int i = 0; i < m_proxy->rowCount(); ++i)
+            m_model->rows()[size_t(m_proxy->mapToSource(m_proxy->index(i, 0)).row())].checked = on;
+        m_model->allChanged();
+    };
+    connect(all, &Link::activated, this, [setVisible] { setVisible(true); });
+    connect(none, &Link::activated, this, [setVisible] { setVisible(false); });
+    connect(hh, &QHeaderView::sectionClicked, this, [this, setVisible](int section) {
+        if (section == BackportGameModel::SelectCol) {
+            bool allOn = m_proxy->rowCount() > 0;
+            for (int i = 0; i < m_proxy->rowCount(); ++i)
+                allOn = allOn && m_model->rows()[size_t(m_proxy->mapToSource(m_proxy->index(i, 0)).row())].checked;
+            setVisible(!allOn);
+            return;
+        }
+        if (section == BackportGameModel::CoverCol)
+            return;
+        const bool same = m_proxy->sortColumn() == section;
+        const Qt::SortOrder order = same && m_proxy->sortOrder() == Qt::AscendingOrder ? Qt::DescendingOrder : Qt::AscendingOrder;
+        m_proxy->sort(section, order);
+        m_table->horizontalHeader()->setSortIndicatorShown(true);
+        m_table->horizontalHeader()->setSortIndicator(section, order);
+    });
+    connect(m_table, &QTableView::clicked, this, [this](const QModelIndex& i) {
+        if (i.column() == BackportGameModel::SelectCol && !m_running) {
+            auto& r = m_model->rows()[size_t(m_proxy->mapToSource(i).row())];
+            r.checked = !r.checked;
+            m_model->rowChanged(r.game.key);
+            emit m_model->checkedChanged();
+        }
+    });
+    connect(m_table, &QTableView::doubleClicked, this, [this](const QModelIndex& i) {
+        showDetails(m_model->rows()[size_t(m_proxy->mapToSource(i).row())].game.key);
+    });
+    connect(m_table, &QWidget::customContextMenuRequested, this, [this](const QPoint& p) {
+        const QModelIndex i = m_table->indexAt(p);
+        if (!i.isValid())
+            return;
+        if (!m_table->selectionModel()->isRowSelected(i.row(), {}))
+            m_table->selectRow(i.row());
+        showRowMenu(m_table->viewport()->mapToGlobal(p));
+    });
+    auto* space = new QShortcut(QKeySequence(Qt::Key_Space), m_table, nullptr, nullptr, Qt::WidgetShortcut);
+    connect(space, &QShortcut::activated, this, [this] {
+        if (m_running)
+            return;
+        for (const QString& k : selectedKeys())
+            if (auto* r = m_model->rowByKey(k)) {
+                r->checked = !r->checked;
+                m_model->rowChanged(k);
+            }
+        emit m_model->checkedChanged();
+    });
+}
+
+void BackportPage::buildProgressCard()
+{
+    // Progress
+    auto* card = new Card(this);
+    auto* chipsWrap = new QWidget(card);
+    auto* ch = hbox(chipsWrap, 6);
+    for (const QString& name : {QStringLiteral("Games"), QStringLiteral("Selected"), QStringLiteral("Ready"), QStringLiteral("Running"),
+                                QStringLiteral("Done"), QStringLiteral("Failed / partial")}) {
+        auto* chip = new QLabel(chipsWrap);
+        chip->setFont(font::caption());
+        chip->setStyleSheet(QStringLiteral("QLabel{background:%1;border:1px solid %2;border-radius:10px;padding:2px 9px;color:%3;}")
+                                .arg(hex(color::bg_3), hex(color::border_2), hex(color::fg_2)));
+        chip->setProperty("chipName", name);
+        m_chips.insert(name, chip);
+        ch->addWidget(chip);
+    }
+    card->setTitle(QStringLiteral("Progress"), chipsWrap);
+    auto* row = new QWidget(card);
+    auto* rh = hbox(row, space::md);
+    m_bar = new ProgressBar(row);
+    m_percent = monoLabel(QStringLiteral("0%"), row, color::fg_0);
+    m_percent->setMinimumWidth(QFontMetrics(font::mono()).horizontalAdvance(QStringLiteral("100%")) + 4);
+    m_percent->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    rh->addWidget(m_bar, 1);
+    rh->addWidget(m_percent);
+    card->body()->addWidget(row);
+    auto* labels = new QWidget(card);
+    auto* lh = hbox(labels, space::md);
+    m_current = label(QStringLiteral("Idle"), TextStyle::Body, color::fg_1, labels);
+    m_stage = label({}, TextStyle::Caption, color::accent_hi, labels);
+    m_stage->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lh->addWidget(m_current, 1);
+    lh->addWidget(m_stage);
+    card->body()->addWidget(labels);
+
+    // Activity
+    auto* act = new Card(this);
+    auto* actTools = new QWidget(act);
+    auto* ah = hbox(actTools, space::sm);
+    m_openOutput = button(QStringLiteral("Open output folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), actTools);
+    m_retry = button(QStringLiteral("Retry failed"), ButtonVariant::Subtle, QStringLiteral("repeat"), actTools);
+    m_retry->setToolTip(QStringLiteral("Select only the games that failed or were cancelled and run again"));
+    auto* clear = button(QStringLiteral("Clear"), ButtonVariant::Subtle, QStringLiteral("trash"), actTools);
+    clear->setToolTip(QStringLiteral("Clear this view (the log file keeps everything)"));
+    setButtonSmall(m_openOutput, true);
+    setButtonSmall(m_retry, true);
+    setButtonSmall(clear, true);
+    ah->addWidget(m_openOutput);
+    ah->addWidget(m_retry);
+    ah->addWidget(clear);
+    act->setTitle(QStringLiteral("Activity"), actTools);
+    m_modeLine = label({}, TextStyle::Caption, color::fg_4, act);
+    act->body()->addWidget(m_modeLine);
+    m_logBox = new QTextEdit(act);
+    m_logBox->setReadOnly(true);
+    m_logBox->setMinimumHeight(190);
+    m_logBox->setFont(font::monoSmall());
+    m_logBox->document()->setMaximumBlockCount(3000);
+    m_logBox->setLineWrapMode(QTextEdit::WidgetWidth);
+    m_logBox->setStyleSheet(QStringLiteral("QTextEdit{background:%1;border:1px solid %2;border-radius:10px;padding:6px 8px;}")
+                                .arg(hex(color::field_bg), hex(color::border_2)));
+    act->body()->addWidget(m_logBox);
+    m_openOutput->setEnabled(false);
+    m_retry->setEnabled(false);
+    connect(clear, &QPushButton::clicked, m_logBox, &QTextEdit::clear);
+    connect(m_retry, &QPushButton::clicked, this, &BackportPage::retryFailed);
+    connect(m_openOutput, &QPushButton::clicked, this, [this] { openPath(m_lastOutputRoot); });
+    m_progressCard = card;
+    m_activityCard = act;
+}
+
+void BackportPage::buildSideColumn(QVBoxLayout* into)
+{
+    // ---- Save to
+    auto* save = new Card(this);
+    save->setTitle(QStringLiteral("Save to"));
+    m_outField = new PathField(PathField::Mode::Directory, save);
+    m_outField->setDialogTitle(QStringLiteral("Choose the folder for Backport ZIPs"));
+    m_outField->setPlaceholder(QStringLiteral("Not set: click the folder button"));
+    m_suppressSave = true;
+    m_outField->setPath(m_settings.outputDir);
+    m_outField->edit()->setCursorPosition(m_settings.outputDir.size());
+    auto* outLabel = label(QStringLiteral("Backport ZIPs"), TextStyle::Body, color::fg_1, save);
+    outLabel->setToolTip(QStringLiteral("Each game's 'FW 4xx <PPSA> <Title> (<version>) backport files.zip' is saved directly in this "
+                                        "folder. Each run's loose files and reports are kept in its _backport_details subfolder."));
+    m_bakField = new PathField(PathField::Mode::Directory, save);
+    m_bakField->setDialogTitle(QStringLiteral("Choose the folder for Originals backup ZIPs"));
+    m_bakField->setPlaceholder(QStringLiteral("Not set: click the folder button"));
+    m_bakField->setPath(m_settings.backupDir);
+    m_bakField->edit()->setCursorPosition(m_settings.backupDir.size());
+    m_suppressSave = false;
+    auto* bakLabel = label(QStringLiteral("Originals backup ZIPs"), TextStyle::Body, color::fg_1, save);
+    bakLabel->setToolTip(QStringLiteral("Each game's '<PPSA> <Title> (<version>) original files.zip' (untouched copies of only the "
+                                        "game files the backport replaces) is saved directly in this folder. Never full games."));
+    save->body()->addWidget(outLabel);
+    save->body()->addWidget(m_outField);
+    save->body()->addSpacing(2);
+    save->body()->addWidget(bakLabel);
+    save->body()->addWidget(m_bakField);
+    connect(m_outField, &PathField::pathChanged, this, [this](const QString&) { saveDestinations(); });
+    connect(m_bakField, &PathField::pathChanged, this, [this](const QString&) { saveDestinations(); });
+    into->addWidget(save);
+
+    // ---- Options (never persisted: every start is SDK 4, everything off)
+    auto* opts = new Card(this);
+    opts->setTitle(QStringLiteral("Options"));
+    auto* sdkLabel = label(QStringLiteral("Target SDK"), TextStyle::Body, color::fg_1, opts);
+    sdkLabel->setToolTip(tip(kSdkTip));
+    m_sdk = new QComboBox(opts);
+    m_sdk->addItem(QStringLiteral("SDK 4  \u00b7  loads on FW 4.00+  (default)"), 4);
+    for (int n = 5; n <= 13; ++n)
+        m_sdk->addItem(QStringLiteral("SDK %1  \u00b7  loads on FW %1.00+").arg(n), n);
+    m_sdk->setToolTip(tip(kSdkTip));
+    m_sdk->setAccessibleName(QStringLiteral("Target SDK"));
+    m_sdkCaption = caption(QStringLiteral("An SDK N build only loads on firmware N.00 and later."), opts);
+    m_sdkCaption->setToolTip(tip(kSdkTip));
+    opts->body()->addWidget(sdkLabel);
+    opts->body()->addWidget(m_sdk);
+    opts->body()->addWidget(m_sdkCaption);
+    opts->body()->addWidget(hairline(opts));
+    auto addSwitch = [opts](const QString& text, const QString& desc, const char* tooltip, Switch*& sw) {
+        auto* row = new QWidget(opts);
+        auto* h = hbox(row, space::md);
+        auto* col = new QVBoxLayout;
+        col->setSpacing(1);
+        auto* t = label(text, TextStyle::Body, color::fg_1, row);
+        auto* d = label(desc, TextStyle::Caption, color::fg_3, row);
+        d->setWordWrap(true);
+        t->setToolTip(tip(tooltip));
+        d->setToolTip(tip(tooltip));
+        col->addWidget(t);
+        col->addWidget(d);
+        h->addLayout(col, 1);
+        sw = new Switch(row);
+        sw->setAccessibleName(text);
+        sw->setToolTip(tip(tooltip));
+        h->addWidget(sw, 0, Qt::AlignVCenter);
+        opts->body()->addWidget(row);
+    };
+    addSwitch(QStringLiteral("Apply to game folders"), QStringLiteral("Copy the files into the game folders, after a backup."), kApplyTip, m_apply);
+    addSwitch(QStringLiteral("PS5 Pro fix"), QStringLiteral("For a black screen or GPU hang on a PS5 Pro."), kProFixTip, m_proFix);
+    addSwitch(QStringLiteral("PS5 Pro build (Pro FW 9.00+)"),
+              QStringLiteral("Pro-only ZIP: the game's own Pro checks, and its PSSR, answer Pro on every Pro firmware."), kPssr2Tip, m_proBuild);
+    connect(m_sdk, &QComboBox::currentIndexChanged, this, [this](int) { updateModeLine(); });
+    for (Switch* s : {m_apply, m_proFix, m_proBuild})
+        connect(s, &QAbstractButton::toggled, this, [this](bool) { updateModeLine(); });
+    into->addWidget(opts);
+
+    // ---- Black screen tip
+    auto* notice = new InfoBar(Tone::Warn, this);
+    notice->setTitle(QStringLiteral("Black screen on FW 5.00+?"));
+    notice->setMessage(QString::fromUtf8(kBlackScreenNotice));
+    notice->setToolTip(tip(kSdkTip));
+    into->addWidget(notice);
+
+    // ---- Backups & support
+    auto* sup = new Card(this);
+    m_engineBadge = new Badge(QStringLiteral("Not checked"), Tone::Neutral, sup);
+    m_engineBadge->setIconName(QString());
+    sup->setTitle(QStringLiteral("Backups & support"), m_engineBadge);
+    m_engineLine = label({}, TextStyle::Caption, color::fg_4, sup);
+    m_engineLine->setWordWrap(true);
+    sup->body()->addWidget(m_engineLine);
+    auto* restore = button(QStringLiteral("Restore originals from a backup\u2026"), ButtonVariant::Secondary, QStringLiteral("undo"), sup);
+    restore->setToolTip(QStringLiteral("Puts back the original files of a game folder this program applied a backport to, and removes "
+                                       "the files it added (only if they are unchanged)."));
+    sup->body()->addWidget(restore);
+    auto* grid = new QWidget(sup);
+    auto* gh = hbox(grid, space::sm);
+    auto* exportBtn = button(QStringLiteral("Export logs"), ButtonVariant::Secondary, QStringLiteral("archive"), grid);
+    exportBtn->setToolTip(QStringLiteral("Save this program's logs (each run's activity log, engine plan, build log and errors) as one "
+                                         "ZIP on your Desktop to send with a bug report. No game files are included."));
+    auto* report = button(QStringLiteral("Report a problem"), ButtonVariant::Secondary, QStringLiteral("bug"), grid);
+    report->setToolTip(QStringLiteral("Open a new issue on the PS5 Backport GUI GitHub page (you can save a logs ZIP to attach first)."));
+    gh->addWidget(exportBtn, 1);
+    gh->addWidget(report, 1);
+    sup->body()->addWidget(grid);
+    auto* more = new Disclosure(QStringLiteral("More"), QStringLiteral("Scan depth, logs folder"), sup);
+    auto* depthRow = new QWidget(more);
+    auto* dh = hbox(depthRow, space::md);
+    auto* dl = label(QStringLiteral("Subfolder depth"), TextStyle::Body, color::fg_1, depthRow);
+    dl->setToolTip(QStringLiteral("How many folder levels below each scan location are searched (1-12)."));
+    dh->addWidget(dl, 1);
+    m_depth = new QSpinBox(depthRow);
+    m_depth->setRange(1, 12);
+    m_depth->setValue(m_settings.scanDepth);
+    m_depth->setFixedWidth(72);
+    m_depth->setToolTip(dl->toolTip());
+    dh->addWidget(m_depth);
+    more->body()->addWidget(depthRow);
+    auto* logs = button(QStringLiteral("Open logs folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), more);
+    more->body()->addWidget(logs, 0, Qt::AlignLeft);
+    sup->body()->addWidget(more);
+    into->addWidget(sup);
+
+    connect(restore, &QPushButton::clicked, this, &BackportPage::pickRestore);
+    connect(exportBtn, &QPushButton::clicked, this, [this] { exportLogs(QStringLiteral("export logs"), true); });
+    connect(report, &QPushButton::clicked, this, &BackportPage::reportProblem);
+    connect(logs, &QPushButton::clicked, this, [this] {
+        QDir().mkpath(bp::folders().logDir);
+        openPath(bp::folders().logDir);
+    });
+    connect(m_depth, &QSpinBox::valueChanged, this, [this](int v) {
+        m_settings.scanDepth = v;
+        persistSettings();
+    });
+}
+
+// ---- helpers ---------------------------------------------------------------------------------
+
+// Screenshot runs and automated tests never touch the user's PS5 Backport
+// files (settings.json, the activity log) and never start a scan or the
+// engine on their own.
+bool BackportPage::testMode()
+{
+    return qApp->property("fwScreenshotMode").toBool() || qEnvironmentVariableIsSet("FW_OFFLINE");
+}
+
+bool BackportPage::persistAllowed() const { return !m_demo && !testMode(); }
+
+void BackportPage::persistSettings()
+{
+    if (persistAllowed())
+        persistSettings();
+}
+
+void BackportPage::log(const QString& level, const QString& message, bool toBox)
+{
+    if (persistAllowed())
+        bp::appendAppLog(level, message);
+    Log lg(QStringLiteral("backport"));
+    if (level == QLatin1String("ERROR"))
+        lg.error(message);
+    else if (level == QLatin1String("WARN"))
+        lg.warn(message);
+    else
+        lg.info(message);
+    if (!toBox)
+        return;
+    QColor lc = color::accent_hi, mc = color::fg_1;
+    if (level == QLatin1String("OK")) {
+        lc = color::success;
+        mc = color::success_hi;
+    } else if (level == QLatin1String("WARN")) {
+        lc = color::warn;
+        mc = color::warn_hi;
+    } else if (level == QLatin1String("ERROR")) {
+        lc = color::danger;
+        mc = color::danger_hi;
+    }
+    QScrollBar* sb = m_logBox->verticalScrollBar();
+    const bool atEnd = sb->value() >= sb->maximum() - 4;
+    const QString html = QStringLiteral("<span style='color:%1'>[%2]</span> <span style='color:%3'>[%4]</span> "
+                                        "<span style='color:%5;white-space:pre-wrap'>%6</span>")
+                             .arg(hex(color::fg_5), QTime::currentTime().toString(QStringLiteral("HH:mm:ss")), hex(lc), level,
+                                  hex(mc), message.toHtmlEscaped());
+    m_logBox->append(html);
+    if (atEnd)
+        sb->setValue(sb->maximum());
+}
+
+void BackportPage::setState(const QString& text, Tone tone)
+{
+    m_engineBadge->set(text, tone);
     emit statusContextChanged();
 }
 
-void BackportPage::addFolders()
+int BackportPage::targetSdk() const { return m_sdk->currentData().toInt(); }
+
+QString BackportPage::outputRoot() const { return m_outField->path().trimmed(); }
+
+QStringList BackportPage::checkedKeys() const
 {
-    const QString dir = QFileDialog::getExistingDirectory(window(), QStringLiteral("Add a folder of game dumps"));
-    if (dir.isEmpty())
-        return;
-    if (readGameSummary(dir, false).isGame) {
-        addGameFolder(dir);
-        return;
-    }
-    m_library.addScanFolder(dir);
-    scan();
+    QStringList out;
+    for (const auto& r : m_model->rows())
+        if (r.checked)
+            out << r.game.key;
+    return out;
 }
 
-void BackportPage::addGameFolder(const QString& folder)
+QStringList BackportPage::selectedKeys() const
 {
-    if (m_reader->isBusy())
-        m_pendingAdds << folder;
-    else
-        m_reader->summarize(folder, true);
+    QStringList out;
+    for (const QModelIndex& i : m_table->selectionModel()->selectedRows())
+        out << m_model->rows()[size_t(m_proxy->mapToSource(i).row())].game.key;
+    return out;
 }
 
-void BackportPage::scan()
+BackportRow* BackportPage::currentRow()
 {
-    const QStringList folders = m_library.scanFolders();
-    if (folders.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("Nothing to scan"), QStringLiteral("Add a folder of game dumps first."));
-        return;
-    }
-    Result<QString> r = jobs::isAvailable(m_ctx, QStringLiteral("backport.scan"))
-                            ? m_ctx.queue().enqueue(QStringLiteral("backport.scan"), QJsonObject{{QStringLiteral("folders"), QJsonArray::fromStringList(folders)}})
-                            : jobs::scanLibrary(m_ctx, folders);
-    if (!r.ok()) {
-        // No scanner in this build: list the direct children that look like dumps.
-        int found = 0;
-        for (const QString& f : folders)
-            for (const QFileInfo& fi : QDir(f).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
-                if (QFile::exists(fi.filePath() + QStringLiteral("/sce_sys/param.json")) || QFile::exists(fi.filePath() + QStringLiteral("/eboot.bin"))) {
-                    addGameFolder(fi.filePath());
-                    ++found;
-                }
-        m_library.setLastScan(QDateTime::currentDateTime());
-        emit toastRequested(Tone::Info, QStringLiteral("Scanned without the engine"), QStringLiteral("%1 game folder%2 found one level below the scan locations.").arg(found).arg(found == 1 ? QString() : QStringLiteral("s")));
-        return;
-    }
-    m_scanJobId = r.value();
-    m_ctx.queue().holdQueue(false);
+    const QModelIndex i = m_table->currentIndex();
+    if (!i.isValid())
+        return nullptr;
+    return &m_model->rows()[size_t(m_proxy->mapToSource(i).row())];
 }
 
-void BackportPage::onJobFinished(const QString& id)
+void BackportPage::saveDestinations()
 {
-    auto rec = m_ctx.queue().record(id);
-    if (!rec)
+    if (m_suppressSave || m_demo)
         return;
-    if (id == m_scanJobId && rec->outcome) {
-        std::vector<LibraryGame> games;
-        for (const auto& v : rec->outcome->details.value(QStringLiteral("games")).toArray()) {
-            LibraryGame g;
-            const QJsonObject o = v.toObject();
-            g.info = GameSummary::fromJson(o);
-            g.status = o.value(QStringLiteral("status")).toString();
-            g.lastSeen = QDateTime::currentDateTime();
-            for (const auto& iv : o.value(QStringLiteral("issues")).toArray()) {
-                const QJsonObject io = iv.toObject();
-                g.issues << QStringLiteral("%1: %2").arg(io.value(QStringLiteral("severity")).toString(), io.value(QStringLiteral("message")).toString());
-            }
-            g.canRun = o.value(QStringLiteral("canRun")).toBool(true);
-            g.plan = o.value(QStringLiteral("plan")).toString();
-            games.push_back(g);
+    m_settings.outputDir = m_outField->path().trimmed();
+    m_settings.backupDir = m_bakField->path().trimmed();
+    persistSettings();
+}
+
+void BackportPage::openPath(const QString& path)
+{
+    if (path.isEmpty())
+        return;
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
+        Sheet::message(window(), QStringLiteral("Could not open"), QStringLiteral("Could not open %1").arg(QDir::toNativeSeparators(path)),
+                       Sheet::Icon::Error);
+}
+
+void BackportPage::updateModeLine()
+{
+    QStringList parts{QStringLiteral("backport + originals ZIPs"),
+                      m_apply->isChecked() ? QStringLiteral("apply to game folders") : QStringLiteral("game folders unchanged")};
+    const int n = targetSdk();
+    if (n > 4)
+        parts << QStringLiteral("SDK %1 (FW %1.00+)").arg(n);
+    if (m_proFix->isChecked())
+        parts << QStringLiteral("PS5 Pro fix");
+    if (m_proBuild->isChecked())
+        parts << QStringLiteral("PS5 Pro build (Pro only)");
+    m_modeLine->setText(QStringLiteral("Next run: ") + parts.join(QStringLiteral(" \u00b7 ")));
+}
+
+void BackportPage::updateButtons()
+{
+    const bool busy = m_running;
+    if (busy && m_kind == Kind::Backport) {
+        m_start->setText(QStringLiteral("Cancel"));
+        setButtonVariant(m_start, ButtonVariant::Danger);
+        setButtonIcon(m_start, QStringLiteral("stop"));
+    } else if (busy) {
+        m_start->setText(QStringLiteral("Cancel"));
+        setButtonVariant(m_start, ButtonVariant::Danger);
+        setButtonIcon(m_start, QStringLiteral("stop"));
+    } else {
+        m_start->setText(QStringLiteral("Start Backport"));
+        setButtonVariant(m_start, ButtonVariant::Primary);
+        setButtonIcon(m_start, QStringLiteral("play"));
+    }
+    m_start->setEnabled(!(busy && (m_cancelRequested || m_kind == Kind::Restore)));
+    m_switchBtn->setEnabled(!busy && !m_scanning);
+    m_rescanBtn->setEnabled(!busy && !m_scanning);
+    m_addBtn->setEnabled(!busy);
+    m_rootsBtn->setEnabled(!busy);
+    for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild})
+        w->setEnabled(!busy);
+    m_model->setLocked(busy);
+    m_rootsBtn->setText(QStringLiteral("Locations (%1)").arg(m_settings.scanRoots.size()));
+}
+
+void BackportPage::updateStats()
+{
+    int games = 0, sel = 0, ready = 0, running = 0, done = 0, failed = 0;
+    for (const auto& r : m_model->rows()) {
+        ++games;
+        if (r.checked)
+            ++sel;
+        if (r.checked && !r.game.alreadyBackported && r.game.appliedRecord.isEmpty() && r.tone != QLatin1String("busy"))
+            ++ready;
+        if (r.tone == QLatin1String("busy"))
+            ++running;
+        if (r.status == QLatin1String("Done") || r.status == QLatin1String("No change needed"))
+            ++done;
+        if (r.status == QLatin1String("Failed") || r.status == QLatin1String("Partial") || r.status == QLatin1String("Cancelled"))
+            ++failed;
+    }
+    auto set = [this](const QString& name, int n) {
+        if (auto* c = m_chips.value(name))
+            c->setText(QStringLiteral("%1  %2").arg(name).arg(n));
+    };
+    set(QStringLiteral("Games"), games);
+    set(QStringLiteral("Selected"), sel);
+    set(QStringLiteral("Ready"), ready);
+    set(QStringLiteral("Running"), running);
+    set(QStringLiteral("Done"), done);
+    set(QStringLiteral("Failed / partial"), failed);
+    m_countBadge->set(games == 0 ? QStringLiteral("No games yet")
+                                 : games == 1 ? QStringLiteral("1 game found") : QStringLiteral("%1 games found").arg(games),
+                      games ? Tone::Info : Tone::Neutral);
+    m_countBadge->setIconName(QString());
+}
+
+void BackportPage::updateLibraryState()
+{
+    const bool noRoots = m_settings.scanRoots.isEmpty() && m_model->rowCount() == 0;
+    const bool empty = m_proxy->rowCount() == 0;
+    m_emptyDrop->setVisible(noRoots && !m_scanning);
+    m_table->setVisible(!empty);
+    QString text;
+    if (empty && !noRoots) {
+        if (m_model->rowCount() > 0)
+            text = QStringLiteral("No game matches the search.");
+        else if (m_scanning)
+            text = QStringLiteral("Scanning\u2026");
+        else
+            text = QStringLiteral("No game folders found in the scan locations.");
+    } else if (empty && m_scanning) {
+        text = QStringLiteral("Scanning\u2026");
+    }
+    m_emptyText->setText(text);
+    m_emptyText->setVisible(!text.isEmpty());
+}
+
+QString BackportPage::statusContext() const
+{
+    if (m_running)
+        return m_current->text();
+    return QStringLiteral("PS5 Backport %1 \u00b7 %2").arg(QLatin1String(bp::kEngineVersion), m_engineBadge->text());
+}
+
+// ---- engine -----------------------------------------------------------------------------------
+
+void BackportPage::onShown()
+{
+    if (m_shownOnce || testMode())
+        return;
+    m_shownOnce = true;
+    log(QStringLiteral("INFO"), QStringLiteral("PS5 Backport GUI by Deckerr97 %1 started").arg(QLatin1String(bp::kEngineVersion)));
+    log(QStringLiteral("INFO"), QStringLiteral("Builds are verified offline; test them on a console and report problems with Report a problem"));
+    if (!m_settings.scanRoots.isEmpty() && m_model->rowCount() == 0)
+        rescan();
+    prepareEngine();
+}
+
+void BackportPage::prepareEngine()
+{
+    if (m_engine == Engine::Preparing || m_engine == Engine::Ready || m_demo)
+        return;
+    const QString exe = bp::engineExecutable();
+    if (exe.isEmpty()) {
+        m_engine = Engine::Missing;
+        setState(QStringLiteral("Engine missing"), Tone::Err);
+        m_engineLine->setText(QStringLiteral("PS5 Backport engine %1 is not part of this installation.").arg(QLatin1String(bp::kEngineVersion)));
+        m_engineBar->setTone(Tone::Err);
+        m_engineBar->setTitle(QStringLiteral("The backport engine is missing"));
+        m_engineBar->setMessage(QStringLiteral("This copy of the app has no engines\\backport\\%1. Download the app again from the "
+                                               "official GitHub release page.")
+                                    .arg(QLatin1String(bp::kEngineExeName)));
+        m_engineBar->show();
+        return;
+    }
+    if (qEnvironmentVariableIsSet("FW_OFFLINE") && !qEnvironmentVariableIsSet("FW_BACKPORT_ENGINE"))
+        return; // tests and screenshot runs never start the engine on their own
+    m_engine = Engine::Preparing;
+    setState(QStringLiteral("Preparing engine\u2026"), Tone::Info);
+    m_engineLine->setText(QStringLiteral("PS5 Backport engine %1 by Deckerr97 (bundled)").arg(QLatin1String(bp::kEngineVersion)));
+    auto* w = new bp::Worker(this);
+    connect(w, &bp::Worker::progress, this, [this](const QJsonObject& ev) {
+        const QString d = ev.value(QStringLiteral("detail")).toString();
+        if (!d.isEmpty())
+            log(QStringLiteral("INFO"), d);
+    });
+    connect(w, &bp::Worker::finished, this, [this, w](const QJsonObject& r) {
+        w->deleteLater();
+        if (r.value(QStringLiteral("status")).toString() == QLatin1String("DONE")) {
+            m_engineRevision = r.value(QStringLiteral("revision")).toString();
+            engineReady();
+        } else {
+            m_engine = Engine::Failed;
+            m_engineError = r.value(QStringLiteral("headline")).toString();
+            const QString tail = r.value(QStringLiteral("stderr")).toString();
+            log(QStringLiteral("ERROR"), QStringLiteral("Engine preparation failed: %1").arg(m_engineError), false);
+            if (!tail.isEmpty())
+                log(QStringLiteral("ERROR"), tail.right(600), false);
+            log(QStringLiteral("ERROR"), QStringLiteral("The backport engine could not be set up"));
+            setState(QStringLiteral("Engine unavailable"), Tone::Err);
+            m_engineBar->setTone(Tone::Err);
+            m_engineBar->setTitle(QStringLiteral("The backport engine could not be set up"));
+            m_engineBar->setMessage(QStringLiteral("Scanning still works; backporting is unavailable. %1").arg(m_engineError));
+            m_engineBar->show();
         }
-        if (!games.empty())
-            m_library.setGames(std::move(games));
-        m_library.setLastScan(QDateTime::currentDateTime());
-        m_scanJobId.clear();
+    });
+    QString err;
+    if (!w->start(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("selftest")}}, &err)) {
+        w->deleteLater();
+        m_engine = Engine::Failed;
+        m_engineError = err;
+        setState(QStringLiteral("Engine unavailable"), Tone::Err);
+        log(QStringLiteral("ERROR"), err);
     }
-    if (rec->kind == backport::kJobRun || rec->kind == backport::kJobSdkFix || rec->kind == backport::kJobAudioScan) {
-        const QString html = reportOf(*rec);
-        if (!html.isEmpty()) {
-            m_reports.insert(folderOf(rec->parameters), QDir::fromNativeSeparators(html));
-            m_lastReport = QDir::fromNativeSeparators(html);
-            m_openReport->setVisible(true);
-            m_openReport->setToolTip(nativePath(m_lastReport));
-        }
-    }
-    const bool undo = rec->kind == QLatin1String("backport.restore") && rec->parameters.value(QStringLiteral("undoSdkFix")).toBool();
-    if (rec->kind == backport::kJobSdkFix || rec->kind == backport::kJobAudioScan || rec->kind == backport::kJobPinProviders || undo) {
-        const bool ok = rec->state == JobState::Succeeded && rec->outcome;
-        const QString title = rec->kind == backport::kJobSdkFix  ? QStringLiteral("SDK fix")
-            : rec->kind == backport::kJobAudioScan               ? QStringLiteral("Audio report")
-            : rec->kind == backport::kJobPinProviders            ? QStringLiteral("AMPR / PlayGo pins")
-                                                                 : QStringLiteral("Undo the SDK fix");
-        if (rec->state != JobState::Cancelled)
-            emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? title : QStringLiteral("%1 failed").arg(title),
-                                ok ? rec->outcome->summary : (rec->error ? rec->error->message : jobStateName(rec->state)));
-        const QString folder = folderOf(rec->parameters);
-        if (rec->kind == backport::kJobSdkFix)
-            m_table->setStatusText(folder, ok ? QStringLiteral("SDK fixed") : QStringLiteral("SDK fix failed"), ok ? Tone::Ok : Tone::Err);
-        // A copy appears in the library next to its source.
-        if (ok && rec->kind == backport::kJobSdkFix && rec->parameters.value(QStringLiteral("mode")).toString() != QLatin1String("inPlace")) {
-            const QString out = QDir::fromNativeSeparators(rec->outcome->details.value(QStringLiteral("output")).toString());
-            if (!out.isEmpty() && out != folder)
-                addGameFolder(out);
-        }
-    }
-    if (rec->kind == QLatin1String("backport.run")) {
-        for (const QString& folder : gamesOf(rec->parameters)) {
-            QString status = rec->state == JobState::Succeeded ? (rec->outcome ? rec->outcome->summary : QStringLiteral("Backported")) : QStringLiteral("Failed: %1").arg(rec->error ? rec->error->message : jobStateName(rec->state));
-            for (const auto& g : m_library.games())
-                if (g.info.folder == folder)
-                    m_library.upsertGame(g.info, status);
+}
+
+void BackportPage::engineReady()
+{
+    m_engine = Engine::Ready;
+    m_engineBar->hide();
+    setState(QStringLiteral("Ready"), Tone::Ok);
+    m_engineLine->setText(QStringLiteral("PS5 Backport GUI %1 by Deckerr97  \u00b7  backend %2")
+                              .arg(QLatin1String(bp::kEngineVersion), m_engineRevision));
+    log(QStringLiteral("INFO"), QStringLiteral("Backport engine ready (backend %1)").arg(m_engineRevision));
+    offerInterruptedRestores();
+}
+
+void BackportPage::offerInterruptedRestores()
+{
+    for (const QJsonObject& row : bp::interruptedApplies()) {
+        if (m_running)
+            return;
+        const QString game = QDir::toNativeSeparators(row.value(QStringLiteral("game_dir")).toString());
+        const QString backup = QDir::toNativeSeparators(row.value(QStringLiteral("backup_dir")).toString());
+        const bool yes = Sheet::confirm(window(), QStringLiteral("Interrupted apply"),
+                                        QStringLiteral("Applying a backport to this game folder was interrupted:\n\n%1\n\nRestore its original "
+                                                       "files now from the verified backup?\n%2")
+                                            .arg(game, backup),
+                                        QStringLiteral("Not now"), QStringLiteral("Restore originals"), false, Sheet::Icon::Warning);
+        if (yes) {
+            runRestore(row.value(QStringLiteral("backup_dir")).toString());
+            return; // one at a time; the rest are offered again next time
         }
     }
 }
 
-bool BackportPage::confirmApply(const QStringList& folders)
-{
-    if (!m_options->effectiveValue(backport::keys::kApplyToGameFolder).toBool())
-        return true;
-    constexpr int kShown = 12;
-    QStringList lines;
-    for (int i = 0; i < folders.size() && i < kShown; ++i)
-        lines << Sheet::monoSpan(nativePath(folders[i]));
-    if (folders.size() > kShown)
-        lines << QStringLiteral("and %1 more").arg(folders.size() - kShown);
-    const QString originals = m_ctx.settings().value(backport::keys::kOriginalsZipFolder).toString().trimmed();
-    const QString text =
-        QStringLiteral("Apply to game folders is on, so the backported files are copied into %1:<br>%2<br><br>"
-                       "Only the backport files are written. The original files are saved first to an originals ZIP "
-                       "in %3 and read back, and an interrupted copy is rolled back.")
-            .arg(folders.size() == 1 ? QStringLiteral("this folder") : QStringLiteral("these folders"),
-                 lines.join(QStringLiteral("<br>")),
-                 originals.isEmpty() ? QStringLiteral("the originals ZIP folder") : Sheet::monoSpan(nativePath(originals)));
-    return Sheet::confirm(window(), QStringLiteral("Change the game folders?"), text,
-                          QStringLiteral("Keep folders unchanged"), QStringLiteral("Apply to game folders"), false,
-                          Sheet::Icon::Warning);
-}
-
-void BackportPage::primaryAction()
-{
-    const QStringList checked = m_table->checkedFolders();
-    if (checked.isEmpty() || !m_backport->isEnabled())
-        return;
-    if (!confirmApply(checked))
-        return;
-    auto r = jobs::submitBackport(m_ctx, checked, m_options->overrides());
-    if (!r.ok()) {
-        emit toastRequested(Tone::Err, QStringLiteral("Backport not started"), r.error().message);
-        return;
-    }
-    m_ctx.queue().holdQueue(false);
-    for (const QString& f : checked)
-        m_table->setStatusText(f, QStringLiteral("Queued"), Tone::Info);
-    emit toastRequested(Tone::Info, QStringLiteral("Backport queued"), QStringLiteral("%1 game%2").arg(checked.size()).arg(checked.size() == 1 ? QString() : QStringLiteral("s")));
-}
-
-void BackportPage::restoreOriginals()
-{
-    const QString zip = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the originals ZIP"), {}, QStringLiteral("Originals ZIP (*.zip)"));
-    if (zip.isEmpty())
-        return;
-    const QString game = m_table->currentFolder();
-    if (!Sheet::confirm(window(), QStringLiteral("Restore the original files?"),
-                        QStringLiteral("The files inside %1 replace the backported ones in the game folder. The backport ZIP is kept.").arg(Sheet::monoSpan(nativePath(zip))),
-                        QStringLiteral("Keep backport"), QStringLiteral("Restore originals"), false, Sheet::Icon::Info))
-        return;
-    auto r = jobs::submitBackportRestore(m_ctx, zip, game);
-    if (!r.ok())
-        emit toastRequested(Tone::Err, QStringLiteral("Restore not started"), r.error().message);
-    else
-        m_ctx.queue().holdQueue(false);
-}
-
-Result<QString> BackportPage::enqueueBackportJob(const QString& kind, const QJsonObject& params, const QString& notStarted)
-{
-    if (!jobs::isAvailable(m_ctx, kind)) {
-        emit toastRequested(Tone::Err, notStarted, jobs::unavailable(kind).message);
-        return jobs::unavailable(kind);
-    }
-    auto r = m_ctx.queue().enqueue(kind, params, m_options->overrides());
-    if (!r.ok()) {
-        emit toastRequested(Tone::Err, notStarted, r.error().message);
-        return r;
-    }
-    m_ctx.queue().holdQueue(false);
-    return r;
-}
-
-void BackportPage::fixSdk(const QString& folder, bool inPlace)
-{
-    const QString sdk = m_options->effectiveValue(backport::keys::kTargetSdk).toString();
-    const QString text = inPlace
-        ? QStringLiteral("Every executable in %1 gets the SDK %2 marker (loads on FW %2.00 and later). The files that change are "
-                         "saved to a backup ZIP in the originals ZIP folder first, then replaced through a journal that rolls back "
-                         "on any error. No fakelib is added and param.json is not changed. Undo it later with Undo the last SDK fix.")
-              .arg(Sheet::monoSpan(nativePath(folder)), sdk)
-        : QStringLiteral("A copy named %1 is made next to the folder, with every executable at the SDK %2 marker (loads on FW %2.00 "
-                         "and later). No fakelib is added and param.json is not changed; the folder itself is only read.")
-              .arg(Sheet::monoSpan(backport::sdkFixCopyName(QFileInfo(folder).fileName(), sdk.toInt())), sdk);
-    if (!Sheet::confirm(window(), inPlace ? QStringLiteral("Change the SDK marker in place?") : QStringLiteral("Fix the SDK marker on a copy?"),
-                        text, QStringLiteral("Cancel"), inPlace ? QStringLiteral("Change in place") : QStringLiteral("Make the copy"), false,
-                        inPlace ? Sheet::Icon::Warning : Sheet::Icon::Info))
-        return;
-    const QJsonObject p{{QStringLiteral("folder"), folder}, {QStringLiteral("mode"), inPlace ? QStringLiteral("inPlace") : QStringLiteral("copy")}};
-    if (enqueueBackportJob(backport::kJobSdkFix, p, QStringLiteral("SDK fix not started")).ok())
-        m_table->setStatusText(folder, QStringLiteral("Queued · SDK fix"), Tone::Info);
-}
-
-void BackportPage::undoSdkFix(const QString& folder)
-{
-    if (!Sheet::confirm(window(), QStringLiteral("Undo the last SDK fix?"),
-                        QStringLiteral("The files the last in-place SDK fix of %1 replaced are put back from its backup. Files "
-                                       "that changed since are left as they are and reported.")
-                            .arg(Sheet::monoSpan(nativePath(folder))),
-                        QStringLiteral("Keep the fix"), QStringLiteral("Undo it"), false, Sheet::Icon::Info))
-        return;
-    (void)enqueueBackportJob(QStringLiteral("backport.restore"),
-                             QJsonObject{{QStringLiteral("game"), folder}, {QStringLiteral("undoSdkFix"), true}},
-                             QStringLiteral("Undo not started"));
-}
-
-void BackportPage::audioReport(const QString& folder)
-{
-    if (enqueueBackportJob(backport::kJobAudioScan, QJsonObject{{QStringLiteral("game"), folder}}, QStringLiteral("Audio report not started")).ok())
-        emit toastRequested(Tone::Info, QStringLiteral("Audio report queued"),
-                            QStringLiteral("Read-only: nothing in the game is changed. Open report shows it when it is done."));
-}
-
-void BackportPage::pinProviders()
-{
-    const QString folder = m_options->effectiveValue(backport::keys::kAmprPlaygoFolder).toString().trimmed();
-    if (folder.isEmpty())
-        return;
-    if (!Sheet::confirm(window(), QStringLiteral("Pin the AMPR / PlayGo libraries again?"),
-                        QStringLiteral("The SHA-256 of libSceAmpr and libScePlayGo in %1 is recorded now. Later backports use "
-                                       "exactly these files and refuse them if they change, until you pin them again.")
-                            .arg(Sheet::monoSpan(nativePath(folder))),
-                        QStringLiteral("Cancel"), QStringLiteral("Pin them"), false, Sheet::Icon::Info))
-        return;
-    (void)enqueueBackportJob(backport::kJobPinProviders, QJsonObject{{QStringLiteral("folder"), folder}},
-                             QStringLiteral("Pinning not started"));
-}
-
-void BackportPage::openReport(const QString& htmlPath)
-{
-    if (htmlPath.isEmpty())
-        return;
-    if (!QFileInfo(htmlPath).isFile()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("Report not found"), nativePath(htmlPath));
-        return;
-    }
-    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(htmlPath)))
-        openInFileManager(htmlPath);
-}
-
-void BackportPage::refreshProviderBar()
-{
-    const QString folder = m_options->effectiveValue(backport::keys::kAmprPlaygoFolder).toString().trimmed();
-    m_providers->setVisible(!folder.isEmpty() && jobs::isAvailable(m_ctx, backport::kJobPinProviders));
-    m_providers->setMessage(QStringLiteral("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
-                                           "purpose, pin them again, or the backport is refused.")
-                                .arg(nativePath(folder)));
-}
-
-void BackportPage::refresh() { scan(); }
+// ---- scanning ---------------------------------------------------------------------------------
 
 bool BackportPage::acceptsDrop(const QList<QUrl>& urls) const
 {
-    for (const auto& u : urls)
-        if (QFileInfo(u.toLocalFile()).isDir())
+    for (const QUrl& u : urls)
+        if (u.isLocalFile() && QFileInfo(u.toLocalFile()).isDir())
             return true;
     return false;
 }
 
 void BackportPage::dropUrls(const QList<QUrl>& urls)
 {
-    for (const auto& u : urls) {
-        const QString f = u.toLocalFile();
-        if (!QFileInfo(f).isDir())
-            continue;
-        if (readGameSummary(f, false).isGame)
-            addGameFolder(f);
+    QStringList dirs;
+    int ignored = 0;
+    for (const QUrl& u : urls) {
+        if (u.isLocalFile() && QFileInfo(u.toLocalFile()).isDir())
+            dirs << u.toLocalFile();
         else
-            m_library.addScanFolder(f);
+            ++ignored;
     }
+    if (ignored)
+        log(QStringLiteral("WARN"), QStringLiteral("%1 dropped item(s) ignored: only folders can be added").arg(ignored));
+    if (!dirs.isEmpty())
+        QTimer::singleShot(0, this, [this, dirs] { addRoots(dirs); }); // never inside the drop handler (#25)
+}
+
+void BackportPage::setDragHighlight(bool on)
+{
+    m_libraryCard->setDropHighlight(on);
+    m_emptyDrop->setHighlighted(on);
 }
 
 void BackportPage::navigateWith(const QVariantMap& args)
 {
-    if (args.contains(QStringLiteral("folder"))) {
-        const QString f = args.value(QStringLiteral("folder")).toString();
-        addGameFolder(f);
+    if (args.contains(QStringLiteral("folder")))
+        addRoots({args.value(QStringLiteral("folder")).toString()});
+}
+
+void BackportPage::addRoots(const QStringList& dirs)
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    QStringList keys;
+    for (const QString& r : m_settings.scanRoots)
+        keys << bp::normKey(r);
+    for (const QString& d : dirs) {
+        const QString abs = QDir::toNativeSeparators(QFileInfo(d).absoluteFilePath());
+        if (keys.contains(bp::normKey(abs)))
+            continue;
+        keys << bp::normKey(abs);
+        m_settings.scanRoots << abs;
+        log(QStringLiteral("INFO"), QStringLiteral("Scan location added: %1").arg(abs));
+    }
+    persistSettings();
+    updateButtons();
+    rescan();
+}
+
+void BackportPage::rescan()
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish before rescanning."));
+        return;
+    }
+    if (m_demo)
+        return;
+    const quint64 gen = ++m_scanGen;
+    if (m_scanCancel)
+        m_scanCancel->store(true);
+    m_scanCancel = std::make_shared<std::atomic_bool>(false);
+    // Keep each row's tick, result and status across the rescan (by key).
+    QHash<QString, BackportRow> previous;
+    for (const auto& r : m_model->rows())
+        previous.insert(r.game.key, r);
+    m_model->clear();
+    m_scanning = true;
+    m_scanLabel->setText(QStringLiteral("Scanning\u2026"));
+    updateButtons();
+    updateLibraryState();
+    const QStringList roots = m_settings.scanRoots;
+    if (roots.isEmpty()) {
+        onScanFinished(gen, 0);
+        return;
+    }
+    log(QStringLiteral("INFO"), QStringLiteral("Scanning %1 location(s)\u2026").arg(roots.size()));
+    const QStringList excludes = {m_outField->path(), m_bakField->path(), bp::engineHome(), bp::folders().dataDir, bp::folders().configDir};
+    const int depth = m_settings.scanDepth;
+    auto cancel = m_scanCancel;
+    QPointer<BackportPage> self(this);
+    auto prev = std::make_shared<QHash<QString, BackportRow>>(previous);
+    (void)QtConcurrent::run([self, gen, roots, excludes, depth, cancel, prev] {
+        const QStringList games = bp::discoverGames(roots, depth, excludes, cancel.get());
+        if (self)
+            QMetaObject::invokeMethod(self.data(), [self, gen, n = games.size()] {
+                if (self && gen == self->m_scanGen)
+                    self->m_scanLabel->setText(QStringLiteral("Reading %1 game folder(s)\u2026").arg(n));
+            });
+        int count = 0;
+        for (const QString& g : games) {
+            if (cancel->load())
+                return;
+            bp::Game game = bp::readGame(g);
+            ++count;
+            QMetaObject::invokeMethod(self.data(), [self, gen, game, prev] {
+                if (!self || gen != self->m_scanGen)
+                    return;
+                BackportRow row;
+                row.game = game;
+                if (prev->contains(game.key)) {
+                    const BackportRow& p = (*prev)[game.key];
+                    row.checked = p.checked;
+                    row.result = p.result;
+                    row.status = p.status;
+                    row.tone = p.tone;
+                    row.detail = p.detail;
+                }
+                if (!game.appliedRecord.isEmpty()) {
+                    row.status = QStringLiteral("Backport applied");
+                    row.tone = QStringLiteral("info");
+                    row.checked = false;
+                    row.detail = QStringLiteral("applied %1; restore originals from Backups & support")
+                                     .arg(game.appliedRecord.value(QStringLiteral("applied_at")).toString());
+                } else if (game.alreadyBackported && row.result.isEmpty()) {
+                    row.status = QStringLiteral("Already backported");
+                    row.tone = QStringLiteral("warn");
+                    row.checked = false;
+                    row.detail = QStringLiteral("this folder already contains backport fakelibs; use an unmodified game folder");
+                }
+                self->m_model->append(row);
+                self->updateLibraryState();
+            });
+        }
+        QMetaObject::invokeMethod(self.data(), [self, gen, count] {
+            if (self)
+                self->onScanFinished(gen, count);
+        });
+    });
+}
+
+void BackportPage::onGameScanned(quint64, const bp::Game&) {}
+
+void BackportPage::onScanFinished(quint64 gen, int count)
+{
+    if (gen != m_scanGen)
+        return;
+    m_scanning = false;
+    m_scanLabel->setText(QStringLiteral("Last scan %1").arg(QTime::currentTime().toString(QStringLiteral("HH:mm"))));
+    if (!m_settings.scanRoots.isEmpty())
+        log(QStringLiteral("INFO"), QStringLiteral("Found %1 game folder(s)").arg(count));
+    if (m_proxy->sortColumn() >= 0)
+        m_proxy->sort(m_proxy->sortColumn(), m_proxy->sortOrder());
+    updateButtons();
+    updateLibraryState();
+    updateStats();
+}
+
+void BackportPage::editScanLocations()
+{
+    auto* s = new Sheet(window(), QStringLiteral("Scan locations"), Sheet::Icon::None, size::dialogWide);
+    s->addText(QStringLiteral("Folders that are scanned for games (subfolders included). Removing one does not delete anything."));
+    auto* list = new QListWidget(s);
+    list->setMinimumHeight(200);
+    auto fill = [this, list] {
+        list->clear();
+        for (const QString& r : m_settings.scanRoots)
+            list->addItem(QFileInfo(r).isDir() ? r : r + QStringLiteral("   (not found)"));
+        for (int i = 0; i < list->count(); ++i)
+            list->item(i)->setData(Qt::UserRole, m_settings.scanRoots.value(i));
+    };
+    fill();
+    s->body()->addWidget(list);
+    auto* row = new QWidget(s);
+    auto* rh = hbox(row, space::sm);
+    auto* add = button(QStringLiteral("Add folder\u2026"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), row);
+    auto* remove = button(QStringLiteral("Remove selected"), ButtonVariant::Secondary, QStringLiteral("trash"), row);
+    rh->addWidget(add);
+    rh->addWidget(remove);
+    rh->addStretch(1);
+    s->body()->addWidget(row);
+    bool changed = false;
+    connect(add, &QPushButton::clicked, s, [this, s, fill, &changed] {
+        const QString d = QFileDialog::getExistingDirectory(s, QString());
+        if (d.isEmpty())
+            return;
+        const QString abs = QDir::toNativeSeparators(QFileInfo(d).absoluteFilePath());
+        for (const QString& r : m_settings.scanRoots)
+            if (bp::normKey(r) == bp::normKey(abs))
+                return;
+        m_settings.scanRoots << abs;
+        log(QStringLiteral("INFO"), QStringLiteral("Scan location added: %1").arg(abs));
+        persistSettings();
+        changed = true;
+        fill();
+    });
+    connect(remove, &QPushButton::clicked, s, [this, list, fill, &changed] {
+        auto* it = list->currentItem();
+        if (!it)
+            return;
+        const QString root = it->data(Qt::UserRole).toString();
+        m_settings.scanRoots.removeAll(root);
+        log(QStringLiteral("INFO"), QStringLiteral("Scan location removed: %1").arg(root));
+        persistSettings();
+        changed = true;
+        fill();
+    });
+    s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Close and rescan"), Sheet::Role::Primary);
+    const int r = s->exec();
+    s->deleteLater();
+    updateButtons();
+    if (r == 1 || changed)
+        rescan();
+}
+
+void BackportPage::clearList()
+{
+    if (m_running)
+        return;
+    if (m_model->rowCount() > 0
+        && !Sheet::confirm(window(), QStringLiteral("Clear the game list?"),
+                           QStringLiteral("Clear the game list and forget all scan locations?\nNothing is deleted from disk."),
+                           QStringLiteral("Keep"), QStringLiteral("Clear list"), true, Sheet::Icon::Warning))
+        return;
+    ++m_scanGen;
+    m_settings.scanRoots.clear();
+    persistSettings();
+    m_model->clear();
+    updateButtons();
+    updateLibraryState();
+    updateStats();
+    log(QStringLiteral("INFO"), QStringLiteral("Game list cleared"));
+}
+
+// ---- Start Backport ---------------------------------------------------------------------------
+
+void BackportPage::startOrCancel()
+{
+    if (m_running) {
+        requestCancel();
+        return;
+    }
+    startRun(checkedKeys());
+}
+
+void BackportPage::startRun(const QStringList& keysIn)
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    if (m_engine == Engine::Missing) {
+        Sheet::message(window(), QStringLiteral("The backport engine is missing"), m_engineBar->isVisible() ? QStringLiteral(
+                           "This copy of the app has no backport engine. Download the app again from the official GitHub release page.") : QString(),
+                       Sheet::Icon::Error);
+        return;
+    }
+    if (m_engine == Engine::Preparing) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("The backport engine is not ready yet."), Sheet::Icon::Warning);
+        return;
+    }
+    if (m_engine == Engine::Failed) {
+        Sheet::message(window(), QStringLiteral("The backport engine could not be set up"), m_engineError, Sheet::Icon::Error);
+        return;
+    }
+    if (keysIn.isEmpty()) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Select at least one game in the Game Library."));
+        return;
+    }
+    QStringList keys;
+    int skipped = 0;
+    for (const QString& k : keysIn) {
+        const BackportRow* r = m_model->rowByKey(k);
+        if (!r)
+            continue;
+        if (!r->game.appliedRecord.isEmpty() || r->game.alreadyBackported) {
+            ++skipped;
+            continue;
+        }
+        keys << k;
+    }
+    if (skipped)
+        log(QStringLiteral("WARN"), QStringLiteral("%1 selected folder(s) already carry backport files and are skipped").arg(skipped));
+    if (keys.isEmpty()) {
+        Sheet::message(window(), QStringLiteral("Backport"),
+                       QStringLiteral("The selected folders already contain backport files. Use unmodified game folders, or restore their "
+                                      "originals first (Backups & support)."));
+        return;
+    }
+    saveDestinations();
+    m_start->setEnabled(false);
+    setState(QStringLiteral("Checking destinations\u2026"), Tone::Info);
+    QStringList dirs;
+    for (const QString& k : keys)
+        dirs << m_model->rowByKey(k)->game.path;
+    const QString out = m_settings.outputDir, bak = m_settings.backupDir;
+    QPointer<BackportPage> self(this);
+    (void)QtConcurrent::run([self, out, bak, dirs, keys] {
+        const bp::Preflight pf = bp::preflight(out, bak, dirs);
+        QMetaObject::invokeMethod(self.data(), [self, pf, keys, dirs] {
+            if (!self)
+                return;
+            self->m_start->setEnabled(true);
+            self->setState(QStringLiteral("Ready"), Tone::Ok);
+            if (!pf.errors.isEmpty()) {
+                for (const QString& e : pf.errors)
+                    self->log(QStringLiteral("ERROR"), e);
+                Sheet::message(self->window(), QStringLiteral("The run cannot start"),
+                               QStringLiteral("The run cannot start:\n\n\u2022 ") + pf.errors.join(QStringLiteral("\n\u2022 ")), Sheet::Icon::Error);
+                return;
+            }
+            if (!pf.warnings.isEmpty()) {
+                for (const QString& w : pf.warnings)
+                    self->log(QStringLiteral("WARN"), w);
+                if (!Sheet::confirm(self->window(), QStringLiteral("Continue anyway?"), pf.warnings.join(u'\n') + QStringLiteral("\n\nContinue anyway?"),
+                                    QStringLiteral("No"), QStringLiteral("Continue"), false, Sheet::Icon::Warning))
+                    return;
+            }
+            if (self->m_apply->isChecked()) {
+                QStringList shown;
+                for (int i = 0; i < dirs.size() && i < 12; ++i)
+                    shown << QStringLiteral("\u2022 %1").arg(dirs[i]);
+                if (dirs.size() > 12)
+                    shown << QStringLiteral("\u2022 \u2026 and %1 more").arg(dirs.size() - 12);
+                QString text = QStringLiteral("These game folders will be changed after each backport is built and verified:\n\n%1\n\n"
+                                              "Before anything is written, the original of every file that will be replaced is copied to its "
+                                              "own folder under:\n%2\nand verified. Only backport files are written into the game folders; "
+                                              "nothing else in them is touched.")
+                                   .arg(shown.join(u'\n'), self->m_settings.backupDir);
+                if (self->m_proBuild->isChecked())
+                    text += QStringLiteral("\n\nPS5 Pro build is ON: games that declare PS5 Pro support get Pro-only files (eboot.bin, and for "
+                                           "games with PSSR a different libScePsml.sprx). Apply only to games you play on a PS5 Pro with "
+                                           "firmware 9.00 or later; a base PS5 should use the normal backport.");
+                text += QStringLiteral("\n\nApply to these game folders?");
+                if (!Sheet::confirm(self->window(), QStringLiteral("Apply backport to game folders"), text, QStringLiteral("No"),
+                                    QStringLiteral("Apply"), true, Sheet::Icon::Warning)) {
+                    self->log(QStringLiteral("INFO"), QStringLiteral("Run not started: apply was not confirmed"));
+                    return;
+                }
+            }
+            self->beginRun(keys);
+        });
+    });
+}
+
+void BackportPage::beginRun(const QStringList& keys)
+{
+    m_kind = Kind::Backport;
+    m_runOptions = {{QStringLiteral("apply"), m_apply->isChecked()},
+                    {QStringLiteral("zip"), true},
+                    {QStringLiteral("target_sdk"), targetSdk()},
+                    {QStringLiteral("pro_fix"), m_proFix->isChecked()},
+                    {QStringLiteral("pssr2"), m_proBuild->isChecked()}};
+    m_runKeys = keys;
+    m_runIndex = 0;
+    m_cancelRequested = false;
+    m_running = true;
+    for (const QString& k : keys)
+        if (auto* r = m_model->rowByKey(k)) {
+            r->status = QStringLiteral("Queued");
+            r->tone = QStringLiteral("muted");
+            r->detail.clear();
+            r->pct = 0;
+        }
+    m_model->allChanged();
+    m_bar->setState(ProgressBar::State::Determinate);
+    m_bar->setFraction(0);
+    m_percent->setText(QStringLiteral("0%"));
+    updateButtons();
+    setState(QStringLiteral("Running"), Tone::Info);
+    QString msg = QStringLiteral("Starting %1 game(s): SDK %2 (FW %2.00+)").arg(keys.size()).arg(targetSdk());
+    if (m_proFix->isChecked())
+        msg += QStringLiteral(", PS5 Pro fix");
+    if (m_proBuild->isChecked())
+        msg += QStringLiteral(", PS5 Pro build (Pro only)");
+    if (m_apply->isChecked())
+        msg += QStringLiteral(", apply to game folders");
+    log(QStringLiteral("INFO"), msg);
+    m_lastOutputRoot = m_settings.outputDir;
+    runNext();
+}
+
+void BackportPage::requestCancel()
+{
+    if (!m_running || m_cancelRequested)
+        return;
+    m_cancelRequested = true;
+    m_start->setEnabled(false);
+    setState(QStringLiteral("Cancelling\u2026"), Tone::Warn);
+    log(QStringLiteral("WARN"), QStringLiteral("Cancelling: stopping at the next safe point"));
+    if (m_worker)
+        m_worker->cancel();
+}
+
+void BackportPage::runNext()
+{
+    const int total = m_kind == Kind::Backport ? int(m_runKeys.size()) : int(m_items.size());
+    if (m_runIndex >= total || (m_cancelRequested && m_kind != Kind::Backport)) {
+        if (m_kind == Kind::Backport)
+            runFinished();
+        else
+            batchFinished();
+        return;
+    }
+    QJsonObject job;
+    if (m_kind == Kind::Backport) {
+        const QString key = m_runKeys[m_runIndex];
+        BackportRow* r = m_model->rowByKey(key);
+        if (m_cancelRequested) {
+            for (int i = m_runIndex; i < total; ++i)
+                if (auto* rr = m_model->rowByKey(m_runKeys[i])) {
+                    rr->status = QStringLiteral("Cancelled");
+                    rr->tone = QStringLiteral("warn");
+                    rr->detail = QStringLiteral("not started");
+                }
+            m_model->allChanged();
+            runFinished();
+            return;
+        }
+        if (!r) {
+            ++m_runIndex;
+            runNext();
+            return;
+        }
+        m_runRowKey = key;
+        r->status = QStringLiteral("Processing");
+        r->tone = QStringLiteral("busy");
+        m_model->rowChanged(key);
+        m_current->setText(QStringLiteral("Processing: %1 (%2)  \u2014  game %3 of %4").arg(nameOr(*r), idOr(*r)).arg(m_runIndex + 1).arg(total));
+        job = {{QStringLiteral("cmd"), QStringLiteral("backport")},
+               {QStringLiteral("game"), QJsonObject{{QStringLiteral("path"), r->game.path},
+                                                     {QStringLiteral("title_id"), r->game.titleId},
+                                                     {QStringLiteral("title"), r->game.title},
+                                                     {QStringLiteral("version"), r->game.version},
+                                                     {QStringLiteral("sdk"), r->game.sdk},
+                                                     {QStringLiteral("fw"), r->game.fw}}},
+               {QStringLiteral("output_root"), m_settings.outputDir},
+               {QStringLiteral("backup_root"), m_settings.backupDir},
+               {QStringLiteral("options"), m_runOptions}};
+    } else {
+        const Item& it = m_items[size_t(m_runIndex)];
+        job = it.job;
+        m_runRowKey = it.rowKey;
+        static const QHash<int, QString> kinds = {{int(Kind::Sdk), QStringLiteral("SDK %1 build")},
+                                                  {int(Kind::ProBuild), QStringLiteral("PS5 Pro build")},
+                                                  {int(Kind::Fakelib), QStringLiteral("Switch AMPR / PlayGo")},
+                                                  {int(Kind::Restore), QStringLiteral("Restore")}};
+        QString kind = kinds.value(int(m_kind));
+        if (m_kind == Kind::Sdk)
+            kind = kind.arg(m_sdkPair);
+        m_current->setText(QStringLiteral("%1: %2  \u2014  %3 of %4").arg(kind, it.name).arg(m_runIndex + 1).arg(total));
+        if (auto* r = m_model->rowByKey(it.rowKey)) {
+            m_rowSavedStatus = r->status;
+            m_rowSavedTone = r->tone;
+            m_rowSavedDetail = r->detail;
+        }
+    }
+    m_lastLabel.clear();
+    auto* w = new bp::Worker(this);
+    m_worker = w;
+    connect(w, &bp::Worker::progress, this, &BackportPage::onProgress);
+    connect(w, &bp::Worker::finished, this, [this, w](const QJsonObject& r) {
+        w->deleteLater();
+        onFinished(r);
+    });
+    QString err;
+    if (!w->start(job, &err)) {
+        w->deleteLater();
+        onFinished({{QStringLiteral("status"), QStringLiteral("FAILED")}, {QStringLiteral("headline"), err}});
+        return;
+    }
+    if (m_cancelRequested && m_kind != Kind::Restore)
+        w->cancel();
+}
+
+void BackportPage::onProgress(const QJsonObject& ev)
+{
+    const QString stage = ev.value(QStringLiteral("stage")).toString();
+    QString label = ev.value(QStringLiteral("label")).toString();
+    if (label.isEmpty())
+        label = stage;
+    const QString detail = ev.value(QStringLiteral("detail")).toString();
+    const int pct = ev.value(QStringLiteral("pct")).toInt();
+    const int total = m_kind == Kind::Backport ? int(m_runKeys.size()) : int(m_items.size());
+    if (auto* r = m_model->rowByKey(m_runRowKey)) {
+        r->pct = pct;
+        r->status = label.isEmpty() ? QStringLiteral("Processing") : label;
+        r->tone = QStringLiteral("busy");
+        m_model->rowChanged(m_runRowKey);
+    }
+    const double frac = total > 0 ? (m_runIndex + pct / 100.0) / total : 0;
+    m_bar->setFraction(frac);
+    m_percent->setText(QStringLiteral("%1%").arg(int(frac * 100)));
+    m_stage->setText(label + QStringLiteral("\u2026"));
+    QString who;
+    if (const BackportRow* r = m_model->rowByKey(m_runRowKey))
+        who = r->game.titleId.isEmpty() ? r->game.title : r->game.titleId;
+    else if (m_runIndex < int(m_items.size()) && m_kind != Kind::Backport)
+        who = m_items[size_t(m_runIndex)].name;
+    if (label != m_lastLabel) {
+        m_lastLabel = label;
+        log(QStringLiteral("INFO"), who.isEmpty() ? label : QStringLiteral("%1: %2").arg(who, label));
+    }
+    if (!detail.isEmpty() && stage != QLatin1String("PLAN")) {
+        static const QRegularExpression perItem(QStringLiteral("\\d+/\\d+|^Backing up \\d|^Re-checking|^Applying \\d"));
+        const bool box = (stage == QLatin1String("EXPORT") || stage == QLatin1String("BACKUP") || stage == QLatin1String("APPLY")
+                          || stage == QLatin1String("SDK5"))
+            && !perItem.match(detail).hasMatch();
+        log(QStringLiteral("INFO"), QStringLiteral("    ") + detail, box);
+    }
+    updateStats();
+    emit statusContextChanged();
+}
+
+void BackportPage::onFinished(const QJsonObject& result)
+{
+    m_worker.clear();
+    const QString trace = result.value(QStringLiteral("trace")).toString();
+    const QString err = trace.isEmpty() ? result.value(QStringLiteral("stderr")).toString() : trace;
+    if (!err.isEmpty())
+        log(QStringLiteral("ERROR"), err.right(600), false);
+    if (m_kind == Kind::Backport) {
+        if (auto* r = m_model->rowByKey(m_runRowKey))
+            rowResult(*r, result);
+        ++m_runIndex;
+        runNext();
+        return;
+    }
+    if (auto* r = m_model->rowByKey(m_runRowKey)) {
+        r->status = m_rowSavedStatus;
+        r->tone = m_rowSavedTone;
+        r->detail = m_rowSavedDetail;
+        r->pct = 0;
+        const QString status = result.value(QStringLiteral("status")).toString();
+        if (status == QLatin1String("DONE")) {
+            const char* mergeKey = m_kind == Kind::Sdk ? "sdk_rebuild" : m_kind == Kind::ProBuild ? "pssr2_test" : "fakelib_swap";
+            if (m_kind != Kind::Restore)
+                r->result.insert(QLatin1String(mergeKey), result);
+        }
+        m_model->rowChanged(m_runRowKey);
+    }
+    m_batchResults.emplace_back(m_items[size_t(m_runIndex)], result);
+    ++m_runIndex;
+    runNext();
+}
+
+void BackportPage::rowResult(BackportRow& row, const QJsonObject& r)
+{
+    const QString status = r.value(QStringLiteral("status")).toString();
+    QString text, tone, level;
+    if (status == QLatin1String("DONE")) {
+        text = QStringLiteral("Done");
+        tone = QStringLiteral("good");
+        level = QStringLiteral("OK");
+    } else if (status == QLatin1String("PARTIAL")) {
+        text = QStringLiteral("Partial");
+        tone = QStringLiteral("warn");
+        level = QStringLiteral("WARN");
+    } else if (status == QLatin1String("CANCELLED")) {
+        text = QStringLiteral("Cancelled");
+        tone = QStringLiteral("warn");
+        level = QStringLiteral("WARN");
+    } else if (status == QLatin1String("NO_CHANGE")) {
+        text = QStringLiteral("No change needed");
+        tone = QStringLiteral("info");
+        level = QStringLiteral("INFO");
+    } else {
+        text = QStringLiteral("Failed");
+        tone = QStringLiteral("bad");
+        level = QStringLiteral("ERROR");
+    }
+    const QString headline = r.value(QStringLiteral("headline")).toString();
+    row.status = text;
+    row.tone = tone;
+    row.detail = headline;
+    row.result = r;
+    row.pct = 0;
+    m_model->rowChanged(row.game.key);
+    log(level, QStringLiteral("%1 (%2): %3 \u2014 %4").arg(nameOr(row), idOr(row), text, headline));
+    const QJsonObject sdk = r.value(QStringLiteral("sdk_change")).toObject();
+    if (sdk.value(QStringLiteral("applied")).toBool()) {
+        const int n = sdk.value(QStringLiteral("target")).toInt();
+        log(QStringLiteral("INFO"), QStringLiteral("    SDK %1 build: loads on firmware %1.00 and later only").arg(n));
+    }
+    const QJsonObject band = r.value(QStringLiteral("engine")).toObject().value(QStringLiteral("target_band")).toObject();
+    if (band.contains(QStringLiteral("target_fw"))) {
+        const QJsonArray na = band.value(QStringLiteral("not_applied")).toArray();
+        QStringList names;
+        for (const QJsonValue& v : na)
+            names << v.toString();
+        const QString what = names.isEmpty() ? QStringLiteral("every fix still applies there")
+                                             : QStringLiteral("%1 FW4-only fix(es) left out: %2").arg(names.size()).arg(names.join(QStringLiteral(", ")));
+        log(QStringLiteral("INFO"), (QStringLiteral("    FW %1+ band: ").arg(band.value(QStringLiteral("target_fw")).toString()) + what).left(600));
+    }
+    const QJsonObject stages = r.value(QStringLiteral("stages")).toObject();
+    for (auto it = stages.begin(); it != stages.end(); ++it) {
+        const QJsonObject st = it.value().toObject();
+        const QString s = st.value(QStringLiteral("state")).toString();
+        if (s == QLatin1String("FAILED") || s == QLatin1String("CANCELLED"))
+            log(s == QLatin1String("FAILED") ? QStringLiteral("ERROR") : QStringLiteral("WARN"),
+                (QStringLiteral("    %1: %2").arg(it.key(), st.value(QStringLiteral("detail")).toString())).left(600));
+    }
+    const QJsonObject pro = r.value(QStringLiteral("pro_fix")).toObject();
+    if (pro.value(QStringLiteral("requested")).toBool()) {
+        QStringList fam;
+        for (const QJsonValue& v : pro.value(QStringLiteral("families")).toArray())
+            fam << v.toString();
+        log(QStringLiteral("INFO"), QStringLiteral("    PS5 Pro fix: %1").arg(fam.isEmpty() ? QStringLiteral("already present") : fam.join(QStringLiteral(", "))));
+    }
+    const QJsonObject dump = r.value(QStringLiteral("dump")).toObject();
+    if (dump.contains(QStringLiteral("note")))
+        log(QStringLiteral("INFO"), (QStringLiteral("    ") + dump.value(QStringLiteral("note")).toString()).left(600));
+    if (dump.contains(QStringLiteral("sdk_note")))
+        log(QStringLiteral("WARN"), (QStringLiteral("    ") + dump.value(QStringLiteral("sdk_note")).toString()).left(600));
+    const QJsonObject pssr2 = r.value(QStringLiteral("pssr2")).toObject();
+    if (pssr2.value(QStringLiteral("applied")).toBool())
+        log(QStringLiteral("INFO"), QStringLiteral("    PS5 Pro build: PS5 Pro FW 9.00+ only; %1").arg(modeNote(pssr2)));
+    else if (pssr2.value(QStringLiteral("requested")).toBool())
+        log(QStringLiteral("WARN"), (QStringLiteral("    PS5 Pro build not made: ") + pssr2.value(QStringLiteral("reason")).toString()).left(600));
+    const QString zip = r.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
+    const QString ozip = r.value(QStringLiteral("originals_zip")).toObject().value(QStringLiteral("path")).toString();
+    if (!zip.isEmpty())
+        log(QStringLiteral("OK"), QStringLiteral("    Backport ZIP: %1").arg(zip));
+    if (!ozip.isEmpty())
+        log(QStringLiteral("OK"), QStringLiteral("    Originals ZIP: %1").arg(ozip));
+    if (r.contains(QStringLiteral("output_dir")))
+        log(QStringLiteral("INFO"), QStringLiteral("    Run details: %1").arg(r.value(QStringLiteral("output_dir")).toString()), false);
+    if (status != QLatin1String("DONE") && status != QLatin1String("NO_CHANGE") && r.contains(QStringLiteral("log_dir")))
+        log(QStringLiteral("INFO"), QStringLiteral("    Full log: %1 (Export logs collects it)").arg(r.value(QStringLiteral("log_dir")).toString()));
+    updateStats();
+}
+
+void BackportPage::runFinished()
+{
+    const bool cancelled = m_cancelRequested;
+    m_running = false;
+    m_worker.clear();
+    if (!cancelled) {
+        m_bar->setFraction(1);
+        m_percent->setText(QStringLiteral("100%"));
+    }
+    m_current->setText(cancelled ? QStringLiteral("Run cancelled") : QStringLiteral("Run complete"));
+    m_stage->clear();
+    m_cancelRequested = false;
+    updateButtons();
+    setState(m_engine == Engine::Ready ? QStringLiteral("Ready") : QStringLiteral("Not checked"), m_engine == Engine::Ready ? Tone::Ok : Tone::Neutral);
+    int done = 0;
+    QStringList failedNotes;
+    bool anyRetry = false;
+    for (auto& r : m_model->rows()) {
+        if (!m_runKeys.contains(r.game.key))
+            continue;
+        if (r.status == QLatin1String("Done"))
+            ++done;
+        if (r.status == QLatin1String("Failed") || r.status == QLatin1String("Partial")) {
+            if (!r.result.isEmpty())
+                failedNotes << QStringLiteral("%1: %2").arg(r.game.titleId.isEmpty() ? r.game.title : r.game.titleId, r.detail).left(200);
+        }
+        r.game.appliedRecord = bp::activeLedgerRecord(r.game.path);
+    }
+    for (const auto& r : m_model->rows())
+        anyRetry = anyRetry || r.status == QLatin1String("Failed") || r.status == QLatin1String("Partial") || r.status == QLatin1String("Cancelled");
+    m_retry->setEnabled(anyRetry);
+    m_openOutput->setEnabled(!m_lastOutputRoot.isEmpty() && QFileInfo(m_lastOutputRoot).isDir());
+    if (cancelled)
+        log(QStringLiteral("WARN"), QStringLiteral("Run cancelled: %1 done. Builds are verified offline only; test them on a console.").arg(done));
+    else
+        log(QStringLiteral("OK"), QStringLiteral("Run finished: %1 done. Builds are verified offline only; test them on a console.").arg(done));
+    updateStats();
+    emit toastRequested(cancelled ? Tone::Warn : (failedNotes.isEmpty() ? Tone::Ok : Tone::Warn),
+                        cancelled ? QStringLiteral("Backport cancelled") : QStringLiteral("Backport finished"),
+                        QStringLiteral("%1 done. Test the result on a console.").arg(done));
+    if (!failedNotes.isEmpty() && !cancelled) {
+        if (Sheet::confirm(window(), QStringLiteral("Some games did not complete"),
+                           QStringLiteral("%1 game(s) failed or were only partly done.\n\nSave a ZIP with the full logs to send with your report?")
+                               .arg(failedNotes.size()),
+                           QStringLiteral("No"), QStringLiteral("Save logs ZIP"), false, Sheet::Icon::Warning))
+            exportLogs(QStringLiteral("after run: ") + failedNotes.join(QStringLiteral("; ")), true);
     }
 }
 
-QString BackportPage::statusContext() const
+void BackportPage::retryFailed()
 {
-    const int n = m_table->checkedFolders().size();
-    return n > 0 ? QStringLiteral("%1 game%2 selected").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")) : QString();
+    if (m_running)
+        return;
+    QStringList keys;
+    for (auto& r : m_model->rows()) {
+        r.checked = r.status == QLatin1String("Failed") || r.status == QLatin1String("Partial") || r.status == QLatin1String("Cancelled");
+        if (r.checked)
+            keys << r.game.key;
+    }
+    m_model->allChanged();
+    startRun(keys);
 }
 
-void BackportPage::setDragHighlight(bool on) { m_tableCard->setDropHighlight(on); }
+// ---- row-menu jobs ------------------------------------------------------------------------------
+
+void BackportPage::startBatch(Kind kind, std::vector<Item> items)
+{
+    if (items.empty())
+        return;
+    m_kind = kind;
+    m_items = std::move(items);
+    m_batchResults.clear();
+    m_runIndex = 0;
+    m_runKeys.clear();
+    m_cancelRequested = false;
+    m_running = true;
+    m_bar->setState(ProgressBar::State::Determinate);
+    m_bar->setFraction(0);
+    updateButtons();
+    switch (kind) {
+    case Kind::Sdk:
+        setState(QStringLiteral("Building SDK %1 versions\u2026").arg(m_sdkPair), Tone::Info);
+        log(QStringLiteral("INFO"), QStringLiteral("Rebuild with SDK %1: %2 backport ZIP(s)").arg(m_sdkPair).arg(m_items.size()));
+        break;
+    case Kind::ProBuild:
+        setState(QStringLiteral("Building PS5 Pro builds\u2026"), Tone::Info);
+        log(QStringLiteral("INFO"), QStringLiteral("PS5 Pro build: %1 backport(s)").arg(m_items.size()));
+        break;
+    case Kind::Fakelib:
+        setState(QStringLiteral("Switching AMPR / PlayGo\u2026"), Tone::Info);
+        break;
+    case Kind::Restore:
+        setState(QStringLiteral("Restoring original files\u2026"), Tone::Info);
+        break;
+    case Kind::Backport:
+        break;
+    }
+    runNext();
+}
+
+void BackportPage::batchFinished()
+{
+    const Kind kind = m_kind;
+    m_running = false;
+    m_cancelRequested = false;
+    m_kind = Kind::Backport;
+    updateButtons();
+    setState(m_engine == Engine::Ready ? QStringLiteral("Ready") : QStringLiteral("Not checked"), m_engine == Engine::Ready ? Tone::Ok : Tone::Neutral);
+    m_bar->setFraction(m_batchResults.empty() ? 0 : 1);
+    m_percent->setText(m_batchResults.empty() ? QStringLiteral("0%") : QStringLiteral("100%"));
+    m_stage->clear();
+    if (kind == Kind::Restore) {
+        m_current->setText(QStringLiteral("Restore finished"));
+        if (m_batchResults.empty())
+            return;
+        const QJsonObject r = m_batchResults.front().second;
+        const QString game = QDir::toNativeSeparators(r.value(QStringLiteral("game_dir")).toString());
+        if (r.value(QStringLiteral("status")).toString() == QLatin1String("DONE")) {
+            log(QStringLiteral("OK"), QStringLiteral("Originals restored in %1").arg(game));
+            Sheet::message(window(), QStringLiteral("Originals restored"), QStringLiteral("The original files were restored in\n%1.").arg(game));
+        } else {
+            QString why = r.value(QStringLiteral("headline")).toString();
+            if (why.isEmpty()) {
+                QStringList probs;
+                for (const QJsonValue& v : r.value(QStringLiteral("problems")).toArray())
+                    probs << v.toString();
+                why = probs.join(QStringLiteral("; "));
+            }
+            log(QStringLiteral("ERROR"), QStringLiteral("Restore did not complete: %1").arg(why));
+            Sheet::message(window(), QStringLiteral("Restore did not complete"), QStringLiteral("Restore did not complete:\n%1").arg(why), Sheet::Icon::Error);
+        }
+        rescan();
+        return;
+    }
+    static const QHash<int, QString> doneLabel = {{int(Kind::Sdk), QStringLiteral("SDK rebuild finished")},
+                                                  {int(Kind::ProBuild), QStringLiteral("PS5 Pro build finished")},
+                                                  {int(Kind::Fakelib), QStringLiteral("AMPR / PlayGo switch finished")}};
+    m_current->setText(doneLabel.value(int(kind)));
+    QStringList lines;
+    int ok = 0, failed = 0;
+    for (const auto& [item, res] : m_batchResults) {
+        const bool good = res.value(QStringLiteral("status")).toString() == QLatin1String("DONE");
+        const QString headline = res.value(QStringLiteral("headline")).toString();
+        const QString output = res.value(QStringLiteral("output")).toString();
+        if (good) {
+            ++ok;
+            log(QStringLiteral("OK"), QStringLiteral("%1: %2").arg(item.name, headline));
+            if (kind == Kind::ProBuild)
+                log(QStringLiteral("OK"), QStringLiteral("    ZIP: %1  (%2)").arg(output, modeNote(res)));
+            else
+                log(QStringLiteral("OK"), QStringLiteral("    ZIP: %1").arg(output));
+            lines << QStringLiteral("\u2714 %1").arg(QFileInfo(output).fileName());
+        } else {
+            ++failed;
+            log(QStringLiteral("ERROR"), QStringLiteral("%1: %2").arg(item.name, headline));
+            if (res.contains(QStringLiteral("log_dir")))
+                log(QStringLiteral("INFO"), QStringLiteral("    Full log: %1").arg(res.value(QStringLiteral("log_dir")).toString()));
+            lines << QStringLiteral("\u2718 %1: %2").arg(item.name, headline.left(160));
+        }
+    }
+    QString text = lines.join(u'\n');
+    if (ok > 0) {
+        if (kind == Kind::Sdk) {
+            int pair = m_batchResults.front().second.value(QStringLiteral("pair")).toInt(5);
+            text += QStringLiteral("\n\nThese builds need firmware %1.00 or later; keep the FW 4xx ZIP for older consoles.\n\n%2")
+                        .arg(pair)
+                        .arg(QString::fromUtf8(kSdkRebuildCaveat));
+            log(QStringLiteral("INFO"), QString::fromUtf8(kSdkRebuildCaveat));
+        } else if (kind == Kind::ProBuild) {
+            text += QStringLiteral("\n\nInstall these only on a PS5 Pro with firmware 9.00 or later. Base PS5 consoles keep the normal backport.");
+        } else {
+            text += QStringLiteral("\n\nTest the result on the console. If the game still fails, try another library, or switch back by using "
+                                   "the source package again.");
+        }
+    }
+    if (lines.isEmpty())
+        return;
+    const QString title = doneLabel.value(int(kind));
+    if (failed > 0) {
+        const QString note = kind == Kind::Sdk ? QStringLiteral("SDK rebuild failures")
+                             : kind == Kind::ProBuild ? QStringLiteral("PS5 Pro build failures")
+                                                      : QStringLiteral("AMPR / PlayGo switch failures");
+        if (Sheet::confirm(window(), title, text + QStringLiteral("\n\nSave a ZIP with the full logs to send?"), QStringLiteral("No"),
+                           QStringLiteral("Save logs ZIP"), false, Sheet::Icon::Warning))
+            exportLogs(note, true);
+    } else {
+        Sheet::message(window(), title, text);
+    }
+}
+
+QStringList BackportPage::chooseBackportFiles(const QString& question, const QString& fileTitle, bool* cancelled)
+{
+    *cancelled = false;
+    auto* s = new Sheet(window(), QStringLiteral("Choose a backport"), Sheet::Icon::Info);
+    s->addText(question);
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Choose a game folder\u2026"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Choose ZIP file(s)\u2026"), Sheet::Role::Primary);
+    const int r = s->exec();
+    s->deleteLater();
+    if (r == 2) {
+        const QStringList files = QFileDialog::getOpenFileNames(this, fileTitle, m_outField->path(),
+                                                                QStringLiteral("Backport ZIP (*.zip);;All files (*)"));
+        *cancelled = files.isEmpty();
+        return files;
+    }
+    if (r == 1) {
+        const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose the backported game folder (it has a fakelib folder)"));
+        *cancelled = d.isEmpty();
+        return d.isEmpty() ? QStringList{} : QStringList{d};
+    }
+    *cancelled = true;
+    return {};
+}
+
+void BackportPage::rebuildWithSdk(const QStringList& keys)
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    if (m_engine != Engine::Ready && m_engine != Engine::Unknown) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("The backport engine is not ready yet."), Sheet::Icon::Warning);
+        return;
+    }
+    const int pair = targetSdk();
+    if (pair < 5)
+        return;
+    m_sdkPair = pair;
+    std::vector<Item> items;
+    for (const QString& k : keys) {
+        const BackportRow* r = m_model->rowByKey(k);
+        if (!r)
+            continue;
+        const QString zip = r->result.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
+        if (zip.isEmpty() || !QFileInfo(zip).isFile())
+            continue;
+        items.push_back({{{QStringLiteral("cmd"), QStringLiteral("sdk")},
+                          {QStringLiteral("pair"), pair},
+                          {QStringLiteral("package"), zip},
+                          {QStringLiteral("output_root"), outputRoot().isEmpty() ? QFileInfo(zip).absolutePath() : outputRoot()},
+                          {QStringLiteral("title_id"), r->game.titleId},
+                          {QStringLiteral("title"), r->game.title},
+                          {QStringLiteral("version"), r->game.version},
+                          {QStringLiteral("source_sdk"), r->game.sdk}},
+                         k, QFileInfo(zip).fileName()});
+    }
+    if (items.empty()) {
+        const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("Choose the FW 4xx backport ZIP(s) to rebuild with SDK %1").arg(pair),
+                                                                m_outField->path(), QStringLiteral("Backport ZIP (*.zip);;All files (*)"));
+        for (const QString& f : files)
+            items.push_back({{{QStringLiteral("cmd"), QStringLiteral("sdk")},
+                              {QStringLiteral("pair"), pair},
+                              {QStringLiteral("package"), QDir::toNativeSeparators(f)},
+                              {QStringLiteral("output_root"), outputRoot().isEmpty() ? QDir::toNativeSeparators(QFileInfo(f).absolutePath()) : outputRoot()},
+                              {QStringLiteral("title_id"), QString()},
+                              {QStringLiteral("title"), QString()},
+                              {QStringLiteral("version"), QString()},
+                              {QStringLiteral("source_sdk"), QString()}},
+                             QString(), QFileInfo(f).fileName()});
+        if (items.empty() && !keys.isEmpty()) {
+            Sheet::message(window(), QStringLiteral("Backport"),
+                           QStringLiteral("The selected games have no backport ZIP from this session yet. Run Start Backport first, or choose a backport ZIP."));
+            return;
+        }
+    }
+    startBatch(Kind::Sdk, std::move(items));
+}
+
+void BackportPage::makeProBuild(const QStringList& keys)
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    if (m_engine != Engine::Ready && m_engine != Engine::Unknown) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("The backport engine is not ready yet."), Sheet::Icon::Warning);
+        return;
+    }
+    std::vector<Item> items;
+    auto item = [this](const QString& src, const QString& key, const BackportRow* r, const QString& gameDir) {
+        return Item{{{QStringLiteral("cmd"), QStringLiteral("pssr2")},
+                     {QStringLiteral("package"), QDir::toNativeSeparators(src)},
+                     {QStringLiteral("output_root"), outputRoot().isEmpty() ? QDir::toNativeSeparators(QFileInfo(src).absolutePath()) : outputRoot()},
+                     {QStringLiteral("title_id"), r ? r->game.titleId : QString()},
+                     {QStringLiteral("title"), r ? r->game.title : QString()},
+                     {QStringLiteral("version"), r ? r->game.version : QString()},
+                     {QStringLiteral("game_dir"), gameDir}},
+                    key, QFileInfo(src).fileName()};
+    };
+    for (const QString& k : keys) {
+        const BackportRow* r = m_model->rowByKey(k);
+        if (!r)
+            continue;
+        const QString zip = r->result.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
+        if (!zip.isEmpty() && QFileInfo(zip).isFile())
+            items.push_back(item(zip, k, r, r->game.path));
+        else if (QFileInfo(QDir(r->game.path).filePath(QStringLiteral("fakelib/libScePsml.sprx"))).isFile())
+            items.push_back(item(r->game.path, k, r, r->game.path));
+    }
+    if (items.empty()) {
+        if (!keys.isEmpty())
+            Sheet::message(window(), QStringLiteral("Backport"),
+                           QStringLiteral("This game has no backport ZIP from this session and its folder is not backported. Choose a backport ZIP or "
+                                          "backported folder next."));
+        bool cancelled = false;
+        const QStringList files = chooseBackportFiles(QStringLiteral("Make the PS5 Pro build from backport ZIP file(s), or from a backported game folder?"),
+                                                      QStringLiteral("Choose the backport ZIP(s) for a PS5 Pro build"), &cancelled);
+        for (const QString& f : files)
+            items.push_back(item(f, QString(), nullptr, QFileInfo(f).isDir() ? QDir::toNativeSeparators(f) : QString()));
+    }
+    startBatch(Kind::ProBuild, std::move(items));
+}
+
+void BackportPage::switchFakelib(const QStringList& keys)
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    QStringList sources, rowKeys;
+    for (const QString& k : keys) {
+        const BackportRow* r = m_model->rowByKey(k);
+        if (!r)
+            continue;
+        const QString zip = r->result.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
+        if (!zip.isEmpty() && QFileInfo(zip).isFile()) {
+            sources << zip;
+            rowKeys << k;
+        } else if (QFileInfo(QDir(r->game.path).filePath(QStringLiteral("fakelib/libSceAgc.sprx"))).isFile()) {
+            sources << r->game.path;
+            rowKeys << k;
+        }
+    }
+    if (sources.isEmpty()) {
+        if (!keys.isEmpty())
+            Sheet::message(window(), QStringLiteral("Backport"),
+                           QStringLiteral("The ticked games have no backport ZIP from this session and their folders are not backported. Choose a "
+                                          "backport ZIP or backported folder next."));
+        bool cancelled = false;
+        sources = chooseBackportFiles(QStringLiteral("Switch the libraries in backport ZIP file(s), or in a backported game folder?"),
+                                      QStringLiteral("Choose the backport ZIP(s) whose AMPR / PlayGo to switch"), &cancelled);
+        rowKeys = QStringList(sources.size(), QString());
+        if (sources.isEmpty())
+            return;
+    }
+    QStringList names;
+    for (const QString& s : sources)
+        names << QFileInfo(s).fileName();
+    QJsonValue ampr, playgo;
+    if (!chooseFakelib(names, &ampr, &playgo))
+        return;
+    QStringList what;
+    if (!ampr.isNull())
+        what << QStringLiteral("AMPR -> %1").arg(ampr.toString());
+    if (!playgo.isNull())
+        what << QStringLiteral("PLAYGO -> %1").arg(playgo.toString());
+    log(QStringLiteral("INFO"), QStringLiteral("Switch AMPR / PlayGo: %1 backport(s); %2").arg(sources.size()).arg(what.join(QStringLiteral(", "))));
+    std::vector<Item> items;
+    for (int i = 0; i < sources.size(); ++i) {
+        const QString src = QDir::toNativeSeparators(sources[i]);
+        items.push_back({{{QStringLiteral("cmd"), QStringLiteral("fakelib")},
+                          {QStringLiteral("package"), src},
+                          {QStringLiteral("output_root"), outputRoot().isEmpty() ? QDir::toNativeSeparators(QFileInfo(src).absolutePath()) : outputRoot()},
+                          {QStringLiteral("ampr"), ampr},
+                          {QStringLiteral("playgo"), playgo},
+                          {QStringLiteral("title_id"), QString()},
+                          {QStringLiteral("title"), QString()},
+                          {QStringLiteral("version"), QString()}},
+                         rowKeys.value(i), QFileInfo(src).fileName()});
+    }
+    startBatch(Kind::Fakelib, std::move(items));
+}
+
+bool BackportPage::chooseFakelib(const QStringList& names, QJsonValue* ampr, QJsonValue* playgo)
+{
+    auto* s = new Sheet(window(), QStringLiteral("Switch AMPR / PlayGo"), Sheet::Icon::None, 760);
+    s->addText(QStringLiteral("Some dumps bring their own AMPR and PlayGo libraries, and a bad one stops the game right after launch (error "
+                              "0xa0020104) or leaves it without content or audio. Pick a library that is known to work on other games; the "
+                              "game's executables stay as they are. Test the result on the console: which library a game needs is only known "
+                              "once it has run."));
+    QString pkg = names.join(QStringLiteral(", "));
+    if (pkg.size() > 240)
+        pkg = pkg.left(240) + QStringLiteral("\u2026");
+    auto* pk = label((names.size() > 1 ? QStringLiteral("Packages: ") : QStringLiteral("Package: ")) + pkg, TextStyle::Caption, color::fg_3, s);
+    pk->setWordWrap(true);
+    s->body()->addWidget(pk);
+    struct Row {
+        QString kind, name;
+        QComboBox* combo = nullptr;
+        QLabel* prov = nullptr;
+        QString file;
+        QString fileLabel;
+    };
+    Row rows[2] = {{QStringLiteral("ampr"), QStringLiteral("AMPR")}, {QStringLiteral("playgo"), QStringLiteral("PlayGo")}};
+    for (Row& r : rows) {
+        auto* w = new QWidget(s);
+        auto* v = vbox(w, 4);
+        auto* h = new QHBoxLayout;
+        h->setSpacing(space::md);
+        auto* l = label(r.name + u':', TextStyle::BodyStrong, color::fg_0, w);
+        l->setFixedWidth(64);
+        h->addWidget(l);
+        r.combo = new QComboBox(w);
+        r.combo->addItem(QStringLiteral("Keep the %1 the package has").arg(r.name), QStringLiteral("keep"));
+        for (const bp::Variant& var : bp::variants())
+            if (var.kind == r.kind)
+                r.combo->addItem(var.label, var.id);
+        r.combo->addItem(QStringLiteral("Choose a signed .sprx file\u2026"), QStringLiteral("file"));
+        h->addWidget(r.combo, 1);
+        v->addLayout(h);
+        r.prov = label(QStringLiteral("The package's own %1 stays as it is.").arg(r.name), TextStyle::Caption, color::fg_3, w);
+        r.prov->setWordWrap(true);
+        r.prov->setContentsMargins(76, 0, 0, 0);
+        v->addWidget(r.prov);
+        s->body()->addWidget(w);
+    }
+    for (Row& r : rows) {
+        Row* rp = &r;
+        connect(r.combo, &QComboBox::currentIndexChanged, s, [this, rp, s](int) {
+            const QString v = rp->combo->currentData().toString();
+            if (v == QLatin1String("keep")) {
+                rp->prov->setText(QStringLiteral("The package's own %1 stays as it is.").arg(rp->name));
+            } else if (v == QLatin1String("file")) {
+                const QString f = QFileDialog::getOpenFileName(s, QStringLiteral("Choose a signed %1 library (.sprx)").arg(rp->name), QString(),
+                                                               QStringLiteral("PS5 library (*.sprx);;All files (*)"));
+                if (f.isEmpty()) {
+                    rp->combo->setCurrentIndex(0);
+                    return;
+                }
+                const bp::UserLibrary u = bp::checkUserLibrary(f, rp->kind);
+                if (!u.ok) {
+                    Sheet::message(s, QStringLiteral("Switch AMPR / PlayGo"), u.error, Sheet::Icon::Warning);
+                    rp->combo->setCurrentIndex(0);
+                    return;
+                }
+                rp->file = QDir::toNativeSeparators(f);
+                rp->fileLabel = u.label;
+                rp->prov->setText(QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), u.label));
+            } else {
+                for (const bp::Variant& var : bp::variants())
+                    if (var.id == v)
+                        rp->prov->setText(QStringLiteral("%1\nSource: %2. Licence: %3.").arg(var.provenance, var.source, var.licence));
+            }
+        });
+    }
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Make the package"), Sheet::Role::Primary);
+    for (;;) {
+        const int r = s->exec();
+        if (r != 1) {
+            s->deleteLater();
+            return false;
+        }
+        auto value = [](const Row& row) -> QJsonValue {
+            const QString v = row.combo->currentData().toString();
+            if (v == QLatin1String("keep"))
+                return QJsonValue(QJsonValue::Null);
+            if (v == QLatin1String("file"))
+                return row.file;
+            return v;
+        };
+        *ampr = value(rows[0]);
+        *playgo = value(rows[1]);
+        if (ampr->isNull() && playgo->isNull()) {
+            Sheet::message(s, QStringLiteral("Switch AMPR / PlayGo"), QStringLiteral("Choose an AMPR library, a PlayGo library, or both."));
+            continue;
+        }
+        s->deleteLater();
+        return true;
+    }
+}
+
+// ---- restore -----------------------------------------------------------------------------------
+
+void BackportPage::pickRestore()
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    QString start = m_bakField->path();
+    if (QFileInfo(QDir(start).filePath(QStringLiteral("_backport_details"))).isDir())
+        start = QDir(start).filePath(QStringLiteral("_backport_details"));
+    const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose the game's folder inside the originals backup folder"), start);
+    if (d.isEmpty())
+        return;
+    const QString journal = QDir(d).filePath(QStringLiteral("APPLY_JOURNAL.json"));
+    if (!QFileInfo(journal).isFile()) {
+        Sheet::message(window(), QStringLiteral("Not an applied backup"),
+                       QStringLiteral("That folder is not a backup of an applied backport (it has no APPLY_JOURNAL.json). Choose the per-game "
+                                      "folder that contains 'originals' and APPLY_JOURNAL.json."),
+                       Sheet::Icon::Error);
+        return;
+    }
+    QFile jf(journal);
+    QJsonParseError pe;
+    QJsonDocument doc;
+    if (jf.open(QIODevice::ReadOnly)) {
+        QByteArray b = jf.readAll();
+        if (b.startsWith("\xEF\xBB\xBF"))
+            b.remove(0, 3);
+        doc = QJsonDocument::fromJson(b, &pe);
+    }
+    if (!doc.isObject()) {
+        Sheet::message(window(), QStringLiteral("Restore"), QStringLiteral("The journal cannot be read: %1").arg(pe.errorString()), Sheet::Icon::Error);
+        return;
+    }
+    const QJsonObject j = doc.object();
+    const QString state = j.value(QStringLiteral("state")).toString();
+    if (state == QLatin1String("ROLLED_BACK") || state == QLatin1String("RESTORED")) {
+        Sheet::message(window(), QStringLiteral("Restore"), QStringLiteral("This backup was already restored."));
+        return;
+    }
+    const QString game = QDir::toNativeSeparators(j.value(QStringLiteral("game_dir")).toString());
+    if (!Sheet::confirm(window(), QStringLiteral("Restore original files?"),
+                        QStringLiteral("Restore the original files of\n%1\nfrom\n%2?\n\nFiles the backport added are removed only if they are unchanged.")
+                            .arg(game, QDir::toNativeSeparators(d)),
+                        QStringLiteral("Cancel"), QStringLiteral("Restore"), true, Sheet::Icon::Warning))
+        return;
+    runRestore(QDir::toNativeSeparators(d));
+}
+
+void BackportPage::runRestore(const QString& backupRun)
+{
+    if (m_running) {
+        Sheet::message(window(), QStringLiteral("Backport"), QStringLiteral("Wait for the current run to finish."));
+        return;
+    }
+    log(QStringLiteral("INFO"), QStringLiteral("Restoring originals from %1").arg(backupRun));
+    startBatch(Kind::Restore, {{{{QStringLiteral("cmd"), QStringLiteral("restore")}, {QStringLiteral("backup_run"), backupRun}},
+                                QString(), QFileInfo(backupRun).fileName()}});
+}
+
+// ---- row menu and details --------------------------------------------------------------------
+
+void BackportPage::showRowMenu(const QPoint& globalPos)
+{
+    BackportRow* row = currentRow();
+    if (!row)
+        return;
+    const QString key = row->game.key;
+    const QStringList sel = selectedKeys().isEmpty() ? QStringList{key} : selectedKeys();
+    QMenu menu(this);
+    menu.addAction(icon(QStringLiteral("info"), color::fg_3), QStringLiteral("Show details"), this, [this, key] { showDetails(key); });
+    menu.addAction(icon(QStringLiteral("folder_open"), color::fg_3), QStringLiteral("Open game folder"), this, [this, key] {
+        if (auto* r = m_model->rowByKey(key))
+            openPath(r->game.path);
+    });
+    for (const auto& [k, text] : {std::pair{QStringLiteral("output_dir"), QStringLiteral("Open backport output")},
+                                  std::pair{QStringLiteral("backup_dir"), QStringLiteral("Open originals backup")},
+                                  std::pair{QStringLiteral("log_dir"), QStringLiteral("Open full log")}}) {
+        const QString p = row->result.value(k).toString();
+        if (!p.isEmpty())
+            menu.addAction(text, this, [this, p] { openPath(p); });
+    }
+    if (!m_running) {
+        menu.addSeparator();
+        const int n = targetSdk();
+        if (n > 4) {
+            menu.addAction(icon(QStringLiteral("layers"), color::fg_3), QStringLiteral("Rebuild its backport ZIP with SDK %1\u2026").arg(n), this,
+                           [this, sel] { rebuildWithSdk(sel); });
+        } else {
+            auto* a = menu.addAction(QStringLiteral("Rebuild its backport ZIP with another SDK: choose Target SDK 5-13 first"));
+            a->setEnabled(false);
+        }
+        menu.addAction(icon(QStringLiteral("zap"), color::fg_3), QStringLiteral("Make a PS5 Pro build from its backport\u2026"), this,
+                       [this, sel] { makeProBuild(sel); });
+        menu.addAction(QStringLiteral("Make a PS5 Pro build from a backport ZIP or folder\u2026"), this, [this] { makeProBuild({}); });
+        menu.addAction(icon(QStringLiteral("replace"), color::fg_3), QStringLiteral("Switch its AMPR / PlayGo library (known-good libraries)\u2026"),
+                       this, [this, sel] { switchFakelib(sel); });
+        menu.addAction(QStringLiteral("Switch AMPR / PlayGo in a backport ZIP or folder\u2026"), this, [this] { switchFakelib({}); });
+    }
+    menu.addSeparator();
+    menu.addAction(icon(QStringLiteral("copy"), color::fg_3), QStringLiteral("Copy source path"), this, [this, key] {
+        if (auto* r = m_model->rowByKey(key))
+            QApplication::clipboard()->setText(r->game.path);
+    });
+    if (!m_running)
+        menu.addAction(icon(QStringLiteral("close"), color::fg_3), QStringLiteral("Remove from list"), this, [this, sel] {
+            for (const QString& k : sel)
+                m_model->removeKey(k);
+            updateLibraryState();
+            updateStats();
+        });
+    menu.exec(globalPos);
+}
+
+void BackportPage::showDetails(const QString& key)
+{
+    const BackportRow* r = m_model->rowByKey(key);
+    if (!r)
+        return;
+    const QString title = r->game.title.isEmpty() ? QStringLiteral("Game details") : r->game.title;
+    auto* s = new Sheet(window(), title, Sheet::Icon::None, size::dialogWide);
+    QStringList lines;
+    auto kv = [&lines](const QString& k, const QString& v) {
+        lines << QStringLiteral("<tr><td style='color:%1;padding-right:14px;white-space:nowrap;vertical-align:top'>%2</td><td style='color:%3'>%4</td></tr>")
+                     .arg(hex(color::fg_4), k.toHtmlEscaped(), hex(color::fg_1), v.toHtmlEscaped().replace(u'\n', QStringLiteral("<br>")));
+    };
+    auto orUnknown = [](const QString& v) { return v.isEmpty() ? QStringLiteral("Unknown") : v; };
+    kv(QStringLiteral("Source folder"), orUnknown(r->game.path));
+    kv(QStringLiteral("PPSA"), orUnknown(r->game.titleId));
+    kv(QStringLiteral("Version"), orUnknown(r->game.version));
+    kv(QStringLiteral("Source SDK"), orUnknown(r->game.sdk));
+    kv(QStringLiteral("Required firmware"), orUnknown(r->game.fw));
+    kv(QStringLiteral("Status"), r->detail.isEmpty() ? r->status : QStringLiteral("%1 \u2014 %2").arg(r->status, r->detail));
+    const QJsonObject res = r->result;
+    const QJsonObject stages = res.value(QStringLiteral("stages")).toObject();
+    for (auto it = stages.begin(); it != stages.end(); ++it) {
+        const QJsonObject st = it.value().toObject();
+        kv(QStringLiteral("Stage: %1").arg(it.key()),
+           QStringLiteral("%1 \u2014 %2").arg(st.value(QStringLiteral("state")).toString(), st.value(QStringLiteral("detail")).toString()));
+    }
+    if (!res.isEmpty()) {
+        QStringList fixes;
+        for (const QJsonValue& v : res.value(QStringLiteral("engine")).toObject().value(QStringLiteral("fixes")).toArray())
+            fixes << v.toString();
+        kv(QStringLiteral("Engine fixes applied"), fixes.isEmpty() ? QStringLiteral("none (baseline only)") : fixes.join(QStringLiteral(", ")));
+        const QJsonObject sdk = res.value(QStringLiteral("sdk_change")).toObject();
+        if (sdk.value(QStringLiteral("requested")).toBool() || sdk.value(QStringLiteral("target")).toInt() > 4) {
+            const int n = sdk.value(QStringLiteral("target")).toInt();
+            kv(QStringLiteral("Target SDK"), sdk.value(QStringLiteral("applied")).toBool()
+                                                  ? QStringLiteral("SDK %1 (needs FW %1.00+)").arg(n)
+                                                  : QStringLiteral("SDK %1 not applied: %2").arg(n).arg(sdk.value(QStringLiteral("reason")).toString()));
+        }
+        const QJsonObject band = res.value(QStringLiteral("engine")).toObject().value(QStringLiteral("target_band")).toObject();
+        if (band.contains(QStringLiteral("target_fw"))) {
+            QStringList na;
+            for (const QJsonValue& v : band.value(QStringLiteral("not_applied")).toArray())
+                na << v.toString();
+            QString t = QStringLiteral("planned for FW %1+: ").arg(band.value(QStringLiteral("target_fw")).toString());
+            t += na.isEmpty() ? QStringLiteral("every fix still applies")
+                              : QStringLiteral("%1 FW4-only fix(es) left out (%2)").arg(na.size()).arg(na.join(QStringLiteral(", ")).left(200));
+            kv(QStringLiteral("Firmware band"), t);
+        }
+        const QJsonObject pro = res.value(QStringLiteral("pro_fix")).toObject();
+        if (pro.value(QStringLiteral("requested")).toBool()) {
+            QStringList fam;
+            for (const QJsonValue& v : pro.value(QStringLiteral("families")).toArray())
+                fam << v.toString();
+            kv(QStringLiteral("PS5 Pro fix"), fam.isEmpty() ? QStringLiteral("already present in the package") : fam.join(QStringLiteral(", ")));
+        }
+        const QJsonObject dump = res.value(QStringLiteral("dump")).toObject();
+        if (dump.contains(QStringLiteral("note")) || dump.contains(QStringLiteral("sdk_note")))
+            kv(QStringLiteral("Dump"), QStringList{dump.value(QStringLiteral("note")).toString(), dump.value(QStringLiteral("sdk_note")).toString()}
+                                           .join(u'\n')
+                                           .trimmed());
+        const QJsonObject pssr2 = res.value(QStringLiteral("pssr2")).toObject();
+        if (pssr2.value(QStringLiteral("requested")).toBool())
+            kv(QStringLiteral("PS5 Pro build"), pssr2.value(QStringLiteral("applied")).toBool()
+                                                    ? QStringLiteral("built (Pro FW 9.00+ only): %1").arg(modeNote(pssr2))
+                                                    : QStringLiteral("not built: %1").arg(pssr2.value(QStringLiteral("reason")).toString()));
+        const QString zip = res.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
+        const QString ozip = res.value(QStringLiteral("originals_zip")).toObject().value(QStringLiteral("path")).toString();
+        if (!zip.isEmpty())
+            kv(QStringLiteral("Backport ZIP"), zip);
+        if (!ozip.isEmpty())
+            kv(QStringLiteral("Originals ZIP"), ozip);
+        if (res.contains(QStringLiteral("log_dir")))
+            kv(QStringLiteral("Full log"), res.value(QStringLiteral("log_dir")).toString());
+    }
+    for (const QString& n : r->game.notes)
+        kv(QStringLiteral("Note"), n);
+    auto* text = new QTextEdit(s);
+    text->setReadOnly(true);
+    text->setMinimumHeight(340);
+    text->setHtml(QStringLiteral("<table cellspacing='0' cellpadding='3'>%1</table>").arg(lines.join(QString())));
+    text->setStyleSheet(QStringLiteral("QTextEdit{background:%1;border:1px solid %2;border-radius:10px;}").arg(hex(color::field_bg), hex(color::border_2)));
+    s->body()->addWidget(text);
+    const QString outDir = res.value(QStringLiteral("output_dir")).toString();
+    const QString bakDir = res.value(QStringLiteral("backup_dir")).toString();
+    s->addButton(QStringLiteral("Open game folder"), Sheet::Role::Safe);
+    int outIdx = -1, bakIdx = -1, n = 1;
+    if (!outDir.isEmpty()) {
+        s->addButton(QStringLiteral("Open output"), Sheet::Role::Safe);
+        outIdx = n++;
+    }
+    if (!bakDir.isEmpty()) {
+        s->addButton(QStringLiteral("Open backup"), Sheet::Role::Safe);
+        bakIdx = n++;
+    }
+    s->addButton(QStringLiteral("Close"), Sheet::Role::Primary);
+    const QString path = r->game.path;
+    const int choice = s->exec();
+    s->deleteLater();
+    if (choice == 0)
+        openPath(path);
+    else if (choice == outIdx)
+        openPath(outDir);
+    else if (choice == bakIdx)
+        openPath(bakDir);
+}
+
+// ---- logs and reports -------------------------------------------------------------------------
+
+void BackportPage::exportLogs(const QString& note, bool reveal)
+{
+    QStringList hostLogs;
+    const QString ourLogs = QDir(Paths::logsDir()).absolutePath();
+    for (const QFileInfo& fi : QDir(ourLogs).entryInfoList({QStringLiteral("*.log")}, QDir::Files, QDir::Time).mid(0, 3))
+        hostLogs << fi.absoluteFilePath();
+    const QString res = bp::makeSupportZip(note, m_engineRevision, hostLogs);
+    if (res.startsWith(u'!')) {
+        Sheet::message(window(), QStringLiteral("Export logs"), QStringLiteral("Could not write the log ZIP: %1").arg(res.mid(1)), Sheet::Icon::Error);
+        return;
+    }
+    log(QStringLiteral("OK"), QStringLiteral("Support logs saved: %1").arg(QDir::toNativeSeparators(res)));
+    if (reveal)
+        Sheet::message(window(), QStringLiteral("Logs saved"),
+                       QStringLiteral("Saved:\n%1\n\nSend this file with your report. It contains this program's logs only (no game files). Your user "
+                                      "folder is shown as ~ and the console IP is left out, but the names of the game and output folders you chose are in it.")
+                           .arg(QDir::toNativeSeparators(res)));
+#ifdef Q_OS_WIN
+    QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(res)});
+#endif
+}
+
+void BackportPage::reportProblem()
+{
+    QString zipName;
+    if (Sheet::confirm(window(), QStringLiteral("Report a problem"),
+                       QStringLiteral("Save a ZIP with this program's logs first, so you can attach it to the report?\n\nIt contains this program's "
+                                      "logs only (no game files)."),
+                       QStringLiteral("No"), QStringLiteral("Save logs ZIP"), false, Sheet::Icon::Info)) {
+        exportLogs(QStringLiteral("report a problem"), false);
+    }
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("template"), QStringLiteral("bug_report.yml"));
+    q.addQueryItem(QStringLiteral("tool_version"), QStringLiteral("%1 (backend %2) in exFAT Image Builder")
+                                                       .arg(QLatin1String(bp::kEngineVersion), m_engineRevision.isEmpty() ? QStringLiteral("not ready") : m_engineRevision));
+    QString sdk = QStringLiteral("Target SDK %1 (FW %1.00+)").arg(targetSdk());
+    if (m_proFix->isChecked())
+        sdk += QStringLiteral(", PS5 Pro fix");
+    if (m_proBuild->isChecked())
+        sdk += QStringLiteral(", PS5 Pro build (Pro FW 9.00+ only)");
+    q.addQueryItem(QStringLiteral("sdk"), sdk);
+    QString fakelib = QStringLiteral("Default (generated by this program)");
+    if (m_proBuild->isChecked())
+        fakelib += QStringLiteral(" + PS5 Pro build (eboot Pro checks; PSSR PSML)");
+    q.addQueryItem(QStringLiteral("fakelib"), fakelib);
+    const BackportRow* one = nullptr;
+    int checked = 0, bad = 0;
+    const BackportRow* badRow = nullptr;
+    for (const auto& r : m_model->rows()) {
+        if (r.checked) {
+            ++checked;
+            one = &r;
+        }
+        if (r.status == QLatin1String("Failed") || r.status == QLatin1String("Partial")) {
+            ++bad;
+            badRow = &r;
+        }
+    }
+    const BackportRow* pick = checked == 1 ? one : (bad == 1 ? badRow : nullptr);
+    if (pick) {
+        if (!pick->game.title.isEmpty())
+            q.addQueryItem(QStringLiteral("game_title"), pick->game.title);
+        if (!pick->game.titleId.isEmpty())
+            q.addQueryItem(QStringLiteral("ppsa"), pick->game.titleId);
+        if (!pick->game.version.isEmpty())
+            q.addQueryItem(QStringLiteral("game_version"), pick->game.version);
+    }
+    QUrl url(QString::fromLatin1(bp::kIssuesUrl));
+    url.setQuery(q);
+    log(QStringLiteral("INFO"), QStringLiteral("Opening the GitHub bug report form: %1").arg(QString::fromLatin1(bp::kIssuesUrl)));
+    QDesktopServices::openUrl(url);
+    Q_UNUSED(zipName);
+}
+
+bool BackportPage::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_table->viewport() && event->type() == QEvent::Resize) {
+        const int w = m_table->viewport()->width();
+        m_table->setColumnHidden(BackportGameModel::FwCol, w < 720);
+        m_table->setColumnHidden(BackportGameModel::SdkCol, w < 620);
+        m_table->setColumnHidden(BackportGameModel::CoverCol, w < 520);
+    }
+    return Page::eventFilter(watched, event);
+}
+
+void BackportPage::cancelAndWait(int ms)
+{
+    if (!m_running)
+        return;
+    requestCancel();
+    QElapsedTimer t;
+    t.start();
+    while (m_running && t.elapsed() < ms)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+}
+
+// ---- screenshots -----------------------------------------------------------------------------
+
+QStringList BackportPage::demoStates() const
+{
+    return {QStringLiteral("library"), QStringLiteral("running")};
+}
 
 void BackportPage::applyDemoState(const QString& name)
 {
-    if (name == QLatin1String("report")) {
-        m_openReport->setVisible(true);
-        return;
+    m_demo = true;
+    ++m_scanGen;
+    if (m_scanCancel)
+        m_scanCancel->store(true);
+    m_scanning = false;
+    m_model->clear();
+    auto add = [this](const QString& id, const QString& title, const QString& ver, const QString& sdk, const QString& fw,
+                      const QString& status, const QString& tone, int pct = 0) {
+        BackportRow r;
+        r.game.path = QStringLiteral("D:\\Games\\%1 %2").arg(id, title);
+        r.game.key = r.game.path.toLower();
+        r.game.titleId = id;
+        r.game.title = title;
+        r.game.version = ver;
+        r.game.sdk = sdk;
+        r.game.fw = fw;
+        r.status = status;
+        r.tone = tone;
+        r.pct = pct;
+        m_model->append(r);
+    };
+    add(QStringLiteral("PPSA18391"), QStringLiteral("Afterdream"), QStringLiteral("02.000.000"), QStringLiteral("8.00"), QStringLiteral("8.00"),
+        QStringLiteral("Ready"), QStringLiteral("idle"));
+    add(QStringLiteral("PPSA09232"), QStringLiteral("Ghost Song"), QStringLiteral("01.005.000"), QStringLiteral("6.00"), QStringLiteral("6.00"),
+        name == QLatin1String("running") ? QStringLiteral("Patching, signing and packaging") : QStringLiteral("Ready"),
+        name == QLatin1String("running") ? QStringLiteral("busy") : QStringLiteral("idle"), 50);
+    add(QStringLiteral("PPSA27500"), QStringLiteral("ONE PIECE Pirate Warriors 4"), QStringLiteral("01.003.000"), QStringLiteral("9.00"),
+        QStringLiteral("9.00"), name == QLatin1String("running") ? QStringLiteral("Done") : QStringLiteral("Ready"),
+        name == QLatin1String("running") ? QStringLiteral("good") : QStringLiteral("idle"));
+    add(QStringLiteral("PPSA10528"), QStringLiteral("Prince of Persia The Lost Crown"), QStringLiteral("01.000.003"), QStringLiteral("7.00"),
+        QStringLiteral("7.00"), QStringLiteral("Already backported"), QStringLiteral("warn"));
+    m_model->rows()[3].checked = false;
+    m_settings.scanRoots = QStringList{QStringLiteral("D:\\Games")};
+    m_outField->setPath(QStringLiteral("D:\\Backports"));
+    m_bakField->setPath(QStringLiteral("D:\\Backports Backups"));
+    setState(QStringLiteral("Ready"), Tone::Ok);
+    m_engineBar->hide();
+    m_engineLine->setText(QStringLiteral("PS5 Backport GUI 0.3.4 by Deckerr97  \u00b7  backend 3e08eda5-914d90065d"));
+    if (name == QLatin1String("running")) {
+        m_bar->setFraction(0.42);
+        m_percent->setText(QStringLiteral("42%"));
+        m_current->setText(QStringLiteral("Processing: Ghost Song (PPSA09232)  \u2014  game 2 of 3"));
+        m_stage->setText(QStringLiteral("Patching, signing and packaging\u2026"));
+        log(QStringLiteral("INFO"), QStringLiteral("Starting 3 game(s): SDK 4 (FW 4.00+)"));
+        log(QStringLiteral("OK"), QStringLiteral("ONE PIECE Pirate Warriors 4 (PPSA27500): Done \u2014 Backport files created. Not yet tested on a console."));
+        log(QStringLiteral("OK"), QStringLiteral("    Backport ZIP: D:\\Backports\\FW 4xx PPSA27500 ONE PIECE (01.003.000) backport files.zip"));
+        log(QStringLiteral("INFO"), QStringLiteral("PPSA09232: Patching, signing and packaging"));
     }
-    if (name != QLatin1String("pins"))
-        return;
-    m_providers->setVisible(true);
-    m_providers->setMessage(QStringLiteral("From %1. They are pinned (SHA-256) at the first backport. After you replace one on "
-                                           "purpose, pin them again, or the backport is refused.")
-                                .arg(nativePath(QStringLiteral("D:/Backport/ampr_emu"))));
-    QTimer::singleShot(0, this, [this] { scrollArea()->verticalScrollBar()->setValue(scrollArea()->verticalScrollBar()->maximum()); });
+    m_scanLabel->setText(QStringLiteral("Last scan 14:02"));
+    updateButtons();
+    updateLibraryState();
+    updateStats();
 }
 
 void BackportPage::clearDemoState()
 {
-    m_openReport->setVisible(!m_lastReport.isEmpty());
-    refreshProviderBar();
-    scrollArea()->verticalScrollBar()->setValue(0);
+    if (!m_demo)
+        return;
+    m_model->clear();
+    m_settings = bp::loadSettings();
+    m_suppressSave = true;
+    m_outField->setPath(m_settings.outputDir);
+    m_bakField->setPath(m_settings.backupDir);
+    m_suppressSave = false;
+    m_demo = false;
+    m_bar->setFraction(0);
+    m_percent->setText(QStringLiteral("0%"));
+    m_current->setText(QStringLiteral("Idle"));
+    m_stage->clear();
+    updateButtons();
+    updateLibraryState();
+    updateStats();
 }
 
 } // namespace fw::pages
