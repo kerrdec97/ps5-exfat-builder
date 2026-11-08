@@ -57,7 +57,7 @@ using namespace theme;
 
 MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), m_ctx(ctx)
 {
-    setWindowTitle(QStringLiteral("%1 — %2").arg(QLatin1String(build::kProductName), QLatin1String(build::kEditionName)));
+    setWindowTitle(QLatin1String(build::kProductName));
     setMinimumSize(size::windowMinW, size::windowMinH);
     setAcceptDrops(true);
     setProperty("fwNoRing", true);
@@ -523,7 +523,7 @@ void MainWindow::onUpdateCheckFinished(const JobRecord& rec)
     auto* bar = new InfoBar(Tone::Info, this);
     bar->setDismissable(true);
     bar->setTitle(QStringLiteral("Version %1 is available").arg(version));
-    bar->setMessage(QStringLiteral("The native Farewell Edition has a newer release. The installer is checked against its SHA-256 before it runs."));
+    bar->setMessage(QStringLiteral("A newer exFAT Image Builder is available. The download is checked against its SHA-256 before it runs."));
     auto* notes = bar->addLink(QStringLiteral("What's new"));
     const QString page = m_release.value(QStringLiteral("pageUrl")).toString();
     connect(notes, &Link::activated, this, [page] { QDesktopServices::openUrl(QUrl(page)); });

@@ -293,7 +293,7 @@ Result<ReleaseInfo> parseRelease(const QByteArray& githubJson, const QString& ru
         }
     }
     if (r.installerUrl.isEmpty())
-        return Error(ErrorCode::NotFound, QStringLiteral("The latest release has no native Farewell Edition installer."));
+        return Error(ErrorCode::NotFound, QStringLiteral("The latest release has no Windows download for this app."));
     r.newerThanRunning = compareVersions(r.version, runningVersion) > 0;
     return r;
 }
@@ -317,7 +317,7 @@ void registerModule(ModuleContext& ctx)
     d.section = QStringLiteral("General");
     d.group = QStringLiteral("Updates");
     d.label = QStringLiteral("Check for updates when the app starts");
-    d.description = QStringLiteral("Asks GitHub for the latest Farewell Edition release a few seconds after start. Nothing is downloaded or installed without your confirmation, and downloads are checked against the release's SHA-256 list.");
+    d.description = QStringLiteral("Asks GitHub for the latest release a few seconds after start. Nothing is downloaded or installed without your confirmation, and downloads are checked against the release's SHA-256 list.");
     d.type = SettingType::Bool;
     d.defaultValue = true;
     d.order = 100;

@@ -30,7 +30,7 @@ int main(int argc, char* argv[])
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/drive.svg")));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("PS5 exFAT Image Builder — Farewell Edition"));
+    parser.setApplicationDescription(QStringLiteral("PS5 exFAT Image Builder v5"));
     parser.addHelpOption();
     parser.addVersionOption();
     QCommandLineOption screenshotOpt(QStringLiteral("screenshot-pages"),
