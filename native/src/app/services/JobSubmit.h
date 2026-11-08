@@ -36,7 +36,8 @@
 //                  ampr.index.ftp   {remoteFolder, host?, port?} (integration: build on the console folder, upload with .bak)
 //   Image edit     image.exfat.edit {image, operations: [{op: add|replace|delete|mkdir, imagePath, localPath}]}
 //                  image.ffpkg.edit {image, operations: [{op: add|replace|delete|rename|mkdir, path, source, newName}]}
-//   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfsc"), output (file path)}
+//   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfs"|"ffpfsc"), output (file path),
+//                                     method? ("direct"|"repack"), replaceExisting?}
 //   Compare        image.compare    {a (image), b (image or folder), depth ("full" (default) | "structure")}
 //                  Images: .exfat / .ffpkg / .ffpfs / .ffpfsc (either side may also be a folder).
 //                  The job succeeds whatever it finds and leaves outcome.verification NotRun;
@@ -77,10 +78,11 @@ namespace fw::jobs {
 inline const QString kFormatExfat = QStringLiteral("exfat");
 inline const QString kFormatFfpkg = QStringLiteral("ffpkg");
 inline const QString kFormatFfpfsc = QStringLiteral("ffpfsc");
+inline const QString kFormatFfpfs = QStringLiteral("ffpfs"); // uncompressed PFS (Convert; image.pfs.build format=ffpfs)
 
 QString imageBuildKind(const QString& format);     // "image.exfat.build", ...
 QString imageKindForFile(const QString& path, const QString& op); // op = "verify" | "extract"; "" if unknown
-QString outputExtension(const QString& format);    // ".exfat", ".ffpkg", ".ffpfsc"
+QString outputExtension(const QString& format);    // ".exfat", ".ffpkg", ".ffpfs", ".ffpfsc"
 
 bool isAvailable(const AppContext& ctx, const QString& kind);
 QStringList missingKinds(const AppContext& ctx, const QStringList& kinds);
@@ -120,8 +122,9 @@ Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port
 // `operations` already in the engine's JSON shape (see the header comment).
 Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJsonArray& operations,
                                 const QVariantMap& overrides);
+// `method` "direct" | "repack" | "" (the engine default: direct for .exfat/.ffpkg -> .ffpfsc).
 Result<QString> submitConvert(AppContext& ctx, const QString& image, const QString& format, const QString& output,
-                              const QVariantMap& overrides);
+                              const QVariantMap& overrides, const QString& method = {}, bool replaceExisting = false);
 // `depth` = "full" | "structure".
 Result<QString> submitCompare(AppContext& ctx, const QString& a, const QString& b, const QString& depth);
 Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,

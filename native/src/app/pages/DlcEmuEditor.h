@@ -42,8 +42,8 @@ private:
     ui::MessageRow* m_validation;
     QLabel* m_bytes;
     QPushButton* m_add;
-    QPushButton* m_duplicate;
-    QPushButton* m_remove;
+    QAbstractButton* m_duplicate;
+    QAbstractButton* m_remove;
     QPushButton* m_find;
     QPushButton* m_save;
     std::vector<tools::dlcemu::Entry> m_loaded; // keeps unknown keys per row (Qt::UserRole index)

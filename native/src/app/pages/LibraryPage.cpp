@@ -2,12 +2,17 @@
 
 #include "app/AppContext.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
+#include "app/ui/Icons.h"
+#include "app/ui/LibraryGrid.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "engines/gameinfo/DumpRename.h"
 #include "engines/gameinfo/Module.h"
+#include "engines/general/Module.h"
 #include "engines/tools/Module.h"
 
+#include <QAction>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -16,14 +21,148 @@
 #include <QJsonObject>
 #include <QMenu>
 
+#include <algorithm>
+
 namespace fw::pages {
 
 using namespace ui;
 using namespace theme;
 
+namespace {
+
+QLineEdit* searchInput(const QString& placeholder, QWidget* parent)
+{
+    auto* e = textInput(placeholder, false, parent);
+    e->setClearButtonEnabled(true);
+    e->setToolTip(QStringLiteral("Title, title ID or file name"));
+    e->addAction(icon(QStringLiteral("search"), color::fg_4), QLineEdit::LeadingPosition);
+    e->setMinimumWidth(170);
+    e->setMaximumWidth(300);
+    e->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    return e;
+}
+
+QComboBox* combo(const QStringList& items, const QString& accessibleName, QWidget* parent)
+{
+    auto* c = dropdown(parent);
+    c->addItems(items);
+    c->setAccessibleName(accessibleName);
+    c->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    return c;
+}
+
+Segmented* viewToggle(QWidget* parent)
+{
+    auto* s = new Segmented(parent);
+    s->addSegment(QStringLiteral("Grid"), QStringLiteral("grid"), QStringLiteral("grid"));
+    s->addSegment(QStringLiteral("List"), QStringLiteral("list"), QStringLiteral("list"));
+    s->setAccessibleName(QStringLiteral("View"));
+    s->setCurrentIndex(0);
+    return s;
+}
+
+// The bar that appears above a collection while items are selected.
+Card* selectionBar(QLabel** text, QWidget* parent)
+{
+    auto* bar = new Card(parent, Card::Variant::Inset);
+    bar->body()->setContentsMargins(4, 0, 4, 0);
+    auto* h = new QHBoxLayout;
+    h->setSpacing(space::sm);
+    *text = label({}, TextStyle::BodyStrong, color::fg_0, bar);
+    h->addWidget(*text);
+    h->addSpacing(space::sm);
+    bar->body()->addLayout(h);
+    bar->hide();
+    return bar;
+}
+
+QHBoxLayout* barLayout(Card* bar) { return static_cast<QHBoxLayout*>(bar->body()->itemAt(0)->layout()); }
+
+QString versionText(const QString& v) { return v.isEmpty() ? QString() : QStringLiteral("v%1").arg(v); }
+
+QString joinMeta(const QStringList& parts)
+{
+    QStringList out;
+    for (const QString& p : parts)
+        if (!p.isEmpty())
+            out << p;
+    return out.join(QStringLiteral(" · "));
+}
+
+QString plural(qint64 n, const QString& one, const QString& many) { return QStringLiteral("%1 %2").arg(formatCount(n), n == 1 ? one : many); }
+
+std::vector<LibraryGame> demoGames()
+{
+    struct D {
+        const char* title;
+        const char* id;
+        const char* version;
+        qint64 bytes;
+        const char* status;
+    };
+    const D d[] = {{"Astro Bot", "PPSA01325", "01.002.000", 48500000000LL, "Backported"},
+                   {"Demon's Souls", "PPSA01341", "01.004.000", 31600000000LL, ""},
+                   {"Ghost of Yōtei", "PPSA26344", "01.512.000", 74200000000LL, "Not backported"},
+                   {"Returnal", "PPSA01284", "01.007.000", 58900000000LL, ""},
+                   {"Ratchet & Clank: Rift Apart", "PPSA01474", "01.003.000", 39800000000LL, ""},
+                   {"Gran Turismo 7", "PPSA01316", "01.049.000", 98100000000LL, "Not backported"},
+                   {"Stellar Blade", "PPSA13198", "01.012.000", 41300000000LL, ""},
+                   {"Sackboy: A Big Adventure", "PPSA01383", "01.012.000", 27600000000LL, ""},
+                   {"Kena: Bridge of Spirits", "PPSA01535", "01.016.000", 21900000000LL, ""},
+                   {"Returnal", "PPSA01284", "01.000.000", 55100000000LL, ""}};
+    std::vector<LibraryGame> out;
+    for (const D& x : d) {
+        LibraryGame g;
+        g.info.title = QString::fromUtf8(x.title);
+        g.info.titleId = QString::fromLatin1(x.id);
+        g.info.version = QString::fromLatin1(x.version);
+        g.info.bytes = x.bytes;
+        g.info.folder = QStringLiteral("D:/Games/%1 %2 (%3)").arg(g.info.titleId, g.info.title, g.info.version);
+        g.info.isGame = true;
+        g.info.exists = true;
+        g.info.platform = QStringLiteral("PS5");
+        g.info.kind = QStringLiteral("Game");
+        g.status = QString::fromLatin1(x.status);
+        out.push_back(g);
+    }
+    return out;
+}
+
+QList<ImageSummary> demoImages()
+{
+    struct D {
+        const char* title;
+        const char* id;
+        const char* version;
+        const char* format;
+        qint64 bytes;
+    };
+    const D d[] = {{"Astro Bot", "PPSA01325", "01.002.000", "exfat", 48700000000LL},
+                   {"Astro Bot", "PPSA01325", "01.002.000", "ffpfsc", 39200000000LL},
+                   {"Demon's Souls", "PPSA01341", "01.004.000", "ffpkg", 31800000000LL},
+                   {"Gran Turismo 7", "PPSA01316", "01.049.000", "ffpfs", 98400000000LL},
+                   {"Stellar Blade", "PPSA13198", "01.012.000", "exfat", 41500000000LL}};
+    QList<ImageSummary> out;
+    for (const D& x : d) {
+        ImageSummary s;
+        s.title = QString::fromUtf8(x.title);
+        s.titleId = QString::fromLatin1(x.id);
+        s.version = QString::fromLatin1(x.version);
+        s.format = QString::fromLatin1(x.format);
+        s.bytes = x.bytes;
+        s.exists = true;
+        s.fromImage = true;
+        s.path = QStringLiteral("D:/Images/%1 %2 (%3).%4").arg(s.titleId, s.title, s.version, s.format);
+        out << s;
+    }
+    return out;
+}
+
+} // namespace
+
 LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStore& library, QWidget* parent)
     : Page(ctx, QStringLiteral("library"), QStringLiteral("Library"),
-           QStringLiteral("Your game dumps: build images, package them, backport them, or trim languages you do not need."), parent),
+           QStringLiteral("Your game dumps and images in one place."), parent),
       m_library(library)
 {
     Q_UNUSED(queueModel);
@@ -34,199 +173,327 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
         if (!m_pendingAdds.isEmpty())
             m_reader->summarize(m_pendingAdds.takeFirst(), true);
     });
+    m_scanner = new ImageScanner(this);
+    connect(m_scanner, &ImageScanner::finished, this, [this](const QList<ImageSummary>& images) {
+        if (m_demo)
+            return;
+        m_images = images;
+        rebuildImages();
+        rebuildGames();
+    });
+
+    auto* add = button(QStringLiteral("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), this);
+    add->setToolTip(QStringLiteral("Add a folder that holds game dumps (or one dump)"));
+    connect(add, &QPushButton::clicked, this, &LibraryPage::addFolders);
+    auto* rescan = button(QStringLiteral("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), this);
+    rescan->setToolTip(QStringLiteral("Look for games and images in the library folders again (F5)"));
+    connect(rescan, &QPushButton::clicked, this, &LibraryPage::refresh);
+    auto* more = new IconButton(QStringLiteral("more"), QStringLiteral("More"), IconButton::Size::Regular, this);
+    more->setToolTip(QStringLiteral("More"));
+    connect(more, &QToolButton::clicked, this, [this, more] {
+        QMenu menu(this);
+        auto* r = menu.addAction(QStringLiteral("Rename dump folders…"), this, &LibraryPage::renameDumps);
+        r->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("library.rename")));
+        menu.addAction(QStringLiteral("Rename images…"), this, [this] {
+            QStringList all;
+            for (const auto& i : m_images)
+                all << i.path;
+            if (!all.isEmpty())
+                renameImagesSheet(all);
+        })->setEnabled(!m_images.isEmpty());
+        menu.exec(more->mapToGlobal(QPoint(0, more->height())));
+    });
+    header()->addAction(more);
+    header()->addAction(rescan);
+    header()->addAction(add);
 
     m_tabs = new QTabBar(this);
     m_tabs->addTab(QStringLiteral("Games"));
+    m_tabs->addTab(QStringLiteral("Images"));
     m_tabs->addTab(QStringLiteral("Languages"));
     m_tabs->addTab(QStringLiteral("DLC emulator"));
     m_tabs->setExpanding(false);
     m_tabs->setDrawBase(false);
     m_tabs->setProperty("fwNoRing", true);
-    auto* tabWrap = new QWidget(this);
-    auto* tl = vbox(tabWrap, 0);
-    tl->addWidget(m_tabs);
-    tl->addWidget(hairline(tabWrap, true));
-    content()->addWidget(tabWrap);
+    content()->addWidget(m_tabs);
     m_stack = new QStackedWidget(this);
     m_stack->setProperty("fwNoRing", true);
     content()->addWidget(m_stack);
-    connect(m_tabs, &QTabBar::currentChanged, m_stack, &QStackedWidget::setCurrentIndex);
-
-    // ---- Games
-    auto* games = new QWidget(m_stack);
-    auto* gl = vbox(games, space::lg);
-    m_gamesCard = new Card(games, Card::Variant::Table);
-    auto* h = m_gamesCard->header();
-    h->addWidget(heading(QStringLiteral("Games"), TextStyle::Subtitle, m_gamesCard));
-    m_gamesCount = caption({}, m_gamesCard);
-    h->addWidget(m_gamesCount);
-    h->addStretch(1);
-    m_search = textInput(QStringLiteral("Search title or ID"), false, m_gamesCard);
-    m_search->setFixedWidth(220);
-    m_search->setClearButtonEnabled(true);
-    h->addWidget(m_search);
-    auto* add = button(QStringLiteral("Add folders…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), m_gamesCard);
-    auto* rescan = button(QStringLiteral("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), m_gamesCard);
-    auto* renameBtn = button(QStringLiteral("Rename dumps…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_gamesCard);
-    renameBtn->setEnabled(jobs::isAvailable(ctx, QStringLiteral("library.rename")));
-    renameBtn->setToolTip(renameBtn->isEnabled() ? QStringLiteral("Rename dump folders after their title ID, name and version") : QStringLiteral("Not available in this build"));
-    connect(renameBtn, &QPushButton::clicked, this, &LibraryPage::renameDumps);
-    h->addWidget(add);
-    h->addWidget(rescan);
-    h->addWidget(renameBtn);
-    connect(add, &QPushButton::clicked, this, &LibraryPage::addFolders);
-    connect(rescan, &QPushButton::clicked, this, &LibraryPage::scan);
-    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) { rebuildGames(); });
-    m_locationsRow = new QWidget(m_gamesCard);
-    m_locationsLayout = hbox(m_locationsRow, space::sm, QMargins(space::lg, 6, space::lg, 6));
-    m_gamesCard->body()->addWidget(m_locationsRow);
-    m_gamesCard->body()->addWidget(hairline(m_gamesCard));
-    m_table = new GameTable(false, m_gamesCard);
-    m_gamesCard->body()->addWidget(m_table);
-    connect(m_table, &GameTable::contextRequested, this, &LibraryPage::gameMenu);
-    connect(m_table, &GameTable::activatedFolder, this, [this](const QString& f) {
-        emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), f}}});
-    });
-    m_empty = new EmptyState(QStringLiteral("library"), QStringLiteral("No games found"),
-                             QStringLiteral("Add a folder that holds game dumps. Each dump is a folder with sce_sys\\param.json."), m_gamesCard);
-    auto* emptyAdd = m_empty->addAction(QStringLiteral("Add folders…"), ButtonVariant::Primary);
-    connect(emptyAdd, &QPushButton::clicked, this, &LibraryPage::addFolders);
-    m_gamesCard->body()->addWidget(m_empty);
-    m_footer = caption({}, m_gamesCard);
-    m_gamesCard->footer()->addWidget(m_footer, 1);
-    auto* hint = caption(QStringLiteral("Double-click a game to build an image · right-click for more"), m_gamesCard);
-    m_gamesCard->footer()->addWidget(hint);
-    gl->addWidget(m_gamesCard);
-    gl->addStretch(1);
-    m_stack->addWidget(games);
-
-    // ---- Languages
-    auto* lang = new QWidget(m_stack);
-    auto* langLayout = vbox(lang, space::lg);
-    auto* pick = new Card(lang);
-    pick->setTitle(QStringLiteral("Language stripper"));
-    pick->body()->addWidget(caption(QStringLiteral("Removes the language folders and audio packs a game ships for languages you do not use. Every removed file is zipped first; Restore puts it back."), pick));
-    m_langFolder = new PathField(PathField::Mode::Directory, pick);
-    m_langFolder->setDialogTitle(QStringLiteral("Choose a game folder, or a folder of games"));
-    auto* prow = new QWidget(pick);
-    auto* ph = hbox(prow, space::sm);
-    ph->addWidget(m_langFolder, 1);
-    m_langBatch = new QCheckBox(QStringLiteral("Folder of games"), prow);
-    ph->addWidget(m_langBatch);
-    m_langScan = button(QStringLiteral("Scan"), ButtonVariant::Primary, QStringLiteral("search"), prow);
-    ph->addWidget(m_langScan);
-    pick->body()->addWidget(field(QStringLiteral("Game folder"), prow, {}, pick));
-    m_langUnavailable = new UnavailableState(QStringLiteral("The language stripper"), QStringLiteral("tools.languages.scan"), pick);
-    pick->body()->addWidget(m_langUnavailable);
-    langLayout->addWidget(pick);
-    connect(m_langScan, &QPushButton::clicked, this, &LibraryPage::languageScan);
-    connect(m_langFolder, &PathField::pathChanged, this, [this](const QString& p) {
-        m_langBatch->setChecked(!p.isEmpty() && !readGameSummary(p, false).isGame);
+    connect(m_tabs, &QTabBar::currentChanged, this, [this](int i) {
+        m_stack->setCurrentIndex(i);
+        emit statusContextChanged();
     });
 
-    auto* table = new Card(lang, Card::Variant::Table);
-    auto* th = table->header();
-    th->addWidget(heading(QStringLiteral("Languages found"), TextStyle::Subtitle, table));
-    th->addStretch(1);
-    m_chips = new QWidget(table);
-    auto* chips = new FlowLayout(m_chips, space::xs, space::xs);
-    struct Quick { const char* text; QStringList codes; };
-    const std::vector<Quick> quick = {{"English only", {QStringLiteral("en")}}, {"Japanese only", {QStringLiteral("ja")}},
-                                      {"EN + JA", {QStringLiteral("en"), QStringLiteral("ja")}},
-                                      {"EU only", {QStringLiteral("en"), QStringLiteral("fr"), QStringLiteral("de"), QStringLiteral("es"), QStringLiteral("it"), QStringLiteral("pt"), QStringLiteral("nl"), QStringLiteral("pl"), QStringLiteral("ru")}},
-                                      {"Keep all", {QStringLiteral("*")}}, {"Keep none", {}}};
-    for (const auto& q : quick) {
-        auto* b = button(QString::fromLatin1(q.text), ButtonVariant::Secondary, {}, m_chips);
-        setButtonSmall(b, true);
-        const QStringList codes = q.codes;
-        connect(b, &QPushButton::clicked, this, [this, codes] { applyQuickKeep(codes); });
-        chips->addWidget(b);
-    }
-    th->addWidget(m_chips);
-    m_langTable = new QTableWidget(0, 5, table);
-    m_langTable->setHorizontalHeaderLabels({QStringLiteral("Keep"), QStringLiteral("Language"), QStringLiteral("Code"), QStringLiteral("Folder or file"), QStringLiteral("Size")});
-    m_langTable->horizontalHeader()->setFixedHeight(32);
-    m_langTable->horizontalHeader()->setHighlightSections(false);
-    m_langTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    m_langTable->setColumnWidth(0, 60);
-    m_langTable->setColumnWidth(1, 160);
-    m_langTable->setColumnWidth(2, 70);
-    m_langTable->setColumnWidth(4, 100);
-    m_langTable->verticalHeader()->hide();
-    m_langTable->verticalHeader()->setDefaultSectionSize(size::row);
-    m_langTable->setShowGrid(false);
-    m_langTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_langTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_langTable->setMinimumHeight(6 * size::row + 40);
-    table->body()->addWidget(m_langTable);
-    m_langEmpty = new EmptyState(QStringLiteral("language"), QStringLiteral("Nothing scanned yet"),
-                                 QStringLiteral("Choose a game folder above and scan it to see which languages it ships."), table);
-    table->body()->addWidget(m_langEmpty);
-    auto* tf = table->footer();
-    m_langSummary = caption({}, table);
-    tf->addWidget(m_langSummary, 1);
-    m_langRestore = button(QStringLiteral("Restore from backup…"), ButtonVariant::Secondary, QStringLiteral("undo"), table);
-    m_langStrip = button(QStringLiteral("Remove languages…"), ButtonVariant::Danger, QStringLiteral("trash"), table);
-    tf->addWidget(m_langRestore);
-    tf->addWidget(m_langStrip);
-    connect(m_langTable, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
-        if (it->column() == 0)
-            updateLanguageSummary();
-    });
-    connect(m_langStrip, &QPushButton::clicked, this, &LibraryPage::stripLanguages);
-    connect(m_langRestore, &QPushButton::clicked, this, &LibraryPage::restoreLanguages);
-    langLayout->addWidget(table);
-    langLayout->addStretch(1);
-    m_stack->addWidget(lang);
+    m_stack->addWidget(buildGamesTab());
+    m_stack->addWidget(buildImagesTab());
+    m_stack->addWidget(buildLanguagesTab());
     m_dlc = new DlcEmuEditor(m_stack);
     connect(m_dlc, &DlcEmuEditor::toastRequested, this, &LibraryPage::toastRequested);
     m_stack->addWidget(m_dlc);
 
-    connect(&m_library, &LibraryStore::changed, this, &LibraryPage::rebuildGames);
+    connect(&m_library, &LibraryStore::changed, this, [this] {
+        rebuildGames();
+        if (imageFolders().join(u'|') != m_imageFoldersKey)
+            scanImages();
+    });
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &LibraryPage::onJobFinished);
     rebuildGames();
+    rebuildImages();
     rebuildLanguages();
+    scanImages();
 }
 
 // ---- Games -------------------------------------------------------------------------
 
+QWidget* LibraryPage::buildGamesTab()
+{
+    auto* page = new QWidget(m_stack);
+    auto* l = vbox(page, space::md);
+
+    auto* tools = new QWidget(page);
+    auto* th = hbox(tools, space::sm);
+    m_search = searchInput(QStringLiteral("Search games"), tools);
+    th->addWidget(m_search, 3);
+    m_filter = combo({QStringLiteral("All games"), QStringLiteral("With an image"), QStringLiteral("Without an image")}, QStringLiteral("Show"), tools);
+    th->addWidget(m_filter);
+    m_sort = combo({QStringLiteral("Title A–Z"), QStringLiteral("Title ID"), QStringLiteral("Largest first"), QStringLiteral("Recently added")}, QStringLiteral("Sort by"), tools);
+    th->addWidget(m_sort);
+    th->addStretch(1);
+    m_gamesCount = caption({}, tools);
+    m_gamesCount->setWordWrap(false);
+    th->addWidget(m_gamesCount);
+    th->addSpacing(space::sm);
+    m_gamesView = viewToggle(tools);
+    th->addWidget(m_gamesView);
+    l->addWidget(tools);
+
+    m_folders = new QWidget(page);
+    new FlowLayout(m_folders, space::xs, space::xs);
+    l->addWidget(m_folders);
+
+    m_gamesSelection = selectionBar(&m_gamesSelectionText, page);
+    {
+        auto* h = barLayout(m_gamesSelection);
+        auto* build = button(QStringLiteral("Build images…"), ButtonVariant::Secondary, QStringLiteral("build"), m_gamesSelection);
+        connect(build, &QPushButton::clicked, this, &LibraryPage::buildSelected);
+        h->addWidget(build);
+        auto* bp = button(QStringLiteral("Backport…"), ButtonVariant::Secondary, QStringLiteral("backports"), m_gamesSelection);
+        connect(bp, &QPushButton::clicked, this, [this] {
+            for (const QString& f : m_gamesGrid->selectedKeys())
+                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), f}}});
+        });
+        h->addWidget(bp);
+        auto* remove = button(QStringLiteral("Remove from library"), ButtonVariant::Subtle, QStringLiteral("close"), m_gamesSelection);
+        remove->setToolTip(QStringLiteral("Only the library entry goes; the folders stay on disk."));
+        connect(remove, &QPushButton::clicked, this, [this] {
+            if (m_demo)
+                return;
+            for (const QString& f : m_gamesGrid->selectedKeys())
+                m_library.removeGame(f);
+        });
+        h->addWidget(remove);
+        h->addStretch(1);
+        auto* clear = new Link(QStringLiteral("Clear selection"), m_gamesSelection);
+        connect(clear, &Link::activated, this, [this] { m_gamesGrid->clearSelection(); });
+        h->addWidget(clear);
+    }
+    l->addWidget(m_gamesSelection);
+
+    m_gamesGrid = new LibraryGrid(page);
+    m_gamesGrid->setAccessibleName(QStringLiteral("Games"));
+    m_gamesGrid->setListHeaders({QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Formats"), QStringLiteral("Backport")});
+    l->addWidget(m_gamesGrid);
+    connect(m_gamesGrid, &LibraryGrid::selectionChanged, this, &LibraryPage::updateGameSelection);
+    connect(m_gamesGrid, &LibraryGrid::contextRequested, this, &LibraryPage::gameMenu);
+    connect(m_gamesGrid, &LibraryGrid::activated, this, [this](const QString& f) {
+        emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), f}}});
+    });
+
+    m_gamesDrop = new DropZone(QStringLiteral("library"), QStringLiteral("Add a library folder"),
+                               QStringLiteral("Drop the folder that holds your game dumps here, or click to browse"), page);
+    m_gamesDrop->setToolTip(QStringLiteral("Every dump inside it is listed: a folder with sce_sys\\param.json or eboot.bin."));
+    connect(m_gamesDrop, &DropZone::clicked, this, &LibraryPage::addFolders);
+    l->addWidget(m_gamesDrop);
+    m_gamesNoMatch = new EmptyState(QStringLiteral("search"), QStringLiteral("No games match"), QStringLiteral("Try another search or show all games."), page);
+    connect(m_gamesNoMatch->addAction(QStringLiteral("Show all games")), &QPushButton::clicked, this, [this] {
+        m_search->clear();
+        m_filter->setCurrentIndex(0);
+    });
+    l->addWidget(m_gamesNoMatch);
+    m_gamesNone = new EmptyState(QStringLiteral("library"), QStringLiteral("No games found yet"),
+                                 QStringLiteral("Rescan the library folders, or add the folder that holds your dumps."), page);
+    connect(m_gamesNone->addAction(QStringLiteral("Rescan"), ButtonVariant::Primary), &QPushButton::clicked, this, &LibraryPage::scan);
+    connect(m_gamesNone->addAction(QStringLiteral("Add folder…")), &QPushButton::clicked, this, &LibraryPage::addFolders);
+    l->addWidget(m_gamesNone);
+    l->addStretch(1);
+
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) { rebuildGames(); });
+    connect(m_filter, &QComboBox::currentIndexChanged, this, [this](int) { rebuildGames(); });
+    connect(m_sort, &QComboBox::currentIndexChanged, this, [this](int) { rebuildGames(); });
+    connect(m_gamesView, &Segmented::currentChanged, this, [this](int) {
+        m_gamesGrid->setMode(m_gamesView->currentValue().toString() == QLatin1String("list") ? LibraryGrid::Mode::List : LibraryGrid::Mode::Grid);
+    });
+    return page;
+}
+
+const std::vector<LibraryGame>& LibraryPage::games() const { return m_demo ? m_demoGames : m_library.games(); }
+
+const LibraryGame* LibraryPage::game(const QString& folder) const
+{
+    for (const auto& g : games())
+        if (g.info.folder == folder)
+            return &g;
+    return nullptr;
+}
+
+QStringList LibraryPage::formatsOf(const GameSummary& g) const
+{
+    QStringList out;
+    if (g.titleId.isEmpty())
+        return out;
+    for (const QString& f : {QStringLiteral("exfat"), QStringLiteral("ffpkg"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs")})
+        for (const ImageSummary& s : m_images)
+            if (s.format == f && s.titleId.compare(g.titleId, Qt::CaseInsensitive) == 0) {
+                out << imageFormatName(f);
+                break;
+            }
+    return out;
+}
+
 void LibraryPage::rebuildGames()
 {
-    m_table->setGames(m_library.games(), m_search->text().trimmed());
-    const bool any = m_table->gameCount() > 0;
-    m_table->setVisible(any);
-    m_empty->setVisible(!any);
-    while (QLayoutItem* it = m_locationsLayout->takeAt(0)) {
+    const QString q = m_search->text().trimmed();
+    const int filter = m_filter->currentIndex();
+    std::vector<const LibraryGame*> shown;
+    qint64 total = 0;
+    for (const auto& g : games()) {
+        total += g.info.bytes;
+        const GameSummary& s = g.info;
+        if (!q.isEmpty() && !s.title.contains(q, Qt::CaseInsensitive) && !s.titleId.contains(q, Qt::CaseInsensitive)
+            && !s.folder.contains(q, Qt::CaseInsensitive))
+            continue;
+        const bool hasImage = !formatsOf(s).isEmpty();
+        if ((filter == 1 && !hasImage) || (filter == 2 && hasImage))
+            continue;
+        shown.push_back(&g);
+    }
+    const int sort = m_sort->currentIndex();
+    const auto title = [](const LibraryGame* g) { return g->info.title.isEmpty() ? QFileInfo(g->info.folder).fileName() : g->info.title; };
+    std::stable_sort(shown.begin(), shown.end(), [&](const LibraryGame* a, const LibraryGame* b) {
+        switch (sort) {
+        case 1: return a->info.titleId.compare(b->info.titleId, Qt::CaseInsensitive) < 0;
+        case 2: return a->info.bytes > b->info.bytes;
+        case 3: return a->lastSeen > b->lastSeen;
+        default: return title(a).compare(title(b), Qt::CaseInsensitive) < 0;
+        }
+    });
+    std::vector<GridItem> items;
+    items.reserve(shown.size());
+    for (const LibraryGame* g : shown) {
+        const GameSummary& s = g->info;
+        GridItem it;
+        it.key = s.folder;
+        it.title = title(g);
+        it.subtitle = joinMeta({s.titleId, versionText(s.version)});
+        it.size = s.bytes > 0 ? formatBytes(s.bytes) : QString();
+        it.path = nativePath(s.folder);
+        it.coverPath = s.coverPath;
+        if (it.coverPath.isEmpty() && !m_demo && QFileInfo::exists(s.folder + QStringLiteral("/sce_sys/icon0.png")))
+            it.coverPath = s.folder + QStringLiteral("/sce_sys/icon0.png");
+        it.chips = QStringList{QStringLiteral("Folder")} + formatsOf(s);
+        it.firstChipNeutral = true;
+        it.badge = g->status;
+        it.badgeTone = !g->issues.isEmpty() ? Tone::Warn : g->status == QLatin1String("Backported") ? Tone::Ok : Tone::Neutral;
+        QStringList tip;
+        if (!s.platform.isEmpty())
+            tip << joinMeta({s.platform, s.kind, s.sdk.isEmpty() ? QString() : QStringLiteral("SDK %1").arg(s.sdk)});
+        tip << QStringLiteral("Double-click to build an image · right-click for more");
+        it.tooltip = tip.join(u'\n');
+        items.push_back(it);
+    }
+    m_gamesGrid->setItems(std::move(items));
+
+    const bool anyGames = !games().empty();
+    const bool anyFolders = m_demo || !m_library.scanFolders().isEmpty();
+    m_gamesGrid->setVisible(!shown.empty());
+    m_gamesDrop->setVisible(!anyGames && !anyFolders);
+    m_gamesNone->setVisible(!anyGames && anyFolders);
+    m_gamesNoMatch->setVisible(anyGames && shown.empty());
+    QString count = plural(qint64(games().size()), QStringLiteral("game"), QStringLiteral("games"));
+    if (shown.size() != games().size())
+        count = QStringLiteral("%1 of %2").arg(shown.size()).arg(count);
+    if (total > 0)
+        count += QStringLiteral(" · %1").arg(formatBytes(total));
+    m_gamesCount->setText(anyGames ? count : QString());
+    m_search->parentWidget()->setVisible(anyGames);
+    m_gamesCount->setToolTip(m_library.lastScan().isValid() ? QStringLiteral("Last scan %1").arg(relativeTime(m_library.lastScan())) : QStringLiteral("Not scanned yet"));
+    rebuildFolders();
+    updateGameSelection();
+    emit statusContextChanged();
+}
+
+void LibraryPage::rebuildFolders()
+{
+    auto* fl = static_cast<FlowLayout*>(m_folders->layout());
+    while (QLayoutItem* it = fl->takeAt(0)) {
         delete it->widget();
         delete it;
     }
-    const QStringList folders = m_library.scanFolders();
-    m_locationsLayout->addWidget(caption(folders.isEmpty() ? QStringLiteral("Scan locations: none yet") : QStringLiteral("Scan locations:"), m_locationsRow));
+    const QStringList folders = m_demo ? QStringList{QStringLiteral("D:/Games"), QStringLiteral("E:/PS5")} : m_library.scanFolders();
+    m_folders->setVisible(!folders.isEmpty());
+    if (folders.isEmpty())
+        return;
+    auto* title = label(QStringLiteral("Library folders"), TextStyle::Caption, color::fg_4, m_folders);
+    fl->addWidget(title);
+    QWidget* firstChip = nullptr;
     for (const QString& f : folders) {
-        auto* chip = new QWidget(m_locationsRow);
-        auto* ch = hbox(chip, 2);
+        auto* chip = new QWidget(m_folders);
+        chip->setObjectName(QStringLiteral("libraryFolderChip"));
+        chip->setAttribute(Qt::WA_StyledBackground, true);
+        auto* ch = hbox(chip, 4, QMargins(8, 2, 2, 2));
+        auto* ic = new QLabel(chip);
+        ic->setPixmap(iconPixmap(QStringLiteral("folder"), size::iconSm, color::fg_3, devicePixelRatioF()));
+        ch->addWidget(ic);
         ch->addWidget(label(nativePath(f), TextStyle::MonoSmall, color::fg_2, chip));
-        auto* x = new IconButton(QStringLiteral("close"), QStringLiteral("Remove %1").arg(nativePath(f)), IconButton::Size::Tiny, chip);
-        connect(x, &QToolButton::clicked, this, [this, f] { m_library.removeScanFolder(f); });
+        auto* x = new IconButton(QStringLiteral("close"), QStringLiteral("Remove %1 from the library").arg(nativePath(f)), IconButton::Size::Tiny, chip);
+        x->setToolTip(QStringLiteral("Stop scanning this folder"));
+        connect(x, &QToolButton::clicked, this, [this, f] {
+            if (!m_demo)
+                m_library.removeScanFolder(f);
+        });
         ch->addWidget(x);
-        m_locationsLayout->addWidget(chip);
+        chip->setStyleSheet(QStringLiteral("#libraryFolderChip { background: %1; border: 1px solid %2; border-radius: 12px; }").arg(hex(color::bg_2), hex(color::border_3)));
+        fl->addWidget(chip);
+        if (!firstChip)
+            firstChip = chip;
     }
-    m_locationsLayout->addStretch(1);
-    m_gamesCount->setText(QStringLiteral("%1 game%2").arg(m_table->gameCount()).arg(m_table->gameCount() == 1 ? QString() : QStringLiteral("s")));
-    qint64 total = 0;
-    for (const auto& g : m_library.games())
-        total += g.info.bytes;
-    m_footer->setText(QStringLiteral("%1 · %2 in %3 location%4")
-                          .arg(m_library.lastScan().isValid() ? QStringLiteral("Last scan %1").arg(relativeTime(m_library.lastScan())) : QStringLiteral("Not scanned yet"))
-                          .arg(formatBytes(total)).arg(folders.size()).arg(folders.size() == 1 ? QString() : QStringLiteral("s")));
-    emit statusContextChanged();
+    auto* add = new Link(QStringLiteral("Add folder…"), m_folders);
+    connect(add, &Link::activated, this, &LibraryPage::addFolders);
+    fl->addWidget(add);
+    // The flow layout aligns tops; the label and the link take the chips' height to line up.
+    const int h = firstChip->sizeHint().height();
+    for (QLabel* l : {static_cast<QLabel*>(title), static_cast<QLabel*>(add)}) {
+        l->setFixedHeight(h);
+        l->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    }
+}
+
+void LibraryPage::updateGameSelection()
+{
+    const int n = int(m_gamesGrid->selectedKeys().size());
+    m_gamesSelection->setVisible(n > 0);
+    m_gamesSelectionText->setText(QStringLiteral("%1 selected").arg(n));
 }
 
 void LibraryPage::addFolders()
 {
     const QString dir = QFileDialog::getExistingDirectory(window(), QStringLiteral("Add a folder of game dumps"));
-    if (dir.isEmpty())
-        return;
+    if (!dir.isEmpty())
+        addFolder(dir);
+}
+
+void LibraryPage::addFolder(const QString& dir)
+{
     if (readGameSummary(dir, false).isGame) {
         m_pendingAdds << dir;
         if (!m_reader->isBusy())
@@ -241,7 +508,9 @@ void LibraryPage::scan()
 {
     const QStringList folders = m_library.scanFolders();
     if (folders.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("Nothing to scan"), QStringLiteral("Add a folder of game dumps first."));
+        scanImages();
+        if (games().empty())
+            emit toastRequested(Tone::Warn, QStringLiteral("Nothing to scan"), QStringLiteral("Add a folder of game dumps first."));
         return;
     }
     auto r = jobs::scanLibrary(m_ctx, folders);
@@ -256,47 +525,122 @@ void LibraryPage::scan()
         if (!m_pendingAdds.isEmpty() && !m_reader->isBusy())
             m_reader->summarize(m_pendingAdds.takeFirst(), true);
         m_library.setLastScan(QDateTime::currentDateTime());
-        emit toastRequested(Tone::Info, QStringLiteral("Scanned without the engine"), QStringLiteral("%1 game folder%2 found one level below the scan locations.").arg(found).arg(found == 1 ? QString() : QStringLiteral("s")));
+        emit toastRequested(Tone::Info, QStringLiteral("Scanned without the engine"), QStringLiteral("%1 game folder%2 found one level below the library folders.").arg(found).arg(found == 1 ? QString() : QStringLiteral("s")));
+        scanImages();
         return;
     }
     m_scanJobId = r.value();
     m_ctx.queue().holdQueue(false);
+    scanImages();
 }
 
 void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
 {
+    const QStringList selected = m_gamesGrid->selectedKeys();
     QMenu menu(this);
-    menu.addAction(QStringLiteral("Build image"), this, [this, folder] { emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), folder}}}); });
-    menu.addAction(QStringLiteral("Build FPKG"), this, [this, folder] { emit navigateRequested({QStringLiteral("fpkg"), {{QStringLiteral("source"), folder}}}); });
-    menu.addAction(QStringLiteral("Backport"), this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
-    menu.addAction(QStringLiteral("Trim languages"), this, [this, folder] {
-        m_tabs->setCurrentIndex(1);
+    if (selected.size() > 1) {
+        menu.addAction(QStringLiteral("Build %1 images…").arg(selected.size()), this, &LibraryPage::buildSelected);
+        menu.addAction(QStringLiteral("Backport %1 games…").arg(selected.size()), this, [this, selected] {
+            for (const QString& f : selected)
+                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), f}}});
+        });
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("Remove %1 from the library").arg(selected.size()), this, [this, selected] {
+            if (!m_demo)
+                for (const QString& f : selected)
+                    m_library.removeGame(f);
+        });
+        menu.exec(pos);
+        return;
+    }
+    menu.addAction(QStringLiteral("Build image…"), this, [this, folder] { emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("source"), folder}}}); });
+    menu.addAction(QStringLiteral("Build FPKG…"), this, [this, folder] { emit navigateRequested({QStringLiteral("fpkg"), {{QStringLiteral("source"), folder}}}); });
+    menu.addAction(QStringLiteral("Backport…"), this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
+    if (const LibraryGame* g = game(folder); g && !g->info.titleId.isEmpty()) {
+        QMenu* images = nullptr;
+        for (const ImageSummary& s : m_images)
+            if (s.titleId.compare(g->info.titleId, Qt::CaseInsensitive) == 0) {
+                if (!images)
+                    images = menu.addMenu(QStringLiteral("Its images"));
+                const QString path = s.path;
+                images->addAction(QStringLiteral("%1 · %2").arg(QFileInfo(path).fileName(), formatBytes(s.bytes)), this,
+                                  [this, path] { openInImageTools(path, QString()); });
+            }
+    }
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Trim languages…"), this, [this, folder] {
+        setTab(LanguagesTab);
         m_langFolder->setPath(folder);
     });
     menu.addAction(QStringLiteral("Edit DLC list…"), this, [this, folder] {
-        m_tabs->setCurrentIndex(2);
+        setTab(DlcTab);
         m_dlc->openFolder(folder);
     });
-    menu.addAction(QStringLiteral("Edit image…"), this, [this, folder] {
-        emit navigateRequested({QStringLiteral("edit"), {}});
-        Q_UNUSED(folder);
-    })->setVisible(false);
     menu.addSeparator();
     menu.addAction(QStringLiteral("Rename folder…"), this, [this, folder] { renameGame(folder); });
     menu.addAction(QStringLiteral("Show in folder"), this, [folder] { openInFileManager(folder); });
     menu.addSeparator();
-    menu.addAction(QStringLiteral("Remove from library"), this, [this, folder] { m_library.removeGame(folder); });
+    menu.addAction(QStringLiteral("Remove from library"), this, [this, folder] {
+        if (!m_demo)
+            m_library.removeGame(folder);
+    });
     menu.exec(pos);
+}
+
+void LibraryPage::buildSelected()
+{
+    const QStringList folders = m_gamesGrid->selectedKeys();
+    if (folders.isEmpty())
+        return;
+    auto* s = new Sheet(window(), folders.size() == 1 ? QStringLiteral("Build an image") : QStringLiteral("Build %1 images").arg(folders.size()), Sheet::Icon::None, size::dialogWide);
+    s->addText(QStringLiteral("One job per game, named after its title ID, name and version."));
+    auto* fmt = new Segmented(s);
+    fmt->addSegment(QStringLiteral("exFAT"), QStringLiteral("drive"), jobs::kFormatExfat);
+    fmt->addSegment(QStringLiteral("FFPKG"), QStringLiteral("package"), jobs::kFormatFfpkg);
+    fmt->addSegment(QStringLiteral("FFPFSC"), QStringLiteral("compress"), jobs::kFormatFfpfsc);
+    fmt->setCurrentIndex(0);
+    s->body()->addWidget(field(QStringLiteral("Format"), fmt, {}, s));
+    auto* out = new PathField(PathField::Mode::Directory, s);
+    out->setDialogTitle(QStringLiteral("Choose the output folder"));
+    const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
+    out->setPlaceholder(def.isEmpty() ? QStringLiteral("Next to each dump") : nativePath(def));
+    s->body()->addWidget(field(QStringLiteral("Save to"), out, {}, s));
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    s->addButton(folders.size() == 1 ? QStringLiteral("Build") : QStringLiteral("Build %1").arg(folders.size()), Sheet::Role::Primary);
+    if (s->exec() != 1 || m_demo)
+        return;
+    const QString format = fmt->currentValue().toString();
+    int queued = 0;
+    QStringList failed;
+    for (const QString& f : folders) {
+        const LibraryGame* g = game(f);
+        const GameSummary info = g ? g->info : readGameSummary(f, false);
+        QString dir = out->path().isEmpty() ? def : out->path();
+        if (dir.isEmpty())
+            dir = QFileInfo(f).absolutePath();
+        const QJsonObject extra{{QStringLiteral("title"), info.title}, {QStringLiteral("titleId"), info.titleId},
+                                {QStringLiteral("version"), info.version}, {QStringLiteral("sourceBytes"), info.bytes}};
+        auto r = jobs::submitImageBuild(m_ctx, format, f, dir, defaultImageStem(info) + jobs::outputExtension(format), {}, extra);
+        if (r.ok())
+            ++queued;
+        else
+            failed << QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), r.error().message);
+    }
+    if (queued > 0)
+        m_ctx.queue().holdQueue(false);
+    if (!failed.isEmpty())
+        emit toastRequested(Tone::Err, QStringLiteral("%1 not queued").arg(plural(failed.size(), QStringLiteral("build"), QStringLiteral("builds"))), failed.join(u'\n'));
+    if (queued > 0)
+        emit toastRequested(Tone::Info, QStringLiteral("%1 queued").arg(plural(queued, QStringLiteral("build"), QStringLiteral("builds"))),
+                            QStringLiteral("Follow them in the Queue."));
 }
 
 void LibraryPage::renameGame(const QString& folder)
 {
-    GameSummary info;
-    for (const auto& g : m_library.games())
-        if (g.info.folder == folder)
-            info = g.info;
-    if (info.folder.isEmpty())
+    const LibraryGame* g = game(folder);
+    if (!g || m_demo)
         return;
+    const GameSummary info = g->info;
     auto* s = new Sheet(window(), QStringLiteral("Rename the dump folder"), Sheet::Icon::None, size::dialogWide);
     s->addText(QStringLiteral("Current name: %1").arg(Sheet::monoSpan(QFileInfo(folder).fileName())));
     auto* pattern = new Segmented(s);
@@ -317,7 +661,7 @@ void LibraryPage::renameGame(const QString& folder)
     };
     name->setText(compute());
     connect(pattern, &Segmented::currentChanged, s, [name, compute](int) { name->setText(compute()); });
-    s->body()->addWidget(field(QStringLiteral("New name"), name, QStringLiteral("Only the folder name changes; the files inside stay as they are."), s));
+    s->body()->addWidget(field(QStringLiteral("New name"), name, QStringLiteral("Only the folder name changes."), s));
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Rename"), Sheet::Role::Primary);
     if (s->exec() != 1)
@@ -342,8 +686,8 @@ void LibraryPage::renameGame(const QString& folder)
 
 void LibraryPage::renameDumps()
 {
-    auto* s = new Sheet(window(), QStringLiteral("Rename dumps"), Sheet::Icon::None, size::dialogWide);
-    s->addText(QStringLiteral("Every dump folder directly inside the source folder gets a name from its title ID, name and version. Nothing is renamed until you confirm the preview; an undo log is written."));
+    auto* s = new Sheet(window(), QStringLiteral("Rename dump folders"), Sheet::Icon::None, size::dialogWide);
+    s->addText(QStringLiteral("Each dump folder inside the source gets a name from its title ID, name and version. You confirm a preview first; an undo log is kept."));
     auto* source = new PathField(PathField::Mode::Directory, s);
     source->setDialogTitle(QStringLiteral("Choose the folder that holds the dumps"));
     const QStringList folders = m_library.scanFolders();
@@ -366,9 +710,10 @@ void LibraryPage::renameDumps()
     s->body()->addWidget(field(QStringLiteral("Pattern"), preset, {}, s));
     auto* dest = new PathField(PathField::Mode::Directory, s);
     dest->setPlaceholder(QStringLiteral("Rename in place"));
-    s->body()->addWidget(field(QStringLiteral("Move into (optional)"), dest, QStringLiteral("Must be on the same drive; folders are renamed, never copied."), s));
+    dest->setToolTip(QStringLiteral("Must be on the same drive; folders are renamed, never copied."));
+    s->body()->addWidget(field(QStringLiteral("Move into (optional)"), dest, {}, s));
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    auto* undo = s->addButton(QStringLiteral("Undo last rename…"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Undo last rename…"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Preview"), Sheet::Role::Primary);
     const int r = s->exec();
     if (r == 1) {
@@ -384,7 +729,6 @@ void LibraryPage::renameDumps()
         }
         return;
     }
-    Q_UNUSED(undo);
     if (r != 2 || source->path().isEmpty())
         return;
     m_renameSource = source->path();
@@ -406,8 +750,8 @@ void LibraryPage::showRenamePreview(const QJsonArray& items, const QString& pres
         Sheet::message(window(), QStringLiteral("No dumps found"), QStringLiteral("%1 has no sub-folders that look like dumps.").arg(Sheet::monoSpan(nativePath(m_renameSource))), Sheet::Icon::Info);
         return;
     }
-    auto* s = new Sheet(window(), QStringLiteral("Preview: %1 dump%2").arg(items.size()).arg(items.size() == 1 ? QString() : QStringLiteral("s")), Sheet::Icon::None, 900);
-    s->addText(QStringLiteral("Pattern %1. Edit a proposed name before applying; names that already exist or repeat are skipped.").arg(Sheet::monoSpan(preset)));
+    auto* s = new Sheet(window(), QStringLiteral("Preview: %1").arg(plural(items.size(), QStringLiteral("dump"), QStringLiteral("dumps"))), Sheet::Icon::None, 900);
+    s->addText(QStringLiteral("Pattern %1. You can edit a proposed name; names that exist already are skipped.").arg(Sheet::monoSpan(preset)));
     auto* table = new QTableWidget(0, 4, s);
     table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("Proposed name"), QStringLiteral("Status")});
     table->horizontalHeader()->setFixedHeight(32);
@@ -472,7 +816,463 @@ void LibraryPage::applyRename(const QJsonArray& items)
     m_ctx.queue().holdQueue(false);
 }
 
+// ---- Images ------------------------------------------------------------------------
+
+QWidget* LibraryPage::buildImagesTab()
+{
+    auto* page = new QWidget(m_stack);
+    auto* l = vbox(page, space::md);
+    auto* tools = new QWidget(page);
+    auto* th = hbox(tools, space::sm);
+    m_imageSearch = searchInput(QStringLiteral("Search images"), tools);
+    th->addWidget(m_imageSearch, 3);
+    m_imageFormat = combo({QStringLiteral("All formats"), QStringLiteral("exFAT"), QStringLiteral("FFPKG"), QStringLiteral("FFPFSC"), QStringLiteral("FFPFS")}, QStringLiteral("Format"), tools);
+    th->addWidget(m_imageFormat);
+    m_imageSort = combo({QStringLiteral("Title A–Z"), QStringLiteral("Title ID"), QStringLiteral("Largest first"), QStringLiteral("Newest first")}, QStringLiteral("Sort by"), tools);
+    th->addWidget(m_imageSort);
+    th->addStretch(1);
+    m_imagesCount = caption({}, tools);
+    m_imagesCount->setWordWrap(false);
+    th->addWidget(m_imagesCount);
+    th->addSpacing(space::sm);
+    m_imagesView = viewToggle(tools);
+    th->addWidget(m_imagesView);
+    l->addWidget(tools);
+
+    m_imagesSelection = selectionBar(&m_imagesSelectionText, page);
+    {
+        auto* h = barLayout(m_imagesSelection);
+        m_imagesOpen = button(QStringLiteral("Open in Image tools"), ButtonVariant::Secondary, QStringLiteral("extract"), m_imagesSelection);
+        connect(m_imagesOpen, &QPushButton::clicked, this, [this] {
+            const QStringList sel = m_imagesGrid->selectedKeys();
+            if (sel.size() == 1)
+                openInImageTools(sel.first(), QString());
+        });
+        h->addWidget(m_imagesOpen);
+        auto* verify = button(QStringLiteral("Verify"), ButtonVariant::Secondary, QStringLiteral("shield_check"), m_imagesSelection);
+        verify->setToolTip(QStringLiteral("Queue a verify job for each selected image"));
+        connect(verify, &QPushButton::clicked, this, [this] { verifyImages(m_imagesGrid->selectedKeys()); });
+        h->addWidget(verify);
+        auto* rename = button(QStringLiteral("Rename…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_imagesSelection);
+        connect(rename, &QPushButton::clicked, this, [this] { renameImagesSheet(m_imagesGrid->selectedKeys()); });
+        h->addWidget(rename);
+        h->addStretch(1);
+        auto* clear = new Link(QStringLiteral("Clear selection"), m_imagesSelection);
+        connect(clear, &Link::activated, this, [this] { m_imagesGrid->clearSelection(); });
+        h->addWidget(clear);
+    }
+    l->addWidget(m_imagesSelection);
+
+    m_imagesGrid = new LibraryGrid(page);
+    m_imagesGrid->setAccessibleName(QStringLiteral("Images"));
+    m_imagesGrid->setListHeaders({QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Format"), QStringLiteral("Note")});
+    l->addWidget(m_imagesGrid);
+    connect(m_imagesGrid, &LibraryGrid::selectionChanged, this, &LibraryPage::updateImageSelection);
+    connect(m_imagesGrid, &LibraryGrid::contextRequested, this, &LibraryPage::imageMenu);
+    connect(m_imagesGrid, &LibraryGrid::activated, this, [this](const QString& p) { openInImageTools(p, QString()); });
+
+    m_imagesEmpty = new EmptyState(QStringLiteral("drive"), QStringLiteral("No images yet"),
+                                   QStringLiteral("Images in your library and output folders show up here."), page);
+    connect(m_imagesEmpty->addAction(QStringLiteral("Build an image"), ButtonVariant::Primary), &QPushButton::clicked, this,
+            [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
+    connect(m_imagesEmpty->addAction(QStringLiteral("Open an image…")), &QPushButton::clicked, this,
+            [this] { emit navigateRequested({QStringLiteral("imagetools"), {}}); });
+    l->addWidget(m_imagesEmpty);
+    m_imagesNoMatch = new EmptyState(QStringLiteral("search"), QStringLiteral("No images match"), QStringLiteral("Try another search or show all formats."), page);
+    connect(m_imagesNoMatch->addAction(QStringLiteral("Show all images")), &QPushButton::clicked, this, [this] {
+        m_imageSearch->clear();
+        m_imageFormat->setCurrentIndex(0);
+    });
+    l->addWidget(m_imagesNoMatch);
+    l->addStretch(1);
+
+    connect(m_imageSearch, &QLineEdit::textChanged, this, [this](const QString&) { rebuildImages(); });
+    connect(m_imageFormat, &QComboBox::currentIndexChanged, this, [this](int) { rebuildImages(); });
+    connect(m_imageSort, &QComboBox::currentIndexChanged, this, [this](int) { rebuildImages(); });
+    connect(m_imagesView, &Segmented::currentChanged, this, [this](int) {
+        m_imagesGrid->setMode(m_imagesView->currentValue().toString() == QLatin1String("list") ? LibraryGrid::Mode::List : LibraryGrid::Mode::Grid);
+    });
+    return page;
+}
+
+QStringList LibraryPage::imageFolders() const
+{
+    QStringList out = m_library.scanFolders();
+    const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
+    if (!def.isEmpty())
+        out << def;
+    // Images are built next to the dump by default.
+    for (const auto& g : m_library.games())
+        out << QFileInfo(g.info.folder).absolutePath();
+    QStringList unique;
+    for (const QString& f : out) {
+        const QString c = QDir::cleanPath(f);
+        if (!c.isEmpty() && !unique.contains(c, Qt::CaseInsensitive))
+            unique << c;
+    }
+    return unique;
+}
+
+void LibraryPage::scanImages()
+{
+    if (m_demo)
+        return;
+    const QStringList folders = imageFolders();
+    m_imageFoldersKey = folders.join(u'|');
+    if (folders.isEmpty()) {
+        m_images.clear();
+        rebuildImages();
+        return;
+    }
+    m_imagesCount->setText(QStringLiteral("Looking for images…"));
+    m_scanner->scan(folders);
+}
+
+bool LibraryPage::isScanningImages() const { return m_scanner->isBusy(); }
+
+const ImageSummary* LibraryPage::image(const QString& path) const
+{
+    for (const ImageSummary& s : m_images)
+        if (s.path == path)
+            return &s;
+    return nullptr;
+}
+
+void LibraryPage::rebuildImages()
+{
+    const QString q = m_imageSearch->text().trimmed();
+    static const QStringList formats = {QString(), QStringLiteral("exfat"), QStringLiteral("ffpkg"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs")};
+    const QString fmt = formats.value(m_imageFormat->currentIndex());
+    std::vector<const ImageSummary*> shown;
+    qint64 total = 0;
+    for (const ImageSummary& s : m_images) {
+        total += s.bytes;
+        if (!fmt.isEmpty() && s.format != fmt)
+            continue;
+        if (!q.isEmpty() && !s.title.contains(q, Qt::CaseInsensitive) && !s.titleId.contains(q, Qt::CaseInsensitive)
+            && !QFileInfo(s.path).fileName().contains(q, Qt::CaseInsensitive))
+            continue;
+        shown.push_back(&s);
+    }
+    const int sort = m_imageSort->currentIndex();
+    std::stable_sort(shown.begin(), shown.end(), [sort](const ImageSummary* a, const ImageSummary* b) {
+        switch (sort) {
+        case 1: return a->titleId.compare(b->titleId, Qt::CaseInsensitive) < 0;
+        case 2: return a->bytes > b->bytes;
+        case 3: return a->modified > b->modified;
+        default: return a->displayTitle().compare(b->displayTitle(), Qt::CaseInsensitive) < 0;
+        }
+    });
+    std::vector<GridItem> items;
+    for (const ImageSummary* s : shown) {
+        GridItem it;
+        it.key = s->path;
+        it.title = s->displayTitle();
+        it.subtitle = joinMeta({s->titleId, versionText(s->version)});
+        if (it.subtitle.isEmpty())
+            it.subtitle = QFileInfo(s->path).fileName();
+        it.size = formatBytes(s->bytes);
+        it.path = nativePath(s->path);
+        it.coverPath = s->coverPath;
+        it.icon = imageFormatIcon(s->format);
+        it.chips = {s->formatName()};
+        if (!s->inner.isEmpty())
+            it.chips << imageFormatName(imageFormatOf(s->inner));
+        if (!s->error.isEmpty()) {
+            it.badge = QStringLiteral("Not readable");
+            it.badgeTone = Tone::Warn;
+            it.tooltip = s->error;
+        } else if (!s->fromImage) {
+            it.badge = QStringLiteral("Name only");
+            it.tooltip = QStringLiteral("No param.json inside; the title ID comes from the file name.");
+        }
+        items.push_back(it);
+    }
+    m_imagesGrid->setItems(std::move(items));
+    const bool any = !m_images.isEmpty();
+    m_imagesGrid->setVisible(!shown.empty());
+    m_imagesEmpty->setVisible(!any && (!isScanningImages() || m_demo));
+    m_imagesNoMatch->setVisible(any && shown.empty());
+    m_imageSearch->parentWidget()->setVisible(any || (isScanningImages() && !m_demo));
+    if (!isScanningImages() || m_demo) {
+        QString count = plural(m_images.size(), QStringLiteral("image"), QStringLiteral("images"));
+        if (int(shown.size()) != m_images.size())
+            count = QStringLiteral("%1 of %2").arg(shown.size()).arg(count);
+        if (total > 0)
+            count += QStringLiteral(" · %1").arg(formatBytes(total));
+        m_imagesCount->setText(any ? count : QString());
+    }
+    m_imagesCount->setToolTip(QStringLiteral("Looked in: %1").arg(m_demo ? QStringLiteral("D:\\Images") : nativePath(imageFolders().join(QStringLiteral(", ")))));
+    updateImageSelection();
+    emit statusContextChanged();
+}
+
+void LibraryPage::updateImageSelection()
+{
+    const int n = int(m_imagesGrid->selectedKeys().size());
+    m_imagesSelection->setVisible(n > 0);
+    m_imagesSelectionText->setText(QStringLiteral("%1 selected").arg(n));
+    m_imagesOpen->setVisible(n == 1);
+}
+
+void LibraryPage::openInImageTools(const QString& image, const QString& action)
+{
+    QVariantMap args{{QStringLiteral("image"), image}};
+    if (!action.isEmpty())
+        args.insert(QStringLiteral("action"), action);
+    emit navigateRequested({QStringLiteral("imagetools"), args});
+}
+
+void LibraryPage::verifyImages(const QStringList& paths)
+{
+    if (m_demo)
+        return;
+    int queued = 0;
+    for (const QString& p : paths)
+        if (jobs::submitVerify(m_ctx, p, {}).ok())
+            ++queued;
+    if (queued > 0) {
+        m_ctx.queue().holdQueue(false);
+        emit toastRequested(Tone::Info, QStringLiteral("%1 queued").arg(plural(queued, QStringLiteral("verify job"), QStringLiteral("verify jobs"))), QString());
+    } else {
+        emit toastRequested(Tone::Err, QStringLiteral("Nothing was verified"), QStringLiteral("Verifying images is not available in this build."));
+    }
+}
+
+void LibraryPage::imageMenu(const QString& path, const QPoint& pos)
+{
+    const QStringList selected = m_imagesGrid->selectedKeys();
+    QMenu menu(this);
+    if (selected.size() > 1) {
+        menu.addAction(QStringLiteral("Verify %1 images").arg(selected.size()), this, [this, selected] { verifyImages(selected); });
+        menu.addAction(QStringLiteral("Rename %1 images…").arg(selected.size()), this, [this, selected] { renameImagesSheet(selected); });
+        menu.exec(pos);
+        return;
+    }
+    const QString f = imageFormatOf(path);
+    menu.addAction(QStringLiteral("Extract…"), this, [this, path] { openInImageTools(path, QStringLiteral("extract")); });
+    menu.addAction(QStringLiteral("Verify…"), this, [this, path] { openInImageTools(path, QStringLiteral("verify")); });
+    menu.addAction(QStringLiteral("Convert…"), this, [this, path] { openInImageTools(path, QStringLiteral("convert")); });
+    menu.addAction(QStringLiteral("Edit…"), this, [this, path] { openInImageTools(path, QStringLiteral("edit")); })
+        ->setEnabled(f == u"exfat" || f == u"ffpkg");
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Rename…"), this, [this, path] { renameImagesSheet({path}); });
+    menu.addAction(QStringLiteral("Show in folder"), this, [path] { openInFileManager(path); });
+    menu.exec(pos);
+}
+
+QString LibraryPage::imageFileName(const ImageSummary& s, const QString& preset)
+{
+    const QFileInfo fi(s.path);
+    QString n = s.titleId.isEmpty() ? fi.completeBaseName() : s.titleId;
+    if (preset != QLatin1String("id") && !s.title.isEmpty() && !s.titleId.isEmpty())
+        n += u' ' + s.title;
+    if (preset == QLatin1String("id-title-version") && !s.version.isEmpty() && !s.titleId.isEmpty())
+        n += QStringLiteral(" (%1)").arg(s.version);
+    return sanitizeFileName(n.simplified()) + u'.' + fi.suffix();
+}
+
+int LibraryPage::renameImages(const QList<QPair<QString, QString>>& renames, QStringList* skipped)
+{
+    int done = 0;
+    for (const auto& [from, name] : renames) {
+        const QFileInfo fi(from);
+        const QString to = fi.absolutePath() + u'/' + name;
+        if (name.isEmpty() || name == fi.fileName())
+            continue;
+        if (QFileInfo::exists(to) && QDir::cleanPath(to).compare(QDir::cleanPath(from), Qt::CaseInsensitive) != 0) {
+            if (skipped)
+                *skipped << QStringLiteral("%1: %2 exists").arg(fi.fileName(), name);
+            continue;
+        }
+        if (!QFile::rename(from, to)) {
+            if (skipped)
+                *skipped << QStringLiteral("%1: in use or read-only").arg(fi.fileName());
+            continue;
+        }
+        ++done;
+    }
+    return done;
+}
+
+void LibraryPage::renameImagesSheet(const QStringList& paths)
+{
+    if (paths.isEmpty() || m_demo)
+        return;
+    QList<ImageSummary> list;
+    for (const QString& p : paths)
+        list << (image(p) ? *image(p) : readImageSummary(p, false));
+    auto* s = new Sheet(window(), paths.size() == 1 ? QStringLiteral("Rename the image") : QStringLiteral("Rename %1 images").arg(paths.size()),
+                        Sheet::Icon::None, paths.size() == 1 ? size::dialogWide : 900);
+    auto* pattern = new Segmented(s);
+    pattern->addSegment(QStringLiteral("PPSA only"), {}, QStringLiteral("id"));
+    pattern->addSegment(QStringLiteral("PPSA Title"), {}, QStringLiteral("id-title"));
+    pattern->addSegment(QStringLiteral("PPSA Title (version)"), {}, QStringLiteral("id-title-version"));
+    pattern->setCurrentIndex(2);
+    s->body()->addWidget(field(QStringLiteral("Pattern"), pattern, {}, s));
+    QLineEdit* name = nullptr;
+    QTableWidget* table = nullptr;
+    if (list.size() == 1) {
+        s->addText(QStringLiteral("Current name: %1").arg(Sheet::monoSpan(QFileInfo(list.first().path).fileName())));
+        name = textInput({}, true, s);
+        s->body()->addWidget(field(QStringLiteral("New name"), name, QStringLiteral("The extension stays; nothing inside the image changes."), s));
+    } else {
+        table = new QTableWidget(int(list.size()), 3, s);
+        table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("New name")});
+        table->horizontalHeader()->setFixedHeight(32);
+        table->horizontalHeader()->setHighlightSections(false);
+        table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+        table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        table->setColumnWidth(0, 70);
+        table->verticalHeader()->hide();
+        table->verticalHeader()->setDefaultSectionSize(size::row);
+        table->setShowGrid(false);
+        table->setMinimumHeight(std::min(12, int(list.size())) * size::row + 40);
+        for (int r = 0; r < list.size(); ++r) {
+            auto* sel = new QTableWidgetItem;
+            sel->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            sel->setCheckState(list[r].titleId.isEmpty() ? Qt::Unchecked : Qt::Checked);
+            sel->setData(Qt::UserRole, list[r].path);
+            table->setItem(r, 0, sel);
+            auto* cur = new QTableWidgetItem(QFileInfo(list[r].path).fileName());
+            cur->setFont(font::mono());
+            cur->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            table->setItem(r, 1, cur);
+            auto* prop = new QTableWidgetItem;
+            prop->setFont(font::mono());
+            prop->setForeground(color::fg_0);
+            table->setItem(r, 2, prop);
+        }
+        s->body()->addWidget(table);
+    }
+    const auto fill = [list, pattern, name, table] {
+        const QString preset = pattern->currentValue().toString();
+        if (name)
+            name->setText(imageFileName(list.first(), preset));
+        if (table)
+            for (int r = 0; r < list.size(); ++r)
+                table->item(r, 2)->setText(imageFileName(list[r], preset));
+    };
+    fill();
+    connect(pattern, &Segmented::currentChanged, s, [fill](int) { fill(); });
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Rename"), Sheet::Role::Primary);
+    if (s->exec() != 1)
+        return;
+    QList<QPair<QString, QString>> renames;
+    if (name) {
+        QString n = sanitizeFileName(name->text().trimmed());
+        const QString ext = QFileInfo(list.first().path).suffix();
+        if (!n.endsWith(u'.' + ext, Qt::CaseInsensitive))
+            n += u'.' + ext;
+        renames.append({list.first().path, n});
+    } else {
+        for (int r = 0; r < table->rowCount(); ++r)
+            if (table->item(r, 0)->checkState() == Qt::Checked)
+                renames.append({table->item(r, 0)->data(Qt::UserRole).toString(), sanitizeFileName(table->item(r, 2)->text().trimmed())});
+    }
+    QStringList skipped;
+    const int done = renameImages(renames, &skipped);
+    if (done > 0)
+        emit toastRequested(Tone::Ok, QStringLiteral("%1 renamed").arg(plural(done, QStringLiteral("image"), QStringLiteral("images"))), QString());
+    if (!skipped.isEmpty())
+        emit toastRequested(Tone::Warn, QStringLiteral("%1 not renamed").arg(plural(skipped.size(), QStringLiteral("image"), QStringLiteral("images"))), skipped.join(u'\n'));
+    scanImages();
+}
+
 // ---- Languages ---------------------------------------------------------------------
+
+QWidget* LibraryPage::buildLanguagesTab()
+{
+    auto* lang = new QWidget(m_stack);
+    auto* langLayout = vbox(lang, space::lg);
+    auto* pick = new Card(lang);
+    pick->setTitle(QStringLiteral("Game folder"));
+    m_langFolder = new PathField(PathField::Mode::Directory, pick);
+    m_langFolder->setDialogTitle(QStringLiteral("Choose a game folder, or a folder of games"));
+    m_langFolder->setPlaceholder(QStringLiteral("A game, or a folder of games"));
+    auto* prow = new QWidget(pick);
+    auto* ph = hbox(prow, space::sm);
+    ph->addWidget(m_langFolder, 1);
+    m_langBatch = new QCheckBox(QStringLiteral("Folder of games"), prow);
+    m_langBatch->setToolTip(QStringLiteral("Scan every game inside this folder"));
+    ph->addWidget(m_langBatch);
+    m_langScan = button(QStringLiteral("Scan"), ButtonVariant::Primary, QStringLiteral("search"), prow);
+    ph->addWidget(m_langScan);
+    pick->body()->addWidget(prow);
+    auto* help = caption(QStringLiteral("Removes the languages you do not use; every removed file is zipped first."), pick);
+    help->setToolTip(QStringLiteral("Language folders and audio packs are removed from the game. Restore from backup puts them back from the ZIP."));
+    pick->body()->addWidget(help);
+    m_langUnavailable = new UnavailableState(QStringLiteral("The language stripper"), QStringLiteral("tools.languages.scan"), pick);
+    pick->body()->addWidget(m_langUnavailable);
+    langLayout->addWidget(pick);
+    connect(m_langScan, &QPushButton::clicked, this, &LibraryPage::languageScan);
+    connect(m_langFolder, &PathField::pathChanged, this, [this](const QString& p) {
+        m_langBatch->setChecked(!p.isEmpty() && !readGameSummary(p, false).isGame);
+    });
+
+    m_langCard = new Card(lang, Card::Variant::Table);
+    auto* th = m_langCard->header();
+    th->addWidget(heading(QStringLiteral("Languages"), TextStyle::Subtitle, m_langCard));
+    th->addStretch(1);
+    m_chips = new QWidget(m_langCard);
+    auto* chips = new FlowLayout(m_chips, space::xs, space::xs);
+    struct Quick {
+        const char* text;
+        QStringList codes;
+    };
+    const std::vector<Quick> quick = {{"English only", {QStringLiteral("en")}}, {"Japanese only", {QStringLiteral("ja")}},
+                                      {"EN + JA", {QStringLiteral("en"), QStringLiteral("ja")}},
+                                      {"EU only", {QStringLiteral("en"), QStringLiteral("fr"), QStringLiteral("de"), QStringLiteral("es"), QStringLiteral("it"), QStringLiteral("pt"), QStringLiteral("nl"), QStringLiteral("pl"), QStringLiteral("ru")}},
+                                      {"Keep all", {QStringLiteral("*")}}, {"Keep none", {}}};
+    chips->addWidget(label(QStringLiteral("Keep:"), TextStyle::Caption, color::fg_4, m_chips));
+    for (const auto& q : quick) {
+        auto* b = button(QString::fromLatin1(q.text), ButtonVariant::Secondary, {}, m_chips);
+        setButtonSmall(b, true);
+        const QStringList codes = q.codes;
+        connect(b, &QPushButton::clicked, this, [this, codes] { applyQuickKeep(codes); });
+        chips->addWidget(b);
+    }
+    th->addWidget(m_chips);
+    m_langTable = new QTableWidget(0, 5, m_langCard);
+    m_langTable->setHorizontalHeaderLabels({QStringLiteral("Keep"), QStringLiteral("Language"), QStringLiteral("Code"), QStringLiteral("Folder or file"), QStringLiteral("Size")});
+    m_langTable->horizontalHeader()->setFixedHeight(32);
+    m_langTable->horizontalHeader()->setHighlightSections(false);
+    m_langTable->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_langTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_langTable->setColumnWidth(0, 60);
+    m_langTable->setColumnWidth(1, 160);
+    m_langTable->setColumnWidth(2, 70);
+    m_langTable->setColumnWidth(4, 100);
+    m_langTable->verticalHeader()->hide();
+    m_langTable->verticalHeader()->setDefaultSectionSize(size::row);
+    m_langTable->setShowGrid(false);
+    m_langTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_langTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_langTable->setMinimumHeight(6 * size::row + 40);
+    m_langCard->body()->addWidget(m_langTable);
+    m_langEmpty = new EmptyState(QStringLiteral("language"), QStringLiteral("Nothing scanned yet"),
+                                 QStringLiteral("Scan a game to see the languages it ships."), m_langCard);
+    m_langEmpty->setCompact(true);
+    m_langCard->body()->addWidget(m_langEmpty);
+    auto* tf = m_langCard->footer();
+    m_langSummary = caption({}, m_langCard);
+    tf->addWidget(m_langSummary, 1);
+    m_langRestore = button(QStringLiteral("Restore from backup…"), ButtonVariant::Secondary, QStringLiteral("undo"), m_langCard);
+    m_langStrip = button(QStringLiteral("Remove languages…"), ButtonVariant::Danger, QStringLiteral("trash"), m_langCard);
+    tf->addWidget(m_langRestore);
+    tf->addWidget(m_langStrip);
+    connect(m_langTable, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
+        if (it->column() == 0)
+            updateLanguageSummary();
+    });
+    connect(m_langStrip, &QPushButton::clicked, this, &LibraryPage::stripLanguages);
+    connect(m_langRestore, &QPushButton::clicked, this, &LibraryPage::restoreLanguages);
+    langLayout->addWidget(m_langCard);
+    langLayout->addStretch(1);
+    return lang;
+}
 
 void LibraryPage::languageScan()
 {
@@ -512,18 +1312,17 @@ void LibraryPage::onJobFinished(const QString& id)
     }
     if (id == m_renamePreviewId) {
         m_renamePreviewId.clear();
-        if (rec->state != JobState::Succeeded || !rec->outcome) {
+        if (rec->state != JobState::Succeeded || !rec->outcome)
             emit toastRequested(Tone::Err, QStringLiteral("Preview failed"), rec->error ? rec->error->message : QStringLiteral("See the log."));
-        } else {
+        else
             showRenamePreview(rec->outcome->details.value(QStringLiteral("items")).toArray(), rec->outcome->details.value(QStringLiteral("preset")).toString());
-        }
     }
     if (id == m_renameApplyId) {
         m_renameApplyId.clear();
         const QString undo = rec->outcome ? rec->outcome->details.value(QStringLiteral("undoLog")).toString() : QString();
         if (rec->state == JobState::Succeeded && rec->outcome) {
             const int n = rec->outcome->details.value(QStringLiteral("renamed")).toInt();
-            emit toastRequested(n > 0 ? Tone::Ok : Tone::Warn, rec->outcome->summary, undo.isEmpty() ? QString() : QStringLiteral("An undo log was written; use Rename dumps… › Undo last rename to reverse it."));
+            emit toastRequested(n > 0 ? Tone::Ok : Tone::Warn, rec->outcome->summary, undo.isEmpty() ? QString() : QStringLiteral("An undo log was written: More › Rename dump folders… › Undo last rename."));
             scan();
         } else {
             emit toastRequested(Tone::Err, QStringLiteral("Rename failed"), rec->error ? rec->error->message : QStringLiteral("See the log."));
@@ -538,10 +1337,7 @@ void LibraryPage::onJobFinished(const QString& id)
     }
     if (id == m_langJobId) {
         m_langJobId.clear();
-        if (rec->outcome)
-            m_langGames = rec->outcome->details.value(QStringLiteral("games")).toArray();
-        else
-            m_langGames = {};
+        m_langGames = rec->outcome ? rec->outcome->details.value(QStringLiteral("games")).toArray() : QJsonArray();
         rebuildLanguages();
         if (rec->error)
             emit toastRequested(Tone::Err, QStringLiteral("Language scan failed"), rec->error->message);
@@ -550,6 +1346,10 @@ void LibraryPage::onJobFinished(const QString& id)
         if (rec->state == JobState::Succeeded && !m_langFolder->path().isEmpty())
             languageScan();
     }
+    // A finished build, convert or edit may have added or changed an image.
+    if (rec->state == JobState::Succeeded && (rec->kind.endsWith(QLatin1String(".build")) || rec->kind == QLatin1String("image.convert")
+                                              || rec->kind.endsWith(QLatin1String(".edit"))))
+        scanImages();
 }
 
 void LibraryPage::rebuildLanguages()
@@ -597,8 +1397,7 @@ void LibraryPage::rebuildLanguages()
     m_langTable->setVisible(any);
     m_chips->setVisible(any);
     m_langEmpty->setVisible(!any);
-    if (!any && available)
-        m_langEmpty->setVisible(true);
+    m_langStrip->setVisible(any);
     updateLanguageSummary();
 }
 
@@ -618,31 +1417,29 @@ void LibraryPage::applyQuickKeep(const QStringList& keepCodes)
 void LibraryPage::updateLanguageSummary()
 {
     qint64 remove = 0;
-    int n = 0, total = m_langTable->rowCount();
+    int n = 0;
+    const int total = m_langTable->rowCount();
     for (int r = 0; r < total; ++r)
         if (m_langTable->item(r, 0)->checkState() != Qt::Checked) {
             remove += m_langTable->item(r, 0)->data(Qt::UserRole + 2).toLongLong();
             ++n;
         }
-    m_langSummary->setText(total == 0 ? QString() : n == 0 ? QStringLiteral("%1 language item%2 · nothing selected for removal").arg(total).arg(total == 1 ? QString() : QStringLiteral("s"))
-                                                          : QStringLiteral("%1 of %2 items selected for removal · saves about %3").arg(n).arg(total).arg(formatBytes(remove)));
+    m_langSummary->setText(total == 0 ? QString() : n == 0 ? QStringLiteral("%1 · untick what to remove").arg(plural(total, QStringLiteral("item"), QStringLiteral("items")))
+                                                          : QStringLiteral("%1 of %2 to remove · saves about %3").arg(n).arg(total).arg(formatBytes(remove)));
     m_langStrip->setEnabled(n > 0 && jobs::isAvailable(m_ctx, QStringLiteral("tools.languages.strip")));
-    m_langStrip->setText(n > 0 ? QStringLiteral("Remove %1 item%2…").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")) : QStringLiteral("Remove languages…"));
+    m_langStrip->setText(n > 0 ? QStringLiteral("Remove %1…").arg(plural(n, QStringLiteral("item"), QStringLiteral("items"))) : QStringLiteral("Remove languages…"));
 }
 
 void LibraryPage::stripLanguages()
 {
     QHash<QString, QStringList> byRoot;
-    QHash<QString, QStringList> codesByRoot;
     QHash<QString, int> totalByRoot;
     for (int r = 0; r < m_langTable->rowCount(); ++r) {
         auto* it = m_langTable->item(r, 0);
         const QString root = it->data(Qt::UserRole).toString();
         totalByRoot[root]++;
-        if (it->checkState() != Qt::Checked) {
+        if (it->checkState() != Qt::Checked)
             byRoot[root] << it->data(Qt::UserRole + 1).toString();
-            codesByRoot[root] << it->data(Qt::UserRole + 3).toString();
-        }
     }
     if (byRoot.isEmpty())
         return;
@@ -654,8 +1451,8 @@ void LibraryPage::stripLanguages()
     QStringList lines;
     for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it)
         lines << QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName().toHtmlEscaped(), it.value().join(QStringLiteral(", ")).toHtmlEscaped());
-    QString text = QStringLiteral("These files and folders are removed from the game:<br>%1<br><br>A backup ZIP is written first to %2. Restore from backup puts everything back.")
-                       .arg(Sheet::monoSpan(lines.join(QStringLiteral("<br>"))), Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
+    const QString text = QStringLiteral("These files and folders are removed from the game:<br>%1<br><br>A backup ZIP is written first to %2. Restore from backup puts everything back.")
+                             .arg(Sheet::monoSpan(lines.join(QStringLiteral("<br>"))), Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
     if (!Sheet::confirm(window(), QStringLiteral("Remove the selected languages?"), text, QStringLiteral("Keep everything"), QStringLiteral("Remove languages"), true, Sheet::Icon::Warning))
         return;
     if (everything && !Sheet::confirm(window(), QStringLiteral("Remove every language?"),
@@ -672,7 +1469,7 @@ void LibraryPage::stripLanguages()
         ++queued;
     }
     m_ctx.queue().holdQueue(false);
-    emit toastRequested(Tone::Info, QStringLiteral("Removing languages"), QStringLiteral("%1 job%2 queued; each one backs up first.").arg(queued).arg(queued == 1 ? QString() : QStringLiteral("s")));
+    emit toastRequested(Tone::Info, QStringLiteral("Removing languages"), QStringLiteral("%1 queued; each one backs up first.").arg(plural(queued, QStringLiteral("job"), QStringLiteral("jobs"))));
 }
 
 void LibraryPage::restoreLanguages()
@@ -693,15 +1490,25 @@ void LibraryPage::restoreLanguages()
         m_ctx.queue().holdQueue(false);
 }
 
-// ---- misc ------------------------------------------------------------------------------
+// ---- page hooks --------------------------------------------------------------------------
 
-void LibraryPage::refresh() { scan(); }
+void LibraryPage::setTab(Tab t) { m_tabs->setCurrentIndex(int(t)); }
+
+void LibraryPage::refresh()
+{
+    if (m_tabs->currentIndex() == LanguagesTab && !m_langFolder->path().isEmpty())
+        languageScan();
+    else
+        scan();
+}
 
 bool LibraryPage::acceptsDrop(const QList<QUrl>& urls) const
 {
-    for (const auto& u : urls)
-        if (QFileInfo(u.toLocalFile()).isDir())
+    for (const auto& u : urls) {
+        const QString f = u.toLocalFile();
+        if (QFileInfo(f).isDir() || (!imageFormatOf(f, true).isEmpty() && QFileInfo(f).isFile()))
             return true;
+    }
     return false;
 }
 
@@ -709,49 +1516,97 @@ void LibraryPage::dropUrls(const QList<QUrl>& urls)
 {
     for (const auto& u : urls) {
         const QString f = u.toLocalFile();
+        if (!imageFormatOf(f, true).isEmpty() && QFileInfo(f).isFile()) {
+            openInImageTools(f, QString());
+            return;
+        }
         if (!QFileInfo(f).isDir())
             continue;
-        if (m_tabs->currentIndex() == 1) {
+        if (m_tabs->currentIndex() == LanguagesTab)
             m_langFolder->setPath(f);
-            continue;
-        }
-        if (readGameSummary(f, false).isGame) {
-            m_pendingAdds << f;
-            if (!m_reader->isBusy())
-                m_reader->summarize(m_pendingAdds.takeFirst(), true);
-        } else {
-            m_library.addScanFolder(f);
-        }
+        else if (m_tabs->currentIndex() == DlcTab)
+            m_dlc->openFolder(f);
+        else
+            addFolder(f);
     }
 }
 
+void LibraryPage::setDragHighlight(bool on) { m_gamesDrop->setHighlighted(on); }
+
 void LibraryPage::navigateWith(const QVariantMap& args)
 {
-    if (args.contains(QStringLiteral("tab")))
-        m_tabs->setCurrentIndex(args.value(QStringLiteral("tab")).toInt());
+    if (args.contains(QStringLiteral("tab"))) {
+        const QString t = args.value(QStringLiteral("tab")).toString();
+        static const QStringList names = {QStringLiteral("games"), QStringLiteral("images"), QStringLiteral("languages"), QStringLiteral("dlc")};
+        bool isInt = false;
+        const int i = t.toInt(&isInt);
+        m_tabs->setCurrentIndex(isInt ? i : std::max(0, int(names.indexOf(t))));
+    }
     if (args.contains(QStringLiteral("dlcFolder"))) {
-        m_tabs->setCurrentIndex(2);
+        setTab(DlcTab);
         m_dlc->openFolder(args.value(QStringLiteral("dlcFolder")).toString());
     }
     if (args.contains(QStringLiteral("languagesFolder"))) {
-        m_tabs->setCurrentIndex(1);
+        setTab(LanguagesTab);
         m_langFolder->setPath(args.value(QStringLiteral("languagesFolder")).toString());
     }
 }
 
 QString LibraryPage::statusContext() const
 {
-    return QStringLiteral("%1 games in the library").arg(m_library.games().size());
+    return QStringLiteral("%1 · %2").arg(plural(qint64(games().size()), QStringLiteral("game"), QStringLiteral("games")),
+                                          plural(m_images.size(), QStringLiteral("image"), QStringLiteral("images")));
+}
+
+// ---- screenshots ---------------------------------------------------------------------------
+
+QStringList LibraryPage::demoStates() const
+{
+    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("images"), QStringLiteral("languages"), QStringLiteral("dlc")};
 }
 
 void LibraryPage::applyDemoState(const QString& name)
 {
-    if (name == QLatin1String("languages"))
-        m_tabs->setCurrentIndex(1);
-    else if (name == QLatin1String("dlc"))
-        m_tabs->setCurrentIndex(2);
+    if (name == QLatin1String("languages")) {
+        setTab(LanguagesTab);
+        return;
+    }
+    if (name == QLatin1String("dlc")) {
+        setTab(DlcTab);
+        return;
+    }
+    m_demo = true;
+    m_demoGames = demoGames();
+    m_images = demoImages();
+    rebuildImages();
+    rebuildGames();
+    if (name == QLatin1String("games")) {
+        setTab(GamesTab);
+    } else if (name == QLatin1String("games-list")) {
+        setTab(GamesTab);
+        m_gamesView->setCurrentValue(QStringLiteral("list"));
+        const auto& items = m_gamesGrid->items();
+        if (items.size() > 3)
+            m_gamesGrid->setSelectedKeys({items[1].key, items[3].key});
+    } else if (name == QLatin1String("images")) {
+        setTab(ImagesTab);
+    }
 }
 
-void LibraryPage::clearDemoState() { m_tabs->setCurrentIndex(0); }
+void LibraryPage::clearDemoState()
+{
+    if (m_demo) {
+        m_demo = false;
+        m_demoGames.clear();
+        m_images.clear();
+        m_gamesGrid->clearSelection();
+        m_imagesGrid->clearSelection();
+        m_gamesView->setCurrentValue(QStringLiteral("grid"));
+        rebuildImages();
+        rebuildGames();
+        scanImages();
+    }
+    setTab(GamesTab);
+}
 
 } // namespace fw::pages

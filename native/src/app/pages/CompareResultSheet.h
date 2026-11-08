@@ -1,6 +1,6 @@
 #pragma once
 
-// The result of an image.compare job as a sheet (Extract & verify › Compare):
+// The result of an image.compare job as a sheet (Image tools › Verify against a folder or image):
 // what was compared, the counts per difference kind and the differences
 // grouped by kind, read from JobOutcome::details (shape in
 // services/JobSubmit.h). "Copy report" puts a plain-text report on the

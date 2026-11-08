@@ -15,6 +15,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QRegularExpression>
 
 namespace fw::integration {
 
@@ -97,10 +98,14 @@ QString formatOfFile(const QString& path)
         return QStringLiteral("exfat");
     if (ext == u"ffpkg")
         return QStringLiteral("ffpkg");
-    if (ext == u"ffpfs" || ext == u"ffpfsc")
+    if (ext == u"ffpfs")
+        return QStringLiteral("ffpfs");
+    if (ext == u"ffpfsc")
         return QStringLiteral("ffpfsc");
     return {};
 }
+
+bool isPfsFormat(const QString& format) { return format == u"ffpfs" || format == u"ffpfsc"; }
 
 QString engineOf(const QString& format)
 {
@@ -108,11 +113,51 @@ QString engineOf(const QString& format)
         return QStringLiteral("image.exfat");
     if (format == u"ffpkg")
         return QStringLiteral("image.ffpkg");
-    if (format == u"ffpfsc")
+    if (isPfsFormat(format))
         return QStringLiteral("image.pfs");
     return {};
 }
 
+// A plain ASCII name for an image packed into a PFS container (PFS names are
+// ASCII): accents are dropped ("Yōtei" -> "Yotei"), other characters become
+// '_'; a name with nothing usable left falls back to the title ID in it.
+QString asciiInnerName(const QString& fileName)
+{
+    const QFileInfo fi(fileName);
+    const QString ext = fi.suffix().toLower();
+    const QString base = fi.completeBaseName();
+    QString out;
+    bool usable = false;
+    for (const QChar c : base.normalized(QString::NormalizationForm_KD)) {
+        if (c.category() == QChar::Mark_NonSpacing)
+            continue;
+        const char16_t u = c.unicode();
+        if (u >= 0x20 && u < 0x7F && u != u'/' && u != u'\\') {
+            out += c;
+            usable |= c.isLetterOrNumber();
+        } else if (!out.endsWith(u'_')) {
+            out += u'_';
+        }
+    }
+    out = out.trimmed();
+    if (!usable) {
+        static const QRegularExpression id(QStringLiteral("[A-Z]{4}[0-9]{5}"));
+        const auto m = id.match(base.toUpper());
+        out = m.hasMatch() ? m.captured(0) : QStringLiteral("image");
+    }
+    return ext.isEmpty() ? out : out + u'.' + ext;
+}
+
+// Converts an image to another format (legacy Convert tab). Methods:
+//   direct — .exfat/.ffpkg -> .ffpfsc only: the image file itself is packed into
+//            a compressed PFS container (legacy 3.5.3+ "no extraction"); no
+//            temporary copy, free space is needed for the output only.
+//   repack — the files are extracted to the job's temp folder and built again
+//            in the target format (the only way for every other pair).
+// A container that holds an .exfat/.ffpkg file (a direct conversion) converts
+// back by unpacking that file: to its own format as is, otherwise repacked.
+// An existing output is only replaced with replaceExisting; it is set aside
+// while the new image is written and put back if the conversion fails.
 class ConvertJob final : public Job {
 public:
     ConvertJob(QJsonObject p, const JobFactory* factory) : m_p(std::move(p)), m_factory(factory) {}
@@ -122,24 +167,44 @@ public:
     {
         return QStringLiteral("Convert to .%1 → %2").arg(target(), QDir::toNativeSeparators(QFileInfo(output()).absolutePath()));
     }
-    QStringList phases() const override { return {QStringLiteral("Extracting"), QStringLiteral("Building")}; }
+    QStringList phases() const override
+    {
+        if (method() == u"direct")
+            return {QStringLiteral("Scanning"), QStringLiteral("Packing"), QStringLiteral("Verifying")};
+        return {QStringLiteral("Extracting"), QStringLiteral("Building")};
+    }
     QJsonObject parameters() const override { return m_p; }
+    QStringList busyPaths() const override
+    {
+        return {QDir::cleanPath(QFileInfo(image()).absoluteFilePath()), QDir::cleanPath(QFileInfo(output()).absoluteFilePath())};
+    }
 
     Status validate(const SettingsValues&) const override
     {
         const QString from = formatOfFile(image());
         if (!QFileInfo(image()).isFile() || from.isEmpty())
-            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose an .exfat, .ffpkg or .ffpfsc image to convert."));
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image to convert."));
         if (engineOf(target()).isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the format to convert to."));
         if (from == target())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The image is already in that format."));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the converted image."));
+        if (formatOfFile(output()) != target())
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("The converted image must end in .%1.").arg(target()));
         if (QFileInfo(output()).absoluteFilePath() == QFileInfo(image()).absoluteFilePath())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The converted image cannot replace its source."));
-        if (!m_factory || !m_factory->contains(engineOf(from) + QStringLiteral(".extract"))
-            || !m_factory->contains(engineOf(target()) + QStringLiteral(".build")))
+        if (QFileInfo(output()).isDir())
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("The output must be a file name, not a folder."));
+        if (QFileInfo::exists(output()) && !replaceExisting())
+            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Choose another name or allow replacing it.").arg(QFileInfo(output()).fileName()));
+        const QString m = m_p.value(QStringLiteral("method")).toString();
+        if (!m.isEmpty() && m != u"direct" && m != u"repack")
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Unknown conversion method \"%1\".").arg(m));
+        if (m == u"direct" && !directPossible())
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Only .exfat and .ffpkg images can be packed into an .ffpfsc as they are."));
+        if (!m_factory || !m_factory->contains(engineOf(target()) + QStringLiteral(".build"))
+            || (method() == u"repack" && !m_factory->contains(engineOf(from) + QStringLiteral(".extract"))))
             return Error(ErrorCode::Unsupported, QStringLiteral("Converting between these formats is not available in this build."));
         return success();
     }
@@ -147,36 +212,151 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         FW_TRY(validate(ctx.settings));
-        const QString stage = QDir(ctx.tempDir).filePath(QStringLiteral("converted"));
-        ctx.log.info(QStringLiteral("Converting %1 to .%2").arg(QFileInfo(image()).fileName(), target()));
+        ctx.log.info(QStringLiteral("Converting %1 to .%2 (%3)")
+                         .arg(QFileInfo(image()).fileName(), target(),
+                              method() == u"direct" ? QStringLiteral("packing the image as it is") : QStringLiteral("repacking its files")));
 
-        // 1. Extract with the source format's engine (verifies what it wrote).
-        QJsonObject ex{{QStringLiteral("image"), image()}, {QStringLiteral("output"), stage}};
-        if (formatOfFile(image()) == u"ffpfsc")
-            ex.insert(QStringLiteral("deep"), true);
-        FW_TRY_ASSIGN(auto extract, m_factory->create(engineOf(formatOfFile(image())) + QStringLiteral(".extract"), ex));
-        FW_TRY(extract->validate(ctx.settings));
-        FW_TRY_ASSIGN(JobOutcome extracted, extract->run(ctx));
-        if (extracted.verification == Verification::Failed)
-            return Error(ErrorCode::VerificationFailed, QStringLiteral("The source image could not be read back correctly. %1").arg(extracted.verificationDetail));
-
-        // 2. Build with the target engine (writes .part, verifies, renames).
-        QJsonObject build{{QStringLiteral("source"), stage}, {QStringLiteral("output"), output()}};
-        if (target() == u"ffpfsc")
-            build.insert(QStringLiteral("format"), QStringLiteral("ffpfsc"));
-        FW_TRY_ASSIGN(auto builder, m_factory->create(engineOf(target()) + QStringLiteral(".build"), build));
-        FW_TRY(builder->validate(ctx.settings));
-        FW_TRY_ASSIGN(JobOutcome built, builder->run(ctx));
-        built.warnings = extracted.warnings + built.warnings;
-        built.details.insert(QStringLiteral("convertedFrom"), image());
-        built.summary = QStringLiteral("Converted to %1. %2").arg(QFileInfo(output()).fileName(), built.summary);
-        return built;
+        // An existing output is set aside, and put back unless the conversion succeeds.
+        QString aside;
+        if (QFileInfo::exists(output())) {
+            aside = output() + QStringLiteral(".old");
+            for (int i = 2; QFileInfo::exists(aside); ++i)
+                aside = output() + QStringLiteral(".old%1").arg(i);
+            if (!QFile::rename(output(), aside))
+                return Error(ErrorCode::IoError, QStringLiteral("%1 could not be set aside. Close programs that use it and try again.")
+                                                     .arg(QDir::toNativeSeparators(output())));
+            ctx.log.info(QStringLiteral("Set the existing %1 aside until the new image has verified.").arg(QFileInfo(output()).fileName()));
+        }
+        auto result = convert(ctx);
+        const bool ok = result.ok() && result->verification != Verification::Failed && QFileInfo::exists(output());
+        if (!aside.isEmpty()) {
+            if (ok) {
+                QFile::remove(aside);
+            } else {
+                if (QFileInfo::exists(output()))
+                    QFile::remove(output());
+                if (QFile::rename(aside, output()))
+                    ctx.log.info(QStringLiteral("Put the previous %1 back.").arg(QFileInfo(output()).fileName()));
+                else
+                    ctx.log.warn(QStringLiteral("The previous image is still at %1.").arg(QDir::toNativeSeparators(aside)));
+            }
+        }
+        if (result.ok())
+            result->details.insert(QStringLiteral("method"), method());
+        return result;
     }
 
 private:
     QString image() const { return m_p.value(QStringLiteral("image")).toString(); }
     QString target() const { return m_p.value(QStringLiteral("format")).toString().toLower(); }
     QString output() const { return m_p.value(QStringLiteral("output")).toString(); }
+    bool replaceExisting() const { return m_p.value(QStringLiteral("replaceExisting")).toBool(false); }
+    bool directPossible() const
+    {
+        const QString from = formatOfFile(image());
+        return (from == u"exfat" || from == u"ffpkg") && target() == u"ffpfsc";
+    }
+    // "direct" by default where it is possible (legacy behaviour), else "repack".
+    QString method() const
+    {
+        const QString m = m_p.value(QStringLiteral("method")).toString();
+        if (m == u"repack")
+            return m;
+        return directPossible() ? QStringLiteral("direct") : QStringLiteral("repack");
+    }
+
+    Result<JobOutcome> runChild(JobContext& ctx, const QString& kind, const QJsonObject& params)
+    {
+        FW_TRY_ASSIGN(auto job, m_factory->create(kind, params));
+        FW_TRY(job->validate(ctx.settings));
+        return job->run(ctx);
+    }
+
+    Result<JobOutcome> convert(JobContext& ctx)
+    {
+        if (method() == u"direct") {
+            const QString inner = asciiInnerName(QFileInfo(image()).fileName());
+            QJsonObject build{{QStringLiteral("source"), image()},
+                              {QStringLiteral("output"), output()},
+                              {QStringLiteral("format"), QStringLiteral("ffpfsc")},
+                              {QStringLiteral("innerName"), inner}};
+            FW_TRY_ASSIGN(JobOutcome built, runChild(ctx, QStringLiteral("image.pfs.build"), build));
+            built.details.insert(QStringLiteral("convertedFrom"), image());
+            built.details.insert(QStringLiteral("innerName"), inner);
+            if (built.verification != Verification::Failed)
+                built.summary = QStringLiteral("Packed %1 into %2. %3").arg(QFileInfo(image()).fileName(), QFileInfo(output()).fileName(), built.summary);
+            return built;
+        }
+
+        const QString from = formatOfFile(image());
+        if (isPfsFormat(from)) {
+            // A container holding an .exfat/.ffpkg file (a direct conversion): unpack that file first.
+            auto sum = pfs::inspectImage(image());
+            if (sum.ok() && !sum->nested && !sum->singleFile.isEmpty()) {
+                const QString inner = QString::fromLatin1(sum->singleFile);
+                const QString innerFormat = formatOfFile(inner);
+                if (innerFormat == u"exfat" || innerFormat == u"ffpkg")
+                    return convertWrapped(ctx, inner, innerFormat);
+            }
+        }
+        return repack(ctx, image(), from, QDir(ctx.tempDir).filePath(QStringLiteral("converted")));
+    }
+
+    // Extract `source` (format `from`) to `stage`, build the target from it.
+    Result<JobOutcome> repack(JobContext& ctx, const QString& source, const QString& from, const QString& stage)
+    {
+        QJsonObject ex{{QStringLiteral("image"), source}, {QStringLiteral("output"), stage}};
+        if (isPfsFormat(from))
+            ex.insert(QStringLiteral("deep"), true);
+        FW_TRY_ASSIGN(JobOutcome extracted, runChild(ctx, engineOf(from) + QStringLiteral(".extract"), ex));
+        if (extracted.verification == Verification::Failed)
+            return Error(ErrorCode::VerificationFailed, QStringLiteral("The source image could not be read back correctly. %1").arg(extracted.verificationDetail));
+
+        QJsonObject build{{QStringLiteral("source"), stage}, {QStringLiteral("output"), output()}};
+        if (isPfsFormat(target()))
+            build.insert(QStringLiteral("format"), target());
+        FW_TRY_ASSIGN(JobOutcome built, runChild(ctx, engineOf(target()) + QStringLiteral(".build"), build));
+        built.warnings = extracted.warnings + built.warnings;
+        built.details.insert(QStringLiteral("convertedFrom"), image());
+        if (built.verification != Verification::Failed)
+            built.summary = QStringLiteral("Converted to %1. %2").arg(QFileInfo(output()).fileName(), built.summary);
+        return built;
+    }
+
+    Result<JobOutcome> convertWrapped(JobContext& ctx, const QString& inner, const QString& innerFormat)
+    {
+        ctx.log.info(QStringLiteral("%1 holds the image %2; unpacking it first.").arg(QFileInfo(image()).fileName(), inner));
+        const QString unpacked = QDir(ctx.tempDir).filePath(QStringLiteral("unpacked"));
+        FW_TRY_ASSIGN(JobOutcome ex, runChild(ctx, QStringLiteral("image.pfs.extract"),
+                                              {{QStringLiteral("image"), image()}, {QStringLiteral("output"), unpacked}, {QStringLiteral("deep"), false}}));
+        const QString innerPath = QDir(unpacked).filePath(inner);
+        if (!QFileInfo(innerPath).isFile())
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 was not found inside %2.").arg(inner, QFileInfo(image()).fileName()));
+        if (innerFormat != target()) {
+            auto built = repack(ctx, innerPath, innerFormat, QDir(ctx.tempDir).filePath(QStringLiteral("converted")));
+            if (built.ok())
+                built->warnings = ex.warnings + built->warnings;
+            return built;
+        }
+        // Same format: the unpacked image is the result. Check it, then move it into place.
+        FW_TRY_ASSIGN(JobOutcome checked, runChild(ctx, engineOf(innerFormat) + QStringLiteral(".verify"), {{QStringLiteral("image"), innerPath}}));
+        if (checked.verification == Verification::Failed) {
+            checked.summary = QStringLiteral("The image inside %1 did not verify; nothing was written.").arg(QFileInfo(image()).fileName());
+            return checked;
+        }
+        PartFile part(output());
+        QFile::remove(part.partPath());
+        if (!QFile::rename(innerPath, part.partPath()) && !QFile::copy(innerPath, part.partPath()))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QDir::toNativeSeparators(part.partPath())));
+        FW_TRY(part.commit(false));
+        JobOutcome out = checked;
+        out.outputs = {output()};
+        out.warnings = ex.warnings + checked.warnings;
+        out.details.insert(QStringLiteral("convertedFrom"), image());
+        out.summary = QStringLiteral("Unpacked %1 from %2. %3").arg(QFileInfo(output()).fileName(), QFileInfo(image()).fileName(), checked.summary);
+        return out;
+    }
+
     QJsonObject m_p;
     const JobFactory* m_factory;
 };

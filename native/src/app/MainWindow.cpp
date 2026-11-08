@@ -6,10 +6,9 @@
 #include "app/pages/AboutPage.h"
 #include "app/pages/BackportPage.h"
 #include "app/pages/BuildImagePage.h"
-#include "app/pages/ExtractVerifyPage.h"
 #include "app/pages/FpkgPage.h"
 #include "app/pages/HomePage.h"
-#include "app/pages/ImageEditorPage.h"
+#include "app/pages/ImageToolsPage.h"
 #include "app/pages/LibraryPage.h"
 #include "app/pages/LogsPage.h"
 #include "app/pages/Ps5ConnectPage.h"
@@ -201,8 +200,7 @@ void MainWindow::buildPages()
     m_sidebar->addGroup(QStringLiteral("Workflows"));
     addPage(new pages::BuildImagePage(m_ctx, *m_queueModel, this), QStringLiteral("build"), QStringLiteral("Build image"));
     addPage(new pages::FpkgPage(m_ctx, *m_queueModel, this), QStringLiteral("package"), QStringLiteral("FPKG"));
-    addPage(new pages::ExtractVerifyPage(m_ctx, *m_queueModel, this), QStringLiteral("extract"), QStringLiteral("Extract & verify"));
-    addPage(new pages::ImageEditorPage(m_ctx, *m_queueModel, this), QStringLiteral("edit"), QStringLiteral("Edit image"));
+    addPage(new pages::ImageToolsPage(m_ctx, *m_queueModel, this), QStringLiteral("extract"), QStringLiteral("Image tools"));
     addPage(new pages::BackportPage(m_ctx, *m_queueModel, *m_logModel, *m_library, this), QStringLiteral("backports"), QStringLiteral("Backport"));
     m_sidebar->addGroup(QStringLiteral("Tools"));
     m_queuePage = new pages::QueuePage(m_ctx, *m_queueModel, *m_logModel, this);
@@ -266,8 +264,19 @@ QString MainWindow::currentPage() const
     return p ? p->key() : QString();
 }
 
-void MainWindow::navigate(const QString& key, const QVariantMap& args)
+void MainWindow::navigate(const QString& requested, const QVariantMap& requestedArgs)
 {
+    // v5: "Extract & verify" and "Edit image" became actions of Image tools;
+    // their old keys still lead there, with the matching action selected.
+    QString key = requested;
+    QVariantMap args = requestedArgs;
+    if (key == QLatin1String("extract") || key == QLatin1String("edit")) {
+        if (!args.contains(QStringLiteral("action")))
+            args.insert(QStringLiteral("action"), key == QLatin1String("edit") ? QStringLiteral("edit")
+                                                  : args.value(QStringLiteral("mode")).toString() == QLatin1String("verify") ? QStringLiteral("verify")
+                                                                                                                             : QStringLiteral("extract"));
+        key = QStringLiteral("imagetools");
+    }
     pages::Page* p = m_pages.value(key);
     if (!p)
         return;
