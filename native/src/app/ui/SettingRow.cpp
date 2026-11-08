@@ -283,7 +283,9 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     auto* labelRow = new QHBoxLayout;
     labelRow->setSpacing(space::sm);
     m_label = label(def.label, TextStyle::Body, color::fg_1, left);
-    m_label->setWordWrap(true);
+    // One line: a wrapping label gets a narrow width hint in a row and folds
+    // even short labels; labels are short by design.
+    m_label->setWordWrap(false);
     m_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     labelRow->addWidget(m_label, 0);
     m_info = new QLabel(left);

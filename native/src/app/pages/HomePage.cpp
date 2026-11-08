@@ -178,7 +178,7 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     m_hero->actions()->addWidget(backportBtn);
     m_hero->actions()->addWidget(connectBtn);
     connect(buildBtn, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
-    connect(backportBtn, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("backports"), {}}); });
+    connect(backportBtn, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("backport"), {}}); });
     connect(connectBtn, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("ps5"), {}}); });
     content()->addWidget(m_hero);
 

@@ -142,7 +142,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     auto* b1 = hero->addAction(QStringLiteral("Build an image"), ButtonVariant::Primary);
     auto* b2 = hero->addAction(QStringLiteral("Backport a game"));
     connect(b1, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
-    connect(b2, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("backports"), {}}); });
+    connect(b2, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("backport"), {}}); });
     m_emptyCard->body()->addWidget(hero);
     content()->addWidget(m_emptyCard);
 
