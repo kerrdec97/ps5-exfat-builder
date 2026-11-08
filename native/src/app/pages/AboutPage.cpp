@@ -178,7 +178,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* own = caption(QStringLiteral("Use it only with games and content you own and dumped yourself."), legal);
     own->setWordWrap(true);
     legal->body()->addWidget(own);
-    auto* sony = caption(QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. No Sony software is included."), legal);
+    auto* sony = caption(QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony software; the bundled PS5 Backport engine is a separate program with its own notices."), legal);
     sony->setWordWrap(true);
     sony->setToolTip(QStringLiteral("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
     legal->body()->addWidget(sony);
@@ -189,7 +189,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     // ---- Third-party notices (folded)
     auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("Full licence texts ship in the LICENSES folder next to the app."), this);
     third->setObjectName(QStringLiteral("about-notices"));
-    third->setSummary(QStringLiteral("6 components"));
+    third->setSummary(QStringLiteral("7 components"));
     auto* tgrid = new QGridLayout;
     tgrid->setHorizontalSpacing(space::lg);
     tgrid->setVerticalSpacing(space::sm);
@@ -200,6 +200,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
         {QStringLiteral("UFS2Tool (SvenGDK)"), QStringLiteral("The UFS2/FFPKG engine follows its image layout"), QStringLiteral("BSD-2-Clause")},
         {QStringLiteral("Lucide icons"), QStringLiteral("Interface icons"), QStringLiteral("ISC")},
         {QStringLiteral("ampr_emu (drakmor)"), QStringLiteral("AMPR index format"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), QStringLiteral("Bundled separate program run by the Backport tab"), QStringLiteral("Its own terms")},
     };
     int row = 0;
     tgrid->addWidget(label(QStringLiteral("Component"), TextStyle::Overline, color::fg_4, third), row, 0);
