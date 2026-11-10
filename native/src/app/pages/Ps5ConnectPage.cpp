@@ -166,8 +166,7 @@ public:
     void paint(QPainter* p, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         p->save();
-        if (option.state & QStyle::State_Selected)
-            p->fillRect(option.rect, color::accent_lo);
+        // The selected row (with its accent bar) is the style's, painted before this.
         p->fillRect(QRect(option.rect.left(), option.rect.bottom(), option.rect.width(), 1), color::border_1);
         const auto tag = ps5::KlogTag(index.data(KlogModel::TagRole).toInt());
         const LogLevel level = tag == ps5::KlogTag::Error ? LogLevel::Error : tag == ps5::KlogTag::Warning ? LogLevel::Warning
@@ -202,7 +201,7 @@ public:
         const bool sel = option.state & QStyle::State_Selected;
         const bool hover = option.state & QStyle::State_MouseOver;
         if (sel || hover) {
-            p->setPen(sel ? QPen(QColor(141, 181, 255, 90), 1) : Qt::NoPen);
+            p->setPen(sel ? QPen(withAlpha(color::accent_hi, 90), 1) : Qt::NoPen);
             p->setBrush(sel ? color::accent_lo : color::bg_3);
             p->drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), radius::control, radius::control);
         }

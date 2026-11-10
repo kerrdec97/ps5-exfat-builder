@@ -948,13 +948,46 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 // ---- drag and drop -------------------------------------------------------------------------
 
+namespace {
+
+// The page that opens what the page in front does not take itself: "build",
+// "extract" (Image tools) or "" (nothing to do with it).
+QString dropPageFor(const QList<QUrl>& urls)
+{
+    if (urls.isEmpty())
+        return {};
+    const QFileInfo fi(urls.first().toLocalFile());
+    if (fi.isDir() || archive::isZipSource(fi.absoluteFilePath())) // a game folder, or a zipped dump: Build takes both
+        return QStringLiteral("build");
+    if (!jobs::imageKindForFile(fi.absoluteFilePath(), QStringLiteral("verify")).isEmpty())
+        return QStringLiteral("extract");
+    return {};
+}
+
+// While a drag is over the window, the sidebar item of the page a drop would
+// open is marked ("" clears the mark).
+void markDropTarget(ui::Sidebar* sidebar, const QString& page)
+{
+    const QString key = page == QLatin1String("extract") ? QStringLiteral("imagetools") : page; // navigate()'s own alias
+    for (const QString& k : sidebar->keys())
+        if (ui::NavItem* item = sidebar->item(k))
+            item->setDropTarget(!key.isEmpty() && k == key);
+}
+
+} // namespace
+
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)
 {
     if (!event->mimeData()->hasUrls() || Sheet::openCount() > 0)
         return;
     event->acceptProposedAction();
-    if (auto* p = currentPageWidget())
-        p->setDragHighlight(p->acceptsDrop(event->mimeData()->urls()));
+    const auto urls = event->mimeData()->urls();
+    pages::Page* p = currentPageWidget();
+    const bool here = p && p->acceptsDrop(urls);
+    if (p)
+        p->setDragHighlight(here);
+    // The page in front shows its own drop zone; otherwise the sidebar shows where the drop goes.
+    markDropTarget(m_sidebar, here ? QString() : dropPageFor(urls));
 }
 
 void MainWindow::dragMoveEvent(QDragMoveEvent* event)
@@ -967,6 +1000,7 @@ void MainWindow::dragLeaveEvent(QDragLeaveEvent*)
 {
     if (auto* p = currentPageWidget())
         p->setDragHighlight(false);
+    markDropTarget(m_sidebar, {});
 }
 
 void MainWindow::dropEvent(QDropEvent* event)
@@ -974,19 +1008,18 @@ void MainWindow::dropEvent(QDropEvent* event)
     const auto urls = event->mimeData()->urls();
     if (auto* p = currentPageWidget())
         p->setDragHighlight(false);
+    markDropTarget(m_sidebar, {});
     if (urls.isEmpty() || Sheet::openCount() > 0)
         return;
     pages::Page* p = currentPageWidget();
     if (p && p->acceptsDrop(urls)) {
         p->dropUrls(urls);
     } else {
-        const QFileInfo fi(urls.first().toLocalFile());
-        if (fi.isDir() || archive::isZipSource(fi.absoluteFilePath())) // a game folder, or a zipped dump: Build takes both
-            navigate(QStringLiteral("build"), {{QStringLiteral("source"), fi.absoluteFilePath()}});
-        else if (!jobs::imageKindForFile(fi.absoluteFilePath(), QStringLiteral("verify")).isEmpty())
-            navigate(QStringLiteral("extract"), {{QStringLiteral("source"), fi.absoluteFilePath()}});
-        else
+        const QString page = dropPageFor(urls);
+        if (page.isEmpty())
             toast(Tone::Warn, QStringLiteral("Nothing to do with that file"), QStringLiteral("Drop a game folder, an image or a package."));
+        else
+            navigate(page, {{QStringLiteral("source"), QFileInfo(urls.first().toLocalFile()).absoluteFilePath()}});
     }
     event->acceptProposedAction();
 }

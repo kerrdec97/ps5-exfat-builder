@@ -20,6 +20,7 @@
 #include <QPainterPath>
 #include <QPointer>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStyle>
 #include <QStyleOption>
 #include <QUrl>
@@ -520,6 +521,66 @@ void paintShadow(QPainter& p, const QRectF& r, qreal rad, int spread)
         p.setPen(QPen(withAlpha(color::shadow, int(70 * t * t)), 1.5));
         p.drawRoundedRect(base.adjusted(-i, -i, i, i), rad + i, rad + i);
     }
+    p.restore();
+}
+
+// ---- cover placeholder -----------------------------------------------------------
+
+int coverIndex(const QString& id)
+{
+    // FNV-1a over the ID's UTF-16 units: the same answer on every run, machine
+    // and Qt version (qHash is seeded per process and may change between versions).
+    quint32 h = 2166136261u;
+    for (const QChar c : id.trimmed().toUpper()) {
+        h ^= c.unicode();
+        h *= 16777619u;
+    }
+    return int(h % quint32(cover::count));
+}
+
+QString coverInitials(const QString& title)
+{
+    QString out;
+    static const QRegularExpression separators(QStringLiteral("[\\s:\\-_]+")); // once, not per cover per paint
+    for (const QString& w : title.split(separators, Qt::SkipEmptyParts)) {
+        for (const QChar c : w)
+            if (c.isLetterOrNumber()) {
+                out += c.toUpper();
+                break;
+            }
+        if (out.size() == 2)
+            break;
+    }
+    return out.isEmpty() ? QStringLiteral("?") : out;
+}
+
+void paintCoverPlaceholder(QPainter& p, const QRectF& r, const QString& title, const QString& id, qreal rad)
+{
+    if (r.isEmpty())
+        return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(cover::gradient(coverIndex(id.isEmpty() ? title : id)));
+    if (rad > 0)
+        p.drawRoundedRect(r, rad, rad);
+    else
+        p.drawRect(r);
+    // A faint sheen over the top third: it ends above the initials.
+    QLinearGradient sheen(r.topLeft(), QPointF(r.left(), r.top() + r.height() * 0.34));
+    sheen.setColorAt(0, withAlpha(color::on_accent, 24));
+    sheen.setColorAt(1, withAlpha(color::on_accent, 0));
+    p.setBrush(sheen);
+    if (rad > 0)
+        p.drawRoundedRect(r, rad, rad);
+    else
+        p.drawRect(r);
+    const qreal side = std::min(r.width(), r.height());
+    QFont f = font::display();
+    f.setPixelSize(std::max(9, qRound(side * (side >= 96 ? 0.30 : 0.38))));
+    p.setFont(f);
+    p.setPen(color::on_accent);
+    p.drawText(r, Qt::AlignCenter, coverInitials(title));
     p.restore();
 }
 
@@ -2038,8 +2099,18 @@ void IconTile::setIconName(const QString& iconName)
 
 void IconTile::setTone(Tone tone)
 {
+    if (m_toned && m_tone == tone)
+        return;
     m_tone = tone;
     m_toned = true;
+    update();
+}
+
+void IconTile::setAccent(bool on)
+{
+    if (m_accent == on)
+        return;
+    m_accent = on;
     update();
 }
 
@@ -2064,6 +2135,14 @@ void IconTile::paintEvent(QPaintEvent*)
         p.setPen(QPen(tint, 1));
         p.setBrush(fillc);
         glyph = toneText(m_tone);
+    } else if (m_accent) {
+        // The page's own mark: a raised square under the signature gradient
+        // as a 22 % tint, outlined by the gradient at 45 %.
+        p.setPen(Qt::NoPen);
+        p.setBrush(color::bg_3);
+        p.drawRoundedRect(r, rad, rad);
+        p.setPen(QPen(QBrush(accentGradient(r, 115)), 1));
+        p.setBrush(accentGradient(r, 56));
     } else {
         QLinearGradient g(r.topLeft(), r.bottomRight());
         QColor a = color::accent, b = color::accent_2;

@@ -86,6 +86,9 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     card->body()->addWidget(m_table);
     m_empty = new EmptyState(QStringLiteral("database"), QStringLiteral("No dlc_emu.ini yet"),
                              QStringLiteral("Choose the game folder, then add or find entries."), card);
+    // The first step as a button, while there is no folder yet.
+    m_emptyChoose = m_empty->addAction(QStringLiteral("Choose the game folder…"));
+    connect(m_emptyChoose, &QPushButton::clicked, this, [this] { m_folder->browseButton()->click(); });
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
     m_validation = new MessageRow(card);
@@ -310,6 +313,7 @@ void DlcEmuEditor::revalidate()
     const bool anyRows = !all.empty();
     m_table->setVisible(anyRows);
     m_empty->setVisible(!anyRows);
+    m_emptyChoose->setVisible(m_folder->path().isEmpty());
     const dlc::Validation v = dlc::validate(all, m_folder->path());
     const int bytes = dlc::byteSize(all);
     m_bytes->setText(QStringLiteral("%1 entr%2 · %3 of %4 KiB").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")).arg(QString::number(bytes / 1024.0, 'f', 1)).arg(dlc::kMaxIniBytes / 1024));

@@ -135,6 +135,16 @@ void paintPopup(QPainter& p, const QRectF& r, qreal radius);
 void paintShadow(QPainter& p, const QRectF& r, qreal radius, int spread);
 QColor blend(const QColor& a, const QColor& b, qreal t); // a at 0, b at 1
 
+// ---- cover placeholder ----------------------------------------------------------
+// The cover of a game that has no cover art, the same wherever it is listed:
+// one of the six theme::cover gradients with the title's initials in white
+// (display font). Which gradient is decided by `id` (the title ID; the title
+// where there is none): the same for an ID on every run and every machine.
+// `r` is filled as it is (radius 0: a plain rectangle, for a caller that clips).
+void paintCoverPlaceholder(QPainter& p, const QRectF& r, const QString& title, const QString& id, qreal radius);
+int coverIndex(const QString& id);            // 0 .. theme::cover::count - 1; case and outer spaces do not matter
+QString coverInitials(const QString& title);  // up to two letters or digits, "?" when the title has none
+
 // ---- card --------------------------------------------------------------------
 class Card : public QFrame {
     Q_OBJECT
@@ -231,6 +241,12 @@ public:
     IconTile(const QString& iconName, int px = 40, QWidget* parent = nullptr);
     void setIconName(const QString& iconName);
     void setTone(Tone tone);
+    Tone tone() const { return m_tone; }
+    bool isToned() const { return m_toned; }
+    // The page header's tile: the gradient tint over a raised square with a
+    // gradient outline (stronger than the default tile, which sits on cards).
+    void setAccent(bool on);
+    bool isAccent() const { return m_accent; }
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -240,6 +256,7 @@ private:
     int m_px;
     Tone m_tone = Tone::Info;
     bool m_toned = false;
+    bool m_accent = false;
 };
 
 // ---- switch --------------------------------------------------------------------

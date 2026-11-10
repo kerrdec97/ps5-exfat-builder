@@ -7,8 +7,9 @@
 // stay cheap; it reports its height for a width, so it sits in a page's scroll
 // area and grows with its content.
 //
-// Covers: the item's cover file, cut to a square; without one, a tile in the
-// signature gradient with the title's initials.
+// Covers: the item's cover file, cut to a square; without one, the generated
+// cover of ui::paintCoverPlaceholder() (the title's initials on a gradient
+// picked by the title ID).
 
 #include "app/ui/Widgets.h"
 
@@ -31,6 +32,7 @@ struct GridItem {
     QString badge;        // list only, e.g. "Not backported"
     Tone badgeTone = Tone::Neutral;
     QString tooltip;
+    QString coverId;      // what picks the generated cover's colour: the title ID ("" = the title)
 };
 
 class LibraryGrid : public QWidget {

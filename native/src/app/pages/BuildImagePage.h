@@ -133,6 +133,7 @@ private:
     void applyLiveCpuLimit();
     void pickFromDlcEmu();
     void onPackageTypeChanged();
+    void updateStartHint();
     enum class PackageType { App, Addon, Update, Backport };
     QString packageType() const;   // the tile's value: app / addon / update / backport
     PackageType packageTypeKind() const;

@@ -57,6 +57,7 @@ private:
     void updateAdvancedSummary();
     void fitLabels();
     void setCompactList(bool compact); // icon-only section list on narrow windows
+    void syncSectionBar(bool animate); // the section list's one sliding selection bar
     void importLegacy();
     void importLegacyFrom(const QString& path);
     void resetAll();
@@ -76,6 +77,8 @@ private:
     QVBoxLayout* m_sectionLayout;
     QHash<QString, QAbstractButton*> m_sectionButtons;
     QHash<QString, ui::Badge*> m_sectionBadges;
+    QWidget* m_sectionBar = nullptr;
+    ui::motion::Value* m_sectionBarY = nullptr;
     QWidget* m_pane;
     QVBoxLayout* m_paneLayout;
     QLabel* m_secTitle;

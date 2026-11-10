@@ -40,13 +40,13 @@ protected:
         clip.addRoundedRect(r, radius::lg, radius::lg);
         p.setClipPath(clip);
         QLinearGradient base(r.topLeft(), r.bottomLeft());
-        base.setColorAt(0, QColor(0x15, 0x1a, 0x27));
+        base.setColorAt(0, color::bg_2_hi);
         base.setColorAt(1, color::bg_2);
         p.fillRect(r, base);
         QRadialGradient glow(QPointF(r.left() + 70, r.center().y()), 220);
-        glow.setColorAt(0, QColor(0x3d, 0x7b, 0xff, 60));
-        glow.setColorAt(0.5, QColor(0x8b, 0x5c, 0xf6, 28));
-        glow.setColorAt(1, QColor(0x8b, 0x5c, 0xf6, 0));
+        glow.setColorAt(0, withAlpha(color::accent, 60));
+        glow.setColorAt(0.5, withAlpha(color::accent_2, 28));
+        glow.setColorAt(1, withAlpha(color::accent_2, 0));
         p.fillRect(r, glow);
         p.setClipping(false);
         p.setPen(QPen(color::border_2, 1));

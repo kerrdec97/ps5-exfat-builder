@@ -47,16 +47,14 @@ bool isInput(const QString& p)
     return p.endsWith(QStringLiteral(".ini"), Qt::CaseInsensitive) || p.endsWith(QStringLiteral(".pkg"), Qt::CaseInsensitive);
 }
 
-QPixmap placeholderIcon()
+// An entry without an icon0.png: the generated cover the Library uses, in the
+// colour of the game the add-on belongs to (its title ID).
+QPixmap placeholderIcon(const QString& title, const QString& titleId)
 {
     QPixmap pm(40, 40);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setBrush(color::bg_3);
-    p.setPen(Qt::NoPen);
-    p.drawRoundedRect(QRectF(0, 0, 40, 40), 6, 6);
-    icon(QStringLiteral("package"), color::fg_4).paint(&p, QRect(10, 10, 20, 20));
+    paintCoverPlaceholder(p, QRectF(0, 0, 40, 40), title, titleId, 6);
     return pm;
 }
 
@@ -239,6 +237,7 @@ void DlcPage::buildListCard()
     card->body()->addWidget(m_loadRow);
 
     auto* logTitle = new Disclosure(QStringLiteral("Conversion log"), QString(), card);
+    logTitle->setPlain(true); // a row of this card, not a plate in it
     m_log = new QPlainTextEdit(logTitle);
     m_log->setReadOnly(true);
     m_log->setMinimumHeight(140);
@@ -522,7 +521,7 @@ void DlcPage::refreshRow(int r)
         return;
     const Row& row = m_rows[size_t(r)];
     m_syncing = true;
-    m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon() : row.icon));
+    m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon(row.item.title, row.item.titleId) : row.icon));
     m_table->item(r, IconCol)->setToolTip(QStringLiteral("Double-click to choose icon0.png"));
     m_table->item(r, TitleCol)->setText(row.item.title);
     m_table->item(r, TitleCol)->setToolTip(plainTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
@@ -677,6 +676,9 @@ void DlcPage::updateState()
         m_countBadge->set(QStringLiteral("Nothing added"), Tone::Neutral);
     m_output->setPlaceholder(m_rows.empty() ? QStringLiteral("A \"DLC packages\" folder next to the first input")
                                             : nativePath(outputFolder()));
+    // What is known to be missing, in validateForm()'s words.
+    setStartHint(!any ? QStringLiteral("Add DLC INIs or DLC packages first.")
+                      : m_loading > 0 ? QStringLiteral("Packages are still being read. Try again in a moment.") : QString());
     const DependencyInfo info = m_ctx.dependencies().last(QStringLiteral("dlc.fpkgcli"));
     if (info.id.isEmpty()) {
         m_engineBadge->set(QStringLiteral("Checking\u2026"), Tone::Neutral);

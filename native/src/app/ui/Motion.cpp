@@ -5,6 +5,8 @@
 #include <QEvent>
 #include <QWidget>
 
+#include <algorithm>
+
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -161,6 +163,60 @@ void HoverFade::reset()
     m_current = m_previous = -1;
     m_in.jumpTo(0.0);
     m_out.jumpTo(0.0);
+}
+
+// ---- Pulse -----------------------------------------------------------------------
+
+Pulse::Pulse(QWidget* owner, int periodMs) : QObject(owner), m_owner(owner), m_period(std::max(200, periodMs))
+{
+    m_timer.setInterval(50); // 20 frames a second are plenty for a slow swing of a few pixels
+    connect(&m_timer, &QTimer::timeout, this, &Pulse::tick);
+    owner->installEventFilter(this);
+}
+
+void Pulse::setActive(bool on)
+{
+    if (on == m_active)
+        return;
+    m_active = on;
+    sync();
+}
+
+void Pulse::sync()
+{
+    const bool run = m_active && m_owner->isVisible() && enabled();
+    if (run == m_timer.isActive())
+        return;
+    if (run) {
+        m_clock.start();
+        m_timer.start();
+        return;
+    }
+    m_timer.stop();
+    if (m_value != 0.0) {
+        m_value = 0.0;
+        m_owner->update();
+    }
+}
+
+void Pulse::tick()
+{
+    if (!enabled() || !m_owner->isVisible()) { // switched off in Windows meanwhile
+        sync();
+        return;
+    }
+    // A triangle 0 -> 1 -> 0 over one period, eased at both ends.
+    const qreal t = qreal(m_clock.elapsed() % m_period) / m_period;
+    const qreal tri = t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0;
+    m_value = tri * tri * (3.0 - 2.0 * tri);
+    m_owner->update();
+}
+
+bool Pulse::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_owner && (event->type() == QEvent::Show || event->type() == QEvent::Hide))
+        sync();
+    return QObject::eventFilter(watched, event);
 }
 
 } // namespace fw::ui::motion

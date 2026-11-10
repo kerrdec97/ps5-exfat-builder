@@ -3,6 +3,7 @@
 #include "app/AppContext.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
@@ -92,6 +93,14 @@ public:
         placeBadge();
         update();
     }
+    // The selection bar, as the sidebar's items have it. The list draws one
+    // bar for all its rows (it slides between them) and tells them so.
+    QRect barRect() const { return QRect(1, (height() - 18) / 2, 3, 18); }
+    void setExternalBar(bool external)
+    {
+        m_externalBar = external;
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent*) override
@@ -103,8 +112,8 @@ protected:
             p.setPen(Qt::NoPen);
             p.setBrush(accentGradient(r, 46));
             p.drawRoundedRect(r, radius::control, radius::control);
-            p.setBrush(accentGradient(QRectF(0, (height() - 16) / 2.0, 3, 16)));
-            p.drawRoundedRect(QRectF(0, (height() - 16) / 2.0, 3, 16), 1.5, 1.5);
+            if (!m_externalBar)
+                NavItem::paintSelectionBar(p, barRect());
         } else if (underMouse()) {
             p.setPen(Qt::NoPen);
             p.setBrush(color::bg_3);
@@ -137,6 +146,25 @@ private:
     QString m_icon;
     Badge* m_badge = nullptr;
     bool m_compact = false;
+    bool m_externalBar = false;
+};
+
+// The section list's one selection bar: it slides from row to row, like the sidebar's.
+class SectionBar : public QWidget {
+public:
+    explicit SectionBar(QWidget* parent) : QWidget(parent)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setProperty("fwNoRing", true);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        NavItem::paintSelectionBar(p, QRectF(rect()));
+    }
 };
 
 } // namespace
@@ -193,6 +221,8 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         badge->setIconName({});
         badge->hide();
         b->setBadge(badge);
+        b->setExternalBar(true);
+        wrap->installEventFilter(this); // the selection bar follows its row
         wl->addWidget(b);
         group->addButton(b);
         m_sectionButtons.insert(s, b);
@@ -200,6 +230,10 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         m_sectionLayout->addWidget(wrap);
         connect(b, &QAbstractButton::clicked, this, [this, s] { showSection(s); });
     }
+    // One selection bar for all rows, over them: it slides to the section that is opened.
+    m_sectionBar = new SectionBar(m_sectionList);
+    m_sectionBarY = new motion::Value(m_sectionList, 0.0, motion::base);
+    m_sectionBarY->onChange([this] { m_sectionBar->move(m_sectionBar->x(), qRound(m_sectionBarY->value())); });
     // Whole-app actions live under the list, away from the section's own.
     m_sectionLayout->addSpacing(space::lg);
     m_sectionLayout->addWidget(hairline(m_sectionList));
@@ -319,6 +353,7 @@ void SettingsPage::showSection(const QString& section)
     m_section = section;
     if (auto* b = m_sectionButtons.value(section))
         b->setChecked(true);
+    syncSectionBar(true);
     if (!m_search->text().trimmed().isEmpty())
         m_search->clear();
     m_searchDelay->stop(); // the rebuild below is the one; no second one 150 ms later
@@ -350,7 +385,37 @@ bool SettingsPage::eventFilter(QObject* watched, QEvent* event)
         else if (watched == m_columns)
             setCompactList(m_columns->width() < 860);
     }
+    // A row of the section list moved or changed size (first layout, the
+    // icon-only list): the bar follows at once.
+    if ((event->type() == QEvent::Move || event->type() == QEvent::Resize) && watched != m_sectionBar
+        && watched->parent() == m_sectionList)
+        syncSectionBar(false);
     return Page::eventFilter(watched, event);
+}
+
+// Puts the selection bar on the open section's row; `animate`: it slides
+// there from where it is.
+void SettingsPage::syncSectionBar(bool animate)
+{
+    if (!m_sectionBar)
+        return;
+    auto* cur = static_cast<SectionButton*>(m_sectionButtons.value(m_section));
+    if (!cur || !cur->isChecked()) {
+        m_sectionBar->hide();
+        return;
+    }
+    const QRect r = cur->barRect().translated(cur->mapTo(m_sectionList, QPoint(0, 0)));
+    const bool slide = animate && !m_sectionBar->isHidden();
+    m_sectionBar->resize(r.size());
+    if (slide) {
+        m_sectionBar->move(r.x(), m_sectionBar->y());
+        m_sectionBarY->animateTo(r.y());
+    } else {
+        m_sectionBarY->jumpTo(r.y());
+        m_sectionBar->move(r.topLeft());
+    }
+    m_sectionBar->raise();
+    m_sectionBar->show();
 }
 
 void SettingsPage::setCompactList(bool compact)
@@ -447,9 +512,14 @@ void SettingsPage::rebuild()
             }
             m_cardsLayout->addWidget(card);
         }
-        if (n == 0)
-            m_cardsLayout->addWidget(new EmptyState(QStringLiteral("search"), QStringLiteral("No setting matches"),
-                                                    QStringLiteral("Try a shorter word, or browse the sections."), m_cards));
+        if (n == 0) {
+            auto* none = new EmptyState(QStringLiteral("search"), QStringLiteral("No setting matches"),
+                                        QStringLiteral("Try a shorter word, or browse the sections."), m_cards);
+            // Queued: clearing the search rebuilds the cards, this button among them.
+            connect(none->addAction(QStringLiteral("Clear search")), &QPushButton::clicked, this, [this] { m_search->clear(); },
+                    Qt::QueuedConnection);
+            m_cardsLayout->addWidget(none);
+        }
         m_secCaption->setText(n == 0 ? QStringLiteral("Nothing matches “%1”.").arg(query)
                                      : QStringLiteral("%1 setting%2 match “%3”.").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(query));
         refreshDependencyStates();

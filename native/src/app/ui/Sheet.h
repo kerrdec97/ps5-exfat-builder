@@ -44,6 +44,9 @@ public:
     void close(int result = -1);
     bool isOpen() const { return isVisible() && !m_closing; } // not while it fades away after its answer
     int result() const { return m_result; }
+    // The sheet takes its size when it opens and when its window is resized.
+    // Content that changed its height afterwards (a list that filled) calls this.
+    void refit() { relayout(); }
     // Sheets open right now, in any window. The main window's shortcuts, Esc
     // handling and drops stand down while one is up (a sheet is a child
     // widget, not a modal window, so Qt does not block them by itself).
@@ -115,6 +118,7 @@ public:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void paintEvent(QPaintEvent* e) override; // the toasts' soft shadows
 
 private:
     void relayout();

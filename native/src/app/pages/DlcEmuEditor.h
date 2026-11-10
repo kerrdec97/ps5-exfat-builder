@@ -41,6 +41,7 @@ private:
     ui::Badge* m_badge;
     QTableWidget* m_table;
     ui::EmptyState* m_empty;
+    QPushButton* m_emptyChoose; // "Choose the game folder…", while none is chosen
     ui::MessageRow* m_validation;
     QLabel* m_bytes;
     QPushButton* m_add;

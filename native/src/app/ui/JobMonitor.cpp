@@ -4,6 +4,7 @@
 #include "app/models/JobQueueModel.h"
 #include "app/ui/Icons.h"
 #include "app/ui/JobRows.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
@@ -74,9 +75,12 @@ QFont metricFont()
     return f;
 }
 
+// The hero figure: the display font (tabular digits, so it does not shake as
+// it counts), sized for the card.
 QFont percentFont(JobMonitor::Variant v)
 {
-    QFont f = v == JobMonitor::Variant::Wide ? font::title() : font::subtitle();
+    QFont f = font::display();
+    f.setPixelSize(v == JobMonitor::Variant::Wide ? 28 : 18);
     return f;
 }
 
@@ -216,10 +220,64 @@ RateSparkline* MetricTile::sparkline()
 
 // ---- stage list ---------------------------------------------------------------------
 
+// The state mark of one stage row: an icon, or, for the stage that is running,
+// an accent dot whose halo swings slowly. It is the one thing that moves in
+// the list, and it rests while the row is hidden or motion is off.
+class StageMark : public QWidget {
+public:
+    explicit StageMark(QWidget* parent) : QWidget(parent)
+    {
+        setFixedSize(14, 14);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+    void set(const QString& icon, const QColor& color, bool running)
+    {
+        m_icon = icon;
+        m_color = color;
+        m_running = running;
+        if (running && !m_pulse)
+            m_pulse = new motion::Pulse(this);
+        if (m_pulse)
+            m_pulse->setActive(running);
+        update();
+    }
+    bool isPulsing() const { return m_pulse && m_pulse->isRunning(); }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        if (!m_running) {
+            p.drawPixmap(rect(), iconPixmap(m_icon, 14, m_color, devicePixelRatioF()));
+            return;
+        }
+        p.setRenderHint(QPainter::Antialiasing);
+        const QPointF c = QRectF(rect()).center();
+        const qreal s = m_pulse ? m_pulse->value() : 0.0;
+        // The halo grows and thins out, then comes back.
+        p.setPen(Qt::NoPen);
+        p.setBrush(withAlpha(color::accent, int(96 - 72 * s)));
+        p.drawEllipse(c, 4.5 + 2.5 * s, 4.5 + 2.5 * s);
+        p.setBrush(m_color);
+        p.drawEllipse(c, 3.5, 3.5);
+    }
+
+private:
+    QString m_icon;
+    QColor m_color;
+    bool m_running = false;
+    motion::Pulse* m_pulse = nullptr;
+};
+
 StageList::StageList(QWidget* parent) : QWidget(parent)
 {
     m_layout = vbox(this, 0);
     setProperty("fwNoRing", true);
+}
+
+bool StageList::isPulsing() const
+{
+    return std::any_of(m_rows.begin(), m_rows.end(), [](const Row& r) { return r.icon->isPulsing(); });
 }
 
 void StageList::setStages(const QStringList& names)
@@ -237,8 +295,7 @@ void StageList::setStages(const QStringList& names)
         row.widget = new QWidget(this);
         row.widget->setFixedHeight(m_compact ? 22 : 26);
         auto* h = hbox(row.widget, space::sm);
-        row.icon = new QLabel(row.widget);
-        row.icon->setFixedSize(14, 14);
+        row.icon = new StageMark(row.widget);
         row.name = new ElideLabel(n, Qt::ElideRight, row.widget);
         row.name->setFont(font::body());
         row.name->setToolTip(plainTip(n));
@@ -316,7 +373,7 @@ void StageList::update(const ProgressSnapshot& p, JobState state)
         if (shown == row.shown)
             continue;
         row.shown = shown;
-        row.icon->setPixmap(iconPixmap(icon, 14, c, devicePixelRatioF()));
+        row.icon->set(icon, c, row.status == QLatin1String("running"));
         row.name->setFont(f);
         setTextColor(row.name, nameColor);
         row.time->setText(time);
@@ -333,6 +390,43 @@ QStringList StageList::texts() const
 }
 
 // ---- monitor ------------------------------------------------------------------------
+
+namespace {
+
+// The result block. For a job that succeeded it is a success-tinted plate
+// around what the job made and what the verification found; otherwise it is
+// not painted at all (a failure brings its own danger-tinted bar).
+class ResultPlate : public QWidget {
+public:
+    using QWidget::QWidget;
+    void setTinted(bool on)
+    {
+        if (on == m_tinted)
+            return;
+        m_tinted = on;
+        setProperty("fwTinted", on);
+        if (layout())
+            layout()->setContentsMargins(on ? QMargins(space::md, space::sm, space::md, space::sm) : QMargins());
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        if (!m_tinted)
+            return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(toneLine(Tone::Ok), 1));
+        p.setBrush(toneTint(Tone::Ok));
+        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
+    }
+
+private:
+    bool m_tinted = false;
+};
+
+} // namespace
 
 JobMonitor::JobMonitor(AppContext& ctx, LogModel& logs, Variant variant, QWidget* parent)
     : Card(parent, Card::Variant::Regular), m_ctx(ctx), m_logs(logs), m_variant(variant)
@@ -503,7 +597,7 @@ void JobMonitor::build()
     }
 
     // ---- result
-    m_result = new QWidget(this);
+    m_result = new ResultPlate(this);
     m_resultLayout = vbox(m_result, 4);
     m_result->hide();
     l->addWidget(m_result);
@@ -1040,6 +1134,17 @@ void JobMonitor::rebuildResult(const JobRecord& r)
         delete it->widget();
         delete it;
     }
+    // A failure leads with its error, in the danger-tinted bar; what a
+    // successful job made sits on a success-tinted plate.
+    const bool hasError = r.error && !r.error->isCancelled();
+    if (hasError) {
+        auto* bar = new InfoBar(Tone::Err, m_result);
+        bar->setTitle(r.state == JobState::Interrupted ? QStringLiteral("Interrupted") : QStringLiteral("Failed"));
+        bar->setMessage(r.error->message);
+        auto* link = bar->addLink(QStringLiteral("Open in Logs"));
+        connect(link, &Link::activated, this, [this] { emit openLogsRequested(m_id); });
+        m_resultLayout->addWidget(bar);
+    }
     if (r.outcome) {
         if (r.outcome->verification != Verification::NotRun) {
             auto* row = new MessageRow(m_result);
@@ -1070,14 +1175,7 @@ void JobMonitor::rebuildResult(const JobRecord& r)
             m_resultLayout->addWidget(row);
         }
     }
-    if (r.error && !r.error->isCancelled()) {
-        auto* bar = new InfoBar(Tone::Err, m_result);
-        bar->setTitle(r.state == JobState::Interrupted ? QStringLiteral("Interrupted") : QStringLiteral("Failed"));
-        bar->setMessage(r.error->message);
-        auto* link = bar->addLink(QStringLiteral("Open in Logs"));
-        connect(link, &Link::activated, this, [this] { emit openLogsRequested(m_id); });
-        m_resultLayout->addWidget(bar);
-    }
+    static_cast<ResultPlate*>(m_result)->setTinted(r.state == JobState::Succeeded && !hasError && m_resultLayout->count() > 0);
     m_result->setVisible(m_resultLayout->count() > 0);
 }
 

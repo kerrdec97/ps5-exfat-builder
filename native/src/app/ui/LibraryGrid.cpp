@@ -14,7 +14,6 @@
 #include <QPainterPath>
 #include <QCache>
 #include <QPointer>
-#include <QRegularExpression>
 #include <QScrollArea>
 #include <QToolTip>
 
@@ -35,33 +34,11 @@ constexpr int kRow = 56;
 constexpr int kListCover = 40;
 constexpr int kChipGap = 4;
 
-QColor mix(const QColor& a, const QColor& b, qreal t)
-{
-    return QColor::fromRgbF(float(a.redF() * (1 - t) + b.redF() * t), float(a.greenF() * (1 - t) + b.greenF() * t),
-                            float(a.blueF() * (1 - t) + b.blueF() * t), 1.0f);
-}
-
 QFont headerFont()
 {
     QFont f = font::caption();
     f.setWeight(QFont::DemiBold);
     return f;
-}
-
-QString initials(const QString& title)
-{
-    QString out;
-    static const QRegularExpression separators(QStringLiteral("[\\s:\\-_]+")); // once, not per tile per paint
-    for (const QString& w : title.split(separators, Qt::SkipEmptyParts)) {
-        for (const QChar c : w)
-            if (c.isLetterOrNumber()) {
-                out += c.toUpper();
-                break;
-            }
-        if (out.size() == 2)
-            break;
-    }
-    return out.isEmpty() ? QStringLiteral("?") : out;
 }
 
 // Covers are read from disk once per file: a thumbnail (short side at most
@@ -339,31 +316,8 @@ void LibraryGrid::paintCover(QPainter& p, const GridItem& it, const QRectF& r, q
     if (!pm.isNull()) {
         p.drawPixmap(r, pm, QRectF(QPointF(0, 0), QSizeF(pm.size())));
     } else {
-        // A generated tile: the signature gradient at a per-title angle, the initials on top.
-        const uint h = uint(qHash(it.title.isEmpty() ? it.key : it.title));
-        const qreal angle = (h % 360) * 3.14159265358979 / 180.0;
-        const QPointF c = r.center();
-        const qreal len = std::max(r.width(), r.height()) * 0.75;
-        QLinearGradient g(c - QPointF(std::cos(angle) * len, std::sin(angle) * len), c + QPointF(std::cos(angle) * len, std::sin(angle) * len));
-        const qreal depth = 0.38 + (h % 7) * 0.05;
-        g.setColorAt(0, mix(color::accent, color::bg_2, depth));
-        g.setColorAt(1, mix(color::accent_2, color::bg_2, depth + 0.1));
-        p.fillRect(r, g);
-        QRadialGradient glow(QPointF(r.left() + r.width() * 0.25, r.top() + r.height() * 0.2), r.width() * 0.9);
-        QColor hi = color::accent_hi;
-        hi.setAlpha(46);
-        glow.setColorAt(0, hi);
-        hi.setAlpha(0);
-        glow.setColorAt(1, hi);
-        p.fillRect(r, glow);
-        QFont f = font::display();
-        f.setPixelSize(std::max(12, int(r.height() * (roundBottom ? 0.36 : 0.30))));
-        f.setWeight(QFont::Bold);
-        p.setFont(f);
-        QColor ink = color::on_accent;
-        ink.setAlpha(230);
-        p.setPen(ink);
-        p.drawText(r, Qt::AlignCenter, initials(it.title));
+        // A generated cover (the clip above gives it its corners).
+        paintCoverPlaceholder(p, r, it.title, it.coverId.isEmpty() ? (it.title.isEmpty() ? it.key : it.title) : it.coverId, 0);
         if (!roundBottom && r.width() > 100) {
             QColor faint = color::on_accent;
             faint.setAlpha(150);

@@ -77,6 +77,8 @@ private:
     RateSparkline* m_spark = nullptr;
 };
 
+class StageMark; // a row's state glyph (JobMonitor.cpp)
+
 // The stage timeline: one row per phase with its state glyph and time.
 class StageList : public QWidget {
     Q_OBJECT
@@ -88,11 +90,14 @@ public:
     // state: the job state; p.phaseIndex is the current stage.
     void update(const ProgressSnapshot& p, JobState state);
     QStringList texts() const; // "Packing · 2 min 10 s · running" per row (tests)
+    // The running stage's dot is moving right now (tests): only while the
+    // list is on screen, a stage runs and motion is on.
+    bool isPulsing() const;
 
 private:
     struct Row {
         QWidget* widget;
-        QLabel* icon;
+        StageMark* icon;
         ElideLabel* name;
         QLabel* time;
         QString status;
@@ -130,6 +135,10 @@ public:
     QString percentText() const;
     QString detailText() const;
     QStringList stageTexts() const { return m_stages->texts(); }
+    bool isStagePulsing() const { return m_stages->isPulsing(); }
+    // The result block; its property "fwTinted" says whether it is the
+    // success-tinted plate of a job that succeeded.
+    QWidget* resultBlock() const { return m_result; }
     QStringList metricValues() const; // elapsed, remaining, speed, done, stage
     LogConsole* console() const { return m_console; }
     QPushButton* cancelButton() const { return m_cancel; }

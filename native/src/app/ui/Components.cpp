@@ -4,6 +4,7 @@
 #include "app/ui/Motion.h"
 #include "app/ui/Style.h"
 
+#include <QAbstractScrollArea>
 #include <QAccessible>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -12,7 +13,9 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QRadialGradient>
+#include <QScopeGuard>
 #include <QTextLayout>
 #include <QVBoxLayout>
 
@@ -50,6 +53,8 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
     return out;
 }
 
+} // namespace
+
 void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr)
 {
     p.setPen(Qt::NoPen);
@@ -60,7 +65,100 @@ void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr)
                  iconPixmap(QStringLiteral("check"), is, color::on_accent, dpr));
 }
 
-} // namespace
+// ---- SelectionGlow ----------------------------------------------------------------------
+
+SelectionGlow::SelectionGlow(QWidget* target) : QWidget(target->parentWidget()), m_target(target)
+{
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setFocusPolicy(Qt::NoFocus);
+    setProperty("fwNoRing", true);
+    // It dies with its target, wherever the target is moved to.
+    connect(target, &QObject::destroyed, this, &QObject::deleteLater);
+    follow();
+}
+
+void SelectionGlow::setItemRect(const QRectF& r, qreal radius)
+{
+    if (r == m_rect && qFuzzyCompare(radius + 1.0, m_radius + 1.0))
+        return;
+    m_rect = r;
+    m_radius = radius;
+    update();
+}
+
+void SelectionGlow::follow()
+{
+    // (The target may be gone while this object still waits for its own deletion.)
+    if (m_following || !m_target)
+        return;
+    m_following = true;
+    const auto done = qScopeGuard([this] { m_following = false; });
+    // The glow needs room around the target. A tile widget often fills its
+    // parent to the edge (a plain container of a layout), so the glow lives
+    // in the nearest ancestor that has the room, under the branch the target
+    // is in; the containers in between paint nothing.
+    QWidget* host = m_target->parentWidget();
+    QWidget* branch = m_target;
+    QList<QPointer<QWidget>> chain{m_target};
+    while (host) {
+        chain << host;
+        const QRect r = QRect(m_target->mapTo(host, QPoint(0, 0)), m_target->size()).adjusted(-kSpread, -kSpread, kSpread, kSpread);
+        QWidget* up = host->parentWidget();
+        const auto* area = up ? qobject_cast<QAbstractScrollArea*>(up->parentWidget()) : nullptr;
+        if (host->rect().contains(r) || !up || host->isWindow() || (area && area->viewport() == up))
+            break; // room enough, or as far up as it may go (a window, the content of a scroll area)
+        branch = host;
+        host = up;
+    }
+    // Whatever moves, resizes, hides or re-parents anything on the way up moves the glow.
+    for (const QPointer<QWidget>& w : std::as_const(m_chain))
+        if (w && !chain.contains(w))
+            w->removeEventFilter(this);
+    for (const QPointer<QWidget>& w : std::as_const(chain))
+        if (!m_chain.contains(w))
+            w->installEventFilter(this);
+    m_chain = chain;
+    if (!host)
+        return;
+    if (parentWidget() != host)
+        setParent(host);
+    setGeometry(QRect(m_target->mapTo(host, QPoint(0, 0)), m_target->size()).adjusted(-kSpread, -kSpread, kSpread, kSpread));
+    stackUnder(branch);
+    setVisible(m_target->isVisibleTo(host));
+}
+
+bool SelectionGlow::eventFilter(QObject* watched, QEvent* event)
+{
+    switch (event->type()) {
+    case QEvent::Move:
+    case QEvent::Resize:
+    case QEvent::ShowToParent:
+    case QEvent::HideToParent:
+    case QEvent::ParentChange:
+        if (watched != this)
+            follow();
+        break;
+    default:
+        break;
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void SelectionGlow::paintEvent(QPaintEvent*)
+{
+    if (m_rect.isEmpty())
+        return;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setBrush(Qt::NoBrush);
+    // Rings that fade outwards from the tile's edge (18 % there), one per pixel.
+    const QRectF r = m_rect.translated(kSpread, kSpread);
+    for (int i = 0; i < kSpread; ++i) {
+        const qreal t = 1.0 - qreal(i) / kSpread;
+        p.setPen(QPen(QBrush(accentGradient(r, int(46 * t * t))), 1.5));
+        p.drawRoundedRect(r.adjusted(-i - 0.5, -i - 0.5, i + 0.5, i + 0.5), m_radius + i, m_radius + i);
+    }
+}
 
 // ---- ChoiceTiles ----------------------------------------------------------------------
 
@@ -80,6 +178,7 @@ ChoiceTiles::ChoiceTiles(QWidget* parent) : QWidget(parent)
     setSizePolicy(sp);
     setProperty("fwNoRing", true); // the selected tile shows the focus itself
     m_hover = new motion::HoverFade(this);
+    m_glow = new SelectionGlow(this);
 }
 
 QString ChoiceTiles::choiceTitle(int index) const
@@ -245,6 +344,10 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
             p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
         }
     }
+    // The selected tile's soft glow lies outside the tile: its own widget
+    // draws it, around wherever the tile was just painted.
+    m_glow->setItemRect(m_current >= 0 && m_current < count() ? QRectF(tileRect(m_current)).adjusted(0.5, 0.5, -0.5, -0.5) : QRectF(),
+                        radius::md);
 }
 
 void ChoiceTiles::mousePressEvent(QMouseEvent* e)
@@ -483,6 +586,20 @@ Disclosure::Disclosure(const QString& title, const QString& captionText, QWidget
     setExpanded(false);
 }
 
+void Disclosure::setPlain(bool plain)
+{
+    if (plain == m_plain)
+        return;
+    m_plain = plain;
+    // Inside a card it is a row of that card, under a hairline: no plate of
+    // its own, no side padding, a quieter title.
+    m_header->layout()->setContentsMargins(plain ? QMargins(0, space::md, 0, space::sm) : QMargins(space::lg, 14, space::lg, 14));
+    m_header->setProperty("fwRadius", plain ? radius::sm : radius::md);
+    m_title->setFont(plain ? font::bodyStrong() : font::subtitle());
+    m_body->setContentsMargins(plain ? QMargins(0, 0, 0, 0) : QMargins(space::lg, 0, space::lg, space::lg));
+    update();
+}
+
 void Disclosure::setExpanded(bool on)
 {
     m_expanded = on;
@@ -546,6 +663,11 @@ void Disclosure::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (m_plain) {
+        // A row of the card it sits in: only a hairline above it.
+        p.fillRect(QRectF(0, 0, width(), 1), color::border_1);
+        return;
+    }
     paintPlate(p, r, radius::md, m_expanded ? 0.0 : m_hover->value());
     if (m_expanded) {
         p.fillRect(QRectF(r.left() + space::lg, m_header->geometry().bottom(), r.width() - 2 * space::lg, 1), color::border_1);
@@ -643,11 +765,21 @@ void StatTile::setValue(const QString& value, Tone tone)
 {
     m_value->setText(value);
     setTextColor(m_value, tone == Tone::Neutral ? color::fg_0 : toneText(tone));
+    if (m_iconToneSet)
+        return; // the page decides the tile's tone itself
     if (tone == Tone::Neutral || tone == Tone::Info)
         m_tile->setTone(Tone::Info);
     else
         m_tile->setTone(tone);
 }
+
+void StatTile::setIconTone(Tone tone)
+{
+    m_iconToneSet = true;
+    m_tile->setTone(tone);
+}
+
+Tone StatTile::iconTone() const { return m_tile->isToned() ? m_tile->tone() : Tone::Info; }
 
 void StatTile::setCaption(const QString& caption)
 {

@@ -51,7 +51,15 @@ private:
     void onProgress(int generation, int done, int total, int found);
     void onFinished(int generation, const Result<std::vector<ps5::DiscoveredConsole>>& result);
     void setResults(std::vector<ps5::DiscoveredConsole> results);
+    void fitArea();
 
+public:
+    // The result list's height: its rows, between these (three rows, five rows).
+    static constexpr int kAreaMin = 148, kAreaMax = 220;
+    QWidget* resultArea() const { return m_area; }
+
+private:
+    QWidget* m_area;
     ui::ProgressBar* m_bar;
     QLabel* m_status;
     QTableWidget* m_table;

@@ -1530,6 +1530,274 @@ private slots:
         QTRY_VERIFY(!toast);
     }
 
+    // ---- page pass: covers, tiles, glow, pulse, toasts ----------------------------------------
+
+    // A game without cover art gets one of six gradients, and always the same
+    // one for the same title ID: on every run, in every list, whatever the
+    // case or the spaces around it.
+    void coverPlaceholderIsStableForAnId()
+    {
+        using namespace theme;
+        // Pinned: FNV-1a over the ID. A change of the hash would recolour every library.
+        QCOMPARE(coverIndex(QStringLiteral("PPSA01325")), 0);
+        QCOMPARE(coverIndex(QStringLiteral("PPSA26344")), 4);
+        QCOMPARE(coverIndex(QStringLiteral("PPSA01535")), 3);
+        QCOMPARE(coverIndex(QStringLiteral("PPSA01474")), 1);
+        QCOMPARE(coverIndex(QStringLiteral("  ppsa01474 ")), 1);
+        QCOMPARE(coverIndex(QStringLiteral("Demon's Souls")), 4);
+        for (const QString& id : {QStringLiteral("PPSA00001"), QStringLiteral("CUSA12345"), QString(), QStringLiteral("日本語")}) {
+            const int i = coverIndex(id);
+            QVERIFY(i >= 0 && i < cover::count);
+            QCOMPARE(coverIndex(id), i);
+        }
+        QCOMPARE(coverInitials(QStringLiteral("Demon's Souls")), QStringLiteral("DS"));
+        QCOMPARE(coverInitials(QStringLiteral("Ratchet & Clank: Rift Apart")), QStringLiteral("RC"));
+        QCOMPARE(coverInitials(QStringLiteral("returnal")), QStringLiteral("R"));
+        QCOMPARE(coverInitials(QStringLiteral("  —  ")), QStringLiteral("?"));
+
+        // White initials are readable on every stop of every gradient.
+        auto onWhite = [](const QColor& c) {
+            auto lin = [](qreal v) { return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); };
+            const qreal l = 0.2126 * lin(c.redF()) + 0.7152 * lin(c.greenF()) + 0.0722 * lin(c.blueF());
+            return 1.05 / (l + 0.05);
+        };
+        for (int i = 0; i < cover::count; ++i) {
+            QVERIFY2(onWhite(cover::stops[i].from) >= 4.5, qPrintable(cover::stops[i].from.name()));
+            QVERIFY2(onWhite(cover::stops[i].to) >= 4.5, qPrintable(cover::stops[i].to.name()));
+            const QGradientStops stops = cover::gradient(i).stops();
+            QCOMPARE(stops.first().second, cover::stops[i].from);
+            QCOMPARE(stops.last().second, cover::stops[i].to);
+        }
+        QCOMPARE(cover::gradient(cover::count + 2).stops(), cover::gradient(2).stops()); // taken modulo
+        QVERIFY(onWhite(color::danger_fill) >= 4.5);
+        QVERIFY(onWhite(color::danger_fill_pressed) >= 4.5);
+
+        // The same ID paints the same picture; another one, another gradient.
+        const auto render = [](const QString& title, const QString& id) {
+            QImage img(40, 40, QImage::Format_ARGB32_Premultiplied);
+            img.fill(color::bg_2);
+            QPainter p(&img);
+            paintCoverPlaceholder(p, QRectF(img.rect()), title, id, 6);
+            return img;
+        };
+        const QImage a = render(QStringLiteral("Astro Bot"), QStringLiteral("PPSA01325"));
+        QCOMPARE(render(QStringLiteral("Astro Bot"), QStringLiteral("PPSA01325")), a);
+        QVERIFY(render(QStringLiteral("Astro Bot"), QStringLiteral("PPSA01535")) != a);
+        // Without an ID the title decides.
+        QCOMPARE(render(QStringLiteral("Demon's Souls"), QString()), render(QStringLiteral("Demon's Souls"), QStringLiteral("Demon's Souls")));
+        // The corner is the card's (rounded), the middle of the left edge the gradient's.
+        QCOMPARE(a.pixelColor(0, 0), color::bg_2);
+        QVERIFY(a.pixelColor(1, 20) != color::bg_2);
+
+        // The Library grid takes the colour from the item's cover ID, not from its path.
+        GridItem one;
+        one.key = QStringLiteral("D:/Games/a");
+        one.title = QStringLiteral("Astro Bot");
+        one.coverId = QStringLiteral("PPSA01325");
+        GridItem two = one;
+        two.key = QStringLiteral("E:/Other/b");
+        auto* grid = add<LibraryGrid>();
+        grid->setMode(LibraryGrid::Mode::List);
+        grid->setItems({one, two});
+        grid->resize(700, grid->heightForWidth(700));
+        QCoreApplication::processEvents();
+        const QImage rows = grid->grab().toImage();
+        // The two rows' covers (40 px, after the check box) are the same picture.
+        const int rowH = 56, top = theme::size::tableHeader;
+        const QRect first(42, top + (rowH - 40) / 2, 40, 40);
+        QCOMPARE(rows.copy(first.adjusted(4, 4, -4, -4)), rows.copy(first.translated(0, rowH).adjusted(4, 4, -4, -4)));
+    }
+
+    // The selected tile's glow is drawn by a sibling under the tile widget:
+    // it follows the widget, never changes its geometry, and goes with it.
+    void selectionGlowFollowsItsWidget()
+    {
+        auto* host = add<QWidget>();
+        host->setFixedSize(400, 200);
+        auto* tiles = new QWidget(host);
+        tiles->setGeometry(40, 30, 200, 100);
+        tiles->show();
+        QPointer<SelectionGlow> glow = new SelectionGlow(tiles);
+        const int s = SelectionGlow::kSpread;
+        QCOMPARE(glow->parentWidget(), host);
+        QCOMPARE(glow->geometry(), tiles->geometry().adjusted(-s, -s, s, s));
+        QVERIFY(glow->testAttribute(Qt::WA_TransparentForMouseEvents));
+        // Under the tiles: the tiles' own child index is higher.
+        QVERIFY(host->children().indexOf(glow.data()) < host->children().indexOf(tiles));
+        tiles->setGeometry(60, 50, 220, 90);
+        QCOMPARE(glow->geometry(), tiles->geometry().adjusted(-s, -s, s, s));
+        QCOMPARE(tiles->geometry(), QRect(60, 50, 220, 90));
+        tiles->hide();
+        QVERIFY(glow->isHidden());
+        tiles->show();
+        QVERIFY(!glow->isHidden());
+
+        // It paints outside the tile's rectangle only when there is one.
+        glow->setItemRect(QRectF(0.5, 0.5, 99, 89), theme::radius::md);
+        QCoreApplication::processEvents();
+        QImage with(glow->size(), QImage::Format_ARGB32_Premultiplied);
+        with.fill(Qt::transparent);
+        glow->render(&with, QPoint(), QRegion(), QWidget::RenderFlags());
+        QVERIFY(with.pixelColor(s - 2, s + 40).alpha() > 0);     // just left of the tile
+        QCOMPARE(with.pixelColor(s + 180, s + 40).alpha(), 0);   // far from it
+        glow->setItemRect({}, 0);
+        with.fill(Qt::transparent);
+        glow->render(&with, QPoint(), QRegion(), QWidget::RenderFlags());
+        QCOMPARE(with.pixelColor(s - 2, s + 40).alpha(), 0);
+
+        delete tiles;
+        QTRY_VERIFY(!glow);
+
+        // A tile widget that fills its container to the edge (a plain box of
+        // a layout): the glow lives one level up, where there is room, under
+        // that box, and follows the box as well.
+        auto* outer = add<QWidget>();
+        outer->setFixedSize(400, 200);
+        auto* box = new QWidget(outer);
+        box->setGeometry(30, 30, 200, 100);
+        box->show();
+        auto* flush = new QWidget(box);
+        flush->setGeometry(0, 0, 200, 100);
+        flush->show();
+        QPointer<SelectionGlow> lifted = new SelectionGlow(flush);
+        QCOMPARE(lifted->parentWidget(), outer);
+        QCOMPARE(lifted->geometry(), QRect(30, 30, 200, 100).adjusted(-s, -s, s, s));
+        QVERIFY(outer->children().indexOf(lifted.data()) < outer->children().indexOf(box));
+        box->move(50, 40);
+        QCOMPARE(lifted->geometry(), QRect(50, 40, 200, 100).adjusted(-s, -s, s, s));
+        box->hide();
+        QVERIFY(lifted->isHidden());
+        box->show();
+        QVERIFY(!lifted->isHidden());
+        delete box;
+        QTRY_VERIFY(!lifted);
+
+        // The tile widget is deleted and its container moves before the glow
+        // itself is gone (a page that rebuilds its tiles): nothing is touched.
+        auto* box2 = new QWidget(outer);
+        box2->setGeometry(30, 30, 200, 100);
+        box2->show();
+        auto* tiles2 = new QWidget(box2);
+        tiles2->setGeometry(0, 0, 200, 100);
+        tiles2->show();
+        QPointer<SelectionGlow> orphan = new SelectionGlow(tiles2);
+        delete tiles2;
+        QVERIFY(orphan); // deleted later
+        box2->move(60, 50);
+        box2->resize(180, 90);
+        box2->hide();
+        QTRY_VERIFY(!orphan);
+        delete box2;
+    }
+
+    // The running stage's dot swings only while it is switched on, on screen
+    // and motion is enabled; otherwise no timer runs and it rests at 0.
+    void pulseRunsOnlyWhileShownAndActive()
+    {
+        auto* dot = add<QWidget>();
+        dot->setFixedSize(14, 14);
+        QCoreApplication::processEvents();
+        // Motion off (the offscreen platform): never.
+        auto* still = new motion::Pulse(dot);
+        still->setActive(true);
+        QVERIFY(!still->isRunning());
+        QCOMPARE(still->value(), 0.0);
+        delete still;
+
+        MotionOn on;
+        auto* pulse = new motion::Pulse(dot, 200);
+        QVERIFY(!pulse->isRunning()); // not switched on
+        pulse->setActive(true);
+        QVERIFY(pulse->isRunning());
+        QTRY_VERIFY(pulse->value() > 0.0);
+        QVERIFY(pulse->value() <= 1.0);
+        dot->hide();
+        QVERIFY(!pulse->isRunning());
+        QCOMPARE(pulse->value(), 0.0);
+        dot->show();
+        QVERIFY(pulse->isRunning());
+        pulse->setActive(false);
+        QVERIFY(!pulse->isRunning());
+        QCOMPARE(pulse->value(), 0.0);
+        // Switched on while hidden: it waits for the widget.
+        dot->hide();
+        pulse->setActive(true);
+        QVERIFY(!pulse->isRunning());
+        dot->show();
+        QVERIFY(pulse->isRunning());
+    }
+
+    // A stat tile's mark can carry the state of what it reports, whatever
+    // the value's own colour; a page header's tile is the accent one; header
+    // buttons keep their own width at the right edge; a disclosure inside a
+    // card is a plain row.
+    void tilesHeadersAndPlainDisclosures()
+    {
+        auto* tile = add<StatTile>(QStringLiteral("queue"), QStringLiteral("Queue"));
+        tile->setValue(QStringLiteral("Idle"));
+        QCOMPARE(tile->iconTone(), Tone::Info); // as before: the accent tile
+        tile->setIconTone(Tone::Neutral);
+        QCOMPARE(tile->iconTone(), Tone::Neutral);
+        tile->setValue(QStringLiteral("2 running"), Tone::Info); // the page's tone stays
+        QCOMPARE(tile->iconTone(), Tone::Neutral);
+        tile->setIconTone(Tone::Err);
+        QCOMPARE(tile->iconTone(), Tone::Err);
+
+        auto* header = add<PageHeader>(QStringLiteral("Build image"), QStringLiteral("Turn a game dump into an image."));
+        header->setIcon(QStringLiteral("build"));
+        auto* icon = header->findChild<IconTile*>();
+        QVERIFY(icon && icon->isAccent());
+        auto* action = button(QStringLiteral("New build"), ButtonVariant::Secondary, QStringLiteral("plus"), header);
+        header->addAction(action);
+        m_window->resize(1300, 700);
+        QCoreApplication::processEvents();
+        QTRY_COMPARE(action->width(), action->sizeHint().width()); // not stretched over what the caption leaves
+        QCOMPARE(action->mapTo(header, QPoint(action->width(), 0)).x(), header->width());
+        m_window->resize(900, 700);
+
+        auto* card = add<Card>();
+        auto* fold = new Disclosure(QStringLiteral("Conversion log"), QString(), card);
+        card->body()->addWidget(fold);
+        QVERIFY(!fold->isPlain());
+        fold->setPlain(true);
+        QVERIFY(fold->isPlain());
+        QCOMPARE(fold->body()->contentsMargins(), QMargins());
+        QCoreApplication::processEvents();
+        // No plate of its own: its left edge is the card's fill, with the hairline on top.
+        const QImage img = fold->grab().toImage();
+        QCOMPARE(img.pixelColor(img.width() / 2, 0), theme::color::border_1);
+        fold->setExpanded(true);
+        QVERIFY(fold->isExpanded());
+    }
+
+    // Toasts have a painted shadow: the host is shown only while there is a
+    // toast, lies under them, covers them with room for the shadow, and takes no clicks.
+    void toastsCastAPaintedShadow()
+    {
+        auto* host = add<QWidget>();
+        host->setFixedSize(700, 400);
+        QCoreApplication::processEvents();
+        ToastHost toasts(host);
+        QVERIFY(toasts.isHidden());
+        QVERIFY(toasts.testAttribute(Qt::WA_TransparentForMouseEvents));
+        toasts.show(Tone::Ok, QStringLiteral("Image built"), QStringLiteral("Demon's Souls"), {}, 0);
+        auto* toast = host->findChild<QFrame*>(QStringLiteral("toast"));
+        QVERIFY(toast);
+        QVERIFY(!toasts.isHidden());
+        QVERIFY(toasts.geometry().contains(toast->geometry()));
+        QVERIFY(toasts.geometry().top() < toast->geometry().top() - 8);
+        QVERIFY(host->children().indexOf(&toasts) < host->children().indexOf(toast)); // under it
+        // Something dark is painted just above the toast, nothing far away from it.
+        QImage img(toasts.size(), QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::transparent);
+        toasts.render(&img, QPoint(), QRegion(), QWidget::RenderFlags());
+        const QPoint above = toast->geometry().topLeft() - toasts.pos() + QPoint(toast->width() / 2, -3);
+        QVERIFY(img.pixelColor(above).alpha() > 0);
+        QCOMPARE(img.pixelColor(above).red(), 0);
+        toasts.clear();
+        QVERIFY(toasts.isHidden());
+    }
+
     // ---- file manager -------------------------------------------------------------------
 
     void openInFileManagerReportsAMissingOutput()

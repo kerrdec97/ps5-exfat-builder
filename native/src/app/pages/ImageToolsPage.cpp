@@ -6,6 +6,7 @@
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "engines/gameinfo/Naming.h"
@@ -92,11 +93,18 @@ public:
         setAttribute(Qt::WA_Hover);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         setAccessibleName(QStringLiteral("Action"));
+        m_hover = new motion::HoverFade(this, [this](int i) {
+            if (i >= 0 && i < int(m_items.size()))
+                update(tile(i));
+        });
+        m_glow = new SelectionGlow(this);
     }
     void add(const QString& title, const QString& text, const QString& icon)
     {
         m_items.push_back({title, text, icon, {}, true});
+        m_hover->reset();
         updateGeometry();
+        syncGlow();
     }
     void setEnabledAt(int i, bool on, const QString& tip = {})
     {
@@ -113,6 +121,7 @@ public:
         m_current = i;
         setAccessibleDescription(QStringLiteral("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
         update();
+        syncGlow();
         if (onChanged)
             onChanged(i);
     }
@@ -149,7 +158,7 @@ protected:
             const Item& it = m_items[size_t(i)];
             const QRectF r = QRectF(tile(i)).adjusted(0.5, 0.5, -0.5, -0.5);
             const bool sel = i == m_current;
-            const bool hov = i == m_hover && it.enabled && !sel;
+            const qreal hov = it.enabled && !sel ? m_hover->amount(i) : 0.0; // the hover tint fades
             if (sel) {
                 p.setPen(Qt::NoPen);
                 p.setBrush(color::bg_2);
@@ -160,18 +169,17 @@ protected:
                 p.setBrush(Qt::NoBrush);
                 p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
             } else {
-                p.setPen(QPen(hov ? color::border_4 : color::border_3, 1));
-                p.setBrush(hov ? color::bg_3 : color::bg_2);
-                p.drawRoundedRect(r, radius::md, radius::md);
+                // The tiles sit on the page, between two cards: plates like them.
+                paintPlate(p, r, radius::md, hov);
             }
-            const QRectF ir(r.left() + 12, r.center().y() - 18, 36, 36);
+            const QRectF ir(r.left() + kPad, r.center().y() - 17, 34, 34);
             p.setPen(Qt::NoPen);
-            p.setBrush(sel ? QBrush(accentGradient(ir)) : QBrush(color::bg_4));
+            p.setBrush(sel ? QBrush(accentFillGradient(ir)) : QBrush(color::bg_4)); // white only on the fill gradient
             p.drawRoundedRect(ir, 10, 10);
             const QColor glyph = sel ? color::on_accent : it.enabled ? color::fg_2 : color::fg_5;
             p.drawPixmap(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18).toRect(), iconPixmap(it.icon, 18, glyph, dpr));
-            const qreal tx = ir.right() + 12;
-            const qreal tw = r.right() - 12 - tx;
+            const qreal tx = ir.right() + kPad;
+            const qreal tw = r.right() - kPad - tx;
             p.setFont(font::bodyStrong());
             p.setPen(it.enabled ? color::fg_0 : color::fg_5);
             p.drawText(QRectF(tx, r.center().y() - 19, tw, 20), Qt::AlignLeft | Qt::AlignVCenter,
@@ -200,17 +208,22 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override
     {
         const int i = at(e->position().toPoint());
-        if (i != m_hover) {
-            m_hover = i;
-            setToolTip(i >= 0 ? m_items[size_t(i)].tip : QString());
+        if (i != m_hover->hovered()) {
+            m_hover->setHovered(i);
+            // Why a tile cannot be chosen, or its second line when a narrow tile cuts it.
+            QString tip = i >= 0 ? m_items[size_t(i)].tip : QString();
+            if (i >= 0 && tip.isEmpty()
+                && QFontMetrics(font::caption()).horizontalAdvance(m_items[size_t(i)].text) > tile(i).width() - 2 * kPad - 34 - kPad - 1)
+                tip = m_items[size_t(i)].text;
+            setToolTip(tip);
             setCursor(i >= 0 && m_items[size_t(i)].enabled ? Qt::PointingHandCursor : Qt::ArrowCursor);
-            update();
         }
     }
-    void leaveEvent(QEvent*) override
+    void leaveEvent(QEvent*) override { m_hover->setHovered(-1); }
+    void resizeEvent(QResizeEvent* e) override
     {
-        m_hover = -1;
-        update();
+        QWidget::resizeEvent(e);
+        syncGlow();
     }
     void keyPressEvent(QKeyEvent* e) override
     {
@@ -227,11 +240,19 @@ protected:
     }
 
 private:
+    // The selected tile's soft glow lies outside the tile: its own widget draws it.
+    void syncGlow()
+    {
+        const bool any = m_current >= 0 && m_current < int(m_items.size());
+        m_glow->setItemRect(any ? QRectF(tile(m_current)).adjusted(0.5, 0.5, -0.5, -0.5) : QRectF(), radius::md);
+    }
     static constexpr int kH = 64;
     static constexpr int kGap = 10;
+    static constexpr int kPad = 10; // around the icon square; 10 leaves the second line room at form width
     std::vector<Item> m_items;
     int m_current = 0;
-    int m_hover = -1;
+    motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades
+    SelectionGlow* m_glow;
 };
 
 ActionBar* bar(QWidget* w) { return static_cast<ActionBar*>(w); }
@@ -839,6 +860,13 @@ void ImageToolsPage::updatePrimary()
         break;
     }
     primaryButton()->setText(text);
+    // What is known to be missing, in validateForm()'s words.
+    if (m_path.isEmpty())
+        setStartHint(QStringLiteral("Open an image first."));
+    else if (m_action == Action::Edit && m_ops.empty() && m_tree.error.isEmpty())
+        setStartHint(QStringLiteral("Stage at least one change."));
+    else
+        setStartHint({});
 }
 
 void ImageToolsPage::updateKinds()

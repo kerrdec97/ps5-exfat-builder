@@ -80,9 +80,10 @@ inline const QColor warn_bg{QStringLiteral("#2e2410")};
 inline const QColor danger{QStringLiteral("#ff5b6b")};
 inline const QColor danger_hi{QStringLiteral("#ff8a95")};
 inline const QColor danger_bg{QStringLiteral("#34141c")};
-inline const QColor danger_fill{QStringLiteral("#e23d50")};
-inline const QColor danger_fill_hover{QStringLiteral("#ef4a5d")};
-inline const QColor danger_fill_pressed{QStringLiteral("#c73245")};
+// The fill of a danger button: white on it is 4.7 (hover 4.1, pressed 5.8).
+inline const QColor danger_fill{QStringLiteral("#d5354a")};
+inline const QColor danger_fill_hover{QStringLiteral("#e0445a")};
+inline const QColor danger_fill_pressed{QStringLiteral("#bd2c40")};
 inline const QColor scrim{3, 4, 9, 170}; // #030409 at 67 %
 inline const QColor highlight{255, 255, 255, 10};      // 1 px inner top edge of a card
 inline const QColor highlight_fill{255, 255, 255, 40}; // the same on a gradient fill
@@ -91,6 +92,11 @@ inline const QColor shadow{0, 0, 0, 255};              // used translucent under
 inline const QColor hero_0{QStringLiteral("#14224d")};
 inline const QColor hero_1{QStringLiteral("#1c1745")};
 inline const QColor hero_2{QStringLiteral("#101222")};
+// The PS5 connect banner's backdrop: deep blue-black, a shade lighter than a
+// card at the top left (fg_0 on it 16.2 to 17.6, fg_3 6.9 to 7.5).
+inline const QColor console_0{QStringLiteral("#121a33")};
+inline const QColor console_1{QStringLiteral("#121526")};
+inline const QColor console_2{QStringLiteral("#0f121d")};
 } // namespace color
 
 // The signature gradient (accent -> accent_2), left to right, for QPainter:
@@ -100,6 +106,29 @@ QLinearGradient accentGradient(const QRectF& r, int alpha = 255);
 QLinearGradient accentFillGradient(const QRectF& r, int alpha = 255);
 // `c` at `alpha` (0..255): tints and translucent outlines made from a token.
 QColor withAlpha(QColor c, int alpha);
+
+// Covers of games without cover art: six gradients of the brand family, so a
+// library of them is not one block repeated. Every stop is dark enough for
+// white initials; white on the lighter / the darker stop:
+//   0 blue 5.7 / 10.3, 1 indigo 6.2 / 11.6, 2 violet 5.8 / 10.9,
+//   3 magenta-violet 5.3 / 10.5, 4 teal-blue 5.1 / 9.7, 5 cyan-blue 4.9 / 9.6
+namespace cover {
+inline constexpr int count = 6;
+struct Stops {
+    QColor from, to; // top left, bottom right
+};
+inline const Stops stops[count] = {
+    {QColor{QStringLiteral("#2a5fd6")}, QColor{QStringLiteral("#1b3a8f")}}, // blue
+    {QColor{QStringLiteral("#4a4fd8")}, QColor{QStringLiteral("#2b2a8c")}}, // indigo
+    {QColor{QStringLiteral("#7446dc")}, QColor{QStringLiteral("#432594")}}, // violet
+    {QColor{QStringLiteral("#a03cc8")}, QColor{QStringLiteral("#5c2182")}}, // magenta-violet
+    {QColor{QStringLiteral("#1a7790")}, QColor{QStringLiteral("#14486b")}}, // teal-blue
+    {QColor{QStringLiteral("#1b76b6")}, QColor{QStringLiteral("#164678")}}, // cyan-blue
+};
+// Gradient `index` (taken modulo `count`), from the top left to the bottom
+// right of whatever it fills (object coordinates).
+QLinearGradient gradient(int index);
+} // namespace cover
 
 // ---- spacing, radii, sizes (px) ----------------------------------------------
 namespace space {

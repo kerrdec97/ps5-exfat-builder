@@ -209,7 +209,11 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         int rows = 0;
         for (int i = 0; i < m_list->topLevelItemCount(); ++i)
             rows += 1 + m_list->topLevelItem(i)->childCount();
-        const int rowH = std::max(m_list->sizeHintForRow(0), font::lineMono + 4);
+        // Every row is as tall as the first (uniform row heights): ask for that
+        // one, as the view will, so no empty band is left under the last row.
+        m_list->ensurePolished();
+        const int firstRow = m_list->topLevelItemCount() > 0 ? m_list->sizeHintForIndex(m_list->indexFromItem(m_list->topLevelItem(0))).height() : 0;
+        const int rowH = firstRow > 0 ? firstRow : font::lineMono + 4;
         const int hostH = host ? host->height() : 900;
         const int maxH = std::clamp(hostH - 430, 140, 360);
         m_list->setFixedHeight(std::clamp(m_list->header()->height() + rows * rowH + 2 * m_list->frameWidth() + 4, 96, maxH));
