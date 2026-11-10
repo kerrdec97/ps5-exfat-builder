@@ -38,8 +38,9 @@ QString bundledFpkgCliDir();
 FpkgCli locateFpkgCli(const QString& configured, const QString& envValue);
 FpkgCli locateFpkgCli(const QString& configured); // env from FW_FPKG_CLI
 
-// The environment fpkg-cli runs with: English messages, no update check
-// prompts, DOTNET_* variables that would redirect its runtime removed.
+// The environment fpkg-cli runs with: English messages (FPKG_LANG=en), and
+// without the DOTNET_STARTUP_HOOKS* and DOTNET_ROOT variables, which could
+// redirect its runtime.
 QProcessEnvironment fpkgCliEnvironment();
 
 // "fpkg-cli info": engine version line ("LibProsperoPkg: 1.2.0") and the

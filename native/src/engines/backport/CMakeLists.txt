@@ -1,4 +1,5 @@
-# Backport engine. Self-contained: it keeps the little game-metadata parsing it
-# needs (param.json / param.sfo for ZIP names and title IDs) in GameMetadata.*
-# instead of depending on the gameinfo module.
+# Readers the Backport tab uses for its game list (fake-signed SELF, the SDK in
+# an executable's param, param.json version fields). Self-contained: it does
+# not depend on the gameinfo module. Backports themselves are made by the
+# bundled PS5 Backport engine, a separate program (see src/app/backport).
 fw_add_module(fw_engine_backport)

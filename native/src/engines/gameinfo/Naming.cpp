@@ -7,10 +7,36 @@
 
 namespace fw::gameinfo {
 
+namespace {
+
+constexpr int kMaxNameCodePoints = 80;
+
+// A surrogate pair is one character.
+void truncateCodePoints(QString& s, int maxPoints)
+{
+    qsizetype units = 0;
+    int points = 0;
+    while (units < s.size() && points < maxPoints) {
+        units += (s.at(units).isHighSurrogate() && units + 1 < s.size()) ? 2 : 1;
+        ++points;
+    }
+    s.truncate(units);
+}
+
+int codePointCount(const QString& s)
+{
+    int points = 0;
+    for (qsizetype i = 0; i < s.size(); ++points)
+        i += (s.at(i).isHighSurrogate() && i + 1 < s.size()) ? 2 : 1;
+    return points;
+}
+
+} // namespace
+
 bool isValidContentId(const QString& contentId)
 {
     static const QRegularExpression re(
-        QStringLiteral("^[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_[0-9]{2}-[A-Z0-9]{16}$"));
+        QStringLiteral("\\A[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_[0-9]{2}-[A-Z0-9]{16}\\z"));
     return re.match(contentId).hasMatch();
 }
 
@@ -21,7 +47,7 @@ QString titleIdFromContentId(const QString& contentId)
 
 bool isValidTitleId(const QString& titleId)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{4}[0-9]{5}$"));
+    static const QRegularExpression re(QStringLiteral("\\A[A-Z]{4}[0-9]{5}\\z")); // \z: "$" would allow a final line feed
     return re.match(titleId).hasMatch();
 }
 
@@ -80,13 +106,7 @@ QString sanitizeTitle(const QString& input)
         name.chop(1);
 
     // Cap at 80 code points (Python slices code points, not UTF-16 units).
-    qsizetype units = 0;
-    int points = 0;
-    while (units < name.size() && points < 80) {
-        units += (name.at(units).isHighSurrogate() && units + 1 < name.size()) ? 2 : 1;
-        ++points;
-    }
-    name.truncate(units);
+    truncateCodePoints(name, kMaxNameCodePoints);
     return name.isEmpty() ? QStringLiteral("game") : name;
 }
 
@@ -116,16 +136,30 @@ QString buildDumpName(const NameParts& parts, NamePreset preset, const NameOptio
     QString titleId = parts.titleId;
     if (options.uppercaseTitleId && !titleId.isEmpty())
         titleId = titleId.toUpper();
+    const QString versionPart = preset == NamePreset::TitleIdTitleVersion && !parts.version.isEmpty()
+                                    ? QStringLiteral(" (") + parts.version + u')'
+                                    : QString();
     QStringList bits;
     if (!titleId.isEmpty())
         bits << titleId;
-    if (preset != NamePreset::TitleId && !parts.title.isEmpty() && parts.title != titleId)
-        bits << parts.title;
+    if (preset != NamePreset::TitleId && !parts.title.isEmpty() && parts.title != titleId) {
+        QString title = parts.title;
+        if (options.sanitize) {
+            // The whole name is capped at 80 characters below: shorten the
+            // title, not the version at the end, to fit.
+            const int room = kMaxNameCodePoints - codePointCount(titleId) - 1 - codePointCount(versionPart);
+            if (room > 0 && codePointCount(title) > room) {
+                truncateCodePoints(title, room);
+                while (!title.isEmpty() && (title.back() == u' ' || title.back() == u'.'))
+                    title.chop(1);
+            }
+        }
+        if (!title.isEmpty())
+            bits << title;
+    }
     if (bits.isEmpty() || titleId.isEmpty())
         return {};
-    QString name = bits.join(u' ');
-    if (preset == NamePreset::TitleIdTitleVersion && !parts.version.isEmpty())
-        name += QStringLiteral(" (") + parts.version + u')';
+    QString name = bits.join(u' ') + versionPart;
     if (options.sanitize) {
         name = sanitizeTitle(name);
         while (!name.isEmpty() && (name.back() == u' ' || name.back() == u'.'))
@@ -158,8 +192,6 @@ QString folderNameProblem(const QString& name)
         return QStringLiteral("The name contains a character Windows does not allow (< > : \" / \\ | ? *).");
     if (name.endsWith(u'.') || name.endsWith(u' '))
         return QStringLiteral("The name ends with a dot or a space, which Windows removes.");
-    if (name == u"." || name == u"..")
-        return QStringLiteral("The name is reserved.");
     static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),
                                              QRegularExpression::CaseInsensitiveOption);
     if (reserved.match(name).hasMatch())
@@ -244,10 +276,12 @@ QString sanitizeImageName(const QString& input)
     }
     name.truncate(units);
     trimEnds(name);
-    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$"),
+    // A device name is reserved with an extension too ("NUL.backup"), so the
+    // underscore goes right after it.
+    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),
                                              QRegularExpression::CaseInsensitiveOption);
-    if (reserved.match(name).hasMatch())
-        name += u'_';
+    if (const auto m = reserved.match(name); m.hasMatch())
+        name.insert(m.capturedEnd(1), u'_');
     return name;
 }
 
@@ -290,16 +324,20 @@ QString renderImageName(ImageNamePreset preset, const QString& customTemplate, c
         // One pass, so a value that looks like a token is not replaced again.
         static const QRegularExpression tokenRe(QStringLiteral("%([A-Za-z]+)%"));
         QString out;
-        qsizetype last = 0;
-        auto it = tokenRe.globalMatch(customTemplate);
-        while (it.hasNext()) {
-            const auto m = it.next();
+        qsizetype last = 0, from = 0;
+        for (;;) {
+            const auto m = tokenRe.match(customTemplate, from);
+            if (!m.hasMatch())
+                break;
             const QString key = m.captured(1).toUpper();
-            if (!tokens.contains(key))
-                continue; // unknown tokens stay as typed
+            if (!tokens.contains(key)) {
+                // Unknown tokens stay as typed; their closing % may open the next token.
+                from = m.capturedEnd() - 1;
+                continue;
+            }
             out += customTemplate.mid(last, m.capturedStart() - last);
             out += tokens.value(key);
-            last = m.capturedEnd();
+            last = from = m.capturedEnd();
         }
         out += customTemplate.mid(last);
         // Empty brackets left by missing values, then whitespace (legacy order).

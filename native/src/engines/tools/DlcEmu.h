@@ -4,8 +4,12 @@
 // original code of this project, ported).
 //
 // The file declares one DLC per [SECTION] and the same section name repeats,
-// so it is modelled as an ordered list of entries; parse → emit is lossless
-// (unknown keys kept). Limits from the dlc_emu README: 32 KiB, 1024 entries,
+// so it is modelled as an ordered list of entries. parse → emit keeps every
+// entry and every key with a value, unknown keys included, but it is not a
+// byte-for-byte round trip: comments, blank lines, keys without a value,
+// lines before the first section and the original key order and letter case
+// of section names are not kept (known keys are written in a fixed order, a
+// repeated key keeps its last value). Limits from the dlc_emu README: 32 KiB, 1024 entries,
 // content_id exactly 36 characters, labels 1-16 alphanumeric, service label
 // 1-6, mount_point at most 15 characters, entitlement key 32 hex digits,
 // download_status from a fixed list.
@@ -55,7 +59,8 @@ Validation validate(const std::vector<Entry>& entries, const QString& app0 = {})
 // Reads <app0>/dlc_emu.ini (empty list if absent).
 Result<std::vector<Entry>> load(const QString& app0);
 // Validates, then writes <app0>/dlc_emu.ini atomically; an existing file is
-// first copied to dlc_emu.ini.bak.
+// first copied to dlc_emu.ini.bak, replacing the backup of the save before
+// (one backup, so the game folder does not fill up with copies).
 Status save(const QString& app0, const std::vector<Entry>& entries);
 
 // ---- offline auto-find ---------------------------------------------------------------

@@ -226,6 +226,39 @@ QByteArray templateParamJson(const QString& cid, const QString& tid, const QStri
     return s.toUtf8();
 }
 
+namespace {
+
+// Which exported INI each item goes into (-1: blocked, none). Items of one
+// input, title ID and publisher prefix share a file; the same INI entry with a
+// second target gets a file of its own. The review text and the export both
+// use this, so they name the same files.
+std::vector<int> iniGroups(const std::vector<DlcItem>& items)
+{
+    std::vector<int> group(items.size(), -1);
+    std::map<QString, int> byKey;
+    int next = 0;
+    for (size_t n = 0; n < items.size(); ++n) {
+        const DlcItem& i = items[n];
+        if (!itemProblem(i, true).isEmpty())
+            continue;
+        QString key = QStringLiteral("%1|%2|%3").arg(i.source.toLower(), i.titleId, i.contentId.left(6));
+        if (auto it = byKey.find(key); it != byKey.end())
+            for (size_t other = 0; other < n; ++other)
+                if (group[other] == it->second && items[other].entry == i.entry
+                    && (items[other].contentId != i.contentId || items[other].title != i.title)) {
+                    key += QStringLiteral("|%1").arg(n);
+                    break;
+                }
+        auto it = byKey.find(key);
+        if (it == byKey.end())
+            it = byKey.emplace(key, next++).first;
+        group[n] = it->second;
+    }
+    return group;
+}
+
+} // namespace
+
 QString buildPlanText(const std::vector<DlcItem>& items, bool iniMode, const QString& output)
 {
     QStringList t;
@@ -245,8 +278,10 @@ QString buildPlanText(const std::vector<DlcItem>& items, bool iniMode, const QSt
                             "field. The PKG source passcode is used for extraction and rebuilt outputs. Default key and "
                             "passcode: 32 zeroes. Official entitlement/signatures are not preserved.");
     std::set<QString> used;
-    std::map<QString, QString> groupPath;
-    for (const DlcItem& i : items) {
+    const std::vector<int> groups = iniMode ? iniGroups(items) : std::vector<int>();
+    std::map<int, QString> groupPath;
+    for (size_t n = 0; n < items.size(); ++n) {
+        const DlcItem& i = items[n];
         t << QString();
         t << QStringLiteral("INPUT: %1%2").arg(native(i.source),
                                                i.entry >= 0 ? QStringLiteral(" [entry %1]").arg(i.entry + 1) : QString());
@@ -263,12 +298,11 @@ QString buildPlanText(const std::vector<DlcItem>& items, bool iniMode, const QSt
         }
         QString out;
         if (iniMode) {
-            const QString key = QStringLiteral("%1|%2|%3").arg(i.source.toLower(), i.titleId, i.contentId.left(6));
-            auto it = groupPath.find(key);
+            auto it = groupPath.find(groups[n]);
             if (it == groupPath.end())
-                it = groupPath.emplace(key, uniqueOutput(output, QStringLiteral("%1-%2-updated.ini")
-                                                                     .arg(QFileInfo(i.source).completeBaseName(), i.titleId),
-                                                         used)).first;
+                it = groupPath.emplace(groups[n], uniqueOutput(output, QStringLiteral("%1-%2-updated.ini")
+                                                                           .arg(QFileInfo(i.source).completeBaseName(), i.titleId),
+                                                               used)).first;
             out = it->second;
         } else {
             out = uniqueOutput(output, i.contentId + QStringLiteral(".pkg"), used);
@@ -276,7 +310,7 @@ QString buildPlanText(const std::vector<DlcItem>& items, bool iniMode, const QSt
         t << QStringLiteral("OUTPUT: %1").arg(native(out));
     }
     t << QString()
-      << QStringLiteral("Affected fields: content_id / title_id / title in INI; contentId / titleId / selected localized title "
+      << QStringLiteral("Affected fields: content_id / title_id / title in INI; contentId / titleId / selected localised title "
                         "and builder identity in supported PS5 PKG.");
     return t.join(u'\n');
 }
@@ -286,32 +320,23 @@ std::vector<IniExportResult> exportUpdatedInis(const std::vector<DlcItem>& items
     std::vector<IniExportResult> results;
     QDir().mkpath(output);
     std::set<QString> used;
-    std::map<QString, size_t> groups; // key -> results index
+    const std::vector<int> groupOf = iniGroups(items);
+    std::map<int, size_t> groups; // group -> results index
     for (size_t n = 0; n < items.size(); ++n) {
         const DlcItem& i = items[n];
-        const QString problem = itemProblem(i, true);
-        if (!problem.isEmpty()) {
+        if (groupOf[n] < 0) {
+            const QString problem = itemProblem(i, true);
             results.push_back({{}, {int(n)}, problem});
             log << QStringLiteral("INI FAILED: %1 — %2").arg(native(i.source), problem);
             continue;
         }
-        QString key = QStringLiteral("%1|%2|%3").arg(i.source.toLower(), i.titleId, i.contentId.left(6));
-        if (auto it = groups.find(key); it != groups.end()) {
-            // The same INI entry with a different target goes to a separate file.
-            for (int other : results[it->second].items)
-                if (items[size_t(other)].entry == i.entry
-                    && (items[size_t(other)].contentId != i.contentId || items[size_t(other)].title != i.title)) {
-                    key += QStringLiteral("|%1").arg(n);
-                    break;
-                }
-        }
-        auto it = groups.find(key);
+        auto it = groups.find(groupOf[n]);
         if (it == groups.end()) {
             IniExportResult r;
             r.path = uniqueOutput(output, QStringLiteral("%1-%2-updated.ini").arg(QFileInfo(i.source).completeBaseName(), i.titleId),
                                   used);
             results.push_back(r);
-            it = groups.emplace(key, results.size() - 1).first;
+            it = groups.emplace(groupOf[n], results.size() - 1).first;
         }
         results[it->second].items.push_back(int(n));
     }
@@ -355,8 +380,10 @@ std::vector<IniExportResult> exportUpdatedInis(const std::vector<DlcItem>& items
                             found = true;
                     okBack = okBack && found;
                 }
-            if (!okBack)
+            if (!okBack) {
                 st = Error(ErrorCode::VerificationFailed, QStringLiteral("INI read-back did not match the target."));
+                QFile::remove(r.path); // written just now by this export; do not leave a file reported as failed
+            }
         }
         if (st.ok()) {
             log << QStringLiteral("INI SAVED: %1 (read-back validated; compatibility unverified)").arg(native(r.path));
@@ -425,7 +452,7 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
     if (const QString kp = hex32Problem(s.entitlementKey); !kp.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The entitlement key %1").arg(kp));
     if (const QString pp = hex32Problem(s.sourcePasscode); !pp.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("PKG source passcode must be exactly 32 hex characters."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("The PKG source passcode %1").arg(pp));
     if (!QDir().mkpath(req.output))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create the output folder %1.").arg(native(req.output)));
 
@@ -458,12 +485,9 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
             ++failed;
             say(QStringLiteral("  FAILED: %1").arg(why));
         };
+        // (Also refuses anything but a PS5 title ID: this engine builds PS5 DLC only.)
         if (const QString problem = itemProblem(item, false); !problem.isEmpty()) {
             fail(problem);
-            continue;
-        }
-        if (!isPs5TitleId(item.titleId)) {
-            fail(QStringLiteral("This engine builds PS5 DLC only."));
             continue;
         }
         const QString work = QDir(ctx.tempDir).filePath(QStringLiteral("dlc-%1").arg(n));
@@ -586,8 +610,15 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
         }
         // Read the identity back.
         auto back = inspectDlcPackage(cli, built, passcode, ctx.token);
-        if (!back.ok() || back->contentId != item.contentId || value(back->metadata, QStringLiteral("titleId")) != item.titleId
-            || !back->isDlc) {
+        if (!back.ok()) {
+            if (back.error().isCancelled() || ctx.token.isCancelled()) {
+                cancelled = true;
+                break;
+            }
+            fail(QStringLiteral("The built package could not be read back: %1").arg(back.error().message));
+            continue;
+        }
+        if (back->contentId != item.contentId || value(back->metadata, QStringLiteral("titleId")) != item.titleId || !back->isDlc) {
             fail(QStringLiteral("Built metadata does not match the reviewed DLC target."));
             continue;
         }
@@ -596,9 +627,19 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
             continue;
         }
         const QString finalPath = uniqueOutput(req.output, item.contentId + QStringLiteral(".pkg"), used);
-        if (!QFile::rename(built, finalPath) && !(QFile::copy(built, finalPath) && QFile::remove(built))) {
-            fail(QStringLiteral("Could not move the package to %1.").arg(native(finalPath)));
-            continue;
+        if (!QFile::rename(built, finalPath)) {
+            // Another drive: copied through <name>.part and flushed, so a cancel
+            // or a pulled drive never leaves a short file under the package's name.
+            if (Status mv = copyFileStreaming(built, finalPath, ctx.token, nullptr, false, true); !mv.ok()) {
+                if (mv.error().isCancelled()) {
+                    cancelled = true;
+                    break;
+                }
+                fail(QStringLiteral("Could not move the package to %1.").arg(native(finalPath)));
+                ctx.log.warn(mv.error().toLogString());
+                continue;
+            }
+            QFile::remove(built);
         }
         outputs[n] = finalPath;
         ++ok;
@@ -606,8 +647,8 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
                 .arg(native(finalPath), s.fullVerify ? QStringLiteral("full") : QStringLiteral("quick")));
     }
     pr->setDone(qint64(total) * 100);
-    const QString status = cancelled ? QStringLiteral("Cancelled - %1 built").arg(ok)
-                                     : QStringLiteral("Done - %1 built, %2 failed").arg(ok).arg(failed);
+    const QString status = cancelled ? QStringLiteral("Cancelled — %1 built").arg(ok)
+                                     : QStringLiteral("Done — %1 built, %2 failed").arg(ok).arg(failed);
     say(status);
     QString report;
     if (s.saveReport)
@@ -637,7 +678,7 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
                                    .arg(skipped.size()).arg(skipped.size() == 1 ? QString() : QStringLiteral("s"), skipped.join(QStringLiteral(", "))));
     }
     o.verification = cancelled ? Verification::Inconclusive : Verification::Passed;
-    o.verificationDetail = cancelled ? QStringLiteral("Cancelled: the %1 packages that were built passed the %2 structural verification; the rest were not built.")
+    o.verificationDetail = cancelled ? QStringLiteral("Cancelled: the %1 package(s) that were built passed the %2 structural verification; the rest were not built.")
                                            .arg(ok).arg(s.fullVerify ? QStringLiteral("full") : QStringLiteral("quick"))
                                      : QStringLiteral("%1 structural verification passed; DLC compatibility on the console is unverified.")
                                            .arg(s.fullVerify ? QStringLiteral("Full") : QStringLiteral("Quick"));
@@ -668,9 +709,9 @@ Status DlcConvertJob::validate(const SettingsValues& settings) const
     if (!cli.ok())
         return Error(ErrorCode::DependencyMissing, cli.problems.join(u' '));
     if (const QString kp = hex32Problem(s.entitlementKey); !kp.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("The entitlement key must be exactly 32 hex characters."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("The entitlement key %1").arg(kp));
     if (const QString pp = hex32Problem(s.sourcePasscode); !pp.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("PKG source passcode must be exactly 32 hex characters."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("The PKG source passcode %1").arg(pp));
     if (QFileInfo(m_request.output).isFile())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The output folder is a file: %1").arg(native(m_request.output)));
     return success();

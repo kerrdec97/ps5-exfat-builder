@@ -7,7 +7,8 @@
 //        gets a proposed name from the chosen preset. Nothing on disk changes.
 // apply: renames each selected item in place (or into a destination folder on
 //        the same drive). Never overwrites: an existing target is skipped
-//        ("Skipped — target exists"), as are two items proposing the same name.
+//        ("Skipped — target exists"); of two items proposing the same name the
+//        first is renamed and the second skipped.
 //        Every completed rename is appended to an undo log right away.
 // undo:  reverses a log, newest first, again never overwriting.
 
@@ -70,13 +71,18 @@ struct RenameRunResult {
     int skipped = 0;
     int failed = 0;
     QString undoLogPath; // empty when nothing was renamed
+    bool cancelled = false; // stopped early; the items not reached say so
 };
 
 // `undoLogPath` empty = Paths::dataDir()/rename-undo/<timestamp>.json.
+// Cancelled before the first rename: Error::cancelled(). Cancelled later: the
+// result, with `cancelled` set, so the caller still gets the undo log.
 Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QString& destinationRoot,
                                          const QString& undoLogPath, const CancellationToken& token,
                                          ProgressReporter* progress = nullptr);
 
+// An entry that cannot be put back because the original name is taken comes
+// back as TargetExists (counted in `skipped`). Cancelling follows the rule above.
 Result<RenameRunResult> undoDumpRenames(const QString& undoLogPath, const CancellationToken& token,
                                         ProgressReporter* progress = nullptr);
 

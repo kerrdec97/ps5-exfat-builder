@@ -33,8 +33,13 @@ QString scalarText(const QJsonValue& v)
 std::optional<qint64> integerField(const QJsonObject& o, const char* key)
 {
     const QJsonValue v = o.value(QLatin1String(key));
-    if (v.isDouble())
-        return qint64(v.toDouble());
+    if (v.isDouble()) {
+        // Converting a double outside the qint64 range is undefined.
+        const double d = v.toDouble();
+        if (!(d >= -9.2e18 && d <= 9.2e18))
+            return std::nullopt;
+        return qint64(d);
+    }
     if (v.isString()) {
         bool ok = false;
         const QString s = v.toString().trimmed();

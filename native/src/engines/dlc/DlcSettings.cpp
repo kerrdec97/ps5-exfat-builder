@@ -11,7 +11,7 @@ namespace fw::dlc {
 
 QString hex32Problem(const QString& value)
 {
-    static const QRegularExpression re(QStringLiteral("^[0-9A-Fa-f]{32}$"));
+    static const QRegularExpression re(QStringLiteral("\\A[0-9A-Fa-f]{32}\\z"));
     if (re.match(value.trimmed()).hasMatch())
         return {};
     return QStringLiteral("must be exactly 32 hexadecimal characters (it has %1).").arg(value.trimmed().size());
@@ -60,8 +60,8 @@ void registerDlcSettings(SettingsSchema& s)
         d.label = QStringLiteral("fpkg-cli.exe");
         d.description = QStringLiteral(
             "PSVIETHOA's command-line front end of Drakmor's LibProsperoPkg engine, used to build PS5 DLC packages. "
-            "Choose the .exe or its folder. Empty: the copy included with a private build, or the FW_FPKG_CLI "
-            "environment variable.");
+            "Choose the .exe or its folder. Empty: the FW_FPKG_CLI environment variable if it is set, otherwise the "
+            "copy included with a private build.");
         d.type = SettingType::FilePath;
         d.defaultValue = QString();
         d.fileFilter = QStringLiteral("fpkg-cli (fpkg-cli.exe);;Programs (*.exe)");
@@ -117,8 +117,8 @@ void registerDlcSettings(SettingsSchema& s)
         d.group = QStringLiteral("DLC packages");
         d.label = QStringLiteral("Find regional releases online");
         d.description = QStringLiteral("When DLC is added, look up the game and its regional releases on the "
-                                       "PlayStation Store, SerialStation and ProsperoPatches. Only identifiers are "
-                                       "sent. Off: enter target identifiers manually.");
+                                       "PlayStation Store, SerialStation and ProsperoPatches. Only identifiers and "
+                                       "game or DLC titles are sent. Off: enter target identifiers manually.");
         d.type = SettingType::Bool;
         d.defaultValue = true;
         add(d);
@@ -158,7 +158,7 @@ void registerDlcSettings(SettingsSchema& s)
         d.section = dlc;
         d.group = QStringLiteral("Engine");
         d.label = QStringLiteral("Kraken level");
-        d.description = QStringLiteral("Compression level of the DLC data (-4 fastest ... 9 smallest).");
+        d.description = QStringLiteral("Compression level of the DLC data (-4 fastest … 9 smallest).");
         d.type = SettingType::Int;
         d.defaultValue = 7;
         d.minimum = -4;

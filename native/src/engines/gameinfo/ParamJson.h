@@ -3,7 +3,8 @@
 // sce_sys/param.json (PS5) reader.
 //
 // Tolerant: a BOM, comments, trailing commas, NUL padding and invalid UTF-8
-// are repaired before parsing (`repaired` says so). The whole object stays
+// are repaired before parsing (`repaired` says so, except for a file whose
+// only flaw was a UTF-8 BOM). The whole object stays
 // available as `raw`; the fields the app uses are lifted out.
 
 #include "core/Result.h"

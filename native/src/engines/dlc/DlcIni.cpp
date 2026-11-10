@@ -717,7 +717,10 @@ Result<QByteArray> DlcIniDocument::updatedBytes(const std::map<int, DlcTarget>& 
                 return Error(ErrorCode::InvalidArgument, msg(kMsgNeedsQuotes));
             v = u'"' + value + u'"';
         }
-        return setLine(edits, line, f.prefix + v + f.suffix);
+        // An empty value directly followed by an inline comment ("key = ; note"):
+        // a comment only starts after white space, so keep one in front of it.
+        const bool commentFollows = f.value.isEmpty() && !f.suffix.isEmpty() && (f.suffix.front() == u';' || f.suffix.front() == u'#');
+        return setLine(edits, line, f.prefix + v + (commentFollows ? QStringLiteral(" ") : QString()) + f.suffix);
     };
 
     const int lineCount = int(m_lines.size());
@@ -743,7 +746,9 @@ Result<QByteArray> DlcIniDocument::updatedBytes(const std::map<int, DlcTarget>& 
                 FW_TRY(editField(l, target.titleId));
             } else if (isPrimaryIdKey(f.key) && f.value == e.contentId) {
                 FW_TRY(editField(l, target.contentId));
-            } else if (isNameKey(f.key) && target.title) {
+            } else if (isNameKey(f.key) && target.title && *target.title != e.title) {
+                // Only an edited title is written: a block may hold several
+                // name-like keys with different values.
                 FW_TRY(editField(l, *target.title));
                 titleEdited = true;
             }

@@ -7,7 +7,9 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QSet>
 #include <QtEndian>
 
 namespace fw::dlc {
@@ -34,6 +36,13 @@ QString valueOf(const std::vector<std::pair<QString, QString>>& kv, const QStrin
 }
 
 bool isDash(const QString& v) { return v.isEmpty() || v == QStringLiteral("—") || v == u"-"; }
+
+// "0x1B": only the digits are upper-cased, never the text around them.
+QString hex(quint32 value) { return QStringLiteral("0x") + QString::number(value, 16).toUpper(); }
+
+// A real param.sfo has a few dozen entries and its largest value is 512 bytes.
+constexpr quint32 kMaxSfoEntries = 4096;
+constexpr quint32 kMaxSfoValueBytes = 64 * 1024;
 
 // The Companion's rebuild gate, in its order (first match wins).
 void applyRebuildGate(DlcPackageInfo& i, bool drmConflict, bool idConflict)
@@ -139,10 +148,10 @@ DlcPackageInfo parsePkgInfoOutput(const QString& output)
         i.drm = QStringLiteral("Entitlement / additional content (CNT header 0x10)");
     } else {
         i.drm = QStringLiteral("Unknown (CNT header %1)").arg(i.headerDrm < 0 ? QStringLiteral("missing")
-                                                                               : QStringLiteral("0x%1").arg(i.headerDrm, 0, 16).toUpper());
+                                                                               : hex(quint32(i.headerDrm)));
         if (i.isDlc)
             i.warnings << QStringLiteral("Additional-content CNT DRM %1 is unsupported or unknown; choose DRM and entitlement "
-                                         "key explicitly.").arg(i.headerDrm < 0 ? QStringLiteral("missing") : QString::number(i.headerDrm, 16));
+                                         "key explicitly.").arg(i.headerDrm < 0 ? QStringLiteral("missing") : hex(quint32(i.headerDrm)));
     }
     bool drmConflict = false;
     if (i.isDlc && !declared.isEmpty() && !headerClass.isEmpty()) {
@@ -203,15 +212,17 @@ Result<DlcPackageInfo> inspectPs4Package(const QString& path, QByteArray* icon)
     i.headerDrm = int(qFromBigEndian<quint32>(p + 0x70));
     i.contentType = int(qFromBigEndian<quint32>(p + 0x74));
     i.isDlc = i.contentType == 0x1B || i.contentType == 0x1C;
-    i.metadata.emplace_back(QStringLiteral("headerContentType"), QStringLiteral("0x%1").arg(i.contentType, 0, 16).toUpper());
-    i.metadata.emplace_back(QStringLiteral("headerDrmType"), QStringLiteral("0x%1").arg(i.headerDrm, 0, 16).toUpper());
-    i.drm = QStringLiteral("PS4 header DRM 0x%1").arg(i.headerDrm, 0, 16).toUpper();
+    i.metadata.emplace_back(QStringLiteral("headerContentType"), hex(quint32(i.contentType)));
+    i.metadata.emplace_back(QStringLiteral("headerDrmType"), hex(quint32(i.headerDrm)));
+    i.drm = QStringLiteral("PS4 header DRM %1").arg(hex(quint32(i.headerDrm)));
     if (count > 100000)
         return Error(ErrorCode::CorruptData, QStringLiteral("Implausible PS4 entry count."));
     if (qint64(table) + qint64(count) * 32 > len)
         return Error(ErrorCode::CorruptData, QStringLiteral("PS4 entry table is outside the package bounds."));
     f.seek(table);
     const QByteArray entries = f.read(qint64(count) * 32);
+    if (entries.size() != qint64(count) * 32)
+        return Error(ErrorCode::CorruptData, QStringLiteral("Truncated PS4 entry table."));
     QByteArray sfo;
     for (quint32 n = 0; n < count; ++n) {
         const auto* e = reinterpret_cast<const uchar*>(entries.constData() + n * 32);
@@ -222,14 +233,13 @@ Result<DlcPackageInfo> inspectPs4Package(const QString& path, QByteArray* icon)
         if (id != 0x1000 && id != 0x1200)
             continue;
         if (qint64(off) + size > len)
-            return Error(ErrorCode::CorruptData,
-                         QStringLiteral("PS4 entry 0x%1 is outside the package bounds.").arg(id, 0, 16).toUpper());
+            return Error(ErrorCode::CorruptData, QStringLiteral("PS4 entry %1 is outside the package bounds.").arg(hex(id)));
         if ((flags & 0x80000000u) || size == 0 || size > 64u * 1024 * 1024)
             continue;
         f.seek(off);
         const QByteArray data = f.read(size);
         if (data.size() != qint64(size))
-            return Error(ErrorCode::CorruptData, QStringLiteral("Truncated PS4 entry 0x%1.").arg(id, 0, 16).toUpper());
+            return Error(ErrorCode::CorruptData, QStringLiteral("Truncated PS4 entry %1.").arg(hex(id)));
         if (id == 0x1000)
             sfo = data;
         else if (icon)
@@ -242,6 +252,11 @@ Result<DlcPackageInfo> inspectPs4Package(const QString& path, QByteArray* icon)
         const quint32 n = qFromLittleEndian<quint32>(s + 16);
         if (keyTable > quint32(sfo.size()) || dataTable > quint32(sfo.size()) || 20 + qint64(n) * 16 > sfo.size())
             return Error(ErrorCode::CorruptData, QStringLiteral("Invalid param.sfo table bounds."));
+        if (n > kMaxSfoEntries)
+            return Error(ErrorCode::CorruptData, QStringLiteral("Implausible param.sfo entry count."));
+        QSet<QString> keys;
+        for (const auto& kv : i.metadata)
+            keys.insert(kv.first.toLower());
         for (quint32 k = 0; k < n; ++k) {
             const auto* e = s + 20 + k * 16;
             const quint16 keyOff = qFromLittleEndian<quint16>(e);
@@ -249,7 +264,7 @@ Result<DlcPackageInfo> inspectPs4Package(const QString& path, QByteArray* icon)
             const quint32 dlen = qFromLittleEndian<quint32>(e + 4);
             const quint32 doff = qFromLittleEndian<quint32>(e + 12);
             const qint64 ks = qint64(keyTable) + keyOff;
-            if (ks >= sfo.size() || qint64(dataTable) + doff + dlen > sfo.size())
+            if (ks >= sfo.size() || qint64(dataTable) + doff + dlen > sfo.size() || dlen > kMaxSfoValueBytes)
                 return Error(ErrorCode::CorruptData, QStringLiteral("Invalid param.sfo entry bounds."));
             const int ke = sfo.indexOf('\0', ks);
             if (ke < 0)
@@ -267,8 +282,9 @@ Result<DlcPackageInfo> inspectPs4Package(const QString& path, QByteArray* icon)
                     t.chop(1);
                 text = QString::fromUtf8(t);
             }
-            if (!valueOf(i.metadata, key).isEmpty())
-                return Error(ErrorCode::CorruptData, QStringLiteral("Duplicate param.sfo key: %1").arg(key));
+            if (keys.contains(key.toLower()))
+                return Error(ErrorCode::CorruptData, QStringLiteral("Duplicate param.sfo key: %1").arg(key.left(64)));
+            keys.insert(key.toLower());
             i.metadata.emplace_back(key, text);
         }
         i.hasParam = true;
@@ -333,7 +349,7 @@ Result<QString> extractDlcPackage(const FpkgCli& cli, const DlcPackageInfo& info
     if (QFileInfo::exists(destination)
         && !QDir(destination).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System))
         return Error(ErrorCode::InvalidArgument,
-                     QStringLiteral("The extraction folder must be empty and cannot be a link or junction."));
+                     QStringLiteral("The extraction folder must be empty."));
     QDir().mkpath(destination);
     QDir().mkpath(tempDir);
     const QStringList args{QStringLiteral("pkg-extract"), native(info.path), QStringLiteral("--output"), native(destination),
@@ -373,7 +389,9 @@ QByteArray extractDlcIcon(const FpkgCli& cli, const QString& path, const QString
         (void)inspectPs4Package(path, &icon);
         return icon;
     }
-    const QString dest = QDir(tempDir).filePath(QStringLiteral("icon-%1").arg(qHash(path), 0, 16));
+    // A folder of its own: two reads of the same package at once must not share (and delete) one.
+    const QString dest = QDir(tempDir).filePath(
+        QStringLiteral("icon-%1-%2").arg(qHash(path), 0, 16).arg(QRandomGenerator::global()->generate(), 8, 16, QLatin1Char('0')));
     removeTreeNoFollow(dest);
     QDir().mkpath(dest);
     const QStringList args{QStringLiteral("pkg-extract"), native(path), QStringLiteral("--output"), native(dest),

@@ -62,8 +62,9 @@ struct GameMetadata {
 };
 
 // Never fails for an existing folder: missing or damaged files leave fields
-// empty and add a note.
-Result<GameMetadata> readGameMetadata(const QString& folder);
+// empty and add a note. The only other error is Cancelled, when `token` is
+// cancelled while the folder is searched for its metadata files.
+Result<GameMetadata> readGameMetadata(const QString& folder, const CancellationToken& token = {});
 
 // Legacy find_meta_file(): `folder/<name>`, `folder/sce_sys/<name>`, then a
 // walk up to 5 levels deep (case-insensitive names). Empty when not found.
