@@ -145,6 +145,9 @@ signals:
     void openQueueRequested(const QString& id);
     void newJobRequested();
     void jobSwitched(const QString& id); // Retry / Run again: the monitor now follows the new job
+    // Retry / Run again could not queue the job (source gone, drive unplugged).
+    // While nothing is connected the monitor shows the message itself.
+    void retryFailed(const QString& id, const QString& message);
     void jobGone();                      // the job left the queue
 
 protected:
@@ -171,6 +174,7 @@ private:
     bool m_hadOutcome = false;
     bool m_hadError = false;
     QString m_phasesKey;
+    bool m_stagesSet = false; // the stage list shows the phases of m_id
     qint64 m_lastSampleMs = 0;
     QTimer m_tick;
 

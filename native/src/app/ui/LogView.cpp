@@ -5,6 +5,7 @@
 #include <QHeaderView>
 #include <QPainter>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QVBoxLayout>
@@ -168,8 +169,22 @@ void ActivityWell::setSmall(bool small)
     refresh();
 }
 
+void ActivityWell::showEvent(QShowEvent* e)
+{
+    Card::showEvent(e);
+    if (m_dirty)
+        refresh();
+}
+
 void ActivityWell::refresh()
 {
+    // One well per Jobs dock, on every job page: only the one on screen
+    // rebuilds its lines on each log flush.
+    if (!isVisible()) {
+        m_dirty = true;
+        return;
+    }
+    m_dirty = false;
     while (m_lines->count() > 0) {
         QLayoutItem* it = m_lines->takeAt(0);
         if (it->widget() != m_emptyLabel)
@@ -228,7 +243,7 @@ LogConsole::LogConsole(LogModel& model, QWidget* parent) : QPlainTextEdit(parent
     setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     setMinimumHeight(120);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    setProperty("fwNoRing", true);
+    setProperty("fwRadius", radius::control); // it takes keyboard focus: it gets the ring
     setAccessibleName(QStringLiteral("Live log"));
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
         if (m_adjusting)
@@ -242,9 +257,9 @@ LogConsole::LogConsole(LogModel& model, QWidget* parent) : QPlainTextEdit(parent
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int max) {
         if (!m_follow)
             return;
-        m_adjusting = true;
+        ++m_adjusting;
         verticalScrollBar()->setValue(max);
-        m_adjusting = false;
+        --m_adjusting;
     });
     connect(&m_model, &LogModel::rowsAppended, this, &LogConsole::onAppended);
     connect(&m_model, &QAbstractItemModel::modelReset, this, [this] {
@@ -289,9 +304,9 @@ void LogConsole::setLive(bool live)
 
 void LogConsole::jumpToLatest()
 {
-    m_adjusting = true;
+    ++m_adjusting;
     verticalScrollBar()->setValue(verticalScrollBar()->maximum());
-    m_adjusting = false;
+    --m_adjusting;
     if (!m_follow) {
         m_follow = true;
         emit followChanged(true);
@@ -318,7 +333,7 @@ void LogConsole::clearLines()
 void LogConsole::refill()
 {
     const bool wasFollowing = m_follow;
-    m_adjusting = true;
+    ++m_adjusting;
     clear();
     m_lines = 0;
     m_lastSeq = 0;
@@ -339,7 +354,7 @@ void LogConsole::refill()
             appendRecord(*rec);
     if (const LogRecord* last = m_model.recordAt(m_model.rowCount() - 1))
         m_lastSeq = std::max(m_lastSeq, last->seq);
-    m_adjusting = false;
+    --m_adjusting;
     m_follow = true;
     jumpToLatest();
     if (!wasFollowing)
@@ -398,8 +413,15 @@ void LogConsole::appendLine(const QDateTime& time, LogLevel level, const QString
     }
     QString text = message;
     text.replace(u'\r', u' ');
-    c.insertText(text.trimmed(), msg);
-    m_lines = std::min(m_lines + 1, m_max);
+    text = text.trimmed();
+    // One endless line (tool output without line breaks) is laid out again on
+    // every resize: the console shows its start, the Logs page has all of it.
+    constexpr int kMaxLineChars = 4000;
+    if (text.size() > kMaxLineChars)
+        text = text.left(kMaxLineChars) + QStringLiteral("…");
+    c.insertText(text, msg);
+    // Lines as the document counts them: a message may hold several.
+    m_lines = document()->blockCount();
 }
 
 QString LogConsole::plainLines() const

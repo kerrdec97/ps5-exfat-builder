@@ -2,21 +2,31 @@
 
 #include "app/ui/Icons.h"
 #include "app/ui/Theme.h"
+#include "app/ui/Widgets.h"
 
 #include <QAbstractItemView>
+#include <QAbstractSlider>
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
+#include <QFocusEvent>
+#include <QHelpEvent>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QRadioButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStyleFactory>
 #include <QStyleOption>
+#include <QTextDocument>
 #include <QTextEdit>
+#include <QToolTip>
 
 #include <algorithm>
 
@@ -224,9 +234,20 @@ QSize FwStyle::sizeFromContents(ContentsType type, const QStyleOption* option, c
     return s;
 }
 
+// Controls whose value the mouse wheel changes.
+static bool wheelChangesValue(const QWidget* w)
+{
+    return qobject_cast<const QComboBox*>(w) || qobject_cast<const QAbstractSpinBox*>(w)
+        || (qobject_cast<const QAbstractSlider*>(w) && !qobject_cast<const QScrollBar*>(w));
+}
+
 void FwStyle::polish(QWidget* widget)
 {
     QProxyStyle::polish(widget);
+    // Qt gives these focus on a wheel turn (Qt::WheelFocus) before the wheel
+    // event arrives; the app guard lets the wheel through to focused ones only.
+    if (wheelChangesValue(widget) && widget->focusPolicy() == Qt::WheelFocus)
+        widget->setFocusPolicy(Qt::StrongFocus);
     if (auto* menu = qobject_cast<QMenu*>(widget)) {
         menu->setWindowFlag(Qt::NoDropShadowWindowHint, true);
         menu->setAttribute(Qt::WA_TranslucentBackground, true);
@@ -237,6 +258,128 @@ void FwStyle::polish(QWidget* widget)
             combo->view()->setTextElideMode(Qt::ElideRight);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The widget that received the last FocusIn, and whether that was a keyboard reason.
+QPointer<QWidget> g_focusIn;
+bool g_focusInByKeyboard = false;
+
+bool arrivedByKeyboard(const QWidget* focusWidget)
+{
+    if (!focusWidget)
+        return false;
+    if (g_focusIn == focusWidget && g_focusInByKeyboard)
+        return true;
+    return focusWidget->window()->testAttribute(Qt::WA_KeyboardFocusChange);
+}
+
+// Markup the app wrote itself: one paragraph whose content is escaped
+// (plainTip(), the setting descriptions). Anything else that looks like
+// markup came from outside.
+bool isAppTip(const QString& tip)
+{
+    static const QLatin1String prefixes[] = {QLatin1String("<p style='white-space:pre-wrap'>"),
+                                             QLatin1String("<p style='white-space:normal'>")};
+    static const QLatin1String suffix("</p>");
+    for (const QLatin1String& prefix : prefixes) {
+        if (!tip.startsWith(prefix) || !tip.endsWith(suffix) || tip.size() < prefix.size() + suffix.size())
+            continue;
+        const QStringView inner = QStringView(tip).mid(prefix.size(), tip.size() - prefix.size() - suffix.size());
+        return !inner.contains(u'<');
+    }
+    return false;
+}
+
+class AppGuard : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        switch (event->type()) {
+        case QEvent::ToolTip: return toolTip(qobject_cast<QWidget*>(watched), static_cast<QHelpEvent*>(event));
+        case QEvent::Wheel:
+            if (auto* w = qobject_cast<QWidget*>(watched); w && wheelChangesValue(w) && !w->hasFocus()) {
+                event->ignore(); // on to the parent: the page scrolls
+                return true;
+            }
+            break;
+        case QEvent::KeyPress: return keyPress(watched, static_cast<QKeyEvent*>(event));
+        case QEvent::FocusIn:
+            // Delivered before QApplication::focusChanged: see hasKeyboardFocus().
+            if (auto* w = qobject_cast<QWidget*>(watched)) {
+                const Qt::FocusReason reason = static_cast<QFocusEvent*>(event)->reason();
+                // Back from another window or a popup: as it was before.
+                if ((reason == Qt::ActiveWindowFocusReason || reason == Qt::PopupFocusReason) && g_focusIn == w)
+                    break;
+                g_focusIn = w;
+                g_focusInByKeyboard = reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason || reason == Qt::ShortcutFocusReason;
+            }
+            break;
+        default: break;
+        }
+        return false;
+    }
+
+private:
+    static bool toolTip(QWidget* w, QHelpEvent* e)
+    {
+        if (!w)
+            return false;
+        QString tip = w->toolTip();
+        QRect rect;
+        if (tip.isEmpty()) {
+            // Item views take theirs from the model (Qt::ToolTipRole).
+            auto* view = qobject_cast<QAbstractItemView*>(w->parentWidget());
+            if (!view || view->viewport() != w)
+                return false;
+            const QModelIndex index = view->indexAt(e->pos());
+            tip = index.data(Qt::ToolTipRole).toString();
+            rect = view->visualRect(index);
+        }
+        if (tip.isEmpty() || !Qt::mightBeRichText(tip) || isAppTip(tip))
+            return false;
+        QToolTip::showText(e->globalPos(), plainTip(tip), w, rect);
+        return true;
+    }
+
+    static bool keyPress(QObject* watched, QKeyEvent* e)
+    {
+        if ((e->key() != Qt::Key_Return && e->key() != Qt::Key_Enter) || e->isAutoRepeat())
+            return false;
+        if (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier))
+            return false;
+        auto* b = qobject_cast<QAbstractButton*>(watched);
+        if (!b || !b->isEnabled())
+            return false;
+        // Toggles keep the platform's keys (Space); Enter is for actions.
+        if (qobject_cast<QCheckBox*>(b) || qobject_cast<QRadioButton*>(b) || qobject_cast<Switch*>(b))
+            return false;
+        b->click();
+        return true;
+    }
+};
+
+} // namespace
+
+bool hasKeyboardFocus(const QWidget* w)
+{
+    const QWidget* fw = QApplication::focusWidget();
+    return w && fw && w->hasFocus() && arrivedByKeyboard(fw);
+}
+
+void installAppGuard(QApplication* app)
+{
+    static QPointer<AppGuard> guard;
+    if (!app || guard)
+        return;
+    guard = new AppGuard(app);
+    app->installEventFilter(guard);
 }
 
 // ---------------------------------------------------------------------------
@@ -283,10 +426,15 @@ void FocusRingOverlay::onFocusChanged(QWidget* /*old*/, QWidget* now)
             t = p;
         if (t->property("fwRingProxy").value<QWidget*>())
             t = t->property("fwRingProxy").value<QWidget*>();
-        const bool keyboard = t->window()->testAttribute(Qt::WA_KeyboardFocusChange);
-        if (keyboard || isInput(t))
+        if (arrivedByKeyboard(now) || isInput(t))
             m_target = t;
     }
+    // Above whatever was raised since (a sheet that just opened).
+    if (m_target)
+        raise();
+    // Polled while there is a target: it may scroll out of view and back in.
+    if (m_target && !m_tick.isActive())
+        m_tick.start();
     refresh();
 }
 
@@ -305,7 +453,7 @@ QRect FocusRingOverlay::ringRect(int* radius) const
     if (clip.height() < r.height() - 2 || clip.width() < r.width() - 2)
         r = clip;
     const QVariant rv = t->property("fwRadius");
-    *radius = rv.isValid() ? rv.toInt() : radius::sm;
+    *radius = rv.isValid() ? rv.toInt() : radius::control; // buttons and inputs
     if (*radius >= radius::pill)
         *radius = r.height() / 2 + size::focusOffset;
     return r.adjusted(-size::focusOffset, -size::focusOffset, size::focusOffset, size::focusOffset);
@@ -321,12 +469,21 @@ void FocusRingOverlay::reset()
 
 void FocusRingOverlay::refresh()
 {
-    int radius = 0;
-    const QRect r = ringRect(&radius);
-    if (r.isEmpty()) {
+    if (!m_target) {
         if (isVisible())
             hide();
         m_tick.stop();
+        m_last = {};
+        return;
+    }
+    if (parentWidget() && parentWidget()->isMinimized())
+        return; // nothing to follow; the next tick after restoring catches up
+    int radius = 0;
+    const QRect r = ringRect(&radius);
+    if (r.isEmpty()) {
+        // Scrolled out of view or hidden for now: keep watching it.
+        if (isVisible())
+            hide();
         m_last = {};
         return;
     }
@@ -334,7 +491,6 @@ void FocusRingOverlay::refresh()
         setGeometry(parentWidget()->rect());
         raise();
         show();
-        m_tick.start();
     }
     if (r != m_last) {
         m_last = r;

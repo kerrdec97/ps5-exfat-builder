@@ -121,18 +121,11 @@ Sidebar::Sidebar(QWidget* parent) : QWidget(parent)
     setFixedWidth(size::sidebar);
     setProperty("fwNoRing", true);
     auto* outer = new QHBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setContentsMargins(0, 0, 1, 0); // the right border, painted in paintEvent
     outer->setSpacing(0);
     auto* inner = new QWidget(this);
     m_layout = vbox(inner, 3, QMargins(space::md, space::md, space::md, space::md));
     outer->addWidget(inner, 1);
-    auto* line = new QFrame(this);
-    line->setFixedWidth(1);
-    line->setAutoFillBackground(true);
-    QPalette lp = line->palette();
-    lp.setColor(QPalette::Window, color::border_1);
-    line->setPalette(lp);
-    outer->addWidget(line);
     m_group = new QButtonGroup(this);
     m_group->setExclusive(true);
     m_version = label({}, TextStyle::Caption, color::fg_5, this);
@@ -153,6 +146,7 @@ void Sidebar::paintEvent(QPaintEvent*)
     glow.setColorAt(0, a);
     glow.setColorAt(1, QColor(0, 0, 0, 0));
     p.fillRect(QRect(0, 0, width(), 260), glow);
+    p.fillRect(QRect(width() - 1, 0, 1, height()), color::border_1);
 }
 
 void Sidebar::addGroup(const QString& overline)
@@ -279,7 +273,14 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     qw->addWidget(m_queueChip);
     m_queueChipWrap->setCursor(Qt::PointingHandCursor);
     m_queueChipWrap->installEventFilter(this);
-    m_queueChipWrap->setToolTip(QStringLiteral("Open the queue"));
+    m_queueChipWrap->setToolTip(QStringLiteral("Open queue"));
+    // Both chips are buttons: Tab reaches them, Space and Enter press them.
+    for (QWidget* chip : {m_consoleChipWrap, m_queueChipWrap}) {
+        chip->setFocusPolicy(Qt::TabFocus);
+        chip->setProperty("fwRole", QStringLiteral("button")); // before the name, see Accessible.h
+        chip->setProperty("fwRadius", radius::pill);
+        chip->setAccessibleName(chip->toolTip());
+    }
     h->addWidget(m_queueChipWrap);
     m_help = new IconButton(QStringLiteral("help"), QStringLiteral("Help"), IconButton::Size::Regular, this);
     h->addWidget(m_help);
@@ -287,11 +288,27 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
 
 bool AppHeader::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::MouseButtonRelease) {
-        if (watched == m_queueChipWrap)
-            emit queueChipClicked();
-        else if (watched == m_consoleChipWrap)
-            emit consoleChipClicked();
+    if (event->type() == QEvent::KeyPress && (watched == m_queueChipWrap || watched == m_consoleChipWrap)) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        if ((ke->key() == Qt::Key_Space || ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) && !ke->isAutoRepeat()) {
+            if (watched == m_queueChipWrap)
+                emit queueChipClicked();
+            else
+                emit consoleChipClicked();
+            return true;
+        }
+    }
+    if (event->type() == QEvent::MouseButtonRelease && (watched == m_queueChipWrap || watched == m_consoleChipWrap)) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        auto* chip = static_cast<QWidget*>(watched);
+        if (me->button() == Qt::LeftButton && chip->rect().contains(me->position().toPoint())) {
+            // Nothing after the signal: a slot may replace the window's content.
+            if (watched == m_queueChipWrap)
+                emit queueChipClicked();
+            else
+                emit consoleChipClicked();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -367,7 +384,7 @@ StatusBar::StatusBar(QWidget* parent) : QWidget(parent)
 void StatusBar::setStatus(const QString& text, Tone tone)
 {
     m_text->setText(text);
-    const QString iconName = tone == Tone::Info ? QStringLiteral("dot") : tone == Tone::Neutral ? QStringLiteral("circle") : defaultBadgeIcon(tone);
+    const QString iconName = tone == Tone::Info ? QStringLiteral("circle_filled") : tone == Tone::Neutral ? QStringLiteral("circle") : defaultBadgeIcon(tone);
     m_mark->setPixmap(iconPixmap(iconName, size::iconSm, toneMark(tone), devicePixelRatioF()));
 }
 

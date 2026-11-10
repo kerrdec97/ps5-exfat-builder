@@ -22,18 +22,27 @@
 class QBoxLayout;
 class QVBoxLayout;
 class QHBoxLayout;
+class QMimeData;
 
 namespace fw::ui {
 
 // ---- labels ------------------------------------------------------------------
 enum class TextStyle { Display, Title, Stat, Subtitle, BodyStrong, Body, Caption, Overline, Mono, MonoSmall };
 QFont fontFor(TextStyle style);
+// Every label of this library shows its text literally (Qt::PlainText): titles,
+// paths, file names and messages come from dumps, images, tools and servers,
+// and must never be read as markup. richLabel() is for markup the app itself
+// writes; escape the outside parts of it with toHtmlEscaped().
 QLabel* label(const QString& text, TextStyle style, const QColor& color, QWidget* parent = nullptr);
+QLabel* richLabel(const QString& html, TextStyle style, const QColor& color, QWidget* parent = nullptr);
 QLabel* caption(const QString& text, QWidget* parent = nullptr);      // caption fg_3
 QLabel* meta(const QString& text, QWidget* parent = nullptr);         // caption fg_4
 QLabel* monoLabel(const QString& text, QWidget* parent = nullptr, const QColor& color = theme::color::fg_1);
 QLabel* heading(const QString& text, TextStyle style = TextStyle::Subtitle, QWidget* parent = nullptr);
 void setTextColor(QWidget* w, const QColor& color);
+// Tooltip text that is shown literally: escaped, and wrapped by Qt like any
+// rich-text tooltip (a plain one is a single long line). "" stays "".
+QString plainTip(const QString& text);
 // A label that elides long text (middle for paths, right for titles).
 class ElideLabel : public QLabel {
     Q_OBJECT
@@ -45,10 +54,12 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
+    void changeEvent(QEvent* e) override;
 
 private:
     void relayout();
     QString m_text;
+    QString m_autoName; // the accessible name this label gave itself
     Qt::TextElideMode m_mode;
 };
 
@@ -57,6 +68,7 @@ class Link : public QLabel {
     Q_OBJECT
 public:
     explicit Link(const QString& text, QWidget* parent = nullptr);
+    void setText(const QString& text); // also the accessible name
 signals:
     void activated();
 
@@ -130,6 +142,7 @@ private:
     QWidget* m_headerWidget = nullptr;
     QWidget* m_footerWidget = nullptr;
     QLabel* m_title = nullptr;
+    QHBoxLayout* m_titleRow = nullptr;
     bool m_drop = false;
     bool m_selected = false;
 };
@@ -220,6 +233,7 @@ public:
     explicit Segmented(QWidget* parent = nullptr);
     void addSegment(const QString& text, const QString& icon = {}, const QVariant& value = {});
     void setSegmentText(int index, const QString& text);
+    QString segmentText(int index) const; // "" when out of range
     void setCurrentIndex(int index);
     int currentIndex() const { return m_current; }
     QVariant currentValue() const;
@@ -288,13 +302,15 @@ public:
     void setPhases(const QStringList& phases, int current); // -1 = none active
     void setPhasesVisible(bool visible);
     ProgressBar* bar() { return m_bar; }
+    QString percentText() const { return m_percent->text(); }
 
 private:
+    void updateLabel();
     ProgressBar* m_bar;
     QLabel* m_percent;
     QLabel* m_detail;
     QWidget* m_stepper;
-    QHBoxLayout* m_stepperLayout;
+    bool m_indeterminate = false;
 };
 
 // Stage stepper (§4.14): done = check success_hi, current = filled circle, pending = circle.
@@ -411,6 +427,7 @@ protected:
 
 private:
     void browse();
+    QString droppedPath(const QMimeData* mime) const;
     Mode m_mode;
     QLineEdit* m_edit;
     QPushButton* m_browse;
@@ -492,7 +509,9 @@ private:
 // ---- misc --------------------------------------------------------------------------------
 QString thinPercent(double fraction);           // "63 %" with a thin space
 QString elideMiddle(const QString& s, int max); // for badges and captions
-void openInFileManager(const QString& path);    // shows a folder / selects a file
+// Shows a folder / selects a file. False when neither the path nor its folder
+// exists any more, or the file manager could not be started.
+bool openInFileManager(const QString& path);
 QString nativePath(const QString& path);
 
 } // namespace fw::ui

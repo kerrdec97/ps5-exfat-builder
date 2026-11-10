@@ -2,6 +2,7 @@
 
 #include "app/ui/Icons.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -16,6 +17,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QProcess>
 #include <QStyle>
 #include <QUrl>
@@ -57,11 +59,28 @@ void setTextColor(QWidget* w, const QColor& color)
 
 QLabel* label(const QString& text, TextStyle style, const QColor& color, QWidget* parent)
 {
-    auto* l = new QLabel(text, parent);
+    auto* l = new QLabel(parent);
+    l->setTextFormat(Qt::PlainText);
+    l->setText(text);
     l->setFont(fontFor(style));
     setTextColor(l, color);
     l->setTextInteractionFlags(Qt::NoTextInteraction);
     return l;
+}
+
+QLabel* richLabel(const QString& html, TextStyle style, const QColor& color, QWidget* parent)
+{
+    QLabel* l = label({}, style, color, parent);
+    l->setTextFormat(Qt::RichText);
+    l->setText(html);
+    return l;
+}
+
+QString plainTip(const QString& text)
+{
+    if (text.isEmpty())
+        return text;
+    return QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(text.toHtmlEscaped());
 }
 
 QLabel* caption(const QString& text, QWidget* parent)
@@ -89,6 +108,7 @@ QLabel* heading(const QString& text, TextStyle style, QWidget* parent)
 ElideLabel::ElideLabel(const QString& text, Qt::TextElideMode mode, QWidget* parent)
     : QLabel(parent), m_text(text), m_mode(mode)
 {
+    setTextFormat(Qt::PlainText);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     setTextInteractionFlags(Qt::NoTextInteraction);
     relayout();
@@ -97,7 +117,6 @@ ElideLabel::ElideLabel(const QString& text, Qt::TextElideMode mode, QWidget* par
 void ElideLabel::setFullText(const QString& text)
 {
     m_text = text;
-    setToolTip(text);
     relayout();
 }
 
@@ -112,30 +131,55 @@ void ElideLabel::resizeEvent(QResizeEvent* e)
     relayout();
 }
 
+void ElideLabel::changeEvent(QEvent* e)
+{
+    QLabel::changeEvent(e);
+    if (e->type() == QEvent::FontChange)
+        relayout(); // the text was cut for the old font
+}
+
 void ElideLabel::relayout()
 {
     const QFontMetrics fm(font());
     const int w = std::max(0, width() - 2);
     const QString shown = fm.elidedText(m_text, m_mode, w);
     QLabel::setText(shown);
-    setToolTip(shown != m_text ? m_text : QString());
+    setToolTip(shown != m_text ? plainTip(m_text) : QString());
+    // Assistive tools read the whole text, not the cut one (unless the owner
+    // gave the label a name of its own).
+    if (accessibleName() == m_autoName && m_autoName != m_text) {
+        m_autoName = m_text;
+        setAccessibleName(m_text);
+    }
 }
 
-Link::Link(const QString& text, QWidget* parent) : QLabel(text, parent)
+Link::Link(const QString& text, QWidget* parent) : QLabel(parent)
 {
+    setTextFormat(Qt::PlainText);
+    setText(text);
     setFont(font::body());
     setTextColor(this, color::accent_hi);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
-    setAccessibleName(text);
     setProperty("fwRadius", 2);
+}
+
+void Link::setText(const QString& text)
+{
+    QLabel::setText(text);
+    setAccessibleName(text);
 }
 
 void Link::mouseReleaseEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton && rect().contains(e->pos()))
-        emit activated();
+    // The slot may delete this link (an info bar clears its links): nothing
+    // touches it after the signal.
+    const bool hit = e->button() == Qt::LeftButton && rect().contains(e->pos());
     QLabel::mouseReleaseEvent(e);
+    if (hit) {
+        e->accept(); // handled: Qt does not go on to the parent of a link that may be gone
+        emit activated();
+    }
 }
 
 void Link::keyPressEvent(QKeyEvent* e)
@@ -149,13 +193,12 @@ void Link::keyPressEvent(QKeyEvent* e)
 
 QFrame* hairline(QWidget* parent, bool strong)
 {
+    // Filled by the stylesheet (QFrame[role="hairline"]): the universal
+    // `background: transparent` rule overrides a palette fill.
     auto* f = new QFrame(parent);
     f->setFrameShape(QFrame::NoFrame);
     f->setFixedHeight(1);
-    f->setAutoFillBackground(true);
-    QPalette p = f->palette();
-    p.setColor(QPalette::Window, strong ? color::border_2 : color::border_1);
-    f->setPalette(p);
+    f->setProperty("role", strong ? QStringLiteral("hairline2") : QStringLiteral("hairline"));
     return f;
 }
 
@@ -342,7 +385,14 @@ Card::Card(QWidget* parent, Variant variant) : QFrame(parent), m_variant(variant
 
 QHBoxLayout* Card::setTitle(const QString& title, QWidget* rightSlot)
 {
+    if (m_titleRow) { // called again: the same row, not a second title
+        m_title->setText(title);
+        if (rightSlot)
+            m_titleRow->addWidget(rightSlot);
+        return m_titleRow;
+    }
     auto* row = new QHBoxLayout;
+    m_titleRow = row;
     row->setSpacing(space::sm);
     row->setContentsMargins(0, 0, 0, 0);
     m_title = heading(title, TextStyle::Subtitle, this);
@@ -430,6 +480,19 @@ void Card::paintEvent(QPaintEvent*)
 
 // ---- badge ---------------------------------------------------------------------
 
+// Tells assistive tools that the text a self-painted control stands for changed.
+static void notifyAccessibleNameChanged(QWidget* w)
+{
+#if QT_CONFIG(accessibility)
+    if (QAccessible::isActive()) {
+        QAccessibleEvent ev(w, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&ev);
+    }
+#else
+    Q_UNUSED(w);
+#endif
+}
+
 QString defaultBadgeIcon(Tone tone)
 {
     switch (tone) {
@@ -490,13 +553,19 @@ void Badge::set(const QString& text, Tone tone)
 {
     if (m_text == text && m_tone == tone)
         return;
-    const bool resize = m_text != text;
+    // The width depends on the text and on whether the tone has a glyph.
+    const bool resize = m_text != text || (!m_iconSet && defaultBadgeIcon(m_tone).isEmpty() != defaultBadgeIcon(tone).isEmpty());
     m_text = text;
     m_tone = tone;
-    setToolTip(text.size() > 32 ? text : QString());
+    // A badge lets clicks through to what it sits on; only one whose text is
+    // cut takes mouse events itself, so that its tooltip can show.
+    const bool cut = text.size() > 32;
+    setToolTip(cut ? plainTip(text) : QString());
+    setAttribute(Qt::WA_TransparentForMouseEvents, !cut);
     if (resize)
         updateGeometry();
     update();
+    notifyAccessibleNameChanged(this);
 }
 
 void Badge::setText(const QString& text) { set(text, m_tone); }
@@ -638,6 +707,11 @@ void Segmented::setSegmentText(int index, const QString& text)
     update();
 }
 
+QString Segmented::segmentText(int index) const
+{
+    return index >= 0 && index < count() ? m_segments[size_t(index)].text : QString();
+}
+
 void Segmented::setSegmentEnabled(int index, bool enabled)
 {
     if (index < 0 || index >= count())
@@ -652,6 +726,12 @@ void Segmented::setCurrentIndex(int index)
         return;
     m_current = index;
     update();
+#if QT_CONFIG(accessibility)
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent ev(this, segmentText(index));
+        QAccessible::updateAccessibility(&ev);
+    }
+#endif
     emit currentChanged(index);
 }
 
@@ -745,6 +825,10 @@ void Segmented::paintEvent(QPaintEvent*)
 
 void Segmented::mousePressEvent(QMouseEvent* e)
 {
+    if (e->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(e);
+        return;
+    }
     const int i = segmentAt(e->pos());
     if (i >= 0 && m_segments[size_t(i)].enabled)
         setCurrentIndex(i);
@@ -790,7 +874,10 @@ ProgressBar::ProgressBar(QWidget* parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     m_timer.setInterval(16);
-    connect(&m_timer, &QTimer::timeout, this, qOverload<>(&QWidget::update));
+    connect(&m_timer, &QTimer::timeout, this, [this] {
+        if (!window()->isMinimized()) // nothing to animate for a minimised window
+            update();
+    });
 }
 
 void ProgressBar::setFraction(double f)
@@ -861,8 +948,8 @@ ProgressBlock::ProgressBlock(QWidget* parent) : QWidget(parent)
     auto* row = new QHBoxLayout;
     row->setSpacing(space::md);
     m_bar = new ProgressBar(this);
-    m_percent = monoLabel(QStringLiteral("0 %"), this, color::fg_0);
-    m_percent->setMinimumWidth(QFontMetrics(font::mono()).horizontalAdvance(QStringLiteral("100 %")));
+    m_percent = monoLabel(thinPercent(0.0), this, color::fg_0);
+    m_percent->setMinimumWidth(QFontMetrics(font::mono()).horizontalAdvance(thinPercent(1.0)));
     row->addWidget(m_bar, 1);
     row->addWidget(m_percent);
     l->addLayout(row);
@@ -870,7 +957,6 @@ ProgressBlock::ProgressBlock(QWidget* parent) : QWidget(parent)
     m_detail->setWordWrap(true);
     l->addWidget(m_detail);
     m_stepper = new StageStepper(this);
-    m_stepperLayout = nullptr;
     l->addWidget(m_stepper);
     m_stepper->hide();
 }
@@ -878,10 +964,10 @@ ProgressBlock::ProgressBlock(QWidget* parent) : QWidget(parent)
 void ProgressBlock::setProgress(double fraction, bool indeterminate, const QString& detail)
 {
     m_bar->setFraction(fraction);
+    m_indeterminate = indeterminate;
     if (m_bar->state() == ProgressBar::State::Determinate || m_bar->state() == ProgressBar::State::Indeterminate)
         m_bar->setState(indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
-    m_percent->setText(indeterminate ? QString() : thinPercent(fraction));
-    m_percent->setVisible(!indeterminate);
+    updateLabel();
     m_detail->setText(detail);
     m_detail->setVisible(!detail.isEmpty());
 }
@@ -889,19 +975,40 @@ void ProgressBlock::setProgress(double fraction, bool indeterminate, const QStri
 void ProgressBlock::setState(ProgressBar::State state)
 {
     m_bar->setState(state);
+    updateLabel();
+}
+
+// The text right of the bar, from the bar's state and fraction: the same
+// whether setProgress() or setState() was called last.
+void ProgressBlock::updateLabel()
+{
+    const QString pct = thinPercent(m_bar->fraction());
+    QString text;
     QColor c = color::fg_0;
-    if (state == ProgressBar::State::Done) {
+    bool plainPercent = false;
+    switch (m_bar->state()) {
+    case ProgressBar::State::Done:
+        text = QStringLiteral("Done");
         c = color::success_hi;
-        m_percent->setText(QStringLiteral("Done"));
-    } else if (state == ProgressBar::State::Failed) {
+        break;
+    case ProgressBar::State::Failed:
+        text = m_indeterminate ? QStringLiteral("Failed") : QStringLiteral("Failed at %1").arg(pct);
         c = color::danger_hi;
-        m_percent->setText(QStringLiteral("Failed at %1").arg(thinPercent(m_bar->fraction())));
-    } else if (state == ProgressBar::State::Paused) {
+        break;
+    case ProgressBar::State::Paused:
+        text = m_indeterminate ? QStringLiteral("Paused") : QStringLiteral("Paused · %1").arg(pct);
         c = color::fg_3;
-        m_percent->setText(QStringLiteral("Paused · %1").arg(thinPercent(m_bar->fraction())));
+        break;
+    case ProgressBar::State::Indeterminate: break;
+    case ProgressBar::State::Determinate:
+        text = pct;
+        plainPercent = true;
+        break;
     }
-    m_percent->setVisible(true);
-    m_percent->setMinimumWidth(0);
+    m_percent->setText(text);
+    m_percent->setVisible(!text.isEmpty());
+    // A bare percentage keeps the width of "100 %", so the bar does not change length.
+    m_percent->setMinimumWidth(plainPercent ? QFontMetrics(font::mono()).horizontalAdvance(thinPercent(1.0)) : 0);
     setTextColor(m_percent, c);
 }
 
@@ -944,7 +1051,7 @@ void StageStepper::setStages(const QStringList& names, int current, bool failed)
             iconName = QStringLiteral("check");
             c = color::success_hi;
         } else if (i == current) {
-            iconName = failed ? QStringLiteral("error") : QStringLiteral("dot");
+            iconName = failed ? QStringLiteral("error") : QStringLiteral("circle_filled");
             c = failed ? color::danger : color::fg_0;
             f = font::bodyStrong();
             f.setPixelSize(12);
@@ -952,9 +1059,8 @@ void StageStepper::setStages(const QStringList& names, int current, bool failed)
         auto* ic = new QLabel(w);
         ic->setPixmap(iconPixmap(iconName, size::iconSm, c, devicePixelRatioF()));
         ic->setFixedSize(size::iconSm, size::iconSm);
-        auto* t = new QLabel(names.at(i), w);
+        auto* t = label(names.at(i), TextStyle::Caption, i == current && !failed ? color::fg_0 : c, w);
         t->setFont(f);
-        setTextColor(t, i == current && !failed ? color::fg_0 : c);
         h->addWidget(ic);
         h->addWidget(t);
         m_layout->addWidget(w);
@@ -1020,6 +1126,7 @@ void InfoBar::setTone(Tone tone)
     const QString iconName = tone == Tone::Info ? QStringLiteral("info") : defaultBadgeIcon(tone);
     m_icon->setPixmap(iconPixmap(iconName.isEmpty() ? QStringLiteral("info") : iconName, size::icon, toneMark(tone),
                                  devicePixelRatioF()));
+    setTextColor(m_title, tone == Tone::Err ? color::danger_hi : color::fg_0); // whichever of title and tone is set first
     update();
 }
 
@@ -1027,9 +1134,13 @@ void InfoBar::setDismissable(bool on) { m_dismiss->setVisible(on); }
 
 void InfoBar::clearLinks()
 {
+    // deleteLater: a link's own activated() may be what clears the links.
     while (m_links->count() > 1) {
         QLayoutItem* it = m_links->takeAt(0);
-        delete it->widget();
+        if (QWidget* w = it->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
         delete it;
     }
 }
@@ -1202,6 +1313,7 @@ void setInputError(QLineEdit* edit, bool error)
 QComboBox* dropdown(QWidget* parent)
 {
     auto* c = new QComboBox(parent);
+    c->setFocusPolicy(Qt::StrongFocus); // not WheelFocus: the wheel scrolls the page (see installAppGuard)
     c->setFixedHeight(size::control);
     c->setMaxVisibleItems(12);
     c->setSizeAdjustPolicy(QComboBox::AdjustToContents);
@@ -1236,7 +1348,14 @@ PathField::PathField(Mode mode, QWidget* parent) : QWidget(parent), m_mode(mode)
     connect(m_edit, &QLineEdit::textEdited, this, [this](const QString&) { emit pathEdited(path()); });
 }
 
-QString PathField::path() const { return QDir::fromNativeSeparators(m_edit->text().trimmed()); }
+QString PathField::path() const
+{
+    QString t = m_edit->text().trimmed();
+    // Explorer's "Copy as path" puts the path in quotes.
+    if (t.size() >= 2 && t.startsWith(u'"') && t.endsWith(u'"'))
+        t = t.mid(1, t.size() - 2).trimmed();
+    return QDir::fromNativeSeparators(t);
+}
 
 void PathField::setPath(const QString& p)
 {
@@ -1267,6 +1386,7 @@ void PathField::setReadOnly(bool ro)
 void PathField::browse()
 {
     const QString start = !path().isEmpty() ? path() : m_startDir;
+    QPointer<PathField> self(this);
     QString chosen;
     switch (m_mode) {
     case Mode::Directory:
@@ -1279,22 +1399,35 @@ void PathField::browse()
         chosen = QFileDialog::getSaveFileName(window(), m_title.isEmpty() ? QStringLiteral("Save as") : m_title, start, m_filter);
         break;
     }
-    if (!chosen.isEmpty())
+    if (self && !chosen.isEmpty()) // the form can be rebuilt while the dialog is open
         setPath(chosen);
+}
+
+// What a drop on this field would set: a local folder for a folder field, a
+// local file for a file field; "" for anything else (web links, the wrong kind).
+QString PathField::droppedPath(const QMimeData* mime) const
+{
+    if (!mime || !mime->hasUrls() || m_edit->isReadOnly())
+        return {};
+    const QList<QUrl> urls = mime->urls();
+    if (urls.isEmpty() || !urls.first().isLocalFile())
+        return {};
+    const QString local = urls.first().toLocalFile();
+    const QFileInfo fi(local);
+    if (local.isEmpty() || !fi.exists())
+        return {};
+    return fi.isDir() == (m_mode == Mode::Directory) ? local : QString();
 }
 
 void PathField::dragEnterEvent(QDragEnterEvent* e)
 {
-    if (e->mimeData()->hasUrls() && !m_edit->isReadOnly())
+    if (!droppedPath(e->mimeData()).isEmpty())
         e->acceptProposedAction();
 }
 
 void PathField::dropEvent(QDropEvent* e)
 {
-    const auto urls = e->mimeData()->urls();
-    if (urls.isEmpty())
-        return;
-    const QString local = urls.first().toLocalFile();
+    const QString local = droppedPath(e->mimeData());
     if (local.isEmpty())
         return;
     setPath(local);
@@ -1447,8 +1580,8 @@ int TwoColumnLayout::heightForWidth(int width) const
         int h = 0;
         if (m_left)
             h += m_left->hasHeightForWidth() ? m_left->heightForWidth(width) : m_left->sizeHint().height();
-        if (m_right)
-            h += m_gap + (m_right->hasHeightForWidth() ? m_right->heightForWidth(std::min(width, m_rightWidth)) : m_right->sizeHint().height());
+        if (m_right) // stacked: the right column is laid out at the full width (setGeometry)
+            h += (m_left ? m_gap : 0) + (m_right->hasHeightForWidth() ? m_right->heightForWidth(width) : m_right->sizeHint().height());
         return h;
     }
     int h = 0;
@@ -1531,6 +1664,8 @@ int FlowLayout::doLayout(const QRect& rect, bool testOnly) const
     const QRect r = rect.marginsRemoved(contentsMargins());
     int x = r.x(), y = r.y(), lineH = 0;
     for (auto* it : m_items) {
+        if (it->isEmpty())
+            continue; // a hidden chip takes no room and no gap
         const QSize s = it->sizeHint();
         int nextX = x + s.width() + m_h;
         if (nextX - m_h > r.right() + 1 && lineH > 0) {
@@ -1564,19 +1699,20 @@ QString elideMiddle(const QString& s, int max)
 
 QString nativePath(const QString& path) { return QDir::toNativeSeparators(path); }
 
-void openInFileManager(const QString& path)
+bool openInFileManager(const QString& path)
 {
     if (path.isEmpty())
-        return;
+        return false;
     const QFileInfo fi(path);
 #ifdef Q_OS_WIN
-    if (fi.exists() && !fi.isDir()) {
-        QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(fi.absoluteFilePath())});
-        return;
-    }
+    if (fi.exists() && !fi.isDir())
+        return QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(fi.absoluteFilePath())});
 #endif
+    // A file that was moved away: its folder is the next best thing to show.
     const QString dir = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
-    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    if (!QFileInfo(dir).isDir())
+        return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 // ---- brand mark / icon tile ------------------------------------------------------

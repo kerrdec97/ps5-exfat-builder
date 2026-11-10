@@ -1,10 +1,13 @@
 #include "app/ui/Components.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Style.h"
 
+#include <QAccessible>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QMetaMethod>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -39,7 +42,6 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
         return out;
     QTextLayout layout(text, font);
     layout.beginLayout();
-    int consumed = 0;
     while (out.size() < maxLines) {
         QTextLine line = layout.createLine();
         if (!line.isValid())
@@ -49,14 +51,11 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
         const int len = line.textLength();
         if (out.size() == maxLines - 1 && start + len < text.size()) {
             out << QFontMetrics(font).elidedText(text.mid(start), Qt::ElideRight, width);
-            consumed = text.size();
             break;
         }
         out << text.mid(start, len).trimmed();
-        consumed = start + len;
     }
     layout.endLayout();
-    Q_UNUSED(consumed);
     return out;
 }
 
@@ -88,7 +87,12 @@ ChoiceTiles::ChoiceTiles(QWidget* parent) : QWidget(parent)
     QSizePolicy sp(QSizePolicy::Expanding, QSizePolicy::Preferred);
     sp.setHeightForWidth(true);
     setSizePolicy(sp);
-    setProperty("fwRadius", radius::md);
+    setProperty("fwNoRing", true); // the selected tile shows the focus itself
+}
+
+QString ChoiceTiles::choiceTitle(int index) const
+{
+    return index >= 0 && index < count() ? m_items[size_t(index)].title : QString();
 }
 
 void ChoiceTiles::addChoice(const QString& title, const QString& description, const QString& icon, const QVariant& value,
@@ -107,6 +111,12 @@ void ChoiceTiles::setCurrentIndex(int index)
         return;
     m_current = index;
     update();
+#if QT_CONFIG(accessibility)
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent ev(this, choiceTitle(index));
+        QAccessible::updateAccessibility(&ev);
+    }
+#endif
     emit currentChanged(index);
 }
 
@@ -236,7 +246,7 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
             p.setFont(font::caption());
             p.drawText(tagR, Qt::AlignCenter, it.tag);
         }
-        // Description: two lines under the title, aligned with it, continuing below the icon.
+        // Description: up to three lines under the title, aligned with it.
         p.setFont(font::caption());
         p.setPen(fgText);
         const qreal dw = r.right() - 14 - tx;
@@ -247,17 +257,24 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         }
         if (sel)
             paintCheckBubble(p, QRectF(r.right() - 32, r.top() + 12, 20, 20), dpr);
-        if (hasFocus() && sel) {
-            QPen fpen(color::focus, 2);
-            p.setPen(fpen);
+        // Keyboard focus only, and inside the tile: outside it the widget's
+        // own edge would cut the ring.
+        if (sel && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
+            p.setPen(QPen(color::focus, 2));
             p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(r.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
+            p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
         }
     }
 }
 
 void ChoiceTiles::mousePressEvent(QMouseEvent* e)
 {
+    if (e->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(e);
+        return;
+    }
+    m_keyNav = false;
+    update();
     const int i = at(e->pos());
     if (i >= 0 && m_items[size_t(i)].enabled)
         setCurrentIndex(i);
@@ -285,6 +302,8 @@ void ChoiceTiles::keyPressEvent(QKeyEvent* e)
     if (k == Qt::Key_Left || k == Qt::Key_Right || k == Qt::Key_Up || k == Qt::Key_Down) {
         const int step = (k == Qt::Key_Left || k == Qt::Key_Up) ? -1 : 1;
         int i = m_current;
+        m_keyNav = true;
+        update();
         for (int n = 0; n < count(); ++n) {
             i = (i + step + count()) % count();
             if (m_items[size_t(i)].enabled) {
@@ -408,11 +427,6 @@ void DropZone::paintEvent(QPaintEvent*)
         p.drawText(QRectF(r.left() + 16, ir.bottom() + 32, r.width() - 32, 18), Qt::AlignCenter,
                    QFontMetrics(font::caption()).elidedText(m_text, Qt::ElideRight, int(r.width() - 32)));
     }
-    if (hasFocus()) {
-        p.setPen(QPen(color::focus, 2));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(r.adjusted(-0.5, -0.5, 0.5, 0.5), radius::md, radius::md);
-    }
 }
 
 // ---- Disclosure ----------------------------------------------------------------------
@@ -424,6 +438,11 @@ Disclosure::Disclosure(const QString& title, const QString& captionText, QWidget
     m_header = new QWidget(this);
     m_header->setCursor(Qt::PointingHandCursor);
     m_header->setFocusPolicy(Qt::StrongFocus);
+    // The role first: naming a widget can already make Qt create (and keep)
+    // its accessible interface. See Accessible.h.
+    m_header->setProperty("fwRole", QStringLiteral("button"));
+    m_header->setProperty("fwExpanded", false);
+    m_header->setProperty("fwRadius", radius::md);
     m_header->setAccessibleName(title);
     m_header->installEventFilter(this);
     auto* h = hbox(m_header, space::md, QMargins(space::lg, 14, space::lg, 14));
@@ -455,6 +474,16 @@ void Disclosure::setExpanded(bool on)
     m_bodyWidget->setVisible(on);
     m_chevron->setPixmap(iconPixmap(on ? QStringLiteral("chevron_down") : QStringLiteral("chevron_right"), 16, color::fg_3,
                                     devicePixelRatioF()));
+    m_header->setProperty("fwExpanded", on);
+#if QT_CONFIG(accessibility)
+    if (QAccessible::isActive()) {
+        QAccessible::State changed;
+        changed.expanded = true;
+        changed.collapsed = true;
+        QAccessibleStateChangeEvent ev(m_header, changed);
+        QAccessible::updateAccessibility(&ev);
+    }
+#endif
     update();
     emit toggled(on);
 }
@@ -475,13 +504,18 @@ bool Disclosure::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == m_header) {
         if (event->type() == QEvent::MouseButtonRelease) {
+            // The left button, released on the header (not after dragging off it).
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() != Qt::LeftButton || !m_header->rect().contains(me->position().toPoint()))
+                return false;
             setExpanded(!m_expanded);
             return true;
         }
         if (event->type() == QEvent::KeyPress) {
             auto* k = static_cast<QKeyEvent*>(event);
             if (k->key() == Qt::Key_Space || k->key() == Qt::Key_Return || k->key() == Qt::Key_Enter) {
-                setExpanded(!m_expanded);
+                if (!k->isAutoRepeat()) // a held key toggles once
+                    setExpanded(!m_expanded);
                 return true;
             }
         }
@@ -499,11 +533,6 @@ void Disclosure::paintEvent(QPaintEvent*)
     paintCardSurface(p, r, radius::md, m_header->underMouse() && !m_expanded);
     if (m_expanded) {
         p.fillRect(QRectF(r.left() + space::lg, m_header->geometry().bottom(), r.width() - 2 * space::lg, 1), color::border_1);
-    }
-    if (m_header->hasFocus()) {
-        p.setPen(QPen(color::focus, 2));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(QRectF(m_header->geometry()).adjusted(2, 2, -2, -2), radius::sm, radius::sm);
     }
 }
 
@@ -580,6 +609,7 @@ StatTile::StatTile(const QString& icon, const QString& overline, QWidget* parent
     m_tile = new IconTile(icon, 32, this);
     top->addWidget(m_tile);
     top->addWidget(label(overline, TextStyle::Overline, color::fg_4, this), 1);
+    setAccessibleName(overline);
     v->addLayout(top);
     m_value = label({}, TextStyle::Stat, color::fg_0, this);
     v->addWidget(m_value);
@@ -610,9 +640,35 @@ void StatTile::setCaption(const QString& caption)
 
 void StatTile::mouseReleaseEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton && rect().contains(e->pos()))
-        emit clicked();
+    const bool hit = e->button() == Qt::LeftButton && rect().contains(e->pos());
     QWidget::mouseReleaseEvent(e);
+    if (hit) {
+        e->accept();
+        emit clicked(); // last: a slot may rebuild the page this tile is on
+    }
+}
+
+void StatTile::connectNotify(const QMetaMethod& signal)
+{
+    // Somebody listens for clicks: the tile is a control then, reachable with
+    // Tab and pressed with Space or Enter like a button.
+    if (signal == QMetaMethod::fromSignal(&StatTile::clicked) && focusPolicy() == Qt::NoFocus) {
+        setFocusPolicy(Qt::TabFocus);
+        setProperty("fwNoRing", false);
+        setProperty("fwRadius", radius::md);
+    }
+    QWidget::connectNotify(signal);
+}
+
+void StatTile::keyPressEvent(QKeyEvent* e)
+{
+    const bool press = e->key() == Qt::Key_Space || e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter;
+    if (press && focusPolicy() != Qt::NoFocus && !e->isAutoRepeat()) {
+        e->accept();
+        emit clicked();
+        return;
+    }
+    QWidget::keyPressEvent(e);
 }
 
 void StatTile::enterEvent(QEnterEvent* e)
@@ -702,11 +758,6 @@ void ActionCard::paintEvent(QPaintEvent*)
     }
     p.drawPixmap(QRectF(r.right() - 30, r.center().y() - 8, 16, 16).toRect(),
                  iconPixmap(QStringLiteral("chevron_right"), 16, active ? color::accent_hi : color::fg_5, dpr));
-    if (hasFocus()) {
-        p.setPen(QPen(color::focus, 2));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(r.adjusted(-1, -1, 1, 1), radius::md + 1, radius::md + 1);
-    }
 }
 
 } // namespace fw::ui

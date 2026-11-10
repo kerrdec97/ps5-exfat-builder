@@ -1,6 +1,7 @@
 #include "app/ui/LibraryGrid.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Style.h"
 
 #include <QContextMenuEvent>
 #include <QFileInfo>
@@ -10,7 +11,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
-#include <QPixmapCache>
+#include <QCache>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QToolTip>
@@ -55,7 +57,8 @@ QFont headerFont()
 QString initials(const QString& title)
 {
     QString out;
-    for (const QString& w : title.split(QRegularExpression(QStringLiteral("[\\s:\\-_]+")), Qt::SkipEmptyParts)) {
+    static const QRegularExpression separators(QStringLiteral("[\\s:\\-_]+")); // once, not per tile per paint
+    for (const QString& w : title.split(separators, Qt::SkipEmptyParts)) {
         for (const QChar c : w)
             if (c.isLetterOrNumber()) {
                 out += c.toUpper();
@@ -67,24 +70,72 @@ QString initials(const QString& title)
     return out.isEmpty() ? QStringLiteral("?") : out;
 }
 
-// The cover file cut to a w×h (device pixels) square, cached.
+// Covers are read from disk once per file: a thumbnail (short side at most
+// kThumb px, decoded at that size) is kept per path, and the tiles are cut
+// from it, so resizing the window, hovering and repainting never touch the
+// disk again. A file that cannot be read is remembered too, until the items
+// are set again: a missing cover on an unplugged drive or a sleeping share is
+// not opened on every repaint. The caches have their own budget; Qt's shared
+// 10 MB pixmap cache holds about twenty covers at 200 % scaling.
+constexpr int kThumb = 512;
+
+struct CoverCache {
+    QCache<QString, QImage> thumbs{64 * 1024};  // cost in KiB
+    QCache<QString, QPixmap> tiles{128 * 1024};
+    QSet<QString> failed;
+    int decodes = 0;
+};
+
+CoverCache& covers()
+{
+    static CoverCache c;
+    return c;
+}
+
+int costKiB(qsizetype bytes) { return int(std::max<qsizetype>(1, bytes / 1024)); }
+
+const QImage* coverThumb(const QString& path)
+{
+    CoverCache& c = covers();
+    if (const QImage* hit = c.thumbs.object(path))
+        return hit;
+    if (c.failed.contains(path))
+        return nullptr;
+    ++c.decodes;
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    const QSize full = reader.size();
+    if (full.isValid() && std::min(full.width(), full.height()) > kThumb) {
+        const qreal f = qreal(kThumb) / std::min(full.width(), full.height());
+        reader.setScaledSize(QSize(std::max(1, qRound(full.width() * f)), std::max(1, qRound(full.height() * f))));
+    }
+    QImage img = reader.read();
+    if (img.isNull()) {
+        c.failed.insert(path);
+        return nullptr;
+    }
+    auto* thumb = new QImage(std::move(img));
+    if (!c.thumbs.insert(path, thumb, costKiB(thumb->sizeInBytes())))
+        return nullptr; // larger than the whole budget: insert() deleted it
+    return c.thumbs.object(path);
+}
+
+// The cover file cut to w×h device pixels.
 QPixmap coverPixmap(const QString& path, const QSize& px)
 {
     if (path.isEmpty() || px.isEmpty())
         return {};
-    const QString key = QStringLiteral("libgrid|%1|%2x%3").arg(path).arg(px.width()).arg(px.height());
-    QPixmap pm;
-    if (QPixmapCache::find(key, &pm))
-        return pm;
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    QImage img = reader.read();
-    if (img.isNull())
+    CoverCache& c = covers();
+    const QString key = QStringLiteral("%1|%2x%3").arg(path).arg(px.width()).arg(px.height());
+    if (const QPixmap* hit = c.tiles.object(key))
+        return *hit;
+    const QImage* thumb = coverThumb(path);
+    if (!thumb)
         return {};
-    img = img.scaled(px, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    QImage img = thumb->scaled(px, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     img = img.copy((img.width() - px.width()) / 2, (img.height() - px.height()) / 2, px.width(), px.height());
-    pm = QPixmap::fromImage(img);
-    QPixmapCache::insert(key, pm);
+    const QPixmap pm = QPixmap::fromImage(img);
+    c.tiles.insert(key, new QPixmap(pm), costKiB(img.sizeInBytes()));
     return pm;
 }
 
@@ -96,11 +147,16 @@ LibraryGrid::LibraryGrid(QWidget* parent) : QWidget(parent)
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setProperty("fwNoRing", true); // the current item shows the focus itself
+    setAccessibleName(QStringLiteral("Items"));
     m_headers = {QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Formats"), QStringLiteral("Status")};
 }
 
+int LibraryGrid::coverDecodeCount() { return covers().decodes; }
+
 void LibraryGrid::setItems(std::vector<GridItem> items)
 {
+    covers().failed.clear(); // a rescan: covers that could not be read get another try
     const QString cur = currentKey();
     m_items = std::move(items);
     QSet<QString> keep;
@@ -231,6 +287,7 @@ void LibraryGrid::setCurrent(int i, bool ensureVisible)
     if (i < 0 || i >= count())
         return;
     m_current = i;
+    setAccessibleDescription(m_items[size_t(i)].title); // the items are painted: say which one is current
     update();
     if (!ensureVisible)
         return;
@@ -413,10 +470,12 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     }
     if (sel || hov || !m_selected.isEmpty())
         paintCheck(p, checkRect(i), sel, true);
-    if (hasFocus() && i == m_current) {
+    // Keyboard focus only, and inside the tile: outside it the grid's own
+    // edge would cut the ring of the first row and of the outer columns.
+    if (i == m_current && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(color::focus, 2));
-        p.drawRoundedRect(r.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
+        p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
     }
 }
 
@@ -512,7 +571,7 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     p.setPen(color::fg_4);
     p.drawText(QRectF(tx, r.center().y() + 1, tw, 16), Qt::AlignLeft | Qt::AlignVCenter,
                QFontMetrics(p.font()).elidedText(second, wide ? Qt::ElideMiddle : Qt::ElideRight, int(tw)));
-    if (hasFocus() && i == m_current) {
+    if (i == m_current && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(color::focus, 2));
         p.drawRoundedRect(r.adjusted(1, 2, -1, -2), radius::sm, radius::sm);
@@ -523,6 +582,7 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
 
 void LibraryGrid::mousePressEvent(QMouseEvent* e)
 {
+    m_keyNav = false;
     setFocus(Qt::MouseFocusReason);
     if (e->button() != Qt::LeftButton)
         return;
@@ -565,37 +625,47 @@ void LibraryGrid::mouseDoubleClickEvent(QMouseEvent* e)
 
 void LibraryGrid::mouseMoveEvent(QMouseEvent* e)
 {
-    const QPoint pos = e->position().toPoint();
-    const int i = itemAt(pos);
-    const bool onCheck = i >= 0 && checkRect(i).contains(pos);
-    if (i != m_hover || onCheck != m_hoverCheck) {
+    const int i = itemAt(e->position().toPoint());
+    if (i != m_hover) {
+        const int old = m_hover;
         m_hover = i;
-        m_hoverCheck = onCheck;
         setCursor(i >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        update();
+        if (old >= 0 && old < count())
+            update(itemRect(old).adjusted(-4, -4, 4, 4));
+        if (i >= 0)
+            update(itemRect(i).adjusted(-4, -4, 4, 4));
     }
 }
 
 void LibraryGrid::leaveEvent(QEvent*)
 {
+    const int old = m_hover;
     m_hover = -1;
-    update();
+    if (old >= 0 && old < count())
+        update(itemRect(old).adjusted(-4, -4, 4, 4));
 }
 
 void LibraryGrid::contextMenuEvent(QContextMenuEvent* e)
 {
-    const int i = itemAt(e->pos());
-    if (i < 0)
+    // The Menu key and Shift+F10 report the middle of this (tall, scrolled)
+    // widget: the menu is for the current item then, not for what lies there.
+    const bool keyboard = e->reason() == QContextMenuEvent::Keyboard;
+    const int i = keyboard ? m_current : itemAt(e->pos());
+    if (i < 0 || i >= count())
         return;
     const QString key = m_items[size_t(i)].key;
+    const QPoint globalPos = keyboard ? mapToGlobal(itemRect(i).center()) : e->globalPos();
+    QPointer<LibraryGrid> self(this);
     if (!m_selected.contains(key)) {
         m_selected = {key};
         m_anchor = i;
         update();
         emit selectionChanged();
+        if (!self)
+            return;
     }
-    setCurrent(i, false);
-    emit contextRequested(key, e->globalPos());
+    setCurrent(i, keyboard);
+    emit contextRequested(key, globalPos);
 }
 
 void LibraryGrid::keyPressEvent(QKeyEvent* e)
@@ -606,6 +676,7 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
     }
     const int cols = m_mode == Mode::List ? 1 : columns(width());
     int next = m_current < 0 ? 0 : m_current;
+    m_keyNav = true;
     switch (e->key()) {
     case Qt::Key_Right: next = m_current < 0 ? 0 : m_current + 1; break;
     case Qt::Key_Left: next = m_current - 1; break;
@@ -620,6 +691,7 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
                 m_selected.remove(key);
             else
                 m_selected.insert(key);
+            m_anchor = m_current; // Shift+arrow extends from here
             update();
             emit selectionChanged();
         }
@@ -654,8 +726,11 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
         m_selected.clear();
         for (int k = std::min(m_anchor, next); k <= std::max(m_anchor, next); ++k)
             m_selected.insert(m_items[size_t(k)].key);
+        setCurrent(next, true);
         emit selectionChanged();
+        return;
     }
+    m_anchor = next; // a later Shift+arrow extends from where the keyboard is
     setCurrent(next, true);
 }
 
@@ -675,7 +750,7 @@ bool LibraryGrid::event(QEvent* e)
                 lines << it.path;
             if (!it.tooltip.isEmpty())
                 lines << it.tooltip;
-            QToolTip::showText(he->globalPos(), lines.join(u'\n'), this, itemRect(i));
+            QToolTip::showText(he->globalPos(), plainTip(lines.join(u'\n')), this, itemRect(i));
         } else {
             QToolTip::hideText();
         }

@@ -32,6 +32,17 @@ static bool useSegmented(const SettingDef& def)
     return true;
 }
 
+// A StringList setting holds folders (Library folders) or wildcard patterns
+// ("Leave out"). Only a folder list gets the folder picker and native
+// separators; a pattern is shown and stored exactly as it is written.
+static bool isFolderList(const SettingDef& def)
+{
+    const QString name = def.key.section(u'.', -1);
+    return name.contains(QLatin1String("folder"), Qt::CaseInsensitive) || name.contains(QLatin1String("dir"), Qt::CaseInsensitive);
+}
+
+static QString listText(const QStringList& items) { return items.join(QStringLiteral("; ")); }
+
 void SettingEditor::build(QWidget* parent)
 {
     switch (m_def.type) {
@@ -122,26 +133,36 @@ void SettingEditor::build(QWidget* parent)
         auto* edit = textInput(QStringLiteral("None"), true, wrap);
         edit->setAccessibleName(m_def.label);
         edit->setToolTip(QStringLiteral("Separate entries with ;"));
-        auto* add = button(QStringLiteral("Add…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), wrap);
         h->addWidget(edit, 1);
-        h->addWidget(add);
         wrap->setFixedWidth(360);
         connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
-            if (!m_updating)
-                emit edited(value());
-        });
-        connect(add, &QPushButton::clicked, this, [this, edit, wrap] {
-            const QString dir = QFileDialog::getExistingDirectory(wrap->window(), m_def.label);
-            if (dir.isEmpty())
+            if (m_updating)
                 return;
-            QStringList items = value().toStringList();
-            if (!items.contains(QDir::toNativeSeparators(dir)) && !items.contains(dir))
-                items << QDir::toNativeSeparators(dir);
-            m_updating = true;
-            edit->setText(items.join(QStringLiteral("; ")));
-            m_updating = false;
-            emit edited(items);
+            // Only a real change: leaving the field untouched is not an edit.
+            const QString t = listText(value().toStringList());
+            if (t == edit->property("fwLast").toString())
+                return;
+            edit->setProperty("fwLast", t);
+            emit edited(value());
         });
+        if (isFolderList(m_def)) {
+            auto* add = button(QStringLiteral("Add…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), wrap);
+            h->addWidget(add);
+            connect(add, &QPushButton::clicked, this, [this, edit, wrap] {
+                QPointer<SettingEditor> self(this);
+                const QString dir = QFileDialog::getExistingDirectory(wrap->window(), m_def.label);
+                if (!self || dir.isEmpty()) // the row can be rebuilt while the dialog is open
+                    return;
+                QStringList items = value().toStringList();
+                if (!items.contains(QDir::toNativeSeparators(dir)) && !items.contains(dir))
+                    items << QDir::toNativeSeparators(dir);
+                m_updating = true;
+                edit->setText(listText(items));
+                m_updating = false;
+                edit->setProperty("fwLast", listText(items));
+                emit edited(items);
+            });
+        }
         m_widget = wrap;
         m_control = edit;
         wrap->setFocusProxy(edit);
@@ -200,9 +221,12 @@ void SettingEditor::setValue(const QVariant& v)
     case SettingType::FilePath: static_cast<PathField*>(m_widget)->setPath(v.toString()); break;
     case SettingType::StringList: {
         QStringList items = v.toStringList();
-        for (QString& s : items)
-            s = QDir::toNativeSeparators(s);
-        static_cast<QLineEdit*>(m_control)->setText(items.join(QStringLiteral("; ")));
+        if (isFolderList(m_def))
+            for (QString& s : items)
+                s = QDir::toNativeSeparators(s);
+        auto* e = static_cast<QLineEdit*>(m_control);
+        e->setText(listText(items));
+        e->setProperty("fwLast", listText(value().toStringList()));
         break;
     }
     }
@@ -324,6 +348,8 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     rcol->addWidget(m_message);
     h->addWidget(right, 0, Qt::AlignRight | Qt::AlignVCenter);
     m_editor->widget()->setAccessibleName(def.label);
+    // The full description is otherwise only in a mouse tooltip.
+    m_editor->widget()->setAccessibleDescription(def.description);
     updateHelp();
 }
 
@@ -481,7 +507,7 @@ void JobOptionsPanel::build()
             connect(row->editor(), &SettingEditor::edited, this, [this, key](const QVariant& v) { onEdited(key, v); });
             connect(row, &SettingRow::useDefaultRequested, this, [this, key] {
                 m_overrides.remove(key);
-                m_errors.remove(key);
+                clearError(key);
                 refreshRow(key);
                 refreshDependencies();
                 emit overridesChanged();
@@ -522,8 +548,7 @@ void JobOptionsPanel::onEdited(const QString& key, const QVariant& value)
         emit overridesChanged();
         return;
     }
-    m_errors.remove(key);
-    row->setMessage({}, Tone::Neutral);
+    clearError(key);
     const QVariant def = m_ctx.settings().value(key);
     if (norm.value() == def) {
         m_overrides.remove(key);
@@ -546,17 +571,30 @@ void JobOptionsPanel::setOverride(const QString& key, const QVariant& value)
         m_overrides.remove(key);
     else
         m_overrides.insert(key, norm.value());
+    clearError(key); // the value is valid now, whatever was typed before
     refreshRow(key);
     refreshDependencies();
     emit overridesChanged();
 }
 
+// Forgets the validation error of a row and takes its message away. A note a
+// page put under the row (SettingRow::setMessage) is left alone: only a row
+// with an error of this panel is cleared.
+void JobOptionsPanel::clearError(const QString& key)
+{
+    if (m_errors.remove(key) == 0)
+        return;
+    if (SettingRow* row = m_rows.value(key))
+        row->setMessage({}, Tone::Neutral);
+}
+
 void JobOptionsPanel::clearOverrides()
 {
     m_overrides.clear();
-    m_errors.clear();
-    for (const QString& k : m_order)
+    for (const QString& k : m_order) {
+        clearError(k);
         refreshRow(k);
+    }
     refreshDependencies();
     emit overridesChanged();
 }
@@ -572,9 +610,11 @@ void JobOptionsPanel::refreshRow(const QString& key)
         row->editor()->setValue(m_overrides.value(key));
         row->setOverridden(true, SettingRow::displayValue(*d, def));
     } else {
+        // Back to the global value: what was typed (and its error, if it had
+        // one) is gone from the field, so it must not block the form either.
         row->editor()->setValue(def);
         row->setOverridden(false);
-        row->setMessage({}, Tone::Neutral);
+        clearError(key);
     }
 }
 
@@ -590,6 +630,11 @@ void JobOptionsPanel::refreshDependencies()
         if (enabled) {
             row->setDisabledReason({});
         } else {
+            // A disabled row cannot be corrected: drop an invalid entry with its error.
+            if (m_errors.contains(key)) {
+                clearError(key);
+                refreshRow(key);
+            }
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
             const QString otherLabel = other ? other->label : d->enabledWhenKey;
             const QString want = other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString();

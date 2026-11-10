@@ -50,11 +50,15 @@ public:
     void setSmall(bool small);               // mono-sm (dock / detail panels)
     void refresh();
 
+protected:
+    void showEvent(QShowEvent* e) override;
+
 private:
     LogModel& m_model;
     QString m_job, m_source;
     int m_max = 5;
     bool m_small = false;
+    bool m_dirty = false; // changed while hidden: refreshed when shown
     QVBoxLayout* m_lines;
     QLabel* m_emptyLabel;
 };
@@ -93,7 +97,7 @@ private:
     LogLevel m_min = LogLevel::Info;
     quint64 m_lastSeq = 0;
     bool m_follow = true;
-    bool m_adjusting = false;
+    int m_adjusting = 0; // depth: scroll changes the console makes itself do not end "follow"
     bool m_live = true;
     int m_lines = 0;
     int m_max = 4000;

@@ -23,6 +23,9 @@ Tone toneForState(JobState state);
 QString stateIcon(JobState state);           // row state glyph
 QString waitingText(const JobRecord& r, int maxAttempts); // "Retrying in 25 s · attempt 2 of 3" or ""
 QString finishedNote(const JobRecord& r);    // "Verified · 12 min 40 s", "2 warnings"
+// A rough estimate for the whole running job, in ms; -1 when unknown.
+// (ProgressSnapshot::etaMs is the current stage only.)
+qint64 jobTimeLeftMs(const JobRecord& r);
 
 class JobRow : public QWidget {
     Q_OBJECT
@@ -86,6 +89,7 @@ private:
     Badge* m_badge;
     QWidget* m_actions;
     QHBoxLayout* m_actionsLayout;
+    QPointer<IconButton> m_upButton, m_downButton;
 };
 
 class JobList : public QWidget {
@@ -104,6 +108,9 @@ signals:
     void selectionChanged(const QString& id);
     void activated(const QString& id);
     void cancelRequested(const QString& id); // the page confirms, then cancels
+    // Retry / Run again could not queue the job (source gone, drive unplugged).
+    // While nothing is connected the list shows the message itself.
+    void retryFailed(const QString& id, const QString& message);
     void countChanged();
 
 protected:
@@ -143,6 +150,7 @@ class JobsDock : public Card {
 public:
     JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent = nullptr);
     void refresh();
+    JobList* list() const { return m_list; } // the rows under the running block (tests)
     // The job the page's monitor shows: the dock hides its own running block
     // for it (nothing is shown twice). "" = none.
     void setWatchedJob(const QString& id);
@@ -155,6 +163,7 @@ signals:
     void watchRequested(const QString& id); // "Watch" on the running block
 
 private:
+    void applyListFilter();
     AppContext& m_ctx;
     JobQueueModel& m_model;
     Badge* m_count;

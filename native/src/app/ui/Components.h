@@ -2,9 +2,9 @@
 
 // v5 page-level components, built on the design tokens (Theme.h):
 //
-//  * ChoiceTiles  — large selectable tiles (icon, title, one-line description,
-//                   optional tag) for the one decision a page is about
-//                   (image format, target firmware...). Keyboard: arrows.
+//  * ChoiceTiles  — large selectable tiles (icon, title, a description of up
+//                   to three lines, optional tag) for the one decision a page
+//                   is about (image format, target firmware...). Keyboard: arrows.
 //  * DropZone     — the empty state of a "pick a folder" step: dashed area,
 //                   click or Enter to browse, accepts a dropped folder/file.
 //  * Disclosure   — a card whose body folds away ("Advanced options"), with a
@@ -38,6 +38,7 @@ public:
     QVariant currentValue() const;
     void setCurrentValue(const QVariant& value);
     int count() const { return int(m_items.size()); }
+    QString choiceTitle(int index) const; // "" when out of range
     void setChoiceEnabled(int index, bool enabled);
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -67,6 +68,7 @@ private:
     std::vector<Item> m_items;
     int m_current = -1;
     int m_hover = -1;
+    bool m_keyNav = false; // an arrow key chose the tile last
 };
 
 class DropZone : public QAbstractButton {
@@ -150,8 +152,10 @@ signals:
 protected:
     void paintEvent(QPaintEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
     void enterEvent(QEnterEvent* e) override;
     void leaveEvent(QEvent* e) override;
+    void connectNotify(const QMetaMethod& signal) override; // a tile with a click handler takes keyboard focus
 
 private:
     IconTile* m_tile;

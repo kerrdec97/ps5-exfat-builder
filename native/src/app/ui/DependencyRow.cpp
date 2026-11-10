@@ -61,16 +61,21 @@ void DependencyRow::setInfo(const DependencyInfo& info)
         detail = detail.isEmpty() ? QDir::toNativeSeparators(info.path) : QStringLiteral("%1 · %2").arg(detail, QDir::toNativeSeparators(info.path));
     if (detail.isEmpty())
         detail = info.purpose;
-    m_detail->setFullText(detail);
+    // The font first: the text is elided with it.
     m_detail->setFont(info.path.isEmpty() ? font::caption() : font::mono());
-    m_detail->setToolTip(QStringList{info.purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix}.join(QStringLiteral("\n")).trimmed());
+    m_detail->setFullText(detail);
+    QStringList tip;
+    for (const QString& part : {info.purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix})
+        if (!part.trimmed().isEmpty())
+            tip << part.trimmed();
+    m_detail->setToolTip(plainTip(tip.join(u'\n')));
     QString iconName;
     QColor c;
     Tone tone = Tone::Neutral;
     QString word;
     switch (info.status) {
     case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = QStringLiteral("Ready"); break;
-    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = QStringLiteral("Version unknown"); break;
+    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = QStringLiteral("Outdated"); break;
     case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Not found"); break;
     case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Error"); break;
     case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = QStringLiteral("Not needed"); break;
@@ -116,6 +121,7 @@ DependencyList::DependencyList(AppContext& ctx, const QStringList& ids, QWidget*
         row->setDivider(i + 1 < order.size());
         connect(row, &DependencyRow::fixRequested, this, &DependencyList::fixRequested);
         m_rows.insert(id, row);
+        m_order << id;
         l->addWidget(row);
     }
     connect(&m_ctx, &AppContext::dependenciesChecked, this, &DependencyList::refresh);
@@ -125,12 +131,14 @@ DependencyList::DependencyList(AppContext& ctx, const QStringList& ids, QWidget*
 void DependencyList::refresh()
 {
     m_last.clear();
-    for (auto it = m_rows.begin(); it != m_rows.end(); ++it) {
-        const DependencyInfo info = m_ctx.dependencies().last(it.key());
+    // In the order of the rows: the copied report lists the tools the same way every time.
+    for (const QString& id : std::as_const(m_order)) {
+        DependencyRow* row = m_rows.value(id);
+        const DependencyInfo info = m_ctx.dependencies().last(id);
         if (info.id.isEmpty())
-            it.value()->setChecking();
+            row->setChecking();
         else {
-            it.value()->setInfo(info);
+            row->setInfo(info);
             m_last << info;
         }
     }

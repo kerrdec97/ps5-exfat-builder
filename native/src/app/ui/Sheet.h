@@ -26,7 +26,13 @@ public:
     ~Sheet() override;
 
     QVBoxLayout* body() { return m_body; }
-    QLabel* addText(const QString& text);        // body fg_1, wraps; supports rich text for mono spans
+    // Body text (fg_1, wraps). addText() shows the text literally unless it
+    // holds a span made by monoSpan() / monoLines() in this process; then it
+    // is rich text and everything else in it must be escaped by the caller.
+    // A "<span" from a file name or a server reply never switches the format.
+    QLabel* addText(const QString& text);
+    QLabel* addPlainText(const QString& text);   // always literal
+    QLabel* addRichText(const QString& html);    // markup the app wrote; escape the outside parts
     QCheckBox* addCheckbox(const QString& text);
     QPushButton* addButton(const QString& text, Role role);
     void setTitle(const QString& title);
@@ -44,23 +50,35 @@ public:
     static int openCount();
 
     // Convenience: a confirm dialog. Returns true when the action button was chosen.
+    // `format`: Qt::AutoText = as addText() decides, Qt::PlainText, Qt::RichText.
     static bool confirm(QWidget* host, const QString& title, const QString& text, const QString& safeText,
                         const QString& actionText, bool destructive = true, Icon icon = Icon::Warning,
-                        const QString& checkboxText = {}, bool* checkboxValue = nullptr);
+                        const QString& checkboxText = {}, bool* checkboxValue = nullptr,
+                        Qt::TextFormat format = Qt::AutoText);
     static void message(QWidget* host, const QString& title, const QString& text, Icon icon = Icon::Info,
-                        const QString& buttonText = QStringLiteral("OK"));
+                        const QString& buttonText = QStringLiteral("OK"), Qt::TextFormat format = Qt::AutoText);
+    // A message that does not block (no nested event loop): for handlers that
+    // must return at once. `text` is shown literally. The sheet deletes itself.
+    static Sheet* notify(QWidget* host, const QString& title, const QString& text, Icon icon = Icon::Info,
+                         const QString& buttonText = QStringLiteral("OK"));
+    // Markup for a value in the mono font; `text` is plain and is escaped here.
     static QString monoSpan(const QString& text);
+    // The same for several plain lines: each is escaped, one line per row.
+    static QString monoLines(const QStringList& plainLines);
 
 protected:
     void paintEvent(QPaintEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
+    void hideEvent(QHideEvent* e) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     bool focusNextPrevChild(bool next) override;
 
 private:
     void relayout();
+    QLabel* addBodyLabel(const QString& text, Qt::TextFormat format);
+    QPushButton* defaultButton() const; // Enter outside a button; focused when the sheet opens
     QWidget* m_panel;
     QVBoxLayout* m_body;
     QHBoxLayout* m_buttons;
@@ -69,9 +87,11 @@ private:
     QList<Role> m_roles;
     int m_width;
     int m_result = -1;
+    bool m_answered = false; // close() ran (exec(): the loop did not just end with the application)
     bool m_counted = false; // in openCount()
     QPointer<QEventLoop> m_loop;
     QPointer<QWidget> m_previousFocus;
+    bool m_previousByKeyboard = false;
 };
 
 // Bottom-right toast stack (max 3, newest at the bottom).

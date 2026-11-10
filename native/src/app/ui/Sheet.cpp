@@ -1,12 +1,19 @@
 #include "app/ui/Sheet.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Style.h"
 
 #include <QApplication>
 #include <QEvent>
+#include <QAbstractSpinBox>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QPainter>
+#include <QPlainTextEdit>
+#include <QRandomGenerator>
+#include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -76,14 +83,40 @@ Sheet::~Sheet()
 
 void Sheet::setTitle(const QString& title) { m_title->setText(title); }
 
-QLabel* Sheet::addText(const QString& text)
+namespace {
+
+// Names the spans this process wrote. Text from outside cannot contain it, so
+// it cannot make addText() read a message as markup.
+const QString& spanMarker()
 {
-    auto* l = label(text, TextStyle::Body, color::fg_1, m_panel);
+    static const QString marker = QStringLiteral("fw%1").arg(QRandomGenerator::global()->generate64(), 0, 16);
+    return marker;
+}
+
+QString spanOpen()
+{
+    return QStringLiteral("<span class=\"%1\" style=\"font-family:'%2';font-size:12px\">").arg(spanMarker(), monoFamily());
+}
+
+} // namespace
+
+QLabel* Sheet::addBodyLabel(const QString& text, Qt::TextFormat format)
+{
+    QLabel* l = format == Qt::RichText ? richLabel(text, TextStyle::Body, color::fg_1, m_panel)
+                                       : label(text, TextStyle::Body, color::fg_1, m_panel);
     l->setWordWrap(true);
-    l->setTextFormat(text.contains(QLatin1String("<span")) ? Qt::RichText : Qt::PlainText);
     m_body->addWidget(l);
     return l;
 }
+
+QLabel* Sheet::addText(const QString& text)
+{
+    const bool ownMarkup = text.contains(QStringLiteral("<span class=\"%1\"").arg(spanMarker()));
+    return addBodyLabel(text, ownMarkup ? Qt::RichText : Qt::PlainText);
+}
+
+QLabel* Sheet::addPlainText(const QString& text) { return addBodyLabel(text, Qt::PlainText); }
+QLabel* Sheet::addRichText(const QString& html) { return addBodyLabel(html, Qt::RichText); }
 
 QCheckBox* Sheet::addCheckbox(const QString& text)
 {
@@ -107,7 +140,16 @@ QPushButton* Sheet::addButton(const QString& text, Role role)
 
 QString Sheet::monoSpan(const QString& text)
 {
-    return QStringLiteral("<span style=\"font-family:'%1';font-size:12px\">%2</span>").arg(monoFamily(), text.toHtmlEscaped());
+    return spanOpen() + text.toHtmlEscaped() + QStringLiteral("</span>");
+}
+
+QString Sheet::monoLines(const QStringList& plainLines)
+{
+    QStringList escaped;
+    escaped.reserve(plainLines.size());
+    for (const QString& line : plainLines)
+        escaped << line.toHtmlEscaped();
+    return spanOpen() + escaped.join(QStringLiteral("<br>")) + QStringLiteral("</span>");
 }
 
 void Sheet::relayout()
@@ -117,9 +159,13 @@ void Sheet::relayout()
     setGeometry(parentWidget()->rect());
     const int w = std::min(m_width, width() - 2 * space::lg);
     m_panel->setFixedWidth(w);
-    m_panel->adjustSize();
-    const QSize s = m_panel->sizeHint();
-    m_panel->setGeometry((width() - w) / 2, std::max(space::lg, (height() - s.height()) / 2), w, s.height());
+    // The height the wrapped text needs at this width (sizeHint() is for the
+    // labels' preferred width), and never taller than the window, so the
+    // buttons stay on screen.
+    QLayout* l = m_panel->layout();
+    int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(w) : m_panel->sizeHint().height();
+    h = std::min(h, std::max(l ? l->totalMinimumSize().height() : 0, height() - 2 * space::lg));
+    m_panel->setGeometry((width() - w) / 2, std::max(space::lg, (height() - h) / 2), w, h);
 }
 
 void Sheet::open()
@@ -129,22 +175,11 @@ void Sheet::open()
         ++g_openSheets;
     }
     m_previousFocus = QApplication::focusWidget();
+    m_previousByKeyboard = hasKeyboardFocus(m_previousFocus);
     relayout();
     raise();
     show();
-    // Focus the safe action for destructive dialogs, the primary one otherwise.
-    QPushButton* focusTarget = nullptr;
-    bool destructive = false;
-    for (int i = 0; i < m_roles.size(); ++i)
-        if (m_roles[i] == Role::Destructive)
-            destructive = true;
-    for (int i = 0; i < m_roles.size(); ++i) {
-        if (destructive && m_roles[i] == Role::Safe) { focusTarget = m_buttonList[i]; break; }
-        if (!destructive && m_roles[i] == Role::Primary) { focusTarget = m_buttonList[i]; break; }
-    }
-    if (!focusTarget && !m_buttonList.isEmpty())
-        focusTarget = m_buttonList.last();
-    if (focusTarget) {
+    if (QPushButton* focusTarget = defaultButton()) {
         window()->setAttribute(Qt::WA_KeyboardFocusChange, true);
         focusTarget->setFocus(Qt::TabFocusReason);
     } else {
@@ -152,14 +187,35 @@ void Sheet::open()
     }
 }
 
+// The safe action for destructive dialogs, the primary one otherwise.
+QPushButton* Sheet::defaultButton() const
+{
+    const bool destructive = m_roles.contains(Role::Destructive);
+    for (int i = 0; i < m_roles.size(); ++i) {
+        if (destructive && m_roles[i] == Role::Safe)
+            return m_buttonList[i];
+        if (!destructive && m_roles[i] == Role::Primary)
+            return m_buttonList[i];
+    }
+    return m_buttonList.isEmpty() ? nullptr : m_buttonList.last();
+}
+
 int Sheet::exec()
 {
     open();
     QEventLoop loop;
     m_loop = &loop;
-    const int r = loop.exec(QEventLoop::DialogExec);
+    m_answered = false;
+    QPointer<Sheet> self(this);
+    loop.exec(QEventLoop::DialogExec);
+    if (!self)
+        return -1; // destroyed with its host while it was open: no answer
     m_loop = nullptr;
-    return r;
+    // The loop also ends when the application quits: that is not "the first
+    // button" but no answer, i.e. the safe one.
+    if (!m_answered)
+        close(-1);
+    return m_result;
 }
 
 void Sheet::close(int result)
@@ -172,13 +228,14 @@ void Sheet::close(int result)
             }
     }
     m_result = result;
+    m_answered = true;
     if (m_counted) {
         m_counted = false;
         --g_openSheets;
     }
     hide();
-    if (m_previousFocus)
-        m_previousFocus->setFocus(Qt::OtherFocusReason);
+    if (m_previousFocus) // a keyboard user gets the ring back where it was
+        m_previousFocus->setFocus(m_previousByKeyboard ? Qt::TabFocusReason : Qt::OtherFocusReason);
     if (m_loop)
         m_loop->exit(result);
     deleteLater();
@@ -198,12 +255,43 @@ void Sheet::keyPressEvent(QKeyEvent* e)
         close(-1);
         return;
     }
+    // Enter anywhere but on a button (those press themselves) is the default
+    // button. Not from a text field of a destructive sheet: its default is the
+    // safe button, and Enter there would throw away what was typed.
+    if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && !e->isAutoRepeat() && isVisible()
+        && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier))) {
+        QWidget* fw = QApplication::focusWidget();
+        const bool typing = qobject_cast<QLineEdit*>(fw) || qobject_cast<QPlainTextEdit*>(fw)
+                         || qobject_cast<QTextEdit*>(fw) || qobject_cast<QAbstractSpinBox*>(fw);
+        QPushButton* b = defaultButton();
+        if (auto* focused = qobject_cast<QPushButton*>(fw); focused && m_buttonList.contains(focused))
+            b = focused;
+        if (b && b->isEnabled() && !(typing && m_roles.contains(Role::Destructive))) {
+            b->click();
+            return;
+        }
+    }
     QWidget::keyPressEvent(e);
 }
 
 void Sheet::mousePressEvent(QMouseEvent* e)
 {
     e->accept(); // the scrim swallows clicks
+}
+
+void Sheet::hideEvent(QHideEvent* e)
+{
+    QWidget::hideEvent(e);
+    // Hidden itself (hide(), setVisible(false)), not with its window: it no
+    // longer counts as open and a waiting exec() returns (the safe answer).
+    if (!isHidden())
+        return;
+    if (m_counted) {
+        m_counted = false;
+        --g_openSheets;
+    }
+    if (m_loop && !m_answered)
+        m_loop->exit(-1);
 }
 
 bool Sheet::eventFilter(QObject* watched, QEvent* event)
@@ -238,11 +326,14 @@ bool Sheet::focusNextPrevChild(bool next)
 
 bool Sheet::confirm(QWidget* host, const QString& title, const QString& text, const QString& safeText,
                     const QString& actionText, bool destructive, Icon icon, const QString& checkboxText,
-                    bool* checkboxValue)
+                    bool* checkboxValue, Qt::TextFormat format)
 {
     auto* s = new Sheet(host, title, icon);
-    s->addText(text);
-    QCheckBox* cb = nullptr;
+    if (format == Qt::AutoText)
+        s->addText(text);
+    else
+        s->addBodyLabel(text, format == Qt::RichText ? Qt::RichText : Qt::PlainText);
+    QPointer<QCheckBox> cb; // gone with the sheet when its host is destroyed during exec()
     if (!checkboxText.isEmpty())
         cb = s->addCheckbox(checkboxText);
     s->addButton(safeText, Role::Safe);
@@ -253,12 +344,25 @@ bool Sheet::confirm(QWidget* host, const QString& title, const QString& text, co
     return r == 1;
 }
 
-void Sheet::message(QWidget* host, const QString& title, const QString& text, Icon icon, const QString& buttonText)
+void Sheet::message(QWidget* host, const QString& title, const QString& text, Icon icon, const QString& buttonText,
+                    Qt::TextFormat format)
 {
     auto* s = new Sheet(host, title, icon);
-    s->addText(text);
+    if (format == Qt::AutoText)
+        s->addText(text);
+    else
+        s->addBodyLabel(text, format == Qt::RichText ? Qt::RichText : Qt::PlainText);
     s->addButton(buttonText, Role::Primary);
     s->exec();
+}
+
+Sheet* Sheet::notify(QWidget* host, const QString& title, const QString& text, Icon icon, const QString& buttonText)
+{
+    auto* s = new Sheet(host, title, icon);
+    s->addPlainText(text);
+    s->addButton(buttonText, Role::Primary);
+    s->open();
+    return s;
 }
 
 // ---- toasts --------------------------------------------------------------------------
@@ -313,9 +417,12 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
             auto* l = new Link(a.text, t);
             auto fn = a.fn;
             connect(l, &Link::activated, this, [this, t, fn] {
+                // The action may close the window this host belongs to.
+                QPointer<ToastHost> self(this);
                 if (fn)
                     fn();
-                remove(t);
+                if (self)
+                    remove(t);
             });
             links->addWidget(l);
         }
@@ -332,7 +439,6 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
     while (m_toasts.size() > 3)
         remove(m_toasts.front());
     t->show();
-    t->raise();
     relayout();
 
     const int life = lifetimeMs >= 0 ? lifetimeMs : (tone == Tone::Ok || tone == Tone::Info || tone == Tone::Neutral) ? 6000 : 0;
@@ -372,14 +478,25 @@ void ToastHost::relayout()
 {
     if (!parentWidget())
         return;
+    // A toast never covers an open sheet: its links would act on the page
+    // behind a dialog that is still waiting for its answer.
+    QWidget* sheet = nullptr;
+    for (QObject* o : parentWidget()->children())
+        if (auto* s = qobject_cast<Sheet*>(o); s && s->isVisible()) {
+            sheet = s;
+            break; // the lowest one: children are in stacking order
+        }
     int y = parentWidget()->height() - space::lg;
     for (auto it = m_toasts.rbegin(); it != m_toasts.rend(); ++it) {
         QWidget* t = *it;
-        t->adjustSize();
-        const int h = t->sizeHint().height();
+        QLayout* l = t->layout();
+        const int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(size::toast) : t->sizeHint().height();
         y -= h;
         t->setGeometry(parentWidget()->width() - space::lg - size::toast, y, size::toast, h);
-        t->raise();
+        if (sheet)
+            t->stackUnder(sheet);
+        else
+            t->raise();
         y -= space::sm;
     }
 }

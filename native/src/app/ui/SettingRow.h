@@ -113,13 +113,14 @@ signals:
 
 private:
     void onEdited(const QString& key, const QVariant& value);
+    void clearError(const QString& key);
     void refreshRow(const QString& key);
     void refreshDependencies();
     AppContext& m_ctx;
     QStringList m_sections, m_exclude, m_order, m_include;
     QHash<QString, SettingRow*> m_rows;
     QVariantMap m_overrides;
-    QHash<QString, QString> m_errors;
+    QHash<QString, QString> m_errors; // rows that show a validation error of their own
     bool m_cards = true;
     bool m_built = false;
 };

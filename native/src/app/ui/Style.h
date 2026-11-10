@@ -8,6 +8,8 @@
 
 #include <QProxyStyle>
 #include <QPointer>
+
+class QApplication;
 #include <QTimer>
 #include <QWidget>
 
@@ -30,6 +32,22 @@ public:
     QSize sizeFromContents(ContentsType type, const QStyleOption* option, const QSize& size,
                            const QWidget* widget) const override;
 };
+
+// Application-wide input rules, installed once by theme::apply():
+//  * a tooltip that looks like markup and was not written by the app (see
+//    plainTip()) is shown as the literal text: tooltips often carry paths,
+//    file names and messages from outside;
+//  * the mouse wheel does not change a dropdown, spin box or slider that has
+//    no keyboard focus: the page under it scrolls instead;
+//  * Enter / Return press the focused button, like Space does.
+void installAppGuard(QApplication* app);
+
+// True when `w` has the keyboard focus and got it the keyboard way: Tab,
+// Backtab, a shortcut, or code that moved it with one of those reasons (the
+// sidebar's arrow keys, a sheet's default button). Focus rings are shown for
+// this, not after a mouse click. (Qt's WA_KeyboardFocusChange follows real
+// Tab key presses only and is cleared by every other focus change.)
+bool hasKeyboardFocus(const QWidget* w);
 
 // Paints a 2 px `focus` ring 1 px outside the focused widget (radius + 1).
 // Inputs show it whenever they have focus; everything else only after keyboard
