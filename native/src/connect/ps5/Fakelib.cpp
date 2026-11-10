@@ -71,10 +71,9 @@ QString Overlay::path() const
 
 bool isListedName(const QString& name)
 {
-    const QString low = name.toLower();
-    if (low.endsWith(QStringLiteral(".uploading")) || low.endsWith(QStringLiteral(".replacing.bak")))
-        return false;
-    return hasLibrarySuffix(low);
+    // Temporary names of an upload in progress ("x.sprx.uploading",
+    // "x.sprx.replacing.bak") do not end in a library suffix, so they never list.
+    return hasLibrarySuffix(name.toLower());
 }
 
 int Listing::enabledCount() const

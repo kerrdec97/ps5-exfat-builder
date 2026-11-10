@@ -19,9 +19,7 @@ Result<RemoteTree> walkRemoteTree(FtpClient& c, const QString& rootIn, const Rem
                                   const CancellationToken& token, const RemoteWalkProgress& progress)
 {
     RemoteTree tree;
-    tree.root = cleanRemotePath(rootIn);
-    if (!tree.root.startsWith(u'/'))
-        tree.root.prepend(u'/');
+    tree.root = cleanRemotePath(rootIn); // always starts with "/"
 
     FW_TRY_ASSIGN(FtpFeatures feats, c.features());
     bool useMlsd = feats.mlsd;

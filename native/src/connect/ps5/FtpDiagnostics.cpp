@@ -253,7 +253,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
     ConsoleEndpoint ep = endpoint;
     ep.host = ep.host.trimmed();
     if (ep.host.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings > PS5 connection."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings › PS5 connection."));
     FtpDiagnosis d;
     d.host = ep.host;
     d.port = ep.ftpPort;
@@ -375,9 +375,13 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
         d.writable = false;
         d.writableDetail = QStringLiteral("Write denied: %1").arg(up.error().message);
     }
-    if (!c.isConnected() && !c.open(d.host, d.port, token).ok()) {
-        d.error = QStringLiteral("The PS5 closed the FTP connection during the checks.");
-        return d;
+    if (!c.isConnected()) {
+        if (auto st = c.open(d.host, d.port, token); !st.ok()) {
+            if (st.error().isCancelled())
+                return Error::cancelled();
+            d.error = QStringLiteral("The PS5 closed the FTP connection during the checks.");
+            return d;
+        }
     }
 
     // 7. Speed test (legacy _ftpspeed_run).

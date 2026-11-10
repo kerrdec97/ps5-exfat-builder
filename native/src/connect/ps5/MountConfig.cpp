@@ -465,11 +465,27 @@ void applyProfileSetting(IniDocument& doc, const QString& prefix, const QString&
     }
 }
 
-void dropEmptyProfileSections(IniDocument& doc)
+bool isProfileSection(const QString& s)
 {
+    return s.startsWith(QLatin1String("game:"), Qt::CaseInsensitive) || s.startsWith(QLatin1String("image:"), Qt::CaseInsensitive);
+}
+
+// The [game:*] / [image:*] sections without a key.
+QStringList emptyProfileSections(const IniDocument& doc)
+{
+    QStringList out;
     for (const QString& s : doc.sections())
-        if ((s.startsWith(QLatin1String("game:"), Qt::CaseInsensitive) || s.startsWith(QLatin1String("image:"), Qt::CaseInsensitive))
-            && doc.keys(s).isEmpty())
+        if (isProfileSection(s) && doc.keys(s).isEmpty())
+            out << s;
+    return out;
+}
+
+// Removes the sections this edit emptied. One that was empty before (it may
+// hold only the user's comments) is not this edit's to remove.
+void dropEmptiedProfileSections(IniDocument& doc, const QStringList& emptyBefore)
+{
+    for (const QString& s : emptyProfileSections(doc))
+        if (!emptyBefore.contains(s, Qt::CaseInsensitive))
             doc.removeSection(s);
 }
 
@@ -479,6 +495,7 @@ QString applyProfiles(const QString& original, const MountConfigValues& before, 
     for (auto it = changes.cbegin(); it != changes.cend(); ++it)
         after.insert(it.key(), it.value());
     IniDocument doc(original.isEmpty() ? v2Header() : original, IniDocument::Quoting::V2);
+    const QStringList emptyBefore = emptyProfileSections(doc);
     if (!doc.contains(QStringLiteral("config"), QStringLiteral("version")))
         doc.set(QStringLiteral("config"), QStringLiteral("version"), QStringLiteral("2"));
     const ProfileRules r = rulesFrom(after);
@@ -495,7 +512,7 @@ QString applyProfiles(const QString& original, const MountConfigValues& before, 
         applyProfileSetting(doc, image, QStringLiteral("mount_mode"), r.mountMode, false);
     if (changes.contains(QStringLiteral("image_sector")))
         applyProfileSetting(doc, image, QStringLiteral("sector_size"), r.sectorSize, false);
-    dropEmptyProfileSections(doc);
+    dropEmptiedProfileSections(doc, emptyBefore);
     return doc.text();
 }
 
@@ -542,7 +559,7 @@ MountConfigValues parseProfiles(const QString& text)
 
 QString mountToolName(MountTool tool)
 {
-    return tool == MountTool::ShadowMountPlus ? QStringLiteral("ShadowMountPlus") : QStringLiteral("MicroMount");
+    return tool == MountTool::ShadowMountPlus ? QStringLiteral("ShadowMount+") : QStringLiteral("MicroMount");
 }
 
 QString mountRemoteDir(MountTool tool)
@@ -887,8 +904,12 @@ MountConfigFiles applyMountConfigChanges(MountTool tool, const QString& config, 
                 section = k.left(dot);
                 k = k.mid(dot + 1);
             }
+            // A key that repeats is read as one value per line: one line each
+            // again, never a line break inside a value.
             if (value.isEmpty())
                 doc.remove(section, k);
+            else if (value.contains(u'\n'))
+                doc.setList(section, k, listLines(value));
             else
                 doc.set(section, k, value);
             continue;
@@ -1130,18 +1151,86 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& v)
         if (isObsoleteSmpKey(it.key()))
             obsolete << it.key();
     if (!obsolete.isEmpty())
-        out << QStringLiteral("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console.").arg(obsolete.join(QStringLiteral(", ")));
+        out << (obsolete.size() == 1
+                    ? QStringLiteral("%1 no longer exists in ShadowMount+ 1.7 and is removed on push to a 1.7 console.")
+                    : QStringLiteral("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console."))
+                   .arg(obsolete.join(QStringLiteral(", ")));
     return out;
 }
 
 // ---- FTP --------------------------------------------------------------------------------------
 
+QString decodeConfigText(const QByteArray& bytes)
+{
+    QString out;
+    out.reserve(bytes.size());
+    const auto* p = reinterpret_cast<const uchar*>(bytes.constData());
+    const qsizetype n = bytes.size();
+    static constexpr char32_t kSmallest[] = {0, 0, 0x80, 0x800, 0x10000}; // below: an overlong form
+    for (qsizetype i = 0; i < n;) {
+        const uchar b = p[i];
+        const int len = b < 0x80 ? 1 : (b >> 5) == 0x6 ? 2 : (b >> 4) == 0xE ? 3 : (b >> 3) == 0x1E ? 4 : 0;
+        bool ok = len > 0 && i + len <= n;
+        char32_t cp = b;
+        if (ok && len > 1) {
+            cp = b & (0xFFu >> (len + 1));
+            for (int k = 1; ok && k < len; ++k) {
+                ok = (p[i + k] & 0xC0) == 0x80;
+                cp = (cp << 6) | (p[i + k] & 0x3Fu);
+            }
+            ok = ok && cp >= kSmallest[len] && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF);
+        }
+        if (!ok) {
+            out += QChar(char16_t(0xDC00 + b)); // one raw byte, written back as it was
+            ++i;
+            continue;
+        }
+        if (cp >= 0x10000) {
+            out += QChar(QChar::highSurrogate(cp));
+            out += QChar(QChar::lowSurrogate(cp));
+        } else {
+            out += QChar(char16_t(cp));
+        }
+        i += len;
+    }
+    return out;
+}
+
+QByteArray encodeConfigText(const QString& text)
+{
+    QByteArray out;
+    out.reserve(text.size() + 16);
+    qsizetype from = 0;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const char16_t u = text.at(i).unicode();
+        // A low surrogate without its high one is a raw byte from decodeConfigText().
+        if (u < 0xDC80 || u > 0xDCFF || (i > 0 && text.at(i - 1).isHighSurrogate()))
+            continue;
+        out += QStringView(text).mid(from, i - from).toUtf8();
+        out += char(u - 0xDC00);
+        from = i + 1;
+    }
+    out += QStringView(text).mid(from).toUtf8();
+    return out;
+}
+
 namespace {
+
+// An uploadReplace() that lost the connection between its two renames leaves
+// the previous file as "<name>.replacing.bak" and nothing under its name: put
+// it back, so the settings do not look lost.
+bool restoreInterruptedReplace(FtpClient& c, const QString& remote)
+{
+    const QString bak = remote + QStringLiteral(".replacing.bak");
+    return c.isConnected() && c.fileExists(bak) && c.rename(bak, remote).ok();
+}
 
 // RETR of a small text file; "" with *exists = false when it is not there.
 Result<QString> downloadText(FtpClient& c, const QString& remote, bool* exists, const CancellationToken& token)
 {
     auto bytes = c.download(remote, token);
+    if (!bytes.ok() && bytes.error().code == ErrorCode::NotFound && restoreInterruptedReplace(c, remote))
+        bytes = c.download(remote, token);
     if (!bytes.ok()) {
         if (bytes.error().code == ErrorCode::NotFound && c.isConnected()) {
             *exists = false;
@@ -1150,7 +1239,7 @@ Result<QString> downloadText(FtpClient& c, const QString& remote, bool* exists, 
         return bytes.takeError();
     }
     *exists = true;
-    return QString::fromUtf8(bytes.value());
+    return decodeConfigText(bytes.value());
 }
 
 Result<MountPushResult> pushRemoteText(FtpClient& c, const QString& dir, const QString& remote, const QString& text,
@@ -1166,11 +1255,13 @@ Result<MountPushResult> pushRemoteText(FtpClient& c, const QString& dir, const Q
                          QStringLiteral("%1 changed on the console since it was loaded (the ShadowMount+ web UI or API may "
                                         "have saved it). Load it again, then make your changes.")
                              .arg(remote),
-                         QStringLiteral("expected %1 bytes, found %2").arg(expected->toUtf8().size()).arg(now.toUtf8().size()));
+                         QStringLiteral("expected %1 bytes, found %2")
+                             .arg(encodeConfigText(*expected).size())
+                             .arg(encodeConfigText(now).size()));
     }
     (void)c.mkdirs(dir); // best effort, like the legacy MKD
     FW_TRY_ASSIGN(out.backupPath, backupRemoteFile(c, remote, backupDir, token));
-    const QByteArray bytes = text.toUtf8();
+    const QByteArray bytes = encodeConfigText(text);
     const Status swap = c.uploadReplace(remote, bytes, QStringLiteral(".new"), token);
     if (swap.ok()) {
         out.swapped = true;
@@ -1189,6 +1280,8 @@ Result<MountPushResult> pushRemoteText(FtpClient& c, const QString& dir, const Q
 Result<QString> loadMountConfig(FtpClient& c, MountTool tool, const CancellationToken& token)
 {
     auto bytes = c.download(mountConfigRemotePath(tool), token);
+    if (!bytes.ok() && bytes.error().code == ErrorCode::NotFound && restoreInterruptedReplace(c, mountConfigRemotePath(tool)))
+        bytes = c.download(mountConfigRemotePath(tool), token);
     if (!bytes.ok()) {
         if (bytes.error().code == ErrorCode::NotFound)
             return Error(ErrorCode::NotFound,
@@ -1198,7 +1291,7 @@ Result<QString> loadMountConfig(FtpClient& c, MountTool tool, const Cancellation
                          bytes.error().detail);
         return bytes.takeError();
     }
-    return QString::fromUtf8(bytes.value());
+    return decodeConfigText(bytes.value());
 }
 
 Result<QString> fetchMountDebugLog(FtpClient& c, MountTool tool, const CancellationToken& token)
@@ -1335,7 +1428,7 @@ QString stopOutcomeMessage(StopOutcome outcome)
 {
     switch (outcome) {
     case StopOutcome::Confirmed:
-        return QStringLiteral("ShadowMountPlus cleanup confirmed — safe to unplug. Re-send the payload after plugging "
+        return QStringLiteral("ShadowMount+ cleanup confirmed — safe to unplug. Re-send the payload after plugging "
                               "the drive back in to resume auto-mounting.");
     case StopOutcome::NoKlog:
         return QStringLiteral("STOP sent — cleanup NOT confirmed (neither the kernel log nor debug.log could be read). Do "
@@ -1361,7 +1454,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
             status(s);
     };
     // 1. klog first, so no cleanup line races past us.
-    say(QStringLiteral("Connecting to klog (%1:%2)...").arg(ep.host).arg(ep.klogPort));
+    say(QStringLiteral("Connecting to klog (%1:%2)…").arg(ep.host).arg(ep.klogPort));
     std::unique_ptr<KlogSession> klog;
     if (auto k = KlogSession::open(ep.host, ep.klogPort, klogConnectTimeoutMs, token); k.ok())
         klog = std::move(k.value());
@@ -1369,7 +1462,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
         return Error::cancelled();
 
     // 2. The STOP sentinel, always. Without klog, remember where debug.log ends.
-    say(QStringLiteral("Sending STOP signal to PS5..."));
+    say(QStringLiteral("Sending STOP signal to PS5…"));
     const QString logPath = mountDebugLogRemotePath(MountTool::ShadowMountPlus);
     FtpClient c(ftpOptionsFor(ep));
     FW_TRY(c.open(ep.host, ep.ftpPort, token));
@@ -1398,7 +1491,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
         }
         // 3b. Follow debug.log over FTP (ShadowMount+ polls STOP every 3 s).
         res.source = QStringLiteral("debug.log");
-        say(QStringLiteral("Kernel log not reachable; following %1...").arg(logPath));
+        say(QStringLiteral("Kernel log not reachable; following %1…").arg(logPath));
         QByteArray carry;
         while (true) {
             if (tracker.poll(clock.elapsed()))
@@ -1411,6 +1504,11 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
                 return Error::cancelled();
             if (!c.isConnected() && !c.open(ep.host, ep.ftpPort, token).ok())
                 continue;
+            // A rotated log is shorter than what was already read: from its top again.
+            if (auto now = c.size(logPath); now.ok() && now.value() < logOffset) {
+                logOffset = 0;
+                carry.clear();
+            }
             QByteArray chunk;
             QBuffer buf(&chunk);
             buf.open(QIODevice::WriteOnly);
@@ -1450,7 +1548,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
     // 3. Watch klog for the confirmation. Lines are read in short slices so the
     //    settle period can complete while klog is quiet.
     res.source = QStringLiteral("klog");
-    say(QStringLiteral("Waiting for ShadowMountPlus confirmation..."));
+    say(QStringLiteral("Waiting for ShadowMount+ confirmation…"));
     while (true) {
         if (tracker.poll(clock.elapsed()))
             return finish(StopOutcome::Confirmed);

@@ -1,5 +1,8 @@
 #include "connect/ps5/RemotePath.h"
 
+#include <QDir>
+#include <QFileInfo>
+
 namespace fw::ps5 {
 
 namespace {
@@ -51,18 +54,27 @@ QString joinRemote(const QString& dir, const QString& name)
     return (base == u"/" ? QString() : base) + u'/' + parts.join(u'/');
 }
 
-QString remoteNameProblem(const QString& name)
+QString listedNameProblem(const QString& name)
 {
     if (name.isEmpty())
         return QStringLiteral("empty name");
     if (name == u"." || name == u"..")
         return QStringLiteral("reserved name \"%1\"").arg(name);
     for (QChar c : name) {
-        if (c == u'/' || c == u'\\' || c == u':')
+        if (c == u'/' || c == u'\\')
             return QStringLiteral("the name contains \"%1\"").arg(c);
         if (c.unicode() < 0x20)
             return QStringLiteral("the name contains a control character");
     }
+    return {};
+}
+
+QString remoteNameProblem(const QString& name)
+{
+    if (const QString why = listedNameProblem(name); !why.isEmpty())
+        return why;
+    if (name.contains(u':'))
+        return QStringLiteral("the name contains \":\"");
     return {};
 }
 
@@ -89,6 +101,14 @@ QString localNameProblem(const QString& name)
 std::optional<QString> remoteChild(const QString& dir, const QString& name)
 {
     if (!remoteNameProblem(name).isEmpty())
+        return std::nullopt;
+    const QString base = cleanRemotePath(dir);
+    return (base == u"/" ? QString() : base) + u'/' + name;
+}
+
+std::optional<QString> listedChild(const QString& dir, const QString& name)
+{
+    if (!listedNameProblem(name).isEmpty())
         return std::nullopt;
     const QString base = cleanRemotePath(dir);
     return (base == u"/" ? QString() : base) + u'/' + name;
@@ -128,31 +148,57 @@ bool isProtectedRemotePath(const QString& path)
         return false;
     // Normalised first, so "/data/../system" or "//system/" cannot slip through.
     const QString low = normalizeRemotePath(path).toLower();
+    if (low == u"/")
+        return false;
+    // A parent of a root ("/user", "/mnt") counts too: deleting, renaming or
+    // overwriting it reaches everything below it.
     for (const QString& prot : protectedRemoteRoots())
-        if (low == prot || low.startsWith(prot + u'/'))
+        if (low == prot || low.startsWith(prot + u'/') || prot.startsWith(low + u'/'))
             return true;
     return false;
 }
 
+QString protectedUploadTarget(const QString& remoteDir, const QStringList& localSources)
+{
+    const QString dir = normalizeRemotePath(remoteDir);
+    if (isProtectedRemotePath(dir))
+        return dir;
+    // A folder lands as <remoteDir>/<its name>/…, a file as <remoteDir>/<its name>.
+    for (const QString& src : localSources) {
+        const QString name = QFileInfo(QDir::cleanPath(src)).fileName();
+        if (name.isEmpty())
+            continue;
+        const QString target = joinRemote(dir, name);
+        if (isProtectedRemotePath(target))
+            return target;
+    }
+    return {};
+}
+
 QString protectedPathWarning(const QString& path, const QString& action)
 {
-    return QStringLiteral("The target is a protected PS5 system directory:\n\n    %1\n\nModifying system partitions "
-                          "(/system, /system_ex, /preinst, /preinst2 ...) can BRICK your console. This is almost "
-                          "never what you want.\n\nContinue with \"%2\" anyway?")
+    return QStringLiteral("The target is a protected PS5 folder:\n\n    %1\n\nIt holds system files, installed apps or "
+                          "saves (/system, /system_ex, /preinst, /user/app, /user/home…). Changing it can brick your "
+                          "console or lose data. This is almost never what you want.\n\nContinue with \"%2\" anyway?")
         .arg(path, action);
 }
 
 DestinationInfo classifyDestination(const QString& path)
 {
     const QString low = path.trimmed().toLower();
+    // A whole first segment: "/data" and "/data/x", not "/database".
+    const auto under = [&](QStringView dir) { return low == dir || (low.startsWith(dir) && low.at(dir.size()) == u'/'); };
     DestinationInfo d;
-    if (low.startsWith(u"/mnt/usb") || low.startsWith(u"/mnt/ext") || low.startsWith(u"/mnt/sandisk")
-        || low.startsWith(u"/mnt/extusb")) {
+    if (low.startsWith(u"/mnt/ext") && !low.startsWith(u"/mnt/extusb")) {
+        // /mnt/ext0, /mnt/ext1: storage the console formatted itself.
+        d.kind = DestinationKind::External;
+        d.label = QStringLiteral("Extended storage (USB or M.2)");
+        d.note = QStringLiteral("Extended storage is a USB drive or the M.2 SSD set up by the console.");
+    } else if (low.startsWith(u"/mnt/usb") || low.startsWith(u"/mnt/extusb") || low.startsWith(u"/mnt/sandisk")) {
         d.kind = DestinationKind::External;
         d.label = QStringLiteral("External USB / exFAT");
         d.note = QStringLiteral("External USB/exFAT is usually the fastest target.");
-    } else if (low.startsWith(u"/data") || low.startsWith(u"/mnt/sandbox") || low.startsWith(u"/system")
-               || low.startsWith(u"/user")) {
+    } else if (under(u"/data") || under(u"/mnt/sandbox") || low.startsWith(u"/system") || under(u"/user")) {
         d.kind = DestinationKind::Internal;
         d.label = QStringLiteral("Internal PS5 storage");
         d.note = QStringLiteral("Internal PS5 storage may be slower on older firmware.");

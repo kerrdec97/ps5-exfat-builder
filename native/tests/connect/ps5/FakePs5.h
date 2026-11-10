@@ -36,6 +36,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
+#include <QElapsedTimer>
 #include <QTimer>
 
 #include <algorithm>
@@ -118,6 +119,8 @@ public:
         QStringList readOnlyPaths;       // STOR/APPE/DELE refused (550) for these virtual paths
         bool renameRefused = false;      // RNFR answers 502
         QString dropOnlyPath;            // dropAfterBytes applies to this virtual path only
+        int goneAfterDrop = 0;           // with the drop the control connection closes too and the next N
+                                         // connections are closed ungreeted (-1: all), like a console in rest mode
         int dropControlOnPasv = 0;       // close the control connection on the first N PASV commands
         QByteArray failFirstTransferReply; // answer the first RETR/STOR/APPE with this (e.g. "425 ...")
         QString shortRetrPath;           // RETR of this path sends half the file, then 226
@@ -128,6 +131,9 @@ public:
         QByteArray extraFeatures;        // added to the FEAT reply, e.g. " XCRYPT\r\n CPFR\r\n"
         bool refuseEpsv = false;         // EPSV answers 502 (with refusePasv: no passive mode at all)
         QStringList refuseDeletePaths;   // DELE refused (550) for these virtual paths; STOR still allowed
+        QByteArray failFirstPasvReply;   // answer the first PASV with this (e.g. "421 Too many connections")
+        int lateListReplyMs = 0;         // the first listing's closing 226 comes this late (stale-reply tests)
+        int dropControlOnRnfr = 0;       // close the control connection on the Nth RNFR (1-based; 0: never)
         bool ftpsrv = false;             // behave like ftpsrv v0.21 (see the header)
         bool selfIgnored = false;        // ftpsrv: SELF answers "enabled" every time (cannot be turned off)
     };
@@ -203,9 +209,27 @@ private:
         m_commands << c;
     }
     void reply(Session* s, const QByteArray& line) { s->ctrl->write(line + "\r\n"); }
+    // After a dropped transfer: the 426, or (goneAfterDrop) the console vanishes.
+    void dropReply(Session* s)
+    {
+        if (m_opt.goneAfterDrop == 0) {
+            reply(s, "426 Connection closed; transfer aborted.");
+            return;
+        }
+        m_goneLeft = m_opt.goneAfterDrop;
+        s->inbuf.clear();
+        s->ctrl->abort();
+    }
 
     void startSession(QTcpSocket* sock)
     {
+        if (m_goneLeft != 0) {
+            if (m_goneLeft > 0)
+                --m_goneLeft;
+            sock->abort();
+            sock->deleteLater();
+            return;
+        }
         auto s = std::make_shared<Session>();
         s->ctrl = sock;
         sock->setParent(m_t.ctx());
@@ -395,12 +419,12 @@ private:
                 m_active.fetch_sub(1);
                 QObject::connect(d, &QTcpSocket::disconnected, d, [this, s, d] {
                     d->deleteLater();
-                    reply(s, "426 Connection closed; transfer aborted.");
+                    dropReply(s);
                 });
                 d->disconnectFromHost();
                 if (d->state() == QAbstractSocket::UnconnectedState) {
                     d->deleteLater();
-                    reply(s, "426 Connection closed; transfer aborted.");
+                    dropReply(s);
                 }
                 return;
             }
@@ -422,13 +446,20 @@ private:
         QTcpSocket* d = s->data;
         auto got = std::make_shared<qint64>(0);
         auto done = std::make_shared<bool>(false);
+        auto clock = std::make_shared<QElapsedTimer>();
+        clock->start();
         if (m_opt.throttleBytesPerSec > 0 || m_opt.stallAfterBytes >= 0)
             d->setReadBufferSize(64 * 1024);
         m_openForWrite.insert(file->fileName());
-        auto pump = [this, s, d, file, got, done, drop, vpath] {
+        auto pump = [this, s, d, file, got, done, drop, vpath, clock] {
             if (*done)
                 return;
-            qint64 budget = m_opt.throttleBytesPerSec > 0 ? std::max<qint64>(1, m_opt.throttleBytesPerSec / 50) : (1LL << 40);
+            // By the clock, not per call: the pump also runs on every readyRead,
+            // and a budget per call would let a fast client finish a "slow"
+            // upload long before its time.
+            qint64 budget = m_opt.throttleBytesPerSec > 0
+                ? std::max<qint64>(0, (clock->elapsed() + 20) * m_opt.throttleBytesPerSec / 1000 - *got)
+                : (1LL << 40);
             if (m_opt.stallAfterBytes >= 0)
                 budget = std::min(budget, m_opt.stallAfterBytes - *got);
             if (drop && !m_dropped)
@@ -449,7 +480,7 @@ private:
                 s->data = nullptr;
                 m_active.fetch_sub(1);
                 d->deleteLater();
-                reply(s, "426 Connection closed; transfer aborted.");
+                dropReply(s);
                 return;
             }
             if (d->state() != QAbstractSocket::ConnectedState && d->bytesAvailable() == 0) {
@@ -562,6 +593,9 @@ private:
             ++m_pasvDrops; // e.g. a Wi-Fi blip before the STOR is sent
             s->inbuf.clear();
             s->ctrl->abort();
+        } else if (cmd == u"PASV" && !m_opt.failFirstPasvReply.isEmpty() && !m_failedPasv) {
+            m_failedPasv = true;
+            reply(s, m_opt.failFirstPasvReply);
         } else if (cmd == u"PASV") {
             if (m_opt.refusePasv)
                 reply(s, "502 PASV not implemented.");
@@ -631,6 +665,9 @@ private:
                 reply(s, "250 Delete operation successful.");
             else
                 reply(s, "550 Delete operation failed.");
+        } else if (cmd == u"RNFR" && m_opt.dropControlOnRnfr > 0 && ++m_rnfrSeen == m_opt.dropControlOnRnfr) {
+            s->inbuf.clear();
+            s->ctrl->abort();
         } else if (cmd == u"RNFR") {
             if (m_opt.renameRefused) {
                 reply(s, "502 RNFR not implemented.");
@@ -689,6 +726,17 @@ private:
                 reply(s, "150 Here comes the directory listing.");
                 beginActive();
                 s->data->write(out);
+                if (m_opt.lateListReplyMs > 0 && !m_lateListDone) {
+                    // The data arrives and closes at once; only the 226 is late.
+                    m_lateListDone = true;
+                    QTcpSocket* d = s->data;
+                    s->data = nullptr;
+                    m_active.fetch_sub(1);
+                    QObject::connect(d, &QTcpSocket::disconnected, d, &QObject::deleteLater);
+                    d->disconnectFromHost();
+                    QTimer::singleShot(m_opt.lateListReplyMs, s->ctrl, [this, s] { reply(s, "226 Directory send OK."); });
+                    return;
+                }
                 finishData(s, "226 Directory send OK.");
             });
         } else if ((cmd == u"RETR" || cmd == u"STOR" || cmd == u"APPE") && !m_opt.failFirstTransferReply.isEmpty()
@@ -754,6 +802,10 @@ private:
     std::atomic<int> m_maxActive{0};
     std::atomic<qint64> m_received{0};
     bool m_dropped = false;
+    int m_goneLeft = 0; // connections still to refuse after a goneAfterDrop drop (-1: all)
+    bool m_failedPasv = false;
+    bool m_lateListDone = false;
+    int m_rnfrSeen = 0;
     int m_pasvDrops = 0;
     bool m_failedTransfer = false;
     int m_corruptLeft = 1;
@@ -763,7 +815,10 @@ private:
 // ---------------------------------------------------------------------------------------
 class FakeTcpSink {
 public:
-    explicit FakeTcpSink(bool neverRead = false) : m_neverRead(neverRead)
+    // `closeAfterBytes` >= 0: the connection is closed once that much arrived
+    // (a loader that takes one small payload, or rejects what it gets).
+    explicit FakeTcpSink(bool neverRead = false, qint64 closeAfterBytes = -1)
+        : m_neverRead(neverRead), m_closeAfter(closeAfterBytes)
     {
         m_t.run([this] {
             m_server = new QTcpServer(m_t.ctx());
@@ -776,7 +831,11 @@ public:
                         continue;
                     }
                     auto buf = std::make_shared<QByteArray>();
-                    QObject::connect(s, &QTcpSocket::readyRead, s, [s, buf] { *buf += s->readAll(); });
+                    QObject::connect(s, &QTcpSocket::readyRead, s, [this, s, buf] {
+                        *buf += s->readAll();
+                        if (m_closeAfter >= 0 && buf->size() >= m_closeAfter)
+                            s->disconnectFromHost();
+                    });
                     QObject::connect(s, &QTcpSocket::disconnected, s, [this, s, buf] {
                         *buf += s->readAll();
                         std::lock_guard l(m_mutex);
@@ -807,6 +866,7 @@ private:
     QTcpServer* m_server = nullptr;
     quint16 m_port = 0;
     bool m_neverRead = false;
+    qint64 m_closeAfter = -1;
     mutable std::mutex m_mutex;
     std::vector<QByteArray> m_received;
     std::atomic<int> m_connections{0};

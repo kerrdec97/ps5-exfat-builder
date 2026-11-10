@@ -49,7 +49,7 @@ enum class MountTool { ShadowMountPlus, MicroMount };
 
 using MountConfigValues = QMap<QString, QString>;
 
-QString mountToolName(MountTool tool);         // "ShadowMountPlus", "MicroMount"
+QString mountToolName(MountTool tool);         // "ShadowMount+", "MicroMount" (for messages)
 QString mountRemoteDir(MountTool tool);        // /data/shadowmount, /data/micromount
 QString mountConfigRemotePath(MountTool tool); // <dir>/config.ini
 QString mountDebugLogRemotePath(MountTool tool); // <dir>/debug.log
@@ -151,6 +151,13 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& values)
 
 // ---- FTP ---------------------------------------------------------------------------------
 
+// Config bytes <-> text without loss, so a push never rewrites what it did
+// not touch. Valid UTF-8 is read as such and a byte order mark stays (as
+// U+FEFF); a byte that is not UTF-8 (a Latin-1 comment) becomes a lone low
+// surrogate U+DC80..U+DCFF and is written back as that one byte.
+QString decodeConfigText(const QByteArray& bytes);
+QByteArray encodeConfigText(const QString& text);
+
 // RETR of config.ini; NotFound when the tool has never written one (normal
 // on first use).
 Result<QString> loadMountConfig(FtpClient& client, MountTool tool, const CancellationToken& token = {});
@@ -166,7 +173,7 @@ struct SmpRemoteState {
     SmpConfigFormat format = SmpConfigFormat::Flat16;
 };
 // config.ini, profiles.ini and the debug.log banner (only when debug.log is
-// at most `maxLogBytes`; the banner is its first line). `apiVersion` (from
+// at most `maxLogBytes`; the last banner in it gives the version). `apiVersion` (from
 // the HTTP API, may be empty) wins over the banner for the format.
 Result<SmpRemoteState> loadSmpState(FtpClient& client, const QString& apiVersion = {}, const CancellationToken& token = {},
                                     qint64 maxLogBytes = 2 * 1024 * 1024);

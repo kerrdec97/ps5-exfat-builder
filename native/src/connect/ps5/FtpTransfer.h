@@ -45,9 +45,11 @@ struct TransferPlan {
     std::vector<TransferFile> files;
     QStringList directories; // remote (upload) or local (download) folders to create
     qint64 totalBytes = 0;
-    // Download: console entries left out because their names are unsafe
-    // ("path: reason"), e.g. containing '/', '\\' or ':' (remoteNameProblem /
-    // localNameProblem). They are reported, never written.
+    // Entries left out of the plan ("path: reason"). Download: console entries
+    // whose names are unsafe on this PC (containing '/', '\\' or ':', see
+    // localNameProblem) or collide with another entry here. Both directions: a
+    // source that would be written to the same target as an earlier one. They
+    // are reported, never written.
     QStringList skipped;
 };
 
@@ -85,8 +87,10 @@ Result<TransferPlan> planDownload(FtpClient& client, const QStringList& remoteSo
                                   const CancellationToken& token = {});
 
 // Runs the plan. `progress` (optional) is advanced in bytes in its current
-// phase; the caller begins the phase. Fails only when nothing could be done
-// (no connection); per-file failures are in the report.
+// phase; the caller begins the phase. Per-file failures are in the report.
+// runUpload() fails as a whole only when nothing reached the console (no
+// connection, a folder that cannot be created); runDownload() only when a
+// local folder cannot be created.
 Result<TransferReport> runUpload(const TransferPlan& plan, const TransferOptions& options,
                                  const CancellationToken& token, ProgressReporter* progress = nullptr,
                                  const Log& log = Log(QStringLiteral("ps5.ftp")));

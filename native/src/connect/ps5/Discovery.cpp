@@ -1,6 +1,7 @@
 #include "connect/ps5/Discovery.h"
 
 #include "connect/ps5/SocketWait.h"
+#include "core/Log.h"
 
 #include <QElapsedTimer>
 #include <QNetworkInterface>
@@ -15,20 +16,37 @@
 
 namespace fw::ps5 {
 
+namespace {
+
+const Log& discoveryLog()
+{
+    static const Log log(QStringLiteral("ps5.discovery"));
+    return log;
+}
+
+} // namespace
+
+bool isPrivateLanAddress(const QHostAddress& address)
+{
+    bool ok = false;
+    const quint32 v = address.toIPv4Address(&ok);
+    if (!ok)
+        return false;
+    return (v >> 24) == 10       // 10/8
+        || (v >> 20) == 0xAC1u   // 172.16/12
+        || (v >> 16) == 0xC0A8u  // 192.168/16
+        || (v >> 16) == 0xA9FEu; // 169.254/16 (a direct cable without DHCP)
+}
+
 QStringList subnetPrefixesFor(const QList<QHostAddress>& addresses)
 {
     QStringList out;
     for (const QHostAddress& a : addresses) {
-        bool ok = false;
-        const quint32 v = a.toIPv4Address(&ok);
-        if (!ok || v == 0 || v == 0xFFFFFFFFu)
+        // Only networks that cannot be someone else's: a public address, a
+        // carrier or campus network or a VPN range is never swept.
+        if (!isPrivateLanAddress(a))
             continue;
-        if ((v >> 24) == 127)       // loopback
-            continue;
-        if ((v >> 16) == 0xA9FEu)   // 169.254/16 link-local (no DHCP answer)
-            continue;
-        if ((v >> 28) >= 0xEu)      // multicast and reserved
-            continue;
+        const quint32 v = a.toIPv4Address();
         const QString prefix = QStringLiteral("%1.%2.%3").arg(v >> 24).arg((v >> 16) & 0xFF).arg((v >> 8) & 0xFF);
         if (!out.contains(prefix))
             out << prefix;
@@ -124,13 +142,26 @@ Result<std::vector<DiscoveredConsole>> discoverConsoles(const DiscoveryOptions& 
                                                         const DiscoveryProgress& progress)
 {
     QStringList hosts = options.hosts;
+    QStringList notPrivate; // own addresses whose networks are left alone
     if (hosts.isEmpty()) {
         const QList<QHostAddress> own = localIpv4Addresses();
         QStringList ownText;
-        for (const QHostAddress& a : own)
+        for (const QHostAddress& a : own) {
             ownText << a.toString();
+            if (!isPrivateLanAddress(a)) {
+                notPrivate << a.toString();
+                discoveryLog().info(QStringLiteral("[Find] Not searching the network of %1: it is not a private "
+                                                   "(home) network address.")
+                                        .arg(a.toString()));
+            }
+        }
         hosts = subnetHosts(subnetPrefixesFor(own), ownText);
     }
+    if (hosts.isEmpty() && !notPrivate.isEmpty())
+        return Error(ErrorCode::InvalidArgument,
+                     QStringLiteral("This PC's network address (%1) is not a private one, so its network is not searched. "
+                                    "Type the console's IP address.")
+                         .arg(notPrivate.join(QStringLiteral(", "))));
     if (hosts.isEmpty())
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("This PC has no network connection to search. Connect it to the same network as "

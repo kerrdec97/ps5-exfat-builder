@@ -34,10 +34,12 @@ namespace {
 
 QStringList stringArray(const QJsonValue& v)
 {
+    // Blank entries are dropped; a path keeps its exact characters (a file
+    // name may begin or end with a space).
     QStringList out;
     for (const auto& x : v.toArray())
         if (!x.toString().trimmed().isEmpty())
-            out << x.toString().trimmed();
+            out << x.toString();
     return out;
 }
 
@@ -62,7 +64,7 @@ quint16 portParam(const QJsonObject& p, quint16 fallback)
 Status needHost(const ConsoleEndpoint& ep)
 {
     if (ep.host.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings > PS5 connection."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings › PS5 connection."));
     return success();
 }
 
@@ -95,6 +97,28 @@ void fillTransferOutcome(JobOutcome& o, const TransferReport& r)
         o.verification = Verification::Passed;
         o.verificationDetail = QStringLiteral("%1 file(s) size-checked").arg(r.verified);
     }
+}
+
+// Entries the plan left out (unsafe names, two sources for one target): each
+// is a warning, and a run that left something out is not a clean "Passed".
+void notePlanSkips(JobOutcome& o, const QStringList& skipped, const QString& notDone)
+{
+    for (const QString& s : skipped)
+        o.warnings << QStringLiteral("%1: %2").arg(notDone, s);
+    if (!skipped.isEmpty() && o.verification == Verification::Passed) {
+        o.verification = Verification::Inconclusive;
+        o.verificationDetail += QStringLiteral("; %1 %2 left out").arg(skipped.size()).arg(
+            skipped.size() == 1 ? QStringLiteral("entry was") : QStringLiteral("entries were"));
+    }
+}
+
+// Nothing to transfer because every source was left out.
+Error nothingPlanned(const QStringList& skipped, const QString& notDone)
+{
+    QString list = skipped.mid(0, 3).join(QStringLiteral("; "));
+    if (skipped.size() > 3)
+        list += QStringLiteral("; and %1 more").arg(skipped.size() - 3);
+    return Error(ErrorCode::InvalidArgument, QStringLiteral("%1: %2").arg(notDone, list));
 }
 
 Error cancelledWithCleanup(const TransferReport& r)
@@ -141,11 +165,14 @@ public:
         for (const QString& f : src)
             if (!QFileInfo::exists(f))
                 return Error(ErrorCode::NotFound, QStringLiteral("Path not found: %1").arg(QDir::toNativeSeparators(f)));
+        // The folder itself and what each source becomes in it: a folder
+        // called "system_ex" sent to "/" writes into /system_ex.
         const QString dir = remoteDir(ep);
-        if (!dir.startsWith(u'/'))
-            return Error(ErrorCode::InvalidArgument, QStringLiteral("The PS5 folder must start with \"/\"."));
-        if (isProtectedRemotePath(dir) && !m_p.value(QStringLiteral("allowProtectedPaths")).toBool())
-            return Error(ErrorCode::PermissionDenied, protectedPathWarning(dir, QStringLiteral("upload into")));
+        if (!m_p.value(QStringLiteral("allowProtectedPaths")).toBool()) {
+            if (const QString prot = protectedUploadTarget(dir, src); !prot.isEmpty())
+                return Error(ErrorCode::PermissionDenied,
+                             protectedPathWarning(prot, prot == dir ? QStringLiteral("upload into") : QStringLiteral("upload to")));
+        }
         return success();
     }
 
@@ -163,6 +190,8 @@ public:
         auto plan = planUpload(stringArray(m_p.value(QStringLiteral("sources"))), dir, ctx.token);
         if (!plan.ok())
             return plan.takeError();
+        if (plan->files.empty() && !plan->skipped.isEmpty())
+            return nothingPlanned(plan->skipped, QStringLiteral("Not uploaded"));
         const DestinationInfo dest = classifyDestination(dir);
         ctx.log.info(QStringLiteral("[FTP] Uploading %1 file(s), %2, to %3:%4%5 (%6) over %7 connection(s)")
                          .arg(plan->files.size())
@@ -179,6 +208,8 @@ public:
             return cancelledWithCleanup(rep.value());
         JobOutcome o;
         fillTransferOutcome(o, rep.value());
+        notePlanSkips(o, plan->skipped, QStringLiteral("Not uploaded"));
+        o.details.insert(QStringLiteral("skippedNames"), toJsonArray(plan->skipped));
         o.details.insert(QStringLiteral("remoteDir"), dir);
         o.details.insert(QStringLiteral("destination"), dest.label);
         o.summary = QStringLiteral("Uploaded %1 file(s) (%2) to %3").arg(rep->transferred).arg(formatBytes(rep->bytes)).arg(dir);
@@ -244,6 +275,8 @@ public:
             plan = std::move(p.value());
             c.quit();
         }
+        if (plan.files.empty() && !plan.skipped.isEmpty())
+            return nothingPlanned(plan.skipped, QStringLiteral("Not downloaded"));
         QDir().mkpath(localDir);
         FW_TRY(ensureFreeSpace(localDir, plan.totalBytes));
         ctx.progress->beginPhase(1, plan.totalBytes, qint64(plan.files.size()));
@@ -254,8 +287,7 @@ public:
             return cancelledWithCleanup(rep.value());
         JobOutcome o;
         fillTransferOutcome(o, rep.value());
-        for (const QString& s : plan.skipped)
-            o.warnings << QStringLiteral("Not downloaded (unsafe name): %1").arg(s);
+        notePlanSkips(o, plan.skipped, QStringLiteral("Not downloaded"));
         o.details.insert(QStringLiteral("skippedNames"), toJsonArray(plan.skipped));
         o.summary = QStringLiteral("%1 file(s) downloaded to %2").arg(rep->transferred).arg(QDir::toNativeSeparators(localDir));
         if (rep->skipped)
@@ -372,8 +404,20 @@ public:
             }
         });
         if (!r.ok()) {
-            if (!r.error().isCancelled())
-                (void)clearDpiTemp(ep.host, port, opt); // a half-received upload stays in /user/data/tmp
+            // A half-received upload stays in /user/data/tmp: after a failure,
+            // and after a cancel once package data was on its way. The cancel
+            // path does not wait long for a console that is gone.
+            const bool cancelled = r.error().isCancelled();
+            if (!cancelled || last > 0) {
+                DpiOptions clear = opt;
+                if (cancelled)
+                    clear.connectTimeoutMs = std::min(clear.connectTimeoutMs, 3000);
+                if (clearDpiTemp(ep.host, port, clear).ok())
+                    ctx.log.info(QStringLiteral("[Y2JB] Cleared the installer's temporary folder (/user/data/tmp)."));
+                else
+                    ctx.log.warn(QStringLiteral("[Y2JB] Could not clear the installer's temporary folder; part of the "
+                                                "package may remain in /user/data/tmp on the PS5."));
+            }
             return r.takeError();
         }
         if (!r->accepted) {
@@ -710,17 +754,16 @@ public:
     QJsonObject parameters() const override { return m_p; }
 
     // The folder is normalised like typed input ("games" → "/games"). The
-    // speed test writes there, so a system folder needs the same confirmation
-    // as an upload.
+    // checks write there, so a system folder needs the same confirmation as an
+    // upload, also when it is the games folder from Settings.
     Status validate(const SettingsValues& s) const override
     {
-        FW_TRY(needHost(endpointFor(m_p, s)));
+        const ConsoleEndpoint ep = endpointFor(m_p, s);
+        FW_TRY(needHost(ep));
         const QString folder = m_p.value(QStringLiteral("folder")).toString().trimmed();
-        if (!folder.isEmpty()) {
-            const QString dir = normalizeRemotePath(folder);
-            if (isProtectedRemotePath(dir) && !m_p.value(QStringLiteral("allowProtectedPaths")).toBool())
-                return Error(ErrorCode::PermissionDenied, protectedPathWarning(dir, QStringLiteral("write test files into")));
-        }
+        const QString dir = normalizeRemotePath(folder.isEmpty() ? ep.gamesFolder : folder);
+        if (isProtectedRemotePath(dir) && !m_p.value(QStringLiteral("allowProtectedPaths")).toBool())
+            return Error(ErrorCode::PermissionDenied, protectedPathWarning(dir, QStringLiteral("write test files into")));
         return success();
     }
 
@@ -917,8 +960,8 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("PS5 connection");
         d.group = QStringLiteral("Console");
         d.label = QStringLiteral("Console IP address");
-        d.description = QStringLiteral("The PS5's address on your network (Settings > Network > View connection status on "
-                                       "the console). Used for FTP, payloads, the kernel log and package installs.");
+        d.description = QStringLiteral("The PS5's address on your network (Settings › Network › Connection Status › View "
+                                       "Connection Status on the console). Used for FTP, payloads, the kernel log and package installs.");
         d.type = SettingType::String;
         d.defaultValue = QString();
         d.validator = hostProblem;

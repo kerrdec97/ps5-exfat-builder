@@ -197,8 +197,9 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
         while (s.bytesToWrite() > level) {
             if (s.state() != QAbstractSocket::ConnectedState)
                 return Error(ErrorCode::IoError, QStringLiteral("The PS5 closed the connection during the package "
-                                                                "upload. Make sure etaHEN is running with Direct "
-                                                                "Package Installer V2 enabled in Services."),
+                                                                "upload. Make sure etaHEN runs with Direct Package "
+                                                                "Installer V2 on (DPI_v2=1 in /data/etaHEN/config.ini, "
+                                                                "or the etaHEN toolbox)."),
                              s.errorString());
             const WaitResult w = waitUntil(
                 [&] { return s.bytesToWrite() <= level || s.state() != QAbstractSocket::ConnectedState; }, 200, token,
@@ -218,28 +219,44 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
         }
         return success();
     };
-    while (true) {
+    // Exactly the `size` bytes the request announced, never to the end of a
+    // file that is still growing.
+    qint64 left = size;
+    while (left > 0) {
         if (auto st = drain(chunk * 2); !st.ok())
             return failSend(st.takeError());
-        const QByteArray b = f.read(chunk);
+        // A closed socket has an empty write buffer, so drain() returns at
+        // once: without these checks the rest of the package would be read
+        // from disk for nothing, with no way to stop it.
+        if (token.isCancelled())
+            return failSend(Error::cancelled());
+        if (s.state() != QAbstractSocket::ConnectedState)
+            break; // the reply (or the lack of one) below says why
+        const QByteArray b = f.read(std::min(chunk, left));
         if (b.isEmpty()) {
             if (!f.atEnd())
                 return failSend(Error(ErrorCode::IoError, QStringLiteral("Could not read the package."), f.errorString()));
-            break;
+            return failSend(Error(ErrorCode::IoError, QStringLiteral("The package file changed while it was being sent. "
+                                                                     "Wait until it is complete, then try again.")));
         }
         s.write(b);
         s.flush();
         queued += b.size();
+        left -= b.size();
     }
     const QByteArray footer = dpiPartFooter();
     s.write(footer);
     queued += footer.size();
     if (auto st = drain(0); !st.ok())
         return failSend(st.takeError());
-    if (progress)
+    const bool sentAll = left == 0; // false: the console closed the connection part-way
+    if (progress && sentAll)
         progress(size, size);
 
-    // Wait for the reply.
+    // Wait for the reply. It is a line or two of text: whatever sends more is
+    // not the installer and must not grow the buffer (or reset the idle
+    // timer) for ever.
+    constexpr qsizetype kMaxReplyBytes = 1024 * 1024;
     QByteArray buf;
     HttpParse head;
     idle.restart();
@@ -247,6 +264,10 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
         if (s.bytesAvailable() > 0) {
             buf += s.readAll();
             idle.restart();
+            if (buf.size() > kMaxReplyBytes)
+                return failSend(Error(ErrorCode::CorruptData,
+                                      QStringLiteral("The PS5 sent an answer that is not the package installer's. Check "
+                                                     "the Direct Package Installer port in Settings.")));
         }
         head = parseHead(buf);
         if (head.headDone) {
@@ -263,7 +284,8 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
                 DpiResponse r;
                 r.status = head.status;
                 r.body = head.chunked ? body : head.contentLength >= 0 ? raw.left(head.contentLength) : raw;
-                r.accepted = dpiAccepted(r.status, r.body);
+                // An answer to a package that was not sent whole is never an acceptance.
+                r.accepted = sentAll && dpiAccepted(r.status, r.body);
                 s.abort();
                 return r;
             }

@@ -97,9 +97,15 @@ void FtpClient::abort()
     d->ctrl.reset();
     d->features.reset();
     d->type = 0;
+    d->useEpsv = false; // the next connection asks PASV again
 }
 
 namespace {
+
+// No FTP reply is anywhere near this long; whatever sends more is not an FTP
+// server (or not a sane one) and must not grow the buffers without end.
+constexpr qint64 kMaxReplyBytes = 64 * 1024;
+constexpr qint64 kMaxListingBytes = 64LL * 1024 * 1024;
 
 // Reads one complete reply from the control connection.
 Result<FtpReply> readReplyOn(QTcpSocket& s, int timeoutMs, const CancellationToken& token)
@@ -107,9 +113,17 @@ Result<FtpReply> readReplyOn(QTcpSocket& s, int timeoutMs, const CancellationTok
     QStringList lines;
     int code = 0;
     bool done = false;
+    qint64 size = 0;
+    const auto tooLong = [] {
+        return Error(ErrorCode::CorruptData, QStringLiteral("The PS5 FTP server sent an answer that is not an FTP reply."),
+                     QStringLiteral("more than %1 bytes").arg(kMaxReplyBytes));
+    };
     while (!done) {
         while (!done && s.canReadLine()) {
             QString line = QString::fromUtf8(s.readLine());
+            size += line.size();
+            if (size > kMaxReplyBytes)
+                return tooLong();
             while (line.endsWith(u'\n') || line.endsWith(u'\r'))
                 line.chop(1);
             if (code == 0) {
@@ -127,8 +141,13 @@ Result<FtpReply> readReplyOn(QTcpSocket& s, int timeoutMs, const CancellationTok
         }
         if (done)
             break;
+        if (s.bytesAvailable() > kMaxReplyBytes) // one endless line
+            return tooLong();
         const WaitResult w = waitUntil(
-            [&] { return s.canReadLine() || s.state() != QAbstractSocket::ConnectedState; }, timeoutMs, token, {&s});
+            [&] {
+                return s.canReadLine() || s.bytesAvailable() > kMaxReplyBytes || s.state() != QAbstractSocket::ConnectedState;
+            },
+            timeoutMs, token, {&s});
         if (w == WaitResult::Cancelled)
             return Error::cancelled();
         if (w == WaitResult::Timeout)
@@ -333,19 +352,33 @@ Status FtpClient::mkd(const QString& path)
 
 Status FtpClient::mkdirs(const QString& pathIn)
 {
+    QSet<QString> none;
+    return mkdirs(pathIn, none);
+}
+
+Status FtpClient::mkdirs(const QString& pathIn, QSet<QString>& known)
+{
     const QString path = cleanRemotePath(pathIn);
-    if (path == u"/")
+    if (path == u"/" || known.contains(path))
         return success();
     QString cur;
     Status last = success();
     for (const QString& part : path.split(u'/', Qt::SkipEmptyParts)) {
         cur += u'/' + part;
+        if (known.contains(cur))
+            continue;
         last = mkd(cur);
         if (!last.ok() && !isConnected())
             return last;
+        // A parent is not asked again: if it really is missing, the folders
+        // below it fail on their own MKD and are checked there.
+        if (cur != path)
+            known.insert(cur);
     }
-    if (last.ok() || isDirectory(path))
+    if (last.ok() || isDirectory(path)) {
+        known.insert(path);
         return success();
+    }
     return last;
 }
 
@@ -514,8 +547,11 @@ static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useE
                     return Error(ErrorCode::CorruptData, QStringLiteral("The PS5 FTP server sent an unreadable "
                                                                         "passive-mode reply."), r.text);
                 port = quint16(m.captured(5).toInt() * 256 + m.captured(6).toInt());
+            } else if (r.code == 500 || r.code == 501 || r.code == 502 || r.code == 504) {
+                useEpsv = true; // the command is not known here: EPSV from now on
             } else {
-                useEpsv = true;
+                // "421 too many connections", "425 ...": PASV itself works, not now.
+                return ftpReplyError(r, QStringLiteral("Opening a data connection (passive mode)"));
             }
         }
         if (useEpsv) {
@@ -530,7 +566,7 @@ static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useE
         // address in the PASV reply (servers behind NAT often send 0.0.0.0).
         t.owned = std::make_unique<QTcpSocket>();
         FW_TRY(detail::connectSocket(*t.owned, ctrl.peerAddress().toString(), port, opt.connectTimeoutMs, token,
-                                     QStringLiteral("FTP data connection")));
+                                     QStringLiteral("FTP server (data port)")));
         t.sock = t.owned.get();
     } else {
         t.server = std::make_unique<QTcpServer>();
@@ -582,13 +618,25 @@ static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useE
                                                                        : QStringLiteral("Listing"));
     if (!opt.passive) {
         QTcpServer* srv = t.server.get();
-        const WaitResult w = waitUntil([&] { return srv->hasPendingConnections(); }, opt.connectTimeoutMs, token, {srv});
-        if (w == WaitResult::Cancelled)
-            return Error::cancelled();
-        if (w != WaitResult::Ready)
-            return Error(ErrorCode::Timeout, QStringLiteral("The PS5 did not open the active-mode data connection. "
-                                                            "Turn on passive mode in Settings."));
-        t.sock = srv->nextPendingConnection();
+        QElapsedTimer waited;
+        waited.start();
+        // Only the console's own connection is the data connection: anything
+        // else that finds the open port is closed and the wait goes on.
+        while (!t.sock) {
+            const qint64 left = opt.connectTimeoutMs - waited.elapsed();
+            const WaitResult w = left > 0 ? waitUntil([&] { return srv->hasPendingConnections(); }, int(left), token, {srv})
+                                          : WaitResult::Timeout;
+            if (w == WaitResult::Cancelled)
+                return Error::cancelled();
+            if (w != WaitResult::Ready)
+                return Error(ErrorCode::Timeout, QStringLiteral("The PS5 did not open the active-mode data connection. "
+                                                                "Turn on passive mode in Settings."));
+            QTcpSocket* in = srv->nextPendingConnection();
+            if (in && in->peerAddress().isEqual(ctrl.peerAddress(), QHostAddress::TolerantConversion))
+                t.sock = in;
+            else if (in)
+                in->abort();
+        }
     }
     return t;
 }
@@ -765,8 +813,13 @@ Result<QByteArray> transferText(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, c
                                 const FtpOptions& opt, const CancellationToken& token, FtpReply& last)
 {
     auto t = startTransfer(c, ctrl, useEpsv, type, 'A', cmd, 0, opt, token, nullptr, &last);
-    if (!t.ok())
+    if (!t.ok()) {
+        // A reply may still be owed: a late one would be read as the answer
+        // to the next command, so the control connection is dropped.
+        if (t.error().isCancelled() || t.error().code == ErrorCode::Timeout)
+            c.abort();
         return t.takeError();
+    }
     QTcpSocket* s = t->sock;
     QByteArray data;
     QElapsedTimer idle;
@@ -775,6 +828,11 @@ Result<QByteArray> transferText(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, c
         if (s->bytesAvailable() > 0) {
             data += s->readAll();
             idle.restart();
+            if (data.size() > kMaxListingBytes) {
+                c.abort();
+                return Error(ErrorCode::CorruptData, QStringLiteral("The folder listing is too large to be one."),
+                             QStringLiteral("more than %1 bytes").arg(kMaxListingBytes));
+            }
         }
         if (s->state() != QAbstractSocket::ConnectedState && s->bytesAvailable() == 0)
             break;
@@ -789,7 +847,12 @@ Result<QByteArray> transferText(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, c
             return Error(ErrorCode::Timeout, QStringLiteral("The folder listing stalled."));
         }
     }
-    FW_TRY_ASSIGN(FtpReply r, readReplyOn(ctrl, opt.idleTimeoutMs, token));
+    auto fin = readReplyOn(ctrl, opt.idleTimeoutMs, token);
+    if (!fin.ok()) {
+        c.abort(); // the closing reply never came (or was not one): out of step from here
+        return fin.takeError();
+    }
+    const FtpReply r = fin.value();
     last = r;
     if (r.code < 200 || r.code >= 300)
         return ftpReplyError(r, QStringLiteral("Listing"));
@@ -809,6 +872,8 @@ Result<std::vector<FtpEntry>> FtpClient::list(const QString& path, FtpListMode m
             return f.takeError();
         mlsd = f.value().mlsd;
     }
+    if (!isConnected())
+        return Error(ErrorCode::IoError, QStringLiteral("Not connected to the PS5 FTP server."));
     if (mlsd) {
         auto data = transferText(*this, *d->ctrl, d->useEpsv, d->type, QStringLiteral("MLSD"), m_opt, token, m_last);
         if (data.ok())
@@ -820,16 +885,15 @@ Result<std::vector<FtpEntry>> FtpClient::list(const QString& path, FtpListMode m
             return data.takeError();
     }
     auto data = transferText(*this, *d->ctrl, d->useEpsv, d->type, QStringLiteral("LIST"), m_opt, token, m_last);
-    if (!data.ok()) {
-        if (data.error().isCancelled() || data.error().code == ErrorCode::Timeout)
-            abort();
-        return data.takeError();
-    }
+    if (!data.ok())
+        return data.takeError(); // transferText dropped the connection where a reply was still owed
     return parseListing(data.value(), false);
 }
 
 Result<QStringList> FtpClient::nameList(const QString& path)
 {
+    if (!isConnected())
+        return Error(ErrorCode::IoError, QStringLiteral("Not connected to the PS5 FTP server."));
     const QString cmd = path.isEmpty() ? QStringLiteral("NLST") : QStringLiteral("NLST ") + path;
     FW_TRY_ASSIGN(QByteArray data, transferText(*this, *d->ctrl, d->useEpsv, d->type, cmd, m_opt, {}, m_last));
     QStringList out;
@@ -865,26 +929,56 @@ Status FtpClient::uploadReplace(const QString& remoteFinal, const QByteArray& da
     const QString temp = finalPath + tempSuffix;
     const QString bak = finalPath + QStringLiteral(".replacing.bak");
     (void)mkdirs(remoteParent(finalPath));
+    // An earlier replace that lost the connection between its two renames
+    // left the old file set aside and nothing under the final name: put it
+    // back first, so a failure below still leaves a file there.
+    if (isConnected() && !fileExists(finalPath) && isConnected() && fileExists(bak))
+        (void)rename(bak, finalPath);
     if (auto st = upload(temp, data, token); !st.ok()) {
         if (isConnected())
             (void)dele(temp);
         return st;
     }
+    // A server that answers 226 for a short write must not replace a good file.
+    if (auto stored = size(temp); stored.ok() && stored.value() != data.size()) {
+        (void)dele(temp);
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("The PS5 stored %1 of %2 bytes of the upload; the old file was kept.")
+                         .arg(stored.value())
+                         .arg(data.size()));
+    }
+    const QString lost = QStringLiteral("The connection to the PS5 was lost while %1 was being replaced.").arg(finalPath);
     bool movedAside = false;
     if (fileExists(finalPath)) {
         (void)dele(bak);
         if (auto st = rename(finalPath, bak); !st.ok()) {
+            if (!isConnected())
+                return Error(st.error().code, lost + QStringLiteral(" The old file was left unchanged."), st.error().detail);
             (void)dele(temp);
             return Error(ErrorCode::Unsupported, QStringLiteral("The PS5 FTP server refused to rename the old file, "
                                                                 "so it was left unchanged."),
                          st.error().detail);
         }
         movedAside = true;
+    } else if (!isConnected()) {
+        return Error(ErrorCode::IoError, lost + QStringLiteral(" The old file was left unchanged."));
     }
     if (auto st = rename(temp, finalPath); !st.ok()) {
-        if (movedAside)
-            (void)rename(bak, finalPath);
+        if (!isConnected()) {
+            // Nothing can be put back now; say where the two files are.
+            return Error(st.error().code,
+                         lost + (movedAside ? QStringLiteral(" The previous file is now %1 and the new one %2.").arg(bak, temp)
+                                            : QStringLiteral(" The new file is still %1.").arg(temp)),
+                         st.error().detail);
+        }
+        const bool restored = !movedAside || rename(bak, finalPath).ok();
         (void)dele(temp);
+        if (!restored)
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("The PS5 FTP server refused to rename the uploaded file, and the previous file could "
+                                        "not be put back: it is now %1.")
+                             .arg(bak),
+                         st.error().detail);
         return Error(ErrorCode::Unsupported, QStringLiteral("The PS5 FTP server refused to rename the uploaded file; "
                                                             "the old file was kept."),
                      st.error().detail);
@@ -896,9 +990,17 @@ Status FtpClient::uploadReplace(const QString& remoteFinal, const QByteArray& da
 
 Status FtpClient::removeTree(const QString& pathIn, const CancellationToken& token)
 {
+    return removeTreeAt(pathIn, token, 0);
+}
+
+Status FtpClient::removeTreeAt(const QString& pathIn, const CancellationToken& token, int depth)
+{
     const QString path = cleanRemotePath(pathIn);
     if (path == u"/")
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Refusing to delete the console's root folder."));
+    // No real folder tree is this deep; a listing that loops back on itself is.
+    if (depth > 128)
+        return Error(ErrorCode::Unsupported, QStringLiteral("%1 is nested too deeply to delete.").arg(path));
     if (!isDirectory(path))
         return dele(path);
     FW_TRY_ASSIGN(std::vector<FtpEntry> entries, list(path, FtpListMode::Auto, token));
@@ -907,13 +1009,15 @@ Status FtpClient::removeTree(const QString& pathIn, const CancellationToken& tok
         if (!token.checkpoint())
             return Error::cancelled();
         // A name the server sent must stay one path segment ("..\\x", "a/b"...).
-        const auto child = remoteChild(path, e.name);
+        // This never leaves the console, so ':' is just a character here: a
+        // folder holding "Save: slot 1.dat" can be deleted like any other.
+        const auto child = listedChild(path, e.name);
         if (!child) {
             refused << e.name;
             continue;
         }
         if (e.isDir && !e.isLink)
-            FW_TRY(removeTree(*child, token));
+            FW_TRY(removeTreeAt(*child, token, depth + 1));
         else
             FW_TRY(dele(*child));
     }

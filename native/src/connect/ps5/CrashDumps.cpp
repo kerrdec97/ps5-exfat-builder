@@ -3,6 +3,7 @@
 
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/FtpTransfer.h"
+#include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
 #include "core/Zip.h"
 
@@ -103,8 +104,10 @@ Result<std::vector<FtpEntry>> listRemote(Session& s, const QString& path, const 
         return Error(ErrorCode::IoError, why.isEmpty() ? QStringLiteral("The console FTP service is not reachable.") : why);
     auto r = c->list(path, FtpListMode::Auto, token);
     if (!r.ok()) {
-        // 550: the folder does not exist (yet, or any more).
-        if (c->lastReply().code == 550)
+        // 550: the folder does not exist (yet, or any more). Only with the
+        // connection still up: a command that died without an answer leaves
+        // an older reply in lastReply().
+        if (c->isConnected() && c->lastReply().code == 550)
             return std::vector<FtpEntry>{};
         s.drop();
     }
@@ -146,14 +149,16 @@ Status download(Session& s, const QString& remote, const QString& local, int ret
     return last;
 }
 
-Status writeCrashZip(const QString& zipPath, const QString& localDir, const QString& folder, const QString& host)
+// Stoppable: a core of several GiB takes minutes to compress. The half-written
+// archive goes with the writer; the downloaded files stay in `localDir`.
+Status writeCrashZip(const QString& zipPath, const QString& localDir, const QString& remoteDir, const QString& host,
+                     const CancellationToken& token)
 {
     zip::Writer w;
     FW_TRY(w.open(zipPath));
     const QByteArray note = QStringLiteral("Crash dump saved by exFAT Image Builder from %1 at %2.\n"
-                                           "Console folder: %3/%4\n")
-                                .arg(host, QDateTime::currentDateTime().toString(Qt::ISODate),
-                                     QString::fromLatin1(kCrashDumpRoot), folder)
+                                           "Console folder: %3\n")
+                                .arg(host, QDateTime::currentDateTime().toString(Qt::ISODate), remoteDir)
                                 .toUtf8();
     FW_TRY(w.addData(QStringLiteral("capture.txt"), note));
     const QStringList files = QDir(localDir).entryList(QDir::Files, QDir::Name);
@@ -161,9 +166,9 @@ Status writeCrashZip(const QString& zipPath, const QString& localDir, const QStr
         if (f.endsWith(QStringLiteral(".partial")))
             continue;
         FW_TRY(w.addFile(QStringLiteral("crash_dumps/%1/%2").arg(QFileInfo(localDir).fileName(), f),
-                         QDir(localDir).filePath(f), zip::Method::Deflate, CancellationToken()));
+                         QDir(localDir).filePath(f), zip::Method::Deflate, token));
     }
-    return w.finish(true);
+    return w.finish(true, token);
 }
 
 // One crash folder, until complete or timed out.
@@ -176,7 +181,7 @@ CapturedCrash captureFolder(Session& s, const ConsoleEndpoint& ep, const CrashCa
     QDir().mkpath(c.localDir);
     const QString remoteDir = joinRemote(opt.root, folder);
     if (status)
-        status(QStringLiteral("Game crashed - saving crash dump %1 ...").arg(folder));
+        status(QStringLiteral("Game crashed — saving crash dump %1…").arg(folder));
 
     QMap<QString, qint64> got; // name → size saved
     QString signature;
@@ -187,8 +192,9 @@ CapturedCrash captureFolder(Session& s, const ConsoleEndpoint& ep, const CrashCa
         auto listing = listRemote(s, remoteDir, token);
         if (listing.ok()) {
             std::vector<FtpEntry> files;
+            // A listed name is one path segment or it is not used (RETR path).
             for (const FtpEntry& e : listing.value())
-                if (!e.isDir && !e.name.isEmpty())
+                if (!e.isDir && listedNameProblem(e.name).isEmpty())
                     files.push_back(e);
             QStringList sig;
             for (const FtpEntry& e : files)
@@ -213,9 +219,7 @@ CapturedCrash captureFolder(Session& s, const ConsoleEndpoint& ep, const CrashCa
                     if (e.name.endsWith(QStringLiteral(".prosperodmp"))) {
                         c.hasCore = true;
                         if (status)
-                            status(QStringLiteral("Crash dump secured: %1 (%2 MB)")
-                                       .arg(e.name)
-                                       .arg(double(QFileInfo(local).size()) / (1024.0 * 1024.0), 0, 'f', 1));
+                            status(QStringLiteral("Crash dump secured: %1 (%2)").arg(e.name, formatBytes(QFileInfo(local).size())));
                     }
                 }
             }
@@ -238,16 +242,21 @@ CapturedCrash captureFolder(Session& s, const ConsoleEndpoint& ep, const CrashCa
         return c;
     }
     if (!c.hasCore)
-        c.warning = QStringLiteral("Crash folder %1: only %2 saved - the console never wrote a .prosperodmp core.")
+        c.warning = QStringLiteral("Crash folder %1: only %2 saved — the console never wrote a .prosperodmp core.")
                         .arg(folder, c.files.join(QStringLiteral(", ")));
     const QString tag = opt.ipTag.isEmpty() ? crashIpTag(ep.host) : opt.ipTag;
-    QString zipPath = QDir(opt.outputDir).filePath(QStringLiteral("PS5_logs_%1_%2_crash_%3.zip")
-                                                       .arg(tag, QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")),
-                                                            safeCrashFolderName(folder)));
+    const QString zipBase = QDir(opt.outputDir).filePath(QStringLiteral("PS5_logs_%1_%2_crash_%3")
+                                                             .arg(tag, QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")),
+                                                                  safeCrashFolderName(folder)));
+    QString zipPath = zipBase + QStringLiteral(".zip");
     for (int n = 2; QFileInfo::exists(zipPath); ++n)
-        zipPath = zipPath.chopped(4) + QStringLiteral(" (%1).zip").arg(n);
-    if (Status st = writeCrashZip(zipPath, c.localDir, folder, ep.host); st.ok())
+        zipPath = zipBase + QStringLiteral(" (%1).zip").arg(n);
+    if (Status st = writeCrashZip(zipPath, c.localDir, remoteDir, ep.host, token); st.ok())
         c.zipPath = zipPath;
+    else if (st.error().isCancelled())
+        c.warning = (c.warning.isEmpty() ? QString() : c.warning + u' ')
+            + QStringLiteral("Stopped before the crash ZIP was written; the saved files are in %1.")
+                  .arg(QDir::toNativeSeparators(c.localDir));
     else
         c.warning = (c.warning.isEmpty() ? QString() : c.warning + u' ')
             + QStringLiteral("The crash ZIP could not be written: %1").arg(st.error().message);
@@ -262,7 +271,7 @@ Result<CrashCaptureReport> captureCrashDumps(const ConsoleEndpoint& ep, const Cr
                                              const CancellationToken& token, const CrashCaptureStatus& status)
 {
     if (ep.host.trimmed().isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings > PS5 connection."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings › PS5 connection."));
     if (opt.outputDir.trimmed().isEmpty() || !QDir().mkpath(opt.outputDir))
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("The folder for crash dumps %1 cannot be created.").arg(QDir::toNativeSeparators(opt.outputDir)));
@@ -296,7 +305,7 @@ Result<CrashCaptureReport> captureCrashDumps(const ConsoleEndpoint& ep, const Cr
         warnedDown = false;
         QStringList folders;
         for (const FtpEntry& e : listing.value())
-            if (e.isDir && !e.name.isEmpty())
+            if (e.isDir && listedNameProblem(e.name).isEmpty())
                 folders << e.name;
         folders.sort();
         if (!baselined) {

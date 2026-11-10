@@ -105,16 +105,25 @@ private slots:
                                                  QHostAddress(QStringLiteral("10.0.0.5")), QHostAddress(QStringLiteral("::1")),
                                                  QHostAddress(QStringLiteral("fe80::1")), QHostAddress(QStringLiteral("0.0.0.0")),
                                                  QHostAddress(QStringLiteral("224.0.0.1"))});
-        QCOMPARE(p, (QStringList{QStringLiteral("192.168.1"), QStringLiteral("10.0.0")}));
+        QCOMPARE(p, (QStringList{QStringLiteral("169.254.3"), QStringLiteral("192.168.1"), QStringLiteral("10.0.0")}));
+        // Only private ranges are ever swept: not a public address, a carrier
+        // (100.64/10) or campus network, or the neighbours of 172.16/12.
+        for (const char* a : {"8.8.8.8", "100.64.1.1", "172.15.0.1", "172.32.0.1", "192.167.1.1", "11.0.0.1", "169.253.1.1", "255.255.255.255", "::1"})
+            QVERIFY2(!isPrivateLanAddress(QHostAddress(QString::fromLatin1(a))), a);
+        for (const char* a : {"10.255.0.1", "172.16.5.5", "172.31.9.9", "192.168.0.1", "169.254.7.7"})
+            QVERIFY2(isPrivateLanAddress(QHostAddress(QString::fromLatin1(a))), a);
+        QCOMPARE(subnetPrefixesFor({QHostAddress(QStringLiteral("8.8.8.8")), QHostAddress(QStringLiteral("100.64.1.1")),
+                                    QHostAddress(QStringLiteral("172.20.1.9"))}),
+                 QStringList{QStringLiteral("172.20.1")});
         const QStringList hosts = subnetHosts({QStringLiteral("192.168.1")}, {QStringLiteral("192.168.1.20")});
         QCOMPARE(hosts.size(), 253);
         QCOMPARE(hosts.first(), QStringLiteral("192.168.1.1"));
         QCOMPARE(hosts.last(), QStringLiteral("192.168.1.254"));
         QVERIFY(!hosts.contains(QStringLiteral("192.168.1.20")));
-        // Whatever this machine has: never loopback or link-local.
+        // Whatever this machine has: never loopback, always a private range.
         for (const QString& prefix : localSubnetPrefixes()) {
             QVERIFY2(!prefix.startsWith(QStringLiteral("127.")), qPrintable(prefix));
-            QVERIFY2(!prefix.startsWith(QStringLiteral("169.254.")), qPrintable(prefix));
+            QVERIFY2(isPrivateLanAddress(QHostAddress(prefix + QStringLiteral(".1"))), qPrintable(prefix));
         }
     }
 
@@ -462,6 +471,20 @@ private slots:
 
         auto rel = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("relative")}});
         QVERIFY(rel.value()->validate(s).ok()); // normalised to "/relative"
+
+        // The checks write a probe file: a protected folder needs the
+        // confirmation, also when it is the games folder from Settings.
+        const SettingsValues sys(mod.schema,
+                                 {{keys::kConsoleIp, QStringLiteral("127.0.0.1")}, {keys::kFtpPort, srv.port()},
+                                  {keys::kGamesFolder, QStringLiteral("/system_ex/app")}},
+                                 {});
+        auto fromSettings = mod.jobs.create(jobkinds::kFtpDiagnose, {});
+        QCOMPARE(fromSettings.value()->validate(sys).error().code, ErrorCode::PermissionDenied);
+        QVERIFY(fromSettings.value()->validate(s).ok());
+        auto confirmed = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("allowProtectedPaths"), true}});
+        QVERIFY(confirmed.value()->validate(sys).ok());
+        auto typed = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("/user")}});
+        QCOMPARE(typed.value()->validate(s).error().code, ErrorCode::PermissionDenied);
     }
 };
 

@@ -148,10 +148,31 @@ private slots:
             QVERIFY2(isProtectedRemotePath(QString::fromLatin1(p)), p);
         for (const char* p : {"/data/system", "/mnt/usb0", "/systemx", "/user/data/tmp", "/user/appmeta", "/data/etaHEN/games", "", "/"})
             QVERIFY2(!isProtectedRemotePath(QString::fromLatin1(p)), p);
-        QVERIFY(protectedPathWarning(QStringLiteral("/system"), QStringLiteral("delete")).contains(QStringLiteral("BRICK")));
+        // A parent of a protected root is protected too: deleting or renaming it reaches the root.
+        for (const char* p : {"/user", "/USER/", "/mnt", "/data/../user", "user"})
+            QVERIFY2(isProtectedRemotePath(QString::fromLatin1(p)), p);
+        for (const char* p : {"/use", "/user/data", "/mnt/ext0", "/m"})
+            QVERIFY2(!isProtectedRemotePath(QString::fromLatin1(p)), p);
+        QVERIFY(protectedPathWarning(QStringLiteral("/system"), QStringLiteral("delete")).contains(QStringLiteral("brick")));
+        // An upload is judged by what it writes: the folder, and each source's name in it.
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("C:/dumps/system_ex")}), QStringLiteral("/system_ex"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("C:/dumps/ok"), QStringLiteral("C:/dumps/PREINST/")}), QStringLiteral("/PREINST"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/user"), {QStringLiteral("C:/x/readme.txt")}), QStringLiteral("/user"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/user/"), {}), QStringLiteral("/user"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("D:/a/user")}), QStringLiteral("/user"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/user/data"), {QStringLiteral("D:/a/app")}), QString());
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/data/etaHEN/games"), {QStringLiteral("D:/a/system"), QStringLiteral("D:/a/b.exfat")}), QString());
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("D:/a/data")}), QString());
         QCOMPARE(classifyDestination(QStringLiteral("/mnt/usb0/games")).kind, DestinationKind::External);
         QCOMPARE(classifyDestination(QStringLiteral("/data/etaHEN/games/")).kind, DestinationKind::Internal);
         QCOMPARE(classifyDestination(QStringLiteral("/foo")).kind, DestinationKind::Unknown);
+        // Whole path segments: "/database" is not "/data"; /mnt/ext* is the console's own extended storage.
+        QCOMPARE(classifyDestination(QStringLiteral("/database/x")).kind, DestinationKind::Unknown);
+        QCOMPARE(classifyDestination(QStringLiteral("/data")).kind, DestinationKind::Internal);
+        QCOMPARE(classifyDestination(QStringLiteral("/system_ex/app")).kind, DestinationKind::Internal);
+        QCOMPARE(classifyDestination(QStringLiteral("/mnt/ext1/games")).kind, DestinationKind::External);
+        QVERIFY(classifyDestination(QStringLiteral("/mnt/ext1/games")).label.startsWith(QStringLiteral("Extended storage")));
+        QCOMPARE(classifyDestination(QStringLiteral("/mnt/extusb0")).label, QStringLiteral("External USB / exFAT"));
     }
 
     // ---- client against the fake server ----------------------------------------------------
@@ -546,6 +567,75 @@ private slots:
         QVERIFY(!planUpload({QDir(local).filePath(QStringLiteral("missing"))}, QStringLiteral("/x")).ok());
     }
 
+    void givingUpAfterALostConnectionCleansUp()
+    {
+        const QString local = fresh(QStringLiteral("gonelocal"));
+        const QString src = QDir(local).filePath(QStringLiteral("big.bin"));
+        QVERIFY(fwtest::writeRandomFile(src, 2 * 1024 * 1024, 21));
+        TransferOptions opt;
+        opt.retries = 1;
+
+        // The console is back once the retry budget is used up: the
+        // half-written file is removed and named in the report.
+        {
+            const QString root = fresh(QStringLiteral("goneback"));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = 1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({src}, QStringLiteral("/up")).value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->transferred, 0);
+            QCOMPARE(rep->removedPartials, QStringList{QStringLiteral("/up/big.bin")});
+            QVERIFY(rep->leftoverPartials.isEmpty());
+            QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/up/big.bin"))));
+        }
+        // The console stays away: the file cannot be removed, and the report
+        // (not a bare connection error) says that it may remain.
+        {
+            const QString root = fresh(QStringLiteral("gone"));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = -1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({src}, QStringLiteral("/up")).value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->leftoverPartials, QStringList{QStringLiteral("/up/big.bin")});
+            QVERIFY(rep->removedPartials.isEmpty());
+            QVERIFY(QFileInfo::exists(srv.path(QStringLiteral("/up/big.bin"))));
+        }
+        // Download: the .part of a file that was given up does not stay.
+        {
+            const QString root = fresh(QStringLiteral("gonedown"));
+            QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("up"))));
+            QVERIFY(QFile::copy(src, QDir(root).filePath(QStringLiteral("up/big.bin"))));
+            auto o = server(root);
+            o.dropAfterBytes = 500 * 1024;
+            o.goneAfterDrop = -1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            const QString down = fresh(QStringLiteral("gonedownlocal"));
+            TransferPlan plan;
+            {
+                FtpClient c(quick());
+                QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+                auto p = planDownload(c, {QStringLiteral("/up/big.bin")}, down);
+                QVERIFY(p.ok());
+                plan = p.value();
+                c.quit();
+            }
+            auto rep = runDownload(plan, opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->transferred, 0);
+            QVERIFY(QDir(down).entryList(QDir::Files).isEmpty());
+        }
+    }
+
 
     // ---- review fixes: regression tests ----------------------------------------------------
     void controlDropBeforeStorRewritesInsteadOfAppending()
@@ -730,9 +820,28 @@ private slots:
             QVERIFY(!QFileInfo::exists(QDir(dl).filePath(QStringLiteral("up.bin"))));
             QVERIFY(!QFileInfo::exists(QFileInfo(dl).absolutePath() + QStringLiteral("/up.bin")));
             // removeTree deletes the safe entry, refuses the rest, leaves "/evil.bin" alone.
+            {
+                auto o2 = o;
+                o2.extraListNames = {QStringLiteral("..\\..\\evil.bin"), QStringLiteral("../up.bin"), QStringLiteral("x\\y.bin")};
+                FakeFtpServer srv2(o2);
+                FtpClient c2(quick());
+                QVERIFY(c2.open(QStringLiteral("127.0.0.1"), srv2.port()).ok());
+                auto rm = c2.removeTree(QStringLiteral("/games"));
+                QCOMPARE(rm.error().code, ErrorCode::InvalidArgument);
+                QVERIFY(rm.error().message.contains(QStringLiteral("evil.bin")));
+                for (const QString& cmd : srv2.commands())
+                    QVERIFY2(!cmd.contains(QStringLiteral("evil")) && !cmd.contains(QStringLiteral("up.bin")) && !cmd.contains(QStringLiteral("y.bin")),
+                             qPrintable(cmd));
+                QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("games/good.bin")), "good"));
+            }
+            // A name with ':' stays on the console, where it is an ordinary
+            // character: it is deleted like any other entry (this fake has no
+            // such file, so the delete itself is what fails).
             auto rm = c.removeTree(QStringLiteral("/games"));
-            QCOMPARE(rm.error().code, ErrorCode::InvalidArgument);
-            QVERIFY(rm.error().message.contains(QStringLiteral("evil.bin")));
+            QVERIFY(!rm.ok());
+            QVERIFY(srv.sawCommand(QStringLiteral("DELE /games/good.bin:ads")));
+            for (const QString& cmd : srv.commands())
+                QVERIFY2(!cmd.startsWith(QStringLiteral("DELE")) || !cmd.contains(QStringLiteral("evil")), qPrintable(cmd));
             QCOMPARE(readAll(QDir(root).filePath(QStringLiteral("evil.bin"))), QByteArray("outside"));
             QVERIFY(QFileInfo(QDir(root).filePath(QStringLiteral("games"))).isDir());
             QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("games/good.bin")), "good"));
@@ -760,8 +869,297 @@ private slots:
         auto out = job.value()->run(ctx);
         QVERIFY(out.ok());
         QCOMPARE(out->details.value(QStringLiteral("skippedNames")).toArray().size(), 1);
-        QVERIFY(out->warnings.join(u' ').contains(QStringLiteral("unsafe name")));
+        QVERIFY(out->warnings.join(u' ').contains(QStringLiteral("Not downloaded: ")));
+        // Something was left out: not a clean "Passed".
+        QCOMPARE(out->verification, Verification::Inconclusive);
+        QVERIFY2(out->verificationDetail.contains(QStringLiteral("1 entry was left out")), qPrintable(out->verificationDetail));
         QCOMPARE(readAll(QDir(dl).filePath(QStringLiteral("g/ok.bin"))), QByteArray("ok"));
+
+        // Every source left out: the job fails instead of reporting 0 files as passed.
+        auto none = mod.jobs.create(jobkinds::kDownload, {{QStringLiteral("sources"), QJsonArray{QStringLiteral("/g/a:b.bin")}},
+                                                          {QStringLiteral("localDir"), fresh(QStringLiteral("names-job-none"))}});
+        auto nout = none.value()->run(ctx);
+        QVERIFY(!nout.ok());
+        QVERIFY2(nout.error().message.startsWith(QStringLiteral("Not downloaded: ")), qPrintable(nout.error().message));
+    }
+
+    // ---- audit fixes -----------------------------------------------------------------------
+    void passiveModeHiccupDoesNotSwitchToEpsv()
+    {
+        const QString root = fresh(QStringLiteral("pasv421"));
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("a.txt")), "a"));
+        auto o = server(root);
+        o.failFirstPasvReply = "421 Too many connections.";
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        // A busy answer to PASV is an error for this transfer, not "PASV is unknown here".
+        auto first = c.list(QStringLiteral("/"));
+        QVERIFY(!first.ok());
+        QCOMPARE(c.lastReply().code, 421);
+        auto second = c.list(QStringLiteral("/"));
+        QVERIFY2(second.ok(), second.ok() ? "" : qPrintable(second.error().toLogString()));
+        QCOMPARE(int(second->size()), 1);
+        QVERIFY(!srv.sawCommand(QStringLiteral("EPSV")));
+
+        // A server without PASV still gets EPSV, and a new connection asks PASV again.
+        auto o2 = server(root);
+        o2.refusePasv = true;
+        FakeFtpServer srv2(o2);
+        FtpClient c2(quick());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), srv2.port()).ok());
+        QVERIFY(c2.list(QStringLiteral("/")).ok());
+        QVERIFY(c2.list(QStringLiteral("/")).ok());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), srv2.port()).ok());
+        QVERIFY(c2.list(QStringLiteral("/")).ok());
+        int pasv = 0;
+        for (const QString& cmd : srv2.commands())
+            pasv += cmd.startsWith(QStringLiteral("PASV")) ? 1 : 0;
+        QCOMPARE(pasv, 2); // once per connection, not once per listing
+    }
+
+    void lateListingReplyDropsTheConnection_data()
+    {
+        QTest::addColumn<bool>("mlsd");
+        QTest::newRow("MLSD") << true;
+        QTest::newRow("LIST") << false;
+    }
+
+    void lateListingReplyDropsTheConnection()
+    {
+        QFETCH(bool, mlsd);
+        const QString root = fresh(QStringLiteral("late"));
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("d/a.txt")), "a"));
+        auto o = server(root);
+        o.mlsd = mlsd;
+        o.lateListReplyMs = 1500;
+        FakeFtpServer srv(o);
+        FtpOptions fo = quick();
+        fo.idleTimeoutMs = 300;
+        FtpClient c(fo);
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto r = c.list(QStringLiteral("/d"));
+        QVERIFY(!r.ok());
+        QCOMPARE(r.error().code, ErrorCode::Timeout);
+        // The 226 is still owed: kept, it would be read as the next command's answer.
+        QVERIFY(!c.isConnected());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto again = c.list(QStringLiteral("/d"));
+        QVERIFY2(again.ok(), again.ok() ? "" : qPrintable(again.error().toLogString()));
+        QCOMPARE(int(again->size()), 1);
+        QVERIFY(c.noop().ok());
+    }
+
+    void repliesThatAreNotFtpAreCutOff()
+    {
+        // Something that is not an FTP server streams bytes without a line end.
+        fake::FakeLineServer flood({{{0, QByteArray(200 * 1024, 'x')}}}, false);
+        FtpClient c(quick());
+        QElapsedTimer t;
+        t.start();
+        auto st = c.connectToHost(QStringLiteral("127.0.0.1"), flood.port());
+        QVERIFY(!st.ok());
+        QCOMPARE(st.error().code, ErrorCode::CorruptData);
+        QVERIFY(t.elapsed() < 2500); // not the reply timeout
+        QVERIFY(!c.isConnected());
+        // Lines without a reply code, on and on.
+        QByteArray chatter;
+        for (int i = 0; i < 4000; ++i)
+            chatter += "hello there, this is not ftp at all\r\n";
+        fake::FakeLineServer talk({{{0, chatter}}}, false);
+        auto st2 = c.connectToHost(QStringLiteral("127.0.0.1"), talk.port());
+        QVERIFY(!st2.ok());
+        QCOMPARE(st2.error().code, ErrorCode::CorruptData);
+    }
+
+    void uploadReplaceSurvivesALostConnectionAndShortWrites()
+    {
+        // The connection dies between "old file set aside" and "new file renamed".
+        const QString root = fresh(QStringLiteral("swaplost"));
+        const QString cfg = QDir(root).filePath(QStringLiteral("cfg/config.ini"));
+        QVERIFY(fwtest::writeTextFile(cfg, "old"));
+        auto o = server(root);
+        o.dropControlOnRnfr = 2;
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto st = c.uploadReplace(QStringLiteral("/cfg/config.ini"), "new contents", QStringLiteral(".new"));
+        QVERIFY(!st.ok());
+        // Not "refused …; the old file was kept": it says where the files are.
+        QVERIFY(st.error().code != ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("/cfg/config.ini.replacing.bak")), qPrintable(st.error().message));
+        QVERIFY2(st.error().message.contains(QStringLiteral("/cfg/config.ini.new")), qPrintable(st.error().message));
+        QVERIFY(!QFileInfo::exists(cfg));
+        QCOMPARE(readAll(cfg + QStringLiteral(".replacing.bak")), QByteArray("old"));
+        // The next replace puts the old file back first and then swaps cleanly.
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        QVERIFY(c.uploadReplace(QStringLiteral("/cfg/config.ini"), "newer contents", QStringLiteral(".new")).ok());
+        QCOMPARE(readAll(cfg), QByteArray("newer contents"));
+        QCOMPARE(QDir(QFileInfo(cfg).absolutePath()).entryList(QDir::Files), QStringList{QStringLiteral("config.ini")});
+
+        // A server that answers 226 for a short write must not replace the good file.
+        const QString root2 = fresh(QStringLiteral("swapshort"));
+        const QString cfg2 = QDir(root2).filePath(QStringLiteral("cfg/config.ini"));
+        QVERIFY(fwtest::writeTextFile(cfg2, "keep me"));
+        auto o2 = server(root2);
+        o2.corruptStorPath = QStringLiteral("/cfg/config.ini.new");
+        FakeFtpServer srv2(o2);
+        FtpClient c2(quick());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), srv2.port()).ok());
+        auto cut = c2.uploadReplace(QStringLiteral("/cfg/config.ini"), QByteArray(4000, 'n'), QStringLiteral(".new"));
+        QVERIFY(!cut.ok());
+        QCOMPARE(cut.error().code, ErrorCode::IoError);
+        QCOMPARE(readAll(cfg2), QByteArray("keep me"));
+        QCOMPARE(QDir(QFileInfo(cfg2).absolutePath()).entryList(QDir::Files), QStringList{QStringLiteral("config.ini")});
+    }
+
+    void listNamesKeepLeadingSpacesAndColonsStayOnTheConsole()
+    {
+        const QDateTime now(QDate(2025, 1, 15), QTime(12, 0), QTimeZone::utc());
+        // One separator before the name; further spaces belong to it.
+        auto e = parseListLine(QStringLiteral("-rw-r--r-- 1 root root 5 Jan 01 12:00  save.bin"), now);
+        QVERIFY(e);
+        QCOMPARE(e->name, QStringLiteral(" save.bin"));
+        auto plain = parseListLine(QStringLiteral("-rw-r--r-- 1 root root 5 Jan  1  2024 save.bin"), now);
+        QVERIFY(plain);
+        QCOMPARE(plain->name, QStringLiteral("save.bin"));
+        // 29 February without a year: the last year that had one.
+        auto leap = parseListLine(QStringLiteral("-rw-r--r-- 1 root root 5 Feb 29 08:30 leap.bin"), now);
+        QVERIFY(leap);
+        QCOMPARE(leap->modified.date(), QDate(2024, 2, 29));
+
+        // ':' is an ordinary character on the console: allowed where the name stays there.
+        QCOMPARE(*listedChild(QStringLiteral("/dumps"), QStringLiteral("Save: slot 1.dat")), QStringLiteral("/dumps/Save: slot 1.dat"));
+        QVERIFY(listedNameProblem(QStringLiteral("Save: slot 1.dat")).isEmpty());
+        for (const char* bad : {"", ".", "..", "a/b", "..\\x", "a\\b", "line\nbreak"})
+            QVERIFY2(!listedChild(QStringLiteral("/dumps"), QString::fromLatin1(bad)), bad);
+        // Never for a name that reaches this PC.
+        QVERIFY(!remoteChild(QStringLiteral("/dumps"), QStringLiteral("Save: slot 1.dat")));
+        QVERIFY(!localNameProblem(QStringLiteral("Save: slot 1.dat")).isEmpty());
+    }
+
+    void sourcesKeepTheirSpacesAndDuplicateTargetsAreLeftOut()
+    {
+        Module mod;
+        const QString root = fresh(QStringLiteral("dups"));
+        FakeFtpServer srv(server(root));
+        const SettingsValues s(mod.schema, {{keys::kConsoleIp, QStringLiteral("127.0.0.1")}, {keys::kFtpPort, srv.port()}}, {});
+        const QString local = fresh(QStringLiteral("dupslocal"));
+        // A name that begins with a space is a different file: it is not trimmed away.
+        const QString spaced = QDir(local).filePath(QStringLiteral(" lead.txt"));
+        QVERIFY(fwtest::writeTextFile(spaced, "spaced"));
+        auto up = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{spaced, QStringLiteral("   ")}},
+                                                      {QStringLiteral("remoteDir"), QStringLiteral("/up")}});
+        QVERIFY2(up.value()->validate(s).ok(), "a source with a leading space is found");
+        ProgressReporter progress;
+        progress.setPhases(up.value()->phases());
+        JobContext ctx;
+        ctx.progress = &progress;
+        ctx.settings = s;
+        ctx.log = Log(QStringLiteral("test"));
+        auto uout = up.value()->run(ctx);
+        QVERIFY2(uout.ok(), uout.ok() ? "" : qPrintable(uout.error().toLogString()));
+        QCOMPARE(readAll(srv.path(QStringLiteral("/up/ lead.txt"))), QByteArray("spaced"));
+
+        // Two sources for one target: the first is sent, the second reported.
+        const QString a = QDir(local).filePath(QStringLiteral("a/x.bin")), b = QDir(local).filePath(QStringLiteral("b/x.bin"));
+        QVERIFY(fwtest::writeTextFile(a, "from a"));
+        QVERIFY(fwtest::writeTextFile(b, "from b!"));
+        auto plan = planUpload({a, b}, QStringLiteral("/up"));
+        QVERIFY(plan.ok());
+        QCOMPARE(int(plan->files.size()), 1);
+        QCOMPARE(plan->totalBytes, qint64(6));
+        QCOMPARE(plan->skipped.size(), 1);
+        QVERIFY(plan->skipped.front().contains(QStringLiteral("/up/x.bin")));
+        auto both = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{a, b}}, {QStringLiteral("remoteDir"), QStringLiteral("/up")}});
+        auto bout = both.value()->run(ctx);
+        QVERIFY(bout.ok());
+        QCOMPARE(readAll(srv.path(QStringLiteral("/up/x.bin"))), QByteArray("from a"));
+        QCOMPARE(bout->verification, Verification::Inconclusive);
+        QVERIFY(bout->warnings.join(u' ').contains(QStringLiteral("Not uploaded: ")));
+
+        // Download: two remote names that are one name on this PC.
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto dplan = planDownload(c, {QStringLiteral("/up/x.bin"), QStringLiteral("/up/x.bin")}, fresh(QStringLiteral("dupsdl")));
+        QVERIFY(dplan.ok());
+        QCOMPARE(int(dplan->files.size()), 1);
+        QCOMPARE(dplan->skipped.size(), 1);
+    }
+
+    void folderUploadSendsOneMkdPerFolderAndSummarisesSkips()
+    {
+        const QString root = fresh(QStringLiteral("mkd"));
+        const QString local = fresh(QStringLiteral("mkdlocal"));
+        const QString deep = QDir(local).filePath(QStringLiteral("deep"));
+        for (int i = 0; i < 25; ++i)
+            QVERIFY(fwtest::writeRandomFile(QDir(deep).filePath(QStringLiteral("l1/l2/%1f%2.bin").arg(i % 2 ? QStringLiteral("l3/") : QString()).arg(i)),
+                                            500 + i, quint32(60 + i)));
+        FakeFtpServer srv(server(root));
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        auto plan = planUpload({deep}, QStringLiteral("/up"));
+        QVERIFY(plan.ok());
+        auto rep = runUpload(plan.value(), opt, {});
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->transferred, 25);
+        // /up, /up/deep, …/l1, …/l2, …/l3: one MKD each, not one per descendant.
+        QStringList mkds;
+        for (const QString& cmd : srv.commands())
+            if (cmd.startsWith(QStringLiteral("MKD ")))
+                mkds << cmd.mid(4);
+        mkds.sort();
+        QCOMPARE(mkds, (QStringList{QStringLiteral("/up"), QStringLiteral("/up/deep"), QStringLiteral("/up/deep/l1"),
+                                    QStringLiteral("/up/deep/l1/l2"), QStringLiteral("/up/deep/l1/l2/l3")}));
+        // A resume run over files that are all there: 25 skips, 20 warnings and one summary line.
+        opt.resume = true;
+        auto again = runUpload(plan.value(), opt, {});
+        QVERIFY(again.ok());
+        QCOMPARE(again->skipped, 25);
+        QCOMPARE(again->warnings.size(), 21);
+        QVERIFY2(again->warnings.last().startsWith(QStringLiteral("5 more file(s)")), qPrintable(again->warnings.last()));
+    }
+
+    void skippedAndFailedFilesCountInTheProgress()
+    {
+        const QString root = fresh(QStringLiteral("count"));
+        const QString local = fresh(QStringLiteral("countlocal"));
+        QStringList sources;
+        for (int i = 0; i < 4; ++i) {
+            const QString f = QDir(local).filePath(QStringLiteral("f%1.bin").arg(i));
+            QVERIFY(fwtest::writeRandomFile(f, 2000 + i, quint32(30 + i)));
+            sources << f;
+        }
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("up/f3.bin")), "locked"));
+        auto o = server(root);
+        o.readOnlyPaths = {QStringLiteral("/up/f3.bin")}; // one file fails
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        opt.retries = 0;
+        auto plan = planUpload(sources, QStringLiteral("/up"));
+        QVERIFY(plan.ok());
+        {
+            ProgressReporter progress;
+            progress.setPhases({QStringLiteral("Uploading")});
+            progress.beginPhase(0, plan->totalBytes, qint64(plan->files.size()));
+            auto rep = runUpload(plan.value(), opt, {}, &progress);
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->transferred, 3);
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(progress.snapshot().filesDone, qint64(4));
+            // Failures are named by their console path, not a bare file name.
+            QVERIFY2(rep->errors.front().startsWith(QStringLiteral("/up/f3.bin: ")), qPrintable(rep->errors.front()));
+        }
+        // A second run with resume: three files are already there and are skipped.
+        opt.resume = true;
+        ProgressReporter progress;
+        progress.setPhases({QStringLiteral("Uploading")});
+        progress.beginPhase(0, plan->totalBytes, qint64(plan->files.size()));
+        auto rep = runUpload(plan.value(), opt, {}, &progress);
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->skipped, 3);
+        QCOMPARE(progress.snapshot().filesDone, qint64(4));
     }
     // ---- jobs and settings ----------------------------------------------------------------------
     void uploadAndDownloadJobs()
@@ -806,11 +1204,29 @@ private slots:
                                                         {QStringLiteral("remoteDir"), QStringLiteral("/system/x")}});
         auto pv = prot.value()->validate(s);
         QCOMPARE(pv.error().code, ErrorCode::PermissionDenied);
-        QVERIFY(pv.error().message.contains(QStringLiteral("BRICK")));
+        QVERIFY(pv.error().message.contains(QStringLiteral("brick")));
         auto allowed = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{src}},
                                                            {QStringLiteral("remoteDir"), QStringLiteral("/system/x")},
                                                            {QStringLiteral("allowProtectedPaths"), true}});
         QVERIFY(allowed.value()->validate(s).ok());
+        // So does a folder whose own name makes it land on a protected root,
+        // and the parent of one.
+        const QString sysEx = QDir(fresh(QStringLiteral("jobsprot"))).filePath(QStringLiteral("system_ex"));
+        QVERIFY(fwtest::writeTextFile(QDir(sysEx).filePath(QStringLiteral("x.bin")), "x"));
+        for (const auto& [sources, dir] : {std::pair{QJsonArray{sysEx}, QStringLiteral("/")}, std::pair{QJsonArray{src}, QStringLiteral("/user")},
+                                           std::pair{QJsonArray{src, sysEx}, QStringLiteral("/")}}) {
+            auto named = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), sources}, {QStringLiteral("remoteDir"), dir}});
+            auto nv = named.value()->validate(s);
+            QVERIFY2(!nv.ok(), qPrintable(dir));
+            QCOMPARE(nv.error().code, ErrorCode::PermissionDenied);
+            QVERIFY(nv.error().message.contains(dir == u"/" ? QStringLiteral("/system_ex") : dir));
+            auto confirmed = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), sources},
+                                                                 {QStringLiteral("remoteDir"), dir},
+                                                                 {QStringLiteral("allowProtectedPaths"), true}});
+            QVERIFY(confirmed.value()->validate(s).ok());
+        }
+        auto plainRoot = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{src}}, {QStringLiteral("remoteDir"), QStringLiteral("/")}});
+        QVERIFY(plainRoot.value()->validate(s).ok());
 
         const QString dl = fresh(QStringLiteral("jobsdl"));
         auto down = mod.jobs.create(jobkinds::kDownload, {{QStringLiteral("sources"), QJsonArray{QStringLiteral("/data/etaHEN/games/Game")}},

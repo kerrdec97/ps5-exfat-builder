@@ -18,8 +18,9 @@
 //     (MiB per second, like the legacy), the read-back compared byte for byte,
 //     then DELE; a leftover is reported. After a cancel or a dropped
 //     connection the file is deleted over a fresh connection.
-// The server is also classified (zftpd or generic) from FEAT and the banner
-// with the legacy scores; the legacy ZHTTP web-UI probe is not ported.
+// The server is also classified (zftpd, ftpsrv, etaHEN or generic) from FEAT
+// and the banner with the legacy scores; the legacy ZHTTP web-UI probe is not
+// ported.
 //
 // Blocking; run on a Qt-started thread (queue worker).
 

@@ -28,6 +28,34 @@ FtpOptions ftpOptionsFor(const ConsoleEndpoint& ep)
     return o;
 }
 
+namespace {
+
+// Two sources that end at the same target would be written by two workers at
+// once. The first keeps the target; later ones are left out and reported.
+void dropDuplicateTargets(TransferPlan& plan, bool upload)
+{
+    QSet<QString> seen;
+    std::vector<TransferFile> kept;
+    kept.reserve(plan.files.size());
+    for (TransferFile& f : plan.files) {
+        // The console's paths are compared as they are; this PC's as its file system does.
+        const QString key = upload ? f.remote : hostNameKey(QDir::cleanPath(f.local));
+        if (seen.contains(key)) {
+            plan.totalBytes -= std::max<qint64>(0, f.size);
+            plan.skipped << (upload ? QStringLiteral("%1: another source is sent to the same file on the PS5 (%2)")
+                                          .arg(QDir::toNativeSeparators(f.local), f.remote)
+                                    : QStringLiteral("%1: another source is saved under the same name on this PC (%2)")
+                                          .arg(f.remote, QDir::toNativeSeparators(f.local)));
+            continue;
+        }
+        seen.insert(key);
+        kept.push_back(std::move(f));
+    }
+    plan.files = std::move(kept);
+}
+
+} // namespace
+
 Result<TransferPlan> planUpload(const QStringList& localSources, const QString& remoteDirIn,
                                 const CancellationToken& token)
 {
@@ -61,6 +89,7 @@ Result<TransferPlan> planUpload(const QStringList& localSources, const QString& 
         }
     }
     plan.directories.removeDuplicates();
+    dropDuplicateTargets(plan, true);
     return plan;
 }
 
@@ -91,7 +120,16 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
                 dirs.pop_front();
                 if (++visited > 100000)
                     return Error(ErrorCode::Unsupported, QStringLiteral("The remote folder has too many sub-folders."));
-                FW_TRY_ASSIGN(std::vector<FtpEntry> entries, c.list(rdir, FtpListMode::Auto, token));
+                auto listed = c.list(rdir, FtpListMode::Auto, token);
+                if (!listed.ok()) {
+                    // One unreadable sub-folder is left out and reported; the
+                    // picked folder itself, a cancel or a lost connection ends the plan.
+                    if (rdir == src || listed.error().isCancelled() || !c.isConnected())
+                        return listed.takeError();
+                    plan.skipped << QStringLiteral("%1: the folder could not be read (%2)").arg(rdir, listed.error().message);
+                    continue;
+                }
+                const std::vector<FtpEntry> entries = std::move(listed.value());
                 QSet<QString> localKeys; // names as this PC's file system compares them
                 for (const FtpEntry& e : entries) {
                     if (e.isLink)
@@ -136,6 +174,7 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
         }
     }
     plan.directories.removeDuplicates();
+    dropDuplicateTargets(plan, false);
     return plan;
 }
 
@@ -202,11 +241,28 @@ struct Shared {
         std::lock_guard lock(mutex);
         inflight.remove(path);
     }
+    // One warning per skipped file, up to a point: a resume run over a whole
+    // game would otherwise put a line per file into the job's outcome.
+    static constexpr int kMaxSkipWarnings = 20;
+    int skipped = 0;
+    void skip(const QString& warning)
+    {
+        std::lock_guard lock(mutex);
+        ++report.skipped;
+        if (skipped++ < kMaxSkipWarnings)
+            report.warnings << warning;
+    }
+    void summariseSkips()
+    {
+        if (skipped > kMaxSkipWarnings)
+            report.warnings << QStringLiteral("%1 more file(s) were skipped for the same reason.").arg(skipped - kMaxSkipWarnings);
+    }
     void fail(const TransferFile& f, const QString& why)
     {
         std::lock_guard lock(mutex);
         ++report.failed;
-        report.errors << QStringLiteral("%1: %2").arg(QFileInfo(f.local).fileName(), why);
+        // The console path: many files of a game share a bare name (param.json).
+        report.errors << QStringLiteral("%1: %2").arg(f.remote, why);
     }
 };
 
@@ -312,13 +368,22 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
     qint64 approvedOffset = 0;
     bool startedHere = false;  // a STOR/APPE of this run was sent (cleanup)
     bool acceptedHere = false; // ... and accepted with a 1xx (resume point is ours)
+    // Every exit that gives the file up for good goes through here, so what
+    // this run wrote of it is removed (or reported when the console is gone).
+    // A cancelled file stays marked: it is removed after all workers stopped.
+    auto giveUp = [&](Outcome o) {
+        if (o == Outcome::Failed) {
+            if (startedHere)
+                removeRemotePartial(sh, &c, f.remote);
+            sh.unmark(f.remote);
+        }
+        return o;
+    };
     if (sh.opt.resume) {
         auto sz = c.size(f.remote);
         if (sz.ok() && sz.value() == f.size) {
             advance(f.size);
-            std::lock_guard lock(sh.mutex);
-            ++sh.report.skipped;
-            sh.report.warnings << QStringLiteral("%1 is already complete on the PS5; skipped.").arg(f.remote);
+            sh.skip(QStringLiteral("%1 is already complete on the PS5; skipped.").arg(f.remote));
             return Outcome::Skipped;
         }
         if (sz.ok() && sz.value() > 0 && sz.value() < f.size) {
@@ -331,11 +396,11 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
     bool append = false;
     while (true) {
         if (!ensureConnected(sh, c, attempt, f, out))
-            return out;
+            return giveUp(out);
         QFile in(f.local);
         if (!in.open(QIODevice::ReadOnly)) {
             sh.fail(f, QStringLiteral("could not read the local file (%1)").arg(in.errorString()));
-            return Outcome::Failed;
+            return giveUp(Outcome::Failed);
         }
         sh.mark(f.remote);
         const Status st = c.store(f.remote, in, offset, advance, sh.token, append);
@@ -358,9 +423,8 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             }
             if (sz.ok() && sz.value() != f.size) {
                 sh.fail(f, QStringLiteral("the PS5 reports %1 bytes, expected %2").arg(sz.value()).arg(f.size));
-                removeRemotePartial(sh, &c, f.remote);
-                sh.unmark(f.remote);
-                return Outcome::Failed;
+                startedHere = true; // the wrong-sized file is this run's
+                return giveUp(Outcome::Failed);
             }
             sh.unmark(f.remote);
             std::lock_guard lock(sh.mutex);
@@ -392,7 +456,7 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             if (!sh.token.sleepFor(1000))
                 return Outcome::Cancelled;
             if (!ensureConnected(sh, c, attempt, f, out))
-                return out;
+                return giveUp(out);
             qint64 next = approvedOffset;
             if (acceptedHere) {
                 // The remote file now starts with this run's bytes.
@@ -405,10 +469,7 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             continue;
         }
         sh.fail(f, st.error().message);
-        if (startedHere)
-            removeRemotePartial(sh, &c, f.remote);
-        sh.unmark(f.remote);
-        return Outcome::Failed;
+        return giveUp(Outcome::Failed);
     }
 }
 
@@ -423,10 +484,7 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
     const QString part = f.local + QStringLiteral(".part");
     if (QFileInfo::exists(f.local) && !sh.opt.overwriteLocal) {
         advance(std::max<qint64>(0, f.size));
-        std::lock_guard lock(sh.mutex);
-        ++sh.report.skipped;
-        sh.report.warnings << QStringLiteral("%1 already exists; skipped (turn on overwrite to replace it).")
-                                  .arg(QDir::toNativeSeparators(f.local));
+        sh.skip(QStringLiteral("%1 already exists; skipped (turn on overwrite to replace it).").arg(QDir::toNativeSeparators(f.local)));
         return Outcome::Skipped;
     }
     int attempt = 0;
@@ -443,14 +501,26 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             advance(have);
         }
     }
+    bool openedHere = false; // this run wrote to the .part (cleanup)
+    // Every exit that gives the file up for good: the .part this run wrote
+    // goes. A cancelled file stays marked and is removed after all workers
+    // stopped; a .part of an earlier run that was never opened is left alone.
+    auto giveUp = [&](Outcome o) {
+        if (o == Outcome::Failed && openedHere) {
+            QFile::remove(part);
+            sh.unmark(part);
+        }
+        return o;
+    };
     while (true) {
         if (!ensureConnected(sh, c, attempt, f, out))
-            return out;
+            return giveUp(out);
         QFile outFile(part);
         if (!outFile.open(offset > 0 ? (QIODevice::WriteOnly | QIODevice::Append) : (QIODevice::WriteOnly | QIODevice::Truncate))) {
             sh.fail(f, QStringLiteral("could not write %1 (%2)").arg(QDir::toNativeSeparators(part), outFile.errorString()));
-            return Outcome::Failed;
+            return giveUp(Outcome::Failed);
         }
+        openedHere = true;
         sh.mark(part);
         Status st = c.retrieve(f.remote, outFile, offset, advance, sh.token);
         // On the drive before it can replace anything (power cut safety).
@@ -461,9 +531,7 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             const qint64 got = QFileInfo(part).size();
             if (f.size >= 0 && got != f.size) {
                 sh.fail(f, QStringLiteral("received %1 bytes, expected %2").arg(got).arg(f.size));
-                QFile::remove(part);
-                sh.unmark(part);
-                return Outcome::Failed;
+                return giveUp(Outcome::Failed);
             }
             // An existing file (only reached with overwrite on) is set aside and
             // restored if the rename fails; the complete .part is then kept.
@@ -502,9 +570,7 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             continue;
         }
         sh.fail(f, st.error().message);
-        QFile::remove(part);
-        sh.unmark(part);
-        return Outcome::Failed;
+        return giveUp(Outcome::Failed);
     }
 }
 
@@ -523,6 +589,9 @@ void runWorkers(Shared& sh, OneFn one)
                 if (i >= sh.plan.files.size())
                     break;
                 const Outcome o = one(sh, c, sh.plan.files[i]);
+                // Done files count themselves; a skipped or failed one is dealt with too.
+                if ((o == Outcome::Skipped || o == Outcome::Failed) && sh.progress)
+                    sh.progress->advanceFiles(1);
                 if (!counted && c.isConnected()) {
                     counted = true;
                     sh.workersConnected.fetch_add(1);
@@ -569,19 +638,24 @@ Result<TransferReport> runUpload(const TransferPlan& plan, const TransferOptions
             dirs << remoteParent(f.remote);
         dirs.removeDuplicates();
         std::sort(dirs.begin(), dirs.end());
+        QSet<QString> made; // one MKD per folder, not one per descendant
         for (const QString& d : dirs) {
             if (!token.checkpoint())
                 return Error::cancelled();
-            if (auto st = prep.mkdirs(d); !st.ok())
+            if (auto st = prep.mkdirs(d, made); !st.ok())
                 return Error(st.error().code, QStringLiteral("Could not create %1 on the PS5. %2").arg(d, st.error().message),
                              st.error().detail);
         }
         prep.quit();
     }
     runWorkers(sh, uploadOne);
+    sh.summariseSkips();
     if (token.isCancelled())
         finishCancelled(sh, true);
-    if (sh.workersConnected.load() == 0 && sh.report.transferred == 0 && !sh.report.cancelled && sh.report.files > 0)
+    // Nothing reached the console at all: one plain error. A report that names
+    // partial files (removed or left behind) is kept, the user needs it.
+    if (sh.workersConnected.load() == 0 && sh.report.transferred == 0 && !sh.report.cancelled && sh.report.files > 0
+        && sh.report.removedPartials.isEmpty() && sh.report.leftoverPartials.isEmpty())
         return Error(ErrorCode::IoError, sh.firstConnectError.isEmpty() ? QStringLiteral("No file could be uploaded.")
                                                                         : sh.firstConnectError);
     return sh.report;
@@ -596,6 +670,7 @@ Result<TransferReport> runDownload(const TransferPlan& plan, const TransferOptio
         if (!QDir().mkpath(d))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(d)));
     runWorkers(sh, downloadOne);
+    sh.summariseSkips();
     if (token.isCancelled())
         finishCancelled(sh, false);
     return sh.report;
