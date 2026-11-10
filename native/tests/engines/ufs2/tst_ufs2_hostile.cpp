@@ -5,11 +5,13 @@
 
 #include "Ufs2TestUtil.h"
 
+#include "core/FsLinks.h"
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Edit.h"
 #include "engines/ufs2/Ufs2Verify.h"
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -497,6 +499,47 @@ private slots:
             QVERIFY2(tree.error().message.contains(QStringLiteral("nested more than 256 deep")),
                      qPrintable(tree.error().message));
         }
+    }
+
+    // A source folder the user may not list is not an empty folder: the scan
+    // fails and names it instead of building an image without its files.
+    void sourceFolderThatCannotBeListedFailsTheScan()
+    {
+        const QString src = m_tmp.filePath(QStringLiteral("denied"));
+        QVERIFY(mktext(src + QStringLiteral("/a.txt"), "a"));
+        QVERIFY(mktext(src + QStringLiteral("/locked/secret.txt"), "secret"));
+        const QString locked = src + QStringLiteral("/locked");
+        if (!fwtest::denyListing(locked, true))
+            QSKIP("Access to a folder cannot be taken away here.");
+        const auto restore = qScopeGuard([&] { (void)fwtest::denyListing(locked, false); });
+        if (!QDir(locked).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+            QSKIP("This account can still list the folder (administrator or root).");
+        CancellationToken token;
+        const auto tree = scanLocalFolder(src, token);
+        QVERIFY(!tree.ok());
+        QCOMPARE(tree.error().code, ErrorCode::PermissionDenied);
+        QVERIFY2(tree.error().message.contains(QLatin1String("locked")), qPrintable(tree.error().toLogString()));
+    }
+
+    // A junction that leads back to a folder above it is an error at once
+    // (Qt's canonical path does not show where a junction leads, so the scan
+    // used to follow it until the path grew too long).
+    void junctionBackIntoTheSourceIsRefused()
+    {
+        const QString src = m_tmp.filePath(QStringLiteral("looped"));
+        QVERIFY(mktext(src + QStringLiteral("/data/near.txt"), "near"));
+        const QString back = src + QStringLiteral("/data/back");
+        if (!createDirectoryJunction(back, src).ok())
+            QSKIP("Folder links cannot be created here.");
+        const auto unlink = qScopeGuard([&] { (void)removeDirectoryJunction(back); });
+        CancellationToken token;
+        const auto tree = scanLocalFolder(src, token);
+        QVERIFY(!tree.ok());
+        QCOMPARE(tree.error().code, ErrorCode::InvalidArgument);
+        QVERIFY2(tree.error().message.contains(QLatin1String("links back into itself")), qPrintable(tree.error().toLogString()));
+        // The first pass through the link already names it: nothing below it was listed twice.
+        QVERIFY2(QDir::fromNativeSeparators(tree.error().message).endsWith(QLatin1String("data/back links back into itself, so it cannot be put into an image.")),
+                 qPrintable(tree.error().message));
     }
 };
 

@@ -143,9 +143,9 @@ void AmprTab::generateLocal()
     }
     bool force = false;
     if (!pfs::folderHasAmprLibrary(folder)) {
-        // Legacy "Not an APR title?" question.
-        if (!Sheet::confirm(window(), QStringLiteral("Not an APR title?"),
-                            QStringLiteral("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an APR title. Generate ampr_emu.index anyway?"),
+        // Legacy "Not an APR title?" question (the app says AMPR everywhere).
+        if (!Sheet::confirm(window(), QStringLiteral("Not an AMPR title?"),
+                            QStringLiteral("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an AMPR title. Generate ampr_emu.index anyway?"),
                             QStringLiteral("Cancel"), QStringLiteral("Generate anyway"), false, Sheet::Icon::Warning))
             return;
         force = true;

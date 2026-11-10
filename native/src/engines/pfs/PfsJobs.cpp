@@ -187,7 +187,7 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     FW_TRY(validate(ctx.settings));
     if (archive::isZipSource(m_source)) {
         const QString zip = m_source;
-        FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+        FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, freeSpaceMarginFrom(ctx.settings)));
         ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         FW_TRY(validate(ctx.settings));
         // Unpacking reports as a phase of its own, which replaced the job's.

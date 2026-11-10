@@ -63,6 +63,13 @@ private:
     bool m_committed = false;
 };
 
+// Gives a finished .part file its final name. When that fails (the file it
+// replaces is mounted or open in another program) the finished work is not
+// thrown away: it is moved to a free name next to it, "<name> (new).<ext>",
+// and the returned error says so. `what` starts that message, for example
+// "The image was built and verified".
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what);
+
 // A private temporary directory, removed recursively on destruction unless
 // keep() was called. Created under Paths::tempRoot() by default.
 class TempDir {
@@ -113,6 +120,13 @@ struct VolumeInfo {
     bool isCloudSynced = false; // OneDrive, Google Drive, Dropbox, iCloud, Creative Cloud folders
 };
 VolumeInfo volumeInfo(const QString& anyPathOnVolume);
+
+// True for the file systems that cannot hold a file of 4 GiB or more (FAT32
+// and older), by the name diskSpace() and volumeInfo() report.
+bool limitsFilesTo4GiB(const QString& fileSystemName);
+// True when the drive holding `folder` is such a file system and `bytes`
+// is over its limit: checked before hours of writing fail at 4 GiB.
+bool tooLargeForDrive(const QString& folder, qint64 bytes);
 
 // Checks that `outputFolder` can hold a file of `largestFileBytes`: refuses
 // FAT/FAT32 for files of 4 GiB or more; returns warnings (shown, not fatal) for

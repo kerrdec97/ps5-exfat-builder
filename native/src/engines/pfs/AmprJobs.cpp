@@ -40,7 +40,7 @@ public:
                 return Error(ErrorCode::InvalidArgument, amprAssetPackProblem(nativeFolder(f), pack));
         if (!m_p.value(QStringLiteral("force")).toBool() && !folderHasAmprLibrary(f))
             return Error(ErrorCode::InvalidArgument,
-                         QStringLiteral("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an APR "
+                         QStringLiteral("This folder has no fakelib/libSceAmpr.sprx, so it does not appear to be an AMPR "
                                         "title. Generate ampr_emu.index anyway?"));
         return success();
     }

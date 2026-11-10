@@ -247,12 +247,12 @@ private slots:
         const SettingsValues noHost(env.schema, {}, {});
         QVERIFY(!env.run(integration::kAmprFtpJob, {{QStringLiteral("remoteFolder"), QStringLiteral("/data/etaHEN/games/GameA")}}, noHost).ok());
 
-        // Local tool: "Not an APR title?" unless forced.
+        // Local tool: "Not an AMPR title?" unless forced.
         const QString plain = fresh(QStringLiteral("not-apr"));
         QVERIFY(put(plain + QStringLiteral("/eboot.bin"), "e", QDateTime::currentDateTimeUtc()));
         auto refused = env.run(pfs::kAmprLocalJob, {{QStringLiteral("folder"), plain}}, s);
         QVERIFY(!refused.ok());
-        QVERIFY(refused.error().message.contains(QStringLiteral("does not appear to be an APR title")));
+        QVERIFY(refused.error().message.contains(QStringLiteral("does not appear to be an AMPR title")));
         auto forced = env.run(pfs::kAmprLocalJob, {{QStringLiteral("folder"), plain}, {QStringLiteral("force"), true}}, s);
         QVERIFY(forced.ok());
         QVERIFY(!forced->warnings.isEmpty());

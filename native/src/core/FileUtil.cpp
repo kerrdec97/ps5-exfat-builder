@@ -253,6 +253,31 @@ void PartFile::abandon()
     QFile::remove(partPath());
 }
 
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
+{
+    Status st = part.commit(replaceExisting);
+    if (st.ok())
+        return st;
+    const QFileInfo fi(part.finalPath());
+    const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
+    const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
+    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
+        return st; // nothing could be saved: the plain error stands
+    Error e = st.error();
+    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    const QString name = QDir::toNativeSeparators(part.finalPath());
+    const QString keptName = QDir::toNativeSeparators(kept);
+    if (e.code == ErrorCode::AlreadyExists)
+        e.message = QStringLiteral("%1, but %2 already exists. It was saved as %3.").arg(what, name, keptName);
+    else if (fi.exists())
+        e.message = QStringLiteral("%1, but could not replace %2 because that file is in use. It was saved as %3. "
+                                   "Close the program that uses the old file, then rename the new one.")
+                        .arg(what, name, keptName);
+    else
+        e.message = QStringLiteral("%1, but could not be named %2. It was saved as %3.").arg(what, name, keptName);
+    return e;
+}
+
 namespace {
 constexpr char kOwnerMarkerMagic[] = "fw-temp 1\n"; // first line of TempDir's marker file
 } // namespace
@@ -405,6 +430,24 @@ VolumeInfo volumeInfo(const QString& anyPathOnVolume)
     return v;
 }
 
+namespace {
+constexpr qint64 k4GiB = 4LL * 1024 * 1024 * 1024; // FAT32 holds files up to 4 GiB - 1
+}
+
+bool limitsFilesTo4GiB(const QString& fileSystemName)
+{
+    const QString fs = fileSystemName.toLower();
+    return fs == u"vfat" || fs == u"msdos" || fs.startsWith(u"fat");
+}
+
+bool tooLargeForDrive(const QString& folder, qint64 bytes)
+{
+    if (bytes < k4GiB)
+        return false;
+    const auto ds = diskSpace(folder);
+    return ds.ok() && limitsFilesTo4GiB(ds->fileSystem);
+}
+
 Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 largestFileBytes)
 {
     const VolumeInfo v = volumeInfo(outputFolder);
@@ -412,8 +455,7 @@ Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 larges
     QString drive = QDir::toNativeSeparators(v.rootPath);
     if (drive.endsWith(u'\\') && drive.size() > 1)
         drive.chop(1);
-    constexpr qint64 k4GiB = 4LL * 1024 * 1024 * 1024;
-    if ((fs == u"FAT32" || fs == u"FAT" || fs == u"VFAT" || fs == u"MSDOS") && largestFileBytes >= k4GiB) // FAT32 holds up to 4 GiB - 1
+    if (limitsFilesTo4GiB(fs) && largestFileBytes >= k4GiB)
         return Error(ErrorCode::Unsupported,
                      QStringLiteral("%1 is formatted as %2, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.")
                          .arg(drive, fs == u"FAT32" ? QStringLiteral("FAT32") : QStringLiteral("FAT")),

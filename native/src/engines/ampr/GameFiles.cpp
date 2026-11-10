@@ -1,7 +1,7 @@
 #include "engines/ampr/GameFiles.h"
 
 #include "engines/ampr/Lz4Pack.h"
-#include "engines/pfs/FolderAccess.h"
+#include "core/FolderAccess.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -72,12 +72,12 @@ private:
     // warning. A .lnk shortcut is an ordinary game file.
     Status walk(const QString& dir, const QString& rel, QSet<QString>& ancestors, qint64& n, const CancellationToken& token)
     {
-        const QString identity = pfs::folderIdentity(dir);
+        const QString identity = folderIdentity(dir);
         ancestors.insert(identity);
         const QFileInfoList entries =
             QDir(dir).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
         if (entries.isEmpty())
-            FW_TRY(pfs::ensureFolderListable(dir)); // empty, or not allowed to look?
+            FW_TRY(ensureFolderListable(dir)); // empty, or not allowed to look?
         for (const QFileInfo& fi : entries) {
             if ((++n & 1023) == 0 && !token.checkpoint())
                 return Error::cancelled();
@@ -90,7 +90,7 @@ private:
             item.path = path;
             item.isDir = fi.isDir();
             if (item.isDir && (fi.isSymbolicLink() || fi.isJunction())) {
-                const QString target = pfs::folderIdentity(fi.absoluteFilePath());
+                const QString target = folderIdentity(fi.absoluteFilePath());
                 if (!target.isEmpty() && ancestors.contains(target)) {
                     m_warnings << QStringLiteral("Skipped %1: the link leads back into its own folder.").arg(path);
                     continue;

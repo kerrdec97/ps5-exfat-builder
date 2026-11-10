@@ -5,9 +5,13 @@
 
 #include "ExfatTestUtil.h"
 
+#include "core/FsLinks.h"
+#include "engines/exfat/SourceScan.h"
 #include "support/TestSupport.h"
 
+#include <QDir>
 #include <QElapsedTimer>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -363,6 +367,53 @@ private slots:
         QVERIFY(tree.ok());
         const QString problems = tree->problems.join(u'\n');
         QVERIFY2(problems.contains(QStringLiteral("a.bin is larger than the volume")), qPrintable(problems));
+    }
+
+    // A source folder the user may not list is not an empty folder: the scan
+    // fails and names it instead of building an image without its files.
+    void sourceFolderThatCannotBeListedFailsTheScan()
+    {
+        const QString src = path(QStringLiteral("denied"));
+        QVERIFY(writeBytes(src + QStringLiteral("/a.txt"), "a"));
+        QVERIFY(writeBytes(src + QStringLiteral("/locked/secret.bin"), "secret"));
+        const QString locked = src + QStringLiteral("/locked");
+        if (!fwtest::denyListing(locked, true))
+            QSKIP("Access to a folder cannot be taken away here.");
+        const auto restore = qScopeGuard([&] { (void)fwtest::denyListing(locked, false); });
+        if (!QDir(locked).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+            QSKIP("This account can still list the folder (administrator or root).");
+        CancellationToken token;
+        const auto tree = scanSource(src, ScanRules{}, token);
+        QVERIFY(!tree.ok());
+        QCOMPARE(tree.error().code, ErrorCode::PermissionDenied);
+        QVERIFY2(tree.error().message.contains(QLatin1String("locked")), qPrintable(tree.error().toLogString()));
+    }
+
+    // A junction that leads back to a folder above it is left out with a
+    // warning (Qt's canonical path does not show where a junction leads); one
+    // that leads elsewhere is followed.
+    void junctionBackIntoTheSourceIsLeftOut()
+    {
+        const QString src = path(QStringLiteral("looped"));
+        const QString far = path(QStringLiteral("looped-elsewhere"));
+        QVERIFY(writeBytes(src + QStringLiteral("/data/near.bin"), "near"));
+        QVERIFY(writeBytes(far + QStringLiteral("/far.bin"), "far"));
+        const QString back = src + QStringLiteral("/data/back");
+        const QString out = src + QStringLiteral("/assets");
+        if (!createDirectoryJunction(back, src).ok() || !createDirectoryJunction(out, far).ok()) {
+            (void)removeDirectoryJunction(back);
+            QSKIP("Folder links cannot be created here.");
+        }
+        const auto unlink = qScopeGuard([&] {
+            (void)removeDirectoryJunction(back);
+            (void)removeDirectoryJunction(out);
+        });
+        CancellationToken token;
+        const auto tree = scanSource(src, ScanRules{}, token);
+        QVERIFY2(tree.ok(), qPrintable(tree.ok() ? QString() : tree.error().toLogString()));
+        QCOMPARE(tree->fileCount, qint64(2)); // data/near.bin and assets/far.bin, each once
+        const QString warnings = QDir::fromNativeSeparators(tree->warnings.join(u'\n'));
+        QVERIFY2(warnings.contains(QLatin1String("data/back")), qPrintable(warnings));
     }
 };
 
