@@ -3,6 +3,7 @@
 // in-process fakes (never a real console).
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/ConsoleServices.h"
@@ -16,6 +17,7 @@
 #include "connect/ps5/PayloadSender.h"
 #include "connect/ps5/SmpApi.h"
 #include "connect/ps5/Y2jb.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
@@ -27,7 +29,6 @@
 #include <QJsonObject>
 #include <QSqlDatabase>
 #include <QSqlQuery>
-#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTest>
@@ -218,6 +219,9 @@ class TstPs5Services : public QObject {
     Q_OBJECT
     QTemporaryDir m_tmp;
     int m_n = 0;
+    // "Nothing listens here": reserved for the whole run, so no other program
+    // (or test running beside this one) can open it meanwhile.
+    fwtest::ClosedPort m_closed;
 
     QString fresh(const QString& name)
     {
@@ -225,12 +229,14 @@ class TstPs5Services : public QObject {
         QDir().mkpath(p);
         return p;
     }
+    quint16 closedPort() const { return m_closed.port(); }
 
 private slots:
     void initTestCase()
     {
         QVERIFY(m_tmp.isValid());
         fwtest::isolateAppData(m_tmp);
+        QVERIFY(m_closed.isValid());
     }
 
     // ---- payloads --------------------------------------------------------------------------------
@@ -248,23 +254,23 @@ private slots:
         QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
         QCOMPARE(r->bytes, QFileInfo(f).size());
         QCOMPARE(lastSent, total);
-        QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 1; }, 5000));
+        QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 1; }, 15000));
         QCOMPARE(sink.received().front(), readAll(f));
 
         auto small = sendPayloadData(QStringLiteral("127.0.0.1"), sink.port(), "ELF!");
         QVERIFY(small.ok());
-        QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 2; }, 5000));
+        QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 2; }, 15000));
         QCOMPARE(sink.received().back(), QByteArray("ELF!"));
     }
 
     void payloadErrorsAreClear()
     {
-        auto refused = sendPayloadData(QStringLiteral("127.0.0.1"), 1, "x");
+        auto refused = sendPayloadData(QStringLiteral("127.0.0.1"), closedPort(), "x");
         QVERIFY(!refused.ok());
         QVERIFY(refused.error().message.contains(QStringLiteral("refused")));
         QVERIFY(refused.error().message.contains(QStringLiteral("payload loader")));
-        QCOMPARE(sendPayloadFile(QStringLiteral("127.0.0.1"), 1, m_tmp.filePath(QStringLiteral("none.elf"))).error().code,
-                 ErrorCode::NotFound);
+        COMPARE_ERROR_CODE(sendPayloadFile(QStringLiteral("127.0.0.1"), closedPort(), m_tmp.filePath(QStringLiteral("none.elf"))),
+                           ErrorCode::NotFound);
         QCOMPARE(sendPayloadData(QString(), 9090, "x").error().code, ErrorCode::InvalidArgument);
         // The loader hints are for a loader that does not answer, not for a missing address.
         QVERIFY(!sendPayloadData(QString(), 9021, "x").error().message.contains(QStringLiteral("elfldr")));
@@ -298,7 +304,7 @@ private slots:
         QVERIFY2(cut.error().message.contains(QStringLiteral("closed the connection")), qPrintable(cut.error().message));
         QVERIFY(reported < 48 * 1024 * 1024);
         QVERIFY(probeTcpPort(QStringLiteral("127.0.0.1"), stuck.port(), 2000, QStringLiteral("test")).ok());
-        QVERIFY(!probeTcpPort(QStringLiteral("127.0.0.1"), 1, 2000, QStringLiteral("test")).ok());
+        QVERIFY(!probeTcpPort(QStringLiteral("127.0.0.1"), closedPort(), 2000, QStringLiteral("test")).ok());
     }
 
     // ---- kernel log -------------------------------------------------------------------------------
@@ -366,7 +372,7 @@ private slots:
     {
         KlogClient::Options o;
         o.host = QStringLiteral("127.0.0.1");
-        o.port = 1;
+        o.port = closedPort();
         o.reconnect = false;
         std::atomic<bool> stopped{false};
         KlogClient client(o, {}, [&](KlogState st, const QString&) {
@@ -391,14 +397,14 @@ private slots:
         t.start();
         auto timeout = waitForKlogLine(QStringLiteral("127.0.0.1"), srv.port(), [](const QString&) { return false; }, 400, 2000, {});
         QCOMPARE(timeout.outcome, KlogSession::Outcome::Timeout);
-        QVERIFY(t.elapsed() < 3000);
+        QVERIFY(t.elapsed() < 10000); // the 400 ms asked for, with room for a busy PC
 
         fake::FakeLineServer closing({{{0, "bye\n"}}}, true);
         auto lost = waitForKlogLine(QStringLiteral("127.0.0.1"), closing.port(), [](const QString&) { return false; }, 3000, 2000, {});
         QCOMPARE(lost.outcome, KlogSession::Outcome::ConnectionLost);
 
         Error err;
-        auto none = waitForKlogLine(QStringLiteral("127.0.0.1"), 1, [](const QString&) { return true; }, 1000, 1000, {}, &err);
+        auto none = waitForKlogLine(QStringLiteral("127.0.0.1"), closedPort(), [](const QString&) { return true; }, 1000, 1000, {}, &err);
         QCOMPARE(none.outcome, KlogSession::Outcome::ConnectionLost);
         // Refused, or (Windows, 1 s connect timeout) no answer: both name the service.
         QVERIFY2(err.message.contains(QStringLiteral("kernel log server")), qPrintable(err.message));
@@ -494,7 +500,7 @@ private slots:
         QCOMPARE(stopShadowMount(ep, {}, {}, 3000, 1000, 500)->outcome, StopOutcome::KlogLost);
 
         // No klog server: STOP is still sent, the result is amber.
-        ep.klogPort = 1;
+        ep.klogPort = closedPort();
         auto none = stopShadowMount(ep, {}, {}, 2000, 1000);
         QCOMPARE(none->outcome, StopOutcome::NoKlog);
         QVERIFY(stopOutcomeMessage(none->outcome).contains(QStringLiteral("NOT confirmed")));
@@ -507,7 +513,7 @@ private slots:
 
         // No FTP: an error (nothing was sent).
         ConsoleEndpoint bad = ep;
-        bad.ftpPort = 1;
+        bad.ftpPort = closedPort();
         QVERIFY(!stopShadowMount(bad, {}, {}, 500, 1000).ok());
     }
 
@@ -578,12 +584,16 @@ private slots:
         fake::FakeFtpServer::Options fo;
         fo.root = root;
         fake::FakeFtpServer ftp(fo);
-        // "ShadowMount+" notices the STOP file and logs its shutdown.
+        // "ShadowMount+" notices the STOP file and logs its shutdown: only once
+        // the file is there, however long the PC takes to get that far (lines
+        // written before the STOP would count as an old run).
         std::atomic<bool> stop{false};
         std::thread smp([&] {
             const QString stopFile = QDir(root).filePath(QStringLiteral("data/shadowmount/STOP"));
-            for (int i = 0; i < 300 && !stop && !QFileInfo::exists(stopFile); ++i)
+            while (!stop && !QFileInfo::exists(stopFile))
                 QThread::msleep(10);
+            if (stop)
+                return;
             QThread::msleep(150);
             QFile f(log);
             if (f.open(QIODevice::Append)) {
@@ -592,7 +602,7 @@ private slots:
             }
         });
         ConsoleEndpoint ep = endpoint(ftp.port());
-        ep.klogPort = 1; // nothing there
+        ep.klogPort = closedPort(); // nothing there
         QStringList status;
         auto r = stopShadowMount(ep, {}, [&](const QString& s) { status << s; }, 6000, 1000, 60000, 200);
         stop = true;
@@ -700,7 +710,7 @@ private slots:
         QVERIFY(refused.error().message.contains(QStringLiteral("usb_mount_changed")));
         QCOMPARE(smp::debugLog(host, api.port()).value(), QStringLiteral("line 1\nline 2"));
         QCOMPARE(smp::kernelLog(host, api.port()).error().code, ErrorCode::NotFound);
-        QVERIFY(!smp::version(host, 1).ok()); // no API: an error, never a hang
+        QVERIFY(!smp::version(host, closedPort()).ok()); // no API: an error, never a hang
 
         // Status replies.
         QVERIFY(smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")}}).succeeded);
@@ -1180,10 +1190,11 @@ private slots:
         QVERIFY(f.ok());
         QCOMPARE(f->status, 500);
         QVERIFY(!f->accepted);
-        auto refused = installPackage(QStringLiteral("127.0.0.1"), 1, pkg);
+        auto refused = installPackage(QStringLiteral("127.0.0.1"), closedPort(), pkg);
+        QVERIFY(!refused.ok());
         QVERIFY(refused.error().message.contains(QStringLiteral("Direct Package Installer")));
-        QCOMPARE(installPackage(QStringLiteral("127.0.0.1"), 1, m_tmp.filePath(QStringLiteral("none.pkg"))).error().code,
-                 ErrorCode::NotFound);
+        COMPARE_ERROR_CODE(installPackage(QStringLiteral("127.0.0.1"), closedPort(), m_tmp.filePath(QStringLiteral("none.pkg"))),
+                           ErrorCode::NotFound);
     }
 
     // ---- Y2JB ----------------------------------------------------------------------------------------
@@ -1236,7 +1247,9 @@ private slots:
         QVERIFY2(blob.contains(QStringLiteral("{\"key\":\"TITLE\",\"data\":\"YouTube\"}")), qPrintable(blob));
         QVERIFY(blob.contains(QStringLiteral("{\"key\":\"ATTR\",\"data\":7}")));
         QVERIFY(blob.contains(QStringLiteral("12345678901234567890")));
-        QVERIFY(!blob.contains(QStringLiteral("\"CONTENT_VERSION\":\"99")) || blob.contains(QStringLiteral("field_list")));
+        // Patched inside field_list only: no top-level key was added beside it.
+        QVERIFY2(blob.contains(QStringLiteral("{\"key\":\"CONTENT_VERSION\",\"data\":\"99.999.999\"}")), qPrintable(blob));
+        QVERIFY2(!blob.contains(QStringLiteral("\"CONTENT_VERSION\":")), qPrintable(blob));
 
         QCOMPARE(patchAppDb(appTop, QStringLiteral("PPSA01650")).value(), 1);
         QVERIFY(verifyAppDb(appTop, QStringLiteral("PPSA01650")).reason.contains(QStringLiteral("top-level")));
@@ -1644,18 +1657,15 @@ private slots:
                 return {200, {{QStringLiteral("status"), 0}, {QStringLiteral("shadowmount_version"), QStringLiteral("1.7beta11")}}};
             return {404, {{QStringLiteral("status"), 2}}};
         });
-        QTcpServer closed;
-        closed.listen(QHostAddress::LocalHost, 0);
-        const quint16 closedPort = closed.serverPort();
-        closed.close();
-        ConsoleEndpoint ep = endpoint(1);
+        ConsoleEndpoint ep = endpoint(closedPort());
         ep.klogPort = klog.port();
         ep.smpApiPort = api.port();
-        ep.dpiPort = closedPort;
+        ep.dpiPort = closedPort();
         const ConsoleServices s = probeConsoleServices(ep);
         QVERIFY(s.klog.checked && s.klog.reachable);
         QVERIFY(s.installer.checked && !s.installer.reachable);
         QVERIFY(s.shadowMount.reachable);
+        QVERIFY(s.smpVersion);
         QCOMPARE(s.smpVersion->version, QStringLiteral("1.7beta11"));
         ServiceProbeOptions only;
         only.installer = only.shadowMount = false;
@@ -1681,7 +1691,7 @@ private slots:
         auto po = pj.value()->run(ctx);
         QVERIFY2(po.ok(), po.ok() ? "" : qPrintable(po.error().toLogString()));
         QCOMPARE(po->verification, Verification::Passed);
-        QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 1; }, 5000));
+        QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 1; }, 15000));
         QCOMPARE(sink.received().front(), readAll(elf));
         auto badTarget = mod.jobs.create(jobkinds::kPayloadSend, {{QStringLiteral("file"), elf}, {QStringLiteral("target"), QStringLiteral("x")}});
         QVERIFY(!badTarget.value()->validate(s).ok());
@@ -1701,7 +1711,7 @@ private slots:
         QVERIFY(!dout2.ok());
         QVERIFY2(dout2.error().message.contains(QStringLiteral("no package data")), qPrintable(dout2.error().message));
         QVERIFY(dout2.error().message.contains(QStringLiteral("DPI_v2=1")));
-        QVERIFY(QTest::qWaitFor([&] { return empty.request().startsWith("POST /cleartmp "); }, 5000));
+        QVERIFY(QTest::qWaitFor([&] { return empty.request().startsWith("POST /cleartmp "); }, 15000));
         // Cancelled while the package is on its way: the temporary folder is
         // cleared as well (a second connection, after the upload's).
         {
@@ -1717,7 +1727,7 @@ private slots:
             auto dout3 = dj3.value()->run(ctx3);
             QVERIFY(!dout3.ok());
             QVERIFY(dout3.error().isCancelled());
-            QCOMPARE(slow.connections(), 2);
+            QTRY_COMPARE_WITH_TIMEOUT(slow.connections(), 2, 15000); // counted when the fake's own thread accepts
         }
 
         fake::FakeFtpServer::Options fo;

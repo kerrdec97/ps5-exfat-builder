@@ -6,16 +6,17 @@
 // the in-process fake FTP server on 127.0.0.1, never a real console.
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/CrashDumps.h"
 #include "connect/ps5/Module.h"
 #include "core/Zip.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QFile>
 #include <QRandomGenerator>
-#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -35,15 +36,6 @@ ConsoleEndpoint endpoint(quint16 port)
     ep.connectTimeoutMs = 2000;
     ep.idleTimeoutMs = 5000;
     return ep;
-}
-
-quint16 closedPort()
-{
-    QTcpServer s;
-    s.listen(QHostAddress::LocalHost, 0);
-    const quint16 p = s.serverPort();
-    s.close();
-    return p;
 }
 
 QByteArray randomBytes(int n, quint32 seed)
@@ -193,7 +185,9 @@ private slots:
         auto opt = fastOptions(out);
         opt.runForMs = 2500;
         CancellationSource cancel;
-        auto r = captureCrashDumps(endpoint(closedPort()), opt, cancel.token());
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
+        auto r = captureCrashDumps(endpoint(closed.port()), opt, cancel.token());
         QVERIFY(r.ok());
         QCOMPARE(r->warnings.size(), 1);
         QVERIFY(r->warnings.front().contains(QStringLiteral("waiting for the console FTP service")));
@@ -205,10 +199,12 @@ private slots:
     {
         CancellationSource cancel;
         ConsoleEndpoint none;
-        QCOMPARE(captureCrashDumps(none, fastOptions(fresh(QStringLiteral("o"))), cancel.token()).error().code,
-                 ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(captureCrashDumps(none, fastOptions(fresh(QStringLiteral("o"))), cancel.token()), ErrorCode::InvalidArgument);
+        // Refused before anything is contacted or written (the port is never used).
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
         CrashCaptureOptions noOut;
-        QCOMPARE(captureCrashDumps(endpoint(closedPort()), noOut, cancel.token()).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(captureCrashDumps(endpoint(closed.port()), noOut, cancel.token()), ErrorCode::InvalidArgument);
     }
 
     void jobIsRegistered()

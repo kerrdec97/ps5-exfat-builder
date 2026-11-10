@@ -88,15 +88,25 @@ private:
     QObject* m_ctx = nullptr;
 };
 
+// The local file a console path stands for. Empty when there is no root or
+// the path would leave it (".." above the top, or a backslash where the host
+// takes it for a separator): the server answers 550 for such a path and never
+// looks at, writes or deletes anything outside its folder.
 inline QString toLocalPath(const QString& root, const QString& cwd, const QString& arg)
 {
+    if (root.isEmpty())
+        return {};
     QString p = arg.trimmed();
     if (!p.startsWith(u'/'))
         p = cwd + u'/' + p;
     p = QDir::cleanPath(p);
     if (!p.startsWith(u'/'))
         p.prepend(u'/');
-    return QDir::cleanPath(root + p);
+    const QString base = QDir::cleanPath(root);
+    const QString local = QDir::cleanPath(base + p);
+    if (local != base && !local.startsWith(base + u'/'))
+        return {};
+    return local;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -561,6 +571,18 @@ private:
             reply(s, "530 Please login with USER and PASS.");
             return;
         }
+        // A path outside the root is refused before any command looks at it.
+        static const QSet<QString> pathCommands{QStringLiteral("CWD"),  QStringLiteral("SIZE"), QStringLiteral("MDTM"), QStringLiteral("MKD"),
+                                                QStringLiteral("RMD"),  QStringLiteral("DELE"), QStringLiteral("RNFR"), QStringLiteral("RNTO"),
+                                                QStringLiteral("LIST"), QStringLiteral("NLST"), QStringLiteral("MLSD"), QStringLiteral("RETR"),
+                                                QStringLiteral("STOR"), QStringLiteral("APPE")};
+        const bool listSwitches = arg.startsWith(u'-') && (cmd == u"LIST" || cmd == u"NLST" || cmd == u"MLSD"); // "LIST -a"
+        if (pathCommands.contains(cmd) && !listSwitches && local(s, arg).isEmpty()) {
+            s->rest = 0;
+            s->renameFrom.clear();
+            reply(s, "550 No such file or directory.");
+            return;
+        }
         if (cmd == u"SYST") {
             reply(s, "215 UNIX Type: L8");
         } else if (cmd == u"FEAT" && m_opt.ftpsrv) {
@@ -583,7 +605,8 @@ private:
                 reply(s, "550 Failed to change directory.");
             }
         } else if (cmd == u"CDUP") {
-            s->cwd = virtualPath(s, QStringLiteral(".."));
+            const QString up = virtualPath(s, QStringLiteral(".."));
+            s->cwd = toLocalPath(m_opt.root, QStringLiteral("/"), up).isEmpty() ? QStringLiteral("/") : up; // the top stays the top
             reply(s, "250 Directory successfully changed.");
         } else if (cmd == u"TYPE" || cmd == u"OPTS" || cmd == u"MODE" || cmd == u"STRU") {
             reply(s, "200 OK");

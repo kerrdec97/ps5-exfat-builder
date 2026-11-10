@@ -3,18 +3,19 @@
 // console).
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/Discovery.h"
 #include "connect/ps5/Endpoint.h"
 #include "connect/ps5/FtpDiagnostics.h"
 #include "connect/ps5/Module.h"
 #include "core/Progress.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QtConcurrent/QtConcurrentRun>
@@ -37,16 +38,6 @@ ConsoleEndpoint endpoint(quint16 port)
     ep.connectTimeoutMs = 3000;
     ep.idleTimeoutMs = 5000;
     return ep;
-}
-
-// A port on 127.0.0.1 that nothing listens on.
-quint16 closedPort()
-{
-    QTcpServer s;
-    s.listen(QHostAddress::LocalHost, 0);
-    const quint16 p = s.serverPort();
-    s.close();
-    return p;
 }
 
 DiagnoseOptions options(const QString& folder, bool speed = false, qint64 bytes = 256 * 1024)
@@ -138,21 +129,27 @@ private slots:
         quiet.root = root;
         quiet.silentGreeting = true;
         FakeFtpServer silent(quiet);
-        const quint16 closed = closedPort();
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
 
         DiscoveryOptions o;
-        o.hosts = {QStringLiteral("127.0.0.1"), QStringLiteral("192.0.2.1")}; // the second is TEST-NET-1: nobody
-        o.ports = {closed, withBanner.port(), silent.port()};
+        // The second host has nothing open and is loopback as well (all of
+        // 127/8 is, and the fakes listen on 127.0.0.1 only): no packet leaves
+        // this PC.
+        o.hosts = {QStringLiteral("127.0.0.1"), QStringLiteral("127.0.0.2")};
+        o.ports = {closed.port(), withBanner.port(), silent.port()};
         o.connectTimeoutMs = 300;
         o.bannerWaitMs = 1000;
         int lastDone = -1, lastTotal = -1, lastFound = -1;
+        bool wentBack = false;
         auto r = discoverConsoles(o, {}, [&](int done, int total, int found) {
-            QVERIFY(done >= lastDone);
+            wentBack = wentBack || done < lastDone;
             lastDone = done;
             lastTotal = total;
             lastFound = found;
         });
         QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QVERIFY(!wentBack);
         QCOMPARE(int(r->size()), 1);
         const DiscoveredConsole& c = r->front();
         QCOMPARE(c.host, QStringLiteral("127.0.0.1"));
@@ -173,13 +170,13 @@ private slots:
         QVERIFY(quietOnly->front().banner.isEmpty());
 
         // Nothing listening: an empty result, not an error.
-        o.ports = {closed};
+        o.ports = {closed.port()};
         auto none = discoverConsoles(o);
         QVERIFY(none.ok());
         QVERIFY(none->empty());
 
         o.ports.clear();
-        QCOMPARE(discoverConsoles(o).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(discoverConsoles(o), ErrorCode::InvalidArgument);
     }
 
     void discoveryIsCancellable()
@@ -203,8 +200,10 @@ private slots:
         QTest::qWait(300);
         src.cancel();
         future.waitForFinished();
-        QVERIFY(t.elapsed() < 5000);
-        QVERIFY(future.result().error().isCancelled());
+        QVERIFY(t.elapsed() < 15000); // stopped by the cancel, not by the 30 s wait
+        const auto cancelled = future.result();
+        QVERIFY(!cancelled.ok());
+        QVERIFY(cancelled.error().isCancelled());
     }
 
     // ---- diagnostics ----------------------------------------------------------------------
@@ -300,7 +299,9 @@ private slots:
 
     void unreachableAndRefusedLogin()
     {
-        auto r = diagnoseFtp(endpoint(closedPort()), options(kGames));
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
+        auto r = diagnoseFtp(endpoint(closed.port()), options(kGames));
         QVERIFY(r.ok());
         QVERIFY(!r->reachable);
         QVERIFY(!r->usable());
@@ -408,7 +409,7 @@ private slots:
         const auto r = future.result();
         QVERIFY(!r.ok());
         QVERIFY(r.error().isCancelled());
-        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(srv.path(kSpeed)), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(srv.path(kSpeed)), 15000);
         QVERIFY(srv.sawCommand(QStringLiteral("DELE ") + kSpeed));
     }
 
@@ -454,8 +455,11 @@ private slots:
 
         // host/port parameters override the settings; an unreachable console
         // fails the job with the outcome kept.
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
         auto bad = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("host"), QStringLiteral("127.0.0.1")},
-                                                             {QStringLiteral("port"), int(closedPort())}});
+                                                             {QStringLiteral("port"), int(closed.port())}});
+        QVERIFY(bad.ok());
         auto badOut = bad.value()->run(ctx);
         QVERIFY(badOut.ok());
         QCOMPARE(badOut->verification, Verification::Failed);

@@ -7,11 +7,16 @@
 #include "connect/ps5/FakePs5.h"
 #include "jobs/JobQueue.h"
 #include "jobs/QueueCompletionWatcher.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkProxy>
+#include <QNetworkProxyFactory>
+#include <QNetworkProxyQuery>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -108,14 +113,23 @@ QJsonObject requestJson(const QByteArray& request)
     return QJsonDocument::fromJson(request.mid(end + 4)).object();
 }
 
-// FW_OFFLINE is set for every test run (CTest); the delivery tests lift it.
-class OnlineScope {
+// FW_OFFLINE for one scope; what it was before comes back on every way out,
+// so no test function depends on what another one left behind.
+class OfflineEnvScope {
 public:
-    OnlineScope() : m_had(qEnvironmentVariableIsSet("FW_OFFLINE")), m_value(qgetenv("FW_OFFLINE")) { qunsetenv("FW_OFFLINE"); }
-    ~OnlineScope()
+    explicit OfflineEnvScope(bool offline) : m_had(qEnvironmentVariableIsSet("FW_OFFLINE")), m_value(qgetenv("FW_OFFLINE"))
+    {
+        if (offline)
+            qputenv("FW_OFFLINE", "1");
+        else
+            qunsetenv("FW_OFFLINE");
+    }
+    ~OfflineEnvScope()
     {
         if (m_had)
             qputenv("FW_OFFLINE", m_value);
+        else
+            qunsetenv("FW_OFFLINE");
     }
 
 private:
@@ -123,7 +137,36 @@ private:
     QByteArray m_value;
 };
 
+// FW_OFFLINE is set for every test run (CTest); the delivery tests lift it.
+struct OnlineScope : OfflineEnvScope {
+    OnlineScope() : OfflineEnvScope(false) {}
+};
+struct OfflineScope : OfflineEnvScope {
+    OfflineScope() : OfflineEnvScope(true) {}
+};
+
+// Every connection Qt would open to another machine goes to `trapPort` on
+// this PC instead (as to an HTTP proxy); loopback addresses are reached
+// directly (Qt never asks a factory about those). Whatever a test or the
+// code under test gets wrong, nothing leaves the PC, and the trap shows what
+// was tried.
+class LoopbackOnlyProxies : public QNetworkProxyFactory {
+public:
+    explicit LoopbackOnlyProxies(quint16 trapPort) : m_trapPort(trapPort) {}
+    QList<QNetworkProxy> queryProxy(const QNetworkProxyQuery& query) override
+    {
+        const bool outgoing = query.queryType() == QNetworkProxyQuery::TcpSocket || query.queryType() == QNetworkProxyQuery::UrlRequest;
+        if (!outgoing || query.peerHostName().isEmpty() || QHostAddress(query.peerHostName()).isLoopback())
+            return {QNetworkProxy(QNetworkProxy::NoProxy)};
+        return {QNetworkProxy(QNetworkProxy::HttpProxy, QStringLiteral("127.0.0.1"), m_trapPort)};
+    }
+
+private:
+    const quint16 m_trapPort;
+};
+
 const QByteArray kNoContent = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+const QByteArray kTrapped = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 } // namespace
 
@@ -131,6 +174,7 @@ class TstNotify : public QObject {
     Q_OBJECT
     QTemporaryDir m_tmp;
     int m_n = 0;
+    fake::FakeHttpUpload m_trap{kTrapped}; // where LoopbackOnlyProxies sends everything else
     QString fresh()
     {
         const QString p = m_tmp.filePath(QString::number(++m_n));
@@ -143,6 +187,48 @@ private slots:
     {
         QVERIFY(m_tmp.isValid());
         fwtest::isolateAppData(m_tmp);
+        QVERIFY(m_trap.port() != 0);
+        QNetworkProxyFactory::setApplicationProxyFactory(new LoopbackOnlyProxies(m_trap.port())); // Qt takes it over
+    }
+
+    void cleanupTestCase()
+    {
+        // No test function sent anything towards another machine.
+        QVERIFY2(m_trap.request().isEmpty(), m_trap.request().left(200).constData());
+    }
+
+    // The safety net itself. The address used is 0.0.0.0 ("this PC": not a
+    // loopback address for Qt, and not routable either), so even a net with a
+    // hole in it would send nothing out.
+    void otherMachinesAreOutOfReach()
+    {
+        const auto discord = QNetworkProxyFactory::proxyForQuery(QNetworkProxyQuery(QUrl(kHook)));
+        QCOMPARE(discord.size(), 1);
+        QCOMPARE(discord.first().type(), QNetworkProxy::HttpProxy);
+        QCOMPARE(discord.first().hostName(), QStringLiteral("127.0.0.1"));
+        QCOMPARE(discord.first().port(), m_trap.port());
+
+        Env env(fresh());
+        QVERIFY(env.store->setValue(keys::kDiscordWebhookUrl, kHook).ok());
+        fake::FakeHttpUpload trap(kTrapped);
+        QNetworkProxyFactory::setApplicationProxyFactory(new LoopbackOnlyProxies(trap.port()));
+        DiscordNotifier n(*env.store);
+        n.setDeliveryUrlForTests(QUrl(QStringLiteral("http://0.0.0.0:9/api/webhooks/1/x")));
+        QSignalSpy delivered(&n, &DiscordNotifier::delivered);
+        QueueRunSummary s;
+        s.succeeded = 1;
+        s.items << QueueRunItem{QStringLiteral("k"), QStringLiteral("Kind"), QStringLiteral("t"), JobState::Succeeded};
+        bool sent = false, done = false;
+        {
+            OnlineScope online;
+            sent = n.notify(s);
+            done = sent && delivered.wait(30000);
+        }
+        QNetworkProxyFactory::setApplicationProxyFactory(new LoopbackOnlyProxies(m_trap.port()));
+        QVERIFY(sent);
+        QVERIFY(done);
+        QCOMPARE(delivered.at(0).at(0).toBool(), false);
+        QVERIFY2(trap.request().startsWith("POST http://0.0.0.0:9/api/webhooks/1/x "), trap.request().left(120).constData());
     }
 
     void webhookAddressesAreValidated()
@@ -259,8 +345,7 @@ private slots:
         QueueRunSummary s;
         s.succeeded = 1;
         s.items << QueueRunItem{QStringLiteral("k"), QStringLiteral("Kind"), QStringLiteral("t"), JobState::Succeeded};
-        if (!qEnvironmentVariableIsSet("FW_OFFLINE"))
-            qputenv("FW_OFFLINE", "1"); // as under CTest
+        OfflineScope offline; // as under CTest
         QVERIFY(!n.notify(s)); // setting empty
         QVERIFY(env.store->setValue(keys::kDiscordWebhookUrl, kHook).ok());
         QVERIFY(!networkAllowed());
@@ -329,7 +414,24 @@ private slots:
         QVERIFY(delivered.wait(10000));
         QCOMPARE(delivered.at(0).at(0).toBool(), false);
         QCOMPARE(delivered.at(0).at(1).toInt(), 404);
-        QVERIFY(!delivered.at(0).at(2).toString().contains(QStringLiteral("AbC_dEf")));
+        QCOMPARE(delivered.at(0).at(2).toString(), QStringLiteral("Discord notification failed: HTTP 404"));
+        // The 404 is the stub's: the POST went there, not to the address in Settings.
+        QVERIFY2(stub.request().startsWith("POST /api/webhooks/1/x HTTP/1.1\r\n"), stub.request().left(80).constData());
+
+        // Nothing answers at all: no HTTP status, and the text of the network
+        // error shows neither the token in Settings nor the one in the address used.
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
+        DiscordNotifier unanswered(*env.store);
+        unanswered.setDeliveryUrlForTests(QUrl(QStringLiteral("http://127.0.0.1:%1/api/webhooks/1/SeCrEt_tok").arg(closed.port())));
+        QSignalSpy failed(&unanswered, &DiscordNotifier::delivered);
+        QVERIFY(unanswered.notify(s));
+        QVERIFY(failed.wait(30000));
+        QCOMPARE(failed.at(0).at(0).toBool(), false);
+        QCOMPARE(failed.at(0).at(1).toInt(), 0);
+        const QString why = failed.at(0).at(2).toString();
+        QVERIFY2(why.startsWith(QStringLiteral("Discord notification failed: ")) && why.size() > 30, qPrintable(why));
+        QVERIFY2(!why.contains(QStringLiteral("AbC_dEf")) && !why.contains(QStringLiteral("SeCrEt_tok")), qPrintable(why));
     }
 };
 

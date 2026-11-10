@@ -2,6 +2,7 @@
 // engine, against the in-process FakeFtpServer (never a real console).
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/Endpoint.h"
 #include "connect/ps5/FtpClient.h"
@@ -10,6 +11,7 @@
 #include "connect/ps5/Module.h"
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QBuffer>
@@ -65,6 +67,29 @@ struct Module {
         registerModule(ctx);
     }
 };
+
+// Sends one raw command line (none: only reads, for the greeting) and returns
+// the reply line that carries the code; empty when nothing came in time. For
+// commands FtpClient itself would never send.
+QByteArray rawCommand(QTcpSocket& s, const QByteArray& line)
+{
+    if (!line.isEmpty()) {
+        s.write(line + "\r\n");
+        s.flush();
+    }
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < 10000) {
+        while (s.canReadLine()) {
+            const QByteArray reply = s.readLine().trimmed();
+            if (reply.size() >= 4 && reply.at(3) == ' ')
+                return reply;
+        }
+        if (!s.waitForReadyRead(250) && s.state() != QAbstractSocket::ConnectedState)
+            break;
+    }
+    return {};
+}
 
 } // namespace
 
@@ -175,6 +200,69 @@ private slots:
         QCOMPARE(classifyDestination(QStringLiteral("/mnt/extusb0")).label, QStringLiteral("External USB / exFAT"));
     }
 
+    // ---- the fake itself ------------------------------------------------------------------
+    // The fake console serves a folder of this PC. Whatever a client sends, it
+    // must not read, change or delete anything outside that folder.
+    void fakeServerStaysInsideItsRoot()
+    {
+        const QString outer = fresh(QStringLiteral("jail"));
+        const QString root = QDir(outer).filePath(QStringLiteral("root"));
+        const QString outside = QDir(outer).filePath(QStringLiteral("outside.txt"));
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("sub/inside.txt")), "inside"));
+        QVERIFY(fwtest::writeTextFile(outside, "outside"));
+        const QString top = QStringLiteral("/"), sub = QStringLiteral("/sub");
+
+        QCOMPARE(fake::toLocalPath(root, top, QStringLiteral("/sub/inside.txt")), root + QStringLiteral("/sub/inside.txt"));
+        QCOMPARE(fake::toLocalPath(root, sub, QStringLiteral("../sub/./inside.txt")), root + QStringLiteral("/sub/inside.txt"));
+        QCOMPARE(fake::toLocalPath(root, sub, QString()), root + QStringLiteral("/sub"));
+        QVERIFY(fake::toLocalPath(QString(), top, QStringLiteral("/x")).isEmpty()); // no root: nothing is served
+        const QStringList climbing = {QStringLiteral("../outside.txt"),         QStringLiteral("/../outside.txt"),
+                                      QStringLiteral("/sub/../../outside.txt"), QStringLiteral("../../outside.txt"),
+                                      QStringLiteral("..\\outside.txt"),        QStringLiteral("/sub/..\\..\\outside.txt"),
+                                      QStringLiteral("/sub/../..\\outside.txt")};
+        for (const QString& p : climbing)
+            for (const QString& cwd : {top, sub}) {
+                const QString local = fake::toLocalPath(root, cwd, p);
+                QVERIFY2(local.isEmpty() || local.startsWith(root + u'/'), qPrintable(p + QStringLiteral(" -> ") + local));
+            }
+
+        FakeFtpServer srv(server(root));
+        QTcpSocket s;
+        s.connectToHost(QHostAddress(QHostAddress::LocalHost), srv.port());
+        QVERIFY(s.waitForConnected(10000));
+        QVERIFY(rawCommand(s, {}).startsWith("220"));
+        QVERIFY(rawCommand(s, "USER anonymous").startsWith("331"));
+        QVERIFY(rawCommand(s, "PASS x").startsWith("230"));
+        for (const QString& p : climbing) {
+            // Outside the root or (where the host keeps the name inside it) not
+            // there: refused either way.
+            for (const char* cmd : {"DELE", "RMD", "RNFR", "SIZE", "MDTM", "RETR", "CWD", "LIST", "MLSD"}) {
+                const QByteArray line = QByteArray(cmd) + ' ' + p.toUtf8();
+                const QByteArray reply = rawCommand(s, line);
+                QVERIFY2(reply.startsWith('5'), (line + " -> " + reply).constData());
+            }
+            if (!fake::toLocalPath(root, top, p).isEmpty())
+                continue; // a name the host keeps inside the root may be created there
+            for (const char* cmd : {"STOR", "APPE", "MKD"}) {
+                const QByteArray line = QByteArray(cmd) + ' ' + p.toUtf8();
+                const QByteArray reply = rawCommand(s, line);
+                QVERIFY2(reply.startsWith("550"), (line + " -> " + reply).constData());
+            }
+        }
+        // A rename cannot move a file out either.
+        QVERIFY(rawCommand(s, "RNFR /sub/inside.txt").startsWith("350"));
+        (void)rawCommand(s, "RNTO /sub/../../moved.txt");
+        QVERIFY(!QFileInfo::exists(QDir(outer).filePath(QStringLiteral("moved.txt"))));
+        // The top folder is its own parent.
+        QVERIFY(rawCommand(s, "CDUP").startsWith("250"));
+        QVERIFY(rawCommand(s, "CDUP").startsWith("250"));
+        QVERIFY2(rawCommand(s, "PWD").startsWith("257 \"/\""), "PWD after CDUP at the top");
+
+        QCOMPARE(readAll(outside), QByteArray("outside"));
+        QCOMPARE(QDir(outer).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden, QDir::Name),
+                 (QStringList{QStringLiteral("outside.txt"), QStringLiteral("root")}));
+    }
+
     // ---- client against the fake server ----------------------------------------------------
     void loginAnonymousAndWithCredentials()
     {
@@ -195,12 +283,14 @@ private slots:
         ok.quit();
         QVERIFY(!ok.isConnected());
 
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
         FtpClient refused(quick());
-        auto r = refused.open(QStringLiteral("127.0.0.1"), 1);
+        auto r = refused.open(QStringLiteral("127.0.0.1"), closed.port());
         QVERIFY(!r.ok());
         // Refused on Linux; on Windows a short timeout may report it as no answer.
         QVERIFY2(r.error().message.contains(QStringLiteral("refused")), qPrintable(r.error().message));
-        QVERIFY(r.error().message.contains(QStringLiteral("127.0.0.1:1")));
+        QVERIFY(r.error().message.contains(QStringLiteral("127.0.0.1:%1").arg(closed.port())));
         QVERIFY(r.error().message.contains(QStringLiteral("FTP server")));
     }
 
@@ -369,8 +459,8 @@ private slots:
         QElapsedTimer t;
         t.start();
         auto st = c.connectToHost(QStringLiteral("127.0.0.1"), silent.port());
-        QCOMPARE(st.error().code, ErrorCode::Timeout);
-        QVERIFY(t.elapsed() < 3000);
+        COMPARE_ERROR_CODE(st, ErrorCode::Timeout);
+        QVERIFY(t.elapsed() < 8000); // the 400 ms asked for (with room for a busy PC), not the default 10 s
 
         // A transfer that stops moving fails after the idle timeout.
         auto s2 = server(fresh(QStringLiteral("stall")));
@@ -555,8 +645,10 @@ private slots:
 
     void noConnectionIsAnError()
     {
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
         TransferOptions opt;
-        opt.endpoint = endpoint(1);
+        opt.endpoint = endpoint(closed.port());
         opt.retries = 0;
         const QString local = fresh(QStringLiteral("noconn"));
         QVERIFY(fwtest::writeTextFile(QDir(local).filePath(QStringLiteral("a")), "a"));
@@ -954,13 +1046,15 @@ private slots:
     {
         // Something that is not an FTP server streams bytes without a line end.
         fake::FakeLineServer flood({{{0, QByteArray(200 * 1024, 'x')}}}, false);
-        FtpClient c(quick());
+        FtpOptions patient = quick();
+        patient.replyTimeoutMs = 30000;
+        FtpClient c(patient);
         QElapsedTimer t;
         t.start();
         auto st = c.connectToHost(QStringLiteral("127.0.0.1"), flood.port());
         QVERIFY(!st.ok());
         QCOMPARE(st.error().code, ErrorCode::CorruptData);
-        QVERIFY(t.elapsed() < 2500); // not the reply timeout
+        QVERIFY(t.elapsed() < 15000); // cut off, well before the reply timeout
         QVERIFY(!c.isConnected());
         // Lines without a reply code, on and on.
         QByteArray chatter;
