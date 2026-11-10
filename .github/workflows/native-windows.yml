@@ -8,14 +8,9 @@ name: Native (C++) Windows build and test
 # published. The zip and the installer are build artefacts only: a release is
 # the single-file exe and SHA256SUMS.txt.
 
+# Started by hand (Actions > Run workflow) or by the release workflow. Builds on
+# every push are off until the workflow has been brought up to date with v5.
 on:
-  push:
-    branches: [main, 'claude/**']
-    paths:
-      - 'native/**'
-      - '!native/docs/**'
-      - '!native/**/*.md'
-      - '.github/workflows/native-windows.yml'
   workflow_dispatch:
   workflow_call: # the release workflow builds, tests and packages through this one
 

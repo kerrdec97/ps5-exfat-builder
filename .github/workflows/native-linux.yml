@@ -4,14 +4,9 @@ name: Native (C++) Linux tests with sanitizers
 # automated test (the GUI tests use the offscreen platform). Complements the
 # Windows workflow: memory and undefined-behaviour bugs show up here first.
 
+# Started by hand (Actions > Run workflow) or by the release workflow. Builds on
+# every push are off until the workflow has been brought up to date with v5.
 on:
-  push:
-    branches: [main, 'claude/**']
-    paths:
-      - 'native/**'
-      - '!native/docs/**'
-      - '!native/**/*.md'
-      - '.github/workflows/native-linux.yml'
   workflow_dispatch:
 
 permissions:
