@@ -116,7 +116,7 @@ const QRegularExpression& titlePattern()
 // The lookup service's own (case-insensitive) content ID pattern.
 const QRegularExpression& contentPattern()
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}\\d{4}-(PPSA|CUSA)\\d{5}_\\d{2}-[A-Z0-9_]{16}$"), kCi);
+    static const QRegularExpression re(QStringLiteral("\\A[A-Z]{2}\\d{4}-(PPSA|CUSA)\\d{5}_\\d{2}-[A-Z0-9_]{16}\\z"), kCi);
     return re;
 }
 
@@ -124,19 +124,19 @@ bool isLookupContentId(const QString& s) { return contentPattern().match(s).hasM
 
 bool isStrictCid(const QString& s)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}\\d{4}-(PPSA|CUSA)\\d{5}_\\d{2}-[A-Z0-9_]{16}$"));
+    static const QRegularExpression re(QStringLiteral("\\A[A-Z]{2}\\d{4}-(PPSA|CUSA)\\d{5}_\\d{2}-[A-Z0-9_]{16}\\z"));
     return re.match(s).hasMatch();
 }
 
 bool isStrictTitle(const QString& s)
 {
-    static const QRegularExpression re(QStringLiteral("^(PPSA|CUSA)\\d{5}$"));
+    static const QRegularExpression re(QStringLiteral("\\A(PPSA|CUSA)\\d{5}\\z"));
     return re.match(s).hasMatch();
 }
 
 bool isConceptId(const QString& s)
 {
-    static const QRegularExpression re(QStringLiteral("^\\d{1,12}$"));
+    static const QRegularExpression re(QStringLiteral("\\A\\d{1,12}\\z"));
     return re.match(s).hasMatch();
 }
 
@@ -569,7 +569,7 @@ std::vector<DlcCandidate> searchOrThrow(const QString& json, const Market& marke
 
 bool sourceBaseProbe(const QString& contentId, const QString& titleId, QString* probeId)
 {
-    static const QRegularExpression re(QStringLiteral("^([A-Z]{2}\\d{4})-((?:PPSA|CUSA)\\d{5})_\\d{2}-[A-Z0-9_]{16}$"));
+    static const QRegularExpression re(QStringLiteral("\\A([A-Z]{2}\\d{4})-((?:PPSA|CUSA)\\d{5})_\\d{2}-[A-Z0-9_]{16}\\z"));
     probeId->clear();
     const QRegularExpressionMatch m = re.match(contentId);
     if (!m.hasMatch() || m.captured(2) != titleId)
@@ -1017,7 +1017,7 @@ DlcLookupResult Engine::lookup(const QString& query)
     if (q.isEmpty() || q.size() > 240)
         throw LookupRejected{QStringLiteral(
             "Enter a title ID, content ID, game name or PlayStation Store product URL (up to 240 characters).")};
-    static const QRegularExpression titleOnly(QStringLiteral("^(PPSA|CUSA)-?\\d{5}$"), kCi);
+    static const QRegularExpression titleOnly(QStringLiteral("\\A(PPSA|CUSA)-?\\d{5}\\z"), kCi);
     const qint64 budget = g_overallTimeoutMs.load();
     if (titleOnly.match(q).hasMatch())
         return resolveCore(QString(q).remove(QLatin1Char('-')).toUpper(), QString(), QString(), budget, false, QString());
@@ -1205,7 +1205,7 @@ DlcLookupResult Engine::resolveCore(QString titleId, QString contentId, QString 
             }
         }
         // 4. PPSA only: the ProsperoPatches title index, verified against the Store.
-        static const QRegularExpression ppsa(QStringLiteral("^PPSA\\d{5}$"));
+        static const QRegularExpression ppsa(QStringLiteral("\\APPSA\\d{5}\\z"));
         if (name.isEmpty() && ppsa.match(titleId).hasMatch())
             name = resolveTitleIndexName(titleId, contentId, result, s);
         // 5. A name without a concept: learn the concept from the source release's page.
@@ -1233,7 +1233,7 @@ DlcLookupResult Engine::resolveCore(QString titleId, QString contentId, QString 
                         break;
                     }
                 } catch (const LookupError& e) {
-                    result.warnings << QStringLiteral("Localized-release relationship lookup unavailable: ") + e.message;
+                    result.warnings << QStringLiteral("Localised-release relationship lookup unavailable: ") + e.message;
                 }
             }
         }
@@ -1582,7 +1582,9 @@ QString htmlDecode(const QString& s)
             out += ch;
             continue;
         }
-        const qsizetype semi = s.indexOf(QLatin1Char(';'), i + 1);
+        // Only as far as an entity can reach (not to the end of the text for every "&").
+        const qsizetype rel = QStringView(s).mid(i + 1, 33).indexOf(u';');
+        const qsizetype semi = rel < 0 ? -1 : i + 1 + rel;
         if (semi > i + 1 && semi - i <= 33) {
             const QStringView entity = QStringView(s).mid(i + 1, semi - i - 1);
             if (entity.startsWith(u'#')) {
@@ -1631,7 +1633,7 @@ bool isGameName(const QString& value)
         || s.startsWith(QStringLiteral("https:"), Qt::CaseInsensitive))
         return false;
     static const QRegularExpression ids(QStringLiteral("^(PPSA|CUSA)-?\\d{5}$|^[A-Z]{2}\\d{4}-(PPSA|CUSA)\\d{5}_"), kCi);
-    static const QRegularExpression token(QStringLiteral("^[A-Z0-9_]{12,}$"));
+    static const QRegularExpression token(QStringLiteral("\\A[A-Z0-9_]{12,}\\z"));
     return !ids.match(s).hasMatch() && !token.match(s).hasMatch();
 }
 
@@ -1788,7 +1790,7 @@ Result<std::vector<DlcCandidate>> parseSearch(const QByteArray& json, const Mark
     if (!links.isArray())
         return out;
     const QStringList queryWords = words(query);
-    static const QRegularExpression idRe(QStringLiteral("^[A-Z]{2}\\d{4}-((PPSA|CUSA)\\d{5})_\\d{2}-[A-Z0-9_]{16}$"));
+    static const QRegularExpression idRe(QStringLiteral("\\A[A-Z]{2}\\d{4}-((PPSA|CUSA)\\d{5})_\\d{2}-[A-Z0-9_]{16}\\z"));
     static const QRegularExpression demoRe(QStringLiteral("\\b(demo|trial)\\b"),
                                            QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
     const QJsonArray items = links.toArray();
@@ -1968,7 +1970,7 @@ QStringList serialLinks(const QString& html, const QString& pathPrefix)
 bool parseTitleIndexHint(const QString& html, const QString& titleId, const QString& sourceContentId, QString* name,
                          QString* contentId)
 {
-    static const QRegularExpression ppsa(QStringLiteral("^PPSA\\d{5}$"));
+    static const QRegularExpression ppsa(QStringLiteral("\\APPSA\\d{5}\\z"));
     if (!ppsa.match(titleId).hasMatch())
         return false;
     static const QRegularExpression h1(QStringLiteral("<h1\\b[^>]*>(.*?)</h1>"), kSingleCi);
@@ -1977,8 +1979,8 @@ bool parseTitleIndexHint(const QString& html, const QString& titleId, const QStr
     const QString hintCid = indexField(html, QStringLiteral("Content ID"));
     if (hintTitle != titleId || !isGameName(hintName))
         return false;
-    const QRegularExpression cidRe(QStringLiteral("^[A-Z]{2}\\d{4}-") + QRegularExpression::escape(titleId)
-                                   + QStringLiteral("_\\d{2}-[A-Z0-9_]{16}$"));
+    const QRegularExpression cidRe(QStringLiteral("\\A[A-Z]{2}\\d{4}-") + QRegularExpression::escape(titleId)
+                                   + QStringLiteral("_\\d{2}-[A-Z0-9_]{16}\\z"));
     if (!cidRe.match(hintCid).hasMatch())
         return false;
     if (isStrictCid(sourceContentId) && (sourceContentId.left(6) != hintCid.left(6) || sourceContentId.mid(7, 9) != titleId))

@@ -56,8 +56,10 @@ public:
         }
         JobOutcome o;
         o.details.insert(QStringLiteral("games"), games);
-        o.summary = items == 0 ? QStringLiteral("No separate language files found. This game may keep all languages in its main data files.")
-                               : QStringLiteral("%1 language items in %2 game(s), %3").arg(items).arg(games.size()).arg(formatBytes(total));
+        o.summary = roots.isEmpty() ? QStringLiteral("No game was found in %1 (a game folder contains eboot.bin).")
+                                          .arg(QDir::toNativeSeparators(folder))
+                  : items == 0 ? QStringLiteral("No separate language files found. This game may keep all languages in its main data files.")
+                               : QStringLiteral("%1 language item(s) in %2 game(s), %3").arg(items).arg(games.size()).arg(formatBytes(total));
         o.verification = Verification::Skipped;
         return o;
     }
@@ -71,7 +73,7 @@ public:
     explicit StripJob(QJsonObject p) : m_p(std::move(p)) {}
     QString kind() const override { return QStringLiteral("tools.languages.strip"); }
     QString title() const override { return QStringLiteral("Remove languages from %1").arg(QFileInfo(m_p.value(QStringLiteral("gameRoot")).toString()).fileName()); }
-    QString subtitle() const override { return QStringLiteral("%1 items, backed up first").arg(m_p.value(QStringLiteral("remove")).toArray().size()); }
+    QString subtitle() const override { return QStringLiteral("%1 item(s), backed up first").arg(m_p.value(QStringLiteral("remove")).toArray().size()); }
     QStringList phases() const override { return {QStringLiteral("Backing up"), QStringLiteral("Checking backup"), QStringLiteral("Removing")}; }
     QJsonObject parameters() const override { return m_p; }
     Status validate(const SettingsValues& s) const override
@@ -92,6 +94,10 @@ public:
         if (isSameOrInside(plan.backupFolder, plan.gameRoot))
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The backup folder cannot be inside the game folder."));
         QDir().mkpath(plan.backupFolder);
+        // The app-wide free-space reserve, when the build has that setting.
+        static const QString marginKey = QStringLiteral("storage.freeSpaceMarginMiB");
+        if (const QVariantMap all = ctx.settings.effective(); all.contains(marginKey) && all.value(marginKey).toLongLong() >= 0)
+            plan.freeSpaceMarginBytes = all.value(marginKey).toLongLong() * 1024 * 1024;
         auto r = stripLanguages(plan, ctx.token, ctx.progress);
         if (!r.ok())
             return r.takeError();

@@ -7,7 +7,8 @@
 //        gets a proposed name from the chosen preset. Nothing on disk changes.
 // apply: renames each selected item in place (or into a destination folder on
 //        the same drive). Never overwrites: an existing target is skipped
-//        ("Skipped — target exists"), as are two items proposing the same name.
+//        ("Skipped — target exists"); of two items proposing the same name the
+//        first is renamed and the second skipped.
 //        Every completed rename is appended to an undo log right away.
 // undo:  reverses a log, newest first, again never overwriting.
 

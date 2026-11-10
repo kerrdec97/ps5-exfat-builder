@@ -1079,6 +1079,114 @@ private slots:
         QVERIFY(!QFileInfo::exists(QDir(src).filePath(QStringLiteral("PPSA40003"))));
     }
 
+    // One walk finds every metadata file the per-file walks found, and can be cancelled.
+    void metadataFilesComeFromOneCancellableWalk()
+    {
+        const QString r = fresh(QStringLiteral("onewalk"));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("eboot.bin")), "x"));
+        // Nothing at the root or in sce_sys: all four are found deeper, in walk order.
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("b/deep/PARAM.SFO")),
+                      buildSfo({sfoString("TITLE_ID", QStringLiteral("CUSA07777"))}))); // no title: nptitle.dat is used
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("a/pfs-version.dat")), "02.10\n"));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("c/param.json")), ps5Param(QStringLiteral("PPSA01234"), QStringLiteral("Json Title"))));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("a/z/nptitle.dat")), "Np Title\n"));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("d/nptitle.dat")), "Later Title\n"));
+        auto m = readGameMetadata(r);
+        QVERIFY(m.ok());
+        for (const char* name : {"param.sfo", "pfs-version.dat", "param.json", "nptitle.dat"})
+            QCOMPARE(QStringList({m->paramSfoPath, m->pfsVersionPath, m->paramJsonPath, m->npTitlePath})
+                         .filter(QString::fromLatin1(name), Qt::CaseInsensitive)
+                         .value(0),
+                     findMetaFile(r, {QString::fromLatin1(name)}));
+        QCOMPARE(m->titleId, QStringLiteral("CUSA07777"));
+        QCOMPARE(m->version, QStringLiteral("02.010.000"));
+        QCOMPARE(m->title, QStringLiteral("Np Title"));
+        QCOMPARE(m->titleSource, QStringLiteral("nptitle.dat"));
+
+        // The walk stops early once the three main files are found; nptitle.dat is still found.
+        const QString e = fresh(QStringLiteral("early"));
+        QVERIFY(write(QDir(e).filePath(QStringLiteral("a/param.sfo")), buildSfo({sfoString("TITLE_ID", QStringLiteral("CUSA08888"))})));
+        QVERIFY(write(QDir(e).filePath(QStringLiteral("a/pfs-version.dat")), "01.00\n"));
+        QVERIFY(write(QDir(e).filePath(QStringLiteral("a/param.json")), "{}"));
+        QVERIFY(write(QDir(e).filePath(QStringLiteral("z/nptitle.dat")), "Found After The Stop\n"));
+        auto em = readGameMetadata(e);
+        QVERIFY(em.ok());
+        QCOMPARE(em->title, QStringLiteral("Found After The Stop"));
+
+        // Cancelled while searching: Cancelled, not a half-read result.
+        CancellationSource cancel;
+        cancel.cancel();
+        auto c = readGameMetadata(r, cancel.token());
+        QVERIFY(!c.ok());
+        QVERIFY(c.error().isCancelled());
+        // Files at the usual places need no walk, so there is nothing to cancel.
+        const QString direct = fresh(QStringLiteral("direct"));
+        makePs5Dump(direct, QStringLiteral("PPSA05678"), QStringLiteral("Direct"));
+        QVERIFY(write(QDir(direct).filePath(QStringLiteral("sce_sys/param.sfo")), buildSfo({sfoString("TITLE", QStringLiteral("T"))})));
+        QVERIFY(write(QDir(direct).filePath(QStringLiteral("pfs-version.dat")), "01.00\n"));
+        QVERIFY(readGameMetadata(direct, cancel.token()).ok());
+    }
+
+    // A param.json somewhere in a PS4 game's data does not make the dump PS5.
+    void strayParamJsonDoesNotMakeAPs4DumpPs5()
+    {
+        const QString r = fresh(QStringLiteral("ps4-json"));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("eboot.bin")), "x"));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("sce_sys/param.sfo")),
+                      buildSfo({sfoString("CATEGORY", QStringLiteral("gd")), sfoString("TITLE", QStringLiteral("Old Game")),
+                                sfoString("TITLE_ID", QStringLiteral("PCAS00123"))})));
+        QVERIFY(write(QDir(r).filePath(QStringLiteral("data/config/param.json")), "{\"quality\": 3}"));
+        auto m = readGameMetadata(r);
+        QVERIFY(m.ok());
+        QCOMPARE(m->platform, Platform::PS4);
+        QCOMPARE(m->kind, ContentKind::Application);
+        QVERIFY(m->kindReason.contains(QStringLiteral("CATEGORY")));
+
+        // Without the dump's own param.sfo or a PS4 title ID, a deep param.json still means PS5.
+        const QString w = fresh(QStringLiteral("ps5-wrapper"));
+        makePs5Dump(QDir(w).filePath(QStringLiteral("inner")), QStringLiteral("PPSA04321"), QStringLiteral("Wrapped"));
+        auto wm = readGameMetadata(w);
+        QVERIFY(wm.ok());
+        QCOMPARE(wm->platform, Platform::PS5);
+        // And the dump's own damaged param.json still means PS5.
+        const QString d = fresh(QStringLiteral("ps5-damaged"));
+        QVERIFY(write(QDir(d).filePath(QStringLiteral("eboot.bin")), "x"));
+        QVERIFY(write(QDir(d).filePath(QStringLiteral("sce_sys/param.json")), "{ not json"));
+        QCOMPARE(readGameMetadata(d)->platform, Platform::PS5);
+    }
+
+    void longNamesKeepTheirVersionAndOddTemplatesWork()
+    {
+        const QString longTitle = QStringLiteral("An Extremely Long Game Title That Goes On And On And On Until It Is Far Too Long. Really");
+        const QString name = buildDumpName({QStringLiteral("PPSA01234"), longTitle, QStringLiteral("01.050.000")},
+                                           NamePreset::TitleIdTitleVersion);
+        QVERIFY2(name.endsWith(QStringLiteral(" (01.050.000)")), qPrintable(name));
+        QVERIFY(name.startsWith(QStringLiteral("PPSA01234 An Extremely Long")));
+        QCOMPARE(int(name.size()), 80);
+        // Two versions of the same long-titled game no longer collide.
+        QVERIFY(name != buildDumpName({QStringLiteral("PPSA01234"), longTitle, QStringLiteral("01.060.000")},
+                                      NamePreset::TitleIdTitleVersion));
+        // Short names are exactly as before.
+        QCOMPARE(buildDumpName({QStringLiteral("PPSA01234"), QStringLiteral("Short"), QStringLiteral("01.000.000")},
+                               NamePreset::TitleIdTitleVersion),
+                 QStringLiteral("PPSA01234 Short (01.000.000)"));
+
+        // An unknown token keeps its text and does not swallow the next token's "%".
+        ImageNameFields f;
+        f.title = QStringLiteral("Game");
+        f.titleId = QStringLiteral("PPSA01234");
+        f.folderName = QStringLiteral("folder");
+        QCOMPARE(renderImageName(ImageNamePreset::Custom, QStringLiteral("%X%TITLE% %PPSA%"), f), QStringLiteral("%XGame PPSA01234"));
+        // A reserved device name is reserved with an extension too.
+        QCOMPARE(sanitizeImageName(QStringLiteral("NUL")), QStringLiteral("NUL_"));
+        QCOMPARE(sanitizeImageName(QStringLiteral("nul.backup")), QStringLiteral("nul_.backup"));
+        QCOMPARE(sanitizeImageName(QStringLiteral("NULL.backup")), QStringLiteral("NULL.backup"));
+        // IDs with a trailing line feed are not valid IDs.
+        QVERIFY(!isValidTitleId(QStringLiteral("PPSA01234\n")));
+        QVERIFY(!isValidContentId(QStringLiteral("UP9000-PPSA01234_00-ABCDEFGHIJKLMNOP\n")));
+        QVERIFY(isValidTitleId(QStringLiteral("PPSA01234")));
+    }
+
     // ---- hostile input ---------------------------------------------------------------
     void sfoBoundsEntryCountAndValueSizes()
     {

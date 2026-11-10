@@ -159,7 +159,12 @@ Result<LibraryScanResult> scanLibrary(const QStringList& libraryFolders, const L
     QStringList seenRoots;
     for (const QString& rawRoot : libraryFolders) {
         const QString root = QDir::cleanPath(rawRoot);
-        if (root.isEmpty() || seenRoots.contains(root))
+#ifdef Q_OS_WIN
+        const Qt::CaseSensitivity pathCase = Qt::CaseInsensitive; // D:\Games and d:\games are one folder
+#else
+        const Qt::CaseSensitivity pathCase = Qt::CaseSensitive;
+#endif
+        if (root.isEmpty() || seenRoots.contains(root, pathCase))
             continue;
         seenRoots << root;
         if (!QFileInfo(root).isDir()) {

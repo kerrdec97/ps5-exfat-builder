@@ -84,6 +84,11 @@ private slots:
         QVERIFY(validateIdentity(QStringLiteral("PPSA01235"), kCid).error().message.contains(QStringLiteral("must match")));
         QVERIFY(hex32Problem(kZeroKey).isEmpty());
         QVERIFY(!hex32Problem(QStringLiteral("12")).isEmpty());
+        // A trailing line feed does not make a valid ID.
+        QVERIFY(!isContentId(kCid + u'\n'));
+        QVERIFY(!isTitleId(QStringLiteral("PPSA01234\n")));
+        QVERIFY(!isPublisherPrefix(QStringLiteral("UP9000\n")));
+        QVERIFY(isTitleId(QStringLiteral("PPSA01234")));
     }
 
     void templateParam()
@@ -168,6 +173,20 @@ private slots:
         const auto files = QJsonDocument::fromJson(readAll(rep)).object().value(QStringLiteral("Files")).toArray();
         QCOMPARE(files.size(), 2);
         QCOMPARE(files[0].toObject().value(QStringLiteral("Result")).toString(), QStringLiteral("Written; edited identifiers validated"));
+
+        // One entry with two targets goes to two files, and the review names exactly those.
+        DlcItem a2 = a;
+        a2.contentId = QStringLiteral("EP1004-PPSA05678_00-TESTDLC0000000A1");
+        const QString out2 = dir(QStringLiteral("export/out2"));
+        const QString plan = buildPlanText({a, a2, b}, true, out2);
+        auto two = exportUpdatedInis({a, a2, b}, out2, log);
+        QCOMPARE(two.size(), size_t(2));
+        QCOMPARE(QFileInfo(two[0].path).fileName(), QStringLiteral("dlc_emu-PPSA05678-updated.ini"));
+        QCOMPARE(QFileInfo(two[1].path).fileName(), QStringLiteral("dlc_emu-PPSA05678-updated-2.ini"));
+        QCOMPARE(two[0].items, (std::vector<int>{0, 2}));
+        QCOMPARE(two[1].items, (std::vector<int>{1}));
+        QCOMPARE(plan.count(QStringLiteral("OUTPUT: ") + QDir::toNativeSeparators(two[0].path) + u'\n'), 2);
+        QCOMPARE(plan.count(QStringLiteral("OUTPUT: ") + QDir::toNativeSeparators(two[1].path) + u'\n'), 1);
     }
 
     void pkgInfoParsing()

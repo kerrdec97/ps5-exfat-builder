@@ -6,19 +6,19 @@ namespace fw::dlc {
 
 bool isTitleId(const QString& t)
 {
-    static const QRegularExpression re(QStringLiteral("^(?:PPSA|CUSA)[0-9]{5}$"));
+    static const QRegularExpression re(QStringLiteral("\\A(?:PPSA|CUSA)[0-9]{5}\\z"));
     return re.match(t).hasMatch();
 }
 
 bool isContentId(const QString& c)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_[0-9]{2}-[A-Z0-9_]{16}$"));
+    static const QRegularExpression re(QStringLiteral("\\A[A-Z]{2}[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_[0-9]{2}-[A-Z0-9_]{16}\\z"));
     return re.match(c).hasMatch();
 }
 
 bool isPublisherPrefix(const QString& p)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}$"));
+    static const QRegularExpression re(QStringLiteral("\\A[A-Z]{2}[0-9]{4}\\z"));
     return re.match(p).hasMatch();
 }
 

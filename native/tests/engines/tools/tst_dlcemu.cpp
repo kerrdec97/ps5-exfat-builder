@@ -172,6 +172,17 @@ private slots:
         good.set(QStringLiteral("download_status"), QStringLiteral("INSTALLED"));
         QVERIFY(dlcemu::save(app0, {good}).ok());
         QCOMPARE(readFile(app0 + QStringLiteral("/dlc_emu.ini.bak")), first); // previous version kept
+        // One backup, replaced by each save: the game folder does not collect copies.
+        const QByteArray second = readFile(app0 + QStringLiteral("/dlc_emu.ini"));
+        good.set(QStringLiteral("mount_point"), QStringLiteral("/app0/addcont0"));
+        QVERIFY(dlcemu::save(app0, {good}).ok());
+        QCOMPARE(readFile(app0 + QStringLiteral("/dlc_emu.ini.bak")), second);
+        QCOMPARE(QDir(app0).entryList(QDir::Files),
+                 (QStringList{QStringLiteral("dlc_emu.ini"), QStringLiteral("dlc_emu.ini.bak")}));
+        // IDs and keys ending in a line feed are not valid.
+        dlcemu::Entry lineFeed = good;
+        lineFeed.set(QStringLiteral("entitlement_key"), QStringLiteral("00112233445566778899aabbccddeeff\n"));
+        QVERIFY(!dlcemu::validate({lineFeed}).ok());
         dlcemu::Entry bad;
         bad.set(QStringLiteral("content_id"), QStringLiteral("SHORT"));
         const QByteArray before = readFile(app0 + QStringLiteral("/dlc_emu.ini"));

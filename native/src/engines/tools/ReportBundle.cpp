@@ -72,6 +72,10 @@ QString userNameOf(const QString& home)
 
 const QString kHidden = QStringLiteral("<hidden>");
 
+constexpr qint64 kMaxExtraFileBytes = 16 * 1024 * 1024;
+constexpr int kMaxCrashReports = 5;
+constexpr qint64 kMaxCrashReportBytes = 1024 * 1024;
+
 // The name fragments that mark a secret: passcodes and passwords, the DLC
 // entitlement key, tokens and other credentials.
 const QString kSecretName = QStringLiteral(
@@ -282,7 +286,18 @@ QString redactUserPaths(const QString& text)
         const QRegularExpression inPath(QStringLiteral("(%1(?:Users|home|Documents and Settings)%1)%2(?=%1|$|\\W)").arg(sep, u),
                                         QRegularExpression::CaseInsensitiveOption);
         out.replace(inPath, QStringLiteral("\\1<user>"));
-        if (user.size() >= 4) {
+        // Anywhere else the name is replaced as a whole word, unless it is an
+        // everyday word that would then vanish from every log line.
+        static const QStringList common = {
+            QStringLiteral("user"),    QStringLiteral("users"),   QStringLiteral("admin"),   QStringLiteral("administrator"),
+            QStringLiteral("owner"),   QStringLiteral("guest"),   QStringLiteral("public"),  QStringLiteral("default"),
+            QStringLiteral("home"),    QStringLiteral("game"),    QStringLiteral("games"),   QStringLiteral("gamer"),
+            QStringLiteral("player"),  QStringLiteral("test"),    QStringLiteral("root"),    QStringLiteral("system"),
+            QStringLiteral("windows"), QStringLiteral("desktop"), QStringLiteral("data"),    QStringLiteral("backup"),
+            QStringLiteral("work"),    QStringLiteral("office"),  QStringLiteral("family"),  QStringLiteral("shared"),
+            QStringLiteral("name"),    QStringLiteral("file"),    QStringLiteral("files"),   QStringLiteral("image"),
+        };
+        if (user.size() >= 4 && !common.contains(user.toLower())) {
             const QRegularExpression word(QStringLiteral("\\b%1\\b").arg(u), QRegularExpression::CaseInsensitiveOption);
             out.replace(word, QStringLiteral("<user>"));
         }
@@ -362,16 +377,36 @@ Result<ReportResult> buildReportBundle(const ReportOptions& options, const Cance
         if (progress)
             progress->advance(fi.size());
     }
+    // The newest crash reports (the text files; a memory dump cannot be
+    // cleaned of secrets and paths, so it is never included).
+    if (!options.logsFolder.isEmpty()) {
+        const QFileInfoList crashes = QDir(QDir(options.logsFolder).filePath(QStringLiteral("crashes")))
+                                          .entryInfoList({QStringLiteral("crash-*.txt")}, QDir::Files, QDir::Time);
+        for (const QFileInfo& fi : crashes.mid(0, kMaxCrashReports)) {
+            QFile f(fi.absoluteFilePath());
+            if (!f.open(QIODevice::ReadOnly))
+                continue;
+            FW_TRY(addText(QStringLiteral("logs/crashes/") + fi.fileName(), QString::fromUtf8(f.read(kMaxCrashReportBytes))));
+        }
+    }
     for (const QString& extra : options.extraFiles) {
         QFile f(extra);
         if (!f.open(QIODevice::ReadOnly))
             continue;
-        FW_TRY(addText(QFileInfo(extra).fileName(), QString::fromUtf8(f.read(16 * 1024 * 1024))));
+        // Of a very long file (the history) the end is kept: the newest
+        // records, from the start of a line.
+        QByteArray bytes;
+        if (f.size() > kMaxExtraFileBytes) {
+            f.seek(f.size() - kMaxExtraFileBytes);
+            bytes = f.read(kMaxExtraFileBytes);
+            bytes.remove(0, bytes.indexOf('\n') + 1);
+        } else {
+            bytes = f.readAll();
+        }
+        FW_TRY(addText(QFileInfo(extra).fileName(), QString::fromUtf8(bytes)));
     }
-    FW_TRY(w.finish());
-    zip::Reader r;
-    FW_TRY(r.open(result.zipPath));
-    FW_TRY(r.verifyAll(token));
+    // Read back in full before the archive gets its name; a failure removes it.
+    FW_TRY(w.finish(true, token));
     return result;
 }
 

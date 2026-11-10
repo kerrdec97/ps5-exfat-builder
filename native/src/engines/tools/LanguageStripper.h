@@ -53,6 +53,7 @@ struct StripPlan {
     QString gameRoot;
     QStringList remove;      // relative paths from a scan
     QString backupFolder;    // where the backup ZIP goes (required, not inside the game)
+    qint64 freeSpaceMarginBytes = 256LL * 1024 * 1024; // kept free on the backup drive (storage.freeSpaceMarginMiB)
 };
 
 struct StripResult {

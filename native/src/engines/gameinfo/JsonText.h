@@ -45,7 +45,8 @@ QString stringValue(const QByteArray& text, const Member& m);
 // BOM (UTF-16 is converted), // and /* */ comments, trailing commas, NUL
 // padding and anything after the top-level value. Invalid UTF-8 is replaced
 // with U+FFFD like the legacy reader (errors='replace'). `changed` is set when
-// the output differs from the input.
+// the output differs from the input in more than a UTF-8 BOM and surrounding
+// white space.
 QByteArray repair(const QByteArray& text, bool* changed = nullptr);
 
 } // namespace fw::gameinfo::json

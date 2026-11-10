@@ -7,6 +7,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSet>
 #include <QtEndian>
@@ -348,7 +349,7 @@ Result<QString> extractDlcPackage(const FpkgCli& cli, const DlcPackageInfo& info
     if (QFileInfo::exists(destination)
         && !QDir(destination).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System))
         return Error(ErrorCode::InvalidArgument,
-                     QStringLiteral("The extraction folder must be empty and cannot be a link or junction."));
+                     QStringLiteral("The extraction folder must be empty."));
     QDir().mkpath(destination);
     QDir().mkpath(tempDir);
     const QStringList args{QStringLiteral("pkg-extract"), native(info.path), QStringLiteral("--output"), native(destination),
@@ -388,7 +389,9 @@ QByteArray extractDlcIcon(const FpkgCli& cli, const QString& path, const QString
         (void)inspectPs4Package(path, &icon);
         return icon;
     }
-    const QString dest = QDir(tempDir).filePath(QStringLiteral("icon-%1").arg(qHash(path), 0, 16));
+    // A folder of its own: two reads of the same package at once must not share (and delete) one.
+    const QString dest = QDir(tempDir).filePath(
+        QStringLiteral("icon-%1-%2").arg(qHash(path), 0, 16).arg(QRandomGenerator::global()->generate(), 8, 16, QLatin1Char('0')));
     removeTreeNoFollow(dest);
     QDir().mkpath(dest);
     const QStringList args{QStringLiteral("pkg-extract"), native(path), QStringLiteral("--output"), native(dest),

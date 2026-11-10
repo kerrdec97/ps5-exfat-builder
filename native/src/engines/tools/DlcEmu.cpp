@@ -19,12 +19,12 @@ namespace {
 
 const QRegularExpression& alnumRe()
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9]+$"));
+    static const QRegularExpression re(QStringLiteral("\\A[A-Za-z0-9]+\\z")); // \z: "$" would allow a final line feed
     return re;
 }
 const QRegularExpression& hex32Re()
 {
-    static const QRegularExpression re(QStringLiteral("^[0-9A-Fa-f]{32}$"));
+    static const QRegularExpression re(QStringLiteral("\\A[0-9A-Fa-f]{32}\\z"));
     return re;
 }
 const QRegularExpression& sectionRe()
@@ -301,8 +301,13 @@ Status save(const QString& app0, const std::vector<Entry>& entries)
                      v.errors.join(QStringLiteral("; ")));
     const QString path = QDir(app0).filePath(QStringLiteral("dlc_emu.ini"));
     if (QFileInfo::exists(path)) {
-        const QString bak = uniquePath(path + QStringLiteral(".bak"));
-        if (!QFile::copy(path, bak))
+        // One backup, replaced on every save: these files end up in every
+        // image built from the folder.
+        QFile current(path);
+        const bool readOk = current.open(QIODevice::ReadOnly) && current.size() <= 16 * 1024 * 1024;
+        const QByteArray bytes = readOk ? current.readAll() : QByteArray();
+        if (!readOk || current.error() != QFileDevice::NoError
+            || !writeFileAtomic(path + QStringLiteral(".bak"), bytes).ok())
             return Error(ErrorCode::IoError, QStringLiteral("Could not back up the existing dlc_emu.ini, so it was not changed."));
     }
     return writeFileAtomic(path, render(entries).toUtf8());

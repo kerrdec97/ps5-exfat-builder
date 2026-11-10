@@ -263,7 +263,7 @@ QString findMetaFile(const QString& folder, const QStringList& names)
     while (!stack.empty()) {
         Item it = stack.back();
         stack.pop_back();
-        if (++visited > 20000)
+        if (++visited > kMaxWalkFolders)
             break;
         const QFileInfoList files = sortedEntries(it.path, QDir::Files);
         for (const QString& want : lower)
@@ -553,9 +553,12 @@ QString findCoverSource(const QString& folderIn)
         int depth;
     };
     std::vector<Item> stack{{folder, 0}};
+    int visited = 0;
     while (!stack.empty()) {
         Item it = stack.back();
         stack.pop_back();
+        if (++visited > kMaxWalkFolders)
+            break;
         for (const QFileInfo& fi : sortedEntries(it.path, QDir::Files))
             if (fi.fileName().compare(QLatin1String("icon0.png"), Qt::CaseInsensitive) == 0)
                 return fi.filePath();

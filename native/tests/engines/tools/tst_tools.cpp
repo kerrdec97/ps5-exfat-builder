@@ -4,11 +4,13 @@
 #include "core/Paths.h"
 #include "core/Zip.h"
 #include "engines/tools/LanguageStripper.h"
+#include "engines/tools/Module.h"
 #include "engines/tools/ReportBundle.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
@@ -279,6 +281,165 @@ private slots:
         QVERIFY(own->skippedExisting.isEmpty());
     }
 
+    // Folder names that only look like language codes are not offered for removal.
+    void lookAlikeFoldersAreNotLanguages()
+    {
+        const QString g = m_root.filePath(QStringLiteral("GameH"));
+        const auto w = [&](const QString& rel) { fwtest::writeTextFile(g + u'/' + rel, "data"); };
+        w(QStringLiteral("eboot.bin"));
+        w(QStringLiteral("gfx/bg/sky.bin"));        // backgrounds, not Bulgarian
+        w(QStringLiteral("gfx/hd-Glow/a.bin"));     // not a language with a script name
+        w(QStringLiteral("gfx/fx-123/a.bin"));
+        w(QStringLiteral("tables/id/table.bin"));   // ids, not Indonesian
+        w(QStringLiteral("world/it/items.bin"));
+        w(QStringLiteral("loc/en/a.bin"));          // next to another language folder
+        w(QStringLiteral("loc/fr/a.bin"));
+        w(QStringLiteral("text/it/a.bin"));         // alone, but in a language container
+        w(QStringLiteral("pack/hi-IN/a.bin"));      // a region spelling of a language the list does not know
+        w(QStringLiteral("pack/es-419/a.bin"));
+        auto scan = scanLanguages(g, CancellationToken());
+        QVERIFY(scan.ok());
+        QStringList paths;
+        for (const auto& i : scan->items)
+            paths << i.relativePath;
+        QCOMPARE(paths, (QStringList{QStringLiteral("loc/en"), QStringLiteral("loc/fr"), QStringLiteral("pack/es-419"),
+                                     QStringLiteral("pack/hi-IN"), QStringLiteral("text/it")}));
+    }
+
+    void cancelWhileCheckingTheBackupIsACancel()
+    {
+        const QString g = makeGame(QStringLiteral("GameI"));
+        StripPlan plan;
+        plan.gameRoot = g;
+        plan.remove = {QStringLiteral("audio/ja")};
+        plan.backupFolder = m_root.filePath(QStringLiteral("backups-i"));
+        QDir().mkpath(plan.backupFolder);
+        CancellationSource cs;
+        ProgressReporter progress([&](const ProgressSnapshot& p) {
+            if (p.phaseIndex >= 1)
+                cs.cancel();
+        }, 0);
+        auto r = stripLanguages(plan, cs.token(), &progress);
+        QVERIFY(!r.ok());
+        QVERIFY2(r.error().isCancelled(), qPrintable(r.error().toLogString()));
+        QVERIFY(QFileInfo::exists(g + QStringLiteral("/audio/ja/vo.bin")));
+        QVERIFY(QDir(plan.backupFolder).entryList(QDir::Files).isEmpty());
+    }
+
+    void restoreKeepsTheOriginalFileTimes()
+    {
+        const QString g = makeGame(QStringLiteral("GameJ"));
+        const QString file = g + QStringLiteral("/audio/ja/vo.bin");
+        const QDateTime old = QDateTime(QDate(2021, 3, 4), QTime(5, 6, 8));
+        {
+            QFile f(file);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            QVERIFY(f.setFileTime(old, QFileDevice::FileModificationTime));
+        }
+        StripPlan plan;
+        plan.gameRoot = g;
+        plan.remove = {QStringLiteral("audio/ja")};
+        plan.backupFolder = m_root.filePath(QStringLiteral("backups-j"));
+        QDir().mkpath(plan.backupFolder);
+        auto r = stripLanguages(plan, CancellationToken(), nullptr);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QVERIFY(!QFileInfo::exists(file));
+        auto back = restoreLanguageBackup(r->backupZip, g, CancellationToken(), nullptr);
+        QVERIFY(back.ok());
+        // (ZIP time stamps have a two-second step.)
+        QVERIFY2(qAbs(QFileInfo(file).lastModified().secsTo(old)) <= 2, qPrintable(QFileInfo(file).lastModified().toString(Qt::ISODate)));
+    }
+
+    // ---- the jobs ---------------------------------------------------------------------
+    void jobsReportPartialWorkTruthfully()
+    {
+        auto schema = std::make_shared<SettingsSchema>();
+        DependencyRegistry deps;
+        JobFactory jobs;
+        ModuleContext mc{*schema, deps, jobs};
+        registerModule(mc);
+        const SettingsValues settings(schema, {}, {});
+        const auto context = [&](ProgressReporter& progress) {
+            JobContext ctx;
+            ctx.jobId = QStringLiteral("t");
+            ctx.progress = &progress;
+            ctx.log = Log(QStringLiteral("test"));
+            ctx.settings = settings;
+            ctx.tempDir = m_root.filePath(QStringLiteral("job-temp"));
+            return ctx;
+        };
+
+        // A backup folder inside the game is refused before it is created there.
+        const QString g = makeGame(QStringLiteral("GameK"));
+        {
+            auto job = jobs.create(QStringLiteral("tools.languages.strip"),
+                                   {{QStringLiteral("gameRoot"), g},
+                                    {QStringLiteral("remove"), QJsonArray{QStringLiteral("audio/ja")}},
+                                    {QStringLiteral("backupFolder"), g + QStringLiteral("/my-backups")}});
+            QVERIFY(job.ok());
+            ProgressReporter progress;
+            JobContext ctx = context(progress);
+            QVERIFY(!job.value()->run(ctx).ok());
+            QVERIFY(!QFileInfo::exists(g + QStringLiteral("/my-backups")));
+            QVERIFY(QFileInfo::exists(g + QStringLiteral("/audio/ja/vo.bin")));
+        }
+        // Part of the selection could not be removed: the outcome (with the backup) is kept.
+        QString backupZip;
+        {
+            const QString backups = m_root.filePath(QStringLiteral("backups-k"));
+            auto job = jobs.create(QStringLiteral("tools.languages.strip"),
+                                   {{QStringLiteral("gameRoot"), g},
+                                    {QStringLiteral("remove"), QJsonArray{QStringLiteral("audio/ja"), QStringLiteral("data/ja-JP")}},
+                                    {QStringLiteral("backupFolder"), backups}});
+            bool interfered = false;
+            ProgressReporter progress([&](const ProgressSnapshot& p) {
+                if (p.phaseIndex >= 1 && !interfered) {
+                    interfered = true;
+                    fwtest::writeTextFile(g + QStringLiteral("/data/ja-JP/late.bin"), "late");
+                }
+            }, 0);
+            JobContext ctx = context(progress);
+            auto o = job.value()->run(ctx);
+            QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+            QCOMPARE(o->verification, Verification::Inconclusive);
+            QCOMPARE(int(o->outputs.size()), 1);
+            backupZip = o->outputs.first();
+            QVERIFY(QFileInfo(backupZip).isFile());
+            QVERIFY2(o->summary.startsWith(QStringLiteral("1 of 2 item(s) could not be removed completely.")), qPrintable(o->summary));
+            QVERIFY(o->summary.contains(QDir::toNativeSeparators(backupZip)));
+            QCOMPARE(o->details.value(QStringLiteral("removed")).toInt(), 1);
+            QVERIFY(o->warnings.join(u'\n').contains(QStringLiteral("data/ja-JP/late.bin")));
+            QVERIFY(QFileInfo::exists(g + QStringLiteral("/data/ja-JP/late.bin")));
+        }
+        // Restore says what it left alone.
+        {
+            fwtest::writeTextFile(g + QStringLiteral("/audio/ja/vo.bin"), "already here");
+            auto job = jobs.create(QStringLiteral("tools.languages.restore"),
+                                   {{QStringLiteral("backupZip"), backupZip}, {QStringLiteral("gameRoot"), g}});
+            ProgressReporter progress;
+            JobContext ctx = context(progress);
+            auto o = job.value()->run(ctx);
+            QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+            QCOMPARE(o->details.value(QStringLiteral("restored")).toInt(), 1);
+            QCOMPARE(o->details.value(QStringLiteral("skippedExisting")).toInt(), 1);
+            QVERIFY2(o->summary.startsWith(QStringLiteral("Restored 1 file(s). 1 already in the game")), qPrintable(o->summary));
+            QVERIFY(o->warnings.join(u'\n').contains(QStringLiteral("audio/ja/vo.bin")));
+            QCOMPARE(readFile(g + QStringLiteral("/audio/ja/vo.bin")), QByteArray("already here"));
+        }
+        // A batch scan of a folder without any game says so.
+        {
+            const QString empty = m_root.filePath(QStringLiteral("no-games"));
+            QDir().mkpath(empty + QStringLiteral("/just-a-folder"));
+            auto job = jobs.create(QStringLiteral("tools.languages.scan"),
+                                   {{QStringLiteral("folder"), empty}, {QStringLiteral("batch"), true}});
+            ProgressReporter progress;
+            JobContext ctx = context(progress);
+            auto o = job.value()->run(ctx);
+            QVERIFY(o.ok());
+            QVERIFY2(o->summary.startsWith(QStringLiteral("No game was found in ")), qPrintable(o->summary));
+        }
+    }
+
     void redactionCoversEverySpelling()
     {
         const QString home = QDir::homePath();
@@ -353,7 +514,12 @@ private slots:
             "LOG-PASSCODE-uuuuuuuuuuuuuuuuuuuuu", "LOG-PASSCODE-EQ-ttttttttttttttttt", "LOG-PASSCODE-COLON-ssssssssssssss",
             "LOG-ESCAPED-PASSCODE-rrrrrrrrrrrr", "API-TOKEN-qqqqqqqqqqqqqqqq", "DIAG-SECRET-pppppppppppp",
             "203.0.113.7", "198.51.100.23", "8.8.4.4", "console.example.net",
+            "CRASH-PASSCODE-oooooooooooo", "DUMP-MEMORY-SECRET-nnnnnnnn",
         };
+        // The crash report (text) belongs in the ZIP; the memory dump next to it never does.
+        fwtest::writeTextFile(logs + QStringLiteral("/crashes/crash-20261101-101010.txt"),
+                              "Unhandled exception 0xC0000005\npasscode=CRASH-PASSCODE-oooooooooooo\n");
+        fwtest::writeTextFile(logs + QStringLiteral("/crashes/crash-20261101-101010.dmp"), "MDMP DUMP-MEMORY-SECRET-nnnnnnnn");
         fwtest::writeTextFile(
             base + QStringLiteral("/settings.json"),
             "{\n  \"version\": 3,\n  \"values\": {\n"
@@ -406,7 +572,12 @@ private slots:
             QByteArray all;
             for (const auto& e : z.entries())
                 all += z.readAll(e).value() + '\n';
-            QVERIFY(z.entries().size() >= 7);
+            QVERIFY(z.entries().size() >= 8);
+            const zip::Entry* crash = z.find(QStringLiteral("logs/crashes/crash-20261101-101010.txt"));
+            QVERIFY(crash);
+            QVERIFY(z.readAll(*crash).value().contains("0xC0000005"));
+            for (const auto& e : z.entries())
+                QVERIFY2(!e.name.endsWith(QStringLiteral(".dmp")), qPrintable(e.name));
             for (const QByteArray& s : secrets) {
                 QVERIFY2(!all.contains(s), s.constData());
                 QVERIFY2(!raw.contains(s), s.constData());

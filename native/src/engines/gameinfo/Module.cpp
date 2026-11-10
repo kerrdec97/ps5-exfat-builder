@@ -140,7 +140,7 @@ public:
         if (mode() == u"undo")
             return runUndo(ctx);
         RenamePlanOptions opt;
-        opt.preset = *preset(ctx.settings);
+        opt.preset = preset(ctx.settings).value_or(NamePreset::TitleIdTitleVersion);
         opt.destinationRoot = QDir::fromNativeSeparators(m_p.value(QStringLiteral("destination")).toString().trimmed());
         const QString source = QDir::fromNativeSeparators(m_p.value(QStringLiteral("source")).toString());
         ctx.progress->beginPhase(0, 0, 0, false);

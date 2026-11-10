@@ -560,6 +560,33 @@ private slots:
                      .arg(kCidA, kTid));
     }
 
+    // Several name-like keys with different values: a change that leaves the
+    // title alone leaves all of them alone; an edited title is still written.
+    void untouchedTitleLeavesOtherNameKeys()
+    {
+        const QString before = QStringLiteral("content_id=%1\nname=Costume Pack\ntitle=My Game\ntitle_name=\ntitle_id=%2\n");
+        PARSE_OK(doc, u8(before.arg(kCidA, kTid)));
+        QCOMPARE(doc.entries().front().title, QStringLiteral("My Game"));
+        const QString cid = QStringLiteral("EP0000-PPSA01234_00-AAAAAAAAAAAAAAAA"); // region change only
+        UPDATE_OK(out, doc, (std::map<int, DlcTarget>{{0, target(kTid, cid, QStringLiteral("My Game"))}}));
+        QCOMPARE(QString::fromUtf8(out), before.arg(cid, kTid));
+        UPDATE_OK(edited, doc, (std::map<int, DlcTarget>{{0, target(kTid, cid, QStringLiteral("New"))}}));
+        QCOMPARE(QString::fromUtf8(edited),
+                 QStringLiteral("content_id=%1\nname=New\ntitle=New\ntitle_name=New\ntitle_id=%2\n").arg(cid, kTid));
+    }
+
+    // "key = ; note": the value goes in front of the comment, which stays a comment.
+    void emptyValueWithInlineComment()
+    {
+        PARSE_OK(doc, u8(QStringLiteral("content_id=%1\ntitle_id =   ; fill in\nname = # todo\n").arg(kCidA)));
+        const QString cid = QStringLiteral("UP0000-PPSA05678_00-AAAAAAAAAAAAAAAA");
+        UPDATE_OK(out, doc, (std::map<int, DlcTarget>{{0, target(QStringLiteral("PPSA05678"), cid, QStringLiteral("New"))}}));
+        QCOMPARE(QString::fromUtf8(out), QStringLiteral("content_id=%1\ntitle_id =   PPSA05678 ; fill in\nname = New # todo\n").arg(cid));
+        PARSE_OK(back, out);
+        QCOMPARE(back.entries().front().titleId, QStringLiteral("PPSA05678"));
+        QCOMPARE(back.entries().front().title, QStringLiteral("New"));
+    }
+
     void insertsCommentTitle_data()
     {
         QTest::addColumn<QString>("before");

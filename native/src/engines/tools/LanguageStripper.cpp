@@ -66,6 +66,7 @@ QString codeAlternation()
 
 struct Patterns {
     QRegularExpression locale{QStringLiteral("^(?:[a-z]{2}-[A-Z]{2}|[a-z]{2}-[A-Z][a-z]+-[A-Z]{2}|[a-z]{2}-[A-Z][a-z]+|[a-z]{2}-\\d{3}|[a-z]{2})$")};
+    QRegularExpression region{QStringLiteral("^[a-z]{2}-[A-Z]{2}$")};
     QRegularExpression pak, psarc, video, audio;
     Patterns()
     {
@@ -73,8 +74,9 @@ struct Patterns {
         const auto ci = QRegularExpression::CaseInsensitiveOption;
         pak = QRegularExpression(QStringLiteral("(?:_lang_(%1)|_(%1)_[Pp]\\.pak|[_\\-](%1)(?=\\.pak)|pakchunk\\d+.*?[_\\-](%1)[_\\-\\.])").arg(c), ci);
         psarc = QRegularExpression(QStringLiteral("(?:audio|speech|voice|vo|sub|subtitle|text|string|loc|lang|movie|video)[_\\-](%1)(?:_\\w+)?\\.psarc$").arg(c), ci);
-        video = QRegularExpression(QStringLiteral("[_\\-](%1)[_\\-]?(?:sub|dub|audio|voice)?\\.(?:mp4|m4v|webm|mkv|avi|mov|mxf|m2ts|ts)$").arg(c), ci);
-        audio = QRegularExpression(QStringLiteral("[_\\-](%1)[_\\-]?\\.(?:bnk|wem|pck|at9|snd|fsb|bank)$").arg(c), ci);
+        // (Only for the extensions the scan passes on: see the lists in scanLanguages().)
+        video = QRegularExpression(QStringLiteral("[_\\-](%1)[_\\-]?(?:sub|dub|audio|voice)?\\.(?:mp4|m4v|webm|mkv|avi|mov|m2ts|ts)$").arg(c), ci);
+        audio = QRegularExpression(QStringLiteral("[_\\-](%1)[_\\-]?\\.(?:bnk|wem|pck|at9|fsb|bank)$").arg(c), ci);
     }
 };
 
@@ -250,6 +252,13 @@ Result<LanguageScan> scanLanguages(const QString& gameRoot, const CancellationTo
         }
         const auto entries = QDir(dir).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
                                                      QDir::Name | QDir::IgnoreCase);
+        // How many folders here are named like a known language: a lone
+        // two-letter folder ("bg", "id", "it") is more likely game data.
+        int languageFolders = 0;
+        for (const QFileInfo& e : entries)
+            if (e.isDir() && !e.isSymLink() && pt.locale.match(e.fileName()).hasMatch()
+                && validCodes().contains(e.fileName().toLower().section(u'-', 0, 0)))
+                ++languageFolders;
         for (const QFileInfo& e : entries) {
             const QString name = e.fileName();
             const QString low = name.toLower();
@@ -259,7 +268,13 @@ Result<LanguageScan> scanLanguages(const QString& gameRoot, const CancellationTo
             if (e.isDir()) {
                 if (pt.locale.match(name).hasMatch()) {
                     const QString code = low.section(u'-', 0, 0);
-                    if (name.size() >= 2 && (validCodes().contains(code) || name.contains(u'-'))) {
+                    const bool known = validCodes().contains(code);
+                    // A bare code counts in a language container or next to another
+                    // language folder. "xx-YY" may be a language the list does not
+                    // know; the other spellings ("xx-Word", "xx-123") must be known.
+                    const bool accepted = !name.contains(u'-') ? known && (inContainer || languageFolders >= 2)
+                                                                : known || pt.region.match(name).hasMatch();
+                    if (accepted) {
                         // Grouped by base language like the legacy app (keeping
                         // English keeps en-US and en-GB); the label names the region.
                         add(abs, true, code, {});
@@ -350,7 +365,7 @@ Result<StripResult> stripLanguages(const StripPlan& plan, const CancellationToke
         total += m.bytes;
         absPaths << abs;
     }
-    FW_TRY(ensureFreeSpace(plan.backupFolder, total));
+    FW_TRY(ensureFreeSpace(plan.backupFolder, total, plan.freeSpaceMarginBytes));
 
     StripResult result;
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH.mm.ss"));
