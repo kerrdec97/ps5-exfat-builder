@@ -1,6 +1,7 @@
 #include "app/ui/LibraryGrid.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Style.h"
 
 #include <QContextMenuEvent>
@@ -29,22 +30,15 @@ namespace {
 constexpr int kMinTile = 168;
 constexpr int kGap = 16;
 constexpr int kText = 84;    // under the cover: title, subtitle, chips
-constexpr int kHeader = 34;  // list
+constexpr int kHeader = size::tableHeader; // list
 constexpr int kRow = 56;
 constexpr int kListCover = 40;
+constexpr int kChipGap = 4;
 
 QColor mix(const QColor& a, const QColor& b, qreal t)
 {
     return QColor::fromRgbF(float(a.redF() * (1 - t) + b.redF() * t), float(a.greenF() * (1 - t) + b.greenF() * t),
                             float(a.blueF() * (1 - t) + b.blueF() * t), 1.0f);
-}
-
-QFont chipFont()
-{
-    QFont f = font::caption();
-    f.setPixelSize(11);
-    f.setWeight(QFont::DemiBold);
-    return f;
 }
 
 QFont headerFont()
@@ -150,6 +144,10 @@ LibraryGrid::LibraryGrid(QWidget* parent) : QWidget(parent)
     setProperty("fwNoRing", true); // the current item shows the focus itself
     setAccessibleName(QStringLiteral("Items"));
     m_headers = {QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Formats"), QStringLiteral("Status")};
+    m_hover = new motion::HoverFade(this, [this](int i) {
+        if (i < count())
+            update(itemRect(i).adjusted(-4, -4, 4, 4)); // one tile, not the grid
+    });
 }
 
 int LibraryGrid::coverDecodeCount() { return covers().decodes; }
@@ -169,7 +167,7 @@ void LibraryGrid::setItems(std::vector<GridItem> items)
     }
     const bool changed = keep != m_selected;
     m_selected = keep;
-    m_hover = -1;
+    m_hover->reset();
     m_anchor = std::min(m_anchor, count() - 1);
     updateGeometry();
     update();
@@ -380,7 +378,7 @@ void LibraryGrid::paintCheck(QPainter& p, const QRectF& r, bool on, bool round)
     const qreal rad = round ? r.width() / 2 : 5;
     p.setPen(Qt::NoPen);
     if (on) {
-        p.setBrush(accentGradient(r));
+        p.setBrush(accentFillGradient(r));
         p.drawRoundedRect(r, rad, rad);
         p.drawPixmap(QRectF(r.center().x() - 7, r.center().y() - 7, 14, 14).toRect(), iconPixmap(QStringLiteral("check"), 14, color::on_accent, devicePixelRatioF()));
     } else {
@@ -394,33 +392,20 @@ void LibraryGrid::paintCheck(QPainter& p, const QRectF& r, bool on, bool round)
 
 qreal LibraryGrid::paintChips(QPainter& p, const GridItem& it, qreal x, qreal y, qreal maxRight)
 {
-    const QFont f = chipFont();
-    const QFontMetrics fm(f);
-    p.setFont(f);
+    // `y` is the top of the 22 px chips.
     const auto chip = [&](const QString& t, bool neutral) {
-        const qreal w = fm.horizontalAdvance(t) + 14;
-        const QRectF cr(x, y, w, 18);
-        p.setPen(Qt::NoPen);
-        if (neutral) {
-            p.setBrush(color::bg_4);
-        } else {
-            QColor tint = color::accent;
-            tint.setAlpha(46);
-            p.setBrush(tint);
-        }
-        p.drawRoundedRect(cr, 9, 9);
-        p.setPen(neutral ? color::fg_2 : color::accent_hi);
-        p.drawText(cr, Qt::AlignCenter, t);
-        x += w + 5;
+        const qreal w = badgeWidth(t);
+        paintBadge(p, QRectF(x, y, w, size::badge), t, neutral ? Tone::Neutral : Tone::Info);
+        x += w + kChipGap;
     };
     for (int c = 0; c < it.chips.size(); ++c) {
-        const qreal w = fm.horizontalAdvance(it.chips[c]) + 14;
+        const qreal w = badgeWidth(it.chips[c]);
         const int rest = int(it.chips.size()) - c - 1;
-        const qreal more = rest > 0 ? fm.horizontalAdvance(QStringLiteral("+%1").arg(rest)) + 19 : 0;
+        const qreal more = rest > 0 ? badgeWidth(QStringLiteral("+%1").arg(rest)) + kChipGap : 0;
         if (x + w + more > maxRight) {
             // Not all fit: a "+N" chip says how many are left out.
             const QString plus = QStringLiteral("+%1").arg(it.chips.size() - c);
-            if (x + fm.horizontalAdvance(plus) + 14 <= maxRight)
+            if (x + badgeWidth(plus) <= maxRight)
                 chip(plus, true);
             break;
         }
@@ -434,11 +419,9 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     const GridItem& it = m_items[size_t(i)];
     const QRectF r = QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5);
     const bool sel = m_selected.contains(it.key);
-    const bool hov = i == m_hover;
+    const qreal hov = m_hover->amount(i); // 0..1: the hover tint fades
     // Card.
-    p.setPen(QPen(hov && !sel ? color::border_4 : color::border_2, 1));
-    p.setBrush(hov ? color::bg_3 : color::bg_2);
-    p.drawRoundedRect(r, radius::md, radius::md);
+    paintPlate(p, r, radius::md, hov);
     // Cover.
     const QRectF cover(r.left() + 1, r.top() + 1, r.width() - 2, r.width() - 2);
     paintCover(p, it, cover, radius::md - 1, false);
@@ -453,13 +436,13 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     p.setFont(font::caption());
     p.setPen(color::fg_3);
     p.drawText(QRectF(x, y, w, 16), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(font::caption()).elidedText(it.subtitle, Qt::ElideRight, int(w)));
-    y += 22;
+    y += 20;
     qreal sizeW = 0;
     if (!it.size.isEmpty()) {
         p.setFont(font::caption());
         sizeW = QFontMetrics(font::caption()).horizontalAdvance(it.size);
         p.setPen(color::fg_4);
-        p.drawText(QRectF(r.right() - 12 - sizeW, y, sizeW, 18), Qt::AlignRight | Qt::AlignVCenter, it.size);
+        p.drawText(QRectF(r.right() - 12 - sizeW, y, sizeW, size::badge), Qt::AlignRight | Qt::AlignVCenter, it.size);
     }
     paintChips(p, it, x, y, r.right() - 12 - sizeW - 6);
     // Selection.
@@ -468,7 +451,7 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
         p.setPen(QPen(QBrush(accentGradient(r, 240)), 2));
         p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
     }
-    if (sel || hov || !m_selected.isEmpty())
+    if (sel || i == m_hover->hovered() || !m_selected.isEmpty())
         paintCheck(p, checkRect(i), sel, true);
     // Keyboard focus only, and inside the tile: outside it the grid's own
     // edge would cut the ring of the first row and of the outer columns.
@@ -490,7 +473,7 @@ void LibraryGrid::paintHeader(QPainter& p)
     qreal right = width() - 12;
     const auto col = [&](const QString& t, qreal w) {
         right -= w;
-        p.drawText(QRectF(right, y, w, kHeader - 6), Qt::AlignLeft | Qt::AlignVCenter, t);
+        p.drawText(QRectF(right, y, w, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, t);
         right -= 12;
     };
     if (badges && wide && m_headers.size() > 4)
@@ -502,7 +485,7 @@ void LibraryGrid::paintHeader(QPainter& p)
     if (wide && m_headers.size() > 1)
         col(m_headers[1], 170);
     if (!m_headers.isEmpty())
-        p.drawText(QRectF(titleX, y, right - titleX, kHeader - 6), Qt::AlignLeft | Qt::AlignVCenter, m_headers[0]);
+        p.drawText(QRectF(titleX, y, right - titleX, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, m_headers[0]);
     p.setPen(QPen(color::border_2, 1));
     p.drawLine(QPointF(0, kHeader - 0.5), QPointF(width(), kHeader - 0.5));
 }
@@ -512,10 +495,10 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     const GridItem& it = m_items[size_t(i)];
     const QRectF r = QRectF(rect);
     const bool sel = m_selected.contains(it.key);
-    const bool hov = i == m_hover;
-    if (sel || hov) {
+    const qreal hov = m_hover->amount(i);
+    if (sel || hov > 0.0) {
         p.setPen(Qt::NoPen);
-        p.setBrush(sel ? color::accent_lo : color::bg_3);
+        p.setBrush(sel ? color::accent_lo : withAlpha(color::bg_3, int(255 * hov)));
         p.drawRoundedRect(r.adjusted(0, 2, 0, -2), radius::sm, radius::sm);
     }
     paintCheck(p, checkRect(i), sel, false);
@@ -533,20 +516,15 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     if (badges && wide) {
         const QRectF c = colRect(140);
         if (!it.badge.isEmpty()) {
-            const QFont f = chipFont();
-            p.setFont(f);
-            const qreal bw = std::min(c.width(), qreal(QFontMetrics(f).horizontalAdvance(it.badge) + 16));
-            const QRectF br(c.left(), c.center().y() - 10, bw, 20);
-            p.setPen(Qt::NoPen);
-            p.setBrush(toneTint(it.badgeTone));
-            p.drawRoundedRect(br, 10, 10);
-            p.setPen(toneText(it.badgeTone));
-            p.drawText(br, Qt::AlignCenter, QFontMetrics(f).elidedText(it.badge, Qt::ElideRight, int(bw - 12)));
+            const int full = badgeWidth(it.badge);
+            const qreal bw = std::min(c.width(), qreal(full));
+            const QString shown = bw < full ? QFontMetrics(font::chip()).elidedText(it.badge, Qt::ElideRight, int(bw - 16)) : it.badge;
+            paintBadge(p, QRectF(c.left(), c.center().y() - size::badge / 2.0, bw, size::badge), shown, it.badgeTone);
         }
     }
     {
         const QRectF c = colRect(wide ? 170 : 120);
-        paintChips(p, it, c.left(), c.center().y() - 9, c.right());
+        paintChips(p, it, c.left(), c.center().y() - size::badge / 2.0, c.right());
     }
     {
         const QRectF c = colRect(80);
@@ -626,24 +604,13 @@ void LibraryGrid::mouseDoubleClickEvent(QMouseEvent* e)
 void LibraryGrid::mouseMoveEvent(QMouseEvent* e)
 {
     const int i = itemAt(e->position().toPoint());
-    if (i != m_hover) {
-        const int old = m_hover;
-        m_hover = i;
+    if (i != m_hover->hovered()) {
         setCursor(i >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        if (old >= 0 && old < count())
-            update(itemRect(old).adjusted(-4, -4, 4, 4));
-        if (i >= 0)
-            update(itemRect(i).adjusted(-4, -4, 4, 4));
+        m_hover->setHovered(i); // repaints the tile it left and the one it entered
     }
 }
 
-void LibraryGrid::leaveEvent(QEvent*)
-{
-    const int old = m_hover;
-    m_hover = -1;
-    if (old >= 0 && old < count())
-        update(itemRect(old).adjusted(-4, -4, 4, 4));
-}
+void LibraryGrid::leaveEvent(QEvent*) { m_hover->setHovered(-1); }
 
 void LibraryGrid::contextMenuEvent(QContextMenuEvent* e)
 {

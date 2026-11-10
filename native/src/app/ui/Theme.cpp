@@ -43,6 +43,16 @@ void tabular(QFont& f)
 #endif
 }
 
+QLinearGradient sweep(const QRectF& r, QColor a, QColor b, int alpha)
+{
+    QLinearGradient g(r.topLeft(), r.topRight());
+    a.setAlpha(alpha);
+    b.setAlpha(alpha);
+    g.setColorAt(0, a);
+    g.setColorAt(1, b);
+    return g;
+}
+
 } // namespace
 
 QString sansFamily()
@@ -94,6 +104,12 @@ QFont caption()
     tabular(f);
     return f;
 }
+QFont chip()
+{
+    QFont f = make(sansFamily(), 11, QFont::DemiBold);
+    tabular(f);
+    return f;
+}
 QFont overline()
 {
     QFont f = make(sansFamily(), 11, QFont::DemiBold);
@@ -117,13 +133,18 @@ QFont monoSmall()
 
 QLinearGradient accentGradient(const QRectF& r, int alpha)
 {
-    QLinearGradient g(r.topLeft(), r.topRight());
-    QColor a = color::accent, b = color::accent_2;
-    a.setAlpha(alpha);
-    b.setAlpha(alpha);
-    g.setColorAt(0, a);
-    g.setColorAt(1, b);
-    return g;
+    return sweep(r, color::accent, color::accent_2, alpha);
+}
+
+QLinearGradient accentFillGradient(const QRectF& r, int alpha)
+{
+    return sweep(r, color::accent_fill, color::accent_fill_2, alpha);
+}
+
+QColor withAlpha(QColor c, int alpha)
+{
+    c.setAlpha(alpha);
+    return c;
 }
 
 QString hex(const QColor& c)
@@ -149,23 +170,26 @@ QScrollArea > QWidget > QWidget { background: transparent; }
 QAbstractScrollArea::corner { background: transparent; }
 QLabel { background: transparent; }
 
-/* ---- buttons ------------------------------------------------------------- */
+/* ---- buttons: plates (bg_4 and lighter), never the dark fill of a field ---- */
 QPushButton {
     min-height: 32px; max-height: 32px; padding: 0 14px; border-radius: 8px;
-    background: {bg_3}; border: 1px solid {border_3}; color: {fg_1}; min-width: 40px;
+    background: {bg_4}; border: 1px solid {border_3}; color: {fg_1}; min-width: 40px;
 }
-QPushButton:hover { background: {bg_4}; border-color: {border_4}; color: {fg_0}; }
-QPushButton:pressed { background: {bg_5}; }
+QPushButton:hover { background: {bg_5}; border-color: {border_4}; color: {fg_0}; }
+QPushButton:pressed { background: {bg_3}; }
 QPushButton:disabled { background: {bg_2}; border-color: {border_2}; color: {fg_5}; }
+/* The fill gradient runs under the border; only its top edge is lit. */
 QPushButton[variant="primary"] {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 {accent_2});
-    border: 1px solid {accent_hi_30}; color: {on_accent};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent_fill}, stop:1 {accent_fill_2});
+    border: 1px solid transparent; border-top-color: {highlight_fill}; color: {on_accent};
 }
 QPushButton[variant="primary"]:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent_hover}, stop:1 {accent_2_hover});
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent_fill_hover}, stop:1 {accent_fill_2_hover});
+    border-color: transparent; border-top-color: {highlight_fill};
 }
 QPushButton[variant="primary"]:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent_pressed}, stop:1 {accent_2});
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent_fill_pressed}, stop:1 {accent_fill_2_pressed});
+    border-color: transparent;
 }
 QPushButton[variant="primary"]:disabled { background: {bg_3}; border-color: {border_2}; color: {fg_5}; }
 QPushButton[variant="danger"] { background: {danger_fill}; border-color: {danger_fill}; color: {on_accent}; }
@@ -191,7 +215,7 @@ QToolButton[size="sm"] { min-width: 28px; max-width: 28px; min-height: 28px; max
 QToolButton[size="xs"] { min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; border-radius: 6px; }
 QToolButton::menu-indicator { image: none; width: 0; }
 
-/* ---- inputs ----------------------------------------------------------------- */
+/* ---- inputs: wells (field_bg, darker than the card) -------------------------- */
 QLineEdit, QAbstractSpinBox, QPlainTextEdit, QTextEdit {
     min-height: 32px; max-height: 32px; padding: 0 12px; border-radius: 8px;
     background: {field_bg}; border: 1px solid {border_3}; color: {field_fg};
@@ -219,10 +243,10 @@ QComboBox:on { background: {field_bg}; border-color: {accent}; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 26px; border: none; }
 QComboBox::down-arrow { width: 16px; height: 16px; }
 QComboBox QAbstractItemView {
-    background: {bg_3}; border: 1px solid {border_3}; border-radius: 12px; padding: 6px;
+    background: {bg_3}; border: 1px solid {border_4}; border-radius: 12px; padding: 6px;
     outline: 0; selection-background-color: {accent_lo}; selection-color: {fg_0}; color: {fg_1};
 }
-QComboBox QAbstractItemView::item { min-height: 32px; padding: 0 10px; border-radius: 7px; }
+QComboBox QAbstractItemView::item { min-height: 32px; padding: 0 10px; border: none; border-radius: 7px; }
 QComboBox QAbstractItemView::item:hover { background: {bg_4}; }
 QComboBox QAbstractItemView::item:selected { background: {accent_lo}; color: {fg_0}; }
 
@@ -231,30 +255,35 @@ QCheckBox:disabled { color: {fg_5}; }
 QCheckBox::indicator { width: 18px; height: 18px; }
 QRadioButton { spacing: 10px; }
 
-/* ---- menus, tooltips ------------------------------------------------------- */
-QMenu { background: {bg_3}; border: 1px solid {border_3}; border-radius: 12px; padding: 6px; }
+/* ---- popups: bg_3 with a border_4 outline ------------------------------------ */
+/* The 12 px margin (size::popupShadow) is where the app guard paints a menu's shadow. */
+QMenu { background: {bg_3}; border: 1px solid {border_4}; border-radius: 12px; padding: 6px; margin: 12px; }
 QMenu::item { min-height: 32px; padding: 0 14px 0 10px; border-radius: 7px; color: {fg_1}; }
 QMenu::item:selected { background: {bg_4}; color: {fg_0}; }
 QMenu::item:disabled { color: {fg_5}; }
 QMenu::separator { height: 1px; background: {border_3}; margin: 6px 4px; }
 QMenu::icon { padding-left: 8px; }
-QToolTip { background: {bg_4}; border: 1px solid {border_4}; border-radius: 8px; padding: 6px 10px; color: {fg_1}; }
+QToolTip {
+    background: {bg_4}; border: 1px solid {border_4}; border-radius: 8px; padding: 6px 10px;
+    color: {fg_1}; font-size: 12px;
+}
 
-/* ---- scrollbars ------------------------------------------------------------- */
-QScrollBar:vertical { background: transparent; width: 10px; margin: 2px 1px; }
-QScrollBar::handle:vertical { background: {bg_5}; border-radius: 4px; margin: 1px 2px; min-height: 32px; }
+/* ---- scrollbars: an 8 px pill, 2 px in from the outer edge and both ends; the
+   bar stays 10 px wide, so nothing a scroll area holds is laid out narrower -- */
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: {bg_5}; border-radius: 4px; margin: 2px 2px 2px 0; min-height: 32px; }
 QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed { background: {border_control}; }
-QScrollBar:horizontal { background: transparent; height: 10px; margin: 1px 2px; }
-QScrollBar::handle:horizontal { background: {bg_5}; border-radius: 4px; margin: 2px 1px; min-width: 32px; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: {bg_5}; border-radius: 4px; margin: 0 2px 2px 2px; min-width: 32px; }
 QScrollBar::handle:horizontal:hover, QScrollBar::handle:horizontal:pressed { background: {border_control}; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 
-/* ---- tables ----------------------------------------------------------------- */
+/* ---- tables and trees ---------------------------------------------------------- */
 QHeaderView { background: transparent; }
 QHeaderView::section {
-    background: transparent; color: {fg_4}; padding: 0 10px; min-height: 34px;
-    border: none; border-bottom: 1px solid {border_2}; font-weight: 600;
+    background: transparent; color: {fg_4}; padding: 0 10px; min-height: 31px;
+    border: none; border-bottom: 1px solid {border_2}; font-size: 12px; font-weight: 600;
 }
 QHeaderView::section:first { padding-left: 14px; }
 QHeaderView::section:hover { color: {fg_1}; }
@@ -265,7 +294,10 @@ QTableView, QTreeView, QListView {
 }
 QTableView::item, QTreeView::item, QListView::item { border: none; border-bottom: 1px solid {border_1}; padding: 0 10px; }
 QTableView::item:hover, QTreeView::item:hover, QListView::item:hover { background: {bg_3}; }
-QTableView::item:selected, QTreeView::item:selected, QListView::item:selected { background: {accent_lo}; color: {fg_0}; }
+QListView::item:selected { background: {accent_lo}; color: {fg_0}; }
+/* The row of a table or tree is filled by FwStyle (accent_lo and the accent
+   bar at its left edge); the cells stay clear over it. */
+QTableView::item:selected, QTreeView::item:selected { background: transparent; color: {fg_0}; }
 QTreeView::branch { background: transparent; }
 
 /* ---- tabs (QTabBar is used only for in-page navigation): pill tabs ------------ */
@@ -280,8 +312,8 @@ QTabWidget::pane { border: none; border-top: 1px solid {border_2}; }
 
 QSplitter::handle { background: transparent; }
 QStatusBar { background: {bg_0}; }
-QProgressBar { background: {bg_5}; border: none; border-radius: 3px; max-height: 6px; min-height: 6px; }
-QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 {accent_2}); border-radius: 3px; }
+QProgressBar { background: {bg_5}; border: none; border-radius: 4px; max-height: 8px; min-height: 8px; }
+QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 {accent_2}); border-radius: 4px; }
 QFrame[role="hairline"] { background: {border_1}; max-height: 1px; min-height: 1px; border: none; }
 QFrame[role="hairline2"] { background: {border_2}; max-height: 1px; min-height: 1px; border: none; }
 )QSS");
@@ -300,7 +332,12 @@ QFrame[role="hairline2"] { background: {border_2}; max-height: 1px; min-height: 
         {QStringLiteral("accent_hi"), accent_hi}, {QStringLiteral("accent_lo"), accent_lo},
         {QStringLiteral("accent_2_hover"), accent_2_hover}, {QStringLiteral("accent_2_hi"), accent_2_hi},
         {QStringLiteral("accent_2"), accent_2}, {QStringLiteral("accent_08"), accent_08},
-        {QStringLiteral("accent_hi_30"), QColor(141, 181, 255, 60)},
+        {QStringLiteral("accent_fill_2_hover"), accent_fill_2_hover},
+        {QStringLiteral("accent_fill_2_pressed"), accent_fill_2_pressed},
+        {QStringLiteral("accent_fill_hover"), accent_fill_hover},
+        {QStringLiteral("accent_fill_pressed"), accent_fill_pressed},
+        {QStringLiteral("accent_fill_2"), accent_fill_2}, {QStringLiteral("accent_fill"), accent_fill},
+        {QStringLiteral("highlight_fill"), highlight_fill},
         {QStringLiteral("accent"), accent}, {QStringLiteral("on_accent"), on_accent},
         {QStringLiteral("focus"), focus}, {QStringLiteral("success_hi"), success_hi},
         {QStringLiteral("success_bg"), success_bg}, {QStringLiteral("success"), success},
@@ -330,12 +367,12 @@ void apply(QApplication* app)
     p.setColor(QPalette::Base, bg_2);
     p.setColor(QPalette::AlternateBase, bg_2);
     p.setColor(QPalette::Text, fg_1);
-    p.setColor(QPalette::Button, bg_3);
+    p.setColor(QPalette::Button, bg_4);
     p.setColor(QPalette::ButtonText, fg_1);
     p.setColor(QPalette::Highlight, field_select_bg);
     p.setColor(QPalette::HighlightedText, field_select_fg);
     p.setColor(QPalette::PlaceholderText, fg_4);
-    p.setColor(QPalette::ToolTipBase, bg_3);
+    p.setColor(QPalette::ToolTipBase, bg_4);
     p.setColor(QPalette::ToolTipText, fg_1);
     p.setColor(QPalette::Link, accent_hi);
     p.setColor(QPalette::LinkVisited, accent_hi);

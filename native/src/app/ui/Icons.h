@@ -7,8 +7,11 @@
 #include <QColor>
 #include <QIcon>
 #include <QPixmap>
+#include <QRect>
 #include <QString>
 #include <QStringList>
+
+class QPainter;
 
 namespace fw::ui {
 
@@ -19,6 +22,12 @@ QPixmap iconPixmap(const QString& name, int size, const QColor& color, qreal dpr
 // design system (rest, hover, selected, disabled).
 QIcon icon(const QString& name, const QColor& rest, const QColor& active = {}, const QColor& selected = {},
            const QColor& disabled = {});
+
+// Draws `name` in a colour on its way from `from` (t = 0) to `to` (t = 1): the
+// two cached pixmaps are cross-faded, nothing is rendered per step. For hover
+// fades; never ask iconPixmap() for a blended colour.
+void drawIconFade(QPainter& p, const QRect& target, const QString& name, int size, const QColor& from, const QColor& to,
+                  qreal t, qreal dpr = 1.0);
 
 // Registers the icon resources (static library); safe to call repeatedly.
 void initIcons();

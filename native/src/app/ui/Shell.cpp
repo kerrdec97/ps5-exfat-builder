@@ -1,6 +1,7 @@
 #include "app/ui/Shell.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 
 #include <QEvent>
 #include <QHBoxLayout>
@@ -14,6 +15,28 @@ namespace fw::ui {
 
 using namespace theme;
 
+namespace {
+
+// The sidebar's one selection bar: it slides from item to item.
+class SelectionBar : public QWidget {
+public:
+    explicit SelectionBar(QWidget* parent) : QWidget(parent)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setProperty("fwNoRing", true);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        NavItem::paintSelectionBar(p, QRectF(rect()));
+    }
+};
+
+} // namespace
+
 // ---- nav item ------------------------------------------------------------------
 
 NavItem::NavItem(const QString& key, const QString& iconName, const QString& text, QWidget* parent)
@@ -26,7 +49,20 @@ NavItem::NavItem(const QString& key, const QString& iconName, const QString& tex
     setAccessibleName(text);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFixedHeight(size::navItem);
-    setProperty("fwRadius", radius::sm);
+    setProperty("fwRadius", radius::control);
+    m_hover = new motion::Value(this, 0.0, motion::fast);
+}
+
+void NavItem::enterEvent(QEnterEvent* e)
+{
+    m_hover->animateTo(1.0);
+    QAbstractButton::enterEvent(e);
+}
+
+void NavItem::leaveEvent(QEvent* e)
+{
+    m_hover->animateTo(0.0);
+    QAbstractButton::leaveEvent(e);
 }
 
 void NavItem::setCompact(bool compact)
@@ -48,50 +84,65 @@ QSize NavItem::sizeHint() const
     return {m_compact ? 44 : 224, size::navItem};
 }
 
+QRect NavItem::barRect() const { return QRect(1, (height() - 18) / 2, 3, 18); }
+
+void NavItem::paintSelectionBar(QPainter& p, const QRectF& r)
+{
+    QLinearGradient bar(r.topLeft(), r.bottomLeft());
+    bar.setColorAt(0, color::accent_hi);
+    bar.setColorAt(1, color::accent_2_hi);
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(bar);
+    p.drawRoundedRect(r, r.width() / 2.0, r.width() / 2.0);
+    p.restore();
+}
+
+void NavItem::setExternalBar(bool external)
+{
+    m_externalBar = external;
+    update();
+}
+
 void NavItem::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const bool sel = isChecked();
-    const bool hover = underMouse();
     const bool down = isDown();
+    if (!underMouse() && m_hover->target() > 0.0)
+        m_hover->animateTo(0.0); // the pointer left without a leave event (the item was hidden under it)
+    const qreal hover = m_hover->value(); // fades in and out
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (sel) {
-        // Selected: a soft gradient wash with a hairline edge and a glowing bar.
-        p.setPen(QPen(QColor(141, 181, 255, 40), 1));
+        // Selected: the signature gradient as an 18 % tint, and the bar.
+        p.setPen(Qt::NoPen);
         p.setBrush(accentGradient(r, 46));
-        p.drawRoundedRect(r, 9, 9);
-        QLinearGradient bar(QPointF(0, (height() - 18) / 2.0), QPointF(0, (height() + 18) / 2.0));
-        bar.setColorAt(0, color::accent_hi);
-        bar.setColorAt(1, color::accent_2_hi);
+        p.drawRoundedRect(r, radius::control, radius::control);
+        if (!m_externalBar)
+            paintSelectionBar(p, barRect());
+    } else if (down || hover > 0.0) {
         p.setPen(Qt::NoPen);
-        p.setBrush(bar);
-        p.drawRoundedRect(QRectF(1, (height() - 18) / 2.0, 3, 18), 1.5, 1.5);
-    } else if (down || hover) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(down ? color::bg_4 : color::bg_3);
-        p.drawRoundedRect(r, 9, 9);
+        p.setBrush(down ? color::bg_3 : withAlpha(color::bg_3, int(153 * hover))); // hover: bg_3 at 60 %
+        p.drawRoundedRect(r, radius::control, radius::control);
     }
-    const QColor iconColor = sel ? color::accent_hi : hover ? color::fg_0 : color::fg_4;
-    const QColor textColor = sel ? color::fg_0 : hover ? color::fg_0 : color::fg_2;
+    const QColor textColor = sel ? color::fg_0 : blend(color::fg_2, color::fg_0, hover);
     const int ix = m_compact ? (width() - size::icon) / 2 : 14;
-    p.drawPixmap(QRect(ix, (height() - size::icon) / 2, size::icon, size::icon),
-                 iconPixmap(m_icon, size::icon, iconColor, devicePixelRatioF()));
+    const QRect iconRect(ix, (height() - size::icon) / 2, size::icon, size::icon);
+    if (sel)
+        p.drawPixmap(iconRect, iconPixmap(m_icon, size::icon, color::accent_hi, devicePixelRatioF()));
+    else
+        drawIconFade(p, iconRect, m_icon, size::icon, color::fg_4, color::fg_0, hover, devicePixelRatioF());
     if (!m_compact) {
         p.setPen(textColor);
         p.setFont(sel ? font::bodyStrong() : font::body());
         int right = width() - 10;
         if (m_count > 0) {
             const QString n = QString::number(m_count);
-            const QFontMetrics fm(font::caption());
-            const int bw = std::max(20, fm.horizontalAdvance(n) + 12);
-            const QRect br(width() - 10 - bw, (height() - 18) / 2, bw, 18);
-            p.setPen(Qt::NoPen);
-            p.setBrush(accentGradient(br, 255));
-            p.drawRoundedRect(br, 9, 9);
-            p.setPen(color::on_accent);
-            p.setFont(font::caption());
-            p.drawText(br, Qt::AlignCenter, n);
+            const int bw = std::max(20, badgeWidth(n, false, true));
+            const QRect br(width() - 10 - bw, (height() - size::badgeCount) / 2, bw, size::badgeCount);
+            paintBadge(p, br, n, Tone::Info, {}, true);
             right = br.left() - 6;
             p.setPen(textColor);
             p.setFont(sel ? font::bodyStrong() : font::body());
@@ -134,6 +185,40 @@ Sidebar::Sidebar(QWidget* parent) : QWidget(parent)
         if (auto* n = qobject_cast<NavItem*>(b))
             emit selected(n->key());
     });
+    // One selection bar for all items, over them: it slides to the item
+    // that becomes current.
+    m_bar = new SelectionBar(inner);
+    m_barY = new motion::Value(inner, 0.0, motion::base);
+    m_barY->onChange([this] { m_bar->move(m_bar->x(), qRound(m_barY->value())); });
+}
+
+void Sidebar::syncBar(bool animate)
+{
+    NavItem* cur = m_items.value(current());
+    if (!cur || cur->isHidden()) {
+        m_bar->hide();
+        return;
+    }
+    const QRect r = cur->barRect().translated(cur->pos());
+    const bool slide = animate && !m_bar->isHidden();
+    m_bar->resize(r.size());
+    if (slide) {
+        m_bar->move(r.x(), m_bar->y());
+        m_barY->animateTo(r.y());
+    } else {
+        m_barY->jumpTo(r.y());
+        m_bar->move(r.topLeft());
+    }
+    m_bar->raise();
+    m_bar->show();
+}
+
+bool Sidebar::eventFilter(QObject* watched, QEvent* event)
+{
+    // An item moved or changed size (first layout, compact mode): the bar follows at once.
+    if ((event->type() == QEvent::Move || event->type() == QEvent::Resize) && qobject_cast<NavItem*>(watched))
+        syncBar(false);
+    return QWidget::eventFilter(watched, event);
 }
 
 void Sidebar::paintEvent(QPaintEvent*)
@@ -144,9 +229,9 @@ void Sidebar::paintEvent(QPaintEvent*)
     QColor a = color::accent;
     a.setAlpha(16);
     glow.setColorAt(0, a);
-    glow.setColorAt(1, QColor(0, 0, 0, 0));
+    glow.setColorAt(1, Qt::transparent);
     p.fillRect(QRect(0, 0, width(), 260), glow);
-    p.fillRect(QRect(width() - 1, 0, 1, height()), color::border_1);
+    p.fillRect(QRect(width() - 1, 0, 1, height()), color::border_2);
 }
 
 void Sidebar::addGroup(const QString& overline)
@@ -164,6 +249,12 @@ NavItem* Sidebar::addItem(const QString& key, const QString& iconName, const QSt
     m_group->addButton(item);
     m_layout->addWidget(item);
     connect(item, &NavItem::moveFocusRequested, this, [this, item](int delta) { focusNeighbour(item, delta); });
+    item->setExternalBar(true);
+    item->installEventFilter(this);
+    connect(item, &QAbstractButton::toggled, this, [this](bool on) {
+        if (on)
+            syncBar(true);
+    });
     return item;
 }
 
@@ -249,9 +340,9 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     auto* brand = new QWidget(this);
     auto* bl = hbox(brand, 10, QMargins(4, 0, 0, 0));
     bl->addWidget(new BrandMark(28, brand), 0, Qt::AlignVCenter);
-    auto* name = label(QStringLiteral("exFAT Image Builder"), TextStyle::Subtitle, color::fg_0, brand);
+    auto* name = label(QStringLiteral("exFAT Image Builder"), TextStyle::BodyStrong, color::fg_0, brand);
     bl->addWidget(name, 0, Qt::AlignVCenter);
-    m_versionPill = new Badge(QString(), Tone::Info, brand);
+    m_versionPill = new Badge(QString(), Tone::Neutral, brand);
     m_versionPill->setIconName(QString());
     m_versionPill->hide();
     bl->addWidget(m_versionPill, 0, Qt::AlignVCenter);
@@ -329,7 +420,7 @@ void AppHeader::setConsoleChip(const QString& text, Tone tone, bool visible)
 
 void AppHeader::setVersion(const QString& version)
 {
-    m_versionPill->set(version, Tone::Info);
+    m_versionPill->set(version, Tone::Neutral);
     m_versionPill->setVisible(!version.isEmpty());
 }
 
@@ -337,21 +428,19 @@ void AppHeader::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), color::bg_0);
-    // A faint brand glow under the logo and a gradient hairline along the bottom.
+    // A faint brand glow under the logo; the edge to the page is border_2,
+    // tinted by the gradient where the glow meets it.
     QRadialGradient glow(QPointF(70, height() / 2.0), 220);
-    QColor g = color::accent;
-    g.setAlpha(28);
-    glow.setColorAt(0, g);
-    glow.setColorAt(1, QColor(0, 0, 0, 0));
+    glow.setColorAt(0, withAlpha(color::accent, 28));
+    glow.setColorAt(1, Qt::transparent);
     p.fillRect(rect(), glow);
-    QLinearGradient line(QPointF(0, 0), QPointF(width(), 0));
-    QColor a = color::accent, b = color::accent_2, c = color::border_1;
-    a.setAlpha(110);
-    b.setAlpha(60);
-    line.setColorAt(0, a);
-    line.setColorAt(0.35, b);
-    line.setColorAt(1, c);
-    p.fillRect(QRect(0, height() - 1, width(), 1), line);
+    const QRect edge(0, height() - 1, width(), 1);
+    p.fillRect(edge, color::border_2);
+    QLinearGradient tint(QPointF(0, 0), QPointF(std::min(width(), 480), 0));
+    tint.setColorAt(0, withAlpha(color::accent, 90));
+    tint.setColorAt(0.5, withAlpha(color::accent_2, 45));
+    tint.setColorAt(1, withAlpha(color::accent_2, 0));
+    p.fillRect(edge, tint);
 }
 
 // ---- status bar -------------------------------------------------------------------
@@ -400,7 +489,7 @@ void StatusBar::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), color::bg_0);
-    p.fillRect(QRect(0, 0, width(), 1), color::border_1);
+    p.fillRect(QRect(0, 0, width(), 1), color::border_2);
 }
 
 // ---- page header --------------------------------------------------------------------

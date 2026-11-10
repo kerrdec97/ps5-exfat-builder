@@ -26,6 +26,11 @@ class QMimeData;
 
 namespace fw::ui {
 
+namespace motion {
+class Value;
+class HoverFade;
+} // namespace motion
+
 // ---- labels ------------------------------------------------------------------
 enum class TextStyle { Display, Title, Stat, Subtitle, BodyStrong, Body, Caption, Overline, Mono, MonoSmall };
 QFont fontFor(TextStyle style);
@@ -114,6 +119,22 @@ private:
     Size m_size;
 };
 
+// ---- painted surfaces ----------------------------------------------------------
+// Depth is painted, never a graphics effect. `r` is the outline's rectangle
+// (inset by half a pixel from the widget's), antialiasing is switched on here.
+// A plate lifts off what it sits on: bg_2, 2 % lighter at the top, a border_2
+// outline and a faint lit top edge. `hover` 0..1 takes it one step up (bg_3,
+// border_4); a bool works.
+void paintPlate(QPainter& p, const QRectF& r, qreal radius, qreal hover = 0.0);
+// A well sinks into a card: field_bg and a border_1 outline, nothing lit.
+void paintWell(QPainter& p, const QRectF& r, qreal radius);
+// A popup floats over the page: bg_3 and a border_4 outline.
+void paintPopup(QPainter& p, const QRectF& r, qreal radius);
+// A soft shadow around `r`, `spread` px wide and dropped by a third of that:
+// for what floats in a translucent window that leaves the room.
+void paintShadow(QPainter& p, const QRectF& r, qreal radius, int spread);
+QColor blend(const QColor& a, const QColor& b, qreal t); // a at 0, b at 1
+
 // ---- card --------------------------------------------------------------------
 class Card : public QFrame {
     Q_OBJECT
@@ -150,6 +171,14 @@ private:
 
 // ---- status badge --------------------------------------------------------------
 enum class Tone { Ok, Warn, Err, Info, Neutral };
+// The one badge / chip look, for the Badge widget and for everything that
+// paints chips itself (grid tiles, choice tiles, the sidebar's counts): a pill
+// with 11 px semibold text on the tone's colour as a 16 % tint with a 35 %
+// outline; neutral is bg_4 / border_3 / fg_2. `r` is 22 px high (18 for a
+// count). `onAccent`: white on the fill gradient instead of a tone.
+void paintBadge(QPainter& p, const QRectF& r, const QString& text, Tone tone, const QString& icon = {},
+                bool onAccent = false);
+int badgeWidth(const QString& text, bool withIcon = false, bool count = false);
 class Badge : public QWidget {
     Q_OBJECT
 public:
@@ -176,7 +205,8 @@ private:
 QString defaultBadgeIcon(Tone tone);
 QColor toneMark(Tone tone);  // glyph / fill colour
 QColor toneText(Tone tone);  // text colour
-QColor toneTint(Tone tone);  // background tint
+QColor toneTint(Tone tone);  // background tint (opaque, for bars)
+QColor toneLine(Tone tone);  // outline of a tinted surface: the tone at 35 %
 
 // ---- brand mark / icon tile ---------------------------------------------------
 // The app's logo: a gradient (accent -> accent_2) rounded square with a glyph.
@@ -193,7 +223,8 @@ private:
 };
 
 // A rounded square holding an icon: page headers, feature cards, stat tiles.
-// Default: translucent brand gradient with an accent_hi glyph; a tone tints it.
+// Default: translucent brand gradient with an accent_hi glyph; a tone tints
+// it; Tone::Neutral is the quiet tile of empty states (bg_3, border_2, fg_3).
 class IconTile : public QWidget {
     Q_OBJECT
 public:
@@ -218,6 +249,10 @@ public:
     explicit Switch(QWidget* parent = nullptr);
     QSize sizeHint() const override { return {theme::size::switchW, theme::size::switchH}; }
 
+    // 0 = off, 1 = on, in between while the knob slides (tests).
+    qreal position() const;
+    bool isAnimating() const;
+
 protected:
     void paintEvent(QPaintEvent* e) override;
     void enterEvent(QEnterEvent* e) override;
@@ -225,6 +260,7 @@ protected:
 
 private:
     bool m_hover = false;
+    motion::Value* m_position; // the knob slides, the track cross-fades
 };
 
 // ---- segmented control -----------------------------------------------------------
@@ -244,6 +280,7 @@ public:
     void setSegmentEnabled(int index, bool enabled);
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
+    bool isAnimating() const; // the selection pill is sliding (tests)
 signals:
     void currentChanged(int index);
 
@@ -262,9 +299,12 @@ private:
     };
     int segmentAt(const QPoint& p) const;
     int segmentWidth(int i) const;
+    QRectF segmentRect(int i) const;
     std::vector<Segment> m_segments;
     int m_current = -1;
-    int m_hover = -1;
+    motion::HoverFade* m_hover;
+    motion::Value* m_slide; // 0..1 from m_slideFrom to the current segment
+    QRectF m_slideFrom;
 };
 
 // ---- progress --------------------------------------------------------------------
@@ -279,6 +319,11 @@ public:
     State state() const { return m_state; }
     QSize sizeHint() const override { return {120, theme::size::progress}; }
     QSize minimumSizeHint() const override { return {40, theme::size::progress}; }
+    // The fill eases to a new fraction: what is painted right now (tests).
+    double shownFraction() const;
+    // A timer or an animation of this bar is running (tests): only while it
+    // is visible and its job runs.
+    bool isAnimating() const;
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -287,10 +332,12 @@ protected:
 
 private:
     void updateTimer();
+    void tick();
     double m_fraction = 0;
     State m_state = State::Determinate;
-    QTimer m_timer;
+    QTimer m_timer;       // frames of the sweep / the indeterminate band, and the wait between sweeps
     qint64 m_t0 = 0;
+    motion::Value* m_shown; // the painted fraction
 };
 
 // Progress block: bar + percent (mono fg_0), caption line, optional stepper.
@@ -356,16 +403,28 @@ private:
 };
 
 // ---- empty / error / unavailable states ----------------------------------------------
+// A 44 px tile, a body-strong title and a caption, centred and never wider
+// than 360 px. Compact (docks, wells, lists) keeps it under about 150 px tall.
 class EmptyState : public QWidget {
     Q_OBJECT
 public:
     EmptyState(const QString& icon, const QString& title, const QString& text, QWidget* parent = nullptr);
     QPushButton* addAction(const QString& text, ButtonVariant variant = ButtonVariant::Secondary);
     void setCompact(bool compact);
+    bool isCompact() const { return m_compact; }
+    QSize minimumSizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
+    void fitText();
     QHBoxLayout* m_actions;
     QVBoxLayout* m_layout;
+    QLabel* m_title;
+    QLabel* m_caption;
+    bool m_compact = false;
+    bool m_sized = false; // had its first resize: its width is real
 };
 
 class ErrorState : public QWidget {
@@ -408,7 +467,10 @@ public:
     explicit PathField(Mode mode = Mode::Directory, QWidget* parent = nullptr);
     QString path() const;
     void setPath(const QString& path);
+    // Shown while the field is empty; cut in the middle when the field is too
+    // narrow for it (the whole text is the tooltip then).
     void setPlaceholder(const QString& text);
+    QString placeholder() const { return m_placeholder; }
     void setFilter(const QString& filter) { m_filter = filter; }
     void setDialogTitle(const QString& title) { m_title = title; }
     void setMode(Mode mode) { m_mode = mode; }
@@ -425,9 +487,11 @@ signals:
 protected:
     void dragEnterEvent(QDragEnterEvent* e) override;
     void dropEvent(QDropEvent* e) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void browse();
+    void fitPlaceholder();
     QString droppedPath(const QMimeData* mime) const;
     Mode m_mode;
     QLineEdit* m_edit;
@@ -435,6 +499,9 @@ private:
     QWidget* m_errorRow;
     QLabel* m_errorLabel;
     QString m_filter, m_title, m_startDir, m_errorText;
+    QString m_placeholder; // the whole text
+    QString m_autoTip;     // the tooltip the field gave its edit (the whole placeholder while it is cut)
+    QString m_autoDescription; // and the accessible description
 };
 
 // Message row under a control: 12 px glyph + caption.

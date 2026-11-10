@@ -65,6 +65,8 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void contextMenuEvent(QContextMenuEvent* e) override;
+    void enterEvent(QEnterEvent* e) override;
+    void leaveEvent(QEvent* e) override;
 
 private:
     void showMenu(const QPoint& globalPos);
@@ -90,6 +92,7 @@ private:
     QWidget* m_actions;
     QHBoxLayout* m_actionsLayout;
     QPointer<IconButton> m_upButton, m_downButton;
+    motion::Value* m_hover; // the hover tint fades
 };
 
 class JobList : public QWidget {

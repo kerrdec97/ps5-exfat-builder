@@ -155,4 +155,23 @@ QStringList iconNames()
     return out;
 }
 
+void drawIconFade(QPainter& p, const QRect& target, const QString& name, int size, const QColor& from, const QColor& to,
+                  qreal t, qreal dpr)
+{
+    if (t <= 0.0 || from == to) {
+        p.drawPixmap(target, iconPixmap(name, size, from, dpr));
+        return;
+    }
+    if (t >= 1.0) {
+        p.drawPixmap(target, iconPixmap(name, size, to, dpr));
+        return;
+    }
+    const qreal opacity = p.opacity();
+    p.setOpacity(opacity * (1.0 - t));
+    p.drawPixmap(target, iconPixmap(name, size, from, dpr));
+    p.setOpacity(opacity * t);
+    p.drawPixmap(target, iconPixmap(name, size, to, dpr));
+    p.setOpacity(opacity);
+}
+
 } // namespace fw::ui

@@ -16,6 +16,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
@@ -48,16 +49,23 @@ static void paintCheck(QPainter* p, const QRect& r, const QStyleOption* opt, boo
     if (!enabled) {
         fill = color::bg_2;
         border = color::border_3;
-    } else if (on || partial) {
-        fill = border = hover ? color::accent_hover : color::accent;
     } else if (hover) {
-        border = color::border_4;
+        border = color::fg_5;
     }
     p->save();
     p->setRenderHint(QPainter::Antialiasing);
-    p->setPen(QPen(border, 1));
-    p->setBrush(fill);
     const QRectF rf = QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (enabled && (on || partial)) {
+        // A white mark sits on it: the fill gradient, not the bright accent.
+        QLinearGradient g(rf.topLeft(), rf.topRight());
+        g.setColorAt(0, hover ? color::accent_fill_hover : color::accent_fill);
+        g.setColorAt(1, hover ? color::accent_fill_2_hover : color::accent_fill_2);
+        p->setPen(Qt::NoPen);
+        p->setBrush(g);
+    } else {
+        p->setPen(QPen(border, 1));
+        p->setBrush(fill);
+    }
     if (radio)
         p->drawEllipse(rf);
     else
@@ -74,7 +82,7 @@ static void paintCheck(QPainter* p, const QRect& r, const QStyleOption* opt, boo
         }
     } else if (partial) {
         p->setPen(Qt::NoPen);
-        p->setBrush(color::on_accent);
+        p->setBrush(enabled ? color::on_accent : color::fg_5);
         p->drawRect(QRect(box.center().x() - 4, box.center().y(), 10, 2));
     }
     p->restore();
@@ -136,9 +144,14 @@ void FwStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option
     }
     case PE_PanelItemViewItem:
     case PE_PanelItemViewRow:
-        // Hairline rows, hover and selection are painted by delegates / QSS.
+        // Tables and trees ask for this before every cell (and a tree for its
+        // branch area); the stylesheet keeps selected cells clear over it.
+        // Hairlines and hover come from delegates / QSS.
         if (option->state & State_Selected) {
             painter->fillRect(option->rect, color::accent_lo);
+            // The accent bar, on the part that touches the view's left edge.
+            if (element == PE_PanelItemViewRow && option->rect.left() <= 0 && option->rect.right() >= 2)
+                painter->fillRect(QRect(0, option->rect.top(), 2, option->rect.height()), color::accent);
             return;
         }
         if (option->state & State_MouseOver) {
@@ -173,7 +186,7 @@ void FwStyle::drawControl(ControlElement element, const QStyleOption* option, QP
 int FwStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, const QWidget* widget) const
 {
     switch (metric) {
-    case PM_ScrollBarExtent: return 10;
+    case PM_ScrollBarExtent: return size::scrollBar;
     case PM_FocusFrameHMargin:
     case PM_FocusFrameVMargin: return 0;
     case PM_IndicatorWidth:
@@ -232,6 +245,23 @@ QSize FwStyle::sizeFromContents(ContentsType type, const QStyleOption* option, c
     if (type == CT_MenuItem)
         s.setHeight(std::max(s.height(), 30));
     return s;
+}
+
+void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, const QPalette& pal, bool enabled,
+                           const QString& text, QPalette::ColorRole textRole) const
+{
+    // The text of a dropdown that is narrower than it ends in an ellipsis
+    // instead of being cut by the edge of the field (the stylesheet style
+    // only clips it).
+    if (qobject_cast<QComboBox*>(dynamic_cast<QWidget*>(painter->device()))) {
+        const QRect room = painter->hasClipping() ? rect.intersected(painter->clipBoundingRect().toAlignedRect()) : rect;
+        const QFontMetrics fm = painter->fontMetrics();
+        if (room.width() > 0 && fm.horizontalAdvance(text) > room.width()) {
+            QProxyStyle::drawItemText(painter, room, flags, pal, enabled, fm.elidedText(text, Qt::ElideRight, room.width()), textRole);
+            return;
+        }
+    }
+    QProxyStyle::drawItemText(painter, rect, flags, pal, enabled, text, textRole);
 }
 
 // Controls whose value the mouse wheel changes.
@@ -294,6 +324,46 @@ bool isAppTip(const QString& tip)
     return false;
 }
 
+// Qt sizes a tooltip for its text alone: a long one becomes one very long
+// line, or a paragraph as wide as Qt likes. A tip wider than the design's
+// limit is narrowed to it afterwards and made as tall as the wrapped text
+// needs (never narrower than its longest word, which cannot wrap).
+void limitToolTipWidth(QWidget* w)
+{
+    auto* tip = qobject_cast<QLabel*>(w);
+    if (!tip || w->width() <= size::toolTipMax)
+        return;
+    if (!tip->wordWrap())
+        tip->setWordWrap(true); // a plain-text tip; Qt decides again for the next text
+    const int target = std::max(size::toolTipMax, tip->minimumSizeHint().width());
+    if (w->width() > target)
+        w->resize(target, tip->heightForWidth(target));
+}
+
+// The visible panel of a menu: its window without the shadow's margin.
+QRect menuPanel(const QMenu* menu)
+{
+    const int m = size::popupShadow;
+    return menu->rect().adjusted(m, m, -m, -m);
+}
+
+// In the 26 px the stylesheet keeps free at the right of a dropdown
+// (QComboBox::drop-down), inside its 1 px border.
+void paintDropdownChevron(QComboBox* combo)
+{
+    const QColor c = !combo->isEnabled() ? color::fg_5
+                   : combo->underMouse() || (combo->view() && combo->view()->isVisible()) ? color::fg_1 : color::fg_3;
+    const QRect r(combo->width() - 1 - 26 + (26 - size::icon) / 2, (combo->height() - size::icon) / 2, size::icon, size::icon);
+    QPainter p(combo);
+    p.drawPixmap(r, iconPixmap(QStringLiteral("chevron_down"), size::icon, c, combo->devicePixelRatioF()));
+}
+
+bool isSubMenu(const QMenu* menu)
+{
+    const auto* parent = qobject_cast<const QMenu*>(QApplication::activePopupWidget());
+    return parent && parent != menu && parent->activeAction() == menu->menuAction();
+}
+
 class AppGuard : public QObject {
 public:
     using QObject::QObject;
@@ -310,6 +380,44 @@ protected:
             }
             break;
         case QEvent::KeyPress: return keyPress(watched, static_cast<QKeyEvent*>(event));
+        case QEvent::Resize:
+            if (auto* w = qobject_cast<QWidget*>(watched); w && w->isWindow() && w->windowType() == Qt::ToolTip)
+                limitToolTipWidth(w);
+            break;
+        // Menus: a translucent window with a clear margin around the panel
+        // (the stylesheet's `margin`), where the soft shadow is painted.
+        case QEvent::Paint:
+            if (auto* menu = qobject_cast<QMenu*>(watched)) {
+                QPainter p(menu); // before the menu paints its panel over it
+                paintShadow(p, QRectF(menuPanel(menu)).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, size::popupShadow - 2);
+            } else if (auto* combo = qobject_cast<QComboBox*>(watched)) {
+                // The stylesheet draws a dropdown as a field and leaves its
+                // arrow area empty: the chevron that tells it from a text
+                // field is painted over it, after the dropdown itself.
+                watched->event(event);
+                paintDropdownChevron(combo);
+                return true;
+            }
+            break;
+        case QEvent::Show:
+            // The panel, not the margin, goes where the menu was asked to be.
+            // A submenu is placed by its first item, margin included.
+            if (auto* menu = qobject_cast<QMenu*>(watched); menu && !isSubMenu(menu))
+                menu->move(menu->pos() - QPoint(size::popupShadow, size::popupShadow));
+            break;
+        case QEvent::MouseButtonPress:
+            // A click on the margin is a click beside the menu: it closes.
+            if (auto* menu = qobject_cast<QMenu*>(watched);
+                menu && !menuPanel(menu).contains(static_cast<QMouseEvent*>(event)->position().toPoint())) {
+                for (int guard = 0; guard < 16; ++guard) {
+                    auto* open = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (!open)
+                        break;
+                    open->close();
+                }
+                return true;
+            }
+            break;
         case QEvent::FocusIn:
             // Delivered before QApplication::focusChanged: see hasKeyboardFocus().
             if (auto* w = qobject_cast<QWidget*>(watched)) {

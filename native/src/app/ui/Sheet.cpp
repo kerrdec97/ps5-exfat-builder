@@ -1,11 +1,13 @@
 #include "app/ui/Sheet.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Style.h"
 
 #include <QApplication>
 #include <QEvent>
 #include <QAbstractSpinBox>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QKeyEvent>
@@ -23,6 +25,11 @@ namespace fw::ui {
 
 using namespace theme;
 
+namespace {
+// A toast's dynamic property: how many px it still is from its place while it slides in.
+const char* const kSlide = "fwSlide";
+} // namespace
+
 Sheet::Sheet(QWidget* host, const QString& title, Icon icon, int width) : QWidget(host), m_width(width)
 {
     setProperty("fwNoRing", true);
@@ -33,7 +40,7 @@ Sheet::Sheet(QWidget* host, const QString& title, Icon icon, int width) : QWidge
     m_panel = new QFrame(this);
     m_panel->setObjectName(QStringLiteral("sheetPanel"));
     m_panel->setStyleSheet(QStringLiteral("#sheetPanel{background:%1;border:1px solid %2;border-radius:%3px;}")
-                               .arg(hex(color::bg_2), hex(color::border_3)).arg(radius::md));
+                               .arg(hex(color::bg_3), hex(color::border_4)).arg(radius::md));
     m_panel->setProperty("fwNoRing", true);
     auto* outer = vbox(m_panel, space::md, QMargins(space::xl, space::xl, space::xl, space::xl));
 
@@ -45,7 +52,12 @@ Sheet::Sheet(QWidget* host, const QString& title, Icon icon, int width) : QWidge
         const QString name = icon == Icon::Error ? QStringLiteral("error") : icon == Icon::Warning ? QStringLiteral("warning") : QStringLiteral("info");
         const QColor c = icon == Icon::Error ? color::danger : icon == Icon::Warning ? color::warn : color::accent_hi;
         ic->setPixmap(iconPixmap(name, size::iconDialog, c, devicePixelRatioF()));
-        titleRow->addWidget(ic, 0, Qt::AlignTop);
+        // Level with the first line of the title, whose line is taller than the glyph.
+        auto* iconColumn = new QVBoxLayout;
+        iconColumn->setContentsMargins(0, (QFontMetrics(font::title()).height() - size::iconDialog + 1) / 2, 0, 0);
+        iconColumn->addWidget(ic);
+        iconColumn->addStretch(1);
+        titleRow->addLayout(iconColumn);
     }
     m_title = heading(title, TextStyle::Title, m_panel);
     m_title->setWordWrap(true);
@@ -63,6 +75,36 @@ Sheet::Sheet(QWidget* host, const QString& title, Icon icon, int width) : QWidge
     m_buttons->addStretch(1);
     outer->addLayout(m_buttons);
     host->installEventFilter(this);
+    m_shown = new motion::Value(this, 1.0, motion::base);
+    m_shown->onChange([this] { applyShown(); });
+}
+
+// The scrim fades with m_shown; the panel rises its last 8 px and fades too.
+// The fade is an opacity effect on the panel alone (a small widget, for a
+// fraction of a second) that is taken off again once the sheet is open.
+void Sheet::applyShown()
+{
+    const qreal v = m_shown->value();
+    m_panel->move(m_panelRect.x(), m_panelRect.y() + qRound((1.0 - v) * 8));
+    auto* fade = qobject_cast<QGraphicsOpacityEffect*>(m_panel->graphicsEffect());
+    if (v < 1.0) {
+        if (!fade) {
+            fade = new QGraphicsOpacityEffect(m_panel);
+            m_panel->setGraphicsEffect(fade);
+        }
+        fade->setOpacity(v);
+    } else if (fade) {
+        m_panel->setGraphicsEffect(nullptr);
+    }
+    update();
+    if (m_closing && v <= 0.0)
+        QMetaObject::invokeMethod(this, &Sheet::finishClose, Qt::QueuedConnection); // not from inside the animation's own step
+}
+
+void Sheet::finishClose()
+{
+    hide();
+    deleteLater();
 }
 
 namespace {
@@ -165,7 +207,8 @@ void Sheet::relayout()
     QLayout* l = m_panel->layout();
     int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(w) : m_panel->sizeHint().height();
     h = std::min(h, std::max(l ? l->totalMinimumSize().height() : 0, height() - 2 * space::lg));
-    m_panel->setGeometry((width() - w) / 2, std::max(space::lg, (height() - h) / 2), w, h);
+    m_panelRect = QRect((width() - w) / 2, std::max(space::lg, (height() - h) / 2), w, h);
+    m_panel->setGeometry(m_panelRect.translated(0, qRound((1.0 - m_shown->value()) * 8)));
 }
 
 void Sheet::open()
@@ -176,9 +219,17 @@ void Sheet::open()
     }
     m_previousFocus = QApplication::focusWidget();
     m_previousByKeyboard = hasKeyboardFocus(m_previousFocus);
+    m_closing = false;
+    setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    m_shown->jumpTo(1.0); // the resting geometry first
     relayout();
     raise();
     show();
+    if (motion::enabled()) { // the scrim fades in, the panel rises and fades in
+        m_shown->setDuration(motion::base);
+        m_shown->jumpTo(0.0);
+        m_shown->animateTo(1.0);
+    }
     if (QPushButton* focusTarget = defaultButton()) {
         window()->setAttribute(Qt::WA_KeyboardFocusChange, true);
         focusTarget->setFocus(Qt::TabFocusReason);
@@ -220,6 +271,8 @@ int Sheet::exec()
 
 void Sheet::close(int result)
 {
+    if (m_closing)
+        return; // answered already: it is only fading away
     if (result < 0) {
         for (int i = 0; i < m_roles.size(); ++i)
             if (m_roles[i] == Role::Safe) {
@@ -233,18 +286,31 @@ void Sheet::close(int result)
         m_counted = false;
         --g_openSheets;
     }
-    hide();
+    // With motion the sheet fades away (fast) instead of vanishing: it is
+    // answered and counted as closed now, lets the mouse through, and is
+    // hidden and deleted when the fade ends.
+    // (Not when it is closed before its first frame: there is nothing to fade.)
+    const bool fade = isVisible() && motion::enabled() && m_shown->value() > 0.0;
+    if (fade) {
+        m_closing = true;
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        m_shown->setDuration(motion::fast);
+        m_shown->animateTo(0.0);
+    } else {
+        hide();
+    }
     if (m_previousFocus) // a keyboard user gets the ring back where it was
         m_previousFocus->setFocus(m_previousByKeyboard ? Qt::TabFocusReason : Qt::OtherFocusReason);
     if (m_loop)
         m_loop->exit(result);
-    deleteLater();
+    if (!fade)
+        deleteLater();
 }
 
 void Sheet::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.fillRect(rect(), color::scrim);
+    p.fillRect(rect(), withAlpha(color::scrim, qRound(color::scrim.alpha() * m_shown->value())));
 }
 
 void Sheet::resizeEvent(QResizeEvent*) { relayout(); }
@@ -389,7 +455,7 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
     auto* t = new QFrame(parentWidget());
     t->setObjectName(QStringLiteral("toast"));
     t->setStyleSheet(QStringLiteral("#toast{background:%1;border:1px solid %2;border-radius:%3px;}")
-                         .arg(hex(color::bg_3), hex(color::border_3)).arg(radius::md));
+                         .arg(hex(color::bg_3), hex(color::border_4)).arg(radius::md));
     t->setFixedWidth(size::toast);
     t->setProperty("fwNoRing", true);
     auto* h = hbox(t, 10, QMargins(space::md, space::md, space::md, space::md));
@@ -440,6 +506,29 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
         remove(m_toasts.front());
     t->show();
     relayout();
+    // It slides in 12 px from the right while it fades in. The fade is an
+    // opacity effect on the toast alone, taken off again when it has arrived.
+    if (motion::enabled() && t->isVisible()) {
+        auto* fade = new QGraphicsOpacityEffect(t);
+        fade->setOpacity(0.0);
+        t->setGraphicsEffect(fade);
+        t->setProperty(kSlide, 12);
+        auto* in = new motion::Value(t, 0.0, motion::base);
+        in->onChange([this, t, in] {
+            const qreal v = in->value();
+            if (auto* fx = qobject_cast<QGraphicsOpacityEffect*>(t->graphicsEffect())) {
+                if (v >= 1.0)
+                    t->setGraphicsEffect(nullptr);
+                else
+                    fx->setOpacity(v);
+            }
+            t->setProperty(kSlide, qRound((1.0 - v) * 12));
+            if (parentWidget())
+                t->move(parentWidget()->width() - space::lg - size::toast + t->property(kSlide).toInt(), t->y());
+        });
+        t->move(t->x() + 12, t->y());
+        in->animateTo(1.0);
+    }
 
     const int life = lifetimeMs >= 0 ? lifetimeMs : (tone == Tone::Ok || tone == Tone::Info || tone == Tone::Neutral) ? 6000 : 0;
     if (life > 0) {
@@ -463,6 +552,31 @@ void ToastHost::remove(QWidget* toast)
     if (it == m_toasts.end())
         return;
     m_toasts.erase(it);
+    auto* fade = qobject_cast<QGraphicsOpacityEffect*>(toast->graphicsEffect());
+    // (Not when it goes before the first frame of its slide-in: nothing shows yet.)
+    if (motion::enabled() && toast->isVisible() && (!fade || fade->opacity() > 0.0)) {
+        // It fades out (fast) where it is, then the others close the gap. It
+        // is out of the stack already and takes no more clicks.
+        qDeleteAll(toast->findChildren<motion::Value*>(QString(), Qt::FindDirectChildrenOnly)); // a slide-in still running
+        toast->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        if (!fade) {
+            fade = new QGraphicsOpacityEffect(toast);
+            toast->setGraphicsEffect(fade);
+        }
+        auto* out = new motion::Value(toast, fade->opacity(), motion::fast);
+        QPointer<ToastHost> self(this);
+        out->onChange([self, toast, out, fade] {
+            fade->setOpacity(out->value());
+            if (out->value() > 0.0)
+                return;
+            toast->hide();
+            toast->deleteLater();
+            if (self)
+                self->relayout();
+        });
+        out->animateTo(0.0);
+        return;
+    }
     toast->hide();
     toast->deleteLater();
     relayout();
@@ -482,7 +596,7 @@ void ToastHost::relayout()
     // behind a dialog that is still waiting for its answer.
     QWidget* sheet = nullptr;
     for (QObject* o : parentWidget()->children())
-        if (auto* s = qobject_cast<Sheet*>(o); s && s->isVisible()) {
+        if (auto* s = qobject_cast<Sheet*>(o); s && s->isOpen()) {
             sheet = s;
             break; // the lowest one: children are in stacking order
         }
@@ -492,7 +606,8 @@ void ToastHost::relayout()
         QLayout* l = t->layout();
         const int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(size::toast) : t->sizeHint().height();
         y -= h;
-        t->setGeometry(parentWidget()->width() - space::lg - size::toast, y, size::toast, h);
+        // kSlide: how far a toast that is still sliding in is from its place.
+        t->setGeometry(parentWidget()->width() - space::lg - size::toast + t->property(kSlide).toInt(), y, size::toast, h);
         if (sheet)
             t->stackUnder(sheet);
         else

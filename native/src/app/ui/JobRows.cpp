@@ -4,6 +4,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/JobMonitor.h"
 #include "app/ui/LogView.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "app/services/JobSubmit.h"
 #include "core/FileUtil.h"
@@ -135,6 +136,7 @@ JobRow::JobRow(Variant variant, QWidget* parent) : QWidget(parent), m_variant(va
     setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover);
     setProperty("fwRadius", radius::xs);
+    m_hover = new motion::Value(this, 0.0, motion::fast);
     const bool queue = variant == Variant::Queue;
     setFixedHeight(queue ? size::rowJob : size::row);
     auto* h = hbox(this, queue ? space::sm : space::sm,
@@ -447,12 +449,29 @@ void JobRow::showMenu(const QPoint& globalPos)
 void JobRow::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    if (m_selected)
+    if (!underMouse() && m_hover->target() > 0.0)
+        m_hover->animateTo(0.0); // the pointer left without a leave event (the list was rebuilt under it)
+    if (m_selected) {
+        // Like a selected table row: accent_lo and the accent bar at its left edge.
         p.fillRect(rect(), color::accent_lo);
-    else if (underMouse())
-        p.fillRect(rect(), color::bg_3);
+        p.fillRect(QRect(0, 0, 2, height()), color::accent);
+    } else if (m_hover->value() > 0.0) {
+        p.fillRect(rect(), withAlpha(color::bg_3, int(255 * m_hover->value())));
+    }
     if (m_divider)
         p.fillRect(QRect(0, height() - 1, width(), 1), color::border_1);
+}
+
+void JobRow::enterEvent(QEnterEvent* e)
+{
+    m_hover->animateTo(1.0);
+    QWidget::enterEvent(e);
+}
+
+void JobRow::leaveEvent(QEvent* e)
+{
+    m_hover->animateTo(0.0);
+    QWidget::leaveEvent(e);
 }
 
 void JobRow::mousePressEvent(QMouseEvent* e)
@@ -569,6 +588,8 @@ void JobList::setEmptyWidget(QWidget* w)
 {
     m_empty = w;
     w->setParent(this);
+    if (auto* state = qobject_cast<EmptyState*>(w))
+        state->setCompact(true); // inside a list: never a tall block
     rebuild();
 }
 

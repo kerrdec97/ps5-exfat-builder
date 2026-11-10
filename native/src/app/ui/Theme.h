@@ -15,30 +15,39 @@ class QApplication;
 namespace fw::theme {
 
 // ---- colour ------------------------------------------------------------------
-// v5 "Nebula" palette: blue-black surfaces with a cool tint, an electric
-// blue -> violet signature gradient (accent -> accent_2) for primary actions,
-// selection and brand moments. Text contrast on bg_2: fg_1 14.3:1, fg_3 6.5:1,
-// fg_4 5.0:1 (WCAG AA for body text down to fg_4).
+// v5 "Nebula" palette: blue-black surfaces with a cool tint and one signature
+// gradient, electric blue -> violet, for the main action, selection and
+// progress. Contrast ratios (WCAG 2):
+//   text on bg_2 (card):  fg_0 16.9, fg_1 14.1, fg_2 9.9, fg_3 7.2, fg_4 5.6;
+//                         fg_5 3.6 is for disabled text and hints only
+//   captions elsewhere:   fg_3 / fg_4 on bg_1 7.8 / 6.1, on bg_0 8.1 / 6.3,
+//                         on bg_3 6.5 / 5.1, on field_bg 7.7 / 6.0
+//   white on the fill gradient: accent_fill 4.7 -> accent_fill_2 5.0
+//                         (hover 4.0 -> 4.2, pressed 5.6 -> 6.0)
+//   white on accent / accent_2 is only 3.8 / 4.2: those two stay bright for
+//   text, icons, outlines, tints and progress on dark, and never carry text.
 namespace color {
-inline const QColor bg_0{QStringLiteral("#07090f")}; // chrome: sidebar, header, status bar
-inline const QColor bg_1{QStringLiteral("#0b0e17")}; // page
-inline const QColor bg_2{QStringLiteral("#11151f")}; // card
-inline const QColor bg_3{QStringLiteral("#171c2a")}; // raised control, hover
-inline const QColor bg_4{QStringLiteral("#1e2435")}; // pressed, selected neutral
-inline const QColor bg_5{QStringLiteral("#283044")}; // track, strong fill
-inline const QColor border_1{QStringLiteral("#151a26")};
-inline const QColor border_2{QStringLiteral("#1c2231")};
-inline const QColor border_3{QStringLiteral("#262d40")};
-inline const QColor border_4{QStringLiteral("#333c55")};
-inline const QColor border_control{QStringLiteral("#3a4561")};
+inline const QColor bg_0{QStringLiteral("#06080d")}; // chrome: sidebar, header, status bar
+inline const QColor bg_1{QStringLiteral("#0a0d15")}; // page
+inline const QColor bg_2{QStringLiteral("#121724")}; // card
+inline const QColor bg_3{QStringLiteral("#1a2030")}; // raised control, hover on a card
+inline const QColor bg_4{QStringLiteral("#222a3e")}; // pressed, neutral selection, secondary button fill
+inline const QColor bg_5{QStringLiteral("#2d3650")}; // track, strong fill
+inline const QColor bg_2_hi{QStringLiteral("#171c28")}; // bg_2 + 2 % white: the top edge of a card
+inline const QColor bg_3_hi{QStringLiteral("#1f2534")}; // bg_3 + 2 % white: the same for a hovered card
+inline const QColor border_1{QStringLiteral("#1a2030")}; // hairline inside a card
+inline const QColor border_2{QStringLiteral("#222a3c")}; // card outline, chrome edge
+inline const QColor border_3{QStringLiteral("#343f5a")}; // control outline at rest
+inline const QColor border_4{QStringLiteral("#445072")}; // control outline on hover, strong divider, popup outline
+inline const QColor border_control{QStringLiteral("#5a6890")}; // field outline on hover; check box and switch outline
 inline const QColor fg_0{QStringLiteral("#f6f8ff")};
 inline const QColor fg_1{QStringLiteral("#dfe4f1")};
 inline const QColor fg_2{QStringLiteral("#b9c1d6")};
-inline const QColor fg_3{QStringLiteral("#919ab2")};
-inline const QColor fg_4{QStringLiteral("#7c859e")};
-inline const QColor fg_5{QStringLiteral("#5a627b")};
-inline const QColor fg_6{QStringLiteral("#3a4258")};
-inline const QColor field_bg{QStringLiteral("#0d111c")};
+inline const QColor fg_3{QStringLiteral("#9ba4bd")}; // captions
+inline const QColor fg_4{QStringLiteral("#8590ab")}; // meta, group labels
+inline const QColor fg_5{QStringLiteral("#667089")}; // disabled, hints
+inline const QColor fg_6{QStringLiteral("#3f4860")};
+inline const QColor field_bg{QStringLiteral("#0b0f19")}; // input well: darker than the card it sits on
 inline const QColor field_fg{QStringLiteral("#dfe4f1")};
 inline const QColor field_select_bg{QStringLiteral("#3d7bff")};
 inline const QColor field_select_fg{QStringLiteral("#ffffff")};
@@ -52,6 +61,14 @@ inline const QColor accent_2{QStringLiteral("#8b5cf6")};       // gradient end (
 inline const QColor accent_2_hover{QStringLiteral("#9a70ff")};
 inline const QColor accent_2_hi{QStringLiteral("#c4b0ff")};
 inline const QColor accent_glow{QStringLiteral("#3d7bff")};   // used translucent for glows
+// The gradient under white text or a white icon (primary button, selected
+// icon squares, check bubbles, count badges): darker than accent -> accent_2.
+inline const QColor accent_fill{QStringLiteral("#2f6bf2")};
+inline const QColor accent_fill_2{QStringLiteral("#7c4df0")};
+inline const QColor accent_fill_hover{QStringLiteral("#3d78fb")};
+inline const QColor accent_fill_2_hover{QStringLiteral("#8a5df6")};
+inline const QColor accent_fill_pressed{QStringLiteral("#285fdc")};
+inline const QColor accent_fill_2_pressed{QStringLiteral("#6e42dd")};
 inline const QColor on_accent{QStringLiteral("#ffffff")};
 inline const QColor focus{QStringLiteral("#8db5ff")};
 inline const QColor success{QStringLiteral("#2ed39a")};
@@ -67,10 +84,22 @@ inline const QColor danger_fill{QStringLiteral("#e23d50")};
 inline const QColor danger_fill_hover{QStringLiteral("#ef4a5d")};
 inline const QColor danger_fill_pressed{QStringLiteral("#c73245")};
 inline const QColor scrim{3, 4, 9, 170}; // #030409 at 67 %
+inline const QColor highlight{255, 255, 255, 10};      // 1 px inner top edge of a card
+inline const QColor highlight_fill{255, 255, 255, 40}; // the same on a gradient fill
+inline const QColor shadow{0, 0, 0, 255};              // used translucent under floating popups
+// The Home banner's backdrop: deep blue -> violet -> page.
+inline const QColor hero_0{QStringLiteral("#14224d")};
+inline const QColor hero_1{QStringLiteral("#1c1745")};
+inline const QColor hero_2{QStringLiteral("#101222")};
 } // namespace color
 
-// The signature gradient (accent -> accent_2), left to right, for QPainter.
+// The signature gradient (accent -> accent_2), left to right, for QPainter:
+// tints, outlines, progress and decoration.
 QLinearGradient accentGradient(const QRectF& r, int alpha = 255);
+// The same sweep in the fill tokens: wherever white sits on the gradient.
+QLinearGradient accentFillGradient(const QRectF& r, int alpha = 255);
+// `c` at `alpha` (0..255): tints and translucent outlines made from a token.
+QColor withAlpha(QColor c, int alpha);
 
 // ---- spacing, radii, sizes (px) ----------------------------------------------
 namespace space {
@@ -95,7 +124,13 @@ inline constexpr int iconDialog = 20;
 inline constexpr int iconEmpty = 24;
 inline constexpr int check = 18;
 inline constexpr int switchW = 42, switchH = 24, switchKnob = 16;
-inline constexpr int progress = 6;
+inline constexpr int progress = 8;
+inline constexpr int badge = 22, badgeCount = 18;
+inline constexpr int scrollBar = 10; // an 8 px handle, 2 px in from the outer edge
+inline constexpr int tableHeader = 32;
+inline constexpr int toolTipMax = 360;
+inline constexpr int popupShadow = 12; // clear margin around a menu panel, for its painted shadow
+inline constexpr int emptyTile = 44, emptyMax = 360;
 inline constexpr int dialog = 480;
 inline constexpr int dialogWide = 640;
 inline constexpr int toast = 360;
@@ -104,7 +139,7 @@ inline constexpr int formMax = 760;
 inline constexpr int settingsList = 200;
 inline constexpr int statusBar = 30;
 inline constexpr int cover = 40, coverRow = 28;
-inline constexpr int focusRing = 2, focusOffset = 1;
+inline constexpr int focusRing = 2, focusOffset = 2;
 inline constexpr int windowMinW = 1100, windowMinH = 700;
 inline constexpr int dockBreakpoint = 1180;  // below: dock wraps under the form
 } // namespace size
@@ -118,6 +153,7 @@ QFont subtitle();   // 15/20 600
 QFont bodyStrong(); // 13/18 600
 QFont body();       // 13/18 400
 QFont caption();    // 12/16 400
+QFont chip();       // 11/14 600: badges and chips
 QFont overline();   // 11/14 600 +6 % uppercase
 QFont mono();       // 12/18 400 tabular
 QFont monoSmall();  // 11/16 400

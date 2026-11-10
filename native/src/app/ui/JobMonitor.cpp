@@ -276,7 +276,7 @@ void StageList::update(const ProgressSnapshot& p, JobState state)
             nameColor = color::fg_2;
             time = ms > 0 ? shortDuration(ms) : QStringLiteral("skipped");
             if (ms <= 0)
-                timeColor = color::fg_5;
+                timeColor = color::fg_4; // a real caption, not a disabled one
             row.status = QStringLiteral("done");
         } else if (started && i == current && (active(state) || failed || stopped)) {
             if (failed) {

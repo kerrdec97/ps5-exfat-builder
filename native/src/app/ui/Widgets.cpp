@@ -1,6 +1,7 @@
 #include "app/ui/Widgets.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -20,6 +21,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QStyle>
+#include <QStyleOption>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -451,26 +453,88 @@ void Card::setSelected(bool on)
     update();
 }
 
+QColor blend(const QColor& a, const QColor& b, qreal t)
+{
+    t = std::clamp(t, 0.0, 1.0);
+    if (t <= 0.0)
+        return a;
+    if (t >= 1.0)
+        return b;
+    return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t, a.greenF() + (b.greenF() - a.greenF()) * t,
+                            a.blueF() + (b.blueF() - a.blueF()) * t, a.alphaF() + (b.alphaF() - a.alphaF()) * t);
+}
+
+void paintPlate(QPainter& p, const QRectF& r, qreal rad, qreal hover)
+{
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    const QColor base = blend(color::bg_2, color::bg_3, hover);
+    QLinearGradient fill(r.topLeft(), r.bottomLeft());
+    fill.setColorAt(0, blend(color::bg_2_hi, color::bg_3_hi, hover));
+    fill.setColorAt(0.4, base);
+    fill.setColorAt(1, base);
+    p.setPen(QPen(blend(color::border_2, color::border_4, hover), 1));
+    p.setBrush(fill);
+    p.drawRoundedRect(r, rad, rad);
+    // The lit top edge: one pixel inside the outline, fading out down the corners.
+    QLinearGradient lit(QPointF(0, r.top() + 1), QPointF(0, r.top() + 1 + std::max<qreal>(rad, 2)));
+    lit.setColorAt(0, color::highlight);
+    lit.setColorAt(1, withAlpha(color::highlight, 0));
+    p.setPen(QPen(QBrush(lit), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(r.adjusted(1, 1, -1, -1), std::max<qreal>(rad - 1, 0), std::max<qreal>(rad - 1, 0));
+    p.restore();
+}
+
+void paintWell(QPainter& p, const QRectF& r, qreal rad)
+{
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(color::border_1, 1));
+    p.setBrush(color::field_bg);
+    p.drawRoundedRect(r, rad, rad);
+    p.restore();
+}
+
+void paintPopup(QPainter& p, const QRectF& r, qreal rad)
+{
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(color::border_4, 1));
+    p.setBrush(color::bg_3);
+    p.drawRoundedRect(r, rad, rad);
+    p.restore();
+}
+
+void paintShadow(QPainter& p, const QRectF& r, qreal rad, int spread)
+{
+    if (spread <= 0)
+        return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setBrush(Qt::NoBrush);
+    // Rings that fade outwards (no blur): each is one pixel of the falloff.
+    const QRectF base = r.translated(0, spread / 3.0);
+    for (int i = 0; i < spread; ++i) {
+        const qreal t = 1.0 - qreal(i) / spread;
+        p.setPen(QPen(withAlpha(color::shadow, int(70 * t * t)), 1.5));
+        p.drawRoundedRect(base.adjusted(-i, -i, i, i), rad + i, rad + i);
+    }
+    p.restore();
+}
+
 void Card::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (m_variant == Variant::Inset) {
-        p.setPen(QPen(color::border_1, 1));
-        p.setBrush(color::field_bg);
-        p.drawRoundedRect(r, radius::control + 2, radius::control + 2);
+        paintWell(p, r, radius::control + 2);
     } else {
-        // Cards sit slightly lifted: a faint top-down sheen over bg_2.
-        QLinearGradient sheen(r.topLeft(), r.bottomLeft());
-        sheen.setColorAt(0, QColor(0x15, 0x1a, 0x27));
-        sheen.setColorAt(1, color::bg_2);
-        p.setPen(QPen(color::border_2, 1));
-        p.setBrush(sheen);
-        p.drawRoundedRect(r, radius::md, radius::md);
+        paintPlate(p, r, radius::md);
         if (m_selected) {
             p.setBrush(accentGradient(r, 26));
-            p.setPen(QPen(QColor(141, 181, 255, 90), 1));
+            p.setPen(QPen(withAlpha(color::accent_hi, 90), 1));
             p.drawRoundedRect(r, radius::md, radius::md);
         }
     }
@@ -546,9 +610,65 @@ QColor toneTint(Tone tone)
     return color::bg_3;
 }
 
+// The colour a tone's tints and outlines are made of.
+static QColor toneBase(Tone tone)
+{
+    return tone == Tone::Info ? color::accent : toneMark(tone);
+}
+
+QColor toneLine(Tone tone)
+{
+    return tone == Tone::Neutral ? color::border_3 : withAlpha(toneBase(tone), 89); // 35 %
+}
+
+namespace {
+constexpr int kBadgePad = 8, kCountPad = 6, kBadgeIconGap = 4;
+}
+
+int badgeWidth(const QString& text, bool withIcon, bool count)
+{
+    int w = (count ? kCountPad : kBadgePad) * 2 + QFontMetrics(font::chip()).horizontalAdvance(text);
+    if (withIcon && !count)
+        w += size::iconSm + kBadgeIconGap;
+    return count ? std::max(w, int(size::badgeCount)) : w;
+}
+
+void paintBadge(QPainter& p, const QRectF& rect, const QString& text, Tone tone, const QString& iconName, bool onAccent)
+{
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF r = rect.adjusted(0.5, 0.5, -0.5, -0.5);
+    QColor fg = toneText(tone);
+    if (onAccent) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(accentFillGradient(rect));
+        fg = color::on_accent;
+        p.drawRoundedRect(rect, rect.height() / 2.0, rect.height() / 2.0);
+    } else {
+        p.setPen(QPen(toneLine(tone), 1));
+        p.setBrush(tone == Tone::Neutral ? color::bg_4 : withAlpha(toneBase(tone), 41)); // 16 %
+        p.drawRoundedRect(r, r.height() / 2.0, r.height() / 2.0);
+    }
+    const bool count = rect.height() < size::badge;
+    const qreal pad = count ? kCountPad : kBadgePad;
+    p.setFont(font::chip());
+    if (!iconName.isEmpty()) {
+        const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+        const QRect ir(int(rect.left() + pad), int(rect.top() + (rect.height() - size::iconSm) / 2.0), size::iconSm, size::iconSm);
+        p.drawPixmap(ir, iconPixmap(iconName, size::iconSm, tone == Tone::Neutral && !onAccent ? color::fg_3 : fg, dpr));
+        p.setPen(fg);
+        const qreal x = ir.right() + 1 + kBadgeIconGap;
+        p.drawText(QRectF(x, rect.top(), rect.right() - x, rect.height()), Qt::AlignVCenter | Qt::AlignLeft, text);
+    } else {
+        p.setPen(fg);
+        p.drawText(rect, Qt::AlignCenter, text);
+    }
+    p.restore();
+}
+
 Badge::Badge(const QString& text, Tone tone, QWidget* parent) : QWidget(parent), m_text(text), m_tone(tone)
 {
-    setFont(font::caption());
+    setFont(font::chip());
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setProperty("fwNoRing", true);
@@ -596,31 +716,14 @@ void Badge::setCount(bool count)
 QSize Badge::sizeHint() const
 {
     const QString iconName = m_iconSet ? m_icon : defaultBadgeIcon(m_tone);
-    const QFontMetrics fm(font());
-    const QString shown = elideMiddle(m_text, 32);
-    int w = (m_count ? 6 : 8) * 2 + fm.horizontalAdvance(shown);
-    if (!iconName.isEmpty() && !m_count)
-        w += size::iconSm + 6;
-    return {w, m_count ? 18 : 20};
+    return {badgeWidth(elideMiddle(m_text, 32), !iconName.isEmpty(), m_count), m_count ? size::badgeCount : size::badge};
 }
 
 void Badge::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(Qt::NoPen);
-    p.setBrush(toneTint(m_tone));
-    p.drawRoundedRect(rect(), height() / 2.0, height() / 2.0);
-    const QString iconName = (m_iconSet ? m_icon : defaultBadgeIcon(m_tone));
-    int x = m_count ? 6 : 8;
-    if (!iconName.isEmpty() && !m_count) {
-        const QPixmap pm = iconPixmap(iconName, size::iconSm, m_tone == Tone::Neutral ? color::fg_3 : toneText(m_tone), devicePixelRatioF());
-        p.drawPixmap(QRect(x, (height() - size::iconSm) / 2, size::iconSm, size::iconSm), pm);
-        x += size::iconSm + 6;
-    }
-    p.setPen(toneText(m_tone));
-    p.setFont(font());
-    p.drawText(QRect(x, 0, width() - x, height()), Qt::AlignVCenter | Qt::AlignLeft, elideMiddle(m_text, 32));
+    const QString iconName = m_count ? QString() : (m_iconSet ? m_icon : defaultBadgeIcon(m_tone));
+    paintBadge(p, QRectF(rect()), elideMiddle(m_text, 32), m_tone, iconName);
 }
 
 // ---- switch -------------------------------------------------------------------
@@ -632,7 +735,12 @@ Switch::Switch(QWidget* parent) : QAbstractButton(parent)
     setFocusPolicy(Qt::TabFocus);
     setProperty("fwRadius", radius::pill);
     setAttribute(Qt::WA_Hover);
+    m_position = new motion::Value(this, 0.0, motion::base);
+    connect(this, &QAbstractButton::toggled, this, [this](bool on) { m_position->animateTo(on ? 1.0 : 0.0); });
 }
+
+qreal Switch::position() const { return m_position->value(); }
+bool Switch::isAnimating() const { return m_position->isRunning(); }
 
 void Switch::enterEvent(QEnterEvent* e)
 {
@@ -652,34 +760,35 @@ void Switch::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    const bool on = isChecked();
-    const bool enabled = isEnabled();
-    QColor fill, border, knob;
-    if (!enabled) {
-        fill = color::bg_2;
-        border = color::border_3;
-        knob = color::fg_5;
-    } else if (on) {
-        border = Qt::transparent;
-        knob = color::on_accent;
-    } else {
-        fill = color::field_bg;
-        border = m_hover ? color::border_4 : color::border_control;
-        knob = color::fg_3;
-    }
+    const qreal t = m_position->value(); // 0 = off .. 1 = on
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    if (enabled && on) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(accentGradient(r, m_hover ? 235 : 255));
+    const qreal rad = r.height() / 2;
+    QColor knob;
+    if (!isEnabled()) {
+        p.setPen(QPen(color::border_3, 1));
+        p.setBrush(color::bg_2);
+        p.drawRoundedRect(r, rad, rad);
+        knob = color::fg_5;
     } else {
-        p.setPen(QPen(border, 1));
-        p.setBrush(fill);
+        // The off track with the on track over it: they cross-fade while the knob slides.
+        if (t < 1.0) {
+            p.setPen(QPen(m_hover ? color::fg_5 : color::border_control, 1));
+            p.setBrush(color::field_bg);
+            p.drawRoundedRect(r, rad, rad);
+        }
+        if (t > 0.0) {
+            p.setOpacity(t);
+            p.setPen(Qt::NoPen);
+            p.setBrush(accentFillGradient(r, m_hover ? 235 : 255));
+            p.drawRoundedRect(r, rad, rad);
+            p.setOpacity(1.0);
+        }
+        knob = blend(color::fg_3, color::on_accent, t);
     }
-    p.drawRoundedRect(r, r.height() / 2, r.height() / 2);
     p.setPen(Qt::NoPen);
     p.setBrush(knob);
-    const int x = on ? width() - 3 - size::switchKnob : 3;
-    p.drawEllipse(QRectF(x, (height() - size::switchKnob) / 2.0, size::switchKnob, size::switchKnob));
+    const qreal off = 3, on = width() - 3 - size::switchKnob;
+    p.drawEllipse(QRectF(off + (on - off) * t, (height() - size::switchKnob) / 2.0, size::switchKnob, size::switchKnob));
 }
 
 // ---- segmented ----------------------------------------------------------------
@@ -691,7 +800,11 @@ Segmented::Segmented(QWidget* parent) : QWidget(parent)
     setMouseTracking(true);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setFont(font::body());
+    m_hover = new motion::HoverFade(this);
+    m_slide = new motion::Value(this, 1.0, motion::base);
 }
+
+bool Segmented::isAnimating() const { return m_slide->isRunning(); }
 
 void Segmented::addSegment(const QString& text, const QString& iconName, const QVariant& value)
 {
@@ -729,7 +842,15 @@ void Segmented::setCurrentIndex(int index)
 {
     if (index < 0 || index >= count() || index == m_current)
         return;
+    // The pill slides from where it is now (maybe half way) to the new segment.
+    const QRectF target = segmentRect(m_current);
+    const qreal t = m_slide->value();
+    m_slideFrom = t >= 1.0 ? target
+                           : QRectF(m_slideFrom.x() + (target.x() - m_slideFrom.x()) * t, target.y(),
+                                    m_slideFrom.width() + (target.width() - m_slideFrom.width()) * t, target.height());
     m_current = index;
+    m_slide->jumpTo(0.0);
+    m_slide->animateTo(1.0);
     update();
 #if QT_CONFIG(accessibility)
     if (QAccessible::isActive()) {
@@ -779,6 +900,16 @@ QSize Segmented::sizeHint() const
     return {w, 34};
 }
 
+QRectF Segmented::segmentRect(int index) const
+{
+    if (index < 0 || index >= count())
+        return {};
+    int x = 3;
+    for (int i = 0; i < index; ++i)
+        x += segmentWidth(i) + 2;
+    return QRectF(x, 3, segmentWidth(index), height() - 6);
+}
+
 int Segmented::segmentAt(const QPoint& pt) const
 {
     int x = 3;
@@ -798,23 +929,30 @@ void Segmented::paintEvent(QPaintEvent*)
     p.setPen(QPen(color::border_3, 1));
     p.setBrush(color::field_bg);
     p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::control + 1, radius::control + 1);
+    // The selection pill, on its way to the current segment or on it.
+    if (m_current >= 0 && m_current < count()) {
+        const QRectF to = segmentRect(m_current);
+        const qreal t = m_slide->value();
+        const QRectF pill = t >= 1.0 ? to
+                                     : QRectF(m_slideFrom.x() + (to.x() - m_slideFrom.x()) * t, to.y(),
+                                              m_slideFrom.width() + (to.width() - m_slideFrom.width()) * t, to.height());
+        p.setPen(QPen(withAlpha(color::accent_hi, 80), 1));
+        p.setBrush(accentGradient(pill, 70));
+        p.drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
+    }
     int x = 3;
     for (int i = 0; i < count(); ++i) {
         const auto& s = m_segments[size_t(i)];
         const int w = segmentWidth(i);
         const QRect r(x, 3, w, height() - 6);
         const bool sel = i == m_current;
-        const bool hov = i == m_hover && s.enabled && !sel;
-        if (sel) {
-            p.setPen(QPen(QColor(141, 181, 255, 80), 1));
-            p.setBrush(accentGradient(QRectF(r), 70));
-            p.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
-        } else if (hov) {
+        const qreal hov = s.enabled && !sel ? m_hover->amount(i) : 0.0;
+        if (hov > 0.0) {
             p.setPen(Qt::NoPen);
-            p.setBrush(color::bg_3);
+            p.setBrush(withAlpha(color::bg_3, int(255 * hov)));
             p.drawRoundedRect(r, radius::sm, radius::sm);
         }
-        QColor fg = !s.enabled ? color::fg_5 : sel ? color::fg_0 : hov ? color::fg_1 : color::fg_3;
+        const QColor fg = !s.enabled ? color::fg_5 : sel ? color::fg_0 : blend(color::fg_3, color::fg_1, hov);
         p.setPen(fg);
         p.setFont(sel ? font::bodyStrong() : font::body());
         int tx = x + 10;
@@ -839,20 +977,9 @@ void Segmented::mousePressEvent(QMouseEvent* e)
         setCurrentIndex(i);
 }
 
-void Segmented::mouseMoveEvent(QMouseEvent* e)
-{
-    const int i = segmentAt(e->pos());
-    if (i != m_hover) {
-        m_hover = i;
-        update();
-    }
-}
+void Segmented::mouseMoveEvent(QMouseEvent* e) { m_hover->setHovered(segmentAt(e->pos())); }
 
-void Segmented::leaveEvent(QEvent*)
-{
-    m_hover = -1;
-    update();
-}
+void Segmented::leaveEvent(QEvent*) { m_hover->setHovered(-1); }
 
 void Segmented::keyPressEvent(QKeyEvent* e)
 {
@@ -873,21 +1000,34 @@ void Segmented::keyPressEvent(QKeyEvent* e)
 
 // ---- progress -----------------------------------------------------------------
 
+namespace {
+constexpr int kFrameMs = 16;
+constexpr int kSweepPeriodMs = 2400; // one highlight sweep every 2.4 s ...
+constexpr int kSweepMs = 900;        // ... that takes 0.9 s to cross the fill
+constexpr int kBandPeriodMs = 1400;  // the indeterminate band, edge to edge
+} // namespace
+
 ProgressBar::ProgressBar(QWidget* parent) : QWidget(parent)
 {
     setFixedHeight(size::progress);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_timer.setInterval(16);
-    connect(&m_timer, &QTimer::timeout, this, [this] {
-        if (!window()->isMinimized()) // nothing to animate for a minimised window
-            update();
-    });
+    m_shown = new motion::Value(this, 0.0, motion::slow);
+    connect(&m_timer, &QTimer::timeout, this, &ProgressBar::tick);
 }
+
+double ProgressBar::shownFraction() const { return m_shown->value(); }
+bool ProgressBar::isAnimating() const { return m_timer.isActive() || m_shown->isRunning(); }
 
 void ProgressBar::setFraction(double f)
 {
     m_fraction = std::clamp(f, 0.0, 1.0);
+    // Forwards the fill eases; back (another job in the same bar) it jumps.
+    if (m_fraction < m_shown->value())
+        m_shown->jumpTo(m_fraction);
+    else
+        m_shown->animateTo(m_fraction);
+    updateTimer();
     update();
 }
 
@@ -896,17 +1036,45 @@ void ProgressBar::setState(State s)
     if (m_state == s)
         return;
     m_state = s;
-    m_t0 = QDateTime::currentMSecsSinceEpoch();
     updateTimer();
     update();
 }
 
+// The timer runs only for a visible bar whose job runs: every frame for the
+// indeterminate band; for the sweep 0.9 s out of every 2.4 s, with one long
+// sleep in between. Never when motion is off.
 void ProgressBar::updateTimer()
 {
-    if (m_state == State::Indeterminate && isVisible())
-        m_timer.start();
-    else
+    const bool band = m_state == State::Indeterminate;
+    const bool sweep = m_state == State::Determinate && m_fraction > 0.0 && m_fraction < 1.0;
+    if ((band || sweep) && isVisible() && motion::enabled()) {
+        if (!m_timer.isActive()) {
+            m_t0 = QDateTime::currentMSecsSinceEpoch();
+            m_timer.start(kFrameMs);
+        }
+    } else if (m_timer.isActive()) {
         m_timer.stop();
+        update(); // without the highlight
+    }
+}
+
+void ProgressBar::tick()
+{
+    if (window()->isMinimized()) { // nothing to animate for a minimised window
+        m_timer.start(500);
+        return;
+    }
+    if (m_state == State::Determinate) {
+        const qint64 t = (QDateTime::currentMSecsSinceEpoch() - m_t0) % kSweepPeriodMs;
+        if (t >= kSweepMs) {
+            m_timer.start(int(kSweepPeriodMs - t)); // sleep until the next sweep
+            update();
+            return;
+        }
+    }
+    if (m_timer.interval() != kFrameMs)
+        m_timer.start(kFrameMs);
+    update();
 }
 
 void ProgressBar::showEvent(QShowEvent*) { updateTimer(); }
@@ -917,22 +1085,28 @@ void ProgressBar::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
-    p.setBrush(color::bg_4);
-    p.drawRoundedRect(rect(), height() / 2.0, height() / 2.0);
+    p.setBrush(color::bg_5);
+    const qreal rad = height() / 2.0;
+    p.drawRoundedRect(rect(), rad, rad);
     QColor fill = color::accent;
-    double frac = m_fraction;
+    double frac = m_shown->value();
     const bool gradient = m_state == State::Determinate || m_state == State::Indeterminate;
     switch (m_state) {
     case State::Done: fill = color::success; frac = 1.0; break;
     case State::Failed: fill = color::danger; break;
     case State::Paused: fill = color::fg_4; break;
     case State::Indeterminate: {
-        const double t = std::fmod((QDateTime::currentMSecsSinceEpoch() - m_t0) / 1400.0, 1.0);
-        const double segW = width() * 0.35;
+        // A gradient band, 30 % wide, that travels left to right (and stands
+        // in the middle while motion is off). It is cut at the track's ends.
+        const double segW = width() * 0.30;
+        const double t = m_timer.isActive()
+                             ? std::fmod((QDateTime::currentMSecsSinceEpoch() - m_t0) / double(kBandPeriodMs), 1.0) : 0.5;
         const double x = -segW + t * (width() + segW);
-        p.setClipRect(rect());
-        p.setBrush(accentGradient(QRectF(x, 0, segW, height())));
-        p.drawRoundedRect(QRectF(x, 0, segW, height()), height() / 2.0, height() / 2.0);
+        const double left = std::max(x, 0.0), right = std::min(x + segW, double(width()));
+        if (right - left >= 1.0) {
+            p.setBrush(accentGradient(QRectF(x, 0, segW, height())));
+            p.drawRoundedRect(QRectF(left, 0, right - left, height()), rad, rad);
+        }
         return;
     }
     case State::Determinate: break;
@@ -943,7 +1117,21 @@ void ProgressBar::paintEvent(QPaintEvent*)
             p.setBrush(accentGradient(QRectF(0, 0, width(), height())));
         else
             p.setBrush(fill);
-        p.drawRoundedRect(fr, height() / 2.0, height() / 2.0);
+        p.drawRoundedRect(fr, rad, rad);
+        // While the job runs: a soft highlight that crosses the filled part.
+        if (m_state == State::Determinate && m_timer.isActive()) {
+            const qint64 t = (QDateTime::currentMSecsSinceEpoch() - m_t0) % kSweepPeriodMs;
+            if (t < kSweepMs) {
+                const double bandW = std::max(32.0, fr.width() * 0.35);
+                const double x = -bandW + (double(t) / kSweepMs) * (fr.width() + bandW);
+                QLinearGradient light(QPointF(x, 0), QPointF(x + bandW, 0));
+                light.setColorAt(0, withAlpha(color::on_accent, 0));
+                light.setColorAt(0.5, withAlpha(color::on_accent, 64));
+                light.setColorAt(1, withAlpha(color::on_accent, 0));
+                p.setBrush(light);
+                p.drawRoundedRect(fr, rad, rad); // the fill's own shape: nothing spills past its round end
+            }
+        }
     }
 }
 
@@ -1161,7 +1349,7 @@ void InfoBar::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(toneTint(m_tone), 1));
+    p.setPen(QPen(toneLine(m_tone), 1));
     p.setBrush(toneTint(m_tone));
     p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
 }
@@ -1171,29 +1359,31 @@ void InfoBar::paintEvent(QPaintEvent*)
 EmptyState::EmptyState(const QString& iconName, const QString& title, const QString& text, QWidget* parent)
     : QWidget(parent)
 {
-    m_layout = vbox(this, space::sm, QMargins(space::xxl, 40, space::xxl, 40));
+    m_layout = vbox(this, 0, QMargins(space::xxl, space::xxxl, space::xxl, space::xxxl));
     m_layout->setAlignment(Qt::AlignHCenter);
-    auto* tile = new QLabel(this);
-    tile->setFixedSize(56, 56);
-    tile->setAlignment(Qt::AlignCenter);
-    tile->setAutoFillBackground(false);
-    tile->setStyleSheet(QStringLiteral("background:%1;border-radius:%2px;").arg(hex(color::bg_3)).arg(radius::md));
-    tile->setPixmap(iconPixmap(iconName, size::iconEmpty, color::fg_3, devicePixelRatioF()));
+    // In a place taller than it needs (a list's whole area) it stays one
+    // block in the middle, not spread out over the height.
+    m_layout->addStretch(1);
+    auto* tile = new IconTile(iconName, size::emptyTile, this);
+    tile->setTone(Tone::Neutral);
     m_layout->addWidget(tile, 0, Qt::AlignHCenter);
-    auto* t = heading(title, TextStyle::Subtitle, this);
-    t->setAlignment(Qt::AlignCenter);
-    t->setWordWrap(true);
-    t->setFixedWidth(360);
-    m_layout->addSpacing(4);
-    m_layout->addWidget(t, 0, Qt::AlignHCenter);
-    auto* c = caption(text, this);
-    c->setAlignment(Qt::AlignCenter);
-    c->setFixedWidth(320);
-    m_layout->addWidget(c, 0, Qt::AlignHCenter);
+    m_layout->addSpacing(space::md);
+    m_title = heading(title, TextStyle::BodyStrong, this);
+    m_title->setAlignment(Qt::AlignCenter);
+    m_title->setWordWrap(true);
+    m_layout->addWidget(m_title, 0, Qt::AlignHCenter);
+    m_caption = caption(text, this);
+    m_caption->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+    m_caption->setContentsMargins(0, space::xs, 0, 0);
+    m_caption->setVisible(!text.isEmpty());
+    m_layout->addWidget(m_caption, 0, Qt::AlignHCenter);
     auto* actions = new QWidget(this);
-    m_actions = hbox(actions, space::sm, QMargins(0, space::sm, 0, 0));
+    actions->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    m_actions = hbox(actions, space::sm, QMargins(0, space::md, 0, 0));
     m_layout->addWidget(actions, 0, Qt::AlignHCenter);
     actions->hide();
+    m_layout->addStretch(1);
+    fitText();
 }
 
 QPushButton* EmptyState::addAction(const QString& text, ButtonVariant variant)
@@ -1206,7 +1396,51 @@ QPushButton* EmptyState::addAction(const QString& text, ButtonVariant variant)
 
 void EmptyState::setCompact(bool compact)
 {
-    m_layout->setContentsMargins(space::xxl, compact ? 20 : 40, space::xxl, compact ? 20 : 40);
+    m_compact = compact;
+    const int v = compact ? space::lg : space::xxxl;
+    m_layout->setContentsMargins(space::xxl, v, space::xxl, v);
+    fitText();
+}
+
+// A word-wrapped label in a centred column gets the height of the width it
+// would like, not of the width it has: `l` is given both here. True when its
+// height changed.
+static bool fitWrapped(QLabel* l, int width)
+{
+    // (A label without text has no height for a width: it takes no room.)
+    const QSize s(width, l->text().isEmpty() ? 0 : std::max(0, l->heightForWidth(width)));
+    if (l->minimumSize() == s && l->maximumSize() == s)
+        return false;
+    const bool taller = l->maximumHeight() != s.height();
+    l->setFixedSize(s);
+    return taller;
+}
+
+void EmptyState::fitText()
+{
+    // Before the first layout the widget has no width to go by: the full
+    // text width is assumed, which is what nearly every place gives it.
+    const QMargins m = m_layout->contentsMargins();
+    const int w = m_sized ? std::clamp(width() - m.left() - m.right(), 160, int(size::emptyMax)) : int(size::emptyMax);
+    const bool a = fitWrapped(m_title, w);
+    const bool b = fitWrapped(m_caption, w);
+    if (a || b)
+        updateGeometry(); // the height changed: the parent's layout has to know now, not after this one's own pass
+}
+
+void EmptyState::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    m_sized = true;
+    fitText();
+}
+
+QSize EmptyState::minimumSizeHint() const
+{
+    // The text follows the width (fitText()): the labels' current width is no minimum.
+    const QMargins m = m_layout->contentsMargins();
+    const QSize s = QWidget::minimumSizeHint();
+    return {std::min(s.width(), 160 + m.left() + m.right()), s.height()};
 }
 
 ErrorState::ErrorState(const QString& title, const QString& body, const QString& technical, QWidget* parent)
@@ -1216,15 +1450,12 @@ ErrorState::ErrorState(const QString& title, const QString& body, const QString&
     auto* row = new QHBoxLayout;
     row->setSpacing(space::md);
     row->setAlignment(Qt::AlignTop);
-    auto* tile = new QLabel(this);
-    tile->setFixedSize(40, 40);
-    tile->setAlignment(Qt::AlignCenter);
-    tile->setStyleSheet(QStringLiteral("background:%1;border-radius:%2px;").arg(hex(color::danger_bg)).arg(radius::md));
-    tile->setPixmap(iconPixmap(QStringLiteral("error"), size::iconDialog, color::danger, devicePixelRatioF()));
+    auto* tile = new IconTile(QStringLiteral("error"), size::emptyTile, this);
+    tile->setTone(Tone::Err);
     row->addWidget(tile, 0, Qt::AlignTop);
     auto* col = new QVBoxLayout;
     col->setSpacing(4);
-    m_title = heading(title, TextStyle::Subtitle, this);
+    m_title = heading(title, TextStyle::BodyStrong, this);
     m_title->setWordWrap(true);
     m_body = label(body, TextStyle::Body, color::fg_2, this);
     m_body->setWordWrap(true);
@@ -1263,35 +1494,32 @@ QPushButton* ErrorState::addAction(const QString& text, ButtonVariant variant)
 
 UnavailableState::UnavailableState(const QString& feature, const QString& kind, QWidget* parent) : QWidget(parent)
 {
-    auto* l = vbox(this, space::sm, QMargins(space::xxl, 32, space::xxl, 32));
+    auto* l = vbox(this, space::xs, QMargins(space::xxl, space::xxxl, space::xxl, space::xxxl));
     l->setAlignment(Qt::AlignHCenter);
-    auto* tile = new QLabel(this);
-    tile->setFixedSize(56, 56);
-    tile->setAlignment(Qt::AlignCenter);
-    tile->setStyleSheet(QStringLiteral("background:%1;border-radius:%2px;").arg(hex(color::bg_3)).arg(radius::md));
-    tile->setPixmap(iconPixmap(QStringLiteral("package"), size::iconEmpty, color::fg_3, devicePixelRatioF()));
+    auto* tile = new IconTile(QStringLiteral("package"), size::emptyTile, this);
+    tile->setTone(Tone::Neutral);
     l->addWidget(tile, 0, Qt::AlignHCenter);
-    auto* t = heading(QStringLiteral("%1 is not available in this build").arg(feature), TextStyle::Subtitle, this);
+    auto* t = heading(QStringLiteral("%1 is not available in this build").arg(feature), TextStyle::BodyStrong, this);
     t->setAlignment(Qt::AlignCenter);
     t->setWordWrap(true);
-    t->setFixedWidth(420);
-    l->addSpacing(4);
+    l->addSpacing(space::sm);
     l->addWidget(t, 0, Qt::AlignHCenter);
     auto* c = caption(QStringLiteral("The engine that does this work is not part of this build. The form stays usable; nothing is queued until the engine is present."), this);
     c->setAlignment(Qt::AlignCenter);
-    c->setFixedWidth(420);
     l->addWidget(c, 0, Qt::AlignHCenter);
     m_tech = label(QStringLiteral("job kind %1 is not registered").arg(kind), TextStyle::Mono, color::fg_4, this);
     m_tech->setAlignment(Qt::AlignCenter);
     m_tech->setWordWrap(true);
-    m_tech->setFixedWidth(420);
     l->addWidget(m_tech, 0, Qt::AlignHCenter);
+    for (QLabel* wrapped : {t, c, m_tech})
+        fitWrapped(wrapped, size::emptyMax);
 }
 
 void UnavailableState::setKinds(const QStringList& kinds)
 {
     m_tech->setText(kinds.size() == 1 ? QStringLiteral("job kind %1 is not registered").arg(kinds.first())
                                       : QStringLiteral("job kinds %1 are not registered").arg(kinds.join(QStringLiteral(", "))));
+    fitWrapped(m_tech, size::emptyMax);
 }
 
 // ---- inputs ---------------------------------------------------------------------
@@ -1342,12 +1570,15 @@ PathField::PathField(Mode mode, QWidget* parent) : QWidget(parent), m_mode(mode)
     m_errorLabel->setWordWrap(true);
     auto* ic = new QLabel(m_errorRow);
     ic->setPixmap(iconPixmap(QStringLiteral("error"), size::iconSm, color::danger, devicePixelRatioF()));
-    ic->setFixedSize(size::iconSm, size::iconSm);
+    ic->setFixedSize(size::iconSm, QFontMetrics(font::caption()).height()); // level with the first line of the message
+    ic->setAlignment(Qt::AlignCenter);
+    m_errorLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     er->addWidget(ic, 0, Qt::AlignTop);
     er->addWidget(m_errorLabel, 1);
     l->addWidget(m_errorRow);
     m_errorRow->hide();
     setFocusProxy(m_edit);
+    m_edit->installEventFilter(this); // its width decides how much of the placeholder shows
     connect(m_browse, &QPushButton::clicked, this, &PathField::browse);
     connect(m_edit, &QLineEdit::editingFinished, this, [this] { emit pathChanged(path()); });
     connect(m_edit, &QLineEdit::textEdited, this, [this](const QString&) { emit pathEdited(path()); });
@@ -1372,7 +1603,43 @@ void PathField::setPath(const QString& p)
     emit pathChanged(path());
 }
 
-void PathField::setPlaceholder(const QString& text) { m_edit->setPlaceholderText(text); }
+void PathField::setPlaceholder(const QString& text)
+{
+    m_placeholder = text;
+    fitPlaceholder();
+}
+
+// The placeholder as far as it fits, cut in the middle. While it is cut the
+// whole text is the edit's tooltip (unless the owner gave the edit one), and
+// it stays what assistive tools read.
+void PathField::fitPlaceholder()
+{
+    QStyleOptionFrame opt;
+    opt.initFrom(m_edit);
+    const QRect contents = m_edit->style()->subElementRect(QStyle::SE_LineEditContents, &opt, m_edit);
+    const QMargins tm = m_edit->textMargins();
+    const int room = contents.width() - tm.left() - tm.right() - 6; // the edit's own 2 px margins and the cursor
+    const QString shown = room > 0 ? QFontMetrics(m_edit->font()).elidedText(m_placeholder, Qt::ElideMiddle, room) : m_placeholder;
+    if (m_edit->placeholderText() != shown)
+        m_edit->setPlaceholderText(shown);
+    const bool cut = shown != m_placeholder;
+    if (m_edit->toolTip() == m_autoTip) {
+        m_autoTip = cut ? plainTip(m_placeholder) : QString();
+        m_edit->setToolTip(m_autoTip);
+    }
+    if (m_edit->accessibleDescription().isEmpty() || m_edit->accessibleDescription() == m_autoDescription) {
+        m_autoDescription = cut ? m_placeholder : QString();
+        m_edit->setAccessibleDescription(m_autoDescription);
+    }
+}
+
+bool PathField::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_edit && !m_placeholder.isEmpty()
+        && (event->type() == QEvent::Resize || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange))
+        fitPlaceholder();
+    return QWidget::eventFilter(watched, event);
+}
 
 void PathField::setError(const QString& message)
 {
@@ -1443,9 +1710,13 @@ MessageRow::MessageRow(QWidget* parent) : QWidget(parent)
 {
     auto* h = hbox(this, 6);
     m_icon = new QLabel(this);
-    m_icon->setFixedSize(size::iconSm, size::iconSm);
+    // As tall as one line of the caption beside it, the glyph in its middle:
+    // level with the first line however tall the row gets.
+    m_icon->setFixedSize(size::iconSm, QFontMetrics(font::caption()).height());
+    m_icon->setAlignment(Qt::AlignCenter);
     m_text = label({}, TextStyle::Caption, color::fg_3, this);
     m_text->setWordWrap(true);
+    m_text->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     h->addWidget(m_icon, 0, Qt::AlignTop);
     h->addWidget(m_text, 1);
     hide();
@@ -1733,17 +2004,18 @@ void BrandMark::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    // A white glyph sits on it: the fill tokens.
     QLinearGradient g(r.topLeft(), r.bottomRight());
-    g.setColorAt(0, color::accent);
-    g.setColorAt(1, color::accent_2);
-    p.setPen(QPen(QColor(255, 255, 255, 45), 1));
+    g.setColorAt(0, color::accent_fill);
+    g.setColorAt(1, color::accent_fill_2);
+    p.setPen(QPen(withAlpha(color::on_accent, 45), 1));
     p.setBrush(g);
     const qreal rad = m_px * 0.3;
     p.drawRoundedRect(r, rad, rad);
     // Gloss on the upper half.
     QLinearGradient gloss(r.topLeft(), QPointF(r.left(), r.center().y()));
-    gloss.setColorAt(0, QColor(255, 255, 255, 50));
-    gloss.setColorAt(1, QColor(255, 255, 255, 0));
+    gloss.setColorAt(0, withAlpha(color::on_accent, 40));
+    gloss.setColorAt(1, withAlpha(color::on_accent, 0));
     p.setPen(Qt::NoPen);
     p.setBrush(gloss);
     p.drawRoundedRect(r, rad, rad);
@@ -1780,7 +2052,11 @@ void IconTile::paintEvent(QPaintEvent*)
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     const qreal rad = m_px * 0.28;
     QColor glyph = color::accent_hi;
-    if (m_toned && m_tone != Tone::Info) {
+    if (m_toned && m_tone == Tone::Neutral) {
+        p.setPen(QPen(color::border_2, 1));
+        p.setBrush(color::bg_3);
+        glyph = color::fg_3;
+    } else if (m_toned && m_tone != Tone::Info) {
         QColor tint = toneMark(m_tone);
         QColor fillc = tint;
         fillc.setAlpha(34);
@@ -1795,7 +2071,7 @@ void IconTile::paintEvent(QPaintEvent*)
         b.setAlpha(40);
         g.setColorAt(0, a);
         g.setColorAt(1, b);
-        p.setPen(QPen(QColor(141, 181, 255, 70), 1));
+        p.setPen(QPen(withAlpha(color::accent_hi, 70), 1));
         p.setBrush(g);
     }
     p.drawRoundedRect(r, rad, rad);
