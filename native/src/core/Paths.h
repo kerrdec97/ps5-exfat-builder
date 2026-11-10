@@ -8,6 +8,7 @@
 // FW_DATA_DIR environment variable overrides both (tests, CI).
 
 #include <QString>
+#include <QStringList>
 
 namespace fw::Paths {
 
@@ -35,14 +36,24 @@ QString cacheDir();
 QString tempRoot();    // private per-user temp root for jobs
 QString toolsDir();    // where user-chosen tool paths are remembered / extracted helpers
 
-// Removes this app's own temp folders older than `maxAgeHours` (startup sweep,
-// audit M9). Returns how many were removed.
+// Removes the "fw-" folders in the app's own temp root that are older than
+// `maxAgeHours` (startup sweep, audit M9). Returns how many were removed.
 int sweepStaleTemp(int maxAgeHours = 24);
-// The same sweep in another folder (the temporary folder chosen in Settings):
-// only "fw-" folders older than maxAgeHours go.
+// The same sweep in another folder (the temporary folder chosen in Settings).
+// That folder is the user's, so only what the app can prove it created goes:
+// a folder with the queue's job-folder name that holds TempDir's marker file.
+// Anything else stays, whatever its name. Links are removed, never followed.
 int sweepStaleTempIn(const QString& folder, int maxAgeHours = 24);
+// Both sweeps on a background thread (the app's own temp root, then each of
+// `otherFolders`): deleting what a crashed job left can take a while and must
+// not hold up the start of the app.
+void sweepStaleTempInBackground(const QStringList& otherFolders = {}, int maxAgeHours = 24);
 
-// Bytes used by this app's temp folders (Settings > Storage).
+// Bytes used by the app's own temp root (Settings > Storage). Links and
+// junctions are not followed.
 qint64 tempUsageBytes();
+// The same for another folder (the temporary folder chosen in Settings): only
+// the job folders sweepStaleTempIn() would remove are counted.
+qint64 tempUsageBytesIn(const QString& folder);
 
 } // namespace fw::Paths

@@ -140,9 +140,10 @@ public:
     std::shared_ptr<const SettingsSchema> schemaPtr() const { return m_schema; }
     QString filePath() const { return m_path; }
 
-    // Loads and migrates. Invalid or unknown entries are dropped with a warning
-    // (see loadWarnings()); a corrupt file is renamed to *.corrupt-<time> and
-    // defaults are used.
+    // Loads and migrates. An invalid entry is reset to its default and an entry
+    // this build does not know is kept for the build that does (it is written
+    // back by save()), each with a warning in the log and in loadWarnings(); a
+    // corrupt file is renamed to *.corrupt-<time> and defaults are used.
     Status load();
     Status save() const;
 

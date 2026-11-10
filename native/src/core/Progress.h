@@ -58,14 +58,28 @@ public:
     void setPhases(const QStringList& names, const QList<double>& weights = {});
     // Enter phase `index` with a total (0 = indeterminate).
     void beginPhase(int index, qint64 total, qint64 filesTotal = 0, bool unitIsBytes = true);
-    // Convenience for single-phase work.
+    // Convenience for single-phase work. A name that is not a declared phase
+    // replaces the phase list by that one phase.
     void begin(const QString& phase, qint64 total, qint64 filesTotal = 0, bool unitIsBytes = true);
+    // Work a helper does on behalf of a job that has its own phases (unpacking
+    // a zipped source before the job's first phase). If `name` is one of the
+    // phases, or none were declared with setPhases(), this is begin(). Else the
+    // phases stay as they are: the step is shown under its own name inside the
+    // current phase and takes the first half of that phase's share of the
+    // overall bar; the phase's own progress then takes the other half, so the
+    // bar neither runs to the end nor falls back.
+    void beginStep(const QString& name, qint64 total, qint64 filesTotal = 0, bool unitIsBytes = true);
 
     void advance(qint64 units);      // thread-safe
     void advanceFiles(qint64 files); // thread-safe
     void setDone(qint64 units);      // thread-safe
     void setCurrentItem(const QString& item);
     void setTotal(qint64 total);
+
+    // The job was paused / resumed (the queue says so). While paused the
+    // clocks stand still, and the pause counts neither as elapsed time nor
+    // into the rate, so the time left does not jump after Resume.
+    void setPaused(bool paused);
 
     // Push a snapshot now, ignoring the throttle (phase change, completion).
     void flush();
@@ -79,6 +93,8 @@ public:
 private:
     void maybeEmit(bool force);
     ProgressSnapshot snapshotLocked() const; // m_mutex held
+    void enterPhaseLocked(int index, qint64 total, qint64 filesTotal, bool unitIsBytes); // m_mutex held
+    std::chrono::steady_clock::time_point clockNowLocked() const;                        // m_mutex held
 
     Sink m_sink;
     std::chrono::milliseconds m_throttle;
@@ -87,6 +103,10 @@ private:
     QStringList m_phaseNames;
     QList<double> m_weights;
     int m_phaseIndex = 0;
+    bool m_declared = false;      // setPhases() was called
+    QString m_stepName;           // beginStep(): shown instead of the phase name while it runs
+    int m_stepPhase = -1;         // the phase whose share of the bar a step took part of
+    double m_stepShare = 0.0;
     // timing
     std::chrono::steady_clock::time_point m_startedAt{};
     std::chrono::steady_clock::time_point m_phaseStartedAt{};
@@ -94,6 +114,8 @@ private:
     qint64 m_totalMs = 0;         // valid once finished
     bool m_started = false;
     bool m_finished = false;
+    bool m_paused = false;
+    std::chrono::steady_clock::time_point m_pausedAt{}; // while paused, this is "now" for the clocks
     qint64 m_total = 0;
     qint64 m_filesTotal = 0;
     bool m_unitIsBytes = true;

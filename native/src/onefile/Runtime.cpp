@@ -322,9 +322,15 @@ bool prepareRoot(const std::wstring& root)
 
 Check verifyPayload(const Payload& p, Progress& progress)
 {
+    // The caller shows GetLastError() for a ReadError. The hash functions
+    // report an NTSTATUS instead and leave whatever error was set before.
+    const auto hashFailed = [] {
+        SetLastError(ERROR_INTERNAL_ERROR);
+        return Check::ReadError;
+    };
     Sha256 sha;
     if (!sha.ok())
-        return Check::ReadError;
+        return hashFailed();
     std::vector<uint8_t> buf(4u << 20);
     for (uint64_t done = 0; done < p.trailer.payloadSize;) {
         if (progress.cancel)
@@ -333,13 +339,13 @@ Check verifyPayload(const Payload& p, Progress& progress)
         if (!readAt(p.file, p.trailer.payloadOffset + done, buf.data(), n))
             return Check::ReadError;
         if (!sha.update(buf.data(), n))
-            return Check::ReadError;
+            return hashFailed();
         done += n;
         progress.done += n;
     }
     uint8_t digest[32];
     if (!sha.finish(digest))
-        return Check::ReadError;
+        return hashFailed();
     return std::memcmp(digest, p.trailer.payloadSha256, 32) == 0 ? Check::Ok : Check::Mismatch;
 }
 

@@ -465,15 +465,15 @@ void waitWithProgress(HINSTANCE instance, HANDLE thread, Unpack& u, ProgressWind
         }
         const std::wstring version = utf8ToWide(u.p->version);
         if (u.progress.cancel) {
-            win.setText(L"Cancelling...");
+            win.setText(L"Cancelling…");
             win.setProgress(-1);
         } else if (u.progress.phase == Progress::Waiting) {
-            win.setText(L"Another copy of exFAT Image Builder is unpacking its files...");
+            win.setText(L"Another copy of exFAT Image Builder is unpacking its files…");
             win.setProgress(-1);
         } else {
             win.setText(u.progress.phase == Progress::Checking
-                            ? L"Checking exFAT Image Builder " + version + L"..."
-                            : L"Unpacking exFAT Image Builder " + version + L" (first start of this version only)...");
+                            ? L"Checking exFAT Image Builder " + version + L"…"
+                            : L"Unpacking exFAT Image Builder " + version + L" (first start of this version only)…");
             const uint64_t total = std::max<uint64_t>(1, u.progress.total.load());
             win.setProgress(int(std::min<uint64_t>(1000, u.progress.done.load() * 1000 / total)));
         }
@@ -518,7 +518,7 @@ int run(HINSTANCE instance)
     std::wstring why;
     if (!openPayload(p, why)) {
         if (why == L"no program is attached to this launcher")
-            return report(kExitDamaged, L"This launcher carries no program (" + why + L").");
+            return report(kExitDamaged, L"This launcher carries no program.");
         return report(kExitDamaged, L"This copy of exFAT Image Builder is damaged (" + why + L").\n\nDownload it again from " +
                                         std::wstring(kReleases));
     }
@@ -617,5 +617,14 @@ int run(HINSTANCE instance)
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+    // People start this file from Downloads or the Desktop. Every DLL loaded by
+    // name from here on (the delay-loaded cabinet.dll, bcrypt.dll and
+    // comctl32.dll, and whatever the system loads for the window) comes from
+    // System32, never from the folder the launcher happens to lie in.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    // At log-off and shutdown Windows ends the launcher after the program
+    // (which has the default level 0x280): the program is in a job that dies
+    // with the launcher and must get to handle the end of the session itself.
+    SetProcessShutdownParameters(0x100, 0);
     return run(instance);
 }

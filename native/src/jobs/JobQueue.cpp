@@ -6,6 +6,7 @@
 #include "jobs/JobHistory.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -44,7 +45,20 @@ JobQueue::JobQueue(SettingsStore& settings, const JobFactory& factory, QObject* 
 
 JobQueue::~JobQueue()
 {
-    shutdown(15000);
+    if (!shutdown(15000)) {
+        // A worker that does not reach a checkpoint keeps the closed app in
+        // memory: the log says which jobs were still running.
+        QStringList titles;
+        {
+            std::lock_guard lock(m_mutex);
+            for (const auto& e : m_entries)
+                if (e->rec.isActive())
+                    titles << e->rec.title;
+        }
+        Log(QStringLiteral("queue")).warn(QStringLiteral("Still waiting for a job to stop after 15 s. Running when the app closed: %1")
+                                              .arg(titles.join(QStringLiteral("; "))));
+        Logger::instance().flush();
+    }
     // Workers hold raw pointers into m_entries (their progress reporters), so
     // they must all be gone before the members are destroyed. Cancellation has
     // been requested and tool processes killed; this returns promptly.
@@ -134,6 +148,8 @@ void JobQueue::pauseJob(const QString& id)
             return;
         e->rec.state = JobState::Paused;
     }
+    if (e->reporter) // created and reset on this thread only
+        e->reporter->setPaused(true); // the clocks and the rate stand still too
     e->cancel.pause();
     emit jobChanged(id);
 }
@@ -149,6 +165,8 @@ void JobQueue::resumeJob(const QString& id)
             return;
         e->rec.state = JobState::Running;
     }
+    if (e->reporter)
+        e->reporter->setPaused(false);
     e->cancel.resume();
     emit jobChanged(id);
 }
@@ -249,6 +267,10 @@ bool JobQueue::remove(const QString& id)
     }
     emit jobRemoved(id);
     (void)saveQueue();
+    // The last waiting job is gone: the queue may have just run dry, and only
+    // schedule() tells anybody (idle()).
+    if (removed->rec.state == JobState::Queued)
+        schedule();
     return true;
 }
 
@@ -422,8 +444,8 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
         Result<JobOutcome> result = Error(ErrorCode::Internal, QStringLiteral("The job did not run."));
         {
             const QString tempParent = settings.string(QStringLiteral("storage.tempFolder")).trimmed();
-            TempDir temp(QStringLiteral("job-") + id,
-                         (!tempParent.isEmpty() && QFileInfo(tempParent).isDir()) ? tempParent : QString());
+            const bool useTempParent = !tempParent.isEmpty() && QFileInfo(tempParent).isDir();
+            TempDir temp(QStringLiteral("job-") + id, useTempParent ? tempParent : QString());
             JobContext ctx;
             ctx.jobId = id;
             ctx.token = token;
@@ -431,6 +453,9 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
             ctx.log = Log(job->kind(), id);
             ctx.settings = settings;
             ctx.tempDir = temp.path();
+            if (!tempParent.isEmpty() && !useTempParent) // explains a later "Not enough space" on the system drive
+                ctx.log.warn(QStringLiteral("The temporary folder %1 is not available; using %2 for this job.")
+                                 .arg(QDir::toNativeSeparators(tempParent), QDir::toNativeSeparators(temp.path())));
             try {
                 if (!temp.isValid())
                     result = Error(ErrorCode::IoError, QStringLiteral("Could not create a temporary folder for this job."));
@@ -447,6 +472,9 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
             if (settings.boolean(QStringLiteral("advanced.keepJobTempFolders")))
                 temp.keep();
         }
+        // The job ends here, on its own thread, before the queue hears of the
+        // result and lets go of the reporter the job was given.
+        job.reset();
         if (self)
             QMetaObject::invokeMethod(self.data(), [self, id, result = std::move(result)]() mutable {
                 if (self)
@@ -501,7 +529,7 @@ bool JobQueue::tryAutoRetry(const std::shared_ptr<Entry>& e, const Error& error)
     }
     Log(QStringLiteral("queue"), e->rec.id)
         .warn(QStringLiteral("Failed (%1); retrying in %2 s, attempt %3 of %4")
-                  .arg(error.message).arg(delay).arg(e->rec.attempt).arg(maxRetries + 1));
+                  .arg(error.message, QString::number(delay), QString::number(e->rec.attempt), QString::number(maxRetries + 1)));
     return true;
 }
 
@@ -555,7 +583,9 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
     }
     Log log(QStringLiteral("queue"), id);
     if (snapshot.state == JobState::Succeeded)
-        log.info(QStringLiteral("Finished: %1 — %2").arg(snapshot.title, snapshot.outcome ? snapshot.outcome->summary : QString()));
+        log.info(snapshot.outcome && !snapshot.outcome->summary.isEmpty()
+                     ? QStringLiteral("Finished: %1 — %2").arg(snapshot.title, snapshot.outcome->summary)
+                     : QStringLiteral("Finished: %1").arg(snapshot.title));
     else if (snapshot.state == JobState::Cancelled)
         log.warn(QStringLiteral("Cancelled: %1").arg(snapshot.title));
     else
@@ -572,7 +602,7 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
 
 Status JobQueue::saveQueue() const
 {
-    if (m_persistPath.isEmpty())
+    if (m_persistPath.isEmpty() || m_restoring)
         return success();
     QJsonArray arr;
     {
@@ -592,6 +622,9 @@ Status JobQueue::saveQueue() const
                 o.insert(QStringLiteral("error"), e->rec.error->message);
             arr.append(o);
         }
+        // Jobs of another build of the app, exactly as they were read.
+        for (const auto& v : m_foreignJobs)
+            arr.append(v);
     }
     QJsonObject root;
     root.insert(QStringLiteral("version"), 1);
@@ -606,32 +639,52 @@ Status JobQueue::restoreQueue()
     QFile f(m_persistPath);
     if (!f.open(QIODevice::ReadOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not read the saved queue."), f.errorString());
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseError);
     f.close();
-    const QJsonArray arr = doc.object().value(QStringLiteral("jobs")).toArray();
-    bool previousHold = m_held;
+    const QJsonValue saved = doc.object().value(QStringLiteral("jobs"));
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject() || (!saved.isArray() && !saved.isUndefined())) {
+        // Set aside: the next save would otherwise replace it with an empty queue.
+        const QString aside = m_persistPath + QStringLiteral(".damaged");
+        QFile::remove(aside);
+        const bool moved = QFile::rename(m_persistPath, aside);
+        return Error(ErrorCode::CorruptData,
+                     moved ? QStringLiteral("The saved queue was damaged and has been set aside as %1. The queue starts empty.")
+                                 .arg(QFileInfo(aside).fileName())
+                           : QStringLiteral("The saved queue was damaged and could not be read. The queue starts empty."),
+                     parseError.error != QJsonParseError::NoError ? parseError.errorString()
+                                                                  : QStringLiteral("not a queue file"));
+    }
+    const QJsonArray arr = saved.toArray();
+    const bool previousHold = m_held;
     m_held = true; // restore without starting; the user resumes
+    // The file is written once, after the loop: until then it still holds
+    // every saved job, whatever happens while they are restored.
+    m_restoring = true;
+    QJsonArray foreign;
     for (const auto& v : arr) {
         const QJsonObject o = v.toObject();
         const QString kind = o.value(QStringLiteral("kind")).toString();
-        const bool wasRunning = o.value(QStringLiteral("state")).toString() != jobStateName(JobState::Queued);
-        auto job = m_factory.create(kind, o.value(QStringLiteral("params")).toObject(),
-                                    o.value(QStringLiteral("overrides")).toObject().toVariantMap());
-        if (!job.ok()) {
-            Log(QStringLiteral("queue")).warn(QStringLiteral("Could not restore a %1 job: %2").arg(kind, job.error().message));
+        const QJsonObject params = o.value(QStringLiteral("params")).toObject();
+        const QVariantMap overrides = o.value(QStringLiteral("overrides")).toObject().toVariantMap();
+        if (!v.isObject() || !m_factory.contains(kind)) {
+            // Saved by another build of the app (one with more job types):
+            // kept in the file as it is, so that build finds it again.
+            foreign.append(v);
+            Log(QStringLiteral("queue"))
+                .warn(QStringLiteral("A saved job of the type \"%1\" is not available in this build. It stays in the queue "
+                                     "file for the build that knows it.")
+                          .arg(kind));
             continue;
         }
         // A record the user can retry, but that never starts by itself.
         const QString savedState = o.value(QStringLiteral("state")).toString();
-        const auto keepInterrupted = [&](std::unique_ptr<Job>& j, const QString& why, bool fresh) {
+        const bool wasRunning = savedState != jobStateName(JobState::Queued);
+        const auto keepRecord = [&](JobRecord rec, const QString& why, bool fresh) {
             auto e = std::make_shared<Entry>();
+            e->rec = std::move(rec);
             e->rec.id = newId();
             e->rec.kind = kind;
-            e->rec.title = j->title();
-            e->rec.subtitle = j->subtitle();
-            e->rec.phases = j->phases();
-            e->rec.parameters = j->parameters();
-            e->rec.overrides = j->settingsOverrides;
             e->rec.added = QDateTime::fromString(o.value(QStringLiteral("added")).toString(), Qt::ISODate);
             e->rec.state = JobState::Interrupted;
             e->rec.error = Error(ErrorCode::Internal, why);
@@ -644,6 +697,33 @@ Status JobQueue::restoreQueue()
                 (void)m_history->append(e->rec);
             emit jobAdded(e->rec.id);
         };
+        const auto keepInterrupted = [&](std::unique_ptr<Job>& j, const QString& why, bool fresh) {
+            JobRecord rec;
+            rec.title = j->title();
+            rec.subtitle = j->subtitle();
+            rec.phases = j->phases();
+            rec.parameters = j->parameters();
+            rec.overrides = j->settingsOverrides;
+            keepRecord(std::move(rec), why, fresh);
+        };
+        auto job = m_factory.create(kind, params, overrides);
+        if (!job.ok()) {
+            // The job type exists but refuses what was saved: shown with the
+            // reason instead of vanishing; the user removes it.
+            Log(QStringLiteral("queue")).warn(QStringLiteral("Could not restore a %1 job: %2").arg(kind, job.error().message));
+            JobRecord rec;
+            rec.title = o.value(QStringLiteral("title")).toString();
+            if (rec.title.isEmpty())
+                rec.title = m_factory.displayName(kind);
+            rec.parameters = params;
+            rec.overrides = overrides;
+            const QString before = o.value(QStringLiteral("error")).toString();
+            const bool known = savedState == jobStateName(JobState::Interrupted) && !before.isEmpty();
+            keepRecord(std::move(rec),
+                       known ? before : QStringLiteral("This saved job could not be restored: %1").arg(job.error().message),
+                       !known);
+            continue;
+        }
         if (savedState == jobStateName(JobState::Interrupted)) {
             // Kept from an earlier restart: shown again with the same explanation.
             const QString why = o.value(QStringLiteral("error")).toString();
@@ -651,14 +731,16 @@ Status JobQueue::restoreQueue()
             continue;
         }
         if (wasRunning) {
+            // After a crash or a power cut nobody removed the job's .part file.
             keepInterrupted(job.value(),
-                            QStringLiteral("The app closed while this job was running. Its partial output was not kept. Retry to run it again."), true);
+                            QStringLiteral("The app closed while this job was running. Its unfinished output (a .part file) "
+                                           "may still be in the output folder. Retry to run it again."),
+                            true);
             continue;
         }
         // enqueue() validates the job's inputs (a USB drive may not be plugged
         // in yet) and takes the job; a second copy keeps the record if refused.
-        auto again = m_factory.create(kind, o.value(QStringLiteral("params")).toObject(),
-                                      o.value(QStringLiteral("overrides")).toObject().toVariantMap());
+        auto again = m_factory.create(kind, params, overrides);
         auto added = enqueue(std::move(job).value());
         if (!added.ok()) {
             Log(QStringLiteral("queue")).warn(QStringLiteral("Could not restore a job: %1").arg(added.error().message));
@@ -668,8 +750,16 @@ Status JobQueue::restoreQueue()
                                                    .arg(added.error().message), true);
         }
     }
+    {
+        std::lock_guard lock(m_mutex);
+        m_foreignJobs = foreign;
+    }
+    m_restoring = false;
+    (void)saveQueue();
     // Restored jobs wait for the user to resume the queue.
     m_held = previousHold || pendingCount() > 0;
+    if (m_held != previousHold)
+        emit heldChanged(m_held);
     schedule();
     return success();
 }

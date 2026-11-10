@@ -106,8 +106,10 @@ inline Status success() { return {}; }
             return fw_try_result_.takeError();                                             \
     } while (0)
 
-// Assign the value of a Result<T> or propagate its error.
-#define FW_TRY_ASSIGN(lhs, expr)                                                           \
+// Assign the value of a Result<T> or propagate its error. This expands to
+// three statements (so that `lhs` can be a declaration): use it only inside a
+// block, never as the single statement after an `if` or `else` without braces.
+#define FW_TRY_ASSIGN(lhs, expr)                                                        \
     auto&& FW_CONCAT_(fw_tmp_, __LINE__) = (expr);                                         \
     if (!FW_CONCAT_(fw_tmp_, __LINE__).ok())                                               \
         return FW_CONCAT_(fw_tmp_, __LINE__).takeError();                                  \

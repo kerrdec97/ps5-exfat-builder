@@ -33,6 +33,7 @@ struct Entry {
     quint64 uncompressedSize = 0;
     quint64 localHeaderOffset = 0;
     QDateTime modified;
+    bool encrypted = false; // password-protected: listed, but read() refuses it
     bool isDirectory() const { return name.endsWith(u'/'); }
 };
 
@@ -94,12 +95,21 @@ public:
     Status verifyAll(const CancellationToken& token, ProgressReporter* progress = nullptr);
 
     // Extracts every entry under `destination` (created if needed) through
-    // .part files. Refuses absolute names, drive letters and ".." segments.
+    // .part files. Refuses absolute names, drive letters and ".." segments;
+    // a character the host cannot store in a name (a ':' in a folder zipped
+    // on Linux) is replaced, see extractedPath().
+    // With `onlyUnder` ("Folder/"), only the entries whose name starts with it
+    // (compared without regard to case) are checked and extracted.
     Status extractAll(const QString& destination, const CancellationToken& token, ProgressReporter* progress = nullptr,
-                      bool overwrite = false);
+                      bool overwrite = false, const QString& onlyUnder = {});
 
-    // The safe relative path for an entry name, or empty if it would escape.
+    // The safe relative path for an entry name, or empty if it would escape
+    // (also for any name with a ':').
     static QString safeRelativePath(const QString& entryName);
+    // The relative path extractAll() writes an entry to: each segment gets the
+    // name the host can store (fw::hostEntryName). Empty if the name would
+    // escape or is the destination itself ("./").
+    static QString extractedPath(const QString& entryName);
 
 private:
     QString m_path;

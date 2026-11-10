@@ -593,6 +593,31 @@ private slots:
         QVERIFY(r.exitCode != 0);
         QVERIFY2(r.err.contains(QLatin1String("already carries a payload")), qPrintable(r.err));
     }
+
+    // A file with a reserved device name can be created through a \\?\ path,
+    // but Explorer could neither open nor delete it in the unpacked program:
+    // the packer refuses it. Wrong arguments are answered with the usage.
+    void packerRefusesReservedNamesAndBadArguments()
+    {
+        const QString input = m_tmp.filePath(QStringLiteral("reserved-in"));
+        QVERIFY(writeFile(input + QLatin1Char('/') + kEntry, "x"));
+        const std::wstring reserved =
+            (QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(input) + QStringLiteral("\\aux.txt")).toStdWString();
+        const HANDLE h = CreateFileW(reserved.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        QVERIFY(h != INVALID_HANDLE_VALUE);
+        CloseHandle(h);
+        const Run r = pack({QStringLiteral("pack"), QStringLiteral("--stub"), QStringLiteral(FW_ONEFILE_STUB_PATH),
+                            QStringLiteral("--input"), input, QStringLiteral("--entry"), kEntry, QStringLiteral("--output"),
+                            m_tmp.filePath(QStringLiteral("reserved.exe"))});
+        QVERIFY(DeleteFileW(reserved.c_str())); // QTemporaryDir could not remove it
+        QVERIFY(r.exitCode != 0);
+        QVERIFY2(r.err.contains(QLatin1String("unsupported file name: aux.txt")), qPrintable(r.describe()));
+        QVERIFY(!QFile::exists(m_tmp.filePath(QStringLiteral("reserved.exe"))));
+
+        const Run usage = pack({QStringLiteral("list")});
+        QVERIFY(usage.exitCode != 0);
+        QVERIFY2(usage.err.contains(QLatin1String("usage: fw_onefile_pack list")), qPrintable(usage.describe()));
+    }
 };
 
 #endif // FW_ONEFILE_STUB_PATH

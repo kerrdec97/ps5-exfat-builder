@@ -4,6 +4,7 @@
 // Info-ZIP unzip when available.
 
 #include "core/Zip.h"
+#include "core/ArchiveSource.h"
 #include "core/ProcessRunner.h"
 #include "support/TestSupport.h"
 
@@ -229,6 +230,268 @@ private slots:
         QVERIFY(!st.ok());
         QVERIFY(!QFile::exists(out + QStringLiteral("/ok.txt")));
         QVERIFY(!QFile::exists(m_root.filePath(QStringLiteral("escaped.txt"))));
+    }
+
+    // A zipped game as a build source: only the game is unpacked, which is
+    // exactly what the free-space check and the progress total counted.
+    void zipSourceUnpacksOnlyTheGame()
+    {
+        const QString z = m_root.filePath(QStringLiteral("source.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("Extras/video.bin"), QByteArray(300000, 'v'), zip::Method::Store).ok());
+            QVERIFY(w.addData(QStringLiteral("PPSA01234-app0/eboot.bin"), QByteArray(100000, 'e')).ok());
+            QVERIFY(w.addData(QStringLiteral("PPSA01234-app0/sce_sys/param.json"), "{}").ok());
+            QVERIFY(w.addData(QStringLiteral("ppsa01234-APP0/data/a.bin"), QByteArray(2000, 'a'), zip::Method::Store).ok());
+            QVERIFY(w.addDirectory(QStringLiteral("Extras/empty")).ok());
+            QVERIFY(w.addData(QStringLiteral("readme.txt"), "hello").ok());
+            QVERIFY(w.finish().ok());
+        }
+        auto g = archive::inspectZip(z);
+        QVERIFY(g.ok());
+        QCOMPARE(g->rootPrefix, QStringLiteral("PPSA01234-app0/"));
+        QCOMPARE(g->files, qint64(3));
+        QCOMPARE(g->bytes, qint64(100000 + 2 + 2000));
+
+        ProgressReporter progress;
+        const QString temp = m_root.filePath(QStringLiteral("unpack"));
+        auto root = archive::unpackZipSource(z, temp, CancellationToken(), &progress, 0);
+        QVERIFY2(root.ok(), root.ok() ? "" : qPrintable(root.error().toLogString()));
+        QCOMPARE(readFile(root.value() + QStringLiteral("/eboot.bin")), QByteArray(100000, 'e'));
+        QCOMPARE(readFile(root.value() + QStringLiteral("/data/a.bin")), QByteArray(2000, 'a'));
+        QCOMPARE(QDir(temp + QStringLiteral("/zip-source")).entryList(QDir::AllEntries | QDir::NoDotAndDotDot),
+                 QStringList{QStringLiteral("PPSA01234-app0")});
+        // Every byte of the game counted once, compressed or not.
+        const ProgressSnapshot s = progress.snapshot();
+        QCOMPARE(s.total, g->bytes);
+        QCOMPARE(s.done, g->bytes);
+
+        // A name that would leave the folder is only a reason to refuse when
+        // it belongs to what is unpacked.
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        const QString only = m_root.filePath(QStringLiteral("only-extras"));
+        QVERIFY(r.extractAll(only, CancellationToken(), nullptr, false, QStringLiteral("extras/")).ok());
+        QCOMPARE(QDir(only).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("Extras")});
+        QVERIFY(QFileInfo(only + QStringLiteral("/Extras/empty")).isDir());
+    }
+
+    // Archives written with '\' as the separator (Compress-Archive of Windows
+    // PowerShell 5, old .NET) hold the same folders as any other.
+    void backslashSeparatorsAreFolders()
+    {
+        const QString z = m_root.filePath(QStringLiteral("backslash.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("game/eboot.bin"), QByteArray(1000, 'e')).ok());
+            QVERIFY(w.addData(QStringLiteral("game/sce_sys/param.json"), "{}").ok());
+            QVERIFY(w.addDirectory(QStringLiteral("game/empty")).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        for (const char* name : {"game/eboot.bin", "game/sce_sys/param.json", "game/empty/"}) {
+            QByteArray with(name);
+            with.replace('/', '\\');
+            QCOMPARE(bytes.count(name), 2); // local header and central directory
+            bytes.replace(name, with);
+        }
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QVERIFY(r.find(QStringLiteral("game/eboot.bin")));
+        const auto* folder = r.find(QStringLiteral("game/empty/"));
+        QVERIFY(folder && folder->isDirectory());
+        auto g = archive::inspectZip(z);
+        QVERIFY2(g.ok(), g.ok() ? "" : qPrintable(g.error().toLogString()));
+        QCOMPARE(g->rootPrefix, QStringLiteral("game/"));
+        QVERIFY(g->hasEboot && g->hasParam);
+        const QString out = m_root.filePath(QStringLiteral("backslash-out"));
+        QVERIFY(r.extractAll(out, CancellationToken()).ok());
+        QCOMPARE(readFile(out + QStringLiteral("/game/eboot.bin")), QByteArray(1000, 'e'));
+        QVERIFY(QFileInfo(out + QStringLiteral("/game/empty")).isDir());
+    }
+
+    // A ':' in a folder name (zipped on Linux or macOS) and a "./" entry are
+    // no attempt to leave the destination: such archives are extracted.
+    void harmlessNamesAreNotRefused()
+    {
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("./")).isEmpty());
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("C:/win.txt")).isEmpty());
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("a/../../evil.txt")).isEmpty());
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("/abs.txt")).isEmpty());
+        QCOMPARE(zip::Reader::extractedPath(QStringLiteral("a/C:/x.txt")), QStringLiteral("a/C_/x.txt"));
+        QCOMPARE(zip::Reader::extractedPath(QStringLiteral("./a//b/./c.txt")), QStringLiteral("a/b/c.txt"));
+        // The strict check other callers rely on is unchanged.
+        QVERIFY(zip::Reader::safeRelativePath(QStringLiteral("Game: Two/eboot.bin")).isEmpty());
+
+        const QString z = m_root.filePath(QStringLiteral("colon.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addDirectory(QStringLiteral("./")).ok());
+            QVERIFY(w.addData(QStringLiteral("Game: Two-app0/eboot.bin"), QByteArray(500, 'e')).ok());
+            QVERIFY(w.addData(QStringLiteral("Game: Two-app0/sce_sys/param.json"), "{}").ok());
+            QVERIFY(w.finish().ok());
+        }
+        auto root = archive::unpackZipSource(z, m_root.filePath(QStringLiteral("colon-unpack")), CancellationToken(), nullptr, 0);
+        QVERIFY2(root.ok(), root.ok() ? "" : qPrintable(root.error().toLogString()));
+        QCOMPARE(QFileInfo(root.value()).fileName(), QStringLiteral("Game_ Two-app0"));
+        QCOMPARE(readFile(root.value() + QStringLiteral("/eboot.bin")), QByteArray(500, 'e'));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        const QString all = m_root.filePath(QStringLiteral("colon-all"));
+        QVERIFY(r.extractAll(all, CancellationToken()).ok()); // the "./" entry is the destination itself
+        QVERIFY(QFileInfo(all + QStringLiteral("/Game_ Two-app0/sce_sys/param.json")).isFile());
+
+        // Inside the game no name may change on the way into the image: a
+        // zipped game with a name this computer cannot store is refused, not
+        // built with the file renamed.
+        const QString odd = m_root.filePath(QStringLiteral("odd-name.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(odd).ok());
+            QVERIFY(w.addData(QStringLiteral("Game-app0/eboot.bin"), "e").ok());
+            QVERIFY(w.addData(QStringLiteral("Game-app0/data/stage 1: intro.bin"), "x").ok());
+            QVERIFY(w.finish().ok());
+        }
+        const Status st = archive::checkZipSource(odd);
+        QCOMPARE(st.error().code, ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("\"stage 1: intro.bin\"")), qPrintable(st.error().message));
+    }
+
+    // Names stored without the UTF-8 flag: UTF-8 all the same (Info-ZIP on
+    // Linux and macOS), or the format's code page 437; never Latin-1.
+    void namesWithoutTheUtf8Flag()
+    {
+        const auto clearUtf8Flag = [](QByteArray& bytes) {
+            // General-purpose flags: offset 6 of a local header, 8 of a central one.
+            for (qsizetype at = bytes.indexOf("PK\x03\x04"); at >= 0; at = bytes.indexOf("PK\x03\x04", at + 4))
+                bytes[at + 7] = char(bytes[at + 7] & ~0x08);
+            for (qsizetype at = bytes.indexOf("PK\x01\x02"); at >= 0; at = bytes.indexOf("PK\x01\x02", at + 4))
+                bytes[at + 9] = char(bytes[at + 9] & ~0x08);
+        };
+        const QString z = m_root.filePath(QStringLiteral("names.zip"));
+        const QByteArray big(3 * 1024 * 1024 + 5, 'q'); // several chunks through addData
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QString::fromUtf8("Pok\xc3\xa9mon/d\xc3\xa9mo.bin"), "utf8").ok());
+            QVERIFY(w.addData(QStringLiteral("XXXXXXX/big.bin"), big).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        clearUtf8Flag(bytes);
+        const QByteArray cp437("M\x81nchen/\x82t\x82.bin"); // "München/été.bin" in code page 437
+        QCOMPARE(cp437.size(), qsizetype(15));
+        QCOMPARE(bytes.count("XXXXXXX/big.bin"), 2);
+        bytes.replace("XXXXXXX/big.bin", cp437);
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QCOMPARE(int(r.entries().size()), 2);
+        QCOMPARE(r.entries()[0].name, QString::fromUtf8("Pok\xc3\xa9mon/d\xc3\xa9mo.bin"));
+        QCOMPARE(r.entries()[1].name, QString::fromUtf8("M\xc3\xbcnchen/\xc3\xa9t\xc3\xa9.bin"));
+        QVERIFY(r.verifyAll(CancellationToken()).ok());
+        auto all = r.readAll(r.entries()[1]);
+        QVERIFY(all.ok());
+        QCOMPARE(all.value(), big);
+        QCOMPARE(zip::crc32(big), r.entries()[1].crc32);
+    }
+
+    // A password-protected entry is named as such, not reported as damaged;
+    // a zipped game with one is refused before the job starts.
+    void passwordProtectedEntriesAreNamed()
+    {
+        const QString z = m_root.filePath(QStringLiteral("locked.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("game/eboot.bin"), QByteArray(1000, 'e')).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        bytes[6] = char(bytes[6] | 0x01);
+        const qsizetype cd = bytes.indexOf("PK\x01\x02");
+        QVERIFY(cd > 0);
+        bytes[cd + 8] = char(bytes[cd + 8] | 0x01);
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QVERIFY(r.entries().front().encrypted);
+        const Status st = r.verifyAll(CancellationToken());
+        QCOMPARE(st.error().code, ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("password-protected")), qPrintable(st.error().message));
+        const Status source = archive::checkZipSource(z);
+        QCOMPARE(source.error().code, ErrorCode::Unsupported);
+        QVERIFY2(source.error().message.contains(QStringLiteral("password-protected")), qPrintable(source.error().message));
+    }
+
+    // Exactly 65,535 entries fit the classic end record: such an archive has
+    // no ZIP64 records (Python's zipfile writes it that way) and is valid.
+    void archiveWith65535EntriesAndNoZip64Records()
+    {
+        const QString z = m_root.filePath(QStringLiteral("many.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (int i = 0; i < 65535; ++i)
+                QVERIFY(w.addData(QStringLiteral("f%1").arg(i), QByteArray(), zip::Method::Store).ok());
+            QVERIFY(w.finish().ok());
+        }
+        // The writer added ZIP64 records (it does from 65,535 entries on):
+        // take them out and write the real values into the classic record.
+        QByteArray bytes = readFile(z);
+        const qsizetype eocd = bytes.size() - 22;
+        const qsizetype record = eocd - 20 - 56;
+        QVERIFY(bytes.mid(eocd, 4) == QByteArray("PK\x05\x06") && bytes.mid(eocd - 20, 4) == QByteArray("PK\x06\x07")
+                && bytes.mid(record, 4) == QByteArray("PK\x06\x06"));
+        QByteArray classic = bytes.mid(eocd);
+        classic.replace(12, 4, bytes.mid(record + 40, 4)); // size of the central directory
+        classic.replace(16, 4, bytes.mid(record + 48, 4)); // its offset
+        bytes = bytes.left(record) + classic;
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        zip::Reader r;
+        const Status st = r.open(z);
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        QCOMPARE(int(r.entries().size()), 65535);
+        QCOMPARE(r.entries().back().name, QStringLiteral("f65534"));
+        // Without a locator, the 32-bit "see ZIP64" marks are still an error.
+        bytes.replace(bytes.size() - 22 + 16, 4, QByteArray("\xFF\xFF\xFF\xFF"));
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        QVERIFY(!r.open(z).ok());
+    }
+
+    // readAll's limit also holds for a declared size of 2^63 or more.
+    void readAllLimitIsUnsigned()
+    {
+        const QString z = makeSample(QStringLiteral("limit.zip"));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        zip::Entry huge = *r.find(QStringLiteral("game/text.txt"));
+        huge.uncompressedSize = ~quint64(0);
+        auto all = r.readAll(huge, 1024);
+        QVERIFY(!all.ok());
+        QCOMPARE(all.error().code, ErrorCode::Unsupported);
+        QVERIFY(r.readAll(*r.find(QStringLiteral("game/text.txt")), 200000).ok());
+        QCOMPARE(r.readAll(*r.find(QStringLiteral("game/text.txt")), 199999).error().code, ErrorCode::Unsupported);
+    }
+
+    // A cancel during the read-back check is a cancel, not a damaged archive.
+    void cancelDuringReadBackIsACancel()
+    {
+        const QString z = m_root.filePath(QStringLiteral("cancel-verify.zip"));
+        CancellationSource cs;
+        zip::Writer w;
+        QVERIFY(w.open(z).ok());
+        QVERIFY(w.addData(QStringLiteral("a.bin"), QByteArray(100000, 'v')).ok());
+        cs.cancel();
+        const Status st = w.finish(true, cs.token());
+        QVERIFY(!st.ok());
+        QVERIFY2(st.error().isCancelled(), qPrintable(st.error().toLogString()));
+        QVERIFY(!QFile::exists(z) && !QFile::exists(z + QStringLiteral(".part")));
     }
 
     void interoperatesWithPythonAndUnzip()

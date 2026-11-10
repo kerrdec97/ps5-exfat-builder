@@ -78,6 +78,17 @@ QString hostEntryName(const QString& name)
     return isSafeEntryName(local) ? local : hostFileName(name, true);
 }
 
-QString hostNameKey(const QString& name) { return hostUsesWindowsNames() ? name.toUpper() : name; }
+QString hostNameKey(const QString& name)
+{
+    if (!hostUsesWindowsNames())
+        return name;
+    // One UTF-16 unit to one unit, as the NTFS upcase table maps. QString's
+    // toUpper() does full case mapping ("ß" becomes "SS"), which would make
+    // "straße.dat" and "STRASSE.dat" collide although NTFS keeps both.
+    QString key = name;
+    for (QChar& ch : key)
+        ch = ch.toUpper();
+    return key;
+}
 
 } // namespace fw

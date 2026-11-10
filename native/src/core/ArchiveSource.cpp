@@ -1,6 +1,7 @@
 #include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 #include "core/Zip.h"
 
 #include <QDir>
@@ -8,6 +9,7 @@
 #include <QMap>
 
 #include <algorithm>
+#include <limits>
 
 namespace fw::archive {
 
@@ -81,14 +83,34 @@ Result<ZipGame> inspectZip(const QString& zipPath)
     const QString rootLower = g.rootPrefix.toLower();
     g.hasEboot = roots.value(rootLower) & 1;
     g.hasParam = roots.value(rootLower) & 2;
+    // Exactly the entries unpackZipSource() extracts. The sizes come from the
+    // archive and are not to be trusted: the sum stops at the largest qint64.
+    constexpr quint64 kMaxBytes = quint64(std::numeric_limits<qint64>::max());
+    quint64 bytes = 0;
     for (const zip::Entry& e : r.entries()) {
-        if (e.isDirectory() || !e.name.toLower().startsWith(rootLower))
+        if (!e.name.startsWith(g.rootPrefix, Qt::CaseInsensitive))
             continue;
-        g.bytes += qint64(e.uncompressedSize);
+        // Inside the game every name must reach the image as it is. One this
+        // computer cannot store would be renamed while unpacking (the game's
+        // own folder may be: its name is not part of the image).
+        for (const QString& part : e.name.mid(g.rootPrefix.size()).split(u'/', Qt::SkipEmptyParts))
+            if (part != u"." && hostEntryName(part) != part)
+                return Error(ErrorCode::Unsupported,
+                             QStringLiteral("%1 holds the name \"%2\", which this computer cannot store as a file name. "
+                                            "The game would not be built as it is in the archive.")
+                                 .arg(QFileInfo(zipPath).fileName(), part));
+        if (e.isDirectory())
+            continue;
+        if (e.encrypted) // said before the job starts, not after half the archive is unpacked
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("%1 is password-protected. Unpack it and choose the game's folder.")
+                             .arg(QFileInfo(zipPath).fileName()));
+        bytes = e.uncompressedSize > kMaxBytes - bytes ? kMaxBytes : bytes + e.uncompressedSize;
         ++g.files;
         if (e.name.compare(g.rootPrefix + QStringLiteral("sce_sys/param.json"), Qt::CaseInsensitive) == 0)
             paramEntry = &e;
     }
+    g.bytes = qint64(bytes);
     if (paramEntry && paramEntry->uncompressedSize < 16ull * 1024 * 1024) {
         auto data = r.readAll(*paramEntry);
         if (data.ok())
@@ -102,17 +124,19 @@ Status checkZipSource(const QString& zipPath)
     auto g = inspectZip(zipPath);
     if (!g.ok())
         return g.error();
-    if (!g->otherGames.isEmpty())
+    if (!g->otherGames.isEmpty()) {
+        // Named like the other games: without the trailing slash.
+        const QString first = g->rootPrefix.isEmpty() ? QStringLiteral("(top level)") : g->rootPrefix.chopped(1);
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("%1 holds more than one game (%2 and %3). Zip one game per archive, or unpack it and "
                                     "choose the game's folder.")
-                         .arg(QFileInfo(zipPath).fileName(), g->rootPrefix.isEmpty() ? QStringLiteral("(top level)") : g->rootPrefix,
-                              g->otherGames.join(QStringLiteral(", "))));
+                         .arg(QFileInfo(zipPath).fileName(), first, g->otherGames.join(QStringLiteral(", "))));
+    }
     return success();
 }
 
 Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, const CancellationToken& token,
-                                ProgressReporter* progress)
+                                ProgressReporter* progress, qint64 freeSpaceMarginBytes)
 {
     FW_TRY(checkZipSource(zipPath));
     FW_TRY_ASSIGN(ZipGame g, inspectZip(zipPath));
@@ -120,15 +144,18 @@ Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, 
         return Error(ErrorCode::InvalidArgument, QStringLiteral("No temporary folder to unpack %1 into.").arg(nativePath(zipPath)));
     const QString dest = QDir(tempDir).filePath(QStringLiteral("zip-source"));
     QDir().mkpath(dest);
-    FW_TRY(ensureFreeSpace(dest, g.bytes));
+    FW_TRY(ensureFreeTempSpace(dest, g.bytes, freeSpaceMarginBytes));
     zip::Reader r;
     FW_TRY(r.open(zipPath));
     if (progress) {
-        progress->begin(QStringLiteral("Unpacking ZIP"), g.bytes, g.files);
+        // A step, not a phase: the job's own phase list stays as it declared it.
+        progress->beginStep(QStringLiteral("Unpacking ZIP"), g.bytes, g.files);
         progress->setCurrentItem(QStringLiteral("Unpacking %1").arg(QFileInfo(zipPath).fileName()));
     }
-    FW_TRY(r.extractAll(dest, token, progress, true));
-    const QString root = QDir::cleanPath(QDir(dest).filePath(g.rootPrefix));
+    // Only the game: what else the archive holds (extras, a second folder) is
+    // neither counted above nor wanted in the temporary folder.
+    FW_TRY(r.extractAll(dest, token, progress, true, g.rootPrefix));
+    const QString root = QDir::cleanPath(QDir(dest).filePath(zip::Reader::extractedPath(g.rootPrefix)));
     if (!QFileInfo(root).isDir())
         return Error(ErrorCode::CorruptData, QStringLiteral("The game folder was not found after unpacking %1.").arg(nativePath(zipPath)));
     return root;

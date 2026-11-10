@@ -41,9 +41,12 @@ Result<ZipGame> inspectZip(const QString& zipPath);
 // validate(): the archive is readable and holds exactly one game.
 Status checkZipSource(const QString& zipPath);
 
-// run(): unpacks the game into <tempDir>/zip-source and returns the game
-// folder. Checks free space on the temp drive first.
+// run(): unpacks the game (and nothing else the archive holds) into
+// <tempDir>/zip-source and returns the game folder. Checks free space on the
+// temp drive first, keeping `freeSpaceMarginBytes` in reserve (jobs pass
+// storage.freeSpaceMarginMiB).
 Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, const CancellationToken& token,
-                                ProgressReporter* progress = nullptr);
+                                ProgressReporter* progress = nullptr,
+                                qint64 freeSpaceMarginBytes = 256LL * 1024 * 1024);
 
 } // namespace fw::archive

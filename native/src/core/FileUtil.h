@@ -30,7 +30,9 @@ QString formatCount(qint64 n); // "18,442"
 QString toLongPath(const QString& path);
 // True if `child` is `parent` or inside it (case-insensitive on Windows).
 bool isSameOrInside(const QString& child, const QString& parent);
-// Removes characters Windows forbids in file names.
+// Replaces the characters Windows forbids in file names by '_' and drops
+// trailing dots and spaces. Reserved device names (CON, NUL...) are left to
+// hostFileName() in PathSafety.
 QString sanitizeFileName(const QString& name);
 // `path` if nothing exists there (nor its .part), else "name (2).ext", "name (3).ext"...
 QString uniquePath(const QString& path);
@@ -74,6 +76,13 @@ public:
     QString filePath(const QString& name) const;
     void keep() { m_keep = true; }
 
+    // Every TempDir holds a small marker file with this name. A folder left
+    // behind in a place the user chose (Settings > Storage > Temporary folder)
+    // is only ever deleted when the marker proves the app created it.
+    static QString ownerMarkerName();
+    // True when `dir` is a real folder (not a link) that holds the marker.
+    static bool isOwnedFolder(const QString& dir);
+
 private:
     QString m_path;
     bool m_keep = false;
@@ -90,6 +99,10 @@ Result<DiskSpace> diskSpace(const QString& anyPathOnVolume);
 // Fails with InsufficientSpace and a user-facing message if fewer than
 // `requiredBytes + marginBytes` are free on the volume holding `path`.
 Status ensureFreeSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes = 256LL * 1024 * 1024);
+// The same check for a job's temporary folder. The message of
+// ensureFreeSpace() advises another output folder, which does not help when
+// the temporary drive is the full one; this one names the setting that does.
+Status ensureFreeTempSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes = 256LL * 1024 * 1024);
 
 // ---- volume checks ---------------------------------------------------------------
 struct VolumeInfo {
@@ -143,15 +156,23 @@ struct FileTree {
 struct ScanOptions {
     bool includeHidden = true;
     bool followSymlinks = false;
-    // Relative paths (or simple `*` globs on the file name) to skip.
+    // Relative paths (or simple `*` globs on the file name) to skip. A folder
+    // that matches is skipped with everything in it.
     QStringList excludes;
 };
 
 Result<FileTree> scanTree(const QString& root, const CancellationToken& token, const ScanOptions& options = {});
 
-// Removes a directory tree. Refuses to touch drive roots, the user's home
-// folder and anything outside `mustBeInside` when it is given.
+// Removes a directory tree. Refuses a protected location (see below) and
+// anything outside `mustBeInside` when it is given.
 Status removeTreeSafely(const QString& path, const QString& mustBeInside = {});
+
+// True for a folder that is never deleted as a whole, whatever a job was told
+// its source is: a drive root, the user's home folder and the folders it lies
+// in, the Desktop, Documents, Downloads, Pictures, Music and Videos folders,
+// and on Windows the Windows, Program Files and ProgramData folders. Folders
+// inside them are not protected.
+bool isProtectedLocation(const QString& path);
 
 // Deletes a folder and everything in it like QDir::removeRecursively(), but
 // never descends into a junction or symbolic link: the link itself is removed
@@ -166,5 +187,11 @@ bool isJunctionOrSymlink(const QString& path);
 // drive (FlushFileBuffers / fsync), so a verified image survives a power cut
 // before it replaces anything.
 Status flushToDisk(QFile& file, const QString& displayName);
+
+// Ends writing to `file`: flushes Qt's buffer, sets the modification time
+// when one is given and closes the file. QFile keeps small writes in memory,
+// so a full or vanished drive often shows up only here and not in write():
+// every writer must check this result before it commits its .part file.
+Status finishWrittenFile(QFile& file, const QString& displayName, const QDateTime& modified = {});
 
 } // namespace fw

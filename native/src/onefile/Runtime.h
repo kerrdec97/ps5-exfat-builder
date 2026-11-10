@@ -45,8 +45,9 @@ struct Progress {
 
 using TraceFn = void (*)(const std::wstring&);
 
-// Opens the launcher's own file and reads the trailer and index. `damaged` is
-// false when no payload is attached at all.
+// Opens the launcher's own file and reads the trailer and index. On failure
+// `err` says why; it is "no program is attached to this launcher" when the
+// file carries no payload at all (anything else means a damaged one).
 bool openPayload(Payload& p, std::wstring& err);
 
 // Runtime roots, most preferred first.

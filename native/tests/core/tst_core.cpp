@@ -13,10 +13,12 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSignalSpy>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include <atomic>
+#include <limits>
 #include <thread>
 
 using namespace fw;
@@ -187,6 +189,56 @@ private slots:
         QVERIFY(done.elapsedMs >= 80);
     }
 
+    // Work a helper does for a job (unpacking a zipped source) keeps the
+    // job's phases: the bar neither runs to 100 % nor falls back afterwards.
+    void stepKeepsTheDeclaredPhases()
+    {
+        const QStringList phases{QStringLiteral("Scanning"), QStringLiteral("Writing image")};
+        ProgressReporter p;
+        p.setPhases(phases, {1.0, 3.0});
+        p.beginStep(QStringLiteral("Unpacking ZIP"), 100, 4);
+        p.advance(50);
+        auto s = p.snapshot();
+        QCOMPARE(s.phase, QStringLiteral("Unpacking ZIP"));
+        QCOMPARE(s.phaseIndex, 0);
+        QCOMPARE(s.phaseCount, 2);
+        QCOMPARE(s.total, qint64(100));
+        QCOMPARE(s.filesTotal, qint64(4));
+        QCOMPARE(s.overallFraction, 0.25 * 0.25); // half of the first half of "Scanning"
+        p.advance(50);
+        QCOMPARE(p.snapshot().overallFraction, 0.125);
+        // The job declares its phases again and starts its first one.
+        p.setPhases(phases, {1.0, 3.0});
+        p.beginPhase(0, 0);
+        s = p.snapshot();
+        QCOMPARE(s.phase, QStringLiteral("Scanning"));
+        QCOMPARE(s.overallFraction, 0.125); // not back to zero
+        p.beginPhase(0, 10);
+        p.advance(5);
+        QCOMPARE(p.snapshot().overallFraction, 0.25 * 0.75);
+        p.beginPhase(1, 10);
+        QCOMPARE(p.snapshot().overallFraction, 0.25);
+        QCOMPARE(p.snapshot().phaseMs.size(), 2);
+
+        // A job that declares the step as a phase gets exactly that phase.
+        ProgressReporter declared;
+        declared.setPhases({QStringLiteral("Unpacking ZIP"), QStringLiteral("Scanning")});
+        declared.beginPhase(1, 0);
+        declared.beginStep(QStringLiteral("Unpacking ZIP"), 10);
+        declared.advance(10);
+        QCOMPARE(declared.snapshot().phaseIndex, 0);
+        QCOMPARE(declared.snapshot().phaseCount, 2);
+        QCOMPARE(declared.snapshot().overallFraction, 0.5);
+
+        // No phases declared at all: the step is the only phase, as begin().
+        ProgressReporter plain;
+        plain.beginStep(QStringLiteral("Unpacking ZIP"), 10);
+        plain.advance(10);
+        QCOMPARE(plain.snapshot().phase, QStringLiteral("Unpacking ZIP"));
+        QCOMPARE(plain.snapshot().phaseCount, 1);
+        QCOMPARE(plain.snapshot().overallFraction, 1.0);
+    }
+
     void formatsFollowTheDesignSystem()
     {
         QCOMPARE(formatBytes(0), QStringLiteral("0 B"));
@@ -197,6 +249,47 @@ private slots:
         QCOMPARE(formatTimeLeft(30 * 1000), QStringLiteral("Less than a minute left"));
         QCOMPARE(formatTimeLeft(125 * 60 * 1000), QStringLiteral("About 2 h 5 min left"));
         QCOMPARE(formatRate(418.0 * 1024 * 1024), QStringLiteral("418 MB/s"));
+        // At a unit boundary the rounded value decides the unit.
+        QCOMPARE(formatBytes(1023), QStringLiteral("1023 B"));
+        QCOMPARE(formatBytes(1024), QStringLiteral("1.0 KB"));
+        QCOMPARE(formatBytes(1024 * 1024 - 1), QStringLiteral("1.0 MB")); // not "1024.0 KB"
+        QCOMPARE(formatBytes(qint64(1024) * 1024 * 1024 - 1), QStringLiteral("1.0 GB"));
+        QCOMPARE(formatBytes(qint64(1023.9 * 1024)), QStringLiteral("1023.9 KB"));
+        QCOMPARE(formatRate(0), QStringLiteral("—"));
+        QCOMPARE(formatRate(100), QStringLiteral("<1 KB/s")); // not "0 KB/s"
+        QCOMPARE(formatRate(600), QStringLiteral("1 KB/s"));
+        QCOMPARE(formatRate(1024.0 * 1024 - 1), QStringLiteral("1 MB/s")); // not "1024 KB/s"
+        QCOMPARE(formatRate(1024.0 * 1024 * 1024 - 1), QStringLiteral("1.0 GB/s"));
+        QCOMPARE(formatRate(2.5 * 1024 * 1024 * 1024), QStringLiteral("2.5 GB/s"));
+    }
+
+    // The job monitor's clocks and the rate stand still while a job is
+    // paused, and the pause is not part of the elapsed time afterwards.
+    void pauseStopsTheClocks()
+    {
+        ProgressReporter p({}, 50);
+        p.setPhases({QStringLiteral("Write"), QStringLiteral("Verify")});
+        p.beginPhase(0, 1000);
+        QTest::qWait(40);
+        p.setPaused(true);
+        const auto paused = p.snapshot();
+        QVERIFY(paused.elapsedMs >= 30);
+        QTest::qWait(120);
+        QCOMPARE(p.snapshot().elapsedMs, paused.elapsedMs);
+        QCOMPARE(p.snapshot().phaseMs, paused.phaseMs);
+        p.setPaused(false);
+        QTest::qWait(40);
+        const auto resumed = p.snapshot();
+        QVERIFY2(resumed.elapsedMs >= paused.elapsedMs + 30, qPrintable(QString::number(resumed.elapsedMs)));
+        QVERIFY2(resumed.elapsedMs < paused.elapsedMs + 110, qPrintable(QString::number(resumed.elapsedMs))); // the 120 ms are not in it
+        QCOMPARE(resumed.phaseMs.value(0), resumed.elapsedMs);
+        // A slow phase counted in steps still gets a time left.
+        ProgressReporter slow([](const ProgressSnapshot&) {}, 0);
+        slow.beginPhase(0, 10, 0, /*unitIsBytes=*/false);
+        QTest::qWait(1200);
+        slow.advance(1); // less than one step a second
+        QVERIFY(slow.snapshot().ratePerSec > 0.0 && slow.snapshot().ratePerSec < 1.0);
+        QVERIFY2(slow.snapshot().etaMs > 0, qPrintable(QString::number(slow.snapshot().etaMs)));
     }
 
     void loggerWritesTextAndJsonAndRingBuffer()
@@ -264,6 +357,55 @@ private slots:
         QCOMPARE(f.readAll(), QByteArray("v2"));
     }
 
+    // Another program holds the file that is to be replaced. The commit fails
+    // with a clear message and leaves everything as it was; it never answers
+    // a refused rename by copying the file (QFile::rename would).
+    void partFileCommitNeverCopiesALockedFile()
+    {
+#ifdef Q_OS_WIN
+        const QString dir = m_root.filePath(QStringLiteral("locked"));
+        const QString target = dir + QStringLiteral("/image.bin");
+        QVERIFY(fwtest::writeTextFile(target, "old image"));
+        QFile holder(target); // Qt opens files without delete sharing: a rename is refused
+        QVERIFY(holder.open(QIODevice::ReadOnly));
+        {
+            PartFile p(target);
+            QVERIFY(fwtest::writeTextFile(p.partPath(), "new image"));
+            const Status st = p.commit(true);
+            QVERIFY(!st.ok());
+            QCOMPARE(st.error().code, ErrorCode::PermissionDenied);
+            QVERIFY(st.error().message.contains(QStringLiteral("image.bin")));
+            QVERIFY(!p.committed());
+            QCOMPARE(QDir(dir).entryList(QDir::Files, QDir::Name),
+                     (QStringList{QStringLiteral("image.bin"), QStringLiteral("image.bin.part")})); // no copy set aside
+            QCOMPARE(holder.readAll(), QByteArray("old image"));
+            holder.close();
+            QVERIFY(p.commit(true).ok());
+        }
+        QCOMPARE(QDir(dir).entryList(QDir::Files), QStringList{QStringLiteral("image.bin")});
+        QFile f(target);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QByteArray("new image"));
+        f.close();
+
+        // The finished .part itself is still held (a scanner): the old file
+        // comes back under its name.
+        QFile scanner(target + QStringLiteral(".part"));
+        PartFile p(target);
+        QVERIFY(fwtest::writeTextFile(p.partPath(), "newer image"));
+        QVERIFY(scanner.open(QIODevice::ReadOnly));
+        const Status st = p.commit(true);
+        QVERIFY(!st.ok());
+        QCOMPARE(st.error().code, ErrorCode::IoError);
+        QVERIFY(st.error().message.contains(QStringLiteral(".part")));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QByteArray("new image"));
+        scanner.close();
+#else
+        QSKIP("Windows file sharing rules");
+#endif
+    }
+
     void uniquePathAvoidsExistingFiles()
     {
         const QString p = m_root.filePath(QStringLiteral("u/report.zip"));
@@ -272,6 +414,10 @@ private slots:
         QCOMPARE(uniquePath(p), m_root.filePath(QStringLiteral("u/report (2).zip")));
         QVERIFY(fwtest::writeTextFile(m_root.filePath(QStringLiteral("u/report (2).zip.part")), "partial"));
         QCOMPARE(uniquePath(p), m_root.filePath(QStringLiteral("u/report (3).zip")));
+        // Percent escapes in downloaded names are not placeholders.
+        const QString escaped = m_root.filePath(QStringLiteral("u/Update%2BDLC%1%3.pkg"));
+        QVERIFY(fwtest::writeTextFile(escaped, "1"));
+        QCOMPARE(uniquePath(escaped), m_root.filePath(QStringLiteral("u/Update%2BDLC%1%3 (2).pkg")));
     }
 
     void tempDirIsRemoved()
@@ -283,6 +429,10 @@ private slots:
             path = t.path();
             QVERIFY(QFileInfo(path).fileName().startsWith(QStringLiteral("fw-unit-")));
             QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("x/y.txt")), "x"));
+            // The marker that tells the app's folders from the user's.
+            QVERIFY(QFileInfo(t.filePath(TempDir::ownerMarkerName())).isFile());
+            QVERIFY(TempDir::isOwnedFolder(path));
+            QVERIFY(!TempDir::isOwnedFolder(t.filePath(QStringLiteral("x"))));
         }
         QVERIFY(!QFileInfo::exists(path));
     }
@@ -327,6 +477,18 @@ private slots:
         QVERIFY(st.error().message.startsWith(QStringLiteral("Not enough space on ")));
         QVERIFY(st.error().message.contains(QStringLiteral("choose another output folder")));
         QVERIFY(ensureFreeSpace(m_root.path(), 1024, 0).ok());
+        // The temporary drive is full: another output folder would not help.
+        const Status temp = ensureFreeTempSpace(m_root.path(), qint64(1) << 60);
+        QCOMPARE(temp.error().code, ErrorCode::InsufficientSpace);
+        QVERIFY(temp.error().message.startsWith(QStringLiteral("Not enough space on ")));
+        QVERIFY(temp.error().message.endsWith(QStringLiteral("or choose another temporary folder in Settings > Storage.")));
+        QVERIFY(ensureFreeTempSpace(m_root.path(), 1024, 0).ok());
+        // Sizes taken from an archive can be absurd: the sum must not wrap
+        // round to "nothing needed".
+        const qint64 huge = std::numeric_limits<qint64>::max();
+        QCOMPARE(ensureFreeSpace(m_root.path(), huge).error().code, ErrorCode::InsufficientSpace);
+        QCOMPARE(ensureFreeSpace(m_root.path(), huge - 5, huge).error().code, ErrorCode::InsufficientSpace);
+        QVERIFY(ensureFreeSpace(m_root.path(), -huge, 0).ok());
     }
 
     void scanTreeListsAndExcludes()
@@ -360,6 +522,24 @@ private slots:
         QVERIFY(!removeTreeSafely(inside, m_root.filePath(QStringLiteral("elsewhere"))).ok());
         QVERIFY(removeTreeSafely(m_root.filePath(QStringLiteral("del")), m_root.path()).ok());
         QVERIFY(!QFileInfo::exists(inside));
+        // What is never deleted as a whole (asked, not tried).
+        QVERIFY(isProtectedLocation(QDir::rootPath()));
+        QVERIFY(isProtectedLocation(QDir::homePath()));
+        QVERIFY(isProtectedLocation(QFileInfo(QDir::homePath()).absolutePath())); // "C:/Users"
+        for (const auto location : {QStandardPaths::DesktopLocation, QStandardPaths::DocumentsLocation, QStandardPaths::DownloadLocation}) {
+            const QString folder = QStandardPaths::writableLocation(location);
+            if (folder.isEmpty())
+                continue;
+            QVERIFY2(isProtectedLocation(folder), qPrintable(folder));
+            QVERIFY2(isProtectedLocation(folder + QStringLiteral("/sub/..")), qPrintable(folder));
+            QVERIFY2(!isProtectedLocation(folder + QStringLiteral("/PS5/game-app0")), qPrintable(folder));
+        }
+#ifdef Q_OS_WIN
+        QVERIFY(isProtectedLocation(qEnvironmentVariable("SystemRoot")));
+        QVERIFY(isProtectedLocation(QDir::homePath().toUpper()));
+#endif
+        QVERIFY(!isProtectedLocation(m_root.path()));
+        QVERIFY(!isProtectedLocation(inside));
     }
 
     void isSameOrInsideHandlesPrefixes()
@@ -456,6 +636,10 @@ private slots:
         auto r = runProcess(spec, CancellationToken());
         QVERIFY(!r.ok());
         QCOMPARE(r.error().code, ErrorCode::ExternalToolFailed);
+        // An absolute path is a program only when it is a file.
+        QCOMPARE(findExecutable(fwtest::helperPath()), fwtest::helperPath());
+        QVERIFY(findExecutable(m_root.path()).isEmpty());
+        QVERIFY(findExecutable(spec.program).isEmpty());
     }
 };
 

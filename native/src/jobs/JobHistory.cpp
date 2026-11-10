@@ -68,7 +68,8 @@ Status JobHistory::append(const JobRecord& r)
         return Error(ErrorCode::IoError, QStringLiteral("Could not write the job history."), f.errorString());
     f.write(QJsonDocument(h.toJson()).toJson(QJsonDocument::Compact));
     f.write("\n");
-    f.close();
+    if (Status st = finishWrittenFile(f, QStringLiteral("the job history")); !st.ok())
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write the job history."), st.error().detail);
     if (m_cache) {
         m_cache->insert(m_cache->begin(), h);
         if (int(m_cache->size()) > kCached)
@@ -109,9 +110,11 @@ std::vector<HistoryEntry> JobHistory::recent(int limit) const
 Status JobHistory::clear()
 {
     std::lock_guard lock(m_mutex);
-    m_cache = std::vector<HistoryEntry>{};
+    // The file first: if it cannot be removed the history is still there, and
+    // the page must not show it as empty until the next start.
     if (QFile::exists(m_path) && !QFile::remove(m_path))
         return Error(ErrorCode::IoError, QStringLiteral("Could not clear the job history."));
+    m_cache = std::vector<HistoryEntry>{};
     return success();
 }
 
@@ -120,6 +123,11 @@ Status JobHistory::exportCsv(const QString& path) const
     auto entries = recent(1000000);
     std::reverse(entries.begin(), entries.end());
     const auto cell = [](QString v) {
+        // Titles come from other people's dumps. A cell that starts like a
+        // formula would be run by Excel or LibreOffice: the leading quote
+        // makes it plain text there.
+        if (!v.isEmpty() && QStringLiteral("=+-@\t\r").contains(v.at(0)))
+            v.prepend(u'\'');
         if (v.contains(u'"') || v.contains(u',') || v.contains(u'\n') || v.contains(u'\r')) {
             v.replace(QStringLiteral("\""), QStringLiteral("\"\""));
             v = u'"' + v + u'"';

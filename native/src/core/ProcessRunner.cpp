@@ -46,7 +46,7 @@ QString decodeConsoleOutput(const QByteArray& bytes, OutputEncoding encoding)
 QString findExecutable(const QString& name, const QStringList& extraDirs)
 {
     if (QFileInfo(name).isAbsolute())
-        return QFileInfo(name).isExecutable() || QFileInfo::exists(name) ? name : QString();
+        return QFileInfo(name).isFile() ? name : QString(); // a folder of that name is no program
     QString found;
     if (!extraDirs.isEmpty())
         found = QStandardPaths::findExecutable(name, extraDirs);
@@ -256,9 +256,14 @@ bool resumeProcessThreads(qint64 pid)
 
 void taskkillTree(qint64 pid)
 {
-    // Fallback for children that escaped the job object.
-    QProcess::execute(QStringLiteral("taskkill"),
-                      {QStringLiteral("/PID"), QString::number(pid), QStringLiteral("/T"), QStringLiteral("/F")});
+    // Fallback for children that escaped the job object. By its full path: a
+    // bare "taskkill" would be looked up in the app folder and the current
+    // folder before System32.
+    wchar_t system[MAX_PATH] = {};
+    const UINT n = GetSystemDirectoryW(system, MAX_PATH);
+    const QString taskkill = n > 0 && n < MAX_PATH ? QDir(QString::fromWCharArray(system, int(n))).filePath(QStringLiteral("taskkill.exe"))
+                                                   : QStringLiteral("taskkill");
+    QProcess::execute(taskkill, {QStringLiteral("/PID"), QString::number(pid), QStringLiteral("/T"), QStringLiteral("/F")});
 }
 #endif
 

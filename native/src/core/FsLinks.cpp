@@ -89,7 +89,8 @@ Status createDirectoryJunction(const QString& link, const QString& target)
 
 #ifdef Q_OS_WIN
     const QString nativeLink = QDir::toNativeSeparators(QFileInfo(link).absoluteFilePath());
-    QString nativeTarget = QDir::toNativeSeparators(t.absoluteFilePath());
+    // Cleaned: the target is stored as given, and a ".." in it would not resolve.
+    QString nativeTarget = QDir::toNativeSeparators(QDir::cleanPath(t.absoluteFilePath()));
     if (!nativeTarget.endsWith(u'\\'))
         nativeTarget += u'\\';
     const std::wstring subst = (QStringLiteral("\\??\\") + nativeTarget).toStdWString();
@@ -128,6 +129,20 @@ Status createDirectoryJunction(const QString& link, const QString& target)
     if (!ok) {
         RemoveDirectoryW(nativeLink.toStdWString().c_str());
         return Error(ErrorCode::IoError, QStringLiteral("Could not create a folder junction."), why);
+    }
+    // NTFS stores any target without looking at it. One a junction cannot
+    // reach (a network share, a mapped network drive) would only fail later,
+    // inside the tool that is given the link: open the folder through it now.
+    const HANDLE through = CreateFileW(nativeLink.toStdWString().c_str(), FILE_LIST_DIRECTORY,
+                                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                       FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (through != INVALID_HANDLE_VALUE) {
+        CloseHandle(through);
+    } else if (GetLastError() != ERROR_ACCESS_DENIED) { // denied: the target is there, only not ours to list
+        const QString unreachable = lastErrorText();
+        RemoveDirectoryW(nativeLink.toStdWString().c_str());
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("A folder junction cannot point at %1.").arg(QDir::toNativeSeparators(target)), unreachable);
     }
     return success();
 #else

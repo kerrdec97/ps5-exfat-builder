@@ -11,6 +11,7 @@
 #include "core/Result.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 
@@ -71,11 +72,14 @@ public:
     bool operator!=(const Value& o) const { return !(*this == o); }
 
 private:
+    void indexKeys(); // after a key was appended, or after m_index was cleared
+
     Type m_type = Type::Null;
     bool m_bool = false;
     QString m_text;              // string content, or number literal
     std::vector<Value> m_items;  // array items, or object values (parallel to m_keys)
     QStringList m_keys;          // object keys in order
+    QHash<QString, int> m_index; // key -> position; only kept for large objects, else empty
 };
 
 struct ParseOptions {

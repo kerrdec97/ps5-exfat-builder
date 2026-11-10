@@ -11,6 +11,8 @@
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
+#include <QStandardPaths>
 #include <QStorageInfo>
 
 #ifdef Q_OS_WIN
@@ -22,7 +24,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <limits>
 
 namespace fw {
 
@@ -41,6 +45,12 @@ QString formatBytes(qint64 bytes)
     }
     if (u == 0)
         return QStringLiteral("%1 B").arg(bytes);
+    // The unit is chosen from the rounded value: 1,048,575 bytes is "1.0 MB",
+    // not "1024.0 KB".
+    if (u < 5 && v >= 1023.95) {
+        v /= 1024.0;
+        ++u;
+    }
     return QStringLiteral("%1 %2").arg(QString::number(v, 'f', 1), QLatin1String(units[u]));
 }
 
@@ -48,12 +58,16 @@ QString formatRate(double bytesPerSec)
 {
     if (bytesPerSec <= 0)
         return QStringLiteral("—");
-    const qint64 b = qint64(bytesPerSec);
-    if (b < 1024 * 1024)
-        return QStringLiteral("%1 KB/s").arg(QString::number(bytesPerSec / 1024.0, 'f', 0));
-    if (b < 1024LL * 1024 * 1024)
-        return QStringLiteral("%1 MB/s").arg(QString::number(bytesPerSec / (1024.0 * 1024.0), 'f', 0));
-    return QStringLiteral("%1 GB/s").arg(QString::number(bytesPerSec / (1024.0 * 1024.0 * 1024.0), 'f', 1));
+    // As above: what rounds to 1024 of a unit is 1 of the next one.
+    const double kb = bytesPerSec / 1024.0;
+    if (kb < 0.5)
+        return QStringLiteral("<1 KB/s"); // would print as "0 KB/s"
+    if (kb < 1023.5)
+        return QStringLiteral("%1 KB/s").arg(QString::number(kb, 'f', 0));
+    const double mb = kb / 1024.0;
+    if (mb < 1023.5)
+        return QStringLiteral("%1 MB/s").arg(QString::number(mb, 'f', 0));
+    return QStringLiteral("%1 GB/s").arg(QString::number(mb / 1024.0, 'f', 1));
 }
 
 QString formatTimeLeft(qint64 ms)
@@ -129,7 +143,8 @@ QString uniquePath(const QString& path)
     const QString base = fi.completeBaseName();
     const QString suffix = fi.suffix().isEmpty() ? QString() : QStringLiteral(".") + fi.suffix();
     for (int i = 2; i < 10000; ++i) {
-        const QString candidate = QDir(dir).filePath(QStringLiteral("%1 (%2)%3").arg(base).arg(i).arg(suffix));
+        // One call: chained arg() would read a "%2" inside the name as a placeholder.
+        const QString candidate = QDir(dir).filePath(QStringLiteral("%1 (%2)%3").arg(base, QString::number(i), suffix));
         if (!taken(candidate))
             return candidate;
     }
@@ -164,31 +179,70 @@ PartFile::~PartFile()
         QFile::remove(partPath());
 }
 
+namespace {
+// Renames a file within its folder. QFile::rename() answers a refused rename
+// (another program holds the file) by copying the whole file: minutes for an
+// image, not cancellable, and as much disk space again, only to fail anyway.
+// This never copies. A scanner or indexer that still has the file open gets a
+// moment to let go first.
+bool renameWithoutCopy(const QString& from, const QString& to, QString& why)
+{
+#ifdef Q_OS_WIN
+    const std::wstring source = toLongPath(from).toStdWString(), target = toLongPath(to).toStdWString();
+    DWORD err = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        if (attempt > 0)
+            Sleep(100);
+        if (MoveFileExW(source.c_str(), target.c_str(), 0)) // no MOVEFILE_COPY_ALLOWED, no replacing
+            return true;
+        err = GetLastError();
+        if (err != ERROR_SHARING_VIOLATION && err != ERROR_ACCESS_DENIED && err != ERROR_LOCK_VIOLATION)
+            break;
+    }
+    why = QStringLiteral("MoveFileEx failed (%1): %2 -> %3").arg(QString::number(err), from, to);
+    return false;
+#else
+    if (!QFileInfo::exists(to) && ::rename(QFile::encodeName(from).constData(), QFile::encodeName(to).constData()) == 0)
+        return true;
+    why = QStringLiteral("rename failed: %1 -> %2").arg(from, to);
+    return false;
+#endif
+}
+} // namespace
+
 Status PartFile::commit(bool replaceExisting)
 {
     if (m_committed)
         return success();
+    QString why;
+    const auto renameFailed = [&] {
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("Could not give %1 its final name. Close any program that has it or its .part file "
+                                    "open and try again.")
+                         .arg(QFileInfo(m_final).fileName()),
+                     why);
+    };
     if (QFileInfo::exists(m_final)) {
         if (!replaceExisting)
             return Error(ErrorCode::AlreadyExists,
-                         QStringLiteral("%1 already exists. Choose another name or output folder.")
+                         QStringLiteral("%1 already exists. Choose another name or folder.")
                              .arg(QFileInfo(m_final).fileName()));
         // Set the old file aside first so a failed rename can be undone (audit M2).
         // A name nobody uses, so a user's own "<name>.old" is never touched.
         const QString aside = uniquePath(m_final + QStringLiteral(".fw-old"));
-        if (!QFile::rename(m_final, aside))
+        if (!renameWithoutCopy(m_final, aside, why))
             return Error(ErrorCode::PermissionDenied,
                          QStringLiteral("Could not replace %1. Close any program using it and try again.")
-                             .arg(QFileInfo(m_final).fileName()));
-        if (!QFile::rename(partPath(), m_final)) {
-            QFile::rename(aside, m_final);
-            return Error(ErrorCode::IoError, QStringLiteral("Could not rename the finished file."),
-                         partPath() + QStringLiteral(" -> ") + m_final);
+                             .arg(QFileInfo(m_final).fileName()),
+                         why);
+        if (!renameWithoutCopy(partPath(), m_final, why)) {
+            QString ignored;
+            renameWithoutCopy(aside, m_final, ignored);
+            return renameFailed();
         }
         QFile::remove(aside);
-    } else if (!QFile::rename(partPath(), m_final)) {
-        return Error(ErrorCode::IoError, QStringLiteral("Could not rename the finished file."),
-                     partPath() + QStringLiteral(" -> ") + m_final);
+    } else if (!renameWithoutCopy(partPath(), m_final, why)) {
+        return renameFailed();
     }
     m_committed = true;
     return success();
@@ -198,6 +252,10 @@ void PartFile::abandon()
 {
     QFile::remove(partPath());
 }
+
+namespace {
+constexpr char kOwnerMarkerMagic[] = "fw-temp 1\n"; // first line of TempDir's marker file
+} // namespace
 
 TempDir::TempDir(const QString& prefix, const QString& parentDir)
 {
@@ -210,9 +268,34 @@ TempDir::TempDir(const QString& prefix, const QString& parentDir)
         const QString p = QDir(parent).filePath(name);
         if (!QFileInfo::exists(p) && QDir().mkpath(p)) {
             m_path = p;
+            // Without the marker the folder still works; it is then never
+            // swept from a folder the user chose.
+            QFile marker(QDir(p).filePath(ownerMarkerName()));
+            if (marker.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+                marker.write(kOwnerMarkerMagic);
+                marker.write("Temporary folder of exFAT Image Builder. It is removed when its job ends.\n");
+                marker.close();
+            }
             return;
         }
     }
+}
+
+QString TempDir::ownerMarkerName()
+{
+    return QStringLiteral(".fw-temp");
+}
+
+bool TempDir::isOwnedFolder(const QString& dir)
+{
+    const QFileInfo folder(dir);
+    if (!folder.isDir() || isJunctionOrSymlink(dir))
+        return false;
+    const QString markerPath = QDir(dir).filePath(ownerMarkerName());
+    if (!QFileInfo(markerPath).isFile() || isJunctionOrSymlink(markerPath))
+        return false;
+    QFile marker(markerPath);
+    return marker.open(QIODevice::ReadOnly) && marker.read(sizeof(kOwnerMarkerMagic) - 1) == kOwnerMarkerMagic;
 }
 
 TempDir::~TempDir()
@@ -248,22 +331,43 @@ Result<DiskSpace> diskSpace(const QString& anyPathOnVolume)
     return d;
 }
 
+namespace {
+Status ensureFreeSpaceOr(const QString& path, qint64 requiredBytes, qint64 marginBytes, const QString& remedy);
+} // namespace
+
 Status ensureFreeSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes)
+{
+    return ensureFreeSpaceOr(path, requiredBytes, marginBytes, QStringLiteral("choose another output folder"));
+}
+
+Status ensureFreeTempSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes)
+{
+    return ensureFreeSpaceOr(path, requiredBytes, marginBytes,
+                             QStringLiteral("choose another temporary folder in Settings > Storage"));
+}
+
+namespace {
+Status ensureFreeSpaceOr(const QString& path, qint64 requiredBytes, qint64 marginBytes, const QString& remedy)
 {
     auto ds = diskSpace(path);
     if (!ds.ok())
         return ds.takeError();
-    const qint64 need = requiredBytes + marginBytes;
+    // Sizes read from an archive or an image can be absurd: no overflow, and a
+    // negative size never turns the check off.
+    const qint64 required = std::max<qint64>(0, requiredBytes), margin = std::max<qint64>(0, marginBytes);
+    const qint64 need = required > std::numeric_limits<qint64>::max() - margin ? std::numeric_limits<qint64>::max()
+                                                                                : required + margin;
     if (ds->available >= need)
         return success();
     QString drive = QDir::toNativeSeparators(ds->rootPath);
     if (drive.endsWith(u'\\') && drive.size() > 1)
         drive.chop(1);
     return Error(ErrorCode::InsufficientSpace,
-                 QStringLiteral("Not enough space on %1. Free %2 or choose another output folder.")
-                     .arg(drive, formatBytes(need - ds->available)),
+                 QStringLiteral("Not enough space on %1. Free %2 or %3.")
+                     .arg(drive, formatBytes(need - ds->available), remedy),
                  QStringLiteral("need %1 bytes, available %2").arg(need).arg(ds->available));
 }
+} // namespace
 
 // ---- volume checks ---------------------------------------------------------------
 
@@ -311,7 +415,8 @@ Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 larges
     constexpr qint64 k4GiB = 4LL * 1024 * 1024 * 1024;
     if ((fs == u"FAT32" || fs == u"FAT" || fs == u"VFAT" || fs == u"MSDOS") && largestFileBytes >= k4GiB) // FAT32 holds up to 4 GiB - 1
         return Error(ErrorCode::Unsupported,
-                     QStringLiteral("%1 is formatted as FAT32, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.").arg(drive),
+                     QStringLiteral("%1 is formatted as %2, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.")
+                         .arg(drive, fs == u"FAT32" ? QStringLiteral("FAT32") : QStringLiteral("FAT")),
                      QStringLiteral("largest file %1 bytes").arg(largestFileBytes));
     QStringList warnings;
     if (v.isNetwork)
@@ -356,12 +461,8 @@ Status copyFileStreaming(const QString& src, const QString& dst, const Cancellat
     if (durable) {
         if (Status st = flushToDisk(out, QFileInfo(dst).fileName()); !st.ok())
             return st;
-    } else if (!out.flush()) {
-        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QFileInfo(dst).fileName()),
-                     out.errorString());
     }
-    out.setFileTime(QFileInfo(src).lastModified(), QFileDevice::FileModificationTime);
-    out.close();
+    FW_TRY(finishWrittenFile(out, QFileInfo(dst).fileName(), QFileInfo(src).lastModified()));
     return part.commit(replaceExisting);
 }
 
@@ -399,9 +500,11 @@ Result<bool> filesEqual(const QString& a, const QString& b, const CancellationTo
 {
     QFile fa(toLongPath(a)), fb(toLongPath(b));
     if (!fa.open(QIODevice::ReadOnly))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(a), fa.errorString());
+        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(QFileInfo(a).fileName()),
+                     a + QStringLiteral(": ") + fa.errorString());
     if (!fb.open(QIODevice::ReadOnly))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(b), fb.errorString());
+        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(QFileInfo(b).fileName()),
+                     b + QStringLiteral(": ") + fb.errorString());
     if (fa.size() != fb.size())
         return false;
     QByteArray ba, bb;
@@ -475,50 +578,68 @@ Result<FileTree> scanTree(const QString& root, const CancellationToken& token, c
     QDir::Filters filters = QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System;
     if (options.includeHidden)
         filters |= QDir::Hidden;
-    QDirIterator::IteratorFlags flags = QDirIterator::Subdirectories;
-    if (options.followSymlinks)
-        flags |= QDirIterator::FollowSymlinks;
 
-    QDirIterator it(tree.root, filters, flags);
-    const QDir base(tree.root);
-    QStringList skippedLinks;
+    // One listing per folder, and every decision from the listing's own data
+    // (no further query per entry). A symbolic link or junction is skipped
+    // before anything below it is read (QDirIterator's own recursion walks
+    // into junctions), so a link to a large tree, or to one of its own
+    // parents, costs nothing. Windows shortcuts (.lnk) are ordinary files.
+    // An excluded folder is skipped with everything in it.
+    struct Folder {
+        QString path;
+        QString relPrefix; // "" for the root, else "a/b/"
+    };
+    std::vector<Folder> pending{{tree.root, QString()}};
+    // followSymlinks: each linked folder is entered once (a link may point
+    // back at a folder that holds it). Qt's canonical path does not resolve
+    // junctions, so the link's own target is what identifies the folder.
+    const auto identity = [](const QString& path) {
+        const QString real = QFileInfo(path).canonicalFilePath();
+#ifdef Q_OS_WIN
+        return real.toLower();
+#else
+        return real;
+#endif
+    };
+    QSet<QString> followed;
+    if (options.followSymlinks)
+        followed.insert(identity(tree.root));
     qint64 n = 0;
-    while (it.hasNext()) {
-        it.next();
-        if ((++n & 0x3FF) == 0 && !token.checkpoint())
-            return Error::cancelled();
-        const QFileInfo fi = it.fileInfo();
-        const QString rel = base.relativeFilePath(fi.absoluteFilePath());
-        if (!options.followSymlinks) {
-            // Symbolic links and junctions are skipped with everything below
-            // them (Qt descends into junctions). Windows shortcuts (.lnk) are
-            // ordinary files.
-            if (std::any_of(skippedLinks.begin(), skippedLinks.end(),
-                            [&](const QString& l) { return rel.startsWith(l); }))
+    while (!pending.empty()) {
+        const Folder folder = std::move(pending.back());
+        pending.pop_back();
+        QDirIterator it(folder.path, filters);
+        while (it.hasNext()) {
+            const QFileInfo fi = it.nextFileInfo();
+            if ((++n & 0x3FF) == 0 && !token.checkpoint())
+                return Error::cancelled();
+            const bool link = fi.isSymbolicLink() || fi.isJunction();
+            if (link && !options.followSymlinks)
                 continue;
-            if (isJunctionOrSymlink(fi.absoluteFilePath())) {
-                skippedLinks << rel + u'/';
+            const QString rel = folder.relPrefix + fi.fileName();
+            if (!options.excludes.isEmpty() && matchesExclude(rel, options.excludes))
                 continue;
+            FileEntry e;
+            e.relativePath = rel;
+            e.isDir = fi.isDir();
+            e.size = e.isDir ? 0 : fi.size();
+            e.modified = fi.lastModified();
+            if (e.isDir) {
+                ++tree.dirCount;
+                bool enter = true;
+                if (link) {
+                    const QString real = identity(fi.isJunction() ? fi.junctionTarget() : fi.symLinkTarget());
+                    enter = !real.isEmpty() && !followed.contains(real);
+                    followed.insert(real);
+                }
+                if (enter)
+                    pending.push_back({fi.absoluteFilePath(), rel + u'/'});
+            } else {
+                ++tree.fileCount;
+                tree.totalBytes += e.size;
             }
+            tree.entries.push_back(std::move(e));
         }
-        if (!options.excludes.isEmpty() && matchesExclude(rel, options.excludes))
-            continue;
-        FileEntry e;
-        e.relativePath = rel;
-        e.isDir = fi.isDir();
-        e.size = e.isDir ? 0 : fi.size();
-        e.modified = fi.lastModified();
-        if (e.isDir)
-            ++tree.dirCount;
-        else {
-            ++tree.fileCount;
-            tree.totalBytes += e.size;
-        }
-        tree.entries.push_back(std::move(e));
-    }
-    // Excluded directories: drop their children too.
-    if (!options.excludes.isEmpty()) {
-        // matchesExclude already handles "dir/" prefixes for literal excludes.
     }
     std::sort(tree.entries.begin(), tree.entries.end(), [](const FileEntry& a, const FileEntry& b) {
         return a.relativePath.compare(b.relativePath, Qt::CaseSensitive) < 0;
@@ -572,15 +693,52 @@ Status flushToDisk(QFile& file, const QString& displayName)
     return success();
 }
 
+Status finishWrittenFile(QFile& file, const QString& displayName, const QDateTime& modified)
+{
+    const auto failed = [&] {
+        const QString why = file.errorString();
+        file.close();
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(displayName), why);
+    };
+    if (!file.flush())
+        return failed();
+    if (modified.isValid())
+        file.setFileTime(modified, QFileDevice::FileModificationTime); // must come after the last write
+    file.close(); // keeps the error of a failed close, clears every earlier one
+    if (file.error() != QFileDevice::NoError)
+        return failed();
+    return success();
+}
+
+bool isProtectedLocation(const QString& path)
+{
+    const QString abs = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (QDir(abs).isRoot() || abs.size() <= 3)
+        return true;
+    // The home folder and everything it lies in ("C:/Users").
+    if (isSameOrInside(QDir::homePath(), abs))
+        return true;
+    QStringList folders;
+    for (const auto location : {QStandardPaths::DesktopLocation, QStandardPaths::DocumentsLocation,
+                                QStandardPaths::DownloadLocation, QStandardPaths::PicturesLocation,
+                                QStandardPaths::MusicLocation, QStandardPaths::MoviesLocation})
+        folders << QStandardPaths::writableLocation(location);
+#ifdef Q_OS_WIN
+    for (const char* variable : {"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"})
+        folders << qEnvironmentVariable(variable);
+#endif
+    return std::any_of(folders.cbegin(), folders.cend(), [&](const QString& folder) {
+        return !folder.isEmpty() && isSameOrInside(abs, folder) && isSameOrInside(folder, abs);
+    });
+}
+
 Status removeTreeSafely(const QString& path, const QString& mustBeInside)
 {
     const QFileInfo fi(path);
     if (!fi.exists())
         return success();
     const QString abs = QDir::cleanPath(fi.absoluteFilePath());
-    const QString home = QDir::cleanPath(QDir::homePath());
-    const bool isRoot = QDir(abs).isRoot() || abs.size() <= 3;
-    if (isRoot || abs.compare(home, Qt::CaseInsensitive) == 0)
+    if (isProtectedLocation(abs))
         return Error(ErrorCode::PermissionDenied, QStringLiteral("Refused to delete %1.").arg(QDir::toNativeSeparators(abs)));
     if (!mustBeInside.isEmpty() && !isSameOrInside(abs, mustBeInside))
         return Error(ErrorCode::PermissionDenied,
