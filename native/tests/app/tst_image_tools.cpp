@@ -468,6 +468,42 @@ private slots:
         page->openImage({});
     }
 
+    // Small texts of the two sheets: singular forms, and no "bytes 0–0" before anything was read.
+    void sheetTextsCountCorrectly()
+    {
+        const auto side = [](const QString& path) {
+            return QJsonObject{{QStringLiteral("path"), path}, {QStringLiteral("kind"), QStringLiteral("folder")},
+                               {QStringLiteral("files"), 1}, {QStringLiteral("dirs"), 1}, {QStringLiteral("bytes"), 10}};
+        };
+        const QJsonObject d{{QStringLiteral("a"), side(QStringLiteral("D:/a"))}, {QStringLiteral("b"), side(QStringLiteral("D:/b"))},
+                            {QStringLiteral("depth"), QStringLiteral("full")}, {QStringLiteral("identical"), true},
+                            {QStringLiteral("counts"), QJsonObject{{QStringLiteral("differences"), 0}}}};
+        const QStringList notes{QStringLiteral("n1"), QStringLiteral("n2"), QStringLiteral("n3"), QStringLiteral("<b>n4</b>")};
+        auto* compare = new pages::CompareResultSheet(m_window.get(), d, QStringLiteral("Identical."), notes);
+        QStringList texts;
+        for (auto* l : compare->findChildren<QLabel*>())
+            texts << l->text();
+        QString all = texts.join(u'\n');
+        QVERIFY2(all.contains(QStringLiteral("1 file · 1 folder ·")), qPrintable(all));
+        QVERIFY(all.contains(QStringLiteral("1 more note in Copy report.")));
+        QVERIFY(!all.contains(QStringLiteral("1 files")));
+        delete compare;
+
+        auto* hex = new pages::HexPreviewSheet(m_window.get(), m_exfat, QStringLiteral("data/notes.txt"), 14);
+        texts.clear();
+        for (auto* l : hex->findChildren<QLabel*>())
+            texts << l->text();
+        all = texts.join(u'\n');
+        QVERIFY2(!all.contains(QStringLiteral("0–0")), qPrintable(all));
+        QVERIFY(all.contains(QStringLiteral("14 bytes")));
+        delete hex;
+        // A file name that reads as markup stays out of the sheet's title.
+        hex = new pages::HexPreviewSheet(m_window.get(), m_exfat, QStringLiteral("data/<b>x</b>.bin"), 14);
+        for (auto* l : hex->findChildren<QLabel*>())
+            QVERIFY2(!l->text().startsWith(QStringLiteral("Preview · <b>")), qPrintable(l->text()));
+        delete hex;
+    }
+
     // The comparison row follows comparisons of the open image only.
     void compareRowIgnoresOtherImages()
     {

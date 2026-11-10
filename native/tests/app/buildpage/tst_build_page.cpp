@@ -48,6 +48,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextDocument>
@@ -1121,6 +1122,41 @@ private slots:
         m_page->setOutputFolder({});
         m_page->setSource({});
         m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    // "Open the output folder when done" is this page's own switch: every
+    // submit reports it once, with its value.
+    void openFolderSwitchIsReportedOnce()
+    {
+        auto& q = m_ctx->queue();
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(m_game));
+        m_page->setOutputFolder(path(QStringLiteral("open-when-done")));
+        ui::Switch* open = nullptr;
+        for (auto* s : m_page->findChildren<ui::Switch*>())
+            if (s->accessibleName() == QLatin1String("Open the output folder when done"))
+                open = s;
+        QVERIFY(open);
+        QSignalSpy spy(m_page, &pages::JobFormPage::jobSubmitted);
+        q.holdQueue(true);
+        open->setChecked(true);
+        QVERIFY(m_page->openOutputWhenDone());
+        QString id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(spy.size(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), id);
+        QCOMPARE(spy.at(0).at(1).toBool(), true);
+        QVERIFY(q.remove(id));
+        open->setChecked(false);
+        spy.clear();
+        id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(spy.size(), 1);
+        QCOMPARE(spy.at(0).at(1).toBool(), false);
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+        m_page->setOutputFolder({});
     }
 
     // FPKG: a source without its own content ID and version (an image) must

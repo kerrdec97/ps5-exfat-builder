@@ -179,6 +179,20 @@ void JobFormPage::setRequiredKinds(const QStringList& kinds)
     refreshAvailability();
 }
 
+void JobFormPage::setFeatureName(const QString& name)
+{
+    if (name == m_feature)
+        return;
+    m_feature = name;
+    // The state card carries the name: it is made again when it is next needed.
+    if (m_unavailableCard) {
+        m_unavailableCard->hide();
+        m_unavailableCard->deleteLater();
+        m_unavailableCard = nullptr;
+        m_unavailable = nullptr;
+    }
+}
+
 void JobFormPage::refreshAvailability()
 {
     const QStringList missing = jobs::missingKinds(m_ctx, m_kinds);
@@ -199,6 +213,7 @@ void JobFormPage::refreshAvailability()
     m_primary->setEnabled(m_available);
     m_queue->setEnabled(m_available);
     m_primary->setToolTip(m_available ? QString() : QStringLiteral("Not available in this build"));
+    m_queue->setToolTip(m_primary->toolTip());
 }
 
 void JobFormPage::showFormError(const QString& title, const QString& message)

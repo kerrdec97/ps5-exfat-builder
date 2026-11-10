@@ -64,9 +64,13 @@ std::pair<QString, QString> entry(const Group& g, const QJsonValue& v)
 
 QString sideLine(const QJsonObject& side)
 {
-    return QStringLiteral("%1 · %2 files · %3 folders · %4")
-        .arg(side.value(QStringLiteral("kind")).toString(), formatCount(side.value(QStringLiteral("files")).toInteger()),
-             formatCount(side.value(QStringLiteral("dirs")).toInteger()), formatBytes(side.value(QStringLiteral("bytes")).toInteger()));
+    const qint64 files = side.value(QStringLiteral("files")).toInteger();
+    const qint64 dirs = side.value(QStringLiteral("dirs")).toInteger();
+    return QStringLiteral("%1 · %2 · %3 · %4")
+        .arg(side.value(QStringLiteral("kind")).toString(),
+             files == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(formatCount(files)),
+             dirs == 1 ? QStringLiteral("1 folder") : QStringLiteral("%1 folders").arg(formatCount(dirs)),
+             formatBytes(side.value(QStringLiteral("bytes")).toInteger()));
 }
 
 QString depthLine(const QJsonObject& d)
@@ -232,7 +236,8 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         body()->addWidget(row);
     }
     if (warnings.size() > 3)
-        body()->addWidget(caption(QStringLiteral("%1 more notes in Copy report.").arg(warnings.size() - 3), this));
+        body()->addWidget(caption(warnings.size() == 4 ? QStringLiteral("1 more note in Copy report.")
+                                                       : QStringLiteral("%1 more notes in Copy report.").arg(warnings.size() - 3), this));
 
     auto* copy = addButton(QStringLiteral("Copy report"), Role::Safe);
     QObject::disconnect(copy, &QPushButton::clicked, this, nullptr); // copying keeps the sheet open

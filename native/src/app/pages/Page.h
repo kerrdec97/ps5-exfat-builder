@@ -102,7 +102,9 @@ public:
     void clearDemoState() override;
     void setDragHighlight(bool on) override;
     ui::Card* sourceCard() const { return m_sourceCard; }
-    bool openOutputWhenDone() const;
+    // "Open the output folder when done" for the job being submitted; a page
+    // with its own switch for it answers from that one.
+    virtual bool openOutputWhenDone() const;
 
     // What the left column shows: the form, or the job monitor that replaces
     // it while a job the page started runs.
@@ -146,6 +148,9 @@ protected:
             m_refreshOptionsSummary();
     }
     QString featureName() const { return m_feature; }
+    // For a page whose outputs differ (Build: image, package, packed folder):
+    // what the "not available in this build" state names.
+    void setFeatureName(const QString& name);
 
 private:
     void submitClicked(bool buildNow);

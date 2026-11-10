@@ -87,6 +87,7 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
 void HexPreviewSheet::start()
 {
     m_loaded = 0;
+    m_ended = false;
     m_error.clear();
     m_view->clear();
     m_reader->read(m_image, m_path, 0, kHexPreviewChunk);
@@ -95,7 +96,7 @@ void HexPreviewSheet::start()
 
 void HexPreviewSheet::loadMore()
 {
-    if (m_reader->isBusy() || !m_error.isEmpty() || (m_size >= 0 && m_loaded >= m_size))
+    if (m_reader->isBusy() || !m_error.isEmpty() || m_ended || (m_size >= 0 && m_loaded >= m_size))
         return;
     m_reader->read(m_image, m_path, m_loaded, kHexPreviewChunk);
     updateStatus();
@@ -123,6 +124,8 @@ void HexPreviewSheet::showSlice(const HexSlice& s)
         else
             m_view->appendPlainText(lines);
         bar->setValue(m_loaded == 0 ? 0 : keep);
+    } else if (m_size > 0 && m_loaded < m_size) {
+        m_ended = true; // nothing came although the file goes on: asking again would do nothing
     }
     m_loaded = s.end();
     updateStatus();
@@ -143,12 +146,16 @@ void HexPreviewSheet::updateStatus()
         status = QStringLiteral("Reading…");
     else if (m_size == 0)
         status = QStringLiteral("The file is empty.");
+    else if (m_ended)
+        status = QStringLiteral("Nothing more can be read.");
+    else if (m_loaded == 0)
+        status = QString(); // nothing read yet: no "bytes 0–0"
     else if (m_size > 0)
         status = QStringLiteral("Showing bytes 0–%1 of %2%3")
                      .arg(formatCount(std::max<qint64>(0, m_loaded - 1)), formatCount(m_size),
                           busy ? QStringLiteral(" · reading…") : m_loaded >= m_size ? QStringLiteral(" · end of file") : QString());
     m_status->setText(status);
-    m_more->setEnabled(!busy && m_error.isEmpty() && m_size > 0 && m_loaded < m_size);
+    m_more->setEnabled(!busy && m_error.isEmpty() && !m_ended && m_size > 0 && m_loaded < m_size);
 }
 
 } // namespace fw::pages

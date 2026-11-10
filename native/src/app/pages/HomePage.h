@@ -2,7 +2,7 @@
 
 // Home, the landing page: a hero with the three main actions, status tiles
 // (console · queue · free space), a "pick up where you left off" bar for the
-// last failed job, quick tools, recent jobs from the history and the PS5
+// last failed, interrupted or cancelled job, quick tools, recent jobs from the history and the PS5
 // setup checklist (services/SetupChecklist.h), which folds into a badge on
 // the console tile once every step is done.
 

@@ -2,8 +2,9 @@
 
 // Build (Main artboard): one page for every output the app makes.
 //
-//   Source       drop zone → game strip. A folder for every format; with FPKG
-//                also an .exfat / .ffpfsc / .ffpkg image or a .gp5 project.
+//   Source       drop zone → game strip. A folder for every format; a zipped
+//                dump for the images and the packed folder; with FPKG also an
+//                .exfat / .ffpfs / .ffpfsc / .ffpkg image or a .gp5 project.
 //                A wrapper folder is searched for the game folder below it.
 //   Format       five tiles (exFAT, FFPKG, PFS, FPKG, Packed folder) and, under
 //                them, the two or three settings people change for that output.
@@ -64,6 +65,7 @@ public:
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
     void setDragHighlight(bool on) override;
+    bool openOutputWhenDone() const override;
 
     void setSource(const QString& path);
     QString source() const;
@@ -141,7 +143,7 @@ private:
     QString tile() const;
     bool isFpkg() const { return tile() == kFormatFpkg; }
     bool isZstdFolder() const { return tile() == kFormatZstdFolder; }
-    QString sourceKind() const; // folder / exfat / ffpfsc / ffpkg / gp5
+    QString sourceKind() const; // folder / zip / exfat / ffpfsc / ffpkg / gp5
     QString outputFolder() const; // where the output goes (resolved defaults)
     QString expectedPackagePath() const;
     FormatOptions* current();
@@ -152,7 +154,6 @@ private:
     QString m_sourcePath;
     QString m_sourceKind;              // sourceKindOf(m_sourcePath), decided when the source is set (never a stat per repaint)
     QSet<QString> m_liveLimitApplied;  // package builds whose live CPU limit was applied on start
-    ui::Card* m_sourceCard = nullptr;
     ui::Badge* m_sourceBadge = nullptr;
     QWidget* m_strip = nullptr;
     ui::ElideLabel* m_stripTitle = nullptr;
@@ -184,7 +185,6 @@ private:
     QWidget* m_baseField = nullptr;
     ui::PathField* m_basePackage = nullptr;
     QWidget* m_addonField = nullptr;
-    QWidget* m_idRow = nullptr;          // Content ID + version
     QWidget* m_titleRow = nullptr;
     QWidget* m_backportField = nullptr;  // the two backport pickers + note
     ui::PathField* m_backport4 = nullptr;
@@ -214,7 +214,7 @@ private:
 
     ui::Disclosure* m_advanced = nullptr;
     QWidget* m_advancedHost = nullptr;
-    ui::Switch* m_openFolder = nullptr;
+    ui::Switch* m_openWhenDone = nullptr; // "Open the output folder when done"
     ui::Link* m_settingsLink = nullptr;
 
     ui::Card* m_summaryCard = nullptr;

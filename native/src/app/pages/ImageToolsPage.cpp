@@ -111,6 +111,7 @@ public:
         if (i == m_current || i < 0 || i >= int(m_items.size()))
             return;
         m_current = i;
+        setAccessibleDescription(QStringLiteral("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
         update();
         if (onChanged)
             onChanged(i);
@@ -188,6 +189,8 @@ protected:
     }
     void mousePressEvent(QMouseEvent* e) override
     {
+        if (e->button() != Qt::LeftButton)
+            return;
         const int i = at(e->position().toPoint());
         if (i >= 0 && m_items[size_t(i)].enabled) {
             setFocus(Qt::MouseFocusReason);
@@ -323,6 +326,13 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         onCompareJob(id, true);
         onEditJobFinished(id);
     });
+    // The file dialogs start in the output folder of the moment, not the one at start-up.
+    connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant& value) {
+        if (key != general::keys::kDefaultOutputDir)
+            return;
+        m_imageField->setStartDir(value.toString());
+        m_compareB->setStartDir(value.toString());
+    });
     openImage({});
 }
 
@@ -404,7 +414,8 @@ void ImageToolsPage::buildExtractPanel()
     m_destination->setPlaceholder(QStringLiteral("A new folder next to the image"));
     m_destination->setToolTip(QStringLiteral("The folder is created if it does not exist. Existing files are never overwritten."));
     card->body()->addWidget(m_destination);
-    card->body()->addWidget(caption(QStringLiteral("Existing files are never overwritten."), card));
+    m_extractNote = caption(QStringLiteral("Existing files are never overwritten."), card);
+    card->body()->addWidget(m_extractNote);
     // A game whose files are in zstd or LZ4 packs: extract them as plain files.
     m_unpackRow = new QWidget(card);
     auto* uh = hbox(m_unpackRow, space::lg, QMargins(0, space::sm, 0, 0));
@@ -709,7 +720,8 @@ void ImageToolsPage::onSummary(const ImageSummary& s)
     if (!s.error.isEmpty() && s.exists && s.format != u"pkg")
         m_imageMsg->set(s.error, Tone::Warn);
     showStrip();
-    updateConvert();
+    // What is inside decides the extract job, and a file that is gone closes the panels.
+    updateActions();
     emit statusContextChanged();
 }
 
@@ -803,6 +815,11 @@ void ImageToolsPage::updateActions()
 
     if (open)
         m_destination->setPlaceholder(nativePath(nextToImage(m_path)));
+    // The exFAT extract job takes a new or empty folder only; the others add to a folder.
+    const bool emptyOnly = f == u"exfat" && !usesGameExtract();
+    m_extractNote->setText(emptyOnly ? QStringLiteral("The folder must be new or empty.") : QStringLiteral("Existing files are never overwritten."));
+    m_destination->setToolTip(emptyOnly ? QStringLiteral("The folder is created if it does not exist. A folder that has files in it is refused.")
+                                        : QStringLiteral("The folder is created if it does not exist. Existing files are never overwritten."));
     queueButton()->setVisible(!(m_action == Action::Edit || (m_action == Action::Verify && cmp)) || !open);
     // A comparison's result is the row in this card (and its sheet): keep the form.
     setMonitorOnStart(!(m_action == Action::Verify && cmp));
@@ -838,7 +855,7 @@ void ImageToolsPage::updateKinds()
     }
     QString kind;
     switch (m_action) {
-    case Action::Extract: kind = jobs::imageKindForFile(m_path, QStringLiteral("extract")); break;
+    case Action::Extract: kind = usesGameExtract() ? QStringLiteral("game.extract") : jobs::imageKindForFile(m_path, QStringLiteral("extract")); break;
     case Action::Verify: kind = compareMode() ? kCompareKind : jobs::imageKindForFile(m_path, QStringLiteral("verify")); break;
     case Action::Convert: kind = kConvertKind; break;
     case Action::Edit: kind = jobs::imageEditKind(m_path); break;
@@ -871,6 +888,13 @@ void ImageToolsPage::ensureTree()
     m_tree = {};
     rebuildTree();
     m_reader->read(m_path);
+}
+
+// Packed games and images inside a PFS container are extracted through the
+// format-neutral reader (game.extract); everything else by its own engine.
+bool ImageToolsPage::usesGameExtract() const
+{
+    return !m_summary.packs.isEmpty() || (!m_summary.inner.isEmpty() && m_summary.fromImage);
 }
 
 // ---- Extract / Verify -------------------------------------------------------------------
@@ -1144,7 +1168,8 @@ void ImageToolsPage::rebuildTree()
     m_btnAddFolder->setEnabled(open);
     m_btnMkdir->setEnabled(open);
     if (open) {
-        QStringList parts{QStringLiteral("%1 files").arg(formatCount(m_tree.fileCount)), formatBytes(m_tree.totalBytes)};
+        QStringList parts{m_tree.fileCount == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(formatCount(m_tree.fileCount)),
+                          formatBytes(m_tree.totalBytes)};
         if (!m_tree.problems.isEmpty())
             parts << QStringLiteral("%1 problem%2").arg(m_tree.problems.size()).arg(m_tree.problems.size() == 1 ? QString() : QStringLiteral("s"));
         m_treeCount->setText(parts.join(QStringLiteral(" · ")));
@@ -1171,14 +1196,23 @@ void ImageToolsPage::rebuildTree()
         it->setForeground(2, color::fg_3);
         items[i] = it;
     }
+    // The whole tree is put together first and handed to the view in one go
+    // (an image can hold a hundred thousand files).
+    QList<QTreeWidgetItem*> top, orphans;
     for (size_t i = 1; i < m_tree.nodes.size(); ++i) {
         const int parent = m_tree.nodes[i].parent;
         if (parent <= 0)
-            m_treeView->addTopLevelItem(items[i]);
-        else if (items[size_t(parent)])
+            top << items[i];
+        else if (size_t(parent) < items.size() && items[size_t(parent)])
             items[size_t(parent)]->addChild(items[i]);
+        else
+            orphans << items[i];
     }
+    qDeleteAll(orphans); // nodes without their folder: nothing to hang them on
+    m_treeView->setUpdatesEnabled(false);
+    m_treeView->addTopLevelItems(top);
     m_treeView->sortItems(0, Qt::AscendingOrder);
+    m_treeView->setUpdatesEnabled(true);
 }
 
 void ImageToolsPage::updateTreeButtons()
@@ -1485,9 +1519,7 @@ Result<QString> ImageToolsPage::submit(bool)
         QString dest = m_destination->path();
         if (dest.isEmpty())
             dest = nextToImage(m_path);
-        // Packed games and images inside a PFS container are read through the
-        // format-neutral reader (game.extract); everything else as before.
-        if (!m_summary.packs.isEmpty() || (!m_summary.inner.isEmpty() && m_summary.fromImage))
+        if (usesGameExtract())
             return jobs::submitGameExtract(m_ctx, m_path, dest, m_summary.packs.isEmpty() || m_unpackPacks->isChecked(),
                                            jobOverrides());
         return jobs::submitExtract(m_ctx, m_path, dest, jobOverrides());

@@ -38,6 +38,7 @@ private:
     QString m_image, m_path;
     qint64 m_size = -1;
     qint64 m_loaded = 0;
+    bool m_ended = false; // a slice came back empty before the end of the file
     QString m_error;
     ui::HexSliceReader* m_reader;
     QPlainTextEdit* m_view;

@@ -231,8 +231,10 @@ public:
                  const QString& tag = {})
     {
         m_items.push_back({title, description, icon, tag, value});
-        if (m_current < 0)
+        if (m_current < 0) {
             m_current = 0;
+            setAccessibleDescription(QStringLiteral("Selected: %1").arg(title));
+        }
         updateGeometry();
         update();
     }
@@ -251,6 +253,7 @@ public:
         if (i < 0 || i >= count() || i == m_current)
             return;
         m_current = i;
+        setAccessibleDescription(QStringLiteral("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
         update();
         if (onChanged)
             onChanged(i);
@@ -353,6 +356,8 @@ protected:
     }
     void mousePressEvent(QMouseEvent* e) override
     {
+        if (e->button() != Qt::LeftButton)
+            return;
         const int i = at(e->pos());
         if (i >= 0)
             setCurrentIndex(i);
@@ -584,13 +589,12 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
 void BuildImagePage::buildSourceCard()
 {
     auto* source = new Card(this);
-    m_sourceCard = source;
     setSourceCard(source);
     m_sourceBadge = new Badge(QStringLiteral("Step 1"), Tone::Neutral, source);
     m_sourceBadge->setIconName(QString());
     source->setTitle(QStringLiteral("Game dump"), m_sourceBadge);
-    m_drop = new DropZone(QStringLiteral("folder_open"), QStringLiteral("Drop a game dump folder here"),
-                          QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys"), source);
+    m_drop = new DropZone(QStringLiteral("folder_open"), QStringLiteral("Drop a game dump folder or a zipped dump here"),
+                          QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"), source);
     m_drop->setAccessibleName(QStringLiteral("Choose the source"));
     connect(m_drop, &DropZone::clicked, this, &BuildImagePage::browseSource);
     source->body()->addWidget(m_drop);
@@ -871,7 +875,6 @@ void BuildImagePage::buildPackageCard()
     m_version->setAccessibleName(QStringLiteral("Version"));
     gh->addWidget(field(QStringLiteral("Version"), m_version, {}, grid), 1);
     details->body()->addWidget(grid);
-    m_idRow = grid;
     m_title = textInput({}, false, details);
     m_title->setAccessibleName(QStringLiteral("Title"));
     m_titleRow = field(QStringLiteral("Title"), m_title, {}, details);
@@ -1040,6 +1043,7 @@ void BuildImagePage::buildSaveCard()
     });
     connect(m_nameMenuButton, &QToolButton::clicked, this, [this] {
         QMenu menu(this);
+        menu.setToolTipsVisible(true); // each preset explains itself
         auto* group = new QActionGroup(&menu);
         const QString current = m_ctx.settings().value(gameinfo::keys::kNamePreset).toString();
         if (const SettingDef* d = m_ctx.schema().find(gameinfo::keys::kNamePreset))
@@ -1081,9 +1085,9 @@ void BuildImagePage::buildAdvanced()
     auto* h = hbox(row, space::lg, QMargins(0, 8, 0, 6));
     auto* lab = label(QStringLiteral("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
     h->addWidget(lab, 1);
-    m_openFolder = new Switch(row);
-    m_openFolder->setAccessibleName(lab->text());
-    h->addWidget(m_openFolder);
+    m_openWhenDone = new Switch(row);
+    m_openWhenDone->setAccessibleName(lab->text());
+    h->addWidget(m_openWhenDone);
     m_advanced->body()->addWidget(row);
     auto* lrow = new QWidget(m_advanced);
     auto* lh = hbox(lrow, 6, QMargins(0, space::sm, 0, 0));
@@ -1224,10 +1228,13 @@ void BuildImagePage::onFormatChanged()
     else
         header()->setCaption(QStringLiteral("Package a game folder, an image or a .gp5 project as an installable .pkg."));
     primaryButton()->setText(pkg ? QStringLiteral("Build package") : folder ? QStringLiteral("Pack game") : QStringLiteral("Build image"));
-    m_sourceCard->setTitleText(pkg ? QStringLiteral("Source") : QStringLiteral("Game dump"));
-    m_drop->setTitle(pkg ? QStringLiteral("Drop a game folder, an image or a .gp5 project here") : QStringLiteral("Drop a game dump folder here"));
-    m_drop->setText(pkg ? QStringLiteral("or click to browse \u2014 a folder, an .exfat, .ffpfsc or .ffpkg image, or a .gp5 project")
-                        : QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys"));
+    // What the "not available in this build" state names follows the tile.
+    setFeatureName(pkg ? QStringLiteral("Package building") : folder ? QStringLiteral("Packing a game folder") : QStringLiteral("Image building"));
+    sourceCard()->setTitleText(pkg ? QStringLiteral("Source") : QStringLiteral("Game dump"));
+    m_drop->setTitle(pkg ? QStringLiteral("Drop a game folder, an image or a .gp5 project here")
+                         : QStringLiteral("Drop a game dump folder or a zipped dump here"));
+    m_drop->setText(pkg ? QStringLiteral("or click to browse \u2014 a folder, an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
+                        : QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"));
     if (t == jobs::kFormatExfat)
         m_advanced->setCaption(QStringLiteral("Free space, volume label, contents, verification"));
     else if (t == jobs::kFormatFfpkg)
@@ -1244,6 +1251,9 @@ void BuildImagePage::onFormatChanged()
                             : folder ? QStringLiteral("All zstd settings")
                                      : QStringLiteral("All FPKG settings"));
     m_fileLabel->setText(pkg ? QStringLiteral("Package name") : folder ? QStringLiteral("Folder name") : QStringLiteral("File name"));
+    m_fileName->setAccessibleName(m_fileLabel->text());
+    m_fileName->setToolTip(pkg ? QStringLiteral("Named from the content ID and the version.")
+                               : QStringLiteral("Named by Settings \u203a Build \u203a Output name. Type to change it for this job."));
     m_fileName->setReadOnly(pkg);
     m_fileExt->setVisible(!pkg && !folder);
     m_nameMenuButton->setVisible(!pkg);
@@ -1459,12 +1469,17 @@ void BuildImagePage::refresh()
 void BuildImagePage::browseSource()
 {
     const QString start = m_ctx.settings().value(general::keys::kLastSourceDir).toString();
+    // At the pointer for a click; under the control when it was the keyboard
+    // (the pointer may be anywhere then).
+    QPoint at = QCursor::pos();
+    if (auto* from = qobject_cast<QWidget*>(sender()); from && !from->rect().contains(from->mapFromGlobal(at)))
+        at = from->mapToGlobal(QPoint(0, from->height()));
     QString picked;
     if (!isFpkg()) {
         QMenu menu(this);
         auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
         auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Zipped dump (.zip)\u2026"));
-        QAction* chosen = menu.exec(QCursor::pos());
+        QAction* chosen = menu.exec(at);
         if (chosen == folder)
             picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game dump folder"), start);
         else if (chosen == zip)
@@ -1474,7 +1489,7 @@ void BuildImagePage::browseSource()
         QMenu menu(this);
         auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
         auto* file = menu.addAction(iconPixmap(QStringLiteral("file"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Image or .gp5 project\u2026"));
-        QAction* chosen = menu.exec(QCursor::pos());
+        QAction* chosen = menu.exec(at);
         if (chosen == folder)
             picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game folder"), start);
         else if (chosen == file)
@@ -1643,7 +1658,7 @@ void BuildImagePage::refreshSourceState()
         }
         if (kind == QLatin1String("zip") && isFpkg()) {
             m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP, or pick exFAT, FFPKG or PFS."), Tone::Warn);
+            m_sourceMsg->set(QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP, or pick exFAT, FFPKG, PFS or Packed folder."), Tone::Warn);
             m_sourceBadge->set(QStringLiteral("Needs a folder"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
@@ -1708,9 +1723,13 @@ void BuildImagePage::showGameRoots(const GameSummary& s)
         connect(pick, &QPushButton::clicked, this, [this, root] { setSource(root); });
         m_rootsList->addWidget(pick, 0, Qt::AlignLeft);
     }
-    if (s.gameRoots.size() > shown || s.rootsTruncated)
-        m_rootsList->addWidget(caption(s.rootsTruncated ? QStringLiteral("The search stopped after 4,000 folders.")
-                                                        : QStringLiteral("and %1 more").arg(s.gameRoots.size() - shown), m_rootsBox));
+    QStringList rest;
+    if (s.gameRoots.size() > shown)
+        rest << QStringLiteral("and %1 more.").arg(s.gameRoots.size() - shown);
+    if (s.rootsTruncated)
+        rest << QStringLiteral("The search stopped after 4,000 folders.");
+    if (!rest.isEmpty())
+        m_rootsList->addWidget(caption(rest.join(u' '), m_rootsBox));
     m_rootsBox->show();
 }
 
@@ -2205,7 +2224,7 @@ QString BuildImagePage::validateForm()
         if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
             return QStringLiteral("Choose the base package (.pkg).");
         if (!hasBackports())
-            return QStringLiteral("Choose at least one backport folder: 4.xx or 5.xx+.");
+            return QStringLiteral("Choose at least one backport (a folder or a ZIP): 4.xx or 5.xx+.");
         static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
         const QString v = m_version->text().trimmed();
         if (!v.isEmpty() && !ver.match(v).hasMatch())
@@ -2213,7 +2232,7 @@ QString BuildImagePage::validateForm()
         return fo && fo->panel->hasErrors() ? fo->panel->errorMessages().join(u' ') : QString();
     }
     if (m_sourcePath.isEmpty())
-        return isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump folder first.");
+        return isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump first.");
     if (m_reader->isBusy())
         return QStringLiteral("The source is still being read. Try again in a moment.");
     if (!m_summary.exists)
@@ -2230,7 +2249,7 @@ QString BuildImagePage::validateForm()
                                   : QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
-                                                  : QStringLiteral("The source folder is not a game dump: sce_sys\\param.json or eboot.bin is missing.");
+                                                  : QStringLiteral("The source folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
         const QString stem = m_fileName->text().trimmed();
         if (stem.isEmpty())
             return isZstdFolder() ? QStringLiteral("Enter a folder name.") : QStringLiteral("Enter a file name.");
@@ -2240,7 +2259,7 @@ QString BuildImagePage::validateForm()
         }
         if (isZstdFolder()) {
             // The job refuses these too; here the message comes before anything is queued.
-            const QString out = QDir::cleanPath(QDir(outputFolder()).filePath(stem));
+            const QString out = QDir::cleanPath(QFileInfo(QDir(outputFolder()).filePath(stem)).absoluteFilePath());
             const QString src = QDir::cleanPath(QFileInfo(m_summary.folder).absoluteFilePath());
             if (kind == QLatin1String("folder") && (isSameOrInside(out, src) || isSameOrInside(src, out)))
                 return QStringLiteral("The packed folder cannot be the game folder itself, inside it or above it. Change the folder name or the output folder.");
@@ -2253,7 +2272,7 @@ QString BuildImagePage::validateForm()
             return QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP first.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
-                                                  : QStringLiteral("The folder is not a game dump: sce_sys\\param.json is missing.");
+                                                  : QStringLiteral("The folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
         const PackageType ptype = packageTypeKind();
         // The engine's own rule (what the package name is made with). A backport
         // update takes its ID from the base package: the field is hidden then.
@@ -2280,7 +2299,7 @@ QString BuildImagePage::validateForm()
             if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
                 return QStringLiteral("Choose the base package (.pkg).");
             if (!hasBackports())
-                return QStringLiteral("Choose at least one backport folder: 4.xx or 5.xx+.");
+                return QStringLiteral("Choose at least one backport (a folder or a ZIP): 4.xx or 5.xx+.");
         }
         if (ptype == PackageType::App && hasBackports()) {
             if (kind != QLatin1String("folder"))
@@ -2359,10 +2378,7 @@ Result<QString> BuildImagePage::submit(bool)
             if (!m_output->path().isEmpty())
                 p.insert(QStringLiteral("output"), m_output->path());
             p.insert(QStringLiteral("buildBase"), buildBase);
-            r = jobs::submitFpkgBackport(m_ctx, p, overrides);
-            if (r.ok() && m_openFolder->isChecked())
-                emit jobSubmitted(r.value(), true);
-            return r;
+            return jobs::submitFpkgBackport(m_ctx, p, overrides);
         }
         details.insert(QStringLiteral("packageType"), type);
         if (ptype == PackageType::Update)
@@ -2388,12 +2404,11 @@ Result<QString> BuildImagePage::submit(bool)
         }
         r = jobs::submitFpkgBuild(m_ctx, sourceKind(), m_summary.folder, m_output->path(), details, overrides);
     }
-    // JobFormPage reports "open the folder when done" from its own switch,
-    // which this page does not use; report ours for the new job.
-    if (r.ok() && m_openFolder->isChecked())
-        emit jobSubmitted(r.value(), true);
     return r;
 }
+
+// This page has its own switch in the Advanced section.
+bool BuildImagePage::openOutputWhenDone() const { return m_openWhenDone && m_openWhenDone->isChecked(); }
 
 QString BuildImagePage::statusContext() const
 {
