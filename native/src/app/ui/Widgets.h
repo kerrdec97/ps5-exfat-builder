@@ -60,6 +60,7 @@ private:
     void relayout();
     QString m_text;
     QString m_autoName; // the accessible name this label gave itself
+    QString m_autoTip;  // the tooltip this label gave itself (the whole text while it is cut)
     Qt::TextElideMode m_mode;
 };
 

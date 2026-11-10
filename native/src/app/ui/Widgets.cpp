@@ -144,7 +144,12 @@ void ElideLabel::relayout()
     const int w = std::max(0, width() - 2);
     const QString shown = fm.elidedText(m_text, m_mode, w);
     QLabel::setText(shown);
-    setToolTip(shown != m_text ? plainTip(m_text) : QString());
+    // The whole text while it is cut, unless the owner gave the label a
+    // tooltip of its own (a path with more to say than the label shows).
+    if (toolTip() == m_autoTip) {
+        m_autoTip = shown != m_text ? plainTip(m_text) : QString();
+        setToolTip(m_autoTip);
+    }
     // Assistive tools read the whole text, not the cut one (unless the owner
     // gave the label a name of its own).
     if (accessibleName() == m_autoName && m_autoName != m_text) {

@@ -159,6 +159,11 @@ private slots:
         QVERIFY(wide->text() != wide->fullText());
         QVERIFY(wide->text().startsWith(QStringLiteral("<img")));
         QCOMPARE(wide->toolTip(), plainTip(wide->fullText()));
+        // A tooltip the owner set says more than the label: a new layout keeps it.
+        wide->setToolTip(QStringLiteral("the owner's own text"));
+        wide->setFullText(wide->fullText() + QStringLiteral(" and more"));
+        wide->resize(wide->width() - 10, wide->height());
+        QCOMPARE(wide->toolTip(), QStringLiteral("the owner's own text"));
         QVERIFY(wide->toolTip().contains(QStringLiteral("&lt;img src=x&gt;&lt;b&gt;t&lt;/b&gt;")));
         QVERIFY(!wide->toolTip().contains(QStringLiteral("<img")));
     }

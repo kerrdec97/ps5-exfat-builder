@@ -468,7 +468,7 @@ Status writeBitmap(ImageSink& sink, const ImagePlan& plan, qint64 bufferBytes)
 {
     const qint64 fullBytes = plan.usedClusters / 8;
     const int partialBits = int(plan.usedClusters % 8);
-    std::vector<char> ones(size_t(std::min<qint64>(std::max<qint64>(fullBytes, 1), bufferBytes)), char(0xFF));
+    std::vector<char> ones(size_t(std::min<qint64>(std::max<qint64>(fullBytes, 1), bufferBytes)), '\xFF');
     for (qint64 done = 0; done < fullBytes;) {
         const qint64 n = std::min<qint64>(qint64(ones.size()), fullBytes - done);
         FW_TRY(sink.write(ones.data(), n));
