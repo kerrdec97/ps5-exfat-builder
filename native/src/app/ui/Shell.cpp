@@ -121,18 +121,11 @@ Sidebar::Sidebar(QWidget* parent) : QWidget(parent)
     setFixedWidth(size::sidebar);
     setProperty("fwNoRing", true);
     auto* outer = new QHBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setContentsMargins(0, 0, 1, 0); // the right border, painted in paintEvent
     outer->setSpacing(0);
     auto* inner = new QWidget(this);
     m_layout = vbox(inner, 3, QMargins(space::md, space::md, space::md, space::md));
     outer->addWidget(inner, 1);
-    auto* line = new QFrame(this);
-    line->setFixedWidth(1);
-    line->setAutoFillBackground(true);
-    QPalette lp = line->palette();
-    lp.setColor(QPalette::Window, color::border_1);
-    line->setPalette(lp);
-    outer->addWidget(line);
     m_group = new QButtonGroup(this);
     m_group->setExclusive(true);
     m_version = label({}, TextStyle::Caption, color::fg_5, this);
@@ -153,6 +146,7 @@ void Sidebar::paintEvent(QPaintEvent*)
     glow.setColorAt(0, a);
     glow.setColorAt(1, QColor(0, 0, 0, 0));
     p.fillRect(QRect(0, 0, width(), 260), glow);
+    p.fillRect(QRect(width() - 1, 0, 1, height()), color::border_1);
 }
 
 void Sidebar::addGroup(const QString& overline)

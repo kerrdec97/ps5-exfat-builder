@@ -274,6 +274,97 @@ private slots:
         delete s;
     }
 
+    // ---- token colours -----------------------------------------------------------------
+
+    void labelsAndHairlinesGetTheirTokenColours()
+    {
+        using namespace theme;
+        auto* card = add<QWidget>();
+        auto* col = new QVBoxLayout(card);
+        struct Sample {
+            QLabel* label;
+            QColor color;
+            const char* name;
+        };
+        QList<Sample> samples{
+            {label(QStringLiteral("MMMM body"), TextStyle::Body, color::fg_1, card), color::fg_1, "body fg_1"},
+            {caption(QStringLiteral("MMMM caption"), card), color::fg_3, "caption fg_3"},
+            {meta(QStringLiteral("MMMM meta"), card), color::fg_4, "meta fg_4"},
+            {heading(QStringLiteral("MMMM heading"), TextStyle::Subtitle, card), color::fg_0, "heading fg_0"},
+            {label(QStringLiteral("MMMM overline"), TextStyle::Overline, color::fg_5, card), color::fg_5, "overline fg_5"},
+            {new Link(QStringLiteral("MMMM link"), card), color::accent_hi, "link accent_hi"},
+            {new ElideLabel(QStringLiteral("MMMM elide"), Qt::ElideRight, card), color::danger_hi, "elide danger_hi"},
+        };
+        setTextColor(samples.last().label, color::danger_hi);
+        for (const Sample& s : samples)
+            col->addWidget(s.label);
+        QFrame* thin = hairline(card);
+        QFrame* strong = hairline(card, true);
+        col->addWidget(thin);
+        col->addWidget(strong);
+        // A colour set after the first show, and a disabled plain label.
+        MessageRow* message = new MessageRow(card);
+        col->addWidget(message);
+        auto* plain = new QLabel(QStringLiteral("MMMM disabled"), card);
+        col->addWidget(plain);
+        card->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_window.get()));
+        QCoreApplication::processEvents();
+        message->set(QStringLiteral("MMMM message"), Tone::Ok);
+        plain->setEnabled(false);
+        QCoreApplication::processEvents();
+
+        const QImage shot = m_window->grab().toImage();
+        // The strongest text pixel of a label: fully covered, so it is the text colour.
+        auto textColor = [&](const QWidget* w) {
+            const QRect r(w->mapTo(m_window.get(), QPoint(0, 0)), w->size());
+            const QColor bg = shot.pixelColor(r.right() - 1, r.top() + 1);
+            QColor best = bg;
+            int bestDist = -1;
+            for (int y = r.top(); y <= r.bottom(); ++y)
+                for (int x = r.left(); x <= r.right(); ++x) {
+                    const QColor c = shot.pixelColor(x, y);
+                    const int d = qAbs(c.red() - bg.red()) + qAbs(c.green() - bg.green()) + qAbs(c.blue() - bg.blue());
+                    if (d > bestDist) {
+                        bestDist = d;
+                        best = c;
+                    }
+                }
+            return best;
+        };
+        auto close = [](const QColor& a, const QColor& b) {
+            return qAbs(a.red() - b.red()) <= 10 && qAbs(a.green() - b.green()) <= 10 && qAbs(a.blue() - b.blue()) <= 10;
+        };
+        for (const Sample& s : samples) {
+            const QColor got = textColor(s.label);
+            QVERIFY2(close(got, s.color), qPrintable(QStringLiteral("%1: %2, expected %3").arg(QLatin1String(s.name), got.name(), s.color.name())));
+        }
+        QLabel* messageText = nullptr;
+        for (QLabel* l : message->findChildren<QLabel*>())
+            if (l->text() == QStringLiteral("MMMM message"))
+                messageText = l;
+        QVERIFY(messageText);
+        QVERIFY2(close(textColor(messageText), toneText(Tone::Ok)), qPrintable(textColor(messageText).name()));
+        QVERIFY2(close(textColor(plain), color::fg_5), qPrintable(textColor(plain).name()));
+
+        auto pixelAt = [&](const QWidget* w) {
+            return shot.pixelColor(w->mapTo(m_window.get(), QPoint(w->width() / 2, 0)));
+        };
+        QCOMPARE(thin->height(), 1);
+        QCOMPARE(pixelAt(thin), color::border_1);
+        QCOMPARE(pixelAt(strong), color::border_2);
+
+        // The sidebar's right border.
+        auto* side = add<Sidebar>();
+        side->addGroup(QStringLiteral("Workflows"));
+        side->addItem(QStringLiteral("a"), QStringLiteral("home"), QStringLiteral("Home"));
+        side->setFixedHeight(200);
+        QCoreApplication::processEvents();
+        const QImage sideShot = side->grab().toImage();
+        QCOMPARE(sideShot.pixelColor(side->width() - 1, 150), color::border_1);
+        QVERIFY(sideShot.pixelColor(side->width() - 3, 150) != color::border_1);
+    }
+
     // ---- the wheel ---------------------------------------------------------------------
 
     void wheelLeavesUnfocusedControlsAlone()

@@ -138,8 +138,12 @@ QString stylesheet()
     const QString sans = sansFamily();
     const QString mono = monoFamily();
     // Placeholders are substituted once; the template never contains a hex.
+    // No `color` in the universal rule: a rule's colour is written into the
+    // palette of every widget it matches when the widget is polished, and
+    // would replace what label(), caption(), Link and setTextColor() set.
+    // Plain text is fg_1 through the application palette (apply()).
     QString qss = QStringLiteral(R"QSS(
-QWidget { color: {fg_1}; background: transparent; }
+QWidget { background: transparent; }
 QMainWindow, QDialog { background: {bg_1}; }
 QAbstractScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }

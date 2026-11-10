@@ -173,13 +173,12 @@ void Link::keyPressEvent(QKeyEvent* e)
 
 QFrame* hairline(QWidget* parent, bool strong)
 {
+    // Filled by the stylesheet (QFrame[role="hairline"]): the universal
+    // `background: transparent` rule overrides a palette fill.
     auto* f = new QFrame(parent);
     f->setFrameShape(QFrame::NoFrame);
     f->setFixedHeight(1);
-    f->setAutoFillBackground(true);
-    QPalette p = f->palette();
-    p.setColor(QPalette::Window, strong ? color::border_2 : color::border_1);
-    f->setPalette(p);
+    f->setProperty("role", strong ? QStringLiteral("hairline2") : QStringLiteral("hairline"));
     return f;
 }
 
