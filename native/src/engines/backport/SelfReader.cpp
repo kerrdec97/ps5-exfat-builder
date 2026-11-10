@@ -14,17 +14,6 @@
 
 namespace fw::backport {
 
-QString selfKindName(SelfKind kind)
-{
-    switch (kind) {
-    case SelfKind::FakeSigned: return QStringLiteral("fake-signed");
-    case SelfKind::Encrypted: return QStringLiteral("encrypted");
-    case SelfKind::Compressed: return QStringLiteral("compressed");
-    case SelfKind::Malformed: return QStringLiteral("malformed");
-    }
-    return QStringLiteral("malformed");
-}
-
 bool SelfEntry::isData() const { return (props & self::props::kHasBlocks) != 0; }
 bool SelfEntry::isEncrypted() const { return (props & self::props::kEncrypted) != 0; }
 bool SelfEntry::isCompressed() const { return (props & self::props::kCompressed) != 0; }
@@ -166,9 +155,9 @@ Result<SelfInfo> inspect(QByteArrayView data)
         }
     }
     // Every program header the unwrap may place must describe a range inside
-    // an executable this tool can hold (overflow-safe; kMaxExecBytes is the
-    // same limit readFileBytes() applies), so unwrap() never allocates or
-    // writes outside a sane buffer.
+    // an executable this tool can hold (overflow-safe), so unwrap() never
+    // writes outside a sane buffer; unwrap() itself applies the tighter limit
+    // that follows from the SELF's own size.
     for (const ProgramHeader& ph : info.phdrs) {
         if (!within(quint64(kMaxExecBytes), ph.offset, ph.filesz)) {
             info.kind = SelfKind::Malformed;

@@ -74,50 +74,6 @@ Result<ParamScan> findParams(QByteArrayView data)
     return scan;
 }
 
-std::optional<int> PatchReport::sdkBefore() const
-{
-    for (const PatchEntry& e : patched)
-        if (e.kind == ParamKind::Process)
-            return bcdMajor(e.oldPs5);
-    if (!patched.empty())
-        return bcdMajor(patched.front().oldPs5);
-    return std::nullopt;
-}
-
-bool PatchReport::changed() const
-{
-    for (const PatchEntry& e : patched)
-        if (e.oldPs4 != e.newPs4 || e.oldPs5 != e.newPs5)
-            return true;
-    return false;
-}
-
-Result<PatchReport> patchSdk(QByteArray& elfData, const SdkPair& pair)
-{
-    FW_TRY_ASSIGN(const ParamScan scan, findParams(QByteArrayView(elfData)));
-    PatchReport report;
-    char* base = elfData.data();
-    for (const ParamInfo& p : scan.params) {
-        PatchEntry e;
-        e.phdrIndex = p.phdrIndex;
-        e.kind = p.kind;
-        e.oldPs4 = p.ps4;
-        e.oldPs5 = p.ps5;
-        e.newPs4 = pair.ps4;
-        e.newPs5 = pair.ps5;
-        qToLittleEndian<quint32>(pair.ps5, base + p.offset + 0x14);
-        qToLittleEndian<quint32>(pair.ps4, base + p.offset + 0x10);
-        report.messages << QStringLiteral("PS5 SDK version %1 -> %2, PS4 version %3 -> %4")
-                               .arg(hex8(e.oldPs5), hex8(e.newPs5), hex8(e.oldPs4), hex8(e.newPs4));
-        report.patched.push_back(e);
-    }
-    if (scan.moduleWithoutParam) {
-        report.skippedNoParam = true;
-        report.messages << QStringLiteral("Module file has no param, skipping");
-    }
-    return report;
-}
-
 std::optional<int> elfSdkMajor(QByteArrayView data, quint32* ps5Out, quint32* ps4Out)
 {
     auto scan = findParams(data);

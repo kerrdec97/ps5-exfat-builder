@@ -1,8 +1,9 @@
 #pragma once
 
-// SDK version patch of the process / module param (docs/BACKPORT_PARITY.md
-// §2.5). Clean-room implementation from the documented facts (offsets,
-// magics, outcomes); no code from the unlicensed patcher was used.
+// The SDK version in the process / module param of a PS5 executable
+// (docs/BACKPORT_PARITY.md §2.5), read only. Clean-room implementation from
+// the documented facts (offsets, magics, outcomes); no code from the
+// unlicensed patcher was used.
 //
 // Param struct at p_offset of a PT_SCE_PROCPARAM / PT_SCE_MODULE_PARAM
 // segment: +0x00 u64 size (low u32 read), +0x08 u32 magic, +0x10 u32 PS4
@@ -38,34 +39,15 @@ struct ParamInfo {
 };
 
 struct ParamScan {
-    std::vector<ParamInfo> params;  // every param the patch would rewrite
+    std::vector<ParamInfo> params;  // every param found, in program header order
     bool moduleWithoutParam = false; // a module param of size 0 ended the walk
 };
 
-// Walks the program headers with the patch rules, without writing.
+// Walks the program headers and reads each param.
 // Errors: ParamMissing ("No process or module param segment found"),
 // ParamSizeInvalid ("Unexpected param struct size 0x…"), ParamMagicInvalid
 // ("Invalid param magic 0x…"), ParamOutOfRange, and the ElfImage errors.
 Result<ParamScan> findParams(QByteArrayView elf);
-
-struct PatchEntry {
-    int phdrIndex = -1;
-    ParamKind kind = ParamKind::Process;
-    quint32 oldPs4 = 0, oldPs5 = 0, newPs4 = 0, newPs5 = 0;
-};
-
-struct PatchReport {
-    std::vector<PatchEntry> patched;
-    bool skippedNoParam = false; // "Module file has no param, skipping"
-    QStringList messages;        // the documented log lines
-    // Old PS5 SDK major (first process param, else first module param).
-    std::optional<int> sdkBefore() const;
-    bool changed() const;
-};
-
-// Rewrites every matching param in `elf` with `pair`. On any error `elf` is
-// left exactly as it was (all segments are checked before the first write).
-Result<PatchReport> patchSdk(QByteArray& elf, const SdkPair& pair);
 
 // The PS5 SDK major recorded in an ELF (process param first). nullopt when
 // there is no readable param or the value is not BCD.

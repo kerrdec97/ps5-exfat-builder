@@ -1,8 +1,9 @@
 #pragma once
 
 // Bounds-checked view of an ELF64 executable (docs/BACKPORT_PARITY.md §2.4).
-// Original code. `Strictness::Signable` applies every header rule the SELF
-// writer needs; `Lenient` only what reading program headers needs.
+// Original code. `Strictness::Signable` applies every header rule of an
+// executable that can be wrapped in a fake-signed SELF (used for the ELF
+// header copy inside one); `Lenient` only what reading program headers needs.
 
 #include "core/Result.h"
 
@@ -38,8 +39,6 @@ inline constexpr int kEhdrSize = 0x40;
 inline constexpr int kPhdrSize = 0x38;
 inline constexpr int kShdrSize = 0x40;
 
-// True for the program header types that become SELF segments (§2.4).
-bool isSelfSegmentType(quint32 type);
 // ELF magic 7F 45 4C 46.
 bool hasElfMagic(QByteArrayView data);
 } // namespace elf
@@ -78,21 +77,17 @@ enum class Strictness { Lenient, Signable };
 class ElfImage {
 public:
     // Parses the header and program header table. Errors carry
-    // Code::ElfInvalid (structure) or Code::SignUnsupported (a valid ELF the
-    // signer cannot rewrite: class, data encoding, machine, type, entry sizes).
+    // Code::ElfInvalid (structure) or Code::SignUnsupported (a valid ELF of a
+    // kind a fake-signed SELF never wraps: class, data encoding, machine,
+    // type, entry sizes).
     static Result<ElfImage> parse(QByteArrayView data, Strictness strictness = Strictness::Signable);
 
     const ElfHeader& header() const { return m_header; }
     const std::vector<ProgramHeader>& programHeaders() const { return m_phdrs; }
-    qint64 fileSize() const { return m_size; }
 
     // True when [offset, offset + length) lies inside the file.
     bool contains(quint64 offset, quint64 length) const;
 
-    // Serialises a header the way the SELF writer stores its copy:
-    // e_ident[9..14] written as zero, the other fields as given.
-    static QByteArray serializeHeader(const ElfHeader& h);
-    static QByteArray serializePhdr(const ProgramHeader& p);
     static ElfHeader readHeader(QByteArrayView data); // no validation; needs 0x40 bytes
     static ProgramHeader readPhdr(QByteArrayView data, quint64 offset, int index);
 

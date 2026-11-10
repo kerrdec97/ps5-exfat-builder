@@ -22,8 +22,6 @@ namespace fw::backport {
 
 enum class SelfKind { FakeSigned, Encrypted, Compressed, Malformed };
 
-QString selfKindName(SelfKind kind);
-
 struct SelfEntry {
     int index = 0;
     quint64 props = 0;

@@ -78,15 +78,15 @@ QByteArray makeSelf(const std::vector<Segment>& segments, const QByteArray& stor
     const qsizetype dataAt = qsizetype(self::alignUp(quint64(elfAt + elfPart.size() + self::kExInfoSize), 0x100));
     QByteArray s(dataAt, '\0');
     put<quint32>(s, 0x00, self::kMagicFake);
-    s[4] = char(self::kVersion);
-    s[5] = char(self::kMode);
-    s[6] = char(self::kEndian);
-    s[7] = char(self::kAttributes);
-    put<quint32>(s, 0x08, self::kKeyType);
+    s[4] = 0x00; // version, mode, endian, attributes as make_fself writes them
+    s[5] = 0x01;
+    s[6] = 0x01;
+    s[7] = 0x12;
+    put<quint32>(s, 0x08, 0x101);                           // key type
     put<quint64>(s, 0x10, quint64(dataAt + stored.size())); // file size
     put<quint16>(s, 0x18, 1);                               // one entry
-    put<quint16>(s, 0x1A, self::kFlags);
-    put<quint64>(s, 0x20, self::props::withSegmentIndex(self::props::kHasBlocks, 0));
+    put<quint16>(s, 0x1A, 0x22);                            // flags
+    put<quint64>(s, 0x20, self::props::kHasBlocks);         // a data entry for segment 0
     put<quint64>(s, 0x28, quint64(dataAt));
     put<quint64>(s, 0x30, quint64(stored.size()));
     put<quint64>(s, 0x38, quint64(stored.size()));
@@ -175,7 +175,7 @@ private slots:
             (void)selfio::unwrap(good.left(n));
         // An encrypted segment is reported as such.
         QByteArray encrypted = good;
-        put<quint64>(encrypted, 0x20, self::props::withSegmentIndex(self::props::kHasBlocks | self::props::kEncrypted, 0));
+        put<quint64>(encrypted, 0x20, self::props::kHasBlocks | self::props::kEncrypted);
         auto r = selfio::unwrap(encrypted);
         QVERIFY(!r.ok());
         QCOMPARE(codeOf(r.error()), Code::SelfEncrypted);
