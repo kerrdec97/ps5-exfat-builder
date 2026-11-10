@@ -196,6 +196,16 @@ private slots:
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_root.filePath(QStringLiteral("qsettings")));
         theme::apply(qApp);
+        // The FPKG engine keeps a work folder under %ProgramData% and its ASCII
+        // links in the system temporary folder: both are folders of this test,
+        // and a toolkit the developer has configured for the app is not seen.
+        qunsetenv("SCE_PROSPERO_PUBTOOLS");
+        const QString sysTemp = path(QStringLiteral("sys-temp")), programData = path(QStringLiteral("program-data"));
+        QVERIFY(QDir().mkpath(sysTemp) && QDir().mkpath(programData));
+        for (const char* name : {"TMP", "TEMP"})
+            qputenv(name, QDir::toNativeSeparators(sysTemp).toLocal8Bit());
+        qputenv("ProgramData", QDir::toNativeSeparators(programData).toLocal8Bit());
+        QCOMPARE(QFileInfo(QDir::tempPath()), QFileInfo(sysTemp));
         // The user's own Publishing Tools, played by the FPKG tests' fake.
         m_tools = path(QStringLiteral("tools"));
         QVERIFY(QDir().mkpath(m_tools + QStringLiteral("/toolchain/ext")));
