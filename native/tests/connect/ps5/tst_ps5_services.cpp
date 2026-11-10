@@ -284,6 +284,16 @@ private slots:
         slow.sendTimeoutMs = 20000;
         auto c = sendPayloadData(QStringLiteral("127.0.0.1"), stuck.port(), QByteArray(64 * 1024 * 1024, 'p'), slow, cs.token());
         QVERIFY(c.error().isCancelled());
+
+        // A loader that closes part-way: an error, never "all bytes sent".
+        fake::FakeTcpSink closing(false, 64 * 1024);
+        qint64 reported = 0;
+        auto cut = sendPayloadData(QStringLiteral("127.0.0.1"), closing.port(), QByteArray(48 * 1024 * 1024, 'p'), {}, {},
+                                   [&](qint64 sent, qint64) { reported = sent; });
+        QVERIFY(!cut.ok());
+        QCOMPARE(cut.error().code, ErrorCode::IoError);
+        QVERIFY2(cut.error().message.contains(QStringLiteral("closed the connection")), qPrintable(cut.error().message));
+        QVERIFY(reported < 48 * 1024 * 1024);
         QVERIFY(probeTcpPort(QStringLiteral("127.0.0.1"), stuck.port(), 2000, QStringLiteral("test")).ok());
         QVERIFY(!probeTcpPort(QStringLiteral("127.0.0.1"), 1, 2000, QStringLiteral("test")).ok());
     }
@@ -1525,6 +1535,23 @@ private slots:
         QVERIFY2(dout2.error().message.contains(QStringLiteral("no package data")), qPrintable(dout2.error().message));
         QVERIFY(dout2.error().message.contains(QStringLiteral("DPI_v2=1")));
         QVERIFY(QTest::qWaitFor([&] { return empty.request().startsWith("POST /cleartmp "); }, 5000));
+        // Cancelled while the package is on its way: the temporary folder is
+        // cleared as well (a second connection, after the upload's).
+        {
+            fake::FakeTcpSink slow(true); // accepts, never reads: the upload stalls
+            const QString big = m_tmp.filePath(QStringLiteral("big.pkg"));
+            QVERIFY(fwtest::writeRandomFile(big, 48 * 1024 * 1024, 5));
+            auto dj3 = mod.jobs.create(jobkinds::kDpiInstall, {{QStringLiteral("package"), big}, {QStringLiteral("port"), slow.port()}});
+            CancellationSource cs;
+            ProgressReporter p3;
+            JobContext ctx3 = context(p3, s);
+            ctx3.token = cs.token();
+            QTimer::singleShot(400, [&] { cs.cancel(); });
+            auto dout3 = dj3.value()->run(ctx3);
+            QVERIFY(!dout3.ok());
+            QVERIFY(dout3.error().isCancelled());
+            QCOMPARE(slow.connections(), 2);
+        }
 
         fake::FakeFtpServer::Options fo;
         fo.root = fresh(QStringLiteral("stopjob"));

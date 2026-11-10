@@ -1,5 +1,8 @@
 #include "connect/ps5/RemotePath.h"
 
+#include <QDir>
+#include <QFileInfo>
+
 namespace fw::ps5 {
 
 namespace {
@@ -128,17 +131,38 @@ bool isProtectedRemotePath(const QString& path)
         return false;
     // Normalised first, so "/data/../system" or "//system/" cannot slip through.
     const QString low = normalizeRemotePath(path).toLower();
+    if (low == u"/")
+        return false;
+    // A parent of a root ("/user", "/mnt") counts too: deleting, renaming or
+    // overwriting it reaches everything below it.
     for (const QString& prot : protectedRemoteRoots())
-        if (low == prot || low.startsWith(prot + u'/'))
+        if (low == prot || low.startsWith(prot + u'/') || prot.startsWith(low + u'/'))
             return true;
     return false;
 }
 
+QString protectedUploadTarget(const QString& remoteDir, const QStringList& localSources)
+{
+    const QString dir = normalizeRemotePath(remoteDir);
+    if (isProtectedRemotePath(dir))
+        return dir;
+    // A folder lands as <remoteDir>/<its name>/…, a file as <remoteDir>/<its name>.
+    for (const QString& src : localSources) {
+        const QString name = QFileInfo(QDir::cleanPath(src)).fileName();
+        if (name.isEmpty())
+            continue;
+        const QString target = joinRemote(dir, name);
+        if (isProtectedRemotePath(target))
+            return target;
+    }
+    return {};
+}
+
 QString protectedPathWarning(const QString& path, const QString& action)
 {
-    return QStringLiteral("The target is a protected PS5 system directory:\n\n    %1\n\nModifying system partitions "
-                          "(/system, /system_ex, /preinst, /preinst2 ...) can BRICK your console. This is almost "
-                          "never what you want.\n\nContinue with \"%2\" anyway?")
+    return QStringLiteral("The target is a protected PS5 folder:\n\n    %1\n\nIt holds system files, installed apps or "
+                          "saves (/system, /system_ex, /preinst, /user/app, /user/home…). Changing it can brick your "
+                          "console or lose data. This is almost never what you want.\n\nContinue with \"%2\" anyway?")
         .arg(path, action);
 }
 

@@ -37,10 +37,19 @@ Result<PayloadResult> sendDevice(const QString& host, quint16 port, QIODevice& i
     }
     const qint64 chunk = std::max(1024, opt.chunkSize);
     qint64 queued = 0, reported = 0;
+    // What really left for the console. Not "queued - bytesToWrite()": Qt
+    // empties its write buffer when the peer closes, which would count the
+    // dropped rest as sent.
+    qint64 written = 0;
+    QObject::connect(&s, &QIODevice::bytesWritten, &s, [&written](qint64 n) { written += n; });
+    const auto closedEarly = [&] {
+        return Error(ErrorCode::IoError, QStringLiteral("The PS5 closed the connection before the whole payload was sent."),
+                     QStringLiteral("%1 of %2 bytes sent").arg(written).arg(total));
+    };
     QElapsedTimer idle;
     idle.start();
     auto report = [&] {
-        const qint64 sent = queued - s.bytesToWrite();
+        const qint64 sent = written;
         if (sent > reported) {
             reported = sent;
             idle.restart();
@@ -51,9 +60,7 @@ Result<PayloadResult> sendDevice(const QString& host, quint16 port, QIODevice& i
     auto drain = [&](qint64 level) -> Status {
         while (s.bytesToWrite() > level) {
             if (s.state() != QAbstractSocket::ConnectedState)
-                return Error(ErrorCode::IoError,
-                             QStringLiteral("The PS5 closed the connection before the whole payload was sent."),
-                             s.errorString());
+                return closedEarly();
             const WaitResult w = waitUntil(
                 [&] { return s.bytesToWrite() <= level || s.state() != QAbstractSocket::ConnectedState; }, 200, token,
                 {&s});
@@ -73,6 +80,11 @@ Result<PayloadResult> sendDevice(const QString& host, quint16 port, QIODevice& i
             s.abort();
             return st.takeError();
         }
+        // A closed socket has an empty write buffer, so drain() cannot see it.
+        if (s.state() != QAbstractSocket::ConnectedState) {
+            s.abort();
+            return closedEarly();
+        }
         const QByteArray b = in.read(chunk);
         if (b.isEmpty()) {
             if (!in.atEnd()) {
@@ -81,7 +93,10 @@ Result<PayloadResult> sendDevice(const QString& host, quint16 port, QIODevice& i
             }
             break;
         }
-        s.write(b);
+        if (s.write(b) != b.size()) {
+            s.abort();
+            return closedEarly();
+        }
         s.flush();
         queued += b.size();
     }
@@ -90,11 +105,15 @@ Result<PayloadResult> sendDevice(const QString& host, quint16 port, QIODevice& i
         return st.takeError();
     }
     report();
+    if (written != queued) {
+        s.abort();
+        return closedEarly();
+    }
     s.disconnectFromHost();
     if (s.state() != QAbstractSocket::UnconnectedState)
         (void)waitUntil([&] { return s.state() == QAbstractSocket::UnconnectedState; }, opt.sendTimeoutMs, token, {&s});
     PayloadResult r;
-    r.bytes = queued;
+    r.bytes = written;
     r.elapsedMs = clock.elapsed();
     return r;
 }

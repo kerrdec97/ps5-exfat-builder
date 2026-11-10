@@ -118,6 +118,8 @@ public:
         QStringList readOnlyPaths;       // STOR/APPE/DELE refused (550) for these virtual paths
         bool renameRefused = false;      // RNFR answers 502
         QString dropOnlyPath;            // dropAfterBytes applies to this virtual path only
+        int goneAfterDrop = 0;           // with the drop the control connection closes too and the next N
+                                         // connections are closed ungreeted (-1: all), like a console in rest mode
         int dropControlOnPasv = 0;       // close the control connection on the first N PASV commands
         QByteArray failFirstTransferReply; // answer the first RETR/STOR/APPE with this (e.g. "425 ...")
         QString shortRetrPath;           // RETR of this path sends half the file, then 226
@@ -203,9 +205,27 @@ private:
         m_commands << c;
     }
     void reply(Session* s, const QByteArray& line) { s->ctrl->write(line + "\r\n"); }
+    // After a dropped transfer: the 426, or (goneAfterDrop) the console vanishes.
+    void dropReply(Session* s)
+    {
+        if (m_opt.goneAfterDrop == 0) {
+            reply(s, "426 Connection closed; transfer aborted.");
+            return;
+        }
+        m_goneLeft = m_opt.goneAfterDrop;
+        s->inbuf.clear();
+        s->ctrl->abort();
+    }
 
     void startSession(QTcpSocket* sock)
     {
+        if (m_goneLeft != 0) {
+            if (m_goneLeft > 0)
+                --m_goneLeft;
+            sock->abort();
+            sock->deleteLater();
+            return;
+        }
         auto s = std::make_shared<Session>();
         s->ctrl = sock;
         sock->setParent(m_t.ctx());
@@ -395,12 +415,12 @@ private:
                 m_active.fetch_sub(1);
                 QObject::connect(d, &QTcpSocket::disconnected, d, [this, s, d] {
                     d->deleteLater();
-                    reply(s, "426 Connection closed; transfer aborted.");
+                    dropReply(s);
                 });
                 d->disconnectFromHost();
                 if (d->state() == QAbstractSocket::UnconnectedState) {
                     d->deleteLater();
-                    reply(s, "426 Connection closed; transfer aborted.");
+                    dropReply(s);
                 }
                 return;
             }
@@ -449,7 +469,7 @@ private:
                 s->data = nullptr;
                 m_active.fetch_sub(1);
                 d->deleteLater();
-                reply(s, "426 Connection closed; transfer aborted.");
+                dropReply(s);
                 return;
             }
             if (d->state() != QAbstractSocket::ConnectedState && d->bytesAvailable() == 0) {
@@ -754,6 +774,7 @@ private:
     std::atomic<int> m_maxActive{0};
     std::atomic<qint64> m_received{0};
     bool m_dropped = false;
+    int m_goneLeft = 0; // connections still to refuse after a goneAfterDrop drop (-1: all)
     int m_pasvDrops = 0;
     bool m_failedTransfer = false;
     int m_corruptLeft = 1;
@@ -763,7 +784,10 @@ private:
 // ---------------------------------------------------------------------------------------
 class FakeTcpSink {
 public:
-    explicit FakeTcpSink(bool neverRead = false) : m_neverRead(neverRead)
+    // `closeAfterBytes` >= 0: the connection is closed once that much arrived
+    // (a loader that takes one small payload, or rejects what it gets).
+    explicit FakeTcpSink(bool neverRead = false, qint64 closeAfterBytes = -1)
+        : m_neverRead(neverRead), m_closeAfter(closeAfterBytes)
     {
         m_t.run([this] {
             m_server = new QTcpServer(m_t.ctx());
@@ -776,7 +800,11 @@ public:
                         continue;
                     }
                     auto buf = std::make_shared<QByteArray>();
-                    QObject::connect(s, &QTcpSocket::readyRead, s, [s, buf] { *buf += s->readAll(); });
+                    QObject::connect(s, &QTcpSocket::readyRead, s, [this, s, buf] {
+                        *buf += s->readAll();
+                        if (m_closeAfter >= 0 && buf->size() >= m_closeAfter)
+                            s->disconnectFromHost();
+                    });
                     QObject::connect(s, &QTcpSocket::disconnected, s, [this, s, buf] {
                         *buf += s->readAll();
                         std::lock_guard l(m_mutex);
@@ -807,6 +835,7 @@ private:
     QTcpServer* m_server = nullptr;
     quint16 m_port = 0;
     bool m_neverRead = false;
+    qint64 m_closeAfter = -1;
     mutable std::mutex m_mutex;
     std::vector<QByteArray> m_received;
     std::atomic<int> m_connections{0};

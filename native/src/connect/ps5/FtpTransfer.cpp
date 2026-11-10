@@ -312,6 +312,17 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
     qint64 approvedOffset = 0;
     bool startedHere = false;  // a STOR/APPE of this run was sent (cleanup)
     bool acceptedHere = false; // ... and accepted with a 1xx (resume point is ours)
+    // Every exit that gives the file up for good goes through here, so what
+    // this run wrote of it is removed (or reported when the console is gone).
+    // A cancelled file stays marked: it is removed after all workers stopped.
+    auto giveUp = [&](Outcome o) {
+        if (o == Outcome::Failed) {
+            if (startedHere)
+                removeRemotePartial(sh, &c, f.remote);
+            sh.unmark(f.remote);
+        }
+        return o;
+    };
     if (sh.opt.resume) {
         auto sz = c.size(f.remote);
         if (sz.ok() && sz.value() == f.size) {
@@ -331,11 +342,11 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
     bool append = false;
     while (true) {
         if (!ensureConnected(sh, c, attempt, f, out))
-            return out;
+            return giveUp(out);
         QFile in(f.local);
         if (!in.open(QIODevice::ReadOnly)) {
             sh.fail(f, QStringLiteral("could not read the local file (%1)").arg(in.errorString()));
-            return Outcome::Failed;
+            return giveUp(Outcome::Failed);
         }
         sh.mark(f.remote);
         const Status st = c.store(f.remote, in, offset, advance, sh.token, append);
@@ -358,9 +369,8 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             }
             if (sz.ok() && sz.value() != f.size) {
                 sh.fail(f, QStringLiteral("the PS5 reports %1 bytes, expected %2").arg(sz.value()).arg(f.size));
-                removeRemotePartial(sh, &c, f.remote);
-                sh.unmark(f.remote);
-                return Outcome::Failed;
+                startedHere = true; // the wrong-sized file is this run's
+                return giveUp(Outcome::Failed);
             }
             sh.unmark(f.remote);
             std::lock_guard lock(sh.mutex);
@@ -392,7 +402,7 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             if (!sh.token.sleepFor(1000))
                 return Outcome::Cancelled;
             if (!ensureConnected(sh, c, attempt, f, out))
-                return out;
+                return giveUp(out);
             qint64 next = approvedOffset;
             if (acceptedHere) {
                 // The remote file now starts with this run's bytes.
@@ -405,10 +415,7 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             continue;
         }
         sh.fail(f, st.error().message);
-        if (startedHere)
-            removeRemotePartial(sh, &c, f.remote);
-        sh.unmark(f.remote);
-        return Outcome::Failed;
+        return giveUp(Outcome::Failed);
     }
 }
 
@@ -443,14 +450,26 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             advance(have);
         }
     }
+    bool openedHere = false; // this run wrote to the .part (cleanup)
+    // Every exit that gives the file up for good: the .part this run wrote
+    // goes. A cancelled file stays marked and is removed after all workers
+    // stopped; a .part of an earlier run that was never opened is left alone.
+    auto giveUp = [&](Outcome o) {
+        if (o == Outcome::Failed && openedHere) {
+            QFile::remove(part);
+            sh.unmark(part);
+        }
+        return o;
+    };
     while (true) {
         if (!ensureConnected(sh, c, attempt, f, out))
-            return out;
+            return giveUp(out);
         QFile outFile(part);
         if (!outFile.open(offset > 0 ? (QIODevice::WriteOnly | QIODevice::Append) : (QIODevice::WriteOnly | QIODevice::Truncate))) {
             sh.fail(f, QStringLiteral("could not write %1 (%2)").arg(QDir::toNativeSeparators(part), outFile.errorString()));
-            return Outcome::Failed;
+            return giveUp(Outcome::Failed);
         }
+        openedHere = true;
         sh.mark(part);
         Status st = c.retrieve(f.remote, outFile, offset, advance, sh.token);
         // On the drive before it can replace anything (power cut safety).
@@ -461,9 +480,7 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             const qint64 got = QFileInfo(part).size();
             if (f.size >= 0 && got != f.size) {
                 sh.fail(f, QStringLiteral("received %1 bytes, expected %2").arg(got).arg(f.size));
-                QFile::remove(part);
-                sh.unmark(part);
-                return Outcome::Failed;
+                return giveUp(Outcome::Failed);
             }
             // An existing file (only reached with overwrite on) is set aside and
             // restored if the rename fails; the complete .part is then kept.
@@ -502,9 +519,7 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
             continue;
         }
         sh.fail(f, st.error().message);
-        QFile::remove(part);
-        sh.unmark(part);
-        return Outcome::Failed;
+        return giveUp(Outcome::Failed);
     }
 }
 
@@ -581,7 +596,10 @@ Result<TransferReport> runUpload(const TransferPlan& plan, const TransferOptions
     runWorkers(sh, uploadOne);
     if (token.isCancelled())
         finishCancelled(sh, true);
-    if (sh.workersConnected.load() == 0 && sh.report.transferred == 0 && !sh.report.cancelled && sh.report.files > 0)
+    // Nothing reached the console at all: one plain error. A report that names
+    // partial files (removed or left behind) is kept, the user needs it.
+    if (sh.workersConnected.load() == 0 && sh.report.transferred == 0 && !sh.report.cancelled && sh.report.files > 0
+        && sh.report.removedPartials.isEmpty() && sh.report.leftoverPartials.isEmpty())
         return Error(ErrorCode::IoError, sh.firstConnectError.isEmpty() ? QStringLiteral("No file could be uploaded.")
                                                                         : sh.firstConnectError);
     return sh.report;

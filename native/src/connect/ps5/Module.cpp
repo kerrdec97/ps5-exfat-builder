@@ -141,11 +141,14 @@ public:
         for (const QString& f : src)
             if (!QFileInfo::exists(f))
                 return Error(ErrorCode::NotFound, QStringLiteral("Path not found: %1").arg(QDir::toNativeSeparators(f)));
+        // The folder itself and what each source becomes in it: a folder
+        // called "system_ex" sent to "/" writes into /system_ex.
         const QString dir = remoteDir(ep);
-        if (!dir.startsWith(u'/'))
-            return Error(ErrorCode::InvalidArgument, QStringLiteral("The PS5 folder must start with \"/\"."));
-        if (isProtectedRemotePath(dir) && !m_p.value(QStringLiteral("allowProtectedPaths")).toBool())
-            return Error(ErrorCode::PermissionDenied, protectedPathWarning(dir, QStringLiteral("upload into")));
+        if (!m_p.value(QStringLiteral("allowProtectedPaths")).toBool()) {
+            if (const QString prot = protectedUploadTarget(dir, src); !prot.isEmpty())
+                return Error(ErrorCode::PermissionDenied,
+                             protectedPathWarning(prot, prot == dir ? QStringLiteral("upload into") : QStringLiteral("upload to")));
+        }
         return success();
     }
 
@@ -372,8 +375,20 @@ public:
             }
         });
         if (!r.ok()) {
-            if (!r.error().isCancelled())
-                (void)clearDpiTemp(ep.host, port, opt); // a half-received upload stays in /user/data/tmp
+            // A half-received upload stays in /user/data/tmp: after a failure,
+            // and after a cancel once package data was on its way. The cancel
+            // path does not wait long for a console that is gone.
+            const bool cancelled = r.error().isCancelled();
+            if (!cancelled || last > 0) {
+                DpiOptions clear = opt;
+                if (cancelled)
+                    clear.connectTimeoutMs = std::min(clear.connectTimeoutMs, 3000);
+                if (clearDpiTemp(ep.host, port, clear).ok())
+                    ctx.log.info(QStringLiteral("[Y2JB] Cleared the installer's temporary folder (/user/data/tmp)."));
+                else
+                    ctx.log.warn(QStringLiteral("[Y2JB] Could not clear the installer's temporary folder; part of the "
+                                                "package may remain in /user/data/tmp on the PS5."));
+            }
             return r.takeError();
         }
         if (!r->accepted) {

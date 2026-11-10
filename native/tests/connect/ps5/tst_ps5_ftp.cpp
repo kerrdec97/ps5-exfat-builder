@@ -148,7 +148,21 @@ private slots:
             QVERIFY2(isProtectedRemotePath(QString::fromLatin1(p)), p);
         for (const char* p : {"/data/system", "/mnt/usb0", "/systemx", "/user/data/tmp", "/user/appmeta", "/data/etaHEN/games", "", "/"})
             QVERIFY2(!isProtectedRemotePath(QString::fromLatin1(p)), p);
-        QVERIFY(protectedPathWarning(QStringLiteral("/system"), QStringLiteral("delete")).contains(QStringLiteral("BRICK")));
+        // A parent of a protected root is protected too: deleting or renaming it reaches the root.
+        for (const char* p : {"/user", "/USER/", "/mnt", "/data/../user", "user"})
+            QVERIFY2(isProtectedRemotePath(QString::fromLatin1(p)), p);
+        for (const char* p : {"/use", "/user/data", "/mnt/ext0", "/m"})
+            QVERIFY2(!isProtectedRemotePath(QString::fromLatin1(p)), p);
+        QVERIFY(protectedPathWarning(QStringLiteral("/system"), QStringLiteral("delete")).contains(QStringLiteral("brick")));
+        // An upload is judged by what it writes: the folder, and each source's name in it.
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("C:/dumps/system_ex")}), QStringLiteral("/system_ex"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("C:/dumps/ok"), QStringLiteral("C:/dumps/PREINST/")}), QStringLiteral("/PREINST"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/user"), {QStringLiteral("C:/x/readme.txt")}), QStringLiteral("/user"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/user/"), {}), QStringLiteral("/user"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("D:/a/user")}), QStringLiteral("/user"));
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/user/data"), {QStringLiteral("D:/a/app")}), QString());
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/data/etaHEN/games"), {QStringLiteral("D:/a/system"), QStringLiteral("D:/a/b.exfat")}), QString());
+        QCOMPARE(protectedUploadTarget(QStringLiteral("/"), {QStringLiteral("D:/a/data")}), QString());
         QCOMPARE(classifyDestination(QStringLiteral("/mnt/usb0/games")).kind, DestinationKind::External);
         QCOMPARE(classifyDestination(QStringLiteral("/data/etaHEN/games/")).kind, DestinationKind::Internal);
         QCOMPARE(classifyDestination(QStringLiteral("/foo")).kind, DestinationKind::Unknown);
@@ -546,6 +560,75 @@ private slots:
         QVERIFY(!planUpload({QDir(local).filePath(QStringLiteral("missing"))}, QStringLiteral("/x")).ok());
     }
 
+    void givingUpAfterALostConnectionCleansUp()
+    {
+        const QString local = fresh(QStringLiteral("gonelocal"));
+        const QString src = QDir(local).filePath(QStringLiteral("big.bin"));
+        QVERIFY(fwtest::writeRandomFile(src, 2 * 1024 * 1024, 21));
+        TransferOptions opt;
+        opt.retries = 1;
+
+        // The console is back once the retry budget is used up: the
+        // half-written file is removed and named in the report.
+        {
+            const QString root = fresh(QStringLiteral("goneback"));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = 1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({src}, QStringLiteral("/up")).value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->transferred, 0);
+            QCOMPARE(rep->removedPartials, QStringList{QStringLiteral("/up/big.bin")});
+            QVERIFY(rep->leftoverPartials.isEmpty());
+            QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/up/big.bin"))));
+        }
+        // The console stays away: the file cannot be removed, and the report
+        // (not a bare connection error) says that it may remain.
+        {
+            const QString root = fresh(QStringLiteral("gone"));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = -1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({src}, QStringLiteral("/up")).value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->leftoverPartials, QStringList{QStringLiteral("/up/big.bin")});
+            QVERIFY(rep->removedPartials.isEmpty());
+            QVERIFY(QFileInfo::exists(srv.path(QStringLiteral("/up/big.bin"))));
+        }
+        // Download: the .part of a file that was given up does not stay.
+        {
+            const QString root = fresh(QStringLiteral("gonedown"));
+            QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("up"))));
+            QVERIFY(QFile::copy(src, QDir(root).filePath(QStringLiteral("up/big.bin"))));
+            auto o = server(root);
+            o.dropAfterBytes = 500 * 1024;
+            o.goneAfterDrop = -1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            const QString down = fresh(QStringLiteral("gonedownlocal"));
+            TransferPlan plan;
+            {
+                FtpClient c(quick());
+                QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+                auto p = planDownload(c, {QStringLiteral("/up/big.bin")}, down);
+                QVERIFY(p.ok());
+                plan = p.value();
+                c.quit();
+            }
+            auto rep = runDownload(plan, opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->transferred, 0);
+            QVERIFY(QDir(down).entryList(QDir::Files).isEmpty());
+        }
+    }
+
 
     // ---- review fixes: regression tests ----------------------------------------------------
     void controlDropBeforeStorRewritesInsteadOfAppending()
@@ -806,11 +889,29 @@ private slots:
                                                         {QStringLiteral("remoteDir"), QStringLiteral("/system/x")}});
         auto pv = prot.value()->validate(s);
         QCOMPARE(pv.error().code, ErrorCode::PermissionDenied);
-        QVERIFY(pv.error().message.contains(QStringLiteral("BRICK")));
+        QVERIFY(pv.error().message.contains(QStringLiteral("brick")));
         auto allowed = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{src}},
                                                            {QStringLiteral("remoteDir"), QStringLiteral("/system/x")},
                                                            {QStringLiteral("allowProtectedPaths"), true}});
         QVERIFY(allowed.value()->validate(s).ok());
+        // So does a folder whose own name makes it land on a protected root,
+        // and the parent of one.
+        const QString sysEx = QDir(fresh(QStringLiteral("jobsprot"))).filePath(QStringLiteral("system_ex"));
+        QVERIFY(fwtest::writeTextFile(QDir(sysEx).filePath(QStringLiteral("x.bin")), "x"));
+        for (const auto& [sources, dir] : {std::pair{QJsonArray{sysEx}, QStringLiteral("/")}, std::pair{QJsonArray{src}, QStringLiteral("/user")},
+                                           std::pair{QJsonArray{src, sysEx}, QStringLiteral("/")}}) {
+            auto named = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), sources}, {QStringLiteral("remoteDir"), dir}});
+            auto nv = named.value()->validate(s);
+            QVERIFY2(!nv.ok(), qPrintable(dir));
+            QCOMPARE(nv.error().code, ErrorCode::PermissionDenied);
+            QVERIFY(nv.error().message.contains(dir == u"/" ? QStringLiteral("/system_ex") : dir));
+            auto confirmed = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), sources},
+                                                                 {QStringLiteral("remoteDir"), dir},
+                                                                 {QStringLiteral("allowProtectedPaths"), true}});
+            QVERIFY(confirmed.value()->validate(s).ok());
+        }
+        auto plainRoot = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{src}}, {QStringLiteral("remoteDir"), QStringLiteral("/")}});
+        QVERIFY(plainRoot.value()->validate(s).ok());
 
         const QString dl = fresh(QStringLiteral("jobsdl"));
         auto down = mod.jobs.create(jobkinds::kDownload, {{QStringLiteral("sources"), QJsonArray{QStringLiteral("/data/etaHEN/games/Game")}},
