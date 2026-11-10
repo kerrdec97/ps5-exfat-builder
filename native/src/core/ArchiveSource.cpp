@@ -1,6 +1,7 @@
 #include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 #include "core/Zip.h"
 
 #include <QDir>
@@ -87,7 +88,18 @@ Result<ZipGame> inspectZip(const QString& zipPath)
     constexpr quint64 kMaxBytes = quint64(std::numeric_limits<qint64>::max());
     quint64 bytes = 0;
     for (const zip::Entry& e : r.entries()) {
-        if (e.isDirectory() || !e.name.startsWith(g.rootPrefix, Qt::CaseInsensitive))
+        if (!e.name.startsWith(g.rootPrefix, Qt::CaseInsensitive))
+            continue;
+        // Inside the game every name must reach the image as it is. One this
+        // computer cannot store would be renamed while unpacking (the game's
+        // own folder may be: its name is not part of the image).
+        for (const QString& part : e.name.mid(g.rootPrefix.size()).split(u'/', Qt::SkipEmptyParts))
+            if (part != u"." && hostEntryName(part) != part)
+                return Error(ErrorCode::Unsupported,
+                             QStringLiteral("%1 holds the name \"%2\", which this computer cannot store as a file name. "
+                                            "The game would not be built as it is in the archive.")
+                                 .arg(QFileInfo(zipPath).fileName(), part));
+        if (e.isDirectory())
             continue;
         if (e.encrypted) // said before the job starts, not after half the archive is unpacked
             return Error(ErrorCode::Unsupported,

@@ -345,6 +345,21 @@ private slots:
         const QString all = m_root.filePath(QStringLiteral("colon-all"));
         QVERIFY(r.extractAll(all, CancellationToken()).ok()); // the "./" entry is the destination itself
         QVERIFY(QFileInfo(all + QStringLiteral("/Game_ Two-app0/sce_sys/param.json")).isFile());
+
+        // Inside the game no name may change on the way into the image: a
+        // zipped game with a name this computer cannot store is refused, not
+        // built with the file renamed.
+        const QString odd = m_root.filePath(QStringLiteral("odd-name.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(odd).ok());
+            QVERIFY(w.addData(QStringLiteral("Game-app0/eboot.bin"), "e").ok());
+            QVERIFY(w.addData(QStringLiteral("Game-app0/data/stage 1: intro.bin"), "x").ok());
+            QVERIFY(w.finish().ok());
+        }
+        const Status st = archive::checkZipSource(odd);
+        QCOMPARE(st.error().code, ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("\"stage 1: intro.bin\"")), qPrintable(st.error().message));
     }
 
     // Names stored without the UTF-8 flag: UTF-8 all the same (Info-ZIP on
