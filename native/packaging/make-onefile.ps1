@@ -52,7 +52,7 @@ $native = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $DeployDir = (Resolve-Path $DeployDir).Path
 if (-not $Output) { $Output = Join-Path (Split-Path $DeployDir -Parent) 'exFAT Image Builder.exe' }
 $Output = [IO.Path]::GetFullPath($Output)
-if (-not $BuildDir) { $BuildDir = Join-Path $native 'build-pc-release' }
+if (-not $BuildDir) { $BuildDir = Join-Path $native 'build-release' } # make-release.ps1's build folder
 if (-not $Stub) { $Stub = Join-Path $BuildDir 'bin\fw_onefile_stub.exe' }
 if (-not $Packer) { $Packer = Join-Path $BuildDir 'bin\fw_onefile_pack.exe' }
 foreach ($tool in $Stub, $Packer) {
@@ -92,9 +92,24 @@ try {
     Write-Host "== Staging $DeployDir"
     Copy-Tree $DeployDir $stage
     foreach ($item in $Extra) {
-        $parts = $item -split '=', 2
-        $src = (Resolve-Path $parts[0]).Path
-        $dest = if ($parts.Count -gt 1 -and $parts[1]) { $parts[1] } else { Split-Path $src -Leaf }
+        # "<source>=<path inside>". A source may hold "=" itself, so the split
+        # is the last "=" that leaves an existing source.
+        $src = ''
+        $dest = ''
+        if (Test-Path -LiteralPath $item) {
+            $src = $item
+        } else {
+            for ($i = $item.LastIndexOf('='); $i -gt 0; $i = $item.LastIndexOf('=', $i - 1)) {
+                if (Test-Path -LiteralPath $item.Substring(0, $i)) {
+                    $src = $item.Substring(0, $i)
+                    $dest = $item.Substring($i + 1)
+                    break
+                }
+            }
+        }
+        if (-not $src) { throw "-Extra '$item': the source does not exist" }
+        $src = (Resolve-Path -LiteralPath $src).Path
+        if (-not $dest) { $dest = Split-Path $src -Leaf }
         $target = Join-Path $stage $dest
         Write-Host "   + $src -> $dest"
         if (Test-Path -LiteralPath $src -PathType Container) {

@@ -1,17 +1,19 @@
 # Backport: parity spec and C++ plan
 
+> **Status:** a record from the v5 rewrite, not kept current. It is the specification an in-app C++ backport pipeline was written from. That pipeline was removed before 5.0.1: the Backport page runs the bundled PS5 Backport engine, a separate program (see `engines/BACKPORT.md`). The settings (§5), the files, classes, job kinds and tests (§6) and the "Impl" / "Ported" statuses (§4) describe the removed code, not this repository.
+
 Scope: the **Backports** area of the PS5 exFAT Image Builder Farewell Edition (Python/Tkinter, `APP_VERSION 4.1.0`, branch `claude/wizardly-sagan-mahxhj` based on `farewell-edition-dev`, HEAD `b298c2d`). It covers what the C++20/Qt 6 rebuild under `native/src/engines/backport/` must do.
 
 | Sources | Abbrev. |
 |---|---|
 | `exfat_builder.py` (embedded engine is base64: `_BACKPORT_B64` = Backport.py, `_SRC_FSELF_B64` = make_fself.py, `_SRC_DECRYPT_B64` = decrypt_fself.py, `_SRC_PATCHER_B64` = ps5_sdk_version_patcher.py, `_SRC_ARCHIVE_B64` = Archive.py; decoded for this spec) | `E:` (line numbers), `BP:`, `MF:`, `DF:`, `PT:` |
 | `ui/tab_backports.py`, `ui/panel_bp_auto.py`, `ui/backport_profiles.py`, `ui/build_ampr_index.py`, `core/backport_safety.py`, `tests/test_backport_*.py` | file names |
-| `docs/farewell/STATUS.md` (includes the read-only D:\ audit summary), `ISSUE_AUDIT.md`, `DEPENDENCIES.md`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md` | `ST`, `IA`, `DEP`, `CL`, `TPN` |
+| `docs/farewell/STATUS.md`, `ISSUE_AUDIT.md`, `DEPENDENCIES.md`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md` | `ST`, `IA`, `DEP`, `CL`, `TPN` |
 | PS5 Backport GUI public repo (docs only; no source): README, ROADMAP, CHANGELOG, docs/INSTALLATION, TROUBLESHOOTING, COMPATIBILITY, REPORTING_ISSUES, PRIVACY, THIRD_PARTY_NOTICES.txt, bug_report.yml, screenshots/ps5-backport-gui.png (0.2.0-beta) | `[R] [RM] [C] [I] [T] [CP] [RI] [P] [N] [BR] [S2]` |
 | Owner's screenshot of Backport GUI 0.3.4 (`images/5.webp`) | `[S5]` |
 | Upstreams cloned for licence checks: `Nazky/Auto-Backpork` (HEAD `dab6fad`, 2026-04-08), `drakmor/ampr_emu` (HEAD `cfa85df`, 2026-09-06) | `UP` |
 
-**How this was checked:** I read the code statically. I then ran the decoded embedded engine on synthetic ELF/SELF files that I built from the format (no game data). The results are in Appendix A. I did not run the Tk app, use a PS5, or read the Backport GUI source on D:\. Anything I could not confirm is marked **UNVERIFIED**.
+**How this was checked:** I read the code statically. I then ran the decoded embedded engine on synthetic ELF/SELF files that I built from the format (no game data). The results are in Appendix A. I did not run the Tk app or use a PS5. Anything I could not confirm is marked **UNVERIFIED**.
 
 **Clean-room boundary.** Parts of the Python engine have no licence (§2.1). For those parts, this document gives only **facts**: byte offsets, magic values, constants and observable behaviour. The C++ engineer implements from this document and must not read or translate the unlicensed Python. GPL-3.0 parts may be ported with attribution.
 
@@ -36,7 +38,7 @@ Scope: the **Backports** area of the PS5 exFAT Image Builder Farewell Edition (P
 
 ## 1. Backport GUI feature inventory (docs, changelog, screenshots)
 
-Backport GUI is closed source and proprietary: "personal, non-commercial use", no derivative works, no reverse engineering [R][LICENSE.txt]. Version history: 0.2.0-beta [S2], early beta 18 Oct 2026 [C], 0.3.1, 0.3.2 (latest stable), 0.3.3 testing build (22 Oct 2026) [R], 0.3.4 [S5]. The D:\ checkout was `D:\fixing input\unity_input_gui`, branch `snapshot/20261021-f1-pro-v45`, HEAD `3cf4ffac` [ST].
+Backport GUI is closed source and proprietary: "personal, non-commercial use", no derivative works, no reverse engineering [R][LICENSE.txt]. Version history: 0.2.0-beta [S2], early beta 18 Oct 2026 [C], 0.3.1, 0.3.2 (latest stable), 0.3.3 testing build (22 Oct 2026) [R], 0.3.4 [S5] (the release version 5 bundles).
 
 ### 1.1 Screens and controls
 
@@ -70,7 +72,6 @@ Backport GUI is closed source and proprietary: "personal, non-commercial use", n
 | Apply to game folders | Optional, off by default. Copies the backport into the game folder only after the originals are backed up and verified. Uses a write journal with automatic rollback on failure. An interrupted apply is offered for rollback at the next start. **Restore originals** is in Settings. | [R][T] |
 | Target SDK | SDK 4 is the default and loads on FW 4.00+. SDK 5–13 are experimental. An SDK *N* build loads only on FW *N*.00+. The target can't be higher than the game's own SDK. SDK 5 fixed black screens and GPU hangs for some titles on newer firmware. SDK 6–13 are untested on hardware. | [R][I][RM] |
 | Rebuild ZIP with another SDK | Right-click a game to rebuild its FW 4xx ZIP at the selected SDK. It keeps the FW 4.xx save fixes. | [R][S5] |
-| PS5 Pro fix, AGCDriver part | The Quality60 AGCDriver `810c3b20` is a third-party build of Sony's `43153558` | At most a user-supplied, hash-pinned file (needs the canonical trio first). The shader-trap part is ported (#32) |
 | PS5 Pro PSSR 2 test / Pro build | Pro FW 9.00+ only. Produces a Pro-only ZIP `… Pro PSSR2 test backport files.zip` (0.3.0 name; the 0.3.4 name is **UNVERIFIED**). The PSSR library uses the console's real Pro, app-info and title queries. A change to the bundled AGC library's Pro detection is tested. On Pro FW 9.x–12.x the game's requested PSSR version is restored. A requested model missing from the packaged files is refused. Games without PSSR get the normal ZIP. *Apply to game folders* warns about Pro-only files. | [C][S5] |
 | Switch AMPR / PlayGo | Swaps a backport's `libSceAmpr.sprx` / `libScePlayGo.sprx` between the engine's providers (AMPR `82484486`, AMPR `0aadd31d`, PlayGo `a0f20f40`, as SHA-256 prefixes) and drakmor **ampr_emu 0.4.2.1** (`2feef6a2` / `f5fdb0ed`, GPL-3.0). The files are hash-pinned in `app/fakelib_variants/MANIFEST.json`. | [N][S5][IA #17 #27] |
 | right.sprx | When `sce_sys/about/right.sprx` fails with `Invalid param magic 0x79A6EB9E`, it is replaced with "the standard copy". Other conversion failures may mean the dump is still encrypted. | [C] |
@@ -82,27 +83,16 @@ Backport GUI is closed source and proprietary: "personal, non-commercial use", n
 | Failure messages | "Target SDK N is higher than this game's own SDK"; "The SDK N build was refused" (for example, executables the signer can't rewrite); "No safe backport was produced"; "No backport is needed"; "Partial" (the build was made but the ZIP or apply step didn't finish). | [T] |
 | Save data | 4.xx-only save fixes are no longer applied to newer SDKs (#5). The save-mount check counted only one of two identical requests and was fixed in 0.3.3 (#22–#24). | [IA] |
 | Audio | 0.3.1 fixed no-audio cases (#10, #11, #13). 0.3.4 added a 2-byte eboot patch for CRI 7.1.4 → 7.1 (12 → 8 channels) (#28). | [IA] |
-| Unity / Il2Cpp | MGS4 launch crash caused by the module-name case `Il2cppUserAssemblies.prx` vs `Il2CppUserAssemblies.prx`, fixed in 0.3.3 (#2). Other Unity handling is **UNVERIFIED**; the checkout folder name `unity_input_gui` suggests an origin in a Unity-input tool. | [IA][ST] |
+| Unity / Il2Cpp | MGS4 launch crash caused by the module-name case `Il2cppUserAssemblies.prx` vs `Il2CppUserAssemblies.prx`, fixed in 0.3.3 (#2). Other Unity handling is **UNVERIFIED**. | [IA][ST] |
 | Console Logs | Sends the bundled klog, FTP and debug payloads (klogsrv and ftpsrv GPL-3.0, ps5debug-NG 1.3.2) to an ELF loader on port 9021. Streams the klog. Downloads crash dumps into `PS5_logs_<ip>_<time>_crash_<…>.zip`. Takes read-only hang snapshots. | [R][RI][N] |
 | Export logs | `PS5BackportGUI_logs_<date>_<time>.zip` on the Desktop, then opens Explorer. Contains the activity log and, per run, the result, engine plan, build log, engine reports and error trace, plus the settings file and a system summary. No game files. Offered automatically after a failed run. | [RI] |
 | Report a problem | Opens the GitHub bug form. Per [C] 0.3.0 it pre-fills the SDK/fakelib options, title, PPSA and version; per [P] it fills only the program version. The current behaviour is **UNVERIFIED**. Form fields: game_title, ppsa, game_version, firmware, console, format, storage, loader, tool_version, sdk, fakelib, happened, expected, steps, error, evidence. | [C][P][BR] |
 | Storage | Settings and applied-backport list in `%APPDATA%\Deckerr97BackportGuiBeta\`. Logs `app_<date>.log` and `runs\<run>\` in `%LOCALAPPDATA%\Deckerr97BackportGuiBeta\logs\`. Engine unpacked to `%LOCALAPPDATA%\D97B\<version>` (about 160 MB). | [I] |
 | Third-party (bundled) | Python 3.14.7, Tcl/Tk 9.0.4, **Capstone 5.0.9** (disassembly), **Unicorn 2.1.1** (CPU emulator, GPL-2.0), Pillow, PyInstaller, make_fself (GPL-3.0+), klogsrv/ftpsrv (GPL-3.0), ampr_emu (GPL-3.0). The engine's use of Capstone/Unicorn is **UNVERIFIED** (likely import/NID analysis). | [N] |
 
-### 1.3 Facts from the read-only D:\ audit (from `ST`; no code was copied)
+### 1.3 Notes on the engine's source
 
-| Finding | Use for C++ |
-|---|---|
-| Import-table checks cover FW 4.03–13.60 but skip decode errors, merge gaps and trust seeded slots | Blocked: tables of undocumented origin |
-| V2 registry, report-only patterns, firmware boundaries and planner families disagree | Nothing to port |
-| Audio gate checks only `sceAudioOut2Set3DLatency`; the live parser keeps only the last 600 characters | Do not copy the pattern |
-| AMPR `prtm` (JWE3 V32 kernel panic after about 1 minute) and `prtp` (fails on Planet Coaster 2 V3) | Not added; experimental if ever added |
-| `packaged_ampr_sha` / `ampr_unmap_prt_fatal` leave ZIPs open | C++ uses RAII for all archive handles |
-| Already-backported detection based on file names, no tests | Hash-based detection (§2.14) |
-| Release-only `4e1d7250` rejects nested or undersized fake libraries | Ported independently (§3 S8) |
-| Boundary UNKNOWN → `HARDWARE_MEASURED_FW13_20_PRO`; evidence: FW 4.50 Base rejection, Pro 13.20 | Record only |
-| SDK 5–13 target pairs | Hardware proof reported for SDK 5 only |
-| The checkout has no tracked project licence; a GPL-3.0 AMPR/PlayGo source ships without licence text or source offer; `right.sprx` (Sony-derived), PSSR and kernel files (game-derived) and the firmware import tables (undocumented origin) are present | All blocked (§4) |
+This section held working notes on the PS5 Backport GUI's engine source. Version 5 bundles that engine unchanged as a separate program (see `engines/BACKPORT.md`), so the notes are not kept here.
 
 ---
 
@@ -120,7 +110,7 @@ Backport GUI is closed source and proprietary: "personal, non-commercial use", n
 | `ui/build_ampr_index.py` | file | Older revision of `drakmor/ampr_emu` `tools/build_ampr_index.py` (diffed; progress callbacks added) | **GPL-3.0** (repo LICENSE @ `cfa85df`) | Port the **current upstream** semantics with attribution (§2.17). Gap: our file has no attribution header, and `TPN` lists drakmor under "no code bundled". |
 | `core/backport_safety.py`, `ui/backport_profiles.py`, `ui/audio_*.py`, Backports UI | files | Original to this project | Project licence | Port freely |
 
-The C++ app is GPL-3.0-compatible, so GPL-3.0 ports are fine with notices plus corresponding source. Code with no licence (Backport.py, the patcher gist, Archive.py) must not be translated.
+GPL-3.0 parts were ported with attribution; their licence continues to apply to those parts (`packaging/THIRD_PARTY_NOTICES-native.md`). Code with no licence (Backport.py, the patcher gist, Archive.py) must not be translated.
 
 ### 2.2 Run sequence (single game, "Apply Auto Backport", `E:16807-17313`)
 
@@ -250,7 +240,7 @@ The C++ must also check that `p_offset + 0x18 ≤ file size` and `p_offset + 0x1
 | 12 | `0x12000038` | 12.00 / `0x0038` | `0x13090001` | 13.09 | FW 12.00+ | **UNVERIFIED** |
 | 13 | `0x13000035` | 13.00 / `0x0035` | `0x13590001` | 13.59 | FW 13.00+ | **UNVERIFIED** |
 
-Pairs 11–13 (ported 2026-11-04 from the owner's D:\ Backport engine, `experimental_outputs/AUTO_COMPLETE_20261008_V1/analysis/sdk_tool.py` `EXTRA_PAIRS`): the pinned patcher's table stops at 10; these are the process-param values of real retail eboots read from the owner's original packages on 2026-10-17 (pair 11 = 44 titles, e.g. Dying Light 2 01.090.000; 12 = 33, e.g. Demon's Souls 01.007.000; 13 = 3, e.g. Marvel's Wolverine 01.001.005). The same scan reproduces pairs 1–10 exactly, so they are measured values, not the earlier "+0.50 per pair" extrapolation. No hardware result is recorded for a build at 11–13.
+Pairs 11–13 (taken on 2026-11-04 from the PS5 Backport engine's own table): the pinned patcher's table stops at 10; these are the process-param values of real retail eboots read from the owner's original packages on 2026-10-17 (pair 11 = 44 titles, e.g. Dying Light 2 01.090.000; 12 = 33, e.g. Demon's Souls 01.007.000; 13 = 3, e.g. Marvel's Wolverine 01.001.005). The same scan reproduces pairs 1–10 exactly, so they are measured values, not the earlier "+0.50 per pair" extrapolation. No hardware result is recorded for a build at 11–13.
 
 Decoding: the major version is the top byte read as BCD (`(b>>4)*10 + (b&0xF)`). `0x10` is SDK 10, not 16. `E:16184 _batchsdk_read_eboot_sdk` treats `0x10` as 16 unless the exact pair value matches; the C++ must use BCD. The "SDK 6 libc/fakelib boundary": Python warns when the current and target SDK are on different sides of 6 (`_abp_crosses_sdk6`, `E:15315`), and the libc NID patch changes direction at 6 (§2.9).
 
@@ -571,7 +561,7 @@ S1–S30 are rules already in force (from `core/backport_safety.py`, `STATUS.md`
 | S24 | SDK Fixer: fakelib off, NID patch off, `param.*` unchanged, verified; copy mode removes a half-written copy; overwrite mode restores the executables on failure | E:15736 | SDK Fixer |
 | S25 | Batch Retag: source ZIPs never modified; output folder ≠ source; temp free ≥ 1.05 × uncompressed; `.part` + rename | E:16514 | retag |
 | S26 | No issue is closed or commented on by tooling | ST | process |
-| S27 | Licence: no Backport GUI code; no `right.sprx`, PSSR, kernel files, firmware import tables, or the Backport GUI's AMPR/PlayGo source copied, bundled or downloaded | ST | build |
+| S27 | No Backport GUI code is copied into the C++ sources (version 5 bundles the released program unchanged, as a separate executable) | ST | build |
 | S28 | Paths over 259 characters: C++ may use `\\?\` internally (`fw::toLongPath`), but ZIP output names stay ≤ 259 (Explorer and other tools) | backport_safety | all |
 | S29 | The "Partial" state must be explicit: the game is patched but a ZIP is missing → the log names the originals' location | E:17880 | all |
 | S30 | A ZIP folder inside the game is refused (it would be packed into the image and re-scanned) | backport_safety | all |
@@ -588,7 +578,7 @@ S1–S30 are rules already in force (from `core/backport_safety.py`, `STATUS.md`
 
 ## 4. Parity matrix
 
-Legend: **Y** = in our Python, **P** = partial, **N** = no. C++ plan: **Impl** = v1; **Later** = after v1; **Blocked** = needs the D:\ source, licence-clear data, or documented values.
+Legend: **Y** = in our Python, **P** = partial, **N** = no. C++ plan: **Impl** = v1; **Later** = after v1; **Blocked** = not ported; it stays in the PS5 Backport engine.
 
 | # | Backport GUI feature | Src | Py | C++ plan | Reason / note |
 |---|---|---|---|---|---|
@@ -603,9 +593,9 @@ Legend: **Y** = in our Python, **P** = partial, **N** = no. C++ plan: **Impl** =
 | 9 | Retry failed | R | N | Impl | |
 | 10 | Cancellation | R | N | Impl | Cancel before Apply leaves the game untouched; during Apply → rollback |
 | 11 | SDK rewrite + fake-sign | R | Y (pairs 1–10) | Impl | §2.5–2.8 |
-| 12 | Bundled default fakelib provider set ("nothing to configure") | R,I | N (user folder, default None) | Blocked (bundle) / Ported · build pending (pins) | The default set is the owner's canonical AGC/AGCDriver/PSML trio, Sony libraries taken from another tool's Super Bomberman R2 backport (D:\ `MANDATORY_FAKELIB_BUNDLE_V1`): never bundled. Its names, sizes and SHA-256 are pinned as data (`CanonicalTrio.h`): a game holding one pinned file is refused as already backported, and a fakelib folder that is the trio is named in the plan. AMPR `82484486`/`0aadd31d`, PlayGo `a0f20f40`: provenance still unknown |
-| 13 | Import-table audit FW 4.03–13.60 | R | N | Blocked | D:\ review 2026-11-04: the audit reads 39 one-line `fwdb/<fw>.json` export-key tables (37 usable; 12.40/12.60 empty) built from the owner's own unpacked firmware, with no written provenance. The §1.3 defects are still in that code (decode errors skipped, gaps merged into one range, any non-lazy GOT slot trusted). Unblock: the owner's provenance note, then a clean table (one firmware bit-mask per key) |
-| 14 | Confirmed fix families (automatic fixes) | R | N | Partly ported | Inventory of the owner's 26 automatic items (D:\ review). Ported (exact byte rules, no decoder, no binary): CRI Unity rack (#40, `CriAudio.h`). Not ported: Frostbite 12ch (3 EA layouts), Unity SaveData copy, libc heap windows, NETCTL offline (deliberately title-conditional), PLT trap restore; the families that need x86 decoding (Prepare 6→0, systemBlocks sentinel, mouse fallbacks, Wwise, GamePresets, Set3 non-fatal) or the firmware tables (lazy GOT seeds, DirNameSearch2) stay blocked |
+| 12 | Bundled default fakelib provider set ("nothing to configure") | R,I | N (user folder, default None) | Blocked (bundle) / Ported · build pending (pins) | The engine's default set (the AGC/AGCDriver/PSML trio) is not bundled by the C++ code. Its names, sizes and SHA-256 are pinned as data (`CanonicalTrio.h`): a game holding one pinned file is refused as already backported, and a fakelib folder that is the trio is named in the plan. |
+| 13 | Import-table audit FW 4.03–13.60 | R | N | Blocked | Not ported: the audit needs the engine's per-firmware export tables and stays in the engine |
+| 14 | Confirmed fix families (automatic fixes) | R | N | Partly ported | Inventory of the engine's 26 automatic items. Ported (exact byte rules, no decoder, no binary): CRI Unity rack (#40, `CriAudio.h`). Not ported: Frostbite 12ch (3 EA layouts), Unity SaveData copy, libc heap windows, NETCTL offline (deliberately title-conditional), PLT trap restore; the families that need x86 decoding (Prepare 6→0, systemBlocks sentinel, mouse fallbacks, Wwise, GamePresets, Set3 non-fatal) or the firmware tables (lazy GOT seeds, DirNameSearch2) stay blocked |
 | 15 | Audio check across firmware bands | R,T | N | Blocked | The gate's rules are known (FW 4.03–5.50 absent, 6.00–9.60 rejects mode 2 with `0x80268001`, 10.01–13.60 native; `backport_core/audio_firmware_gate.py`), but deciding the mode and the result handling needs an x86 decoder. Defects found in the owner's gate: mode 0 accepted although the matrix says it is rejected, the first argument never checked, plain decoded ELF members never analysed |
 | 16 | ZIP CRC re-read + recorded hashes | R | P (CRC + count; hashes recorded, not re-checked) | Impl | Re-hash every member against the manifest |
 | 17 | Signed-executable structure check | R | N | Impl | Re-parse each SELF, unwrap, compare with the patched ELF |
@@ -623,21 +613,21 @@ Legend: **Y** = in our Python, **P** = partial, **N** = no. C++ plan: **Impl** =
 | 29 | Target SDK 11–13 | R | N | **Done** (2026-11-04) | Pair values from the owner's engine with their provenance (§2.6); `backport.targetSdk` 1–13; untested on hardware |
 | 30 | Target ≤ game SDK | R | Y | Impl | S4 |
 | 31 | Rebuild a ZIP with another SDK (row menu) | R | P (Batch SDK Retag) | Impl | Single and batch; fakelib/NID off. The "keeps FW 4.xx save fixes" part is blocked (#39). |
-| 32 | PS5 Pro fix | R | N | Ported · build pending (shader part) / Blocked (AGCDriver hook) | `ProFix.h`, `backport.proFix` (off by default, never automatic): every guarded `s_trap 1` in the root eboot.bin → `s_nop 0` (Black Flag V16 WORKING base FW 4.50/9.00, Pro FW 9.05/10.01/13.60; 164 sites Mortal Shell II V3, 137 LN3 V4), ZIP `… Pro fix backport files.zip`. The `--agcdriver-lt12-hook` swaps in the Quality60 AGCDriver `810c3b20`, a third-party build of Sony's `43153558`: not bundled |
-| 33 | PS5 Pro build / PSSR 2 test (+ from an existing backport) | C,S5 | N | Blocked | D:\ review: the PSML import restore, mfsrVersion getter fallback, KPN model check and TRINITY_MODE_HW_GATE need no binary when the package already holds the overlay PSML `72855f03` + `k9.psp`, but need an ELF symbol/relocation/PLT writer the C++ engine does not have; a canonical-PSML package needs those two Sony/game-derived files; OPERATION_MODE_PRO_GATE needs a decoder; the owner's engine refuses a PSSR 2 build without the audio gate (#15). Never run on a PS5 Pro yet |
-| 34 | Switch AMPR / PlayGo | N,S5 | N | Impl (user-supplied) / Blocked (bundled) | `ProviderSet.*`, setting `backport.amprPlaygoFolder`: the user's own `libSceAmpr` / `libScePlayGo` (S8 rules) take the place of the same-named libraries wherever the fakelib set is staged (also replacing a dump's own copies, kept in the originals ZIP). SHA-256 and size pinned per folder in `<dataDir>/backport/provider-pins.json` at the first backport (trust on first use); a changed, added or missing file is refused (`ProviderChanged`) until re-pinned (`backport.pinProviders`, "Pin them again" on the page). Bundling ampr_emu 0.4.2.1 (GPL-3.0, upstream LICENSE verified) needs reproducible-build provenance first. Engine providers: blocked. Swapping the providers inside an existing backport ZIP: not built (a new backport with the folder set does it). |
-| 35 | `right.sprx` "Invalid param magic" → standard copy | C | N (counted as failure) | Ported · build pending | `RightSprx.h`, `backport.standardRightSprx`: when the game-root copy cannot be converted (any reason, as the owner's engine), the user's own standard right.sprx (SHA-256 `81544cbbc69f844f58bbff2cfaf8ad3ccce7dddaf58604cc359ced19d19629d0`, 12512 bytes, in 107 of the owner's 379 originals) is converted in its place; the dump's copy stays in the originals ZIP. Sony's file is never bundled. Console result for a substituted build: none recorded |
+| 32 | PS5 Pro fix | R | N | Ported · build pending (shader part) / Blocked (AGCDriver hook) | `ProFix.h`, `backport.proFix` (off by default, never automatic): every guarded `s_trap 1` in the root eboot.bin → `s_nop 0` (Black Flag V16 WORKING base FW 4.50/9.00, Pro FW 9.05/10.01/13.60; 164 sites Mortal Shell II V3, 137 LN3 V4), ZIP `… Pro fix backport files.zip`. The engine's AGCDriver hook (`--agcdriver-lt12-hook`) is not ported |
+| 33 | PS5 Pro build / PSSR 2 test (+ from an existing backport) | C,S5 | N | Blocked | The PSML import restore, mfsrVersion getter fallback, KPN model check and TRINITY_MODE_HW_GATE need no binary when the package already holds the overlay PSML and `k9.psp`, but need an ELF symbol/relocation/PLT writer the C++ engine does not have; a canonical-PSML package needs those two files; OPERATION_MODE_PRO_GATE needs a decoder; the owner's engine refuses a PSSR 2 build without the audio gate (#15). Never run on a PS5 Pro yet |
+| 34 | Switch AMPR / PlayGo | N,S5 | N | Impl (user-supplied) / Blocked (bundled) | `ProviderSet.*`, setting `backport.amprPlaygoFolder`: the user's own `libSceAmpr` / `libScePlayGo` (S8 rules) take the place of the same-named libraries wherever the fakelib set is staged (also replacing a dump's own copies, kept in the originals ZIP). SHA-256 and size pinned per folder in `<dataDir>/backport/provider-pins.json` at the first backport (trust on first use); a changed, added or missing file is refused (`ProviderChanged`) until re-pinned (`backport.pinProviders`, "Pin them again" on the page). Bundling ampr_emu 0.4.2.1 (GPL-3.0) or the engine's providers: not done. Swapping the providers inside an existing backport ZIP: not built (a new backport with the folder set does it). |
+| 35 | `right.sprx` "Invalid param magic" → standard copy | C | N (counted as failure) | Ported · build pending | `RightSprx.h`, `backport.standardRightSprx`: when the game-root copy cannot be converted (any reason, as the owner's engine), the user's own standard right.sprx is converted in its place; the dump's copy stays in the originals ZIP. The file is never bundled. Console result for a substituted build: none recorded |
 | 36 | Dump with another tool's fakelib (#27) | R | P (overlay + backup; extras re-signed) | Impl | Overlay, extras unchanged with a warning (D3). Replacing extras → #34. |
 | 37 | OS metadata ignored | R | Y | Impl | S15 |
 | 38 | Already-backported detection | T | Y (fakelib + manifest) | Impl | S6, S7 |
 | 39 | Save-data fixes (FW 4.xx), save-mount check | IA, S5 | N | Blocked | The owner's Prepare-option, systemBlocks-sentinel and reused-request (#22–#24) fixes find their sites with Capstone (`families_v2.py` 341–449, 815–873): a C++ x86 decoder is needed first. Noted risks: systemBlocks→0 is applied on every firmware for FW 4xx builds although the boundaries file calls it harmful from FW 12.00; the registry rates SAVEDATA_PREPARE semantically unproved |
-| 40 | Audio fixes (0.3.1 families, CRI 7.1.4 → 7.1) | IA | P (hidden scanner, one profile) | Ported · build pending (CRI rack) / report only (rest) | `CriAudio.h`, `backport.criAudioFix` (default on): the CRI Unity rack 12ch → 8ch with the owner's exact rules (hardware: PAC-MAN WORLD 2 Re-PAC V8, STORY OF SEASONS, WONDERBOY, base FW 4.50). The "2-byte CRI 7.1.4 → 7.1 eboot patch (#28)" is not in the D:\ working tree. Frostbite (3 EA layouts) not ported yet; Wwise needs a decoder. `backport.audioScan` stays the read-only report |
+| 40 | Audio fixes (0.3.1 families, CRI 7.1.4 → 7.1) | IA | P (hidden scanner, one profile) | Ported · build pending (CRI rack) / report only (rest) | `CriAudio.h`, `backport.criAudioFix` (default on): the CRI Unity rack 12ch → 8ch with the owner's exact rules (hardware: PAC-MAN WORLD 2 Re-PAC V8, STORY OF SEASONS, WONDERBOY, base FW 4.50). The "2-byte CRI 7.1.4 → 7.1 eboot patch (#28)" was not found in the engine's source. Frostbite (3 EA layouts) not ported yet; Wwise needs a decoder. `backport.audioScan` stays the read-only report |
 | 41 | Unity / Il2Cpp module-name case (#2) | IA | N | Ported · build pending (fix) / Impl (DT_NEEDED detector) | `ModuleCaseFix.h`: the spelling the game loads comes from `"%s/Modules/<Name>.prx"` in the decoded eboot (the owner's engine: "the DT_NEEDED module name is a separate, lower-case string and does not decide the file name"); the module is staged, zipped and applied under that spelling with a journaled case-only rename; the originals ZIP, rollback and Restore keep the dump's (`renamed_files`). The older DT_NEEDED detector (`ModuleImports.*`) uses PS4 tag values; the owner's engine reads the PS5 tags 0x61000043/45/47/49, so it is likely silent on real titles. Console confirmation pending |
 | 42 | Destination rules (both set, different, not nested, not in game, free space, folder named in the message) | T | P (backport folder optional; same folder allowed; nesting not checked) | Impl | S9, S10, S12, S38 |
 | 43 | Free-space check | R | P (single only) | Impl | S12 |
 | 44 | Failure message set (higher SDK / SDK N refused / no safe backport / no backport needed / Partial) | T | P | Impl | §6.3 |
 | 45 | Console Logs: payload send to ELF loader (9021), live klog | R | P (klog viewer on 3232, payload sender) | Impl (shortcut) | The Backport page links to the PS5 connect page's Payloads and Kernel log tabs (no new protocol work; the features are the PS5 connection module's). |
-| 46 | Crash dump auto-download ZIP, hang snapshots | R | N | Later (spec ready) | The console paths are now known from the owner's Log Sender: crash folders in `/user/devlog/system/sce_coredumps.0` over ftpsrv (2121, anonymous, `LIST` only), polled every 0.25 s and woken by the klog line `[CRS][coredump_seq] prepare()`, baseline on the first listing, core first, complete after 3 s of no change (180 s timeout), ZIP `PS5_logs_<ip>_<time>_crash_<folder>.zip` in `Desktop\PS5 Logs`; hang snapshots through ps5debug-NG (TCP 744, the PC listens on 755). Needs a console to test |
+| 46 | Crash dump auto-download ZIP, hang snapshots | R | N | Crash dumps: built since as `ps5.crashdumps.capture` (PS5 connect › Crash dumps). Hang snapshots: not built | From the Log Sender: crash folders in `/user/devlog/system/sce_coredumps.0` over ftpsrv (2121, anonymous, `LIST` only), polled every 0.25 s and woken by the klog line `[CRS][coredump_seq] prepare()`, baseline on the first listing, core first, complete after 3 s of no change (180 s timeout), ZIP `PS5_logs_<ip>_<time>_crash_<folder>.zip` in `Desktop\PS5 Logs`; hang snapshots through ps5debug-NG (TCP 744, the PC listens on 755). Needs a console to test |
 | 47 | Export logs ZIP (activity, per-run plan/log/report/trace, settings, system; no game files) | RI | P (text report) | Impl | `<Desktop>/…_logs_<date>_<time>.zip` |
 | 48 | Report a problem with prefilled form | C,BR | P (link) | Impl | GitHub issue-form query parameters: title, PPSA, version, SDK, fakelib |
 | 49 | Settings: subfolder depth, open logs folder, restore, applied list | I | P | Impl | §5 |
@@ -811,18 +801,9 @@ Fixtures are generated in code by `SyntheticElf.h` from the tables below, so no 
 
 ---
 
-## 7. Blocked on the D:\ source or on licence-unclear data
+## 7. Not ported
 
-| Item | Blocked by | Unblock path |
-|---|---|---|
-| Firmware import-table audit (FW 4.03–13.60), audio band gate, decoder-based fix families | The tables come from the owner's own unpacked firmware without a written provenance note; the gate and most code families need x86 decoding | The owner's provenance note for the tables; an x86 decoder (Zydis, MIT, or Capstone, BSD) in the C++ engine. The D:\ code itself is the owner's, so porting it is not the obstacle |
-| PS5 Pro fix, AGCDriver part | The Quality60 AGCDriver `810c3b20` is a third-party build of Sony's `43153558` | At most a user-supplied, hash-pinned file (needs the canonical trio first). The shader-trap part is ported (#32) |
-| PS5 Pro build / PSSR 2 test | PSSR files are game-derived; AGC library change | Not bundleable; at most a user-supplied files option after review |
-| `right.sprx` standard copy | Sony's file | Done the only safe way: the user's own copy, hash-pinned (#35). Never bundled |
-| Default fakelib provider set (AMPR `82484486`/`0aadd31d`, PlayGo `a0f20f40`, others) | Unknown provenance | User-supplied folder (current behaviour) |
-| ampr_emu 0.4.2.1 binaries | GPL-3.0 is fine, but build provenance and toolchain (SDK headers) are unverified | Reproducible build from upstream + licence text + source offer |
-| ~~SDK pairs 11–13~~ | Unblocked 2026-11-04 | Measured values with provenance from the owner's engine (§2.6) |
-| FW 4.xx save fixes, save-mount check | Capstone-based site finding in the owner's engine (see #39) | An x86 decoder. The Il2Cpp case fix is ported (#41); the D:\ checkout was read on the owner's PC on 2026-11-04 without changing it (its seven uncommitted files hashed before and after) |
+The engine features marked **Blocked** in §4 were not ported to C++. They remain features of the PS5 Backport engine, which version 5 bundles as a separate program.
 
 ---
 

@@ -10,9 +10,14 @@ output, backport update packages and DLC packages. The full notes are in
 `native/RELEASE_NOTES.md` and on the release page. From this version the app
 is proprietary (see `native/packaging/LICENCE.txt`).
 
-## [4.1.0] - 2026-11-03 — Farewell Edition
+## [4.1.0] - not released — Farewell Edition (Python)
 
-The final release of exFAT Image Builder. It restores the v4.0.2 source that
+This version was never released: it has no tag and no download. Version 5
+replaced it, and the files this entry names (the Python sources, `build.bat`,
+`docs/farewell/`, `tools/`, `tests/`, `vendor/`, the Windows build workflow)
+are no longer in the repository. The entry is kept as a record.
+
+It was planned as the final release of the Python app. It restores the v4.0.2 source that
 was never published, fixes the problems reported since, and gives the app a
 consistent look. Every existing feature, setting and language is kept.
 
@@ -270,9 +275,7 @@ consistent look. Every existing feature, setting and language is kept.
   recovery yet. Update builds exist in the engine but not in the Build tab.
 - The PS5 Backport GUI's engine (import-table audit, confirmed-fix
   families, audio gate, AMPR/PlayGo variants, `right.sprx` replacement) is
-  not merged. Its checkout has no project licence and ships Sony-, game- and
-  firmware-derived data of unknown origin, so none of it is copied; the
-  checks above are independent equivalents. See `docs/farewell/STATUS.md`.
+  not merged; the checks above are independent equivalents.
 - Not tested on real hardware for this release: image builds with OSFMount,
   robocopy on a real game, Windows 10/11 locales, and a PS5. The Windows CI
   runner has no OSFMount and no console. See the README.

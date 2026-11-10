@@ -1,12 +1,11 @@
 # PFS / FFPFSC engine (`fw_engine_pfs`)
 
 Native C++ port of **Lazy_MkPFS** (Nazky, <https://github.com/Nazky/Lazy_MkPFS>,
-vendored at `vendor/lazy_mkpfs`, upstream commit
-`78bdd00c5645b1170420df051c586dd0ca4f918d`), which is itself derived from
-**MkPFS** by PSBrew (<https://github.com/PSBrew/MkPFS>). Both are GPL-3.0, which
-continues to apply to this port (see `packaging/THIRD_PARTY_NOTICES-native.md`);
-every source file names what it was ported from. The legacy Python app and the
-vendored package are not modified.
+upstream commit `78bdd00c5645b1170420df051c586dd0ca4f918d`), which is itself
+derived from **MkPFS** by PSBrew (<https://github.com/PSBrew/MkPFS>). Both are
+GPL-3.0; their terms still apply to the ported parts (see
+`packaging/THIRD_PARTY_NOTICES-native.md`), and every source file names what
+it was ported from.
 
 For the same input and options the engine writes **byte-identical** images to
 Lazy_MkPFS (see [Compatibility](#compatibility)); it is multithreaded,
@@ -43,7 +42,7 @@ verifies what it wrote before the image gets its final name.
 
 Lazy's default `main_folder.py` mode (folder → temporary exFAT image via
 mkfs/OSFMount → container) needs the exFAT engine; the app chains an
-`exfat` job and an `image.pfs.build` job with the `.exfat` as source instead.
+`image.exfat.build` job and an `image.pfs.build` job with the `.exfat` as source instead.
 
 ## On-disk format
 
@@ -469,6 +468,5 @@ threaded (30 vs 6 MB/s); level 9 is the legacy default.
 | `tst_pfs_hostile` | crafted images: separator / NUL / dot entry names → `CorruptData` and nothing extracted; names a drive cannot store renamed on extraction and reported, nothing written outside the folder; size without blocks and size beyond the blocks → `CorruptData` (verification and extraction fail); a PFSC header declaring a 16 GiB block table in a small file is refused without allocating it; the path-safety helpers |
 | `tst_pfs_benchmark` | MB/s native (1 and N threads) vs Lazy_MkPFS on the same input; outputs identical |
 
-`ctest --test-dir native/build-pfs -R pfs --output-on-failure`. The benchmark
-honours `FW_PFS_BENCH_MIB`, `FW_PFS_BENCH_LEVEL`, `FW_PFS_BENCH_REPEAT` and
+The benchmark honours `FW_PFS_BENCH_MIB`, `FW_PFS_BENCH_LEVEL`, `FW_PFS_BENCH_REPEAT` and
 skips the Python half when `python3` with `cryptography` is missing.

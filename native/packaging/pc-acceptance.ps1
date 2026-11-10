@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-  PC acceptance run of the native Farewell Edition on a real Windows PC:
+  PC acceptance run of the native exFAT Image Builder on a real Windows PC:
   build native/ with MSVC + Qt, run CTest, deploy the Qt runtime, run the
   deployed exe's --self-test and --screenshot-pages, pack the single-file exe
-  and run its --self-test, launch it for real and check it is still running,
-  package a portable zip and record SHA-256s.
+  and run its --self-test, launch the deployed exe for real and check it is
+  still running, package a portable zip and record SHA-256s.
 
 .DESCRIPTION
   Everything goes into one evidence folder (default: <repo>\_PC_TEST_EVIDENCE\
@@ -29,9 +29,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$QtDir = 'D:\LAPTOP_C_COPY_20261029\Qt\6.10.3\msvc2022_64',
+    # Default: the QT_ROOT_DIR or Qt6_DIR environment variable, else qmake on PATH.
+    [string]$QtDir = '',
     [string]$OutRoot = '',
     [string]$BuildDir = '',
+    # The bundled PS5 Backport engine, as in make-release.ps1. Empty: CMake
+    # downloads the pinned release and checks its SHA-256.
+    [string]$BackportEngine = '',
     [int]$AliveSeconds = 30,
     [switch]$SkipBuild
 )
@@ -75,6 +79,15 @@ function Invoke-Logged([string]$logName, [scriptblock]$command) {
 
 function Save-Text([string]$name, [string]$text) {
     [IO.File]::WriteAllText((Join-Path $evidence $name), $text, (New-Object Text.UTF8Encoding($false)))
+}
+
+# A step that cannot go on still leaves a SUMMARY.md that says which one.
+function Stop-Run([string]$step, [string]$message) {
+    $results[$step] = "FAILED ($message)"
+    $rows = ($results.GetEnumerator() | ForEach-Object { "| $($_.Key) | $($_.Value) |" }) -join "`n"
+    Save-Text 'SUMMARY.md' ("# PC acceptance run: exFAT Image Builder $version (native)`n`nStopped early.`n`n| Check | Result |`n|---|---|`n$rows`n")
+    Write-Host "FAILED: $step ($message)"
+    exit 1
 }
 
 function Write-Blocker([string]$what) {
@@ -126,7 +139,17 @@ foreach ($tool in 'cl', 'cmake', 'ninja') {
         Write-Blocker "'$tool' is not on PATH after VsDevCmd (add the component Microsoft.VisualStudio.Component.VC.CMake.Project for CMake and Ninja)."
     }
 }
-if (-not (Test-Path (Join-Path $QtDir 'bin\qmake.exe'))) { throw "Qt is not at $QtDir" }
+if (-not $QtDir) {
+    if ($env:QT_ROOT_DIR) { $QtDir = $env:QT_ROOT_DIR }
+    elseif ($env:Qt6_DIR -and (Test-Path (Join-Path $env:Qt6_DIR '..\..\..\bin'))) { $QtDir = (Resolve-Path (Join-Path $env:Qt6_DIR '..\..\..')).Path }
+    else {
+        $qmake = Get-Command qmake -ErrorAction SilentlyContinue
+        if ($qmake) { $QtDir = Split-Path (Split-Path $qmake.Source -Parent) -Parent }
+    }
+}
+if (-not $QtDir -or -not (Test-Path (Join-Path $QtDir 'bin\qmake.exe'))) {
+    throw 'Qt was not found: pass -QtDir <...\msvc2022_64>, set QT_ROOT_DIR, or put qmake on PATH.'
+}
 $env:PATH = (Join-Path $QtDir 'bin') + ';' + $env:PATH
 
 $clBanner = (& cmd.exe /c 'cl 2>&1' | Select-Object -First 1)
@@ -151,13 +174,14 @@ $tools.GetEnumerator() | ForEach-Object { Write-Host ("  {0}: {1}" -f $_.Key, ($
 # ---- 2. Configure and build ---------------------------------------------------
 if (-not $SkipBuild) {
     Write-Step 'Configure'
-    $code = Invoke-Logged 'configure.log' { & cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF }
-    if ($code -ne 0) { $results.configure = 'FAILED'; throw 'CMake configure failed (configure.log)' }
+    $engineArg = if ($BackportEngine) { "-DFW_BACKPORT_ENGINE_EXE=$BackportEngine" } else { '-DFW_FETCH_BACKPORT_ENGINE=ON' }
+    $code = Invoke-Logged 'configure.log' { & cmake -S $native -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtDir" -DFW_WARNINGS_AS_ERRORS=OFF $engineArg }
+    if ($code -ne 0) { Stop-Run 'configure' 'CMake configure failed, see configure.log' }
     $results.configure = 'passed'
 
     Write-Step 'Build'
     $code = Invoke-Logged 'build.log' { & cmake --build $BuildDir --parallel }
-    if ($code -ne 0) { $results.build = 'FAILED'; throw 'Build failed (build.log)' }
+    if ($code -ne 0) { Stop-Run 'build' 'see build.log' }
     $results.build = 'passed'
 }
 
@@ -167,7 +191,8 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 $env:FW_OFFLINE = '1'
 Remove-Item Env:FW_WINDOWS_MOUNT_TEST -ErrorAction SilentlyContinue # mounting a VHD needs administrator rights
 $ctestCode = Invoke-Logged 'ctest.log' { & ctest --test-dir $BuildDir --timeout 900 --output-on-failure --output-junit (Join-Path $evidence 'ctest-junit.xml') }
-$summaryLine = (Select-String -Path (Join-Path $evidence 'ctest.log') -Pattern 'tests passed' | Select-Object -Last 1).Line
+$summaryMatch = Select-String -Path (Join-Path $evidence 'ctest.log') -Pattern 'tests passed' | Select-Object -Last 1
+$summaryLine = if ($summaryMatch) { $summaryMatch.Line } else { 'no result line in ctest.log' }
 $results.ctest = $(if ($ctestCode -eq 0) { "passed ($summaryLine)" } else { "FAILED ($summaryLine)" })
 Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
 
@@ -180,11 +205,18 @@ $built = Join-Path $BuildDir 'bin\exFAT Image Builder.exe'
 Copy-Item $built $dist
 $exe = Join-Path $dist 'exFAT Image Builder.exe'
 $code = Invoke-Logged 'windeployqt.log' { & (Join-Path $QtDir 'bin\windeployqt.exe') --release --no-translations --no-system-d3d-compiler --no-opengl-sw --compiler-runtime $exe }
-if ($code -ne 0) { $results.deploy = 'FAILED'; throw 'windeployqt failed (windeployqt.log)' }
+if ($code -ne 0) { Stop-Run 'deploy' 'windeployqt failed, see windeployqt.log' }
+# The same files as make-release.ps1 section 4, so the run tests what a release holds.
 Copy-Item (Join-Path $native 'packaging\README-portable.txt') (Join-Path $dist 'README.txt')
 Copy-Item (Join-Path $repo 'LICENSES') -Recurse (Join-Path $dist 'LICENSES')
-if (Test-Path (Join-Path $native 'packaging\licenses')) { Copy-Item (Join-Path $native 'packaging\licenses\*') (Join-Path $dist 'LICENSES\') }
+Copy-Item (Join-Path $native 'packaging\licenses\*') (Join-Path $dist 'LICENSES\')
 Copy-Item (Join-Path $native 'packaging\THIRD_PARTY_NOTICES-native.md') (Join-Path $dist 'THIRD_PARTY_NOTICES.md')
+Copy-Item (Join-Path $native 'packaging\LICENCE.txt') (Join-Path $dist 'LICENCE.txt')
+$engines = Join-Path $BuildDir 'bin\engines'
+if (-not (Test-Path (Join-Path $engines 'backport\PS5BackportGUI.exe'))) {
+    Stop-Run 'deploy' "the PS5 Backport engine is missing from $engines (configure with -BackportEngine <exe> or let CMake fetch it)"
+}
+Copy-Item $engines -Recurse (Join-Path $dist 'engines')
 $results.deploy = 'passed'
 
 # The app's own data for every run below: never the user's settings.
@@ -239,6 +271,7 @@ $results.screenshots = $(if ($p.ExitCode -eq 0 -and $pngs -gt 0) { "passed ($png
 # ---- 7. Real launch: still running after N seconds -------------------------------
 Write-Step "Launch ($AliveSeconds s)"
 $p = Start-Process -FilePath $exe -PassThru
+$null = $p.Handle # Windows PowerShell 5.1 only reports the exit code of a process whose handle it holds
 Start-Sleep -Seconds $AliveSeconds
 $alive = -not $p.HasExited
 try {
@@ -265,30 +298,32 @@ Remove-Item Env:FW_DATA_DIR -ErrorAction SilentlyContinue
 
 # ---- 8. Portable zip and checksums --------------------------------------------------
 Write-Step 'Package'
-$zip = Join-Path $evidence "exFAT-Image-Builder-Farewell-$version-win64-portable.zip"
+$zip = Join-Path $evidence "exFAT-Image-Builder-$version-win64-portable.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path $dist -DestinationPath $zip
 $sums = @()
-foreach ($f in @($onefile, $exe, $zip)) {
+# The two files in the evidence folder itself (the deployed exe has the same
+# leaf name as the single-file exe; its hash is in SUMMARY.md).
+foreach ($f in @($onefile, $zip)) {
     if (-not (Test-Path -LiteralPath $f)) { continue }
-    $sums +=((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() + '  ' + (Split-Path $f -Leaf))
+    $sums += ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() + '  ' + (Split-Path $f -Leaf))
 }
 Save-Text 'SHA256SUMS.txt' (($sums -join "`n") + "`n")
 $exeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower()
-$results.package = 'portable zip written (no installer: Inno Setup is not installed on this PC)'
+$results.package = 'portable zip written (this script builds no installer)'
 
 # ---- 9. Summary -------------------------------------------------------------------
 $failed = @($results.GetEnumerator() | Where-Object { "$($_.Value)" -like 'FAILED*' }).Count
 $rows = ($results.GetEnumerator() | ForEach-Object { "| $($_.Key) | $($_.Value) |" }) -join "`n"
 $summary = @"
-# PC acceptance run — exFAT Image Builder $version (native)
+# PC acceptance run: exFAT Image Builder $version (native)
 
 * Commit: ``$($tools.commit)`` ($($tools.branch)); uncommitted files: $(@($tools.dirtyFiles).Count)
 * PC: $($tools.computer), $($tools.windows); elevated: $($tools.elevated)
 * Tool chain: $($tools.cl); $($tools.cmake); Ninja $($tools.ninja); Qt $($tools.qt) ($QtDir)
 * Executable: ``$exe``
 * **SHA-256 of the executable: ``$exeSha``**
-* Single-file exe (the release download): ``$onefile`` (SHA-256 in SHA256SUMS.txt)
+* Single-file exe (packed like the release download): ``$onefile`` (SHA-256 in SHA256SUMS.txt)
 
 ## PC tests (this machine)
 
@@ -298,7 +333,8 @@ $rows
 
 The real-Windows-exFAT-driver test (``tst_exfat_windows`` with
 FW_WINDOWS_MOUNT_TEST=1) mounts a VHD and needs administrator rights; this
-run was not elevated, so it ran in its non-mounting mode. CI runs it elevated.
+script always runs it in its non-mounting mode (this run was elevated:
+$($tools.elevated)).
 
 ## Not tested here (needs hardware or user-supplied tools)
 

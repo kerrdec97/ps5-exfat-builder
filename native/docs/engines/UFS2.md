@@ -282,11 +282,11 @@ FW_UFS2TOOL_DLL=/path/UFS2Tool.dll   # the legacy app's embedded DLL (+ dotnet o
 FW_FSCK_UFS=/path/fsck.ufs           # ufsutils, or fsck.ufs/fsck_ffs on PATH
 FW_DUMPFS_UFS=/path/dumpfs.ufs
 makefs on PATH (FW_MAKEFS)           # NetBSD makefs, Debian/Ubuntu package "makefs"
-ctest --test-dir native/build-ufs2 -R ufs2 --output-on-failure
 ```
 
-Each check is skipped (`QSKIP`) when its tool is missing. The DLL can be
-extracted from `exfat_builder.py` (`_UFS2TOOL_DLL_B64`). It needs a
+Each check is skipped (`QSKIP`) when its tool is missing. The DLL was embedded
+in the Python app (`exfat_builder.py`, `_UFS2TOOL_DLL_B64`, in the v4 and
+earlier tags). It needs a
 `UFS2Tool.runtimeconfig.json` (see `extract_ufs2tool()`) and `DokanNet.dll`
 beside it.
 

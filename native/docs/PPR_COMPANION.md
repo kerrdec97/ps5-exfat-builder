@@ -28,7 +28,7 @@ embedded .NET add-on and ported into this app's own pages and engines.
 | All 31 PlayGo languages | Settings › PlayGo › **All 31 PlayGo languages** (off by default; the Companion ticked it by default) |
 | attributePub (SDK Fix rule): Report only / Apply | Settings › FPKG › Choose the package size class (attributePub, SDK Fix rule): on = apply, off = leave the dump's values |
 | [DlcConverter] OutputFolder | Settings › DLC › Output folder (also the DLC page's Save to) |
-| DRM (Free / Additional content), Entitlement key, PKG source passcode | DLC page › Options. fpkg-cli always builds Additional content (entitlement) DLC; Free is not offered. |
+| DRM (Free / Additional content), Entitlement key, PKG source passcode | DLC page › Options; the key and the passcode can also be kept in Settings › DLC keys (`dlc.entitlementKey`, `dlc.sourcePasscode`, stored in settings.json; a problem report hides them). fpkg-cli always builds Additional content (entitlement) DLC; Free is not offered. |
 | ppr-pkg Create-tab engine fields used by the DLC tab (Kraken level, Threads, PFS format, image mode, Kraken backend, SDK, deterministic) | Settings › DLC › Engine (also per job under Advanced options) |
 | [Backport] OutputFolder | the Build page's Save to folder (default: the base package's folder) |
 | [SdkFix] Enabled | always on: this app's FPKG engine is the GP5 + Sony publisher pipeline |

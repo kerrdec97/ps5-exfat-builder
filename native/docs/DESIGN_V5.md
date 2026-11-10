@@ -3,8 +3,9 @@
 v5 replaces the flat GitHub-style look of 5.0 previews with a calmer, more
 confident interface: blue-black surfaces, one signature gradient
 (accent `#3d7bff` → accent_2 `#8b5cf6`), larger radii and far less text on
-screen. Tokens live in `src/app/ui/Theme.h`; nobody writes a hex colour
-anywhere else.
+screen. Tokens live in `src/app/ui/Theme.h`; pages take their colours from
+there (the console card of PS5 connect and the payload list still paint a few
+gradient colours of their own).
 
 ## Principles
 
@@ -12,14 +13,16 @@ anywhere else.
    "Which format?", "Where to save?"). Its title is that question's noun.
 2. **Say it once, short.** Page captions are one sentence. Field help is at
    most one short sentence; anything longer goes in a tooltip (setting rows do
-   this automatically: `SettingRow::conciseHelp`). No paragraphs inside forms.
+   this automatically: `SettingRow::conciseHelp`). No paragraphs inside forms
+   (the Build page keeps two: the Backport note and the unpack caption).
 3. **Defaults first, power second.** Options most people never change go in a
    folded `Disclosure` ("Advanced options"); `JobFormPage::addJobOptionsCard`
    already does this for per-job settings. The header summary says how many
    differ from defaults.
 4. **Big targets for the main choice.** Use `ChoiceTiles` for 2–4 mutually
    exclusive options that matter (format, target), `Segmented` only for small
-   view toggles, `QComboBox` for long lists.
+   view toggles, `QComboBox` for long lists. The Build page's five format
+   tiles are drawn by the page's own `FormatTiles`.
 5. **Empty states invite action.** A step that needs a folder starts as a
    `DropZone`; once filled it becomes an inset card with an `IconTile`, the
    item's name, a one-line meta row and `Change…`.

@@ -62,6 +62,11 @@ All sockets are blocking-style: waits run a short local `QEventLoop` (25 ms tick
 | Untrusted names | names from LIST/MLSD/NLST are never turned into paths blindly: `remoteChild()` refuses empty, `.`, `..` and names containing `/`, `\`, `:` or control characters. `removeTree()` uses `listedChild()`, which allows `:` (an ordinary character on the console, and the path never reaches this PC), and refuses the rest (and then does not remove the folder) |
 | Safe replace | `uploadReplace()` = legacy `_ftp_upload_to`: STOR `<name><suffix>`, move the old file to `<name>.replacing.bak`, rename into place, delete the backup; on failure the temp is removed and the old file restored. The temp is size-checked (`SIZE`) before the swap. When the connection is lost between the two renames the error names the `.replacing.bak` and the temp; the next `uploadReplace()` (and `loadMountConfig()` / the config push) puts the old file back first |
 
+The page's browser (`app/pages/Ps5ConnectPage`, `app/services/ConsoleSession`) adds its own rules on
+top: Rename refuses a name that is already listed (case-insensitive on `/mnt/usb*` and `/mnt/ext*`);
+Disconnect drops the requests that wait; uploads and downloads use the connected console's address;
+an upload over a listed file asks first.
+
 ### Transfers (`FtpTransfer.h`, jobs `ps5.ftp.upload` / `ps5.ftp.download`)
 
 * Layout as the legacy queue: a file → `<remoteDir>/<name>`, a folder → `<remoteDir>/<folder>/<relative path>`; empty folders are created too. Sources keep their exact characters (a leading or trailing space is part of the name). Two sources that end at the same target are not both transferred: the later one is left out and listed (`details.skippedNames`, a warning each).
@@ -139,7 +144,7 @@ Pushing never re-renders a loaded file: `applyMountConfigChanges()` edits only t
 | Enable / Disable | `RNFR`/`RNTO` between the folders, `disabled` created when needed. New: refused (`AlreadyExists`) when the other folder already holds a file of that name — the legacy rename would have replaced it |
 | UI | PS5 connect › Fakelib (`pages/ps5/FakelibTab`): table (state badge, size, time, folder), Add…/Replace…/Enable-Disable/Remove/Refresh; each action opens its own connection and lists again (like the legacy worker threads) |
 
-## Autoloader (`Autoloader.h`, legacy Y2JB › Autoloader, Y2J-16, `E:18825-19031`)
+## Autoloader (`Autoloader.h`, legacy Y2JB › Autoloader, Y2J-16)
 
 A **local** `ps5_autoloader` folder (setting `ps5.autoloaderFolder`, legacy `al_dir`); nothing is sent to the console. `autoload.txt` (ps5-unified-autoloader 0.1.7 rules): one `.elf`/`.bin` per line (a file of the folder, or an absolute path), `!<ms>` sleeps, `#` starts a comment anywhere, `@sync`; `.js` lines are warned (sent to elfldr upstream, they fail).
 
@@ -155,7 +160,7 @@ A **local** `ps5_autoloader` folder (setting `ps5.autoloaderFolder`, legacy `al_
 
 `walkRemoteTree(client, root, {fillMissingSizes, exactTimes})`: depth first, per folder in case-insensitive name order, the files of a folder before its sub-folders' (legacy `collect_ftp_rows`). MLSD while the server takes it (times to the second), LIST once it answers MLSD with 5xx; `exactTimes` asks `MDTM` for every file the listing gave no exact time for (stops asking when MDTM is unsupported), `fillMissingSizes` asks `SIZE`. Names only through `remoteChild()` (others reported in `skippedNames`), links counted and never followed, an unreadable sub-folder skipped and reported (`unreadableDirs`); the root must be listable.
 
-## PS5 Manager (`ConsoleGames.h`, legacy `E:13196-13670`, `ui/tab_ps5_mgr.py`)
+## PS5 Manager (`ConsoleGames.h`, the legacy PS5 Manager tab)
 
 | Topic | Behaviour |
 |---|---|

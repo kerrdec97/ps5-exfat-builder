@@ -28,7 +28,7 @@ verify and send them to your console — from one app, in one download.**
 
 | | |
 |---|---|
-| **Build image** | Drop a dump folder (or a zipped dump), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`) installable **FPKG** `.pkg` (with your own Sony Publishing Tools; from a folder, any image or a packed game), or a **Packed folder** (no image: the game folder with its files in zstd packs, for a USB drive or FTP). Each output shows only its own options; experts get the rest under *Advanced options*. **Performance mode** (Low impact / Balanced / Maximum) on every format. Every image is read back and verified before it gets its final name. |
+| **Build image** | Drop a dump folder (or a zipped dump), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`), installable **FPKG** `.pkg` (with your own Sony Publishing Tools; from a folder, any image or a packed game), or a **Packed folder** (no image: the game folder with its files in zstd packs, for a USB drive or FTP). Each output shows only its own options; experts get the rest under *Advanced options*. **Performance mode** (Low impact / Balanced / Maximum) on every format. Every image is read back and verified before it gets its final name. |
 | **zstd packs** | *Compress game files*: the game's files go into zstd packs inside the image, served on the console by the bundled **ampr-emu-ng 0.3.3** runtime. Packed games (zstd or LZ4) are read through their packs everywhere: extract, convert, FPKG. Or skip the image: **Packed folder** packs the game folder itself. |
 | **Backport** | Make games run on older firmware with the built-in **PS5 Backport engine 0.3.4 by Deckerr97** — the same engine as the standalone PS5 Backport GUI, so results are identical. Target SDK 4–13, PS5 Pro fix, PS5 Pro build, AMPR / PlayGo switch, and optional apply to the game folder with a verified originals backup and one-click restore. |
 | **Backport updates** | Ship a backport as its own small **update package** that installs over the game's base package, so the base stays the original game: Build image › FPKG › **Backport** (4.xx and/or 5.xx+ backport files, folder or ZIP). Each update is checked against the base before it gets its name. |
@@ -63,13 +63,15 @@ its settings, logs and unpacked files in that folder.
 
 ## 🔐 Verify your download
 
-Every release has `SHA256SUMS.txt`. In PowerShell:
+Every release from 5.0.0 has `SHA256SUMS.txt`. In PowerShell:
 
 ```powershell
 Get-FileHash ".\exFAT.Image.Builder.exe" -Algorithm SHA256
 ```
 
-GitHub replaces the spaces in the file name with dots; the hash is the same.
+The download arrives as `exFAT.Image.Builder.exe`: GitHub replaces the spaces
+in the file name with dots. Compare the hash with the line in
+`SHA256SUMS.txt`; capital and small letters make no difference.
 
 ## 🛡 Antivirus warnings
 
@@ -85,7 +87,7 @@ guesses, not matches. You can check the hash or scan it on VirusTotal.
   FPKG packages (backport updates need a verified SDK Fix release). Nothing
   from Sony is included or downloaded.
 * Optional: your own **fpkg-cli** (PSVIETHOA FPKG Builder, LibProsperoPkg by
-  Drakmor) for the DLC page.
+  drakmor) for the DLC page.
 * For console features: a jailbroken PS5 running an FTP server (ftpsrv or
   etaHEN), and ShadowMount+ to mount images.
 
@@ -154,5 +156,5 @@ Proprietary: Copyright © 2026 Deckerr97 (kerrdec97), all rights reserved
 ([LICENCE.txt](native/packaging/LICENCE.txt)). Third-party components keep
 their own licences ([notices](native/packaging/THIRD_PARTY_NOTICES-native.md),
 [LICENSES](LICENSES)). The bundled PS5 Backport engine is a separate program
-under its own terms. Earlier Python versions (v1–v4) stay available under the
-v4.x tags with the licence they were released under.
+under its own terms. Earlier Python versions (v1–v4) stay available under
+their version tags with the licence they were released under.

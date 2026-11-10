@@ -1,5 +1,6 @@
-; Inno Setup script for the native Farewell Edition.
-; Built in CI: iscc /DAppVersion=5.0.0 /DSourceDir=<deployed folder> /O<out> installer.iss
+; Inno Setup script for exFAT Image Builder (native). The installer is a CI
+; build artefact; a published release is the single-file exe only.
+; Built in CI: iscc /DAppVersion=<x.y.z> /DSourceDir=<deployed folder> /O<out> installer.iss
 ; Per-user install by default (no administrator rights needed), optional
 ; all-users install when elevated.
 
@@ -12,19 +13,19 @@
 
 [Setup]
 AppId={{7C1E3D52-7A36-4C6B-9E1F-5F2E8A0B6D41}
-AppName=exFAT Image Builder - Farewell Edition
+AppName=exFAT Image Builder
 AppVersion={#AppVersion}
-AppVerName=exFAT Image Builder - Farewell Edition {#AppVersion}
+AppVerName=exFAT Image Builder {#AppVersion}
 AppPublisher=kerrdec97
 AppPublisherURL=https://github.com/kerrdec97/ps5-exfat-builder
-DefaultDirName={autopf}\exFAT Image Builder Farewell
+DefaultDirName={autopf}\exFAT Image Builder
 DefaultGroupName=exFAT Image Builder
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputBaseFilename=exFAT-Image-Builder-Farewell-{#AppVersion}-win64-setup
+OutputBaseFilename=exFAT-Image-Builder-{#AppVersion}-win64-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -36,8 +37,8 @@ MinVersion=10.0.17763
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\exFAT Image Builder - Farewell Edition"; Filename: "{app}\exFAT Image Builder.exe"
-Name: "{autodesktop}\exFAT Image Builder - Farewell Edition"; Filename: "{app}\exFAT Image Builder.exe"; Tasks: desktopicon
+Name: "{autoprograms}\exFAT Image Builder"; Filename: "{app}\exFAT Image Builder.exe"
+Name: "{autodesktop}\exFAT Image Builder"; Filename: "{app}\exFAT Image Builder.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked

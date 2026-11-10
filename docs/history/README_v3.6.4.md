@@ -1,3 +1,5 @@
+> Historical document: this is the README of the old v3 Python app (3.6.4). It does not describe version 5.
+
 # exFAT Image Builder
 
 **A complete Windows toolkit for preparing, converting, and deploying PS5 game images for homebrew use.**

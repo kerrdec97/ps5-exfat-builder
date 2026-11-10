@@ -54,7 +54,13 @@ is recognised here and the other way round:
 | `DATA_DIR` | `%LOCALAPPDATA%\Deckerr97BackportGuiBeta` | `jobs`, `logs`, `logs\runs` |
 
 `D97BETA_CONFIG_DIR` and `D97BETA_DATA_DIR` override them, as in the original program. **Tests must
-set both** (to temporary folders) so the user's real settings and ledger are never touched.
+set both** (to temporary folders) so the user's real settings and ledger are never touched; CTest
+also points both into the build folder for every test (`tests/CMakeLists.txt`).
+
+Because the files are shared: `settings.json` is merged per key and is not overwritten when it cannot
+be read; folders are written with native separators; an unfinished apply is not offered for restore
+while a PS5 Backport GUI that this app did not start is running, or while the journal was written in
+the last five minutes (`kApplyQuietSeconds`).
 
 ## Native helpers (`src/engines/backport/`)
 
@@ -72,7 +78,8 @@ All of them only read. None writes into a game folder.
 How the game list uses them (`BackportCore.cpp`): `ebootSdk()` reads `eboot.bin` (up to 512 MiB),
 unwraps it when it is a SELF, and shows the PS5 SDK of its process param; `param.json` versions are
 shown through `parsePs5VersionField`; the already-backported check hashes only files whose name and
-size match a pinned library.
+size match a pinned library. The page uses these readers for its list only; everything a backport
+does is the engine's.
 
 Limits that protect the list from hostile files (a dump from someone else is untrusted input):
 
@@ -88,8 +95,8 @@ Limits that protect the list from hostile files (a dump from someone else is unt
 GNU GPL version 3), as modified by Nazky, and carry an attribution header; the reader is
 reimplemented from the format description rather than translated from `decrypt_fself.py`. make_fself
 is listed in `THIRD_PARTY_NOTICES-native.md`. `SceParam.*` is clean-room from the documented facts
-(offsets, magics); no code from the unlicensed SDK patcher was used. No Sony library, firmware table
-or fakelib binary is bundled or downloaded; the trio pins are hashes only.
+(offsets, magics); no code from the old Python app's SDK patcher was used. The native code bundles
+and downloads no library, firmware table or fakelib binary; the trio pins are hashes only.
 
 ## Tests
 
@@ -99,7 +106,6 @@ or fakelib binary is bundled or downloaded; the trio pins are hashes only.
 | `tests/app/tst_backport_engine.cpp` | The engine host. Always: scanner rules, preflight refusals, AMPR / PlayGo user-file checks, the settings round trip, worker failure paths. With `FW_BACKPORT_ENGINE` set: the engine's selftest and the protocol (progress, result, cancel and tree kill). With `FW_BACKPORT_E2E_GAME` as well: a full backport with Apply off, a switch and an SDK rebuild, into temporary folders. |
 | `tests/app/tst_backport_page.cpp` | The page. |
 
-Run them with `ctest -R backport`.
 
 Not tested here: anything on a PS5. Whether a console loads a backport is a property of the bundled
 engine, not of this repository's code.

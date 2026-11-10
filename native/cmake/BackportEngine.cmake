@@ -40,6 +40,9 @@ if(_engine_src)
     endif()
     file(SHA256 "${_engine_src}" _engine_hash)
     if(NOT _engine_hash STREQUAL FW_BACKPORT_ENGINE_SHA256)
+        if(NOT FW_BACKPORT_ENGINE_EXE)
+            file(REMOVE "${_engine_src}") # a damaged earlier download: fetched again by the next configure
+        endif()
         message(FATAL_ERROR "The PS5 Backport engine does not match the pinned SHA-256 "
                             "(${_engine_hash} instead of ${FW_BACKPORT_ENGINE_SHA256}).")
     endif()
@@ -51,8 +54,9 @@ if(_engine_src)
         DEPENDS "${_engine_src}"
         COMMENT "Bundling the PS5 Backport engine ${FW_BACKPORT_ENGINE_VERSION}")
     add_custom_target(fw_backport_engine ALL DEPENDS "${_engine_dst}")
-    install(PROGRAMS "${_engine_src}" DESTINATION engines/backport RENAME PS5BackportGUI.exe)
     message(STATUS "PS5 Backport engine ${FW_BACKPORT_ENGINE_VERSION}: bundled (${_engine_src})")
 else()
+    # Nothing an earlier configure bundled may stay behind.
+    file(REMOVE "${PROJECT_BINARY_DIR}/bin/engines/backport/PS5BackportGUI.exe")
     message(STATUS "PS5 Backport engine: not bundled (set FW_BACKPORT_ENGINE_EXE or FW_FETCH_BACKPORT_ENGINE=ON)")
 endif()

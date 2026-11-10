@@ -35,6 +35,7 @@ if(MSVC)
     target_link_options(fw_onefile PRIVATE /DEPENDENTLOADFLAG:0x800)
 endif()
 fw_configure_target(fw_onefile)
+fw_strip_pdb_path(fw_onefile)
 
 add_executable(fw_onefile_pack pack_main.cpp)
 target_link_libraries(fw_onefile_pack PRIVATE fw_onefile_format cabinet)
@@ -43,3 +44,4 @@ set_target_properties(fw_onefile_pack PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin
     MSVC_RUNTIME_LIBRARY ${_fw_static_crt})
 fw_configure_target(fw_onefile_pack)
+fw_strip_pdb_path(fw_onefile_pack)

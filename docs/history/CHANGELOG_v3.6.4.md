@@ -1,3 +1,5 @@
+> Historical document: this is the changelog of the old v3 Python app (up to 3.6.4). It does not describe version 5.
+
 # Changelog
 
 ## [3.6.4] - 2026-06-12

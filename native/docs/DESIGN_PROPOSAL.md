@@ -1,6 +1,8 @@
-# Farewell Edition — design proposal for the native (Qt 6 Widgets) app
+# Design proposal for the native (Qt 6 Widgets) app
 
-Status: proposal for owner review. Canvas with the artboards: https://claude.ai/artifact/LH716oABMWm56ShXXrFDff
+> **Status:** a record from the v5 rewrite, not kept current. This proposal was superseded by `DESIGN_V5.md`; the shipped tokens (`src/app/ui/Theme.h`), page list and widgets differ from it.
+
+The artboards were reviewed on a design canvas
 (Main = Build image, Fpkg, Backport, Queue, Settings, Logs, States, Connect).
 The design system README (Graphite theme) is binding; every value below is either taken from
 `tkinter_theme.py` at f151289 or marked **proposed** in section 7.

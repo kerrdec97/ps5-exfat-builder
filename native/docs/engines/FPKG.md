@@ -1,8 +1,8 @@
 # FPKG engine (`native/src/engines/fpkg/`)
 
 Builds, verifies and extracts PS5 debug packages (`.pkg`) by driving the user's **own** Sony Publishing Tools
-(`prospero-pub-cmd.exe`). Nothing from Sony is bundled or downloaded. The reference app (PSVIETHOA FPKG Builder 3.0.0)
-has no licence: its behaviour is re-implemented from `native/docs/FPKG_PARITY.md`, no code or text is copied. There is
+(`prospero-pub-cmd.exe`). Nothing from Sony is bundled or downloaded. The behaviour of the reference app (PSVIETHOA
+FPKG Builder 3.0.0) is re-implemented from `native/docs/FPKG_PARITY.md`; no code or text is copied. There is
 no built-in packer (LibProsperoPkg / Kraken / PFS v3) and no online metadata download.
 
 **What has been tested, and how.** Every test in this document runs against our stand-in tool
@@ -208,7 +208,7 @@ control on the running job).
   clashes in the scanner, settings and legacy keys, toolchain lookup and probes, stagers.
 * `tst_fpkg_build` — jobs end to end against the stand-in: full build (argv, TEMP/TMP, cwd, logs, cleanup, progress),
   project contents and compression level, stock/`[Error]`/crash/no-output failures (the `0xC0000135`/`0xC000007B`
-  rows exist only on Windows, where the stand-in can return such exit codes; they have not been run yet), bar
+  rows exist only on Windows, where the stand-in can return such exit codes), bar
   variants, `img_verify` failure, conflict policies, a placement failure keeps the new package(s) and the old ones
   (full build and update pair), cancellation (process tree incl. a grandchild, no partials),
   CPU-core limit and live change (affinity observed in the stand-in), priority / core limit / live limit / private

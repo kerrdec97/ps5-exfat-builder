@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
-# PS5 exFAT Image Builder v5 (native C++/Qt).
-# The legacy Python application at the repository root is left untouched; this
-# project is self-contained under native/.
+# PS5 exFAT Image Builder v5 (native C++/Qt). The project is self-contained
+# under native/.
 
 project(FarewellEdition
     VERSION 5.0.1

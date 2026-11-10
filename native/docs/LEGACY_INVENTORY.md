@@ -1,5 +1,7 @@
 # Legacy inventory — engines and settings (exFAT Image Builder 4.1.0, Farewell Edition)
 
+> **Status:** a record from the v5 rewrite, not kept current. It describes the Python app (versions 1 to 4), which is no longer in this repository; every `file:line` reference points at that removed code.
+
 | | |
 |---|---|
 | Snapshot | branch checked out from `farewell-edition-dev`, HEAD `b298c2d` (2026-11-04). All `file:line` references are to this commit. Function names are the stable reference if lines drift. |
@@ -12,7 +14,7 @@
 
 ## 0. Overview
 
-The legacy app has **seven image engines**, all driven from Tk callbacks with worker threads:
+The legacy app has **eight image engines**, all driven from Tk callbacks with worker threads:
 
 | # | Engine | Visible entry point | Hidden/legacy entry points | External tool(s) |
 |---|---|---|---|---|
@@ -272,7 +274,7 @@ See §3.1 for the job model. Dispatch `_uq_dispatch` (`ui/tab_unibuild.py:3009`)
 
 Vendored commit `78bdd00` (2026-06-18) of the Lazy fork of PSBrew/MkPFS, GPL-3.0 (inherited). Local patches: pip auto-install disabled in `__init__.py` and `compression._auto_install`. The app only ever calls **`main_file.py` → `pack_file()` → `build_pfs_stream_single_file()`** (one file, unsigned, unencrypted, 32-bit inodes, case-insensitive, block size 0x10000). `build_pfs` (folders), `pack_folder`, `pack_batch`, `inspect`, `extract_pfs_image`, `verify_pfs`, `create_exfat_image`, signing and encryption are present but **unused** by the app.
 
-All integers little-endian. `PFS_MAGIC = 20130315` (0x0133232B). Block size default 0x10000.
+All integers little-endian. `PFS_MAGIC = 20130315` (0x01332A0B). Block size default 0x10000.
 
 #### PFS header (block 0, `_pack_pfs_header_block`, `build.py:247`; parser `inspect.py:94`)
 

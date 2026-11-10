@@ -7,7 +7,8 @@ helpers deliberately do not (`src/engines/backport/CMakeLists.txt`). Links Qt
 Core and **Qt Gui** (only for `QImage` in cover normalisation; no widgets, no
 `QGuiApplication` needed).
 
-Legacy references: `E:` = `exfat_builder.py`. Everything below was checked
+Legacy references: `E:` = `exfat_builder.py` of the Python app (versions 1 to
+4, no longer in this repository). Everything below was checked
 against the legacy code, not only against `LEGACY_UI_INVENTORY.md`.
 
 ## Headers

@@ -1,16 +1,17 @@
-exFAT Image Builder - Farewell Edition (native)
-================================================
+exFAT Image Builder
+===================
 
-Portable build. Run "exFAT Image Builder.exe".
+Run "exFAT Image Builder.exe".
 
 * Settings, history and the queue are stored in your user profile
   (%APPDATA%\kerrdec97\exFAT Image Builder Farewell). To keep everything next
-  to the program instead, create an empty file named portable.txt in this
-  folder; data then goes to the "data" sub-folder.
+  to the program instead, create an empty file named portable.txt next to
+  the "exFAT Image Builder.exe" you start (the file you downloaded, not its
+  unpacked copy); data then goes to a "data" folder beside it.
 * Logs: %LOCALAPPDATA%\kerrdec97\exFAT Image Builder Farewell\logs
-  (or data\logs in portable mode). Settings > Logging > Open log folder.
-* Sony Publishing Tools are never included. FPKG builds use your own copy;
-  point Settings > Tools at it.
+  (or data\logs in portable mode). Logs page > Open log folder.
+* Sony Publishing Tools are not part of the published program. FPKG builds
+  use your own copy; point Settings > Tools at it.
 * For your own legally dumped games only. Not affiliated with or endorsed by
   Sony Interactive Entertainment.
 

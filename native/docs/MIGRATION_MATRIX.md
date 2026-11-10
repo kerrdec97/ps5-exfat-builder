@@ -1,4 +1,6 @@
-# Migration matrix — legacy Python app → native C++ Farewell Edition
+# Migration matrix — legacy Python app → native C++ app (version 5)
+
+> **Status:** a record from the v5 rewrite, not kept current. It lists what the native app took over from the Python app and how each item was tested at the time; features added after the port (zstd packs, Packed folder output, the DLC page, backport update packages, the single-file launcher) have no rows here. The CI runs it names are from the previews.
 
 Source inventories: `LEGACY_INVENTORY.md` (engines, 108 settings keys, 173
 rows), `LEGACY_UI_INVENTORY.md` (pages, PS5 connectivity, library, i18n),
@@ -9,12 +11,11 @@ rows), `LEGACY_UI_INVENTORY.md` (pages, PS5 connectivity, library, i18n),
 
 | Status | Meaning |
 |---|---|
-| **Done** | Implemented natively; automated tests pass on Linux (GCC, ASan+UBSan) and Windows (MSVC 2022, Qt 6.8) CI. |
+| **Done** | Implemented natively; automated tests passed on Linux (GCC, ASan+UBSan) and Windows (MSVC 2022, Qt 6.8) CI when the row was written (the last green CI run was on 2026-11-04; later work was tested on the release PC). |
 | **Done · field check** | Implemented and tested against fakes/stand-ins/goldens, but the real counterpart (PS5 console, Sony Publishing Tools, a real game dump on the owner's PC) has not been exercised. |
 | **Superseded** | The legacy mechanism is replaced by a better native one (reason given). |
 | **Blocked** | Cannot be built honestly yet (licence, missing source or data) — reason given. |
 | **Not ported** | Deliberately dropped (reason given). |
-| **Ported · build pending** | Code and tests written from the owner's D:\ Backport source (2026-11-04, branch `claude/backport-parity-v5`), not yet compiled or run: the PC that did the port has no C++ tool chain yet and could not push to CI. Becomes Done after the Windows build, CTest and CI pass. |
 
 Test names refer to `native/tests/**/tst_*.cpp`.
 
@@ -30,7 +31,7 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Output-inside-source refusal, FAT32 refusal (≥ 4 GiB), cloud/network warnings | `Job::validate`, `checkOutputVolume()` | Done | tst_core_extra, engine job tests | — |
 | Free-space pre-flight (+ reserve) | `ensureFreeSpace` + `storage.freeSpaceMarginMiB` | Done | tst_core, engine tests | — |
 | Previous image set aside / restored on failure (audit M2) | `PartFile::commit(replace)` with unique `.fw-old` | Done | tst_core, tst_exfat_jobs, tst_ufs2_jobs | — |
-| Delete source after verified build (audit C1/C2) | `general::deleteSourceAfterVerifiedBuild` + per-engine rules (full verification only) | Done | tst_settings_jobs, tst_pfs_jobs, tst_ufs2_jobs, tst_exfat_jobs | — |
+| Delete source after verified build (audit C1/C2) | Per-engine settings (`exfat.deleteSourceAfterVerify`, `ufs2.deleteSourceAfterBuild`, `pfs.deleteSourceAfterConvert`; full verification only). The general key `storage.deleteSourceAfterVerifiedBuild` is declared, but no job reads it | Done (per engine) | tst_settings_jobs, tst_pfs_jobs, tst_ufs2_jobs, tst_exfat_jobs | — |
 | Auto-retry failed builds | `general.autoRetryCount/DelaySeconds` in the queue (transient errors only) | Done | tst_settings_jobs | — |
 | Embedded .bat/.ps1, OSFMount discovery/sweep/dismount chain, robocopy parsing | — | Superseded | — | No mounting needed: images are written and read natively |
 | Post-build FTP upload (`adv_auto_upload`) | `integration::PostBuildActions` (`ps5.autoUploadAfterBuild`, verified images only) | Done | tst_integration | — |
@@ -65,34 +66,18 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Live CPU-core limit, Defender pre-scan, keep-awake | `setLiveCpuLimit`, `fpkg.prescan`, app-wide keep-awake | Done | tst_fpkg_build; Build page (FPKG) live CPU combo | — |
 | Bundled Sony tools / LibProsperoPkg built-in engine | — | Not ported | — | Licence: Sony binaries are never bundled; built-in engine out of scope |
 
-## 4. Backport (see BACKPORT_PARITY.md, docs/engines/BACKPORT.md)
+## 4. Backport (see docs/engines/BACKPORT.md)
+
+The in-app C++ backport pipeline of the v5 previews, which this section used to list row by row, was removed before
+5.0.1. Backports are made by the bundled PS5 Backport engine, a separate program. `BACKPORT_PARITY.md` is the
+specification the removed pipeline was written from.
 
 | Feature | C++ implementation | Status | Tests | Remaining |
 |---|---|---|---|---|
-| SELF unwrap → SDK patch (pairs 1–10) → fake-sign, libc import rename | `engines/backport` (clean-room patcher, GPL port of make_fself) | Done · field check | tst_backport_format (all Appendix A golden hashes) | Console load test |
-| Scan, planner with safety rules S1–S38 | `ExecutableScanner`, `BackportPlanner` | Done | tst_backport_scan/planner/run | — |
-| Backport + originals ZIPs, read-back verification | `BackupArchive` on `core/Zip` | Done | tst_backport_zip, tst_zip | — |
-| Apply to game folder (journaled, crash-safe rollback), restore | `ApplyJournal`, `RestoreService` | Done | tst_backport_run | Default "apply" = on (owner may flip) |
-| Already-backported detection (manifest hashes) | `BackportManifest` (reads Python schema 1, writes 2) | Done | tst_backport_run | — |
-| Interrupted-apply prompt at start | `backport::interruptedApplies()` | Done | tst_backport_run; start-up banner on the Backport page | — |
-| Run report per run (JSON + self-contained HTML next to `BackportBackup/<ID>/`), "Open report" on the Backport page | `RunReport` (runner, SDK fix, audio report) | Done | tst_backport_report | — |
-| SDK Fixer, SDK marker only (copy, or in place with backup ZIP + journal, undo) | `SdkFixer`, `backport.sdkFix`, `backport.restore {undoSdkFix}` | Done · field check | tst_backport_sdkfix | Console load test of a fixed build |
-| Unity/Il2Cpp module-name case (detector) | `ModuleImports` → plan / library-scan issue `ModuleNameCase` (DT_NEEDED against `sce_module/`, report only) | Done · field check | tst_backport_detect | The D:\ review found the owner's engine reads PS5 tags 0x61000043/45/47/49, not the PS4 values this detector uses: likely silent on real titles. Superseded for the fix by the row below |
-| Unity/Il2Cpp module-name case **fix** (issue #2, MGS4) | `ModuleCaseFix`: spellings from `"%s/Modules/<Name>.prx"` in the decoded eboot; staged, zipped and applied under the game's spelling (case-only rename, journaled `rename_to`); originals ZIP, rollback and Restore keep the dump's (`renamed_files` in the manifest) | Ported · build pending | tst_backport_modulecase | Console confirmation pending in the owner's records |
-| Audio-fix scanner (legacy hidden tab) | `AudioScan`, `backport.audioScan` (read-only report) | Done | tst_backport_detect | Patch profiles need console evidence (no test patch) |
-| CRI Unity audio fix (12-channel rack → 8, issues #10/#11) | `CriAudio`: "CRI Atom" module, exactly one 12-channel rack in an executable segment with the 8-channel rack 1..0x40 bytes before it, 3 bytes; setting `backport.criAudioFix` (default on, as the owner's engine) | Ported · build pending | tst_backport_criaudio (owner's vectors) | Hardware: PAC-MAN WORLD 2 Re-PAC, STORY OF SEASONS, WONDERBOY (base FW 4.50, owner) |
-| PS5 Pro fix, shader-assert part | `ProFix`: guarded `s_trap 1` → `s_nop 0` in the root eboot.bin, setting `backport.proFix` (off), ZIP `… Pro fix backport files.zip` | Ported · build pending | tst_backport_profix | The Quality60 AGCDriver hook (second Pro fix part) is a third-party Sony library build: not bundled |
-| Standard `right.sprx` substitute (issues #2/#7/#8) | `RightSprx`: an unconvertible game-root `sce_sys/about/right.sprx` takes the user's own standard copy (`backport.standardRightSprx`, SHA-256 `81544cbb…` pinned), converted normally; the dump's copy stays in the originals ZIP | Ported · build pending | tst_backport_rightsprx (synthetic file through a test seam) | Sony's file is never bundled; no console result recorded for a substituted build |
-| Target SDK 11–13 | `SdkTable` pairs from retail process params (owner's `sdk_tool.EXTRA_PAIRS`, 44/33/3 titles) | Ported · build pending | tst_backport_format, planner, scan, sdkfix | Untested on hardware (only SDK 5 has a reported result) |
-| Canonical AGC/AGCDriver/PSML trio | `CanonicalTrio`: pins (name, size, SHA-256) as data; a game holding one pinned file is refused as already backported; a fakelib folder that is the trio is named | Ported · build pending | tst_backport_detect | The libraries are Sony's (from another tool's backport): never bundled |
-| Plain-ELF fakelib dump note | Planner Info note with the `PRX_PROCESS_STARTUP_FAILURE 0xa0020104` lead, never a refusal | Ported · build pending | tst_backport_detect | — |
-| Apply/Restore safety from the Backport GUI export layer | Every check before the first write (nothing written on a mismatch); read-only game files made writable; Apply/rollback/Restore copies flushed to the drive before the rename; "Change the game folders?" confirmation on the Backport page; Target SDK, Pro fix and CRI fix shown on the Backport page (Target SDK appeared on the FPKG page before) | Ported · build pending | tst_backport_run (gameChangedBeforeApplyWritesNothing, fileAppearingBeforeApplyWritesNothing, readOnlyGameFilesAreAppliedAndRestored), tst_backport_scan | Per-user applied ledger, Retry failed/Cancel/counters on the page, Report-a-problem prefill: not built (gap report) |
-| User-supplied AMPR/PlayGo libraries with hash pinning | `ProviderSet`, `backport.amprPlaygoFolder`, `backport.pinProviders` | Done · field check | tst_backport_providers | Nothing bundled; whether a given provider loads is the user's test |
-| Console logs from the Backport page (payload, kernel log) | Links to the PS5 connect page tabs | Done | — (UI link; screenshot `backport-report`) | — |
-| Crash-dump auto-download and hang snapshots (Log Sender) | — | Not ported (spec ready) | — | Fully specified from the D:\ Log Sender (`/user/devlog/system/sce_coredumps.0` over ftpsrv 2121, klog `[CRS][coredump_seq]` wake-up, ps5debug-NG on 744 with the PC listening on 755); needs a PS5 to test, so it was left for a later pass |
-| Import-table audit FW 4.03–13.60, audio firmware gate (Set3DLatency bands) | — | Blocked | — | The tables (39 `fwdb/<fw>.json`, 37 usable) were built from the owner's own unpacked firmware with no written provenance; the gate needs an x86 decoder (Zydis/Capstone) for mode and result checks. Needs the owner's provenance note before any table ships |
-| Code fix families that need x86 decoding (save-data Prepare 6→0, systemBlocks sentinel and the double request #22-#24, absolute-mouse fallbacks, Wwise 7.1.4→7.1, GamePresets 0x30→0x28, Set3DLatency non-fatal, libc heap semantic path) and import-gap families (lazy GOT seeds, DirNameSearch2) | — | Blocked | — | Capstone in the owner's engine (needs a decoder in C++) or the firmware tables above |
-| PS5 Pro build / PSSR 2 test, AGCDriver hook, default fakelib set, bundled AMPR/PlayGo providers, libc reuse table | — | Blocked | — | Sony/game-derived binaries (overlay PSML `72855f03`, `k9.psp`, Quality60 AGCDriver `810c3b20`, canonical trio, other games' libc); PSSR 2 also needs an ELF symbol/relocation writer and the audio gate |
+| Backports (SDK rebuild, apply and restore, PS5 Pro fix and build, AMPR / PlayGo switch, the engine's own fixes) | The Backport page drives the bundled PS5 Backport engine 0.3.4 as a worker process (`app/backport`: `BackportHost`, `BackportCore`; `app/pages/BackportPage`); not a queue job | Superseded | tst_backport_engine, tst_backport_page, tst_pagesb_backport | Console results are the engine's |
+| Game list: SDK of a dump, already-backported detection | `engines/backport` read-only helpers (`SelfReader`, `SceParam`, `SdkTable`, `GameMetadata`, `CanonicalTrio`) | Done | tst_backport_self | — |
+| Backport update packages (FPKG) | `fpkg.backport` (`engines/fpkg/BackportUpdate`) | Done · field check | tst_backport_update | Real tools; console install |
+| Crash-dump capture (the Backport GUI's Log Sender) | `ps5.crashdumps.capture` (`connect/ps5/CrashDumps`); PS5 connect › Crash dumps | Done · field check | tst_ps5_crashdumps | Real console; hang snapshots are not built |
 
 ## 5. Queue, history, logging, settings, storage
 
@@ -107,7 +92,7 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 | Temp sweep, clear temp, temp size | `Paths::sweepStaleTemp`, `tempUsageBytes` | Done | tst_core_extra | — |
 | (new) One job per image/game at a time; deletes never follow junctions; one app instance | `Job::busyPaths` + queue scheduling; `removeTreeNoFollow`; `QLockFile` in the data folder | Done | tst_settings_jobs, tst_core_extra | — |
 | Child processes killed on close (audit H3/H4) | Windows job objects (suspended start), POSIX process groups | Done | tst_core (spawned grandchild killed) | — |
-| Update check + self-update | `connect/update` (native installer only, SHA-256 required, fails closed) | Done · field check | tst_update (local HTTP server) | First real release |
+| Update check + self-update | `connect/update` (version from the release tag; downloads the single-file exe, SHA-256 from `SHA256SUMS.txt` required, fails closed; the old installer asset name is still understood) | Done · field check | tst_update (local HTTP server) | — |
 | Translations (16 languages) | — | Not ported | — | Legacy tables covered 62 of 1,559 strings; Qt Linguist infrastructure to follow |
 | Discord webhook (hidden `discord_webhook` key, POST on finish) | `connect/notify` (`DiscordNotifier`, `discordPayload`): real setting `general.discordWebhookUrl` (General, advanced; empty = off; only discord.com / discordapp.com webhook addresses), legacy key imported, one embed per finished run from `QueueCompletionWatcher` (counts + up to 10 jobs; folders cut to file names; mentions disabled; update checks and diagnostics left out), nothing sent with `FW_OFFLINE`; token never logged and hidden in problem reports | Done · field check | tst_notify (local HTTP stub: POST body and headers, 404 reported, offline/empty/invalid send nothing, legacy import), tst_tools (report redaction), tst_legacy_import, tst_ps5_tools_ui (setting) | A real Discord channel was not contacted |
 | Write benchmark, theme | — | Not ported | — | Dead/orphan keys in the legacy app |
@@ -144,7 +129,8 @@ Test names refer to `native/tests/**/tst_*.cpp`.
 |---|---|---|---|
 | Windows executable | MSVC 2022 + Qt 6.8.3, windeployqt, manifest (PerMonitorV2 DPI, long paths, asInvoker) | Done | `native-windows.yml`: build, tests, deployed-exe self-test, page screenshots, 30 s launch check |
 | exFAT images with the real Windows driver | `tst_exfat_windows`: image wrapped in a VHD, mounted with Mount-DiskImage, read back and `chkdsk`ed; a Windows-formatted exFAT volume read by the native reader | Done | Windows CI (test log printed in the run) |
-| Installer + portable zip + SHA256SUMS | Inno Setup (per-user, no admin), zip, checksums | Done | CI artifacts |
+| Single-file exe + SHA256SUMS (the release) | `fw_onefile` launcher + `fw_onefile_pack` (`packaging/make-onefile.ps1`, `make-release.ps1`) | Done | tst_onefile; the release script's smoke test |
+| Installer + portable zip | Inno Setup (per-user, no admin), zip | Done (CI artefacts only; not part of a v5 release) | CI artifacts |
 | No admin rights, no .NET, no OSFMount, no Python | Native engines | Done | — |
-| Windows CI acceptance of the release candidate | Commit `b29d7b5`, run 41804192710 | Done | 36/36 tests, deployed-exe self-test, 41 page screenshots, 30 s launch, installer + portable zip + SHA256SUMS |
-| Real PC acceptance test (owner's machine) | `native/packaging/pc-acceptance.ps1`: build, CTest, deploy, `--self-test`, `--screenshot-pages`, 30 s real launch, portable zip, SHA-256, `SUMMARY.md` in `_PC_TEST_EVIDENCE\<version>-<commit>\` (private app data folder; nothing installed) | Pending | 2026-11-04: blocked on the PC itself — no MSVC, Windows SDK, CMake, Ninja or vswhere; the Visual Studio Build Tools install needs a UAC prompt and the Microsoft licence terms (owner only). The script wrote `BLOCKER.md` with the exact install command |
+| Windows CI acceptance of the release candidate | Commit `b29d7b5`, run 41804192710 | Done (preview; 2026-11-04) | 36/36 tests at that commit (62 test programs today), deployed-exe self-test, 41 page screenshots, 30 s launch, installer + portable zip + SHA256SUMS. The tag builds of 5.0.0 and 5.0.1 failed in CI; both releases were built on the release PC |
+| Real PC acceptance test (owner's machine) | `native/packaging/pc-acceptance.ps1`: build, CTest, deploy, `--self-test`, `--screenshot-pages`, 30 s real launch, portable zip, SHA-256, `SUMMARY.md` in `_PC_TEST_EVIDENCE\<version>-<commit>\` (private app data folder; nothing installed) | Done | Run on the release PC for 5.0.0 (the evidence folder stays local) |

@@ -6,7 +6,7 @@ name: Native (C++) Linux tests with sanitizers
 
 on:
   push:
-    branches: [farewell-edition-dev, 'claude/wizardly-sagan-mahxhj', 'claude/backport-parity-v5']
+    branches: [main, 'claude/**']
     paths:
       - 'native/**'
       - '!native/docs/**'
@@ -50,5 +50,4 @@ jobs:
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/native/tests/lsan.supp
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           FW_OFFLINE: '1'
-
         run: ctest --test-dir build --output-on-failure --timeout 900

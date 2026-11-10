@@ -24,19 +24,14 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
 * **Single file (recommended)**: download `exFAT Image Builder.exe` and run
   it; nothing to unzip or install, no admin prompt, no VC++ Redistributable
   needed. The first start of each version unpacks the program once (about
-  60 MB, a second or less) to
+  190 MB, a few seconds) to
   `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime\` (or `%TEMP%` if that
   is not writable); later starts run it from there at once, and older versions
   are removed. A damaged download refuses to start. With an empty
   `portable.txt` next to the exe, the unpacked copy goes to
   `exFAT Image Builder.data\` and settings and logs to `data\` beside it.
   To remove the app, delete the exe and that `runtime` folder.
-* **Installer**: `exFAT-Image-Builder-Farewell-<version>-win64-setup.exe`
-  installs per user (no admin prompt) or for all users.
-* **Portable**: unzip `exFAT-Image-Builder-Farewell-<version>-win64-portable.zip`
-  anywhere. Create an empty `portable.txt` next to the exe to keep settings and
-  logs in a `data` folder beside it.
-* Verify downloads with `SHA256SUMS.txt` from the same release.
+* Verify the download with `SHA256SUMS.txt` from the same release.
 
 ## Where things are stored
 

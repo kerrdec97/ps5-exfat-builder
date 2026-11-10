@@ -29,6 +29,10 @@ foreach(test_src ${FW_TESTS})
     if(rel MATCHES "^app/" AND NOT FW_BUILD_APP)
         continue() # UI tests need the app library
     endif()
+    if(TARGET ${test_name})
+        message(FATAL_ERROR "Two test files are called ${test_name}.cpp (the second is tests/${rel}). "
+                            "A test's file name is its target name, so it must be unique under native/tests.")
+    endif()
     add_executable(${test_name} ${test_src})
     if(rel MATCHES "^engines/([^/]+)/")
         target_link_libraries(${test_name} PRIVATE fw_test_support_core fw_engine_${CMAKE_MATCH_1})
@@ -42,9 +46,13 @@ foreach(test_src ${FW_TESTS})
     endif()
     fw_configure_target(${test_name})
     add_test(NAME ${test_name} COMMAND ${test_name} -o -,txt)
+    # The two D97BETA folders are a second line of defence: a test that shows
+    # the Backport page and forgets to set them itself then works in the build
+    # tree, never in the files the PS5 Backport program keeps for the user.
+    set(_isolated "${CMAKE_CURRENT_BINARY_DIR}/isolated/${test_name}")
     set_tests_properties(${test_name} PROPERTIES
         TIMEOUT 900
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FW_OFFLINE=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE}")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FW_OFFLINE=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE};D97BETA_CONFIG_DIR=${_isolated}/backport-config;D97BETA_DATA_DIR=${_isolated}/backport-data")
 endforeach()
 
 # Module-owned extras (helper executables such as a stand-in external tool):

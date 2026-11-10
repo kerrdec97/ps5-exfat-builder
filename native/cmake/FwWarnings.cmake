@@ -8,7 +8,17 @@ if(MSVC)
     add_link_options($<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
 endif()
 
-# Shared compiler settings for every Farewell target.
+# /DEBUG records the .pdb's full path in the executable, and with it the build
+# PC's folder layout and user name. For the programs that leave the build PC
+# only the file name is recorded (a debugger still finds the symbols next to
+# the exe or on its symbol path, and matches them by GUID).
+function(fw_strip_pdb_path target)
+    if(MSVC)
+        target_link_options(${target} PRIVATE "/PDBALTPATH:%_PDB%")
+    endif()
+endfunction()
+
+# Shared compiler settings for every target of the project.
 function(fw_configure_target target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /EHsc /bigobj)

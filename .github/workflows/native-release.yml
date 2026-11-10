@@ -1,12 +1,13 @@
 name: Native (C++) release
 
 # Pushing a tag v5.* builds, tests and packages exFAT Image Builder v5 on
-# Windows (the same workflow as every push), then publishes the single-file
-# exe (the main download: one file, nothing to unzip or install), the
-# installer, the portable zip and SHA256SUMS.txt as a GitHub *pre-release*. A
-# pre-release is not "latest", so the legacy app's update check does not offer
-# it; promote it by hand once it has been tested on a real PC and console.
-# (The app's own update check looks for the installer asset; keep it.)
+# Windows (native-windows.yml, called from here), then publishes the
+# single-file exe (the one download: nothing to unzip or install) and
+# SHA256SUMS.txt as a GitHub *pre-release*. A release that already exists for
+# the tag (the owner publishes by hand) is left as it is. A pre-release is not
+# "latest"; promote it by hand once it has been tested on a real PC and
+# console. The installer and the portable zip stay build artefacts of the
+# Windows workflow; they are not part of a release.
 
 on:
   push:
@@ -32,10 +33,12 @@ jobs:
           name: native-windows-packages
           path: dist
 
-      - name: Check the packages against their checksums
+      - name: Check the download against its checksum
         run: |
           ls -la dist
-          cd dist && tr -d '\r' < SHA256SUMS.txt | sha256sum -c -   # written on Windows (CRLF)
+          # GitHub serves the asset without spaces; SHA256SUMS.txt lists that name.
+          cp "dist/exFAT Image Builder.exe" dist/exFAT.Image.Builder.exe
+          cd dist && sha256sum -c SHA256SUMS.txt
 
       - name: Publish the pre-release
         env:
@@ -46,11 +49,10 @@ jobs:
             echo "The release $GITHUB_REF_NAME already exists (published by hand); not replacing it."
             exit 0
           fi
-          # GitHub stores asset names without spaces ("exFAT.Image.Builder.exe"); the label keeps the readable name.
-          test -f "dist/exFAT Image Builder.exe"
+          # The asset is "exFAT.Image.Builder.exe"; the label keeps the readable name.
           gh release create "$GITHUB_REF_NAME" \
-            "dist/exFAT Image Builder.exe#exFAT Image Builder.exe (single file: download and run)" \
-            dist/*-setup.exe dist/*.zip dist/SHA256SUMS.txt \
+            "dist/exFAT.Image.Builder.exe#exFAT Image Builder.exe (single file: download and run)" \
+            dist/SHA256SUMS.txt \
             --prerelease --verify-tag \
             --title "exFAT Image Builder ${GITHUB_REF_NAME#v} (pre-release)" \
             --notes-file native/RELEASE_NOTES.md
