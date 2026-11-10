@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "engines/exfat/ExfatReader.h"
+#include "engines/pfs/FolderAccess.h"
 #include "engines/pfs/PfsBuilder.h"
 #include "engines/pfs/PfsReader.h"
 #include "engines/ufs2/Ufs2Reader.h"
@@ -68,7 +69,11 @@ public:
 private:
     Status walk(const QString& dir, const QString& rel, QSet<QString>& ancestors, qint64& n, const CancellationToken& token)
     {
-        const QString canonical = QFileInfo(dir).canonicalFilePath();
+        // The folder's identity: a junction's canonical path is its own, so it
+        // would not show a junction that leads back into the folders above it.
+        QString canonical = pfs::folderIdentity(dir);
+        if (canonical.isEmpty())
+            canonical = QFileInfo(dir).canonicalFilePath();
         if (ancestors.contains(canonical)) {
             m_warnings << QStringLiteral("Skipped %1: the link leads back into its own folder.").arg(rel);
             return success();
@@ -76,6 +81,8 @@ private:
         ancestors.insert(canonical);
         const QFileInfoList entries =
             QDir(dir).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::Name);
+        if (entries.isEmpty())
+            FW_TRY(pfs::ensureFolderListable(dir)); // empty, or not allowed to look?
         for (const QFileInfo& fi : entries) {
             if ((++n & 0xFF) == 0 && !token.checkpoint())
                 return Error::cancelled();

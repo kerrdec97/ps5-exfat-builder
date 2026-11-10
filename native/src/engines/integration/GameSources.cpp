@@ -2,7 +2,9 @@
 
 #include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 #include "engines/ampr/GamePack.h"
+#include "engines/ampr/HostPaths.h"
 #include "engines/ampr/Lz4Pack.h"
 #include "engines/ampr/Module.h"
 #include "engines/exfat/ExfatJobs.h"
@@ -48,6 +50,7 @@ public:
     const std::vector<ampr::GameItem>& items() const override { return m_items; }
     int find(const QString& path) const override { return m_tree->find(path); }
     Result<qint64> read(int index, qint64 offset, char* dst, qint64 len) override { return m_tree->read(index, offset, dst, len); }
+    QStringList warnings() const override { return m_tree->warnings(); }
 
 private:
     std::unique_ptr<FileTree> m_tree;
@@ -168,6 +171,9 @@ public:
         if (archive::isZipSource(src)) {
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
+            // Unpacking reports as a phase of its own, which replaced the job's.
+            ctx.progress->setPhases(ph, weights);
+            ctx.progress->beginPhase(0, 0);
         }
         const QString outDir = QFileInfo(output()).absolutePath();
         if (!QDir().mkpath(outDir))
@@ -218,6 +224,9 @@ public:
         // compression (the volumes keep their exact sizes), and nothing deleted.
         sub.settings = childSettings(ctx.settings);
         ChildProgress cp(ctx.progress, 3);
+        // The child's own phase list, so each of its phases gets its index
+        // (a build that never declares them would stay on its first).
+        cp.reporter()->setPhases(child->phases(), child->phaseWeights());
         sub.progress = cp.reporter();
         FW_TRY(child->validate(sub.settings));
         FW_TRY_ASSIGN(JobOutcome out, child->run(sub));
@@ -331,6 +340,8 @@ public:
         const QString o = QFileInfo(output()).absoluteFilePath();
         if (QFileInfo(source()).isDir() && (isSameOrInside(o, QFileInfo(source()).absoluteFilePath())))
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The output cannot be inside the game folder."));
+        if (QFileInfo(o).exists() && !QFileInfo(o).isDir())
+            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 exists and is not a folder.").arg(native(o)));
         if (QFileInfo(o).exists() && !QDir(o).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System))
             return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 is not empty. Choose an empty or new folder.").arg(native(o)));
         return success();
@@ -401,10 +412,12 @@ public:
                     continue;
                 if (it.path.compare(QStringLiteral("ampr_emu.index"), Qt::CaseInsensitive) == 0 && r->amprIndexWritten)
                     continue; // rewritten for the unpacked files
-                QFile f(QDir(stage).filePath(it.path));
-                if (!f.exists() && r->droppedFiles.contains(it.path))
+                // Where the extraction put it (never a path outside the stage).
+                auto written = childPathInside(stage, r->hostPath(it.path));
+                QFile f(written.ok() ? *written : QString());
+                if ((!written.ok() || !f.exists()) && r->droppedFiles.contains(it.path))
                     continue; // left out on purpose (old journal and logs)
-                if (!f.open(QIODevice::ReadOnly) || f.size() != it.size)
+                if (!written.ok() || !f.open(QIODevice::ReadOnly) || f.size() != it.size)
                     return Error(ErrorCode::VerificationFailed, QStringLiteral("%1 did not extract correctly.").arg(it.path));
                 for (qint64 pos = 0; pos < it.size;) {
                     if (!ctx.token.checkpoint())
@@ -429,6 +442,7 @@ public:
                          QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.").arg(native(out)));
         guard.keep = true;
         o.outputs = {out};
+        o.warnings = r->warnings + ampr::renamedWarnings(r->renamed);
         o.summary = r->kind == ampr::PackKind::None
                         ? QStringLiteral("Extracted %1 files (%2).").arg(formatCount(r->files), formatBytes(r->bytes))
                         : QStringLiteral("Extracted %1 files (%2); %3 came out of the %4 packs.")
@@ -560,21 +574,43 @@ public:
         FW_TRY_ASSIGN(StagePlan p, planStage(source, token));
         if (progress)
             progress->setTotal(p.bytes);
+        // The names come from an image or a pack index: every target is checked
+        // to lie inside the staging folder before anything is written.
         const QString appName = p.root.isEmpty() ? QStringLiteral("app") : p.root.section(u'/', -1);
-        const QDir out(QDir(destination).filePath(appName));
-        if (!out.mkpath(QStringLiteral(".")))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not create the staging folder."));
-        for (const QString& d : p.dirs)
-            out.mkpath(d);
+        FW_TRY_ASSIGN(const QString appDir, ampr::HostPaths(destination).add(appName, true));
+        ampr::HostPaths paths(appDir);
         const QString prefix = p.root.isEmpty() ? QString() : p.root + u'/';
-        std::vector<char> buf(size_t(4) << 20);
+        QStringList dirTargets;
+        for (const QString& d : std::as_const(p.dirs)) {
+            FW_TRY_ASSIGN(const QString target, paths.add(d, true));
+            dirTargets << target;
+        }
+        std::vector<QString> fileTargets;
+        fileTargets.reserve(p.include.size());
         for (int i : p.include) {
+            FW_TRY_ASSIGN(QString target, paths.add(p.files->items()[size_t(i)].path.mid(prefix.size())));
+            fileTargets.push_back(std::move(target));
+        }
+        // A package must hold the game's own names: a file this drive would
+        // store under another name cannot be staged here.
+        if (!paths.renamed().isEmpty())
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("%1 holds names this drive cannot store as they are (%2), so the package cannot be "
+                                        "built from it here.")
+                             .arg(QFileInfo(source).fileName(), paths.renamed().first()),
+                         paths.renamed().join(QStringLiteral("; ")));
+        if (!QDir().mkpath(appDir))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create the staging folder."));
+        for (const QString& d : std::as_const(dirTargets))
+            QDir().mkpath(d);
+        std::vector<char> buf(size_t(4) << 20);
+        for (size_t k = 0; k < p.include.size(); ++k) {
+            const int i = p.include[k];
             const ampr::GameItem& it = p.files->items()[size_t(i)];
-            const QString rel = it.path.mid(prefix.size());
             if (progress)
-                progress->setCurrentItem(rel);
-            out.mkpath(QFileInfo(rel).path());
-            QFile f(out.filePath(rel));
+                progress->setCurrentItem(it.path.mid(prefix.size()));
+            QDir().mkpath(QFileInfo(fileTargets[k]).absolutePath());
+            QFile f(fileTargets[k]);
             if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
                 return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(f.fileName())), f.errorString());
             for (qint64 pos = 0; pos < it.size;) {

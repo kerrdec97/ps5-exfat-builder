@@ -190,6 +190,9 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
         FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
         ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         FW_TRY(validate(ctx.settings));
+        // Unpacking reports as a phase of its own, which replaced the job's.
+        if (ctx.progress)
+            ctx.progress->setPhases(phases(), phaseWeights());
     }
     ProgressReporter* pr = ctx.progress;
     const qint64 ts = m_params.value(QStringLiteral("timestamp")).toInteger(0);

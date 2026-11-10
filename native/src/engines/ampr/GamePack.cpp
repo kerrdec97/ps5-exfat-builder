@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "core/FsLinks.h"
+#include "engines/ampr/HostPaths.h"
 #include "engines/pfs/AmprIndex.h"
 
 #include <QDateTime>
@@ -45,9 +46,7 @@ bool isAmprIndexPath(const QString& rel) { return rel.compare(pfs::kAmprIndexNam
 
 Status emptyOrNewFolder(const QString& outFolder)
 {
-    const QFileInfo fi(outFolder);
-    if (fi.exists() && (!fi.isDir() || !QDir(outFolder).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)))
-        return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 is not empty.").arg(native(outFolder)));
+    FW_TRY(checkNewFolderOutput(outFolder));
     if (!QDir().mkpath(outFolder))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(outFolder)));
     return success();
@@ -141,6 +140,68 @@ pfs::AmprFile amprFile(const GameItem& it, qint64 size)
 std::unique_ptr<SequentialReader> itemReader(std::shared_ptr<GameFiles> files, int index)
 {
     return std::make_unique<ItemReader>(std::move(files), index);
+}
+
+Status checkNewFolderOutput(const QString& folder)
+{
+    const QFileInfo fi(folder);
+    if (!fi.exists())
+        return success();
+    if (!fi.isDir())
+        return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 exists and is not a folder.").arg(native(folder)));
+    if (!QDir(folder).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System))
+        return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists and is not empty.").arg(native(folder)));
+    return success();
+}
+
+Result<std::unique_ptr<StagedFolder>> StagedFolder::begin(const QString& finalFolder)
+{
+    std::unique_ptr<StagedFolder> s(new StagedFolder);
+    s->m_final = QDir::cleanPath(QFileInfo(finalFolder).absoluteFilePath());
+    s->m_stage = s->m_final + QStringLiteral(".part");
+    s->m_marker = s->m_final + QStringLiteral(".part.writing");
+    s->m_parent = QFileInfo(s->m_final).absolutePath();
+    FW_TRY(checkNewFolderOutput(s->m_final));
+    if (QFileInfo::exists(s->m_stage)) {
+        if (!QFileInfo::exists(s->m_marker))
+            return Error(ErrorCode::AlreadyExists,
+                         QStringLiteral("%1 already exists. Move or delete it, then try again.").arg(native(s->m_stage)));
+        FW_TRY(removeTreeSafely(s->m_stage, s->m_parent));
+    }
+    if (!QDir().mkpath(s->m_parent) || !QFile(s->m_marker).open(QIODevice::WriteOnly))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(s->m_parent)));
+    s->m_owned = true;
+    if (!QDir().mkdir(s->m_stage))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(s->m_stage)));
+    return s;
+}
+
+StagedFolder::~StagedFolder()
+{
+    if (!m_owned)
+        return;
+    if (!m_committed)
+        (void)removeTreeSafely(m_stage, m_parent);
+    QFile::remove(m_marker);
+}
+
+Status StagedFolder::commit()
+{
+    // The final folder may have changed while the job ran: it is only ever
+    // replaced when it is (still) absent or empty.
+    FW_TRY(checkNewFolderOutput(m_final));
+    const bool existed = QFileInfo(m_final).isDir();
+    if (existed && !QDir().rmdir(m_final))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(m_final)));
+    if (!QDir().rename(m_stage, m_final)) {
+        if (existed)
+            QDir().mkdir(m_final);
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.")
+                         .arg(native(m_final)));
+    }
+    m_committed = true;
+    return success();
 }
 
 QString PackGameReport::summary() const
@@ -248,22 +309,26 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
 
     if (const int eboot = logical->find(QStringLiteral("eboot.bin")); eboot >= 0) {
         FW_TRY_ASSIGN(QByteArray head, readSmall(*logical, eboot, 4));
-        if (executableKind(head) == ExecutableKind::PlainElf)
+        if (executableKind(head) == ExecutableKind::PlainElf) {
             rep.warnings << QStringLiteral("eboot.bin is a plain ELF, not a signed SELF: the console will not start it. Use a "
                                            "fake-signed (backported) eboot.bin.");
+            log.warn(rep.warnings.back()); // now, not after hours of packing
+        }
+    }
+    for (const QString& w : logical->warnings()) {
+        rep.warnings << w;
+        log.warn(w);
     }
 
-    // Free space: the packs at worst as large as their files, and the copied loose files.
-    FW_TRY(emptyOrNewFolder(outFolder));
-    FW_TRY(ensureFreeSpace(outFolder, rep.packedBytes + (canLink ? 0 : rep.looseBytes) + runtime.size(), o.freeSpaceMarginBytes));
-
-    if (progress && o.packPhase >= 0)
-        progress->beginPhase(o.packPhase, rep.packedBytes + rep.looseBytes);
-    const QDir out(outFolder);
+    // Where everything loose goes. The names come from a pack index or an
+    // image when the source is one, so every target is checked to lie inside
+    // the output before anything is written.
+    HostPaths paths(outFolder);
     // Only folders that hold loose files exist on disk, plus the source's own
     // empty folders: the runtime serves a folder of packed files from the
     // index, and a real (empty) folder of the same name would hide its
     // contents from the game.
+    QStringList emptyDirTargets;
     {
         QSet<QString> nonEmpty;
         for (int i = 0; i < int(logical->items().size()); ++i) {
@@ -273,38 +338,88 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
                 nonEmpty.insert(p.left(slash));
         }
         for (const QString& d : dirs)
-            if (!nonEmpty.contains(d) && !out.mkpath(d))
-                return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(out.filePath(d))));
+            if (!nonEmpty.contains(d)) {
+                FW_TRY_ASSIGN(const QString target, paths.add(d, true));
+                emptyDirTargets << target;
+            }
+    }
+    // A read-only file is copied even where links work: deleting a link later
+    // would clear the read-only flag, which all links of a file share, on the
+    // user's original.
+    struct LooseTarget {
+        QString path;
+        QString linkFrom; // "" = copy
+    };
+    std::vector<LooseTarget> looseTargets;
+    looseTargets.reserve(loose.size());
+    qint64 copiedLooseBytes = 0;
+    for (const Loose& l : loose) {
+        const GameItem& it = logical->items()[size_t(l.index)];
+        LooseTarget t;
+        FW_TRY_ASSIGN(t.path, paths.add(it.path));
+        if (canLink) {
+            const QString original = QDir(o.linkFromFolder).filePath(it.path);
+            if (QFileInfo(original).isWritable())
+                t.linkFrom = original;
+        }
+        if (t.linkFrom.isEmpty())
+            copiedLooseBytes += it.size;
+        looseTargets.push_back(std::move(t));
+    }
+    const QString fakelib = folderCaseFor(logical->items(), QStringLiteral("fakelib"));
+    FW_TRY_ASSIGN(const QString runtimeTarget, paths.add(fakelib + QStringLiteral("/libSceAmpr.sprx")));
+    if (!paths.renamed().isEmpty()) {
+        rep.warnings << renamedWarnings(paths.renamed());
+        for (const QString& n : paths.renamed())
+            log.warn(QStringLiteral("Renamed for this drive: %1").arg(n));
     }
 
-    // Loose files: linked, else copied.
+    // Free space: the packs at worst as large as their files, and the copied loose files.
+    FW_TRY(emptyOrNewFolder(outFolder));
+    FW_TRY(ensureFreeSpace(outFolder, rep.packedBytes + copiedLooseBytes + runtime.size(), o.freeSpaceMarginBytes));
+
+    if (progress && o.packPhase >= 0)
+        progress->beginPhase(o.packPhase, rep.packedBytes + rep.looseBytes);
+    for (const QString& d : std::as_const(emptyDirTargets))
+        if (!QDir().mkpath(d))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(d)));
+
+    // Loose files: linked where the caller allows it, else copied.
     std::vector<char> buf(size_t(4) << 20);
-    for (const Loose& l : loose) {
+    qint64 readOnlyCopies = 0;
+    for (size_t k = 0; k < loose.size(); ++k) {
         if (!token.checkpoint())
             return Error::cancelled();
+        const Loose& l = loose[k];
+        const LooseTarget& t = looseTargets[k];
         const GameItem& it = logical->items()[size_t(l.index)];
-        const QString dst = out.filePath(it.path);
-        out.mkpath(QFileInfo(it.path).path());
-        // A read-only file is copied: deleting a link later would clear the
-        // read-only flag, which all links of a file share, on the user's original.
-        const QString original = QDir(o.linkFromFolder).filePath(it.path);
-        if (canLink && QFileInfo(original).isWritable() && createHardLink(dst, original).ok()) {
+        if (!QDir().mkpath(QFileInfo(t.path).absolutePath()))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(QFileInfo(t.path).absolutePath())));
+        if (!t.linkFrom.isEmpty() && createHardLink(t.path, t.linkFrom).ok()) {
             ++rep.linkedFiles;
             if (progress)
                 progress->advance(it.size);
             continue;
         }
-        FW_TRY(copyItem(*logical, l.index, dst, buf, token, progress));
+        if (canLink && t.linkFrom.isEmpty())
+            ++readOnlyCopies;
+        FW_TRY(copyItem(*logical, l.index, t.path, buf, token, progress));
     }
-    if (canLink && rep.linkedFiles < qint64(loose.size()) && !loose.empty())
-        log.info(QStringLiteral("%1 of %2 loose files were copied (the output is on another drive or the file system has no hard links).")
-                     .arg(qint64(loose.size()) - rep.linkedFiles)
-                     .arg(loose.size()));
+    if (!loose.empty() && !o.linkFromFolder.isEmpty() && rep.sourcePacks == PackKind::None) {
+        const qint64 copied = qint64(loose.size()) - rep.linkedFiles;
+        if (!canLink)
+            log.info(QStringLiteral("The %1 loose file%2 copied: the work folder is on another drive than the game, or the "
+                                    "drive has no hard links.")
+                         .arg(formatCount(copied), copied == 1 ? QStringLiteral(" was") : QStringLiteral("s were")));
+        else if (copied > 0)
+            log.info(QStringLiteral("%1 of %2 loose files were copied instead of linked (%3 read-only in the source).")
+                         .arg(formatCount(copied), formatCount(qint64(loose.size())), formatCount(readOnlyCopies)));
+    }
 
     // The runtime (only this file of fakelib/).
-    const QString fakelib = folderCaseFor(logical->items(), QStringLiteral("fakelib"));
-    out.mkpath(fakelib);
-    FW_TRY(writeFileAtomic(out.filePath(fakelib + QStringLiteral("/libSceAmpr.sprx")), runtime));
+    if (!QDir().mkpath(QFileInfo(runtimeTarget).absolutePath()))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(QFileInfo(runtimeTarget).absolutePath())));
+    FW_TRY(writeFileAtomic(runtimeTarget, runtime));
     if (rep.previousRuntime.kind != RuntimeKind::None && !rep.previousRuntime.bundled)
         log.info(QStringLiteral("fakelib/libSceAmpr.sprx: %1 replaced by %2.").arg(rep.previousRuntime.describe(), rep.runtime));
 
@@ -395,21 +510,47 @@ Result<UnpackReport> unpackGame(std::shared_ptr<GameFiles> source, const QString
         files.push_back(i);
         total += it.size;
     }
+    rep.warnings = logical->warnings();
+    // The names come from a pack index or an image: every target is checked
+    // to lie inside the output before anything is written, and gets the name
+    // this drive can store.
+    HostPaths paths(outFolder);
+    QStringList dirTargets;
+    dirTargets.reserve(dirs.size());
+    for (const QString& d : std::as_const(dirs)) {
+        FW_TRY_ASSIGN(const QString target, paths.add(d, true));
+        dirTargets << target;
+    }
+    std::vector<QString> fileTargets;
+    fileTargets.reserve(files.size());
+    for (int i : files) {
+        const QString& stored = logical->items()[size_t(i)].path;
+        FW_TRY_ASSIGN(QString target, paths.add(stored));
+        if (const QString rel = paths.relative(stored); rel != stored)
+            rep.hostPaths.insert(stored, rel);
+        fileTargets.push_back(std::move(target));
+    }
+    rep.renamed = paths.renamed();
+    for (const QString& n : std::as_const(rep.renamed))
+        log.info(QStringLiteral("Renamed for this drive: %1").arg(n));
+
     FW_TRY(emptyOrNewFolder(outFolder));
     FW_TRY(ensureFreeSpace(outFolder, total, o.freeSpaceMarginBytes));
     if (progress)
         progress->setTotal(total);
-    const QDir out(outFolder);
-    for (const QString& d : dirs)
-        if (!out.mkpath(d))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(out.filePath(d))));
+    for (const QString& d : std::as_const(dirTargets))
+        if (!QDir().mkpath(d))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(d)));
     std::vector<char> buf(size_t(4) << 20);
-    for (int i : files) {
+    for (size_t k = 0; k < files.size(); ++k) {
+        const int i = files[k];
         const GameItem& it = logical->items()[size_t(i)];
         if (progress)
             progress->setCurrentItem(it.path);
-        out.mkpath(QFileInfo(it.path).path());
-        FW_TRY(copyItem(*logical, i, out.filePath(it.path), buf, token, progress));
+        if (!QDir().mkpath(QFileInfo(fileTargets[k]).absolutePath()))
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not create %1.").arg(native(QFileInfo(fileTargets[k]).absolutePath())));
+        FW_TRY(copyItem(*logical, i, fileTargets[k], buf, token, progress));
         ++rep.files;
         rep.bytes += it.size;
     }

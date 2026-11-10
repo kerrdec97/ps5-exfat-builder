@@ -382,6 +382,67 @@ private slots:
         QCOMPARE(big.error().code, ErrorCode::CorruptData);
     }
 
+    // A flat_path_table whose entries all point into the same collision
+    // group, each one entry further in, would have the reader parse the
+    // group once per entry. The work is bounded by the resolver's size and
+    // the image is reported as damaged.
+    void overlappingCollisionGroupsAreBounded()
+    {
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        // "BB" and "C#" have the same path hash, so every name made of seven
+        // such pairs lands in one collision group.
+        QStringList colliding;
+        for (int i = 0; i < 128; ++i) {
+            QString name;
+            for (int bit = 0; bit < 7; ++bit)
+                name += (i >> bit) & 1 ? QStringLiteral("C#") : QStringLiteral("BB");
+            colliding << name;
+            QVERIFY(pfstest::writeFile(src + u'/' + name, QByteArray::number(i), -1));
+        }
+        for (int i = 0; i < 200; ++i)
+            QVERIFY(pfstest::writeFile(src + QStringLiteral("/plain/%1.bin").arg(i), QByteArray::number(i), -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+
+        // The honest image reads, collisions included.
+        qint64 bs = 0;
+        Inode fptIno, colIno;
+        {
+            auto o = openImage(image);
+            QVERIFY2(o.ok(), qPrintable(o.ok() ? QString() : o.error().toLogString()));
+            QCOMPARE(qint64(o->img->files().size()), qint64(1 + 128 + 200));
+            for (const QString& name : colliding)
+                QVERIFY(o->img->findFile(name.toLatin1()));
+            bs = o->img->header().blockSize;
+            fptIno = o->img->inodes()[1];
+            colIno = o->img->inodes()[2];
+        }
+        QByteArray bytes = pfstest::readAll(image);
+        const qint64 fptAt = fptIno.db[0] * bs, colAt = colIno.db[0] * bs;
+        const qint32 entSize = getI32(bytes.constData() + colAt + 12);
+        QVERIFY(entSize >= 24);
+        QVERIFY(qint64(entSize) * 128 <= colIno.size);
+        int patched = 0;
+        for (qint64 i = 0; i + 8 <= fptIno.size; i += 8) {
+            char* value = bytes.data() + fptAt + i + 4;
+            if (getU32(value) & 0x80000000u)
+                continue; // the real group, at offset 0
+            putU32(value, 0x80000000u | quint32(entSize * (1 + patched % 127)));
+            ++patched;
+        }
+        QVERIFY(patched >= 200);
+        QVERIFY(writeFileAtomic(image, bytes).ok());
+
+        QElapsedTimer timer;
+        timer.start();
+        auto o = openImage(image);
+        QVERIFY(!o.ok());
+        QCOMPARE(o.error().code, ErrorCode::CorruptData);
+        QVERIFY2(o.error().toLogString().contains(QStringLiteral("groups overlap")), qPrintable(o.error().toLogString()));
+        QVERIFY(timer.elapsed() < 5000);
+    }
+
     // A tiny image whose PFSC header declares a 16 GiB block offset table
     // (the inode and header stretched to a 1 TiB image the file does not
     // hold; Reviewer's craft_pfsc.py) is rejected without allocating it.

@@ -8,6 +8,7 @@
 #include "engines/pfs/PfsSource.h"
 
 #include "engines/pfs/AmprIndex.h"
+#include "engines/pfs/FolderAccess.h"
 #include "engines/pfs/PfsFormat.h"
 
 #include <QDateTime>
@@ -109,6 +110,7 @@ struct Walker {
     int excludedFolders = 0;
     QStringList excludedSamples;
     qint64 seen = 0;
+    std::set<QString> ancestors; // identities of the folders being walked (junction loops)
 
     void noteExcluded(const QString& rel)
     {
@@ -126,8 +128,20 @@ struct Walker {
         const QString canonical = dirInfo.canonicalFilePath();
         if (!canonical.isEmpty() && !visited.insert(canonical).second)
             return success(); // symlink loop or second link to the same folder
+        // A junction's canonical path is its own, so a junction that leads
+        // back into the folders above it is recognised by the folder's identity.
+        const QString identity = folderIdentity(absDir);
+        if (!identity.isEmpty() && !ancestors.insert(identity).second)
+            return success();
+        struct Leave {
+            std::set<QString>& set;
+            const QString& id;
+            ~Leave() { set.erase(id); }
+        } leave{ancestors, identity};
         const QFileInfoList entries = QDir(absDir).entryInfoList(
             QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::Name);
+        if (entries.isEmpty())
+            FW_TRY(ensureFolderListable(absDir)); // empty, or not allowed to look?
         int included = 0;
         for (const QFileInfo& fi : entries) {
             if ((++seen & 0xFF) == 0 && !token.checkpoint())
