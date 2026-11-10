@@ -253,6 +253,54 @@ private slots:
         QVERIFY(panel.overrides().isEmpty());
     }
 
+    // An error in a job option that the user can no longer see or fix does not block the form.
+    void optionsPanelDropsErrorsThatCannotBeFixed()
+    {
+        const QString mode = QStringLiteral("exfat.spareSpace");      // "legacy" / "fixed"
+        const QString amount = QStringLiteral("exfat.spareSpaceMiB"); // enabled when the mode is "fixed"
+        ui::JobOptionsPanel panel(*m_ctx, {QStringLiteral("Build")});
+        panel.build();
+        ui::SettingRow* amountRow = panel.row(amount);
+        QVERIFY(amountRow && panel.row(mode));
+        auto typeInto = [](ui::SettingRow* row, const QString& text) {
+            auto* edit = row->editor()->widget()->findChild<QLineEdit*>();
+            QVERIFY(edit);
+            edit->setText(text);
+            emit edit->editingFinished();
+        };
+
+        // A page's own note under a row survives a valid edit of that row.
+        panel.setOverride(mode, QStringLiteral("fixed"));
+        amountRow->setMessage(QStringLiteral("A note from the page"), ui::Tone::Info);
+        typeInto(amountRow, QStringLiteral("512"));
+        QVERIFY(!panel.hasErrors());
+        QCOMPARE(amountRow->messageText(), QStringLiteral("A note from the page"));
+
+        // An invalid entry is an error ...
+        typeInto(amountRow, QStringLiteral("abc"));
+        QVERIFY(panel.hasErrors());
+        // ... until the row is switched off by the setting it depends on: it cannot be corrected then.
+        panel.setOverride(mode, QStringLiteral("legacy"));
+        QVERIFY2(!panel.hasErrors(), qPrintable(panel.errorMessages().join(u'|')));
+        QVERIFY(amountRow->messageText().isEmpty());
+
+        // The same when the global value changes under a row that shows an error.
+        panel.setOverride(mode, QStringLiteral("fixed"));
+        emit amountRow->useDefaultRequested();
+        typeInto(amountRow, QStringLiteral("abc"));
+        QVERIFY(panel.hasErrors());
+        const QVariant before = m_ctx->settings().value(amount);
+        QVERIFY(m_ctx->settings().setValue(amount, before.toInt() + 64).ok());
+        QVERIFY(!panel.hasErrors());
+        QVERIFY(m_ctx->settings().setValue(amount, before).ok());
+
+        // A value set by the page clears an error as well.
+        typeInto(amountRow, QStringLiteral("abc"));
+        QVERIFY(panel.hasErrors());
+        panel.setOverride(amount, 256);
+        QVERIFY(!panel.hasErrors());
+    }
+
     void queuePageReflectsFakeJobs()
     {
         m_window->navigate(QStringLiteral("queue"));
