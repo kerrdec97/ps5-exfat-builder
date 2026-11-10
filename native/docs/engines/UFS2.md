@@ -284,8 +284,9 @@ FW_DUMPFS_UFS=/path/dumpfs.ufs
 makefs on PATH (FW_MAKEFS)           # NetBSD makefs, Debian/Ubuntu package "makefs"
 ```
 
-Each check is skipped (`QSKIP`) when its tool is missing. The DLL can be
-extracted from `exfat_builder.py` (`_UFS2TOOL_DLL_B64`). It needs a
+Each check is skipped (`QSKIP`) when its tool is missing. The DLL was embedded
+in the Python app (`exfat_builder.py`, `_UFS2TOOL_DLL_B64`, in the v4 and
+earlier tags). It needs a
 `UFS2Tool.runtimeconfig.json` (see `extract_ufs2tool()`) and `DokanNet.dll`
 beside it.
 

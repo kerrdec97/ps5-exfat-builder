@@ -4,7 +4,7 @@ What each engine does to be fast, what was measured, and where. All numbers
 come from the cloud development VM (Linux, 4 vCPUs shared with other builds,
 virtio disk). **None was measured on the owner's PC**; real-world speed is
 bounded by the drives and by Windows Defender, and should be re-measured
-there (owner's checklist in `RELEASE_NOTES.md`). Details and reproduction
+there. Details and reproduction
 commands are in each engine's document.
 
 ## Principles (all engines)

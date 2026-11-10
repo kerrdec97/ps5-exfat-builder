@@ -1,7 +1,10 @@
 # ── exFAT Image Builder — .gitignore ─────────────────────────────────────
 # Keeps build output, caches, and runtime-generated files out of the repo.
-# NOTE: donors.json and CHANGELOG.md are intentional, app-read files — they
-# are NOT ignored. assets/, build.bat, controller.ico, *.py stay tracked.
+# The rules down to "Native C++ rebuild" date from the Python app (versions 1
+# to 4); they are kept because they still keep images, executables and logs
+# out. NOTE: they also apply under native/tests/data: a new fixture with an
+# ignored extension (*.exe, *.pkg, *.exfat, *.log, ...) needs `git add -f` or
+# an exception like the one for exfat_builder_settings.json below.
 
 # ── PyInstaller build output ─────────────────────────────────────────────
 build/

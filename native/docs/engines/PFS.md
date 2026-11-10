@@ -42,7 +42,7 @@ verifies what it wrote before the image gets its final name.
 
 Lazy's default `main_folder.py` mode (folder → temporary exFAT image via
 mkfs/OSFMount → container) needs the exFAT engine; the app chains an
-`exfat` job and an `image.pfs.build` job with the `.exfat` as source instead.
+`image.exfat.build` job and an `image.pfs.build` job with the `.exfat` as source instead.
 
 ## On-disk format
 

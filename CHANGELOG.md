@@ -10,9 +10,14 @@ output, backport update packages and DLC packages. The full notes are in
 `native/RELEASE_NOTES.md` and on the release page. From this version the app
 is proprietary (see `native/packaging/LICENCE.txt`).
 
-## [4.1.0] - 2026-11-03 — Farewell Edition
+## [4.1.0] - not released — Farewell Edition (Python)
 
-The final release of exFAT Image Builder. It restores the v4.0.2 source that
+This version was never released: it has no tag and no download. Version 5
+replaced it, and the files this entry names (the Python sources, `build.bat`,
+`docs/farewell/`, `tools/`, `tests/`, `vendor/`, the Windows build workflow)
+are no longer in the repository. The entry is kept as a record.
+
+It was planned as the final release of the Python app. It restores the v4.0.2 source that
 was never published, fixes the problems reported since, and gives the app a
 consistent look. Every existing feature, setting and language is kept.
 

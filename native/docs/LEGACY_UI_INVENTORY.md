@@ -10,7 +10,7 @@ Scope of this file: shell/navigation, every page in `ui/*.py` outside the image-
 Engine pages are listed as rows only and point to the sibling documents:
 `LEGACY_INVENTORY.md` (image build, extract, convert, PFS, OSFMount), `FPKG_PARITY.md` (ffpkg editor/UFS2Tool), `BACKPORT_PARITY.md` (Backports).
 
-Conventions: `file:line` are 1-based. `E:` = `exfat_builder.py`. Control IDs (`HOME-1`...) are used only so counts in section 9 are reproducible. "Persisted key" is a key in the settings JSON `~/.exfat_builder_settings.json` (`E:132-173`, atomic write via `.tmp` + `os.replace`, corrupt file renamed to `.corrupt`).
+Conventions: `file:line` are 1-based. `E:` = `exfat_builder.py`. Control IDs (`HOME-1`...) are used only so counts in section 10 are reproducible. "Persisted key" is a key in the settings JSON `~/.exfat_builder_settings.json` (`E:132-173`, atomic write via `.tmp` + `os.replace`, corrupt file renamed to `.corrupt`).
 
 ---
 
@@ -506,7 +506,7 @@ Rename rules in section 4.4.
 | Payload sender (Payloads page) | Raw TCP, one-way push | 9090 | yes | `pl_port` | `E:18478`, `E:18736` |
 | ShadowMount+/MicroMount ELF send | Raw TCP | 9021 | yes | `smp_payload_port`, `mm_payload_port` | `ui/tab_shadowmount.py:3158`, `ui/tab_micromount.py` |
 | Kernel log | TCP stream of text lines (klogsrv by ps5-payload-dev) | 3232 | yes | `klog_port` | `E:19044` |
-| Etahen Direct Package Installer V2 (Y2JB PKG install) | HTTP/1.1 POST multipart | 12800 | yes | `y2jb_dpi_port` | `E:20655` |
+| etaHEN Direct Package Installer V2 (Y2JB PKG install) | HTTP/1.1 POST multipart | 12800 | yes | `y2jb_dpi_port` | `E:20655` |
 | PS5 status ping | TCP connect probe | 2121, then 9021, then 1234 | no | - | `E:26878` |
 | FTP server web UI probe (zftpd "ZHTTP") | HTTP GET `/` on the FTP port | = FTP port | no | - | `E:6238` |
 | Y2JB hint text | etaHEN FTP is documented in the UI as port 1337 | 1337 | via `y2jb_ftp_port` | - | `E:18064` |

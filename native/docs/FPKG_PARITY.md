@@ -13,8 +13,8 @@ Conventions:
   `AS` = `A:Services/AppSettings.cs`, `MW` = `A:Views/MainWindow.axaml`, `VM` = `A:ViewModels/MainViewModel.cs`.
   `file:N` is a line, `file:N-M` a range, all at commit `6e43d85`.
 * **Our paths** are repository-relative (`core/fpkg/scan.py`, `native/src/...`).
-* **UNVERIFIED** marks anything that could not be checked from source, binaries or a run in this session.
-* The reference has no licence. Everything below is a description of its behaviour in our own words. Short identifiers
+* **UNVERIFIED** marks anything that could not be checked from source, binaries or a run.
+* No code or text of the reference is copied. Everything below is a description of its behaviour in our own words. Short identifiers
   (setting keys, CLI flags, XML element and attribute names, file names, numeric format constants) are quoted because
   they are facts about the tools and file formats. No reference code, UI text or data table is reproduced.
 
@@ -41,7 +41,7 @@ the corrections are listed in §7.3.
 
 | Part | Where | Licence / origin | We may | We may not |
 |---|---|---|---|---|
-| App, Core, CLI, tests, scripts, docs, CHANGELOG, `vi.json`/`en.json`, design system | `src/`, `tests/`, `scripts/`, `docs/`, `design-system/` | **None.** No LICENSE/COPYING file in the tree; the README "Credits & license" section grants nothing for the app code. All rights reserved by default. | Read for behaviour; quote facts (flags, file names, format constants) | Copy code, UI strings, localisation text, data tables, test fixtures, icons, screenshots |
+| App, Core, CLI, tests, scripts, docs, CHANGELOG, `vi.json`/`en.json`, design system | `src/`, `tests/`, `scripts/`, `docs/`, `design-system/` | Its authors' own terms (not ours to copy) | Read for behaviour; quote facts (flags, file names, format constants) | Copy code, UI strings, localisation text, data tables, test fixtures, icons, screenshots |
 | Toolkit launchers and GP5 script | `K:build.bat`, `K:build-from-folder.ps1`, `K:build-gui.ps1`, `K:scripts/create-gp5-from-folder.py` | Not ours (part of the reference's toolkit folder) | Read for the tool's argument conventions | Copy, vendor, or depend on them |
 | Sony Publishing Tools 2.79, as the reference expects them | `K:toolchain/prospero-pub-cmd.exe`, `libScePubTools.dll`, `ext/{da,fa,p2d,ric,sc2}.exe`, `ext/ispc_texcomp.dll`, `ext/libatrac9.dll`; also `libs/libScePubTools.dll` | Sony proprietary SDK | Drive the **user's own copy** through its command line | Bundle, redistribute, download, link to, or ship any part of it |
 | `prospero-dds2png.exe` | `K:prospero-dds2png.exe` | Not ours (UNVERIFIED whether it is a Sony or a third-party tool) | Run the user's copy if they have it | Bundle it |
@@ -776,7 +776,7 @@ details: file count, bytes, size class, PlayGo layout, excluded counts).
 
 ### 6.6 Test plan
 
-**Fake `prospero-pub-cmd`** (`native/tests/fakes/fake_pubcmd.cpp`, built by CMake into a fake toolkit layout
+**Fake `prospero-pub-cmd`** (`native/tests/engines/fpkg/fake_pubcmd.cpp`, built by CMake into a fake toolkit layout
 `<build>/tests/fake-toolkit/toolchain/prospero-pub-cmd[.exe]` with an empty `libScePubTools.dll` and an `ext/` folder,
 plus a fake `prospero-dds2png[.exe]` that writes a minimal PNG of the requested colour type). It is our own
 implementation of the behaviour already covered by `tests/fakes/fake_pubcmd.py`:

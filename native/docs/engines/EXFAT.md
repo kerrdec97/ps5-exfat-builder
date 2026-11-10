@@ -22,7 +22,8 @@ OSFMount + `format.com` + `robocopy` pipeline is gone.
 ## Format decisions
 
 The layout follows what the legacy app produced, so images behave the same on
-the console. Legacy references: `New-OsfExfatImage.ps1` and `make_image.bat`
+the console. Legacy references (the Python app of versions 1 to 4, no longer
+in this repository): `New-OsfExfatImage.ps1` and `make_image.bat`
 (embedded base64 in `exfat_builder.py` as `_PS1_B64` / `_BAT_B64`; decode them
 to read), `exfat_builder.py` (`verify_walk_tree`, `_get_cluster_size_arg`,
 `set_aside_previous_image`), `ui/tab_advanced.py` (Filesystem layout card).

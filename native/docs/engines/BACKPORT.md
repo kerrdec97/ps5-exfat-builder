@@ -54,7 +54,13 @@ is recognised here and the other way round:
 | `DATA_DIR` | `%LOCALAPPDATA%\Deckerr97BackportGuiBeta` | `jobs`, `logs`, `logs\runs` |
 
 `D97BETA_CONFIG_DIR` and `D97BETA_DATA_DIR` override them, as in the original program. **Tests must
-set both** (to temporary folders) so the user's real settings and ledger are never touched.
+set both** (to temporary folders) so the user's real settings and ledger are never touched; CTest
+also points both into the build folder for every test (`tests/CMakeLists.txt`).
+
+Because the files are shared: `settings.json` is merged per key and is not overwritten when it cannot
+be read; folders are written with native separators; an unfinished apply is not offered for restore
+while a PS5 Backport GUI that this app did not start is running, or while the journal was written in
+the last five minutes (`kApplyQuietSeconds`).
 
 ## Native helpers (`src/engines/backport/`)
 
@@ -72,7 +78,8 @@ All of them only read. None writes into a game folder.
 How the game list uses them (`BackportCore.cpp`): `ebootSdk()` reads `eboot.bin` (up to 512 MiB),
 unwraps it when it is a SELF, and shows the PS5 SDK of its process param; `param.json` versions are
 shown through `parsePs5VersionField`; the already-backported check hashes only files whose name and
-size match a pinned library.
+size match a pinned library. The page uses these readers for its list only; everything a backport
+does is the engine's.
 
 Limits that protect the list from hostile files (a dump from someone else is untrusted input):
 

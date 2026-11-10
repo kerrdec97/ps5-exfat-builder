@@ -1,10 +1,10 @@
-# Farewell Edition — native C++ architecture
+# exFAT Image Builder — native C++ architecture
 
 The native rebuild of the PS5 exFAT Image Builder. C++20, Qt 6 (Widgets for
 the UI, Core/Network/Concurrent for the backend), CMake + Ninja, MSVC 2022 on
-Windows (release), GCC/Clang on Linux (development and CI tests). The legacy
-Python application at the repository root is untouched and remains the
-reference until the migration matrix says otherwise.
+Windows (release), GCC/Clang on Linux (development and CI tests). It replaced
+the Python application of versions 1 to 4, which is no longer in the
+repository.
 
 ## Decisions
 
@@ -26,6 +26,8 @@ reference until the migration matrix says otherwise.
 native/
   CMakeLists.txt            project, options, Qt/zlib discovery
   cmake/FwWarnings.cmake    fw_configure_target(), fw_add_module()
+  cmake/AmprRuntime.cmake   the bundled ampr-emu-ng runtime (pinned by SHA-256)
+  cmake/BackportEngine.cmake  the bundled PS5 Backport engine (pinned by SHA-256)
   src/
     core/                   fw_core     — Result, Cancellation, Progress, Log, Settings, Paths,
                                           FileUtil, PathSafety, ProcessRunner, Dependencies
@@ -37,7 +39,10 @@ native/
       pfs/                  PFS / FFPFSC compressed image builder/reader/verify (GPL port), AMPR index
       ufs2/                 FFPKG (UFS2) images (port of UFS2Tool newfs), reader/verify/extract/edit
       fpkg/                 FPKG packages through the user's Publishing Tools
-      backport/             Backport engine (scan, planner, patcher, ZIPs, journaled apply, restore)
+      backport/             read-only helpers for the Backport page's game list (SELF reader, SDK table,
+                                          metadata); backports are made by the bundled PS5 Backport engine
+      ampr/                 zstd asset packs (write, read, unpack), LZ4 pack reader, the bundled runtime
+      dlc/                  DLC packages through the user's fpkg-cli, dlc_emu INIs, key lookup
       tools/                Language Stripper, DLC-emu editor, problem reports
       integration/          cross-engine workflows: image.convert, image.compare (ImageFiles: read-only
                                           file access to any image or folder), FPKG image stagers, post-build upload
@@ -46,11 +51,16 @@ native/
     connect/notify/         fw_connect_notify — Discord webhook message when the queue finishes
     registration/           calls every module's registerModule()
     app/                    the Qt Widgets application (theme, widgets, pages, main.cpp)
+      backport/             host of the bundled PS5 Backport engine (worker process, settings, ledger)
+    onefile/                the single-file launcher (plain Win32) and its packer
   tests/
     support/                fw_test_support, fw_test_helper process
     core/                   core + queue tests
     engines/<name>/         module tests (tst_*.cpp)
-  docs/                     architecture, parity matrices, inventories, design proposal
+    connect/<name>/         connection module tests, with the fake PS5
+    app/                    UI tests (offscreen)
+    onefile/                launcher and packer tests
+  docs/                     architecture, UI, design, engine documents; records of the v5 rewrite
 ```
 
 Every `src/engines/*/CMakeLists.txt` is a single `fw_add_module(<target> DEPENDS ...)`
@@ -97,7 +107,7 @@ Each module exposes `void fw::<name>::registerModule(fw::ModuleContext&)` in
   queue or `QtConcurrent::run` with results posted back via queued signals.
 * Pages read services from `AppContext` (settings store, queue, history,
   dependencies, log buffer).
-* All look-and-feel comes from the design system (`docs/DESIGN_PROPOSAL.md`):
+* All look-and-feel comes from the design system (`docs/DESIGN_V5.md`):
   tokens in one place, QSS generated from tokens, custom widgets for the rest.
 
 ## Dependencies by module
@@ -116,7 +126,10 @@ Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
 
 ## Testing switches
 
-`FW_DATA_DIR` isolates all app data (tests, CI). `FW_OFFLINE=1` stops the
+`FW_DATA_DIR` isolates the app's own data (tests, CI). The Backport page also
+uses the files of the bundled PS5 Backport engine, which `D97BETA_CONFIG_DIR`
+and `D97BETA_DATA_DIR` move; CTest points both into the build folder, and a
+test that shows the page sets them to its own temporary folders. `FW_OFFLINE=1` stops the
 silent update check and the Discord webhook (set for every test and CI run). Module tests link only
 their own module (`tests/engines/<m>/`, `tests/connect/<m>/`); helper
 executables come from a module's `tests/.../extra.cmake`.
@@ -126,7 +139,9 @@ executables come from a module's `tests/.../extra.cmake`.
 `Paths`: settings, history and queue in `%APPDATA%\kerrdec97\exFAT Image Builder Farewell`;
 logs, temp and caches in `%LOCALAPPDATA%\...`; portable mode with
 `portable.txt` next to the exe (`<exe>\data`); `FW_DATA_DIR` overrides both
-(tests, CI). Stale `fw-*` temp folders older than a day are removed at start.
+(tests, CI). Stale `fw-*` temp folders older than a day are removed at start;
+in a temporary folder the user chose, only job folders that carry the app's
+marker are removed.
 
 ## Command line
 
