@@ -28,8 +28,9 @@ ConsoleEndpoint endpointFromSettings(const SettingsValues& s)
     ep.klogPort = port(s, keys::kKlogPort, 3232);
     ep.dpiPort = port(s, keys::kDpiPort, 12800);
     ep.smpApiPort = port(s, keys::kSmpApiPort, 10101);
-    ep.connectTimeoutMs = int(std::clamp<qint64>(s.integer(keys::kConnectTimeout), 1, 300)) * 1000;
-    ep.idleTimeoutMs = int(std::clamp<qint64>(s.integer(keys::kIdleTimeout), 1, 3600)) * 1000;
+    // The same limits as the settings (Module.cpp), for values that did not come through them.
+    ep.connectTimeoutMs = int(std::clamp<qint64>(s.integer(keys::kConnectTimeout), 1, 120)) * 1000;
+    ep.idleTimeoutMs = int(std::clamp<qint64>(s.integer(keys::kIdleTimeout), 5, 600)) * 1000;
     ep.parallelTransfers = int(std::clamp<qint64>(s.integer(keys::kParallelTransfers), 1, 8));
     ep.passive = s.boolean(keys::kPassiveMode);
     const QString games = s.string(keys::kGamesFolder).trimmed();

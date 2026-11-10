@@ -66,7 +66,7 @@ QString protectedPathWarning(const QString& path, const QString& action);
 enum class DestinationKind { External, Internal, Unknown };
 struct DestinationInfo {
     DestinationKind kind = DestinationKind::Unknown;
-    QString label; // "External USB / exFAT", "Internal PS5 storage", "Unknown location"
+    QString label; // "External USB / exFAT", "Extended storage (USB or M.2)", "Internal PS5 storage", "Unknown location"
     QString note;
 };
 DestinationInfo classifyDestination(const QString& path);

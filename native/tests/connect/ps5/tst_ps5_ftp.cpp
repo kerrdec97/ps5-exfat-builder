@@ -166,6 +166,13 @@ private slots:
         QCOMPARE(classifyDestination(QStringLiteral("/mnt/usb0/games")).kind, DestinationKind::External);
         QCOMPARE(classifyDestination(QStringLiteral("/data/etaHEN/games/")).kind, DestinationKind::Internal);
         QCOMPARE(classifyDestination(QStringLiteral("/foo")).kind, DestinationKind::Unknown);
+        // Whole path segments: "/database" is not "/data"; /mnt/ext* is the console's own extended storage.
+        QCOMPARE(classifyDestination(QStringLiteral("/database/x")).kind, DestinationKind::Unknown);
+        QCOMPARE(classifyDestination(QStringLiteral("/data")).kind, DestinationKind::Internal);
+        QCOMPARE(classifyDestination(QStringLiteral("/system_ex/app")).kind, DestinationKind::Internal);
+        QCOMPARE(classifyDestination(QStringLiteral("/mnt/ext1/games")).kind, DestinationKind::External);
+        QVERIFY(classifyDestination(QStringLiteral("/mnt/ext1/games")).label.startsWith(QStringLiteral("Extended storage")));
+        QCOMPARE(classifyDestination(QStringLiteral("/mnt/extusb0")).label, QStringLiteral("External USB / exFAT"));
     }
 
     // ---- client against the fake server ----------------------------------------------------
@@ -1078,6 +1085,39 @@ private slots:
         QVERIFY(dplan.ok());
         QCOMPARE(int(dplan->files.size()), 1);
         QCOMPARE(dplan->skipped.size(), 1);
+    }
+
+    void folderUploadSendsOneMkdPerFolderAndSummarisesSkips()
+    {
+        const QString root = fresh(QStringLiteral("mkd"));
+        const QString local = fresh(QStringLiteral("mkdlocal"));
+        const QString deep = QDir(local).filePath(QStringLiteral("deep"));
+        for (int i = 0; i < 25; ++i)
+            QVERIFY(fwtest::writeRandomFile(QDir(deep).filePath(QStringLiteral("l1/l2/%1f%2.bin").arg(i % 2 ? QStringLiteral("l3/") : QString()).arg(i)),
+                                            500 + i, quint32(60 + i)));
+        FakeFtpServer srv(server(root));
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        auto plan = planUpload({deep}, QStringLiteral("/up"));
+        QVERIFY(plan.ok());
+        auto rep = runUpload(plan.value(), opt, {});
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->transferred, 25);
+        // /up, /up/deep, …/l1, …/l2, …/l3: one MKD each, not one per descendant.
+        QStringList mkds;
+        for (const QString& cmd : srv.commands())
+            if (cmd.startsWith(QStringLiteral("MKD ")))
+                mkds << cmd.mid(4);
+        mkds.sort();
+        QCOMPARE(mkds, (QStringList{QStringLiteral("/up"), QStringLiteral("/up/deep"), QStringLiteral("/up/deep/l1"),
+                                    QStringLiteral("/up/deep/l1/l2"), QStringLiteral("/up/deep/l1/l2/l3")}));
+        // A resume run over files that are all there: 25 skips, 20 warnings and one summary line.
+        opt.resume = true;
+        auto again = runUpload(plan.value(), opt, {});
+        QVERIFY(again.ok());
+        QCOMPARE(again->skipped, 25);
+        QCOMPARE(again->warnings.size(), 21);
+        QVERIFY2(again->warnings.last().startsWith(QStringLiteral("5 more file(s)")), qPrintable(again->warnings.last()));
     }
 
     void skippedAndFailedFilesCountInTheProgress()

@@ -128,9 +128,9 @@ QByteArray discordPayload(const QueueRunSummary& s, const QDateTime& when)
         {QStringLiteral("title"), QStringLiteral("\U0001F3AE ") + title},
         {QStringLiteral("description"), lines.join(u'\n').left(4000)},
         {QStringLiteral("color"), s.failed > 0 ? kRed : s.cancelled > 0 ? kAmber : kGreen},
-        {QStringLiteral("footer"), QJsonObject{{QStringLiteral("text"), QStringLiteral("%1 %2 %3").arg(QLatin1String(build::kProductName),
-                                                                                                    QLatin1String(build::kEditionName),
-                                                                                                    QLatin1String(build::kVersion))}}},
+        // Product and version; the edition name ("v5") would only repeat the version's first digit.
+        {QStringLiteral("footer"), QJsonObject{{QStringLiteral("text"), QStringLiteral("%1 %2").arg(QLatin1String(build::kProductName),
+                                                                                                 QLatin1String(build::kVersion))}}},
         {QStringLiteral("timestamp"), when.toUTC().toString(QStringLiteral("yyyy-MM-ddTHH:mm:ssZ"))},
     };
     const QJsonObject body{{QStringLiteral("embeds"), QJsonArray{embed}},

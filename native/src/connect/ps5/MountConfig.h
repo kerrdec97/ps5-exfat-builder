@@ -49,7 +49,7 @@ enum class MountTool { ShadowMountPlus, MicroMount };
 
 using MountConfigValues = QMap<QString, QString>;
 
-QString mountToolName(MountTool tool);         // "ShadowMountPlus", "MicroMount"
+QString mountToolName(MountTool tool);         // "ShadowMount+", "MicroMount" (for messages)
 QString mountRemoteDir(MountTool tool);        // /data/shadowmount, /data/micromount
 QString mountConfigRemotePath(MountTool tool); // <dir>/config.ini
 QString mountDebugLogRemotePath(MountTool tool); // <dir>/debug.log
@@ -173,7 +173,7 @@ struct SmpRemoteState {
     SmpConfigFormat format = SmpConfigFormat::Flat16;
 };
 // config.ini, profiles.ini and the debug.log banner (only when debug.log is
-// at most `maxLogBytes`; the banner is its first line). `apiVersion` (from
+// at most `maxLogBytes`; the last banner in it gives the version). `apiVersion` (from
 // the HTTP API, may be empty) wins over the banner for the format.
 Result<SmpRemoteState> loadSmpState(FtpClient& client, const QString& apiVersion = {}, const CancellationToken& token = {},
                                     qint64 maxLogBytes = 2 * 1024 * 1024);

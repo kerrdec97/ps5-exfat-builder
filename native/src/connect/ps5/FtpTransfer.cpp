@@ -120,7 +120,16 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
                 dirs.pop_front();
                 if (++visited > 100000)
                     return Error(ErrorCode::Unsupported, QStringLiteral("The remote folder has too many sub-folders."));
-                FW_TRY_ASSIGN(std::vector<FtpEntry> entries, c.list(rdir, FtpListMode::Auto, token));
+                auto listed = c.list(rdir, FtpListMode::Auto, token);
+                if (!listed.ok()) {
+                    // One unreadable sub-folder is left out and reported; the
+                    // picked folder itself, a cancel or a lost connection ends the plan.
+                    if (rdir == src || listed.error().isCancelled() || !c.isConnected())
+                        return listed.takeError();
+                    plan.skipped << QStringLiteral("%1: the folder could not be read (%2)").arg(rdir, listed.error().message);
+                    continue;
+                }
+                const std::vector<FtpEntry> entries = std::move(listed.value());
                 QSet<QString> localKeys; // names as this PC's file system compares them
                 for (const FtpEntry& e : entries) {
                     if (e.isLink)
@@ -231,6 +240,22 @@ struct Shared {
     {
         std::lock_guard lock(mutex);
         inflight.remove(path);
+    }
+    // One warning per skipped file, up to a point: a resume run over a whole
+    // game would otherwise put a line per file into the job's outcome.
+    static constexpr int kMaxSkipWarnings = 20;
+    int skipped = 0;
+    void skip(const QString& warning)
+    {
+        std::lock_guard lock(mutex);
+        ++report.skipped;
+        if (skipped++ < kMaxSkipWarnings)
+            report.warnings << warning;
+    }
+    void summariseSkips()
+    {
+        if (skipped > kMaxSkipWarnings)
+            report.warnings << QStringLiteral("%1 more file(s) were skipped for the same reason.").arg(skipped - kMaxSkipWarnings);
     }
     void fail(const TransferFile& f, const QString& why)
     {
@@ -358,9 +383,7 @@ Outcome uploadOne(Shared& sh, FtpClient& c, const TransferFile& f)
         auto sz = c.size(f.remote);
         if (sz.ok() && sz.value() == f.size) {
             advance(f.size);
-            std::lock_guard lock(sh.mutex);
-            ++sh.report.skipped;
-            sh.report.warnings << QStringLiteral("%1 is already complete on the PS5; skipped.").arg(f.remote);
+            sh.skip(QStringLiteral("%1 is already complete on the PS5; skipped.").arg(f.remote));
             return Outcome::Skipped;
         }
         if (sz.ok() && sz.value() > 0 && sz.value() < f.size) {
@@ -461,10 +484,7 @@ Outcome downloadOne(Shared& sh, FtpClient& c, const TransferFile& f)
     const QString part = f.local + QStringLiteral(".part");
     if (QFileInfo::exists(f.local) && !sh.opt.overwriteLocal) {
         advance(std::max<qint64>(0, f.size));
-        std::lock_guard lock(sh.mutex);
-        ++sh.report.skipped;
-        sh.report.warnings << QStringLiteral("%1 already exists; skipped (turn on overwrite to replace it).")
-                                  .arg(QDir::toNativeSeparators(f.local));
+        sh.skip(QStringLiteral("%1 already exists; skipped (turn on overwrite to replace it).").arg(QDir::toNativeSeparators(f.local)));
         return Outcome::Skipped;
     }
     int attempt = 0;
@@ -618,16 +638,18 @@ Result<TransferReport> runUpload(const TransferPlan& plan, const TransferOptions
             dirs << remoteParent(f.remote);
         dirs.removeDuplicates();
         std::sort(dirs.begin(), dirs.end());
+        QSet<QString> made; // one MKD per folder, not one per descendant
         for (const QString& d : dirs) {
             if (!token.checkpoint())
                 return Error::cancelled();
-            if (auto st = prep.mkdirs(d); !st.ok())
+            if (auto st = prep.mkdirs(d, made); !st.ok())
                 return Error(st.error().code, QStringLiteral("Could not create %1 on the PS5. %2").arg(d, st.error().message),
                              st.error().detail);
         }
         prep.quit();
     }
     runWorkers(sh, uploadOne);
+    sh.summariseSkips();
     if (token.isCancelled())
         finishCancelled(sh, true);
     // Nothing reached the console at all: one plain error. A report that names
@@ -648,6 +670,7 @@ Result<TransferReport> runDownload(const TransferPlan& plan, const TransferOptio
         if (!QDir().mkpath(d))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(d)));
     runWorkers(sh, downloadOne);
+    sh.summariseSkips();
     if (token.isCancelled())
         finishCancelled(sh, false);
     return sh.report;

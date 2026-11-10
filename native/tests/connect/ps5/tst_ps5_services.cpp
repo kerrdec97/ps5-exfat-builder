@@ -266,6 +266,9 @@ private slots:
         QCOMPARE(sendPayloadFile(QStringLiteral("127.0.0.1"), 1, m_tmp.filePath(QStringLiteral("none.elf"))).error().code,
                  ErrorCode::NotFound);
         QCOMPARE(sendPayloadData(QString(), 9090, "x").error().code, ErrorCode::InvalidArgument);
+        // The loader hints are for a loader that does not answer, not for a missing address.
+        QVERIFY(!sendPayloadData(QString(), 9021, "x").error().message.contains(QStringLiteral("elfldr")));
+        QVERIFY(!sendPayloadData(QString(), 9090, "x").error().message.contains(QStringLiteral("DPI")));
 
         // A loader that never reads: the send stalls and times out.
         fake::FakeTcpSink stuck(true);

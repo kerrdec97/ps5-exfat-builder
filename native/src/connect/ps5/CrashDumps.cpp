@@ -3,6 +3,7 @@
 
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/FtpTransfer.h"
+#include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
 #include "core/Zip.h"
 
@@ -191,8 +192,9 @@ CapturedCrash captureFolder(Session& s, const ConsoleEndpoint& ep, const CrashCa
         auto listing = listRemote(s, remoteDir, token);
         if (listing.ok()) {
             std::vector<FtpEntry> files;
+            // A listed name is one path segment or it is not used (RETR path).
             for (const FtpEntry& e : listing.value())
-                if (!e.isDir && !e.name.isEmpty())
+                if (!e.isDir && listedNameProblem(e.name).isEmpty())
                     files.push_back(e);
             QStringList sig;
             for (const FtpEntry& e : files)
@@ -303,7 +305,7 @@ Result<CrashCaptureReport> captureCrashDumps(const ConsoleEndpoint& ep, const Cr
         warnedDown = false;
         QStringList folders;
         for (const FtpEntry& e : listing.value())
-            if (e.isDir && !e.name.isEmpty())
+            if (e.isDir && listedNameProblem(e.name).isEmpty())
                 folders << e.name;
         folders.sort();
         if (!baselined) {

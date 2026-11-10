@@ -352,19 +352,33 @@ Status FtpClient::mkd(const QString& path)
 
 Status FtpClient::mkdirs(const QString& pathIn)
 {
+    QSet<QString> none;
+    return mkdirs(pathIn, none);
+}
+
+Status FtpClient::mkdirs(const QString& pathIn, QSet<QString>& known)
+{
     const QString path = cleanRemotePath(pathIn);
-    if (path == u"/")
+    if (path == u"/" || known.contains(path))
         return success();
     QString cur;
     Status last = success();
     for (const QString& part : path.split(u'/', Qt::SkipEmptyParts)) {
         cur += u'/' + part;
+        if (known.contains(cur))
+            continue;
         last = mkd(cur);
         if (!last.ok() && !isConnected())
             return last;
+        // A parent is not asked again: if it really is missing, the folders
+        // below it fail on their own MKD and are checked there.
+        if (cur != path)
+            known.insert(cur);
     }
-    if (last.ok() || isDirectory(path))
+    if (last.ok() || isDirectory(path)) {
+        known.insert(path);
         return success();
+    }
     return last;
 }
 
@@ -604,13 +618,25 @@ static Result<Transfer> startTransfer(FtpClient& c, QTcpSocket& ctrl, bool& useE
                                                                        : QStringLiteral("Listing"));
     if (!opt.passive) {
         QTcpServer* srv = t.server.get();
-        const WaitResult w = waitUntil([&] { return srv->hasPendingConnections(); }, opt.connectTimeoutMs, token, {srv});
-        if (w == WaitResult::Cancelled)
-            return Error::cancelled();
-        if (w != WaitResult::Ready)
-            return Error(ErrorCode::Timeout, QStringLiteral("The PS5 did not open the active-mode data connection. "
-                                                            "Turn on passive mode in Settings."));
-        t.sock = srv->nextPendingConnection();
+        QElapsedTimer waited;
+        waited.start();
+        // Only the console's own connection is the data connection: anything
+        // else that finds the open port is closed and the wait goes on.
+        while (!t.sock) {
+            const qint64 left = opt.connectTimeoutMs - waited.elapsed();
+            const WaitResult w = left > 0 ? waitUntil([&] { return srv->hasPendingConnections(); }, int(left), token, {srv})
+                                          : WaitResult::Timeout;
+            if (w == WaitResult::Cancelled)
+                return Error::cancelled();
+            if (w != WaitResult::Ready)
+                return Error(ErrorCode::Timeout, QStringLiteral("The PS5 did not open the active-mode data connection. "
+                                                                "Turn on passive mode in Settings."));
+            QTcpSocket* in = srv->nextPendingConnection();
+            if (in && in->peerAddress().isEqual(ctrl.peerAddress(), QHostAddress::TolerantConversion))
+                t.sock = in;
+            else if (in)
+                in->abort();
+        }
     }
     return t;
 }
@@ -964,9 +990,17 @@ Status FtpClient::uploadReplace(const QString& remoteFinal, const QByteArray& da
 
 Status FtpClient::removeTree(const QString& pathIn, const CancellationToken& token)
 {
+    return removeTreeAt(pathIn, token, 0);
+}
+
+Status FtpClient::removeTreeAt(const QString& pathIn, const CancellationToken& token, int depth)
+{
     const QString path = cleanRemotePath(pathIn);
     if (path == u"/")
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Refusing to delete the console's root folder."));
+    // No real folder tree is this deep; a listing that loops back on itself is.
+    if (depth > 128)
+        return Error(ErrorCode::Unsupported, QStringLiteral("%1 is nested too deeply to delete.").arg(path));
     if (!isDirectory(path))
         return dele(path);
     FW_TRY_ASSIGN(std::vector<FtpEntry> entries, list(path, FtpListMode::Auto, token));
@@ -983,7 +1017,7 @@ Status FtpClient::removeTree(const QString& pathIn, const CancellationToken& tok
             continue;
         }
         if (e.isDir && !e.isLink)
-            FW_TRY(removeTree(*child, token));
+            FW_TRY(removeTreeAt(*child, token, depth + 1));
         else
             FW_TRY(dele(*child));
     }

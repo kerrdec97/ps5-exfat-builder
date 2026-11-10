@@ -87,8 +87,10 @@ Result<TransferPlan> planDownload(FtpClient& client, const QStringList& remoteSo
                                   const CancellationToken& token = {});
 
 // Runs the plan. `progress` (optional) is advanced in bytes in its current
-// phase; the caller begins the phase. Fails only when nothing could be done
-// (no connection); per-file failures are in the report.
+// phase; the caller begins the phase. Per-file failures are in the report.
+// runUpload() fails as a whole only when nothing reached the console (no
+// connection, a folder that cannot be created); runDownload() only when a
+// local folder cannot be created.
 Result<TransferReport> runUpload(const TransferPlan& plan, const TransferOptions& options,
                                  const CancellationToken& token, ProgressReporter* progress = nullptr,
                                  const Log& log = Log(QStringLiteral("ps5.ftp")));

@@ -20,6 +20,7 @@
 #include "core/Cancellation.h"
 #include "core/Result.h"
 
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -124,6 +125,9 @@ public:
     // Creates every missing segment (errors on existing ones are ignored, like
     // the legacy ensure_dir); fails only when the final folder is not there.
     Status mkdirs(const QString& path);
+    // The same for many folders: `known` collects what this run has already
+    // dealt with, so every folder gets one MKD instead of one per descendant.
+    Status mkdirs(const QString& path, QSet<QString>& known);
     Status rmd(const QString& path);
     Status dele(const QString& path);
     Status rename(const QString& from, const QString& to);
@@ -163,13 +167,17 @@ public:
     // Legacy _ftp_upload_to safe swap: STOR to "<final><tempSuffix>", move an
     // existing final aside to "<final>.replacing.bak", rename the temp over the
     // final, delete the backup; on failure the temp is removed and the old
-    // final restored.
+    // final restored. The temp is size-checked before the swap. When the
+    // connection is lost between the two renames nothing can be put back:
+    // the error then names the ".replacing.bak" and the temp, and the next
+    // call puts the old file back first.
     Status uploadReplace(const QString& remoteFinal, const QByteArray& data,
                          const QString& tempSuffix = QStringLiteral(".uploading"), const CancellationToken& token = {});
     // Removes a file or a whole folder tree (children first).
     Status removeTree(const QString& path, const CancellationToken& token = {});
 
 private:
+    Status removeTreeAt(const QString& path, const CancellationToken& token, int depth);
     struct Impl;
     std::unique_ptr<Impl> d;
     FtpOptions m_opt;

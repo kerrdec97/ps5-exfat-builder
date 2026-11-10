@@ -64,7 +64,7 @@ quint16 portParam(const QJsonObject& p, quint16 fallback)
 Status needHost(const ConsoleEndpoint& ep)
 {
     if (ep.host.isEmpty())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings > PS5 connection."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("Enter your PS5 IP address in Settings › PS5 connection."));
     return success();
 }
 
@@ -960,8 +960,8 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("PS5 connection");
         d.group = QStringLiteral("Console");
         d.label = QStringLiteral("Console IP address");
-        d.description = QStringLiteral("The PS5's address on your network (Settings > Network > View connection status on "
-                                       "the console). Used for FTP, payloads, the kernel log and package installs.");
+        d.description = QStringLiteral("The PS5's address on your network (Settings › Network › Connection Status › View "
+                                       "Connection Status on the console). Used for FTP, payloads, the kernel log and package installs.");
         d.type = SettingType::String;
         d.defaultValue = QString();
         d.validator = hostProblem;

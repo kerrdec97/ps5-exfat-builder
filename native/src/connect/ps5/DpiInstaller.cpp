@@ -197,8 +197,9 @@ Result<DpiResponse> installPackage(const QString& host, quint16 port, const QStr
         while (s.bytesToWrite() > level) {
             if (s.state() != QAbstractSocket::ConnectedState)
                 return Error(ErrorCode::IoError, QStringLiteral("The PS5 closed the connection during the package "
-                                                                "upload. Make sure etaHEN is running with Direct "
-                                                                "Package Installer V2 enabled in Services."),
+                                                                "upload. Make sure etaHEN runs with Direct Package "
+                                                                "Installer V2 on (DPI_v2=1 in /data/etaHEN/config.ini, "
+                                                                "or the etaHEN toolbox)."),
                              s.errorString());
             const WaitResult w = waitUntil(
                 [&] { return s.bytesToWrite() <= level || s.state() != QAbstractSocket::ConnectedState; }, 200, token,

@@ -559,7 +559,7 @@ MountConfigValues parseProfiles(const QString& text)
 
 QString mountToolName(MountTool tool)
 {
-    return tool == MountTool::ShadowMountPlus ? QStringLiteral("ShadowMountPlus") : QStringLiteral("MicroMount");
+    return tool == MountTool::ShadowMountPlus ? QStringLiteral("ShadowMount+") : QStringLiteral("MicroMount");
 }
 
 QString mountRemoteDir(MountTool tool)
@@ -1151,7 +1151,10 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& v)
         if (isObsoleteSmpKey(it.key()))
             obsolete << it.key();
     if (!obsolete.isEmpty())
-        out << QStringLiteral("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console.").arg(obsolete.join(QStringLiteral(", ")));
+        out << (obsolete.size() == 1
+                    ? QStringLiteral("%1 no longer exists in ShadowMount+ 1.7 and is removed on push to a 1.7 console.")
+                    : QStringLiteral("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console."))
+                   .arg(obsolete.join(QStringLiteral(", ")));
     return out;
 }
 
@@ -1425,7 +1428,7 @@ QString stopOutcomeMessage(StopOutcome outcome)
 {
     switch (outcome) {
     case StopOutcome::Confirmed:
-        return QStringLiteral("ShadowMountPlus cleanup confirmed — safe to unplug. Re-send the payload after plugging "
+        return QStringLiteral("ShadowMount+ cleanup confirmed — safe to unplug. Re-send the payload after plugging "
                               "the drive back in to resume auto-mounting.");
     case StopOutcome::NoKlog:
         return QStringLiteral("STOP sent — cleanup NOT confirmed (neither the kernel log nor debug.log could be read). Do "
@@ -1451,7 +1454,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
             status(s);
     };
     // 1. klog first, so no cleanup line races past us.
-    say(QStringLiteral("Connecting to klog (%1:%2)...").arg(ep.host).arg(ep.klogPort));
+    say(QStringLiteral("Connecting to klog (%1:%2)…").arg(ep.host).arg(ep.klogPort));
     std::unique_ptr<KlogSession> klog;
     if (auto k = KlogSession::open(ep.host, ep.klogPort, klogConnectTimeoutMs, token); k.ok())
         klog = std::move(k.value());
@@ -1459,7 +1462,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
         return Error::cancelled();
 
     // 2. The STOP sentinel, always. Without klog, remember where debug.log ends.
-    say(QStringLiteral("Sending STOP signal to PS5..."));
+    say(QStringLiteral("Sending STOP signal to PS5…"));
     const QString logPath = mountDebugLogRemotePath(MountTool::ShadowMountPlus);
     FtpClient c(ftpOptionsFor(ep));
     FW_TRY(c.open(ep.host, ep.ftpPort, token));
@@ -1488,7 +1491,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
         }
         // 3b. Follow debug.log over FTP (ShadowMount+ polls STOP every 3 s).
         res.source = QStringLiteral("debug.log");
-        say(QStringLiteral("Kernel log not reachable; following %1...").arg(logPath));
+        say(QStringLiteral("Kernel log not reachable; following %1…").arg(logPath));
         QByteArray carry;
         while (true) {
             if (tracker.poll(clock.elapsed()))
@@ -1501,6 +1504,11 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
                 return Error::cancelled();
             if (!c.isConnected() && !c.open(ep.host, ep.ftpPort, token).ok())
                 continue;
+            // A rotated log is shorter than what was already read: from its top again.
+            if (auto now = c.size(logPath); now.ok() && now.value() < logOffset) {
+                logOffset = 0;
+                carry.clear();
+            }
             QByteArray chunk;
             QBuffer buf(&chunk);
             buf.open(QIODevice::WriteOnly);
@@ -1540,7 +1548,7 @@ Result<StopResult> stopShadowMount(const ConsoleEndpoint& ep, const Cancellation
     // 3. Watch klog for the confirmation. Lines are read in short slices so the
     //    settle period can complete while klog is quiet.
     res.source = QStringLiteral("klog");
-    say(QStringLiteral("Waiting for ShadowMountPlus confirmation..."));
+    say(QStringLiteral("Waiting for ShadowMount+ confirmation…"));
     while (true) {
         if (tracker.poll(clock.elapsed()))
             return finish(StopOutcome::Confirmed);
