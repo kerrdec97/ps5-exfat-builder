@@ -9,9 +9,9 @@
 // event loop, which also delivers newly posted requests; those are queued and
 // run after the current one instead of re-entering the client (a nested
 // disconnect would otherwise destroy the client under the running command).
+// disconnect() stops the running request and drops the ones that wait.
 
 #include "connect/ps5/FtpListing.h"
-#include "connect/ps5/MountConfig.h"
 #include "core/Result.h"
 
 #include <QObject>
@@ -48,7 +48,9 @@ public:
     ConnectionState state() const { return m_state; }
     bool isConnected() const { return m_state == ConnectionState::Connected; }
     bool isConnecting() const { return m_state == ConnectionState::Connecting; }
+    // The console of the current (or last) connection: what the listing on screen belongs to.
     QString host() const { return m_host; }
+    quint16 port() const { return m_port; }
 
     // All asynchronous; each answers with the matching signal. connectTo()
     // while connecting or connected is ignored (one connection at a time).
@@ -58,8 +60,8 @@ public:
     void remove(const QString& path, bool isDir);
     void rename(const QString& from, const QString& to);
     void mkdir(const QString& path);
-    void loadMountConfig(ps5::MountTool tool);
-    void pushMountConfig(ps5::MountTool tool, const QString& text);
+    // SITE AVAIL, answered with freeSpace(). No console FTP server implements
+    // it today: the page shows free space from the ShadowMount+ API instead.
     void siteAvail();
 
 signals:
@@ -69,8 +71,6 @@ signals:
     void disconnected(const QString& reason);
     void listed(const fw::ui::RemoteListing& listing);
     void operationDone(const QString& what, bool ok, const QString& message);
-    void mountConfigLoaded(int tool, bool ok, const QString& text, const QString& message);
-    void mountConfigPushed(int tool, bool ok, const QString& message);
     void freeSpace(const QString& text);
 
 private:
@@ -81,6 +81,7 @@ private:
     ConsoleWorker* m_worker = nullptr;
     ConnectionState m_state = ConnectionState::Offline;
     QString m_host;
+    quint16 m_port = 0;
 };
 
 } // namespace fw::ui

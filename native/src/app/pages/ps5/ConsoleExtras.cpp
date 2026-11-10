@@ -59,8 +59,16 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     l->addWidget(card);
     connect(m_refresh, &QPushButton::clicked, this, &SmpLogTab::fetch);
     connect(m_which, &Segmented::currentChanged, this, [this](int) {
-        if (!m_view->toPlainText().isEmpty())
+        if (!m_view->toPlainText().isEmpty() || isBusy())
             fetch();
+    });
+    // One load at a time; a choice made while one runs is loaded right after it.
+    connect(this, &ConsoleToolTab::busyChanged, this, [this](bool busy) {
+        m_refresh->setEnabled(!busy);
+        if (!busy && m_fetchPending) {
+            m_fetchPending = false;
+            fetch();
+        }
     });
     connect(save, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Save debug.log"),
@@ -101,6 +109,10 @@ void SmpLogTab::fetch()
         m_source->setText(QStringLiteral("Enter the console's IP address at the top of the page first."));
         return;
     }
+    if (isBusy()) {
+        m_fetchPending = true; // the running load is for the other choice: this one follows it
+        return;
+    }
     m_badge->set(QStringLiteral("Loading…"), Tone::Info);
     struct Got {
         QString text, source;
@@ -134,7 +146,9 @@ void SmpLogTab::fetch()
                 b = b.right(kTail);
             return Got{QString::fromUtf8(b), QStringLiteral("%1 over FTP%2.").arg(path, cut ? QStringLiteral(", last %1").arg(formatBytes(kTail)) : QString())};
         },
-        [this](const Result<Got>& r) {
+        [this, gen = ++m_fetchGen](const Result<Got>& r) {
+            if (gen != m_fetchGen)
+                return; // superseded: the load for the current choice has started
             if (!r.ok()) {
                 m_badge->set(QStringLiteral("Not loaded"), Tone::Err);
                 m_source->setText(r.error().message);
@@ -209,6 +223,20 @@ CrashDumpsTab::CrashDumpsTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     });
     connect(&m_ctx.queue(), &JobQueue::jobChanged, this, &CrashDumpsTab::onJob);
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &CrashDumpsTab::onJob);
+    // A job that is taken out of the queue while it waits never finishes.
+    connect(&m_ctx.queue(), &JobQueue::jobRemoved, this, [this](const QString& id) {
+        if (id != m_jobId || !m_watching)
+            return;
+        setWatching(false);
+        m_status->set(QStringLiteral("Removed from the queue before it started watching."), Tone::Neutral);
+    });
+}
+
+void CrashDumpsTab::setWatching(bool on)
+{
+    m_watching = on;
+    m_start->setVisible(!on);
+    m_stop->setVisible(on);
 }
 
 void CrashDumpsTab::start()
@@ -218,19 +246,15 @@ void CrashDumpsTab::start()
         m_status->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Warn);
         return;
     }
-    QJsonObject p{{QStringLiteral("host"), ep.host}, {QStringLiteral("port"), int(ep.ftpPort)}, {QStringLiteral("minutes"), m_minutes->value()}};
-    if (!m_folder->path().trimmed().isEmpty())
-        p.insert(QStringLiteral("outputDir"), m_folder->path().trimmed());
-    auto id = m_ctx.queue().enqueue(ps5::jobkinds::kCrashDumps, p);
+    auto id = jobs::submitCrashDumpCapture(m_ctx, ep.host, int(ep.ftpPort), m_minutes->value(), m_folder->path().trimmed());
     if (!id.ok()) {
         m_status->set(id.error().message, Tone::Err);
         return;
     }
     m_jobId = id.value();
     m_ctx.queue().startNow(id.value()); // this job only; a paused queue stays paused
-    m_status->set(QStringLiteral("Watching. Reproduce the crash on the console now."), Tone::Info);
-    m_start->hide();
-    m_stop->show();
+    setWatching(true);
+    onJob(m_jobId); // the status says whether it watches already or still waits
 }
 
 void CrashDumpsTab::onJob(const QString& id)
@@ -241,12 +265,15 @@ void CrashDumpsTab::onJob(const QString& id)
     if (!r)
         return;
     if (!isTerminal(r->state)) {
-        if (!r->progress.currentItem.isEmpty())
+        if (r->state == JobState::Queued)
+            m_status->set(QStringLiteral("Waiting for the job that is running. Watching starts after it."), Tone::Info);
+        else if (!r->progress.currentItem.isEmpty())
             m_status->set(r->progress.currentItem, Tone::Info);
+        else
+            m_status->set(QStringLiteral("Watching. Reproduce the crash on the console now."), Tone::Info);
         return;
     }
-    m_start->show();
-    m_stop->hide();
+    setWatching(false);
     if (r->state == JobState::Succeeded && r->outcome)
         m_status->set(r->outcome->summary, Tone::Ok);
     else

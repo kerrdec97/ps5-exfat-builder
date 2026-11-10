@@ -87,7 +87,7 @@ bool cancelWithConfirm(AppContext& ctx, QWidget* host, const QString& id)
     bool remove = false;
     const bool ok = ui::Sheet::confirm(host ? host->window() : nullptr, QStringLiteral("Cancel the running job?"),
                                        QStringLiteral("%1%2. The job stops at its next safe point and removes what it had not finished.")
-                                           .arg(rec->title.toHtmlEscaped(), pct),
+                                           .arg(rec->title, pct), // plain text: shown as it is
                                        QStringLiteral("Keep running"), QStringLiteral("Cancel job"), true, ui::Sheet::Icon::Warning,
                                        QStringLiteral("Also remove the job from the queue"), &remove);
     if (!ok)
@@ -155,7 +155,7 @@ Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, con
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("verify"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -179,7 +179,7 @@ Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, co
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("extract"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -234,19 +234,6 @@ Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders)
     return enqueue(ctx, QStringLiteral("library.scan"), p, {});
 }
 
-Result<QString> submitFtpUpload(AppContext& ctx, const QString& host, int port, const QString& localPath,
-                                const QString& remotePath)
-{
-    QJsonObject p{{QStringLiteral("sources"), QJsonArray{localPath}}};
-    if (!host.isEmpty())
-        p.insert(QStringLiteral("host"), host);
-    if (port > 0)
-        p.insert(QStringLiteral("port"), port);
-    if (!remotePath.isEmpty())
-        p.insert(QStringLiteral("remoteDir"), remotePath);
-    return enqueue(ctx, QStringLiteral("ps5.ftp.upload"), p, {});
-}
-
 Result<QString> submitPayload(AppContext& ctx, const QString& host, int port, const QString& file)
 {
     QJsonObject p{{QStringLiteral("host"), host}, {QStringLiteral("port"), port}, {QStringLiteral("file"), file}};
@@ -284,15 +271,32 @@ Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip,
                    QJsonObject{{QStringLiteral("backupZip"), backupZip}, {QStringLiteral("gameRoot"), gameRoot}}, {});
 }
 
-Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics)
+Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics,
+                                    const QStringList& extraFiles)
 {
     QJsonObject p;
     p.insert(QStringLiteral("destinationFolder"), destinationFolder);
     p.insert(QStringLiteral("logsFolder"), QFileInfo(ctx.logFilePath()).absolutePath());
-    p.insert(QStringLiteral("extraFiles"),
-             QJsonArray::fromStringList({Paths::settingsFile(), Paths::historyFile(), Paths::queueFile()}));
+    QStringList files{Paths::settingsFile(), Paths::historyFile(), Paths::queueFile()};
+    for (const QString& f : extraFiles)
+        if (!f.isEmpty() && !files.contains(f))
+            files << f;
+    p.insert(QStringLiteral("extraFiles"), QJsonArray::fromStringList(files));
     p.insert(QStringLiteral("diagnostics"), diagnostics);
     return enqueue(ctx, QStringLiteral("tools.report"), p, {});
+}
+
+QStringList newestCrashFiles(const QStringList& crashFiles)
+{
+    if (crashFiles.isEmpty())
+        return {};
+    // crash-<date>-<time>.txt and .dmp belong to one crash.
+    const QString stem = QFileInfo(crashFiles.first()).completeBaseName();
+    QStringList out;
+    for (const QString& f : crashFiles)
+        if (QFileInfo(f).completeBaseName() == stem)
+            out << f;
+    return out;
 }
 
 QString imageEditKind(const QString& image)
@@ -411,12 +415,35 @@ Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const 
     return enqueue(ctx, QStringLiteral("library.rename"), p, {});
 }
 
-Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force)
+Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force, bool allowAssetPacks)
 {
     QJsonObject p{{QStringLiteral("folder"), folder}};
     if (force)
         p.insert(QStringLiteral("force"), true);
+    if (allowAssetPacks)
+        p.insert(QStringLiteral("allowAssetPacks"), true);
     return enqueue(ctx, QStringLiteral("ampr.index.local"), p, {});
+}
+
+Result<QString> submitShadowMountEject(AppContext& ctx, const QString& host, int apiPort, const QString& path)
+{
+    QJsonObject p;
+    if (!host.isEmpty())
+        p.insert(QStringLiteral("host"), host);
+    if (apiPort > 0)
+        p.insert(QStringLiteral("apiPort"), apiPort);
+    if (!path.isEmpty())
+        p.insert(QStringLiteral("path"), path);
+    return enqueue(ctx, QStringLiteral("ps5.shadowmount.eject"), p, {});
+}
+
+Result<QString> submitCrashDumpCapture(AppContext& ctx, const QString& host, int port, int minutes, const QString& outputDir)
+{
+    QJsonObject p{{QStringLiteral("minutes"), minutes}};
+    putEndpoint(p, host, port);
+    if (!outputDir.isEmpty())
+        p.insert(QStringLiteral("outputDir"), outputDir);
+    return enqueue(ctx, QStringLiteral("ps5.crashdumps.capture"), p, {});
 }
 
 Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder)

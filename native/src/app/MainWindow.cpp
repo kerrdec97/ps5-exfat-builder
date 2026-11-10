@@ -15,10 +15,12 @@
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
 #include "app/services/JobSubmit.h"
+#include "app/services/LauncherIdentity.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
 #include "connect/notify/DiscordWebhook.h"
+#include "core/ArchiveSource.h"
 #include "core/BuildInfo.h"
 #include "core/CrashHandler.h"
 #include "core/FileUtil.h"
@@ -35,11 +37,13 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMenu>
 #include <QMimeData>
 #include <QProcess>
+#include <QScreen>
 #include <QSettings>
 #include <QShortcut>
 #include <QStandardPaths>
@@ -122,7 +126,11 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     connect(m_header->helpButton(), &QToolButton::clicked, this, [this] {
         QMenu menu(this);
         menu.addAction(QStringLiteral("Keyboard shortcuts"), this, &MainWindow::showShortcuts);
-        menu.addAction(QStringLiteral("Open logs folder"), this, [] { openInFileManager(Paths::logsDir()); });
+        // Where the log files are written: general.logFolder when it is set, else the default folder.
+        menu.addAction(QStringLiteral("Open logs folder"), this, [this] {
+            const QString log = m_ctx.logFilePath();
+            openInFileManager(log.isEmpty() ? Paths::logsDir() : QFileInfo(log).absolutePath());
+        });
         menu.addAction(QStringLiteral("Report a problem…"), this, [this] { reportProblem(); });
         auto* upd = menu.addAction(QStringLiteral("Check for updates"), this, [this] { checkForUpdates(false); });
         upd->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("update.check")));
@@ -148,12 +156,21 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     m_freeSpaceTimer.start();
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
-        m_tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/icons/drive.svg")), this);
+        m_tray = new QSystemTrayIcon(launcher::appIcon(), this);
         m_tray->setToolTip(windowTitle());
         connect(m_tray, &QSystemTrayIcon::messageClicked, this, [this] {
             showNormal();
             activateWindow();
             navigate(QStringLiteral("queue"));
+        });
+        // The icon itself brings the window back too.
+        connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
+            if (reason != QSystemTrayIcon::Trigger && reason != QSystemTrayIcon::DoubleClick)
+                return;
+            if (isMinimized())
+                showNormal();
+            raise();
+            activateWindow();
         });
     }
 
@@ -208,8 +225,7 @@ void MainWindow::buildPages()
     addPage(m_ps5Page, QStringLiteral("ps5"), QStringLiteral("PS5 connect"));
     addPage(new pages::LibraryPage(m_ctx, *m_queueModel, *m_library, this), QStringLiteral("library"), QStringLiteral("Library"));
     m_sidebar->addGroup(QStringLiteral("System"));
-    m_logsPage = new pages::LogsPage(m_ctx, *m_logModel, this);
-    addPage(m_logsPage, QStringLiteral("file_text"), QStringLiteral("Logs"));
+    addPage(new pages::LogsPage(m_ctx, *m_logModel, this), QStringLiteral("file_text"), QStringLiteral("Logs"));
     m_settingsPage = new pages::SettingsPage(m_ctx, this);
     addPage(m_settingsPage, QStringLiteral("settings"), QStringLiteral("Settings"));
     m_sidebar->addStretch();
@@ -262,8 +278,12 @@ void MainWindow::buildShortcuts()
     });
     add(QKeySequence(QStringLiteral("Ctrl+L")), [this] { navigate(QStringLiteral("logs")); });
     add(QKeySequence(QStringLiteral("Ctrl+,")), [this] { navigate(QStringLiteral("settings")); });
-    add(QKeySequence::Quit, [this] { close(); });
-    add(QKeySequence(QStringLiteral("Ctrl+Q")), [this] { close(); });
+    // Ctrl+Q everywhere, plus the platform's own quit key where it is another one
+    // (the same sequence registered twice would be ambiguous and never fire).
+    const QKeySequence ctrlQ(QStringLiteral("Ctrl+Q"));
+    add(ctrlQ, [this] { close(); });
+    if (const QKeySequence quit(QKeySequence::Quit); !quit.isEmpty() && quit != ctrlQ)
+        add(quit, [this] { close(); });
     add(QKeySequence(Qt::Key_F5), [this] {
         if (auto* p = currentPageWidget())
             p->refresh();
@@ -308,8 +328,12 @@ void MainWindow::navigate(const QString& requested, const QVariantMap& requested
     pages::Page* p = m_pages.value(key);
     if (!p)
         return;
-    if (m_stack->currentWidget() != p) {
+    // The first page added is the stack's current widget from the start, with
+    // nothing selected in the sidebar and onShown() not called yet: the first
+    // navigation counts as a change even when it leads to that page.
+    if (m_stack->currentWidget() != p || m_shownPage != p) {
         m_stack->setCurrentWidget(p);
+        m_shownPage = p;
         m_sidebar->setCurrent(key);
         p->onShown();
     }
@@ -445,7 +469,7 @@ void MainWindow::onJobFinished(const QString& id)
                 auto* s = new Sheet(this, QStringLiteral("Problem report ready"), Sheet::Icon::Info);
                 s->addText(QStringLiteral("The report was saved as %1. Attach it to a new GitHub issue and describe what happened.").arg(Sheet::monoSpan(nativePath(out))));
                 s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
-                s->addButton(QStringLiteral("Show in folder"), Sheet::Role::Primary);
+                s->addButton(QStringLiteral("Show in folder"), Sheet::Role::Safe); // one primary action per sheet
                 s->addButton(QStringLiteral("Open GitHub issue"), Sheet::Role::Primary);
                 const int r = s->exec();
                 if (r == 1)
@@ -678,18 +702,18 @@ void MainWindow::checkCrashFiles()
     bar->setTitle(QStringLiteral("The app closed unexpectedly last time"));
     bar->setMessage(QStringLiteral("A crash report was saved. Sending a problem report helps fix it; it contains logs and the crash file, never your games."));
     auto* report = bar->addLink(QStringLiteral("Create a problem report"));
-    connect(report, &Link::activated, this, [this, files, newest, bar] {
-        QSettings().setValue(QStringLiteral("crash/lastAcknowledged"), newest);
-        bar->hide();
-        emit bar->dismissed();
-        reportProblem(files);
+    connect(report, &Link::activated, this, [this, files, bar = QPointer<InfoBar>(bar)] {
+        // The banner goes when the report is on its way; Cancel in the sheet leaves it.
+        if (reportProblem(files) && bar) {
+            bar->hide();
+            emit bar->dismissed(); // records the crash as acknowledged
+        }
     });
     connect(bar, &InfoBar::dismissed, this, [newest] { QSettings().setValue(QStringLiteral("crash/lastAcknowledged"), newest); });
-    m_crashBanner = bar;
     showBanner(bar);
 }
 
-void MainWindow::reportProblem(const QStringList& extraFiles)
+bool MainWindow::reportProblem(const QStringList& extraFiles)
 {
     auto* s = new Sheet(this, QStringLiteral("Report a problem"), Sheet::Icon::Info, size::dialogWide);
     s->addText(QStringLiteral("A ZIP is written to your Desktop with: the app's log files, the settings, queue and history files, the dependency statuses and a system summary%1. "
@@ -704,7 +728,7 @@ void MainWindow::reportProblem(const QStringList& extraFiles)
     auto* create = s->addButton(QStringLiteral("Create report"), Sheet::Role::Primary);
     create->setEnabled(available);
     if (s->exec() != 1)
-        return;
+        return false;
     (void)m_ctx.settings().setValue(tools::keys::kRedactReports, redact->isChecked());
     QJsonArray deps;
     for (const auto& d : m_ctx.dependencies().lastAll())
@@ -715,13 +739,15 @@ void MainWindow::reportProblem(const QStringList& extraFiles)
                             {QStringLiteral("settingsCount"), int(m_ctx.schema().all().size())},
                             {QStringLiteral("extraFiles"), QJsonArray::fromStringList(extraFiles)}};
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics);
+    // The crash files go into the ZIP themselves, not only their names.
+    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics, jobs::newestCrashFiles(extraFiles));
     if (!r.ok()) {
         toast(Tone::Err, QStringLiteral("Report not created"), r.error().message);
-        return;
+        return false;
     }
     m_reportJobId = r.value();
     toast(Tone::Info, QStringLiteral("Creating the problem report"), QStringLiteral("It appears on the Desktop in a moment."));
+    return true;
 }
 
 void MainWindow::showShortcuts()
@@ -750,10 +776,17 @@ void MainWindow::restoreWindowState()
 {
     QSettings qs;
     const QByteArray geo = qs.value(QStringLiteral("window/geometry")).toByteArray();
-    if (!geo.isEmpty())
+    if (!geo.isEmpty()) {
         restoreGeometry(geo);
-    else
-        resize(1440, 920);
+    } else {
+        // First run: the designed size, or what the screen has room for (a 1366 × 768 display has less).
+        QSize first(1440, 920);
+        if (const QScreen* s = screen() ? screen() : QGuiApplication::primaryScreen()) {
+            const QSize room = s->availableGeometry().size() - QSize(16, 40); // the frame and title bar
+            first = first.boundedTo(room).expandedTo(minimumSize());
+        }
+        resize(first);
+    }
     m_userCompact = qs.value(QStringLiteral("window/sidebarCompact"), false).toBool();
     setSidebarCompact(m_userCompact);
     const QString last = qs.value(QStringLiteral("window/lastPage"), QStringLiteral("home")).toString();
@@ -794,13 +827,26 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // A question is still open (answer it first), or this function is already
+    // waiting for the backport engine below: a second close request starts nothing.
+    if (m_closeInProgress || (!m_closing && Sheet::openCount() > 0)) {
+        event->ignore();
+        return;
+    }
+    // Edits that exist only in this window.
+    if (const QString unsaved = !m_closing && m_ps5Page ? m_ps5Page->unsavedChanges() : QString(); !unsaved.isEmpty()) {
+        const bool discard = Sheet::confirm(this, QStringLiteral("Close without saving?"),
+                                            QStringLiteral("On PS5 connect, %1. Closing the app discards this.").arg(unsaved),
+                                            QStringLiteral("Keep editing"), QStringLiteral("Close anyway"), true, Sheet::Icon::Warning);
+        if (!discard) {
+            event->ignore();
+            navigate(QStringLiteral("ps5"));
+            return;
+        }
+    }
     // A backport run or restore in progress (the PS5 Backport engine runs it):
     // cancel at the next safe point and wait for the worker (an apply in
     // progress is rolled back from the verified backup first).
-    if (!m_closing && Sheet::openCount() > 0) {
-        event->ignore(); // a question is still open; answer it first
-        return;
-    }
     if (auto* bpPage = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); bpPage && bpPage->isBusy()) {
         const bool stop = Sheet::confirm(this, QStringLiteral("Cancel the backport run?"),
                                          QStringLiteral("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
@@ -809,11 +855,20 @@ void MainWindow::closeEvent(QCloseEvent* event)
             event->ignore();
             return;
         }
+        // The wait runs the event loop for up to two minutes: nothing in the window may be used meanwhile.
+        m_closeInProgress = true;
+        centralWidget()->setEnabled(false);
+        m_status->setContext(QStringLiteral("Stopping the backport run…"));
         bpPage->cancelAndWait(120000);
+        centralWidget()->setEnabled(true);
+        m_closeInProgress = false;
     }
     if (!m_closing && m_ctx.queue().isBusy() && m_ctx.settings().value(general::keys::kConfirmOnClose).toBool()) {
+        // Stopped jobs are listed again at the next start only when the queue is restored.
+        const bool restored = m_ctx.settings().value(general::keys::kRestoreQueue).toBool();
         const bool stop = Sheet::confirm(this, QStringLiteral("Stop the running jobs?"),
-                                         QStringLiteral("Jobs are still running. Closing stops them; partial output is removed and they come back as Interrupted so you can retry."),
+                                         restored ? QStringLiteral("Jobs are still running. Closing stops them; partial output is removed and they come back as Interrupted so you can retry.")
+                                                  : QStringLiteral("Jobs are still running. Closing stops them and removes their partial output; start them again afterwards."),
                                          QStringLiteral("Keep running"), QStringLiteral("Close and stop"), true, Sheet::Icon::Warning);
         if (!stop) {
             event->ignore();
@@ -831,7 +886,6 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event)
     if (!event->mimeData()->hasUrls() || Sheet::openCount() > 0)
         return;
     event->acceptProposedAction();
-    m_dragging = true;
     if (auto* p = currentPageWidget())
         p->setDragHighlight(p->acceptsDrop(event->mimeData()->urls()));
 }
@@ -844,14 +898,12 @@ void MainWindow::dragMoveEvent(QDragMoveEvent* event)
 
 void MainWindow::dragLeaveEvent(QDragLeaveEvent*)
 {
-    m_dragging = false;
     if (auto* p = currentPageWidget())
         p->setDragHighlight(false);
 }
 
 void MainWindow::dropEvent(QDropEvent* event)
 {
-    m_dragging = false;
     const auto urls = event->mimeData()->urls();
     if (auto* p = currentPageWidget())
         p->setDragHighlight(false);
@@ -862,7 +914,7 @@ void MainWindow::dropEvent(QDropEvent* event)
         p->dropUrls(urls);
     } else {
         const QFileInfo fi(urls.first().toLocalFile());
-        if (fi.isDir())
+        if (fi.isDir() || archive::isZipSource(fi.absoluteFilePath())) // a game folder, or a zipped dump: Build takes both
             navigate(QStringLiteral("build"), {{QStringLiteral("source"), fi.absoluteFilePath()}});
         else if (!jobs::imageKindForFile(fi.absoluteFilePath(), QStringLiteral("verify")).isEmpty())
             navigate(QStringLiteral("extract"), {{QStringLiteral("source"), fi.absoluteFilePath()}});

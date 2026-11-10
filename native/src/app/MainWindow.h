@@ -28,14 +28,10 @@ namespace pages {
 class Page;
 class HomePage;
 class BuildImagePage;
-class FpkgPage;
-class ExtractVerifyPage;
-class ImageEditorPage;
 class BackportPage;
 class QueuePage;
 class Ps5ConnectPage;
 class LibraryPage;
-class LogsPage;
 class SettingsPage;
 class AboutPage;
 } // namespace pages
@@ -60,7 +56,8 @@ public:
     LogModel& logModel() { return *m_logModel; }
     void toast(ui::Tone tone, const QString& title, const QString& body, const QList<ui::ToastHost::Action>& actions = {});
     void showShortcuts();
-    void reportProblem(const QStringList& extraFiles = {});
+    // Asks, then queues the problem report. Returns true when the report job was queued.
+    bool reportProblem(const QStringList& extraFiles = {});
     void checkForUpdates(bool silent);
     void setSidebarCompact(bool compact);
 
@@ -108,12 +105,12 @@ private:
     QSystemTrayIcon* m_tray = nullptr;
     QHash<QString, pages::Page*> m_pages;
     QStringList m_order;
+    pages::Page* m_shownPage = nullptr; // the page navigate() showed last (null before the first call)
     pages::HomePage* m_home = nullptr;
     pages::QueuePage* m_queuePage = nullptr;
     pages::SettingsPage* m_settingsPage = nullptr;
     pages::AboutPage* m_aboutPage = nullptr;
     pages::Ps5ConnectPage* m_ps5Page = nullptr;
-    pages::LogsPage* m_logsPage = nullptr;
     QSet<QString> m_openFolderWhenDone;
     quint64 m_freeSpaceGen = 0; // refreshFreeSpace(): the newest probe wins
     // The app-update lifecycle (one owner: the update slots):
@@ -126,13 +123,12 @@ private:
     QString m_pendingInstaller;
     QPointer<ui::InfoBar> m_updateBanner;
     QPointer<ui::InfoBar> m_installBanner; // "Install after the queue finishes"
-    QPointer<ui::InfoBar> m_crashBanner;
     QPointer<ui::Sheet> m_countdown;
     QTimer m_freeSpaceTimer;
     bool m_autoCompact = false;
     bool m_userCompact = false;
-    bool m_dragging = false;
     bool m_closing = false;
+    bool m_closeInProgress = false; // closeEvent() is waiting for the backport engine to stop
 };
 
 } // namespace fw

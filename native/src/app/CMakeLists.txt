@@ -17,7 +17,7 @@ fw_configure_target(fw_app_lib)
 set(FW_APP_WIN_RC "")
 if(WIN32)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/windows/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
-    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/windows/app.manifest ${CMAKE_CURRENT_BINARY_DIR}/app.manifest COPYONLY)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/windows/app.manifest ${CMAKE_CURRENT_BINARY_DIR}/app.manifest @ONLY) # the version comes from the project
     set(FW_APP_WIN_RC ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
 endif()
 

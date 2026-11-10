@@ -24,6 +24,8 @@ public:
     QPlainTextEdit* editor() { return m_editor; }
     QStringList chipNames() const { return m_files; }
     bool isDirty() const { return m_dirty; }
+    // The user changed the text since it was loaded or saved (a new default header alone is not an edit).
+    bool hasUnsavedEdits() const { return !m_demo && m_editor->document()->isModified(); }
     QString validationText() const { return m_validation->text(); }
     void insertPayloadLine(const QString& fileName);
     void insertSleepLine(int ms);
@@ -58,6 +60,8 @@ private:
     QStringList m_files;
     QString m_current; // the folder the editor's text belongs to
     bool m_dirty = false;
+    bool m_hasFolder = false;   // m_current exists (asked when it is opened or loaded)
+    bool m_loadPending = false; // the folder is read when the running step ends
     bool m_useRecycleBin = true;
     bool m_demo = false;
 };

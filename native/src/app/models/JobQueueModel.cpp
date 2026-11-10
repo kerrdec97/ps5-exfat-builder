@@ -25,13 +25,20 @@ QString progressDetailText(const ProgressSnapshot& p)
 JobQueueModel::JobQueueModel(JobQueue& queue, QObject* parent) : QAbstractListModel(parent), m_queue(queue)
 {
     reload();
-    connect(&m_queue, &JobQueue::jobAdded, this, [this](const QString&) { reload(); });
-    connect(&m_queue, &JobQueue::jobRemoved, this, [this](const QString&) { reload(); });
-    connect(&m_queue, &JobQueue::orderChanged, this, [this] { reload(); });
+    // Membership changes one row at a time: a view keeps its selection and
+    // scroll position, and queueing many jobs copies each record once.
+    connect(&m_queue, &JobQueue::jobAdded, this, &JobQueueModel::insertJob);
+    connect(&m_queue, &JobQueue::jobRemoved, this, &JobQueueModel::removeJob);
+    connect(&m_queue, &JobQueue::orderChanged, this, &JobQueueModel::syncOrder);
     connect(&m_queue, &JobQueue::jobChanged, this, &JobQueueModel::refresh);
     connect(&m_queue, &JobQueue::jobFinished, this, [this](const QString& id) {
+        // The counts are announced once for a finished job, whether or not its last change already showed the state.
+        const int row = rowOf(id);
+        const bool known = row >= 0;
+        const JobState before = known ? m_rows[size_t(row)].state : JobState::Queued;
         refresh(id);
-        emit countsChanged();
+        if (known && rowOf(id) >= 0 && m_rows[size_t(rowOf(id))].state == before)
+            emit countsChanged();
     });
 }
 
@@ -43,11 +50,51 @@ void JobQueueModel::reload()
     emit countsChanged();
 }
 
+void JobQueueModel::insertJob(const QString& id)
+{
+    if (rowOf(id) >= 0)
+        return;
+    const auto rec = m_queue.record(id);
+    if (!rec)
+        return; // gone again already
+    // New jobs go to the end of the queue; "run next" follows as an order change.
+    const int row = int(m_rows.size());
+    beginInsertRows({}, row, row);
+    m_rows.push_back(*rec);
+    endInsertRows();
+    emit countsChanged();
+}
+
+void JobQueueModel::removeJob(const QString& id)
+{
+    const int row = rowOf(id);
+    if (row < 0)
+        return;
+    beginRemoveRows({}, row, row);
+    m_rows.erase(m_rows.begin() + row);
+    endRemoveRows();
+    emit countsChanged();
+}
+
+void JobQueueModel::syncOrder()
+{
+    std::vector<JobRecord> now = m_queue.records();
+    bool same = now.size() == m_rows.size();
+    for (size_t i = 0; same && i < now.size(); ++i)
+        same = now[i].id == m_rows[i].id;
+    if (same)
+        return; // the order the views show already
+    beginResetModel();
+    m_rows = std::move(now);
+    endResetModel();
+    emit countsChanged();
+}
+
 void JobQueueModel::refresh(const QString& id)
 {
     const int row = rowOf(id);
     if (row < 0) {
-        reload();
+        insertJob(id);
         return;
     }
     auto rec = m_queue.record(id);

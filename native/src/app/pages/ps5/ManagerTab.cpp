@@ -412,15 +412,15 @@ void Ps5ManagerTab::uploadSelected()
     const QString dir = g.status == ps5::GameStatus::SizeMismatch ? ps5::remoteParent(g.remotePath)
                         : folders.isEmpty()                         ? endpoint().gamesFolder
                                                                     : folders.first();
-    const QString title = g.status == ps5::GameStatus::SizeMismatch ? QStringLiteral("Upload %1 again?").arg(g.name.toHtmlEscaped())
-                                                                    : QStringLiteral("Upload %1?").arg(g.name.toHtmlEscaped());
+    const ps5::ConsoleEndpoint ep = endpoint(); // the console the question is about
+    const QString title = g.status == ps5::GameStatus::SizeMismatch ? QStringLiteral("Upload %1 again?").arg(g.name)
+                                                                    : QStringLiteral("Upload %1?").arg(g.name);
     const QString text = g.status == ps5::GameStatus::SizeMismatch
                              ? QStringLiteral("The copy on the PS5 (%1) has a different size from the local image (%2). It is overwritten by %3. Unmount the game first.")
                                    .arg(sizeText(g.remoteSize), sizeText(g.localSize), Sheet::monoSpan(nativePath(g.localPath)))
                              : QStringLiteral("%1 (%2) is uploaded to %3.").arg(Sheet::monoSpan(g.name), sizeText(g.localSize), Sheet::monoSpan(dir));
     if (!Sheet::confirm(window(), title, text, QStringLiteral("Cancel"), QStringLiteral("Upload"), g.status == ps5::GameStatus::SizeMismatch, Sheet::Icon::Info))
         return;
-    const ps5::ConsoleEndpoint ep = endpoint();
     auto r = jobs::submitFtpUploadMany(m_ctx, ep.host, ep.ftpPort, {g.localPath}, dir, false);
     if (!r.ok()) {
         emit toastRequested(Tone::Err, QStringLiteral("Upload not started"), r.error().message);
@@ -494,7 +494,9 @@ void Ps5ManagerTab::compare(const QString& remoteFolder, const QString& localSou
                                   return;
                               tick.restart();
                               postToUi([this, folders, files] {
-                                  m_cmpFooter->setText(QStringLiteral("Reading the console folder… %1 folder(s), %2 file(s)").arg(folders).arg(files));
+                                  m_cmpFooter->setText(QStringLiteral("Reading the console folder… %1 folder%2, %3 file%4")
+                                                           .arg(folders).arg(folders == 1 ? QString() : QStringLiteral("s"))
+                                                           .arg(files).arg(files == 1 ? QString() : QStringLiteral("s")));
                               });
                           }));
             rep.localSource = localSource;
@@ -545,10 +547,11 @@ void Ps5ManagerTab::showReport()
     const bool any = !m_report->diffs.empty();
     m_diffs->setVisible(any);
     m_cmpEmpty->setVisible(!any);
-    QString text = QStringLiteral("%1 — %2 local file(s) (%3), %4 on the PS5 (%5)")
+    QString text = QStringLiteral("%1 — %2 local %6 (%3), %4 on the PS5 (%5)")
                        .arg(m_report->summary())
                        .arg(formatCount(m_report->localFiles), formatBytes(m_report->localBytes))
-                       .arg(formatCount(m_report->remoteFiles), formatBytes(m_report->remoteBytes));
+                       .arg(formatCount(m_report->remoteFiles), formatBytes(m_report->remoteBytes))
+                       .arg(m_report->localFiles == 1 ? QStringLiteral("file") : QStringLiteral("files"));
     if (!m_report->warnings.isEmpty())
         text += QStringLiteral(" · ") + m_report->warnings.join(QStringLiteral(" · "));
     m_cmpFooter->setText(text);

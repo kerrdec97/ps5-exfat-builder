@@ -213,7 +213,7 @@ private slots:
         QVERIFY(writeBytes(odd, "not an elf"));
         tab.addFile(odd, false);
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy(), 10000);
-        QVERIFY(tab.statusText().contains(QStringLiteral("failed")));
+        QVERIFY2(tab.statusText().contains(QStringLiteral("libOdd.prx not added")), qPrintable(tab.statusText()));
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/libOdd.prx"))));
     }
 

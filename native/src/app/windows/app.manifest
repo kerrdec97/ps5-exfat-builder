@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
-  <assemblyIdentity type="win32" name="kerrdec97.exFATImageBuilder.Farewell" version="5.0.0.0" processorArchitecture="amd64"/>
-  <description>PS5 exFAT Image Builder</description>
+  <assemblyIdentity type="win32" name="kerrdec97.exFATImageBuilder.Farewell" version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.0" processorArchitecture="amd64"/>
+  <description>exFAT Image Builder</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

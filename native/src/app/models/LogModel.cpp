@@ -13,7 +13,7 @@ LogModel::LogModel(AppContext& ctx, QObject* parent) : QAbstractTableModel(paren
         for (const auto& r : m_rows) {
             if (!m_sources.contains(r.source))
                 m_sources << r.source;
-            m_lastSeq = std::max(m_lastSeq, r.seq);
+            m_snapshot.insert(r.seq);
         }
     }
     m_timer.setInterval(150);
@@ -21,10 +21,11 @@ LogModel::LogModel(AppContext& ctx, QObject* parent) : QAbstractTableModel(paren
     connect(&m_timer, &QTimer::timeout, this, &LogModel::flushPending);
     connect(&ctx, &AppContext::logRecordAdded, this, [this](const LogRecord& r) {
         // Records logged before this model existed came from the ring buffer
-        // already; their queued notifications must not add them twice.
-        if (r.seq <= m_lastSeq)
+        // already; their queued notifications must not add them twice. Only
+        // those: two threads logging at once can deliver their records in
+        // either order, so "older than the newest seen" is not a reason to drop one.
+        if (m_snapshot.contains(r.seq))
             return;
-        m_lastSeq = r.seq;
         m_pending.push_back(r);
         if (!m_timer.isActive())
             m_timer.start();
@@ -35,6 +36,8 @@ void LogModel::flushPending()
 {
     if (m_pending.empty())
         return;
+    // Within a batch the records go in the order they were logged.
+    std::stable_sort(m_pending.begin(), m_pending.end(), [](const LogRecord& a, const LogRecord& b) { return a.seq < b.seq; });
     // Drop the oldest rows first if we would exceed the cap.
     const int overflow = int(m_rows.size() + m_pending.size()) - m_maxRows;
     if (overflow > 0) {

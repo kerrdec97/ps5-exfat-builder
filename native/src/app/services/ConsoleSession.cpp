@@ -1,11 +1,11 @@
 #include "app/services/ConsoleSession.h"
 
-#include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/RemotePath.h"
 
 #include "core/Cancellation.h"
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -19,26 +19,34 @@ public:
     explicit ConsoleWorker(ConsoleSession* session) : m_session(session) {}
 
     // Worker thread: runs `request` now, or after the running one when called
-    // from inside it (the client's nested event loop delivered it).
-    void run(std::function<void()> request)
+    // from inside it (the client's nested event loop delivered it). A request
+    // posted before the last cancelRunning() is dropped: a disconnect also
+    // stops what was still waiting (the other deletes of a selection).
+    void run(std::function<void()> request, quint64 epoch)
     {
-        m_pending.push_back(std::move(request));
+        m_pending.push_back({std::move(request), epoch});
         if (m_busy)
             return;
         m_busy = true;
         while (!m_pending.empty()) {
             auto next = std::move(m_pending.front());
             m_pending.pop_front();
-            next();
+            if (next.epoch == m_epoch.load())
+                next.fn();
         }
         m_busy = false;
     }
 
+    // Any thread: the value a request posted now has to carry.
+    quint64 epoch() const { return m_epoch.load(); }
+
     // Any thread: stops the running operation (where the client can be
-    // cancelled); later requests get a fresh token.
+    // cancelled) and drops the requests that wait behind it; later requests
+    // get a fresh token.
     void cancelRunning()
     {
         std::lock_guard lock(m_cancelMutex);
+        ++m_epoch;
         m_cancel.cancel(QStringLiteral("Disconnected"));
         m_cancel = CancellationSource();
     }
@@ -53,7 +61,8 @@ public slots:
         m_client = std::make_unique<ps5::FtpClient>(opt);
         auto st = m_client->open(host, port, token());
         if (!st.ok()) {
-            const QString why = st.error().message;
+            // A cancelled attempt (Disconnect while connecting) is not a failure to report.
+            const QString why = st.error().isCancelled() ? QString() : st.error().message;
             m_client.reset();
             emit m_session->disconnected(why);
             return;
@@ -118,35 +127,6 @@ public slots:
         noteDroppedLink(st);
         emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? QStringLiteral("Created %1").arg(path) : st.error().message);
     }
-    void doLoadMount(int tool)
-    {
-        if (!m_client) {
-            emit m_session->mountConfigLoaded(tool, false, {}, QStringLiteral("Not connected."));
-            return;
-        }
-        auto r = ps5::loadMountConfig(*m_client, ps5::MountTool(tool));
-        if (!r.ok()) {
-            const bool fresh = r.error().code == ErrorCode::NotFound;
-            emit m_session->mountConfigLoaded(tool, fresh, {}, fresh ? QStringLiteral("No config.ini on the console yet; the defaults are shown.") : r.error().message);
-            return;
-        }
-        emit m_session->mountConfigLoaded(tool, true, r.value(), QStringLiteral("Loaded from the console."));
-    }
-    void doPushMount(int tool, const QString& text)
-    {
-        if (!m_client) {
-            emit m_session->mountConfigPushed(tool, false, QStringLiteral("Not connected."));
-            return;
-        }
-        auto r = ps5::pushMountConfig(*m_client, ps5::MountTool(tool), text, ps5::newConsoleBackupDir());
-        if (!r.ok()) {
-            emit m_session->mountConfigPushed(tool, false, r.error().message);
-            return;
-        }
-        emit m_session->mountConfigPushed(tool, true,
-                                          r->backupPath.isEmpty() ? QStringLiteral("Written to the console (no earlier config existed).")
-                                                                  : QStringLiteral("Written to the console. The previous config was saved to %1").arg(r->backupPath));
-    }
     void doSiteAvail()
     {
         if (!m_client)
@@ -170,10 +150,16 @@ private:
         return m_cancel.token();
     }
 
+    struct Request {
+        std::function<void()> fn;
+        quint64 epoch = 0;
+    };
+
     ConsoleSession* m_session;
     std::unique_ptr<ps5::FtpClient> m_client;
-    std::deque<std::function<void()>> m_pending; // worker thread only
-    bool m_busy = false;                          // worker thread only
+    std::deque<Request> m_pending; // worker thread only
+    bool m_busy = false;           // worker thread only
+    std::atomic<quint64> m_epoch{0};
     std::mutex m_cancelMutex;
     CancellationSource m_cancel;
 };
@@ -205,7 +191,7 @@ ConsoleSession::~ConsoleSession()
     // Stop what is running, close the connection (after it, if the request
     // arrives inside it), then let the thread finish before the worker goes.
     m_worker->cancelRunning();
-    QMetaObject::invokeMethod(m_worker, [w = m_worker] { w->run([w] { w->doDisconnect(); }); }, Qt::BlockingQueuedConnection);
+    QMetaObject::invokeMethod(m_worker, [w = m_worker] { w->run([w] { w->doDisconnect(); }, w->epoch()); }, Qt::BlockingQueuedConnection);
     m_thread.quit();
     m_thread.wait(); // every client wait has a timeout; never delete a running worker
     delete m_worker;
@@ -213,7 +199,7 @@ ConsoleSession::~ConsoleSession()
 
 void ConsoleSession::post(std::function<void()> request)
 {
-    QMetaObject::invokeMethod(m_worker, [w = m_worker, r = std::move(request)]() mutable { w->run(std::move(r)); },
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, r = std::move(request), epoch = m_worker->epoch()]() mutable { w->run(std::move(r), epoch); },
                               Qt::QueuedConnection);
 }
 
@@ -222,6 +208,7 @@ void ConsoleSession::connectTo(const QString& host, quint16 port, int connectTim
     if (m_state == ConnectionState::Connecting || m_state == ConnectionState::Connected)
         return; // one connection at a time (Return in the host field while connecting)
     m_host = host;
+    m_port = port;
     setState(ConnectionState::Connecting, {});
     post([w = m_worker, host, port, connectTimeoutMs, passive] { w->doConnect(host, port, connectTimeoutMs, passive); });
 }
@@ -252,16 +239,6 @@ void ConsoleSession::rename(const QString& from, const QString& to)
 void ConsoleSession::mkdir(const QString& path)
 {
     post([w = m_worker, path] { w->doMkdir(path); });
-}
-
-void ConsoleSession::loadMountConfig(ps5::MountTool tool)
-{
-    post([w = m_worker, tool] { w->doLoadMount(int(tool)); });
-}
-
-void ConsoleSession::pushMountConfig(ps5::MountTool tool, const QString& text)
-{
-    post([w = m_worker, tool, text] { w->doPushMount(int(tool), text); });
 }
 
 void ConsoleSession::siteAvail()

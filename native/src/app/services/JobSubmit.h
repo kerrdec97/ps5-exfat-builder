@@ -1,6 +1,6 @@
 #pragma once
 
-// The only place where pages hand work to the queue.
+// Where pages hand work to the queue.
 //
 // Every function checks that the job kind is registered (AppContext::
 // jobFactory().contains(kind)); when it is not, it returns an Error with
@@ -12,27 +12,38 @@
 //
 //   Image builds   image.exfat.build / image.ffpkg.build / image.pfs.build
 //                  {source, output (full file path), format ("ffpfsc" or "ffpfs" for PFS)}
+//                  image.build.zstd {source, output, format}: the same build with the
+//                  game's files in zstd packs first (ampr.zstdPack is on)
 //   Packed folder  ampr.pack {source (folder | .zip), output (the new folder)}
 //                  the Build page's zstd output: the game's files in zstd packs, no image
+//                  (ampr.unpack is registered too; the UI unpacks through game.extract)
 //   Image verify   image.<fmt>.verify   {image}  (no source: standalone integrity check)
 //   Image extract  image.<fmt>.extract  {image, output, deep (PFS)}
 //                  <fmt> from the extension: .exfat → exfat, .ffpkg → ffpkg,
 //                  .ffpfs/.ffpfsc → pfs.
+//   Game extract   game.extract {source (folder | image), output, unpackPacks}
 //   FPKG build     fpkg.build   {source (folder | .gp5 | image), output?, contentId?, contentVersion?,
 //                               title?, basePackage?, baseFolder?, exactSource?, updateOutput?}
 //   FPKG add-on    fpkg.addon   {payloadFolder, output?, contentId?, entitlementKey, volumeType?}
 //   FPKG verify    fpkg.verify  {package, integrity: bool}
 //   FPKG extract   fpkg.extract {package, destination}
+//   FPKG backport  fpkg.backport {..} as engines/fpkg/BackportUpdate.h reads them (the page builds the object)
+//   DLC            dlc.convert  {..} as engines/dlc/DlcConvert.h reads them (the page builds the object)
 //   Library        library.scan     {folders: [..]} → details.games = [LibraryGame::toJson()]
-//   PS5            ps5.ftp.upload   {sources: [..], remoteDir?, host?, port?, allowProtectedPaths?}
-//                  ps5.ftp.download {sources: [remote..], localDir, overwrite?, host?, port?}
+//   PS5            ps5.ftp.upload   {sources: [..], remoteDir?, host?, port?, allowProtectedPaths?,
+//                                    parallel?, resume?, retries?}
+//                  ps5.ftp.download {sources: [remote..], localDir, overwrite?, host?, port?,
+//                                    parallel?, resume?, retries?}
 //                  ps5.payload.send {file, target? ("payload"|"shadowmount"|...), host?, port?}
 //                  ps5.dpi.install  {package, host?, port?}
 //                  ps5.y2jb.autoBlock {region ("USA"|"EU"|"JP"), confirmed: true, backupDir?, host?, port?}
-//                  ps5.shadowmount.stop {host?, port?}
+//                  ps5.shadowmount.stop  {host?, port?}
+//                  ps5.shadowmount.eject {host?, apiPort?, path?}
+//                  ps5.crashdumps.capture {host?, port?, minutes, outputDir?}
 //                  ps5.ftp.diagnose {host?, port?, folder?, speedTest} → details = ps5::FtpDiagnosis::toJson()
-//   AMPR index     ampr.index.local {folder, force?}           (pfs: writes <folder>/ampr_emu.index)
-//                  ampr.index.ftp   {remoteFolder, host?, port?} (integration: build on the console folder, upload with .bak)
+//   AMPR index     ampr.index.local {folder, force?, allowAssetPacks?}  (pfs: writes <folder>/ampr_emu.index)
+//                  ampr.index.ftp   {remoteFolder, host?, port?, allowAssetPacks?}
+//                                   (integration: build on the console folder, upload with .bak)
 //   Image edit     image.exfat.edit {image, operations: [{op: add|replace|delete|mkdir, imagePath, localPath}]}
 //                  image.ffpkg.edit {image, operations: [{op: add|replace|delete|rename|mkdir, path, source, newName}]}
 //   Convert        image.convert    {image, format ("exfat"|"ffpkg"|"ffpfs"|"ffpfsc"), output (file path),
@@ -111,8 +122,6 @@ Result<QString> submitFpkgBackport(AppContext& ctx, const QJsonObject& params, c
 // dlc.convert (engines/dlc/DlcConvert.h).
 Result<QString> submitDlcConvert(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides = {});
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders);
-Result<QString> submitFtpUpload(AppContext& ctx, const QString& host, int port, const QString& localPath,
-                                const QString& remotePath);
 Result<QString> submitPayload(AppContext& ctx, const QString& host, int port, const QString& file);
 Result<QString> submitUpdateCheck(AppContext& ctx);
 Result<QString> submitUpdateDownload(AppContext& ctx, const QJsonObject& release);
@@ -120,7 +129,13 @@ Result<QString> submitLanguageScan(AppContext& ctx, const QString& folder, bool 
 Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, const QStringList& remove,
                                     const QString& backupFolder);
 Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip, const QString& gameRoot);
-Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics);
+// The ZIP holds the logs, the settings, history and queue files, `diagnostics`
+// and `extraFiles` (the crash report files after a crash).
+Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics,
+                                    const QStringList& extraFiles = {});
+// Of the crash files on disk (newest first, crash::previousCrashFiles()), the
+// ones of the newest crash: its report and its dump.
+QStringList newestCrashFiles(const QStringList& crashFiles);
 
 Result<QString> submitFtpDownload(AppContext& ctx, const QString& host, int port, const QStringList& remotePaths,
                                   const QString& localDir, bool overwrite);
@@ -130,6 +145,10 @@ Result<QString> submitDpiInstall(AppContext& ctx, const QString& host, int port,
 Result<QString> submitY2jbAutoBlock(AppContext& ctx, const QString& host, int port, const QString& region,
                                     const QString& backupDir);
 Result<QString> submitShadowMountStop(AppContext& ctx, const QString& host, int port);
+// Unmounts one USB drive through the ShadowMount+ 1.7 API (`path` is its mount point).
+Result<QString> submitShadowMountEject(AppContext& ctx, const QString& host, int apiPort, const QString& path);
+// Watches the console's crash folder for `minutes` (0 = until stopped); `outputDir` empty = the job's default.
+Result<QString> submitCrashDumpCapture(AppContext& ctx, const QString& host, int port, int minutes, const QString& outputDir);
 // `folder` empty = the games folder from Settings.
 Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest);
 // `operations` already in the engine's JSON shape (see the header comment).
@@ -142,7 +161,7 @@ Result<QString> submitConvert(AppContext& ctx, const QString& image, const QStri
 Result<QString> submitCompare(AppContext& ctx, const QString& a, const QString& b, const QString& depth);
 Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const QString& source, const QString& preset,
                                     const QString& destination, const QJsonArray& items, const QString& undoLog);
-Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force);
+Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force, bool allowAssetPacks = false);
 Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder);
 QString imageEditKind(const QString& image); // "image.exfat.edit" / "image.ffpkg.edit" / ""
 

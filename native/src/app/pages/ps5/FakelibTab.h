@@ -31,11 +31,15 @@ private:
     void showListing(const ps5::fakelib::Listing& listing);
     int selectedRow() const;
     void updateActions();
-    // Runs `op` then lists again; `what` names the action in messages.
-    void runAndRefresh(const QString& what, std::function<Status(ps5::FtpClient&, const CancellationToken&)> op);
+    // Runs `op` then lists again; `done` / `failed` are the message titles ("libX.sprx added" / "libX.sprx not added").
+    void runAndRefresh(const QString& done, const QString& failed, std::function<Status(ps5::FtpClient&, const CancellationToken&)> op);
     void askAdd();
     void askReplace();
     void askRemove();
+    // Asks about each overlay of that name (Replace? / Add next to the disabled copy?). False when the user stops.
+    bool confirmSameName(const std::vector<ps5::fakelib::Overlay>& overlays, const QString& name);
+    void replaceOverlay(const ps5::fakelib::Overlay& target, const QString& localPath, bool confirmed);
+    void removeOverlay(const ps5::fakelib::Overlay& target);
     // Reject → message; Confirm → question. Returns false when the user stops.
     bool checkWithUser(const QString& localPath, bool* confirmed);
 

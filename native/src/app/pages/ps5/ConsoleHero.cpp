@@ -232,21 +232,28 @@ void ConsoleHero::setState(State state, const QString& detail)
     case State::Connecting:
         m_badge->set(QStringLiteral("Connecting…"), Tone::Info);
         m_badge->setIconName(QStringLiteral("loader"));
+        m_tile->setTone(Tone::Info);
         break;
+    // Every state sets its own glyph: the badge keeps the last one it was given.
     case State::Connected:
         m_badge->set(QStringLiteral("Connected"), Tone::Ok);
+        m_badge->setIconName(defaultBadgeIcon(Tone::Ok));
         m_tile->setTone(Tone::Ok);
         break;
     case State::Failed:
         m_badge->set(QStringLiteral("Not reachable"), Tone::Err);
+        m_badge->setIconName(defaultBadgeIcon(Tone::Err));
         m_tile->setTone(Tone::Err);
         break;
     }
     m_badge->setToolTip(detail);
-    m_connect->setText(state == State::Connected ? QStringLiteral("Disconnect") : QStringLiteral("Connect"));
-    setButtonVariant(m_connect, state == State::Connected ? ButtonVariant::Secondary : ButtonVariant::Primary);
-    setButtonIcon(m_connect, state == State::Connected ? QStringLiteral("unplug") : QStringLiteral("plug"));
-    m_connect->setEnabled(state != State::Connecting);
+    // The one button: Connect, Cancel (an attempt can take the whole connect timeout) or Disconnect.
+    const bool busy = state == State::Connecting;
+    const bool on = state == State::Connected;
+    m_connect->setText(on ? QStringLiteral("Disconnect") : busy ? QStringLiteral("Cancel") : QStringLiteral("Connect"));
+    setButtonVariant(m_connect, on || busy ? ButtonVariant::Secondary : ButtonVariant::Primary);
+    setButtonIcon(m_connect, on ? QStringLiteral("unplug") : busy ? QStringLiteral("close") : QStringLiteral("plug"));
+    m_connect->setEnabled(true);
     update();
 }
 

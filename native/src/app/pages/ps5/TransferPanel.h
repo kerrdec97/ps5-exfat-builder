@@ -3,8 +3,9 @@
 // PS5 connect › Files › Transfers: the FTP uploads and downloads of the queue
 // (ps5.ftp.upload / ps5.ftp.download) as a transfer list, newest first. Each
 // row shows the file being moved, a progress bar, bytes done of total, speed,
-// time left and files done; Pause / Resume and Cancel while it runs, Retry
-// and the error when it failed, Remove when it ended. "Clear finished"
+// time left and files done; Pause / Resume and Cancel (after a question: the
+// part-sent file is deleted) while it runs, Retry and the error when it
+// failed, Remove when it ended. "Clear finished"
 // removes the ended transfers (only these kinds; other jobs stay).
 
 #include "app/ui/Widgets.h"
@@ -61,11 +62,15 @@ public:
     void setSpecimen(const std::vector<JobRecord>& records);
     void clearSpecimen();
     static bool isTransferKind(const QString& kind);
+    QString summaryText() const { return m_summary->text(); }
+signals:
+    void toastRequested(fw::ui::Tone tone, const QString& title, const QString& body);
 
 private:
     void sync(const QString& id);
     void drop(const QString& id);
     void updateHeader();
+    void showSummary(const std::vector<JobState>& states);
     void reloadAll();
 
     AppContext& m_ctx;

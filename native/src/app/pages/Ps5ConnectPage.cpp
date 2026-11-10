@@ -104,18 +104,32 @@ QVariant KlogModel::headerData(int section, Qt::Orientation orientation, int rol
 
 void KlogModel::append(const ps5::KlogLine& line)
 {
-    if (m_lines.size() >= m_max) {
-        beginRemoveRows({}, 0, 0);
-        if (m_lines.front().tag == ps5::KlogTag::Warning) --m_warnings;
-        if (m_lines.front().tag == ps5::KlogTag::Error) --m_errors;
-        m_lines.pop_front();
+    append(std::vector<ps5::KlogLine>{line});
+}
+
+void KlogModel::append(const std::vector<ps5::KlogLine>& lines)
+{
+    if (lines.empty())
+        return;
+    // One removal and one insertion for the whole batch; of a batch larger than the buffer only the newest lines stay.
+    const size_t take = std::min(lines.size(), m_max);
+    const size_t over = m_lines.size() + take > m_max ? m_lines.size() + take - m_max : 0;
+    if (over > 0) {
+        beginRemoveRows({}, 0, int(over) - 1);
+        for (size_t i = 0; i < over; ++i) {
+            if (m_lines.front().tag == ps5::KlogTag::Warning) --m_warnings;
+            if (m_lines.front().tag == ps5::KlogTag::Error) --m_errors;
+            m_lines.pop_front();
+        }
         endRemoveRows();
     }
     const int row = int(m_lines.size());
-    beginInsertRows({}, row, row);
-    m_lines.push_back(line);
-    if (line.tag == ps5::KlogTag::Warning) ++m_warnings;
-    if (line.tag == ps5::KlogTag::Error) ++m_errors;
+    beginInsertRows({}, row, row + int(take) - 1);
+    for (size_t i = lines.size() - take; i < lines.size(); ++i) {
+        m_lines.push_back(lines[i]);
+        if (lines[i].tag == ps5::KlogTag::Warning) ++m_warnings;
+        if (lines[i].tag == ps5::KlogTag::Error) ++m_errors;
+    }
     endInsertRows();
 }
 
@@ -273,7 +287,7 @@ QString youtubeHelp(const QString& firmware)
     const QString v = ps5::y2jbYoutubeVersionFor(firmware);
     if (firmware.trimmed().isEmpty())
         return QStringLiteral("Type the firmware to see which YouTube version it needs.");
-    return v.isEmpty() ? QStringLiteral("Y2JB supports firmware 4.03 to 13.60.") : QStringLiteral("Firmware %1 needs YouTube %2.").arg(firmware.trimmed(), v);
+    return v.isEmpty() ? QStringLiteral("No Y2JB release covers firmware %1.").arg(firmware.trimmed()) : QStringLiteral("Firmware %1 needs YouTube %2.").arg(firmware.trimmed(), v);
 }
 
 } // namespace
@@ -319,6 +333,13 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
             m_ftpPort->setText(v.toString());
         if (key == ps5::keys::kPayloadPort)
             updatePayloadChip();
+        if (key == ps5::keys::kGamesFolder) {
+            rebuildPlaces(); // the "Games" place follows the setting
+            if (!m_session->isConnected() && !m_session->isConnecting() && !v.toString().isEmpty()) {
+                m_remoteDir = ps5::normalizeRemotePath(v.toString()); // where the next connection starts
+                rebuildBreadcrumb();
+            }
+        }
     });
     connect(m_hero, &ConsoleHero::chipClicked, this, [this](const QString& key) {
         static const QHash<QString, QString> target = {{QStringLiteral("ftp"), QStringLiteral("ftp")}, {QStringLiteral("klog"), QStringLiteral("klog")},
@@ -387,15 +408,13 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
         const QString start = m_remoteDir.isEmpty() ? m_ctx.settings().value(ps5::keys::kGamesFolder).toString() : m_remoteDir;
         m_history.clear();
         m_historyIndex = -1;
+        m_firstListing = true;
+        m_firstListingStep = 0;
         listRemote(start);
         checkServices();
     });
     connect(m_session, &ConsoleSession::listed, this, &Ps5ConnectPage::onListed);
-    connect(m_session, &ConsoleSession::operationDone, this, [this](const QString&, bool ok, const QString& message) {
-        emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? QStringLiteral("Done") : QStringLiteral("The console refused"), message);
-        if (ok)
-            listRemote(m_remoteDir);
-    });
+    connect(m_session, &ConsoleSession::operationDone, this, &Ps5ConnectPage::onOperationDone);
     connect(m_session, &ConsoleSession::freeSpace, this, [this](const QString& text) {
         if (m_storage.empty()) {
             // The FTP server's SITE AVAIL answer: bytes when it is a plain number.
@@ -408,8 +427,13 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
     });
     connect(&m_payloads, &PayloadStore::changed, this, &Ps5ConnectPage::rebuildPayloads);
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, [this](const QString& id) {
-        if (id == m_payloadSendId)
-            updatePayloadChip();
+        if (id != m_payloadSendId)
+            return;
+        updatePayloadChip();
+        // "Sent" is recorded when the console took the payload, not when the job was queued.
+        const auto r = m_ctx.queue().record(id);
+        if (r && r->state == JobState::Succeeded)
+            m_payloads.markSent(m_payloadSendPath);
     });
     connect(m_smp, &ShadowMountTab::loaded, this, [this] {
         if (!m_smp->loadedValues().isEmpty() && m_smpVersion.isEmpty())
@@ -444,8 +468,8 @@ ps5::ConsoleEndpoint Ps5ConnectPage::endpoint() const
     return ep;
 }
 
-Ps5ConnectPage::Group* Ps5ConnectPage::addGroup(const QString& key, const QString& title, const QString& iconName,
-                                                const QList<std::tuple<QString, QString, QString, QWidget*>>& tools)
+void Ps5ConnectPage::addGroup(const QString& key, const QString& title, const QString& iconName,
+                              const QList<std::tuple<QString, QString, QString, QWidget*>>& tools)
 {
     Group g;
     g.key = key;
@@ -476,7 +500,6 @@ Ps5ConnectPage::Group* Ps5ConnectPage::addGroup(const QString& key, const QStrin
     m_groups->setTabData(index, key);
     m_toolGroup.insert(key, key);
     m_groupList.push_back(g);
-    return &m_groupList.back();
 }
 
 void Ps5ConnectPage::showTool(const QString& keyIn)
@@ -550,14 +573,15 @@ void Ps5ConnectPage::applyConnectionState(ConsoleSession::ConnectionState state,
     switch (state) {
     case State::Connected: {
         const ps5::FtpServerIdentity id = ps5::identifyFtpServer(detail);
+        // The console the session is connected to, whatever the address fields say by now.
         m_hero->setState(ConsoleHero::State::Connected, detail.simplified());
-        m_hero->setSubtitle(QStringLiteral("%1 · FTP %2 · %3").arg(host()).arg(ftpPort()).arg(id.label()));
-        m_hero->setChip(QStringLiteral("ftp"), Tone::Ok, id.name.isEmpty() ? QString::number(ftpPort()) : id.label(), detail.simplified());
+        m_hero->setSubtitle(QStringLiteral("%1 · FTP %2 · %3").arg(browserHost()).arg(browserPort()).arg(id.label()));
+        m_hero->setChip(QStringLiteral("ftp"), Tone::Ok, id.name.isEmpty() ? QString::number(browserPort()) : id.label(), detail.simplified());
         break;
     }
     case State::Connecting:
         m_hero->setState(ConsoleHero::State::Connecting);
-        m_hero->setSubtitle(QStringLiteral("Connecting to %1:%2…").arg(host()).arg(ftpPort()));
+        m_hero->setSubtitle(QStringLiteral("Connecting to %1:%2…").arg(m_session->host()).arg(m_session->port()));
         m_hero->setChip(QStringLiteral("ftp"), Tone::Info, QStringLiteral("connecting…"));
         break;
     case State::Offline:
@@ -573,16 +597,23 @@ void Ps5ConnectPage::applyConnectionState(ConsoleSession::ConnectionState state,
             m_listing = {};
             m_remote->setRowCount(0);
         }
+        // Requests that were dropped with the connection never answer.
+        m_opsPending = m_opsTotal = m_opsOk = 0;
+        m_opsError.clear();
         break;
     }
     }
     m_remoteArea->setVisible(on || m_specimenListing);
     m_remoteEmpty->setVisible(!on && !m_specimenListing);
+    // The empty state's button is the card's button: Connect, or Cancel while an attempt runs.
+    if (m_emptyConnect)
+        m_emptyConnect->setText(state == State::Connecting ? QStringLiteral("Cancel") : QStringLiteral("Connect"));
     updateActions();
     if (state != m_lastState) {
         m_lastState = state;
-        emit connectionChanged(state, host(), detail);
-        emit reachabilityChanged(on, host());
+        const QString consoleHost = state == State::Offline ? host() : m_session->host();
+        emit connectionChanged(state, consoleHost, detail);
+        emit reachabilityChanged(on, consoleHost);
     }
     emit statusContextChanged();
 }
@@ -730,10 +761,10 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     auto* bh = hbox(bar, space::sm, QMargins(space::md, space::sm, space::md, space::sm));
     m_btnUpload = button(QStringLiteral("Upload files…"), ButtonVariant::Primary, QStringLiteral("upload"), bar);
     m_btnUploadFolder = button(QStringLiteral("Upload folder…"), ButtonVariant::Secondary, QStringLiteral("folder_in"), bar);
-    m_btnNewFolder = button(QStringLiteral("New folder"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), bar);
-    m_btnDownload = button(QStringLiteral("Download"), ButtonVariant::Secondary, QStringLiteral("download"), bar);
-    m_btnRename = button(QStringLiteral("Rename"), ButtonVariant::Subtle, QStringLiteral("rename"), bar);
-    m_btnDelete = button(QStringLiteral("Delete"), ButtonVariant::Subtle, QStringLiteral("trash"), bar);
+    m_btnNewFolder = button(QStringLiteral("New folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), bar);
+    m_btnDownload = button(QStringLiteral("Download…"), ButtonVariant::Secondary, QStringLiteral("download"), bar);
+    m_btnRename = button(QStringLiteral("Rename…"), ButtonVariant::Subtle, QStringLiteral("rename"), bar);
+    m_btnDelete = button(QStringLiteral("Delete…"), ButtonVariant::Subtle, QStringLiteral("trash"), bar);
     for (auto* b : {m_btnUpload, m_btnUploadFolder, m_btnNewFolder, m_btnDownload, m_btnRename, m_btnDelete})
         setButtonSmall(b, true);
     m_btnDownload->setToolTip(QStringLiteral("Download the selected items to a folder on this PC"));
@@ -794,11 +825,10 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
         QMenu menu(this);
         QTableWidgetItem* it = m_remote->itemAt(p);
         const int i = it ? entryIndex(it->row()) : -1;
+        // The folder's path, not its row: a listing that arrives while the menu is open replaces the entries.
         if (i >= 0 && m_listing.entries[size_t(i)].isDir)
-            menu.addAction(icon(QStringLiteral("folder_open"), color::fg_2), QStringLiteral("Open"), this, [this, i] {
-                if (const auto child = ps5::remoteChild(m_remoteDir, m_listing.entries[size_t(i)].name))
-                    listRemote(*child);
-            });
+            if (const auto child = ps5::remoteChild(m_remoteDir, m_listing.entries[size_t(i)].name))
+                menu.addAction(icon(QStringLiteral("folder_open"), color::fg_2), QStringLiteral("Open"), this, [this, path = *child] { listRemote(path); });
         if (it) {
             menu.addAction(icon(QStringLiteral("download"), color::fg_2), QStringLiteral("Download…"), this, &Ps5ConnectPage::downloadSelected)->setEnabled(m_btnDownload->isEnabled());
             menu.addAction(icon(QStringLiteral("rename"), color::fg_2), QStringLiteral("Rename…"), this, &Ps5ConnectPage::renameSelected)->setEnabled(m_btnRename->isEnabled());
@@ -824,9 +854,9 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     al->addWidget(m_remote, 1);
     rl->addWidget(m_remoteArea, 1);
     m_remoteEmpty = new EmptyState(QStringLiteral("plug"), QStringLiteral("Connect to browse the console"),
-                                   QStringLiteral("Start ftpsrv, etaHEN's FTP or zftpd on the PS5, then connect. Drop files here to upload them."), right);
-    auto* b = m_remoteEmpty->addAction(QStringLiteral("Connect"), ButtonVariant::Primary);
-    connect(b, &QPushButton::clicked, this, &Ps5ConnectPage::toggleConnection);
+                                   QStringLiteral("Start ftpsrv, etaHEN's FTP or zftpd on the PS5, then connect. Once connected, drop files on the list to upload them."), right);
+    m_emptyConnect = m_remoteEmpty->addAction(QStringLiteral("Connect"), ButtonVariant::Primary);
+    connect(m_emptyConnect, &QPushButton::clicked, this, &Ps5ConnectPage::toggleConnection);
     auto* find = m_remoteEmpty->addAction(QStringLiteral("Find my PS5"), ButtonVariant::Secondary);
     connect(find, &QPushButton::clicked, m_find, &QPushButton::click);
     rl->addWidget(m_remoteEmpty, 1);
@@ -847,6 +877,7 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     l->addWidget(card);
 
     m_transfers = new TransferPanel(m_ctx, tab);
+    connect(m_transfers, &TransferPanel::toastRequested, this, &Page::toastRequested);
     l->addWidget(m_transfers);
     l->addStretch(1);
     m_remoteDir = m_ctx.settings().value(ps5::keys::kGamesFolder).toString();
@@ -896,13 +927,65 @@ void Ps5ConnectPage::listRemote(const QString& path)
     m_session->list(path.isEmpty() ? QStringLiteral("/") : path);
 }
 
+void Ps5ConnectPage::beginOperations(int count, const QString& footer)
+{
+    m_opsPending += count;
+    m_opsTotal += count;
+    m_remoteFooter->setText(footer);
+}
+
+void Ps5ConnectPage::onOperationDone(const QString& what, bool ok, const QString& message)
+{
+    // One answer per request; a selection of 50 items gets one toast and one listing at its end.
+    if (m_opsPending > 0)
+        --m_opsPending;
+    if (ok)
+        ++m_opsOk;
+    else
+        m_opsError = message;
+    if (m_opsPending > 0)
+        return;
+    const int total = std::max(m_opsTotal, 1);
+    const int failed = total - m_opsOk;
+    const QString error = m_opsError;
+    m_opsTotal = m_opsOk = 0;
+    m_opsError.clear();
+    const bool isDelete = what == u"delete";
+    if (total == 1) {
+        const QString notDone = isDelete ? QStringLiteral("Not deleted") : what == u"rename" ? QStringLiteral("Not renamed") : QStringLiteral("Folder not created");
+        emit toastRequested(ok ? Tone::Ok : Tone::Err, ok ? QStringLiteral("Done") : notDone, message);
+    } else if (failed == 0) {
+        emit toastRequested(Tone::Ok, QStringLiteral("Done"), QStringLiteral("Deleted %1 items").arg(total));
+    } else {
+        emit toastRequested(Tone::Err, QStringLiteral("%1 deleted, %2 not").arg(total - failed).arg(failed), error);
+    }
+    // Also after a failure: part of a folder may be gone.
+    if (m_session->isConnected())
+        listRemote(m_remoteDir);
+    else
+        updateFooter();
+}
+
 void Ps5ConnectPage::onListed(const RemoteListing& listing)
 {
     if (!listing.error.isEmpty()) {
+        // The folder of the last connection (or of the settings) may not exist on this console: open
+        // the games folder, then the root, before reporting anything.
+        if (m_firstListing && m_session->isConnected()) {
+            const QString games = ps5::normalizeRemotePath(m_ctx.settings().value(ps5::keys::kGamesFolder).toString());
+            const QString next = listing.path != games && !games.isEmpty() && m_firstListingStep == 0 ? games : QStringLiteral("/");
+            if (listing.path != next && m_firstListingStep < 2) {
+                ++m_firstListingStep;
+                listRemote(next);
+                return;
+            }
+        }
+        m_firstListing = false;
         emit toastRequested(Tone::Err, QStringLiteral("Could not list %1").arg(listing.path), listing.error);
         m_remoteFooter->setText(listing.error);
         return;
     }
+    m_firstListing = false;
     // History: a new folder (not Back) drops the forward entries.
     if (m_historyIndex < 0 || m_history.value(m_historyIndex) != listing.path) {
         while (m_history.size() > m_historyIndex + 1)
@@ -1072,21 +1155,24 @@ bool Ps5ConnectPage::confirmProtected(const QString& path, const QString& action
 {
     if (!ps5::isProtectedRemotePath(path))
         return true;
-    return Sheet::confirm(window(), QStringLiteral("Write to a system folder?"), ps5::protectedPathWarning(path, action).toHtmlEscaped(),
+    // Plain text: the sheet shows the warning as it is written.
+    return Sheet::confirm(window(), QStringLiteral("Change a system folder?"), ps5::protectedPathWarning(path, action),
                           QStringLiteral("Cancel"), QStringLiteral("Continue anyway"), true, Sheet::Icon::Warning);
 }
 
 void Ps5ConnectPage::uploadDialog(bool folder)
 {
+    // The folder the dialog names: a listing that arrives while it is open must not redirect the upload.
+    const QString target = m_remoteDir;
     if (folder) {
-        const QString dir = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose a folder to send to %1").arg(m_remoteDir));
+        const QString dir = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose a folder to send to %1").arg(target));
         if (!dir.isEmpty())
-            uploadFiles({dir});
+            uploadFiles({dir}, target);
         return;
     }
-    const QStringList files = QFileDialog::getOpenFileNames(window(), QStringLiteral("Choose files to send to %1").arg(m_remoteDir));
+    const QStringList files = QFileDialog::getOpenFileNames(window(), QStringLiteral("Choose files to send to %1").arg(target));
     if (!files.isEmpty())
-        uploadFiles(files);
+        uploadFiles(files, target);
 }
 
 void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& remoteDirIn)
@@ -1094,9 +1180,22 @@ void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& r
     if (localPaths.isEmpty())
         return;
     const QString remoteDir = remoteDirIn.isEmpty() ? m_remoteDir : remoteDirIn;
+    // The console whose listing is on screen (the address fields may have been edited since).
+    const QString consoleHost = browserHost();
+    const int consolePort = browserPort();
     const bool protectedDir = ps5::isProtectedRemotePath(remoteDir);
     if (protectedDir && !confirmProtected(remoteDir, QStringLiteral("upload")))
         return;
+    // The upload replaces files of the same name: say so when the open folder shows some.
+    if (const QStringList taken = uploadCollisions(localPaths, remoteDir); !taken.isEmpty()) {
+        const QString what = taken.size() == 1 ? QStringLiteral("%1 is already in %2.").arg(taken.first(), remoteDir)
+                                               : QStringLiteral("%1 of these items are already in %2 (%3%4).")
+                                                     .arg(taken.size()).arg(remoteDir, taken.mid(0, 3).join(QStringLiteral(", ")), taken.size() > 3 ? QStringLiteral(", …") : QString());
+        if (!Sheet::confirm(window(), taken.size() == 1 ? QStringLiteral("Replace the file on the console?") : QStringLiteral("Replace the files on the console?"),
+                            what + QStringLiteral(" The upload replaces what is there; there is no recycle bin on the PS5."),
+                            QStringLiteral("Cancel"), QStringLiteral("Replace"), true, Sheet::Icon::Warning))
+            return;
+    }
     // One transfer per dropped item (its own progress row), up to 20; more go as one job.
     QList<QStringList> batches;
     if (localPaths.size() <= 20)
@@ -1104,25 +1203,42 @@ void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& r
             batches << QStringList{p};
     else
         batches << localPaths;
-    int queued = 0;
+    qsizetype items = 0;
     QStringList started;
     for (const QStringList& batch : batches) {
-        auto r = jobs::submitFtpUploadMany(m_ctx, host(), ftpPort(), batch, remoteDir, protectedDir);
+        auto r = jobs::submitFtpUploadMany(m_ctx, consoleHost, consolePort, batch, remoteDir, protectedDir);
         if (!r.ok()) {
             emit toastRequested(Tone::Err, QStringLiteral("Upload not started"), r.error().message);
             break;
         }
-        ++queued;
+        items += batch.size();
         started << r.value();
     }
-    if (queued == 0)
+    if (started.isEmpty())
         return;
     // These transfers run now, in this order; a paused queue stays paused for the rest.
     for (auto it = started.crbegin(); it != started.crend(); ++it)
         m_ctx.queue().startNow(*it);
     showTool(QStringLiteral("ftp"));
     emit toastRequested(Tone::Info, QStringLiteral("Upload queued"),
-                        QStringLiteral("%1 item%2 → %3").arg(localPaths.size()).arg(localPaths.size() == 1 ? QString() : QStringLiteral("s")).arg(remoteDir));
+                        QStringLiteral("%1 item%2 → %3").arg(items).arg(items == 1 ? QString() : QStringLiteral("s")).arg(remoteDir));
+}
+
+QStringList Ps5ConnectPage::uploadCollisions(const QStringList& localPaths, const QString& remoteDir) const
+{
+    if (remoteDir != m_listing.path)
+        return {}; // not the folder on screen: nothing is known about it
+    const bool caseSensitive = ps5::classifyDestination(remoteDir).kind == ps5::DestinationKind::Internal;
+    QStringList out;
+    for (const QString& p : localPaths) {
+        const QFileInfo fi(p);
+        if (fi.isDir())
+            continue; // a folder is merged into the one that is there
+        for (const ps5::FtpEntry& e : m_listing.entries)
+            if (!e.isDir && e.name.compare(fi.fileName(), caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive) == 0)
+                out << e.name;
+    }
+    return out;
 }
 
 void Ps5ConnectPage::downloadSelected()
@@ -1130,9 +1246,31 @@ void Ps5ConnectPage::downloadSelected()
     const QStringList sel = selectedRemotePaths();
     if (sel.isEmpty())
         return;
+    // The console the selection was made on.
+    const QString consoleHost = browserHost();
+    const int consolePort = browserPort();
     const QString dir = QFileDialog::getExistingDirectory(window(), QStringLiteral("Download %1 item%2 to").arg(sel.size()).arg(sel.size() == 1 ? QString() : QStringLiteral("s")));
     if (dir.isEmpty())
         return;
+    // Files that are already in the folder are skipped unless the user says to replace them.
+    QStringList existing;
+    for (const QString& p : sel)
+        if (QFileInfo::exists(QDir(dir).filePath(ps5::remoteFileName(p))))
+            existing << ps5::remoteFileName(p);
+    bool overwrite = false;
+    if (!existing.isEmpty()) {
+        auto* s = new Sheet(window(), existing.size() == 1 ? QStringLiteral("%1 is already in the folder").arg(existing.first())
+                                                         : QStringLiteral("%1 items are already in the folder").arg(existing.size()),
+                            Sheet::Icon::Warning);
+        s->addText(QStringLiteral("Replace what is in %1 with the copies from the console, or keep the files that are there and download only the rest?").arg(nativePath(dir)));
+        s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+        s->addButton(QStringLiteral("Keep existing"), Sheet::Role::Primary);
+        s->addButton(QStringLiteral("Replace"), Sheet::Role::Destructive);
+        const int answer = s->exec();
+        if (answer != 1 && answer != 2)
+            return;
+        overwrite = answer == 2;
+    }
     QList<QStringList> batches;
     if (sel.size() <= 20)
         for (const QString& p : sel)
@@ -1141,7 +1279,7 @@ void Ps5ConnectPage::downloadSelected()
         batches << sel;
     QStringList started;
     for (const QStringList& batch : batches) {
-        auto r = jobs::submitFtpDownload(m_ctx, host(), ftpPort(), batch, dir, false);
+        auto r = jobs::submitFtpDownload(m_ctx, consoleHost, consolePort, batch, dir, overwrite);
         if (!r.ok()) {
             emit toastRequested(Tone::Err, QStringLiteral("Download not started"), r.error().message);
             return;
@@ -1155,27 +1293,51 @@ void Ps5ConnectPage::downloadSelected()
 
 void Ps5ConnectPage::deleteSelected()
 {
-    const QStringList sel = selectedRemotePaths();
-    if (sel.isEmpty())
-        return;
-    for (const QString& p : sel)
-        if (!confirmProtected(p, QStringLiteral("delete")))
-            return;
-    QStringList names;
-    for (const QString& p : sel)
-        names << ps5::remoteFileName(p);
-    if (!Sheet::confirm(window(), sel.size() == 1 ? QStringLiteral("Delete %1 from the console?").arg(names.first().toHtmlEscaped()) : QStringLiteral("Delete %1 items from the console?").arg(sel.size()),
-                        QStringLiteral("Folders are removed with everything inside them. There is no recycle bin on the PS5."),
-                        QStringLiteral("Keep"), QStringLiteral("Delete")))
-        return;
+    // What is selected now is what the question names and what is deleted: the
+    // listing and the selection can change while the sheets are open.
+    struct Target {
+        QString path;
+        bool isDir = false;
+    };
+    std::vector<Target> sel;
     for (const QModelIndex& i : m_remote->selectionModel()->selectedRows()) {
         const int e = entryIndex(i.row());
         if (e < 0)
             continue;
-        const auto& entry = m_listing.entries[size_t(e)];
+        const ps5::FtpEntry& entry = m_listing.entries[size_t(e)];
         if (const auto child = ps5::remoteChild(m_remoteDir, entry.name))
-            m_session->remove(*child, entry.isDir);
+            sel.push_back({*child, entry.isDir});
     }
+    if (sel.empty())
+        return;
+    for (const Target& t : sel)
+        if (!confirmProtected(t.path, QStringLiteral("delete")))
+            return;
+    if (!Sheet::confirm(window(), sel.size() == 1 ? QStringLiteral("Delete %1 from the console?").arg(ps5::remoteFileName(sel.front().path))
+                                                  : QStringLiteral("Delete %1 items from the console?").arg(sel.size()),
+                        QStringLiteral("Folders are removed with everything inside them. There is no recycle bin on the PS5."),
+                        QStringLiteral("Keep"), QStringLiteral("Delete")))
+        return;
+    if (!m_session->isConnected())
+        return;
+    beginOperations(int(sel.size()), QStringLiteral("Deleting…"));
+    for (const Target& t : sel)
+        m_session->remove(t.path, t.isDir);
+}
+
+QString Ps5ConnectPage::renameCollision(const QString& dir, const QString& oldName, const QString& newName) const
+{
+    if (dir != m_listing.path)
+        return {}; // the folder is not the one on screen any more: nothing to compare with
+    // USB and extended storage are exFAT (names differing only in case are the same file); the internal disk is not.
+    const bool caseSensitive = ps5::classifyDestination(dir).kind == ps5::DestinationKind::Internal;
+    for (const ps5::FtpEntry& e : m_listing.entries) {
+        if (e.name == oldName)
+            continue; // the item itself (a change of case only)
+        if (e.name.compare(newName, caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive) == 0)
+            return e.name;
+    }
+    return {};
 }
 
 void Ps5ConnectPage::renameSelected()
@@ -1196,20 +1358,31 @@ void Ps5ConnectPage::renameSelected()
     if (s->exec() != 1)
         return;
     const QString n = name->text().trimmed();
-    if (n.isEmpty() || n == ps5::remoteFileName(sel.first()))
+    const QString oldName = ps5::remoteFileName(sel.first());
+    if (n.isEmpty() || n == oldName)
         return;
     if (const QString why = ps5::remoteNameProblem(n); !why.isEmpty()) {
         emit toastRequested(Tone::Warn, QStringLiteral("Not renamed"), why);
         return;
     }
-    m_session->rename(sel.first(), ps5::joinRemote(m_remoteDir, n));
+    // The item's own folder, not the one open now (a listing may have arrived while the sheet was up).
+    const QString dir = ps5::remoteParent(sel.first());
+    // The console's RNTO replaces an existing file without a word: never rename onto a name that is taken.
+    if (const QString taken = renameCollision(dir, oldName, n); !taken.isEmpty()) {
+        emit toastRequested(Tone::Warn, QStringLiteral("Not renamed"),
+                            QStringLiteral("%1 already exists in this folder. Choose another name, or delete or rename that item first.").arg(taken));
+        return;
+    }
+    beginOperations(1, QStringLiteral("Renaming…"));
+    m_session->rename(sel.first(), ps5::joinRemote(dir, n));
 }
 
 void Ps5ConnectPage::newFolder()
 {
-    if (!confirmProtected(m_remoteDir, QStringLiteral("create a folder in")))
+    const QString dir = m_remoteDir; // the folder the sheet names, whatever is listed when it closes
+    if (!confirmProtected(dir, QStringLiteral("create a folder")))
         return;
-    auto* s = new Sheet(window(), QStringLiteral("New folder in %1").arg(m_remoteDir), Sheet::Icon::None);
+    auto* s = new Sheet(window(), QStringLiteral("New folder in %1").arg(dir), Sheet::Icon::None);
     auto* name = textInput(QStringLiteral("Folder name"), true, s);
     s->body()->addWidget(field(QStringLiteral("Name"), name, {}, s));
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
@@ -1224,7 +1397,8 @@ void Ps5ConnectPage::newFolder()
         emit toastRequested(Tone::Warn, QStringLiteral("Folder not created"), why);
         return;
     }
-    m_session->mkdir(ps5::joinRemote(m_remoteDir, n));
+    beginOperations(1, QStringLiteral("Creating the folder…"));
+    m_session->mkdir(ps5::joinRemote(dir, n));
 }
 
 void Ps5ConnectPage::resizeEvent(QResizeEvent* event)
@@ -1396,6 +1570,7 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
         m_targetHint->setText(v == u"payload:9020"   ? QStringLiteral("Only before elfldr runs: the exploit's own loader starts it.")
                             : v == u"payload:50000"  ? QStringLiteral("Y2JB's remote JS server takes .js files; the port can differ.")
                             : v.startsWith(QLatin1String("micromount")) ? QStringLiteral("MicroMount is archived; use ShadowMount+.")
+                            : v.startsWith(QLatin1String("shadowmount")) ? QStringLiteral("For shadowmountplus.elf: the loader port set for ShadowMount+ in Settings.")
                                                                          : QStringLiteral("elfldr runs every payload as its own process."));
     };
     connect(m_payloadTarget, &QComboBox::currentIndexChanged, this, [targetHint](int) { targetHint(); });
@@ -1433,11 +1608,15 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
     connect(m_pRemove, &QPushButton::clicked, this, [this] {
         if (m_currentPayload < 0)
             return;
-        const auto& e = m_payloads.entries()[size_t(m_currentPayload)];
-        if (Sheet::confirm(window(), QStringLiteral("Remove this payload from the list?"),
-                           QStringLiteral("%1 is removed from the list only; the file stays where it is.").arg(e.name.toHtmlEscaped()),
-                           QStringLiteral("Keep"), QStringLiteral("Remove")))
-            m_payloads.remove(m_currentPayload);
+        if (m_currentPayload >= int(m_payloads.entries().size()))
+            return;
+        const PayloadEntry e = m_payloads.entries()[size_t(m_currentPayload)];
+        if (!Sheet::confirm(window(), QStringLiteral("Remove this payload from the list?"),
+                            QStringLiteral("%1 is removed from the list only; the file stays where it is.").arg(e.name),
+                            QStringLiteral("Keep"), QStringLiteral("Remove")))
+            return;
+        // The entry the question named, wherever it is in the list now.
+        m_payloads.remove(payloadIndex(e));
     });
     return tab;
 }
@@ -1490,6 +1669,9 @@ void Ps5ConnectPage::addOrEditPayload(int index)
     PayloadEntry e;
     if (index >= 0 && index < int(m_payloads.entries().size()))
         e = m_payloads.entries()[size_t(index)];
+    else
+        index = -1;
+    const PayloadEntry before = e;
     auto* s = new Sheet(window(), index < 0 ? QStringLiteral("Add payload") : QStringLiteral("Edit payload"), Sheet::Icon::None, size::dialogWide);
     auto* name = textInput(QStringLiteral("elfldr"), false, s);
     name->setText(e.name);
@@ -1510,18 +1692,34 @@ void Ps5ConnectPage::addOrEditPayload(int index)
     e.name = name->text().trimmed().isEmpty() ? QFileInfo(file->path()).fileName() : name->text().trimmed();
     e.path = file->path();
     e.notes = notes->toPlainText().trimmed();
-    if (e.path.isEmpty())
+    if (e.path.isEmpty()) {
+        emit toastRequested(Tone::Warn, index < 0 ? QStringLiteral("Payload not added") : QStringLiteral("Payload not changed"), QStringLiteral("Choose the payload's file."));
         return;
+    }
     if (index < 0)
         m_payloads.add(e);
     else
-        m_payloads.update(index, e);
+        m_payloads.update(payloadIndex(before), e); // the entry that was opened, wherever it is now
+}
+
+int Ps5ConnectPage::payloadIndex(const PayloadEntry& entry) const
+{
+    const auto& all = m_payloads.entries();
+    for (int i = 0; i < int(all.size()); ++i)
+        if (all[size_t(i)].path == entry.path && all[size_t(i)].name == entry.name)
+            return i;
+    return -1;
 }
 
 void Ps5ConnectPage::sendPayload(int index)
 {
     if (index < 0 || index >= int(m_payloads.entries().size()))
         return;
+    // One send at a time: a second click (or a double click on the list) must not load the payload twice.
+    if (const auto running = m_payloadSendId.isEmpty() ? std::nullopt : m_ctx.queue().record(m_payloadSendId); running && !isTerminal(running->state)) {
+        emit toastRequested(Tone::Info, QStringLiteral("A payload is being sent"), QStringLiteral("Wait until it has finished, then send the next one."));
+        return;
+    }
     if (host().isEmpty()) {
         setInputError(m_host, true);
         emit toastRequested(Tone::Warn, QStringLiteral("No console address"), QStringLiteral("Enter the console's IP address at the top of the page first."));
@@ -1536,8 +1734,8 @@ void Ps5ConnectPage::sendPayload(int index)
         return;
     }
     m_payloadSendId = r.value();
+    m_payloadSendPath = e.path;
     m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
-    m_payloads.markSent(e.path);
     m_hero->setChip(QStringLiteral("payload"), Tone::Info, QStringLiteral("%1 · sending").arg(port));
     emit toastRequested(Tone::Info, QStringLiteral("Sending payload"), QStringLiteral("%1 → %2:%3").arg(e.name, host()).arg(port));
 }
@@ -1612,39 +1810,72 @@ QWidget* Ps5ConnectPage::buildKlog(QWidget* parent)
         m_klogPause->setText(m_klogPaused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
         setButtonIcon(m_klogPause, m_klogPaused ? QStringLiteral("play") : QStringLiteral("pause"));
         if (!m_klogPaused) {
-            for (const auto& line : m_klogHeld)
-                m_klog->append(line);
+            m_klog->append(std::vector<ps5::KlogLine>(m_klogHeld.begin(), m_klogHeld.end()));
             m_klogHeld.clear();
             if (m_klogFollow->isChecked())
                 m_klogView->scrollToBottom();
         }
     });
-    connect(clear, &QToolButton::clicked, this, [this] { m_klog->clear(); m_klogHeld.clear(); klogFilterChanged(); });
+    connect(clear, &QToolButton::clicked, this, [this] {
+        m_klog->clear();
+        m_klogHeld.clear();
+        m_klogIncoming.clear();
+        updateKlogStats();
+    });
     connect(exportBtn, &QToolButton::clicked, this, &Ps5ConnectPage::klogExport);
     connect(snapshot, &QToolButton::clicked, this, &Ps5ConnectPage::klogSnapshot);
     connect(m_klogFilter, &QLineEdit::textChanged, this, [this](const QString&) { klogFilterChanged(); });
+    // New rows pass through the proxy's filter by themselves: only the counts change here.
     connect(m_klog, &QAbstractItemModel::rowsInserted, this, [this] {
         if (m_klogFollow->isChecked())
             QMetaObject::invokeMethod(m_klogView, &QTableView::scrollToBottom, Qt::QueuedConnection);
-        klogFilterChanged();
+        updateKlogStats();
     });
+    // Lines arrive one by one from the reader thread; the view takes them in batches.
+    m_klogFlush = new QTimer(this);
+    m_klogFlush->setSingleShot(true);
+    m_klogFlush->setInterval(120);
+    connect(m_klogFlush, &QTimer::timeout, this, &Ps5ConnectPage::flushKlog);
     return tab;
 }
 
 void Ps5ConnectPage::klogFilterChanged()
 {
     m_klogProxy->setFilterFixedString(m_klogFilter->text());
+    updateKlogStats();
+}
+
+void Ps5ConnectPage::updateKlogStats()
+{
     m_klogStats->setText(QStringLiteral("%1 lines · %2 warnings · %3 errors%4")
                              .arg(formatCount(m_klog->rowCount())).arg(m_klog->warnings()).arg(m_klog->errors())
                              .arg(m_klogFilter->text().isEmpty() ? QString() : QStringLiteral(" · %1 shown").arg(formatCount(m_klogProxy->rowCount()))));
     emit statusContextChanged();
 }
 
+void Ps5ConnectPage::flushKlog()
+{
+    if (m_klogIncoming.empty())
+        return;
+    std::vector<ps5::KlogLine> lines;
+    lines.swap(m_klogIncoming);
+    if (!m_klogPaused) {
+        m_klog->append(lines);
+        return;
+    }
+    m_klogHeld.insert(m_klogHeld.end(), lines.begin(), lines.end());
+    while (m_klogHeld.size() > 20000)
+        m_klogHeld.pop_front();
+}
+
 void Ps5ConnectPage::klogToggle()
 {
+    // Lines and states a stopped client already posted are not applied any more.
+    ++m_klogGen;
     if (m_klogClient) {
         m_klogClient->stop();
         m_klogClient.reset();
+        flushKlog(); // what arrived before the stop is kept
         klogState(ps5::KlogState::Stopped, {});
         return;
     }
@@ -1657,25 +1888,23 @@ void Ps5ConnectPage::klogToggle()
     o.host = host();
     o.port = quint16(settingPort(ps5::keys::kKlogPort, 3232));
     o.connectTimeoutMs = settingPort(ps5::keys::kConnectTimeout, 10) * 1000;
+    // Posted to the application object: the page may be gone when a call arrives, and only the UI thread may ask.
     QPointer<Ps5ConnectPage> self(this);
+    const quint64 gen = m_klogGen;
     m_klogClient = std::make_unique<ps5::KlogClient>(
         o,
-        [self](const ps5::KlogLine& line) {
-            QMetaObject::invokeMethod(self.data(), [self, line] {
-                if (!self)
+        [self, gen](const ps5::KlogLine& line) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, line] {
+                if (!self || gen != self->m_klogGen)
                     return;
-                if (self->m_klogPaused) {
-                    self->m_klogHeld.push_back(line);
-                    if (self->m_klogHeld.size() > 20000)
-                        self->m_klogHeld.pop_front();
-                } else {
-                    self->m_klog->append(line);
-                }
+                self->m_klogIncoming.push_back(line);
+                if (!self->m_klogFlush->isActive())
+                    self->m_klogFlush->start();
             }, Qt::QueuedConnection);
         },
-        [self](ps5::KlogState st, const QString& detail) {
-            QMetaObject::invokeMethod(self.data(), [self, st, detail] {
-                if (self)
+        [self, gen](ps5::KlogState st, const QString& detail) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, st, detail] {
+                if (self && gen == self->m_klogGen)
                     self->klogState(st, detail);
             }, Qt::QueuedConnection);
         });
@@ -1705,6 +1934,10 @@ void Ps5ConnectPage::klogState(ps5::KlogState state, const QString& detail)
     case ps5::KlogState::Disconnected: tone = Tone::Warn; break;
     case ps5::KlogState::Stopped: tone = Tone::Neutral; word = QStringLiteral("Disconnected"); break;
     }
+    // The card's chip said "live" while the stream ran; it does not any more.
+    if (state != ps5::KlogState::Connected && m_klogLive)
+        m_hero->setChip(QStringLiteral("klog"), Tone::Neutral, QString::number(settingPort(ps5::keys::kKlogPort, 3232)));
+    m_klogLive = state == ps5::KlogState::Connected;
     m_klogBadge->set(word, tone);
     m_klogBadge->setIconName(tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone));
     m_klogBadge->setToolTip(detail);
@@ -1718,7 +1951,12 @@ void Ps5ConnectPage::klogExport()
                                                       QStringLiteral("Text files (*.txt)"));
     if (path.isEmpty())
         return;
-    auto st = writeFileAtomic(path, (QStringLiteral("PS5 kernel log export %1\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate)) + m_klog->allText()).toUtf8());
+    // Everything received: also the lines held back while paused.
+    flushKlog();
+    QString held;
+    for (const ps5::KlogLine& l : m_klogHeld)
+        held += l.received.toString(QStringLiteral("HH:mm:ss.zzz")) + u'\t' + ps5::klogTagName(l.tag) + u'\t' + l.text + u'\n';
+    auto st = writeFileAtomic(path, (QStringLiteral("PS5 kernel log export %1\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate)) + m_klog->allText() + held).toUtf8());
     emit toastRequested(st.ok() ? Tone::Ok : Tone::Err, st.ok() ? QStringLiteral("Kernel log exported") : QStringLiteral("Export failed"), st.ok() ? nativePath(path) : st.error().message);
 }
 
@@ -1741,13 +1979,15 @@ void Ps5ConnectPage::klogSnapshot()
                 return;
             }
             const QDateTime now = QDateTime::currentDateTime();
+            std::vector<ps5::KlogLine> lines;
             for (const QString& t : r.value().split(u'\n', Qt::SkipEmptyParts)) {
                 ps5::KlogLine l;
                 l.received = now;
                 l.text = t;
                 l.tag = ps5::klogTag(t);
-                self->m_klog->append(l);
+                lines.push_back(l);
             }
+            self->m_klog->append(lines);
             emit self->toastRequested(Tone::Ok, QStringLiteral("Kernel log snapshot"), QStringLiteral("From ShadowMount+; a snapshot, not a live stream."));
         }, Qt::QueuedConnection);
     });
@@ -1993,9 +2233,9 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
         const quint16 port = quint16(settingPort(ps5::keys::kDpiPort, 12800));
         const int timeout = settingPort(ps5::keys::kConnectTimeout, 10) * 1000;
         QPointer<Ps5ConnectPage> self(this);
-        auto* thread = QThread::create([self, h, port, timeout] {
+        (void)QtConcurrent::run([self, h, port, timeout] {
             auto st = ps5::probeTcpPort(h, port, timeout, QStringLiteral("Direct Package Installer"));
-            QMetaObject::invokeMethod(self.data(), [self, st, port] {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, st, port] {
                 if (!self)
                     return;
                 self->m_dpiStatus->setText(st.ok() ? QStringLiteral("The installer answers on port %1.").arg(port)
@@ -2003,8 +2243,6 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
                 setTextColor(self->m_dpiStatus, st.ok() ? color::success_hi : color::danger_hi);
             }, Qt::QueuedConnection);
         });
-        connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-        thread->start();
     });
     connect(m_install, &QPushButton::clicked, this, [this] {
         if (m_pkg->path().isEmpty()) {
@@ -2040,12 +2278,16 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
         }
         const QString reg = region();
         const QString tid = ps5::y2jbTitleId(*ps5::y2jbRegionFromName(reg));
+        // One folder: the one the question names is the one the job writes to.
+        const QString backupDir = ps5::newConsoleBackupDir();
+        const QString consoleHost = host();
+        const int consolePort = ftpPort();
         if (!Sheet::confirm(window(), QStringLiteral("Block YouTube updates for %1?").arg(reg),
                             QStringLiteral("This patches param.json, appinfo.db and app.db for %1 (%2) on your PS5. Make sure you are in the PS5 Settings menu before continuing, and reboot the PS5 afterwards. Backups go to %3.")
-                                .arg(reg, Sheet::monoSpan(tid), Sheet::monoSpan(nativePath(ps5::newConsoleBackupDir()))),
+                                .arg(reg.toHtmlEscaped(), Sheet::monoSpan(tid), Sheet::monoSpan(nativePath(backupDir))),
                             QStringLiteral("Not now"), QStringLiteral("Block updates"), true, Sheet::Icon::Warning))
             return;
-        auto r = jobs::submitY2jbAutoBlock(m_ctx, host(), ftpPort(), reg, {});
+        auto r = jobs::submitY2jbAutoBlock(m_ctx, consoleHost, consolePort, reg, backupDir);
         if (!r.ok()) {
             emit toastRequested(Tone::Err, QStringLiteral("Not started"), r.error().message);
             return;
@@ -2104,7 +2346,7 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
         QPointer<Ps5ConnectPage> self(this);
         (void)QtConcurrent::run([self, folder, reg] {
             auto r = ps5::patchLocalFolder(folder, reg);
-            QMetaObject::invokeMethod(self.data(), [self, r] {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, r] {
                 if (!self)
                     return;
                 self->m_patchLocal->setEnabled(true);
@@ -2114,9 +2356,9 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
                 }
                 QStringList lines;
                 for (const auto& f : r->files)
-                    lines << QStringLiteral("%1 %2 — %3").arg(f.status, f.name, f.detail).toHtmlEscaped();
+                    lines << QStringLiteral("%1 %2 — %3").arg(f.status, f.name, f.detail);
                 Sheet::message(self->window(), r->allVerified() ? QStringLiteral("Local files patched") : QStringLiteral("Patched with problems"),
-                               Sheet::monoSpan(lines.join(QStringLiteral("<br>"))), r->allVerified() ? Sheet::Icon::Info : Sheet::Icon::Warning);
+                               monoLines(lines), r->allVerified() ? Sheet::Icon::Info : Sheet::Icon::Warning);
             }, Qt::QueuedConnection);
         });
     });
@@ -2135,7 +2377,10 @@ bool Ps5ConnectPage::acceptsDrop(const QList<QUrl>& urls) const
         return false;
     if (currentTool() == u"install")
         return urls.first().toLocalFile().endsWith(QLatin1String(".pkg"), Qt::CaseInsensitive);
-    return m_session->isConnected() && jobs::isAvailable(m_ctx, ps5::jobkinds::kUpload);
+    if (!jobs::isAvailable(m_ctx, ps5::jobkinds::kUpload))
+        return false;
+    // On the browser also while not connected: the drop is answered here ("Connect first"), not by another page.
+    return m_session->isConnected() || currentTool() == u"ftp";
 }
 
 void Ps5ConnectPage::dropUrls(const QList<QUrl>& urls)
@@ -2148,8 +2393,41 @@ void Ps5ConnectPage::dropUrls(const QList<QUrl>& urls)
         m_installTab->setPackage(paths.first());
         return;
     }
+    if (paths.isEmpty())
+        return;
+    if (!m_session->isConnected()) {
+        emit toastRequested(Tone::Warn, QStringLiteral("Connect first"), QStringLiteral("Connect to the console, then drop the files on the list to upload them."));
+        return;
+    }
+    // A drop anywhere on the page (not on the file list, which shows its target): say where it goes and ask.
+    const QString target = m_remoteDir;
+    const QString what = paths.size() == 1 ? QFileInfo(paths.first()).fileName() : QStringLiteral("%1 items").arg(paths.size());
+    if (!Sheet::confirm(window(), QStringLiteral("Upload to the console?"),
+                        QStringLiteral("%1 will be uploaded to %2 on %3.").arg(Sheet::monoSpan(what), Sheet::monoSpan(target), Sheet::monoSpan(browserHost())),
+                        QStringLiteral("Cancel"), QStringLiteral("Upload"), false, Sheet::Icon::Info))
+        return;
     showTool(QStringLiteral("ftp"));
-    uploadFiles(paths);
+    uploadFiles(paths, target);
+}
+
+QString Ps5ConnectPage::unsavedChanges() const
+{
+    QStringList what;
+    if (m_autoloader->hasUnsavedEdits())
+        what << QStringLiteral("autoload.txt has edits that are not saved");
+    if (m_smp->hasLoaded() && !m_smp->changes().isEmpty())
+        what << QStringLiteral("the ShadowMount+ settings have changes that are not pushed to the console");
+    return what.join(QStringLiteral(", and "));
+}
+
+QString Ps5ConnectPage::browserHost() const
+{
+    return m_session->isConnected() ? m_session->host() : host();
+}
+
+int Ps5ConnectPage::browserPort() const
+{
+    return m_session->isConnected() && m_session->port() > 0 ? int(m_session->port()) : ftpPort();
 }
 
 void Ps5ConnectPage::setDragHighlight(bool on)
@@ -2194,7 +2472,7 @@ QString Ps5ConnectPage::statusContext() const
     if (host().isEmpty())
         return QStringLiteral("No console address");
     QStringList parts;
-    parts << (m_session->isConnected() ? QStringLiteral("Connected to %1 · FTP %2").arg(host()).arg(ftpPort()) : QStringLiteral("%1 · FTP %2").arg(host()).arg(ftpPort()));
+    parts << (m_session->isConnected() ? QStringLiteral("Connected to %1 · FTP %2").arg(browserHost()).arg(browserPort()) : QStringLiteral("%1 · FTP %2").arg(host()).arg(ftpPort()));
     if (m_klogClient)
         parts << QStringLiteral("Kernel log: %1 lines").arg(formatCount(m_klog->rowCount()));
     return parts.join(QStringLiteral(" · "));

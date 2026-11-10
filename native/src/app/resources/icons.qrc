@@ -196,4 +196,12 @@
     <file alias="youtube.svg">icons/youtube.svg</file>
     <file alias="zap.svg">icons/zap.svg</file>
 </qresource>
+<qresource prefix="/app">
+    <file alias="app-16.png">app/app-16.png</file>
+    <file alias="app-24.png">app/app-24.png</file>
+    <file alias="app-32.png">app/app-32.png</file>
+    <file alias="app-48.png">app/app-48.png</file>
+    <file alias="app-64.png">app/app-64.png</file>
+    <file alias="app-256.png">app/app-256.png</file>
+</qresource>
 </RCC>

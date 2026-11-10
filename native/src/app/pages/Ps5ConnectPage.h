@@ -35,6 +35,7 @@
 #include <vector>
 
 class QComboBox;
+class QTimer;
 
 namespace fw::ui {
 class Segmented;
@@ -69,6 +70,7 @@ public:
     QVariant data(const QModelIndex& index, int role) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
     void append(const ps5::KlogLine& line);
+    void append(const std::vector<ps5::KlogLine>& lines); // one model change for the whole batch
     void clear();
     QString allText() const;
     int warnings() const { return m_warnings; }
@@ -92,6 +94,9 @@ public:
     QString host() const;
     int ftpPort() const;
     bool isReachable() const { return m_session->isConnected(); }
+    // What would be lost by closing now ("" when nothing): unsaved edits in the Autoloader editor
+    // and the ShadowMount+ settings form.
+    QString unsavedChanges() const;
     bool acceptsDrop(const QList<QUrl>& urls) const override;
     void dropUrls(const QList<QUrl>& urls) override;
     void setDragHighlight(bool on) override;
@@ -138,11 +143,19 @@ private:
     void showServices(const ps5::ConsoleServices& s);
     void updatePayloadChip();
     void showTool(const QString& key);
-    Group* addGroup(const QString& key, const QString& title, const QString& icon,
-                    const QList<std::tuple<QString, QString, QString, QWidget*>>& tools);
+    void addGroup(const QString& key, const QString& title, const QString& icon,
+                  const QList<std::tuple<QString, QString, QString, QWidget*>>& tools);
     // FTP
     QWidget* buildFilesBrowser(QWidget* parent);
     void onListed(const ui::RemoteListing& listing);
+    // Delete / rename / new folder: `count` requests were sent; their answers are summed up in one toast.
+    void beginOperations(int count, const QString& footer);
+    void onOperationDone(const QString& what, bool ok, const QString& message);
+    // The console the browser is connected to (the address fields when it is not connected).
+    QString browserHost() const;
+    int browserPort() const;
+    // Names in the open folder that an upload of `localPaths` into `remoteDir` would replace.
+    QStringList uploadCollisions(const QStringList& localPaths, const QString& remoteDir) const;
     void showListing(const ui::RemoteListing& listing);
     void rebuildBreadcrumb();
     void rebuildPlaces();
@@ -155,6 +168,8 @@ private:
     void downloadSelected();
     void deleteSelected();
     void renameSelected();
+    // The listed name a rename to `newName` would land on ("" when it is free).
+    QString renameCollision(const QString& dir, const QString& oldName, const QString& newName) const;
     void newFolder();
     void goBack();
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -166,12 +181,15 @@ private:
     void showPayload(int index);
     void addOrEditPayload(int index);
     void sendPayload(int index);
+    int payloadIndex(const ui::PayloadEntry& entry) const; // -1 when it is not in the list any more
     // Kernel log
     QWidget* buildKlog(QWidget* parent);
     void klogToggle();
     void klogState(ps5::KlogState state, const QString& detail);
     void klogExport();
     void klogFilterChanged();
+    void updateKlogStats();
+    void flushKlog();
     void klogSnapshot();
     // Y2JB
     QWidget* buildY2jb(QWidget* parent);
@@ -195,11 +213,17 @@ private:
     std::vector<ps5::smp::StorageItem> m_storage;
     QString m_smpVersion;
     QString m_payloadSendId;
+    QString m_payloadSendPath; // the payload that job sends
     // ftp
     QString m_remoteDir;
     ui::RemoteListing m_listing;
     QStringList m_history;
     int m_historyIndex = -1;
+    int m_opsPending = 0, m_opsTotal = 0, m_opsOk = 0; // the batch of delete / rename / mkdir requests under way
+    QString m_opsError;                                // the last failure of that batch
+    bool m_firstListing = false;                       // the listing right after connecting
+    int m_firstListingStep = 0;                        // its fallbacks: 1 = games folder, 2 = root
+    QPushButton* m_emptyConnect = nullptr;
     bool m_specimenListing = false;
     ui::Card* m_filesCard = nullptr;
     QWidget* m_crumbs;
@@ -252,7 +276,11 @@ private:
     QSortFilterProxyModel* m_klogProxy;
     QLabel* m_klogStats;
     bool m_klogPaused = false;
-    std::deque<ps5::KlogLine> m_klogHeld;
+    bool m_klogLive = false;                   // the card's chip says "live"
+    std::deque<ps5::KlogLine> m_klogHeld;      // received while paused
+    std::vector<ps5::KlogLine> m_klogIncoming; // received since the last flush
+    QTimer* m_klogFlush = nullptr;
+    quint64 m_klogGen = 0; // bumped on Connect/Disconnect: calls of an earlier client are ignored
     // y2jb
     ui::Segmented* m_region;
     ui::PathField* m_pkg;

@@ -99,15 +99,7 @@ void AmprTab::updateAvailability()
 
 QString AmprTab::submitLocal(const QString& folder, bool force, bool allowAssetPacks)
 {
-    Result<QString> r = Error(ErrorCode::Internal, {});
-    if (allowAssetPacks) {
-        QJsonObject p{{QStringLiteral("folder"), folder}, {QStringLiteral("allowAssetPacks"), true}};
-        if (force)
-            p.insert(QStringLiteral("force"), true);
-        r = m_ctx.queue().enqueue(kLocalKind, p);
-    } else {
-        r = jobs::submitAmprIndexLocal(m_ctx, folder, force);
-    }
+    const Result<QString> r = jobs::submitAmprIndexLocal(m_ctx, folder, force, allowAssetPacks);
     if (!r.ok()) {
         m_localStatus->set(r.error().message, Tone::Err);
         return {};
@@ -204,9 +196,9 @@ void AmprTab::browseConsole()
 void AmprTab::applyDemo()
 {
     m_localFolder->setPath(QStringLiteral("D:/Dumps/PPSA01234-app0"));
-    m_localStatus->set(QStringLiteral("Indexed 18,442 file(s) into D:\\Dumps\\PPSA01234-app0\\ampr_emu.index (1.4 MB)"), Tone::Ok);
+    m_localStatus->set(QStringLiteral("Indexed 18,442 files into D:\\Dumps\\PPSA01234-app0\\ampr_emu.index (1.4 MB)"), Tone::Ok);
     m_remoteFolder->setText(QStringLiteral("/mnt/usb0/games/PPSA05678-app0"));
-    m_remoteStatus->set(QStringLiteral("Indexed 9,120 file(s) and uploaded ampr_emu.index to /mnt/usb0/games/PPSA05678-app0 (old index kept as ampr_emu.index.bak)"), Tone::Ok);
+    m_remoteStatus->set(QStringLiteral("Indexed 9,120 files and uploaded ampr_emu.index to /mnt/usb0/games/PPSA05678-app0 (old index kept as ampr_emu.index.bak)"), Tone::Ok);
 }
 
 void AmprTab::clearDemo()

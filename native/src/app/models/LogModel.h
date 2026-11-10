@@ -8,6 +8,7 @@
 #include "core/Log.h"
 
 #include <QAbstractTableModel>
+#include <QSet>
 #include <QSortFilterProxyModel>
 #include <QTimer>
 
@@ -49,7 +50,7 @@ private:
     QTimer m_timer;
     QStringList m_sources;
     int m_maxRows = 20000;
-    quint64 m_lastSeq = 0; // the newest record this model holds or has queued
+    QSet<quint64> m_snapshot; // the records taken from the ring buffer at construction
 };
 
 class LogFilterModel : public QSortFilterProxyModel {

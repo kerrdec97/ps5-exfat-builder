@@ -1,5 +1,7 @@
 #include "app/pages/ps5/ConsoleToolTab.h"
 
+#include "app/ui/Sheet.h"
+
 #include <QHeaderView>
 
 namespace fw::pages {
@@ -103,6 +105,14 @@ void setBadgeCell(QTableWidget* table, int row, int column, const QString& text,
     anchor->setData(Qt::AccessibleTextRole, text);
     anchor->setToolTip(text);
     table->setItem(row, column, anchor);
+}
+
+QString monoLines(const QStringList& lines)
+{
+    QStringList spans;
+    for (const QString& line : lines)
+        spans << Sheet::monoSpan(line);
+    return spans.join(QStringLiteral("<br>"));
 }
 
 } // namespace fw::pages

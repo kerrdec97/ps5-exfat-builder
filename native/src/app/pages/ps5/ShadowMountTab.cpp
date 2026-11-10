@@ -191,8 +191,21 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     l->addWidget(mm);
     l->addStretch(1);
 
-    connect(m_load, &QPushButton::clicked, this, &ShadowMountTab::load);
+    connect(m_load, &QPushButton::clicked, this, [this] {
+        // Loading replaces the form: ask when it holds changes that were not pushed.
+        if (m_hasLoaded && !changes().isEmpty()
+            && !Sheet::confirm(window(), QStringLiteral("Discard the changes?"),
+                               QStringLiteral("The form has changes that were not pushed to the console. Loading replaces them with what the console has."),
+                               QStringLiteral("Keep editing"), QStringLiteral("Load"), true, Sheet::Icon::Warning))
+            return;
+        load();
+    });
     connect(m_push, &QPushButton::clicked, this, [this] { push(false); });
+    // Load and Push are for an idle tab: one piece of console work at a time.
+    connect(this, &ConsoleToolTab::busyChanged, this, [this](bool busy) {
+        m_load->setEnabled(!busy);
+        refreshMarks();
+    });
     populate({});
     updateHeader();
 }
@@ -497,6 +510,7 @@ void ShadowMountTab::load()
 {
     const QString apiVersion = m_apiVersion;
     const quint16 apiPort = endpoint().smpApiPort;
+    const QString consoleHost = endpoint().host; // the console this load asks, whatever the address field says when it answers
     setStatus(QStringLiteral("Loading config.ini, profiles.ini and the version…"), Tone::Info);
     struct Loaded {
         ps5::SmpRemoteState state;
@@ -516,7 +530,7 @@ void ShadowMountTab::load()
             FW_TRY_ASSIGN(out.state, ps5::loadSmpState(c, out.apiVersion, t));
             return out;
         },
-        [this](const Result<Loaded>& r) {
+        [this, consoleHost](const Result<Loaded>& r) {
             if (!r.ok()) {
                 setStatus(r.error().message, r.error().isCancelled() ? Tone::Neutral : Tone::Err);
                 refreshMarks();
@@ -524,13 +538,13 @@ void ShadowMountTab::load()
             }
             if (!r->apiVersion.isEmpty())
                 m_apiVersion = r->apiVersion;
-            finishLoad(r->state);
+            finishLoad(r->state, consoleHost);
         });
     if (!started)
         setStatus(whyNotStarted(), Tone::Warn);
 }
 
-void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s)
+void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s, const QString& consoleHost)
 {
     m_config = s.config;
     m_profiles = s.profiles;
@@ -540,7 +554,7 @@ void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s)
     m_format = s.format;
     m_loaded = ps5::parseMountConfig(ps5::MountTool::ShadowMountPlus, s.config, s.profiles);
     m_hasLoaded = true;
-    m_loadedHost = endpoint().host; // Push is for this console only
+    m_loadedHost = consoleHost; // Push is for this console only
     populate(m_loaded);
     updateHeader();
     setStatus(s.configExists ? QStringLiteral("Loaded. Only the settings you change are written back.")
@@ -571,10 +585,14 @@ void ShadowMountTab::push(bool confirmed)
         return;
     }
     const ps5::MountConfigFiles files = ps5::applyMountConfigChanges(ps5::MountTool::ShadowMountPlus, m_config, m_profiles, ch, m_format);
+    // What the new files were made from: the push is refused when the console's differ (also when a
+    // load finishes while the question below is open).
+    const std::optional<QString> expectConfig = m_configExists ? m_config : QString();
+    const std::optional<QString> expectProfiles = m_profilesExists ? m_profiles : QString();
     if (!confirmed) {
         QStringList lines;
         for (auto it = ch.cbegin(); it != ch.cend(); ++it)
-            lines << QStringLiteral("%1: %2 → %3").arg(it.key(), shortValue(m_loaded.value(it.key())), shortValue(it.value())).toHtmlEscaped();
+            lines << QStringLiteral("%1: %2 → %3").arg(it.key(), shortValue(m_loaded.value(it.key())), shortValue(it.value()));
         QString where = ps5::mountConfigRemotePath(ps5::MountTool::ShadowMountPlus);
         if (files.profilesChanged)
             where += QStringLiteral(" and ") + ps5::smpProfilesRemotePath();
@@ -583,14 +601,13 @@ void ShadowMountTab::push(bool confirmed)
                                      : QString();
         if (!Sheet::confirm(window(), QStringLiteral("Write %1 change%2 to the console?").arg(ch.size()).arg(ch.size() == 1 ? QString() : QStringLiteral("s")),
                             QStringLiteral("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
-                                .arg(Sheet::monoSpan(lines.join(QStringLiteral("<br>"))), Sheet::monoSpan(where), debugOff),
+                                .arg(monoLines(lines), Sheet::monoSpan(where), debugOff),
                             QStringLiteral("Cancel"), QStringLiteral("Push"), false, Sheet::Icon::Info))
             return;
     }
     const QString backupDir = ps5::newConsoleBackupDir();
-    const std::optional<QString> expectConfig = m_configExists ? m_config : QString();
-    const std::optional<QString> expectProfiles = m_profilesExists ? m_profiles : QString();
     const QString apiVersion = m_apiVersion;
+    const QString consoleHost = endpoint().host;
     setStatus(QStringLiteral("Pushing…"), Tone::Info);
     m_push->setEnabled(false);
     const bool started = runOnConsole<ps5::SmpRemoteState>(
@@ -601,19 +618,21 @@ void ShadowMountTab::push(bool confirmed)
                 FW_TRY(ps5::pushSmpProfiles(c, files.profiles, backupDir, t, expectProfiles));
             return ps5::loadSmpState(c, apiVersion, t);
         },
-        [this, n = ch.size()](const Result<ps5::SmpRemoteState>& r) {
+        [this, n = ch.size(), consoleHost](const Result<ps5::SmpRemoteState>& r) {
             if (!r.ok()) {
                 setStatus(r.error().message, Tone::Err);
                 emit toastRequested(Tone::Err, QStringLiteral("Not pushed"), r.error().message);
                 refreshMarks();
                 return;
             }
-            finishLoad(r.value());
+            finishLoad(r.value(), consoleHost);
             setStatus(QStringLiteral("%1 change%2 written; ShadowMount+ reloads its config by itself.").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")), Tone::Ok);
             emit toastRequested(Tone::Ok, QStringLiteral("Config pushed"), QStringLiteral("%1 setting%2 changed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
         });
-    if (!started)
+    if (!started) {
+        setStatus(whyNotStarted(), Tone::Warn); // nothing runs: not "Pushing…"
         refreshMarks();
+    }
 }
 
 void ShadowMountTab::safeToUnplug()
@@ -678,9 +697,7 @@ void ShadowMountTab::ejectUsb()
                                        QStringLiteral("Cancel"), QStringLiteral("Eject"), false, Sheet::Icon::Info)) {
                 return;
             }
-            auto id = m_ctx.queue().enqueue(ps5::jobkinds::kShadowMountEject,
-                                            QJsonObject{{QStringLiteral("host"), ep.host}, {QStringLiteral("apiPort"), int(ep.smpApiPort)},
-                                                        {QStringLiteral("path"), path}});
+            auto id = jobs::submitShadowMountEject(m_ctx, ep.host, int(ep.smpApiPort), path);
             if (!id.ok()) {
                 setStatus(id.error().message, Tone::Err);
                 return;
@@ -770,7 +787,7 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
     connect(defaults, &QPushButton::clicked, this, [show] { show(ps5::mountConfigDefaults(ps5::MountTool::MicroMount)); });
     connect(load, &QPushButton::clicked, this, [this, show] {
         m_mmStatus->setText(QStringLiteral("Loading %1…").arg(ps5::mountConfigRemotePath(ps5::MountTool::MicroMount)));
-        runOnConsole<QString>([](ps5::FtpClient& c, const CancellationToken& t) { return ps5::loadMountConfig(c, ps5::MountTool::MicroMount, t); },
+        const bool started = runOnConsole<QString>([](ps5::FtpClient& c, const CancellationToken& t) { return ps5::loadMountConfig(c, ps5::MountTool::MicroMount, t); },
                               [this, show](const Result<QString>& r) {
                                   if (r.ok()) {
                                       show(ps5::parseMountConfig(ps5::MountTool::MicroMount, r.value()));
@@ -779,6 +796,8 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
                                       m_mmStatus->setText(r.error().message);
                                   }
                               });
+        if (!started)
+            m_mmStatus->setText(whyNotStarted());
     });
     connect(m_mmPush, &QPushButton::clicked, this, [this, values] {
         const MountConfigValues v = values();
@@ -818,7 +837,7 @@ void ShadowMountTab::applyDemo()
     s.logVersion = QStringLiteral("1.7beta11");
     s.format = ps5::SmpConfigFormat::V2;
     m_apiVersion = QStringLiteral("1.7beta11");
-    finishLoad(s);
+    finishLoad(s, endpoint().host);
     setValue(QStringLiteral("scan_interval_seconds"), QStringLiteral("15"));
     setValue(QStringLiteral("auto_update_ampr"), QStringLiteral("1"));
     setStatus(QStringLiteral("Example values, not from a console."), Tone::Info);
