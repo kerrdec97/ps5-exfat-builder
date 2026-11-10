@@ -66,25 +66,26 @@ QString describe(const std::optional<JobRecord>& r)
     return jobStateName(r->state) + QStringLiteral(": ") + (r->error ? r->error->toLogString() : (r->outcome ? r->outcome->summary : QString()));
 }
 
-void writeFile(const QString& path, const QByteArray& data)
+bool writeFile(const QString& path, const QByteArray& data)
 {
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile f(path);
-    QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write(data);
+    return f.open(QIODevice::WriteOnly) && f.write(data) == data.size();
 }
 
 // Zips `folder` with every entry under `prefix` ("" or "Name/").
-void zipFolder(const QString& folder, const QString& zipPath, const QString& prefix)
+bool zipFolder(const QString& folder, const QString& zipPath, const QString& prefix)
 {
     zip::Writer w;
-    QVERIFY(w.open(zipPath, true).ok());
+    if (!w.open(zipPath, true).ok())
+        return false;
     QDirIterator it(folder, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString p = it.next();
-        QVERIFY(w.addFile(prefix + QDir(folder).relativeFilePath(p), p, zip::Method::Deflate, {}).ok());
+        if (!w.addFile(prefix + QDir(folder).relativeFilePath(p), p, zip::Method::Deflate, {}).ok())
+            return false;
     }
-    QVERIFY(w.finish(true).ok());
+    return w.finish(true).ok();
 }
 
 } // namespace
@@ -102,18 +103,18 @@ private slots:
         fwtest::isolateAppData(m_root);
         m_env = std::make_unique<Env>(m_root.path());
         m_game = m_root.filePath(QStringLiteral("PPSA09999 Zip Test"));
-        writeFile(m_game + QStringLiteral("/eboot.bin"), QByteArray("\x7f" "ELF", 4) + QByteArray(4000, 'e'));
-        writeFile(m_game + QStringLiteral("/sce_sys/param.json"),
-                  R"({"titleId":"PPSA09999","contentVersion":"01.000.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Zip Test"}}})");
-        writeFile(m_game + QStringLiteral("/data/a.bin"), QByteArray(70000, 'a'));
-        writeFile(m_game + QStringLiteral("/data/sub/b.txt"), "hello zip");
-        writeFile(m_game + QStringLiteral("/sce_module/libc.prx"), QByteArray(3000, 'c'));
+        QVERIFY(writeFile(m_game + QStringLiteral("/eboot.bin"), QByteArray("\x7f" "ELF", 4) + QByteArray(4000, 'e')));
+        QVERIFY(writeFile(m_game + QStringLiteral("/sce_sys/param.json"),
+                  R"({"titleId":"PPSA09999","contentVersion":"01.000.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Zip Test"}}})"));
+        QVERIFY(writeFile(m_game + QStringLiteral("/data/a.bin"), QByteArray(70000, 'a')));
+        QVERIFY(writeFile(m_game + QStringLiteral("/data/sub/b.txt"), "hello zip"));
+        QVERIFY(writeFile(m_game + QStringLiteral("/sce_module/libc.prx"), QByteArray(3000, 'c')));
     }
 
     void inspectReadsParamWithoutUnpacking()
     {
         const QString z = m_root.filePath(QStringLiteral("inspect.zip"));
-        zipFolder(m_game, z, QStringLiteral("PPSA09999-app0/"));
+        QVERIFY(zipFolder(m_game, z, QStringLiteral("PPSA09999-app0/")));
         QVERIFY(archive::isZipSource(z));
         auto g = archive::inspectZip(z);
         QVERIFY2(g.ok(), g.ok() ? "" : qPrintable(g.error().message));
@@ -142,7 +143,7 @@ private slots:
         QFETCH(QString, prefix);
         const QString tag = QString::fromLatin1(QTest::currentDataTag()).replace(u',', u'_').replace(u' ', u'_');
         const QString z = m_root.filePath(QStringLiteral("dump-%1.zip").arg(tag));
-        zipFolder(m_game, z, prefix);
+        QVERIFY(zipFolder(m_game, z, prefix));
         const QString out = m_root.filePath(QStringLiteral("out/%1%2").arg(tag, ext));
         QDir().mkpath(QFileInfo(out).absolutePath());
         QJsonObject p{{QStringLiteral("source"), z}, {QStringLiteral("output"), out}};

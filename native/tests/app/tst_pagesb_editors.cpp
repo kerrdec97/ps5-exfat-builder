@@ -337,8 +337,6 @@ private slots:
         QVERIFY(page.row(key));
         const int before = page.attentionCount();
         emit page.row(key)->editor()->edited(QVariant(1000000));
-        if (page.attentionCount() == before)
-            QSKIP("the schema took the value (clamped or accepted): nothing was refused");
         QCOMPARE(page.attentionCount(), before + 1);
         QPushButton* reset = buttonByText(&page, QStringLiteral("Reset section"));
         QVERIFY(reset);

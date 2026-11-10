@@ -20,7 +20,9 @@
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
 #include "app/pages/BuildImagePage.h"
+#include "app/pages/LibraryPage.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/LibraryGrid.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
@@ -38,6 +40,7 @@
 #include "engines/ufs2/Module.h"
 #include "support/TestSupport.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -46,12 +49,15 @@
 #include <QHelpEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextDocument>
+#include <QTimer>
 #include <QToolTip>
 #include <QUrl>
 #include <QtEndian>
@@ -160,12 +166,26 @@ class TstBuildPage : public QObject {
         return {};
     }
 
-    void resetNaming()
+    // A base package with its own param.json (version 01.000.000, like the test
+    // game), written on first use. Empty when it could not be written.
+    QString basePackage()
+    {
+        const QString base = path(QStringLiteral("Packages/UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.pkg"));
+        if (QFileInfo(base).isFile())
+            return base;
+        const bool ok = fwtest::writeTextFile(base, QByteArray("\x7F" "FIH", 4) + QByteArray(4096, '\0')
+                                                        + QByteArray("{\"contentId\":\"UP0000-PPSA01234_00-GOLDENTEST000000\","
+                                                                     "\"contentVersion\":\"01.000.000\",\"titleId\":\"PPSA01234\"}")
+                                                        + QByteArray(512, '\0'));
+        return ok ? base : QString();
+    }
+
+    bool resetNaming()
     {
         auto& s = m_ctx->settings();
-        QVERIFY(s.setValue(gameinfo::keys::kNamePreset, QStringLiteral("ppsa_title_ver")).ok());
-        QVERIFY(s.setValue(gameinfo::keys::kNameTemplate, gameinfo::kDefaultImageNameTemplate).ok());
-        QVERIFY(s.setValue(gameinfo::keys::kFirmwareOverride, QStringLiteral("auto")).ok());
+        return s.setValue(gameinfo::keys::kNamePreset, QStringLiteral("ppsa_title_ver")).ok()
+               && s.setValue(gameinfo::keys::kNameTemplate, gameinfo::kDefaultImageNameTemplate).ok()
+               && s.setValue(gameinfo::keys::kFirmwareOverride, QStringLiteral("auto")).ok();
     }
 
 private slots:
@@ -505,7 +525,7 @@ private slots:
         QCOMPARE(m_page->fileName(), QStringLiteral("Ghost of Yōtei (zstd)"));
         m_page->setFileStem(QStringLiteral("Ghost of Yōtei"));
         QVERIFY(addToQueue().isEmpty());
-        resetNaming();
+        QVERIFY(resetNaming());
 
         // A zipped dump packs the same way (the ZIP is read for its title and version).
         const QString zipPath = path(QStringLiteral("zips/PPSA01234-app.zip"));
@@ -610,7 +630,7 @@ private slots:
         QCOMPARE(m_page->fileName(), QStringLiteral("PPSA01342 - Ghost of Yōtei [FW7] ffpkg 4.00.ffpkg"));
         QVERIFY(s.setValue(gameinfo::keys::kNamePreset, QStringLiteral("folder")).ok()); // #43
         QCOMPARE(m_page->fileName(), QStringLiteral("Ghost of Yōtei.ffpkg"));
-        resetNaming();
+        QVERIFY(resetNaming());
 
         // Typed names stay for this job (also across formats), with the format's extension.
         m_page->setFileStem(QStringLiteral("Mon jeu ☆ (copie)"));
@@ -755,12 +775,8 @@ private slots:
     void backportUpdatesSubmitBackportJobs()
     {
         auto& q = m_ctx->queue();
-        const QString base = path(QStringLiteral("Packages/UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.pkg"));
-        // A base package with its own param.json (version 01.000.000, like the test game).
-        QVERIFY(fwtest::writeTextFile(base, QByteArray("\x7F" "FIH", 4) + QByteArray(4096, '\0')
-                                                + QByteArray("{\"contentId\":\"UP0000-PPSA01234_00-GOLDENTEST000000\","
-                                                             "\"contentVersion\":\"01.000.000\",\"titleId\":\"PPSA01234\"}")
-                                                + QByteArray(512, '\0')));
+        const QString base = basePackage();
+        QVERIFY(!base.isEmpty());
         const QString b4 = path(QStringLiteral("Backports/FW 4xx PPSA01234 Test (01.000.000) backport files"));
         QVERIFY(fwtest::writeTextFile(b4 + QStringLiteral("/eboot.bin"), "backported"));
         q.holdQueue(true);
@@ -991,7 +1007,7 @@ private slots:
         QVERIFY(q.remove(id));
         q.holdQueue(false);
         QVERIFY(s.setValue(ampr::keys::kZstdPack, before).ok());
-        resetNaming();
+        QVERIFY(resetNaming());
         m_page->setOutputFolder({});
         m_page->setFormat(jobs::kFormatExfat);
     }
@@ -1105,8 +1121,8 @@ private slots:
         QVERIFY(q.remove(id));
 
         // Update: the base must exist, and its path is sent without the spaces around it.
-        const QString base = path(QStringLiteral("Packages/UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.pkg"));
-        QVERIFY(QFileInfo(base).isFile()); // written by backportUpdatesSubmitBackportJobs
+        const QString base = basePackage();
+        QVERIFY(!base.isEmpty());
         m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("update")},
                                                      {QStringLiteral("basePackage"), path(QStringLiteral("Packages/missing.pkg"))}});
         QVERIFY(addToQueue().isEmpty());
@@ -1217,6 +1233,115 @@ private slots:
         QCOMPARE(contentId->text(), QString());
         QCOMPARE(version->text(), QString());
         QCOMPARE(title->text(), QString());
+        m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    // The five format tiles: one row where there is room, three and two below
+    // that, then pairs, then a single column; and a tile is where a click on
+    // its place lands. Pure geometry, so it holds on the offscreen platform.
+    void formatTilesWrapByWidth()
+    {
+        QWidget* tiles = nullptr;
+        for (auto* w : m_page->findChildren<QWidget*>())
+            if (w->accessibleName() == QLatin1String("Output format"))
+                tiles = w;
+        QVERIFY(tiles);
+        QVERIFY(tiles->hasHeightForWidth());
+        const QStringList titles{QStringLiteral("exFAT"), QStringLiteral("FFPKG"), QStringLiteral("PFS"), QStringLiteral("FPKG"), QStringLiteral("Packed folder")};
+
+        // Height and gap of a tile, from the widget's own answers for one and two rows.
+        const int tileH = tiles->heightForWidth(4000);
+        const int gap = tiles->heightForWidth(797) - 2 * tileH;
+        QVERIFY2(tileH > 0 && gap > 0 && gap < tileH, qPrintable(QStringLiteral("%1 / %2").arg(tileH).arg(gap)));
+        const auto rows = [&](int width) {
+            const int h = tiles->heightForWidth(width);
+            return (h + gap) % (tileH + gap) == 0 ? (h + gap) / (tileH + gap) : -1;
+        };
+        QCOMPARE(rows(1440), 1); // 5
+        QCOMPARE(rows(798), 1);
+        QCOMPARE(rows(797), 2); // 3 + 2
+        QCOMPARE(rows(534), 2);
+        QCOMPARE(rows(533), 3); // 2 + 2 + 1
+        QCOMPARE(rows(392), 3);
+        QCOMPARE(rows(391), 5); // one column
+        QCOMPARE(rows(200), 5);
+
+        // Each tile answers a click in the middle of its place, at every arrangement.
+        const QSize laidOut = tiles->size();
+        const auto restore = qScopeGuard([&] {
+            tiles->resize(laidOut);
+            m_page->setFormat(jobs::kFormatExfat);
+        });
+        const QList<QPair<int, int>> arrangements{{1000, 5}, {700, 3}, {450, 2}, {300, 1}}; // width, tiles per row
+        for (const auto& [width, perRow] : arrangements) {
+            QCOMPARE(rows(width), (5 + perRow - 1) / perRow);
+            const int tileW = (width - (perRow - 1) * gap) / perRow;
+            for (int i = 0; i < titles.size(); ++i) {
+                tiles->resize(width, tiles->heightForWidth(width)); // the page's layout may have had its say meanwhile
+                const QPoint middle((i % perRow) * (tileW + gap) + tileW / 2, (i / perRow) * (tileH + gap) + tileH / 2);
+                QVERIFY2(tiles->rect().contains(middle), qPrintable(QStringLiteral("%1 px, tile %2").arg(width).arg(i)));
+                QTest::mouseClick(tiles, Qt::LeftButton, Qt::NoModifier, middle);
+                QVERIFY2(tiles->accessibleDescription() == QStringLiteral("Selected: ") + titles.at(i),
+                         qPrintable(QStringLiteral("%1 px, tile %2: %3").arg(width).arg(i).arg(tiles->accessibleDescription())));
+            }
+        }
+    }
+
+    // Library › right-click a game › "Pack with zstd…": the Build page opens
+    // with Packed folder chosen and that dump as its source, ready to queue
+    // the pack job.
+    void libraryPackWithZstdOpensTheBuildPage()
+    {
+        auto& q = m_ctx->queue();
+        auto* lib = qobject_cast<pages::LibraryPage*>(m_window->page(QStringLiteral("library")));
+        QVERIFY(lib);
+        ui::LibraryGrid* grid = lib->gamesView();
+        QVERIFY(grid);
+        m_page->setFormat(jobs::kFormatExfat);
+        m_page->setSource({});
+        m_window->navigate(QStringLiteral("library"));
+        QCOMPARE(m_window->currentPage(), QStringLiteral("library"));
+
+        // The menu runs its own event loop: a timer inside it picks the entry.
+        bool picked = false;
+        QTimer pick;
+        pick.setInterval(30);
+        connect(&pick, &QTimer::timeout, this, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu)
+                return;
+            pick.stop();
+            for (QAction* a : menu->actions())
+                if (a->text() == QStringLiteral("Pack with zstd…")) {
+                    picked = true;
+                    a->trigger();
+                }
+            menu->close();
+        });
+        pick.start();
+        emit grid->contextRequested(m_game, QPoint(40, 40));
+        pick.stop();
+        QVERIFY2(picked, "the game's menu has no \"Pack with zstd…\"");
+
+        QCOMPARE(m_window->currentPage(), QStringLiteral("build"));
+        QWidget* tiles = nullptr;
+        for (auto* w : m_page->findChildren<QWidget*>())
+            if (w->accessibleName() == QLatin1String("Output format"))
+                tiles = w;
+        QVERIFY(tiles);
+        QCOMPARE(tiles->accessibleDescription(), QStringLiteral("Selected: Packed folder"));
+        QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && clean(m_page->summary().folder) == clean(m_game); }, 15000));
+        m_page->setOutputFolder(path(QStringLiteral("from-library-zstd")));
+        q.holdQueue(true);
+        const QString id = addToQueue();
+        QVERIFY2(!id.isEmpty(), "the Build page did not queue the pack job");
+        QCOMPARE(q.record(id)->kind, ampr::kPackJob);
+        QCOMPARE(clean(q.record(id)->parameters.value(QStringLiteral("source")).toString()), clean(m_game));
+        QCOMPARE(q.record(id)->overrides.value(ampr::keys::kZstdPack).toBool(), true);
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+        m_page->setOutputFolder({});
+        m_page->setSource({});
         m_page->setFormat(jobs::kFormatExfat);
     }
 };

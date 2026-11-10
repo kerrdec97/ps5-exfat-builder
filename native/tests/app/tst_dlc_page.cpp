@@ -2,13 +2,14 @@
 // window: an INI is imported (one row per content_id), rows are retargeted to
 // another region (each keeps its own _NN and suffix), the plan lists the
 // outputs, updated INIs are written next to the originals' names without
-// touching them, and Convert DLC queues a dlc.convert job. With FW_FPKG_CLI
-// set the job runs for real and the package is read back.
+// touching them, and Convert DLC queues a dlc.convert job. With FW_DLC_E2E_CLI
+// naming fpkg-cli.exe the job runs for real and the package is read back.
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
 #include "app/pages/DlcPage.h"
 #include "app/ui/Theme.h"
+#include "app/ui/Widgets.h"
 #include "engines/dlc/DlcIdentity.h"
 #include "engines/dlc/DlcPackage.h"
 #include "engines/dlc/DlcSettings.h"
@@ -41,24 +42,40 @@ class TstDlcPage : public QObject {
     pages::DlcPage* m_page = nullptr;
     QString m_ini;
     QByteArray m_iniBytes;
+    QString m_realCli; // fpkg-cli for the opt-in real conversion (FW_DLC_E2E_CLI)
+
+    // The list as two functions need it: both rows of the INI, retargeted to
+    // another region's game, with an output folder. Each sets it up itself.
+    bool retargetedRows()
+    {
+        m_page->clearList();
+        m_page->addInputs({m_ini});
+        if (m_page->rowCount() != 2)
+            return false;
+        const QString err = m_page->applyTarget({0, 1}, QStringLiteral("PPSA05678"), QStringLiteral("EP1004-PPSA05678_00-SEASONPASS000001"),
+                                                QStringLiteral("Manual target; compatibility unverified"), QString(), false);
+        m_page->setOutputFolder(m_root.filePath(QStringLiteral("DLC out")));
+        return err.isEmpty();
+    }
 
 private slots:
     void initTestCase()
     {
         QVERIFY(m_root.isValid());
         fwtest::isolateAppData(m_root);
-        // The main window builds the Backport page, which reads the PS5 Backport
-        // settings: never the user's.
-        qputenv("D97BETA_CONFIG_DIR", QDir::toNativeSeparators(m_root.filePath(QStringLiteral("bp-config"))).toUtf8());
-        qputenv("D97BETA_DATA_DIR", QDir::toNativeSeparators(m_root.filePath(QStringLiteral("bp-data"))).toUtf8());
+        // The real tool runs only when the test's own variable names it. The
+        // app's FW_FPKG_CLI is taken away: a developer who uses the app with
+        // it set would otherwise have every run of this test start the tool.
+        m_realCli = qEnvironmentVariable("FW_DLC_E2E_CLI");
+        qunsetenv("FW_FPKG_CLI");
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_root.filePath(QStringLiteral("qsettings")));
         qputenv("FW_TEST_AUTO_ACCEPT", "1"); // the review sheet answers itself
         theme::apply(qApp);
         m_ctx = std::make_unique<AppContext>();
         QVERIFY(m_ctx->initialize().ok());
-        if (!qEnvironmentVariableIsEmpty("FW_FPKG_CLI"))
-            QVERIFY(m_ctx->settings().setValue(dlc::keys::kFpkgCliPath, qEnvironmentVariable("FW_FPKG_CLI")).ok());
+        if (!m_realCli.isEmpty())
+            QVERIFY(m_ctx->settings().setValue(dlc::keys::kFpkgCliPath, m_realCli).ok());
 
         m_ini = m_root.filePath(QStringLiteral("Game/dlc_emu.ini"));
         m_iniBytes = "; DLC of the test game\r\n[PSAC]\r\n# Season Pass\r\ncontent_id=UP9000-PPSA01234_00-SEASONPASS000001\r\n"
@@ -115,6 +132,7 @@ private slots:
 
     void saveUpdatedInis()
     {
+        QVERIFY(retargetedRows());
         QStringList log;
         const auto results = m_page->saveUpdatedInis(&log);
         QCOMPARE(results.size(), size_t(1));
@@ -130,8 +148,9 @@ private slots:
 
     void convertQueuesJob()
     {
+        QVERIFY(retargetedRows());
         auto& q = m_ctx->queue();
-        const bool real = !qEnvironmentVariableIsEmpty("FW_FPKG_CLI");
+        const bool real = !m_realCli.isEmpty();
         if (!real)
             q.holdQueue(true);
         QStringList before;
@@ -143,9 +162,19 @@ private slots:
             if (!before.contains(r.id))
                 id = r.id;
         if (!real) {
-            // Without the DLC engine the job is refused by its own check.
-            if (id.isEmpty())
-                QSKIP("fpkg-cli is not available (set FW_FPKG_CLI for the real conversion).");
+            // The click does one of two things, and says which. Without the
+            // DLC engine the job is refused by its own check and the page
+            // shows why; with one in reach the job waits in the held queue.
+            if (id.isEmpty()) {
+                bool told = false;
+                for (auto* bar : m_page->findChildren<ui::InfoBar*>())
+                    told = told || bar->isVisibleTo(m_page);
+                QVERIFY2(told, "nothing was queued and the page did not say why");
+            } else {
+                QCOMPARE(q.record(id)->kind, QStringLiteral("dlc.convert"));
+                QCOMPARE(q.record(id)->state, JobState::Queued);
+                QVERIFY(q.remove(id)); // never run: that needs the real tool
+            }
             q.holdQueue(false);
             return;
         }
@@ -160,7 +189,7 @@ private slots:
         QVERIFY(rec->outcome);
         QCOMPARE(rec->outcome->outputs.size(), 2);
         CancellationSource cs;
-        auto info = dlc::inspectDlcPackage(dlc::locateFpkgCli(qEnvironmentVariable("FW_FPKG_CLI")), rec->outcome->outputs[0],
+        auto info = dlc::inspectDlcPackage(dlc::locateFpkgCli(m_realCli), rec->outcome->outputs[0],
                                            dlc::kZeroKey, cs.token());
         QVERIFY(info.ok());
         QCOMPARE(info->contentId, QStringLiteral("EP1004-PPSA05678_00-SEASONPASS000001"));

@@ -12,7 +12,9 @@
 
 #include <QDir>
 #include <QElapsedTimer>
+#include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
@@ -322,8 +324,11 @@ private slots:
         QDir().mkpath(cloud);
         auto warn = checkOutputVolume(cloud, 1024);
         QVERIFY(warn.ok());
-        QCOMPARE(warn->size(), 1);
-        QVERIFY(warn->first().contains(QStringLiteral("cloud")));
+        // One warning more than the temporary folder itself gets (which may have
+        // some of its own on a removable, network or FAT drive): the cloud one.
+        QCOMPARE(warn->size(), ok->size() + 1);
+        QCOMPARE(warn->filter(QStringLiteral("cloud")).size(), 1);
+        QVERIFY(ok->filter(QStringLiteral("cloud")).isEmpty());
         const VolumeInfo v = volumeInfo(m_root.path());
         QVERIFY(!v.fileSystem.isEmpty());
         QVERIFY(volumeInfo(m_root.filePath(QStringLiteral("not/yet/created"))).rootPath == v.rootPath);
@@ -493,6 +498,17 @@ private slots:
         QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/crash-20260101-000000.txt"), "old"));
         QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/other.txt"), "x"));
         QCOMPARE(crash::previousCrashFiles(dir).size(), 1);
+        // A later crash comes first (later by its name and by its file time).
+        const QString newer = dir + QStringLiteral("/crash-20260302-101500.txt");
+        QVERIFY(fwtest::writeTextFile(newer, "new"));
+        {
+            QFile old(dir + QStringLiteral("/crash-20260101-000000.txt"));
+            QVERIFY(old.open(QIODevice::ReadWrite));
+            QVERIFY(old.setFileTime(QDateTime::currentDateTime().addDays(-60), QFileDevice::FileModificationTime));
+        }
+        const QStringList listed = crash::previousCrashFiles(dir);
+        QCOMPARE(listed.size(), 2);
+        QCOMPARE(QFileInfo(listed.first()).fileName(), QStringLiteral("crash-20260302-101500.txt"));
     }
 
     void cpuLimitCanBeAppliedWhileRunning()

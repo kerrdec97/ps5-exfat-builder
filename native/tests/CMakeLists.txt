@@ -46,13 +46,32 @@ foreach(test_src ${FW_TESTS})
     endif()
     fw_configure_target(${test_name})
     add_test(NAME ${test_name} COMMAND ${test_name} -o -,txt)
-    # The two D97BETA folders are a second line of defence: a test that shows
-    # the Backport page and forgets to set them itself then works in the build
-    # tree, never in the files the PS5 Backport program keeps for the user.
+    # FW_DATA_DIR and the D97BETA folders are a second line of defence: a test
+    # that forgets fwtest::isolateAppData, or shows the Backport page without
+    # it, then works in the build tree, never in the user's app data or in the
+    # files the PS5 Backport program keeps for the user.
+    # QT_FORCE_STDERR_LOGGING: without it Qt Test sends its report to the
+    # debugger channel on Windows when there is no console, and CTest (and
+    # Testing/Temporary/LastTest.log) would show nothing of a failure.
     set(_isolated "${CMAKE_CURRENT_BINARY_DIR}/isolated/${test_name}")
     set_tests_properties(${test_name} PROPERTIES
         TIMEOUT 900
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;FW_OFFLINE=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE};D97BETA_CONFIG_DIR=${_isolated}/backport-config;D97BETA_DATA_DIR=${_isolated}/backport-data")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1;FW_OFFLINE=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE};FW_DATA_DIR=${_isolated}/appdata;D97BETA_CONFIG_DIR=${_isolated}/backport-config;D97BETA_DATA_DIR=${_isolated}/backport-data;D97BETA_ENGINE_HOME=${_isolated}/backport-engine-home")
+endforeach()
+
+# Programs that write gigabytes or load every core never run side by side, so
+# the timing of the other tests does not depend on them (ctest -L heavy lists them).
+foreach(heavy tst_exfat_bench tst_exfat_roundtrip tst_pfs_benchmark tst_ufs2_roundtrip)
+    if(TEST ${heavy})
+        set_tests_properties(${heavy} PROPERTIES RESOURCE_LOCK fw_heavy_disk LABELS heavy)
+    endif()
+endforeach()
+# One of these starts a stand-in process named like the PS5 Backport program,
+# which the others would take for a second copy of it running.
+foreach(engine_test tst_backport_engine tst_backport_page tst_pagesb_backport)
+    if(TEST ${engine_test})
+        set_tests_properties(${engine_test} PROPERTIES RESOURCE_LOCK fw_backport_process_name)
+    endif()
 endforeach()
 
 # Module-owned extras (helper executables such as a stand-in external tool):

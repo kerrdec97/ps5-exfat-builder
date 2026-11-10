@@ -59,6 +59,12 @@ struct Env {
     }
 };
 
+// False also when the job was refused before it could be queued.
+bool succeeded(const std::optional<JobRecord>& r)
+{
+    return r && r->state == JobState::Succeeded;
+}
+
 QString describe(const std::optional<JobRecord>& r)
 {
     if (!r)
@@ -285,10 +291,10 @@ private slots:
         Env env(m_root.filePath(QStringLiteral("e3")));
         const QString out = m_root.filePath(QStringLiteral("stagers"));
         QDir().mkpath(out);
-        QVERIFY(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.exfat")}})->state == JobState::Succeeded);
-        QVERIFY(env.run(QStringLiteral("image.ffpkg.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.ffpkg")}})->state == JobState::Succeeded);
-        QVERIFY(env.run(QStringLiteral("image.pfs.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.ffpfsc")},
-                                                            {QStringLiteral("format"), QStringLiteral("ffpfsc")}})->state == JobState::Succeeded);
+        QVERIFY(succeeded(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.exfat")}})));
+        QVERIFY(succeeded(env.run(QStringLiteral("image.ffpkg.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.ffpkg")}})));
+        QVERIFY(succeeded(env.run(QStringLiteral("image.pfs.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.ffpfsc")},
+                                                            {QStringLiteral("format"), QStringLiteral("ffpfsc")}})));
         const auto expected = snapshot(m_game);
         for (const QString& img : {QStringLiteral("g.exfat"), QStringLiteral("g.ffpkg"), QStringLiteral("g.ffpfsc")}) {
             auto stager = fpkg::sourceStagerFor(out + u'/' + img);
@@ -321,7 +327,7 @@ private slots:
         const QString out = m_root.filePath(QStringLiteral("upload"));
         QDir().mkpath(out);
         // Off by default: nothing queued.
-        QVERIFY(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/a.exfat")}})->state == JobState::Succeeded);
+        QVERIFY(succeeded(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/a.exfat")}})));
         QTest::qWait(100);
         QCOMPARE(queued.count(), 0);
         // On for this job: the verified image is queued for upload.

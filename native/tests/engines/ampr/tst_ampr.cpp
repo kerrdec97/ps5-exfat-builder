@@ -22,6 +22,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QRandomGenerator>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -216,18 +217,33 @@ private slots:
 
     void damagedPacksAreRefused()
     {
-        const QString dir = m_tmp.filePath(QStringLiteral("packs-1"));
+        // Its own small pack, so the function also runs alone.
+        const QString dir = m_tmp.filePath(QStringLiteral("packs-damaged"));
+        QVERIFY(QDir().mkpath(dir));
+        QMap<QByteArray, QByteArray> files;
+        files.insert("data/level1.bin", compressible(300 * 1024, 1));
+        files.insert("a/deep.txt", QByteArray("hello zstd"));
+        ZstdPackOptions o;
+        o.threads = 1;
+        o.archiveId.fill('A');
+        auto written = writeZstdPack(inputsOf(files), o, dir, {}, nullptr);
+        QVERIFY2(written.ok(), written.ok() ? "" : qPrintable(written.error().toLogString()));
         QByteArray idx = bytesOf(dir + QStringLiteral("/ampr_zstd.index"));
+        QVERIFY(idx.size() > 64);
         QVERIFY(decodeZstdIndex(idx).ok());
         QByteArray bad = idx;
         bad[bad.size() - 1] = char(bad[bad.size() - 1] ^ 0x20); // a path byte
         QVERIFY(!decodeZstdIndex(bad).ok());
         bad = idx;
         bad[16] = 16; // 64 KiB chunks: refused
-        QCOMPARE(decodeZstdIndex(bad).error().code, ErrorCode::Unsupported);
+        const auto smallChunks = decodeZstdIndex(bad);
+        QVERIFY(!smallChunks.ok());
+        QCOMPARE(smallChunks.error().code, ErrorCode::Unsupported);
         // A volume of another pack.
         auto ix = decodeZstdIndex(idx);
+        QVERIFY(ix.ok());
         QByteArray header = bytesOf(dir + QStringLiteral("/ampr_zstd-000.pak")).left(64);
+        QCOMPARE(header.size(), 64);
         QVERIFY(checkZstdVolumeHeader(header, 0, *ix).ok());
         QVERIFY(!checkZstdVolumeHeader(header, 1, *ix).ok());
         header[30] = char(header[30] ^ 1);
@@ -274,18 +290,8 @@ private slots:
 
     void packAGameAndUnpackItAgain()
     {
-        const QString game = m_tmp.filePath(QStringLiteral("games/PPSA01234"));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(60000, 'E')));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA01234"})"));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("old ampr-emu-ng 0.3.1 build")));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceNpAuth.sprx"), QByteArray("backport lib")));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/level1.bin"), compressible(1200 * 1024, 2)));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/sub/noise.bin"), randomBytes(300 * 1024, 9)));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/Media/Modules/game.prx"), QByteArray(5000, 'P')));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/settings.ini"), QByteArray("[a]\nb=1\n")));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/empty.bin"), QByteArray()));
-        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/ampr_commands.bin"), QByteArray("journal")));
-        QVERIFY(QDir().mkpath(game + QStringLiteral("/saves/empty")));
+        const QString game = sampleGame();
+        QVERIFY(!game.isEmpty());
 
         auto files = openFolderGame(game, {});
         QVERIFY(files.ok());
@@ -300,7 +306,12 @@ private slots:
         QCOMPARE(rep->droppedFiles, QStringList{QStringLiteral("ampr_commands.bin")});
         QCOMPARE(rep->previousRuntime.kind, RuntimeKind::AmprEmuNg);
         QVERIFY(rep->amprIndexWritten);
-        QVERIFY(rep->linkedFiles >= 4);
+        // Loose files are linked only where both folders are on one NTFS
+        // volume; anywhere else they are copied, which is as correct.
+        if (QStorageInfo(m_tmp.path()).fileSystemType().compare("NTFS", Qt::CaseInsensitive) == 0)
+            QVERIFY2(rep->linkedFiles >= 4, qPrintable(QString::number(rep->linkedFiles)));
+        else
+            QCOMPARE(rep->linkedFiles, qint64(0));
 
         // On disk: loose files, the packs, the bundled runtime; no folder that
         // holds only packed files (data/ would hide the packed listing).
@@ -315,7 +326,6 @@ private slots:
         QCOMPARE(bytesOf(out + QStringLiteral("/Media/Modules/game.prx")), bytesOf(game + QStringLiteral("/Media/Modules/game.prx")));
 
         // ampr_emu.index lists the packed files (as the game sees them) and the new runtime.
-        auto scan = pfs::scanAmprFolder(game, {});
         const QByteArray amprIdx = bytesOf(out + QStringLiteral("/ampr_emu.index"));
         QVERIFY(amprIdx.startsWith("AMPRIDX3"));
         QVERIFY(amprIdx.contains("/app0/data/level1.bin"));
@@ -379,7 +389,8 @@ private slots:
 
     void compatibleStrategyKeepsConfigsLoose()
     {
-        const QString game = m_tmp.filePath(QStringLiteral("games/PPSA01234"));
+        const QString game = sampleGame();
+        QVERIFY(!game.isEmpty());
         auto files = openFolderGame(game, {});
         QVERIFY(files.ok());
         PackGameOptions o;
@@ -393,6 +404,27 @@ private slots:
     }
 
 private:
+    // The dump several functions pack: written by whichever of them runs
+    // first, so each also works alone. Empty when it could not be written.
+    QString sampleGame()
+    {
+        const QString game = m_tmp.filePath(QStringLiteral("games/PPSA01234"));
+        if (QFileInfo::exists(game + QStringLiteral("/saves/empty")))
+            return game;
+        const bool ok = fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(60000, 'E'))
+            && fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA01234"})")
+            && fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("old ampr-emu-ng 0.3.1 build"))
+            && fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceNpAuth.sprx"), QByteArray("backport lib"))
+            && fwtest::writeTextFile(game + QStringLiteral("/data/level1.bin"), compressible(1200 * 1024, 2))
+            && fwtest::writeTextFile(game + QStringLiteral("/data/sub/noise.bin"), randomBytes(300 * 1024, 9))
+            && fwtest::writeTextFile(game + QStringLiteral("/Media/Modules/game.prx"), QByteArray(5000, 'P'))
+            && fwtest::writeTextFile(game + QStringLiteral("/settings.ini"), QByteArray("[a]\nb=1\n"))
+            && fwtest::writeTextFile(game + QStringLiteral("/empty.bin"), QByteArray())
+            && fwtest::writeTextFile(game + QStringLiteral("/ampr_commands.bin"), QByteArray("journal"))
+            && QDir().mkpath(game + QStringLiteral("/saves/empty")); // made last: its presence means the dump is whole
+        return ok ? game : QString();
+    }
+
     struct Lz4Game {
         QByteArray data, vol, c1;
         quint64 off1 = 0;
@@ -537,6 +569,7 @@ private slots:
         volBad[qsizetype(off1 + 10)] = char(volBad[qsizetype(off1 + 10)] ^ 0xFF);
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/ampr_assets-000.pak"), volBad));
         auto files2 = openFolderGame(game, {});
+        QVERIFY(files2.ok());
         auto logical2 = logicalGame(*files2, {});
         QVERIFY(logical2.ok());
         QByteArray tail(c1.size(), '\0');
@@ -639,7 +672,8 @@ private slots:
     // folder (linkFromFolder) may.
     void looseFilesAreCopiedUnlessLinkingIsAskedFor()
     {
-        const QString game = m_tmp.filePath(QStringLiteral("games/PPSA01234"));
+        const QString game = sampleGame();
+        QVERIFY(!game.isEmpty());
         auto files = openFolderGame(game, {});
         QVERIFY(files.ok());
         PackGameOptions o;

@@ -9,6 +9,7 @@
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/pages/BuildImagePage.h"
 #include "app/pages/CompareResultSheet.h"
 #include "app/pages/HexPreviewSheet.h"
 #include "app/pages/ImageToolsPage.h"
@@ -21,14 +22,19 @@
 #include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
+#include "app/ui/Widgets.h"
+#include "engines/ampr/Module.h"
+#include "engines/gameinfo/Module.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -43,16 +49,31 @@ namespace {
 
 const QByteArray kParam = R"({"titleId":"PPSA00002","contentVersion":"01.020.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Image Test"}}})";
 
-// Answers the confirmation sheet that a page action is about to open.
-void answerSheetSoon(QObject* ctx, QWidget* window, int button)
+// Answers the confirmation sheet that a page action is about to open, whenever
+// it opens. The returned flag says whether one was shown; the watch ends with
+// the answer, or when the caller lets go of the flag.
+[[nodiscard]] std::shared_ptr<bool> answerSheetSoon(QObject* ctx, QWidget* window, int button)
 {
-    QTimer::singleShot(300, ctx, [window, button] {
+    auto answered = std::make_shared<bool>(false);
+    auto* watch = new QTimer(ctx);
+    watch->setInterval(30);
+    QObject::connect(watch, &QTimer::timeout, ctx, [watch, window, button, answered] {
+        if (answered.use_count() == 1) { // nobody waits for the answer any more
+            watch->stop();
+            watch->deleteLater();
+            return;
+        }
         for (auto* s : window->findChildren<ui::Sheet*>())
             if (s->isOpen()) {
+                watch->stop();
+                watch->deleteLater();
+                *answered = true;
                 s->close(button);
                 return;
             }
     });
+    watch->start();
+    return answered;
 }
 
 // Runs `fn` and returns the id of the one job it queued ("" when it queued none or several).
@@ -127,8 +148,7 @@ private slots:
         m_window->show();
         QVERIFY(QTest::qWaitForWindowExposed(m_window.get()));
         for (const QString& kind : {QStringLiteral("image.exfat.build"), QStringLiteral("image.ffpkg.build"), QStringLiteral("image.compare")})
-            if (!jobs::isAvailable(*m_ctx, kind))
-                QSKIP("image engines not registered in this build");
+            QVERIFY(jobs::isAvailable(*m_ctx, kind)); // every engine is linked into the app tests
 
         m_src = m_root.filePath(QStringLiteral("game"));
         QVERIFY(fwtest::writeTextFile(m_src + QStringLiteral("/sce_sys/param.json"), kParam));
@@ -139,10 +159,8 @@ private slots:
         QVERIFY(!m_exfat.isEmpty());
         m_ffpkg = build(jobs::kFormatFfpkg, m_src, QStringLiteral("game"));
         QVERIFY(!m_ffpkg.isEmpty());
-        if (jobs::isAvailable(*m_ctx, QStringLiteral("image.pfs.build"))) {
-            m_ffpfsc = build(jobs::kFormatFfpfsc, m_src, QStringLiteral("game"));
-            QVERIFY(!m_ffpfsc.isEmpty());
-        }
+        m_ffpfsc = build(jobs::kFormatFfpfsc, m_src, QStringLiteral("game"));
+        QVERIFY(!m_ffpfsc.isEmpty());
         m_ctx->queue().clearFinished();
     }
 
@@ -176,9 +194,7 @@ private slots:
     // The strip (and the Library's Images view) read the title from inside every format.
     void imageSummariesComeFromInsideTheImages()
     {
-        QStringList images{m_exfat, m_ffpkg};
-        if (!m_ffpfsc.isEmpty())
-            images << m_ffpfsc;
+        const QStringList images{m_exfat, m_ffpkg, m_ffpfsc};
         for (const QString& img : images) {
             const ui::ImageSummary s = ui::readImageSummary(img);
             QVERIFY2(s.error.isEmpty(), qPrintable(img + u' ' + s.error));
@@ -195,7 +211,12 @@ private slots:
         QCOMPARE(named.titleId, QStringLiteral("PPSA01325"));
         QCOMPARE(named.version, QStringLiteral("01.002"));
         QCOMPARE(named.title, QStringLiteral("Astro Bot"));
-        QCOMPARE(ui::findImageFiles({m_root.path()}).size(), images.size());
+        // Found again by a search of the folder (other functions may have added images of their own).
+        QStringList found;
+        for (const QString& f : ui::findImageFiles({m_root.path()}))
+            found << QDir::cleanPath(f).toLower();
+        for (const QString& img : images)
+            QVERIFY2(found.contains(QDir::cleanPath(img).toLower()), qPrintable(img));
 
         auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}});
@@ -239,8 +260,7 @@ private slots:
         QCOMPARE(q.record(id)->kind, QStringLiteral("image.exfat.verify"));
         QCOMPARE(q.record(id)->state, JobState::Succeeded);
 
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.convert")) || m_ffpfsc.isEmpty())
-            return;
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.convert")));
         // exFAT -> FFPFSC packs the image as it is by default.
         page->setAction(pages::ImageToolsPage::Action::Convert);
         page->setConvertTarget(jobs::kFormatFfpfsc);
@@ -276,8 +296,9 @@ private slots:
         QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
         QVERIFY(QFileInfo::exists(m_root.filePath(QStringLiteral("game.ffpfs"))));
         // The same conversion again asks before replacing; "Replace" passes replaceExisting.
-        answerSheetSoon(this, m_window.get(), 1);
+        const auto askedToReplace = answerSheetSoon(this, m_window.get(), 1);
         id = runPrimary();
+        QVERIFY2(*askedToReplace, "the existing image was replaced without a question");
         QVERIFY(!id.isEmpty());
         QVERIFY(q.record(id)->parameters.value(QStringLiteral("replaceExisting")).toBool());
         QCOMPARE(q.record(id)->state, JobState::Succeeded);
@@ -288,8 +309,7 @@ private slots:
     // Edit: staged changes are applied in one job after the confirmation.
     void editAppliesStagedChanges()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
-            QSKIP("image editing not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit"))); // every engine is linked into the app tests
         auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         auto& q = m_ctx->queue();
         const QString copy = m_root.filePath(QStringLiteral("edit-me.exfat"));
@@ -304,8 +324,9 @@ private slots:
         QVERIFY(treeHas(page->tree(), QStringLiteral("data/notes.txt")));
         QVERIFY(!treeHas(page->tree(), QStringLiteral("data/extra.txt")));
         page->showForm();
-        answerSheetSoon(this, m_window.get(), 1);
+        const auto askedToApply = answerSheetSoon(this, m_window.get(), 1);
         const QString id = newJob(q, [&] { page->primaryAction(); });
+        QVERIFY2(*askedToApply, "the changes were applied without a question");
         QVERIFY(!id.isEmpty());
         QVERIFY(waitTerminal(q, id));
         QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
@@ -326,8 +347,7 @@ private slots:
     // staged list, and so does reading the same image again.
     void editConfirmationListsTheFirstChanges()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
-            QSKIP("image editing not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit"))); // every engine is linked into the app tests
         auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         auto& q = m_ctx->queue();
         m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_exfat}});
@@ -363,13 +383,15 @@ private slots:
             QVERIFY(!bar->isVisible());
 
         // Another image is asked for: the staged changes are not dropped without a question.
-        answerSheetSoon(this, m_window.get(), 0); // Keep editing
+        const auto askedToKeep = answerSheetSoon(this, m_window.get(), 0); // Keep editing
         m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}, {QStringLiteral("action"), QStringLiteral("verify")}});
+        QVERIFY2(*askedToKeep, "the staged changes were not asked about");
         QCOMPARE(page->imagePath(), m_exfat);
         QCOMPARE(page->staged().size(), size_t(30));
         QCOMPARE(page->action(), pages::ImageToolsPage::Action::Edit);
-        answerSheetSoon(this, m_window.get(), 1); // Discard
+        const auto askedToDiscard = answerSheetSoon(this, m_window.get(), 1); // Discard
         m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}, {QStringLiteral("action"), QStringLiteral("verify")}});
+        QVERIFY2(*askedToDiscard, "the staged changes were not asked about");
         QCOMPARE(page->imagePath(), m_ffpkg);
         QVERIFY(page->staged().empty());
         page->openImage({});
@@ -379,8 +401,7 @@ private slots:
     // keeps the sheet open with the reason, a good one is staged.
     void newFolderSheetChecksTheName()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
-            QSKIP("image editing not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit"))); // every engine is linked into the app tests
         auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_exfat}});
         QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
@@ -585,8 +606,7 @@ private slots:
     // The comparison row follows comparisons of the open image only.
     void compareRowIgnoresOtherImages()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.compare")))
-            QSKIP("image.compare not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.compare"))); // every engine is linked into the app tests
         auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
         auto& q = m_ctx->queue();
         page->showForm();
@@ -604,12 +624,6 @@ private slots:
         QTRY_COMPARE(page->compareJobId(), own.value());
         page->openImage({});
         q.clearFinished();
-    }
-
-    void cleanupTestCase()
-    {
-        m_window.reset();
-        m_ctx.reset();
     }
 
     void hexLinesAreOffsetHexAndAscii()
@@ -773,10 +787,10 @@ private slots:
         QCOMPARE(lib->images().first().titleId, QStringLiteral("PPSA00002"));
         QCOMPARE(lib->imagesView()->count(), 1);
         QCOMPARE(lib->imagesView()->items().front().title, QStringLiteral("Image Test"));
-        if (jobs::isAvailable(*m_ctx, QStringLiteral("library.scan"))) {
-            QTRY_COMPARE_WITH_TIMEOUT(lib->gamesView()->count(), 1, 20000);
-            QTRY_COMPARE_WITH_TIMEOUT(lib->gamesView()->items().front().chips, (QStringList{QStringLiteral("Folder"), QStringLiteral("exFAT")}), 20000);
-        }
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("library.scan")));
+        QTRY_COMPARE_WITH_TIMEOUT(lib->gamesView()->count(), 1, 20000);
+        QTRY_COMPARE_WITH_TIMEOUT(lib->gamesView()->items().front().chips, (QStringList{QStringLiteral("Folder"), QStringLiteral("exFAT")}), 20000);
+
         // Rename by title ID, name and version; never over an existing file.
         const QString name = pages::LibraryPage::imageFileName(lib->images().first(), QStringLiteral("id-title-version"));
         QCOMPARE(name, QStringLiteral("PPSA00002 Image Test (01.020.000).exfat"));
@@ -815,6 +829,118 @@ private slots:
         QCOMPARE(sheet->groupTitles(), (QStringList{QStringLiteral("Only in A (missing from B) · 900"), QStringLiteral("Different content · 1")}));
         QCOMPARE(sheet->list()->topLevelItem(0)->childCount(), 4); // 3 listed + "… and 897 more"
         sheet->close(0);
+    }
+
+    // Library › Build images… with "Packed folder": one pack job for the
+    // selected game, written to the chosen folder under the name the Build
+    // page would give it, and the dump itself is left as it was.
+    void libraryBulkBuildMakesAPackedFolder()
+    {
+        auto* lib = qobject_cast<pages::LibraryPage*>(m_window->page(QStringLiteral("library")));
+        QVERIFY(lib);
+        m_window->navigate(QStringLiteral("library"));
+        // Settings › Build › Output name, as the Build page reads it.
+        auto& st = m_ctx->settings();
+        const QVariant presetBefore = st.value(gameinfo::keys::kNamePreset);
+        const auto presetBack = qScopeGuard([&] { (void)st.setValue(gameinfo::keys::kNamePreset, presetBefore); });
+        QVERIFY(st.setValue(gameinfo::keys::kNamePreset, QStringLiteral("ppsa_title_ver")).ok());
+        const QString dir = m_root.filePath(QStringLiteral("bulk-lib"));
+        const QString game = dir + QStringLiteral("/Bulk dump");
+        // Both version fields, as a real dump has them (the Library reads the master version, the Build page the content version).
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"),
+                                      R"({"titleId":"PPSA00003","contentVersion":"01.000.000","masterVersion":"01.00",
+                                          "localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Bulk Test"}}})"));
+        QVERIFY(fwtest::writeRandomFile(game + QStringLiteral("/eboot.bin"), 5000, 21));
+        QVERIFY(fwtest::writeRandomFile(game + QStringLiteral("/data/big.bin"), 300000, 22));
+        const auto dump = [&game] {
+            QMap<QString, qint64> files;
+            QDirIterator it(game, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                it.next();
+                files.insert(QDir(game).relativeFilePath(it.filePath()), it.fileInfo().size());
+            }
+            return files;
+        };
+        const auto before = dump();
+        QCOMPARE(before.size(), 3);
+
+        lib->dropUrls({QUrl::fromLocalFile(dir)});
+        QString key, seen;
+        (void)QTest::qWaitFor([&] {
+            for (const auto& item : lib->gamesView()->items())
+                if (QDir::cleanPath(item.key).compare(QDir::cleanPath(game), Qt::CaseInsensitive) == 0) {
+                    seen = item.subtitle;
+                    if (seen.contains(QStringLiteral("01.000.000"))) // listed and read
+                        key = item.key;
+                }
+            return !key.isEmpty();
+        }, 20000);
+        QVERIFY2(!key.isEmpty(), qPrintable(QStringLiteral("the library shows the dump as \"%1\"").arg(seen)));
+        lib->gamesView()->setSelectedKeys({key});
+        QPushButton* build = nullptr;
+        for (auto* b : lib->findChildren<QPushButton*>())
+            if (b->text() == QStringLiteral("Build images…"))
+                build = b;
+        QVERIFY(build);
+        QTRY_VERIFY_WITH_TIMEOUT(build->isVisibleTo(lib) && build->isEnabled(), 5000);
+
+        // The sheet runs its own event loop: a timer inside it picks the
+        // format and the folder and presses Build.
+        const QString outDir = m_root.filePath(QStringLiteral("bulk-out"));
+        QVERIFY(QDir().mkpath(outDir));
+        bool chosen = false;
+        QTimer drive;
+        drive.setInterval(30);
+        connect(&drive, &QTimer::timeout, this, [&] {
+            for (auto* s : m_window->findChildren<ui::Sheet*>()) {
+                if (!s->isOpen())
+                    continue;
+                auto* format = s->findChild<ui::Segmented*>();
+                auto* saveTo = s->findChild<ui::PathField*>();
+                QPushButton* go = nullptr;
+                for (auto* b : s->findChildren<QPushButton*>())
+                    if (b->text() == QStringLiteral("Build"))
+                        go = b;
+                if (!format || !saveTo || !go)
+                    continue;
+                drive.stop();
+                format->setCurrentValue(pages::kFormatZstdFolder);
+                saveTo->setPath(outDir);
+                chosen = format->currentValue().toString() == pages::kFormatZstdFolder;
+                go->click();
+                return;
+            }
+        });
+        drive.start();
+        auto& q = m_ctx->queue();
+        const QString id = newJob(q, [&] { build->click(); });
+        drive.stop();
+        QVERIFY2(chosen, "the sheet did not open or has no Packed folder choice");
+        QVERIFY2(!id.isEmpty(), "not exactly one job for the one selected game");
+
+        auto rec = q.record(id);
+        QVERIFY(rec);
+        QCOMPARE(rec->kind, ampr::kPackJob);
+        QCOMPARE(QDir::cleanPath(rec->parameters.value(QStringLiteral("source")).toString()).toLower(), QDir::cleanPath(game).toLower());
+        const QString packed = QDir(outDir).filePath(QStringLiteral("PPSA00003 Bulk Test (01.000.000)"));
+        QCOMPARE(QDir::cleanPath(rec->parameters.value(QStringLiteral("output")).toString()).toLower(), QDir::cleanPath(packed).toLower());
+        QCOMPARE(rec->overrides.value(ampr::keys::kZstdPack).toBool(), true); // whatever the global switch says
+        QVERIFY(waitTerminal(q, id));
+        rec = q.record(id);
+        QVERIFY2(rec->state == JobState::Succeeded, qPrintable(rec->error ? rec->error->toLogString() : QString()));
+        QVERIFY(QFileInfo(packed + QStringLiteral("/ampr_zstd.index")).isFile());
+        QVERIFY(QFileInfo(packed + QStringLiteral("/ampr_zstd-000.pak")).isFile());
+        QVERIFY(QFileInfo(packed + QStringLiteral("/eboot.bin")).isFile());
+        QVERIFY(!QFileInfo::exists(packed + QStringLiteral("/data/big.bin"))); // in the packs
+        QCOMPARE(dump(), before);
+        lib->gamesView()->setSelectedKeys({});
+        q.clearFinished();
+    }
+
+    void cleanupTestCase()
+    {
+        m_window.reset();
+        m_ctx.reset();
     }
 };
 

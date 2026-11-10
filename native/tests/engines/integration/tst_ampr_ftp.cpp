@@ -82,25 +82,38 @@ struct Env {
 
 // A small APR game: nested folders, spaces, a non-ASCII name, case-only
 // variants, the emulator's own files and an old index (all left out).
-void makeApp0(const QString& app0)
+bool makeApp0(const QString& app0)
 {
     const QDateTime t0(QDate(2025, 6, 1), QTime(10, 20, 30), QTimeZone::utc());
     int i = 0;
     auto at = [&] { return t0.addSecs(3600 * (++i)); };
-    QVERIFY(put(app0 + QStringLiteral("/eboot.bin"), QByteArray(4096, 'E'), at()));
-    QVERIFY(put(app0 + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00001\"}", at()));
-    QVERIFY(put(app0 + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("\x7f" "ELF", 4) + QByteArray(100, 'a'), at()));
-    QVERIFY(put(app0 + QStringLiteral("/Data/Level 1/map.bin"), QByteArray(777, 'm'), at()));
-    QVERIFY(put(app0 + QStringLiteral("/Data/Level 1/Sound.PAK"), QByteArray(1234, 's'), at()));
-    QVERIFY(put(app0 + QStringLiteral("/data/other.bin"), QByteArray(5, 'o'), at())); // "Data" vs "data"
-    QVERIFY(put(app0 + QStringLiteral("/Data/Ä-umlaut.txt"), "u", at()));
-    QVERIFY(put(app0 + QStringLiteral("/Data/zero.bin"), QByteArray(), at()));
-    QVERIFY(put(app0 + QStringLiteral("/Data/CASE.bin"), "1", at()));
-    QVERIFY(put(app0 + QStringLiteral("/Data/case.bin"), "22", at())); // dropped: case-only variant
-    QVERIFY(put(app0 + QStringLiteral("/ampr_emu.index"), "old index", at()));
-    QVERIFY(put(app0 + QStringLiteral("/ampr_commands.bin"), "cmd", at()));
-    QVERIFY(put(app0 + QStringLiteral("/apr_emu.log"), "log", at()));
-    QVERIFY(QDir().mkpath(app0 + QStringLiteral("/empty folder")));
+    if (!put(app0 + QStringLiteral("/eboot.bin"), QByteArray(4096, 'E'), at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00001\"}", at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("\x7f" "ELF", 4) + QByteArray(100, 'a'), at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/Data/Level 1/map.bin"), QByteArray(777, 'm'), at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/Data/Level 1/Sound.PAK"), QByteArray(1234, 's'), at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/data/other.bin"), QByteArray(5, 'o'), at())) // "Data" vs "data"
+        return false;
+    if (!put(app0 + QStringLiteral("/Data/Ä-umlaut.txt"), "u", at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/Data/zero.bin"), QByteArray(), at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/Data/CASE.bin"), "1", at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/Data/case.bin"), "22", at())) // dropped: case-only variant
+        return false;
+    if (!put(app0 + QStringLiteral("/ampr_emu.index"), "old index", at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/ampr_commands.bin"), "cmd", at()))
+        return false;
+    if (!put(app0 + QStringLiteral("/apr_emu.log"), "log", at()))
+        return false;
+    return QDir().mkpath(app0 + QStringLiteral("/empty folder"));
 }
 
 QByteArray localIndex(const QString& app0)
@@ -169,7 +182,7 @@ private slots:
         Env env;
         const QString root = fresh(QStringLiteral("console"));
         const QString app0 = root + QStringLiteral("/data/etaHEN/games/PPSA00001-app0");
-        makeApp0(app0);
+        QVERIFY(makeApp0(app0));
         const QByteArray expected = localIndex(app0);
         QVERIFY(expected.startsWith("AMPRIDX3"));
         // The fixture's times are what it set (the index records them).
@@ -212,7 +225,7 @@ private slots:
 
         // The local tool writes the same bytes into a copy of the folder.
         const QString copy = fresh(QStringLiteral("local-copy"));
-        makeApp0(copy);
+        QVERIFY(makeApp0(copy));
         auto local = env.run(pfs::kAmprLocalJob, {{QStringLiteral("folder"), copy}}, env.settings(srv.port()));
         QVERIFY2(local.ok(), local.ok() ? "" : qPrintable(local.error().toLogString()));
         QCOMPARE(local->verification, Verification::Passed);
@@ -225,7 +238,7 @@ private slots:
     {
         Env env;
         const QString root = fresh(QStringLiteral("parent"));
-        makeApp0(root + QStringLiteral("/data/etaHEN/games/GameA"));
+        QVERIFY(makeApp0(root + QStringLiteral("/data/etaHEN/games/GameA")));
         QVERIFY(put(root + QStringLiteral("/data/etaHEN/games/GameB/eboot.bin"), "b", QDateTime::currentDateTimeUtc()));
         FakeFtpServer::Options o;
         o.root = root;
@@ -264,7 +277,7 @@ private slots:
         Env env;
         const QString root = fresh(QStringLiteral("norename"));
         const QString app0 = root + QStringLiteral("/g/app0");
-        makeApp0(app0);
+        QVERIFY(makeApp0(app0));
         FakeFtpServer::Options o;
         o.root = root;
         o.mlsd = true;
@@ -283,7 +296,7 @@ private slots:
         Env env;
         const QString root = fresh(QStringLiteral("cancel"));
         const QString app0 = root + QStringLiteral("/g/app0");
-        makeApp0(app0);
+        QVERIFY(makeApp0(app0));
         FakeFtpServer::Options o;
         o.root = root;
         o.mlsd = true;

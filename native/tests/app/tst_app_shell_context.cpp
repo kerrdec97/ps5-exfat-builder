@@ -9,6 +9,7 @@
 #include "connect/ps5/Module.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
@@ -17,6 +18,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -39,11 +41,13 @@ bool writeBytes(const QString& path, const QByteArray& bytes)
     return f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(bytes) == bytes.size();
 }
 
-// A job that validates and stays queued while the queue is held.
+// A job that validates and stays queued while the queue is held. Its port is
+// one that refuses, should the job ever get to run.
 Result<QString> queueDiagnosis(AppContext& ctx)
 {
     return ctx.queue().enqueue(ps5::jobkinds::kFtpDiagnose,
-                               QJsonObject{{QStringLiteral("host"), QStringLiteral("127.0.0.1")}, {QStringLiteral("port"), 1}, {QStringLiteral("speedTest"), false}});
+                               QJsonObject{{QStringLiteral("host"), QStringLiteral("127.0.0.1")}, {QStringLiteral("port"), int(fwtest::refusedPort())},
+                                           {QStringLiteral("speedTest"), false}});
 }
 
 } // namespace
@@ -102,17 +106,27 @@ private slots:
         qunsetenv("FW_DATA_DIR");
         if (!Paths::isPortable())
             QVERIFY(!AppContext::usePortableWindowState()); // an installed copy keeps its place
+        // Whatever happens below, the rest of the program is back on the
+        // test's own INI files and the variable is as it was.
+        const auto restore = qScopeGuard([this, before] {
+            if (before.isEmpty())
+                qunsetenv("FW_DATA_DIR");
+            else
+                qputenv("FW_DATA_DIR", before);
+            QSettings::setDefaultFormat(QSettings::IniFormat);
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_root.filePath(QStringLiteral("qsettings")));
+        });
         qputenv("FW_DATA_DIR", m_root.path().toUtf8());
+        // The switch itself must choose the INI file: the test's own choice
+        // from initTestCase is taken away first.
+        QSettings::setDefaultFormat(QSettings::NativeFormat);
         QVERIFY(AppContext::usePortableWindowState());
         QCOMPARE(QSettings::defaultFormat(), QSettings::IniFormat);
+        // Asked with the INI format spelled out: with the app's real names a
+        // native store would be the user's registry.
         const QString file = QDir::fromNativeSeparators(
-            QSettings(QSettings::defaultFormat(), QSettings::UserScope, QStringLiteral("kerrdec97"), QStringLiteral("exFAT Image Builder Farewell")).fileName());
+            QSettings(QSettings::IniFormat, QSettings::UserScope, QStringLiteral("kerrdec97"), QStringLiteral("exFAT Image Builder Farewell")).fileName());
         QVERIFY2(file.startsWith(QDir::fromNativeSeparators(Paths::dataDir()), Qt::CaseInsensitive), qPrintable(file));
-        if (before.isEmpty())
-            qunsetenv("FW_DATA_DIR");
-        else
-            qputenv("FW_DATA_DIR", before);
-        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_root.filePath(QStringLiteral("qsettings")));
     }
 
     // Jobs come and go as rows; only a changed order resets the model.

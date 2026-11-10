@@ -15,6 +15,7 @@
 #include "app/services/JobSubmit.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
+#include "ConsoleTestUtil.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/ps5/Module.h"
 #include "connect/ps5/MountConfig.h"
@@ -52,16 +53,10 @@ bool writeBytes(const QString& path, const QByteArray& bytes)
 
 const QByteArray kElf = QByteArray("\x7f" "ELF", 4) + QByteArray(40, '\1');
 
+// The stand-in console: FTP on `port`, every other service refuses.
 pages::ConsoleToolTab::EndpointFn fakeConsole(quint16 port)
 {
-    return [port] {
-        ps5::ConsoleEndpoint ep;
-        ep.host = QStringLiteral("127.0.0.1");
-        ep.ftpPort = port;
-        ep.connectTimeoutMs = 3000;
-        ep.idleTimeoutMs = 5000;
-        return ep;
-    };
+    return [port] { return fwtest::loopbackConsole(port); };
 }
 
 // Waits until the job ends; empty when it succeeded, else why not.
@@ -109,6 +104,7 @@ private slots:
         theme::apply(qApp);
         m_ctx = std::make_unique<AppContext>();
         QVERIFY(m_ctx->initialize().ok());
+        QVERIFY(fwtest::closeConsoleServices(m_ctx->settings()));
         m_ctx->queue().holdQueue(false);
     }
 
@@ -119,7 +115,7 @@ private slots:
         const QString dir = fresh(QStringLiteral("ps5_autoloader"));
         QVERIFY(writeBytes(dir + QStringLiteral("/kstuff.elf"), kElf));
         QVERIFY(writeBytes(dir + QStringLiteral("/autoload.txt"), "kstuff.elf\r\n\r\n\r\n\r\n!1000\r\n"));
-        pages::AutoloaderTab tab(*m_ctx, fakeConsole(1));
+        pages::AutoloaderTab tab(*m_ctx, fakeConsole(fwtest::refusedPort()));
         tab.setUseRecycleBin(false); // never the developer's real recycle bin
         tab.resize(1100, 900);
         tab.openFolder(dir);
@@ -267,8 +263,7 @@ private slots:
         QVERIFY(tab.compareSummary().contains(QStringLiteral("1 missing on the PS5")));
 
         // Compare with an .exfat image built by the real engine from the console's own files.
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build")))
-            QSKIP("exFAT engine not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build"))); // every engine is linked into the app tests
         const QString imgSrc = fresh(QStringLiteral("GAMEIMG"));
         QVERIFY(writeBytes(imgSrc + QStringLiteral("/eboot.bin"), QByteArray(70000, 'e')));
         QVERIFY(writeBytes(imgSrc + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00001\"}"));
@@ -480,7 +475,7 @@ private slots:
         auto ep = fakeConsole(srv.port());
         pages::ShadowMountTab tab(*m_ctx, [ep] {
             auto e = ep();
-            e.smpApiPort = 1; // no API: version from the debug.log banner
+            e.smpApiPort = fwtest::refusedPort(); // no API: version from the debug.log banner
             return e;
         });
         tab.resize(1100, 900);
@@ -522,7 +517,7 @@ private slots:
         auto ep = fakeConsole(srv.port());
         pages::ShadowMountTab tab(*m_ctx, [ep] {
             auto e = ep();
-            e.smpApiPort = 1;
+            e.smpApiPort = fwtest::refusedPort();
             return e;
         });
         tab.resize(1100, 900);
