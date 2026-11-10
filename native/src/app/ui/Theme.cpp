@@ -1,5 +1,6 @@
 #include "app/ui/Theme.h"
 
+#include "app/ui/Accessible.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Style.h"
 
@@ -325,6 +326,7 @@ void apply(QApplication* app)
     ui::initIcons();
     app->setStyle(new ui::FwStyle);
     ui::installAppGuard(app);
+    ui::installAccessibility();
     app->setFont(font::body());
 
     QPalette p;

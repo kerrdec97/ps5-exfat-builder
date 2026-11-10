@@ -34,9 +34,20 @@ int TileGrid::columnsFor(int width) const
         return 1;
     const int fit = std::max(1, (width + m_h) / (m_minW + m_h));
     int cols = std::clamp(std::min(fit, visible), 1, m_maxCols);
-    if (m_balanced)
-        while (cols > 1 && visible % cols != 0)
-            --cols;
+    // Balanced: no last row with a lone tile or two under a full row. A count
+    // that no column number divides (5, 7) keeps the widest layout whose last
+    // row is at least half full, instead of falling to one column.
+    if (m_balanced) {
+        int best = cols;
+        while (best > 1 && visible % best != 0)
+            --best;
+        if (best == 1 && visible > 1) {
+            best = cols;
+            while (best > 1 && (visible % best) * 2 < best)
+                --best;
+        }
+        cols = best;
+    }
     return cols;
 }
 

@@ -57,9 +57,10 @@ QString shortTimeLeft(qint64 ms)
     const qint64 s = (ms + 500) / 1000;
     if (s < 60)
         return QStringLiteral("~%1 s").arg(std::max<qint64>(1, s));
-    if (s < 3600)
-        return QStringLiteral("~%1 min").arg((s + 30) / 60);
-    return QStringLiteral("~%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60, 2, 10, QLatin1Char('0'));
+    const qint64 min = (s + 30) / 60;
+    if (min < 60)
+        return QStringLiteral("~%1 min").arg(min);
+    return QStringLiteral("~%1 h %2 min").arg(min / 60).arg(min % 60, 2, 10, QLatin1Char('0'));
 }
 
 namespace {
@@ -299,7 +300,7 @@ void StageList::update(const ProgressSnapshot& p, JobState state)
                 nameColor = color::fg_1;
                 row.status = QStringLiteral("cancelling");
             } else {
-                icon = QStringLiteral("dot");
+                icon = QStringLiteral("circle_filled");
                 c = color::accent_hi;
                 nameColor = color::fg_0;
                 timeColor = color::accent_hi;
@@ -354,6 +355,9 @@ JobMonitor::JobMonitor(AppContext& ctx, LogModel& logs, Variant variant, QWidget
             emit jobGone();
         }
     });
+    // Nothing is followed yet: an empty console, not every job's lines.
+    m_console->setLive(false);
+    m_console->clearLines();
     applyEmpty();
 }
 
@@ -393,10 +397,10 @@ void JobMonitor::build()
     m_bar = new ProgressBar(prog);
     m_bar->setFixedHeight(wide ? 8 : size::progress);
     barRow->addWidget(m_bar, 1);
-    m_percent = label(QStringLiteral("0 %"), TextStyle::Body, color::fg_0, prog);
+    m_percent = label(thinPercent(0.0), TextStyle::Body, color::fg_0, prog);
     m_percent->setFont(percentFont(m_variant));
     m_percent->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_percent->setMinimumWidth(QFontMetrics(percentFont(m_variant)).horizontalAdvance(QStringLiteral("100 %")));
+    m_percent->setMinimumWidth(QFontMetrics(percentFont(m_variant)).horizontalAdvance(thinPercent(1.0)));
     barRow->addWidget(m_percent);
     pl->addLayout(barRow);
     m_detail = label({}, TextStyle::Body, color::fg_1, prog);
@@ -585,6 +589,7 @@ void JobMonitor::setJobId(const QString& id)
     if (m_id != id) {
         m_id = id;
         m_phasesKey.clear();
+        m_stagesSet = false;
         m_hadOutcome = false;
         m_hadError = false;
         m_mSpeed->sparkline()->clear();
@@ -607,6 +612,7 @@ void JobMonitor::setDemoRecord(const JobRecord& record, const QStringList& logLi
     m_demo = record;
     m_id = record.id;
     m_phasesKey.clear();
+    m_stagesSet = false;
     m_console->setLive(false);
     m_console->clearLines();
     QDateTime t = record.started.isValid() ? record.started : QDateTime::currentDateTime();
@@ -858,14 +864,19 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     case JobState::Succeeded:
         m_bar->setState(ProgressBar::State::Done);
-        pct = QStringLiteral("100 %");
+        pct = thinPercent(1.0);
         pctColor = color::success_hi;
         break;
     case JobState::Failed:
-    case JobState::Interrupted:
         m_bar->setState(ProgressBar::State::Failed);
         pct = (!started || p.indeterminate) ? QStringLiteral("Failed") : QStringLiteral("Failed at %1").arg(thinPercent(p.overallFraction));
         pctColor = color::danger_hi;
+        break;
+    case JobState::Interrupted:
+        // A job restored after the app closed has no start time any more.
+        m_bar->setState(ProgressBar::State::Failed);
+        pct = (!started || p.indeterminate) ? QStringLiteral("Interrupted") : QStringLiteral("Interrupted at %1").arg(thinPercent(p.overallFraction));
+        pctColor = color::warn_hi;
         break;
     case JobState::Cancelled:
         m_bar->setState(ProgressBar::State::Paused);
@@ -879,21 +890,26 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     }
     m_percent->setText(pct);
-    m_percent->setMinimumWidth(pct.size() <= 5 ? QFontMetrics(percentFont(m_variant)).horizontalAdvance(QStringLiteral("100 %")) : 0);
+    m_percent->setMinimumWidth(pct.size() <= 5 ? QFontMetrics(percentFont(m_variant)).horizontalAdvance(thinPercent(1.0)) : 0);
     setTextColor(m_percent, pctColor);
 
+    // The error itself is in the result block below (once, not twice).
+    const bool errorShownBelow = r.error.has_value() && !r.error->isCancelled();
     QString detail;
     QColor detailColor = color::fg_1;
     switch (r.state) {
     case JobState::Running: {
-        const QString d = progressDetailText(p);
-        detail = p.phase;
-        if (!d.isEmpty())
-            detail += QStringLiteral(" · ") + d;
+        QStringList parts;
+        if (!p.phase.isEmpty())
+            parts << p.phase;
+        if (const QString d = progressDetailText(p); !d.isEmpty())
+            parts << d;
+        detail = parts.join(QStringLiteral(" · "));
         break;
     }
     case JobState::Paused:
-        detail = QStringLiteral("Paused in “%1”. Resume to continue.").arg(p.phase);
+        detail = p.phase.isEmpty() ? QStringLiteral("Paused. Resume to continue.")
+                                   : QStringLiteral("Paused in “%1”. Resume to continue.").arg(p.phase);
         break;
     case JobState::Cancelling:
         detail = QStringLiteral("Stopping at the next safe point…");
@@ -910,12 +926,19 @@ void JobMonitor::apply(const JobRecord& r)
         detail = r.outcome && !r.outcome->summary.isEmpty() ? r.outcome->summary : QStringLiteral("Finished");
         break;
     case JobState::Failed:
-    case JobState::Interrupted:
-        detail = r.error ? r.error->message : QStringLiteral("Failed");
+        if (!errorShownBelow)
+            detail = QStringLiteral("Failed");
+        else if (started && !p.phase.isEmpty())
+            detail = QStringLiteral("Failed in “%1”.").arg(p.phase);
         detailColor = color::danger_hi;
         break;
+    case JobState::Interrupted:
+        if (!errorShownBelow)
+            detail = QStringLiteral("Interrupted when the app closed. Retry to run it again.");
+        detailColor = color::warn_hi;
+        break;
     case JobState::Cancelled:
-        detail = QStringLiteral("Cancelled at the job's last safe point; what it had not finished was removed.");
+        detail = started ? QStringLiteral("Cancelled before it finished.") : QStringLiteral("Cancelled before it started.");
         detailColor = color::fg_2;
         break;
     }
@@ -940,7 +963,7 @@ void JobMonitor::apply(const JobRecord& r)
         m_mLeft->setValue(left.isEmpty() ? kDash : left);
         m_mLeft->setHint(left.isEmpty() ? (p.indeterminate ? QStringLiteral("this stage has no size") : QStringLiteral("measuring")) : QStringLiteral("this stage"));
     } else {
-        m_mLeft->setValue(r.state == JobState::Succeeded ? QStringLiteral("0:00") : kDash);
+        m_mLeft->setValue(r.state == JobState::Succeeded ? clockText(0) : kDash);
         m_mLeft->setHint({});
     }
     if (r.state == JobState::Running && p.unitIsBytes && p.ratePerSec > 0) {
@@ -975,7 +998,8 @@ void JobMonitor::apply(const JobRecord& r)
 
     // Stages
     const QString key = r.phases.join(u'\x1f');
-    if (key != m_phasesKey) {
+    if (!m_stagesSet || key != m_phasesKey) {
+        m_stagesSet = true;
         m_phasesKey = key;
         m_stages->setStages(r.phases);
     }
@@ -1005,7 +1029,7 @@ void JobMonitor::apply(const JobRecord& r)
         note << QStringLiteral("Attempt %1").arg(r.attempt);
     if (r.finished.isValid())
         note << QStringLiteral("Finished %1").arg(r.finished.toString(QStringLiteral("HH:mm")));
-    if (!started && finished)
+    if (!started && finished && r.state != JobState::Interrupted)
         note << QStringLiteral("Not started");
     m_note->setText(note.join(QStringLiteral(" · ")));
     updateTick(&r);

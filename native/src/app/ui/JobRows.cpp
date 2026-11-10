@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
+#include "app/ui/JobMonitor.h"
 #include "app/ui/LogView.h"
 #include "app/ui/Sheet.h"
 #include "app/services/JobSubmit.h"
@@ -50,7 +51,7 @@ Tone toneForState(JobState state)
 QString stateIcon(JobState state)
 {
     switch (state) {
-    case JobState::Running: return QStringLiteral("dot");
+    case JobState::Running: return QStringLiteral("circle_filled");
     case JobState::Paused: return QStringLiteral("pause_circle");
     case JobState::Cancelling: return QStringLiteral("stop_circle");
     case JobState::Succeeded: return QStringLiteral("success");
@@ -83,16 +84,13 @@ QString waitingText(const JobRecord& r, int maxAttempts)
     return QStringLiteral("Retrying in %1 s · attempt %2 of %3").arg(s).arg(r.attempt).arg(std::max(maxAttempts, r.attempt));
 }
 
+// The same wording as the monitor's stage times ("2 min", "1 h 05 min").
 static QString durationText(const JobRecord& r)
 {
     if (!r.started.isValid() || !r.finished.isValid())
         return {};
-    const qint64 s = r.started.secsTo(r.finished);
-    if (s < 60)
-        return QStringLiteral("%1 s").arg(s);
-    if (s < 3600)
-        return QStringLiteral("%1 min %2 s").arg(s / 60).arg(s % 60);
-    return QStringLiteral("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
+    // Never negative: the clock may have been set back while the job ran.
+    return shortDuration(std::max<qint64>(0, r.started.msecsTo(r.finished)));
 }
 
 QString finishedNote(const JobRecord& r)
@@ -144,8 +142,6 @@ JobRow::JobRow(Variant variant, QWidget* parent) : QWidget(parent), m_variant(va
     m_grip = new QLabel(this);
     m_grip->setFixedSize(size::icon, size::icon);
     static_cast<QLabel*>(m_grip)->setPixmap(iconPixmap(QStringLiteral("grip"), size::icon, color::fg_5, devicePixelRatioF()));
-    m_grip->setCursor(Qt::SizeAllCursor);
-    m_grip->setToolTip(QStringLiteral("Drag to reorder"));
     h->addWidget(m_grip);
     m_stateIcon = new QLabel(this);
     m_stateIcon->setFixedSize(size::icon, size::icon);
@@ -181,10 +177,21 @@ JobRow::JobRow(Variant variant, QWidget* parent) : QWidget(parent), m_variant(va
     else
         m_middle->hide();
     m_badge = new Badge({}, Tone::Neutral, this);
-    h->addWidget(m_badge);
+    if (queue) {
+        // A column as wide as the widest state, so the rows line up.
+        auto* cell = new QWidget(this);
+        auto* cl = hbox(cell, 0);
+        cl->addWidget(m_badge);
+        cl->addStretch(1);
+        static const int widest = Badge(QStringLiteral("Running · %1").arg(thinPercent(1.0)), Tone::Info).sizeHint().width();
+        cell->setFixedWidth(widest);
+        h->addWidget(cell);
+    } else {
+        h->addWidget(m_badge);
+    }
     m_actions = new QWidget(this);
     m_actionsLayout = hbox(m_actions, 2);
-    m_actions->setFixedWidth(queue ? 100 : 28);
+    m_actions->setFixedWidth(queue ? 4 * 28 + 3 * 2 : 28); // up, down, remove, more
     m_actionsLayout->setAlignment(Qt::AlignRight);
     h->addWidget(m_actions);
 }
@@ -203,13 +210,15 @@ void JobRow::setSelected(bool on)
 void JobRow::setCanMoveUp(bool on)
 {
     m_canUp = on;
-    rebuildActions();
+    if (m_upButton)
+        m_upButton->setEnabled(on);
 }
 
 void JobRow::setCanMoveDown(bool on)
 {
     m_canDown = on;
-    rebuildActions();
+    if (m_downButton)
+        m_downButton->setEnabled(on);
 }
 
 void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, bool reorderable)
@@ -219,16 +228,17 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
     m_id = r.id;
     m_state = r.state;
     m_reorderable = reorderable && r.state == JobState::Queued;
-    m_grip->setVisible(m_reorderable || m_variant == Variant::Queue);
-    m_grip->setEnabled(m_reorderable);
-    if (m_variant == Variant::Queue) {
-        m_grip->setVisible(true);
-        static_cast<QLabel*>(m_grip)->setPixmap(m_reorderable ? iconPixmap(QStringLiteral("grip"), size::icon, color::fg_5, devicePixelRatioF()) : QPixmap());
-        m_grip->setCursor(m_reorderable ? Qt::SizeAllCursor : Qt::ArrowCursor);
+    // The first cell: the grip of a queued row; in the dock the state glyph of
+    // the others (the label stays enabled: a disabled one greys its pixmap).
+    auto* grip = static_cast<QLabel*>(m_grip);
+    if (m_reorderable) {
+        grip->setPixmap(iconPixmap(QStringLiteral("grip"), size::icon, color::fg_5, devicePixelRatioF()));
+        grip->setCursor(Qt::SizeAllCursor);
+        grip->setToolTip(QStringLiteral("Drag to reorder"));
     } else {
-        m_grip->setVisible(true);
-        static_cast<QLabel*>(m_grip)->setPixmap(m_reorderable ? iconPixmap(QStringLiteral("grip"), size::icon, color::fg_5, devicePixelRatioF())
-                                                              : iconPixmap(stateIcon(r.state), size::icon, stateColor(r.state), devicePixelRatioF()));
+        grip->setPixmap(m_variant == Variant::Queue ? QPixmap() : iconPixmap(stateIcon(r.state), size::icon, stateColor(r.state), devicePixelRatioF()));
+        grip->setCursor(Qt::ArrowCursor);
+        grip->setToolTip(m_variant == Variant::Queue ? QString() : jobStateName(r.state));
     }
     m_stateIcon->setPixmap(iconPixmap(stateIcon(r.state), size::icon, stateColor(r.state), devicePixelRatioF()));
     setAccessibleName(QStringLiteral("%1, %2").arg(r.title, jobStateName(r.state)));
@@ -330,10 +340,17 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
 
 void JobRow::rebuildActions()
 {
+    // deleteLater: this runs inside the click of one of these buttons (Pause
+    // changes the job's state before the click handler has returned).
     while (QLayoutItem* it = m_actionsLayout->takeAt(0)) {
-        delete it->widget();
+        if (QWidget* w = it->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
         delete it;
     }
+    m_upButton = nullptr;
+    m_downButton = nullptr;
     auto add = [this](const QString& iconName, const QString& name, auto signal, bool enabled = true) {
         auto* b = new IconButton(iconName, name, IconButton::Size::Small, m_actions);
         b->setEnabled(enabled);
@@ -359,8 +376,8 @@ void JobRow::rebuildActions()
     case JobState::Cancelling:
         break; // on its way out: nothing to do but wait
     case JobState::Queued:
-        add(QStringLiteral("arrow_up"), QStringLiteral("Move up"), &JobRow::moveUpRequested, m_canUp);
-        add(QStringLiteral("arrow_down"), QStringLiteral("Move down"), &JobRow::moveDownRequested, m_canDown);
+        m_upButton = add(QStringLiteral("arrow_up"), QStringLiteral("Move up"), &JobRow::moveUpRequested, m_canUp);
+        m_downButton = add(QStringLiteral("arrow_down"), QStringLiteral("Move down"), &JobRow::moveDownRequested, m_canDown);
         add(QStringLiteral("trash"), QStringLiteral("Remove"), &JobRow::removeRequested);
         break;
     case JobState::Failed:
@@ -465,7 +482,8 @@ void JobRow::mouseMoveEvent(QMouseEvent* e)
     auto* mime = new QMimeData;
     mime->setData(QLatin1String(kJobMime), m_id.toUtf8());
     drag->setMimeData(mime);
-    drag->setPixmap(grab().scaledToWidth(std::min(width(), 320), Qt::SmoothTransformation));
+    // scaledToWidth() counts device pixels: 320 logical px at any scaling.
+    drag->setPixmap(grab().scaledToWidth(qRound(std::min(width(), 320) * devicePixelRatioF()), Qt::SmoothTransformation));
     drag->setHotSpot(QPoint(16, height() / 2));
     // The list waits for the drag to end before it rebuilds its rows.
     QPointer<JobRow> self(this);
@@ -573,15 +591,22 @@ void JobList::wire(JobRow* row)
     connect(row, &JobRow::activated, this, &JobList::activated);
     connect(row, &JobRow::pauseRequested, this, [&q](const QString& id) { q.pauseJob(id); });
     connect(row, &JobRow::resumeRequested, this, [&q](const QString& id) { q.resumeJob(id); });
+    // Up / down change places with the neighbouring QUEUED job: running and
+    // finished jobs in between (and rows a filter hides) are stepped over.
     connect(row, &JobRow::moveUpRequested, this, [this, &q](const QString& id) {
-        const int r = m_model.rowOf(id);
-        if (r > 0)
-            q.move(id, r - 1);
+        for (int k = m_model.rowOf(id) - 1; k >= 0; --k)
+            if (const JobRecord* o = m_model.recordAt(k); o && o->state == JobState::Queued) {
+                q.move(id, k);
+                return;
+            }
     });
     connect(row, &JobRow::moveDownRequested, this, [this, &q](const QString& id) {
         const int r = m_model.rowOf(id);
-        if (r >= 0 && r + 1 < m_model.rowCount())
-            q.move(id, r + 1);
+        for (int k = r + 1; r >= 0 && k < m_model.rowCount(); ++k)
+            if (const JobRecord* o = m_model.recordAt(k); o && o->state == JobState::Queued) {
+                q.move(id, k);
+                return;
+            }
     });
     connect(row, &JobRow::removeRequested, this, [&q](const QString& id) { q.remove(id); });
     connect(row, &JobRow::retryRequested, this, [this, &q](const QString& id) {
@@ -633,8 +658,11 @@ void JobList::rebuildNow()
             return;
         }
     m_rebuildPending = false;
+    // Rows are kept for the jobs that stay: a row that has the keyboard focus
+    // or an open menu survives a start, a finish or a move of any job.
+    QHash<QString, JobRow*> old;
     for (auto* r : m_rows)
-        r->deleteLater();
+        old.insert(r->id(), r);
     m_rows.clear();
     while (QLayoutItem* it = m_layout->takeAt(0))
         delete it;
@@ -651,14 +679,23 @@ void JobList::rebuildNow()
             continue;
         if (m_maxRows >= 0 && int(m_rows.size()) >= m_maxRows)
             continue;
-        auto* row = new JobRow(m_variant, this);
+        JobRow* row = old.take(rec->id);
+        if (!row) {
+            row = new JobRow(m_variant, this);
+            wire(row);
+        }
         row->setRecord(*rec, queuedPos, maxAttempts, true);
         row->setSelected(rec->id == m_selected);
-        wire(row);
+        if (!m_rows.empty())
+            QWidget::setTabOrder(m_rows.back(), row); // Tab follows the order on screen
         m_rows.push_back(row);
         m_layout->addWidget(row);
         if (rec->notBefore.isValid() && rec->state == JobState::Queued)
             anyWaiting = true;
+    }
+    for (JobRow* gone : std::as_const(old)) {
+        gone->hide();
+        gone->deleteLater();
     }
     for (size_t i = 0; i < m_rows.size(); ++i) {
         m_rows[i]->setDivider(i + 1 < m_rows.size());
@@ -736,7 +773,9 @@ int JobList::dropIndexAt(const QPoint& p) const
         if (p.y() < g.center().y())
             return m_model.rowOf(m_rows[i]->id());
     }
-    return m_model.rowCount();
+    // Below the last row shown: right after it, not at the end of everything
+    // (the dock shows the first few rows only).
+    return m_rows.empty() ? m_model.rowCount() : m_model.rowOf(m_rows.back()->id()) + 1;
 }
 
 void JobList::dragEnterEvent(QDragEnterEvent* e)
@@ -767,9 +806,19 @@ void JobList::dropEvent(QDropEvent* e)
     update();
     if (from < 0)
         return;
+    // A queued job stays among the queued ones: never ahead of the first, never
+    // behind the last of them (running and finished rows keep their places).
+    int firstQueued = -1, lastQueued = -1;
+    for (int r = 0; r < m_model.rowCount(); ++r)
+        if (const JobRecord* o = m_model.recordAt(r); o && o->state == JobState::Queued) {
+            if (firstQueued < 0)
+                firstQueued = r;
+            lastQueued = r;
+        }
+    if (firstQueued >= 0)
+        target = std::clamp(target, firstQueued, lastQueued + 1);
     if (target > from)
         --target;
-    // Never move ahead of running / finished rows that precede the queued block.
     if (target != from)
         m_ctx.queue().move(id, target);
     e->acceptProposedAction();
@@ -872,10 +921,7 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     m_running->hide();
 
     m_list = new JobList(ctx, model, JobRow::Variant::Dock, this);
-    // System jobs (update checks) never show in the dock, like in the Queue page and the header chip.
-    m_list->setFilter([](const JobRecord& r) {
-        return !jobs::isSystemKind(r.kind) && r.state != JobState::Running && r.state != JobState::Paused;
-    });
+    applyListFilter();
     m_list->setMaxRows(6);
     connect(m_list, &JobList::activated, this, &JobsDock::openJobRequested);
     connect(m_list, &JobList::cancelRequested, this, &JobsDock::cancelRequested);
@@ -898,6 +944,14 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     connect(&m_model, &JobQueueModel::countsChanged, this, [this] { refresh(); });
     connect(&m_ctx.queue(), &JobQueue::heldChanged, this, [this] { refresh(); });
     refresh();
+}
+
+// System jobs (update checks) never show in the dock, like in the Queue page
+// and the header chip. The job of the running block is not listed again; a
+// second job that runs at the same time is, so it can be paused and cancelled.
+void JobsDock::applyListFilter()
+{
+    m_list->setFilter([shown = m_runningId](const JobRecord& r) { return !jobs::isSystemKind(r.kind) && r.id != shown; });
 }
 
 void JobsDock::refresh()
@@ -929,6 +983,7 @@ void JobsDock::refresh()
     }
     m_count->setText(QString::number(total));
     m_count->setVisible(total > 0);
+    const QString shownBefore = m_runningId;
     if (running) {
         m_runningId = running->id;
         m_runTitle->setFullText(running->title);
@@ -946,6 +1001,7 @@ void JobsDock::refresh()
         m_runCancel->setVisible(!cancelling);
         m_runPause->setIconName(running->state == JobState::Paused ? QStringLiteral("play") : QStringLiteral("pause"));
         m_runPause->setToolTip(running->state == JobState::Paused ? QStringLiteral("Resume job") : QStringLiteral("Pause job"));
+        m_runPause->setAccessibleName(m_runPause->toolTip());
         if (m_tail->jobId() != running->id)
             m_tail->setJobId(running->id);
         // The page's monitor shows this job already: nothing twice.
@@ -954,6 +1010,8 @@ void JobsDock::refresh()
         m_runningId.clear();
         m_running->hide();
     }
+    if (m_runningId != shownBefore)
+        applyListFilter();
     m_empty->setVisible(total == 0);
     QString foot;
     if (held)

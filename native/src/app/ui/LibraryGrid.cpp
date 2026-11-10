@@ -1,6 +1,7 @@
 #include "app/ui/LibraryGrid.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Style.h"
 
 #include <QContextMenuEvent>
 #include <QFileInfo>
@@ -145,6 +146,8 @@ LibraryGrid::LibraryGrid(QWidget* parent) : QWidget(parent)
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setProperty("fwNoRing", true); // the current item shows the focus itself
+    setAccessibleName(QStringLiteral("Items"));
     m_headers = {QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Formats"), QStringLiteral("Status")};
 }
 
@@ -283,6 +286,7 @@ void LibraryGrid::setCurrent(int i, bool ensureVisible)
     if (i < 0 || i >= count())
         return;
     m_current = i;
+    setAccessibleDescription(m_items[size_t(i)].title); // the items are painted: say which one is current
     update();
     if (!ensureVisible)
         return;
@@ -465,10 +469,12 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     }
     if (sel || hov || !m_selected.isEmpty())
         paintCheck(p, checkRect(i), sel, true);
-    if (hasFocus() && i == m_current) {
+    // Keyboard focus only, and inside the tile: outside it the grid's own
+    // edge would cut the ring of the first row and of the outer columns.
+    if (i == m_current && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(color::focus, 2));
-        p.drawRoundedRect(r.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
+        p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
     }
 }
 
@@ -564,7 +570,7 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     p.setPen(color::fg_4);
     p.drawText(QRectF(tx, r.center().y() + 1, tw, 16), Qt::AlignLeft | Qt::AlignVCenter,
                QFontMetrics(p.font()).elidedText(second, wide ? Qt::ElideMiddle : Qt::ElideRight, int(tw)));
-    if (hasFocus() && i == m_current) {
+    if (i == m_current && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(color::focus, 2));
         p.drawRoundedRect(r.adjusted(1, 2, -1, -2), radius::sm, radius::sm);
@@ -575,6 +581,7 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
 
 void LibraryGrid::mousePressEvent(QMouseEvent* e)
 {
+    m_keyNav = false;
     setFocus(Qt::MouseFocusReason);
     if (e->button() != Qt::LeftButton)
         return;
@@ -668,6 +675,7 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
     }
     const int cols = m_mode == Mode::List ? 1 : columns(width());
     int next = m_current < 0 ? 0 : m_current;
+    m_keyNav = true;
     switch (e->key()) {
     case Qt::Key_Right: next = m_current < 0 ? 0 : m_current + 1; break;
     case Qt::Key_Left: next = m_current - 1; break;
@@ -682,6 +690,7 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
                 m_selected.remove(key);
             else
                 m_selected.insert(key);
+            m_anchor = m_current; // Shift+arrow extends from here
             update();
             emit selectionChanged();
         }
@@ -720,6 +729,7 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
         emit selectionChanged();
         return;
     }
+    m_anchor = next; // a later Shift+arrow extends from where the keyboard is
     setCurrent(next, true);
 }
 

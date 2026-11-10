@@ -174,6 +174,7 @@ private:
     bool m_hadOutcome = false;
     bool m_hadError = false;
     QString m_phasesKey;
+    bool m_stagesSet = false; // the stage list shows the phases of m_id
     qint64 m_lastSampleMs = 0;
     QTimer m_tick;
 

@@ -89,6 +89,7 @@ private:
     Badge* m_badge;
     QWidget* m_actions;
     QHBoxLayout* m_actionsLayout;
+    QPointer<IconButton> m_upButton, m_downButton;
 };
 
 class JobList : public QWidget {
@@ -149,6 +150,7 @@ class JobsDock : public Card {
 public:
     JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent = nullptr);
     void refresh();
+    JobList* list() const { return m_list; } // the rows under the running block (tests)
     // The job the page's monitor shows: the dock hides its own running block
     // for it (nothing is shown twice). "" = none.
     void setWatchedJob(const QString& id);
@@ -161,6 +163,7 @@ signals:
     void watchRequested(const QString& id); // "Watch" on the running block
 
 private:
+    void applyListFilter();
     AppContext& m_ctx;
     JobQueueModel& m_model;
     Badge* m_count;

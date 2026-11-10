@@ -348,6 +348,8 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     rcol->addWidget(m_message);
     h->addWidget(right, 0, Qt::AlignRight | Qt::AlignVCenter);
     m_editor->widget()->setAccessibleName(def.label);
+    // The full description is otherwise only in a mouse tooltip.
+    m_editor->widget()->setAccessibleDescription(def.description);
     updateHelp();
 }
 
@@ -505,7 +507,7 @@ void JobOptionsPanel::build()
             connect(row->editor(), &SettingEditor::edited, this, [this, key](const QVariant& v) { onEdited(key, v); });
             connect(row, &SettingRow::useDefaultRequested, this, [this, key] {
                 m_overrides.remove(key);
-                m_errors.remove(key);
+                clearError(key);
                 refreshRow(key);
                 refreshDependencies();
                 emit overridesChanged();
@@ -546,8 +548,7 @@ void JobOptionsPanel::onEdited(const QString& key, const QVariant& value)
         emit overridesChanged();
         return;
     }
-    m_errors.remove(key);
-    row->setMessage({}, Tone::Neutral);
+    clearError(key);
     const QVariant def = m_ctx.settings().value(key);
     if (norm.value() == def) {
         m_overrides.remove(key);
@@ -570,17 +571,30 @@ void JobOptionsPanel::setOverride(const QString& key, const QVariant& value)
         m_overrides.remove(key);
     else
         m_overrides.insert(key, norm.value());
+    clearError(key); // the value is valid now, whatever was typed before
     refreshRow(key);
     refreshDependencies();
     emit overridesChanged();
 }
 
+// Forgets the validation error of a row and takes its message away. A note a
+// page put under the row (SettingRow::setMessage) is left alone: only a row
+// with an error of this panel is cleared.
+void JobOptionsPanel::clearError(const QString& key)
+{
+    if (m_errors.remove(key) == 0)
+        return;
+    if (SettingRow* row = m_rows.value(key))
+        row->setMessage({}, Tone::Neutral);
+}
+
 void JobOptionsPanel::clearOverrides()
 {
     m_overrides.clear();
-    m_errors.clear();
-    for (const QString& k : m_order)
+    for (const QString& k : m_order) {
+        clearError(k);
         refreshRow(k);
+    }
     refreshDependencies();
     emit overridesChanged();
 }
@@ -596,9 +610,11 @@ void JobOptionsPanel::refreshRow(const QString& key)
         row->editor()->setValue(m_overrides.value(key));
         row->setOverridden(true, SettingRow::displayValue(*d, def));
     } else {
+        // Back to the global value: what was typed (and its error, if it had
+        // one) is gone from the field, so it must not block the form either.
         row->editor()->setValue(def);
         row->setOverridden(false);
-        row->setMessage({}, Tone::Neutral);
+        clearError(key);
     }
 }
 
@@ -614,6 +630,11 @@ void JobOptionsPanel::refreshDependencies()
         if (enabled) {
             row->setDisabledReason({});
         } else {
+            // A disabled row cannot be corrected: drop an invalid entry with its error.
+            if (m_errors.contains(key)) {
+                clearError(key);
+                refreshRow(key);
+            }
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
             const QString otherLabel = other ? other->label : d->enabledWhenKey;
             const QString want = other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString();

@@ -1,6 +1,7 @@
 #include "app/ui/Sheet.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Style.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -157,9 +158,13 @@ void Sheet::relayout()
     setGeometry(parentWidget()->rect());
     const int w = std::min(m_width, width() - 2 * space::lg);
     m_panel->setFixedWidth(w);
-    m_panel->adjustSize();
-    const QSize s = m_panel->sizeHint();
-    m_panel->setGeometry((width() - w) / 2, std::max(space::lg, (height() - s.height()) / 2), w, s.height());
+    // The height the wrapped text needs at this width (sizeHint() is for the
+    // labels' preferred width), and never taller than the window, so the
+    // buttons stay on screen.
+    QLayout* l = m_panel->layout();
+    int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(w) : m_panel->sizeHint().height();
+    h = std::min(h, std::max(l ? l->totalMinimumSize().height() : 0, height() - 2 * space::lg));
+    m_panel->setGeometry((width() - w) / 2, std::max(space::lg, (height() - h) / 2), w, h);
 }
 
 void Sheet::open()
@@ -169,6 +174,7 @@ void Sheet::open()
         ++g_openSheets;
     }
     m_previousFocus = QApplication::focusWidget();
+    m_previousByKeyboard = hasKeyboardFocus(m_previousFocus);
     relayout();
     raise();
     show();
@@ -198,9 +204,17 @@ int Sheet::exec()
     open();
     QEventLoop loop;
     m_loop = &loop;
-    const int r = loop.exec(QEventLoop::DialogExec);
+    m_answered = false;
+    QPointer<Sheet> self(this);
+    loop.exec(QEventLoop::DialogExec);
+    if (!self)
+        return -1; // destroyed with its host while it was open: no answer
     m_loop = nullptr;
-    return r;
+    // The loop also ends when the application quits: that is not "the first
+    // button" but no answer, i.e. the safe one.
+    if (!m_answered)
+        close(-1);
+    return m_result;
 }
 
 void Sheet::close(int result)
@@ -213,13 +227,14 @@ void Sheet::close(int result)
             }
     }
     m_result = result;
+    m_answered = true;
     if (m_counted) {
         m_counted = false;
         --g_openSheets;
     }
     hide();
-    if (m_previousFocus)
-        m_previousFocus->setFocus(Qt::OtherFocusReason);
+    if (m_previousFocus) // a keyboard user gets the ring back where it was
+        m_previousFocus->setFocus(m_previousByKeyboard ? Qt::TabFocusReason : Qt::OtherFocusReason);
     if (m_loop)
         m_loop->exit(result);
     deleteLater();
@@ -302,7 +317,7 @@ bool Sheet::confirm(QWidget* host, const QString& title, const QString& text, co
         s->addText(text);
     else
         s->addBodyLabel(text, format == Qt::RichText ? Qt::RichText : Qt::PlainText);
-    QCheckBox* cb = nullptr;
+    QPointer<QCheckBox> cb; // gone with the sheet when its host is destroyed during exec()
     if (!checkboxText.isEmpty())
         cb = s->addCheckbox(checkboxText);
     s->addButton(safeText, Role::Safe);
@@ -408,7 +423,6 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
     while (m_toasts.size() > 3)
         remove(m_toasts.front());
     t->show();
-    t->raise();
     relayout();
 
     const int life = lifetimeMs >= 0 ? lifetimeMs : (tone == Tone::Ok || tone == Tone::Info || tone == Tone::Neutral) ? 6000 : 0;
@@ -448,14 +462,25 @@ void ToastHost::relayout()
 {
     if (!parentWidget())
         return;
+    // A toast never covers an open sheet: its links would act on the page
+    // behind a dialog that is still waiting for its answer.
+    QWidget* sheet = nullptr;
+    for (QObject* o : parentWidget()->children())
+        if (auto* s = qobject_cast<Sheet*>(o); s && s->isVisible()) {
+            sheet = s;
+            break; // the lowest one: children are in stacking order
+        }
     int y = parentWidget()->height() - space::lg;
     for (auto it = m_toasts.rbegin(); it != m_toasts.rend(); ++it) {
         QWidget* t = *it;
-        t->adjustSize();
-        const int h = t->sizeHint().height();
+        QLayout* l = t->layout();
+        const int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(size::toast) : t->sizeHint().height();
         y -= h;
         t->setGeometry(parentWidget()->width() - space::lg - size::toast, y, size::toast, h);
-        t->raise();
+        if (sheet)
+            t->stackUnder(sheet);
+        else
+            t->raise();
         y -= space::sm;
     }
 }

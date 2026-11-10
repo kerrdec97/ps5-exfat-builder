@@ -38,6 +38,7 @@ public:
     QVariant currentValue() const;
     void setCurrentValue(const QVariant& value);
     int count() const { return int(m_items.size()); }
+    QString choiceTitle(int index) const; // "" when out of range
     void setChoiceEnabled(int index, bool enabled);
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -67,6 +68,7 @@ private:
     std::vector<Item> m_items;
     int m_current = -1;
     int m_hover = -1;
+    bool m_keyNav = false; // an arrow key chose the tile last
 };
 
 class DropZone : public QAbstractButton {
@@ -150,8 +152,10 @@ signals:
 protected:
     void paintEvent(QPaintEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
     void enterEvent(QEnterEvent* e) override;
     void leaveEvent(QEvent* e) override;
+    void connectNotify(const QMetaMethod& signal) override; // a tile with a click handler takes keyboard focus
 
 private:
     IconTile* m_tile;

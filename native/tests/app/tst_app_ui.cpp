@@ -32,6 +32,7 @@
 #include <QDir>
 #include <QJsonDocument>
 #include <QLineEdit>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -326,7 +327,7 @@ private slots:
 
         QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
         QTRY_VERIFY2(m->stateText().startsWith(QStringLiteral("Done")), qPrintable(m->stateText()));
-        QCOMPARE(m->percentText(), QStringLiteral("100 %"));
+        QCOMPARE(m->percentText(), ui::thinPercent(1.0));
         QVERIFY2(m->stageTexts().at(0).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(0)));
         QVERIFY2(m->stageTexts().at(1).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(1)));
         QVERIFY(m->retryButton()->isVisibleTo(m));
@@ -345,6 +346,146 @@ private slots:
         q.clearFinished();
         QTRY_COMPARE(page->list()->visibleCount(), 0);
         QTRY_VERIFY(m->jobId().isEmpty()); // the job left the queue
+    }
+
+    // A row keeps its widget (focus, an open menu) while other jobs come, go and move.
+    void jobRowsSurviveListUpdates()
+    {
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        const auto tidy = qScopeGuard([&q] { // also when a check below fails
+            q.cancelAll();
+            q.holdQueue(false);
+            q.clearFinished();
+        });
+        auto a = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Row A")}, {QStringLiteral("steps"), 2}});
+        auto b = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Row B")}, {QStringLiteral("steps"), 2}});
+        auto c = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Row C")}, {QStringLiteral("steps"), 2}});
+        QVERIFY(a.ok() && b.ok() && c.ok());
+        ui::JobList list(*m_ctx, m_window->queueModel(), ui::JobRow::Variant::Queue, m_window.get());
+        list.resize(900, 400);
+        list.show();
+        QTRY_COMPARE(list.visibleIds(), (QStringList{a.value(), b.value(), c.value()}));
+        auto rowOf = [&list](const QString& id) {
+            QCoreApplication::processEvents(); // new rows are shown, replaced ones are gone
+            ui::JobRow* found = nullptr;
+            for (ui::JobRow* r : list.findChildren<ui::JobRow*>())
+                if (r->id() == id && !r->isHidden())
+                    found = r;
+            return found;
+        };
+        QPointer<ui::JobRow> rowB = rowOf(b.value());
+        QPointer<ui::JobRow> rowC = rowOf(c.value());
+        QVERIFY(rowB && rowC);
+        rowC->setFocus();
+        QTRY_VERIFY(rowC->hasFocus());
+
+        // Ctrl+Up twice: C moves to the top and keeps the focus all the way.
+        QTest::keyClick(rowC, Qt::Key_Up, Qt::ControlModifier);
+        QTRY_COMPARE(list.visibleIds(), (QStringList{a.value(), c.value(), b.value()}));
+        QVERIFY(rowC && rowC->hasFocus());
+        QTest::keyClick(rowC, Qt::Key_Up, Qt::ControlModifier);
+        QTRY_COMPARE(list.visibleIds(), (QStringList{c.value(), a.value(), b.value()}));
+        QVERIFY(rowC && rowC->hasFocus());
+        QCOMPARE(rowOf(b.value()), rowB.data()); // the same widget as before
+
+        // Another job is removed: the others stay.
+        q.remove(a.value());
+        QTRY_COMPARE(list.visibleIds(), (QStringList{c.value(), b.value()}));
+        QVERIFY(rowB && rowC && rowC->hasFocus());
+
+        // While the queue is paused nothing "starts next".
+        QString notes; // the note's tooltip has the text in full
+        for (const QLabel* l : rowC->findChildren<QLabel*>())
+            notes += l->toolTip() + u'|';
+        QVERIFY2(notes.contains(QStringLiteral("Waits for the queue to resume")), qPrintable(notes));
+        q.remove(b.value());
+        q.remove(c.value());
+        QTRY_COMPARE(list.visibleCount(), 0);
+    }
+
+    // The dock: a cancelling job is shown once, a second running job gets a row.
+    void dockShowsEveryActiveJobOnce()
+    {
+        auto& q = m_ctx->queue();
+        const QVariant before = m_ctx->settings().value(QStringLiteral("performance.maxConcurrentJobs"));
+        QVERIFY(m_ctx->settings().setValue(QStringLiteral("performance.maxConcurrentJobs"), 2).ok());
+        const auto tidy = qScopeGuard([&] { // also when a check below fails
+            q.cancelAll();
+            (void)m_ctx->settings().setValue(QStringLiteral("performance.maxConcurrentJobs"), before);
+        });
+        ui::JobsDock dock(*m_ctx, m_window->queueModel(), m_window.get());
+        dock.show();
+        auto a = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Dock A")}, {QStringLiteral("steps"), 400}, {QStringLiteral("stepMs"), 20}});
+        auto b = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Dock B")}, {QStringLiteral("steps"), 400}, {QStringLiteral("stepMs"), 20}});
+        QVERIFY(a.ok() && b.ok());
+        QVERIFY(waitForState(q, a.value(), JobState::Running));
+        QVERIFY(waitForState(q, b.value(), JobState::Running));
+        // One of them in the running block, the other as a row below it.
+        QTRY_VERIFY(!dock.runningJob().isEmpty());
+        const QString other = dock.runningJob() == a.value() ? b.value() : a.value();
+        QTRY_COMPARE(dock.list()->visibleIds(), QStringList{other});
+
+        // Cancelling: still only in the running block.
+        const QString shown = dock.runningJob();
+        q.cancel(shown);
+        QTRY_VERIFY(!dock.list()->visibleIds().contains(shown) || q.record(shown)->isTerminal());
+        q.cancel(other);
+        QVERIFY(waitForState(q, a.value(), JobState::Cancelled));
+        QVERIFY(waitForState(q, b.value(), JobState::Cancelled));
+        // Finished jobs are rows again.
+        QTRY_COMPARE(dock.list()->visibleCount(), 2);
+        q.clearFinished();
+    }
+
+    // The monitor: an interrupted job is not "Failed" / "Not started", and an error is said once.
+    void monitorTextsMatchTheState()
+    {
+        ui::JobMonitor m(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Compact, m_window.get());
+        // A new monitor follows nothing: its console is empty, not every job's log.
+        QCOMPARE(m.console()->lineCount(), 0);
+        QVERIFY(m.console()->plainLines().isEmpty());
+
+        QStringList lines;
+        JobRecord r = ui::JobMonitor::demoRecord(QStringLiteral("failed"), &lines);
+        m.setDemoRecord(r, lines);
+        QVERIFY2(m.percentText().startsWith(QStringLiteral("Failed at")), qPrintable(m.percentText()));
+        QCOMPARE(m.detailText(), QStringLiteral("Failed in “Verifying with img_verify”.")); // the message is in the bar below
+        int shown = 0;
+        for (const QLabel* l : m.findChildren<QLabel*>())
+            if (l->text() == r.error->message)
+                ++shown;
+        QCOMPARE(shown, 1);
+
+        // Restored after the app closed: no start time, an error that says so.
+        JobRecord i = r;
+        i.state = JobState::Interrupted;
+        i.started = {};
+        i.error = Error(ErrorCode::IoError, QStringLiteral("The app closed while this job was running."));
+        m.setDemoRecord(i, lines);
+        QCOMPARE(m.stateText(), QStringLiteral("Interrupted"));
+        QCOMPARE(m.percentText(), QStringLiteral("Interrupted"));
+        QVERIFY(m.detailText().isEmpty());
+        QString all;
+        for (const QLabel* l : m.findChildren<QLabel*>())
+            all += l->text() + u'|';
+        QVERIFY2(!all.contains(QStringLiteral("Not started")), qPrintable(all));
+
+        // A job without phases after one with phases: the stage list is rebuilt.
+        JobRecord none = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        m.setDemoRecord(none, lines);
+        QCOMPARE(m.stageTexts().size(), none.phases.size());
+        none.id = QStringLiteral("other");
+        none.phases.clear();
+        m.setDemoRecord(none, lines);
+        QCOMPARE(m.stageTexts().size(), 0);
+
+        // Paused before the first progress report: no empty quotes.
+        JobRecord p = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        p.state = JobState::Paused;
+        p.progress.phase.clear();
+        m.setDemoRecord(p, lines);
+        QVERIFY2(!m.detailText().contains(QStringLiteral("“”")), qPrintable(m.detailText()));
     }
 
     // Retry / Run again on a job whose source is gone: the reason is shown.
@@ -695,7 +836,9 @@ private slots:
 
     void screenshotsCoverEveryPage()
     {
-        const QString dir = m_root.filePath(QStringLiteral("shots"));
+        // FW_UI_SHOT_DIR (an empty or new folder) keeps the pictures for a look at them.
+        const QString keep = qEnvironmentVariable("FW_UI_SHOT_DIR");
+        const QString dir = keep.isEmpty() ? m_root.filePath(QStringLiteral("shots")) : keep;
         const int written = m_window->screenshotAllPages(dir);
         QVERIFY(written >= m_window->pageKeys().size());
         const QStringList files = QDir(dir).entryList({QStringLiteral("*.png")});

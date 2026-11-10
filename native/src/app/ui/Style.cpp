@@ -11,6 +11,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -263,6 +264,19 @@ void FwStyle::polish(QWidget* widget)
 
 namespace {
 
+// The widget that received the last FocusIn, and whether that was a keyboard reason.
+QPointer<QWidget> g_focusIn;
+bool g_focusInByKeyboard = false;
+
+bool arrivedByKeyboard(const QWidget* focusWidget)
+{
+    if (!focusWidget)
+        return false;
+    if (g_focusIn == focusWidget && g_focusInByKeyboard)
+        return true;
+    return focusWidget->window()->testAttribute(Qt::WA_KeyboardFocusChange);
+}
+
 // Markup the app wrote itself: one paragraph whose content is escaped
 // (plainTip(), the setting descriptions). Anything else that looks like
 // markup came from outside.
@@ -296,6 +310,17 @@ protected:
             }
             break;
         case QEvent::KeyPress: return keyPress(watched, static_cast<QKeyEvent*>(event));
+        case QEvent::FocusIn:
+            // Delivered before QApplication::focusChanged: see hasKeyboardFocus().
+            if (auto* w = qobject_cast<QWidget*>(watched)) {
+                const Qt::FocusReason reason = static_cast<QFocusEvent*>(event)->reason();
+                // Back from another window or a popup: as it was before.
+                if ((reason == Qt::ActiveWindowFocusReason || reason == Qt::PopupFocusReason) && g_focusIn == w)
+                    break;
+                g_focusIn = w;
+                g_focusInByKeyboard = reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason || reason == Qt::ShortcutFocusReason;
+            }
+            break;
         default: break;
         }
         return false;
@@ -341,6 +366,12 @@ private:
 };
 
 } // namespace
+
+bool hasKeyboardFocus(const QWidget* w)
+{
+    const QWidget* fw = QApplication::focusWidget();
+    return w && fw && w->hasFocus() && arrivedByKeyboard(fw);
+}
 
 void installAppGuard(QApplication* app)
 {
@@ -395,10 +426,15 @@ void FocusRingOverlay::onFocusChanged(QWidget* /*old*/, QWidget* now)
             t = p;
         if (t->property("fwRingProxy").value<QWidget*>())
             t = t->property("fwRingProxy").value<QWidget*>();
-        const bool keyboard = t->window()->testAttribute(Qt::WA_KeyboardFocusChange);
-        if (keyboard || isInput(t))
+        if (arrivedByKeyboard(now) || isInput(t))
             m_target = t;
     }
+    // Above whatever was raised since (a sheet that just opened).
+    if (m_target)
+        raise();
+    // Polled while there is a target: it may scroll out of view and back in.
+    if (m_target && !m_tick.isActive())
+        m_tick.start();
     refresh();
 }
 
@@ -417,7 +453,7 @@ QRect FocusRingOverlay::ringRect(int* radius) const
     if (clip.height() < r.height() - 2 || clip.width() < r.width() - 2)
         r = clip;
     const QVariant rv = t->property("fwRadius");
-    *radius = rv.isValid() ? rv.toInt() : radius::sm;
+    *radius = rv.isValid() ? rv.toInt() : radius::control; // buttons and inputs
     if (*radius >= radius::pill)
         *radius = r.height() / 2 + size::focusOffset;
     return r.adjusted(-size::focusOffset, -size::focusOffset, size::focusOffset, size::focusOffset);
@@ -433,12 +469,21 @@ void FocusRingOverlay::reset()
 
 void FocusRingOverlay::refresh()
 {
-    int radius = 0;
-    const QRect r = ringRect(&radius);
-    if (r.isEmpty()) {
+    if (!m_target) {
         if (isVisible())
             hide();
         m_tick.stop();
+        m_last = {};
+        return;
+    }
+    if (parentWidget() && parentWidget()->isMinimized())
+        return; // nothing to follow; the next tick after restoring catches up
+    int radius = 0;
+    const QRect r = ringRect(&radius);
+    if (r.isEmpty()) {
+        // Scrolled out of view or hidden for now: keep watching it.
+        if (isVisible())
+            hide();
         m_last = {};
         return;
     }
@@ -446,7 +491,6 @@ void FocusRingOverlay::refresh()
         setGeometry(parentWidget()->rect());
         raise();
         show();
-        m_tick.start();
     }
     if (r != m_last) {
         m_last = r;

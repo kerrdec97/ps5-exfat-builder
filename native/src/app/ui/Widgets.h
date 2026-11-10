@@ -22,6 +22,7 @@
 class QBoxLayout;
 class QVBoxLayout;
 class QHBoxLayout;
+class QMimeData;
 
 namespace fw::ui {
 
@@ -65,6 +66,7 @@ class Link : public QLabel {
     Q_OBJECT
 public:
     explicit Link(const QString& text, QWidget* parent = nullptr);
+    void setText(const QString& text); // also the accessible name
 signals:
     void activated();
 
@@ -228,6 +230,7 @@ public:
     explicit Segmented(QWidget* parent = nullptr);
     void addSegment(const QString& text, const QString& icon = {}, const QVariant& value = {});
     void setSegmentText(int index, const QString& text);
+    QString segmentText(int index) const; // "" when out of range
     void setCurrentIndex(int index);
     int currentIndex() const { return m_current; }
     QVariant currentValue() const;
@@ -296,13 +299,15 @@ public:
     void setPhases(const QStringList& phases, int current); // -1 = none active
     void setPhasesVisible(bool visible);
     ProgressBar* bar() { return m_bar; }
+    QString percentText() const { return m_percent->text(); }
 
 private:
+    void updateLabel();
     ProgressBar* m_bar;
     QLabel* m_percent;
     QLabel* m_detail;
     QWidget* m_stepper;
-    QHBoxLayout* m_stepperLayout;
+    bool m_indeterminate = false;
 };
 
 // Stage stepper (§4.14): done = check success_hi, current = filled circle, pending = circle.
@@ -419,6 +424,7 @@ protected:
 
 private:
     void browse();
+    QString droppedPath(const QMimeData* mime) const;
     Mode m_mode;
     QLineEdit* m_edit;
     QPushButton* m_browse;

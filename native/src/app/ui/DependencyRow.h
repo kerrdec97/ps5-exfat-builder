@@ -61,6 +61,7 @@ private:
     AppContext& m_ctx;
     QStringList m_ids;
     QHash<QString, DependencyRow*> m_rows;
+    QStringList m_order; // row order
     QList<DependencyInfo> m_last;
 };
 

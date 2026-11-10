@@ -37,6 +37,9 @@ QByteArray svgSource(const QString& name)
     QByteArray data;
     if (f.open(QIODevice::ReadOnly))
         data = f.readAll();
+    else if (name == QLatin1String("circle_filled")) // the running mark: a filled circle, readable at 12 px
+        data = QByteArrayLiteral("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+                                 "<circle cx=\"12\" cy=\"12\" r=\"5\" fill=\"currentColor\"/></svg>");
     cache.insert(name, data);
     return data;
 }

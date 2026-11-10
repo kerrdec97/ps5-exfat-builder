@@ -5,25 +5,30 @@
 // estimate, the Library grid's keyboard menu and its cover cache.
 
 #include "app/ui/Components.h"
+#include "app/ui/HomeKit.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/LibraryGrid.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Shell.h"
+#include "app/ui/Style.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
 #include "support/TestSupport.h"
 
+#include <QAccessible>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QHelpEvent>
 #include <QImage>
 #include <QLineEdit>
+#include <QMimeData>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 #include <QToolTip>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -662,6 +667,342 @@ private slots:
         QCOMPARE(LibraryGrid::coverDecodeCount(), before + 3);
     }
 
+    void shiftArrowExtendsFromTheKeyboardPosition()
+    {
+        auto* grid = add<LibraryGrid>();
+        std::vector<GridItem> items;
+        for (int i = 0; i < 12; ++i) {
+            GridItem it;
+            it.key = QStringLiteral("key%1").arg(i);
+            it.title = QStringLiteral("Game %1").arg(i);
+            items.push_back(it);
+        }
+        grid->setItems(items);
+        grid->setMode(LibraryGrid::Mode::List);
+        grid->resize(800, grid->heightForWidth(800));
+        QTest::mouseClick(grid, Qt::LeftButton, Qt::NoModifier, QPoint(200, 34 + 56 + 20)); // the second row
+        QCOMPARE(grid->selectedKeys(), QStringList{QStringLiteral("key1")});
+        for (int i = 0; i < 4; ++i)
+            QTest::keyClick(grid, Qt::Key_Down);
+        QCOMPARE(grid->currentKey(), QStringLiteral("key5"));
+        QTest::keyClick(grid, Qt::Key_Down, Qt::ShiftModifier);
+        QCOMPARE(grid->selectedKeys(), (QStringList{QStringLiteral("key5"), QStringLiteral("key6")})); // not key1..key6
+    }
+
+    // ---- sheets ------------------------------------------------------------------------------
+
+    void sheetDestroyedWhileOpenGivesNoAnswer()
+    {
+        // Destroyed with its host while exec() runs: no answer, nothing touched afterwards.
+        auto* host = new QWidget(m_window.get());
+        host->resize(600, 400);
+        host->show();
+        bool checked = true;
+        QTimer::singleShot(0, [host] { delete host; });
+        QVERIFY(!Sheet::confirm(host, QStringLiteral("Delete?"), QStringLiteral("text"), QStringLiteral("Keep"), QStringLiteral("Delete"),
+                                true, Sheet::Icon::Warning, QStringLiteral("Do not ask again"), &checked));
+        QCOMPARE(checked, true); // left as it was
+        QCOMPARE(Sheet::openCount(), 0);
+
+        auto* host2 = new QWidget(m_window.get());
+        auto* s = new Sheet(host2, QStringLiteral("Done"), Sheet::Icon::Info);
+        s->addButton(QStringLiteral("Open folder"), Sheet::Role::Primary);
+        QTimer::singleShot(0, [host2] { delete host2; });
+        QCOMPARE(s->exec(), -1);
+    }
+
+    void sheetPanelIsAsTallAsItsWrappedText()
+    {
+        auto* host = add<QWidget>();
+        host->setFixedSize(900, 600);
+        QCoreApplication::processEvents();
+        auto* s = new Sheet(host, QStringLiteral("A long message"), Sheet::Icon::Info);
+        QString text;
+        for (int i = 0; i < 14; ++i)
+            text += QStringLiteral("the output folder is not there any more ");
+        QLabel* body = s->addText(text);
+        QPushButton* ok = s->addButton(QStringLiteral("OK"), Sheet::Role::Primary);
+        s->open();
+        QCoreApplication::processEvents();
+        QWidget* panel = s->findChild<QWidget*>(QStringLiteral("sheetPanel"));
+        QVERIFY(panel);
+        // The label got the height its text needs at the panel's width, and the
+        // button is inside the panel and the window.
+        QVERIFY2(body->height() >= body->heightForWidth(body->width()), qPrintable(QString::number(body->height())));
+        QVERIFY(panel->rect().contains(ok->geometry()));
+        QVERIFY(panel->geometry().bottom() <= host->height());
+        s->close();
+
+        // Taller than the window: clamped, the button still on screen.
+        s = new Sheet(host, QStringLiteral("An endless message"), Sheet::Icon::Info);
+        for (int i = 0; i < 5; ++i)
+            text += text;
+        s->addText(text);
+        ok = s->addButton(QStringLiteral("OK"), Sheet::Role::Primary);
+        s->open();
+        QCoreApplication::processEvents();
+        panel = s->findChild<QWidget*>(QStringLiteral("sheetPanel"));
+        QVERIFY(panel->geometry().bottom() <= host->height());
+        QVERIFY(panel->geometry().top() >= 0);
+        s->close();
+    }
+
+    void toastsStayUnderAnOpenSheet()
+    {
+        auto* host = add<QWidget>();
+        host->setFixedSize(900, 600);
+        ToastHost toasts(host);
+        auto* s = new Sheet(host, QStringLiteral("Cancel the build?"), Sheet::Icon::Warning);
+        s->addButton(QStringLiteral("Keep building"), Sheet::Role::Safe);
+        s->open();
+        toasts.show(Tone::Ok, QStringLiteral("Image built"), QStringLiteral("body"), {}, 0);
+        QFrame* toast = host->findChild<QFrame*>(QStringLiteral("toast"));
+        QVERIFY(toast);
+        const QObjectList order = host->children();
+        QVERIFY(order.indexOf(toast) < order.indexOf(s)); // lower in the stack
+        s->close();
+        toasts.clear();
+    }
+
+    // ---- focus ring -----------------------------------------------------------------------
+
+    void focusRingIsForKeyboardFocusAndStaysAboveASheet()
+    {
+        auto* ring = new FocusRingOverlay(m_window.get());
+        QPushButton* first = button(QStringLiteral("First"), ButtonVariant::Secondary, {}, m_window.get());
+        QPushButton* second = button(QStringLiteral("Second"), ButtonVariant::Secondary, {}, m_window.get());
+        m_window->layout()->addWidget(first);
+        m_window->layout()->addWidget(second);
+        auto* edit = add<QLineEdit>();
+        QCoreApplication::processEvents();
+
+        // Focus that arrives the keyboard way (Tab, or code that moves it for
+        // an arrow key or a sheet): a ring.
+        second->setFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY(second->hasFocus());
+        QVERIFY(!ring->isVisible());
+        QVERIFY(!hasKeyboardFocus(second));
+        first->setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(first->hasFocus());
+        QVERIFY(hasKeyboardFocus(first));
+        QTRY_VERIFY(ring->isVisible());
+        // A click on another button: focus moves, no ring any more.
+        QTest::mouseClick(second, Qt::LeftButton);
+        QTRY_VERIFY(second->hasFocus());
+        QVERIFY(!hasKeyboardFocus(second));
+        QTRY_VERIFY(!ring->isVisible());
+        QTest::keyClick(second, Qt::Key_Backtab);
+        QTRY_VERIFY(first->hasFocus());
+        QTRY_VERIFY(ring->isVisible());
+        // A text field has one whenever it has the focus.
+        QTest::mouseClick(edit, Qt::LeftButton);
+        QTRY_VERIFY(edit->hasFocus());
+        QTRY_VERIFY(ring->isVisible());
+
+        // A sheet opens while the ring is showing: the ring moves to the
+        // sheet's button and is drawn above the sheet, not under it.
+        auto* s = new Sheet(m_window.get(), QStringLiteral("Cancel the build?"), Sheet::Icon::Warning);
+        s->addButton(QStringLiteral("Keep building"), Sheet::Role::Safe);
+        s->addButton(QStringLiteral("Cancel build"), Sheet::Role::Destructive);
+        s->open();
+        QTRY_VERIFY(ring->isVisible());
+        const QObjectList order = m_window->children();
+        QVERIFY(order.indexOf(ring) > order.indexOf(s));
+        s->close();
+        delete ring;
+    }
+
+    // ---- small widgets -------------------------------------------------------------------
+
+    void badgeWidthFollowsItsGlyphAndLongTextGetsATooltip()
+    {
+        Badge b(QStringLiteral("Ready"), Tone::Neutral);
+        const int plain = b.sizeHint().width();
+        b.setTone(Tone::Ok); // the same text, now with a glyph
+        QVERIFY(b.sizeHint().width() > plain);
+        QVERIFY(b.testAttribute(Qt::WA_TransparentForMouseEvents));
+        QVERIFY(b.toolTip().isEmpty());
+        const QString longText = QStringLiteral("Verification failed: the image digest does not match <b>");
+        b.setText(longText);
+        QCOMPARE(b.toolTip(), plainTip(longText));
+        QVERIFY(!b.testAttribute(Qt::WA_TransparentForMouseEvents)); // or the tooltip could never show
+    }
+
+    void progressBlockLabelDoesNotDependOnCallOrder()
+    {
+        ProgressBlock a, b;
+        a.setProgress(0.4, false, QStringLiteral("Packing"));
+        a.setState(ProgressBar::State::Paused);
+        b.setState(ProgressBar::State::Paused);
+        b.setProgress(0.4, false, QStringLiteral("Packing"));
+        QCOMPARE(a.percentText(), QStringLiteral("Paused · %1").arg(thinPercent(0.4)));
+        QCOMPARE(b.percentText(), a.percentText());
+        b.setState(ProgressBar::State::Determinate);
+        QCOMPARE(b.percentText(), thinPercent(0.4));
+
+        InfoBar bar(Tone::Info);
+        bar.setTitle(QStringLiteral("Failed"));
+        bar.setTone(Tone::Err); // after the title
+        QLabel* title = nullptr;
+        for (QLabel* l : bar.findChildren<QLabel*>())
+            if (l->text() == QStringLiteral("Failed"))
+                title = l;
+        QVERIFY(title);
+        QCOMPARE(title->palette().color(QPalette::WindowText), theme::color::danger_hi);
+    }
+
+    void pathFieldTakesQuotedPathsAndTheRightKindOfDrop()
+    {
+        PathField field(PathField::Mode::Directory);
+        field.edit()->setText(QStringLiteral("  \"C:\\Dumps\\My Game\"  "));
+        QCOMPARE(field.path(), QStringLiteral("C:/Dumps/My Game"));
+
+        const QString file = m_root.filePath(QStringLiteral("drop.bin"));
+        QVERIFY(fwtest::writeTextFile(file, "x"));
+        auto dropOf = [](PathField& f, const QUrl& url) {
+            QMimeData mime;
+            mime.setUrls({url});
+            QDragEnterEvent enter(QPoint(5, 5), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            enter.ignore();
+            QApplication::sendEvent(&f, &enter);
+            return enter.isAccepted();
+        };
+        QVERIFY(dropOf(field, QUrl::fromLocalFile(m_root.path())));  // a folder on a folder field
+        QVERIFY(!dropOf(field, QUrl::fromLocalFile(file)));          // a file on a folder field
+        QVERIFY(!dropOf(field, QUrl(QStringLiteral("https://example.com/x")))); // not a local file
+        PathField fileField(PathField::Mode::OpenFile);
+        QVERIFY(dropOf(fileField, QUrl::fromLocalFile(file)));
+        QVERIFY(!dropOf(fileField, QUrl::fromLocalFile(m_root.path())));
+    }
+
+    void flowLayoutLeavesNoGapForHiddenItems()
+    {
+        QWidget host;
+        auto* flow = new FlowLayout(&host, 8, 8);
+        auto* a = new QLabel(QStringLiteral("aaaa"), &host);
+        auto* hidden = new QLabel(QStringLiteral("bbbb"), &host);
+        auto* c = new QLabel(QStringLiteral("cccc"), &host);
+        flow->addWidget(a);
+        flow->addWidget(hidden);
+        flow->addWidget(c);
+        hidden->hide();
+        host.resize(600, 40);
+        host.show();
+        QCoreApplication::processEvents();
+        QCOMPARE(c->x(), a->x() + a->width() + 8); // one gap, not two
+
+        // A balanced tile grid with a prime number of tiles is not one column.
+        QWidget gridHost;
+        auto* grid = new TileGrid(&gridHost, 200, 4);
+        grid->setBalanced(true);
+        for (int i = 0; i < 5; ++i)
+            grid->addWidget(new QLabel(QStringLiteral("tile"), &gridHost));
+        QCOMPARE(grid->columnsFor(1200), 3); // 3 + 2
+        grid->addWidget(new QLabel(QStringLiteral("tile"), &gridHost));
+        QCOMPARE(grid->columnsFor(1200), 3); // 6: 3 + 3
+        QCOMPARE(grid->columnsFor(210), 1);
+    }
+
+    void disclosureTogglesOncePerPress()
+    {
+        auto* d = add<Disclosure>(QStringLiteral("Advanced options"), QString());
+        QWidget* header = d->findChild<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        QVERIFY(header);
+        QCoreApplication::processEvents();
+        QSignalSpy spy(d, &Disclosure::toggled);
+        QTest::mouseClick(header, Qt::RightButton, Qt::NoModifier, QPoint(20, 10));
+        QCOMPARE(spy.count(), 0);
+        QTest::mouseClick(header, Qt::LeftButton, Qt::NoModifier, QPoint(20, 10));
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(d->isExpanded());
+        QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "), true);
+        QApplication::sendEvent(header, &repeat);
+        QCOMPARE(spy.count(), 1); // a held key does not flip it again
+        QTest::keyClick(header, Qt::Key_Space);
+        QCOMPARE(spy.count(), 2);
+
+        // A right click does not change a choice either.
+        auto* seg = add<Segmented>();
+        seg->addSegment(QStringLiteral("One"));
+        seg->addSegment(QStringLiteral("Two"));
+        QCoreApplication::processEvents();
+        QTest::mouseClick(seg, Qt::RightButton, Qt::NoModifier, QPoint(seg->width() - 8, 10));
+        QCOMPARE(seg->currentIndex(), 0);
+        QTest::mouseClick(seg, Qt::LeftButton, Qt::NoModifier, QPoint(seg->width() - 8, 10));
+        QCOMPARE(seg->currentIndex(), 1);
+    }
+
+    // ---- assistive technology --------------------------------------------------------------
+
+    void selfPaintedControlsSayWhatTheyAre()
+    {
+        auto iface = [](QObject* o) { return QAccessible::queryAccessibleInterface(o); };
+
+        Badge badge(QStringLiteral("Not found"), Tone::Err);
+        QVERIFY(iface(&badge));
+        QCOMPARE(iface(&badge)->role(), QAccessible::StaticText);
+        QCOMPARE(iface(&badge)->text(QAccessible::Name), QStringLiteral("Not found"));
+
+        ProgressBar bar;
+        bar.setFraction(0.63);
+        QCOMPARE(iface(&bar)->role(), QAccessible::ProgressBar);
+        QVERIFY(iface(&bar)->valueInterface());
+        QCOMPARE(iface(&bar)->valueInterface()->currentValue().toInt(), 63);
+        bar.setState(ProgressBar::State::Indeterminate);
+        QVERIFY(iface(&bar)->state().busy);
+
+        Segmented seg;
+        seg.setAccessibleName(QStringLiteral("Verification"));
+        seg.addSegment(QStringLiteral("Off"));
+        seg.addSegment(QStringLiteral("Quick"));
+        seg.setCurrentIndex(1);
+        QCOMPARE(iface(&seg)->text(QAccessible::Name), QStringLiteral("Verification"));
+        QCOMPARE(iface(&seg)->text(QAccessible::Value), QStringLiteral("Quick"));
+
+        ChoiceTiles tiles;
+        tiles.addChoice(QStringLiteral("exFAT"), QStringLiteral("d"), QStringLiteral("drive"), QStringLiteral("exfat"));
+        tiles.addChoice(QStringLiteral("FPKG"), QStringLiteral("d"), QStringLiteral("package"), QStringLiteral("fpkg"));
+        tiles.setCurrentIndex(1);
+        QCOMPARE(iface(&tiles)->text(QAccessible::Value), QStringLiteral("FPKG"));
+
+        Link link(QStringLiteral("How to fix…"));
+        QCOMPARE(iface(&link)->role(), QAccessible::Link);
+        link.setText(QStringLiteral("Set path…"));
+        QCOMPARE(iface(&link)->text(QAccessible::Name), QStringLiteral("Set path…"));
+
+        Disclosure d(QStringLiteral("Advanced options"));
+        QWidget* header = d.findChild<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        QCOMPARE(iface(header)->role(), QAccessible::Button);
+        QCOMPARE(iface(header)->text(QAccessible::Name), QStringLiteral("Advanced options"));
+        QVERIFY(iface(header)->state().collapsed);
+        d.setExpanded(true);
+        QVERIFY(iface(header)->state().expanded);
+
+        // A stat tile with a click handler is a button that Tab reaches and Enter presses.
+        StatTile tile(QStringLiteral("game"), QStringLiteral("Library"));
+        tile.setValue(QStringLiteral("12 games"));
+        QCOMPARE(tile.focusPolicy(), Qt::NoFocus);
+        QCOMPARE(iface(&tile)->text(QAccessible::Name), QStringLiteral("Library: 12 games"));
+        int clicks = 0;
+        connect(&tile, &StatTile::clicked, this, [&clicks] { ++clicks; });
+        QCOMPARE(tile.focusPolicy(), Qt::TabFocus);
+        QCOMPARE(iface(&tile)->role(), QAccessible::Button);
+        QTest::keyClick(&tile, Qt::Key_Return);
+        QTest::keyClick(&tile, Qt::Key_Space);
+        QCOMPARE(clicks, 2);
+
+        // The header chips.
+        AppHeader header2;
+        QSignalSpy queue(&header2, &AppHeader::queueChipClicked);
+        QWidget* chip = header2.queueChip()->parentWidget();
+        QCOMPARE(chip->focusPolicy(), Qt::TabFocus);
+        QCOMPARE(iface(chip)->role(), QAccessible::Button);
+        QTest::keyClick(chip, Qt::Key_Return);
+        QCOMPARE(queue.count(), 1);
+        QTest::mouseClick(chip, Qt::RightButton, Qt::NoModifier, QPoint(2, 2));
+        QCOMPARE(queue.count(), 1);
+    }
+
     // ---- file manager -------------------------------------------------------------------
 
     void openInFileManagerReportsAMissingOutput()
@@ -669,6 +1010,20 @@ private slots:
         QVERIFY(!openInFileManager(QString()));
         // Neither the file nor its folder exists: nothing to show, and nothing is started.
         QVERIFY(!openInFileManager(m_root.filePath(QStringLiteral("moved-away/out.exfat"))));
+    }
+
+    // Keep this test the last one: QCoreApplication::exit() stops every later
+    // event loop of the thread from starting.
+    void sheetExecWhenTheApplicationQuits()
+    {
+        // The nested loop ends without a button: that is the safe button's
+        // index, not 0 = "the first button" (here: "Open folder").
+        auto* s = new Sheet(m_window.get(), QStringLiteral("Done"), Sheet::Icon::Info);
+        s->addButton(QStringLiteral("Open folder"), Sheet::Role::Primary);
+        s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
+        QTimer::singleShot(0, [] { QCoreApplication::exit(0); });
+        QCOMPARE(s->exec(), 1);
+        QCOMPARE(Sheet::openCount(), 0);
     }
 };
 

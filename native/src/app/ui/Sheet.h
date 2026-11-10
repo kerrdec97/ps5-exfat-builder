@@ -86,9 +86,11 @@ private:
     QList<Role> m_roles;
     int m_width;
     int m_result = -1;
+    bool m_answered = false; // close() ran (exec(): the loop did not just end with the application)
     bool m_counted = false; // in openCount()
     QPointer<QEventLoop> m_loop;
     QPointer<QWidget> m_previousFocus;
+    bool m_previousByKeyboard = false;
 };
 
 // Bottom-right toast stack (max 3, newest at the bottom).

@@ -273,7 +273,14 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     qw->addWidget(m_queueChip);
     m_queueChipWrap->setCursor(Qt::PointingHandCursor);
     m_queueChipWrap->installEventFilter(this);
-    m_queueChipWrap->setToolTip(QStringLiteral("Open the queue"));
+    m_queueChipWrap->setToolTip(QStringLiteral("Open queue"));
+    // Both chips are buttons: Tab reaches them, Space and Enter press them.
+    for (QWidget* chip : {m_consoleChipWrap, m_queueChipWrap}) {
+        chip->setFocusPolicy(Qt::TabFocus);
+        chip->setProperty("fwRole", QStringLiteral("button")); // before the name, see Accessible.h
+        chip->setProperty("fwRadius", radius::pill);
+        chip->setAccessibleName(chip->toolTip());
+    }
     h->addWidget(m_queueChipWrap);
     m_help = new IconButton(QStringLiteral("help"), QStringLiteral("Help"), IconButton::Size::Regular, this);
     h->addWidget(m_help);
@@ -281,6 +288,16 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
 
 bool AppHeader::eventFilter(QObject* watched, QEvent* event)
 {
+    if (event->type() == QEvent::KeyPress && (watched == m_queueChipWrap || watched == m_consoleChipWrap)) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        if ((ke->key() == Qt::Key_Space || ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) && !ke->isAutoRepeat()) {
+            if (watched == m_queueChipWrap)
+                emit queueChipClicked();
+            else
+                emit consoleChipClicked();
+            return true;
+        }
+    }
     if (event->type() == QEvent::MouseButtonRelease && (watched == m_queueChipWrap || watched == m_consoleChipWrap)) {
         auto* me = static_cast<QMouseEvent*>(event);
         auto* chip = static_cast<QWidget*>(watched);
@@ -367,7 +384,7 @@ StatusBar::StatusBar(QWidget* parent) : QWidget(parent)
 void StatusBar::setStatus(const QString& text, Tone tone)
 {
     m_text->setText(text);
-    const QString iconName = tone == Tone::Info ? QStringLiteral("dot") : tone == Tone::Neutral ? QStringLiteral("circle") : defaultBadgeIcon(tone);
+    const QString iconName = tone == Tone::Info ? QStringLiteral("circle_filled") : tone == Tone::Neutral ? QStringLiteral("circle") : defaultBadgeIcon(tone);
     m_mark->setPixmap(iconPixmap(iconName, size::iconSm, toneMark(tone), devicePixelRatioF()));
 }
 
