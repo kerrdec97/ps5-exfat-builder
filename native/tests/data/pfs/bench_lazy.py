@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Time the vendored Lazy_MkPFS for tst_pfs_benchmark.
+"""Time Lazy_MkPFS for tst_pfs_benchmark.
 
     python3 -I bench_lazy.py file   <source-file>   <output> <level> <cpu> <timestamp>
     python3 -I bench_lazy.py folder <source-folder> <output> <level> <cpu> <timestamp>
@@ -7,18 +7,24 @@
 "file" is Lazy main_file.py (image -> .ffpfsc, the path the legacy app uses);
 "folder" is the legacy PFS tab two-step (folder -> pfs_image.dat -> .ffpfsc).
 Prints "seconds=<s>" for the build itself (interpreter start-up excluded).
+
+Lazy_MkPFS is not part of this repository: the environment variable
+FW_LAZY_MKPFS_DIR names a checkout of https://github.com/Nazky/Lazy_MkPFS
+(the references were made with commit 78bdd00).
 """
 import os
 import sys
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-LAZY = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..', 'vendor', 'lazy_mkpfs'))
+LAZY = os.environ.get('FW_LAZY_MKPFS_DIR', '')
 
 
 def main() -> int:
     mode, src, out, level, cpu, ts = sys.argv[1:7]
-    sys.path.insert(0, LAZY)
+    if not os.path.isfile(os.path.join(LAZY, 'main_file.py')):
+        print("FW_LAZY_MKPFS_DIR does not name a checkout of Lazy_MkPFS (no main_file.py)", file=sys.stderr)
+        return 2
+    sys.path.insert(0, os.path.abspath(LAZY))
     real_time = time.time
     fixed = float(ts)
     time.time = lambda: fixed  # Lazy stamps inodes with int(time.time())

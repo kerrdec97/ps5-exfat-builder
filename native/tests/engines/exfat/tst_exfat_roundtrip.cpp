@@ -7,17 +7,16 @@
 #include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatVerify.h"
 #include "engines/exfat/PlatformFs.h"
+#include "support/SparseFile.h"
 #include "support/TestSupport.h"
 
 #include <QElapsedTimer>
 #include <QJsonArray>
+#include <QScopeGuard>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimeZone>
-
-#ifdef Q_OS_UNIX
-#include <sys/stat.h>
-#endif
 
 using namespace fw;
 using namespace fw::exfat;
@@ -75,6 +74,9 @@ private:
         }
     }
 
+    // The verifier's report. A verification that could not run at all fails
+    // the test here: an empty report would count as "passed", and a report
+    // made up for the error would satisfy the tests that expect a mismatch.
     VerifyReport verifyFolder(const QString& image, const QString& folder, bool full, ScanRules rules = {})
     {
         CancellationToken token;
@@ -83,8 +85,11 @@ private:
         vo.threads = 4;
         auto r = verifyImageAgainstFolder(image, folder, rules, vo, token);
         if (!r.ok()) {
-            qWarning() << err(r.error());
-            return {};
+            const QString why = QStringLiteral("verification did not run: ") + err(r.error());
+            QTest::qFail(qPrintable(why), __FILE__, __LINE__);
+            VerifyReport failed;
+            failed.structureProblems << why;
+            return failed;
         }
         return r.value();
     }
@@ -113,7 +118,9 @@ private slots:
         QVERIFY(m_tmp.isValid());
         fwtest::isolateAppData(m_tmp);
         m_sample = path(QStringLiteral("sample"));
-        makeSampleTree(m_sample, 1500);
+        QVERIFY(makeSampleTree(m_sample, 1500));
+        // The images are compared with what is on disk, so the disk must hold all of it.
+        QCOMPARE(listing(m_sample).size(), sampleTreeEntries(1500));
         m_sampleImage = path(QStringLiteral("sample.exfat"));
         WriterOptions o;
         o.spare = SpareMode::Fixed;
@@ -125,8 +132,13 @@ private slots:
     void sampleTreeRoundTripsAndPassesFsck()
     {
         const QString src = path(QStringLiteral("legacy-size"));
-        makeSampleTree(src);
+        QVERIFY(makeSampleTree(src));
         const QString image = path(QStringLiteral("legacy-size.exfat"));
+        // The legacy rule leaves at least 1 GiB free. Starting from an empty
+        // sparse file keeps that free space from being allocated where the
+        // file system can do that (it does not matter here when it cannot);
+        // the writer and the image's contents are the same either way.
+        (void)fwtest::makeSparseFile(image, 0);
         auto plan = build(src, image); // default: legacy automatic size, automatic cluster
         QVERIFY2(plan.ok(), qPrintable(plan.ok() ? QString() : err(plan.error())));
         QCOMPARE(QFileInfo(image).size(), plan->geo.volumeBytes());
@@ -134,16 +146,13 @@ private slots:
         QCOMPARE(plan->geo.clusterBytes(), 65536); // automatic = 64 KiB (ShadowMount+ 1.7), even for small files
         expectFsckClean(image);
         compareImageWithFolder(image, src);
-        // Manual cross-checks with other exFAT drivers: keep the sample.
-        if (const QByteArray keep = qgetenv("FW_EXFAT_KEEP_SAMPLE"); !keep.isEmpty()) {
-            const QString dir = QString::fromLocal8Bit(keep);
-            QDir(dir).removeRecursively();
-            QDir().mkpath(dir);
-            QVERIFY(QFile::copy(image, dir + QStringLiteral("/sample.exfat")));
-            QVERIFY(QDir().rename(src, dir + QStringLiteral("/sample")));
-        }
+        // Manual cross-checks with other exFAT drivers: FW_EXFAT_KEEP_SAMPLE=<dir>
+        // receives a copy in the new sub-folder "fw-exfat-sample".
+        const QString problem = keepForCrossCheck("FW_EXFAT_KEEP_SAMPLE", QStringLiteral("fw-exfat-sample"), image,
+                                                  QStringLiteral("sample.exfat"), src, QStringLiteral("sample"));
+        QVERIFY2(problem.isEmpty(), qPrintable(problem));
         if (fsckPath().isEmpty())
-            QSKIP("fsck.exfat not installed; the structure was checked by the reader only");
+            qInfo("fsck.exfat is not installed: the structure was checked by the reader only");
     }
 
     void manySmallFilesAndCompactSize()
@@ -217,7 +226,7 @@ private slots:
     void emptyFolderAndNoLabel()
     {
         const QString src = path(QStringLiteral("empty-src"));
-        QDir().mkpath(src);
+        QVERIFY(QDir().mkpath(src));
         const QString image = path(QStringLiteral("empty.exfat"));
         WriterOptions o;
         o.label = QString();
@@ -239,22 +248,53 @@ private slots:
         QVERIFY(t->problems.isEmpty());
     }
 
+    void sourceChangingAfterTheScanFailsTheWrite_data()
+    {
+        QTest::addColumn<int>("newSize");
+        QTest::newRow("shorter") << 40000;
+        QTest::newRow("longer") << 160000;
+    }
+
+    // The image is laid out for the sizes the scan saw. A file that has
+    // another size when it is written would end up cut off or padded under
+    // its own name: the write fails instead and names the file.
+    void sourceChangingAfterTheScanFailsTheWrite()
+    {
+        QFETCH(int, newSize);
+        const QString src = path(QStringLiteral("changing-%1").arg(newSize));
+        QVERIFY(writeBytes(src + QStringLiteral("/eboot.bin"), "x"));
+        QVERIFY(writeRandom(src + QStringLiteral("/data/changing.bin"), 100000, 1));
+        CancellationToken token;
+        auto tree = scanSource(src, {}, token);
+        QVERIFY2(tree.ok(), qPrintable(tree.ok() ? QString() : err(tree.error())));
+        WriterOptions o;
+        o.spare = SpareMode::Fixed;
+        o.syncToDisk = false;
+        auto plan = planImage(tree.value(), o);
+        QVERIFY2(plan.ok(), qPrintable(plan.ok() ? QString() : err(plan.error())));
+        QVERIFY(writeRandom(src + QStringLiteral("/data/changing.bin"), newSize, 2));
+        const auto written = writeImage(tree.value(), plan.value(), path(QStringLiteral("changing-%1.exfat").arg(newSize)), o, token);
+        FWTEST_COMPARE_ERROR(written, ErrorCode::IoError);
+        QVERIFY2(written.error().message.contains(QStringLiteral("changing.bin changed while the image was being built")),
+                 qPrintable(err(written.error())));
+    }
+
     void namesThatExfatCannotHoldAreRefused()
     {
 #ifdef Q_OS_WIN
         QSKIP("Windows itself cannot create these names");
 #else
         const QString src = path(QStringLiteral("bad-names"));
-        writeBytes(src + QStringLiteral("/eboot.bin"), "x");
-        writeBytes(src + QStringLiteral("/Data.bin"), "1");
-        writeBytes(src + QStringLiteral("/DATA.BIN"), "2");
+        QVERIFY(writeBytes(src + QStringLiteral("/eboot.bin"), "x"));
+        QVERIFY(writeBytes(src + QStringLiteral("/Data.bin"), "1"));
+        QVERIFY(writeBytes(src + QStringLiteral("/DATA.BIN"), "2"));
         auto r = build(src, path(QStringLiteral("bad-names.exfat")));
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InvalidArgument);
         QVERIFY2(r.error().message.contains(QStringLiteral("differ only in upper/lower case")), qPrintable(r.error().message));
 
         const QString src2 = path(QStringLiteral("bad-names2"));
-        writeBytes(src2 + QStringLiteral("/what?.txt"), "1");
+        QVERIFY(writeBytes(src2 + QStringLiteral("/what?.txt"), "1"));
         auto r2 = build(src2, path(QStringLiteral("bad-names2.exfat")));
         QVERIFY(!r2.ok());
         QVERIFY2(r2.error().message.contains(QStringLiteral("what?.txt")), qPrintable(r2.error().message));
@@ -264,12 +304,17 @@ private slots:
     void exclusionsAreAppliedAndVerifiedConsistently()
     {
         const QString src = path(QStringLiteral("excl"));
-        makeSampleTree(src, 5);
-        writeBytes(src + QStringLiteral("/Thumbs.db"), "junk");
-        writeBytes(src + QStringLiteral("/data/desktop.ini"), "junk");
-        writeBytes(src + QStringLiteral("/old build.exfat"), "nested image");
-        writeBytes(src + QStringLiteral("/decrypted/x.elf"), "decrypted");
-        writeBytes(src + QStringLiteral("/.hidden"), "hidden");
+        QVERIFY(makeSampleTree(src, 5));
+        QVERIFY(writeBytes(src + QStringLiteral("/Thumbs.db"), "junk"));
+        QVERIFY(writeBytes(src + QStringLiteral("/data/desktop.ini"), "junk"));
+        QVERIFY(writeBytes(src + QStringLiteral("/old build.exfat"), "nested image"));
+        QVERIFY(writeBytes(src + QStringLiteral("/decrypted/x.elf"), "decrypted"));
+        // Hidden the Unix way (a leading dot) and the Windows way (the attribute).
+        QVERIFY(writeBytes(src + QStringLiteral("/.hidden"), "hidden"));
+        QVERIFY(writeBytes(src + QStringLiteral("/data/attribute.bin"), "hidden"));
+#ifdef Q_OS_WIN
+        QVERIFY(setHiddenAttribute(src + QStringLiteral("/data/attribute.bin")));
+#endif
         ScanRules rules;
         rules.excludePatterns = {QStringLiteral("*.exfat"), QStringLiteral("thumbs.db"), QStringLiteral("desktop.ini"),
                                  QStringLiteral("decrypted/")};
@@ -286,8 +331,13 @@ private slots:
         QVERIFY(tree.ok());
         for (const char* p : {"Thumbs.db", "data/desktop.ini", "old build.exfat", "decrypted", "decrypted/x.elf"})
             QVERIFY2(tree->find(QString::fromLatin1(p)) < 0, p);
-#ifndef Q_OS_WIN
+        // Each platform's own kind of hidden file is left out, the other kind is an ordinary file.
+#ifdef Q_OS_WIN
+        QVERIFY(tree->find(QStringLiteral("data/attribute.bin")) < 0);
+        QVERIFY(tree->find(QStringLiteral(".hidden")) > 0);
+#else
         QVERIFY(tree->find(QStringLiteral(".hidden")) < 0);
+        QVERIFY(tree->find(QStringLiteral("data/attribute.bin")) > 0);
 #endif
         QVERIFY(tree->find(QStringLiteral("data/big.bin")) > 0);
         // Verification with the same rules passes; without them it fails strictly.
@@ -303,7 +353,7 @@ private slots:
         flipByte(img, 100); // VolumeSerialNumber: checksum no longer matches
         auto r = ExfatReader::open(img);
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::CorruptData);
         QVERIFY2(r.error().message.contains(QStringLiteral("main boot sector")), qPrintable(r.error().message));
         QVERIFY(r.error().message.contains(QStringLiteral("backup copy is intact")));
         const VerifyReport v = verifyFolder(img, m_sample, false);
@@ -345,7 +395,7 @@ private slots:
         QVERIFY(!t->problems.isEmpty());
         const Status intact = ExfatReader::requireIntact(t.value());
         QVERIFY(!intact.ok());
-        QCOMPARE(intact.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(intact, ErrorCode::CorruptData);
         QVERIFY2(intact.error().message.contains(QStringLiteral("damaged")), qPrintable(intact.error().message));
         QVERIFY(!verifyFolder(img, m_sample, false).passed());
 
@@ -384,27 +434,27 @@ private slots:
         flipByte(img2, g.clusterOffset(upcase.cluster) + 200);
         auto r2 = ExfatReader::open(img2);
         QVERIFY(!r2.ok());
-        QCOMPARE(r2.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(r2, ErrorCode::CorruptData);
         QVERIFY(r2.error().message.contains(QStringLiteral("up-case")));
 
         const QString img3 = copyOf(m_sampleImage, QStringLiteral("truncated.exfat"));
         QVERIFY(QFile(img3).resize(QFileInfo(img3).size() / 2));
         auto r3 = ExfatReader::open(img3);
         QVERIFY(!r3.ok());
-        QCOMPARE(r3.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(r3, ErrorCode::CorruptData);
         QVERIFY(r3.error().message.contains(QStringLiteral("shorter")));
 
         const QString notExfat = path(QStringLiteral("not-exfat.bin"));
         QVERIFY(writeRandom(notExfat, 1 << 20, 9));
         auto r4 = ExfatReader::open(notExfat);
         QVERIFY(!r4.ok());
-        QCOMPARE(r4.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(r4, ErrorCode::CorruptData);
     }
 
     void verifyIsStrict()
     {
         const QString src = path(QStringLiteral("verify-src"));
-        makeSampleTree(src, 20);
+        QVERIFY(makeSampleTree(src, 20));
         const QString image = path(QStringLiteral("verify.exfat"));
         WriterOptions o;
         o.spare = SpareMode::Fixed;
@@ -429,7 +479,7 @@ private slots:
         }
         flipByte(src + QStringLiteral("/data/big.bin"), 2 * 1024 * 1024 + 7, 0x10);
         // A file only in the source: missing from the image.
-        writeBytes(src + QStringLiteral("/data/new.bin"), "new");
+        QVERIFY(writeBytes(src + QStringLiteral("/data/new.bin"), "new"));
         {
             const VerifyReport r = verifyFolder(image, src, false);
             QVERIFY(!r.passed());
@@ -450,8 +500,8 @@ private slots:
             QCOMPARE(j.value(QStringLiteral("mismatches")).toArray().size(), 2);
         }
         // A different size.
-        writeRandom(src + QStringLiteral("/data/medium.bin"), 700 * 1024 + 1, 3);
-        QDir().mkpath(src + QStringLiteral("/empty folder"));
+        QVERIFY(writeRandom(src + QStringLiteral("/data/medium.bin"), 700 * 1024 + 1, 3));
+        QVERIFY(QDir().mkpath(src + QStringLiteral("/empty folder")));
         {
             const VerifyReport r = verifyFolder(image, src, false);
             QVERIFY(!r.passed());
@@ -469,7 +519,7 @@ private slots:
     {
         QFETCH(bool, parallel);
         const QString src = path(QStringLiteral("times-src-%1").arg(parallel));
-        makeSampleTree(src, 200);
+        QVERIFY(makeSampleTree(src, 200));
         // Known times on a file and a folder.
         const QDateTime fileTime(QDate(2021, 5, 6), QTime(7, 8, 9, 123), QTimeZone::utc());
         const QDateTime dirTime(QDate(2019, 12, 24), QTime(18, 0, 1, 990), QTimeZone::utc());
@@ -489,10 +539,12 @@ private slots:
         CancellationToken token;
         auto tree = reader.value()->readTree(token);
         QVERIFY(tree.ok());
-        const ImageEntry& big = tree->entries[size_t(tree->find(QStringLiteral("data/big.bin")))];
+        const int bigIndex = tree->find(QStringLiteral("data/big.bin"));
+        QVERIFY(bigIndex > 0);
+        const ImageEntry& big = tree->entries[size_t(bigIndex)];
         QCOMPARE(big.modified.toMSecsSinceEpoch(), fileTime.toMSecsSinceEpoch() - 3); // 10 ms resolution
         const QString dest = path(QStringLiteral("extracted-%1").arg(parallel));
-        QDir().mkpath(dest);
+        QVERIFY(QDir().mkpath(dest));
         ExtractOptions eo;
         eo.parallel = parallel;
         eo.threads = 8;
@@ -520,28 +572,34 @@ private slots:
         QVERIFY(verifyFolder(image, dest, true).passed());
     }
 
+    // A file over 4 GiB: 64-bit offsets in the writer, the reader, the file
+    // stream and the verifier. The source is sparse, and the image starts as
+    // an empty sparse file, so the long run of zeros (which the writer leaves
+    // as a hole) takes no room where the file system can do that.
     void sparseFileLargerThan4GiB()
     {
-#ifndef Q_OS_UNIX
-        QSKIP("sparse files are only created quickly on this platform's test file systems under Unix");
-#else
+        const qint64 size = 4 * kGiB + 16 * kMiB + 12345;
         const QString src = path(QStringLiteral("huge-src"));
-        QDir().mkpath(src);
-        const qint64 size = 5 * kGiB + 12345;
-        {
-            QFile f(src + QStringLiteral("/huge.bin"));
-            QVERIFY(f.open(QIODevice::WriteOnly));
-            QVERIFY(f.resize(size));
-            QVERIFY(f.seek(size - 5));
-            QCOMPARE(f.write("tail!", 5), qint64(5));
-            QVERIFY(f.seek(4 * kGiB + 1));
-            QCOMPARE(f.write("past 4 GiB", 10), qint64(10));
-        }
-        struct stat sb;
-        QVERIFY(::stat(QFile::encodeName(src + QStringLiteral("/huge.bin")).constData(), &sb) == 0);
-        if (qint64(sb.st_blocks) * 512 > 64 * kMiB)
-            QSKIP("this file system does not create sparse files");
         const QString image = path(QStringLiteral("huge.exfat"));
+        // Gives the disk space back as soon as the test ends.
+        const auto cleanup = qScopeGuard([&] {
+            QFile::remove(image);
+            QDir(src).removeRecursively();
+        });
+        QVERIFY(QDir().mkpath(src));
+        const QList<QPair<qint64, QByteArray>> marks = {
+            {0, QByteArrayLiteral("head")}, {4 * kGiB - 5, QByteArrayLiteral("edge!")},
+            {4 * kGiB + 1, QByteArrayLiteral("past 4 GiB")}, {size - 5, QByteArrayLiteral("tail!")}};
+        const qint64 allocated = fwtest::makeSparseFile(src + QStringLiteral("/huge.bin"), size, marks);
+        if (allocated < 0 || allocated > 64 * kMiB)
+            QSKIP("this file system does not create sparse files");
+        // Where the image's hole would be real data after all, the disk must hold it.
+        const qint64 need = holesStayUnallocated(image) ? 256 * kMiB : size + 256 * kMiB;
+        const qint64 available = QStorageInfo(m_tmp.path()).bytesAvailable();
+        if (available < need)
+            QSKIP(qPrintable(QStringLiteral("the image needs %1 MiB in the temporary folder and %2 MiB are free")
+                                 .arg(need / kMiB).arg(available / kMiB)));
+
         WriterOptions o;
         o.spare = SpareMode::Fixed;
         QElapsedTimer t;
@@ -549,38 +607,56 @@ private slots:
         auto plan = build(src, image, o);
         QVERIFY2(plan.ok(), qPrintable(plan.ok() ? QString() : err(plan.error())));
         QVERIFY(QFileInfo(image).size() > size);
-        struct stat ib;
-        QVERIFY(::stat(QFile::encodeName(image).constData(), &ib) == 0);
-        qInfo() << "5 GiB sparse file imaged in" << t.elapsed() << "ms; image uses" << qint64(ib.st_blocks) * 512 / kMiB << "MiB on disk";
+        qInfo() << "file over 4 GiB imaged in" << t.elapsed() << "ms; the image uses" << fwtest::bytesOnDisk(image) / kMiB
+                << "MiB on disk";
         expectFsckClean(image);
 
         auto reader = ExfatReader::open(image);
-        QVERIFY(reader.ok());
+        QVERIFY2(reader.ok(), qPrintable(reader.ok() ? QString() : err(reader.error())));
         CancellationToken token;
         auto tree = reader.value()->readTree(token);
-        QVERIFY(tree.ok());
-        const ImageEntry& e = tree->entries[size_t(tree->find(QStringLiteral("huge.bin")))];
+        QVERIFY2(tree.ok(), qPrintable(tree.ok() ? QString() : err(tree.error())));
+        const int idx = tree->find(QStringLiteral("huge.bin"));
+        QVERIFY(idx > 0);
+        const ImageEntry& e = tree->entries[size_t(idx)];
         QCOMPARE(e.size, size);
         ImageFileStream s(image, reader.value()->geometry());
         QVERIFY(s.open().ok());
-        char buf[16] = {};
-        auto r = s.read(e, size - 5, buf, 16);
-        QVERIFY(r.ok());
-        QCOMPARE(r.value(), qint64(5));
-        QCOMPARE(QByteArray(buf, 5), QByteArray("tail!"));
-        r = s.read(e, 4 * kGiB + 1, buf, 10);
-        QCOMPARE(QByteArray(buf, 10), QByteArray("past 4 GiB"));
+        for (const auto& m : marks) {
+            QByteArray got(16, '\0');
+            auto r = s.read(e, m.first, got.data(), got.size());
+            QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+            QCOMPARE(r.value(), std::min<qint64>(got.size(), size - m.first)); // the last mark ends the file
+            QCOMPARE(got.left(m.second.size()), m.second);
+        }
         VerifyOptions vo;
         vo.full = true;
         auto v = verifyImageAgainstFolder(image, src, {}, vo, token);
-        QVERIFY(v.ok());
+        QVERIFY2(v.ok(), qPrintable(v.ok() ? QString() : err(v.error())));
         QVERIFY2(v->passed(), qPrintable(v->summary()));
         QCOMPARE(v->bytesCompared, size);
-#endif
     }
 
 private:
     static bool setPathTimesForTest(const QString& p, const QDateTime& t) { return setPathTimes(p, t, t, t); }
+
+    // True when an image written to `path` keeps its holes unallocated: the
+    // path is left as an empty sparse file, which the writer then truncates
+    // and fills (see fwtest::makeSparseFile).
+    static bool holesStayUnallocated(const QString& path)
+    {
+        const qint64 probe = 64 * kMiB;
+        if (fwtest::makeSparseFile(path, 0) < 0)
+            return false;
+        {
+            QFile f(path);
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || !f.resize(probe) || !f.seek(probe) || f.write("x", 1) != 1)
+                return false;
+        }
+        const qint64 used = fwtest::bytesOnDisk(path);
+        QFile(path).resize(0);
+        return used >= 0 && used < probe / 8;
+    }
 };
 
 QTEST_GUILESS_MAIN(TestExfatRoundtrip)

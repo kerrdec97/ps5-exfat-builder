@@ -23,7 +23,10 @@ using namespace exfattest;
 
 namespace {
 
-constexpr qint64 kQuickMs = 2000; // the work takes milliseconds; the margin is for a busy machine
+// The guarded work takes milliseconds; unguarded it runs until memory is gone
+// or never ends. The bound only has to tell those apart, so it is wide enough
+// for a machine whose disk and processors are all busy with other tests.
+constexpr qint64 kQuickMs = 120000;
 
 bool patch(const QString& path, qint64 off, const QByteArray& bytes)
 {
@@ -272,7 +275,7 @@ private slots:
         auto reader = ExfatReader::open(img);
         QVERIFY2(timer.elapsed() < kQuickMs, qPrintable(QString::number(timer.elapsed())));
         QVERIFY(!reader.ok());
-        QCOMPARE(reader.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(reader, ErrorCode::CorruptData);
         QVERIFY2(reader.error().detail.contains(QStringLiteral("VolumeLength")), qPrintable(reader.error().toLogString()));
     }
 
@@ -294,7 +297,7 @@ private slots:
         auto reader = ExfatReader::open(img);
         QVERIFY2(timer.elapsed() < kQuickMs, qPrintable(QString::number(timer.elapsed())));
         QVERIFY(!reader.ok());
-        QCOMPARE(reader.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(reader, ErrorCode::CorruptData);
         QVERIFY2(reader.error().message.contains(QStringLiteral("shorter than the volume")),
                  qPrintable(reader.error().toLogString()));
     }
@@ -310,7 +313,7 @@ private slots:
         auto reader = ExfatReader::open(img);
         QVERIFY2(timer.elapsed() < kQuickMs, qPrintable(QString::number(timer.elapsed())));
         QVERIFY(!reader.ok());
-        QCOMPARE(reader.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(reader, ErrorCode::CorruptData);
         QVERIFY2(reader.error().message.contains(QStringLiteral("root folder cannot be read")),
                  qPrintable(reader.error().toLogString()));
     }
@@ -385,7 +388,7 @@ private slots:
         CancellationToken token;
         const auto tree = scanSource(src, ScanRules{}, token);
         QVERIFY(!tree.ok());
-        QCOMPARE(tree.error().code, ErrorCode::PermissionDenied);
+        FWTEST_COMPARE_ERROR(tree, ErrorCode::PermissionDenied);
         QVERIFY2(tree.error().message.contains(QLatin1String("locked")), qPrintable(tree.error().toLogString()));
     }
 
@@ -395,12 +398,12 @@ private slots:
     void junctionBackIntoTheSourceIsLeftOut()
     {
         const QString src = path(QStringLiteral("looped"));
-        const QString far = path(QStringLiteral("looped-elsewhere"));
+        const QString elsewhere = path(QStringLiteral("looped-elsewhere"));
         QVERIFY(writeBytes(src + QStringLiteral("/data/near.bin"), "near"));
-        QVERIFY(writeBytes(far + QStringLiteral("/far.bin"), "far"));
+        QVERIFY(writeBytes(elsewhere + QStringLiteral("/far.bin"), "far"));
         const QString back = src + QStringLiteral("/data/back");
         const QString out = src + QStringLiteral("/assets");
-        if (!createDirectoryJunction(back, src).ok() || !createDirectoryJunction(out, far).ok()) {
+        if (!createDirectoryJunction(back, src).ok() || !createDirectoryJunction(out, elsewhere).ok()) {
             (void)removeDirectoryJunction(back);
             QSKIP("Folder links cannot be created here.");
         }

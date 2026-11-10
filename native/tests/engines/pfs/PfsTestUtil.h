@@ -14,8 +14,21 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTest>
 
 #include <cstdint>
+
+// QCOMPARE on the error code of a result that must have failed. A result that
+// succeeded fails the test here; asking it for its error would end the whole
+// test program instead.
+#ifndef FWTEST_COMPARE_ERROR
+#define FWTEST_COMPARE_ERROR(result, expectedCode)                                \
+    do {                                                                          \
+        const auto& fwtestResult_ = (result);                                     \
+        QVERIFY2(!fwtestResult_.ok(), "this succeeded; expected " #expectedCode); \
+        QCOMPARE(fwtestResult_.error().code, expectedCode);                       \
+    } while (false)
+#endif
 
 namespace pfstest {
 
@@ -140,6 +153,10 @@ inline bool writeFile(const QString& path, const QByteArray& data, qint64 mtime)
 
 inline bool makeTree(const QString& root, const QJsonArray& tree, qint64 mtime)
 {
+    // An empty path (what an invalid temporary folder gives) would name the
+    // current folder, which is not this test's to clear.
+    if (root.isEmpty())
+        return false;
     QDir(root).removeRecursively();
     QDir().mkpath(root);
     for (const TreeItem& t : expandTree(tree)) {

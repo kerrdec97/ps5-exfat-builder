@@ -1,6 +1,8 @@
 // Throughput of the exFAT engine: write, full verification, extraction.
 // Logs MB/s; there is no pass/fail threshold (machines differ too much).
-// FW_EXFAT_BENCH_MIB sets the amount of large-file data (default 256).
+// FW_EXFAT_BENCH_MIB sets the amount of large-file data. The default of 64
+// keeps an ordinary test run light (the same code runs, on less data); for
+// numbers worth quoting set 256 or more on a machine that does nothing else.
 
 #include "ExfatTestUtil.h"
 
@@ -44,17 +46,33 @@ private:
                       : QStringLiteral("n/a");
     }
 
+    // The image the verify and extract measurements read. writeThroughput()
+    // leaves it behind; a measurement that is run on its own writes it first.
+    bool ensureImage()
+    {
+        if (QFileInfo::exists(m_image))
+            return true;
+        WriterOptions o;
+        o.label = QStringLiteral("BENCH");
+        o.spare = SpareMode::Fixed;
+        const auto plan = build(m_src, m_image, o);
+        if (!plan.ok())
+            qWarning().noquote() << plan.error().toLogString();
+        return plan.ok();
+    }
+
 private slots:
     void initTestCase()
     {
         QVERIFY(m_tmp.isValid());
         fwtest::isolateAppData(m_tmp);
         m_src = m_tmp.filePath(QStringLiteral("bench-src"));
-        const qint64 mib = qEnvironmentVariableIsSet("FW_EXFAT_BENCH_MIB") ? qEnvironmentVariableIntValue("FW_EXFAT_BENCH_MIB") : 256;
+        const int asked = qEnvironmentVariableIntValue("FW_EXFAT_BENCH_MIB");
+        const qint64 mib = asked > 0 ? asked : 64;
         const int big = 4;
         for (int i = 0; i < big; ++i)
             QVERIFY(writeRandom(m_src + QStringLiteral("/big/%1.bin").arg(i), mib * kMiB / big, quint32(i + 1)));
-        writeBytes(m_src + QStringLiteral("/eboot.bin"), "bench");
+        QVERIFY(writeBytes(m_src + QStringLiteral("/eboot.bin"), "bench"));
         for (int i = 0; i < 2000; ++i)
             QVERIFY(writeRandom(m_src + QStringLiteral("/small/%1/%2.dat").arg(i % 20).arg(i), 4096 + i % 1000, quint32(100 + i)));
         CancellationToken token;
@@ -90,6 +108,7 @@ private slots:
 
     void verifyThroughput()
     {
+        QVERIFY(ensureImage());
         CancellationToken token;
         for (int threads : {1, std::max(2, QThread::idealThreadCount())}) {
             VerifyOptions vo;
@@ -115,6 +134,7 @@ private slots:
 
     void extractThroughput()
     {
+        QVERIFY(ensureImage());
         CancellationToken token;
         // Two rounds: on some VMs the first large batch of new page-cache
         // pages is much slower (memory faulted in lazily by the host), which
@@ -127,7 +147,7 @@ private slots:
             auto tree = reader.value()->readTree(token);
             QVERIFY(tree.ok());
             const QString dest = m_tmp.filePath(parallel ? QStringLiteral("x-par") : QStringLiteral("x-seq"));
-            QDir().mkpath(dest);
+            QVERIFY(QDir().mkpath(dest));
             ExtractOptions eo;
             eo.parallel = parallel;
             eo.threads = 16;

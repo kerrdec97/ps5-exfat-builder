@@ -3,8 +3,10 @@
 // standard output (UTF-8, one "key=value" per line) and writes one line to
 // standard error.
 //
-//   --exit=<n>    exit with <n> (default 0)
-//   --sleep=<ms>  sleep before exiting
+//   --exit=<n>          exit with <n> (default 0)
+//   --wait-file=<path>  stay alive until that file exists (the test creates
+//                       it when it is done with the running program); exits
+//                       with 98 when it never appears
 
 #include <windows.h>
 #include <shellapi.h>
@@ -51,19 +53,27 @@ int wmain()
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     put(out, L"argc=" + std::to_wstring(argc - 1));
     int code = 0;
-    DWORD sleepMs = 0;
+    std::wstring waitFile;
     for (int i = 1; i < argc; ++i) {
         const std::wstring a = argv[i];
         put(out, L"arg=" + a);
         if (a.rfind(L"--exit=", 0) == 0)
             code = _wtoi(a.c_str() + 7);
-        else if (a.rfind(L"--sleep=", 0) == 0)
-            sleepMs = DWORD(_wtoi(a.c_str() + 8));
+        else if (a.rfind(L"--wait-file=", 0) == 0)
+            waitFile = a.substr(12);
     }
     LocalFree(argv);
     put(out, L"end");
     put(GetStdHandle(STD_ERROR_HANDLE), L"child-stderr");
-    if (sleepMs)
-        Sleep(sleepMs);
+    if (!waitFile.empty()) {
+        // Long enough for a busy machine, and bounded: a test that died must
+        // not leave this program running for good.
+        const ULONGLONG start = GetTickCount64();
+        while (GetFileAttributesW(waitFile.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            if (GetTickCount64() - start > 10ULL * 60 * 1000)
+                return 98;
+            Sleep(20);
+        }
+    }
     return code;
 }

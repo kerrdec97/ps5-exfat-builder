@@ -91,6 +91,7 @@ private slots:
     void initTestCase()
     {
         QVERIFY(m_tmp.isValid());
+        fwtest::isolateAppData(m_tmp);
         QVERIFY(makeReferenceTree(m_tmp.filePath("src")));
     }
 
@@ -128,7 +129,9 @@ private slots:
         WriterOptions opt;
         opt.params = FormatParams{block, frag, minfree, bpi};
         opt.formatTime = ref.value()->sb().time;
-        opt.populateTime = ref.value()->readInode(kRootIno)->mtime;
+        const auto refRoot = ref.value()->readInode(kRootIno);
+        QVERIFY2(refRoot.ok(), refRoot.ok() ? "" : qPrintable(refRoot.error().toLogString()));
+        opt.populateTime = refRoot->mtime;
         opt.fsId1 = ref.value()->sb().id[1];
         Ufs2Writer w(tree.value(), opt);
         const QString mine = m_tmp.filePath(file + ".native");

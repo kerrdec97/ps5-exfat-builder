@@ -41,6 +41,15 @@ int wmain(int argc, wchar_t** argv)
     for (int i = 2; i < argc; ++i)
         cmd += L" " + quote(argv[i]);
 
+    // A screen buffer wide and long enough for everything the launcher prints,
+    // whatever console defaults this user has: no line the test looks for is
+    // wrapped and none scrolls away. This is the buffer of this helper's own
+    // windowless console; where it cannot be resized the default one is used.
+    HANDLE con = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_EXISTING, 0, nullptr);
+    if (con != INVALID_HANDLE_VALUE)
+        SetConsoleScreenBufferSize(con, COORD{400, 2000});
+
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
@@ -57,8 +66,6 @@ int wmain(int argc, wchar_t** argv)
     // The launcher returns when the program has exited; give the console a
     // moment for output the program wrote just before.
     Sleep(200);
-    HANDLE con = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                             OPEN_EXISTING, 0, nullptr);
     CONSOLE_SCREEN_BUFFER_INFO info{};
     std::wstring text;
     if (con != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(con, &info)) {

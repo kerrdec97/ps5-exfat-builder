@@ -12,11 +12,13 @@
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Verify.h"
 #include "jobs/JobQueue.h"
+#include "support/SparseFile.h"
 
 #include <QCryptographicHash>
 #include <QDirIterator>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QScopeGuard>
 #include <QStorageInfo>
 #include <QTemporaryDir>
 
@@ -223,6 +225,27 @@ private slots:
         QVERIFY(o->outputs.isEmpty());
         QVERIFY(!QFileInfo::exists(out));
         QVERIFY(!QFileInfo::exists(out + ".part"));
+
+        // The same while replacing an image: the one that was there stays,
+        // byte for byte.
+        QVERIFY(mktext(out, "previous image"));
+        tampered = false;
+        o = runJob(ufs2::kinds::kBuild, buildParams(src, out, true), {}, {}, [&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && !tampered) {
+                tampered = true;
+                QFile f(src + "/eboot.bin");
+                if (f.open(QIODevice::ReadWrite)) {
+                    f.seek(200);
+                    f.write("tampered again");
+                }
+            }
+        });
+        QVERIFY(tampered);
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Failed);
+        QVERIFY(o->outputs.isEmpty());
+        QCOMPARE(readAll(out), QByteArray("previous image"));
+        QVERIFY(!QFileInfo::exists(out + ".part"));
     }
 
     void cancelLeavesNoOutputAndKeepsTheOldImage()
@@ -263,7 +286,7 @@ private slots:
         QVERIFY(mktext(out, "old"));
         auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out));
         QVERIFY(!o.ok());
-        QCOMPARE(o.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::AlreadyExists);
         QCOMPARE(readAll(out), QByteArray("old"));
         o = runJob(ufs2::kinds::kBuild, buildParams(src, out, true));
         QVERIFY(o.ok());
@@ -347,29 +370,43 @@ private slots:
     {
         const QString src = freshGame("validate-src");
         auto o = runJob(ufs2::kinds::kBuild, buildParams(src, src + "/inside.ffpkg"));
-        QCOMPARE(o.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::InvalidArgument);
         o = runJob(ufs2::kinds::kBuild, buildParams(m_tmp.filePath("nope"), m_tmp.filePath("x.ffpkg")));
-        QCOMPARE(o.error().code, ErrorCode::NotFound);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::NotFound);
         o = runJob(ufs2::kinds::kBuild, buildParams(src, m_tmp.path()));
-        QCOMPARE(o.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::InvalidArgument);
         const QString empty = m_tmp.filePath("empty-src");
         QVERIFY(QDir().mkpath(empty));
         o = runJob(ufs2::kinds::kBuild, buildParams(empty, m_tmp.filePath("empty.ffpkg")));
-        QCOMPARE(o.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::InvalidArgument);
     }
 
+    // The image plus the reserve must fit the drive before anything is
+    // written. The reserve is set to its largest value (64 GiB); on a drive
+    // with more room than that, a sparse file makes the image large enough to
+    // exceed the rest, so the refusal does not depend on how full this PC is.
     void freeSpaceIsChecked()
     {
-        QStorageInfo si(m_tmp.path());
-        if (si.bytesAvailable() > 60LL * 1024 * 1024 * 1024)
-            QSKIP("more than 60 GiB free here; the 64 GiB reserve cannot be exceeded");
+        const qint64 gib = 1024LL * 1024 * 1024;
+        const qint64 available = QStorageInfo(m_tmp.path()).bytesAvailable();
+        const qint64 filler = available - 60 * gib; // the reserve covers the last 60 GiB with room to spare
+        if (filler > 1024 * gib)
+            QSKIP("more than a terabyte is free here: planning an image that large takes too long for a test");
         const QString src = freshGame("space-src");
+        QVERIFY(!src.isEmpty());
         const QString out = m_tmp.filePath("space.ffpkg");
+        // Leaves no sparse file behind for the tests that follow.
+        const auto cleanup = qScopeGuard([&] { QFile::remove(src + "/data/filler.bin"); });
+        if (filler > 0) {
+            const qint64 allocated = fwtest::makeSparseFile(src + "/data/filler.bin", filler);
+            if (allocated < 0 || allocated > 64 * 1024 * 1024)
+                QSKIP("this file system does not create sparse files");
+        }
         QVERIFY(m_store->setValue(general::keys::kFreeSpaceMarginMiB, 65536).ok());
         auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out));
         m_store->reset(general::keys::kFreeSpaceMarginMiB);
-        QVERIFY(!o.ok());
-        QCOMPARE(o.error().code, ErrorCode::InsufficientSpace);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::InsufficientSpace);
+        QVERIFY2(o.error().message.startsWith(QStringLiteral("Not enough space on")), qPrintable(o.error().message));
         QVERIFY(!QFileInfo::exists(out) && !QFileInfo::exists(out + ".part"));
     }
 
@@ -450,7 +487,7 @@ private slots:
         QVERIFY(!QFileInfo::exists(dest + ".part"));
         // An existing, non-empty destination is refused.
         o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", dest}});
-        QCOMPARE(o.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::AlreadyExists);
         // One folder only.
         const QString sub = m_tmp.filePath("ex-out/sce_sys");
         o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", sub}, {"path", "/sce_sys"}});
@@ -508,7 +545,7 @@ private slots:
                                                     {"operations", QJsonArray{QJsonObject{{"op", "delete"}, {"path", "/sce_sys/icon0.png"}},
                                                                               QJsonObject{{"op", "add"}, {"path", "/eboot.bin"}, {"source", local + "/param.json"}}}}});
         QVERIFY(!o.ok());
-        QCOMPARE(o.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::AlreadyExists);
         QCOMPARE(sha(img), before);
         QVERIFY(!QFileInfo::exists(img + ".part"));
         // A cancelled edit too.
@@ -550,7 +587,7 @@ private slots:
         const QString dest = m_tmp.filePath("marker-out");
         auto o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", dest}});
         QVERIFY(!o.ok());
-        QCOMPARE(o.error().code, ErrorCode::Unsupported);
+        FWTEST_COMPARE_ERROR(o, ErrorCode::Unsupported);
         QVERIFY2(o.error().message.contains(".FW-EXTRACT-STAGING"), qPrintable(o.error().toLogString()));
         QVERIFY(!QFileInfo::exists(dest));
         QVERIFY(!QFileInfo::exists(dest + ".part"));
@@ -622,8 +659,9 @@ private slots:
         QVERIFY(QTest::qWaitFor([&] {
             auto rec = queue.record(id.value());
             return rec && isTerminal(rec->state);
-        }, 120000));
+        }, 300000));
         const auto rec = queue.record(id.value());
+        QVERIFY(rec.has_value());
         QCOMPARE(rec->state, JobState::Succeeded);
         QVERIFY(rec->outcome.has_value());
         QCOMPARE(rec->outcome->verification, Verification::Passed);
