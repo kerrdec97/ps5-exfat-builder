@@ -24,11 +24,14 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QLabel>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QTreeWidgetItemIterator>
+#include <QUrl>
 
 using namespace fw;
 
@@ -68,6 +71,15 @@ bool waitTerminal(JobQueue& q, const QString& id, int ms = 120000)
         auto r = q.record(id);
         return r && isTerminal(r->state);
     }, ms);
+}
+
+// Whether the Edit tree lists `path` ('/'-separated, as the page stages it).
+bool treeHas(QTreeWidget* tree, const QString& path)
+{
+    for (QTreeWidgetItemIterator it(tree); *it; ++it)
+        if ((*it)->data(0, Qt::UserRole).toString() == path)
+            return true;
+    return false;
 }
 
 QByteArray fileBytes(const QString& path)
@@ -197,11 +209,16 @@ private slots:
         const QString dest = m_root.filePath(QStringLiteral("extracted"));
         page->setExtractDestination(dest);
         const auto runPrimary = [&]() -> QString {
+            page->showForm(); // "Back to the image" after the job before
             const QString id = newJob(q, [&] { page->primaryAction(); });
             return !id.isEmpty() && waitTerminal(q, id) ? id : QString();
         };
         QString id = runPrimary();
         QVERIFY(!id.isEmpty());
+        // The monitor took the form's place: Ctrl+B and drops do not reach the hidden form.
+        QVERIFY(page->isMonitorShown());
+        QVERIFY(newJob(q, [&] { page->primaryAction(); }).isEmpty());
+        QVERIFY(!page->acceptsDrop({QUrl::fromLocalFile(m_ffpkg)}));
         QCOMPARE(q.record(id)->kind, QStringLiteral("image.exfat.extract"));
         QCOMPARE(q.record(id)->state, JobState::Succeeded);
         QCOMPARE(fileBytes(dest + QStringLiteral("/data/notes.txt")), QByteArray("Hello, image!\n"));
@@ -264,18 +281,65 @@ private slots:
         page->stage({QStringLiteral("add"), QStringLiteral("data/extra.txt"), extra, {}});
         page->stage({QStringLiteral("delete"), QStringLiteral("data/notes.txt"), {}, {}});
         QCOMPARE(page->primaryButton()->text(), QStringLiteral("Apply 2 changes"));
+        QVERIFY(treeHas(page->tree(), QStringLiteral("data/notes.txt")));
+        QVERIFY(!treeHas(page->tree(), QStringLiteral("data/extra.txt")));
+        page->showForm();
         answerSheetSoon(this, m_window.get(), 1);
         const QString id = newJob(q, [&] { page->primaryAction(); });
         QVERIFY(!id.isEmpty());
         QVERIFY(waitTerminal(q, id));
         QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
         QVERIFY(page->staged().empty());
+        // The tree is read again when the job ends: it shows the edited image.
+        QTRY_VERIFY_WITH_TIMEOUT(treeHas(page->tree(), QStringLiteral("data/extra.txt")), 15000);
+        QVERIFY(!treeHas(page->tree(), QStringLiteral("data/notes.txt")));
         auto slice = ui::readHexSlice(copy, QStringLiteral("data/extra.txt"), 0);
         QVERIFY(slice.ok());
         QCOMPARE(slice.data, QByteArray("added by the test"));
         QVERIFY(!ui::readHexSlice(copy, QStringLiteral("data/notes.txt"), 0).ok());
         page->openImage({});
         q.clearFinished();
+    }
+
+    // The confirmation lists the first changes and counts the rest (a sheet
+    // does not scroll), with names shown literally; "Keep editing" keeps the
+    // staged list, and so does reading the same image again.
+    void editConfirmationListsTheFirstChanges()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
+            QSKIP("image editing not registered in this build");
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_exfat}});
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+        page->showForm();
+        for (int i = 0; i < 30; ++i)
+            page->stage({QStringLiteral("mkdir"), QStringLiteral("new <b>%1</b> & co").arg(i), {}, {}});
+        QCOMPARE(page->staged().size(), size_t(30));
+        page->refresh(); // F5 on the open image
+        QCOMPARE(page->staged().size(), size_t(30));
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+
+        QStringList texts;
+        QTimer::singleShot(300, this, [&] {
+            for (auto* s : m_window->findChildren<ui::Sheet*>())
+                if (s->isOpen()) {
+                    for (auto* l : s->findChildren<QLabel*>())
+                        texts << l->text();
+                    s->close(0); // Keep editing
+                    return;
+                }
+        });
+        QVERIFY(newJob(q, [&] { page->primaryAction(); }).isEmpty());
+        const QString text = texts.join(u'\n');
+        QVERIFY2(text.contains(QStringLiteral("Apply 30 changes to game.exfat?")), qPrintable(text));
+        QVERIFY2(text.contains(QStringLiteral("… and 18 more")), qPrintable(text));
+        QCOMPARE(text.count(QStringLiteral("New folder /new")), 12);
+        QVERIFY(text.contains(QStringLiteral("&lt;b&gt;0&lt;/b&gt; &amp; co"))); // escaped exactly once
+        QVERIFY(!text.contains(QStringLiteral("&lt;br")));
+        QCOMPARE(page->staged().size(), size_t(30));
+        page->clearStaged();
+        page->openImage({});
     }
 
     void cleanupTestCase()

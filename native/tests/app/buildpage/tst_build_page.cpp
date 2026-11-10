@@ -24,6 +24,7 @@
 #include "app/ui/SettingRow.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/FileUtil.h"
 #include "core/Zip.h"
 #include "engines/ampr/Module.h"
 #include "engines/ampr/ZstdPack.h"
@@ -42,12 +43,15 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHelpEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTextDocument>
+#include <QToolTip>
 #include <QUrl>
 #include <QtEndian>
 
@@ -817,6 +821,206 @@ private slots:
         QVERIFY(q.remove(id));
         q.holdQueue(false);
         m_window->navigate(QStringLiteral("build"), {{QStringLiteral("backport5xx"), QString()}});
+        m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    // A title from param.json that reads as markup is shown as it is, in the
+    // strip and in its tooltip, never rendered.
+    void titlesFromDumpsAreShownLiterally()
+    {
+        const QString title = QStringLiteral("<b>Bold</b> <img src=x.png> Game");
+        const QString dump = path(QStringLiteral("Dumps/PPSA09999-markup"));
+        QVERIFY(makeDump(dump, title, QStringLiteral("PPSA09999"), QStringLiteral("UP0000-PPSA09999_00-MARKUPTEST000000")));
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(dump));
+        QCOMPARE(m_page->summary().title, title);
+        ui::ElideLabel* strip = nullptr;
+        for (auto* l : m_page->findChildren<ui::ElideLabel*>())
+            if (l->fullText() == title)
+                strip = l;
+        QVERIFY(strip);
+        QCOMPARE(strip->textFormat(), Qt::PlainText);
+        // The page's own message rows (source, base package, free space) are
+        // literal too; the ones inside setting rows show the app's own text.
+        int checked = 0;
+        for (auto* row : m_page->findChildren<ui::MessageRow*>()) {
+            bool setting = false;
+            for (QWidget* w = row->parentWidget(); w && !setting; w = w->parentWidget())
+                setting = qobject_cast<ui::SettingRow*>(w) != nullptr;
+            if (setting)
+                continue;
+            for (auto* l : row->findChildren<QLabel*>())
+                QCOMPARE(l->textFormat(), Qt::PlainText);
+            ++checked;
+        }
+        QVERIFY(checked >= 3);
+        QVERIFY(Qt::mightBeRichText(title));
+        QCOMPARE(pages::plainTip(title), Qt::convertFromPlainText(title));
+        QVERIFY(pages::plainTip(title).contains(QStringLiteral("&lt;b&gt;")));
+        QCOMPARE(pages::plainTip(QStringLiteral("D:\\Games & more\\a.bin")), QStringLiteral("D:\\Games & more\\a.bin"));
+        // The tooltip of an elided label goes through the same conversion.
+        strip->setToolTip(title);
+        QHelpEvent tip(QEvent::ToolTip, QPoint(2, 2), strip->mapToGlobal(QPoint(2, 2)));
+        QVERIFY(QCoreApplication::sendEvent(strip, &tip));
+        QCOMPARE(QToolTip::text(), pages::plainTip(title));
+        QToolTip::hideText();
+        m_page->setSource({});
+    }
+
+    // Ctrl+B and drops act on the form the user sees: while the job monitor
+    // is shown they must not start a second job or change the hidden source.
+    void monitorViewIgnoresCtrlBAndDrops()
+    {
+        auto& q = m_ctx->queue();
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(m_game));
+        m_page->setOutputFolder(path(QStringLiteral("monitor-out")));
+        q.holdQueue(true);
+        const QString id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        const QList<QUrl> drop{QUrl::fromLocalFile(m_asciiGame)};
+        QVERIFY(m_page->acceptsDrop(drop));
+        m_page->showMonitor(id);
+        QVERIFY(m_page->isMonitorShown());
+        const QStringList before = ids(q);
+        m_page->primaryAction();
+        QCOMPARE(ids(q), before);
+        QVERIFY(!m_page->acceptsDrop(drop));
+        m_page->dropUrls(drop);
+        QCOMPARE(clean(m_page->source()), clean(m_game));
+        m_page->showForm();
+        QVERIFY(m_page->acceptsDrop(drop));
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+    }
+
+    // The free-space answer is not cached: a refusal from earlier is checked
+    // again when the button is pressed, and its text counts the reserve.
+    void staleSpaceVerdictsAreCheckedAgain()
+    {
+        auto& q = m_ctx->queue();
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(m_game));
+        m_page->setOutputFolder(path(QStringLiteral("space-out")));
+        const qint64 needed = 48LL << 30, free = 47LL << 30, reserve = 2LL << 30;
+        m_page->showSpaceError(needed, free, QStringLiteral("Q:"), reserve);
+        QStringList shown;
+        for (auto* bar : m_page->findChildren<ui::InfoBar*>())
+            if (bar->isVisible())
+                for (auto* l : bar->findChildren<QLabel*>())
+                    shown << l->text();
+        const QString text = shown.join(u'\n');
+        QVERIFY2(text.contains(QStringLiteral("plus the %1 free-space reserve").arg(formatBytes(reserve))), qPrintable(text));
+        QVERIFY2(text.contains(QStringLiteral("Free %1 or").arg(formatBytes(needed + reserve - free))), qPrintable(text));
+        // Without a reserve the sentence is the short one.
+        m_page->showSpaceError(needed, free, QStringLiteral("Q:"));
+        shown.clear();
+        for (auto* bar : m_page->findChildren<ui::InfoBar*>())
+            if (bar->isVisible())
+                for (auto* l : bar->findChildren<QLabel*>())
+                    shown << l->text();
+        QVERIFY(!shown.join(u'\n').contains(QStringLiteral("reserve")));
+        QVERIFY(shown.join(u'\n').contains(QStringLiteral("Free %1 or").arg(formatBytes(needed - free))));
+        // The drive has room for this small dump: the old refusal must not stand.
+        q.holdQueue(true);
+        const QString id = addToQueue();
+        QVERIFY2(!id.isEmpty(), "a stale \"not enough space\" answer refused the job");
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+    }
+
+    // Packed folder: pack volumes stay below 4 GiB, so the page holds no
+    // single-file size against the drive; and its hidden "Compress game files"
+    // switch stays on whatever the global setting or the panel does.
+    void packedFolderKeepsItsSwitchOnAndHasNoFileLimit()
+    {
+        auto& q = m_ctx->queue();
+        auto& s = m_ctx->settings();
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(m_game));
+        QVERIFY(m_page->largestOutputFileBytes() >= m_page->summary().bytes);
+        m_page->setFormat(pages::kFormatZstdFolder);
+        QCOMPARE(m_page->largestOutputFileBytes(), qint64(0));
+
+        ui::JobOptionsPanel* panel = m_page->optionsPanel(pages::kFormatZstdFolder);
+        QVERIFY(panel);
+        const auto dependentsEnabled = [&] {
+            for (const QString& key : {ampr::keys::kZstdLevel, ampr::keys::kPackStrategy, ampr::keys::kVerifyPacks}) {
+                ui::SettingRow* row = panel->row(key);
+                if (!row || !row->editor()->widget()->isEnabledTo(row))
+                    return false;
+            }
+            return panel->effectiveValue(ampr::keys::kZstdPack).toBool();
+        };
+        const QVariant before = s.value(ampr::keys::kZstdPack);
+        QVERIFY(dependentsEnabled());
+        // The global setting on, then off again (the case that used to grey the rows out).
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, true).ok());
+        QVERIFY(dependentsEnabled());
+        m_page->setOutputFolder(path(QStringLiteral("zstd-switch")));
+        q.holdQueue(true);
+        QString id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->overrides.value(ampr::keys::kZstdPack).toBool(), true); // sent even when it equals the global value
+        QVERIFY(q.remove(id));
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, false).ok());
+        QVERIFY(dependentsEnabled());
+        panel->clearOverrides();
+        QVERIFY(dependentsEnabled());
+        s.resetSection(QStringLiteral("Build"));
+        QVERIFY(dependentsEnabled());
+        id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->overrides.value(ampr::keys::kZstdPack).toBool(), true);
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, before).ok());
+        resetNaming();
+        m_page->setOutputFolder({});
+        m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    // FPKG: a source without its own content ID and version (an image) must
+    // not be packaged with the previous game's.
+    void packageFieldsFollowTheSource()
+    {
+        m_page->showForm();
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatFpkg},
+                                                     {QStringLiteral("packageType"), QStringLiteral("app")}});
+        QVERIFY(selectSource(m_asciiGame));
+        QLineEdit *contentId = nullptr, *version = nullptr, *title = nullptr;
+        for (auto* e : m_page->packageCard()->findChildren<QLineEdit*>()) {
+            if (e->accessibleName() == QLatin1String("Content ID"))
+                contentId = e;
+            else if (e->accessibleName() == QLatin1String("Version"))
+                version = e;
+            else if (e->accessibleName() == QLatin1String("Title"))
+                title = e;
+        }
+        QVERIFY(contentId && version && title);
+        QCOMPARE(contentId->text(), QStringLiteral("UP0000-PPSA01234_00-GOLDENTEST000000"));
+        QCOMPARE(version->text(), QStringLiteral("01.000.000"));
+        QCOMPARE(title->text(), QStringLiteral("Test Game"));
+        // An image has no param.json the page reads: nothing of the game before it may stay.
+        const QString image = path(QStringLiteral("PPSA05555 Other Game.exfat"));
+        QVERIFY(fwtest::writeTextFile(image, QByteArray(4096, '\0')));
+        m_page->setSource(image);
+        QTRY_COMPARE(clean(m_page->summary().folder), clean(image));
+        QCOMPARE(contentId->text(), QString());
+        QCOMPARE(version->text(), QString());
+        QCOMPARE(title->text(), QString()); // the file's name is not a title
+        QCOMPARE(m_page->fileName(), QString()); // no package name from the other game's ID
+        // Back to a game: its details again; no source: none.
+        QVERIFY(selectSource(m_asciiGame));
+        QCOMPARE(contentId->text(), QStringLiteral("UP0000-PPSA01234_00-GOLDENTEST000000"));
+        m_page->setSource({});
+        QCOMPARE(contentId->text(), QString());
+        QCOMPARE(version->text(), QString());
+        QCOMPARE(title->text(), QString());
         m_page->setFormat(jobs::kFormatExfat);
     }
 };

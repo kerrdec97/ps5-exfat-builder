@@ -1,11 +1,13 @@
 #include "app/pages/HexPreviewSheet.h"
 
+#include "app/pages/Page.h"
 #include "core/FileUtil.h"
 
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QScrollBar>
 #include <QStyle>
+#include <QTextDocument>
 
 #include <algorithm>
 
@@ -14,8 +16,20 @@ namespace fw::pages {
 using namespace ui;
 using namespace theme;
 
+namespace {
+
+// The file's name is stored in the image; one that reads as markup stays out
+// of the title (the line under it shows the whole path literally).
+QString previewTitle(const QString& path)
+{
+    const QString title = QStringLiteral("Preview · %1").arg(path.section(u'/', -1));
+    return Qt::mightBeRichText(title) ? QStringLiteral("Preview") : title;
+}
+
+} // namespace
+
 HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QString& path, qint64 knownSize)
-    : Sheet(host, QStringLiteral("Preview · %1").arg(path.section(u'/', -1)), Icon::None, size::dialogWide),
+    : Sheet(host, previewTitle(path), Icon::None, size::dialogWide),
       m_image(image), m_path(path), m_size(knownSize)
 {
     m_reader = new HexSliceReader(this);
@@ -25,11 +39,13 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     where->setFont(font::mono());
     setTextColor(where, color::fg_1);
     where->setToolTip(QStringLiteral("/%1\n%2").arg(path, nativePath(image)));
+    plainLabel(where);
     body()->addWidget(where);
     m_meta = caption({}, this);
     body()->addWidget(m_meta);
 
     m_errorBar = new InfoBar(Tone::Err, this);
+    plainLabels(m_errorBar); // the reader's message quotes the path
     m_errorBar->hide();
     body()->addWidget(m_errorBar);
 

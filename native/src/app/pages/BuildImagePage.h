@@ -30,6 +30,7 @@
 #include "core/FileUtil.h"
 
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPointer>
 #include <QSet>
@@ -73,7 +74,8 @@ public:
     void setFileStem(const QString& stem); // as if typed by the user
     void setOutputFolder(const QString& dir); // as if chosen with Browse…
     bool fileNameEdited() const { return m_nameEdited; }
-    void showSpaceError(qint64 needed, qint64 free, const QString& drive); // real flow + demo state
+    // Real flow + demo state. `reserve` is the free-space reserve that was counted on top of `needed`.
+    void showSpaceError(qint64 needed, qint64 free, const QString& drive, qint64 reserve = 0);
 
     // Introspection for tests and screenshots.
     ui::JobOptionsPanel* optionsPanel(const QString& format) const; // panel of a tile ("ffpfs" → the PFS panel)
@@ -84,6 +86,8 @@ public:
     QWidget* packageCard() const { return m_packageCard; }
     QString sourceMessage() const;
     QStringList gameRootChoices() const { return m_rootChoices; }
+    // The largest single file the output can have (what a FAT32 drive limits); 0 = no such limit known.
+    qint64 largestOutputFileBytes() const;
 
 protected:
     Result<QString> submit(bool buildNow) override;
@@ -119,6 +123,8 @@ private:
     void updateOutput();
     void renderFileName();
     void checkSpace();
+    void checkSpaceNow(); // the same check, answered before it returns
+    void keepZstdPackOn();
     void updateToolsStatus();
     void applyLiveCpuLimit();
     void pickFromDlcEmu();
@@ -185,6 +191,8 @@ private:
     ui::MessageRow* m_baseInfo = nullptr;
     QString m_baseTitleId;               // from the inspected base package
     QString m_autoVersion;               // the version this page filled in
+    QString m_detailsFor;                // the source the Package fields were last filled from
+    QString m_addonIdFor, m_addonId;     // "From dlc_emu.ini…": the payload folder and the entry's content ID
     quint64 m_baseGen = 0;
     QString m_inspectedBase;             // the base path last inspected
     std::shared_ptr<CancellationSource> m_baseCancel;
@@ -213,9 +221,11 @@ private:
     QLabel* m_liveNote = nullptr;
 
     // The free-space check of the output folder; validateForm() refuses to
-    // start on Insufficient and Unavailable and finishes a Checking one first.
+    // start on Insufficient and Unavailable, but only on a fresh answer: it
+    // asks the drive again unless the last answer is positive and recent.
     enum class SpaceCheck { Unknown, Checking, Ok, Warn, Insufficient, Unavailable };
     SpaceCheck m_spaceState = SpaceCheck::Unknown;
+    QElapsedTimer m_spaceChecked; // since the last answer
     void applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists);
     quint64 m_spaceGen = 0;
     bool m_spaceOk = true;

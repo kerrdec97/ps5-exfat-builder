@@ -83,7 +83,12 @@ public:
     JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QString& key, const QString& title,
                 const QString& caption, const QString& primaryText, const QString& featureName, QWidget* parent = nullptr);
     bool hasPrimaryAction() const override { return true; }
-    void primaryAction() override { submitClicked(true); }
+    // Ctrl+B acts on the form the user sees, not on the one hidden behind the monitor.
+    void primaryAction() override
+    {
+        if (m_view == View::Form)
+            submitClicked(true);
+    }
     ui::JobsDock* dock() { return m_dock; }
     QVBoxLayout* form() { return m_form; }
     QVBoxLayout* aside() { return m_aside; }
@@ -161,6 +166,18 @@ private:
 };
 
 // Shared helpers for pages
+//
+// Text that comes from outside the app (titles, IDs, names and paths from
+// dumps, ZIPs, images and packages, messages that quote them) is shown as it
+// is, never as markup: QLabel and tooltips otherwise take text that starts
+// like HTML for rich text.
+//  * plainLabel()  — the label shows its text and its tooltip literally;
+//  * plainLabels() — the same for every label inside a composite widget
+//                    (MessageRow, InfoBar, ErrorState);
+//  * plainTip()    — the text for setToolTip() on any other widget or item.
+QLabel* plainLabel(QLabel* label);
+void plainLabels(QWidget* widget);
+QString plainTip(const QString& text);
 QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
 QString relativeTime(const QDateTime& t);         // "2 min ago"
 QString driveLabel(const QString& path);          // "D:" / "/"

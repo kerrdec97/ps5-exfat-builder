@@ -1,5 +1,6 @@
 #include "app/pages/CompareResultSheet.h"
 
+#include "app/pages/Page.h"
 #include "app/ui/Icons.h"
 #include "core/FileUtil.h"
 
@@ -124,12 +125,14 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         h->addWidget(tag, 0, Qt::AlignTop);
         auto* col = new QVBoxLayout;
         col->setSpacing(0);
+        // Paths, names and notes below come from the job's result (the images' own file names): shown literally.
         auto* path = new ElideLabel(nativePath(side.value(QStringLiteral("path")).toString()), Qt::ElideMiddle, row);
         path->setFont(font::mono());
         setTextColor(path, color::fg_1);
         path->setToolTip(nativePath(side.value(QStringLiteral("path")).toString()));
+        plainLabel(path);
         col->addWidget(path);
-        col->addWidget(caption(sideLine(side), row));
+        col->addWidget(plainLabel(caption(sideLine(side), row)));
         h->addLayout(col, 1);
         body()->addWidget(row);
     }
@@ -150,6 +153,7 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
     body()->addWidget(badges);
     auto* sum = label(summary, TextStyle::Body, color::fg_1, this);
     sum->setWordWrap(true);
+    plainLabel(sum);
     body()->addWidget(sum);
     body()->addWidget(caption(depthLine(d), this));
 
@@ -184,9 +188,9 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
                 auto* it = new QTreeWidgetItem(top);
                 it->setText(0, path);
                 it->setFont(0, font::mono());
-                it->setToolTip(0, path);
+                it->setToolTip(0, plainTip(path));
                 it->setText(1, detail);
-                it->setToolTip(1, detail);
+                it->setToolTip(1, plainTip(detail));
                 it->setForeground(1, color::fg_3);
             }
             if (n > list.size()) {
@@ -221,6 +225,7 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         h->addWidget(ic, 0, Qt::AlignTop);
         auto* t = caption(w, row);
         t->setWordWrap(true);
+        plainLabel(t);
         t->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         setTextColor(t, toneText(Tone::Warn));
         h->addWidget(t, 1, Qt::AlignTop);

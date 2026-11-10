@@ -120,6 +120,8 @@ private:
     void buildVerifyPanel();
     void buildConvertPanel();
     void buildEditPanel();
+    void loadImage(const QString& path); // openImage() without touching the form's error bar
+    void onEditJobFinished(const QString& id);
     void onSummary(const ui::ImageSummary& s);
     void showStrip();
     void updateActions();   // tiles enabled, panels shown, primary text, kinds

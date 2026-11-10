@@ -22,6 +22,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QTextDocument>
 
 namespace fw::pages {
 
@@ -287,7 +288,10 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
 
     // Comparisons run through the queue; the result row follows the latest one.
     connect(&m_ctx.queue(), &JobQueue::jobChanged, this, [this](const QString& id) { onCompareJob(id, false); });
-    connect(&m_ctx.queue(), &JobQueue::jobFinished, this, [this](const QString& id) { onCompareJob(id, true); });
+    connect(&m_ctx.queue(), &JobQueue::jobFinished, this, [this](const QString& id) {
+        onCompareJob(id, true);
+        onEditJobFinished(id);
+    });
     for (const JobRecord& rec : m_ctx.queue().records())
         if (rec.kind == kCompareKind)
             m_compareJobId = rec.id;
@@ -329,15 +333,19 @@ void ImageToolsPage::buildImageCard()
     sh->addWidget(m_stripTile);
     auto* col = new QVBoxLayout;
     col->setSpacing(3);
+    // Title, IDs and path are read from the image and its file name: shown literally.
     m_stripTitle = new ElideLabel({}, Qt::ElideRight, m_strip);
     m_stripTitle->setFont(font::subtitle());
     setTextColor(m_stripTitle, color::fg_0);
+    plainLabel(m_stripTitle);
     m_stripMeta = new ElideLabel({}, Qt::ElideRight, m_strip);
     m_stripMeta->setFont(font::caption());
     setTextColor(m_stripMeta, color::fg_3);
+    plainLabel(m_stripMeta);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, m_strip);
     m_stripPath->setFont(font::monoSmall());
     setTextColor(m_stripPath, color::fg_4);
+    plainLabel(m_stripPath);
     col->addWidget(m_stripTitle);
     col->addWidget(m_stripMeta);
     col->addWidget(m_stripPath);
@@ -357,6 +365,7 @@ void ImageToolsPage::buildImageCard()
     m_strip->hide();
     m_imageCard->body()->addWidget(m_strip);
     m_imageMsg = new MessageRow(m_imageCard);
+    plainLabels(m_imageMsg); // what the reader reports about the image
     m_imageCard->body()->addWidget(m_imageMsg);
     form()->addWidget(m_imageCard);
 }
@@ -435,6 +444,7 @@ void ImageToolsPage::buildVerifyPanel()
     rh->addWidget(m_compareBadge, 0, Qt::AlignTop);
     m_compareSummary = caption({}, m_compareResultRow);
     m_compareSummary->setWordWrap(true);
+    plainLabel(m_compareSummary); // job titles, file names and errors
     rh->addWidget(m_compareSummary, 1);
     m_compareView = button(QStringLiteral("View result"), ButtonVariant::Secondary, QStringLiteral("list"), m_compareResultRow);
     m_compareView->hide();
@@ -498,6 +508,7 @@ void ImageToolsPage::buildEditPanel()
     auto* h = treeCard->header();
     h->addWidget(heading(QStringLiteral("Contents"), TextStyle::Subtitle, treeCard));
     m_treeCount = caption({}, treeCard);
+    plainLabel(m_treeCount); // its tooltip lists problems that quote names from the image
     h->addWidget(m_treeCount);
     h->addStretch(1);
     m_btnAddFiles = button(QStringLiteral("Add files…"), ButtonVariant::Secondary, QStringLiteral("file_plus"), treeCard);
@@ -548,6 +559,7 @@ void ImageToolsPage::buildEditPanel()
     m_treeEmpty->setCompact(true);
     treeCard->body()->addWidget(m_treeEmpty);
     m_treeError = new ErrorState(QStringLiteral("This image cannot be edited"), {}, {}, treeCard);
+    plainLabels(m_treeError);
     m_treeError->hide();
     treeCard->body()->addWidget(m_treeError);
     el->addWidget(treeCard);
@@ -574,13 +586,35 @@ void ImageToolsPage::buildEditPanel()
 void ImageToolsPage::openImage(const QString& path)
 {
     clearFormError();
+    loadImage(path);
+}
+
+void ImageToolsPage::onEditJobFinished(const QString& id)
+{
+    const auto rec = m_ctx.queue().record(id);
+    if (!rec || m_demo || m_path.isEmpty() || !rec->kind.endsWith(QLatin1String(".edit")))
+        return;
+    const QString image = rec->parameters.value(QStringLiteral("image")).toString();
+    if (QString::compare(QDir::cleanPath(QFileInfo(image).absoluteFilePath()), QDir::cleanPath(QFileInfo(m_path).absoluteFilePath()),
+                         Qt::CaseInsensitive) != 0)
+        return;
+    // The file is the edited image now: the strip and the tree are read again.
+    // Changes staged since the job was started stay.
+    loadImage(m_path);
+}
+
+void ImageToolsPage::loadImage(const QString& path)
+{
     const bool same = path == m_path && !path.isEmpty();
     m_path = path;
     if (m_imageField->path() != path) {
         const QSignalBlocker block(m_imageField);
         m_imageField->setPath(path);
     }
-    m_ops.clear();
+    // Reading the same image again keeps the staged changes, like the
+    // destination and the comparison below.
+    if (!same)
+        m_ops.clear();
     m_tree = {};
     m_treeFor.clear();
     m_summary = {};
@@ -838,6 +872,7 @@ void ImageToolsPage::startCompare()
     if (!m_path.isEmpty() && isActionEnabled(Action::Verify) && m_action != Action::Verify)
         setAction(Action::Verify);
     m_verifyMode->setCurrentValue(QStringLiteral("compare"));
+    showForm(); // an explicit request: the comparison's row lives in the form
     primaryAction();
 }
 
@@ -1084,7 +1119,7 @@ void ImageToolsPage::rebuildTree()
         it->setData(0, Qt::UserRole + 1, n.isDir);
         it->setIcon(0, icon(n.isDir ? QStringLiteral("folder") : QStringLiteral("file"), color::fg_3));
         if (!n.isDir)
-            it->setToolTip(0, QStringLiteral("/%1\nDouble-click to preview its bytes").arg(n.path));
+            it->setToolTip(0, plainTip(QStringLiteral("/%1\nDouble-click to preview its bytes").arg(n.path)));
         it->setText(1, n.isDir ? QString() : formatBytes(n.size));
         it->setForeground(1, color::fg_3);
         it->setText(2, n.modified.isValid() ? humanTime(n.modified) : QString());
@@ -1155,6 +1190,7 @@ void ImageToolsPage::rebuildStaged()
         auto* t = new ElideLabel(m_ops[i].describe(), Qt::ElideMiddle, row);
         t->setFont(font::mono());
         setTextColor(t, color::fg_1);
+        plainLabel(t); // names from the image and from the user's drive
         t->setToolTip(m_ops[i].describe());
         h->addWidget(t, 1);
         auto* x = new IconButton(QStringLiteral("close"), QStringLiteral("Remove this change"), IconButton::Size::Small, row);
@@ -1215,7 +1251,9 @@ void ImageToolsPage::newFolder()
         target = target.contains(u'/') ? target.section(u'/', 0, -2) : QString();
     auto* s = new Sheet(window(), QStringLiteral("New folder"), Sheet::Icon::None);
     auto* name = textInput(QStringLiteral("Folder name"), true, s);
-    s->body()->addWidget(field(target.isEmpty() ? QStringLiteral("Name (in the image root)") : QStringLiteral("Name (in /%1)").arg(target), name, {}, s));
+    auto* nameField = field(target.isEmpty() ? QStringLiteral("Name (in the image root)") : QStringLiteral("Name (in /%1)").arg(target), name, {}, s);
+    plainLabels(nameField); // the label names a folder of the image
+    s->body()->addWidget(nameField);
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
     name->setFocus();
@@ -1384,15 +1422,24 @@ Result<QString> ImageToolsPage::submit(bool)
         return jobs::submitConvert(m_ctx, m_path, convertTarget(), out, options()->overrides(), convertMethod(), replace);
     }
     case Action::Edit: {
+        // A sheet does not scroll: the first changes are listed, the rest counted.
+        constexpr size_t kListed = 12;
         int deletes = 0;
         QStringList lines;
         for (const auto& o : m_ops) {
             if (o.op == QLatin1String("delete") || o.op == QLatin1String("replace"))
                 ++deletes;
-            lines << o.describe().toHtmlEscaped();
+            if (size_t(lines.size()) < kListed)
+                lines << Sheet::monoSpan(o.describe()); // escapes the names
         }
-        if (!Sheet::confirm(window(), QStringLiteral("Apply %1 change%2 to %3?").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s")).arg(QFileInfo(m_path).fileName().toHtmlEscaped()),
-                            Sheet::monoSpan(lines.join(QStringLiteral("<br>"))) + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
+        if (m_ops.size() > kListed)
+            lines << QStringLiteral("… and %1 more").arg(m_ops.size() - kListed);
+        const QString count = QStringLiteral("%1 change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s"));
+        QString title = QStringLiteral("Apply %1 to %2?").arg(count, QFileInfo(m_path).fileName());
+        if (Qt::mightBeRichText(title)) // a file name that reads as markup stays out of the title
+            title = QStringLiteral("Apply %1?").arg(count);
+        if (!Sheet::confirm(window(), title,
+                            lines.join(QStringLiteral("<br>")) + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
                             QStringLiteral("Keep editing"), QStringLiteral("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
             return Error(ErrorCode::Cancelled, QStringLiteral("Not applied."));
         auto r = jobs::submitImageEdit(m_ctx, m_path, operationsJson(), options()->overrides());
@@ -1410,7 +1457,8 @@ Result<QString> ImageToolsPage::submit(bool)
 
 bool ImageToolsPage::acceptsDrop(const QList<QUrl>& urls) const
 {
-    if (urls.isEmpty())
+    // Not while the job monitor is up: the drop would change the form hidden behind it.
+    if (urls.isEmpty() || isMonitorShown())
         return false;
     const QString f = urls.first().toLocalFile();
     if (!imageFormatOf(f, true).isEmpty() && QFileInfo(f).isFile())
@@ -1438,6 +1486,9 @@ void ImageToolsPage::setDragHighlight(bool on)
 
 void ImageToolsPage::navigateWith(const QVariantMap& args)
 {
+    // Asked to open an image or an action: that is the form, not the monitor of an earlier job.
+    if (!args.isEmpty())
+        showForm();
     QString image = args.value(QStringLiteral("image")).toString();
     if (image.isEmpty())
         image = args.value(QStringLiteral("source")).toString();

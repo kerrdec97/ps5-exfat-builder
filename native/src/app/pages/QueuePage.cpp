@@ -77,7 +77,8 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     auto* h = hbox(row, space::md, QMargins(0, 5, 0, 5));
     auto* left = new QWidget(row);
     auto* lh = hbox(left, space::sm);
-    lh->addWidget(label(name, TextStyle::Body, color::fg_2, left));
+    // Names and values come from the stored job (paths, IDs): shown literally.
+    lh->addWidget(plainLabel(label(name, TextStyle::Body, color::fg_2, left)));
     if (overridden) {
         auto* b = new Badge(QStringLiteral("Overridden"), Tone::Neutral, left);
         b->setIconName(QStringLiteral("advanced"));
@@ -91,6 +92,7 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     v->setMaximumWidth(240);
     v->setToolTip(value);
+    plainLabel(v);
     h->addWidget(v, 0, Qt::AlignRight);
     return row;
 }

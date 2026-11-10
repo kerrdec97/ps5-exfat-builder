@@ -446,6 +446,41 @@ QWidget* plainRow(const QString& title, const QString& help, QWidget* control, Q
     return row;
 }
 
+// Jobs that run the publisher and follow the live CPU limit.
+bool isPackageBuildKind(const QString& kind)
+{
+    return kind == QLatin1String("fpkg.build") || kind == QLatin1String("fpkg.addon") || kind == QLatin1String("fpkg.backport");
+}
+
+// "D:" for a volume root like "D:/".
+QString driveName(const QString& rootPath)
+{
+    if (rootPath.size() >= 2 && rootPath[1] == u':')
+        return rootPath.left(2);
+    return rootPath.isEmpty() ? QStringLiteral("this drive") : rootPath;
+}
+
+// What the drive of an output folder answers: its free space, whether it can
+// hold a file of `largestFileBytes`, and whether the folder is there yet.
+struct SpaceProbe {
+    Result<DiskSpace> space;
+    Result<QStringList> volume;
+    bool exists;
+};
+
+SpaceProbe probeOutputFolder(const QString& folder, qint64 largestFileBytes)
+{
+    // A folder created by the build: measure the drive it will be on.
+    QString probe = folder;
+    while (!probe.isEmpty() && !QFileInfo::exists(probe))
+        probe = QFileInfo(probe).absolutePath() == probe ? QString() : QFileInfo(probe).absolutePath();
+    const QString at = probe.isEmpty() ? folder : probe;
+    return {diskSpace(at), checkOutputVolume(at, largestFileBytes), QFileInfo::exists(folder)};
+}
+
+// A free-space answer older than this is asked again before a job starts.
+constexpr qint64 kSpaceVerdictMs = 5000;
+
 QWidget* sectionHeading(const QString& text, bool first, QWidget* parent)
 {
     auto* w = new QWidget(parent);
@@ -494,6 +529,14 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
             m_ctx.checkDependenciesAsync();
         if (key == exfat::keys::kClusterSize)
             updateClusterNote();
+        if (key == general::keys::kFreeSpaceMarginMiB)
+            checkSpace();
+        if (key == ampr::keys::kZstdPack)
+            keepZstdPackOn();
+    });
+    connect(&ctx.settings(), &SettingsStore::resetDone, this, [this] {
+        keepZstdPackOn();
+        checkSpace();
     });
     connect(&ctx, &AppContext::dependenciesChecked, this, &BuildImagePage::updateToolsStatus);
     connect(&m_ctx.queue(), &JobQueue::jobChanged, this, [this](const QString& id) {
@@ -504,7 +547,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
             return;
         }
         auto rec = m_ctx.queue().record(id);
-        if (rec && rec->state == JobState::Running && (rec->kind == QLatin1String("fpkg.build") || rec->kind == QLatin1String("fpkg.addon"))) {
+        if (rec && rec->state == JobState::Running && isPackageBuildKind(rec->kind)) {
             m_liveLimitApplied.insert(id);
             applyLiveCpuLimit();
         }
@@ -536,15 +579,19 @@ void BuildImagePage::buildSourceCard()
     sh->addWidget(m_stripTile);
     auto* scol = new QVBoxLayout;
     scol->setSpacing(3);
+    // Title, IDs and path come from the dump (param.json, file names): shown literally.
     m_stripTitle = new ElideLabel({}, Qt::ElideRight, strip);
     m_stripTitle->setFont(font::subtitle());
     setTextColor(m_stripTitle, color::fg_0);
+    plainLabel(m_stripTitle);
     m_stripMeta = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripMeta->setFont(font::caption());
     setTextColor(m_stripMeta, color::fg_3);
+    plainLabel(m_stripMeta);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripPath->setFont(font::monoSmall());
     setTextColor(m_stripPath, color::fg_4);
+    plainLabel(m_stripPath);
     scol->addWidget(m_stripTitle);
     scol->addWidget(m_stripMeta);
     scol->addWidget(m_stripPath);
@@ -560,6 +607,7 @@ void BuildImagePage::buildSourceCard()
     source->body()->addWidget(m_strip);
 
     m_sourceMsg = new MessageRow(source);
+    plainLabels(m_sourceMsg); // quotes folder names and what a ZIP reports
     source->body()->addWidget(m_sourceMsg);
     // Several games below the chosen folder: one link per game.
     m_rootsBox = new QWidget(source);
@@ -628,6 +676,7 @@ void BuildImagePage::buildFormatCard()
     });
     m_toolsRow = plainRow(QStringLiteral("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail);
     m_toolsRow->setAccessibleName(QStringLiteral("Sony Publishing Tools"));
+    plainLabel(m_toolsDetail); // shows the tools' path and what the check reports
     m_toolsDetail->setToolTip(QStringLiteral("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
 
     // One options panel per format: only that format's settings.
@@ -669,10 +718,10 @@ void BuildImagePage::buildFormatCard()
     m_formats[4].tile = kFormatZstdFolder;
     buildFormatOptions(m_formats[4], {QStringLiteral("Build"), QStringLiteral("Performance"), QStringLiteral("Advanced")},
                        {zstd, kThreads, kSpeed, kKeepTemp}, {}, {kSpeed, ampr::keys::kZstdLevel, ampr::keys::kPackStrategy});
-    if (SettingRow* on = m_formats[4].panel->row(ampr::keys::kZstdPack)) {
+    if (SettingRow* on = m_formats[4].panel->row(ampr::keys::kZstdPack))
         on->hide();
-        m_formats[4].panel->setOverride(ampr::keys::kZstdPack, true);
-    }
+    keepZstdPackOn();
+    connect(m_formats[4].panel, &JobOptionsPanel::overridesChanged, this, &BuildImagePage::keepZstdPackOn);
     for (auto& fo : m_formats)
         if (SettingRow* row = fo.panel->row(kSpeed))
             row->setMessage(speedNote(), Tone::Neutral);
@@ -792,6 +841,7 @@ void BuildImagePage::buildPackageCard()
     m_titleRow = field(QStringLiteral("Title"), m_title, {}, details);
     details->body()->addWidget(m_titleRow);
     connect(m_version, &QLineEdit::textEdited, this, [this] { m_autoVersion.clear(); });
+    connect(m_contentId, &QLineEdit::textEdited, this, [this] { m_addonIdFor.clear(); });
     connect(m_contentId, &QLineEdit::textChanged, this, [this] { renderFileName(); });
     connect(m_version, &QLineEdit::textChanged, this, [this] { renderFileName(); });
 
@@ -804,6 +854,7 @@ void BuildImagePage::buildPackageCard()
         bl->addWidget(field(QStringLiteral("Base package"), m_basePackage,
                             QStringLiteral("The .pkg the console already has; updates are built against it."), m_baseField));
         m_baseInfo = new MessageRow(m_baseField);
+        plainLabels(m_baseInfo); // the base package's title and ID
         m_baseInfo->hide();
         bl->addWidget(m_baseInfo);
     }
@@ -888,6 +939,7 @@ void BuildImagePage::buildSaveCard()
     ol->addWidget(label(QStringLiteral("Folder"), TextStyle::Body, color::fg_1, outField));
     ol->addWidget(m_output);
     m_spaceRow = new MessageRow(outField);
+    plainLabels(m_spaceRow);
     ol->addWidget(m_spaceRow);
     gh->addWidget(outField, 1);
 
@@ -923,6 +975,7 @@ void BuildImagePage::buildSaveCard()
     gh->addWidget(nameField, 1);
     dest->body()->addWidget(grid);
     m_spaceBar = new InfoBar(Tone::Err, dest);
+    plainLabels(m_spaceBar);
     m_spaceBar->hide();
     dest->body()->addWidget(m_spaceBar);
     form()->addWidget(dest);
@@ -937,7 +990,7 @@ void BuildImagePage::buildSaveCard()
         const QString problem = text.trimmed().isEmpty() ? QString() : gameinfo::folderNameProblem(text.trimmed() + m_fileExt->text());
         setInputError(m_fileName, !problem.isEmpty());
         m_fileName->setToolTip(problem.isEmpty() ? QStringLiteral("Named by Settings \u203a Build \u203a Output name. Type to change it for this job.")
-                                                 : problem);
+                                                 : plainTip(problem));
     });
     connect(m_nameMenuButton, &QToolButton::clicked, this, [this] {
         QMenu menu(this);
@@ -1153,8 +1206,7 @@ void BuildImagePage::onFormatChanged()
     else
         m_resetName->setVisible(m_nameEdited);
     if (folder)
-        if (FormatOptions* fo = current()) // the switch stays on whatever the global setting does
-            fo->panel->setOverride(ampr::keys::kZstdPack, true);
+        keepZstdPackOn();
     setRequiredKinds({pkg ? QStringLiteral("fpkg.build") : folder ? ampr::kPackJob : jobs::imageBuildKind(format())});
     applyRowVisibility();
     updateAdvancedSummary();
@@ -1208,6 +1260,16 @@ void BuildImagePage::applyRowVisibility()
             divide(buckets.value(it.key()));
         }
     }
+}
+
+// Packed folder: "Compress game files" is what this output is. Its hidden
+// switch stays on whatever the global setting or the panel's overrides do, so
+// the rows that depend on it never grey out.
+void BuildImagePage::keepZstdPackOn()
+{
+    JobOptionsPanel* panel = optionsPanel(kFormatZstdFolder);
+    if (panel && !panel->effectiveValue(ampr::keys::kZstdPack).toBool())
+        panel->setOverride(ampr::keys::kZstdPack, true);
 }
 
 void BuildImagePage::updateAdvancedSummary()
@@ -1289,7 +1351,8 @@ void BuildImagePage::setDragHighlight(bool on)
 
 bool BuildImagePage::acceptsDrop(const QList<QUrl>& urls) const
 {
-    if (urls.isEmpty())
+    // Not while the job monitor is up: the drop would change the form hidden behind it.
+    if (urls.isEmpty() || isMonitorShown())
         return false;
     const QFileInfo fi(urls.first().toLocalFile());
     if (fi.isDir())
@@ -1309,6 +1372,9 @@ void BuildImagePage::dropUrls(const QList<QUrl>& urls)
 
 void BuildImagePage::navigateWith(const QVariantMap& args)
 {
+    // Asked to set the form up (a source, a format): show it, not the monitor of an earlier job.
+    if (!args.isEmpty())
+        showForm();
     if (args.contains(QStringLiteral("format")))
         setFormat(args.value(QStringLiteral("format")).toString());
     if (args.contains(QStringLiteral("packageType")))
@@ -1332,6 +1398,8 @@ void BuildImagePage::onShown()
 {
     if (isFpkg())
         updateToolsStatus();
+    // The drive may have changed while the user was elsewhere (files deleted, a drive plugged in).
+    checkSpace();
 }
 
 void BuildImagePage::refresh()
@@ -1374,6 +1442,8 @@ void BuildImagePage::browseSource()
 void BuildImagePage::setSource(const QString& path)
 {
     m_sourcePath = QDir::fromNativeSeparators(path);
+    if (m_sourcePath != m_addonIdFor)
+        m_addonIdFor.clear();
     m_sourceKind = sourceKindOf(m_sourcePath); // one stat here, not one per status-bar refresh
     clearFormError();
     m_sourceMsg->clear();
@@ -1388,6 +1458,14 @@ void BuildImagePage::setSource(const QString& path)
         m_sourceBadge->setIconName(QString());
         m_summary = {};
         m_nameEdited = false;
+        // The Package card described the source that is gone.
+        m_detailsFor.clear();
+        if (m_contentId) {
+            m_contentId->clear();
+            m_title->clear();
+            if (m_autoVersion.isEmpty() || m_version->text().trimmed() != m_autoVersion)
+                m_version->clear();
+        }
         updateOutput();
         renderFileName();
         emit statusContextChanged();
@@ -1426,20 +1504,35 @@ void BuildImagePage::onSummary(const GameSummary& s)
     if (s.exists && !s.isGame && s.gameRoots.size() == 1 && !m_demo) {
         const QString root = s.gameRoots.first();
         const QString note = QDir::toNativeSeparators(QDir(s.folder).relativeFilePath(root));
+        const QString addonId = m_sourcePath == m_addonIdFor ? m_addonId : QString();
         setSource(root);
         m_pendingRootNote = note; // shown once the game folder is read
+        if (!addonId.isEmpty()) { // the add-on chosen from dlc_emu.ini keeps its ID
+            m_addonIdFor = m_sourcePath;
+            m_addonId = addonId;
+        }
         return;
     }
     m_summary = s;
     refreshSourceState();
-    // Package details come from param.json (or the file name for images).
+    // Package details come from param.json. A new source replaces all of them:
+    // one without its own (an image, a .gp5 project) must not be packaged with
+    // the previous game's content ID and version. Reading the same source
+    // again keeps what the user typed where param.json has nothing.
     if (s.exists && m_contentId) {
-        if (!s.contentId.isEmpty())
+        const bool newSource = m_detailsFor != m_sourcePath;
+        m_detailsFor = m_sourcePath;
+        // For a file the summary's title is the file's name, not a title.
+        const QString title = sourceKind() == QLatin1String("folder") ? s.title : QString();
+        if (newSource || !s.contentId.isEmpty())
             m_contentId->setText(s.contentId);
-        if (!s.title.isEmpty())
-            m_title->setText(s.title);
-        if (!s.version.isEmpty() && !(packageTypeKind() == PackageType::Backport && !m_autoVersion.isEmpty()))
+        if (newSource || !title.isEmpty())
+            m_title->setText(title);
+        if ((newSource || !s.version.isEmpty()) && !(packageTypeKind() == PackageType::Backport && !m_autoVersion.isEmpty()))
             m_version->setText(s.version);
+        // An add-on chosen from dlc_emu.ini: the entry's ID, not the payload folder's.
+        if (!m_addonIdFor.isEmpty() && m_addonIdFor == m_sourcePath)
+            m_contentId->setText(m_addonId);
     }
     if (m_estSize)
         m_estSize->setText(s.bytes > 0 ? formatBytes(s.bytes) : QStringLiteral("—"));
@@ -1555,7 +1648,7 @@ void BuildImagePage::showGameRoots(const GameSummary& s)
                             QStringLiteral("game"), m_rootsBox);
         setButtonSmall(pick, true);
         pick->setAccessibleName(QStringLiteral("Use %1").arg(QFileInfo(root).fileName()));
-        pick->setToolTip(nativePath(root));
+        pick->setToolTip(plainTip(nativePath(root)));
         connect(pick, &QPushButton::clicked, this, [this, root] { setSource(root); });
         m_rootsList->addWidget(pick, 0, Qt::AlignLeft);
     }
@@ -1716,10 +1809,14 @@ void BuildImagePage::pickFromDlcEmu()
     if (s->exec() != 1)
         return;
     const auto& c = candidates[size_t(combo->currentData().toInt())];
-    m_contentId->setText(c.contentId);
     m_entitlementKey->setText(c.entitlementKey);
-    if (!c.payloadFolder.isEmpty())
+    if (!c.payloadFolder.isEmpty()) {
         setSource(c.payloadFolder);
+        // The payload folder's own summary arrives later; the chosen entry's ID stays.
+        m_addonIdFor = m_sourcePath;
+        m_addonId = c.contentId;
+    }
+    m_contentId->setText(c.contentId);
     if (!c.supported)
         showFormError(QStringLiteral("This add-on cannot be packaged"), c.reason);
 }
@@ -1749,7 +1846,7 @@ void BuildImagePage::applyLiveCpuLimit()
     const int cores = m_liveCores->currentData().toInt();
     int applied = 0;
     for (const auto& rec : m_ctx.queue().records())
-        if (rec.state == JobState::Running && (rec.kind == QLatin1String("fpkg.build") || rec.kind == QLatin1String("fpkg.addon"))) {
+        if (rec.state == JobState::Running && isPackageBuildKind(rec.kind)) {
             fpkg::setLiveCpuLimit(rec.id, cores);
             ++applied;
         }
@@ -1854,6 +1951,15 @@ qint64 BuildImagePage::neededBytes() const
     return qint64(double(m_summary.bytes) * 1.006) + 64LL * 1024 * 1024;
 }
 
+qint64 BuildImagePage::largestOutputFileBytes() const
+{
+    // An image or a package is one file. A packed folder's pack volumes stay
+    // below 4 GiB by design and which files stay loose is only known once the
+    // job has scanned the game, so the page holds no single-file limit against
+    // the drive (it would refuse FAT32 drives the job itself accepts).
+    return isZstdFolder() ? 0 : neededBytes();
+}
+
 void BuildImagePage::updateOutput()
 {
     if (!m_nameEdited || isFpkg())
@@ -1897,28 +2003,36 @@ void BuildImagePage::checkSpace()
         return;
     }
     const qint64 needed = neededBytes();
+    const qint64 largest = largestOutputFileBytes();
     const bool pkg = isFpkg();
     const quint64 gen = ++m_spaceGen;
     QPointer<BuildImagePage> self(this);
-    (void)QtConcurrent::run([self, folder, needed, gen, pkg] {
-        // A folder created by the build: measure the drive it will be on.
-        QString probe = folder;
-        while (!probe.isEmpty() && !QFileInfo::exists(probe))
-            probe = QFileInfo(probe).absolutePath() == probe ? QString() : QFileInfo(probe).absolutePath();
-        const bool exists = QFileInfo::exists(folder);
-        auto ds = diskSpace(probe.isEmpty() ? folder : probe);
-        auto vol = checkOutputVolume(probe.isEmpty() ? folder : probe, needed);
-        if (!self)
-            return;
-        QMetaObject::invokeMethod(self.data(), [self, ds, vol, folder, needed, gen, pkg, exists] {
+    (void)QtConcurrent::run([self, folder, needed, largest, gen, pkg] {
+        const SpaceProbe p = probeOutputFolder(folder, largest);
+        // The page is only touched on the UI thread, where the pointer is tested.
+        QMetaObject::invokeMethod(qApp, [self, p, folder, needed, gen, pkg] {
             if (self && gen == self->m_spaceGen)
-                self->applySpaceCheck(ds, vol, folder, needed, pkg, exists);
+                self->applySpaceCheck(p.space, p.volume, folder, needed, pkg, p.exists);
         }, Qt::QueuedConnection);
     });
 }
 
+void BuildImagePage::checkSpaceNow()
+{
+    const QString folder = outputFolder();
+    const qint64 needed = neededBytes();
+    ++m_spaceGen; // an answer still on its way is superseded by this one
+    m_spaceBar->hide();
+    m_spaceOk = true;
+    m_spaceProblem.clear();
+    const SpaceProbe p = probeOutputFolder(folder, largestOutputFileBytes());
+    applySpaceCheck(p.space, p.volume, folder, needed, isFpkg(), p.exists);
+}
+
 void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists)
 {
+    Q_UNUSED(folder);
+    m_spaceChecked.start();
     m_output->setError({});
     if (!ds.ok()) {
         m_spaceState = SpaceCheck::Unavailable;
@@ -1929,7 +2043,8 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
     }
     if (m_freeSpace)
         m_freeSpace->setText(formatBytes(ds->available));
-    const QString drive = driveLabel(folder);
+    // From the answer itself: the folder may not exist yet, and this is the UI thread.
+    const QString drive = driveName(ds->rootPath);
     if (!vol.ok()) {
         m_spaceState = SpaceCheck::Insufficient;
         m_spaceOk = false;
@@ -1938,8 +2053,9 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
         m_spaceRow->clear();
         return;
     }
-    if (needed > 0 && ds->available < needed + general::freeSpaceMarginBytes(m_ctx.settings().snapshot())) {
-        showSpaceError(needed, ds->available, drive);
+    const qint64 reserve = general::freeSpaceMarginBytes(m_ctx.settings().snapshot());
+    if (needed > 0 && ds->available < needed + reserve) {
+        showSpaceError(needed, ds->available, drive, reserve);
         return;
     }
     QString text = QStringLiteral("%1 free on %2.").arg(formatBytes(ds->available), drive);
@@ -1958,8 +2074,11 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
     m_spaceRow->set(text, tone);
 }
 
-void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QString& drive)
+void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QString& drive, qint64 reserve)
 {
+    reserve = std::max<qint64>(0, reserve);
+    const QString what = isFpkg() ? QStringLiteral("package") : isZstdFolder() ? QStringLiteral("packed folder") : QStringLiteral("image");
+    const QString toFree = formatBytes(std::max<qint64>(0, needed + reserve - freeBytes));
     m_spaceState = SpaceCheck::Insufficient;
     m_spaceOk = false;
     m_spaceProblem = QStringLiteral("Not enough space on %1.").arg(drive);
@@ -1967,15 +2086,17 @@ void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QStri
     m_output->setError(QStringLiteral("Not enough space"));
     m_spaceBar->setTone(Tone::Err);
     m_spaceBar->setTitle(QStringLiteral("Not enough space on %1").arg(drive));
-    m_spaceBar->setMessage(QStringLiteral("This %1 needs %2; %3 is free. Free %4 or choose another output folder.")
-                               .arg(isFpkg() ? QStringLiteral("package") : isZstdFolder() ? QStringLiteral("packed folder") : QStringLiteral("image"),
-                                    formatBytes(needed), formatBytes(freeBytes),
-                                    formatBytes(std::max<qint64>(0, needed - freeBytes))));
+    // The refusal counts the free-space reserve, so the message does too.
+    m_spaceBar->setMessage(reserve > 0
+                               ? QStringLiteral("This %1 needs %2 plus the %3 free-space reserve; %4 is free. Free %5 or choose another output folder.")
+                                     .arg(what, formatBytes(needed), formatBytes(reserve), formatBytes(freeBytes), toFree)
+                               : QStringLiteral("This %1 needs %2; %3 is free. Free %4 or choose another output folder.")
+                                     .arg(what, formatBytes(needed), formatBytes(freeBytes), toFree));
     m_spaceBar->clearLinks();
     // Suggest the volume with the most free space.
     QStorageInfo best;
     for (const QStorageInfo& si : QStorageInfo::mountedVolumes()) {
-        if (!si.isValid() || !si.isReady() || si.isReadOnly() || si.bytesAvailable() < needed)
+        if (!si.isValid() || !si.isReady() || si.isReadOnly() || si.bytesAvailable() < needed + reserve)
             continue;
         if (!best.isValid() || si.bytesAvailable() > best.bytesAvailable())
             best = si;
@@ -2093,17 +2214,13 @@ QString BuildImagePage::validateForm()
                 return QStringLiteral("An add-on needs its Content ID.");
         }
     }
-    if (m_spaceState == SpaceCheck::Checking) {
-        // The answer is still on its way: ask the drive now rather than start on a guess.
-        const QString folder = outputFolder();
-        QString probe = folder;
-        while (!probe.isEmpty() && !QFileInfo::exists(probe))
-            probe = QFileInfo(probe).absolutePath() == probe ? QString() : QFileInfo(probe).absolutePath();
-        const qint64 needed = neededBytes();
-        ++m_spaceGen; // the pending answer is superseded by this one
-        applySpaceCheck(diskSpace(probe.isEmpty() ? folder : probe), checkOutputVolume(probe.isEmpty() ? folder : probe, needed), folder, needed,
-                        isFpkg(), QFileInfo::exists(folder));
-    }
+    // Never refuse, or start, on an old answer: ask the drive now when the last
+    // answer was negative, is still on its way or is more than a few seconds old
+    // (the user may have freed space or plugged the drive in since).
+    const bool positive = m_spaceState == SpaceCheck::Ok || m_spaceState == SpaceCheck::Warn;
+    if (!m_demo && !outputFolder().isEmpty()
+        && (!positive || !m_spaceChecked.isValid() || m_spaceChecked.elapsed() > kSpaceVerdictMs))
+        checkSpaceNow();
     if (m_spaceState == SpaceCheck::Unavailable)
         return QStringLiteral("The output drive is not available. Choose another output folder.");
     if (!m_spaceOk)
@@ -2124,8 +2241,10 @@ Result<QString> BuildImagePage::submit(bool)
             out = outputFolder();
         QJsonObject extra{{QStringLiteral("title"), m_summary.title}, {QStringLiteral("titleId"), m_summary.titleId},
                           {QStringLiteral("version"), m_summary.version}, {QStringLiteral("sourceBytes"), m_summary.bytes}};
-        if (isZstdFolder())
+        if (isZstdFolder()) {
+            overrides.insert(ampr::keys::kZstdPack, true); // what this output is, whatever the global setting says
             r = jobs::submitPackFolder(m_ctx, m_summary.folder, QDir(out).filePath(fileName()), overrides, extra);
+        }
         else
             r = jobs::submitImageBuild(m_ctx, format(), m_summary.folder, out, fileName(), overrides, extra);
     } else {

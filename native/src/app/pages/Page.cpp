@@ -5,12 +5,16 @@
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QHelpEvent>
 #include <QPointer>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QStorageInfo>
+#include <QTextDocument>
+#include <QToolTip>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -84,6 +88,7 @@ JobFormPage::JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QStri
     m_formWidget = new QWidget(left);
     m_form = vbox(m_formWidget, space::lg);
     m_error = new InfoBar(Tone::Err, m_formWidget);
+    plainLabels(m_error); // messages quote file names and what the engines report
     m_error->setDismissable(true);
     m_error->hide();
     m_form->addWidget(m_error);
@@ -316,6 +321,58 @@ void JobFormPage::clearDemoState()
 }
 
 // ---- helpers ------------------------------------------------------------------------
+
+namespace {
+
+// Shows a widget's tooltip literally. The widget keeps its own tooltip text
+// (ElideLabel sets the full text when it elides); only the display changes.
+class PlainTipFilter : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() != QEvent::ToolTip)
+            return false;
+        auto* w = qobject_cast<QWidget*>(watched);
+        if (!w || w->toolTip().isEmpty() || !Qt::mightBeRichText(w->toolTip()))
+            return false;
+        QToolTip::showText(static_cast<QHelpEvent*>(event)->globalPos(), plainTip(w->toolTip()), w);
+        return true;
+    }
+};
+
+} // namespace
+
+QLabel* plainLabel(QLabel* label)
+{
+    if (!label)
+        return label;
+    label->setTextFormat(Qt::PlainText);
+    static QPointer<PlainTipFilter> filter;
+    if (!filter)
+        filter = new PlainTipFilter(QCoreApplication::instance());
+    label->removeEventFilter(filter); // installed once, however often this is called
+    label->installEventFilter(filter);
+    return label;
+}
+
+void plainLabels(QWidget* widget)
+{
+    if (!widget)
+        return;
+    plainLabel(qobject_cast<QLabel*>(widget));
+    for (QLabel* l : widget->findChildren<QLabel*>())
+        plainLabel(l);
+}
+
+QString plainTip(const QString& text)
+{
+    // A tooltip has no format switch: text that would be taken for markup is
+    // handed over as markup that shows exactly that text.
+    return Qt::mightBeRichText(text) ? Qt::convertFromPlainText(text) : text;
+}
 
 QString humanTime(const QDateTime& t)
 {
