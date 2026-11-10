@@ -60,6 +60,10 @@ public:
     virtual void navigateWith(const QVariantMap& args) { Q_UNUSED(args); }
     virtual QString statusContext() const { return {}; }     // status bar, right side
     virtual void onShown() {}
+    // Edits that exist only in this window and would be lost on exit, as the
+    // middle of a sentence ("autoload.txt has edits that are not saved");
+    // "" when there are none. The window asks before it closes.
+    virtual QString unsavedChanges() const { return {}; }
     // Screenshot states (CI evidence): names and how to enter/leave them.
     virtual QStringList demoStates() const { return {}; }
     virtual void applyDemoState(const QString& name) { Q_UNUSED(name); }

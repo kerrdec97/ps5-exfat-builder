@@ -240,9 +240,12 @@ Result<QString> submitPayload(AppContext& ctx, const QString& host, int port, co
     return enqueue(ctx, QStringLiteral("ps5.payload.send"), p, {});
 }
 
-Result<QString> submitUpdateCheck(AppContext& ctx)
+Result<QString> submitUpdateCheck(AppContext& ctx, const QString& apiUrl)
 {
-    return enqueue(ctx, QStringLiteral("update.check"), {}, {});
+    QJsonObject p;
+    if (!apiUrl.isEmpty())
+        p.insert(QStringLiteral("apiUrl"), apiUrl);
+    return enqueue(ctx, QStringLiteral("update.check"), p, {});
 }
 
 Result<QString> submitUpdateDownload(AppContext& ctx, const QJsonObject& release)

@@ -852,7 +852,8 @@ private slots:
             if (setting)
                 continue;
             for (auto* l : row->findChildren<QLabel*>())
-                QCOMPARE(l->textFormat(), Qt::PlainText);
+                if (l->pixmap().isNull()) // the icon is a picture, not text
+                    QCOMPARE(l->textFormat(), Qt::PlainText);
             ++checked;
         }
         QVERIFY(checked >= 3);

@@ -96,7 +96,7 @@ public:
     bool isReachable() const { return m_session->isConnected(); }
     // What would be lost by closing now ("" when nothing): unsaved edits in the Autoloader editor
     // and the ShadowMount+ settings form.
-    QString unsavedChanges() const;
+    QString unsavedChanges() const override;
     bool acceptsDrop(const QList<QUrl>& urls) const override;
     void dropUrls(const QList<QUrl>& urls) override;
     void setDragHighlight(bool on) override;

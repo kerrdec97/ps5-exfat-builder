@@ -62,8 +62,9 @@
 //   Hex preview    no job: services/HexPreview reads slices of a file inside an image on a
 //                  worker thread (read-only, the image is not kept open between slices).
 //   Dump rename    library.rename   {mode: preview|apply|undo, source, preset?, destination?, items: [{source, name, selected}], undoLog}
-//   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate)
-//                  update.download  {release: <details>} → outputs[0] = verified installer
+//   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate, canDownload, note)
+//                  update.download  {release: <details>} → outputs[0] = the verified program file, left in the
+//                                   cache folder (details + file, sha256); nothing starts or replaces it
 //   Tools          tools.languages.scan    {folder, batch}
 //                  tools.languages.strip   {gameRoot, remove: [..], backupFolder?}
 //                  tools.languages.restore {backupZip, gameRoot}
@@ -123,7 +124,8 @@ Result<QString> submitFpkgBackport(AppContext& ctx, const QJsonObject& params, c
 Result<QString> submitDlcConvert(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides = {});
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders);
 Result<QString> submitPayload(AppContext& ctx, const QString& host, int port, const QString& file);
-Result<QString> submitUpdateCheck(AppContext& ctx);
+// `apiUrl`: empty = GitHub (the job refuses any other address outside tests).
+Result<QString> submitUpdateCheck(AppContext& ctx, const QString& apiUrl = {});
 Result<QString> submitUpdateDownload(AppContext& ctx, const QJsonObject& release);
 Result<QString> submitLanguageScan(AppContext& ctx, const QString& folder, bool batch);
 Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, const QStringList& remove,

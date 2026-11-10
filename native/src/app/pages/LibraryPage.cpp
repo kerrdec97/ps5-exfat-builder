@@ -1688,6 +1688,11 @@ void LibraryPage::navigateWith(const QVariantMap& args)
     }
 }
 
+QString LibraryPage::unsavedChanges() const
+{
+    return m_dlc->hasUnsavedChanges() ? QStringLiteral("dlc_emu.ini has edits that are not saved") : QString();
+}
+
 QString LibraryPage::statusContext() const
 {
     return QStringLiteral("%1 · %2").arg(plural(qint64(games().size()), QStringLiteral("game"), QStringLiteral("games")),
