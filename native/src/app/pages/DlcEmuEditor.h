@@ -21,10 +21,12 @@ public:
     void setEntries(const std::vector<tools::dlcemu::Entry>& entries);
     QString validationText() const { return m_validation->text(); }
     QTableWidget* table() { return m_table; }
+    bool hasUnsavedChanges() const { return m_dirty; }
 signals:
     void toastRequested(fw::ui::Tone tone, const QString& title, const QString& body);
 
 private:
+    void folderChanged();
     void load();
     void addRow(const tools::dlcemu::Entry& e);
     void addEntry();
@@ -46,8 +48,9 @@ private:
     QAbstractButton* m_remove;
     QPushButton* m_find;
     QPushButton* m_save;
-    std::vector<tools::dlcemu::Entry> m_loaded; // keeps unknown keys per row (Qt::UserRole index)
+    QString m_shownFolder; // the folder whose entries the table holds
     bool m_dirty = false;
+    bool m_asking = false; // the "discard the unsaved changes?" question is open
 };
 
 } // namespace fw::pages

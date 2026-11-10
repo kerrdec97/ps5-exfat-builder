@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonDocument>
 #include <QSettings>
 #include <QStandardPaths>
@@ -12,6 +13,8 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+
+#include <tlhelp32.h>
 #endif
 
 namespace fw::bp {
@@ -55,7 +58,83 @@ void setNoWindow(QProcess* p)
 #endif
 }
 
+bool processAlive(qint64 pid)
+{
+#ifdef Q_OS_WIN
+    if (pid <= 0)
+        return false;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!h)
+        return GetLastError() == ERROR_ACCESS_DENIED; // it exists, it is just not ours to open
+    DWORD code = 0;
+    const bool alive = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+    CloseHandle(h);
+    return alive;
+#else
+    Q_UNUSED(pid);
+    return true; // unknown: keep the file
+#endif
+}
+
+// A job file is deleted when its worker ends; one that is left behind (the app
+// was killed) would stay forever. Files older than a day whose writer is gone
+// are removed.
+void sweepStaleJobFiles(const QString& jobsDir)
+{
+    const QDateTime limit = QDateTime::currentDateTime().addDays(-1);
+    const QFileInfoList files = QDir(jobsDir).entryInfoList({QStringLiteral("job_*.json")}, QDir::Files);
+    for (const QFileInfo& fi : files) {
+        if (fi.lastModified() > limit)
+            continue;
+        bool ok = false;
+        const qint64 pid = fi.completeBaseName().section(u'_', 1, 1).toLongLong(&ok);
+        if (ok && processAlive(pid))
+            continue;
+        QFile::remove(fi.absoluteFilePath());
+    }
+}
+
 } // namespace
+
+bool foreignEngineRunning()
+{
+#ifdef Q_OS_WIN
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return false;
+    QHash<quint32, quint32> parentOf;
+    QList<quint32> engines;
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    for (BOOL more = Process32FirstW(snap, &pe); more; more = Process32NextW(snap, &pe)) {
+        parentOf.insert(pe.th32ProcessID, pe.th32ParentProcessID);
+        const QString name = QString::fromWCharArray(pe.szExeFile);
+        if (name.startsWith(QLatin1String("PS5BackportGUI"), Qt::CaseInsensitive) && name.endsWith(QLatin1String(".exe"), Qt::CaseInsensitive))
+            engines << pe.th32ProcessID;
+    }
+    CloseHandle(snap);
+    const quint32 self = quint32(QCoreApplication::applicationPid());
+    for (quint32 pid : engines) {
+        // A worker of this app is a descendant of it (the one-file engine's
+        // bootloader, then the real worker).
+        bool ours = false;
+        quint32 p = pid;
+        for (int depth = 0; depth < 8 && p != 0; ++depth) {
+            if (p == self) {
+                ours = true;
+                break;
+            }
+            const auto it = parentOf.constFind(p);
+            if (it == parentOf.constEnd() || it.value() == p)
+                break;
+            p = it.value();
+        }
+        if (!ours)
+            return true;
+    }
+#endif
+    return false;
+}
 
 Folders folders()
 {
@@ -138,17 +217,41 @@ Worker::Worker(QObject* parent) : QObject(parent) {}
 Worker::~Worker()
 {
     if (m_proc && m_proc->state() != QProcess::NotRunning) {
-        // The stdin pipe closes with us: the worker cancels itself (and rolls
-        // back an apply) at its next safe point. Kill only an engine stage.
-        if (m_phase == QLatin1String("engine") && m_cmd != QLatin1String("restore"))
+        m_proc->disconnect(this);
+        // End of input is the worker's cancel signal: it stops (and rolls back
+        // an apply) at its next safe point.
+        m_proc->closeWriteChannel();
+        if (killable()) {
             killTree();
-        m_proc->waitForFinished(2000);
+            m_proc->waitForFinished(2000);
+        } else if (!m_proc->waitForFinished(10000)) {
+            // An export, apply or restore that is still writing: destroying the
+            // process object would terminate it in the middle of a file, so
+            // the object is left to the process for as long as the app lives.
+            QProcess* p = m_proc;
+            m_proc = nullptr;
+            p->setParent(nullptr);
+            QObject::connect(p, &QProcess::finished, p, &QObject::deleteLater);
+        }
     }
     if (!m_jobPath.isEmpty())
         QFile::remove(m_jobPath);
 }
 
 bool Worker::isRunning() const { return m_proc && m_proc->state() != QProcess::NotRunning && !m_done; }
+
+// Only an engine stage may be killed: an export or apply finishes or rolls
+// back its current step by itself, and a restore must run to its end. Before
+// the first progress line only the commands that begin with the engine stage
+// count as being in it.
+bool Worker::killable() const
+{
+    if (m_cmd == QLatin1String("restore"))
+        return false;
+    if (m_phase.isEmpty())
+        return m_cmd == QLatin1String("backport") || m_cmd == QLatin1String("selftest");
+    return m_phase == QLatin1String("engine");
+}
 
 bool Worker::start(const QJsonObject& job, QString* error)
 {
@@ -166,17 +269,21 @@ bool Worker::start(const QJsonObject& job, QString* error)
         return false;
     }
     const Folders f = folders();
+    sweepStaleJobFiles(f.jobsDir);
     m_cmd = job.value(QStringLiteral("cmd")).toString();
     m_jobPath = QDir(f.jobsDir).filePath(QStringLiteral("job_%1_%2.json")
                                              .arg(QCoreApplication::applicationPid())
                                              .arg(QDateTime::currentMSecsSinceEpoch()));
     QFile jf(m_jobPath);
-    if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    const QByteArray jobBytes = QJsonDocument(job).toJson(QJsonDocument::Compact);
+    if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate) || jf.write(jobBytes) != jobBytes.size() || !jf.flush()) {
         if (error)
             *error = QStringLiteral("Could not write the job file %1: %2").arg(QDir::toNativeSeparators(m_jobPath), jf.errorString());
+        jf.close();
+        QFile::remove(m_jobPath);
+        m_jobPath.clear();
         return false;
     }
-    jf.write(QJsonDocument(job).toJson(QJsonDocument::Compact));
     jf.close();
 
     m_proc = new QProcess(this);
@@ -218,7 +325,7 @@ void Worker::cancel()
         return; // restores ignore cancel and are never killed
     QPointer<Worker> self(this);
     QTimer::singleShot(1500, this, [self] {
-        if (self && self->isRunning() && self->m_phase == QLatin1String("engine"))
+        if (self && self->isRunning() && self->killable())
             self->killTree();
     });
 }
@@ -229,13 +336,30 @@ void Worker::killTree()
         return;
 #ifdef Q_OS_WIN
     // One-file PyInstaller: the PID we own is the bootloader; the real worker
-    // is its child. taskkill /T ends the whole tree.
-    QProcess tk;
-    tk.setProgram(QStringLiteral("taskkill"));
-    tk.setArguments({QStringLiteral("/PID"), QString::number(m_proc->processId()), QStringLiteral("/T"), QStringLiteral("/F")});
-    setNoWindow(&tk);
-    tk.start();
-    tk.waitForFinished(5000);
+    // is its child. taskkill /T ends the whole tree. It is Windows' own
+    // taskkill (never one found through the search path), and it runs on its
+    // own: nothing here waits for it.
+    wchar_t sys[MAX_PATH + 1] = {};
+    const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    if (n == 0 || n > MAX_PATH) {
+        m_proc->kill();
+        return;
+    }
+    auto* tk = new QProcess;
+    tk->setProgram(QDir(QString::fromWCharArray(sys, int(n))).filePath(QStringLiteral("taskkill.exe")));
+    tk->setArguments({QStringLiteral("/PID"), QString::number(m_proc->processId()), QStringLiteral("/T"), QStringLiteral("/F")});
+    tk->setStandardOutputFile(QProcess::nullDevice());
+    tk->setStandardErrorFile(QProcess::nullDevice());
+    setNoWindow(tk);
+    QObject::connect(tk, &QProcess::finished, tk, &QObject::deleteLater);
+    QObject::connect(tk, &QProcess::errorOccurred, tk, [tk, proc = QPointer<QProcess>(m_proc)](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;
+        if (proc)
+            proc->kill(); // at least the process we own
+        tk->deleteLater();
+    });
+    tk->start();
 #else
     m_proc->kill();
 #endif
@@ -301,11 +425,20 @@ void Worker::onFinished()
     QFile::remove(m_jobPath);
     QJsonObject r = m_result;
     if (!m_haveResult) {
-        if (m_cancelled) {
+        const QString tail = m_errTail.join(u'\n').right(2000);
+        if (m_cancelled && killable()) {
             r = {{QStringLiteral("status"), QStringLiteral("CANCELLED")},
                  {QStringLiteral("headline"), QStringLiteral("Cancelled during the build; no files were written")}};
+        } else if (m_cancelled) {
+            // Past the engine stage (or a restore): files may have been written
+            // or half restored, so this is not a clean cancel.
+            const QString headline = m_cmd == QLatin1String("restore")
+                ? QStringLiteral("The restore stopped before it finished; check the game folder and run Restore originals from a backup\u2026 again")
+                : QStringLiteral("The backport worker stopped during %1 without finishing; check the output and, if the backport was being "
+                                 "applied, the game folder (Restore originals from a backup\u2026)")
+                      .arg(m_phase.isEmpty() ? QStringLiteral("its work") : m_phase);
+            r = {{QStringLiteral("status"), QStringLiteral("FAILED")}, {QStringLiteral("headline"), headline}, {QStringLiteral("stderr"), tail}};
         } else {
-            const QString tail = m_errTail.join(u'\n').right(2000);
             r = {{QStringLiteral("status"), QStringLiteral("FAILED")},
                  {QStringLiteral("headline"), QStringLiteral("The backport worker stopped unexpectedly")},
                  {QStringLiteral("stderr"), tail}};

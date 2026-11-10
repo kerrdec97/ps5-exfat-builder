@@ -22,6 +22,7 @@
 #include "engines/dlc/DlcConvert.h"
 #include "engines/dlc/DlcIni.h"
 #include "engines/dlc/DlcLookup.h"
+#include "core/Cancellation.h"
 #include "engines/dlc/DlcPackage.h"
 
 #include <QHash>
@@ -125,6 +126,10 @@ private:
     QSet<QString> m_lookupRunning;
     QStringList m_lookupQueue;
     QSet<QString> m_loadingPaths; // packages being read (case-folded)
+    // Background reads and lookups belong to the list they were started for:
+    // clearing the list cancels them and drops whatever still arrives.
+    CancellationSource m_work;
+    quint64 m_listGen = 0;
     QString m_cacheDir;
     bool m_demo = false;
 };

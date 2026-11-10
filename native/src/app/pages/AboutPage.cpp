@@ -141,7 +141,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* cl = new TwoColumnLayout(columns, 380, 100000);
     auto* credits = new Card(columns);
     credits->setTitle(QStringLiteral("Credits"));
-    auto* lead = label(QStringLiteral("Created and maintained by DecKerr97 (kerrdec97). Inspired by NookieAI and stonemodder (Porkfolio)."), TextStyle::Body, color::fg_1, credits);
+    auto* lead = label(QStringLiteral("Created and maintained by Deckerr97 (kerrdec97). Inspired by NookieAI and stonemodder (Porkfolio)."), TextStyle::Body, color::fg_1, credits);
     lead->setWordWrap(true);
     credits->body()->addWidget(lead);
     auto* people = new QWidget(credits);
@@ -172,9 +172,13 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
         w->setWordWrap(true);
         v->addWidget(w);
         if (!who[2].isEmpty()) {
-            auto* g = label(who[2], TextStyle::Caption, color::fg_4, cell);
-            g->setToolTip(QStringLiteral("https://") + who[2]);
-            v->addWidget(g);
+            // It reads as a link, so it is one.
+            const QString url = QStringLiteral("https://") + who[2];
+            auto* g = new Link(who[2], cell);
+            g->setFont(font::caption());
+            g->setToolTip(url);
+            connect(g, &Link::activated, this, [url] { QDesktopServices::openUrl(QUrl(url)); });
+            v->addWidget(g, 0, Qt::AlignLeft);
         }
         v->addStretch(1);
         pg->addWidget(cell);
@@ -198,16 +202,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* own = caption(QStringLiteral("Use it only with games and content you own and dumped yourself."), legal);
     own->setWordWrap(true);
     legal->body()->addWidget(own);
-    // A private build carries the owner's own Sony Publishing Tools and fpkg-cli.
-    const QDir tools(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools")));
-    const bool privateBuild = QFileInfo(tools.filePath(QStringLiteral("fpkg-toolkit"))).isDir()
-                              || QFileInfo(tools.filePath(QStringLiteral("fpkg-cli"))).isDir();
-    auto* sony = caption(privateBuild
-                             ? QStringLiteral("Private build: it carries your own copy of Sony's Publishing Tools and fpkg-cli for personal "
-                                              "use. Do not share this exe. Not affiliated with or endorsed by Sony Interactive Entertainment.")
-                             : QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony "
-                                              "software; the bundled PS5 Backport engine is a separate program with its own notices."),
-                         legal);
+    auto* sony = caption(affiliationNote(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools"))), legal);
     sony->setWordWrap(true);
     sony->setToolTip(QStringLiteral("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
     legal->body()->addWidget(sony);
@@ -216,25 +211,13 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     content()->addWidget(columns);
 
     // ---- Third-party notices (folded)
-    auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("Full licence texts ship in the LICENSES folder next to the app."), this);
+    auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("The full licence texts are in the app's LICENSES folder."), this);
     third->setObjectName(QStringLiteral("about-notices"));
-    third->setSummary(QStringLiteral("11 components"));
+    const QList<QStringList> rows = thirdPartyComponents();
+    third->setSummary(QStringLiteral("%1 components").arg(rows.size()));
     auto* tgrid = new QGridLayout;
     tgrid->setHorizontalSpacing(space::lg);
     tgrid->setVerticalSpacing(space::sm);
-    const QList<QStringList> rows = {
-        {QStringLiteral("Qt 6 (Core, Gui, Widgets, Svg, Network, Concurrent)"), QStringLiteral("Application framework, dynamically linked"), QStringLiteral("LGPL-3.0")},
-        {QStringLiteral("zlib"), QStringLiteral("Compression and ZIP archives"), QStringLiteral("zlib licence")},
-        {QStringLiteral("Lazy_MkPFS / PSBrew MkPFS"), QStringLiteral("The PFS/FFPFSC engine is a C++ port of this code"), QStringLiteral("GPL-3.0")},
-        {QStringLiteral("UFS2Tool (SvenGDK)"), QStringLiteral("The UFS2/FFPKG engine follows its image layout"), QStringLiteral("BSD-2-Clause")},
-        {QStringLiteral("Lucide icons"), QStringLiteral("Interface icons"), QStringLiteral("ISC")},
-        {QStringLiteral("ampr_emu (drakmor)"), QStringLiteral("AMPR index format"), QStringLiteral("GPL-3.0")},
-        {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), QStringLiteral("Bundled separate program run by the Backport tab"), QStringLiteral("Its own terms")},
-        {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), QStringLiteral("Bundled PS5 runtime for zstd packs, unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0")},
-        {QStringLiteral("ps5-dump-forge (quer3q)"), QStringLiteral("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0")},
-        {QStringLiteral("zstd (Meta)"), QStringLiteral("zstd packs"), QStringLiteral("BSD-3-Clause")},
-        {QStringLiteral("LZ4 (Yann Collet)"), QStringLiteral("Reading LZ4 packs"), QStringLiteral("BSD-2-Clause")},
-    };
     int row = 0;
     tgrid->addWidget(label(QStringLiteral("Component"), TextStyle::Overline, color::fg_4, third), row, 0);
     tgrid->addWidget(label(QStringLiteral("Use"), TextStyle::Overline, color::fg_4, third), row, 1);
@@ -253,7 +236,56 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     tgrid->setColumnStretch(0, 2);
     tgrid->setColumnStretch(1, 3);
     third->body()->addLayout(tgrid);
+    // The release is one exe that unpacks itself: show where the texts are.
+    const QString licences = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("LICENSES"));
+    if (QFileInfo(licences).isDir()) {
+        auto* open = button(QStringLiteral("Open the LICENSES folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), third);
+        connect(open, &QPushButton::clicked, this, [licences] { openInFileManager(licences); });
+        third->body()->addWidget(open, 0, Qt::AlignLeft);
+    }
     content()->addWidget(third);
+}
+
+QList<QStringList> AboutPage::thirdPartyComponents()
+{
+    return {
+        {QStringLiteral("Qt 6 (Core, Gui, Widgets, Svg, Network, Concurrent, Sql)"), QStringLiteral("Application framework, dynamically linked"), QStringLiteral("LGPL-3.0")},
+        {QStringLiteral("zlib"), QStringLiteral("Compression and ZIP archives"), QStringLiteral("zlib licence")},
+        {QStringLiteral("Lazy_MkPFS / PSBrew MkPFS"), QStringLiteral("The PFS/FFPFSC engine is a C++ port of this code"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("UFS2Tool (SvenGDK)"), QStringLiteral("The UFS2/FFPKG engine follows its image layout"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("make_fself (john-tornblom, modified by Nazky)"), QStringLiteral("The fake-SELF reader behind the Backport tab's game list is a port of this code"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("LibProsperoPKG (SvenGDK)"), QStringLiteral("Facts used by the FPKG engine: PS5 flat-path hash, UCP layout"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("zstd 1.5.7 (Meta Platforms)"), QStringLiteral("zstd packs"), QStringLiteral("BSD-3-Clause")},
+        {QStringLiteral("LZ4 1.10.0 (Yann Collet)"), QStringLiteral("Reading LZ4 packs"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("ps5-dump-forge (quer3q)"), QStringLiteral("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), QStringLiteral("Format of the zstd packs; its PS5 runtime is bundled unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("Lucide icons"), QStringLiteral("Interface icons"), QStringLiteral("ISC")},
+        {QStringLiteral("Microsoft Visual C++ runtime"), QStringLiteral("Runtime libraries shipped with the program"), QStringLiteral("Microsoft redistributable")},
+        {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), QStringLiteral("Bundled separate program run by the Backport tab"), QStringLiteral("Its own terms")},
+    };
+}
+
+QString AboutPage::affiliationNote(const QString& toolsDir)
+{
+    // The three private switches of the release script are independent: say
+    // only what this build really carries.
+    const QDir tools(toolsDir);
+    QStringList carried;
+    if (QFileInfo(tools.filePath(QStringLiteral("fpkg-toolkit"))).isDir())
+        carried << QStringLiteral("Sony's Publishing Tools");
+    if (QFileInfo(tools.filePath(QStringLiteral("fpkg-cli"))).isDir())
+        carried << QStringLiteral("fpkg-cli");
+    if (QFileInfo(tools.filePath(QStringLiteral("youtube"))).isDir())
+        carried << QStringLiteral("the YouTube app packages");
+    if (carried.isEmpty())
+        return QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony "
+                              "software; the bundled PS5 Backport engine is a separate program with its own notices.");
+    QString list = carried.last();
+    if (carried.size() > 1)
+        list = carried.mid(0, carried.size() - 1).join(QStringLiteral(", ")) + QStringLiteral(" and ") + carried.last();
+    return QStringLiteral("Private build: it carries your own copy of %1 for personal use. Do not share this exe. Not affiliated "
+                          "with or endorsed by Sony Interactive Entertainment.")
+        .arg(list);
 }
 
 void AboutPage::setUpdateStatus(const QString& text, Tone tone)

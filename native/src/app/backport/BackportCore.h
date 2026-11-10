@@ -43,6 +43,9 @@ QStringList discoverGames(const QStringList& roots, int depth, const QStringList
                           const std::atomic_bool* cancel = nullptr);
 
 Game readGame(const QString& folder);
+// The same with the ledger already read (readLedger()): a scan reads it once,
+// not once per game.
+Game readGame(const QString& folder, const QJsonArray& ledger);
 
 // "N.NN" with 1 <= N <= 30.
 bool plausibleVersion(const QString& v);
@@ -54,7 +57,18 @@ qint64 executableBytes(const QString& folder, const std::atomic_bool* cancel = n
 
 // ---- ledger (applied_backports.json, written by the worker) -----------------------------
 
+QJsonArray readLedger(); // the "applied" rows
 QJsonObject activeLedgerRecord(const QString& gameDir); // {} when none
+QJsonObject activeLedgerRecord(const QString& gameDir, const QJsonArray& ledger);
+
+// Ledger rows whose apply never finished (ledger and journal both IN_PROGRESS)
+// and whose journal has not been written for `quietSeconds`: a journal that is
+// still being written belongs to an apply that is running, not interrupted.
+inline constexpr int kApplyQuietSeconds = 5 * 60;
+std::vector<QJsonObject> unfinishedApplies(int quietSeconds);
+// The applies to offer a restore for: unfinishedApplies(kApplyQuietSeconds),
+// and nothing at all while a PS5 Backport GUI that this app did not start is
+// running (it shares the ledger and may be the one applying).
 std::vector<QJsonObject> interruptedApplies();
 
 // ---- settings.json (shared with the standalone program) ---------------------------------
@@ -65,8 +79,20 @@ struct Settings {
     QString backupDir;
     int scanDepth = 6;
 };
-Settings loadSettings();
-bool saveSettings(const Settings& s); // keeps the other keys (klog_*, geometry)
+// What loadSettings() found: no file (defaults), a readable file, or a file
+// that exists but cannot be opened or parsed (in use, cut short, not JSON).
+enum class SettingsFile { Missing, Ok, Unreadable };
+Settings loadSettings(SettingsFile* state = nullptr, QString* error = nullptr);
+
+enum SettingsKey { ScanRootsKey = 1, OutputDirKey = 2, BackupDirKey = 4, ScanDepthKey = 8, AllSettingsKeys = 15 };
+// Re-reads settings.json and changes only `keys` (SettingsKey flags) in it;
+// every other key, known or not, stays as the file has it. Folders are written
+// with native separators, as the standalone program writes them. An Unreadable
+// file is never replaced: false, with the reason in `error`.
+bool saveSettings(const Settings& s, int keys, QString* error = nullptr);
+bool saveSettings(const Settings& s); // all four keys
+// Cleaned, with native separators (empty stays empty).
+QString nativeFolder(const QString& path);
 
 // ---- preflight (gui.App.preflight) ------------------------------------------------------
 

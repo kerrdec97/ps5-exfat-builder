@@ -32,23 +32,58 @@ namespace {
 
 bool cancelled(const std::atomic_bool* c) { return c && c->load(); }
 
-QJsonObject readJsonObject(const QString& path, bool* ok = nullptr)
+// `why` (optional) says why the file gave no object: empty for "there is no
+// such file", otherwise the reason it could not be opened or parsed.
+QJsonObject readJsonObject(const QString& path, bool* ok = nullptr, QString* why = nullptr)
 {
     if (ok)
         *ok = false;
+    if (why)
+        why->clear();
     QFile f(toLongPath(path));
-    if (!f.open(QIODevice::ReadOnly))
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (why && f.exists())
+            *why = f.errorString();
         return {};
+    }
     QByteArray b = f.readAll();
     if (b.startsWith("\xEF\xBB\xBF"))
         b.remove(0, 3);
     QJsonParseError pe;
     const QJsonDocument d = QJsonDocument::fromJson(b, &pe);
-    if (pe.error != QJsonParseError::NoError || !d.isObject())
+    if (pe.error != QJsonParseError::NoError || !d.isObject()) {
+        if (why)
+            *why = pe.error != QJsonParseError::NoError ? pe.errorString() : QStringLiteral("it does not hold a JSON object");
         return {};
+    }
     if (ok)
         *ok = true;
     return d.object();
+}
+
+// settings.json as an object. An absent file, and one with nothing in it, is
+// Missing (there is nothing to lose); anything else that does not parse is
+// Unreadable and must never be replaced.
+QJsonObject readSettingsObject(SettingsFile* state, QString* error)
+{
+    const QString path = folders().settingsPath;
+    bool ok = false;
+    QString why;
+    QJsonObject o = readJsonObject(path, &ok, &why);
+    SettingsFile st = ok ? SettingsFile::Ok : SettingsFile::Missing;
+    if (!ok && !why.isEmpty()) {
+        st = SettingsFile::Unreadable;
+        QFile f(toLongPath(path));
+        if (f.open(QIODevice::ReadOnly) && f.readAll().trimmed().isEmpty()) {
+            st = SettingsFile::Missing;
+            why.clear();
+        }
+    }
+    if (state)
+        *state = st;
+    if (error)
+        *error = why;
+    return o;
 }
 
 // Equal to or inside (both normalised).
@@ -110,6 +145,12 @@ const QStringList& skipNames()
 }
 
 } // namespace
+
+QString nativeFolder(const QString& path)
+{
+    const QString p = path.trimmed();
+    return p.isEmpty() ? QString() : QDir::toNativeSeparators(QDir::cleanPath(p));
+}
 
 QString normKey(const QString& path)
 {
@@ -221,7 +262,9 @@ std::pair<QString, QString> nameFromFolder(const QString& name)
     return {t, version};
 }
 
-Game readGame(const QString& folder)
+Game readGame(const QString& folder) { return readGame(folder, readLedger()); }
+
+Game readGame(const QString& folder, const QJsonArray& ledger)
 {
     Game g;
     g.path = QDir::toNativeSeparators(folder);
@@ -309,7 +352,7 @@ Game readGame(const QString& folder)
             g.notes << QStringLiteral("fakelib holds another tool's AGC / AGCDriver / PSML: the build replaces them with this "
                                       "program's set and the originals backup keeps the dump's copies");
         }
-        g.appliedRecord = activeLedgerRecord(folder);
+        g.appliedRecord = activeLedgerRecord(folder, ledger);
     } catch (const std::exception& e) {
         g.error = QStringLiteral("Error: %1").arg(QString::fromLocal8Bit(e.what()));
     }
@@ -360,11 +403,15 @@ QString journalState(const QString& journal, bool* readable)
 }
 } // namespace
 
-QJsonObject activeLedgerRecord(const QString& gameDir)
+QJsonArray readLedger() { return ledgerRows(); }
+
+QJsonObject activeLedgerRecord(const QString& gameDir) { return activeLedgerRecord(gameDir, ledgerRows()); }
+
+QJsonObject activeLedgerRecord(const QString& gameDir, const QJsonArray& ledger)
 {
     const QString key = normKey(gameDir);
     std::vector<QJsonObject> rows;
-    for (const QJsonValue& v : ledgerRows()) {
+    for (const QJsonValue& v : ledger) {
         const QJsonObject r = v.toObject();
         if (normKey(r.value(QStringLiteral("game_dir")).toString()) != key)
             continue;
@@ -385,26 +432,42 @@ QJsonObject activeLedgerRecord(const QString& gameDir)
     return rows.front();
 }
 
-std::vector<QJsonObject> interruptedApplies()
+std::vector<QJsonObject> unfinishedApplies(int quietSeconds)
 {
     std::vector<QJsonObject> out;
+    const QDateTime now = QDateTime::currentDateTime();
     for (const QJsonValue& v : ledgerRows()) {
         const QJsonObject r = v.toObject();
         if (r.value(QStringLiteral("state")).toString() != QLatin1String("IN_PROGRESS"))
             continue;
-        bool readable = false;
-        if (journalState(r.value(QStringLiteral("journal")).toString(), &readable) == QLatin1String("IN_PROGRESS"))
-            out.push_back(r);
+        const QString journal = r.value(QStringLiteral("journal")).toString();
+        if (journalState(journal, nullptr) != QLatin1String("IN_PROGRESS"))
+            continue;
+        // A journal that was written a moment ago belongs to an apply that is
+        // most likely still running (in the standalone PS5 Backport GUI).
+        const QDateTime written = QFileInfo(journal).lastModified();
+        if (quietSeconds > 0 && written.isValid() && written.secsTo(now) < quietSeconds)
+            continue;
+        out.push_back(r);
     }
     return out;
 }
 
+std::vector<QJsonObject> interruptedApplies()
+{
+    // The ledger cannot tell an interrupted apply from one in progress in
+    // another program, so nothing is offered while that program runs.
+    if (foreignEngineRunning())
+        return {};
+    return unfinishedApplies(kApplyQuietSeconds);
+}
+
 // ---- settings ------------------------------------------------------------------------
 
-Settings loadSettings()
+Settings loadSettings(SettingsFile* state, QString* error)
 {
     Settings s;
-    const QJsonObject o = readJsonObject(folders().settingsPath);
+    const QJsonObject o = readSettingsObject(state, error);
     for (const QJsonValue& v : o.value(QStringLiteral("scan_roots")).toArray())
         if (v.isString() && !v.toString().trimmed().isEmpty())
             s.scanRoots << QDir::toNativeSeparators(v.toString());
@@ -421,24 +484,49 @@ Settings loadSettings()
     return s;
 }
 
-bool saveSettings(const Settings& s)
+bool saveSettings(const Settings& s, int keys, QString* error)
 {
-    if (!ensureFolders())
+    QString err;
+    if (!ensureFolders(&err)) {
+        if (error)
+            *error = err;
         return false;
-    QJsonObject o = readJsonObject(folders().settingsPath);
-    QJsonArray roots;
-    for (const QString& r : s.scanRoots)
-        roots.append(r);
-    o.insert(QStringLiteral("scan_roots"), roots);
-    o.insert(QStringLiteral("output_dir"), s.outputDir);
-    o.insert(QStringLiteral("backup_dir"), s.backupDir);
-    o.insert(QStringLiteral("scan_depth"), std::clamp(s.scanDepth, 1, 12));
+    }
+    // The file is shared with the standalone program: start from what it holds
+    // right now and change only the asked keys, so nothing that program wrote
+    // since (or a key this app does not know) is lost.
+    SettingsFile state = SettingsFile::Missing;
+    QJsonObject o = readSettingsObject(&state, &err);
+    if (state == SettingsFile::Unreadable) {
+        if (error)
+            *error = QStringLiteral("%1 cannot be read (%2); it was left as it is")
+                         .arg(QDir::toNativeSeparators(folders().settingsPath), err);
+        return false;
+    }
+    if (keys & ScanRootsKey) {
+        QJsonArray roots;
+        for (const QString& r : s.scanRoots)
+            roots.append(QDir::toNativeSeparators(r));
+        o.insert(QStringLiteral("scan_roots"), roots);
+    }
+    if (keys & OutputDirKey)
+        o.insert(QStringLiteral("output_dir"), nativeFolder(s.outputDir));
+    if (keys & BackupDirKey)
+        o.insert(QStringLiteral("backup_dir"), nativeFolder(s.backupDir));
+    if (keys & ScanDepthKey)
+        o.insert(QStringLiteral("scan_depth"), std::clamp(s.scanDepth, 1, 12));
     for (const auto& [k, v] : std::initializer_list<std::pair<const char*, QJsonValue>>{
+             {"scan_roots", QJsonArray()}, {"output_dir", QString()}, {"backup_dir", QString()}, {"scan_depth", 6},
              {"klog_ip", QString()}, {"klog_port", 3232}, {"klog_reconnect_ms", 1000}, {"klog_max_lines", 5000}, {"geometry", QString()}})
         if (!o.contains(QLatin1String(k)))
             o.insert(QLatin1String(k), v);
-    return writeFileAtomic(folders().settingsPath, QJsonDocument(o).toJson(QJsonDocument::Indented)).ok();
+    const auto st = writeFileAtomic(folders().settingsPath, QJsonDocument(o).toJson(QJsonDocument::Indented));
+    if (!st.ok() && error)
+        *error = st.error().message;
+    return st.ok();
 }
+
+bool saveSettings(const Settings& s) { return saveSettings(s, AllSettingsKeys, nullptr); }
 
 // ---- preflight -----------------------------------------------------------------------
 
@@ -506,6 +594,8 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
         QFile pf(probe);
         if (!pf.open(QIODevice::WriteOnly) || pf.write("ok") != 2) {
             r.errors << QStringLiteral("Cannot write to the %1 folder %2: %3").arg(label, d, pf.errorString());
+            pf.close();
+            QFile::remove(probe); // it may have been created before the write failed
             continue;
         }
         pf.close();
@@ -594,6 +684,12 @@ UserLibrary checkUserLibrary(const QString& path, const QString& kind)
     QFile f(toLongPath(path));
     if (!f.open(QIODevice::ReadOnly)) {
         u.error = QStringLiteral("%1: cannot be read (%2)").arg(name, f.errorString());
+        return u;
+    }
+    // Every known AMPR / PlayGo library is well below 1 MiB; anything far
+    // larger is not one, and is not read into memory to find that out.
+    if (f.size() > 32LL * 1024 * 1024) {
+        u.error = QStringLiteral("%1 is not a signed PS5 library (.sprx)").arg(name);
         return u;
     }
     const QByteArray data = f.readAll();
@@ -720,11 +816,12 @@ void appendAppLog(const QString& level, const QString& message)
     const Folders f = folders();
     QDir().mkpath(f.logDir);
     QFile lf(QDir(f.logDir).filePath(QStringLiteral("app_%1.log").arg(QDate::currentDate().toString(QStringLiteral("yyyyMMdd")))));
-    if (!lf.open(QIODevice::Append | QIODevice::Text))
+    // The standalone program appends to the same file: one unbuffered write
+    // per line keeps the lines of the two whole.
+    if (!lf.open(QIODevice::Append | QIODevice::Text | QIODevice::Unbuffered))
         return;
-    QTextStream ts(&lf);
-    ts.setEncoding(QStringConverter::Utf8);
-    ts << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")) << " [" << level << "] " << message << "\n";
+    const QString line = QStringLiteral("%1 [%2] %3\n").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")), level, message);
+    lf.write(line.toUtf8());
 }
 
 } // namespace fw::bp

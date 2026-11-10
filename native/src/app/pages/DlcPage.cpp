@@ -78,12 +78,20 @@ QByteArray resize512Png(const QString& path, QString* error)
     return png;
 }
 
+// Titles, file names and Store texts come from outside: a tooltip shows them
+// as text, never as markup.
+QString plainTip(const QString& text)
+{
+    return text.isEmpty() ? QString() : QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(text.toHtmlEscaped());
+}
+
 QString regionLabel(const QString& code)
 {
-    if (code == u"UP") return QStringLiteral("US");
-    if (code == u"EP") return QStringLiteral("UK");
+    // The same names as the Region column.
+    if (code == u"UP") return QStringLiteral("Americas");
+    if (code == u"EP") return QStringLiteral("Europe");
     if (code == u"JP") return QStringLiteral("Japan");
-    if (code == u"HP") return QStringLiteral("Hong Kong");
+    if (code == u"HP") return QStringLiteral("Asia");
     if (code == u"KP") return QStringLiteral("Korea");
     return code;
 }
@@ -117,7 +125,10 @@ DlcPage::DlcPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     updateState();
 }
 
-DlcPage::~DlcPage() = default;
+DlcPage::~DlcPage()
+{
+    m_work.cancel(); // a package read or lookup still running stops at its next check
+}
 
 void DlcPage::buildListCard()
 {
@@ -181,13 +192,28 @@ void DlcPage::buildListCard()
     connect(removeAct, &QAction::triggered, this, [this] {
         QList<int> rows = selectedRows();
         std::sort(rows.begin(), rows.end(), std::greater<>());
-        for (int r : rows) {
-            m_rows.erase(m_rows.begin() + r);
-            m_table->removeRow(r);
+        {
+            // removeRow() reports the selection change before the row has left
+            // the table: keep the slots out until m_rows matches again.
+            const QSignalBlocker blocker(m_table);
+            for (int r : rows) {
+                if (r < 0 || r >= int(m_rows.size()))
+                    continue;
+                m_table->removeRow(r);
+                m_rows.erase(m_rows.begin() + r);
+            }
         }
+        updateRegionLine();
         updateState();
     });
     m_table->addAction(removeAct);
+    auto* iconAct = new QAction(QStringLiteral("Choose icon0.png…"), m_table);
+    connect(iconAct, &QAction::triggered, this, [this] {
+        const QList<int> rows = selectedRows();
+        if (!rows.isEmpty())
+            chooseIcon(rows.first());
+    });
+    m_table->addAction(iconAct);
     card->body()->addWidget(m_table, 1);
 
     auto* actions = new QWidget(card);
@@ -212,6 +238,7 @@ void DlcPage::buildListCard()
     card->body()->addWidget(actions);
 
     m_regionLine = caption(QString(), card);
+    m_regionLine->setTextFormat(Qt::PlainText); // carries names from the Store lookup
     m_regionLine->setWordWrap(true);
     m_regionLine->setTextInteractionFlags(Qt::TextSelectableByMouse);
     card->body()->addWidget(m_regionLine);
@@ -400,10 +427,14 @@ void DlcPage::addInputs(const QStringList& paths)
                 QByteArray icon;
             };
             auto* watcher = new QFutureWatcher<std::shared_ptr<Loaded>>(this);
-            connect(watcher, &QFutureWatcher<std::shared_ptr<Loaded>>::finished, this, [this, watcher, path] {
+            connect(watcher, &QFutureWatcher<std::shared_ptr<Loaded>>::finished, this, [this, watcher, path, gen = m_listGen] {
                 watcher->deleteLater();
                 --m_loading;
                 m_loadingPaths.remove(path.toLower());
+                if (gen != m_listGen) {
+                    updateState(); // the list was cleared while this package was read
+                    return;
+                }
                 const auto loaded = watcher->result();
                 if (!loaded->info.ok()) {
                     appendLog(QStringLiteral("LOAD FAILED: %1 \u2014 %2").arg(nativePath(path), loaded->info.error().message));
@@ -448,18 +479,17 @@ void DlcPage::addInputs(const QStringList& paths)
                 addRow(std::move(r));
                 updateState();
             });
-            watcher->setFuture(QtConcurrent::run([cliPath, path, passcode, tempDir] {
+            watcher->setFuture(QtConcurrent::run([cliPath, path, passcode, tempDir, cancel = m_work.token()] {
                 auto loaded = std::make_shared<Loaded>();
-                CancellationSource cancel;
                 const dlc::FpkgCli cli = dlc::locateFpkgCli(cliPath);
                 if (!cli.ok() && !dlc::looksLikePs4Package(path)) {
                     loaded->info = Error(ErrorCode::DependencyMissing, cli.problems.join(u' '));
                     return loaded;
                 }
-                loaded->info = dlc::inspectDlcPackage(cli, path, passcode, cancel.token());
+                loaded->info = dlc::inspectDlcPackage(cli, path, passcode, cancel);
                 if (loaded->info.ok() && loaded->info->isDlc) {
                     QDir().mkpath(tempDir);
-                    loaded->icon = dlc::extractDlcIcon(cli, path, passcode, tempDir, cancel.token());
+                    loaded->icon = dlc::extractDlcIcon(cli, path, passcode, tempDir, cancel);
                 }
                 return loaded;
             }));
@@ -469,7 +499,10 @@ void DlcPage::addInputs(const QStringList& paths)
         }
     }
     if (added > 0 || failed > 0)
-        m_loadRow->set(QStringLiteral("%1 entries added; %2 files failed").arg(added).arg(failed), failed ? Tone::Warn : Tone::Ok);
+        m_loadRow->set(QStringLiteral("%1 added; %2 failed")
+                           .arg(added == 1 ? QStringLiteral("1 entry") : QStringLiteral("%1 entries").arg(added),
+                                failed == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(failed)),
+                       failed ? Tone::Warn : Tone::Ok);
     updateState();
 }
 
@@ -499,11 +532,11 @@ void DlcPage::refreshRow(int r)
     m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon() : row.icon));
     m_table->item(r, IconCol)->setToolTip(QStringLiteral("Double-click to choose icon0.png"));
     m_table->item(r, TitleCol)->setText(row.item.title);
-    m_table->item(r, TitleCol)->setToolTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
-                                               .arg(row.item.title, row.item.titleId,
-                                                    row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version,
-                                                    nativePath(row.item.source),
-                                                    row.isPackage ? QString() : QStringLiteral(" [entry %1]").arg(row.item.entry + 1)));
+    m_table->item(r, TitleCol)->setToolTip(plainTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
+                                                        .arg(row.item.title, row.item.titleId,
+                                                             row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version,
+                                                             nativePath(row.item.source),
+                                                             row.isPackage ? QString() : QStringLiteral(" [entry %1]").arg(row.item.entry + 1))));
     m_table->item(r, ContentIdCol)->setText(row.item.contentId);
     m_table->item(r, ContentIdCol)->setFont(font::mono());
     m_table->item(r, TitleIdCol)->setText(row.item.titleId);
@@ -516,15 +549,15 @@ void DlcPage::refreshRow(int r)
                                 : code == u"KP" ? QStringLiteral("Korea") : QStringLiteral("Unknown");
         m_table->item(r, RegionCol)->setText(row.item.targetMarket.isEmpty() ? QStringLiteral("%1 · %2").arg(shortName, code)
                                                                               : QStringLiteral("%1 Store").arg(row.item.targetMarket.section(u'(', 1).remove(u')')));
-        m_table->item(r, RegionCol)->setToolTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
-                                                                                 : QStringLiteral("%1 (Store)").arg(row.item.targetMarket));
+        m_table->item(r, RegionCol)->setToolTip(plainTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
+                                                                                          : QStringLiteral("%1 (Store)").arg(row.item.targetMarket)));
     }
     m_table->item(r, VersionCol)->setText(row.item.version);
     m_table->item(r, SourceCol)->setText(QFileInfo(row.item.source).fileName()
                                          + (row.isPackage ? QString() : QStringLiteral(" [%1]").arg(row.item.entry + 1)));
-    m_table->item(r, SourceCol)->setToolTip(nativePath(row.item.source));
+    m_table->item(r, SourceCol)->setToolTip(plainTip(nativePath(row.item.source)));
     m_table->item(r, ResultCol)->setText(row.result);
-    m_table->item(r, ResultCol)->setToolTip(row.warnings.isEmpty() ? row.result : row.result + QStringLiteral("\n") + row.warnings.join(u'\n'));
+    m_table->item(r, ResultCol)->setToolTip(plainTip(row.warnings.isEmpty() ? row.result : row.result + QStringLiteral("\n") + row.warnings.join(u'\n')));
     const bool problem = !dlc::validateIdentity(row.item.titleId, row.item.contentId).ok()
                       || (row.package && !row.package->canRebuild);
     m_table->item(r, ResultCol)->setForeground(problem ? toneText(Tone::Warn) : color::fg_2);
@@ -549,8 +582,10 @@ void DlcPage::syncFromTable(int r, int c)
     } else if (c == TitleIdCol) {
         row.item.titleId = text.trimmed().toUpper();
     }
-    const Status st = dlc::validateIdentity(row.item.titleId, row.item.contentId);
-    row.result = st.ok() ? QStringLiteral("Manual target; compatibility unverified") : st.error().message;
+    if (c == ContentIdCol || c == TitleIdCol) {
+        const Status st = dlc::validateIdentity(row.item.titleId, row.item.contentId);
+        row.result = st.ok() ? QStringLiteral("Manual target; compatibility unverified") : st.error().message;
+    }
     refreshRow(r);
     updateState();
 }
@@ -563,6 +598,8 @@ void DlcPage::chooseIcon(int r)
                                                       QStringLiteral("PNG (*.png)"));
     if (file.isEmpty())
         return;
+    if (r >= int(m_rows.size()))
+        return; // the list changed under the file dialog
     QString why;
     const QByteArray png = resize512Png(file, &why);
     if (png.isEmpty()) {
@@ -584,6 +621,11 @@ void DlcPage::chooseIcon(int r)
 
 void DlcPage::clearList()
 {
+    // Packages still being read and lookups still running belong to the old
+    // list: they are told to stop, and what they still deliver is dropped.
+    ++m_listGen;
+    m_work.cancel();
+    m_work = CancellationSource();
     m_rows.clear();
     m_table->setRowCount(0);
     m_lookupQueue.clear();
@@ -706,9 +748,21 @@ void DlcPage::pumpLookups()
             continue;
         m_lookupRunning.insert(k);
         auto* w = new QFutureWatcher<std::shared_ptr<dlc::DlcLookupResult>>(this);
-        connect(w, &QFutureWatcher<std::shared_ptr<dlc::DlcLookupResult>>::finished, this, [this, w, k] {
+        connect(w, &QFutureWatcher<std::shared_ptr<dlc::DlcLookupResult>>::finished, this, [this, w, k, gen = m_listGen] {
             w->deleteLater();
             m_lookupRunning.remove(k);
+            if (gen != m_listGen) {
+                // Started for a list that was cleared (and cancelled with it):
+                // not a result. A row of the new list with this key asks again.
+                for (const Row& r : m_rows)
+                    if (lookupKey(r) == k && !m_lookupQueue.contains(k)) {
+                        m_lookupQueue << k;
+                        break;
+                    }
+                updateRegionLine();
+                pumpLookups();
+                return;
+            }
             m_lookups.insert(k, w->result());
             const auto& res = *w->result();
             int observed = 0;
@@ -727,10 +781,9 @@ void DlcPage::pumpLookups()
             pumpLookups();
         });
         const QString cacheDir = m_cacheDir;
-        w->setFuture(QtConcurrent::run([cacheDir, cid, title] {
-            CancellationSource cancel;
+        w->setFuture(QtConcurrent::run([cacheDir, cid, title, cancel = m_work.token()] {
             dlc::DlcLookupService svc(cacheDir);
-            return std::make_shared<dlc::DlcLookupResult>(svc.resolveRegions(dlc::titleIdOf(cid), cid, title, cancel.token()));
+            return std::make_shared<dlc::DlcLookupResult>(svc.resolveRegions(dlc::titleIdOf(cid), cid, title, cancel));
         }));
     }
     updateRegionLine();
@@ -740,7 +793,7 @@ void DlcPage::updateRegionLine()
 {
     const QList<int> rows = selectedRows();
     const int r = rows.isEmpty() ? (m_rows.empty() ? -1 : 0) : rows.first();
-    if (r < 0) {
+    if (r < 0 || r >= int(m_rows.size())) {
         m_regionLine->setText(QStringLiteral("Import DLC to find the game's regional releases. Change region\u2026 applies a reviewed target."));
         return;
     }
@@ -849,10 +902,10 @@ void DlcPage::changeRegion()
     const QString sourceTid = first.item.titleId;
 
     auto* s = new Sheet(window(), QStringLiteral("DLC regions / targets"), Sheet::Icon::None, 1000);
-    s->addText(QStringLiteral("Selected: %1 DLC entries. Original: %2 / %3<br>Find the game, choose a region, then apply. Each DLC "
+    s->addText(QStringLiteral("Selected: %1. Original: %2 / %3<br>Find the game, choose a region, then apply. Each DLC "
                               "item keeps its own suffix; an exact observed DLC SKU is used when available. Game identifiers can "
                               "be shared across regions.")
-                   .arg(rows.size())
+                   .arg(rows.size() == 1 ? QStringLiteral("1 DLC entry") : QStringLiteral("%1 DLC entries").arg(rows.size()))
                    .arg(Sheet::monoSpan(sourceTid), Sheet::monoSpan(sourceCid)));
     // Query row
     auto* qrow = new QWidget(s);
@@ -1106,8 +1159,9 @@ void DlcPage::changeRegion()
                 status->setText(err);
                 return;
             }
-            appendLog(QStringLiteral("Target set: %1 row(s) \u2192 %2 / %3 (%4)")
-                          .arg(rows.size()).arg(targetTid->text(), targetCid->text(), st->evidence));
+            appendLog(QStringLiteral("Target set: %1 → %2 / %3 (%4)")
+                          .arg(rows.size() == 1 ? QStringLiteral("1 row") : QStringLiteral("%1 rows").arg(rows.size()))
+                          .arg(targetTid->text(), targetCid->text(), st->evidence));
             s->close(add ? 1 : 2);
         });
     }
@@ -1206,11 +1260,11 @@ QString DlcPage::validateForm()
         return QStringLiteral("Packages are still being read. Try again in a moment.");
     if (const QString k = dlc::hex32Problem(m_key->text().trimmed()); !k.isEmpty()) {
         setInputError(m_key, true);
-        return QStringLiteral("The entitlement key must be exactly 32 hex characters.");
+        return QStringLiteral("The entitlement key must be exactly 32 hexadecimal characters.");
     }
     if (const QString p = dlc::hex32Problem(m_passcode->text().trimmed()); !p.isEmpty()) {
         setInputError(m_passcode, true);
-        return QStringLiteral("PKG source passcode must be exactly 32 hex characters.");
+        return QStringLiteral("The PKG source passcode must be exactly 32 hexadecimal characters.");
     }
     if (outputFolder().isEmpty())
         return QStringLiteral("Select the output folder.");

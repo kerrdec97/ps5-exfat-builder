@@ -14,6 +14,7 @@
 
 #include "app/backport/BackportCore.h"
 #include "app/backport/BackportHost.h"
+#include "support/TestSupport.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -21,6 +22,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -199,6 +201,196 @@ private slots:
         QCOMPARE(o.value(QStringLiteral("output_dir")).toString(), QStringLiteral("D:\\Out"));
         const Settings back = loadSettings();
         QCOMPARE(back.scanRoots, s.scanRoots);
+    }
+
+    // settings.json belongs to the standalone program too: a save changes the
+    // asked keys in the file as it is NOW and keeps everything else.
+    void settingsSaveMergesIntoTheFile()
+    {
+        writeFile(folders().settingsPath,
+                  R"({"scan_roots":["D:\\A"],"output_dir":"D:\\Out","backup_dir":"D:\\Bak","scan_depth":6,)"
+                  R"("klog_ip":"10.0.0.9","future_key":{"keep":[1,2,3]}})");
+        SettingsFile state = SettingsFile::Missing;
+        Settings s = loadSettings(&state);
+        QCOMPARE(state, SettingsFile::Ok);
+        QCOMPARE(s.scanRoots, QStringList{QStringLiteral("D:\\A")});
+
+        // The other program adds a location and moves the output folder after this app loaded.
+        writeFile(folders().settingsPath,
+                  R"({"scan_roots":["D:\\A","E:\\B"],"output_dir":"D:\\Elsewhere","backup_dir":"D:\\Bak","scan_depth":6,)"
+                  R"("klog_ip":"10.0.0.9","future_key":{"keep":[1,2,3]},"geometry":"900x700"})");
+        s.scanDepth = 3; // the one thing the user changed here
+        QString err;
+        QVERIFY2(saveSettings(s, ScanDepthKey, &err), qPrintable(err));
+        QFile f(folders().settingsPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+        QCOMPARE(o.value(QStringLiteral("scan_depth")).toInt(), 3);
+        QCOMPARE(o.value(QStringLiteral("scan_roots")).toArray().size(), 2); // not rolled back to this app's copy
+        QCOMPARE(o.value(QStringLiteral("output_dir")).toString(), QStringLiteral("D:\\Elsewhere"));
+        QCOMPARE(o.value(QStringLiteral("geometry")).toString(), QStringLiteral("900x700"));
+        QCOMPARE(o.value(QStringLiteral("klog_ip")).toString(), QStringLiteral("10.0.0.9"));
+        QCOMPARE(o.value(QStringLiteral("future_key")).toObject().value(QStringLiteral("keep")).toArray().size(), 3); // unknown keys survive
+    }
+
+    void settingsFoldersAreWrittenNative()
+    {
+        QFile::remove(folders().settingsPath);
+        Settings s;
+        s.scanRoots = {QStringLiteral("D:/Games")};
+        s.outputDir = QStringLiteral("D:/Out/Sub/");
+        s.backupDir = QStringLiteral("D:\\Bak");
+        QVERIFY(saveSettings(s, OutputDirKey | BackupDirKey | ScanRootsKey));
+        QFile f(folders().settingsPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+        QCOMPARE(o.value(QStringLiteral("output_dir")).toString(), QStringLiteral("D:\\Out\\Sub"));
+        QCOMPARE(o.value(QStringLiteral("backup_dir")).toString(), QStringLiteral("D:\\Bak"));
+        QCOMPARE(o.value(QStringLiteral("scan_roots")).toArray().first().toString(), QStringLiteral("D:\\Games"));
+        QVERIFY(o.contains(QStringLiteral("klog_port"))); // a new file gets the standalone program's other keys
+        QCOMPARE(nativeFolder(QString()), QString());
+        QCOMPARE(loadSettings().outputDir, QStringLiteral("D:\\Out\\Sub")); // both separator forms are read
+    }
+
+    // A file that exists but cannot be parsed (cut short by a crash, bytes that
+    // are not UTF-8) is never replaced: its content is all there is to recover.
+    void unreadableSettingsFileIsNotOverwritten()
+    {
+        const QByteArray cutShort = QByteArray("{\"scan_roots\": [\"D:/Games\", \"E:/Mo");
+        const QByteArray notUtf8 = QByteArray("{\"output_dir\":\"D:/Sp") + QByteArray::fromHex("e4df") + QByteArray("\"}");
+        const QList<QByteArray> damaged = {cutShort, notUtf8, QByteArray("[1,2,3]")};
+        for (const QByteArray& bytes : damaged) {
+            writeFile(folders().settingsPath, bytes);
+            SettingsFile state = SettingsFile::Ok;
+            QString why;
+            const Settings s = loadSettings(&state, &why);
+            QCOMPARE(state, SettingsFile::Unreadable);
+            QVERIFY(!why.isEmpty());
+            QVERIFY(s.scanRoots.isEmpty());
+            Settings mine;
+            mine.scanRoots = {QStringLiteral("D:\\New")};
+            QString err;
+            QVERIFY(!saveSettings(mine, ScanRootsKey, &err));
+            QVERIFY2(err.contains(QStringLiteral("cannot be read")), qPrintable(err));
+            QVERIFY(!saveSettings(mine)); // the four-key form refuses as well
+            QFile f(folders().settingsPath);
+            QVERIFY(f.open(QIODevice::ReadOnly));
+            QCOMPARE(f.readAll(), bytes);
+        }
+        // A file with nothing in it holds nothing to lose: it counts as absent.
+        writeFile(folders().settingsPath, "  \r\n");
+        SettingsFile state = SettingsFile::Ok;
+        (void)loadSettings(&state);
+        QCOMPARE(state, SettingsFile::Missing);
+        Settings mine;
+        mine.scanRoots = {QStringLiteral("D:\\New")};
+        QVERIFY(saveSettings(mine, ScanRootsKey));
+        QCOMPARE(loadSettings().scanRoots, mine.scanRoots);
+        QFile::remove(folders().settingsPath);
+    }
+
+    // An apply whose journal is still being written is running, not interrupted.
+    void unfinishedAppliesLeaveARunningApplyAlone()
+    {
+        QTemporaryDir root;
+        const QString journal = QDir::toNativeSeparators(root.filePath(QStringLiteral("bak/PPSA11111/APPLY_JOURNAL.json")));
+        writeFile(journal, R"({"state":"IN_PROGRESS"})");
+        const QJsonObject row{{QStringLiteral("state"), QStringLiteral("IN_PROGRESS")},
+                              {QStringLiteral("journal"), journal},
+                              {QStringLiteral("game_dir"), QStringLiteral("D:\\Games\\PPSA11111")},
+                              {QStringLiteral("backup_dir"), QFileInfo(journal).absolutePath()}};
+        writeFile(folders().ledgerPath, QJsonDocument(QJsonObject{{QStringLiteral("applied"), QJsonArray{row}}}).toJson());
+        QVERIFY(unfinishedApplies(kApplyQuietSeconds).empty()); // written this second
+        QCOMPARE(unfinishedApplies(0).size(), size_t(1));       // the rule itself still finds it
+        {
+            QFile jf(journal);
+            QVERIFY(jf.open(QIODevice::ReadWrite));
+            QVERIFY(jf.setFileTime(QDateTime::currentDateTime().addSecs(-2 * kApplyQuietSeconds), QFileDevice::FileModificationTime));
+        }
+        const auto stale = unfinishedApplies(kApplyQuietSeconds);
+        QCOMPARE(stale.size(), size_t(1));
+        QCOMPARE(stale.front().value(QStringLiteral("journal")).toString(), journal);
+        // A finished journal is never offered, whatever the ledger says.
+        writeFile(journal, R"({"state":"ROLLED_BACK"})");
+        QVERIFY(unfinishedApplies(0).empty());
+        QFile::remove(folders().ledgerPath);
+    }
+
+    // The standalone program shares the ledger: while one runs that this app
+    // did not start, nothing is offered as "interrupted".
+    void aForeignEngineProcessIsSeen()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("process list is read on Windows only");
+#else
+        QTemporaryDir root;
+        const QString exe = root.filePath(QStringLiteral("PS5BackportGUI.exe"));
+        QVERIFY(QFile::copy(fwtest::helperPath(), exe));
+        // The helper starts a second copy through cmd.exe, which exits at once:
+        // that copy has no living parent, as a program started by the user.
+        QProcess own;
+        own.start(exe, {QStringLiteral("spawn-sleep"), QStringLiteral("4000")});
+        QVERIFY(own.waitForStarted(10000));
+        QVERIFY(own.waitForReadyRead(10000)); // "spawned"
+        QTRY_VERIFY_WITH_TIMEOUT(foreignEngineRunning(), 3000);
+        const QString journal = root.filePath(QStringLiteral("APPLY_JOURNAL.json"));
+        writeFile(journal, R"({"state":"IN_PROGRESS"})");
+        {
+            QFile jf(journal);
+            QVERIFY(jf.open(QIODevice::ReadWrite));
+            QVERIFY(jf.setFileTime(QDateTime::currentDateTime().addSecs(-2 * kApplyQuietSeconds), QFileDevice::FileModificationTime));
+        }
+        writeFile(folders().ledgerPath,
+                  QJsonDocument(QJsonObject{{QStringLiteral("applied"),
+                                             QJsonArray{QJsonObject{{QStringLiteral("state"), QStringLiteral("IN_PROGRESS")},
+                                                                    {QStringLiteral("journal"), QDir::toNativeSeparators(journal)}}}}})
+                      .toJson());
+        QCOMPARE(unfinishedApplies(kApplyQuietSeconds).size(), size_t(1));
+        QVERIFY(interruptedApplies().empty()); // not offered while that program runs
+        QFile::remove(folders().ledgerPath);
+        own.waitForFinished(10000);
+        QTest::qWait(500); // the second copy ends with the first; the folder can go
+#endif
+    }
+
+    // A job file left by a killed app is removed once its writer is gone.
+    void staleJobFilesAreSwept()
+    {
+        QVERIFY(ensureFolders());
+        const QString jobs = folders().jobsDir;
+        const QString stale = QDir(jobs).filePath(QStringLiteral("job_4_1700000000000.json")); // PID 4 is never a user process
+        const QString fresh = QDir(jobs).filePath(QStringLiteral("job_4_1700000000001.json"));
+        const QString mine = QDir(jobs).filePath(QStringLiteral("job_%1_1700000000002.json").arg(QCoreApplication::applicationPid()));
+        const QString dead = QDir(jobs).filePath(QStringLiteral("job_999999996_1700000000003.json"));
+        for (const QString& p : {stale, fresh, mine, dead})
+            writeFile(p, "{}");
+        const QDateTime old = QDateTime::currentDateTime().addDays(-3);
+        for (const QString& p : {stale, mine, dead}) {
+            QFile f(p);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            QVERIFY(f.setFileTime(old, QFileDevice::FileModificationTime));
+        }
+        // Any program will do as the "engine" here: the sweep runs before the
+        // worker is started, and the helper just exits.
+        const QByteArray engineBefore = qgetenv("FW_BACKPORT_ENGINE");
+        qputenv("FW_BACKPORT_ENGINE", QDir::toNativeSeparators(fwtest::helperPath()).toUtf8());
+        Worker w;
+        bool finished = false;
+        QObject::connect(&w, &Worker::finished, [&finished](const QJsonObject&) { finished = true; });
+        QString err;
+        const bool started = w.start(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("selftest")}}, &err);
+        if (engineBefore.isEmpty())
+            qunsetenv("FW_BACKPORT_ENGINE");
+        else
+            qputenv("FW_BACKPORT_ENGINE", engineBefore);
+        QVERIFY2(started, qPrintable(err));
+        QTRY_VERIFY_WITH_TIMEOUT(finished, 30000);
+        QVERIFY(!QFileInfo::exists(dead));  // old, and no such process
+        QVERIFY(QFileInfo::exists(stale));  // old, but a process with that id is alive
+        QVERIFY(QFileInfo::exists(fresh));  // not a day old
+        QVERIFY(QFileInfo::exists(mine));   // its process (this test) is alive
+        for (const QString& p : {stale, fresh, mine, dead})
+            QFile::remove(p);
     }
 
     void missingEngine()

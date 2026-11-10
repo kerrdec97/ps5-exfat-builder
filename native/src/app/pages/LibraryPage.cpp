@@ -18,10 +18,12 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
+#include <QSet>
 
 #include <algorithm>
 
@@ -35,6 +37,7 @@ namespace {
 QLineEdit* searchInput(const QString& placeholder, QWidget* parent)
 {
     auto* e = textInput(placeholder, false, parent);
+    e->setAccessibleName(placeholder);
     e->setClearButtonEnabled(true);
     e->setToolTip(QStringLiteral("Title, title ID or file name"));
     e->addAction(icon(QStringLiteral("search"), color::fg_4), QLineEdit::LeadingPosition);
@@ -162,6 +165,54 @@ QList<ImageSummary> demoImages()
 
 } // namespace
 
+std::vector<LibraryGame> mergeScanResult(const std::vector<LibraryGame>& known, std::vector<LibraryGame> scanned,
+                                         const QStringList& scanFolders, const QDateTime& now,
+                                         const std::function<bool(const QString&)>& stillThere)
+{
+    const auto key = [](const QString& folder) { return QDir::cleanPath(QDir::fromNativeSeparators(folder)).toLower(); };
+    QHash<QString, const LibraryGame*> before;
+    for (const LibraryGame& g : known)
+        before.insert(key(g.info.folder), &g);
+    QSet<QString> listed;
+    for (LibraryGame& g : scanned) {
+        const QString k = key(g.info.folder);
+        listed.insert(k);
+        const LibraryGame* old = before.value(k);
+        g.lastSeen = old && old->lastSeen.isValid() ? old->lastSeen : now;
+        if (old) {
+            g.status = old->status;
+            g.issues = old->issues;
+            g.canRun = old->canRun;
+            g.plan = old->plan;
+        }
+    }
+    for (const LibraryGame& g : known) {
+        const QString k = key(g.info.folder);
+        if (listed.contains(k))
+            continue;
+        bool underScanFolder = false, scanFolderReachable = false;
+        for (const QString& f : scanFolders) {
+            const QString fk = key(f);
+            if (k != fk && !k.startsWith(fk.endsWith(u'/') ? fk : fk + u'/'))
+                continue;
+            underScanFolder = true;
+            scanFolderReachable = scanFolderReachable || QFileInfo(f).isDir();
+        }
+        if (underScanFolder ? !scanFolderReachable : (!stillThere || stillThere(g.info.folder)))
+            scanned.push_back(g);
+    }
+    return scanned;
+}
+
+QString imageRenameTarget(const QString& typed, const QString& sourcePath)
+{
+    QString n = sanitizeFileName(typed.trimmed());
+    const QString ext = QFileInfo(sourcePath).suffix();
+    if (!ext.isEmpty() && !n.endsWith(u'.' + ext, Qt::CaseInsensitive))
+        n += u'.' + ext;
+    return n;
+}
+
 LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStore& library, QWidget* parent)
     : Page(ctx, QStringLiteral("library"), QStringLiteral("Library"),
            QStringLiteral("Your game dumps and images in one place."), parent),
@@ -281,17 +332,17 @@ QWidget* LibraryPage::buildGamesTab()
         h->addWidget(build);
         auto* bp = button(QStringLiteral("Backport…"), ButtonVariant::Secondary, QStringLiteral("backports"), m_gamesSelection);
         connect(bp, &QPushButton::clicked, this, [this] {
-            for (const QString& f : m_gamesGrid->selectedKeys())
-                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), f}}});
+            // One request for the whole selection: one scan on the Backport page.
+            const QStringList selected = m_gamesGrid->selectedKeys();
+            if (!selected.isEmpty())
+                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
         h->addWidget(bp);
         auto* remove = button(QStringLiteral("Remove from library"), ButtonVariant::Subtle, QStringLiteral("close"), m_gamesSelection);
         remove->setToolTip(QStringLiteral("Only the library entry goes; the folders stay on disk."));
         connect(remove, &QPushButton::clicked, this, [this] {
-            if (m_demo)
-                return;
-            for (const QString& f : m_gamesGrid->selectedKeys())
-                m_library.removeGame(f);
+            if (!m_demo)
+                removeGames(m_gamesGrid->selectedKeys());
         });
         h->addWidget(remove);
         h->addStretch(1);
@@ -339,6 +390,17 @@ QWidget* LibraryPage::buildGamesTab()
 }
 
 const std::vector<LibraryGame>& LibraryPage::games() const { return m_demo ? m_demoGames : m_library.games(); }
+
+// Several entries at once: one save of the library and one rebuild of the grid.
+void LibraryPage::removeGames(const QStringList& folders)
+{
+    std::vector<LibraryGame> keep;
+    for (const LibraryGame& g : m_library.games())
+        if (!folders.contains(g.info.folder))
+            keep.push_back(g);
+    if (keep.size() != m_library.games().size())
+        m_library.setGames(std::move(keep));
+}
 
 const LibraryGame* LibraryPage::game(const QString& folder) const
 {
@@ -438,7 +500,14 @@ void LibraryPage::rebuildFolders()
 {
     auto* fl = static_cast<FlowLayout*>(m_folders->layout());
     while (QLayoutItem* it = fl->takeAt(0)) {
-        delete it->widget();
+        // This runs from the click handlers of the widgets it replaces (the
+        // remove button of a chip, the "Add folder…" link): they must outlive
+        // the event that is still being delivered to them.
+        if (QWidget* w = it->widget()) {
+            w->hide();
+            w->setParent(nullptr);
+            w->deleteLater();
+        }
         delete it;
     }
     const QStringList folders = m_demo ? QStringList{QStringLiteral("D:/Games"), QStringLiteral("E:/PS5")} : m_library.scanFolders();
@@ -470,7 +539,7 @@ void LibraryPage::rebuildFolders()
             firstChip = chip;
     }
     auto* add = new Link(QStringLiteral("Add folder…"), m_folders);
-    connect(add, &Link::activated, this, &LibraryPage::addFolders);
+    connect(add, &Link::activated, this, &LibraryPage::addFolders, Qt::QueuedConnection);
     fl->addWidget(add);
     // The flow layout aligns tops; the label and the link take the chips' height to line up.
     const int h = firstChip->sizeHint().height();
@@ -515,6 +584,11 @@ void LibraryPage::scan()
             emit toastRequested(Tone::Warn, QStringLiteral("Nothing to scan"), QStringLiteral("Add a folder of game dumps first."));
         return;
     }
+    if (!m_scanJobId.isEmpty()) {
+        const auto running = m_ctx.queue().record(m_scanJobId);
+        if (running && !isTerminal(running->state))
+            return; // that scan is still at work; its result is the newest there is
+    }
     auto r = jobs::scanLibrary(m_ctx, folders);
     if (!r.ok()) {
         int found = 0;
@@ -543,14 +617,12 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
     if (selected.size() > 1) {
         menu.addAction(QStringLiteral("Build %1 images…").arg(selected.size()), this, &LibraryPage::buildSelected);
         menu.addAction(QStringLiteral("Backport %1 games…").arg(selected.size()), this, [this, selected] {
-            for (const QString& f : selected)
-                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), f}}});
+            emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
         menu.addSeparator();
         menu.addAction(QStringLiteral("Remove %1 from the library").arg(selected.size()), this, [this, selected] {
             if (!m_demo)
-                for (const QString& f : selected)
-                    m_library.removeGame(f);
+                removeGames(selected);
         });
         menu.exec(pos);
         return;
@@ -703,7 +775,9 @@ void LibraryPage::renameGame(const QString& folder)
     if (newName.isEmpty() || newName == QFileInfo(folder).fileName())
         return;
     const QString target = QFileInfo(folder).absolutePath() + u'/' + newName;
-    if (QFileInfo::exists(target)) {
+    // On Windows the folder itself "exists" under a name that differs in case only.
+    const bool caseOnly = QString::compare(QDir::cleanPath(target), QDir::cleanPath(folder), Qt::CaseInsensitive) == 0;
+    if (!caseOnly && QFileInfo::exists(target)) {
         Sheet::message(window(), QStringLiteral("A folder with that name exists"), QStringLiteral("%1 is already there. Choose another name.").arg(Sheet::monoSpan(nativePath(target))), Sheet::Icon::Error);
         return;
     }
@@ -786,6 +860,7 @@ void LibraryPage::showRenamePreview(const QJsonArray& items, const QString& pres
     auto* s = new Sheet(window(), QStringLiteral("Preview: %1").arg(plural(items.size(), QStringLiteral("dump"), QStringLiteral("dumps"))), Sheet::Icon::None, 900);
     s->addText(QStringLiteral("Pattern %1. You can edit a proposed name; names that exist already are skipped.").arg(Sheet::monoSpan(preset)));
     auto* table = new QTableWidget(0, 4, s);
+    table->setAccessibleName(QStringLiteral("Folders to rename"));
     table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("Proposed name"), QStringLiteral("Status")});
     table->horizontalHeader()->setFixedHeight(32);
     table->horizontalHeader()->setHighlightSections(false);
@@ -820,7 +895,7 @@ void LibraryPage::showRenamePreview(const QJsonArray& items, const QString& pres
         table->setItem(r, 2, prop);
         const QString msg = it.value(QStringLiteral("message")).toString();
         auto* st = new QTableWidgetItem(msg.isEmpty() ? status : QStringLiteral("%1 — %2").arg(status, msg));
-        st->setForeground(ready ? color::success_hi : status == QLatin1String("AlreadyNamed") ? color::fg_3 : color::warn_hi);
+        st->setForeground(ready ? color::success_hi : status == QLatin1String("Already named") || status == QLatin1String("AlreadyNamed") ? color::fg_3 : color::warn_hi);
         st->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         st->setToolTip(QStringLiteral("%1 · %2 · %3").arg(it.value(QStringLiteral("titleId")).toString(), it.value(QStringLiteral("title")).toString(), it.value(QStringLiteral("version")).toString()));
         table->setItem(r, 3, st);
@@ -1061,19 +1136,24 @@ void LibraryPage::verifyImages(const QStringList& paths)
     if (m_demo)
         return;
     int queued = 0;
-    QStringList started;
-    for (const QString& p : paths)
+    QStringList started, failed;
+    for (const QString& p : paths) {
         if (auto r = jobs::submitVerify(m_ctx, p, {}); r.ok()) {
             ++queued;
             started << r.value();
+        } else {
+            failed << QStringLiteral("%1: %2").arg(QFileInfo(p).fileName(), r.error().message);
         }
+    }
     for (auto it = started.crbegin(); it != started.crend(); ++it)
         m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
-    if (queued > 0) {
+    if (queued > 0)
         emit toastRequested(Tone::Info, QStringLiteral("%1 queued").arg(plural(queued, QStringLiteral("verify job"), QStringLiteral("verify jobs"))), QString());
-    } else {
-        emit toastRequested(Tone::Err, QStringLiteral("Nothing was verified"), QStringLiteral("Verifying images is not available in this build."));
-    }
+    if (!failed.isEmpty())
+        emit toastRequested(queued > 0 ? Tone::Warn : Tone::Err,
+                            queued > 0 ? QStringLiteral("%1 not verified").arg(plural(failed.size(), QStringLiteral("image"), QStringLiteral("images")))
+                                       : QStringLiteral("Nothing was verified"),
+                            failed.mid(0, 4).join(u'\n') + (failed.size() > 4 ? QStringLiteral("\n… and %1 more").arg(failed.size() - 4) : QString()));
 }
 
 void LibraryPage::imageMenu(const QString& path, const QPoint& pos)
@@ -1155,6 +1235,7 @@ void LibraryPage::renameImagesSheet(const QStringList& paths)
         s->body()->addWidget(field(QStringLiteral("New name"), name, QStringLiteral("The extension stays; nothing inside the image changes."), s));
     } else {
         table = new QTableWidget(int(list.size()), 3, s);
+        table->setAccessibleName(QStringLiteral("Images to rename"));
         table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("New name")});
         table->horizontalHeader()->setFixedHeight(32);
         table->horizontalHeader()->setHighlightSections(false);
@@ -1199,15 +1280,13 @@ void LibraryPage::renameImagesSheet(const QStringList& paths)
         return;
     QList<QPair<QString, QString>> renames;
     if (name) {
-        QString n = sanitizeFileName(name->text().trimmed());
-        const QString ext = QFileInfo(list.first().path).suffix();
-        if (!n.endsWith(u'.' + ext, Qt::CaseInsensitive))
-            n += u'.' + ext;
-        renames.append({list.first().path, n});
+        renames.append({list.first().path, imageRenameTarget(name->text(), list.first().path)});
     } else {
         for (int r = 0; r < table->rowCount(); ++r)
-            if (table->item(r, 0)->checkState() == Qt::Checked)
-                renames.append({table->item(r, 0)->data(Qt::UserRole).toString(), sanitizeFileName(table->item(r, 2)->text().trimmed())});
+            if (table->item(r, 0)->checkState() == Qt::Checked) {
+                const QString source = table->item(r, 0)->data(Qt::UserRole).toString();
+                renames.append({source, imageRenameTarget(table->item(r, 2)->text(), source)});
+            }
     }
     QStringList skipped;
     const int done = renameImages(renames, &skipped);
@@ -1273,6 +1352,7 @@ QWidget* LibraryPage::buildLanguagesTab()
     }
     th->addWidget(m_chips);
     m_langTable = new QTableWidget(0, 5, m_langCard);
+    m_langTable->setAccessibleName(QStringLiteral("Languages"));
     m_langTable->setHorizontalHeaderLabels({QStringLiteral("Keep"), QStringLiteral("Language"), QStringLiteral("Code"), QStringLiteral("Folder or file"), QStringLiteral("Size")});
     m_langTable->horizontalHeader()->setFixedHeight(32);
     m_langTable->horizontalHeader()->setHighlightSections(false);
@@ -1334,18 +1414,23 @@ void LibraryPage::onJobFinished(const QString& id)
     auto rec = m_ctx.queue().record(id);
     if (!rec)
         return;
-    if (id == m_scanJobId && !rec->outcome)
+    if (id == m_scanJobId && !rec->outcome) {
         m_scanJobId.clear(); // a failed or cancelled scan is over too
+        if (rec->state == JobState::Failed)
+            emit toastRequested(Tone::Err, QStringLiteral("The library scan failed"), rec->error ? rec->error->message : QStringLiteral("See the log."));
+    }
     if (id == m_scanJobId && rec->outcome) {
         std::vector<LibraryGame> games;
         for (const auto& v : rec->outcome->details.value(QStringLiteral("games")).toArray()) {
             LibraryGame g;
             g.info = GameSummary::fromJson(v.toObject());
-            g.lastSeen = QDateTime::currentDateTime();
             games.push_back(g);
         }
-        if (!games.empty())
-            m_library.setGames(std::move(games));
+        // The scan covers the library folders only: a dump that was added by
+        // hand from somewhere else stays, and so does everything the list
+        // knows about a game beyond what the scan reads.
+        m_library.setGames(mergeScanResult(m_library.games(), std::move(games), m_library.scanFolders(), QDateTime::currentDateTime(),
+                                           [](const QString& folder) { return readGameSummary(folder, false).isGame; }));
         m_library.setLastScan(QDateTime::currentDateTime());
         m_scanJobId.clear();
     }
@@ -1487,11 +1572,16 @@ void LibraryPage::stripLanguages()
     for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it)
         if (it.value().size() == totalByRoot.value(it.key()))
             everything = true;
+    // One line per game, each its own span (monoSpan escapes what it is given);
+    // a long batch is cut so the buttons stay on screen.
     QStringList lines;
-    for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it)
-        lines << QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName().toHtmlEscaped(), it.value().join(QStringLiteral(", ")).toHtmlEscaped());
+    const int kShown = 10;
+    for (auto it = byRoot.cbegin(); it != byRoot.cend() && lines.size() < kShown; ++it)
+        lines << Sheet::monoSpan(QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), elideMiddle(it.value().join(QStringLiteral(", ")), 160)));
+    if (byRoot.size() > kShown)
+        lines << QStringLiteral("… and %1 more").arg(plural(byRoot.size() - kShown, QStringLiteral("game"), QStringLiteral("games")));
     const QString text = QStringLiteral("These files and folders are removed from the game:<br>%1<br><br>A backup ZIP is written first to %2. Restore from backup puts everything back.")
-                             .arg(Sheet::monoSpan(lines.join(QStringLiteral("<br>"))), Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
+                             .arg(lines.join(QStringLiteral("<br>")), Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
     if (!Sheet::confirm(window(), QStringLiteral("Remove the selected languages?"), text, QStringLiteral("Keep everything"), QStringLiteral("Remove languages"), true, Sheet::Icon::Warning))
         return;
     if (everything && !Sheet::confirm(window(), QStringLiteral("Remove every language?"),
@@ -1499,19 +1589,22 @@ void LibraryPage::stripLanguages()
                                       QStringLiteral("Go back"), QStringLiteral("Remove every language anyway"), true, Sheet::Icon::Error))
         return;
     int queued = 0;
-    QStringList started;
+    QStringList started, failed;
     for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it) {
         auto r = jobs::submitLanguageStrip(m_ctx, it.key(), it.value(), backup);
         if (!r.ok()) {
-            emit toastRequested(Tone::Err, QStringLiteral("Not started"), r.error().message);
-            return;
+            failed << QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), r.error().message);
+            continue;
         }
         ++queued;
         started << r.value();
     }
     for (auto it = started.crbegin(); it != started.crend(); ++it)
         m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
-    emit toastRequested(Tone::Info, QStringLiteral("Removing languages"), QStringLiteral("%1 queued; each one backs up first.").arg(plural(queued, QStringLiteral("job"), QStringLiteral("jobs"))));
+    if (queued > 0)
+        emit toastRequested(Tone::Info, QStringLiteral("Removing languages"), QStringLiteral("%1 queued; each one backs up first.").arg(plural(queued, QStringLiteral("job"), QStringLiteral("jobs"))));
+    if (!failed.isEmpty())
+        emit toastRequested(Tone::Err, QStringLiteral("Not started"), failed.mid(0, 4).join(u'\n'));
 }
 
 void LibraryPage::restoreLanguages()

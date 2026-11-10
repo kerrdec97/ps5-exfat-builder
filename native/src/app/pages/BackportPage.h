@@ -22,6 +22,7 @@
 #include "app/ui/Components.h"
 
 #include <QAbstractTableModel>
+#include <QHash>
 #include <QJsonObject>
 #include <QPointer>
 #include <QSortFilterProxyModel>
@@ -67,7 +68,6 @@ public:
     QVariant data(const QModelIndex& index, int role) const override;
     QVariant headerData(int section, Qt::Orientation o, int role) const override;
     Qt::ItemFlags flags(const QModelIndex& index) const override;
-    bool setData(const QModelIndex& index, const QVariant& value, int role) override;
 
     std::vector<BackportRow>& rows() { return m_rows; }
     const std::vector<BackportRow>& rows() const { return m_rows; }
@@ -78,14 +78,12 @@ public:
     void removeKey(const QString& key);
     void rowChanged(const QString& key);
     void allChanged();
-    void setLocked(bool locked) { m_locked = locked; }
 
 signals:
     void checkedChanged();
 
 private:
     std::vector<BackportRow> m_rows;
-    bool m_locked = false;
 };
 
 class BackportFilterModel : public QSortFilterProxyModel {
@@ -112,7 +110,7 @@ public:
     ~BackportPage() override;
 
     bool hasPrimaryAction() const override { return true; }
-    void primaryAction() override { startOrCancel(); }
+    void primaryAction() override; // starts a run; it never cancels one
     void refresh() override { rescan(); }
     bool acceptsDrop(const QList<QUrl>& urls) const override;
     void dropUrls(const QList<QUrl>& urls) override;
@@ -124,9 +122,13 @@ public:
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
 
-    // Close handling (MainWindow): a run or restore in progress.
-    bool isBusy() const { return isRunning(); }
-    // Cancels, then pumps events until the current worker exits (at most `ms`).
+    // Close handling (MainWindow): a run or restore in progress, or a worker
+    // that is still alive whatever the page's state says.
+    bool isBusy() const { return isRunning() || (m_worker && m_worker->isRunning()); }
+    // A restore cannot be cancelled: closing has to wait for it.
+    bool isRestoring() const { return isBusy() && m_kind == Kind::Restore; }
+    // Cancels (a restore is only waited for), then pumps events until the
+    // current worker exits (at most `ms`).
     void cancelAndWait(int ms);
 
 protected:
@@ -154,12 +156,13 @@ private:
     // engine
     void prepareEngine();
     void engineReady();
+    bool engineUsable(); // says why when it is not
+    void showEngineState();
     void offerInterruptedRestores();
 
     // scanning
     void addRoots(const QStringList& dirs);
     void rescan();
-    void onGameScanned(quint64 gen, const bp::Game& g);
     void onScanFinished(quint64 gen, int count);
     void editScanLocations();
     void clearList();
@@ -167,7 +170,10 @@ private:
     // runs
     void startOrCancel();
     void startRun(const QStringList& keys);
+    void preflightDone(const bp::Preflight& pf, const QStringList& keys, const QStringList& dirs);
     void beginRun(const QStringList& keys);
+    bool idleForNewWork(); // says "wait" when a run or its check is active
+    bool enterRunning(Kind kind);
     void requestCancel();
     void runNext();
     void onProgress(const QJsonObject& ev);
@@ -188,7 +194,8 @@ private:
     QStringList chooseBackportFiles(const QString& question, const QString& fileTitle, bool* cancelled);
     void pickRestore();
     void runRestore(const QString& backupRun);
-    void exportLogs(const QString& note, bool reveal);
+    void exportLogs(const QString& note, bool showSheet);
+    void syncLibraryStatus();
     void reportProblem();
     void openPath(const QString& path);
     void saveDestinations();
@@ -196,8 +203,11 @@ private:
     // activity log
     void log(const QString& level, const QString& message, bool toBox = true);
     static bool testMode();
+    static bool mayReadSharedFiles();
     bool persistAllowed() const;
-    void persistSettings();
+    bool reloadSettings(int changing = 0);
+    void persistSettings(int keys);
+    void showSettingsProblem(const QString& title, const QString& message);
 
     QStringList selectedKeys() const; // highlighted rows (view selection)
     QStringList checkedKeys() const;
@@ -206,21 +216,36 @@ private:
     QString outputRoot() const;
 
     // ---- state
+    ui::LibraryStore& m_library;
     bp::Settings m_settings;
     BackportGameModel* m_model;
     BackportFilterModel* m_proxy;
     Engine m_engine = Engine::Unknown;
     QString m_engineRevision, m_engineError;
     QPointer<bp::Worker> m_worker;
-    // The page's run lifecycle; setRunState() is its only writer:
-    //   Idle ─▶ Scanning ─▶ Idle                       (rescan / clearList)
+    // The page's run lifecycle. setRunState() is its only writer and refuses
+    // every step that is not one of these:
+    //   Idle ─▶ Preflight ─▶ Idle | Running            (Start Backport checks the destinations first)
     //   Idle ─▶ Running ─▶ Cancelling ─▶ Idle           (a Restore cannot be cancelled)
-    enum class RunState { Idle, Scanning, Running, Cancelling };
+    // and never Idle or a new Running while a worker is alive. Every entry
+    // point asks idleForNewWork(); enterRunning() is the one gate into Running.
+    // Scanning is independent of it (m_scanning): a scan may end during a run.
+    enum class RunState { Idle, Preflight, Running, Cancelling };
     RunState m_runState = RunState::Idle;
-    void setRunState(RunState state);
+    bool setRunState(RunState state);
     bool isRunning() const { return m_runState == RunState::Running || m_runState == RunState::Cancelling; }
     bool isCancelling() const { return m_runState == RunState::Cancelling; }
-    bool isScanning() const { return m_runState == RunState::Scanning; }
+    bool isPreflight() const { return m_runState == RunState::Preflight; }
+    bool isIdle() const { return m_runState == RunState::Idle; }
+    bool isScanning() const { return m_scanning; }
+    void setScanning(bool on);
+    bool m_scanning = false;
+    // Each game's tick, status and result by key. It outlives the list, so a
+    // scan that is restarted before it listed every game loses nothing.
+    QHash<QString, BackportRow> m_rowMemory;
+    bool m_settingsMissing = false; // settings.json did not exist at the last read
+    bool m_offerPending = false;    // interrupted applies are offered when the page is next in front
+    bool m_exporting = false;       // a support ZIP is being written
     quint64 m_scanGen = 0;
     std::shared_ptr<std::atomic_bool> m_scanCancel;
     Kind m_kind = Kind::Backport;
@@ -273,6 +298,7 @@ private:
     ui::Badge* m_engineBadge;
     QLabel* m_engineLine;
     ui::InfoBar* m_engineBar;
+    ui::InfoBar* m_settingsBar;
 };
 
 } // namespace fw::pages
