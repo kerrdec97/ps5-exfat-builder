@@ -484,6 +484,12 @@ private slots:
             QVERIFY(!held.ok() || !held.value());
             QCOMPARE(fileHash(img), edited);
             QVERIFY(QFileInfo::exists(marker));
+            // Another edit meanwhile is refused before anything changes, and
+            // leaves the marker in place.
+            auto again = editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("eboot.bin"))}, options(), token);
+            QVERIFY(!again.ok());
+            QCOMPARE(fileHash(img), edited);
+            QVERIFY(QFileInfo::exists(marker));
             CloseHandle(lock);
         } else {
             QCOMPARE(QFileInfo(journal).size(), qint64(0));

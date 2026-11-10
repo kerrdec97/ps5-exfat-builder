@@ -879,6 +879,13 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
     if (log)
         log->info(QStringLiteral("Editing in place: %1 bytes of new data, %2 metadata patches, undo journal %3")
                       .arg(dataBytes).arg(patches.size()).arg(formatBytes(journalBytes)));
+    // A journal still here was retired (anything else was rolled back when
+    // the edit started) but could not be deleted then. It goes first: while
+    // it exists its marker must stay, or recovery would apply it.
+    if (QFileInfo::exists(journal) && !QFile::remove(journal))
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("Could not remove the old undo journal %1. Close any program using it, then try again.")
+                         .arg(QDir::toNativeSeparators(journal)));
     // A marker of an earlier journal must not disown the one written now.
     if (const QString marker = journalDoneMarker(journal); QFileInfo::exists(marker) && !QFile::remove(marker))
         return Error(ErrorCode::IoError,
