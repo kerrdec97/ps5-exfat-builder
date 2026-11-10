@@ -563,8 +563,8 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
 // ---- updates --------------------------------------------------------------------------
 //
 // A release is the program file itself. The app finds it, can download and
-// check it, and then tells the user where it is: it never starts the download,
-// never closes for it and never replaces the running program.
+// check it, and then tells the user where it is: it never runs the downloaded
+// file, never closes for it and never replaces the running program.
 
 namespace {
 
