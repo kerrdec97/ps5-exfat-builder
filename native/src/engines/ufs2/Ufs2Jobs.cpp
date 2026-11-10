@@ -193,7 +193,9 @@ public:
             return Error(ErrorCode::InvalidArgument,
                          QStringLiteral("The image cannot be saved inside the game folder it is built from. Choose another output folder."));
         if (QFileInfo::exists(out) && !replaceExisting())
-            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists.").arg(QFileInfo(out).fileName()));
+            return Error(ErrorCode::AlreadyExists,
+                         QStringLiteral("%1 already exists. Choose another name, or allow replacing the existing image.")
+                             .arg(QFileInfo(out).fileName()));
         return validateParams(formatParams(settings));
     }
 
@@ -214,8 +216,9 @@ public:
         FW_TRY_ASSIGN(SourceTree tree, scanLocalFolder(src, ctx.token));
         if (tree.fileCount == 0 && tree.dirCount == 0)
             return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is empty.").arg(native(src)));
-        ctx.log.info(QStringLiteral("%1 files in %2 folders, %3").arg(formatCount(tree.fileCount), formatCount(tree.dirCount),
-                                                                      formatBytes(tree.totalBytes)));
+        ctx.log.info(QStringLiteral("%1 in %2, %3").arg(counted(tree.fileCount, "file", "files"),
+                                                        counted(tree.dirCount, "folder", "folders"),
+                                                        formatBytes(tree.totalBytes)));
 
         QStringList notes;
         WriterOptions opt;
@@ -276,8 +279,8 @@ public:
                             v.verification == Verification::Passed ? QStringLiteral("The image was built and verified")
                                                                    : QStringLiteral("The image was built")));
         outcome.outputs << out;
-        outcome.summary = QStringLiteral("%1 · %2 · %3 files").arg(QFileInfo(out).fileName(), formatBytes(ws.imageBytes),
-                                                                    formatCount(tree.fileCount));
+        outcome.summary = QStringLiteral("%1 · %2 · %3").arg(QFileInfo(out).fileName(), formatBytes(ws.imageBytes),
+                                                              counted(tree.fileCount, "file", "files"));
         ctx.log.info(QStringLiteral("Saved %1").arg(native(out)));
 
         if (ctx.settings.boolean(keys::kDeleteSourceAfterBuild)) {
@@ -372,8 +375,8 @@ public:
                     outcome.verification = Verification::Failed;
                     outcome.verificationDetail = read.error().message;
                 } else {
-                    outcome.verificationDetail = QStringLiteral("Structure check passed and all %1 files (%2) read back without errors.")
-                                                     .arg(formatCount(tree.fileCount), formatBytes(read.value()));
+                    outcome.verificationDetail = QStringLiteral("Structure check passed; %1 (%2) read back without errors.")
+                                                     .arg(counted(tree.fileCount, "file", "files"), formatBytes(read.value()));
                 }
             }
         }
@@ -476,7 +479,9 @@ public:
         for (int i = 0; i < ex.renamed.size() && i < 20; ++i)
             outcome.warnings << QStringLiteral("Renamed for this drive: %1").arg(ex.renamed[i]);
         if (ex.renamed.size() > 20)
-            outcome.warnings << QStringLiteral("%1 more names were changed.").arg(ex.renamed.size() - 20);
+            outcome.warnings << (ex.renamed.size() == 21
+                                     ? QStringLiteral("1 more name was changed.")
+                                     : QStringLiteral("%1 more names were changed.").arg(ex.renamed.size() - 20));
 
         if (verifyEnabled(ctx.settings)) {
             const CompareDepth depth = verifyDepth(ctx.settings);
@@ -509,8 +514,8 @@ public:
         }
         cleanup.armed = false;
         outcome.outputs << out;
-        outcome.summary = QStringLiteral("%1 files (%2) extracted").arg(formatCount(ex.files), formatBytes(ex.bytes));
-        ctx.log.info(QStringLiteral("Extracted %1 files to %2").arg(formatCount(ex.files), native(out)));
+        outcome.summary = QStringLiteral("%1 (%2) extracted").arg(counted(ex.files, "file", "files"), formatBytes(ex.bytes));
+        ctx.log.info(QStringLiteral("Extracted %1 to %2").arg(counted(ex.files, "file", "files"), native(out)));
         return outcome;
     }
 

@@ -93,10 +93,10 @@ QString CompareReport::summary(CompareDepth depth) const
 {
     if (ok()) {
         if (depth == CompareDepth::Full)
-            return QStringLiteral("%1 files compared byte for byte, all identical (%2).")
-                .arg(formatCount(filesCompared), formatBytes(bytesCompared));
-        return QStringLiteral("%1 files and %2 folders match by name, type and size.")
-            .arg(formatCount(filesCompared), formatCount(dirsCompared));
+            return QStringLiteral("%1 compared byte for byte, all identical (%2).")
+                .arg(counted(filesCompared, "file", "files"), formatBytes(bytesCompared));
+        return QStringLiteral("%1 and %2 match by name, type and size.")
+            .arg(counted(filesCompared, "file", "files"), counted(dirsCompared, "folder", "folders"));
     }
     QStringList parts;
     if (!missing.isEmpty())
@@ -372,6 +372,8 @@ Result<CompareReport> verifyExtracted(const SourceTree& tree, const ExtractRepor
     rep.dirsCompared = report.dirs;
     QByteArray ba(qsizetype(bufferBytes), '\0'), bb(qsizetype(bufferBytes), '\0');
     for (const auto& [node, path] : report.written) {
+        if (!token.checkpoint())
+            return Error::cancelled();
         const TreeNode& n = tree.nodes[size_t(node)];
         const QString rel = tree.relativePath(node);
         const QFileInfo fi(toLongPath(path));

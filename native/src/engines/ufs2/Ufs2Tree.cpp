@@ -215,7 +215,8 @@ private:
 Status appendLocalFolder(SourceTree& tree, int parent, const QString& dir, const CancellationToken& token)
 {
     Scanner s{tree, token};
-    // Seed the loop guard with the ancestors' own folders when they are local.
+    // The loop guard starts at `dir`: a link back into `dir` or below is
+    // caught, one into a folder that is already in the tree is not.
     FW_TRY(s.scanDir(parent, dir));
     tree.recount();
     return success();

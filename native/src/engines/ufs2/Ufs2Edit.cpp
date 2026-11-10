@@ -1,6 +1,7 @@
 #include "engines/ufs2/Ufs2Edit.h"
 
 #include "core/PathSafety.h"
+#include "engines/ufs2/Ufs2Format.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -214,7 +215,7 @@ Status applyEdits(SourceTree& tree, const std::vector<EditOp>& ops, const Cancel
                                  QStringLiteral("%1 is a folder, so replace it with a folder.").arg(where));
                 FW_TRY_ASSIGN(int k, replaceInDir(tree, idx, fi.absoluteFilePath(), token));
                 if (log)
-                    log->append(QStringLiteral("Replaced %1 files in %2").arg(k).arg(where));
+                    log->append(QStringLiteral("Replaced %1 in %2").arg(counted(k, "file", "files"), where));
             }
             break;
         }

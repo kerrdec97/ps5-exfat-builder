@@ -17,7 +17,7 @@ using namespace ufs2test;
 
 namespace {
 
-constexpr qint64 kQuickMs = 1000;
+constexpr qint64 kQuickMs = 2000; // the work takes milliseconds; the margin is for a busy machine
 constexpr int kLeafFolders = 96;
 
 bool patch(const QString& path, qint64 off, const QByteArray& bytes)

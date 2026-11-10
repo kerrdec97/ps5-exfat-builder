@@ -104,8 +104,8 @@ void registerModule(ModuleContext& ctx)
         d.label = QStringLiteral("Free space in automatic images");
         d.description = QStringLiteral(
             "How much room an automatically sized image keeps free, for files you add later. Standard keeps 1 % "
-            "of the image, at least 1 GB and at most 8 GB (as before). Fixed keeps exactly the amount below, "
-            "for the smallest images.");
+            "of the image, at least 1 GB and at most 8 GB (as before). Fixed makes the smallest image that "
+            "still has the amount below free.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("legacy");
         d.choices = {{QStringLiteral("legacy"), QStringLiteral("Standard (1 %, 1 to 8 GB)"), {}},
@@ -125,7 +125,7 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = 256;
         d.minimum = 0;
         d.maximum = 1048576;
-        d.unit = QStringLiteral("MiB");
+        d.unit = QStringLiteral("MB");
         d.enabledWhenKey = keys::kSpareSpace;
         d.enabledWhenValue = QStringLiteral("fixed");
         d.perJob = true;
@@ -263,6 +263,9 @@ void registerModule(ModuleContext& ctx)
         d.section = build;
         d.group = gContents;
         d.label = QStringLiteral("Wait between retries");
+        d.description = QStringLiteral(
+            "How long to wait before a source file that could not be opened is tried again (a virus scanner or "
+            "another program may hold it for a moment). Raise it for slow network drives.");
         d.type = SettingType::Int;
         d.defaultValue = 3;
         d.minimum = 0;
@@ -314,6 +317,9 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("Storage");
         d.group = QStringLiteral("Extracting exFAT images");
         d.label = QStringLiteral("Files at once");
+        d.description = QStringLiteral(
+            "How many files are written at the same time when extracting several at once. More helps on SSDs with "
+            "many small files; on a hard drive a low number is faster.");
         d.type = SettingType::Int;
         d.defaultValue = 32;
         d.minimum = 1;

@@ -58,12 +58,12 @@ void registerModule(ModuleContext& ctx)
         d.section = section;
         d.group = group;
         d.label = QStringLiteral("Block size");
-        d.description = QStringLiteral("UFS2 block size of new .ffpkg images (newfs -b). 64 KiB is what PS5 loaders have been "
+        d.description = QStringLiteral("UFS2 block size of new .ffpkg images (newfs -b). 64 KB is what PS5 loaders have been "
                                        "fed so far; change it only if a loader asks for something else.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("65536");
-        addChoice(d, QStringLiteral("32768"), QStringLiteral("32 KiB"));
-        addChoice(d, QStringLiteral("65536"), QStringLiteral("64 KiB (recommended)"));
+        addChoice(d, QStringLiteral("32768"), QStringLiteral("32 KB"));
+        addChoice(d, QStringLiteral("65536"), QStringLiteral("64 KB (recommended)"));
         d.perJob = true;
         d.advanced = true;
         d.order = order++;
@@ -79,8 +79,8 @@ void registerModule(ModuleContext& ctx)
                                        "files. A fragment larger than the block size is reduced to the block size.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("65536");
-        addChoice(d, QStringLiteral("32768"), QStringLiteral("32 KiB"));
-        addChoice(d, QStringLiteral("65536"), QStringLiteral("64 KiB (recommended)"));
+        addChoice(d, QStringLiteral("32768"), QStringLiteral("32 KB"));
+        addChoice(d, QStringLiteral("65536"), QStringLiteral("64 KB (recommended)"));
         d.perJob = true;
         d.advanced = true;
         d.order = order++;
@@ -114,9 +114,9 @@ void registerModule(ModuleContext& ctx)
                                        "automatically when a game has more files than the inodes allow.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("262144");
-        addChoice(d, QStringLiteral("131072"), QStringLiteral("128 KiB"));
-        addChoice(d, QStringLiteral("262144"), QStringLiteral("256 KiB (recommended)"));
-        addChoice(d, QStringLiteral("524288"), QStringLiteral("512 KiB"));
+        addChoice(d, QStringLiteral("131072"), QStringLiteral("128 KB"));
+        addChoice(d, QStringLiteral("262144"), QStringLiteral("256 KB (recommended)"));
+        addChoice(d, QStringLiteral("524288"), QStringLiteral("512 KB"));
         d.perJob = true;
         d.advanced = true;
         d.order = order++;

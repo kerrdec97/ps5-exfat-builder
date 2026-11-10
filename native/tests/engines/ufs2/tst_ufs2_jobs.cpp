@@ -10,6 +10,7 @@
 #include "engines/general/Module.h"
 #include "engines/ufs2/Module.h"
 #include "engines/ufs2/Ufs2Check.h"
+#include "engines/ufs2/Ufs2Verify.h"
 #include "jobs/JobQueue.h"
 
 #include <QCryptographicHash>
@@ -521,6 +522,21 @@ private slots:
         QVERIFY(!o.ok() && o.error().isCancelled());
         QCOMPARE(sha(img), before);
         QVERIFY(!QFileInfo::exists(img + ".part"));
+    }
+
+    void summariesCountInTheSingular()
+    {
+        CheckReport check;
+        check.files = 1;
+        check.dirs = 1;
+        QCOMPARE(check.summary(), QStringLiteral("File system consistent: 1 file and 1 folder."));
+        check.files = 2414;
+        check.dirs = 12;
+        QCOMPARE(check.summary(), QStringLiteral("File system consistent: 2,414 files and 12 folders."));
+        CompareReport cmp;
+        cmp.filesCompared = 1;
+        cmp.dirsCompared = 3;
+        QCOMPARE(cmp.summary(CompareDepth::Structure), QStringLiteral("1 file and 3 folders match by name, type and size."));
     }
 
     // The staging marker is compared the way the destination drive compares

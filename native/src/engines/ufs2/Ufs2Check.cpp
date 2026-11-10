@@ -13,7 +13,8 @@ namespace fw::ufs2 {
 QString CheckReport::summary() const
 {
     if (ok())
-        return QStringLiteral("File system consistent: %1 files and %2 folders.").arg(formatCount(files), formatCount(dirs));
+        return QStringLiteral("File system consistent: %1 and %2.")
+            .arg(counted(files, "file", "files"), counted(dirs, "folder", "folders"));
     return QStringLiteral("%1 file system problem%2 found. First: %3")
         .arg(formatCount(problemCount), problemCount == 1 ? QString() : QStringLiteral("s"),
              problems.isEmpty() ? QString() : problems.first());

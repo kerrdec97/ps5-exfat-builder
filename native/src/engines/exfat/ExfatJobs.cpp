@@ -304,8 +304,10 @@ public:
                 o.warnings << QStringLiteral("The source folder was kept: it is deleted only after a full byte-for-byte "
                                              "verification.");
             } else if (tree.excludedCount > 0) {
-                o.warnings << QStringLiteral("The source folder was kept: %1 items in it were left out of the image.")
-                                  .arg(formatCount(tree.excludedCount));
+                o.warnings << (tree.excludedCount == 1
+                                   ? QStringLiteral("The source folder was kept: 1 item in it was left out of the image.")
+                                   : QStringLiteral("The source folder was kept: %1 items in it were left out of the image.")
+                                         .arg(formatCount(tree.excludedCount)));
             } else if (const Status st = removeTreeSafely(m_source); !st.ok()) {
                 o.warnings << QStringLiteral("The source folder could not be deleted: %1").arg(st.error().message);
             } else {
@@ -314,8 +316,8 @@ public:
             }
         }
 
-        o.summary = QStringLiteral("%1 image, %2 files (%3)")
-                        .arg(formatBytes(volume), formatCount(tree.fileCount), formatBytes(tree.totalBytes));
+        o.summary = QStringLiteral("%1 image, %2 (%3)")
+                        .arg(formatBytes(volume), counted(tree.fileCount, "file", "files"), formatBytes(tree.totalBytes));
         o.details.insert(QStringLiteral("image"), m_output);
         o.details.insert(QStringLiteral("volumeBytes"), double(volume));
         o.details.insert(QStringLiteral("clusterBytes"), double(plan.geo.clusterBytes()));
@@ -452,8 +454,9 @@ private:
             }
         }
         o.verification = Verification::Passed;
-        o.verificationDetail = full ? QStringLiteral("Structure intact; %1 files (%2) read back without errors.").arg(formatCount(files), formatBytes(bytes))
-                                    : QStringLiteral("Structure intact; %1 files.").arg(formatCount(files));
+        o.verificationDetail = full ? QStringLiteral("Structure intact; %1 (%2) read back without errors.")
+                                          .arg(counted(files, "file", "files"), formatBytes(bytes))
+                                    : QStringLiteral("Structure intact; %1.").arg(counted(files, "file", "files"));
         o.summary = QStringLiteral("The image is intact.");
         return o;
     }
@@ -556,8 +559,8 @@ public:
         eo.threads = x.extractThreads;
         eo.bufferBytes = x.writer.bufferBytes;
         FW_TRY_ASSIGN(ExtractStats st, extractTree(*reader, tree, stage, eo, ctx.token, ctx.progress));
-        ctx.log.info(QStringLiteral("Extracted %1 files, %2 in %3 ms (%4)")
-                         .arg(formatCount(st.files), formatBytes(st.bytes))
+        ctx.log.info(QStringLiteral("Extracted %1, %2 in %3 ms (%4)")
+                         .arg(counted(st.files, "file", "files"), formatBytes(st.bytes))
                          .arg(st.elapsedMs)
                          .arg(rate(st.bytes, st.elapsedMs)));
         JobOutcome o;
@@ -565,7 +568,8 @@ public:
         for (int i = 0; i < st.renamed.size() && i < 20; ++i)
             o.warnings << QStringLiteral("Renamed for this drive: %1").arg(st.renamed[i]);
         if (st.renamed.size() > 20)
-            o.warnings << QStringLiteral("%1 more names were changed.").arg(st.renamed.size() - 20);
+            o.warnings << (st.renamed.size() == 21 ? QStringLiteral("1 more name was changed.")
+                                                   : QStringLiteral("%1 more names were changed.").arg(st.renamed.size() - 20));
         for (const QString& n : st.renamed)
             ctx.log.info(QStringLiteral("Renamed for this drive: %1").arg(n));
         if (recovered)
@@ -607,7 +611,7 @@ public:
         }
         guard.keep = true;
         o.outputs << m_output;
-        o.summary = QStringLiteral("%1 files, %2").arg(formatCount(st.files), formatBytes(st.bytes));
+        o.summary = QStringLiteral("%1, %2").arg(counted(st.files, "file", "files"), formatBytes(st.bytes));
         o.details.insert(QStringLiteral("files"), double(st.files));
         o.details.insert(QStringLiteral("folders"), double(st.dirs));
         o.details.insert(QStringLiteral("bytes"), double(st.bytes));

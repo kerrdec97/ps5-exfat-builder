@@ -46,22 +46,33 @@ to read), `exfat_builder.py` (`verify_walk_tree`, `_get_cluster_size_arg`,
 | Attributes | Windows: read-only, hidden, system, archive copied. Elsewhere: archive (+ read-only when not writable). | robocopy `/COPY:DAT` |
 | Exclusions | `exfat.excludePatterns` (default `*.exfat *.ffpkg *.ffpfs *.ffpfsc Thumbs.db desktop.ini .DS_Store`, `System Volume Information/`, `$RECYCLE.BIN/`), `exfat.excludeHidden` (files only), job parameter `excludes`. The verifier applies the same rules. | robocopy `/XF *.exfat /XF *.ffpkg`, `/XA:H` with "Exclude hidden files"; `verify_walk_tree` additionally skipped `.ffpfs/.ffpfsc` (inconsistent, fixed here) |
 | Source check | `eboot.bin` must be at the top of the source (`exfat.requireEboot`) | bat `:no_eboot`, PS1 check |
-| Free space | Full image size + `storage.freeSpaceMarginMiB` before writing; FAT32 output refused for images ≥ 4 GiB | PS1 preflight: image + 256 MB |
-| Links | File links are followed (content copied). Folder links/junctions are followed unless they point back into their own parent chain (skipped with a warning). A broken link stops the build. | robocopy default |
+| Free space | Full image size + `storage.freeSpaceMarginMiB` before writing; FAT32 output refused for images ≥ 4 GiB (also for a rebuild edit that grows past 4 GiB, and for extracting a file ≥ 4 GiB onto FAT32) | PS1 preflight: image + 256 MB |
+| Links | File links are followed (content copied). Folder links/junctions are followed unless they point back into their own parent chain (skipped with a warning). A broken link stops the build. A Windows shortcut (`.lnk`) is not a link: it is copied as the small file it is, whatever it points at. | robocopy default |
 
 ## Jobs
 
 | Kind | Parameters | Phases | Notes |
 |---|---|---|---|
-| `image.exfat.build` | `source`, `output` (file, or an existing folder → `<source name>.exfat`), optional `label`, optional `excludes[]` | Scanning → Writing image → Verifying | Writes `<output>.part`, verifies the `.part`, then renames (an existing image is set aside by `PartFile` and restored if the rename fails). Verification failure: nothing is renamed, an older image stays. |
-| `image.exfat.verify` | `image`, `source`, optional `excludes[]` | Reading image → Comparing | `verification.mode` decides full or structure. A damaged image is a failed verification, not an error. |
-| `image.exfat.extract` | `image`, `output` (new or empty folder) | Reading image → Extracting → Verifying | Extracts into `<output>.part` (with a marker file so a stale one can be recognised as ours), verifies it against the image, then renames. A `.part` folder without the marker is never touched. Every output path is checked to stay inside the folder (`core/PathSafety.h`); names exFAT allows but the drive cannot store as they are (on Windows trailing dots or spaces and device names such as `CON`; anywhere names made only of dots and spaces) are changed, reported as "Renamed for this drive" warnings and verified under their image names. |
+| `image.exfat.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output` (file, or an existing folder → `<source name>.exfat`, without `.zip` for a ZIP), optional `label`, optional `excludes[]` | Scanning → Writing image → Verifying | Writes `<output>.part`, verifies the `.part`, then renames (an existing image is set aside by `PartFile` and restored if the rename fails). Verification failure: nothing is renamed, an older image stays. If the rename fails (the old image is mounted or open elsewhere) the finished image is kept as `<name> (new).exfat` and the error says so. |
+| `image.exfat.verify` | `image`, optional `source`, optional `excludes[]` | Reading image → Comparing | With `source`: `verification.mode` decides full or structure. Without it the image is checked on its own: structure, and in full mode every file is read back. In both modes a damaged image (boot region and backup boot region included) is a failed verification, not an error. |
+| `image.exfat.extract` | `image`, `output` (new or empty folder) | Reading image → Extracting → Verifying | Extracts into `<output>.part` (with a marker file so a stale one can be recognised as ours; an image whose root holds that name in any case is refused), verifies it against the image, then renames. A `.part` folder without the marker is never touched. If the rename fails the extracted folder is kept as `<output>.new`. Every output path is checked to stay inside the folder (`core/PathSafety.h`); names exFAT allows but the drive cannot store as they are (on Windows trailing dots or spaces and device names such as `CON`; anywhere names made only of dots and spaces) are changed, reported as "Renamed for this drive" warnings and verified under their image names. |
 | `image.exfat.edit` | `image`, `operations[]` of `{op: add\|replace\|delete\|mkdir, imagePath, localPath}` | Planning → Writing → Verifying | See *Editing images*. Always verified (mode from `verification.mode`). |
 
-Every job checks `ctx.token` at least every 4 MiB and every 64 files, logs
+Every job checks `ctx.token` at least every 4 MiB and every 64 files (the
+undo journal of an in-place edit included), logs
 milestones with `info` and buffer/timing detail with `debug`, and returns
 per-file mismatch details in `JobOutcome::details.verification`
 (`mismatches[]` of `{path, kind, detail}`, up to 200, plus counts).
+
+**Images from elsewhere** (`ExfatReader`). The reader ends on any input, in
+time and memory proportional to the file: a `VolumeLength` whose byte size
+overflows is refused, so the cluster count and both bitmaps are bounded by
+the real file size; a FAT chain is followed for at most the clusters its
+data length needs (256 MiB for the root folder); a folder whose clusters
+already belong to something else (for example to one of its own parents) is
+reported and not listed again; the walk stops once the entries claim more
+clusters than the volume has, at 256 nested folders, or at 10,000,000
+entries. All of these are reported as damage.
 
 **Verification** (`ExfatVerify`). Strict (audit H1): any missing, extra,
 different-type, different-size file or folder fails, as does any structural
@@ -74,7 +85,8 @@ the first differing byte. Lost clusters (allocated, unused) are a warning.
 **Deleting the source** (`exfat.deleteSourceAfterVerify`, audit C2) happens
 only when full byte verification passed, the image got its final name, and
 nothing in the source was excluded; otherwise the folder is kept with a
-warning. `removeTreeSafely` refuses drive roots and the home folder.
+warning. A ZIP source is never deleted. `removeTreeSafely` refuses drive
+roots and the home folder.
 
 ## Editing images
 
@@ -96,15 +108,25 @@ directly and never loses the original before the edited image has verified
   `recoverInterruptedEdit`); a damaged journal is refused rather than applied.
   The journal records the image's size and volume serial and is never applied
   to any other image (a build that replaces the image deletes it). Free space
-  for the journal plus the margin is checked first.
+  for the journal plus the margin is checked first. Writing the journal is
+  part of the Writing phase (progress, Cancel). Once the edit has verified the
+  journal is deleted; if another program holds it, it is emptied, or, when it
+  cannot even be opened, disowned by a marker `<image>.edit-journal.done`
+  holding its header and checksum. Recovery removes an empty or disowned
+  journal without applying it, so a verified edit is never rolled back.
 * **Rebuild** for everything else (adds, mkdir, replacements that need more
   clusters, `exfat.editStrategy = rebuild`): the edited tree is written to
   `<image>.part` — unchanged files are streamed from the original image —
   with the original cluster size, sector size, label and serial; verified
   against the expected tree (unchanged files byte-compared with the
-  original); then swapped in with set-aside/restore. If the edited contents
+  original); then swapped in with set-aside/restore (if the swap fails
+  because the original is open elsewhere, the edited image is kept as
+  `<name> (new).exfat`). If the edited contents
   no longer fit, the image grows using the automatic size rule. Free space for
   the whole new image is checked first.
+
+Operations that cancel each other out (create a folder, then delete it) write
+nothing: `EditResult::changed` is false and the job reports no verification.
 
 Paths inside the image are case-insensitive like exFAT itself; `add` into an
 existing folder keeps the local name; adding a folder applies the exclusion
@@ -138,10 +160,11 @@ overridden for a single job.
 
 Shared settings read by this module: `verification.verifyAfterBuild`,
 `verification.mode`, `performance.workerThreads`, `performance.ioBufferMiB`,
-`storage.freeSpaceMarginMiB`. The module also maps the legacy exFAT switches
+`storage.freeSpaceMarginMiB`. The legacy exFAT switches
 `adv_skip_verify` → `verification.verifyAfterBuild` (inverted) and
 `adv_checksum_verify = true` → `verification.mode = full` (off keeps the new
-default, full, instead of downgrading to the legacy size walk).
+default, full, instead of downgrading to the legacy size walk) are mapped by
+the general module (`engines/general/Module.cpp`), which owns those keys.
 
 Legacy options deliberately not carried over: OSFMount path (no OSFMount),
 robocopy threads (`adv_threads`; the writer is sequential by design and cannot

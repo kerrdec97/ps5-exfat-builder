@@ -5,6 +5,8 @@
 
 #include "engines/ufs2/Ufs2Format.h"
 
+#include "core/FileUtil.h"
+
 #include <algorithm>
 #include <climits>
 #include <cstring>
@@ -23,6 +25,11 @@ int log2Int(qint64 v)
 
 bool isPowerOfTwo(qint64 v) { return v > 0 && (v & (v - 1)) == 0; }
 
+QString counted(qint64 n, const char* one, const char* many)
+{
+    return n == 1 ? QStringLiteral("1 ") + QLatin1String(one) : formatCount(n) + u' ' + QLatin1String(many);
+}
+
 static Error badParam(const QString& what)
 {
     return Error(ErrorCode::InvalidArgument, QStringLiteral("The FFPKG image settings are not valid: %1").arg(what));
@@ -32,7 +39,7 @@ Status validateParams(const FormatParams& p)
 {
     // UFS2Tool ValidateParameters(); sector size is fixed at 512.
     if (!isPowerOfTwo(p.blockSize) || p.blockSize < 4096 || p.blockSize > 65536)
-        return badParam(QStringLiteral("the block size must be a power of 2 from 4 KiB to 64 KiB (got %1).").arg(p.blockSize));
+        return badParam(QStringLiteral("the block size must be a power of 2 from 4 KB to 64 KB (got %1).").arg(p.blockSize));
     if (!isPowerOfTwo(p.fragmentSize) || p.fragmentSize < 512)
         return badParam(QStringLiteral("the fragment size must be a power of 2 of at least 512 bytes (got %1).").arg(p.fragmentSize));
     if (p.fragmentSize > p.blockSize)

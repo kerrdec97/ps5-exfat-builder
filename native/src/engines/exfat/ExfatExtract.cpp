@@ -294,8 +294,8 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
             finisher.finish(e, target(i));
     }
     if (finisher.failed())
-        stats.warnings << QStringLiteral("The timestamps or attributes of %1 items could not be restored.")
-                              .arg(formatCount(finisher.failed()));
+        stats.warnings << QStringLiteral("The timestamps or attributes of %1 could not be restored.")
+                              .arg(counted(finisher.failed(), "item", "items"));
     stats.elapsedMs = timer.elapsed();
     return stats;
 }

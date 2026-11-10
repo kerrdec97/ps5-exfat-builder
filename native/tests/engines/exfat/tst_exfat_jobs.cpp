@@ -669,6 +669,29 @@ private slots:
                  qPrintable(r->warnings.join(u'\n')));
     }
 
+    void summariesCountInTheSingularAndEndWithOneFullStop()
+    {
+        QCOMPARE(counted(1, "file", "files"), QStringLiteral("1 file"));
+        QCOMPARE(counted(0, "file", "files"), QStringLiteral("0 files"));
+        QCOMPARE(counted(1234, "file", "files"), QStringLiteral("1,234 files"));
+        VerifyReport one;
+        one.full = true;
+        one.filesChecked = 1;
+        one.dirsChecked = 1;
+        QVERIFY2(one.summary().startsWith(QStringLiteral("1 file and 1 folder compared byte for byte")), qPrintable(one.summary()));
+        one.full = false;
+        one.filesChecked = 2;
+        QVERIFY2(one.summary().startsWith(QStringLiteral("2 files and 1 folder checked")), qPrintable(one.summary()));
+        // A problem that is a whole sentence does not get a second full stop.
+        VerifyReport damaged;
+        damaged.structureProblems << corruptImage(QStringLiteral("its boot checksum does not match")).message;
+        QVERIFY(!damaged.passed());
+        QVERIFY2(damaged.summary().endsWith(QStringLiteral("game folder.")), qPrintable(damaged.summary()));
+        VerifyReport mismatch;
+        mismatch.structureProblems << QStringLiteral("the name hash of a.bin does not match");
+        QVERIFY2(mismatch.summary().endsWith(QStringLiteral("does not match.")), qPrintable(mismatch.summary()));
+    }
+
     void fat32LimitIsKnownByFileSystemName()
     {
         for (const char* fs : {"FAT32", "FAT", "fat16", "vfat", "msdos"})

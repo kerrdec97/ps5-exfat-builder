@@ -321,7 +321,7 @@ Status ExfatReader::requireIntact(const ImageTree& tree)
         return success();
     QString what = tree.problems.first();
     if (tree.problemCount > 1)
-        what += QStringLiteral(" (and %1 more problems)").arg(tree.problemCount - 1);
+        what += QStringLiteral(" (and %1)").arg(counted(tree.problemCount - 1, "more problem", "more problems"));
     return corruptImage(what, tree.problems.join(QStringLiteral("; ")));
 }
 
@@ -343,8 +343,8 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
                 problems.add(QStringLiteral("the volume metadata overlaps itself"));
     if (m_vol.boot.volumeFlags & 0x2)
         tree.warnings << QStringLiteral("The image is marked as not cleanly unmounted (VolumeDirty).");
-    if (!m_vol.backupBootMatches)
-        tree.warnings << QStringLiteral("Backup boot region: ") + m_vol.backupProblem + u'.';
+    if (!m_vol.backupBootMatches && !m_vol.backupProblem.isEmpty())
+        tree.warnings << m_vol.backupProblem.at(0).toUpper() + m_vol.backupProblem.mid(1) + u'.';
 
     {
         ImageEntry root;
@@ -518,7 +518,8 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
                 for (const Extent& x : ent.extents)
                     dup += usage.mark(x);
                 if (dup)
-                    problems.add(QStringLiteral("%1 shares %2 clusters with another file (cross-linked)").arg(path).arg(dup));
+                    problems.add(QStringLiteral("%1 shares %2 with another file (cross-linked)")
+                                     .arg(path, counted(dup, "cluster", "clusters")));
             } else if (ent.isDir) {
                 // A folder without clusters is legal but unusual; it has no entries.
             }
@@ -576,9 +577,14 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
             lost += std::popcount(alloc & ~used[w]);
         }
         if (usedButFree)
-            problems.add(QStringLiteral("%1 clusters in use are marked free in the allocation bitmap").arg(usedButFree));
+            problems.add(usedButFree == 1
+                             ? QStringLiteral("1 cluster in use is marked free in the allocation bitmap")
+                             : QStringLiteral("%1 clusters in use are marked free in the allocation bitmap")
+                                   .arg(formatCount(usedButFree)));
         if (lost)
-            tree.warnings << QStringLiteral("%1 clusters are marked in use but belong to no file (lost clusters).").arg(lost);
+            tree.warnings << (lost == 1 ? QStringLiteral("1 cluster is marked in use but belongs to no file (lost cluster).")
+                                        : QStringLiteral("%1 clusters are marked in use but belong to no file (lost clusters).")
+                                              .arg(formatCount(lost)));
     }
     return tree;
 }

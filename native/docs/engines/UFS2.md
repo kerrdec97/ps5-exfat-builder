@@ -136,8 +136,15 @@ broken. Everywhere else the output is byte-identical.
   builds put UFS2 at 8192.
 - Validates block and fragment sizes, shifts, group layout, `fs_size`
   against `ncg·fpg`, the summary area, size limits, and that the file holds
-  `fs_size·fsize` bytes. A shorter file is reported as an incomplete image.
+  `fs_size·fsize` bytes (computed without overflow). A shorter file is
+  reported as an incomplete image.
   Corruption is `ErrorCode::CorruptData` with a user message.
+- Ends on any input, in time and memory proportional to the file: a block
+  map with more references than the image has blocks is refused (pointers
+  that lead back to the same block), a folder cannot be larger than the
+  image, and `loadTree()` stops when the folders together are larger than the
+  image, at 256 nested folders or at 10,000,000 entries. `blocks()` takes an
+  optional token.
 - Handles general UFS2: fragments, holes, all three indirect levels,
   short and long symbolic links (listing only), and directory entries
   checked like `ufs_dirbadentry()`. UFS1 is reported as unsupported.
@@ -152,11 +159,16 @@ This is a read-only fsck_ffs pass 1–5. It checks:
 - the summary area against the groups, and the superblock totals
 - the superblock copies against the primary
 - "." and ".." in every directory and reachability from the root
+- that no directory lists the same name twice
 - that every block pointer is in range, not shared, and not marked free
 - `di_blocks`, link counts and `d_type`
 - that no used fragment is unreferenced and no inode is marked used without
   being referenced
 - folders per group
+
+It stops with a problem, instead of running on, when the group maps cannot
+fit their headers or when inodes and folders together claim more blocks than
+the image holds.
 
 It accepts the NetBSD `makefs` image in the tests and UFS2Tool's own images.
 
@@ -164,10 +176,10 @@ It accepts the NetBSD `makefs` image in the tests and UFS2Tool's own images.
 
 | Kind | Parameters | Phases | Notes |
 |---|---|---|---|
-| `image.ffpkg.build` | `source`, `output`, `replaceExisting` (false) | Scanning → Writing image → Verifying | Writes `<output>.part`. The image gets its final name only after verification passed (audit H6). An existing image is set aside and restored if replacing fails (M2). Refused when the output is inside the source. |
+| `image.ffpkg.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output`, `replaceExisting` (false) | Scanning → Writing image → Verifying | Writes `<output>.part`. The image gets its final name only after verification passed (audit H6). An existing image is set aside and restored if replacing fails (M2); the finished image is then kept as `<name> (new).ffpkg` and the error says so. Refused when the output is inside the source. A folder with more than 32,765 sub-folders is refused while planning (`di_nlink` is 16 bits). A ZIP source is never deleted. |
 | `image.ffpkg.verify` | `image`, `source` (optional) | Checking structure → Comparing | With `source`: compares at the configured depth. Without it, in full mode: reads every file back. A damaged image is `Verification::Failed`, not a job error. |
-| `image.ffpkg.extract` | `image`, `output` (new or empty folder), `path` ("/") | Reading image → Extracting → Verifying | Extracts into `<output>.part`, marked so a leftover of ours can be replaced, and renames it on success. On Windows, forbidden characters and device names are changed and collisions get " (2)". Each change is reported. File times come from the inodes. |
-| `image.ffpkg.edit` | `image`, `operations` | Reading image → Writing image → Verifying → Replacing original | Rebuilds through `<image>.part` and always compares the result with the edited tree, at least by name and size. The original is replaced only after that passes. Images containing links or special files are refused, because a rebuild would drop them. |
+| `image.ffpkg.extract` | `image`, `output` (new or empty folder), `path` ("/") | Reading image → Extracting → Verifying | Extracts into `<output>.part`, marked so a leftover of ours can be replaced (an image whose top folder holds the marker's name in any case is refused), and renames it on success; if that rename fails the extracted folder is kept as `<output>.new`. On Windows, forbidden characters and device names are changed and collisions get " (2)". Each change is reported. File times come from the inodes. |
+| `image.ffpkg.edit` | `image`, `operations` | Reading image → Writing image → Verifying → Replacing original | Rebuilds through `<image>.part` and always compares the result with the edited tree, at least by name and size. The original is replaced only after that passes; if it cannot be replaced (open elsewhere) the edited image is kept as `<name> (new).ffpkg`. Images containing links or special files are refused, because a rebuild would drop them. |
 
 Operations (`Ufs2Edit.h`): `{"op":"add","path":"/a/b","source":"C:/x"}`
 creates missing parent folders and adds a file or a folder recursively.
@@ -175,11 +187,15 @@ creates missing parent folders and adds a file or a folder recursively.
 file that exists in both, as UFS2Tool did. `delete` and
 `rename` (`newName`) work as named. `mkdir` makes a real directory, so no
 `.keep` file is needed. The legacy editor changed the image in place with
-UFS2Tool; here an edit can never leave a half-edited image.
+UFS2Tool; here an edit can never leave a half-edited image. A folder
+`replace` matches files by the names stored in the image; names that could
+leave the chosen folder on Windows (`\`, `:` and the like) are skipped.
 
 Every job writes outputs through `.part` names and checks free space against
 `storage.freeSpaceMarginMiB`. It honours cancellation at least every buffer
-(4 MiB) and every 64 regions, and reports byte progress.
+(4 MiB) and every 64 regions, and reports byte progress. An image of 4 GiB
+or more, or the extraction of a file that large, is refused up front when the
+destination drive is FAT32.
 
 ## Settings
 
@@ -278,14 +294,14 @@ beside it.
 
 - **Not loaded on a PS5.** Compatibility rests on the byte-identity with
   UFS2Tool (what users have been loading) and on FreeBSD's fsck.
-- **Not compiled with MSVC here.** The code avoids GCC-only features and
-  uses Qt for file access (`fw::toLongPath` on opens), but no MSVC build ran
-  in this environment.
 - **Listing order on Windows** is assumed to be the same for `QDirIterator`
-  and .NET (both read the NTFS index order). That was not observed on
-  Windows. The order affects only byte-identity, not validity.
+  and .NET (both read the NTFS index order). The release is an MSVC build
+  and the whole suite runs on Windows, but the order has not been compared
+  with UFS2Tool running on the same Windows folder. It affects only
+  byte-identity, not validity.
 - Symbolic links and special files are not written. The scanner follows
-  links and refuses special files. Edits refuse images that contain them.
+  links and refuses special files; a Windows shortcut (`.lnk`) is copied as
+  the file it is. Edits refuse images that contain links or special files.
 - The legacy "mount as drive" (Dokan) feature has no equivalent; extraction
   reads the image directly.
 - Images are written in full apart from large gaps (> 4 MiB), which are

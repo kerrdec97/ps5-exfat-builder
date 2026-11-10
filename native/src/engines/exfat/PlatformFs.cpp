@@ -81,19 +81,11 @@ Error fileError(const QString& userMessage, const QFileDevice& file)
 
 Status syncFile(QFile& file, const QString& displayName)
 {
+    // The flush here keeps the "drive ran out of space" wording; the device
+    // flush itself is the shared one.
     if (!file.flush())
         return fileError(QStringLiteral("Could not write %1.").arg(displayName), file);
-#ifdef Q_OS_WIN
-    const intptr_t h = _get_osfhandle(file.handle());
-    if (h == -1 || !FlushFileBuffers(reinterpret_cast<HANDLE>(h)))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
-                     QStringLiteral("FlushFileBuffers failed (%1)").arg(GetLastError()));
-#else
-    if (::fsync(file.handle()) != 0)
-        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
-                     QStringLiteral("fsync failed"));
-#endif
-    return success();
+    return flushToDisk(file, displayName);
 }
 
 #ifdef Q_OS_WIN
