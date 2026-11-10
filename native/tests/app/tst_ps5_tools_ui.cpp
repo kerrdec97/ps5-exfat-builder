@@ -20,6 +20,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QLabel>
 #include <QSettings>
 #include <QTabBar>
 #include <QTcpServer>
@@ -234,6 +235,59 @@ private slots:
         QVERIFY(QFileInfo::exists(ui::lastFtpCheckPath()));
         const auto saved = ui::loadLastFtpCheck();
         QVERIFY(saved && saved->passed() && saved->isFor(QStringLiteral("127.0.0.1"), server.port()));
+        m_ctx->queue().clearFinished();
+    }
+
+    // The checks write into the folder: a system folder is asked about first,
+    // and "Cancel" queues nothing.
+    void diagnosticsAskBeforeASystemFolder()
+    {
+        fake::FakeFtpServer::Options o;
+        o.root = m_root.filePath(QStringLiteral("diag-system"));
+        QDir().mkpath(o.root + QStringLiteral("/system_ex/priv"));
+        fake::FakeFtpServer server(o);
+        (void)m_ctx->settings().setValue(ps5::keys::kConsoleIp, QStringLiteral("127.0.0.1"));
+        (void)m_ctx->settings().setValue(ps5::keys::kFtpPort, int(server.port()));
+        m_window->navigate(QStringLiteral("ps5"), {{QStringLiteral("tab"), QStringLiteral("diagnostics")}});
+        auto* tab = ps5Page()->diagnosticsTab();
+        QVERIFY(tab);
+        QTRY_VERIFY(tab->isVisible());
+        tab->folderEdit()->setText(QStringLiteral("/system_ex/priv"));
+
+        QString asked;
+        const auto answer = [&](const QString& button) {
+            auto* poll = new QTimer(this);
+            connect(poll, &QTimer::timeout, this, [this, poll, button, &asked] {
+                for (auto* s : m_window->findChildren<ui::Sheet*>()) {
+                    QPushButton* b = s->isVisible() ? buttonIn(s, button) : nullptr;
+                    if (!b)
+                        continue;
+                    QStringList texts;
+                    for (auto* l : s->findChildren<QLabel*>())
+                        texts << l->text();
+                    asked = texts.join(u'\n');
+                    poll->stop();
+                    poll->deleteLater();
+                    b->click();
+                    return;
+                }
+            });
+            poll->start(20);
+        };
+        const int jobs = int(m_ctx->queue().records().size());
+        answer(QStringLiteral("Cancel"));
+        tab->run(false); // blocks in the question
+        QVERIFY2(asked.contains(QStringLiteral("Test a system folder?")) && asked.contains(QStringLiteral("/system_ex/priv")), qPrintable(asked));
+        QVERIFY(!tab->isRunning());
+        QCOMPARE(int(m_ctx->queue().records().size()), jobs);
+
+        answer(QStringLiteral("Continue anyway"));
+        tab->run(false);
+        QVERIFY(tab->isRunning());
+        QVERIFY(waitForDiagnosis(tab));
+        QCOMPARE(tab->cellText(QStringLiteral("writable")), QStringLiteral("Yes"));
+        QVERIFY(server.sawCommand(QStringLiteral("DELE /system_ex/priv/.exfatbuilder_wtest_")));
+        tab->folderEdit()->clear();
         m_ctx->queue().clearFinished();
     }
 

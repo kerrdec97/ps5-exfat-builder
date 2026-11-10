@@ -661,6 +661,7 @@ void ImageToolsPage::loadImage(const QString& path)
         m_ops.clear();
     m_tree = {};
     m_treeFor.clear();
+    m_reader->cancel(); // a listing of the image shown before is abandoned
     m_summary = {};
     m_summary.path = path;
     m_summary.format = imageFormatOf(path, true);

@@ -526,8 +526,9 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(raced().size(), 3, 5000);
     }
 
-    // The report holds the crash files themselves, next to the files it always has.
-    void problemReportContainsTheCrashFiles()
+    // The report holds the crash report itself (text), next to the files it
+    // always has; the memory dump of the crash is left out.
+    void problemReportContainsTheCrashReportButNotTheDump()
     {
         const QString crashes = fresh(QStringLiteral("crashes"));
         const QString newest = crashes + QStringLiteral("/crash-20261102-101500.txt");
@@ -545,9 +546,9 @@ private slots:
         QVERIFY2(id.ok(), qPrintable(id.ok() ? QString() : id.error().message));
         const QJsonArray sent = m_ctx->queue().record(id.value())->parameters.value(QStringLiteral("extraFiles")).toArray();
         QVERIFY(sent.contains(newest));
-        QVERIFY(sent.contains(newestDump));
+        QVERIFY(!sent.contains(newestDump));
         QVERIFY(!sent.contains(older));
-        QCOMPARE(sent.size(), 5); // settings, history, queue + the two crash files
+        QCOMPARE(sent.size(), 4); // settings, history, queue + the crash report
         m_ctx->queue().startNow(id.value());
         QTRY_VERIFY_WITH_TIMEOUT(m_ctx->queue().record(id.value()) && isTerminal(m_ctx->queue().record(id.value())->state), 60000);
         const auto rec = m_ctx->queue().record(id.value());
@@ -556,6 +557,21 @@ private slots:
         for (const auto& v : rec->outcome->details.value(QStringLiteral("contents")).toArray())
             contents << v.toString();
         QVERIFY2(contents.contains(QStringLiteral("crash-20261102-101500.txt")), qPrintable(contents.join(u' ')));
+        QVERIFY2(!contents.join(u' ').contains(QStringLiteral(".dmp")), qPrintable(contents.join(u' ')));
+
+        // Crash reports beside the logs are added by the job itself: not handed over a second time.
+        const QString own = QFileInfo(m_ctx->logFilePath()).absolutePath() + QStringLiteral("/crashes/crash-20261103-080000.txt");
+        QVERIFY(writeBytes(own, "Exception 0xC0000005 beside the logs\n"));
+        auto second = jobs::submitProblemReport(*m_ctx, out, QJsonObject{}, {own});
+        QVERIFY(second.ok());
+        QCOMPARE(m_ctx->queue().record(second.value())->parameters.value(QStringLiteral("extraFiles")).toArray().size(), 3);
+        m_ctx->queue().startNow(second.value());
+        QTRY_VERIFY_WITH_TIMEOUT(m_ctx->queue().record(second.value()) && isTerminal(m_ctx->queue().record(second.value())->state), 60000);
+        QStringList again;
+        for (const auto& v : m_ctx->queue().record(second.value())->outcome->details.value(QStringLiteral("contents")).toArray())
+            again << v.toString();
+        QCOMPARE(again.join(u' ').count(QStringLiteral("crash-20261103-080000.txt")), 1);
+        QFile::remove(own);
     }
 
     // "Sent" is recorded when the console took the payload; a second click while it is on its way sends nothing.
@@ -730,6 +746,19 @@ private slots:
         QVERIFY2(asked.contains(QStringLiteral("Replace the file on the console?")) && asked.contains(QStringLiteral("taken.bin")), qPrintable(asked));
         QCOMPARE(uploads(), 1);
         QCOMPARE(QFileInfo(root + QStringLiteral("/data/etaHEN/games/taken.bin")).size(), qint64(8));
+
+        // A folder whose own name lands on a system path ("system_ex" sent to
+        // "/") is asked about like a system folder.
+        QVERIFY(writeBytes(local + QStringLiteral("/system_ex/x.bin"), "x"));
+        asked.clear();
+        onSheet(&page, [&](ui::Sheet* s) {
+            asked = labelsOf(s);
+            if (QPushButton* no = buttonIn(s, QStringLiteral("Cancel")))
+                no->click();
+        });
+        page.uploadFiles({local + QStringLiteral("/system_ex")}, QStringLiteral("/"));
+        QVERIFY2(asked.contains(QStringLiteral("Change a system folder?")) && asked.contains(QStringLiteral("/system_ex")), qPrintable(asked));
+        QCOMPARE(uploads(), 1);
 
         // Three items deleted: one message.
         toasts.clear();

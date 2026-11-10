@@ -764,11 +764,11 @@ void MainWindow::checkCrashFiles()
     auto* bar = new InfoBar(Tone::Warn, this);
     bar->setDismissable(true);
     bar->setTitle(QStringLiteral("The app closed unexpectedly last time"));
-    bar->setMessage(QStringLiteral("A crash report was saved. Sending a problem report helps fix it; it contains logs and the crash file, never your games."));
+    bar->setMessage(QStringLiteral("A crash report was saved. Sending a problem report helps fix it; it contains logs and the crash report (text), never your games."));
     auto* report = bar->addLink(QStringLiteral("Create a problem report"));
-    connect(report, &Link::activated, this, [this, files, bar = QPointer<InfoBar>(bar)] {
+    connect(report, &Link::activated, this, [this, bar = QPointer<InfoBar>(bar)] {
         // The banner goes when the report is on its way; Cancel in the sheet leaves it.
-        if (reportProblem(files) && bar) {
+        if (reportProblem() && bar) {
             bar->hide();
             emit bar->dismissed(); // records the crash as acknowledged
         }
@@ -777,12 +777,16 @@ void MainWindow::checkCrashFiles()
     showBanner(bar);
 }
 
-bool MainWindow::reportProblem(const QStringList& extraFiles)
+bool MainWindow::reportProblem()
 {
+    // The newest crash reports go in as text. The memory dump of a crash never
+    // does: it can hold passcodes and paths that cannot be masked.
+    const QStringList crashFiles = crash::previousCrashFiles(QDir(Paths::logsDir()).filePath(QStringLiteral("crashes")));
+    const bool crashed = !crashFiles.isEmpty();
     auto* s = new Sheet(this, QStringLiteral("Report a problem"), Sheet::Icon::Info, size::dialogWide);
     s->addText(QStringLiteral("A ZIP is written to your Desktop with: the app's log files, the settings, queue and history files, the dependency statuses and a system summary%1. "
                               "It never contains game files. Attach it to a GitHub issue afterwards.")
-                   .arg(extraFiles.isEmpty() ? QString() : QStringLiteral(", and the crash report")));
+                   .arg(crashed ? QStringLiteral(", and the newest crash reports (text)") : QString()));
     auto* redact = s->addCheckbox(QStringLiteral("Hide my user name in paths"));
     redact->setChecked(m_ctx.settings().value(tools::keys::kRedactReports).toBool());
     const bool available = jobs::isAvailable(m_ctx, QStringLiteral("tools.report"));
@@ -800,11 +804,9 @@ bool MainWindow::reportProblem(const QStringList& extraFiles)
     QJsonObject diagnostics{{QStringLiteral("version"), QString::fromLatin1(build::kVersion)},
                             {QStringLiteral("dependencies"), deps},
                             {QStringLiteral("jobKinds"), QJsonArray::fromStringList(m_ctx.jobFactory().kinds())},
-                            {QStringLiteral("settingsCount"), int(m_ctx.schema().all().size())},
-                            {QStringLiteral("extraFiles"), QJsonArray::fromStringList(extraFiles)}};
+                            {QStringLiteral("settingsCount"), int(m_ctx.schema().all().size())}};
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-    // The crash files go into the ZIP themselves, not only their names.
-    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics, jobs::newestCrashFiles(extraFiles));
+    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics, jobs::newestCrashFiles(crashFiles));
     if (!r.ok()) {
         toast(Tone::Err, QStringLiteral("Report not created"), r.error().message);
         return false;
@@ -1046,7 +1048,6 @@ int MainWindow::screenshotAllPages(const QString& dir)
     setSidebarCompact(m_userCompact || m_autoCompact);
     // Keyboard focus ring: Tab into the page.
     navigate(QStringLiteral("settings"));
-    setAttribute(Qt::WA_KeyboardFocusChange, true);
     m_sidebar->focusCurrent();
     snap(QStringLiteral("focus-ring"));
     resize(1100, 760);

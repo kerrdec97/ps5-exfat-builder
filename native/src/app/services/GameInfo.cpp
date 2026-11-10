@@ -29,7 +29,7 @@ QString GameSummary::metaLine() const
     if (bytes > 0)
         parts << formatBytes(bytes);
     if (files > 0)
-        parts << QStringLiteral("%1 files").arg(formatCount(files));
+        parts << (files == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(formatCount(files)));
     if (!sdk.isEmpty())
         parts << QStringLiteral("SDK %1").arg(sdk);
     return parts.join(QStringLiteral(" · "));

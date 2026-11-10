@@ -57,7 +57,7 @@ public:
     void toast(ui::Tone tone, const QString& title, const QString& body, const QList<ui::ToastHost::Action>& actions = {});
     void showShortcuts();
     // Asks, then queues the problem report. Returns true when the report job was queued.
-    bool reportProblem(const QStringList& extraFiles = {});
+    bool reportProblem();
     // `apiUrl` is for tests (a local server standing in for GitHub); the app
     // passes none and the job refuses any other address.
     void checkForUpdates(bool silent, const QString& apiUrl = {});

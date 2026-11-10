@@ -99,6 +99,10 @@ public:
     void clearOverrides();
     bool hasErrors() const { return !m_errors.isEmpty(); }
     QStringList errorMessages() const { return m_errors.values(); }
+    // Which rows show an error, and the message of one: a page that hides
+    // rows for the chosen action leaves their errors out (see JobFormPage).
+    QStringList errorKeys() const { return m_errors.keys(); }
+    QString errorMessage(const QString& key) const { return m_errors.value(key); }
     int rowCount() const { return int(m_rows.size()); }
     SettingRow* row(const QString& key) const { return m_rows.value(key); }
     QStringList keys() const { return m_order; }

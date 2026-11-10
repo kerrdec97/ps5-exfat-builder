@@ -15,6 +15,7 @@
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
 #include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/SettingRow.h"
@@ -22,12 +23,14 @@
 #include "app/ui/Shell.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/FileUtil.h"
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/update/Module.h"
+#include "engines/ampr/Module.h"
 #include "engines/tools/DlcEmu.h"
 
 #include <QCryptographicHash>
@@ -988,6 +991,83 @@ private slots:
         QVERIFY(items[0].toObject().value(QStringLiteral("proposedName")).toString().startsWith(QStringLiteral("PPSA01234 Test Game")));
         QVERIFY(QFileInfo(dump).isDir()); // preview renames nothing
         m_ctx->queue().clearFinished();
+    }
+
+    // A Packed folder job is what it is whatever the global "zstd packs"
+    // switch says, from every page that queues one.
+    void packedFolderJobsCarryTheirOwnSwitch()
+    {
+        const QString src = m_root.filePath(QStringLiteral("pack-src/PPSA07777"));
+        QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(64, 'E')));
+        QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA07777"})"));
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        const auto id = jobs::submitPackFolder(*m_ctx, src, m_root.filePath(QStringLiteral("pack-out/PPSA07777")), {}, {});
+        QVERIFY2(id.ok(), qPrintable(id.ok() ? QString() : id.error().message));
+        QCOMPARE(q.record(id.value())->overrides.value(ampr::keys::kZstdPack).toBool(), true);
+        QVERIFY(q.remove(id.value()));
+        q.holdQueue(false);
+    }
+
+    // Home: the Free space tile shows a value in a screenshot run too (the
+    // worker's answer would come after the picture).
+    void homeFreeSpaceTileIsFilledForScreenshots()
+    {
+        auto* tile = m_window->page(QStringLiteral("home"))->findChild<ui::StatTile*>(QStringLiteral("home-space"));
+        QVERIFY(tile);
+        qApp->setProperty("fwScreenshotMode", true);
+        const auto reset = qScopeGuard([] { qApp->setProperty("fwScreenshotMode", QVariant()); });
+        m_window->navigate(QStringLiteral("queue"));
+        m_window->navigate(QStringLiteral("home"));
+        QStringList texts;
+        for (auto* l : tile->findChildren<QLabel*>())
+            texts << l->text();
+        const QString shown = texts.join(u'|');
+        QVERIFY2(shown.contains(QStringLiteral(" on ")) || shown.contains(QStringLiteral("|on ")) || shown.contains(QStringLiteral("not available")), qPrintable(shown));
+        QVERIFY2(!shown.contains(QStringLiteral("Checking")), qPrintable(shown));
+    }
+
+    // Settings > Storage > Temporary files measures and clears the temporary
+    // folder chosen there as well, and in it only the job folders the app made.
+    void temporaryFilesCoverTheChosenFolder()
+    {
+        auto* page = qobject_cast<pages::SettingsPage*>(m_window->page(QStringLiteral("settings")));
+        QVERIFY(page);
+        const QString custom = m_root.filePath(QStringLiteral("my temp"));
+        QString job;
+        {
+            TempDir t(QStringLiteral("job-J101010-002"), custom);
+            QVERIFY(t.isValid());
+            t.keep();
+            job = t.path();
+            QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("zip-source/eboot.bin")), QByteArray(70000, 'x')));
+        }
+        const QString mine = custom + QStringLiteral("/my notes/keep.txt");
+        QVERIFY(fwtest::writeTextFile(mine, "mine"));
+        QVERIFY(m_ctx->settings().setValue(general::keys::kTempFolder, custom).ok());
+        const auto restore = qScopeGuard([this] { (void)m_ctx->settings().setValue(general::keys::kTempFolder, QString()); });
+        m_window->navigate(QStringLiteral("settings"));
+        page->showSection(QStringLiteral("Storage"));
+        const QString customShown = QDir::toNativeSeparators(custom);
+        const auto usage = [&]() -> QString {
+            for (auto* l : page->findChildren<QLabel*>())
+                if (l->text().contains(customShown) && l->text().contains(QDir::toNativeSeparators(Paths::tempRoot())))
+                    return l->text();
+            return {};
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(!usage().isEmpty(), 10000);
+        QVERIFY2(!usage().startsWith(QStringLiteral("Nothing")), qPrintable(usage()));
+        QPushButton* clear = nullptr;
+        for (auto* b : page->findChildren<QPushButton*>())
+            if (b->text() == QStringLiteral("Clear"))
+                clear = b;
+        QVERIFY(clear);
+        QTRY_VERIFY(clear->isEnabled());
+        QTRY_VERIFY(!m_ctx->queue().isBusy());
+        clear->click();
+        QVERIFY(!QFileInfo::exists(job));
+        QVERIFY(QFile::exists(mine)); // the user's own folder in there is not the app's to remove
+        QTRY_VERIFY_WITH_TIMEOUT(usage().startsWith(QStringLiteral("Nothing to clear in")), 10000);
     }
 
     // A release is the program file itself: the app says "up to date", offers

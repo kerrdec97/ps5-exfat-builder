@@ -503,8 +503,9 @@ private slots:
 
     void stringListEditorKeepsPatternsAsWritten()
     {
+        // The definition says which kind of list it is, not the key's name.
         SettingDef patterns;
-        patterns.key = QStringLiteral("test.excludePatterns");
+        patterns.key = QStringLiteral("test.folderPatterns");
         patterns.label = QStringLiteral("Leave out");
         patterns.type = SettingType::StringList;
         SettingEditor ed(patterns, m_window.get());
@@ -533,6 +534,7 @@ private slots:
         folders.key = QStringLiteral("general.libraryFolders");
         folders.label = QStringLiteral("Library folders");
         folders.type = SettingType::StringList;
+        folders.folderList = true;
         SettingEditor fed(folders, m_window.get());
         QCOMPARE(fed.widget()->findChildren<QPushButton*>().size(), 1);
         fed.setValue(QStringList{QStringLiteral("D:/Dumps/A")});

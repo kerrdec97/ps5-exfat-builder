@@ -289,9 +289,17 @@ void JobFormPage::submitClicked(bool buildNow)
                       QStringLiteral("The engine for this workflow is not part of this build, so nothing was queued."));
         return;
     }
-    if (m_options && m_options->hasErrors()) {
-        showFormError(QStringLiteral("Check the job settings"), m_options->errorMessages().join(u' '));
-        return;
+    if (m_options) {
+        // A row the page hid does not apply to this job and is not sent with
+        // it: its error cannot be corrected here and must not block the job.
+        QStringList problems;
+        for (const QString& key : m_options->errorKeys())
+            if (const SettingRow* row = m_options->row(key); !row || !row->isHidden())
+                problems << m_options->errorMessage(key);
+        if (!problems.isEmpty()) {
+            showFormError(QStringLiteral("Check the job settings"), problems.join(u' '));
+            return;
+        }
     }
     const QString problem = validateForm();
     if (!problem.isEmpty()) {
@@ -371,32 +379,39 @@ QString driveLabel(const QString& path)
     return root.isEmpty() ? QStringLiteral("this drive") : root;
 }
 
+DriveSpace driveSpaceOf(const QString& folder)
+{
+    // A folder that is not created yet: the drive it will be on.
+    QString path = folder.isEmpty() ? QDir::homePath() : folder;
+    while (!QFileInfo::exists(path)) {
+        const QString parent = QFileInfo(path).absolutePath();
+        if (parent == path || parent.isEmpty())
+            break;
+        path = parent;
+    }
+    const QStorageInfo si(path);
+    DriveSpace d;
+    d.ready = si.isValid() && si.isReady();
+    d.available = d.ready ? si.bytesAvailable() : -1;
+    d.label = si.rootPath();
+    if (d.label.size() >= 2 && d.label[1] == u':')
+        d.label = d.label.left(2);
+    else if (d.label.isEmpty())
+        d.label = QStringLiteral("this drive");
+    return d;
+}
+
 void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done)
 {
     if (!context)
         return; // nobody to answer
     QPointer<QObject> guard(context);
     (void)QtConcurrent::run([guard, folder, done = std::move(done)] {
-        // A folder that is not created yet: the drive it will be on.
-        QString path = folder.isEmpty() ? QDir::homePath() : folder;
-        while (!QFileInfo::exists(path)) {
-            const QString parent = QFileInfo(path).absolutePath();
-            if (parent == path || parent.isEmpty())
-                break;
-            path = parent;
-        }
-        const QStorageInfo si(path);
-        const bool ready = si.isValid() && si.isReady();
-        const qint64 available = ready ? si.bytesAvailable() : -1;
-        QString label = si.rootPath();
-        if (label.size() >= 2 && label[1] == u':')
-            label = label.left(2);
-        else if (label.isEmpty())
-            label = QStringLiteral("this drive");
+        const DriveSpace d = driveSpaceOf(folder);
         // The context is only touched on the UI thread, where the pointer is tested.
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, ready, available, label, done] {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, d, done] {
             if (guard)
-                done(ready, available, label);
+                done(d.ready, d.available, d.label);
         }, Qt::QueuedConnection);
     });
 }

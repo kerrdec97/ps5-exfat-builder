@@ -526,9 +526,10 @@ void HomePage::refresh()
     // Off the UI thread (a network drive answers slowly), and only while the
     // page is on screen: refresh() runs on every queue change, onShown() asks again.
     const quint64 gen = ++m_spaceGen;
-    probeFreeSpace(isVisible() ? this : nullptr, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
+    const auto show = [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
         if (gen != m_spaceGen)
             return;
+        m_spaceKnown = true;
         if (ready) {
             m_spaceTile->setValue(formatBytes(available));
             m_spaceTile->setCaption(QStringLiteral("on %1 · %2").arg(label, nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder")));
@@ -536,7 +537,19 @@ void HomePage::refresh()
             m_spaceTile->setValue(QStringLiteral("—"));
             m_spaceTile->setCaption(QStringLiteral("Output drive not available"));
         }
-    });
+    };
+    if (qApp->property("fwScreenshotMode").toBool()) {
+        // A screenshot run renders the page at once: the answer of a worker
+        // would come after the picture, so the drive is asked here.
+        const DriveSpace d = driveSpaceOf(folder);
+        show(d.ready, d.available, d.label);
+    } else {
+        if (!m_spaceKnown) { // the tile is never empty while the first answer is on its way
+            m_spaceTile->setValue(QStringLiteral("Checking…"));
+            m_spaceTile->setCaption(nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder"));
+        }
+        probeFreeSpace(isVisible() ? this : nullptr, folder, show);
+    }
 
     // Pick up where you left off: the most recent failed / interrupted / cancelled job.
     m_continueId.clear();

@@ -6,6 +6,7 @@
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "engines/general/Module.h"
 
 #include <QAction>
 #include <QButtonGroup>
@@ -261,6 +262,8 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         refreshRow(key);
         refreshDependencyStates();
         updateSectionHeader();
+        if (key == general::keys::kTempFolder)
+            updateTempUsage(); // "Temporary files" names and measures that folder too
     });
     connect(&m_ctx.settings(), &SettingsStore::resetDone, this, &SettingsPage::rebuild);
     connect(&m_ctx, &AppContext::dependenciesChecked, this, [this] {
@@ -479,7 +482,8 @@ void SettingsPage::buildSection(const QString& section)
         m_cardsLayout->addWidget(card);
     }
     if (section == QLatin1String("Storage")) {
-        // Temporary files (Paths::tempUsageBytes / sweepStaleTemp).
+        // Temporary files: the app's own temp root and, when one is chosen,
+        // the temporary folder of this section (jobs run there then).
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
         card->setTitle(QStringLiteral("Temporary files"));
@@ -498,7 +502,9 @@ void SettingsPage::buildSection(const QString& section)
                 emit toastRequested(Tone::Warn, QStringLiteral("Jobs are running"), QStringLiteral("Temporary files are cleared when the queue is idle."));
                 return;
             }
-            const int n = Paths::sweepStaleTemp(0);
+            int n = Paths::sweepStaleTemp(0);
+            if (const QString custom = m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed(); !custom.isEmpty())
+                n += Paths::sweepStaleTempIn(custom, 0);
             emit toastRequested(Tone::Ok, QStringLiteral("Temporary files cleared"), QStringLiteral("%1 folder%2 removed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
             updateTempUsage();
         });
@@ -624,13 +630,19 @@ void SettingsPage::updateTempUsage()
     if (!m_tempUsage)
         return;
     QPointer<SettingsPage> self(this);
-    (void)QtConcurrent::run([self] {
-        const qint64 bytes = Paths::tempUsageBytes();
-        QMetaObject::invokeMethod(qApp, [self, bytes] {
+    const QString custom = m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed();
+    (void)QtConcurrent::run([self, custom] {
+        // In the chosen folder only the job folders the app created count.
+        const qint64 bytes = Paths::tempUsageBytes() + (custom.isEmpty() ? 0 : Paths::tempUsageBytesIn(custom));
+        QMetaObject::invokeMethod(qApp, [self, bytes, custom] {
             if (!self || !self->m_tempUsage)
                 return;
-            self->m_tempUsage->setText(bytes > 0 ? QStringLiteral("%1 in %2").arg(formatBytes(bytes), nativePath(Paths::tempRoot()))
-                                                 : QStringLiteral("Nothing to clear in %1").arg(nativePath(Paths::tempRoot())));
+            if (custom != self->m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed())
+                return; // the folder was changed meanwhile: its own measurement follows
+            const QString where = custom.isEmpty() ? nativePath(Paths::tempRoot())
+                                                   : QStringLiteral("%1 and %2").arg(nativePath(Paths::tempRoot()), nativePath(custom));
+            self->m_tempUsage->setText(bytes > 0 ? QStringLiteral("%1 in %2").arg(formatBytes(bytes), where)
+                                                 : QStringLiteral("Nothing to clear in %1").arg(where));
             self->m_tempClear->setEnabled(bytes > 0);
         }, Qt::QueuedConnection);
     });

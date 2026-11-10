@@ -1253,11 +1253,11 @@ QString DlcPage::validateForm()
         return QStringLiteral("Packages are still being read. Try again in a moment.");
     if (const QString k = dlc::hex32Problem(m_key->text().trimmed()); !k.isEmpty()) {
         setInputError(m_key, true);
-        return QStringLiteral("The entitlement key must be exactly 32 hexadecimal characters.");
+        return QStringLiteral("The entitlement key %1").arg(k); // the engine's wording, with the length
     }
     if (const QString p = dlc::hex32Problem(m_passcode->text().trimmed()); !p.isEmpty()) {
         setInputError(m_passcode, true);
-        return QStringLiteral("The PKG source passcode must be exactly 32 hexadecimal characters.");
+        return QStringLiteral("The PKG source passcode %1").arg(p);
     }
     if (outputFolder().isEmpty())
         return QStringLiteral("Select the output folder.");

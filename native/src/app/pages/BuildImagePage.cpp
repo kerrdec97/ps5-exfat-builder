@@ -475,7 +475,8 @@ QWidget* plainRow(const QString& title, const QString& help, QWidget* control, Q
 // Jobs that run the publisher and follow the live CPU limit.
 bool isPackageBuildKind(const QString& kind)
 {
-    return kind == QLatin1String("fpkg.build") || kind == QLatin1String("fpkg.addon") || kind == QLatin1String("fpkg.backport");
+    return kind == QLatin1String("fpkg.build") || kind == QLatin1String("fpkg.addon") || kind == QLatin1String("fpkg.backport")
+        || kind == QLatin1String("fpkg.verify") || kind == QLatin1String("fpkg.extract");
 }
 
 // "D:" for a volume root like "D:/".
@@ -533,9 +534,6 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         m_sourceBadge->set(QStringLiteral("Scanning\u2026 %1 files \u00b7 %2").arg(formatCount(files), formatBytes(bytes)), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
     });
-
-    // Work folders of backport builds that a crash or power loss left behind.
-    (void)QtConcurrent::run([] { fpkg::sweepStaleBackportWork(); });
 
     buildSourceCard();
     buildFormatCard();
@@ -1926,7 +1924,7 @@ void BuildImagePage::applyLiveCpuLimit()
             fpkg::setLiveCpuLimit(rec.id, cores);
             ++applied;
         }
-    m_liveNote->setText(applied > 0 ? QStringLiteral("Applied to %1 running package build%2.").arg(applied).arg(applied == 1 ? QString() : QStringLiteral("s"))
+    m_liveNote->setText(applied > 0 ? QStringLiteral("Applied to %1 running package job%2.").arg(applied).arg(applied == 1 ? QString() : QStringLiteral("s"))
                                     : QStringLiteral("Lower it any time, even while packing."));
 }
 
@@ -2339,10 +2337,8 @@ Result<QString> BuildImagePage::submit(bool)
             out = outputFolder();
         QJsonObject extra{{QStringLiteral("title"), m_summary.title}, {QStringLiteral("titleId"), m_summary.titleId},
                           {QStringLiteral("version"), m_summary.version}, {QStringLiteral("sourceBytes"), m_summary.bytes}};
-        if (isZstdFolder()) {
-            overrides.insert(ampr::keys::kZstdPack, true); // what this output is, whatever the global setting says
+        if (isZstdFolder())
             r = jobs::submitPackFolder(m_ctx, m_summary.folder, QDir(out).filePath(fileName()), overrides, extra);
-        }
         else
             r = jobs::submitImageBuild(m_ctx, format(), m_summary.folder, out, fileName(), overrides, extra);
     } else {

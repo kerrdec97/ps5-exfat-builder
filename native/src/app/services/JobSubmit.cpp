@@ -3,6 +3,7 @@
 #include "app/AppContext.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Widgets.h"
+#include "core/FileUtil.h"
 #include "core/Paths.h"
 #include "engines/ampr/Module.h"
 
@@ -148,7 +149,11 @@ Result<QString> submitPackFolder(AppContext& ctx, const QString& source, const Q
     QJsonObject p = extra;
     p.insert(QStringLiteral("source"), source);
     p.insert(QStringLiteral("output"), output);
-    return enqueue(ctx, ampr::kPackJob, p, overrides);
+    // What this output is, whatever the global "zstd packs" switch says, and
+    // from every page that queues one (Build image, the Library's bulk build).
+    QVariantMap o = overrides;
+    o.insert(ampr::keys::kZstdPack, true);
+    return enqueue(ctx, ampr::kPackJob, p, o);
 }
 
 Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, const QVariantMap& overrides)
@@ -279,11 +284,20 @@ Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationF
 {
     QJsonObject p;
     p.insert(QStringLiteral("destinationFolder"), destinationFolder);
-    p.insert(QStringLiteral("logsFolder"), QFileInfo(ctx.logFilePath()).absolutePath());
+    const QString logsFolder = QFileInfo(ctx.logFilePath()).absolutePath();
     QStringList files{Paths::settingsFile(), Paths::historyFile(), Paths::queueFile()};
-    for (const QString& f : extraFiles)
-        if (!f.isEmpty() && !files.contains(f))
-            files << f;
+    for (const QString& f : extraFiles) {
+        if (f.isEmpty() || files.contains(f))
+            continue;
+        // A memory dump cannot be cleaned of secrets and paths: it stays out.
+        if (QFileInfo(f).suffix().compare(QLatin1String("dmp"), Qt::CaseInsensitive) == 0)
+            continue;
+        // The job adds the crash reports beside the logs by itself.
+        if (isSameOrInside(f, QDir(logsFolder).filePath(QStringLiteral("crashes"))))
+            continue;
+        files << f;
+    }
+    p.insert(QStringLiteral("logsFolder"), logsFolder);
     p.insert(QStringLiteral("extraFiles"), QJsonArray::fromStringList(files));
     p.insert(QStringLiteral("diagnostics"), diagnostics);
     return enqueue(ctx, QStringLiteral("tools.report"), p, {});
@@ -365,13 +379,16 @@ Result<QString> submitShadowMountStop(AppContext& ctx, const QString& host, int 
     return enqueue(ctx, QStringLiteral("ps5.shadowmount.stop"), p, {});
 }
 
-Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest)
+Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest,
+                                  bool allowProtectedPaths)
 {
     QJsonObject p;
     putEndpoint(p, host, port);
     if (!folder.trimmed().isEmpty())
         p.insert(QStringLiteral("folder"), folder.trimmed());
     p.insert(QStringLiteral("speedTest"), speedTest);
+    if (allowProtectedPaths)
+        p.insert(QStringLiteral("allowProtectedPaths"), true);
     return enqueue(ctx, QStringLiteral("ps5.ftp.diagnose"), p, {});
 }
 

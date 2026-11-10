@@ -37,8 +37,7 @@ static bool useSegmented(const SettingDef& def)
 // separators; a pattern is shown and stored exactly as it is written.
 static bool isFolderList(const SettingDef& def)
 {
-    const QString name = def.key.section(u'.', -1);
-    return name.contains(QLatin1String("folder"), Qt::CaseInsensitive) || name.contains(QLatin1String("dir"), Qt::CaseInsensitive);
+    return def.type == SettingType::StringList && def.folderList;
 }
 
 static QString listText(const QStringList& items) { return items.join(QStringLiteral("; ")); }

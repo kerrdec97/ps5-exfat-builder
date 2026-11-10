@@ -52,6 +52,7 @@ struct SettingDef {
     QString unit;        // "MiB", "threads", "%"
     QList<SettingChoice> choices; // Enum
     QString fileFilter;  // FilePath dialogs, e.g. "Executables (*.exe)"
+    bool folderList = false;      // StringList: the items are folders (folder picker, native separators), not patterns
     bool perJob = false;          // may be overridden for a single job
     bool advanced = false;        // hidden behind "Show advanced"
     bool restartRequired = false;

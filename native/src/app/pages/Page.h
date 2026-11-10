@@ -192,6 +192,16 @@ private:
 QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
 QString relativeTime(const QDateTime& t);         // "2 min ago"
 QString driveLabel(const QString& path);          // "D:" / "/"
+// What the drive of `folder` (or of the nearest folder above it that exists)
+// reports. Blocking: a mapped network drive or an unplugged letter can take
+// seconds, so pages use probeFreeSpace(); screenshot runs, which render a page
+// at once, ask here.
+struct DriveSpace {
+    bool ready = false;
+    qint64 available = -1;
+    QString label; // "D:" / "/" / "this drive"
+};
+DriveSpace driveSpaceOf(const QString& folder);
 // Asks the drive of `folder` for its free space on a worker thread (a mapped
 // network drive or an unplugged letter can block for seconds) and calls
 // `done(ready, bytesAvailable, driveLabel)` on the UI thread while `context`
