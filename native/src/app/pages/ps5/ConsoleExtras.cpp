@@ -246,10 +246,7 @@ void CrashDumpsTab::start()
         m_status->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Warn);
         return;
     }
-    QJsonObject p{{QStringLiteral("host"), ep.host}, {QStringLiteral("port"), int(ep.ftpPort)}, {QStringLiteral("minutes"), m_minutes->value()}};
-    if (!m_folder->path().trimmed().isEmpty())
-        p.insert(QStringLiteral("outputDir"), m_folder->path().trimmed());
-    auto id = m_ctx.queue().enqueue(ps5::jobkinds::kCrashDumps, p);
+    auto id = jobs::submitCrashDumpCapture(m_ctx, ep.host, int(ep.ftpPort), m_minutes->value(), m_folder->path().trimmed());
     if (!id.ok()) {
         m_status->set(id.error().message, Tone::Err);
         return;

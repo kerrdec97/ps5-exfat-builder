@@ -697,9 +697,7 @@ void ShadowMountTab::ejectUsb()
                                        QStringLiteral("Cancel"), QStringLiteral("Eject"), false, Sheet::Icon::Info)) {
                 return;
             }
-            auto id = m_ctx.queue().enqueue(ps5::jobkinds::kShadowMountEject,
-                                            QJsonObject{{QStringLiteral("host"), ep.host}, {QStringLiteral("apiPort"), int(ep.smpApiPort)},
-                                                        {QStringLiteral("path"), path}});
+            auto id = jobs::submitShadowMountEject(m_ctx, ep.host, int(ep.smpApiPort), path);
             if (!id.ok()) {
                 setStatus(id.error().message, Tone::Err);
                 return;

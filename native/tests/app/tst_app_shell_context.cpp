@@ -5,6 +5,7 @@
 #include "app/AppContext.h"
 #include "app/models/JobQueueModel.h"
 #include "app/services/AppStores.h"
+#include "app/services/LauncherIdentity.h"
 #include "connect/ps5/Module.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
@@ -13,6 +14,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIcon>
+#include <QImage>
 #include <QJsonObject>
 #include <QSettings>
 #include <QSignalSpy>
@@ -173,6 +176,21 @@ private slots:
         ui::PayloadStore again; // what was saved loads again
         QCOMPARE(int(again.entries().size()), 1);
         QVERIFY(again.entries().front().lastSent.isValid());
+    }
+
+    // The window icon is the brand mark in colour, in the sizes the shell asks for.
+    void appIconIsTheBrandMark()
+    {
+        const QIcon icon = launcher::appIcon();
+        QVERIFY(!icon.isNull());
+        const QList<QSize> sizes = icon.availableSizes();
+        for (const int px : {16, 24, 32, 48, 64, 256})
+            QVERIFY2(sizes.contains(QSize(px, px)), qPrintable(QString::number(px)));
+        const QImage big = icon.pixmap(256, 256).toImage();
+        QCOMPARE(big.size(), QSize(256, 256));
+        QCOMPARE(qAlpha(big.pixel(0, 0)), 0); // rounded corners
+        const QColor tile = big.pixelColor(40, 128);
+        QVERIFY2(tile.alpha() == 255 && tile.blue() > 200 && tile.blue() > tile.red(), qPrintable(tile.name()));
     }
 
     // One scan folder is one entry, however it is written.

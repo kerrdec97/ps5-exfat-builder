@@ -15,6 +15,7 @@
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
 #include "app/services/JobSubmit.h"
+#include "app/services/LauncherIdentity.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
@@ -155,7 +156,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     m_freeSpaceTimer.start();
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
-        m_tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/icons/drive.svg")), this);
+        m_tray = new QSystemTrayIcon(launcher::appIcon(), this);
         m_tray->setToolTip(windowTitle());
         connect(m_tray, &QSystemTrayIcon::messageClicked, this, [this] {
             showNormal();
@@ -277,8 +278,12 @@ void MainWindow::buildShortcuts()
     });
     add(QKeySequence(QStringLiteral("Ctrl+L")), [this] { navigate(QStringLiteral("logs")); });
     add(QKeySequence(QStringLiteral("Ctrl+,")), [this] { navigate(QStringLiteral("settings")); });
-    add(QKeySequence::Quit, [this] { close(); });
-    add(QKeySequence(QStringLiteral("Ctrl+Q")), [this] { close(); });
+    // Ctrl+Q everywhere, plus the platform's own quit key where it is another one
+    // (the same sequence registered twice would be ambiguous and never fire).
+    const QKeySequence ctrlQ(QStringLiteral("Ctrl+Q"));
+    add(ctrlQ, [this] { close(); });
+    if (const QKeySequence quit(QKeySequence::Quit); !quit.isEmpty() && quit != ctrlQ)
+        add(quit, [this] { close(); });
     add(QKeySequence(Qt::Key_F5), [this] {
         if (auto* p = currentPageWidget())
             p->refresh();
@@ -464,7 +469,7 @@ void MainWindow::onJobFinished(const QString& id)
                 auto* s = new Sheet(this, QStringLiteral("Problem report ready"), Sheet::Icon::Info);
                 s->addText(QStringLiteral("The report was saved as %1. Attach it to a new GitHub issue and describe what happened.").arg(Sheet::monoSpan(nativePath(out))));
                 s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
-                s->addButton(QStringLiteral("Show in folder"), Sheet::Role::Primary);
+                s->addButton(QStringLiteral("Show in folder"), Sheet::Role::Safe); // one primary action per sheet
                 s->addButton(QStringLiteral("Open GitHub issue"), Sheet::Role::Primary);
                 const int r = s->exec();
                 if (r == 1)

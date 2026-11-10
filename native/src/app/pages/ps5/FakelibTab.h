@@ -31,8 +31,8 @@ private:
     void showListing(const ps5::fakelib::Listing& listing);
     int selectedRow() const;
     void updateActions();
-    // Runs `op` then lists again; `what` names the action in messages.
-    void runAndRefresh(const QString& what, std::function<Status(ps5::FtpClient&, const CancellationToken&)> op);
+    // Runs `op` then lists again; `done` / `failed` are the message titles ("libX.sprx added" / "libX.sprx not added").
+    void runAndRefresh(const QString& done, const QString& failed, std::function<Status(ps5::FtpClient&, const CancellationToken&)> op);
     void askAdd();
     void askReplace();
     void askRemove();

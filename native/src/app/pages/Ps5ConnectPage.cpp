@@ -287,7 +287,7 @@ QString youtubeHelp(const QString& firmware)
     const QString v = ps5::y2jbYoutubeVersionFor(firmware);
     if (firmware.trimmed().isEmpty())
         return QStringLiteral("Type the firmware to see which YouTube version it needs.");
-    return v.isEmpty() ? QStringLiteral("Y2JB supports firmware 4.03 to 13.60.") : QStringLiteral("Firmware %1 needs YouTube %2.").arg(firmware.trimmed(), v);
+    return v.isEmpty() ? QStringLiteral("No Y2JB release covers firmware %1.").arg(firmware.trimmed()) : QStringLiteral("Firmware %1 needs YouTube %2.").arg(firmware.trimmed(), v);
 }
 
 } // namespace
@@ -468,8 +468,8 @@ ps5::ConsoleEndpoint Ps5ConnectPage::endpoint() const
     return ep;
 }
 
-Ps5ConnectPage::Group* Ps5ConnectPage::addGroup(const QString& key, const QString& title, const QString& iconName,
-                                                const QList<std::tuple<QString, QString, QString, QWidget*>>& tools)
+void Ps5ConnectPage::addGroup(const QString& key, const QString& title, const QString& iconName,
+                              const QList<std::tuple<QString, QString, QString, QWidget*>>& tools)
 {
     Group g;
     g.key = key;
@@ -500,7 +500,6 @@ Ps5ConnectPage::Group* Ps5ConnectPage::addGroup(const QString& key, const QStrin
     m_groups->setTabData(index, key);
     m_toolGroup.insert(key, key);
     m_groupList.push_back(g);
-    return &m_groupList.back();
 }
 
 void Ps5ConnectPage::showTool(const QString& keyIn)
@@ -762,10 +761,10 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     auto* bh = hbox(bar, space::sm, QMargins(space::md, space::sm, space::md, space::sm));
     m_btnUpload = button(QStringLiteral("Upload files…"), ButtonVariant::Primary, QStringLiteral("upload"), bar);
     m_btnUploadFolder = button(QStringLiteral("Upload folder…"), ButtonVariant::Secondary, QStringLiteral("folder_in"), bar);
-    m_btnNewFolder = button(QStringLiteral("New folder"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), bar);
-    m_btnDownload = button(QStringLiteral("Download"), ButtonVariant::Secondary, QStringLiteral("download"), bar);
-    m_btnRename = button(QStringLiteral("Rename"), ButtonVariant::Subtle, QStringLiteral("rename"), bar);
-    m_btnDelete = button(QStringLiteral("Delete"), ButtonVariant::Subtle, QStringLiteral("trash"), bar);
+    m_btnNewFolder = button(QStringLiteral("New folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), bar);
+    m_btnDownload = button(QStringLiteral("Download…"), ButtonVariant::Secondary, QStringLiteral("download"), bar);
+    m_btnRename = button(QStringLiteral("Rename…"), ButtonVariant::Subtle, QStringLiteral("rename"), bar);
+    m_btnDelete = button(QStringLiteral("Delete…"), ButtonVariant::Subtle, QStringLiteral("trash"), bar);
     for (auto* b : {m_btnUpload, m_btnUploadFolder, m_btnNewFolder, m_btnDownload, m_btnRename, m_btnDelete})
         setButtonSmall(b, true);
     m_btnDownload->setToolTip(QStringLiteral("Download the selected items to a folder on this PC"));
@@ -1571,6 +1570,7 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
         m_targetHint->setText(v == u"payload:9020"   ? QStringLiteral("Only before elfldr runs: the exploit's own loader starts it.")
                             : v == u"payload:50000"  ? QStringLiteral("Y2JB's remote JS server takes .js files; the port can differ.")
                             : v.startsWith(QLatin1String("micromount")) ? QStringLiteral("MicroMount is archived; use ShadowMount+.")
+                            : v.startsWith(QLatin1String("shadowmount")) ? QStringLiteral("For shadowmountplus.elf: the loader port set for ShadowMount+ in Settings.")
                                                                          : QStringLiteral("elfldr runs every payload as its own process."));
     };
     connect(m_payloadTarget, &QComboBox::currentIndexChanged, this, [targetHint](int) { targetHint(); });

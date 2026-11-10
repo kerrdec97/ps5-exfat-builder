@@ -1,6 +1,5 @@
 #include "app/services/ConsoleSession.h"
 
-#include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/RemotePath.h"
 
@@ -128,35 +127,6 @@ public slots:
         noteDroppedLink(st);
         emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? QStringLiteral("Created %1").arg(path) : st.error().message);
     }
-    void doLoadMount(int tool)
-    {
-        if (!m_client) {
-            emit m_session->mountConfigLoaded(tool, false, {}, QStringLiteral("Not connected."));
-            return;
-        }
-        auto r = ps5::loadMountConfig(*m_client, ps5::MountTool(tool));
-        if (!r.ok()) {
-            const bool fresh = r.error().code == ErrorCode::NotFound;
-            emit m_session->mountConfigLoaded(tool, fresh, {}, fresh ? QStringLiteral("No config.ini on the console yet; the defaults are shown.") : r.error().message);
-            return;
-        }
-        emit m_session->mountConfigLoaded(tool, true, r.value(), QStringLiteral("Loaded from the console."));
-    }
-    void doPushMount(int tool, const QString& text)
-    {
-        if (!m_client) {
-            emit m_session->mountConfigPushed(tool, false, QStringLiteral("Not connected."));
-            return;
-        }
-        auto r = ps5::pushMountConfig(*m_client, ps5::MountTool(tool), text, ps5::newConsoleBackupDir());
-        if (!r.ok()) {
-            emit m_session->mountConfigPushed(tool, false, r.error().message);
-            return;
-        }
-        emit m_session->mountConfigPushed(tool, true,
-                                          r->backupPath.isEmpty() ? QStringLiteral("Written to the console (no earlier config existed).")
-                                                                  : QStringLiteral("Written to the console. The previous config was saved to %1").arg(r->backupPath));
-    }
     void doSiteAvail()
     {
         if (!m_client)
@@ -269,16 +239,6 @@ void ConsoleSession::rename(const QString& from, const QString& to)
 void ConsoleSession::mkdir(const QString& path)
 {
     post([w = m_worker, path] { w->doMkdir(path); });
-}
-
-void ConsoleSession::loadMountConfig(ps5::MountTool tool)
-{
-    post([w = m_worker, tool] { w->doLoadMount(int(tool)); });
-}
-
-void ConsoleSession::pushMountConfig(ps5::MountTool tool, const QString& text)
-{
-    post([w = m_worker, tool, text] { w->doPushMount(int(tool), text); });
 }
 
 void ConsoleSession::siteAvail()

@@ -494,7 +494,9 @@ void Ps5ManagerTab::compare(const QString& remoteFolder, const QString& localSou
                                   return;
                               tick.restart();
                               postToUi([this, folders, files] {
-                                  m_cmpFooter->setText(QStringLiteral("Reading the console folder… %1 folder(s), %2 file(s)").arg(folders).arg(files));
+                                  m_cmpFooter->setText(QStringLiteral("Reading the console folder… %1 folder%2, %3 file%4")
+                                                           .arg(folders).arg(folders == 1 ? QString() : QStringLiteral("s"))
+                                                           .arg(files).arg(files == 1 ? QString() : QStringLiteral("s")));
                               });
                           }));
             rep.localSource = localSource;
@@ -545,10 +547,11 @@ void Ps5ManagerTab::showReport()
     const bool any = !m_report->diffs.empty();
     m_diffs->setVisible(any);
     m_cmpEmpty->setVisible(!any);
-    QString text = QStringLiteral("%1 — %2 local file(s) (%3), %4 on the PS5 (%5)")
+    QString text = QStringLiteral("%1 — %2 local %6 (%3), %4 on the PS5 (%5)")
                        .arg(m_report->summary())
                        .arg(formatCount(m_report->localFiles), formatBytes(m_report->localBytes))
-                       .arg(formatCount(m_report->remoteFiles), formatBytes(m_report->remoteBytes));
+                       .arg(formatCount(m_report->remoteFiles), formatBytes(m_report->remoteBytes))
+                       .arg(m_report->localFiles == 1 ? QStringLiteral("file") : QStringLiteral("files"));
     if (!m_report->warnings.isEmpty())
         text += QStringLiteral(" · ") + m_report->warnings.join(QStringLiteral(" · "));
     m_cmpFooter->setText(text);

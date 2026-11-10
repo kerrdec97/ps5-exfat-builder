@@ -155,7 +155,7 @@ Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, con
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("verify"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -179,7 +179,7 @@ Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, co
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("extract"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -232,19 +232,6 @@ Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders)
     QJsonObject p;
     p.insert(QStringLiteral("folders"), QJsonArray::fromStringList(folders));
     return enqueue(ctx, QStringLiteral("library.scan"), p, {});
-}
-
-Result<QString> submitFtpUpload(AppContext& ctx, const QString& host, int port, const QString& localPath,
-                                const QString& remotePath)
-{
-    QJsonObject p{{QStringLiteral("sources"), QJsonArray{localPath}}};
-    if (!host.isEmpty())
-        p.insert(QStringLiteral("host"), host);
-    if (port > 0)
-        p.insert(QStringLiteral("port"), port);
-    if (!remotePath.isEmpty())
-        p.insert(QStringLiteral("remoteDir"), remotePath);
-    return enqueue(ctx, QStringLiteral("ps5.ftp.upload"), p, {});
 }
 
 Result<QString> submitPayload(AppContext& ctx, const QString& host, int port, const QString& file)
@@ -428,12 +415,35 @@ Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const 
     return enqueue(ctx, QStringLiteral("library.rename"), p, {});
 }
 
-Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force)
+Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force, bool allowAssetPacks)
 {
     QJsonObject p{{QStringLiteral("folder"), folder}};
     if (force)
         p.insert(QStringLiteral("force"), true);
+    if (allowAssetPacks)
+        p.insert(QStringLiteral("allowAssetPacks"), true);
     return enqueue(ctx, QStringLiteral("ampr.index.local"), p, {});
+}
+
+Result<QString> submitShadowMountEject(AppContext& ctx, const QString& host, int apiPort, const QString& path)
+{
+    QJsonObject p;
+    if (!host.isEmpty())
+        p.insert(QStringLiteral("host"), host);
+    if (apiPort > 0)
+        p.insert(QStringLiteral("apiPort"), apiPort);
+    if (!path.isEmpty())
+        p.insert(QStringLiteral("path"), path);
+    return enqueue(ctx, QStringLiteral("ps5.shadowmount.eject"), p, {});
+}
+
+Result<QString> submitCrashDumpCapture(AppContext& ctx, const QString& host, int port, int minutes, const QString& outputDir)
+{
+    QJsonObject p{{QStringLiteral("minutes"), minutes}};
+    putEndpoint(p, host, port);
+    if (!outputDir.isEmpty())
+        p.insert(QStringLiteral("outputDir"), outputDir);
+    return enqueue(ctx, QStringLiteral("ps5.crashdumps.capture"), p, {});
 }
 
 Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder)

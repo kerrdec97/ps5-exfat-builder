@@ -143,8 +143,8 @@ private:
     void showServices(const ps5::ConsoleServices& s);
     void updatePayloadChip();
     void showTool(const QString& key);
-    Group* addGroup(const QString& key, const QString& title, const QString& icon,
-                    const QList<std::tuple<QString, QString, QString, QWidget*>>& tools);
+    void addGroup(const QString& key, const QString& title, const QString& icon,
+                  const QList<std::tuple<QString, QString, QString, QWidget*>>& tools);
     // FTP
     QWidget* buildFilesBrowser(QWidget* parent);
     void onListed(const ui::RemoteListing& listing);

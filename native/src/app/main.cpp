@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
     QApplication::setApplicationName(QStringLiteral("exFAT Image Builder Farewell"));
     QApplication::setApplicationDisplayName(QStringLiteral("exFAT Image Builder"));
     QApplication::setApplicationVersion(QString::fromLatin1(fw::build::kVersion));
-    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/drive.svg")));
+    QApplication::setWindowIcon(fw::launcher::appIcon());
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("PS5 exFAT Image Builder v5"));

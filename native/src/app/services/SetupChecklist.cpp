@@ -31,6 +31,8 @@ QVariantMap settingsArgs(const QString& key)
 
 QString ago(const QDateTime& t)
 {
+    if (!t.isValid())
+        return QStringLiteral("at an unknown time");
     const qint64 s = t.secsTo(QDateTime::currentDateTime());
     if (s < 60)
         return QStringLiteral("just now");
@@ -38,7 +40,7 @@ QString ago(const QDateTime& t)
         return QStringLiteral("%1 min ago").arg(s / 60);
     if (s < 86400)
         return QStringLiteral("%1 h ago").arg(s / 3600);
-    return t.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+    return QStringLiteral("on %1").arg(t.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
 }
 
 } // namespace
