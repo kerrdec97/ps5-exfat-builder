@@ -17,6 +17,37 @@
 
 namespace fw::exfat {
 
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
+{
+    Status st = part.commit(replaceExisting);
+    if (st.ok())
+        return st;
+    const QFileInfo fi(part.finalPath());
+    const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
+    const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
+    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
+        return st; // nothing could be saved: the plain error stands
+    Error e = st.error();
+    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    const QString name = QDir::toNativeSeparators(part.finalPath());
+    const QString keptName = QDir::toNativeSeparators(kept);
+    if (e.code == ErrorCode::AlreadyExists)
+        e.message = QStringLiteral("%1, but %2 already exists. It was saved as %3.").arg(what, name, keptName);
+    else if (fi.exists())
+        e.message = QStringLiteral("%1, but could not replace %2 because that file is in use. It was saved as %3. "
+                                   "Close the program that uses the old file, then rename the new one.")
+                        .arg(what, name, keptName);
+    else
+        e.message = QStringLiteral("%1, but could not be named %2. It was saved as %3.").arg(what, name, keptName);
+    return e;
+}
+
+QString keepStagedFolder(const QString& stage, const QString& output)
+{
+    const QString kept = uniquePath(output + QStringLiteral(".new"));
+    return QDir().rename(stage, kept) ? kept : stage;
+}
+
 Error fileError(const QString& userMessage, const QFileDevice& file)
 {
     if (file.error() == QFileDevice::ResourceError)

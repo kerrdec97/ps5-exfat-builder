@@ -1006,7 +1006,7 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
         return res;
     }
     reader.reset(); // release the original before it is swapped (Windows)
-    FW_TRY(part.commit(true));
+    FW_TRY(commitOrKeep(part, true, QStringLiteral("The edited image was built and verified")));
     return res;
 }
 

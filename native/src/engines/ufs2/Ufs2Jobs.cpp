@@ -50,6 +50,34 @@ QStringList listingOf(const SourceTree& t)
 
 QString seconds(qint64 ms) { return QStringLiteral("%1 s").arg(QString::number(double(ms) / 1000.0, 'f', 1)); }
 
+// Gives a finished .part file its final name. When that fails (the image it
+// replaces is mounted or open in another program) the finished work is not
+// thrown away: it is moved to a free name next to it, "<name> (new).<ext>",
+// and the returned error says so. `what` starts that message.
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
+{
+    Status st = part.commit(replaceExisting);
+    if (st.ok())
+        return st;
+    const QFileInfo fi(part.finalPath());
+    const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
+    const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
+    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
+        return st; // nothing could be saved: the plain error stands
+    Error e = st.error();
+    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    if (e.code == ErrorCode::AlreadyExists)
+        e.message = QStringLiteral("%1, but %2 already exists. It was saved as %3.").arg(what, native(part.finalPath()), native(kept));
+    else if (fi.exists())
+        e.message = QStringLiteral("%1, but could not replace %2 because that file is in use. It was saved as %3. "
+                                   "Close the program that uses the old file, then rename the new one.")
+                        .arg(what, native(part.finalPath()), native(kept));
+    else
+        e.message = QStringLiteral("%1, but could not be named %2. It was saved as %3.")
+                        .arg(what, native(part.finalPath()), native(kept));
+    return e;
+}
+
 QJsonObject geometryJson(const PlanSummary& s)
 {
     const Geometry& g = s.geometry;
@@ -227,7 +255,9 @@ public:
             outcome.summary = QStringLiteral("Not saved: the new image failed verification.");
             return outcome; // the .part file is removed with `part`
         }
-        FW_TRY(part.commit(replaceExisting()));
+        FW_TRY(commitOrKeep(part, replaceExisting(),
+                            v.verification == Verification::Passed ? QStringLiteral("The image was built and verified")
+                                                                   : QStringLiteral("The image was built")));
         outcome.outputs << out;
         outcome.summary = QStringLiteral("%1 · %2 · %3 files").arg(QFileInfo(out).fileName(), formatBytes(ws.imageBytes),
                                                                     formatCount(tree.fileCount));
@@ -425,10 +455,19 @@ public:
             outcome.verification = Verification::Skipped;
         }
         QFile::remove(QDir(staging).filePath(kStagingMarker));
-        if (QFileInfo(out).isDir() && !QDir().rmdir(out))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(out)));
-        if (!QDir().rename(staging, out))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not rename the extracted folder to %1.").arg(native(out)));
+        if ((QFileInfo(out).isDir() && !QDir().rmdir(out)) || !QDir().rename(staging, out)) {
+            // The files are extracted (and verified): they are not deleted
+            // because a folder name could not be taken.
+            cleanup.armed = false;
+            QString kept = uniquePath(out + QStringLiteral(".new"));
+            if (!QDir().rename(staging, kept))
+                kept = staging;
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
+                                        "open in another program. They were saved in %3.")
+                             .arg(outcome.verification == Verification::Passed ? QStringLiteral(" and verified") : QString(),
+                                  native(out), native(kept)));
+        }
         cleanup.armed = false;
         outcome.outputs << out;
         outcome.summary = QStringLiteral("%1 files (%2) extracted").arg(formatCount(ex.files), formatBytes(ex.bytes));
@@ -542,7 +581,7 @@ public:
             // before the original is replaced.
         }
         ctx.progress->beginPhase(3, 0, 0, false);
-        FW_TRY(part.commit(true));
+        FW_TRY(commitOrKeep(part, true, QStringLiteral("The edited image was built and verified")));
         outcome.outputs << img;
         outcome.summary = QStringLiteral("%1 change%2 applied to %3").arg(ops.size()).arg(ops.size() == 1 ? QString() : QStringLiteral("s"),
                                                                            QFileInfo(img).fileName());

@@ -7,6 +7,7 @@
 #include "engines/exfat/ExfatReader.h"
 #include "engines/exfat/ExfatVerify.h"
 #include "engines/exfat/Module.h"
+#include "engines/exfat/PlatformFs.h"
 #include "engines/general/Module.h"
 
 #include <QDir>
@@ -281,7 +282,9 @@ public:
             o.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
 
-        FW_TRY(part.commit(x.overwrite));
+        FW_TRY(commitOrKeep(part, x.overwrite,
+                            x.verify ? QStringLiteral("The image was built and verified")
+                                     : QStringLiteral("The image was built")));
         o.outputs << m_output;
         // An undo journal of the image that was just replaced must never be
         // applied to the new one.
@@ -554,12 +557,16 @@ public:
             o.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
         reader.reset();
-        if (QFileInfo(m_output).isDir() && !QDir().rmdir(m_output))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(m_output)));
-        if (!QDir().rename(stage, m_output))
+        if ((QFileInfo(m_output).isDir() && !QDir().rmdir(m_output)) || !QDir().rename(stage, m_output)) {
+            // The files are extracted (and verified): they are not deleted
+            // because a folder name could not be taken.
+            guard.keep = true;
+            const QString kept = keepStagedFolder(stage, m_output);
             return Error(ErrorCode::IoError,
-                         QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.")
-                             .arg(native(m_output)));
+                         QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
+                                        "open in another program. They were saved in %3.")
+                             .arg(x.verify ? QStringLiteral(" and verified") : QString(), native(m_output), native(kept)));
+        }
         guard.keep = true;
         o.outputs << m_output;
         o.summary = QStringLiteral("%1 files, %2").arg(formatCount(st.files), formatBytes(st.bytes));

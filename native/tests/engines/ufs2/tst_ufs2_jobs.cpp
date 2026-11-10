@@ -8,6 +8,7 @@
 #include "core/Settings.h"
 #include "engines/general/Module.h"
 #include "engines/ufs2/Module.h"
+#include "engines/ufs2/Ufs2Check.h"
 #include "jobs/JobQueue.h"
 
 #include <QCryptographicHash>
@@ -266,6 +267,77 @@ private slots:
         QCOMPARE(o->verification, Verification::Passed);
         QVERIFY(Ufs2Reader::open(out).ok());
         QVERIFY(!QFileInfo::exists(out + ".old"));
+    }
+
+    // The old image is open in another program, so the new one cannot take
+    // its name. The finished, verified image is kept next to it.
+    void finishedImageIsKeptWhenTheOldOneCannotBeReplaced()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("An open file can be replaced on this platform.");
+#endif
+        const QString src = freshGame("locked-src");
+        const QString out = m_tmp.filePath("locked.ffpkg");
+        QVERIFY(mktext(out, "old"));
+        QFile holder(out);
+        QVERIFY(holder.open(QIODevice::ReadOnly)); // opened without delete sharing
+        auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out, true));
+        holder.close();
+        QVERIFY(!o.ok());
+        const QString kept = m_tmp.filePath("locked (new).ffpkg");
+        QVERIFY2(o.error().message.contains("built and verified"), qPrintable(o.error().toLogString()));
+        QVERIFY2(o.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(o.error().toLogString()));
+        QCOMPARE(readAll(out), QByteArray("old"));
+        QVERIFY(!QFileInfo::exists(out + ".part"));
+        auto r = Ufs2Reader::open(kept);
+        QVERIFY(r.ok());
+        CancellationToken token;
+        const auto c = checkImage(*r.value(), token);
+        QVERIFY(c.ok() && c->ok());
+
+        // The same for an edit, which always rebuilds.
+        r = Error(ErrorCode::Internal, QString());
+        const QByteArray before = sha(kept);
+        holder.setFileName(kept);
+        QVERIFY(holder.open(QIODevice::ReadOnly));
+        o = runJob(ufs2::kinds::kEdit,
+                   QJsonObject{{"image", kept}, {"operations", QJsonArray{QJsonObject{{"op", "mkdir"}, {"path", "/added"}}}}});
+        holder.close();
+        QVERIFY(!o.ok());
+        const QString keptEdit = m_tmp.filePath("locked (new) (new).ffpkg");
+        QVERIFY2(o.error().message.contains("edited image was built and verified"), qPrintable(o.error().toLogString()));
+        QVERIFY2(o.error().message.contains(QDir::toNativeSeparators(keptEdit)), qPrintable(o.error().toLogString()));
+        QCOMPARE(sha(kept), before);
+        QVERIFY(!QFileInfo::exists(kept + ".part"));
+        r = Ufs2Reader::open(keptEdit);
+        QVERIFY(r.ok());
+        auto tree = r.value()->loadTree(token);
+        QVERIFY(tree.ok());
+        QVERIFY(tree->find("/added") >= 0);
+    }
+
+    // The chosen (empty) folder cannot be replaced because a program has it
+    // open: the extracted, verified files stay, under "<folder>.new".
+    void extractedFilesAreKeptWhenTheFolderCannotBeUsed()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("A folder in use can be removed on this platform.");
+#endif
+        const QString src = freshGame("held-src");
+        const QString img = m_tmp.filePath("held.ffpkg");
+        QVERIFY(runJob(ufs2::kinds::kBuild, buildParams(src, img)).ok());
+        const QString dest = m_tmp.filePath("held-out");
+        QVERIFY(QDir().mkpath(dest));
+        const QString before = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(dest)); // the current folder of a process cannot be removed
+        auto o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", dest}});
+        QVERIFY(QDir::setCurrent(before));
+        QVERIFY(!o.ok());
+        const QString kept = dest + ".new";
+        QVERIFY2(o.error().message.contains("extracted and verified"), qPrintable(o.error().toLogString()));
+        QVERIFY2(o.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(o.error().toLogString()));
+        QCOMPARE(snapshotFolder(kept), snapshotFolder(src));
+        QVERIFY(!QFileInfo::exists(dest + ".part"));
     }
 
     void validationRefusesBadInput()

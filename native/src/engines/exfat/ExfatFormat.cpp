@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 
 namespace fw::exfat {
 
@@ -374,6 +375,9 @@ Result<BootInfo> parseBootRegion(const QByteArray& region)
         return bad(QStringLiteral("NumberOfFats %1").arg(info.numberOfFats));
     if (g.volumeLength < quint64((1u << 20) >> g.bytesPerSectorShift))
         return bad(QStringLiteral("VolumeLength %1 too small").arg(g.volumeLength));
+    // Larger than any file can be: the byte size would not fit 63 bits.
+    if (g.volumeLength > (quint64(std::numeric_limits<qint64>::max()) >> g.bytesPerSectorShift))
+        return bad(QStringLiteral("VolumeLength %1 too large").arg(g.volumeLength));
     if (g.fatOffset < 24)
         return bad(QStringLiteral("FatOffset %1 < 24").arg(g.fatOffset));
     const quint64 fatEnd = quint64(g.fatOffset) + quint64(g.fatLength) * info.numberOfFats;

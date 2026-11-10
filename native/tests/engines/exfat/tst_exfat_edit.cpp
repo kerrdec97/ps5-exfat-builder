@@ -295,6 +295,34 @@ private slots:
         QCOMPARE(b.attributes, a.attributes);
     }
 
+    // A rebuilt edit whose original is open in another program cannot replace
+    // it; the finished, verified image is kept next to it.
+    void rebuiltImageIsKeptWhenTheOriginalCannotBeReplaced()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("An open file can be replaced on this platform.");
+#endif
+        const QString img = freshImage();
+        const QByteArray original = readAllOf(img);
+        EditOptions o = options(false);
+        o.strategy = EditStrategy::Rebuild;
+        CancellationToken token;
+        QFile holder(img);
+        QVERIFY(holder.open(QIODevice::ReadOnly)); // opened without delete sharing
+        auto r = editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("data/medium.bin"))}, o, token);
+        holder.close();
+        QVERIFY(!r.ok());
+        const QFileInfo fi(img);
+        const QString kept = fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new).exfat"));
+        QVERIFY2(r.error().message.contains(QStringLiteral("edited image was built and verified")), qPrintable(err(r.error())));
+        QVERIFY2(r.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(err(r.error())));
+        QCOMPARE(readAllOf(img), original);
+        QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+        expectIntact(kept);
+        QVERIFY(treeOf(kept).find(QStringLiteral("data/medium.bin")) < 0);
+        QVERIFY(treeOf(kept).find(QStringLiteral("data/big.bin")) > 0);
+    }
+
     void alwaysRebuildStrategy()
     {
         const QString img = freshImage();

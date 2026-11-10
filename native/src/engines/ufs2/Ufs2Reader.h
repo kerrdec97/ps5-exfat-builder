@@ -92,9 +92,13 @@ public:
     Status readAt(qint64 offset, char* dst, qint64 len) const;
 
     Result<Inode> readInode(quint32 ino) const;
-    Result<InodeBlocks> blocks(const Inode& in, quint32 ino) const;
+    // The block map of an inode. `token` (optional) is checked once per
+    // indirect block. A map with more blocks than the image holds is refused.
+    Result<InodeBlocks> blocks(const Inode& in, quint32 ino, const CancellationToken* token = nullptr) const;
     Result<std::vector<FileExtent>> extents(const Inode& in, quint32 ino) const;
-    Result<std::vector<DirEntry>> readDirectory(quint32 ino, bool includeDots = false) const;
+    // `dirBytes` (optional) receives the size of the directory's data.
+    Result<std::vector<DirEntry>> readDirectory(quint32 ino, bool includeDots = false,
+                                                qint64* dirBytes = nullptr) const;
     Result<QByteArray> readLink(quint32 ino) const;
 
     // "/", "/a/b" (UTF-8 names). Fails with NotFound for missing paths.
@@ -113,7 +117,7 @@ private:
     Ufs2Reader() = default;
     static Result<std::shared_ptr<Ufs2Reader>> findSuperblock(std::shared_ptr<Ufs2Reader> r);
     Status walkIndirect(qint64 ptr, int level, qint64 firstLbn, qint64 nblocks, InodeBlocks& out, quint32 ino,
-                        int depth) const;
+                        int depth, const CancellationToken* token) const;
 
     QString m_path;
     qint64 m_fileSize = 0;

@@ -12,7 +12,23 @@
 
 #include <memory>
 
+namespace fw {
+class PartFile;
+}
+
 namespace fw::exfat {
+
+// Gives a finished .part file its final name. When that fails (the file it
+// replaces is mounted or open in another program) the finished work is not
+// thrown away: it is moved to a free name next to it, "<name> (new).<ext>",
+// and the returned error says so. `what` starts that message, for example
+// "The image was built and verified".
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what);
+
+// The same for a finished staging folder that could not be renamed to
+// `output`: moves it to "<output>.new" (numbered when taken) and returns
+// where the files are now (the staging folder itself when that failed too).
+QString keepStagedFolder(const QString& stage, const QString& output);
 
 // Flushes the OS cache of an open file to the device (FlushFileBuffers/fsync).
 Status syncFile(QFile& file, const QString& displayName);

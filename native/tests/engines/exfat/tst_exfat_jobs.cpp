@@ -283,6 +283,45 @@ private slots:
         QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
     }
 
+    // The old image is open in another program (mounted, being uploaded), so
+    // the new one cannot take its name. The finished, verified image is kept
+    // under a free name next to it instead of being deleted.
+    void finishedImageIsKeptWhenTheOldOneCannotBeReplaced()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("An open file can be replaced on this platform.");
+#endif
+        const QString src = makeGame(QStringLiteral("locked"), 2);
+        const QString out = path(QStringLiteral("locked.exfat"));
+        writeBytes(out, "OLD IMAGE");
+        QFile holder(out);
+        QVERIFY(holder.open(QIODevice::ReadOnly)); // opened without delete sharing
+        auto r = m_env.run(kJobBuild, buildParams(src, out));
+        QVERIFY(!r.ok());
+        const QString kept = path(QStringLiteral("locked (new).exfat"));
+        QVERIFY2(r.error().message.contains(QStringLiteral("built and verified")), qPrintable(err(r.error())));
+        QVERIFY2(r.error().message.contains(QStringLiteral("in use")), qPrintable(err(r.error())));
+        QVERIFY2(r.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(err(r.error())));
+        QCOMPARE(readAllOf(out), QByteArray("OLD IMAGE"));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        {
+            CancellationToken token;
+            auto reader = ExfatReader::open(kept);
+            QVERIFY(reader.ok());
+            auto tree = reader.value()->readTree(token);
+            QVERIFY(tree.ok() && tree->problems.isEmpty());
+            QVERIFY(tree->find(QStringLiteral("eboot.bin")) > 0);
+        }
+        // A second attempt keeps its image too, without touching the first.
+        const QByteArray first = fileHash(kept);
+        r = m_env.run(kJobBuild, buildParams(src, out));
+        holder.close();
+        QVERIFY(!r.ok());
+        QCOMPARE(fileHash(kept), first);
+        QVERIFY(ExfatReader::open(path(QStringLiteral("locked (new) (2).exfat"))).ok());
+        QCOMPARE(readAllOf(out), QByteArray("OLD IMAGE"));
+    }
+
     void cancellationLeavesNoOutputAndNoPart()
     {
         const QString src = makeGame(QStringLiteral("cancel"), 5);
@@ -434,6 +473,32 @@ private slots:
         r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest3}});
         QVERIFY(!r.ok());
         QCOMPARE(readAllOf(dest3 + QStringLiteral(".part/user-file.txt")), QByteArray("mine"));
+    }
+
+    // The chosen (empty) folder cannot be replaced because a program has it
+    // open: the extracted, verified files stay, under "<folder>.new".
+    void extractedFilesAreKeptWhenTheFolderCannotBeUsed()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("A folder in use can be removed on this platform.");
+#endif
+        const QString src = makeGame(QStringLiteral("heldsrc"), 5);
+        const QString img = path(QStringLiteral("heldsrc.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        const QString dest = path(QStringLiteral("held"));
+        QVERIFY(QDir().mkpath(dest));
+        const QString before = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(dest)); // the current folder of a process cannot be removed
+        auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}});
+        QVERIFY(QDir::setCurrent(before));
+        QVERIFY(!r.ok());
+        const QString kept = dest + QStringLiteral(".new");
+        QVERIFY2(r.error().message.contains(QStringLiteral("extracted and verified")), qPrintable(err(r.error())));
+        QVERIFY2(r.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(err(r.error())));
+        QCOMPARE(listing(kept), listing(src));
+        QVERIFY(!QFileInfo::exists(kept + QStringLiteral("/.fw-extract-in-progress")));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
+        QVERIFY(QDir(dest).isEmpty());
     }
 
     // exFAT allows names Win32 rewrites or opens as devices (trailing dots or

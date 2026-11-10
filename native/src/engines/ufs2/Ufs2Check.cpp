@@ -56,6 +56,13 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
     };
     const qint64 nfrags = sb.size;
     const quint32 ninodes = sb.inodeCount();
+    // The maps below are sized from the superblock. Group maps that cannot
+    // fit their header would fail for every group anyway; stop before
+    // allocating for inode counts the image cannot back.
+    if (ceilDiv(sb.ipg, 8) > sb.cgsize || ceilDiv(sb.fpg, 8) > sb.cgsize) {
+        add(QStringLiteral("The cylinder group maps do not fit their headers."));
+        return rep;
+    }
     Bits freeMap(nfrags), usedMap(nfrags), inoUsed(ninodes);
     std::vector<CgSum> cgs(size_t(sb.ncg));
 
@@ -265,6 +272,11 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
     // ---- directory tree -----------------------------------------------------------------------
     std::unordered_map<quint32, InodeInfo> seen;
     std::deque<std::pair<quint32, quint32>> queue; // (dir, parent)
+    // Blocks the inodes claim and bytes the folders hold. A sound image
+    // cannot exceed its own size with either; an image whose inodes or
+    // folders share blocks could otherwise keep the check busy for hours.
+    qint64 claimedFrags = 0, dirBytesTotal = 0;
+    bool overClaimed = false;
     auto visitInode = [&](quint32 ino) -> Status {
         FW_TRY_ASSIGN(Inode in, r.readInode(ino));
         InodeInfo& info = seen[ino];
@@ -274,8 +286,10 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
             add(QStringLiteral("Inode %1 has an unknown file type (mode %2).").arg(ino).arg(in.mode, 0, 8));
             return success();
         }
-        auto b = r.blocks(in, ino);
+        auto b = r.blocks(in, ino, &token);
         if (!b.ok()) {
+            if (b.error().isCancelled())
+                return b.takeError();
             add(b.error().message);
             return success();
         }
@@ -297,6 +311,8 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
             add(QStringLiteral("Inode %1 block count is %2, should be %3.").arg(ino).arg(in.blocks).arg(frags * (sb.fsize / kDevBSize)));
         if (b->strayPointers > 0)
             add(QStringLiteral("Inode %1 has block pointers past the end of the file.").arg(ino));
+        claimedFrags += frags;
+        overClaimed = claimedFrags > nfrags;
         if (in.isDir())
             ++rep.dirs;
         else {
@@ -315,13 +331,18 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
         return rep;
     }
     queue.emplace_back(kRootIno, kRootIno);
-    qint64 n = 0;
-    while (!queue.empty()) {
+    while (!queue.empty() && !overClaimed) {
         const auto [dir, parent] = queue.front();
         queue.pop_front();
-        if ((++n & 0x3F) == 0 && !token.checkpoint())
+        if (!token.checkpoint())
             return Error::cancelled();
-        auto entries = r.readDirectory(dir, true);
+        qint64 dirBytes = 0;
+        auto entries = r.readDirectory(dir, true, &dirBytes);
+        dirBytesTotal += dirBytes;
+        if (dirBytesTotal > r.fileSize()) {
+            overClaimed = true;
+            break;
+        }
         if (!entries.ok()) {
             add(entries.error().message);
             continue;
@@ -344,6 +365,8 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
             const bool known = seen.count(e.ino) > 0;
             if (!known) {
                 FW_TRY(visitInode(e.ino));
+                if (overClaimed)
+                    break;
                 if (seen[e.ino].isDir)
                     queue.emplace_back(e.ino, dir);
             } else if (seen[e.ino].isDir) {
@@ -355,6 +378,10 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
             if (e.type != kDtUnknown && e.type != want && e.type != kDtLnk)
                 add(QStringLiteral("The entry for inode %1 has the wrong type.").arg(e.ino));
         }
+    }
+    if (overClaimed) {
+        add(QStringLiteral("The files and folders use more blocks than the image holds; the rest was not checked."));
+        return rep;
     }
     // "." of every directory and ".." of its sub-directories were counted when
     // their own directory was read; the root's ".." points at itself.

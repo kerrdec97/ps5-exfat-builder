@@ -14,6 +14,11 @@ namespace {
 
 constexpr qint64 kFatBlock = 64 * 1024;
 constexpr int kMaxListedProblems = 50;
+// Limits for images that were not written here: deeper or larger than any
+// real game folder, small enough that a damaged image cannot exhaust memory.
+constexpr int kMaxFolderDepth = 256;
+constexpr size_t kMaxTreeEntries = 10'000'000;
+constexpr qint64 kChainCheckpoint = 1 << 16; // clusters between two cancel checks
 
 void appendCluster(std::vector<Extent>& v, quint32 c)
 {
@@ -231,13 +236,21 @@ Result<quint32> ExfatReader::fatEntry(quint32 cluster)
     return get32(reinterpret_cast<const uchar*>(it->constData()) + (off - block * kFatBlock));
 }
 
-bool ExfatReader::followChain(quint32 first, qint64 expected, std::vector<Extent>& out, QString& problem)
+bool ExfatReader::followChain(quint32 first, qint64 expected, std::vector<Extent>& out, QString& problem,
+                              const CancellationToken* token)
 {
     const Geometry& g = m_vol.boot.geo;
     out.clear();
+    problem.clear();
+    // A chain that loops is cut off after as many clusters as it can really
+    // have: its data length, or the largest folder for the root.
+    const qint64 limit = std::min<qint64>(g.clusterCount,
+                                          expected >= 0 ? expected : ceilDiv(kMaxDirectoryBytes, g.clusterBytes()));
     quint32 c = first;
     qint64 steps = 0;
     while (true) {
+        if (token && steps % kChainCheckpoint == kChainCheckpoint - 1 && !token->checkpoint())
+            return false;
         if (!g.isValidCluster(c)) {
             problem = QStringLiteral("cluster %1 is outside the volume").arg(c);
             return false;
@@ -263,8 +276,10 @@ bool ExfatReader::followChain(quint32 first, qint64 expected, std::vector<Extent
             problem = QStringLiteral("the cluster chain from %1 runs into a bad cluster").arg(first);
             return false;
         }
-        if (steps > qint64(g.clusterCount)) {
-            problem = QStringLiteral("the cluster chain from %1 loops").arg(first);
+        if (steps >= limit) {
+            problem = expected >= 0 || limit == qint64(g.clusterCount)
+                ? QStringLiteral("the cluster chain from %1 loops").arg(first)
+                : QStringLiteral("the cluster chain from %1 is longer than a folder can be").arg(first);
             return false;
         }
         c = n;
@@ -317,6 +332,11 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
     ImageTree tree;
     Problems problems(tree);
     ClusterUsage usage(g.clusterCount);
+    // Clusters the entries claim. Without cross-links the sum cannot exceed
+    // the heap, so the walk stops there instead of following the same chains
+    // again for every entry of a damaged image.
+    qint64 claimed = 0;
+    bool stopped = false;
     for (const auto* list : {&m_vol.bitmapExtents, &m_vol.upcaseExtents, &m_vol.rootExtents})
         for (const Extent& e : *list)
             if (usage.mark(e))
@@ -337,7 +357,8 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
     }
 
     std::vector<int> queue{0};
-    for (size_t qi = 0; qi < queue.size(); ++qi) {
+    std::vector<int> depths{0}; // folder levels above queue[i]
+    for (size_t qi = 0; qi < queue.size() && !stopped; ++qi) {
         if (!token.checkpoint())
             return Error::cancelled();
         const int dirIdx = queue[qi];
@@ -460,14 +481,26 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
                 problems.add(QStringLiteral("the folder %1 has an impossible size").arg(path));
                 continue;
             }
+            qint64 dup = 0;
             if (ent.size > 0) {
-                const qint64 need = ceilDiv(ent.size, cb);
                 if (!(s[1] & kFlagAllocationPossible)) {
                     problems.add(QStringLiteral("%1 has data but no allocation").arg(path));
                     continue;
                 }
+                if (ent.size > qint64(g.clusterCount) * cb) {
+                    problems.add(QStringLiteral("%1 is larger than the volume").arg(path));
+                    continue;
+                }
+                const qint64 need = ceilDiv(ent.size, cb);
+                claimed += need;
+                if (claimed > qint64(g.clusterCount)) {
+                    problems.add(QStringLiteral("the files and folders claim more clusters than the volume has; the rest "
+                                                "of the image was not read"));
+                    stopped = true;
+                    break;
+                }
                 if (ent.noFatChain) {
-                    if (!g.isValidCluster(ent.firstCluster) || need > qint64(g.clusterCount)
+                    if (!g.isValidCluster(ent.firstCluster)
                         || qint64(ent.firstCluster) - kFirstDataCluster + need > qint64(g.clusterCount)) {
                         problems.add(QStringLiteral("%1 points outside the volume").arg(path));
                         continue;
@@ -475,12 +508,13 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
                     ent.extents.push_back({ent.firstCluster, quint32(need)});
                 } else {
                     QString why;
-                    if (!followChain(ent.firstCluster, need, ent.extents, why)) {
+                    if (!followChain(ent.firstCluster, need, ent.extents, why, &token)) {
+                        if (why.isEmpty())
+                            return Error::cancelled();
                         problems.add(QStringLiteral("%1: %2").arg(path, why));
                         continue;
                     }
                 }
-                qint64 dup = 0;
                 for (const Extent& x : ent.extents)
                     dup += usage.mark(x);
                 if (dup)
@@ -488,11 +522,29 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
             } else if (ent.isDir) {
                 // A folder without clusters is legal but unusual; it has no entries.
             }
+            if (tree.entries.size() >= kMaxTreeEntries) {
+                problems.add(QStringLiteral("the image holds more than %1 files and folders; the rest was not read")
+                                 .arg(formatCount(qint64(kMaxTreeEntries))));
+                stopped = true;
+                break;
+            }
             const int idx = int(tree.entries.size());
             tree.entries[size_t(dirIdx)].children.push_back(idx);
             if (ent.isDir) {
                 ++tree.dirCount;
-                queue.push_back(idx);
+                // A folder that shares clusters may be one of its own
+                // ancestors: listing it again would never end.
+                if (dup)
+                    problems.add(QStringLiteral("the contents of %1 were not read (its clusters belong to something else)")
+                                     .arg(path));
+                else if (depths[qi] + 1 > kMaxFolderDepth)
+                    problems.add(QStringLiteral("%1 is nested more than %2 folders deep; its contents were not read")
+                                     .arg(path)
+                                     .arg(kMaxFolderDepth));
+                else {
+                    queue.push_back(idx);
+                    depths.push_back(depths[qi] + 1);
+                }
             } else {
                 ++tree.fileCount;
                 tree.totalBytes += ent.size;
@@ -504,7 +556,7 @@ Result<ImageTree> ExfatReader::readTree(const CancellationToken& token, bool che
         tree.index.insert(tree.entries[size_t(i)].path, i);
     tree.usedClusters = usage.count();
 
-    if (checkAllocation) {
+    if (checkAllocation && !stopped) {
         auto bm = readBitmap();
         if (!bm.ok())
             return bm.takeError();
