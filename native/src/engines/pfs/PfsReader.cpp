@@ -461,7 +461,9 @@ Status PfsImage::parse()
         special.insert(colIno);
 
     std::map<quint32, quint32> fpt;
-    std::map<quint32, std::vector<ParsedDirent>> collisions;
+    // Each resolver group is parsed once, however many hashes point at it.
+    std::map<quint32, qint64> collisionGroup;
+    std::map<qint64, std::vector<ParsedDirent>> collisionGroups;
     if (fptIno >= 0 && fptIno < qint64(m_inodes.size())) {
         FW_TRY_ASSIGN(const QByteArray fptBlob, readPayload(m_inodes[size_t(fptIno)]));
         if (fptBlob.size() % 8 != 0)
@@ -478,6 +480,11 @@ Status PfsImage::parse()
                 problem(QStringLiteral("flat_path_table refers to a missing collision_resolver"));
             } else {
                 FW_TRY_ASSIGN(const QByteArray cblob, readPayload(m_inodes[size_t(colIno)]));
+                // The groups of a real resolver do not overlap, so together
+                // they hold at most one entry per 24 bytes (the smallest
+                // entry). A crafted table whose offsets walk through the same
+                // entries again and again must not multiply the work.
+                qint64 budget = cblob.size() / 24 + 1;
                 for (const auto& [hsh, v] : fpt) {
                     if (!(v & 0x80000000u))
                         continue;
@@ -486,7 +493,19 @@ Status PfsImage::parse()
                         problem(QStringLiteral("collision_resolver offset out of range"));
                         continue;
                     }
-                    collisions[hsh] = parseDirents(cblob.mid(off), m_problems, QStringLiteral("collision_resolver"));
+                    auto group = collisionGroups.find(off);
+                    if (group == collisionGroups.end()) {
+                        if (budget <= 0) {
+                            problem(QStringLiteral("collision_resolver groups overlap"));
+                            break;
+                        }
+                        const QByteArray tail = QByteArray::fromRawData(cblob.constData() + off, cblob.size() - off);
+                        group = collisionGroups
+                                    .emplace(off, parseDirents(tail, m_problems, QStringLiteral("collision_resolver")))
+                                    .first;
+                        budget -= qint64(group->second.size());
+                    }
+                    collisionGroup[hsh] = off;
                 }
             }
         }
@@ -620,7 +639,9 @@ Status PfsImage::parse()
                                 .arg(hsh, 8, 16, QLatin1Char('0')));
                     continue;
                 }
-                const auto& actual = collisions[hsh];
+                static const std::vector<ParsedDirent> none;
+                const auto group = collisionGroup.find(hsh);
+                const auto& actual = group == collisionGroup.end() ? none : collisionGroups[group->second];
                 for (const Expected& e : list) {
                     const bool found = std::any_of(actual.begin(), actual.end(), [&](const ParsedDirent& d) {
                         return d.name == e.full && d.inode == e.ino && (d.type == kDirentDirectory) == e.isDir;

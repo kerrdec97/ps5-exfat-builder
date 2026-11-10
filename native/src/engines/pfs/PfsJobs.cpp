@@ -142,6 +142,8 @@ Status PfsBuildJob::validate(const SettingsValues& settings) const
         return Error(ErrorCode::NotFound, QStringLiteral("Choose an existing game folder or image to pack."));
     if (m_output.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the PFS image."));
+    if (QFileInfo(m_output).isDir())
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("The output must be a file name, not a folder."));
     if (archive::isZipSource(m_source)) { // #67: a zipped dump, unpacked in run()
         FW_TRY(archive::checkZipSource(m_source));
         if (QFileInfo::exists(m_output) && !m_params.value(QStringLiteral("replaceExisting")).toBool())
@@ -149,8 +151,6 @@ Status PfsBuildJob::validate(const SettingsValues& settings) const
                                                        .arg(QFileInfo(m_output).fileName()));
         return success();
     }
-    if (QFileInfo(m_output).isDir())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("The output must be a file name, not a folder."));
     const QFileInfo src(m_source);
     if (src.isDir() && isSameOrInside(m_output, m_source))
         return Error(ErrorCode::InvalidArgument,
@@ -190,6 +190,9 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
         FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
         ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         FW_TRY(validate(ctx.settings));
+        // Unpacking reports as a phase of its own, which replaced the job's.
+        if (ctx.progress)
+            ctx.progress->setPhases(phases(), phaseWeights());
     }
     ProgressReporter* pr = ctx.progress;
     const qint64 ts = m_params.value(QStringLiteral("timestamp")).toInteger(0);
@@ -457,8 +460,10 @@ Result<JobOutcome> PfsExtractJob::run(JobContext& ctx)
     o.freeSpaceMargin = freeSpaceMarginFrom(ctx.settings);
     if (ctx.progress) {
         auto sum = inspectImage(m_image);
-        ctx.progress->beginPhase(0, sum.ok() ? (o.deep || !sum->nested ? sum->logicalBytes : 0) : 0,
-                                 sum.ok() ? sum->files : 0);
+        // Not deep: the nested image comes out as the one file it is.
+        const bool whole = sum.ok() && sum->nested && !o.deep;
+        ctx.progress->beginPhase(0, !sum.ok() ? 0 : whole ? sum->outerBytes : sum->logicalBytes,
+                                 !sum.ok() ? 0 : whole ? sum->outerFiles : sum->files);
     }
     FW_TRY_ASSIGN(const ExtractReport r, extractImage(m_image, m_output, o, ctx.token, hooksFor(ctx.progress)));
     JobOutcome outcome;
@@ -475,7 +480,8 @@ Result<JobOutcome> PfsExtractJob::run(JobContext& ctx)
     outcome.details.insert(QStringLiteral("folders"), r.dirs);
     outcome.details.insert(QStringLiteral("bytes"), r.bytes);
     outcome.details.insert(QStringLiteral("nested"), r.nested);
-    outcome.summary = QStringLiteral("%1 files · %2").arg(formatCount(r.files), formatBytes(r.bytes));
+    outcome.summary = QStringLiteral("%1 file%2 · %3").arg(formatCount(r.files), r.files == 1 ? QString() : QStringLiteral("s"),
+                                                           formatBytes(r.bytes));
     return outcome;
 }
 

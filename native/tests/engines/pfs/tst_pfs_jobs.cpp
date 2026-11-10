@@ -168,7 +168,7 @@ private slots:
         QCOMPARE(o.files.blockGain, 11);
         QCOMPARE(o.files.minFileGain, 13);
         QVERIFY(!o.files.skipExecutables);
-        QCOMPARE(o.threads, 3);
+        QCOMPARE(o.threads, std::min(3, std::max(1, QThread::idealThreadCount()))); // never more threads than cores
         const PlanOptions po = planOptionsFrom(s, 1);
         QCOMPARE(po.excludes, QStringList{QStringLiteral("x")});
         QVERIFY(!po.keepEmptyFolders);
@@ -429,6 +429,17 @@ private slots:
         auto vr = runJob(**vj, store.snapshot());
         QVERIFY(vr.outcome.ok());
         QCOMPARE(vr.outcome->verification, Verification::Passed);
+        QVERIFY(vr.outcome->warnings.isEmpty());
+
+        // The generated index stores the files' times: a dump that was copied
+        // or touched since the build still verifies, with a note.
+        QVERIFY(pfstest::setMtime(src + QStringLiteral("/fakelib/libSceAmpr.sprx"), 1650000000));
+        auto touched = runJob(**env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}})),
+                              store.snapshot());
+        QVERIFY(touched.outcome.ok());
+        QCOMPARE(touched.outcome->verification, Verification::Passed);
+        QVERIFY2(touched.outcome->warnings.join(u'\n').contains(QLatin1String("other file times")),
+                 qPrintable(touched.outcome->warnings.join(u'\n')));
 
         // A real change is still caught.
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/extra.bin"), "new", -1));

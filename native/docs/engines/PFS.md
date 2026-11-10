@@ -28,6 +28,8 @@ verifies what it wrote before the image gets its final name.
 | `PfsReader.*` | open + validate an image, tree, streaming decode, random access into a compressed file | `inspect.py` (`inspect_pfs_image`, `iter_inode_logical_blocks`, …) |
 | `PfsVerify.*` | strict verification, extraction | `inspect.py` (`validate_source_match`, `extract_pfs_image`) |
 | `PfsJobs.*`, `Module.*` | queue jobs, settings, legacy keys | — |
+| `AmprIndex.*`, `AmprJobs.*` | `ampr_emu.index` (AMPRIDX3) and the job `ampr.index.local`, registered by this module | `ampr_index.py`; drakmor `build_ampr_index.py` |
+| `FolderAccess.*` | "can this folder be listed?" and a folder's identity across links, shared with the pack engine and the compare reader | — |
 
 ## What it builds
 
@@ -185,14 +187,14 @@ per job.
 | Key | Section · group | Default | Lazy / MkPFS / legacy equivalent |
 |---|---|---|---|
 | `pfs.compressionLevel` | PFS · Compression | 9 | `--zlib-level` / `--compression-level`; legacy `pfs_compression_level` (default 9) |
-| `pfs.threads` | PFS · Compression (adv.) | 0 = `performance.workerThreads` | `--cpu-count`; legacy `pfs_lazy_cpu_count` |
+| `pfs.threads` | PFS · Compression (adv.) | 0 = `performance.workerThreads` | `--cpu-count`; legacy `pfs_lazy_cpu_count`. Never more than the machine has cores |
 | `pfs.containerMinCompressMiB` | PFS · Compression (adv.) | 1.0 | `main_file.py --min-compress-size` |
 | `pfs.containerBlockGain` | PFS · Compression (adv.) | 1 % | `threshold_gain=1` in `pack_file` |
-| `pfs.compressFiles` | PFS · Folder images | off | `main_folder.py --no-exfat` (on) vs MkPFS `--no-compress` (off, legacy) |
-| `pfs.fileMinCompressMiB` | PFS · Folder images | 5.0 | `main_folder.py --min-compress-size` |
-| `pfs.fileBlockGain` | PFS · Folder images (adv.) | 5 % | `threshold_gain=5` in `pack_folder` |
-| `pfs.fileMinGain` | PFS · Folder images (adv.) | 0 % | `min_file_gain` |
-| `pfs.skipExecutables` | PFS · Folder images (adv.) | on | `skip_executable_compression` |
+| `pfs.compressFiles` | PFS · Folder images (.ffpfs) | off | `main_folder.py --no-exfat` (on) vs MkPFS `--no-compress` (off, legacy) |
+| `pfs.fileMinCompressMiB` | PFS · Folder images (.ffpfs) | 5.0 | `main_folder.py --min-compress-size` |
+| `pfs.fileBlockGain` | PFS · Folder images (.ffpfs) (adv.) | 5 % | `threshold_gain=5` in `pack_folder` |
+| `pfs.fileMinGain` | PFS · Folder images (.ffpfs) (adv.) | 0 % | `min_file_gain` |
+| `pfs.skipExecutables` | PFS · Folder images (.ffpfs) (adv.) | on | `skip_executable_compression` |
 | `pfs.blockSize` | PFS · Image format (adv.) | 65536 | `block_size` |
 | `pfs.caseInsensitive` | PFS · Image format (adv.) | on | `case_insensitive` |
 | `pfs.imageVersion` | PFS · Image format (adv.) | PS5 | `pfs_version`; MkPFS `--version PS5` |
@@ -226,14 +228,24 @@ into the dump).
 
 | Kind | Parameters | Phases |
 |---|---|---|
-| `image.pfs.build` | `source` (folder or file), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true) | Scanning → Compressing and writing → Verifying |
-| `image.pfs.verify` | `image`, `source` (folder or file, optional), `depth` (`full` \| `structure`; default full with a source, structure without), `findGameRoot` (true) | Verifying |
+| `image.pfs.build` | `source` (folder, image file, or a zipped dump that is unpacked to the job's temp folder first), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
+| `image.pfs.verify` | `image`, `source` (folder or file, optional), `depth` (`full` \| `structure`; default full with a source, structure without), `findGameRoot` (true), `innerName` (as for the build) | Verifying |
 | `image.pfs.extract` | `image`, `output` (folder), `deep` (true: unpack the nested `pfs_image.dat`, MkPFS `unpack --deep`), `overwrite` (false) | Extracting |
 
 `findGameRoot`: a folder without `eboot.bin` (or `sce_sys/param.json`) at its
 top is searched for the first sub-folder holding `eboot.bin`, as Lazy's
 `pack_folder` (`find_game_root`) does; the detected root is logged and stored
 in the outcome details (`gameRoot`).
+
+A standalone verification regenerates `ampr_emu.index` from the folder as it
+is now. The index stores every file's modification time, so a dump that was
+copied or touched since the build gives other bytes: when the two indexes
+differ only in those times the job passes with a warning.
+
+`image.pfs.extract` fills a new or empty output through `<output>.part` and
+renames it at the end; the marker that says a leftover is the app's is the
+file `<output>.part.extracting` next to it (not inside it: an image may hold a
+file of any name).
 
 Build: cheap `validate()` (source exists, output not inside the source folder,
 no existing output unless `replaceExisting`, ASCII file name); scan; free-space
@@ -377,15 +389,24 @@ part of the tests):
    signed build path fails (`TypeError` in `read_image_bytes`), no app path
    uses either, and nothing available here produces such an image to test
    against.
-6. **Errors instead of silent skips**: an unreadable folder fails the scan
-   (Lazy skipped it); a source file whose size changes during the build fails
-   the job (Lazy silently copied the old length).
+6. **Errors instead of silent skips**: a folder that cannot be listed fails
+   the scan (Lazy skipped it). The listing error itself is checked
+   (`FolderAccess.*`): on Windows `QFileInfo::isReadable()` does not look at
+   NTFS permissions and such a folder would otherwise pass for an empty one.
+   A source file whose size changes during the build fails the job (Lazy
+   silently copied the old length).
 7. **Order ties.** Two names equal ignoring case (possible only on
    case-sensitive file systems) are ordered by their bytes; Lazy keeps the
    file system's listing order. Such dumps collide in a case-insensitive
    image anyway.
-8. **Symlinks** to files and folders are followed (as `os.scandir().is_file()` /
-   `is_dir()` do), but a folder reached twice (link loop) is packed once.
+8. **Links.** Symbolic links and NTFS junctions to files and folders are
+   followed (as `os.scandir().is_file()` / `is_dir()` do), so a dump whose
+   folder is a junction to another drive is packed whole. A folder already
+   packed through another symbolic link is packed once, and a link or
+   junction that leads back into the folders above it is left out; a link
+   whose target is missing is skipped, as in Lazy. None of the three is
+   reported. (The zstd pack path follows links the same way and lists loops
+   and dead links as warnings, see `ZSTD_PACKS.md`.)
 9. **Exclusions and markers** (`pfs.excludes`, `pfs.keepEmptyFolders`) have no
    Lazy equivalent; with the default excludes a dump without stray images is
    packed exactly like Lazy would.

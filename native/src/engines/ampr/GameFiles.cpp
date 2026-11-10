@@ -1,6 +1,7 @@
 #include "engines/ampr/GameFiles.h"
 
 #include "engines/ampr/Lz4Pack.h"
+#include "engines/pfs/FolderAccess.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -22,31 +23,9 @@ public:
 
     Status scan(const CancellationToken& token)
     {
-        // Walked by hand: symbolic links and junctions are skipped (never
-        // entered), while .lnk files are ordinary game files.
-        const QDir root(m_root);
-        std::vector<QString> pending{m_root};
+        QSet<QString> ancestors;
         qint64 n = 0;
-        while (!pending.empty()) {
-            const QString dir = pending.back();
-            pending.pop_back();
-            const QFileInfoList entries =
-                QDir(dir).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
-            for (const QFileInfo& fi : entries) {
-                if ((++n & 1023) == 0 && !token.checkpoint())
-                    return Error::cancelled();
-                if (fi.isSymbolicLink() || fi.isJunction())
-                    continue;
-                GameItem item;
-                item.path = root.relativeFilePath(fi.absoluteFilePath());
-                item.isDir = fi.isDir();
-                item.size = item.isDir ? 0 : fi.size();
-                item.mtime = fi.lastModified(QTimeZone::UTC).toSecsSinceEpoch();
-                m_items.push_back(item);
-                if (item.isDir)
-                    pending.push_back(fi.absoluteFilePath());
-            }
-        }
+        FW_TRY(walk(m_root, QString(), ancestors, n, token));
         std::sort(m_items.begin(), m_items.end(), [](const GameItem& a, const GameItem& b) { return a.path < b.path; });
         for (int i = 0; i < int(m_items.size()); ++i)
             m_index.insert(m_items[size_t(i)].path, i);
@@ -56,6 +35,7 @@ public:
     QString describe() const override { return QStringLiteral("folder"); }
     const std::vector<GameItem>& items() const override { return m_items; }
     int find(const QString& path) const override { return m_index.value(path, -1); }
+    QStringList warnings() const override { return m_warnings; }
     Result<qint64> read(int index, qint64 offset, char* dst, qint64 len) override
     {
         if (index < 0 || size_t(index) >= m_items.size() || m_items[size_t(index)].isDir)
@@ -86,9 +66,50 @@ public:
     }
 
 private:
+    // Symbolic links and junctions are followed, as the image builds' own
+    // scans do, so a dump spread over two drives packs whole; a link that
+    // leads back into its own folder or to nothing is left out with a
+    // warning. A .lnk shortcut is an ordinary game file.
+    Status walk(const QString& dir, const QString& rel, QSet<QString>& ancestors, qint64& n, const CancellationToken& token)
+    {
+        const QString identity = pfs::folderIdentity(dir);
+        ancestors.insert(identity);
+        const QFileInfoList entries =
+            QDir(dir).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+        if (entries.isEmpty())
+            FW_TRY(pfs::ensureFolderListable(dir)); // empty, or not allowed to look?
+        for (const QFileInfo& fi : entries) {
+            if ((++n & 1023) == 0 && !token.checkpoint())
+                return Error::cancelled();
+            const QString path = rel.isEmpty() ? fi.fileName() : rel + u'/' + fi.fileName();
+            if ((fi.isSymbolicLink() || fi.isJunction()) && !fi.exists()) {
+                m_warnings << QStringLiteral("Skipped %1: the link's target does not exist.").arg(path);
+                continue;
+            }
+            GameItem item;
+            item.path = path;
+            item.isDir = fi.isDir();
+            if (item.isDir && (fi.isSymbolicLink() || fi.isJunction())) {
+                const QString target = pfs::folderIdentity(fi.absoluteFilePath());
+                if (!target.isEmpty() && ancestors.contains(target)) {
+                    m_warnings << QStringLiteral("Skipped %1: the link leads back into its own folder.").arg(path);
+                    continue;
+                }
+            }
+            item.size = item.isDir ? 0 : fi.size();
+            item.mtime = fi.lastModified(QTimeZone::UTC).toSecsSinceEpoch();
+            m_items.push_back(item);
+            if (item.isDir)
+                FW_TRY(walk(fi.absoluteFilePath(), path, ancestors, n, token));
+        }
+        ancestors.remove(identity);
+        return success();
+    }
+
     QString m_root;
     std::vector<GameItem> m_items;
     QHash<QString, int> m_index;
+    QStringList m_warnings;
     QFile m_file;
     int m_open = -1;
 };
@@ -208,6 +229,8 @@ QString parentOf(const QString& path)
 
 } // namespace
 
+QStringList UnpackedGame::warnings() const { return m_base->warnings(); }
+
 QString UnpackedGame::describe() const
 {
     return QStringLiteral("%1 (%2 packs unpacked)").arg(m_base->describe(), packKindName(m_kind));
@@ -228,7 +251,9 @@ Result<std::shared_ptr<UnpackedGame>> UnpackedGame::open(std::shared_ptr<GameFil
     if (g->m_kind == PackKind::Zstd) {
         const int ix = base->find(kZstdIndexName);
         indexMtime = base->items()[size_t(ix)].mtime;
-        FW_TRY_ASSIGN(QByteArray bytes, readWhole(*base, ix, 1LL << 31));
+        // About 100 bytes per packed file: 256 MiB is far beyond any game and
+        // keeps a file that only claims to be an index from costing 2 GiB.
+        FW_TRY_ASSIGN(QByteArray bytes, readWhole(*base, ix, 256LL * 1024 * 1024));
         auto opener = [base](quint32 v) -> Result<std::shared_ptr<RandomAccess>> {
             const int i = base->find(zstdVolumeName(int(v)));
             if (i < 0 || base->items()[size_t(i)].isDir)
@@ -276,7 +301,8 @@ Result<std::shared_ptr<UnpackedGame>> UnpackedGame::open(std::shared_ptr<GameFil
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 is listed twice in the packs.").arg(path));
         if (g->m_index.contains(path))
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 is both a folder and a packed file.").arg(path));
-        for (QString dir = parentOf(path); !dir.isEmpty() && !g->m_index.contains(dir); dir = parentOf(dir)) {
+        QString dir = parentOf(path);
+        for (; !dir.isEmpty() && !g->m_index.contains(dir); dir = parentOf(dir)) {
             GameItem d;
             d.path = dir;
             d.isDir = true;
@@ -285,6 +311,8 @@ Result<std::shared_ptr<UnpackedGame>> UnpackedGame::open(std::shared_ptr<GameFil
             g->m_items.push_back(d);
             g->m_sources.push_back({false, -1});
         }
+        if (!dir.isEmpty() && !g->m_items[size_t(g->m_index.value(dir))].isDir)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is both a file and a folder of packed files.").arg(dir));
         GameItem f;
         f.path = path;
         f.size = packed[size_t(i)].second;

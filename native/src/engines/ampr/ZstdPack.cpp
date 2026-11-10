@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <system_error>
 #include <thread>
 
 namespace fw::ampr {
@@ -351,21 +352,22 @@ struct Slot {
 // the main thread reads the next.
 class CompressPool {
 public:
-    CompressPool(int threads, int level, bool roundTrip) : m_level(level), m_roundTrip(roundTrip), m_threadCount(threads)
+    CompressPool(int threads, int level, bool roundTrip) : m_level(level), m_roundTrip(roundTrip)
     {
-        for (int i = 0; i < threads; ++i)
-            m_threads.emplace_back([this] { work(); });
-    }
-    ~CompressPool()
-    {
-        {
-            std::lock_guard lock(m_mutex);
-            m_stop = true;
+        m_threads.reserve(size_t(threads));
+        try {
+            for (int i = 0; i < threads; ++i)
+                m_threads.emplace_back([this] { work(); });
+        } catch (const std::system_error&) {
+            // The system would not start another thread: the ones that run do the work.
+            if (m_threads.empty()) {
+                stop();
+                throw;
+            }
         }
-        m_cv.notify_all();
-        for (auto& t : m_threads)
-            t.join();
+        m_threadCount = int(m_threads.size());
     }
+    ~CompressPool() { stop(); }
     void start(Slot* batch, int count)
     {
         std::lock_guard lock(m_mutex);
@@ -384,14 +386,27 @@ public:
     }
 
 private:
+    void stop()
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            m_stop = true;
+        }
+        m_cv.notify_all();
+        for (auto& t : m_threads)
+            t.join();
+        m_threads.clear();
+    }
     void work()
     {
         ZSTD_CCtx* c = ZSTD_createCCtx();
         ZSTD_DCtx* d = ZSTD_createDCtx();
-        ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, m_level);
-        ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, kZstdChunkShift);
-        ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 1);
-        ZSTD_CCtx_setParameter(c, ZSTD_c_contentSizeFlag, 1);
+        if (c) {
+            ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, m_level);
+            ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, kZstdChunkShift);
+            ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 1);
+            ZSTD_CCtx_setParameter(c, ZSTD_c_contentSizeFlag, 1);
+        }
         std::vector<char> check(static_cast<size_t>(kZstdChunkBytes), 0);
         quint64 seen = 0;
         for (;;) {
@@ -424,6 +439,10 @@ private:
     void compress(ZSTD_CCtx* c, ZSTD_DCtx* d, std::vector<char>& check, Slot& s)
     {
         s.error.clear();
+        if (!c || !d) {
+            s.error = QStringLiteral("not enough memory for the compressor");
+            return;
+        }
         const size_t r = ZSTD_compress2(c, s.out.data(), s.out.size(), s.in.data(), size_t(s.inLen));
         if (!ZSTD_isError(r) && qint64(r) < s.inLen) {
             if (m_roundTrip) {
@@ -445,7 +464,7 @@ private:
 
     const int m_level;
     const bool m_roundTrip;
-    const int m_threadCount;
+    int m_threadCount = 0;
     std::vector<std::thread> m_threads;
     std::mutex m_mutex;
     std::condition_variable m_cv, m_doneCv;
@@ -584,13 +603,16 @@ Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPac
         for (const auto& f : files)
             sorted.push_back(f.path);
         std::sort(sorted.begin(), sorted.end());
-        for (size_t i = 1; i < sorted.size(); ++i) {
+        for (size_t i = 1; i < sorted.size(); ++i)
             if (sorted[i] == sorted[i - 1])
                 return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is listed twice.").arg(QString::fromUtf8(sorted[i])));
-            if (sorted[i].startsWith(sorted[i - 1] + '/'))
-                return Error(ErrorCode::InvalidArgument,
-                             QStringLiteral("%1 is both a file and a folder.").arg(QString::fromUtf8(sorted[i - 1])));
-        }
+        // Every folder of a path is looked up: other names ("a-1", "a.b") sort
+        // between "a" and "a/b", so neighbours alone would miss the pair.
+        for (const QByteArray& path : sorted)
+            for (qsizetype slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1))
+                if (std::binary_search(sorted.begin(), sorted.end(), path.left(slash)))
+                    return Error(ErrorCode::InvalidArgument,
+                                 QStringLiteral("%1 is both a file and a folder.").arg(QString::fromUtf8(path.left(slash))));
     }
     {
         std::vector<ZstdFileRecord> recs;
@@ -821,6 +843,8 @@ Result<std::unique_ptr<ZstdPackReader>> ZstdPackReader::open(const QByteArray& i
         r->m_volumes.push_back(std::move(ra));
     }
     r->m_dctx = ZSTD_createDCtx();
+    if (!r->m_dctx)
+        return Error(ErrorCode::Internal, QStringLiteral("Not enough memory to read the zstd packs."));
     r->m_chunk.resize(qsizetype(kZstdChunkBytes));
     return r;
 }

@@ -33,8 +33,10 @@ std::optional<QVariant> clampInt(const QVariant& v, int lo, int hi)
 int threadsFrom(const SettingsValues& s)
 {
     const qint64 own = s.integer(keys::kThreads);
+    // More threads than cores only cost memory (three 2 MiB tasks in flight
+    // per thread), so the module's own number is capped like the app-wide one.
     if (own > 0)
-        return int(std::clamp<qint64>(own, 1, 256));
+        return int(std::clamp<qint64>(own, 1, std::max(1, QThread::idealThreadCount())));
     return general::workerThreads(s);
 }
 
@@ -247,8 +249,8 @@ void registerModule(ModuleContext& ctx)
         d.group = QStringLiteral("Folder images (.ffpfs)");
         d.label = QStringLiteral("Never compress executables and system files");
         d.description = QStringLiteral(
-            "Keeps eboot*.bin, .prx/.sprx modules, sce_sys and sce_module, .json, .txt and .png files "
-            "uncompressed so the console can load them directly.");
+            "Keeps eboot*.bin, param*.sfx, keystone, .prx/.sprx modules, sce_sys and sce_module, .json, .txt and "
+            ".png files uncompressed so the console can load them directly.");
         d.type = SettingType::Bool;
         d.defaultValue = true;
         d.enabledWhenKey = keys::kCompressFiles;

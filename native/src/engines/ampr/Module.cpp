@@ -3,6 +3,7 @@
 #include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
 #include "engines/ampr/GamePack.h"
+#include "engines/ampr/HostPaths.h"
 #include "engines/ampr/Runtime.h"
 #include "engines/general/Module.h"
 
@@ -27,7 +28,8 @@ void registerSettings(SettingsSchema& s)
         d.label = QStringLiteral("Compress game files (zstd packs)");
         d.description = QStringLiteral(
             "A smaller image: the game's files go into zstd packs that ampr-emu-ng reads on the console. The bundled "
-            "runtime goes to fakelib/libSceAmpr.sprx; mount with ShadowMount+ with its fakelib updates turned off. Not "
+            "runtime goes to fakelib/libSceAmpr.sprx; mount with ShadowMount+ with \"Update game fakelib emulators\" turned "
+            "off. Not "
             "every game works packed yet: keep your original dump.");
         d.type = SettingType::Bool;
         d.defaultValue = false;
@@ -140,9 +142,7 @@ public:
         const QString s = QFileInfo(source()).absoluteFilePath(), o = QFileInfo(output()).absoluteFilePath();
         if (isSameOrInside(o, s) || isSameOrInside(s, o))
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The new folder cannot be inside the game folder (or the other way round)."));
-        if (QFileInfo(o).exists() && !QDir(o).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System))
-            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists and is not empty.").arg(native(o)));
-        return success();
+        return checkNewFolderOutput(o);
     }
 
 protected:
@@ -175,6 +175,9 @@ public:
         if (isZip()) {
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
+            // Unpacking reports as a phase of its own, which replaced the job's.
+            ctx.progress->setPhases(phases(), phaseWeights());
+            ctx.progress->beginPhase(0, 0);
         }
         FW_TRY_ASSIGN(auto files, openFolderGame(src, ctx.token));
         PackGameOptions o;
@@ -182,26 +185,26 @@ public:
         o.threads = ps.threads;
         o.strategy = ps.strategy;
         o.verify = ps.verify;
-        o.linkFromFolder = src;
-        o.freeSpaceMarginBytes = qint64(ctx.settings.integer(general::keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
+        // No linkFromFolder: the packed folder is kept, so its loose files are
+        // copies and share nothing with the source dump.
+        o.freeSpaceMarginBytes = general::freeSpaceMarginBytes(ctx.settings);
         o.packPhase = 1;
         o.verifyPhase = 2;
         const QString out = QFileInfo(output()).absoluteFilePath();
-        const bool created = !QFileInfo::exists(out);
+        // Written as "<output>.part" and renamed when everything is done: a
+        // failure or a cancel leaves nothing behind and touches nothing the
+        // job did not create.
+        FW_TRY_ASSIGN(auto staged, StagedFolder::begin(out));
         ctx.log.info(QStringLiteral("Packing %1 with zstd level %2 (%3) into %4")
                          .arg(native(src))
                          .arg(ps.level)
                          .arg(ps.strategy == PackStrategy::Compatible ? QStringLiteral("compatible: containers, configs and media stay loose")
                                                                       : QStringLiteral("everything except system files"),
                               native(out)));
-        auto r = packGame(files, out, o, ctx.token, ctx.progress, ctx.log);
-        if (!r.ok()) {
-            // Nothing half-written stays; a folder the user made is left empty, not removed.
-            (void)removeTreeSafely(out, QFileInfo(out).absolutePath());
-            if (!created)
-                QDir().mkpath(out);
+        auto r = packGame(files, staged->path(), o, ctx.token, ctx.progress, ctx.log);
+        if (!r.ok())
             return r.takeError();
-        }
+        FW_TRY(staged->commit());
         for (const QString& l : r->looseSummary)
             ctx.log.info(QStringLiteral("Kept loose: %1").arg(l));
         if (!r->droppedFiles.isEmpty())
@@ -249,18 +252,29 @@ public:
             return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 has no zstd or LZ4 packs.").arg(QFileInfo(source()).fileName()));
         ctx.progress->beginPhase(1, 0);
         const QString out = QFileInfo(output()).absoluteFilePath();
-        const bool created = !QFileInfo::exists(out);
-        auto r = unpackGame(files, out, {}, ctx.token, ctx.progress, ctx.log);
-        if (!r.ok()) {
-            (void)removeTreeSafely(out, QFileInfo(out).absolutePath());
-            if (!created)
-                QDir().mkpath(out);
+        // Written as "<output>.part" and renamed at the end (see PackJob).
+        FW_TRY_ASSIGN(auto staged, StagedFolder::begin(out));
+        UnpackOptions uo;
+        uo.freeSpaceMarginBytes = general::freeSpaceMarginBytes(ctx.settings);
+        ctx.log.info(QStringLiteral("Unpacking the %1 packs of %2 into %3")
+                         .arg(packKindName(detectPackKind(*files)), native(source()), native(out)));
+        auto r = unpackGame(files, staged->path(), uo, ctx.token, ctx.progress, ctx.log);
+        if (!r.ok())
             return r.takeError();
-        }
+        FW_TRY(staged->commit());
+        if (!r->droppedFiles.isEmpty())
+            ctx.log.info(QStringLiteral("Left out (packs, old AMPR journal and logs): %1").arg(r->droppedFiles.join(QStringLiteral(", "))));
         JobOutcome outcome;
         outcome.outputs = {out};
-        outcome.summary = QStringLiteral("Unpacked %1 files (%2) from %3 packs.")
-                              .arg(formatCount(r->unpackedFiles), formatBytes(r->bytes), packKindName(r->kind));
+        outcome.warnings = r->warnings + renamedWarnings(r->renamed);
+        outcome.summary = QStringLiteral("Unpacked %1 file%2 (%3) from %4 packs.")
+                              .arg(formatCount(r->unpackedFiles), r->unpackedFiles == 1 ? QString() : QStringLiteral("s"),
+                                   formatBytes(r->bytes), packKindName(r->kind));
+        ctx.log.info(outcome.summary);
+        outcome.details.insert(QStringLiteral("files"), r->files);
+        outcome.details.insert(QStringLiteral("bytes"), r->bytes);
+        outcome.details.insert(QStringLiteral("unpackedFiles"), r->unpackedFiles);
+        outcome.details.insert(QStringLiteral("amprIndexWritten"), r->amprIndexWritten);
         return outcome;
     }
 };
@@ -284,7 +298,7 @@ void registerModule(ModuleContext& ctx)
 {
     registerSettings(ctx.settings);
     ctx.dependencies.add(QStringLiteral("ampr.runtime"), QStringLiteral("ampr-emu-ng runtime (zstd packs)"),
-                         QStringLiteral("Serves zstd-packed games on the console."), probeRuntime);
+                         QStringLiteral("Serves zstd-packed games on the console (bundled, GPL-3.0, quer3q/ampr-emu-ng)."), probeRuntime);
     ctx.jobs.add(kPackJob, QStringLiteral("Pack a game (zstd)"),
                  [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new PackJob(p)); });
     ctx.jobs.add(kUnpackJob, QStringLiteral("Unpack a packed game"),

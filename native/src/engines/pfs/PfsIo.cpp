@@ -49,7 +49,7 @@ Result<qint64> FileSeqSource::read(char* dst, qint64 n)
                          m_file.errorString());
         if (r == 0)
             return Error(ErrorCode::IoError,
-                         QStringLiteral("%1 became shorter while the image was being built.")
+                         QStringLiteral("%1 became shorter while it was being read. Close programs that change it and try again.")
                              .arg(QFileInfo(m_path).fileName()),
                          m_path);
         got += r;
@@ -166,7 +166,7 @@ Result<qint64> FolderImageSource::read(char* dst, qint64 n)
                 FW_TRY_ASSIGN(const qint64 got, m_open->read(out, fromFile));
                 if (got != fromFile)
                     return Error(ErrorCode::IoError,
-                                 QStringLiteral("%1 became shorter while the image was being built.")
+                                 QStringLiteral("%1 became shorter while it was being read. Close programs that change it and try again.")
                                      .arg(QString::fromLatin1(f.relPath)));
                 m_openRead += got;
                 if (onSourceBytes)

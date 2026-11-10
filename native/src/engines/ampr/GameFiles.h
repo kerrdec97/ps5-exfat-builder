@@ -13,6 +13,7 @@
 
 #include <QHash>
 #include <QString>
+#include <QStringList>
 
 #include <memory>
 #include <vector>
@@ -35,10 +36,14 @@ public:
     virtual int find(const QString& path) const = 0;
     // Reads up to `len` bytes of item `index` from `offset` (0 at the end).
     virtual Result<qint64> read(int index, qint64 offset, char* dst, qint64 len) = 0;
+    // What the listing left out or could not read properly (skipped links, a
+    // damaged image); for the job's warnings.
+    virtual QStringList warnings() const { return {}; }
 };
 
-// A folder on disk (hidden and system files included, links not followed
-// into loops).
+// A folder on disk: hidden and system files included; symbolic links and
+// junctions followed (one that loops back into its own folder or has no
+// target is left out with a warning). Fails when a folder cannot be listed.
 Result<std::shared_ptr<GameFiles>> openFolderGame(const QString& folder, const CancellationToken& token);
 
 // Random access to one item of a GameFiles (for pack volumes inside an image).
@@ -60,6 +65,7 @@ public:
     const std::vector<GameItem>& items() const override { return m_items; }
     int find(const QString& path) const override { return m_index.value(path, -1); }
     Result<qint64> read(int index, qint64 offset, char* dst, qint64 len) override;
+    QStringList warnings() const override;
 
     PackKind kind() const { return m_kind; }
     qint64 packedFiles() const { return m_packedFiles; }

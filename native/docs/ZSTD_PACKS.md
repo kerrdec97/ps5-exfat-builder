@@ -11,7 +11,8 @@ docs, 36 issues and PRs), November 2026.
 |---|---|
 | Format, packer, reader | `src/engines/ampr/ZstdPack.*` |
 | Rules (what stays loose) | `src/engines/ampr/PackRules.*` |
-| Packing / unpacking a game | `src/engines/ampr/GamePack.*` |
+| Packing / unpacking a game, the staged output folder | `src/engines/ampr/GamePack.*` |
+| Where stored names go on this computer (containment) | `src/engines/ampr/HostPaths.*` |
 | Jobs `ampr.pack` (Build page › Packed folder, Library › Pack with zstd…; a zipped dump is unpacked first) and `ampr.unpack` | `src/engines/ampr/Module.cpp` |
 | Packed game as plain files, folder reader | `src/engines/ampr/GameFiles.*` |
 | LZ4 (AMPRPAK4) reader, read only | `src/engines/ampr/Lz4Pack.*` |
@@ -42,6 +43,28 @@ does not depend on the thread count.
   them (loose, packed, the new runtime), on-disk case kept; the old journal
   (`ampr_commands.bin`) and logs are left out.
 * A folder that holds only packed files is not created on disk.
+* The loose files of a *Packed folder* (`ampr.pack`) are copies: the folder
+  is kept, so it shares no file data with the dump it was made from and
+  editing one never changes the other. Only the temporary work folder of
+  `image.build.zstd` hard-links them from the source (same NTFS volume;
+  read-only files are copied there too).
+* `ampr.pack` and `ampr.unpack` write `<output>.part` (marker file
+  `<output>.part.writing`) and rename it when everything is done. The output
+  may be absent or an empty folder; that is checked when the job is queued,
+  when it starts and again before the rename, and only the staged folder is
+  ever removed.
+* The source folder is scanned like the plain image builds scan it: symbolic
+  links and junctions are followed. A link that leads back into its own
+  folders, or whose target is missing, is left out and listed as a warning.
+  A folder that cannot be listed fails the job.
+* Names from a pack index or an image are untrusted. A path with `..`, an
+  empty component, a backslash or a drive letter fails the job before
+  anything is written (`HostPaths`); other names this drive cannot store are
+  renamed with a warning, and two names that are one file here get ` (2)`.
+  FPKG staging refuses renamed names instead (a package must hold the
+  game's own names).
+* An image built with zstd packs is uploaded after the build like any other
+  when "Upload new images to the PS5" is on; a packed folder is not.
 
 ## Reported problems and what the app does
 
@@ -53,7 +76,7 @@ does not depend on the thread count.
 | "Update game fakelib emulators" replaces the runtime (dump-forge #10, #23) | Every zstd build warns about it |
 | Days Gone left 58.7 GB loose with the old default (ampr-emu-ng #3) | Pack everything by default; *compatible* is an option |
 | ASTRO BOT started with the keep-loose profile but not fully packed (dump-forge #27) | The *compatible* strategy |
-| A plain ELF eboot never starts (dump-forge 9ab367c, ampr-emu-ng #8) | Warned before the image is built |
+| A plain ELF eboot never starts (dump-forge 9ab367c, ampr-emu-ng #8) | Warned in the log as soon as it is seen, before packing, and again in the job's result |
 | Old LZ4 packs must be decoded before repacking (ampr-emu-ng #21) | LZ4 and zstd packed sources are unpacked on the fly and packed again |
 | Packing into an image needs space and twice the CPU (dump-forge #15) | Packs go to a work folder next to the output, loose files hard-linked; removed after the build or after a crash |
 | Corrupt or truncated sources (ampr-emu-ng #7) | Every chunk decoded again while packing, every volume read back against its CRCs, the image verified against the packed folder |

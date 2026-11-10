@@ -4,8 +4,10 @@
 // (AMPRPAK4) reader on a hand-built pack.
 
 #include "core/FileUtil.h"
+#include "core/PathSafety.h"
 #include "engines/ampr/GameFiles.h"
 #include "engines/ampr/GamePack.h"
+#include "engines/ampr/HostPaths.h"
 #include "engines/ampr/Lz4Pack.h"
 #include "engines/ampr/PackRules.h"
 #include "engines/ampr/Runtime.h"
@@ -390,11 +392,16 @@ private slots:
         QCOMPARE(rep->packedFiles, qint64(2));
     }
 
-    void lz4PacksUnpack()
+private:
+    struct Lz4Game {
+        QByteArray data, vol, c1;
+        quint64 off1 = 0;
+    };
+    // A hand-built AMPRPAK4 game in `game`: one packed file listed as `p0`
+    // (two LZ4 chunks of 64 KiB blocks, the second raw), one loose record, a
+    // CRC sidecar.
+    void buildLz4Game(const QString& game, const QByteArray& p0, Lz4Game& built)
     {
-        // A hand-built AMPRPAK4 game: one packed file (two LZ4 chunks of 64 KiB
-        // blocks, the second raw), one loose record, a CRC sidecar.
-        const QString game = m_tmp.filePath(QStringLiteral("lz4game"));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray("\x54\x14\xF5\xEE", 4)));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), "{}"));
         const QByteArray data = compressible(65536, 4) + randomBytes(30000, 5);
@@ -428,7 +435,6 @@ private slots:
         std::memcpy(vol.data() + off1, c1.constData(), size_t(c1.size()));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/ampr_assets-000.pak"), vol));
 
-        const QByteArray p0 = "/app0/data/big.bin";
         const QByteArray p1 = "/app0/eboot.bin";
         const QByteArray v0 = "ampr_assets-000.pak";
         QByteArray strings = p0 + '\0' + p1 + '\0' + v0 + '\0';
@@ -495,6 +501,21 @@ private slots:
         put32(crc, 52, crc32(c1.constData(), c1.size()));
         put32(crc, 40, crc32(crc.constData() + 48, crc.size() - 48));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/ampr_assets.index.crc"), crc));
+        built = {data, vol, c1, off1};
+    }
+
+private slots:
+    void lz4PacksUnpack()
+    {
+        const QString game = m_tmp.filePath(QStringLiteral("lz4game"));
+        Lz4Game built;
+        buildLz4Game(game, "/app0/data/big.bin", built);
+        if (QTest::currentTestFailed())
+            return;
+        const QByteArray& data = built.data;
+        const QByteArray& vol = built.vol;
+        const QByteArray& c1 = built.c1;
+        const quint64 off1 = built.off1;
 
         auto files = openFolderGame(game, {});
         QVERIFY(files.ok());
@@ -520,6 +541,159 @@ private slots:
         QVERIFY(logical2.ok());
         QByteArray tail(c1.size(), '\0');
         QVERIFY(!(*logical2)->read((*logical2)->find(QStringLiteral("data/big.bin")), 65536, tail.data(), tail.size()).ok());
+    }
+
+    // A name cannot be a file and a folder at once, whatever sorts between
+    // the two ("a-1" comes after "a" and before "a/b").
+    void fileAndFolderOfOneNameAreRefused()
+    {
+        const QString dir = m_tmp.filePath(QStringLiteral("both"));
+        QVERIFY(QDir().mkpath(dir));
+        auto w = writeZstdPack(inputsOf({{"a", "file"}, {"a-1", "other"}, {"a/b", "inside"}}), {}, dir, {});
+        QVERIFY(!w.ok());
+        QVERIFY2(w.error().message.contains(QLatin1String("both a file and a folder")), qPrintable(w.error().toLogString()));
+        QVERIFY(QDir(dir).isEmpty());
+
+        // A loose file next to packed files below the same name.
+        const QString game = m_tmp.filePath(QStringLiteral("both-game"));
+        QVERIFY(QDir().mkpath(game));
+        QVERIFY(writeZstdPack(inputsOf({{"a/b", QByteArray(1000, 'x')}}), {}, game, {}).ok());
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/a"), "loose"));
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        auto logical = logicalGame(*files, {});
+        QVERIFY(!logical.ok());
+        QCOMPARE(logical.error().code, ErrorCode::CorruptData);
+    }
+
+    // Stored paths are untrusted: nothing a pack index or an image lists may
+    // be written outside the output folder.
+    void hostPathsStayInsideTheirRoot()
+    {
+        const QString root = m_tmp.filePath(QStringLiteral("hostpaths/out"));
+        for (const char* bad : {"../x", "a/../../x", "..", "a/./b", "a//b", "/abs/x", "a/", "", "C:/Windows/x", "c:x/y", "a/D:/x",
+                                "a\\..\\x"}) {
+            QVERIFY2(!storedPathProblem(QString::fromLatin1(bad)).isEmpty(), bad);
+            HostPaths paths(root);
+            auto r = paths.add(QString::fromLatin1(bad));
+            QVERIFY2(!r.ok(), bad);
+            QCOMPARE(r.error().code, ErrorCode::CorruptData);
+            QVERIFY2(r.error().message.contains(QLatin1String("unsafe path")), qPrintable(r.error().message));
+        }
+        HostPaths paths(root);
+        // Names this drive cannot store are mapped, never refused, and stay inside.
+        for (const char* odd : {"data/ab:c.bin", "data/CON", "data/trailing.", "data/q?.bin", "...", "data/ x"}) {
+            auto r = paths.add(QString::fromLatin1(odd));
+            QVERIFY2(r.ok(), odd);
+            QVERIFY2(isSameOrInside(*r, root) && *r != QDir::cleanPath(root), qPrintable(*r));
+            QCOMPARE(*r, QDir::cleanPath(root) + u'/' + paths.relative(QString::fromLatin1(odd)));
+        }
+        // The same stored path always goes to the same place.
+        QCOMPARE(*paths.add(QStringLiteral("data/ab:c.bin")), *paths.add(QStringLiteral("data/ab:c.bin")));
+        QCOMPARE(*paths.add(QStringLiteral("Media/x.bin")), QDir::cleanPath(root) + QStringLiteral("/Media/x.bin"));
+        if (hostUsesWindowsNames()) {
+            QVERIFY(!paths.renamed().isEmpty());
+            // Two files that are one file on this drive: the second is renamed, not overwritten.
+            const QString first = *paths.add(QStringLiteral("Media/Clip.bik"));
+            const QString second = *paths.add(QStringLiteral("Media/clip.BIK"));
+            QVERIFY(first.compare(second, Qt::CaseInsensitive) != 0);
+            QVERIFY(second.endsWith(QLatin1String(" (2)")));
+            // Folders that differ only in case stay one folder.
+            QCOMPARE(*paths.add(QStringLiteral("media/y.bin")), QDir::cleanPath(root) + QStringLiteral("/Media/y.bin"));
+            QVERIFY(paths.renamed().join(u'\n').contains(QLatin1String("Media/clip.BIK")));
+            QVERIFY(!paths.renamed().join(u'\n').contains(QLatin1String("media/y.bin")));
+        }
+        QVERIFY(!QFileInfo::exists(m_tmp.filePath(QStringLiteral("hostpaths")))); // deciding a path creates nothing
+    }
+
+    // An LZ4 manifest that lists a path with a drive letter: unpacking and
+    // packing again both refuse it before anything is written.
+    void hostileLz4ManifestCannotLeaveTheOutput()
+    {
+        const QString escaped = m_tmp.filePath(QStringLiteral("lz4-escaped"));
+        if (escaped.startsWith(u'/'))
+            QSKIP("An absolute path in a manifest needs a drive letter (it starts with '/' here and the manifest refuses it).");
+        const QString game = m_tmp.filePath(QStringLiteral("lz4hostile"));
+        Lz4Game built;
+        buildLz4Game(game, "/app0/" + (escaped + QStringLiteral("/evil.sprx")).toUtf8(), built);
+        if (QTest::currentTestFailed())
+            return;
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        auto logical = logicalGame(*files, {});
+        QVERIFY2(logical.ok(), logical.ok() ? "" : qPrintable(logical.error().toLogString()));
+
+        const QString out = m_tmp.filePath(QStringLiteral("lz4hostile-out/unpacked"));
+        auto u = unpackGame(*files, out, {}, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY(!u.ok());
+        QVERIFY2(u.error().message.contains(QLatin1String("unsafe path")), qPrintable(u.error().toLogString()));
+        PackGameOptions o;
+        o.freeSpaceMarginBytes = 0;
+        auto p = packGame(*files, m_tmp.filePath(QStringLiteral("lz4hostile-out/packed")), o, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY(!p.ok());
+        QVERIFY(!QFileInfo::exists(escaped));
+        QVERIFY(!QFileInfo::exists(m_tmp.filePath(QStringLiteral("lz4hostile-out"))));
+    }
+
+    // A kept output never shares file data with the source; only a work
+    // folder (linkFromFolder) may.
+    void looseFilesAreCopiedUnlessLinkingIsAskedFor()
+    {
+        const QString game = m_tmp.filePath(QStringLiteral("games/PPSA01234"));
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        PackGameOptions o;
+        o.freeSpaceMarginBytes = 0;
+        const QString out = m_tmp.filePath(QStringLiteral("copied/PPSA01234"));
+        auto rep = packGame(*files, out, o, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+        QCOMPARE(rep->linkedFiles, qint64(0));
+        const QByteArray original = bytesOf(game + QStringLiteral("/eboot.bin"));
+        {
+            QFile f(out + QStringLiteral("/eboot.bin"));
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            QVERIFY(f.write("XXXX") == 4);
+        }
+        QCOMPARE(bytesOf(game + QStringLiteral("/eboot.bin")), original);
+    }
+
+    // The staged folder: nothing under the final name until commit(), and a
+    // final folder that is not ours to replace is refused both times.
+    void stagedFolderOnlyReplacesAnEmptyOrMissingFolder()
+    {
+        const QString base = m_tmp.filePath(QStringLiteral("staged"));
+        const QString out = base + QStringLiteral("/out");
+        QVERIFY(fwtest::writeTextFile(out, "a file"));
+        QCOMPARE(checkNewFolderOutput(out).error().code, ErrorCode::AlreadyExists);
+        QVERIFY(!StagedFolder::begin(out).ok());
+        QCOMPARE(bytesOf(out), QByteArray("a file"));
+        QVERIFY(QFile::remove(out));
+        {
+            auto s = StagedFolder::begin(out);
+            QVERIFY(s.ok());
+            QVERIFY(QFileInfo((*s)->path()).isDir());
+            QVERIFY(fwtest::writeTextFile((*s)->path() + QStringLiteral("/a.bin"), "a"));
+            QVERIFY(!QFileInfo::exists(out));
+        } // abandoned
+        QVERIFY(QDir(base).isEmpty());
+        {
+            auto s = StagedFolder::begin(out);
+            QVERIFY(s.ok());
+            QVERIFY(fwtest::writeTextFile((*s)->path() + QStringLiteral("/a.bin"), "a"));
+            QVERIFY(fwtest::writeTextFile(out + QStringLiteral("/theirs.txt"), "theirs")); // appears meanwhile
+            QCOMPARE((*s)->commit().error().code, ErrorCode::AlreadyExists);
+        }
+        QCOMPARE(QDir(base).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("out")});
+        QCOMPARE(bytesOf(out + QStringLiteral("/theirs.txt")), QByteArray("theirs"));
+        QVERIFY(QFile::remove(out + QStringLiteral("/theirs.txt")));
+        {
+            auto s = StagedFolder::begin(out); // an empty folder may be replaced
+            QVERIFY(s.ok());
+            QVERIFY(fwtest::writeTextFile((*s)->path() + QStringLiteral("/a.bin"), "a"));
+            QVERIFY((*s)->commit().ok());
+        }
+        QCOMPARE(bytesOf(out + QStringLiteral("/a.bin")), QByteArray("a"));
+        QCOMPARE(QDir(base).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("out")});
     }
 
 private:

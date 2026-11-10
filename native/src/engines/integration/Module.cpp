@@ -6,7 +6,9 @@
 #include "core/FileUtil.h"
 #include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatReader.h"
+#include "engines/exfat/Module.h"
 #include "engines/fpkg/SourceStager.h"
+#include "engines/general/Module.h"
 #include "engines/integration/ImageCompare.h"
 #include "engines/integration/ImageFiles.h"
 #include "engines/pfs/PfsVerify.h"
@@ -17,6 +19,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QStorageInfo>
 
 namespace fw::integration {
 
@@ -89,8 +92,8 @@ QString asciiInnerName(const QString& fileName)
 //            in the target format (the only way for every other pair).
 // A container that holds an .exfat/.ffpkg file (a direct conversion) converts
 // back by unpacking that file: to its own format as is, otherwise repacked.
-// An existing output is only replaced with replaceExisting; it is set aside
-// while the new image is written and put back if the conversion fails.
+// An existing output is only replaced with replaceExisting, and only by the
+// final rename of the finished, verified image.
 class ConvertJob final : public Job {
 public:
     ConvertJob(QJsonObject p, const JobFactory* factory) : m_p(std::move(p)), m_factory(factory) {}
@@ -149,31 +152,13 @@ public:
                          .arg(QFileInfo(image()).fileName(), target(),
                               method() == u"direct" ? QStringLiteral("packing the image as it is") : QStringLiteral("repacking its files")));
 
-        // An existing output is set aside, and put back unless the conversion succeeds.
-        QString aside;
-        if (QFileInfo::exists(output())) {
-            aside = output() + QStringLiteral(".old");
-            for (int i = 2; QFileInfo::exists(aside); ++i)
-                aside = output() + QStringLiteral(".old%1").arg(i);
-            if (!QFile::rename(output(), aside))
-                return Error(ErrorCode::IoError, QStringLiteral("%1 could not be set aside. Close programs that use it and try again.")
-                                                     .arg(QDir::toNativeSeparators(output())));
-            ctx.log.info(QStringLiteral("Set the existing %1 aside until the new image has verified.").arg(QFileInfo(output()).fileName()));
-        }
+        // An existing output keeps its name until the new image is finished
+        // and verified: every path below writes "<output>.part" and replaces
+        // the old file only in its final rename (PartFile::commit), so a
+        // failure, a cancel or a crash leaves the previous image where it was.
+        if (QFileInfo::exists(output()))
+            ctx.log.info(QStringLiteral("The existing %1 is replaced once the new image has verified.").arg(QFileInfo(output()).fileName()));
         auto result = convert(ctx);
-        const bool ok = result.ok() && result->verification != Verification::Failed && QFileInfo::exists(output());
-        if (!aside.isEmpty()) {
-            if (ok) {
-                QFile::remove(aside);
-            } else {
-                if (QFileInfo::exists(output()))
-                    QFile::remove(output());
-                if (QFile::rename(aside, output()))
-                    ctx.log.info(QStringLiteral("Put the previous %1 back.").arg(QFileInfo(output()).fileName()));
-                else
-                    ctx.log.warn(QStringLiteral("The previous image is still at %1.").arg(QDir::toNativeSeparators(aside)));
-            }
-        }
         if (result.ok())
             result->details.insert(QStringLiteral("method"), method());
         return result;
@@ -205,6 +190,17 @@ private:
         return job->run(ctx);
     }
 
+    // The build that writes output(): it may replace an existing file exactly
+    // when this job may (the FFPKG and PFS builds take that as a parameter,
+    // the exFAT build from its setting).
+    Result<JobOutcome> runBuild(JobContext& ctx, const QString& kind, QJsonObject params)
+    {
+        params.insert(QStringLiteral("replaceExisting"), replaceExisting());
+        JobContext sub = ctx;
+        sub.settings = ctx.settings.withOverrides({{exfat::keys::kOverwriteExisting, replaceExisting()}});
+        return runChild(sub, kind, params);
+    }
+
     Result<JobOutcome> convert(JobContext& ctx)
     {
         if (method() == u"direct") {
@@ -213,7 +209,7 @@ private:
                               {QStringLiteral("output"), output()},
                               {QStringLiteral("format"), QStringLiteral("ffpfsc")},
                               {QStringLiteral("innerName"), inner}};
-            FW_TRY_ASSIGN(JobOutcome built, runChild(ctx, QStringLiteral("image.pfs.build"), build));
+            FW_TRY_ASSIGN(JobOutcome built, runBuild(ctx, QStringLiteral("image.pfs.build"), build));
             built.details.insert(QStringLiteral("convertedFrom"), image());
             built.details.insert(QStringLiteral("innerName"), inner);
             if (built.verification != Verification::Failed)
@@ -248,7 +244,7 @@ private:
         QJsonObject build{{QStringLiteral("source"), stage}, {QStringLiteral("output"), output()}};
         if (isPfsFormat(target()))
             build.insert(QStringLiteral("format"), target());
-        FW_TRY_ASSIGN(JobOutcome built, runChild(ctx, engineOf(target()) + QStringLiteral(".build"), build));
+        FW_TRY_ASSIGN(JobOutcome built, runBuild(ctx, engineOf(target()) + QStringLiteral(".build"), build));
         built.warnings = extracted.warnings + built.warnings;
         built.details.insert(QStringLiteral("convertedFrom"), image());
         if (built.verification != Verification::Failed)
@@ -277,11 +273,30 @@ private:
             checked.summary = QStringLiteral("The image inside %1 did not verify; nothing was written.").arg(QFileInfo(image()).fileName());
             return checked;
         }
-        PartFile part(output());
-        QFile::remove(part.partPath());
-        if (!QFile::rename(innerPath, part.partPath()) && !QFile::copy(innerPath, part.partPath()))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QDir::toNativeSeparators(part.partPath())));
-        FW_TRY(part.commit(false));
+        // On the output's own drive the unpacked image only needs a new name;
+        // from another drive (the temp folder usually is on one) it is copied
+        // through "<output>.part": cancellable, with progress, and only after
+        // the output drive is known to have room.
+        const QString outDir = QFileInfo(output()).absolutePath();
+        if (!QDir().mkpath(outDir))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(outDir)));
+        const QStorageInfo from(QFileInfo(innerPath).absolutePath()), to(outDir);
+        bool placed = false;
+        if (from.isValid() && to.isValid() && from.rootPath() == to.rootPath()) {
+            PartFile part(output());
+            QFile::remove(part.partPath());
+            if (QFile::rename(innerPath, part.partPath())) {
+                FW_TRY(part.commit(replaceExisting()));
+                placed = true;
+            }
+        }
+        if (!placed) {
+            const qint64 size = QFileInfo(innerPath).size();
+            FW_TRY(ensureFreeSpace(outDir, size, general::freeSpaceMarginBytes(ctx.settings)));
+            ctx.progress->begin(QStringLiteral("Saving"), size, 1);
+            ctx.progress->setCurrentItem(QFileInfo(output()).fileName());
+            FW_TRY(copyFileStreaming(innerPath, output(), ctx.token, ctx.progress, replaceExisting()));
+        }
         JobOutcome out = checked;
         out.outputs = {output()};
         out.warnings = ex.warnings + checked.warnings;
@@ -359,13 +374,11 @@ public:
         ctx.progress->beginPhase(0, 0);
         ctx.progress->setCurrentItem(QFileInfo(a()).fileName());
         FW_TRY_ASSIGN(auto treeA, openFileTree(a(), ctx.token));
-        ctx.log.info(QStringLiteral("A: %1, %2 files, %3 folders, %4")
-                         .arg(treeA->describe(), formatCount(treeA->fileCount()), formatCount(treeA->dirCount()), formatBytes(treeA->totalBytes())));
+        ctx.log.info(QStringLiteral("A: %1").arg(treeLine(*treeA)));
         ctx.progress->beginPhase(1, 0);
         ctx.progress->setCurrentItem(QFileInfo(b()).fileName());
         FW_TRY_ASSIGN(auto treeB, openFileTree(b(), ctx.token));
-        ctx.log.info(QStringLiteral("B: %1, %2 files, %3 folders, %4")
-                         .arg(treeB->describe(), formatCount(treeB->fileCount()), formatCount(treeB->dirCount()), formatBytes(treeB->totalBytes())));
+        ctx.log.info(QStringLiteral("B: %1").arg(treeLine(*treeB)));
 
         CompareOptions opt;
         opt.depth = dep;
@@ -400,12 +413,21 @@ public:
             logSome(QStringLiteral("Different content: %1 (first difference at byte %2)").arg(d.path, formatCount(d.offset)));
         for (const UnreadableFile& u : rep.unreadable)
             logSome(QStringLiteral("Could not read %1: %2").arg(u.path, u.message));
-        if (logged > 20)
-            ctx.log.info(QStringLiteral("… %1 more differences (see the job's result).").arg(logged - 20));
+        // The lists are capped; the count of all differences is not.
+        if (const qint64 more = std::max<qint64>(rep.differenceCount(), logged) - 20; logged > 20 && more > 0)
+            ctx.log.info(QStringLiteral("… %1 more difference%2 (see the job's result).")
+                             .arg(formatCount(more), more == 1 ? QString() : QStringLiteral("s")));
         return out;
     }
 
 private:
+    // "exFAT image, 1 file, 12 folders, 48.2 GB"
+    static QString treeLine(const FileTree& t)
+    {
+        return QStringLiteral("%1, %2 file%3, %4 folder%5, %6")
+            .arg(t.describe(), formatCount(t.fileCount()), t.fileCount() == 1 ? QString() : QStringLiteral("s"),
+                 formatCount(t.dirCount()), t.dirCount() == 1 ? QString() : QStringLiteral("s"), formatBytes(t.totalBytes()));
+    }
     QString a() const { return m_p.value(QStringLiteral("a")).toString(); }
     QString b() const { return m_p.value(QStringLiteral("b")).toString(); }
     CompareDepth depth() const
@@ -415,10 +437,12 @@ private:
     QJsonObject m_p;
 };
 
+// The jobs whose verified image is uploaded. A packed folder (ampr.pack) is
+// not an image and is never uploaded automatically.
 const QStringList& buildKinds()
 {
     static const QStringList k = {QStringLiteral("image.exfat.build"), QStringLiteral("image.ffpkg.build"),
-                                  QStringLiteral("image.pfs.build"), kConvertJob};
+                                  QStringLiteral("image.pfs.build"), kZstdBuildJob, kConvertJob};
     return k;
 }
 

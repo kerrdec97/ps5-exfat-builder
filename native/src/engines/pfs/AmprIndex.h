@@ -41,6 +41,10 @@ quint64 amprPathHash(const QByteArray& path);
 // writes no index).
 QByteArray buildAmprIndex(const std::vector<AmprRow>& rows);
 
+// True when two indexes list the same paths with the same sizes and differ
+// at most in the files' modification times.
+bool amprIndexesDifferOnlyInTimes(const QByteArray& a, const QByteArray& b);
+
 // ---- the stand-alone AMPR index tool (local folder or console folder) -------------------
 //
 // Rules of drakmor ampr_emu tools/build_ampr_index.py (current upstream,

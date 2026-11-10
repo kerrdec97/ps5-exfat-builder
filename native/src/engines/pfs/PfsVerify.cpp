@@ -6,6 +6,7 @@
 
 #include "core/FileUtil.h"
 #include "core/PathSafety.h"
+#include "engines/pfs/AmprIndex.h"
 #include "engines/pfs/PfsIo.h"
 #include "engines/pfs/PfsReader.h"
 
@@ -144,6 +145,23 @@ Status compareFile(const PfsImage& img, const PfsEntry& e, const SourceFile& src
     if (!st.ok()) {
         if (st.error().code != ErrorCode::VerificationFailed)
             return st;
+        if (diffAt >= 0 && src.generated && asciiLower(e.path) == "ampr_emu.index") {
+            // The generated index stores every file's modification time. A
+            // source that was copied or touched since the build gives other
+            // times; the index is still right when nothing else differs.
+            QByteArray stored;
+            FW_TRY(img.readFile(ino, [&](const char* d, qint64 len) -> Status {
+                stored.append(d, qsizetype(len));
+                return success();
+            }, token));
+            stored.truncate(qsizetype(src.size));
+            if (amprIndexesDifferOnlyInTimes(stored, src.content)) {
+                rep.warnings << QStringLiteral("ampr_emu.index in the image holds other file times than the source has now "
+                                               "(its paths and sizes match).");
+                rep.bytesChecked += src.size;
+                return success();
+            }
+        }
         if (diffAt >= 0)
             rep.fail(QStringLiteral("Different content: %1 (first difference at byte %2)").arg(rel(e.path)).arg(diffAt));
         else if (dirtyPadding)
@@ -258,6 +276,9 @@ Result<ImageSummary> inspectImage(const QString& image)
     sum.warnings << o.outer->warnings();
     if (o.outer->files().size() == 1 && o.outer->dirs().empty())
         sum.singleFile = o.outer->files().front().path;
+    sum.outerFiles = qint64(o.outer->files().size());
+    for (const PfsEntry& e : o.outer->files())
+        sum.outerBytes += o.outer->inodes()[e.inode].logicalSize();
     if (looksNested(*o.outer, true)) {
         FW_TRY(openNested(o));
         sum.nested = true;
@@ -315,6 +336,7 @@ Result<VerifyReport> verifyImage(const QString& image, const VerifyExpectation& 
             rep.problemCount = tree.problemCount;
             rep.filesChecked = tree.filesChecked;
             rep.paddedFiles = tree.paddedFiles;
+            rep.warnings << tree.warnings;
             if (full)
                 rep.bytesChecked = tree.bytesChecked;
         }
@@ -389,29 +411,40 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
     // A new or empty folder is filled through "<out>.part" and renamed at the end.
     const bool staged = outEmpty;
     const QString root = staged ? out + QStringLiteral(".part") : out;
+    // The marker that says a leftover "<out>.part" is ours lives next to the
+    // staged folder, not in it: an image may hold a file of any name.
+    const QString markerPath = root + QStringLiteral(".extracting");
     if (staged) {
         if (QFileInfo::exists(root)) {
-            if (!QFileInfo::exists(root + u'/' + QLatin1String(kExtractMarker)))
+            // (Older versions kept the marker inside the staged folder.)
+            if (!QFileInfo::exists(markerPath) && !QFileInfo::exists(root + u'/' + QLatin1String(kExtractMarker)))
                 return Error(ErrorCode::AlreadyExists,
                              QStringLiteral("%1 already exists. Move or delete it and try again.")
                                  .arg(QDir::toNativeSeparators(root)));
             FW_TRY(removeTreeSafely(root));
         }
-        if (!QDir().mkpath(root))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(QDir::toNativeSeparators(root)));
-        QFile marker(root + u'/' + QLatin1String(kExtractMarker));
+        QFile marker(markerPath);
         if (!marker.open(QIODevice::WriteOnly))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not write to %1.").arg(QDir::toNativeSeparators(root)));
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not write to %1.").arg(QDir::toNativeSeparators(QFileInfo(out).absolutePath())));
+        marker.close();
+        if (!QDir().mkpath(root)) {
+            QFile::remove(markerPath);
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(QDir::toNativeSeparators(root)));
+        }
     }
     struct Cleanup {
-        QString path;
+        QString path, marker;
+        bool staged;
         bool active;
         ~Cleanup()
         {
             if (active)
                 (void)removeTreeSafely(path);
+            if (staged)
+                QFile::remove(marker);
         }
-    } cleanup{root, staged};
+    } cleanup{root, markerPath, staged, staged};
 
     // Image names are untrusted. Each one becomes a single safe component
     // (renamed where this drive cannot store it), and every path is checked to
@@ -477,12 +510,16 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
                 hooks.advance(len);
             return success();
         }, token));
+        // The last piece may still sit in Qt's buffer: a full drive shows here.
+        if (!f.flush())
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not write %1. The drive may be full.").arg(QDir::toNativeSeparators(target)),
+                         f.errorString());
         f.close();
         FW_TRY(part.commit(options.overwrite));
         ++rep.files;
     }
     if (staged) {
-        QFile::remove(root + u'/' + QLatin1String(kExtractMarker));
         if (QFileInfo::exists(out) && !QDir().rmdir(out))
             return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(QDir::toNativeSeparators(out)));
         if (!QDir().rename(root, out))
