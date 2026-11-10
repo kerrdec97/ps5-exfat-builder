@@ -26,6 +26,7 @@ ProgressReporter::ProgressReporter(Sink sink, int throttleMs)
 void ProgressReporter::setPhases(const QStringList& names, const QList<double>& weights)
 {
     std::lock_guard lock(m_mutex);
+    m_declared = true;
     m_phaseNames = names.isEmpty() ? QStringList{QStringLiteral("Working")} : names;
     m_weights.clear();
     for (int i = 0; i < m_phaseNames.size(); ++i)
@@ -38,33 +39,39 @@ void ProgressReporter::setPhases(const QStringList& names, const QList<double>& 
             m_phaseMs[i] = 0;
 }
 
+void ProgressReporter::enterPhaseLocked(int index, qint64 total, qint64 filesTotal, bool unitIsBytes)
+{
+    const int next = std::clamp(index, 0, std::max(0, int(m_phaseNames.size()) - 1));
+    const auto now = Clock::now();
+    if (!m_started) {
+        m_started = true;
+        m_startedAt = now;
+        m_phaseStartedAt = now;
+    } else if (next != m_phaseIndex && !m_finished) {
+        // Close the phase that ends; a phase entered again (a second
+        // beginPhase with the real total) keeps its clock running.
+        if (m_phaseIndex >= 0 && m_phaseIndex < m_phaseMs.size())
+            m_phaseMs[m_phaseIndex] += msBetween(m_phaseStartedAt, now);
+        m_phaseStartedAt = now;
+    }
+    m_phaseIndex = next;
+    m_total = std::max<qint64>(0, total);
+    m_filesTotal = std::max<qint64>(0, filesTotal);
+    m_unitIsBytes = unitIsBytes;
+    m_currentItem.clear();
+    m_done.store(0);
+    m_filesDone.store(0);
+    m_rate = 0.0;
+    m_rateT0 = now;
+    m_rateDone0 = 0;
+}
+
 void ProgressReporter::beginPhase(int index, qint64 total, qint64 filesTotal, bool unitIsBytes)
 {
     {
         std::lock_guard lock(m_mutex);
-        const int next = std::clamp(index, 0, std::max(0, int(m_phaseNames.size()) - 1));
-        const auto now = Clock::now();
-        if (!m_started) {
-            m_started = true;
-            m_startedAt = now;
-            m_phaseStartedAt = now;
-        } else if (next != m_phaseIndex && !m_finished) {
-            // Close the phase that ends; a phase entered again (a second
-            // beginPhase with the real total) keeps its clock running.
-            if (m_phaseIndex >= 0 && m_phaseIndex < m_phaseMs.size())
-                m_phaseMs[m_phaseIndex] += msBetween(m_phaseStartedAt, now);
-            m_phaseStartedAt = now;
-        }
-        m_phaseIndex = next;
-        m_total = std::max<qint64>(0, total);
-        m_filesTotal = std::max<qint64>(0, filesTotal);
-        m_unitIsBytes = unitIsBytes;
-        m_currentItem.clear();
-        m_done.store(0);
-        m_filesDone.store(0);
-        m_rate = 0.0;
-        m_rateT0 = now;
-        m_rateDone0 = 0;
+        m_stepName.clear(); // a step ends where the job's next phase begins
+        enterPhaseLocked(index, total, filesTotal, unitIsBytes);
     }
     flush();
 }
@@ -73,18 +80,37 @@ void ProgressReporter::begin(const QString& phase, qint64 total, qint64 filesTot
 {
     {
         std::lock_guard lock(m_mutex);
-        const int idx = m_phaseNames.indexOf(phase);
+        int idx = int(m_phaseNames.indexOf(phase));
         if (idx < 0) {
             m_phaseNames = {phase};
             m_weights = {1.0};
             m_phaseMs = {0};
+            m_stepPhase = -1;
+            idx = 0;
+        }
+        m_stepName.clear();
+        enterPhaseLocked(idx, total, filesTotal, unitIsBytes);
+    }
+    flush();
+}
+
+void ProgressReporter::beginStep(const QString& name, qint64 total, qint64 filesTotal, bool unitIsBytes)
+{
+    bool insidePhase = false;
+    {
+        std::lock_guard lock(m_mutex);
+        insidePhase = m_declared && !m_phaseNames.contains(name);
+        if (insidePhase) {
+            m_stepName = name;
+            m_stepPhase = m_phaseIndex;
+            m_stepShare = 0.5;
+            enterPhaseLocked(m_phaseIndex, total, filesTotal, unitIsBytes); // the phase's clock keeps running
         }
     }
-    const int idx = [&] {
-        std::lock_guard lock(m_mutex);
-        return int(m_phaseNames.indexOf(phase));
-    }();
-    beginPhase(std::max(0, idx), total, filesTotal, unitIsBytes);
+    if (insidePhase)
+        flush();
+    else
+        begin(name, total, filesTotal, unitIsBytes);
 }
 
 void ProgressReporter::advance(qint64 units)
@@ -154,7 +180,7 @@ ProgressSnapshot ProgressReporter::snapshot() const
 ProgressSnapshot ProgressReporter::snapshotLocked() const
 {
     ProgressSnapshot s;
-    s.phase = m_phaseNames.value(m_phaseIndex);
+    s.phase = m_stepName.isEmpty() ? m_phaseNames.value(m_phaseIndex) : m_stepName;
     s.phaseIndex = m_phaseIndex;
     s.phaseCount = int(m_phaseNames.size());
     s.done = m_done.load(std::memory_order_relaxed);
@@ -176,7 +202,14 @@ ProgressSnapshot ProgressReporter::snapshotLocked() const
         if (i < m_phaseIndex)
             before += m_weights[i];
     }
-    const double cur = m_weights.value(m_phaseIndex, 1.0) * (s.indeterminate ? 0.0 : s.phaseFraction());
+    // A step (beginStep) fills the first part of its phase's share; the
+    // phase's own progress fills the rest.
+    double within = s.indeterminate ? 0.0 : s.phaseFraction();
+    if (!m_stepName.isEmpty())
+        within *= m_stepShare;
+    else if (m_phaseIndex == m_stepPhase)
+        within = m_stepShare + (1.0 - m_stepShare) * within;
+    const double cur = m_weights.value(m_phaseIndex, 1.0) * within;
     s.overallFraction = sumW > 0 ? std::clamp((before + cur) / sumW, 0.0, 1.0) : 0.0;
 
     // Clocks

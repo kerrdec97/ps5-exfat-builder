@@ -126,17 +126,18 @@ Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, 
         return Error(ErrorCode::InvalidArgument, QStringLiteral("No temporary folder to unpack %1 into.").arg(nativePath(zipPath)));
     const QString dest = QDir(tempDir).filePath(QStringLiteral("zip-source"));
     QDir().mkpath(dest);
-    FW_TRY(ensureFreeSpace(dest, g.bytes, freeSpaceMarginBytes));
+    FW_TRY(ensureFreeTempSpace(dest, g.bytes, freeSpaceMarginBytes));
     zip::Reader r;
     FW_TRY(r.open(zipPath));
     if (progress) {
-        progress->begin(QStringLiteral("Unpacking ZIP"), g.bytes, g.files);
+        // A step, not a phase: the job's own phase list stays as it declared it.
+        progress->beginStep(QStringLiteral("Unpacking ZIP"), g.bytes, g.files);
         progress->setCurrentItem(QStringLiteral("Unpacking %1").arg(QFileInfo(zipPath).fileName()));
     }
     // Only the game: what else the archive holds (extras, a second folder) is
     // neither counted above nor wanted in the temporary folder.
     FW_TRY(r.extractAll(dest, token, progress, true, g.rootPrefix));
-    const QString root = QDir::cleanPath(QDir(dest).filePath(g.rootPrefix));
+    const QString root = QDir::cleanPath(QDir(dest).filePath(zip::Reader::extractedPath(g.rootPrefix)));
     if (!QFileInfo(root).isDir())
         return Error(ErrorCode::CorruptData, QStringLiteral("The game folder was not found after unpacking %1.").arg(nativePath(zipPath)));
     return root;

@@ -123,10 +123,12 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
     case SettingType::Int: {
         bool ok = false;
         double d = value.toDouble(&ok);
-        if (!ok || std::floor(d) != d)
+        // "inf" and 1e300 are numbers too, but none a qint64 can hold.
+        if (!ok || !std::isfinite(d) || std::floor(d) != d || std::fabs(d) > 9.0e18)
             return bad(QStringLiteral("expected a whole number."));
         if (def->maximum > def->minimum && (d < def->minimum || d > def->maximum))
-            return bad(QStringLiteral("must be between %1 and %2.").arg(def->minimum).arg(def->maximum));
+            return bad(QStringLiteral("must be between %1 and %2.")
+                           .arg(QString::number(qint64(def->minimum)), QString::number(qint64(def->maximum))));
         out = qint64(d);
         break;
     }
@@ -136,7 +138,8 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
         if (!ok || !std::isfinite(d))
             return bad(QStringLiteral("expected a number."));
         if (def->maximum > def->minimum && (d < def->minimum || d > def->maximum))
-            return bad(QStringLiteral("must be between %1 and %2.").arg(def->minimum).arg(def->maximum));
+            return bad(QStringLiteral("must be between %1 and %2.")
+                           .arg(QString::number(def->minimum, 'g', 15), QString::number(def->maximum, 'g', 15)));
         out = d;
         break;
     }

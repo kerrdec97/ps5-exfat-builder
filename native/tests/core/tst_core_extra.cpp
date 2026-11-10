@@ -6,10 +6,12 @@
 #include "core/FsLinks.h"
 #include "core/Paths.h"
 #include "core/OrderedJson.h"
+#include "core/PathSafety.h"
 #include "core/ProcessRunner.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QTest>
@@ -153,6 +155,54 @@ private slots:
         QCOMPARE(json::write(doc.value(), w), QByteArray(R"({"a": 1.5, "b": 100000.0, "c": 7})"));
     }
 
+    // A crafted file with one huge object must not stall the thread that
+    // reads it (a list search per member is quadratic), and a huge number is
+    // no integer.
+    void jsonCopesWithHugeObjectsAndNumbers()
+    {
+        constexpr int kMembers = 60000;
+        QByteArray text("{");
+        for (int i = 0; i < kMembers; ++i)
+            text += "\"k" + QByteArray::number(i) + "\":" + QByteArray::number(i) + ",";
+        text += "\"k7\":\"again\",\"big\":1e300}";
+        QElapsedTimer timer;
+        timer.start();
+        auto doc = json::parse(text);
+        QVERIFY(doc.ok());
+        json::Value v = doc.value();
+        QCOMPARE(v.keys().size(), kMembers + 1);
+        QCOMPARE(v.keys().at(7), QStringLiteral("k7")); // duplicate key: first position, last value
+        QCOMPARE(v.value(QStringLiteral("k7")).toString(), QStringLiteral("again"));
+        QCOMPARE(v.value(QStringLiteral("k59999")).toInt(), qint64(59999));
+        QVERIFY(v.remove(QStringLiteral("k3")));
+        QVERIFY(!v.contains(QStringLiteral("k3")));
+        QCOMPARE(v.indexOf(QStringLiteral("k4")), 3);
+        QCOMPARE(v.value(QStringLiteral("k59999")).toInt(), qint64(59999));
+        v.insert(QStringLiteral("new"), json::Value(true));
+        QCOMPARE(v.indexOf(QStringLiteral("new")), kMembers);
+        const QByteArray written = json::write(v, {-1, false, false});
+        QVERIFY(written.startsWith("{\"k0\": 0, \"k1\": 1, \"k2\": 2, \"k4\": 4, "));
+        QVERIFY(written.endsWith("\"big\": 1e300, \"new\": true}"));
+        QVERIFY2(timer.elapsed() < 20000, qPrintable(QString::number(timer.elapsed())));
+        QCOMPARE(v.value(QStringLiteral("big")).toInt(-1), qint64(-1));
+        QCOMPARE(json::Value::numberLiteral(QStringLiteral("-1e300")).toInt(7), qint64(7));
+        QCOMPARE(json::Value::numberLiteral(QStringLiteral("1e3")).toInt(), qint64(1000));
+    }
+
+    // NTFS compares names one character at a time: "ß" is not "SS" there.
+    void nameKeyComparesLikeTheFileSystem()
+    {
+        if (!hostUsesWindowsNames()) {
+            QCOMPARE(hostNameKey(QStringLiteral("Ab")), QStringLiteral("Ab"));
+            return;
+        }
+        QCOMPARE(hostNameKey(QStringLiteral("Ab.dat")), QStringLiteral("AB.DAT"));
+        QCOMPARE(hostNameKey(QString::fromUtf8("d\xc3\xa9mo")), hostNameKey(QString::fromUtf8("D\xc3\x89MO")));
+        QVERIFY(hostNameKey(QString::fromUtf8("stra\xc3\x9f" "e.dat")) != hostNameKey(QStringLiteral("STRASSE.dat")));
+        QCOMPARE(hostNameKey(QString::fromUtf8("stra\xc3\x9f" "e.dat")).size(), 10);
+        QCOMPARE(hostNameKey(QString::fromUtf8("\xcf\x83")), hostNameKey(QString::fromUtf8("\xcf\x82"))); // σ and ς
+    }
+
     void jsonRejectsMalformedWithPosition()
     {
         for (const char* bad : {"{", "{\"a\":}", "[1,]", "{\"a\" 1}", "tru", "\"unterminated", "{} x", "01", "1.", "\"\\x\""}) {
@@ -187,6 +237,59 @@ private slots:
         // A real folder is never removed as if it were a link.
         QVERIFY(!removeDirectoryJunction(target).ok());
         QVERIFY(QFileInfo::exists(target + QStringLiteral("/file.txt")));
+        // A target given with ".." is stored cleaned, so the link resolves.
+        const QString dotted = m_root.filePath(QStringLiteral("dotted-link"));
+        QVERIFY(createDirectoryJunction(dotted, target + QStringLiteral("/../sub")).ok());
+        QCOMPARE(readAll(dotted + QStringLiteral("/file.txt")), QByteArray("content"));
+        QVERIFY(removeDirectoryJunction(dotted).ok());
+    }
+
+    // A scan lists each folder once and never looks below a junction, also
+    // one that points back at its own parent; an excluded folder is skipped
+    // with everything in it.
+    void scanSkipsLinksAndExcludedFolders()
+    {
+        const QString root = m_root.filePath(QStringLiteral("scan"));
+        QVERIFY(fwtest::writeTextFile(root + QStringLiteral("/a/b/file.bin"), "12345"));
+        QVERIFY(fwtest::writeTextFile(root + QStringLiteral("/a/cache.tmp/inner/x.bin"), "123"));
+        QVERIFY(fwtest::writeTextFile(root + QStringLiteral("/z.txt"), "1"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/empty")));
+        QVERIFY(createDirectoryJunction(root + QStringLiteral("/a/b/loop"), root).ok());
+        const auto rels = [](const FileTree& t) {
+            QStringList out;
+            for (const auto& e : t.entries)
+                out << e.relativePath;
+            return out;
+        };
+        auto all = scanTree(root, CancellationToken());
+        QVERIFY(all.ok());
+        QCOMPARE(rels(all.value()),
+                 (QStringList{QStringLiteral("a"), QStringLiteral("a/b"), QStringLiteral("a/b/file.bin"),
+                              QStringLiteral("a/cache.tmp"), QStringLiteral("a/cache.tmp/inner"),
+                              QStringLiteral("a/cache.tmp/inner/x.bin"), QStringLiteral("empty"), QStringLiteral("z.txt")}));
+        QCOMPARE(all->fileCount, qint64(3));
+        QCOMPARE(all->dirCount, qint64(5));
+        QCOMPARE(all->totalBytes, qint64(9));
+        ScanOptions opt;
+        opt.excludes = {QStringLiteral("*.tmp")};
+        auto some = scanTree(root, CancellationToken(), opt);
+        QVERIFY(some.ok());
+        QCOMPARE(rels(some.value()), (QStringList{QStringLiteral("a"), QStringLiteral("a/b"), QStringLiteral("a/b/file.bin"),
+                                                  QStringLiteral("empty"), QStringLiteral("z.txt")}));
+        // With links followed, a link back to a folder already walked ends there.
+        const QString outside = m_root.filePath(QStringLiteral("scan-outside"));
+        QVERIFY(fwtest::writeTextFile(outside + QStringLiteral("/far.bin"), "12"));
+        QVERIFY(createDirectoryJunction(root + QStringLiteral("/empty/out"), outside).ok());
+        opt.excludes.clear();
+        opt.followSymlinks = true;
+        auto followed = scanTree(root, CancellationToken(), opt);
+        QVERIFY(followed.ok());
+        QVERIFY(rels(followed.value()).contains(QStringLiteral("empty/out/far.bin")));
+        QVERIFY(rels(followed.value()).contains(QStringLiteral("a/b/loop")));
+        QVERIFY(!rels(followed.value()).contains(QStringLiteral("a/b/loop/z.txt")));
+        QCOMPARE(followed->entries.size(), all->entries.size() + 3);
+        QVERIFY(removeDirectoryJunction(root + QStringLiteral("/empty/out")).ok());
+        QVERIFY(removeDirectoryJunction(root + QStringLiteral("/a/b/loop")).ok());
     }
 
     void rawOutputAndStartedHook()

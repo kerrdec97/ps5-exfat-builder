@@ -97,6 +97,10 @@ Result<DiskSpace> diskSpace(const QString& anyPathOnVolume);
 // Fails with InsufficientSpace and a user-facing message if fewer than
 // `requiredBytes + marginBytes` are free on the volume holding `path`.
 Status ensureFreeSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes = 256LL * 1024 * 1024);
+// The same check for a job's temporary folder. The message of
+// ensureFreeSpace() advises another output folder, which does not help when
+// the temporary drive is the full one; this one names the setting that does.
+Status ensureFreeTempSpace(const QString& path, qint64 requiredBytes, qint64 marginBytes = 256LL * 1024 * 1024);
 
 // ---- volume checks ---------------------------------------------------------------
 struct VolumeInfo {

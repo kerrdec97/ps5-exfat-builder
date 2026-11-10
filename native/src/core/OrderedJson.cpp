@@ -64,7 +64,8 @@ qint64 Value::toInt(qint64 fallback) const
     if (ok)
         return n;
     const double d = m_text.toDouble(&ok);
-    return ok ? qint64(d) : fallback;
+    // 1e300 is valid JSON; converting it to an integer is not defined.
+    return ok && std::isfinite(d) && std::fabs(d) < 9.2e18 ? qint64(d) : fallback;
 }
 
 double Value::toDouble(double fallback) const
@@ -98,14 +99,36 @@ void Value::removeAt(int i)
     if (i < 0 || i >= int(m_items.size()))
         return;
     m_items.erase(m_items.begin() + i);
-    if (m_type == Type::Object)
+    if (m_type == Type::Object) {
         m_keys.removeAt(i);
+        m_index.clear(); // every later position moved
+        indexKeys();
+    }
+}
+
+namespace {
+// Objects with fewer members are searched as a list. From here on a list
+// search per member makes reading or writing an object quadratic: a crafted
+// file with 200,000 members in one object would stall the thread reading it.
+constexpr int kIndexedFrom = 32;
+} // namespace
+
+void Value::indexKeys()
+{
+    const int n = int(m_keys.size());
+    if (!m_index.isEmpty())
+        m_index.insert(m_keys.last(), n - 1); // complete before: only the new key is missing
+    else if (n >= kIndexedFrom)
+        for (int i = 0; i < n; ++i)
+            m_index.insert(m_keys.at(i), i);
 }
 
 int Value::indexOf(const QString& key) const
 {
     if (m_type != Type::Object)
         return -1;
+    if (!m_index.isEmpty()) // complete whenever it is not empty
+        return m_index.value(key, -1);
     return int(m_keys.indexOf(key));
 }
 
@@ -124,6 +147,7 @@ Value& Value::operator[](const QString& key)
         return m_items[size_t(i)];
     m_keys.append(key);
     m_items.emplace_back();
+    indexKeys();
     return m_items.back();
 }
 
@@ -593,7 +617,7 @@ void writeValue(QByteArray& out, const Value& v, const WriteOptions& o, int leve
             newline(level + 1);
             writeString(out, keys[i], o.ensureAscii);
             out += ": ";
-            writeValue(out, v.value(keys[i]), o, level + 1);
+            writeValue(out, v.at(i), o, level + 1); // by position: no search per member
         }
         newline(level);
         out += '}';

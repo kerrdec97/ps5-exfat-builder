@@ -277,6 +277,106 @@ private slots:
         QVERIFY(QFileInfo(only + QStringLiteral("/Extras/empty")).isDir());
     }
 
+    // Archives written with '\' as the separator (Compress-Archive of Windows
+    // PowerShell 5, old .NET) hold the same folders as any other.
+    void backslashSeparatorsAreFolders()
+    {
+        const QString z = m_root.filePath(QStringLiteral("backslash.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("game/eboot.bin"), QByteArray(1000, 'e')).ok());
+            QVERIFY(w.addData(QStringLiteral("game/sce_sys/param.json"), "{}").ok());
+            QVERIFY(w.addDirectory(QStringLiteral("game/empty")).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        for (const char* name : {"game/eboot.bin", "game/sce_sys/param.json", "game/empty/"}) {
+            QByteArray with(name);
+            with.replace('/', '\\');
+            QCOMPARE(bytes.count(name), 2); // local header and central directory
+            bytes.replace(name, with);
+        }
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QVERIFY(r.find(QStringLiteral("game/eboot.bin")));
+        const auto* folder = r.find(QStringLiteral("game/empty/"));
+        QVERIFY(folder && folder->isDirectory());
+        auto g = archive::inspectZip(z);
+        QVERIFY2(g.ok(), g.ok() ? "" : qPrintable(g.error().toLogString()));
+        QCOMPARE(g->rootPrefix, QStringLiteral("game/"));
+        QVERIFY(g->hasEboot && g->hasParam);
+        const QString out = m_root.filePath(QStringLiteral("backslash-out"));
+        QVERIFY(r.extractAll(out, CancellationToken()).ok());
+        QCOMPARE(readFile(out + QStringLiteral("/game/eboot.bin")), QByteArray(1000, 'e'));
+        QVERIFY(QFileInfo(out + QStringLiteral("/game/empty")).isDir());
+    }
+
+    // A ':' in a folder name (zipped on Linux or macOS) and a "./" entry are
+    // no attempt to leave the destination: such archives are extracted.
+    void harmlessNamesAreNotRefused()
+    {
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("./")).isEmpty());
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("C:/win.txt")).isEmpty());
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("a/../../evil.txt")).isEmpty());
+        QVERIFY(zip::Reader::extractedPath(QStringLiteral("/abs.txt")).isEmpty());
+        QCOMPARE(zip::Reader::extractedPath(QStringLiteral("a/C:/x.txt")), QStringLiteral("a/C_/x.txt"));
+        QCOMPARE(zip::Reader::extractedPath(QStringLiteral("./a//b/./c.txt")), QStringLiteral("a/b/c.txt"));
+        // The strict check other callers rely on is unchanged.
+        QVERIFY(zip::Reader::safeRelativePath(QStringLiteral("Game: Two/eboot.bin")).isEmpty());
+
+        const QString z = m_root.filePath(QStringLiteral("colon.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addDirectory(QStringLiteral("./")).ok());
+            QVERIFY(w.addData(QStringLiteral("Game: Two-app0/eboot.bin"), QByteArray(500, 'e')).ok());
+            QVERIFY(w.addData(QStringLiteral("Game: Two-app0/sce_sys/param.json"), "{}").ok());
+            QVERIFY(w.finish().ok());
+        }
+        auto root = archive::unpackZipSource(z, m_root.filePath(QStringLiteral("colon-unpack")), CancellationToken(), nullptr, 0);
+        QVERIFY2(root.ok(), root.ok() ? "" : qPrintable(root.error().toLogString()));
+        QCOMPARE(QFileInfo(root.value()).fileName(), QStringLiteral("Game_ Two-app0"));
+        QCOMPARE(readFile(root.value() + QStringLiteral("/eboot.bin")), QByteArray(500, 'e'));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        const QString all = m_root.filePath(QStringLiteral("colon-all"));
+        QVERIFY(r.extractAll(all, CancellationToken()).ok()); // the "./" entry is the destination itself
+        QVERIFY(QFileInfo(all + QStringLiteral("/Game_ Two-app0/sce_sys/param.json")).isFile());
+    }
+
+    // readAll's limit also holds for a declared size of 2^63 or more.
+    void readAllLimitIsUnsigned()
+    {
+        const QString z = makeSample(QStringLiteral("limit.zip"));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        zip::Entry huge = *r.find(QStringLiteral("game/text.txt"));
+        huge.uncompressedSize = ~quint64(0);
+        auto all = r.readAll(huge, 1024);
+        QVERIFY(!all.ok());
+        QCOMPARE(all.error().code, ErrorCode::Unsupported);
+        QVERIFY(r.readAll(*r.find(QStringLiteral("game/text.txt")), 200000).ok());
+        QCOMPARE(r.readAll(*r.find(QStringLiteral("game/text.txt")), 199999).error().code, ErrorCode::Unsupported);
+    }
+
+    // A cancel during the read-back check is a cancel, not a damaged archive.
+    void cancelDuringReadBackIsACancel()
+    {
+        const QString z = m_root.filePath(QStringLiteral("cancel-verify.zip"));
+        CancellationSource cs;
+        zip::Writer w;
+        QVERIFY(w.open(z).ok());
+        QVERIFY(w.addData(QStringLiteral("a.bin"), QByteArray(100000, 'v')).ok());
+        cs.cancel();
+        const Status st = w.finish(true, cs.token());
+        QVERIFY(!st.ok());
+        QVERIFY2(st.error().isCancelled(), qPrintable(st.error().toLogString()));
+        QVERIFY(!QFile::exists(z) && !QFile::exists(z + QStringLiteral(".part")));
+    }
+
     void interoperatesWithPythonAndUnzip()
     {
         const QString z64 = makeSample(QStringLiteral("interop64.zip"), true);

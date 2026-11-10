@@ -332,7 +332,10 @@ private slots:
         QSignalSpy finished(&q, &JobQueue::jobFinished);
         QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Game, \"Deluxe\"")}}).ok());
         QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Second")}, {QStringLiteral("fail"), true}}).ok());
-        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 2; }, 10000));
+        // A title from somebody else's dump that a spreadsheet would run as a formula.
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("=HYPERLINK(\"http://x\",\"Astro\")")}}).ok());
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("@SUM(1)")}}).ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 4; }, 10000));
         const QString csv = m_root.filePath(QStringLiteral("csv/history.csv"));
         QVERIFY(history.exportCsv(csv).ok());
         QFile f(csv);
@@ -341,7 +344,9 @@ private slots:
         QVERIFY(all.startsWith("\xEF\xBB\xBF" "finished,started,title"));
         QVERIFY(all.contains("\"Game, \"\"Deluxe\"\"\""));
         QVERIFY(all.contains("Second,test.fake,Failed"));
-        QCOMPARE(all.count("\r\n"), 3);
+        QVERIFY(all.contains(",\"'=HYPERLINK(\"\"http://x\"\",\"\"Astro\"\")\",test.fake,"));
+        QVERIFY(all.contains(",'@SUM(1),test.fake,"));
+        QCOMPARE(all.count("\r\n"), 5);
     }
 
     void invalidJobIsRejectedAtEnqueue()
@@ -614,6 +619,8 @@ private slots:
         QCOMPARE(int(recs.size()), 2);
         QCOMPARE(recs[0].title, QStringLiteral("Running"));
         QCOMPARE(recs[0].state, JobState::Interrupted);
+        // After a crash nobody removed the job's .part file: the text must not claim otherwise.
+        QVERIFY2(recs[0].error->message.contains(QStringLiteral(".part file) may still be")), qPrintable(recs[0].error->message));
         QCOMPARE(recs[1].title, QStringLiteral("Waiting"));
         QCOMPARE(recs[1].state, JobState::Queued);
         QTest::qWait(200);
@@ -651,6 +658,164 @@ private slots:
         QCOMPARE(recs[0].state, JobState::Interrupted);
         QVERIFY(recs[0].error.has_value());
         QVERIFY2(recs[0].error->message.contains(QStringLiteral("Bad job")), qPrintable(recs[0].error->message));
+    }
+
+    // A queue file that cannot be read is reported and set aside, not
+    // silently replaced by an empty queue at the next save.
+    void damagedQueueFileIsSetAside()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        const QString queueFile = m_root.filePath(QStringLiteral("q13/queue.json"));
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q13/settings.json")));
+        QVERIFY(store.load().ok());
+        for (const QByteArray& damaged : {QByteArray("{ \"jobs\": [ {\"kind\": \"test.fake\""), QByteArray("[1, 2]"),
+                                          QByteArray("{\"jobs\": \"none\"}")}) {
+            QVERIFY(fwtest::writeTextFile(queueFile, damaged));
+            JobQueue q(store, reg.jobs);
+            q.setPersistencePath(queueFile);
+            const Status st = q.restoreQueue();
+            QVERIFY(!st.ok());
+            QCOMPARE(st.error().code, ErrorCode::CorruptData);
+            QVERIFY2(st.error().message.contains(QStringLiteral("queue.json.damaged")), qPrintable(st.error().message));
+            QVERIFY(q.records().empty());
+            QVERIFY(!QFile::exists(queueFile));
+            QFile aside(queueFile + QStringLiteral(".damaged"));
+            QVERIFY(aside.open(QIODevice::ReadOnly));
+            QCOMPARE(aside.readAll(), damaged);
+            // The queue works on from empty.
+            QVERIFY(q.enqueue(QStringLiteral("test.fake"), {}).ok());
+            QVERIFY(QFile::exists(queueFile));
+        }
+    }
+
+    // Saved jobs this build cannot create: a job type of another build stays
+    // in the file untouched (that build restores it); a job whose type exists
+    // but refuses the saved parameters is shown with the reason.
+    void savedJobsThatCannotBeCreatedAreNotDropped()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        reg.jobs.add(QStringLiteral("test.picky"), QStringLiteral("Picky"), [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> {
+            if (p.value(QStringLiteral("reject")).toBool())
+                return Error(ErrorCode::InvalidArgument, QStringLiteral("The saved file list is gone."));
+            return std::unique_ptr<Job>(new FakeJob(p));
+        });
+        const QJsonObject privateJob{{QStringLiteral("kind"), QStringLiteral("private.publish")},
+                                     {QStringLiteral("title"), QStringLiteral("Only the other build")},
+                                     {QStringLiteral("state"), jobStateName(JobState::Queued)},
+                                     {QStringLiteral("added"), QStringLiteral("2026-01-02T03:04:05")},
+                                     {QStringLiteral("extra"), QStringLiteral("kept as it is")},
+                                     {QStringLiteral("params"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Other")}}}};
+        const QJsonArray saved{privateJob,
+                               QJsonObject{{QStringLiteral("kind"), QStringLiteral("test.fake")},
+                                           {QStringLiteral("state"), jobStateName(JobState::Queued)},
+                                           {QStringLiteral("params"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Mine")}}}},
+                               QJsonObject{{QStringLiteral("kind"), QStringLiteral("test.picky")},
+                                           {QStringLiteral("title"), QStringLiteral("Picky one")},
+                                           {QStringLiteral("state"), jobStateName(JobState::Queued)},
+                                           {QStringLiteral("params"), QJsonObject{{QStringLiteral("reject"), true}}}}};
+        const QString queueFile = m_root.filePath(QStringLiteral("q14/queue.json"));
+        QVERIFY(fwtest::writeTextFile(queueFile, QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
+                                                                           {QStringLiteral("jobs"), saved}}).toJson()));
+        const auto savedJobs = [&] {
+            QFile f(queueFile);
+            return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("jobs")).toArray()
+                                               : QJsonArray();
+        };
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q14/settings.json")));
+        QVERIFY(store.load().ok());
+        {
+            JobQueue q(store, reg.jobs);
+            q.setPersistencePath(queueFile);
+            QSignalSpy held(&q, &JobQueue::heldChanged);
+            QVERIFY(q.restoreQueue().ok());
+            QCOMPARE(held.count(), 1); // restored jobs wait: the pages hear about it
+            const auto recs = q.records();
+            QCOMPARE(int(recs.size()), 2);
+            QCOMPARE(recs[0].title, QStringLiteral("Mine"));
+            QCOMPARE(recs[0].state, JobState::Queued);
+            QCOMPARE(recs[1].title, QStringLiteral("Picky one"));
+            QCOMPARE(recs[1].state, JobState::Interrupted);
+            QVERIFY2(recs[1].error->message.contains(QStringLiteral("The saved file list is gone.")), qPrintable(recs[1].error->message));
+            QVERIFY(!q.retry(recs[1].id).ok()); // still refused, with the creator's reason
+            QVERIFY(savedJobs().contains(privateJob));
+            QCOMPARE(savedJobs().size(), 3);
+            // Later saves keep it too.
+            QVERIFY(q.remove(recs[1].id));
+            QVERIFY(q.remove(recs[0].id));
+            QCOMPARE(savedJobs(), QJsonArray{privateJob});
+        }
+        // The build that knows the job type gets it back as it was saved.
+        reg.jobs.add(QStringLiteral("private.publish"), QStringLiteral("Publish"),
+                     [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new FakeJob(p)); });
+        JobQueue q2(store, reg.jobs);
+        q2.setPersistencePath(queueFile);
+        QVERIFY(q2.restoreQueue().ok());
+        const auto recs = q2.records();
+        QCOMPARE(int(recs.size()), 1);
+        QCOMPARE(recs[0].title, QStringLiteral("Other"));
+        QCOMPARE(recs[0].state, JobState::Queued);
+    }
+
+    // Removing the last waiting job ends the run: the "queue finished"
+    // notification for the job that did run is not lost.
+    void removingTheLastWaitingJobFinishesTheRun()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q15/settings.json")));
+        QVERIFY(store.load().ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        q.holdQueue(true);
+        auto a = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("A")}});
+        auto b = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("B")}});
+        QVERIFY(a.ok() && b.ok());
+        q.startNow(a.value()); // "Build now" on A; B keeps waiting
+        QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
+        QTest::qWait(100);
+        QCOMPARE(finished.count(), 0); // B is still to come
+        QVERIFY(q.remove(b.value()));
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.first().at(0).toInt(), 1);
+        QCOMPARE(w.lastRunJobIds(), QStringList{a.value()});
+    }
+
+    // Range errors name the limits as whole numbers, not "1.04858e+06".
+    void rangeErrorsPrintPlainNumbers()
+    {
+        SettingsSchema schema;
+        SettingDef spare;
+        spare.key = QStringLiteral("test.spareMiB");
+        spare.section = SettingsSchema::sectionOrder().first();
+        spare.label = QStringLiteral("Fixed free space");
+        spare.type = SettingType::Int;
+        spare.defaultValue = 0;
+        spare.minimum = 0;
+        spare.maximum = 1048576;
+        schema.add(spare);
+        SettingDef ratio = spare;
+        ratio.key = QStringLiteral("test.ratio");
+        ratio.label = QStringLiteral("Ratio");
+        ratio.type = SettingType::Double;
+        ratio.minimum = 0.5;
+        ratio.maximum = 12345678.25;
+        schema.add(ratio);
+        SettingDef free = spare;
+        free.key = QStringLiteral("test.unbounded");
+        free.maximum = 0;
+        schema.add(free);
+        auto bad = schema.normalize(spare.key, 2000000);
+        QVERIFY(!bad.ok());
+        QCOMPARE(bad.error().message, QStringLiteral("Fixed free space: must be between 0 and 1048576."));
+        QCOMPARE(schema.normalize(ratio.key, 0.1).error().message, QStringLiteral("Ratio: must be between 0.5 and 12345678.25."));
+        QCOMPARE(schema.normalize(spare.key, 1048576).value().toLongLong(), 1048576);
+        // "inf" and 1e300 are numbers, but no whole number the app can store.
+        QVERIFY(!schema.normalize(free.key, QStringLiteral("inf")).ok());
+        QVERIFY(!schema.normalize(free.key, 1e300).ok());
+        QCOMPARE(schema.normalize(free.key, QStringLiteral("-12")).value().toLongLong(), -12);
     }
 };
 

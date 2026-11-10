@@ -13,6 +13,7 @@
 #include "jobs/Job.h"
 
 #include <QDateTime>
+#include <QJsonArray>
 #include <QObject>
 #include <QThreadPool>
 
@@ -84,7 +85,10 @@ public:
     int pendingCount() const;
     bool isBusy() const { return runningCount() > 0; }
 
-    // Persists pending jobs; restores them (and marks interrupted ones).
+    // Persists pending jobs; restores them (and marks interrupted ones). A
+    // saved job this build has no job type for is not shown; it stays in the
+    // file for the build that knows it. A file that cannot be read is set
+    // aside as "<name>.damaged" and reported as the error.
     Status saveQueue() const;
     Status restoreQueue();
 
@@ -97,7 +101,7 @@ signals:
     void jobFinished(const QString& id);
     void jobRemoved(const QString& id);
     void orderChanged();
-    void heldChanged(bool held); // holdQueue()
+    void heldChanged(bool held); // holdQueue(), restoreQueue()
     void idle();
 
 private:
@@ -117,6 +121,8 @@ private:
     QThreadPool m_pool;
     mutable std::mutex m_mutex;
     std::vector<std::shared_ptr<Entry>> m_entries;
+    QJsonArray m_foreignJobs;     // saved jobs of another build, written back unchanged (m_mutex)
+    bool m_restoring = false;     // restoreQueue() is running: saveQueue() waits for its end
     bool m_held = false;
     bool m_shuttingDown = false;
     quint64 m_counter = 0;

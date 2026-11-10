@@ -1,5 +1,7 @@
 #include "core/Zip.h"
 
+#include "core/PathSafety.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QtEndian>
@@ -376,6 +378,8 @@ Status Writer::finish(bool verifyBeforeCommit, const CancellationToken& token)
             st = r.verifyAll(token);
         if (!st.ok()) {
             m_part->abandon();
+            if (st.error().isCancelled())
+                return Error::cancelled(); // not a failed check: the caller stopped it
             return Error(ErrorCode::VerificationFailed,
                          QStringLiteral("%1 did not pass its read-back check and was deleted.").arg(QFileInfo(m_path).fileName()),
                          st.error().toLogString());
@@ -404,6 +408,40 @@ QString Reader::safeRelativePath(const QString& entryName)
         out << seg;
     }
     return out.join(u'/');
+}
+
+namespace {
+enum class NameCheck { Ok, Destination, Unsafe };
+
+// Where extractAll() puts an entry. Refused (Unsafe): absolute names, a drive
+// letter and ".." segments. Not refused: a name that is the destination itself
+// ("./", written first by some tools), and a ':' or another character this
+// host cannot store inside a segment (a folder zipped on Linux or macOS):
+// such a segment gets the name PathSafety gives it.
+NameCheck extractionPath(const QString& entryName, QString& relative)
+{
+    QString n = entryName;
+    n.replace(u'\\', u'/');
+    const bool driveLetter = n.size() >= 2 && n.at(1) == u':' && n.at(0).unicode() < 128 && n.at(0).isLetter();
+    if (n.startsWith(u'/') || driveLetter || n.contains(QChar(0)))
+        return NameCheck::Unsafe;
+    QStringList out;
+    for (const QString& seg : n.split(u'/', Qt::SkipEmptyParts)) {
+        if (seg == u".")
+            continue;
+        if (seg == u"..")
+            return NameCheck::Unsafe;
+        out << hostEntryName(seg);
+    }
+    relative = out.join(u'/');
+    return out.isEmpty() ? NameCheck::Destination : NameCheck::Ok;
+}
+} // namespace
+
+QString Reader::extractedPath(const QString& entryName)
+{
+    QString relative;
+    return extractionPath(entryName, relative) == NameCheck::Ok ? relative : QString();
 }
 
 Status Reader::open(const QString& path)
@@ -471,6 +509,9 @@ Status Reader::open(const QString& path)
             return corrupt(QStringLiteral("truncated central directory entry"));
         const QByteArray rawName = cd.mid(pos + 46, nameLen);
         e.name = (flags & kFlagUtf8) ? QString::fromUtf8(rawName) : QString::fromLatin1(rawName);
+        // Some writers (Compress-Archive of Windows PowerShell 5, old .NET)
+        // store '\' as the separator; everything here expects '/'.
+        e.name.replace(u'\\', u'/');
         // ZIP64 extra
         qsizetype x = pos + 46 + nameLen;
         const qsizetype xEnd = x + extraLen;
@@ -593,7 +634,8 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
 
 Result<QByteArray> Reader::readAll(const Entry& entry, qint64 maxBytes)
 {
-    if (qint64(entry.uncompressedSize) > maxBytes)
+    // Compared unsigned: a declared size of 2^63 or more must not pass as negative.
+    if (entry.uncompressedSize > quint64(std::max<qint64>(0, maxBytes)))
         return Error(ErrorCode::Unsupported, QStringLiteral("%1 is too large to read into memory.").arg(entry.name));
     QByteArray all;
     FW_TRY(read(entry, [&](const QByteArray& c) { all += c; return success(); }, CancellationToken()));
@@ -617,16 +659,16 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
         return onlyUnder.isEmpty() || e.name.startsWith(onlyUnder, Qt::CaseInsensitive);
     };
     // Validate every name before writing anything.
+    QString rel;
     for (const Entry& e : m_entries)
-        if (wanted(e) && safeRelativePath(e.name).isEmpty())
+        if (wanted(e) && extractionPath(e.name, rel) == NameCheck::Unsafe)
             return Error(ErrorCode::CorruptData,
                          QStringLiteral("The archive contains an unsafe path (%1); nothing was extracted.").arg(e.name));
     QDir().mkpath(destination);
     const QDir dest(destination);
     for (const Entry& e : m_entries) {
-        if (!wanted(e))
-            continue;
-        const QString rel = safeRelativePath(e.name);
+        if (!wanted(e) || extractionPath(e.name, rel) != NameCheck::Ok)
+            continue; // not asked for, or the destination folder itself
         const QString target = dest.filePath(rel);
         if (!isSameOrInside(target, destination))
             return Error(ErrorCode::CorruptData, QStringLiteral("The archive contains an unsafe path (%1).").arg(e.name));

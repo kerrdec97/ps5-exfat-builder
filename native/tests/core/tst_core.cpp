@@ -188,6 +188,56 @@ private slots:
         QVERIFY(done.elapsedMs >= 80);
     }
 
+    // Work a helper does for a job (unpacking a zipped source) keeps the
+    // job's phases: the bar neither runs to 100 % nor falls back afterwards.
+    void stepKeepsTheDeclaredPhases()
+    {
+        const QStringList phases{QStringLiteral("Scanning"), QStringLiteral("Writing image")};
+        ProgressReporter p;
+        p.setPhases(phases, {1.0, 3.0});
+        p.beginStep(QStringLiteral("Unpacking ZIP"), 100, 4);
+        p.advance(50);
+        auto s = p.snapshot();
+        QCOMPARE(s.phase, QStringLiteral("Unpacking ZIP"));
+        QCOMPARE(s.phaseIndex, 0);
+        QCOMPARE(s.phaseCount, 2);
+        QCOMPARE(s.total, qint64(100));
+        QCOMPARE(s.filesTotal, qint64(4));
+        QCOMPARE(s.overallFraction, 0.25 * 0.25); // half of the first half of "Scanning"
+        p.advance(50);
+        QCOMPARE(p.snapshot().overallFraction, 0.125);
+        // The job declares its phases again and starts its first one.
+        p.setPhases(phases, {1.0, 3.0});
+        p.beginPhase(0, 0);
+        s = p.snapshot();
+        QCOMPARE(s.phase, QStringLiteral("Scanning"));
+        QCOMPARE(s.overallFraction, 0.125); // not back to zero
+        p.beginPhase(0, 10);
+        p.advance(5);
+        QCOMPARE(p.snapshot().overallFraction, 0.25 * 0.75);
+        p.beginPhase(1, 10);
+        QCOMPARE(p.snapshot().overallFraction, 0.25);
+        QCOMPARE(p.snapshot().phaseMs.size(), 2);
+
+        // A job that declares the step as a phase gets exactly that phase.
+        ProgressReporter declared;
+        declared.setPhases({QStringLiteral("Unpacking ZIP"), QStringLiteral("Scanning")});
+        declared.beginPhase(1, 0);
+        declared.beginStep(QStringLiteral("Unpacking ZIP"), 10);
+        declared.advance(10);
+        QCOMPARE(declared.snapshot().phaseIndex, 0);
+        QCOMPARE(declared.snapshot().phaseCount, 2);
+        QCOMPARE(declared.snapshot().overallFraction, 0.5);
+
+        // No phases declared at all: the step is the only phase, as begin().
+        ProgressReporter plain;
+        plain.beginStep(QStringLiteral("Unpacking ZIP"), 10);
+        plain.advance(10);
+        QCOMPARE(plain.snapshot().phase, QStringLiteral("Unpacking ZIP"));
+        QCOMPARE(plain.snapshot().phaseCount, 1);
+        QCOMPARE(plain.snapshot().overallFraction, 1.0);
+    }
+
     void formatsFollowTheDesignSystem()
     {
         QCOMPARE(formatBytes(0), QStringLiteral("0 B"));
@@ -265,6 +315,55 @@ private slots:
         QCOMPARE(f.readAll(), QByteArray("v2"));
     }
 
+    // Another program holds the file that is to be replaced. The commit fails
+    // with a clear message and leaves everything as it was; it never answers
+    // a refused rename by copying the file (QFile::rename would).
+    void partFileCommitNeverCopiesALockedFile()
+    {
+#ifdef Q_OS_WIN
+        const QString dir = m_root.filePath(QStringLiteral("locked"));
+        const QString target = dir + QStringLiteral("/image.bin");
+        QVERIFY(fwtest::writeTextFile(target, "old image"));
+        QFile holder(target); // Qt opens files without delete sharing: a rename is refused
+        QVERIFY(holder.open(QIODevice::ReadOnly));
+        {
+            PartFile p(target);
+            QVERIFY(fwtest::writeTextFile(p.partPath(), "new image"));
+            const Status st = p.commit(true);
+            QVERIFY(!st.ok());
+            QCOMPARE(st.error().code, ErrorCode::PermissionDenied);
+            QVERIFY(st.error().message.contains(QStringLiteral("image.bin")));
+            QVERIFY(!p.committed());
+            QCOMPARE(QDir(dir).entryList(QDir::Files, QDir::Name),
+                     (QStringList{QStringLiteral("image.bin"), QStringLiteral("image.bin.part")})); // no copy set aside
+            QCOMPARE(holder.readAll(), QByteArray("old image"));
+            holder.close();
+            QVERIFY(p.commit(true).ok());
+        }
+        QCOMPARE(QDir(dir).entryList(QDir::Files), QStringList{QStringLiteral("image.bin")});
+        QFile f(target);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QByteArray("new image"));
+        f.close();
+
+        // The finished .part itself is still held (a scanner): the old file
+        // comes back under its name.
+        QFile scanner(target + QStringLiteral(".part"));
+        PartFile p(target);
+        QVERIFY(fwtest::writeTextFile(p.partPath(), "newer image"));
+        QVERIFY(scanner.open(QIODevice::ReadOnly));
+        const Status st = p.commit(true);
+        QVERIFY(!st.ok());
+        QCOMPARE(st.error().code, ErrorCode::IoError);
+        QVERIFY(st.error().message.contains(QStringLiteral(".part")));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QByteArray("new image"));
+        scanner.close();
+#else
+        QSKIP("Windows file sharing rules");
+#endif
+    }
+
     void uniquePathAvoidsExistingFiles()
     {
         const QString p = m_root.filePath(QStringLiteral("u/report.zip"));
@@ -273,6 +372,10 @@ private slots:
         QCOMPARE(uniquePath(p), m_root.filePath(QStringLiteral("u/report (2).zip")));
         QVERIFY(fwtest::writeTextFile(m_root.filePath(QStringLiteral("u/report (2).zip.part")), "partial"));
         QCOMPARE(uniquePath(p), m_root.filePath(QStringLiteral("u/report (3).zip")));
+        // Percent escapes in downloaded names are not placeholders.
+        const QString escaped = m_root.filePath(QStringLiteral("u/Update%2BDLC%1%3.pkg"));
+        QVERIFY(fwtest::writeTextFile(escaped, "1"));
+        QCOMPARE(uniquePath(escaped), m_root.filePath(QStringLiteral("u/Update%2BDLC%1%3 (2).pkg")));
     }
 
     void tempDirIsRemoved()
@@ -332,6 +435,12 @@ private slots:
         QVERIFY(st.error().message.startsWith(QStringLiteral("Not enough space on ")));
         QVERIFY(st.error().message.contains(QStringLiteral("choose another output folder")));
         QVERIFY(ensureFreeSpace(m_root.path(), 1024, 0).ok());
+        // The temporary drive is full: another output folder would not help.
+        const Status temp = ensureFreeTempSpace(m_root.path(), qint64(1) << 60);
+        QCOMPARE(temp.error().code, ErrorCode::InsufficientSpace);
+        QVERIFY(temp.error().message.startsWith(QStringLiteral("Not enough space on ")));
+        QVERIFY(temp.error().message.endsWith(QStringLiteral("or choose another temporary folder in Settings > Storage.")));
+        QVERIFY(ensureFreeTempSpace(m_root.path(), 1024, 0).ok());
         // Sizes taken from an archive can be absurd: the sum must not wrap
         // round to "nothing needed".
         const qint64 huge = std::numeric_limits<qint64>::max();

@@ -121,6 +121,11 @@ Status JobHistory::exportCsv(const QString& path) const
     auto entries = recent(1000000);
     std::reverse(entries.begin(), entries.end());
     const auto cell = [](QString v) {
+        // Titles come from other people's dumps. A cell that starts like a
+        // formula would be run by Excel or LibreOffice: the leading quote
+        // makes it plain text there.
+        if (!v.isEmpty() && QStringLiteral("=+-@\t\r").contains(v.at(0)))
+            v.prepend(u'\'');
         if (v.contains(u'"') || v.contains(u',') || v.contains(u'\n') || v.contains(u'\r')) {
             v.replace(QStringLiteral("\""), QStringLiteral("\"\""));
             v = u'"' + v + u'"';
