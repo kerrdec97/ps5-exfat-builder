@@ -1,7 +1,6 @@
 // Tools module: Language Stripper detection, verified backup + removal,
 // restore, safety refusals, and the problem-report bundle with redaction.
 
-#include "core/Paths.h"
 #include "core/Zip.h"
 #include "engines/tools/LanguageStripper.h"
 #include "engines/tools/Module.h"
@@ -25,6 +24,14 @@ QByteArray readFile(const QString& p)
 {
     QFile f(p);
     return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+
+// The error of a call that must have failed (a marker error, not undefined
+// behaviour, when it succeeded).
+template <typename R>
+Error errorOf(const R& result)
+{
+    return result.ok() ? Error(ErrorCode::Internal, QStringLiteral("<the call succeeded>")) : result.error();
 }
 } // namespace
 
@@ -74,6 +81,7 @@ private slots:
         QCOMPARE(scan->codes(), (QStringList{QStringLiteral("de"), QStringLiteral("en"), QStringLiteral("es"), QStringLiteral("fr"),
                                              QStringLiteral("ja"), QStringLiteral("zh")}));
         const auto it = std::find_if(scan->items.begin(), scan->items.end(), [](const LanguageItem& i) { return i.relativePath == u"data/en-US"; });
+        QVERIFY(it != scan->items.end());
         QCOMPARE(it->language, QStringLiteral("English (US)"));
         QCOMPARE(it->bytes, qint64(1000));
         // JSON round trip
@@ -140,14 +148,26 @@ private slots:
         auto system = base;
         system.remove = {QStringLiteral("sce_sys/ja")};
         QVERIFY(!stripLanguages(system, CancellationToken(), nullptr).ok());
-        auto escape = base;
-        escape.remove = {QStringLiteral("../GameB/eboot.bin")};
-        QVERIFY(!stripLanguages(escape, CancellationToken(), nullptr).ok());
+        // Items outside the game: the files exist (so that is not why the plan
+        // is refused), and they are still there afterwards.
+        const QString outsideFile = m_root.filePath(QStringLiteral("outside-c/audio/ja/keep.bin"));
+        QVERIFY(fwtest::writeTextFile(outsideFile, "not part of the game"));
+        for (const QString& item : {QStringLiteral("../outside-c/audio/ja"), QStringLiteral("audio/../../outside-c/audio/ja"),
+                                    QDir::toNativeSeparators(QFileInfo(outsideFile).absolutePath()),
+                                    QFileInfo(outsideFile).absolutePath()}) {
+            auto escape = base;
+            escape.remove = {item};
+            const auto refused = stripLanguages(escape, CancellationToken(), nullptr);
+            QVERIFY2(!refused.ok(), qPrintable(item));
+            QVERIFY2(errorOf(refused).message.contains(QStringLiteral("is not inside the game folder")), qPrintable(item));
+            QCOMPARE(readFile(outsideFile), QByteArray("not part of the game"));
+        }
         auto notGame = base;
         notGame.gameRoot = m_root.filePath(QStringLiteral("backups2"));
         QVERIFY(!stripLanguages(notGame, CancellationToken(), nullptr).ok());
         // Nothing was removed by any refused plan.
         QVERIFY(QFileInfo::exists(g + QStringLiteral("/audio/ja/vo.bin")));
+        QVERIFY(QFileInfo::exists(g + QStringLiteral("/sce_sys/ja/strings.txt")));
         QVERIFY(QDir(base.backupFolder).entryList(QDir::Files).isEmpty());
     }
 
@@ -164,6 +184,39 @@ private slots:
         auto r = stripLanguages(plan, cs.token(), nullptr);
         QVERIFY(!r.ok() && r.error().isCancelled());
         QVERIFY(QFileInfo::exists(g + QStringLiteral("/audio/ja/vo.bin")));
+        QVERIFY(QDir(plan.backupFolder).entryList(QDir::Files).isEmpty());
+    }
+
+    // A backup that cannot be read back is no backup: nothing is removed.
+    void damagedBackupRemovesNothing()
+    {
+        const QString g = makeGame(QStringLiteral("GameL"));
+        StripPlan plan;
+        plan.gameRoot = g;
+        plan.remove = {QStringLiteral("data/ja-JP"), QStringLiteral("audio/ja")};
+        plan.backupFolder = m_root.filePath(QStringLiteral("backups-l"));
+        QDir().mkpath(plan.backupFolder);
+        bool damaged = false;
+        // The backup is written and its check is about to start: one byte of a
+        // stored file changes on the disk.
+        ProgressReporter progress([&](const ProgressSnapshot& p) {
+            if (p.phaseIndex < 1 || damaged)
+                return;
+            const QStringList backups = QDir(plan.backupFolder).entryList(QDir::Files);
+            if (backups.size() != 1)
+                return;
+            QFile f(QDir(plan.backupFolder).filePath(backups.first()));
+            if (!f.open(QIODevice::ReadWrite))
+                return;
+            const qint64 at = f.readAll().indexOf(QByteArray(64, 'J'));
+            damaged = at > 0 && f.seek(at + 10) && f.write("x") == 1;
+        }, 0);
+        const auto r = stripLanguages(plan, CancellationToken(), &progress);
+        QVERIFY2(damaged, "the backup was not found when its check began");
+        QCOMPARE(errorOf(r).code, ErrorCode::VerificationFailed);
+        QCOMPARE(readFile(g + QStringLiteral("/audio/ja/vo.bin")), QByteArray(700, 'J'));
+        QCOMPARE(readFile(g + QStringLiteral("/data/ja-JP/text.bin")), QByteArray(2000, 'j'));
+        // What could not be verified is not left behind as if it were a backup.
         QVERIFY(QDir(plan.backupFolder).entryList(QDir::Files).isEmpty());
     }
 
@@ -248,6 +301,21 @@ private slots:
                                 {{QStringLiteral("sce_module/libx.prx"), payload}})));
         QVERIFY(refused(makeZip(QStringLiteral("eboot.zip"), "{\"game\":\"GameF\",\"removed\":[\"eboot.bin\"]}", {})));
         QVERIFY(refused(makeZip(QStringLiteral("escape.zip"), "{\"game\":\"GameF\",\"removed\":[\"../GameA/audio\"]}", {})));
+        // File names that leave the game folder, under an item the manifest lists.
+        const QString landing = m_root.filePath(QStringLiteral("restore-escape"));
+        const QByteArray listed("{\"game\":\"GameF\",\"removed\":[\"audio/xx\"]}");
+        QVERIFY(refused(makeZip(QStringLiteral("dotdot.zip"), listed,
+                                {{QStringLiteral("audio/xx/a.bin"), payload},
+                                 {QStringLiteral("audio/xx/../../../restore-escape/up.bin"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("absolute.zip"), listed,
+                                {{QStringLiteral("audio/xx/a.bin"), payload}, {landing + QStringLiteral("/absolute.bin"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("rooted.zip"), listed,
+                                {{QStringLiteral("audio/xx/a.bin"), payload}, {QStringLiteral("/restore-escape/rooted.bin"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("backslash.zip"), listed,
+                                {{QStringLiteral("audio/xx/a.bin"), payload},
+                                 {QStringLiteral("audio\\xx\\..\\..\\..\\restore-escape\\back.bin"), payload}})));
+        QVERIFY(!QFileInfo::exists(landing));
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/restore-escape")));
         // Refused means nothing was written.
         QVERIFY(!QFileInfo::exists(g + QStringLiteral("/audio/xx")));
         QVERIFY(!QFileInfo::exists(g + QStringLiteral("/audio/xxl")));
@@ -321,7 +389,7 @@ private slots:
         }, 0);
         auto r = stripLanguages(plan, cs.token(), &progress);
         QVERIFY(!r.ok());
-        QVERIFY2(r.error().isCancelled(), qPrintable(r.error().toLogString()));
+        QVERIFY2(errorOf(r).isCancelled(), qPrintable(errorOf(r).toLogString()));
         QVERIFY(QFileInfo::exists(g + QStringLiteral("/audio/ja/vo.bin")));
         QVERIFY(QDir(plan.backupFolder).entryList(QDir::Files).isEmpty());
     }
@@ -447,15 +515,28 @@ private slots:
         const QString native = QDir::toNativeSeparators(home);
         QString json = native;
         json.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+        const QString encoded = QString::fromLatin1(QUrl::toPercentEncoding(home, "/:"));
         const QString text = home + QStringLiteral("/a | ") + native + QStringLiteral("\\b | ") + json + QStringLiteral(" | ")
-            + QString::fromLatin1(QUrl::toPercentEncoding(home, "/:")) + QStringLiteral(" | D:\\Users\\") + user
+            + encoded + QStringLiteral(" | D:\\Users\\") + user
             + QStringLiteral("\\Games | /home/") + user + QStringLiteral("/x");
         const QString red = redactUserPaths(text);
-        QVERIFY2(!red.contains(home, Qt::CaseInsensitive), qPrintable(red));
-        QVERIFY2(!red.contains(native, Qt::CaseInsensitive), qPrintable(red));
-        if (user.size() >= 2)
+        // The messages name the spelling, not the text: a failure must not put the user's name into the test log.
+        QVERIFY2(!red.contains(home, Qt::CaseInsensitive), "the home path with forward slashes is still there");
+        QVERIFY2(!red.contains(native, Qt::CaseInsensitive), "the home path with native separators is still there");
+        QVERIFY2(!red.contains(json, Qt::CaseInsensitive), "the JSON-escaped home path is still there");
+        QVERIFY2(!red.contains(encoded, Qt::CaseInsensitive), "the percent-encoded home path is still there");
+        if (user.size() >= 2) {
+            const QString encodedUser = QString::fromLatin1(QUrl::toPercentEncoding(user));
             QVERIFY2(!red.contains(QStringLiteral("\\") + user + QStringLiteral("\\"), Qt::CaseInsensitive)
-                         && !red.contains(QStringLiteral("/") + user + QStringLiteral("/"), Qt::CaseInsensitive), qPrintable(red));
+                         && !red.contains(QStringLiteral("/") + user + QStringLiteral("/"), Qt::CaseInsensitive),
+                     "the user name is still there as a folder name");
+            QVERIFY2(!red.contains(QStringLiteral("/") + encodedUser + QStringLiteral("/"), Qt::CaseInsensitive)
+                         && !red.endsWith(QStringLiteral("/") + encodedUser, Qt::CaseInsensitive)
+                         && !red.contains(QStringLiteral("/") + encodedUser + QStringLiteral(" "), Qt::CaseInsensitive),
+                     "the percent-encoded user name is still there as a folder name");
+        }
+        // What is not a user path stays.
+        QVERIFY(red.contains(QStringLiteral(" | ")));
     }
 
     void reportBundleRedactsAndVerifies()

@@ -6,6 +6,7 @@
 #include "FpkgTestUtil.h"
 
 #include "core/FsLinks.h"
+#include "engines/fpkg/AsciiAliases.h"
 #include "engines/fpkg/ContentNaming.h"
 #include "engines/fpkg/DumpRules.h"
 #include "engines/fpkg/FpkgBuilder.h"
@@ -20,6 +21,7 @@
 #include "engines/fpkg/Toolchain.h"
 
 #include <QCryptographicHash>
+#include <QProcess>
 #include <QRandomGenerator>
 #include <QTemporaryDir>
 #include <QTest>
@@ -135,6 +137,7 @@ private slots:
     {
         QVERIFY(m_root.isValid());
         fwtest::isolateAppData(m_root);
+        QVERIFY(confineEngineTo(m_root.path()));
     }
 
     // ---- naming --------------------------------------------------------------------
@@ -266,7 +269,7 @@ private slots:
     {
         {
             json::Value p = parsed("{}");
-            QCOMPARE(applyPackageSizeClass(p, 1, 1).error().code, ErrorCode::CorruptData); // category missing
+            QCOMPARE(errorOf(applyPackageSizeClass(p, 1, 1)).code, ErrorCode::CorruptData); // category missing
         }
         {
             json::Value p = parsed("{\"applicationCategoryType\":1}");
@@ -297,7 +300,7 @@ private slots:
         }
         {
             json::Value p = parsed("{\"applicationCategoryType\":0}");
-            QCOMPARE(applyPackageSizeClass(p, 200LL * 1000 * 1000 * 1000, kLv2MaxFiles + 1).error().code, ErrorCode::Unsupported);
+            QCOMPARE(errorOf(applyPackageSizeClass(p, 200LL * 1000 * 1000 * 1000, kLv2MaxFiles + 1)).code, ErrorCode::Unsupported);
             json::Value q = parsed("{\"applicationCategoryType\":0}");
             auto big = applyPackageSizeClass(q, 300LL * 1000 * 1000 * 1000, 10);
             QVERIFY(big.ok()); // above the largest class: a warning, img_create decides
@@ -430,11 +433,17 @@ private slots:
     {
         const QString d = dir(QStringLiteral("links"));
         put(d, QStringLiteral("real/a.bin"), "x");
-        QVERIFY(createDirectoryJunction(QDir(d).filePath(QStringLiteral("link")), QDir(d).filePath(QStringLiteral("real"))).ok());
+        // (The link is removed when the test leaves: nothing is deleted through it.)
+        JunctionGuard link(QDir(d).filePath(QStringLiteral("link")));
+        const Status linked = createDirectoryJunction(link.path(), QDir(d).filePath(QStringLiteral("real")));
+        if (!linked.ok())
+            QSKIP(qPrintable(QStringLiteral("No folder link can be made in the temporary folder (%1).").arg(linked.error().message)));
         auto r = scanSource({d}, {}, CancellationToken());
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::Unsupported);
-        QVERIFY(r.error().message.contains(QStringLiteral("link")));
+        QCOMPARE(errorOf(r).code, ErrorCode::Unsupported);
+        QVERIFY(errorOf(r).message.contains(QStringLiteral("link")));
+        link.release();
+        QVERIFY(QFileInfo::exists(QDir(d).filePath(QStringLiteral("real/a.bin"))));
 
         const QString many = dir(QStringLiteral("many"));
         for (int i = 0; i < 2100; ++i)
@@ -443,10 +452,14 @@ private slots:
         src.cancel();
         auto c = scanSource({many}, {}, src.token());
         QVERIFY(!c.ok());
-        QVERIFY(c.error().isCancelled());
+        QVERIFY(errorOf(c).isCancelled());
+        // The token is looked at once per `checkpointEvery` entries: every
+        // entry here, and never in a tree smaller than the interval.
         ScanOptions o;
+        o.checkpointEvery = 1;
+        QVERIFY(errorOf(scanSource({many}, o, src.token())).isCancelled());
         o.checkpointEvery = 5000;
-        QVERIFY(scanSource({many}, o, src.token()).ok()); // no checkpoint reached
+        QVERIFY(scanSource({many}, o, src.token()).ok());
     }
 
     // Package paths are case-insensitive: two entries of one folder whose
@@ -461,7 +474,7 @@ private slots:
         const auto expectClash = [](const QString& root, const QString& a, const QString& b) {
             auto r = scanSource({root}, {}, CancellationToken());
             QVERIFY(!r.ok());
-            QCOMPARE(r.error().code, ErrorCode::Unsupported);
+            QCOMPARE(errorOf(r).code, ErrorCode::Unsupported);
             const QString msg = r.error().message;
             QVERIFY2(msg.contains(QDir::toNativeSeparators(QDir(root).filePath(a))), qPrintable(msg));
             QVERIFY2(msg.contains(QDir::toNativeSeparators(QDir(root).filePath(b))), qPrintable(msg));
@@ -584,6 +597,7 @@ private slots:
     {
         PlayGoInputs in;
         in.sourceScenario = golden(QStringLiteral("source_scenario.json"));
+        QVERIFY(in.sourceScenario && !in.sourceScenario->isEmpty());
         in.files = {{QStringLiteral("eboot.bin"), 10}};
         for (const int n : {1, 2, 100}) {
             in.chunkCount = n;
@@ -621,6 +635,7 @@ private slots:
         QCOMPARE(p->payloads.back().dst, QStringLiteral("playgo-chunks/003-2.bin"));
         in.fillEmptyChunks = false;
         p = planPlayGo(in);
+        QVERIFY(p.ok());
         QCOMPARE(int(p->payloads.size()), 3);
         // Invalid scenario file: warning and a default scenario in the param.json language.
         in.sourceScenario = QByteArray("{\"scenarioCount\":9}");
@@ -631,6 +646,7 @@ private slots:
         // Fallback off: minimal layout.
         in.fallback = false;
         p = planPlayGo(in);
+        QVERIFY(p.ok());
         QCOMPARE(p->layout, PlayGoLayout::Minimal);
         QVERIFY(p->payloads.empty());
         QCOMPARE(p->fileChunk(QStringLiteral("eboot.bin")), std::optional<int>());
@@ -729,9 +745,10 @@ private slots:
     {
         const QString dump = dir(QStringLiteral("golden-b/dump"));
         const QString out = dir(QStringLiteral("golden-b/out"));
-        makeGoldenDump(dump);
+        QVERIFY(makeGoldenDump(dump));
         BuildPlan plan;
         const QByteArray gp5 = goldenProject(dump, out, {{keys::kPlayGoChunkCount, 3}}, &plan);
+        QVERIFY(!gp5.isEmpty());
         QCOMPARE(gp5, golden(QStringLiteral("gp5_layout_b.gp5")));
         QCOMPARE(plan.playgo.scenarioBytes, golden(QStringLiteral("scenario_layout_b.json")));
         QCOMPARE(plan.paramBytes, golden(QStringLiteral("param_normalised.json")));
@@ -749,10 +766,12 @@ private slots:
     {
         const QString dump = dir(QStringLiteral("golden-a/dump"));
         const QString out = dir(QStringLiteral("golden-a/out"));
-        makeGoldenDump(dump);
+        QVERIFY(makeGoldenDump(dump));
         BuildPlan plan;
         const QByteArray gp5 = goldenProject(dump, out, {{keys::kPlayGoFallback, false}}, &plan);
+        QVERIFY(!gp5.isEmpty());
         QCOMPARE(gp5, golden(QStringLiteral("gp5_layout_a.gp5")));
+        QVERIFY(!plan.playgo.scenarioBytes.isEmpty());
         QCOMPARE(plan.playgo.scenarioBytes, golden(QStringLiteral("scenario_default_en-US.json")));
     }
 
@@ -760,7 +779,7 @@ private slots:
     {
         const QString dump = dir(QStringLiteral("golden-c/dump"));
         const QString out = dir(QStringLiteral("golden-c/out"));
-        makeGoldenDump(dump);
+        QVERIFY(makeGoldenDump(dump));
         const quint64 header = langBit(QStringLiteral("en-US")) | langBit(QStringLiteral("fr-FR")) | langBit(QStringLiteral("de-DE"));
         put(dump, QStringLiteral("sce_sys/playgo-chunk.dat"),
             buildPlgx({{header, "Base"}, {langBit(QStringLiteral("fr-FR")), "French voice"}, {header, "Extra"}},
@@ -771,13 +790,14 @@ private slots:
                       ps5FlatPathHash(QStringLiteral("/eboot.bin"))}));
         BuildPlan plan;
         const QByteArray gp5 = goldenProject(dump, out, {{keys::kUseSourcePlayGoTable, true}}, &plan);
+        QVERIFY(!gp5.isEmpty());
         QCOMPARE(gp5, golden(QStringLiteral("gp5_layout_c.gp5")));
         QCOMPARE(plan.playgo.layout, PlayGoLayout::SourceTable);
         QCOMPARE(plan.playgo.scenarioBytes, golden(QStringLiteral("scenario_layout_c.json")));
 
         // The same table is ignored while the setting is off (layout B).
         BuildPlan off;
-        goldenProject(dump, out, {{keys::kPlayGoChunkCount, 3}}, &off);
+        QVERIFY(!goldenProject(dump, out, {{keys::kPlayGoChunkCount, 3}}, &off).isEmpty());
         QCOMPARE(off.playgo.layout, PlayGoLayout::Script);
     }
 
@@ -793,32 +813,32 @@ private slots:
         };
         {
             const QString d = dir(QStringLiteral("plan/nokeystone"));
-            makeSimpleDump(d);
+            QVERIFY(makeSimpleDump(d));
             QFile::remove(QDir(d).filePath(QStringLiteral("sce_sys/keystone")));
             auto r = plan(d);
-            QCOMPARE(r.error().code, ErrorCode::CorruptData);
-            QVERIFY(r.error().message.contains(QStringLiteral("keystone")));
+            QCOMPARE(errorOf(r).code, ErrorCode::CorruptData);
+            QVERIFY(errorOf(r).message.contains(QStringLiteral("keystone")));
             put(d, QStringLiteral("sce_sys/keystone"), QByteArray(95, 'K'));
-            QVERIFY(plan(d).error().message.contains(QStringLiteral("95 bytes")));
+            QVERIFY(errorOf(plan(d)).message.contains(QStringLiteral("95 bytes")));
         }
         {
             const QString d = dir(QStringLiteral("plan/badnames"));
-            makeSimpleDump(d);
+            QVERIFY(makeSimpleDump(d));
             put(d, QStringLiteral("Data/50%.pak"), "x");
             put(d, QStringLiteral("Data/a;b"), "x");
             auto r = plan(d);
-            QCOMPARE(r.error().code, ErrorCode::Unsupported);
-            QVERIFY(r.error().message.startsWith(QStringLiteral("2 file name(s)")));
+            QCOMPARE(errorOf(r).code, ErrorCode::Unsupported);
+            QVERIFY(errorOf(r).message.startsWith(QStringLiteral("2 file name(s)")));
         }
         {
             const QString d = dir(QStringLiteral("plan/badid"));
-            makeSimpleDump(d, QStringLiteral("XX"));
-            QCOMPARE(plan(d).error().code, ErrorCode::CorruptData);
+            QVERIFY(makeSimpleDump(d, QStringLiteral("XX")));
+            QCOMPARE(errorOf(plan(d)).code, ErrorCode::CorruptData);
             const QString e = dir(QStringLiteral("plan/otherid"));
-            makeSimpleDump(e);
+            QVERIFY(makeSimpleDump(e));
             PlanOptions po;
             po.contentId = QStringLiteral("UP0000-PPSA01234_00-ABCDEFGHIJKLMNOP");
-            QCOMPARE(plan(e, {}, po).error().code, ErrorCode::InvalidArgument);
+            QCOMPARE(errorOf(plan(e, {}, po)).code, ErrorCode::InvalidArgument);
             po = {};
             po.contentVersion = QStringLiteral("01.002.000");
             po.title = QStringLiteral("Renamed");
@@ -831,7 +851,7 @@ private slots:
         {
             // DLC emulator off: dlc_emu.ini left out, but an empty addcont0 is still an empty folder.
             const QString d = dir(QStringLiteral("plan/dlcoff"));
-            makeGoldenDump(d);
+            QVERIFY(makeGoldenDump(d));
             put(d, QStringLiteral("fakelib/libSceAppContent.sprx"), "x");
             auto r = plan(d, {{keys::kKeepDlcEmulator, false}, {keys::kKeepEmptyFolders, false}});
             QVERIFY(r.ok());
@@ -839,25 +859,28 @@ private slots:
             QVERIFY(!r->scan.findFile(QStringLiteral("fakelib/libSceAppContent.sprx")));
             QVERIFY(r->emptyDirs.isEmpty());
             auto on = plan(d, {{keys::kKeepEmptyFolders, false}});
+            QVERIFY(on.ok());
             QCOMPARE(on->emptyDirs, QStringList{QStringLiteral("addcont0")}); // DLC mounts always declared
             put(d, QStringLiteral("dlc_emu.ini"), "[PSAC]\ncontent_id=UP0000-PPSA01234_00-GOLDENDLC0000001\nmount_point=/app0/addcont7\n");
             auto missing = plan(d);
+            QVERIFY(missing.ok());
             QVERIFY(std::any_of(missing->warnings.begin(), missing->warnings.end(),
                                 [](const QString& w) { return w.contains(QStringLiteral("addcont7")); }));
         }
         {
             // Size class off and on.
             const QString d = dir(QStringLiteral("plan/size"));
-            makeSimpleDump(d);
+            QVERIFY(makeSimpleDump(d));
             auto off = plan(d, {{keys::kAutoSizeClass, false}});
             QVERIFY(!off->paramBytes.contains("attributePub"));
             auto on = plan(d);
+            QVERIFY(on.ok());
             QVERIFY(on->paramBytes.contains("\"attributePub\": 0"));
         }
         {
             // PS4 SELF: repaired copy when on, warning when off; AMPR import warning.
             const QString d = dir(QStringLiteral("plan/self"));
-            makeSimpleDump(d);
+            QVERIFY(makeSimpleDump(d));
             put(d, QStringLiteral("eboot.bin"), QByteArray("\x4F\x15\x3D\x1D", 4) + QByteArray(60, '\0') + "libSceAmpr");
             auto on = plan(d);
             QVERIFY(on.ok());
@@ -868,12 +891,13 @@ private slots:
             QVERIFY(repaired);
             QVERIFY(std::any_of(on->warnings.begin(), on->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("libSceAmpr")); }));
             auto off = plan(d, {{keys::kRepairSelf, false}});
+            QVERIFY(off.ok());
             QVERIFY(std::any_of(off->warnings.begin(), off->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("PS4 SELF")); }));
         }
         {
             // UCP: checked only when the setting is on.
             const QString d = dir(QStringLiteral("plan/ucp"));
-            makeSimpleDump(d);
+            QVERIFY(makeSimpleDump(d));
             QByteArray stale = makeUcp({{"a.png", "hello"}});
             stale[stale.size() - 1] = 'Z';
             put(d, QStringLiteral("sce_sys/trophy2/trophy00.ucp"), stale);
@@ -887,7 +911,7 @@ private slots:
                     repaired = e.kind == EntryKind::RepairedUcp;
             QVERIFY(repaired);
             put(d, QStringLiteral("sce_sys/trophy2/trophy00.ucp"), "garbage");
-            QCOMPARE(plan(d, {{keys::kRepairUcp, true}}).error().code, ErrorCode::CorruptData);
+            QCOMPARE(errorOf(plan(d, {{keys::kRepairUcp, true}})).code, ErrorCode::CorruptData);
         }
     }
 
@@ -917,19 +941,21 @@ private slots:
         QCOMPARE(plan->conversions[0].replacedPngRel, QStringLiteral("sce_sys/icon0.png"));
         QCOMPARE(plan->conversions[1].dst, QStringLiteral("sce_sys/pic2.png"));
         QCOMPARE(plan->conversions[1].requirement, PngRequirement::Rgba);
-        QCOMPARE(planImageRecovery(scan.value(), true, false).error().code, ErrorCode::DependencyMissing);
-        QCOMPARE(planImageRecovery(scan.value(), false, true).error().code, ErrorCode::CorruptData);
+        QCOMPARE(errorOf(planImageRecovery(scan.value(), true, false)).code, ErrorCode::DependencyMissing);
+        QCOMPARE(errorOf(planImageRecovery(scan.value(), false, true)).code, ErrorCode::CorruptData);
 
         put(d, QStringLiteral("sce_sys/pic1.png"), makePng(6)); // wrong mode, no .dds
         scan = scanSource({d}, {}, CancellationToken());
-        QCOMPARE(planImageRecovery(scan.value(), true, true).error().code, ErrorCode::CorruptData);
+        QVERIFY(scan.ok());
+        QCOMPARE(errorOf(planImageRecovery(scan.value(), true, true)).code, ErrorCode::CorruptData);
 
         const QString d2 = dir(QStringLiteral("img2"));
         put(d2, QStringLiteral("sce_sys/Pic2.dds"), "DDS ");
         put(d2, QStringLiteral("sce_sys/pic2.DDS"), "DDS ");
         scan = scanSource({d2}, {}, CancellationToken());
+        QVERIFY(scan.ok());
         if (scan->sceSysDds.size() == 2) // case-sensitive file systems only
-            QVERIFY(planImageRecovery(scan.value(), true, true).error().message.contains(QStringLiteral("both")));
+            QVERIFY(errorOf(planImageRecovery(scan.value(), true, true)).message.contains(QStringLiteral("both")));
 
         // SELF copy with the PS5 signature; the source is untouched.
         const QString self = QDir(d).filePath(QStringLiteral("old.sprx"));
@@ -1077,7 +1103,7 @@ private slots:
         QCOMPARE(QDir(d).entryList(QDir::Files).size(), 3); // x.pkg, x (1).pkg, x (2).pkg: nothing set aside is left
         const QString p5 = partial("5");
         const Status fail = placeOutput(p5, final, OutputConflict::Fail, notes);
-        QCOMPARE(fail.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(fail).code, ErrorCode::AlreadyExists);
         QCOMPARE(readAll(final), QByteArray("4"));
         QCOMPARE(keepBothName(QDir(d).filePath(QStringLiteral("y.remastered.pkg"))), QDir(d).filePath(QStringLiteral("y (1).remastered.pkg")));
         // A failed rename restores the file that was set aside.
@@ -1127,8 +1153,8 @@ private slots:
             QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
             QCOMPARE(readAll(keptUpd), QByteArray("new update"));
             QCOMPARE(readAll(keptFull), QByteArray("new full"));
-            QVERIFY2(st.error().message.contains(QDir::toNativeSeparators(keptUpd)), qPrintable(st.error().message));
-            QVERIFY(st.error().message.contains(QDir::toNativeSeparators(keptFull)));
+            QVERIFY2(errorOf(st).message.contains(QDir::toNativeSeparators(keptUpd)), qPrintable(errorOf(st).message));
+            QVERIFY(errorOf(st).message.contains(QDir::toNativeSeparators(keptFull)));
             QVERIFY(notes.isEmpty());
             QCOMPARE(files().size(), 4); // nothing set aside is left over
         }
@@ -1140,7 +1166,7 @@ private slots:
             QStringList notes, kept;
             const Status st = placeOutputs(moves, OutputConflict::Overwrite, notes, &kept, failing(pFull, full));
             QVERIFY(!st.ok());
-            QCOMPARE(st.error().code, ErrorCode::IoError);
+            QCOMPARE(errorOf(st).code, ErrorCode::IoError);
             QCOMPARE(readAll(upd), QByteArray("old update"));
             QCOMPARE(readAll(full), QByteArray("old full"));
             QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
@@ -1160,7 +1186,7 @@ private slots:
             QCOMPARE(readAll(pUpd), QByteArray("new update"));
             QCOMPARE(readAll(pFull), QByteArray("new full"));
             QCOMPARE(readAll(upd), QByteArray("old update"));
-            QVERIFY(st.error().message.contains(QDir::toNativeSeparators(pUpd)));
+            QVERIFY(errorOf(st).message.contains(QDir::toNativeSeparators(pUpd)));
         }
 
         // A new file appearing at a final name under "Fail" stops the step,
@@ -1169,7 +1195,7 @@ private slots:
         {
             QStringList notes, kept;
             const Status st = placeOutputs(moves, OutputConflict::Fail, notes, &kept);
-            QCOMPARE(st.error().code, ErrorCode::AlreadyExists);
+            QCOMPARE(errorOf(st).code, ErrorCode::AlreadyExists);
             QCOMPARE(readAll(upd), QByteArray("old update"));
             QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
         }
@@ -1246,9 +1272,11 @@ private slots:
     void settingsAndLegacyKeys()
     {
         Env env;
+        QStringList checked;
         for (const auto* d : env.schema->all()) {
             if (!d->key.startsWith(QStringLiteral("fpkg.")))
                 continue;
+            checked << d->key;
             QVERIFY2(env.schema->normalize(d->key, d->defaultValue).ok(), qPrintable(d->key));
             QVERIFY2(!d->description.isEmpty(), qPrintable(d->key));
             if (!d->enabledWhenKey.isEmpty())
@@ -1258,6 +1286,10 @@ private slots:
                 QVERIFY2(std::find(ids.begin(), ids.end(), d->dependencyId) != ids.end(), qPrintable(d->key));
             }
         }
+        // The loop saw the module's settings (not an empty set under another prefix).
+        QVERIFY2(checked.size() >= 20, qPrintable(checked.join(u' ')));
+        for (const QString& key : {keys::kPubToolsPath, keys::kPasscode, keys::kPlayGoChunkCount, keys::kCompressionLevel})
+            QVERIFY2(checked.contains(key), qPrintable(key));
         QVERIFY(!env.schema->normalize(keys::kPasscode, QStringLiteral("short")).ok());
         QVERIFY(!env.schema->normalize(keys::kPasscode, QString(31, u'0') + QChar(0xE9)).ok());
         QVERIFY(!env.schema->normalize(keys::kPlayGoChunkCount, 256).ok());
@@ -1301,25 +1333,122 @@ private slots:
                                                 QStringLiteral("fpkg.verify")}));
     }
 
+    // A private build ships the owner's toolkit as <app>/tools/fpkg-toolkit;
+    // it is used only when nothing is configured. <app> is the folder of the
+    // running program and cannot be redirected, and nothing may be planted
+    // next to the real test programs (they share one folder, and a leftover
+    // would be found by every later run). So a copy of this program in the
+    // temporary folder runs the checks: there <app> is a folder of its own.
     void bundledToolkitIsTheLastFallback()
     {
-        // A private build ships the owner's toolkit as <app>/tools/fpkg-toolkit;
-        // it is used only when nothing is configured.
+        const char* const appVariable = "FW_TEST_BUNDLED_APP_DIR";
+        if (!qEnvironmentVariableIsSet(appVariable)) {
+            const QString app = dir(QStringLiteral("bundled-app"));
+            const QString self = QCoreApplication::applicationFilePath();
+            const QString copy = QDir(app).filePath(QFileInfo(self).fileName());
+            QVERIFY(QFile::copy(self, copy));
+            QProcess child;
+            QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+            environment.insert(QString::fromLatin1(appVariable), app);
+            child.setProcessEnvironment(environment);
+            child.setProcessChannelMode(QProcess::MergedChannels);
+            // The copy writes its result to a file (its standard output is not always a pipe that can be read).
+            const QString result = QDir(app).filePath(QStringLiteral("result.txt"));
+            child.start(copy, {QStringLiteral("-o"), result + QStringLiteral(",txt"), QStringLiteral("bundledToolkitIsTheLastFallback")});
+            if (!child.waitForStarted(60000))
+                QSKIP(qPrintable(QStringLiteral("A copy of the test program cannot be started from the temporary folder (%1).")
+                                     .arg(child.errorString())));
+            if (!child.waitForFinished(300000)) {
+                child.kill();
+                child.waitForFinished(10000);
+                QFAIL("The copy of the test program did not finish.");
+            }
+            const QByteArray output = child.readAll() + readAll(result);
+            // 0xC0000135: the copy does not find the libraries the original has next to it.
+            if (child.exitCode() == int(0xC0000135u))
+                QSKIP("A copy of the test program does not start outside its build folder (a library is missing).");
+            QVERIFY2(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, output.constData());
+            QVERIFY2(output.contains("PASS   : TstFpkgRules::bundledToolkitIsTheLastFallback()"), output.constData());
+            return;
+        }
+
+        // In the copy. Nothing is written unless this really is the folder made for it.
+        const QString app = qEnvironmentVariable(appVariable);
+        QVERIFY2(QFileInfo(QCoreApplication::applicationDirPath()) == QFileInfo(app),
+                 qPrintable(QCoreApplication::applicationDirPath()));
         const QString bundled = bundledToolkitDir();
-        QVERIFY(!bundled.isEmpty());
-        QVERIFY2(!QFileInfo::exists(bundled), "leftover bundled toolkit next to the test");
+        QVERIFY2(QFileInfo(bundled) == QFileInfo(QDir(app).filePath(QStringLiteral("tools/fpkg-toolkit"))), qPrintable(bundled));
+        QVERIFY(!QFileInfo::exists(bundled));
         QVERIFY(!locatePubTools(QString(), QString()).ok());
-        put(bundled, QStringLiteral("toolchain/prospero-pub-cmd.exe"), "exe");
-        put(bundled, QStringLiteral("prospero-dds2png.exe"), "exe");
+        QVERIFY(put(bundled, QStringLiteral("toolchain/prospero-pub-cmd.exe"), "exe"));
+        QVERIFY(put(bundled, QStringLiteral("prospero-dds2png.exe"), "exe"));
         const PubToolchain t = locatePubTools(QString(), QString());
-        QVERIFY(t.ok());
+        QVERIFY2(t.ok(), qPrintable(t.problems.join(u' ')));
         QCOMPARE(QDir::cleanPath(t.toolkitRoot), QDir::cleanPath(bundled));
         QCOMPARE(QFileInfo(locateDds2png(t, QString())).fileName(), kDds2pngExeName);
         // A configured path still wins (and a wrong one is reported, not replaced).
         QVERIFY(!locatePubTools(dir(QStringLiteral("elsewhere")), QString()).ok());
-        QVERIFY(QDir(QFileInfo(bundled).absoluteFilePath()).removeRecursively());
-        QDir().rmdir(QFileInfo(bundled).absolutePath()); // tools/ when empty
+        QVERIFY(QDir(bundled).removeRecursively());
         QVERIFY(!locatePubTools(QString(), QString()).ok());
+    }
+
+    // Links of a process that no longer runs are removed from the alias
+    // folder; a link of a running process, a real folder with such a name and
+    // the folder a removed link pointed to are left alone.
+    void staleAliasLinksAreSweptButNeverRealFolders()
+    {
+        const QString d = dir(QStringLiteral("aliases"));
+        if (!isAsciiPath(d))
+            QSKIP("The temporary folder itself has a non-ASCII path: no link can be made in it.");
+        const QString target = QDir(d).filePath(QStringLiteral("Game é"));
+        QVERIFY(put(target, QStringLiteral("eboot.bin"), "game data"));
+        const QString base = QDir(d).filePath(AsciiAliases::aliasFolderName());
+        QVERIFY(QDir().mkpath(base));
+        // Process ids are multiples of four on Windows and far below this
+        // value everywhere: no process has this one.
+        const qint64 noSuchProcess = 0x7FFFFFF1;
+        QVERIFY(!processIsRunning(noSuchProcess));
+        const QString dead = QDir(base).filePath(QStringLiteral("a%1-00aa11-src").arg(noSuchProcess, 0, 16));
+        const QString live = QDir(base).filePath(QStringLiteral("a%1-00bb22-src").arg(QCoreApplication::applicationPid(), 0, 16));
+        const QString realFolder = QDir(base).filePath(QStringLiteral("a%1-00cc33-out").arg(noSuchProcess, 0, 16));
+        JunctionGuard deadGuard(dead), liveGuard(live); // whatever happens below, no link outlives the test
+        const Status linked = createDirectoryJunction(dead, target);
+        if (!linked.ok())
+            QSKIP(qPrintable(QStringLiteral("No folder link can be made in the temporary folder (%1).").arg(linked.error().message)));
+        QVERIFY(createDirectoryJunction(live, target).ok());
+        QVERIFY(put(realFolder, QStringLiteral("keep.txt"), "a user's file"));
+        QVERIFY(put(base, QStringLiteral("notes.txt"), "not a link"));
+
+        QCOMPARE(AsciiAliases::sweepStale(base), 1);
+        QVERIFY(!QFileInfo::exists(dead) && !isLinkOrReparsePoint(dead));
+        QVERIFY(isLinkOrReparsePoint(live));
+        QCOMPARE(readAll(QDir(realFolder).filePath(QStringLiteral("keep.txt"))), QByteArray("a user's file"));
+        QVERIFY(QFileInfo::exists(QDir(base).filePath(QStringLiteral("notes.txt"))));
+        QCOMPARE(readAll(QDir(target).filePath(QStringLiteral("eboot.bin"))), QByteArray("game data"));
+        QCOMPARE(AsciiAliases::sweepStale(base), 0);
+
+        // An alias object makes its link here, maps paths under it, and removes it again.
+        QString link;
+        {
+            AsciiAliases aliases({d}, {target});
+            auto mapped = aliases.map(target, QStringLiteral("src"));
+            QVERIFY2(mapped.ok(), qPrintable(errorOf(mapped).toLogString()));
+            link = mapped.value();
+            QVERIFY(isAsciiPath(link));
+            QVERIFY(link.startsWith(base));
+            QCOMPARE(aliases.links(), QStringList{link});
+            QCOMPARE(aliases.toToolPath(QDir(target).filePath(QStringLiteral("eboot.bin"))),
+                     QDir::toNativeSeparators(link + QStringLiteral("/eboot.bin")));
+            QCOMPARE(readAll(link + QStringLiteral("/eboot.bin")), QByteArray("game data"));
+            // An ASCII folder needs no link; a base inside a forbidden folder is never used.
+            QCOMPARE(aliases.map(d, QStringLiteral("x")).value(), QDir::cleanPath(d));
+            AsciiAliases inside({d}, {d});
+            QCOMPARE(errorOf(inside.map(target, QStringLiteral("src"))).code, ErrorCode::Unsupported);
+        }
+        QVERIFY(!QFileInfo::exists(link) && !isLinkOrReparsePoint(link));
+        QCOMPARE(readAll(QDir(target).filePath(QStringLiteral("eboot.bin"))), QByteArray("game data"));
+        QVERIFY(removeDirectoryJunction(live).ok());
+        QCOMPARE(readAll(QDir(target).filePath(QStringLiteral("eboot.bin"))), QByteArray("game data"));
     }
 
     void toolchainLookup()
@@ -1346,7 +1475,16 @@ private slots:
         put(root, QStringLiteral("prospero-dds2png.exe"), "exe");
         QCOMPARE(QFileInfo(locateDds2png(t, QString())).fileName(), kDds2pngExeName);
         QVERIFY(locateDds2png(t, QDir(root).filePath(QStringLiteral("missing.exe"))).isEmpty());
-#ifndef Q_OS_WIN
+#ifdef Q_OS_WIN
+        // The three runtime libraries count as present next to the tool as well as in the system folder.
+        const QStringList runtime{QStringLiteral("msvcp140.dll"), QStringLiteral("vcruntime140.dll"), QStringLiteral("vcruntime140_1.dll")};
+        for (const QString& name : missingVcRuntimeDlls(dir(QStringLiteral("no-runtime"))))
+            QVERIFY2(runtime.contains(name), qPrintable(name));
+        const QString withRuntime = dir(QStringLiteral("with-runtime"));
+        for (const QString& name : runtime)
+            QVERIFY(put(withRuntime, name, "dll"));
+        QCOMPARE(missingVcRuntimeDlls(withRuntime), QStringList());
+#else
         QVERIFY(missingVcRuntimeDlls(QString()).isEmpty());
 #endif
         Env env;

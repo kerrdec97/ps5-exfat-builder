@@ -2,7 +2,7 @@
 // detection, naming, covers, library scan, Dump Rename and the module's jobs.
 // Every dump is synthetic and built in a temporary folder.
 
-#include "core/Paths.h"
+#include "core/FsLinks.h"
 #include "engines/gameinfo/Cover.h"
 #include "engines/gameinfo/DumpRename.h"
 #include "engines/gameinfo/GameInfo.h"
@@ -86,10 +86,17 @@ QByteArray buildSfo(const std::vector<SfoField>& fields)
 
 bool write(const QString& path, const QByteArray& bytes) { return fwtest::writeTextFile(path, bytes); }
 
+// The error of a call that must have failed (a marker error, not undefined
+// behaviour, when it succeeded).
+template <typename R>
+Error errorOf(const R& result)
+{
+    return result.ok() ? Error(ErrorCode::Internal, QStringLiteral("<the call succeeded>")) : result.error();
+}
+
 QByteArray ps5Param(const QString& titleId, const QString& title, const QString& lang = QStringLiteral("en-US"),
                     const QString& extra = {})
 {
-    // (No raw string here: moc 6.4 mis-parses multi-line raw literals.)
     return QStringLiteral("{\n"
                           "  \"applicationCategoryType\": 0,\n"
                           "  \"applicationDrmType\": \"standard\",\n"
@@ -110,18 +117,19 @@ QByteArray ps5Param(const QString& titleId, const QString& title, const QString&
         .toUtf8();
 }
 
-// A PS5 dump: <root>/eboot.bin + sce_sys/param.json (+ icon0.png).
-void makePs5Dump(const QString& root, const QString& titleId, const QString& title, qint64 ebootSize = 1000,
-                 bool icon = false)
+// A PS5 dump: <root>/eboot.bin + sce_sys/param.json (+ icon0.png). False when
+// a file could not be written.
+[[nodiscard]] bool makePs5Dump(const QString& root, const QString& titleId, const QString& title, qint64 ebootSize = 1000,
+                               bool icon = false)
 {
-    QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("eboot.bin")), ebootSize, 7));
-    QVERIFY(write(QDir(root).filePath(QStringLiteral("sce_sys/param.json")), ps5Param(titleId, title)));
-    if (icon) {
-        QImage img(512, 512, QImage::Format_RGB32);
-        img.fill(QColor(200, 30, 30));
-        QDir().mkpath(QDir(root).filePath(QStringLiteral("sce_sys")));
-        QVERIFY(img.save(QDir(root).filePath(QStringLiteral("sce_sys/icon0.png")), "PNG"));
-    }
+    if (!fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("eboot.bin")), ebootSize, 7)
+        || !write(QDir(root).filePath(QStringLiteral("sce_sys/param.json")), ps5Param(titleId, title)))
+        return false;
+    if (!icon)
+        return true;
+    QImage img(512, 512, QImage::Format_RGB32);
+    img.fill(QColor(200, 30, 30));
+    return img.save(QDir(root).filePath(QStringLiteral("sce_sys/icon0.png")), "PNG");
 }
 
 JobContext makeContext(ProgressReporter& progress, const SettingsValues& settings, const QString& temp)
@@ -397,11 +405,14 @@ private slots:
         QCOMPARE(order->localizedTitles.size(), 3);
         QCOMPARE(order->localizedTitles.at(1).first, QStringLiteral("fr-FR"));
         auto gb = parseParamJson(R"({"localizedParameters":{"defaultLanguage":"ko-KR","en-GB":{"titleName":"Colour"},"de-DE":{"titleName":"x"}}})");
+        QVERIFY(gb.ok());
         QCOMPARE(gb->title, QStringLiteral("Colour"));
         auto top = parseParamJson(R"({"titleName":"  Top Level  ","titleId":12345})");
+        QVERIFY(top.ok());
         QCOMPARE(top->title, QStringLiteral("Top Level"));
         QCOMPARE(top->titleId, QStringLiteral("12345"));
         auto name = parseParamJson(R"({"name":"By Name"})");
+        QVERIFY(name.ok());
         QCOMPARE(name->title, QStringLiteral("By Name"));
     }
 
@@ -473,8 +484,9 @@ private slots:
 
         // No SFO: param.json gives title, ID and version (masterVersion).
         const QString b = fresh(QStringLiteral("chainB"));
-        makePs5Dump(b, QStringLiteral("PPSA33333"), QString::fromUtf8("Caf\u00e9 \u2013 Deluxe\u2122"));
+        QVERIFY(makePs5Dump(b, QStringLiteral("PPSA33333"), QString::fromUtf8("Caf\u00e9 \u2013 Deluxe\u2122")));
         auto mb = readGameMetadata(b);
+        QVERIFY(mb.ok());
         QCOMPARE(mb->title, QString::fromUtf8("Caf\u00e9 - Deluxe"));
         QCOMPARE(mb->rawTitle, QString::fromUtf8("Caf\u00e9 \u2013 Deluxe\u2122"));
         QCOMPARE(mb->titleId, QStringLiteral("PPSA33333"));
@@ -490,6 +502,7 @@ private slots:
         QVERIFY(write(QDir(c).filePath(QStringLiteral("sce_sys/param.json")), ps5Param(QStringLiteral("PPSA55555"), QStringLiteral("Ignored"))));
         QVERIFY(write(QDir(c).filePath(QStringLiteral("sce_sys/nptitle.dat")), "Np Title\r\nsecond\n"));
         auto mc = readGameMetadata(c);
+        QVERIFY(mc.ok());
         QCOMPARE(mc->titleId, QStringLiteral("CUSA44444"));
         QCOMPARE(mc->title, QStringLiteral("Np Title"));
         QCOMPARE(mc->titleSource, QStringLiteral("nptitle.dat"));
@@ -500,6 +513,7 @@ private slots:
                                                                                          sfoString("CATEGORY", QStringLiteral("ac"))})));
         QVERIFY(write(QDir(d).filePath(QStringLiteral("sce_sys/nptitle.dat")), QByteArray("NPTD\0\x01\x02", 7)));
         auto md = readGameMetadata(d);
+        QVERIFY(md.ok());
         QVERIFY(md->title.isEmpty());
         QCOMPARE(md->platform, Platform::PS4);
         QCOMPARE(md->kind, ContentKind::AddOn);
@@ -544,12 +558,14 @@ private slots:
         const QString addon = fresh(QStringLiteral("addon"));
         QVERIFY(write(QDir(addon).filePath(QStringLiteral("sce_sys/param.json")), ps5Param(QStringLiteral("PPSA01325"), QStringLiteral("DLC"))));
         auto a = readGameMetadata(addon);
+        QVERIFY(a.ok());
         QCOMPARE(a->platform, Platform::PS5);
         QCOMPARE(a->kind, ContentKind::AddOn);
 
         const QString app = fresh(QStringLiteral("ps5selfonly"));
         QVERIFY(write(QDir(app).filePath(QStringLiteral("eboot.bin")), QByteArray("\x54\x14\xF5\xEE....", 8)));
         auto s = readGameMetadata(app);
+        QVERIFY(s.ok());
         QCOMPARE(s->platform, Platform::PS5);
         QCOMPARE(s->kind, ContentKind::Application);
 
@@ -559,6 +575,7 @@ private slots:
                       buildSfo({sfoString("CATEGORY", QStringLiteral("gp")), sfoString("TITLE_ID", QStringLiteral("CUSA00002")),
                                 sfoInt("SYSTEM_VER", 0x09000000)})));
         auto p = readGameMetadata(patch);
+        QVERIFY(p.ok());
         QCOMPARE(p->platform, Platform::PS4);
         QCOMPARE(p->kind, ContentKind::Patch);
         QCOMPARE(p->requiredSystemVersion.toString(), QStringLiteral("9.00"));
@@ -613,17 +630,27 @@ private slots:
         QVERIFY(fwtest::writeRandomFile(QDir(r).filePath(QStringLiteral("sub/b.bin")), 2345, 2));
         QVERIFY(fwtest::writeRandomFile(QDir(r).filePath(QStringLiteral("sub/deeper/.c")), 5, 3));
         QCOMPARE(dumpSize(r), qint64(3350));
-#ifndef Q_OS_WIN
+        // A link to a folder elsewhere and a link back to the dump itself (junctions
+        // on Windows): neither is followed. The links are removed again, so that
+        // nothing is ever deleted through them.
         const QString outside = fresh(QStringLiteral("outside"));
         QVERIFY(fwtest::writeRandomFile(QDir(outside).filePath(QStringLiteral("big.bin")), 50000, 4));
-        QVERIFY(QFile::link(outside, QDir(r).filePath(QStringLiteral("link"))));
-        QCOMPARE(dumpSize(r), qint64(3350));
-#endif
+        JunctionGuard away(QDir(r).filePath(QStringLiteral("link"))), loop(QDir(r).filePath(QStringLiteral("sub/back")));
+        const Status linked = createDirectoryJunction(away.path(), outside);
+        if (linked.ok()) {
+            QVERIFY(createDirectoryJunction(loop.path(), r).ok());
+            QCOMPARE(dumpSize(r), qint64(3350));
+        }
+        away.release();
+        loop.release();
         CancellationSource cs;
         cs.cancel();
         for (int i = 0; i < 600; ++i)
             QVERIFY(write(QDir(r).filePath(QStringLiteral("many/%1").arg(i)), "y"));
         QCOMPARE(dumpSize(r, cs.token()), qint64(-1));
+        if (!linked.ok())
+            QSKIP(qPrintable(QStringLiteral("No folder link can be made in the temporary folder (%1): links were not checked.")
+                                 .arg(linked.error().message)));
     }
 
     void coverIsTrimmedFilledAndCached()
@@ -651,9 +678,18 @@ private slots:
         QCOMPARE(QColor(n.pixel(2, 2)).blue() > 150, true);
         QCOMPARE(QColor(n.pixel(kCoverWidth - 3, kCoverHeight - 3)).red() > 150, true);
         QVERIFY(QColor(n.pixel(2, kCoverHeight / 2 + 20)).green() < 60);
-        // Cached: same path, file not rewritten.
+        // Cached: same path, file not rewritten. The cached file gets a time of
+        // its own first: a rewrite within one tick of the clock would not show.
+        {
+            QFile cached(out.value());
+            QVERIFY(cached.open(QIODevice::ReadWrite));
+            QVERIFY(cached.setFileTime(QDateTime(QDate(2020, 2, 3), QTime(4, 5, 6)), QFileDevice::FileModificationTime));
+        }
         const QDateTime t = QFileInfo(out.value()).lastModified();
-        QCOMPARE(normalizedCover(src, cache).value(), out.value());
+        QVERIFY(t.date().year() == 2020);
+        auto second = normalizedCover(src, cache);
+        QVERIFY(second.ok());
+        QCOMPARE(second.value(), out.value());
         QCOMPARE(QFileInfo(out.value()).lastModified(), t);
         QCOMPARE(QDir(cache).entryList(QDir::Files).size(), 1);
 
@@ -692,7 +728,7 @@ private slots:
         QVERIFY(write(huge, png));
         auto h = normalizedCover(huge, r);
         QVERIFY(!h.ok());
-        QCOMPARE(h.error().code, ErrorCode::Unsupported);
+        QCOMPARE(errorOf(h).code, ErrorCode::Unsupported);
         QVERIFY(!normalizedCover(QDir(r).filePath(QStringLiteral("none.png")), r).ok());
     }
 
@@ -701,10 +737,10 @@ private slots:
     {
         const QString lib1 = fresh(QStringLiteral("lib1"));
         const QString lib2 = fresh(QStringLiteral("lib2"));
-        makePs5Dump(QDir(lib1).filePath(QStringLiteral("Astro")), QStringLiteral("PPSA01325"), QStringLiteral("Astro Bot"), 5000, true);
-        makePs5Dump(QDir(lib1).filePath(QStringLiteral("Wrapper/PPSA02222-app")), QStringLiteral("PPSA02222"), QString::fromUtf8("\u00c9t\u00e9"));
+        QVERIFY(makePs5Dump(QDir(lib1).filePath(QStringLiteral("Astro")), QStringLiteral("PPSA01325"), QStringLiteral("Astro Bot"), 5000, true));
+        QVERIFY(makePs5Dump(QDir(lib1).filePath(QStringLiteral("Wrapper/PPSA02222-app")), QStringLiteral("PPSA02222"), QString::fromUtf8("\u00c9t\u00e9")));
         // Duplicate of Astro, smaller: the bigger one wins.
-        makePs5Dump(QDir(lib2).filePath(QStringLiteral("AstroCopy")), QStringLiteral("PPSA01325"), QStringLiteral("Astro Bot"), 100);
+        QVERIFY(makePs5Dump(QDir(lib2).filePath(QStringLiteral("AstroCopy")), QStringLiteral("PPSA01325"), QStringLiteral("Astro Bot"), 100));
         // A PS4 dump with param.sfo only.
         const QString ps4 = QDir(lib2).filePath(QStringLiteral("PS4Game"));
         QVERIFY(write(QDir(ps4).filePath(QStringLiteral("eboot.bin")), "x"));
@@ -753,14 +789,14 @@ private slots:
 
         CancellationSource cs;
         cs.cancel();
-        QVERIFY(scanLibrary({lib1}, opt, cs.token()).error().isCancelled());
+        QVERIFY(errorOf(scanLibrary({lib1}, opt, cs.token())).isCancelled());
     }
 
     void libraryScanJobUsesSettings()
     {
         Module mod;
         const QString lib = fresh(QStringLiteral("joblib"));
-        makePs5Dump(QDir(lib).filePath(QStringLiteral("G1")), QStringLiteral("PPSA05555"), QStringLiteral("Job Game"), 10, true);
+        QVERIFY(makePs5Dump(QDir(lib).filePath(QStringLiteral("G1")), QStringLiteral("PPSA05555"), QStringLiteral("Job Game"), 10, true));
         const QString cache = fresh(QStringLiteral("jobcache"));
         auto job = mod.jobs.create(jobkinds::kLibraryScan, {});
         QVERIFY(job.ok());
@@ -785,13 +821,13 @@ private slots:
     void renamePlanApplyNeverOverwritesAndUndoes()
     {
         const QString src = fresh(QStringLiteral("rename"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("dump1")), QStringLiteral("PPSA01111"), QStringLiteral("First: Game"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("dump2")), QStringLiteral("PPSA02222"), QStringLiteral("Second"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("dump3")), QStringLiteral("PPSA03333"), QStringLiteral("Third"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("dump1")), QStringLiteral("PPSA01111"), QStringLiteral("First: Game")));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("dump2")), QStringLiteral("PPSA02222"), QStringLiteral("Second")));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("dump3")), QStringLiteral("PPSA03333"), QStringLiteral("Third")));
         // Same game twice -> the second proposal is a duplicate.
-        makePs5Dump(QDir(src).filePath(QStringLiteral("dump4")), QStringLiteral("PPSA03333"), QStringLiteral("Third"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("dump4")), QStringLiteral("PPSA03333"), QStringLiteral("Third")));
         // Already named.
-        makePs5Dump(QDir(src).filePath(QStringLiteral("PPSA04444 Fourth (01.002.000)")), QStringLiteral("PPSA04444"), QStringLiteral("Fourth"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("PPSA04444 Fourth (01.002.000)")), QStringLiteral("PPSA04444"), QStringLiteral("Fourth")));
         // Not a dump (no eboot, no ID-looking name): ignored.
         QDir().mkpath(QDir(src).filePath(QStringLiteral("photos")));
         // A dump whose name looks like an ID but has no metadata.
@@ -802,13 +838,22 @@ private slots:
         RenamePlanOptions opt;
         auto plan = planDumpRenames(src, opt, {});
         QVERIFY(plan.ok());
+        // A name that is not in the list gives an item no check below accepts
+        // (a default item would read as "Ready").
         auto byName = [&](const std::vector<RenameItem>& items, const QString& n) -> const RenameItem& {
             for (const auto& it : items)
                 if (it.currentName == n)
                     return it;
-            static RenameItem none;
+            static const RenameItem none = [] {
+                RenameItem missing;
+                missing.status = RenameStatus::Failed;
+                missing.proposedName = QStringLiteral("<not in the list>");
+                missing.confidence = QStringLiteral("<not in the list>");
+                return missing;
+            }();
             return none;
         };
+        QCOMPARE(byName(*plan, QStringLiteral("no such dump")).status, RenameStatus::Failed);
         QCOMPARE(int(plan->size()), 6); // dump1-4, PPSA04444..., ppsa05555
         QCOMPARE(byName(*plan, QStringLiteral("dump1")).proposedName, QStringLiteral("PPSA01111 First Game (01.002.000)"));
         QCOMPARE(byName(*plan, QStringLiteral("dump1")).status, RenameStatus::Ready);
@@ -819,6 +864,12 @@ private slots:
         QCOMPARE(byName(*plan, QStringLiteral("PPSA04444 Fourth (01.002.000)")).status, RenameStatus::AlreadyNamed);
         QCOMPARE(byName(*plan, QStringLiteral("ppsa05555")).proposedName, QStringLiteral("PPSA05555"));
         QCOMPARE(byName(*plan, QStringLiteral("ppsa05555")).confidence, QStringLiteral("yellow"));
+        // Only the case differs: where paths ignore case that is the folder itself, not a taken name.
+#ifdef Q_OS_WIN
+        QCOMPARE(byName(*plan, QStringLiteral("ppsa05555")).status, RenameStatus::AlreadyNamed);
+#else
+        QCOMPARE(byName(*plan, QStringLiteral("ppsa05555")).status, RenameStatus::Ready);
+#endif
         // The plan changed nothing on disk.
         QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("dump1"))).isDir());
 
@@ -849,25 +900,62 @@ private slots:
         QCOMPARE(undo->renamed, 2);
         QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("dump1/eboot.bin"))).isFile());
         auto again = undoDumpRenames(log, {});
+        QVERIFY(again.ok());
         QCOMPARE(again->renamed, 0);
         QCOMPARE(again->skipped, 2);
 
         // A target created after planning is still never overwritten.
         auto plan2 = planDumpRenames(src, opt, {});
+        QVERIFY(plan2.ok());
         QDir().mkpath(QDir(src).filePath(QStringLiteral("PPSA01111 First Game (01.002.000)")));
         auto run2 = applyDumpRenames(plan2.value(), {}, QDir(fresh(QStringLiteral("undo2"))).filePath(QStringLiteral("l.json")), {});
+        QVERIFY(run2.ok());
         QCOMPARE(byName(run2->items, QStringLiteral("dump1")).status, RenameStatus::TargetExists);
         QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("dump1"))).isDir());
+    }
+
+    // A proposal that differs from the folder's name in case only. Where paths
+    // ignore case (Windows) the folder counts as named already and keeps its
+    // spelling; elsewhere it is an ordinary rename. Either way nothing is lost
+    // and the result says what happened.
+    void renameWithACaseOnlyDifference()
+    {
+        const QString src = fresh(QStringLiteral("rename-case"));
+        QVERIFY(write(QDir(src).filePath(QStringLiteral("ppsa05555/eboot.bin")), "game"));
+        const auto spelling = [&] { return QDir(src).entryList(QDir::Dirs | QDir::NoDotAndDotDot); };
+        auto plan = planDumpRenames(src, RenamePlanOptions{}, {});
+        QVERIFY(plan.ok());
+        QCOMPARE(int(plan->size()), 1);
+        QCOMPARE(plan->front().currentName, QStringLiteral("ppsa05555"));
+        QCOMPARE(plan->front().proposedName, QStringLiteral("PPSA05555"));
+        const QString log = QDir(fresh(QStringLiteral("rename-case-undo"))).filePath(QStringLiteral("log.json"));
+        auto run = applyDumpRenames(plan.value(), {}, log, {});
+        QVERIFY(run.ok());
+        QCOMPARE(run->failed, 0);
+        QCOMPARE(int(run->items.size()), 1);
+#ifdef Q_OS_WIN
+        QCOMPARE(plan->front().status, RenameStatus::AlreadyNamed);
+        QCOMPARE(run->items.front().status, RenameStatus::AlreadyNamed);
+        QCOMPARE(run->renamed, 0);
+        QCOMPARE(spelling(), QStringList{QStringLiteral("ppsa05555")});
+#else
+        QCOMPARE(plan->front().status, RenameStatus::Ready);
+        QCOMPARE(run->items.front().status, RenameStatus::Renamed);
+        QCOMPARE(run->renamed, 1);
+        QCOMPARE(spelling(), QStringList{QStringLiteral("PPSA05555")});
+#endif
+        QVERIFY(QFileInfo(QDir(src).filePath(spelling().value(0) + QStringLiteral("/eboot.bin"))).isFile());
     }
 
     void renameIntoDestinationAndPresets()
     {
         const QString src = fresh(QStringLiteral("rename-dst"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("x")), QStringLiteral("PPSA06666"), QStringLiteral("Sixth"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("x")), QStringLiteral("PPSA06666"), QStringLiteral("Sixth")));
         RenamePlanOptions opt;
         opt.preset = NamePreset::TitleId;
         opt.destinationRoot = QDir(src).filePath(QStringLiteral("sorted/new"));
         auto plan = planDumpRenames(src, opt, {});
+        QVERIFY(plan.ok());
         QCOMPARE(plan->front().proposedName, QStringLiteral("PPSA06666"));
         auto run = applyDumpRenames(plan.value(), opt.destinationRoot, {}, {});
         QVERIFY(run.ok());
@@ -881,7 +969,7 @@ private slots:
     {
         Module mod;
         const QString src = fresh(QStringLiteral("rename-job"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("a")), QStringLiteral("PPSA07777"), QStringLiteral("Seventh"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("a")), QStringLiteral("PPSA07777"), QStringLiteral("Seventh")));
         const SettingsValues s = mod.settings({{keys::kRenamePreset, QStringLiteral("ppsa_title")}});
         ProgressReporter progress;
 
@@ -931,8 +1019,8 @@ private slots:
         const SettingsValues s = mod.settings();
         const QString src = fresh(QStringLiteral("undo-truth"));
         for (const char* n : {"a", "b", "c"})
-            makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA1000%1").arg(int(n[0] - 'a')),
-                        QStringLiteral("Game %1").arg(QLatin1String(n)));
+            QVERIFY(makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA1000%1").arg(int(n[0] - 'a')),
+                        QStringLiteral("Game %1").arg(QLatin1String(n))));
         RenamePlanOptions opt;
         opt.preset = NamePreset::TitleId;
         const QString log = QDir(fresh(QStringLiteral("undo-truth-log"))).filePath(QStringLiteral("log.json"));
@@ -961,8 +1049,8 @@ private slots:
         // Cancel after the first restored name: the rest is listed, nothing claims success.
         const QString src2 = fresh(QStringLiteral("undo-cancel"));
         for (const char* n : {"a", "b", "c"})
-            makePs5Dump(QDir(src2).filePath(QLatin1String(n)), QStringLiteral("PPSA2000%1").arg(int(n[0] - 'a')),
-                        QStringLiteral("Game %1").arg(QLatin1String(n)));
+            QVERIFY(makePs5Dump(QDir(src2).filePath(QLatin1String(n)), QStringLiteral("PPSA2000%1").arg(int(n[0] - 'a')),
+                        QStringLiteral("Game %1").arg(QLatin1String(n))));
         const QString log2 = QDir(fresh(QStringLiteral("undo-cancel-log"))).filePath(QStringLiteral("log.json"));
         QVERIFY(applyDumpRenames(planDumpRenames(src2, opt, {}).value(), {}, log2, {}).ok());
         {
@@ -1004,7 +1092,7 @@ private slots:
             cancel.cancel();
             auto r = undoDumpRenames(log2, cancel.token());
             QVERIFY(!r.ok());
-            QVERIFY(r.error().isCancelled());
+            QVERIFY(errorOf(r).isCancelled());
         }
     }
 
@@ -1015,8 +1103,8 @@ private slots:
         const SettingsValues s = mod.settings();
         const QString src = fresh(QStringLiteral("apply-cancel"));
         for (const char* n : {"a", "b", "c"})
-            makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA3000%1").arg(int(n[0] - 'a')),
-                        QStringLiteral("Game %1").arg(QLatin1String(n)));
+            QVERIFY(makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA3000%1").arg(int(n[0] - 'a')),
+                        QStringLiteral("Game %1").arg(QLatin1String(n))));
         const QString log = QDir(fresh(QStringLiteral("apply-cancel-log"))).filePath(QStringLiteral("log.json"));
         CancellationSource cancel;
         ProgressReporter stopAfterOne([&](const ProgressSnapshot& p) {
@@ -1049,10 +1137,10 @@ private slots:
         Module mod;
         const SettingsValues s = mod.settings();
         const QString src = fresh(QStringLiteral("apply-only"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("Seen")), QStringLiteral("PPSA40001"), QStringLiteral("Seen"));
-        makePs5Dump(QDir(src).filePath(QStringLiteral("Unticked")), QStringLiteral("PPSA40002"), QStringLiteral("Unticked"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("Seen")), QStringLiteral("PPSA40001"), QStringLiteral("Seen")));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("Unticked")), QStringLiteral("PPSA40002"), QStringLiteral("Unticked")));
         // Copied in after the preview: no edit names it.
-        makePs5Dump(QDir(src).filePath(QStringLiteral("Late")), QStringLiteral("PPSA40003"), QStringLiteral("Late"));
+        QVERIFY(makePs5Dump(QDir(src).filePath(QStringLiteral("Late")), QStringLiteral("PPSA40003"), QStringLiteral("Late")));
         QString untickedPath = QDir::toNativeSeparators(QDir(src).filePath(QStringLiteral("Unticked")));
 #ifdef Q_OS_WIN
         untickedPath = untickedPath.toUpper(); // another spelling of the same folder
@@ -1118,10 +1206,10 @@ private slots:
         cancel.cancel();
         auto c = readGameMetadata(r, cancel.token());
         QVERIFY(!c.ok());
-        QVERIFY(c.error().isCancelled());
+        QVERIFY(errorOf(c).isCancelled());
         // Files at the usual places need no walk, so there is nothing to cancel.
         const QString direct = fresh(QStringLiteral("direct"));
-        makePs5Dump(direct, QStringLiteral("PPSA05678"), QStringLiteral("Direct"));
+        QVERIFY(makePs5Dump(direct, QStringLiteral("PPSA05678"), QStringLiteral("Direct")));
         QVERIFY(write(QDir(direct).filePath(QStringLiteral("sce_sys/param.sfo")), buildSfo({sfoString("TITLE", QStringLiteral("T"))})));
         QVERIFY(write(QDir(direct).filePath(QStringLiteral("pfs-version.dat")), "01.00\n"));
         QVERIFY(readGameMetadata(direct, cancel.token()).ok());
@@ -1144,7 +1232,7 @@ private slots:
 
         // Without the dump's own param.sfo or a PS4 title ID, a deep param.json still means PS5.
         const QString w = fresh(QStringLiteral("ps5-wrapper"));
-        makePs5Dump(QDir(w).filePath(QStringLiteral("inner")), QStringLiteral("PPSA04321"), QStringLiteral("Wrapped"));
+        QVERIFY(makePs5Dump(QDir(w).filePath(QStringLiteral("inner")), QStringLiteral("PPSA04321"), QStringLiteral("Wrapped")));
         auto wm = readGameMetadata(w);
         QVERIFY(wm.ok());
         QCOMPARE(wm->platform, Platform::PS5);
@@ -1205,7 +1293,7 @@ private slots:
         }
         auto r = parseSfo(sfo);
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::CorruptData);
+        QCOMPARE(errorOf(r).code, ErrorCode::CorruptData);
 
         // Within the entry limit, oversized and overlapping values are skipped, not copied.
         const quint32 few = 4096;

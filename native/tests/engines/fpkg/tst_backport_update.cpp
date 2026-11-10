@@ -1,11 +1,12 @@
 // Backport update packages (the ppr-pkg Companion's Backport tab): the pure
 // rules (versions, names, wrapper folders, firmware groups, request checks),
 // the package inspector (kind, base digest, param.json, delta reference
-// search), the SDK Fix toolchain check, and an end-to-end run with the
-// owner's real Sony toolkit when FW_BACKPORT_E2E_TOOLKIT (a toolkit folder)
-// and FW_BACKPORT_E2E_GAME (a game folder with sce_sys/param.json) are set.
+// search), the SDK Fix toolchain check, the whole job against the stand-in
+// publisher (tests/engines/fpkg/fake_pubcmd.cpp), and an end-to-end run with
+// the owner's real Sony toolkit when FW_BACKPORT_E2E_TOOLKIT (a toolkit
+// folder) and FW_BACKPORT_E2E_GAME (a game folder with sce_sys/param.json)
+// are set.
 
-#include "core/FsLinks.h"
 #include "core/Paths.h"
 #include "engines/fpkg/AsciiAliases.h"
 #include "engines/fpkg/BackportUpdate.h"
@@ -19,24 +20,84 @@
 #include <QCryptographicHash>
 #include <QDirIterator>
 #include <QProcess>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <atomic>
 #include <thread>
 
 using namespace fw;
 using namespace fw::fpkg;
 using namespace fpkgtest;
 
+namespace {
+
+// The Backport job only runs a publisher whose two files are in the table of
+// verified SDK Fix releases, and the table has no hook for tests. For as long
+// as this object lives the stand-in's own pair is in it. (The table is handed
+// out as const; it is filled when first used and lives in writable memory.)
+class TrustedStandIn {
+public:
+    TrustedStandIn(const QString& pubCmd, const QString& library)
+    {
+        const auto sha256 = [](const QString& path) {
+            return QString::fromLatin1(QCryptographicHash::hash(readAll(path), QCryptographicHash::Sha256).toHex()).toUpper();
+        };
+        table().append(SdkFixRelease{QStringLiteral("stand-in"), sha256(pubCmd), sha256(library), true});
+    }
+    ~TrustedStandIn() { table().removeLast(); }
+    TrustedStandIn(const TrustedStandIn&) = delete;
+    TrustedStandIn& operator=(const TrustedStandIn&) = delete;
+
+private:
+    static QList<SdkFixRelease>& table() { return const_cast<QList<SdkFixRelease>&>(sdkFixReleases()); }
+};
+
+} // namespace
+
 class TstBackportUpdate : public QObject {
     Q_OBJECT
 private:
     QTemporaryDir m_tmp;
+    int m_runs = 0;
     QString dir(const QString& name)
     {
         const QString d = QDir(m_tmp.path()).filePath(name);
         QDir().mkpath(d);
         return d;
+    }
+
+    // Validates and runs the job as the queue does, with a temporary folder of its own.
+    Result<JobOutcome> runBackport(const BackportUpdateRequest& request, const SettingsValues& values,
+                                   const CancellationToken& token = {})
+    {
+        FpkgBackportJob job(request);
+        if (const Status valid = job.validate(values); !valid.ok())
+            return valid.error();
+        ProgressReporter reporter([](const ProgressSnapshot&) {}, 0);
+        JobContext ctx;
+        ctx.jobId = QStringLiteral("B%1").arg(++m_runs);
+        ctx.token = token;
+        ctx.progress = &reporter;
+        ctx.log = Log(job.kind(), ctx.jobId);
+        ctx.settings = values;
+        ctx.tempDir = dir(QStringLiteral("jobtemp-%1").arg(m_runs));
+        auto result = job.run(ctx);
+        QDir(ctx.tempDir).removeRecursively();
+        return result;
+    }
+
+    // The names in `folder` that start with a dot: work folders the job must not leave.
+    static QStringList workFoldersIn(const QString& folder)
+    {
+        return QDir(folder).entryList({QStringLiteral(".*")}, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+    }
+
+    static QStringList packagesIn(const QString& folder)
+    {
+        return QDir(folder).entryList({QStringLiteral("*.pkg")}, QDir::Files, QDir::Name);
     }
 
 private slots:
@@ -46,6 +107,7 @@ private slots:
         if (qEnvironmentVariableIsSet("FW_E2E_KEEP"))
             m_tmp.setAutoRemove(false);
         fwtest::isolateAppData(m_tmp);
+        QVERIFY(confineEngineTo(m_tmp.path()));
     }
 
     void versionCarry()
@@ -63,10 +125,10 @@ private slots:
         QCOMPARE(backportUpdateVersion(QStringLiteral("01.005.000"), QStringLiteral(" 01.006.000 ")).value(), QStringLiteral("01.006.000"));
         auto low = backportUpdateVersion(QStringLiteral("01.005.000"), QStringLiteral("01.005.000"));
         QVERIFY(!low.ok());
-        QVERIFY(low.error().message.contains(QStringLiteral("must be greater than the base")));
+        QVERIFY(errorOf(low).message.contains(QStringLiteral("must be greater than the base")));
         auto max = backportUpdateVersion(QStringLiteral("99.999.999"), {});
         QVERIFY(!max.ok());
-        QVERIFY(max.error().message.contains(QStringLiteral("maximum version")));
+        QVERIFY(errorOf(max).message.contains(QStringLiteral("maximum version")));
         QVERIFY(!backportUpdateVersion(QStringLiteral("x"), {}).ok());
     }
 
@@ -112,17 +174,17 @@ private slots:
         BackportUpdateRequest r;
         r.basePackage = QDir(base).filePath(QStringLiteral("base.pkg"));
         FpkgSettings s;
-        QVERIFY(validateBackportRequest(r, s).error().message.contains(QStringLiteral("at least one backport")));
+        QVERIFY(errorOf(validateBackportRequest(r, s)).message.contains(QStringLiteral("at least one backport")));
         r.backport4xx = b4;
         r.backport5xx = QDir(b4).filePath(QStringLiteral("nested"));
         QDir().mkpath(r.backport5xx);
-        QVERIFY(validateBackportRequest(r, s).error().message.contains(QStringLiteral("separate trees")));
+        QVERIFY(errorOf(validateBackportRequest(r, s)).message.contains(QStringLiteral("separate trees")));
         r.backport5xx.clear();
         r.output = QDir(b4).filePath(QStringLiteral("out"));
-        QVERIFY(validateBackportRequest(r, s).error().message.contains(QStringLiteral("outside the 4.xx backport files")));
+        QVERIFY(errorOf(validateBackportRequest(r, s)).message.contains(QStringLiteral("outside the 4.xx backport files")));
         r.output.clear();
         r.version = QStringLiteral("1.2");
-        QVERIFY(validateBackportRequest(r, s).error().message.contains(QStringLiteral("NN.NNN.NNN")));
+        QVERIFY(errorOf(validateBackportRequest(r, s)).message.contains(QStringLiteral("NN.NNN.NNN")));
         // Round trip through the job parameters.
         r.version = QStringLiteral("01.000.001");
         auto back = BackportUpdateRequest::fromJson(r.toJson());
@@ -178,7 +240,7 @@ private slots:
             return QByteArray("{\"contentId\":\"UP0000-PPSA01234_00-GOLDENTEST000000\",\"contentVersion\":\"") + v
                  + QByteArray("\",\"titleId\":\"PPSA01234\"}");
         };
-        QByteArray pkg("" "FIH", 4);
+        QByteArray pkg("\x7F" "FIH", 4);
         pkg += QByteArray(4000, '\0') + obj("01.005.001") + QByteArray(9000, '\0') + obj("01.005.000")
              + QByteArray(2000, '\0') + obj("01.005.000") + QByteArray(100, '\0');
         put(d, QStringLiteral("r.pkg"), pkg);
@@ -219,7 +281,7 @@ private slots:
         auto cancelled = findParamJsonInPackage(path, cs.token());
         canceller.join();
         QVERIFY(!cancelled.ok());
-        QVERIFY(cancelled.error().isCancelled());
+        QVERIFY(errorOf(cancelled).isCancelled());
 
         // A real param.json behind a short run of the pattern is still found.
         QByteArray mixed("\x7F" "FIH", 4);
@@ -290,12 +352,11 @@ private slots:
         const QString mine = QDir(out).filePath(QStringLiteral(".ppr-backport-ppsa01234-12345678"));
         const QString unmarked = QDir(out).filePath(QStringLiteral(".ppr-sdkbase-abc"));
         const QString foreign = QDir(out).filePath(QStringLiteral("My Game"));
-        // The marker of a process that has ended.
-        QProcess ended;
-        ended.start(QStringLiteral("cmd.exe"), {QStringLiteral("/c"), QStringLiteral("exit")});
-        QVERIFY(ended.waitForStarted());
-        const qint64 deadPid = ended.processId();
-        QVERIFY(ended.waitForFinished());
+        // The marker of a process that does not run. The id of a real one that
+        // has ended may be given to another process at any moment; this value
+        // is no process id at all (they are multiples of four on Windows and
+        // far smaller everywhere).
+        const qint64 deadPid = 0x7FFFFFF1;
         put(dead, QStringLiteral(".fw-owned"), QByteArray::number(deadPid));
         put(dead, QStringLiteral("update.partial.pkg"), QByteArray(1000, 'x'));
         put(mine, QStringLiteral(".fw-owned"), QByteArray::number(QCoreApplication::applicationPid()));
@@ -388,12 +449,198 @@ private slots:
         QVERIFY(!isPlausibleDigest(digest.left(31)));
     }
 
+    // Whatever spelling comes back names the same folder; `aliased` says
+    // whether it is the 8.3 one, which is only used when it is shorter.
     void publisherTemp()
     {
-        bool aliased = false;
-        const QString t = publisherTempPath(m_tmp.path(), &aliased);
-        QVERIFY(!t.isEmpty());
-        QVERIFY(t.size() <= QDir::toNativeSeparators(QFileInfo(m_tmp.path()).absoluteFilePath()).size());
+        const QString folder = dir(QStringLiteral("publisher temporary folder"));
+        const QString full = QDir::toNativeSeparators(QFileInfo(folder).absoluteFilePath());
+        bool aliased = true;
+        const QString t = publisherTempPath(folder, &aliased);
+        QCOMPARE(aliased, t != full);
+        if (aliased)
+            QVERIFY2(t.size() < full.size(), qPrintable(t));
+        QVERIFY(put(QDir::fromNativeSeparators(t), QStringLiteral("probe.txt"), "through the returned path"));
+        QCOMPARE(readAll(QDir(folder).filePath(QStringLiteral("probe.txt"))), QByteArray("through the returned path"));
+        QCOMPARE(publisherTempPath(folder, nullptr), t);
+        // A folder that does not exist has no short name.
+        const QString missing = QDir(m_tmp.path()).filePath(QStringLiteral("no such folder for the publisher"));
+        aliased = true;
+        QCOMPARE(publisherTempPath(missing, &aliased), QDir::toNativeSeparators(QFileInfo(missing).absoluteFilePath()));
+        QVERIFY(!aliased);
+    }
+
+    // The whole job against the stand-in publisher: the base build, one update
+    // per firmware group and the checks between them, the names, the clean-up,
+    // and what a failed or cancelled run leaves.
+    void backportJobWithTheStandInPublisher()
+    {
+        const QString toolkit = dir(QStringLiteral("standin/toolkit"));
+        const QString bin = QDir(toolkit).filePath(QStringLiteral("toolchain"));
+        const QString pubCmd = QDir(bin).filePath(QStringLiteral("prospero-pub-cmd.exe"));
+        QVERIFY(QDir().mkpath(bin));
+        QVERIFY(QFile::copy(QStringLiteral(FW_FAKE_PUBCMD), pubCmd));
+        QVERIFY(put(bin, QStringLiteral("libScePubTools.dll"), "the stand-in's library"));
+        for (const QString& helper : sdkFixExtFiles())
+            QVERIFY(put(bin, QStringLiteral("ext/") + helper, "x"));
+        const PubToolchain tc = locatePubTools(toolkit, QString());
+        QVERIFY2(tc.ok(), qPrintable(tc.problems.join(u' ')));
+
+        const QString game = dir(QStringLiteral("standin/PPSA01234-app"));
+        QVERIFY(makeSimpleDump(game));
+        const QString b4 = dir(QStringLiteral("standin/FW 4xx backport files"));
+        QVERIFY(put(b4, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(40, '4')));
+        QVERIFY(put(b4, QStringLiteral("fakelib/libkernel_sys.sprx"), "4xx library"));
+        const QString b5 = dir(QStringLiteral("standin/FW 5xx backport files"));
+        QVERIFY(put(b5, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(50, '5')));
+        const QString out = QDir(m_tmp.path()).filePath(QStringLiteral("standin/out"));
+        const QString log = QDir(m_tmp.path()).filePath(QStringLiteral("standin/publisher.log"));
+        EnvVar logVariable("FAKE_PUBCMD_LOG", log.toUtf8());
+        const auto commands = [&] {
+            QList<QStringList> runs;
+            for (const QByteArray& line : readAll(log).split('\n')) {
+                if (line.trimmed().isEmpty())
+                    continue;
+                QStringList argv;
+                for (const auto& a : QJsonDocument::fromJson(line).object().value(QStringLiteral("argv")).toArray())
+                    argv << a.toString();
+                runs << argv;
+            }
+            return runs;
+        };
+
+        Env env;
+        const SettingsValues values = env.values({{keys::kPubToolsPath, toolkit}, {general::keys::kFreeSpaceMarginMiB, 0}});
+        BackportUpdateRequest request;
+        request.gameFolder = game;
+        request.backport4xx = b4;
+        request.backport5xx = b5;
+        request.output = out;
+        request.buildBase = true;
+
+        // Not a verified SDK Fix toolchain: refused before anything is built.
+        QVERIFY(!checkSdkFixToolchain(tc).ready());
+        QCOMPARE(errorOf(runBackport(request, values)).code, ErrorCode::DependencyMissing);
+        QVERIFY(!QFileInfo::exists(out));
+        QVERIFY(commands().isEmpty());
+
+        const TrustedStandIn trusted(pubCmd, QDir(bin).filePath(QStringLiteral("libScePubTools.dll")));
+        QVERIFY2(checkSdkFixToolchain(tc).ready(), qPrintable(checkSdkFixToolchain(tc).text));
+
+        // ---- base + 4.xx + 5.xx+ -----------------------------------------------------------
+        auto built = runBackport(request, values);
+        QVERIFY2(built.ok(), qPrintable(errorOf(built).toLogString()));
+        const QString basePkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        const QString update4 = QDir(out).filePath(QStringLiteral("PPSA01234-backport-4xx.pkg"));
+        const QString update5 = QDir(out).filePath(QStringLiteral("PPSA01234-backport-5xxplus.pkg"));
+        QCOMPARE(built->outputs, (QStringList{basePkg, update4, update5}));
+        QCOMPARE(packagesIn(out), (QStringList{QFileInfo(update4).fileName(), QFileInfo(update5).fileName(), QFileInfo(basePkg).fileName()}));
+        QCOMPARE(built->verification, Verification::Passed);
+        QCOMPARE(built->details.value(QStringLiteral("version")).toString(), QStringLiteral("01.000.001"));
+        QVERIFY2(built->summary.contains(QStringLiteral("version 01.000.001")), qPrintable(built->summary));
+        const auto base = inspectPackage(basePkg, CancellationToken());
+        QVERIFY(base.ok());
+        QCOMPARE(base->kind, PackageKind::Ps5);
+        QCOMPARE(base->version, QStringLiteral("01.000.000"));
+        QVERIFY(isPlausibleDigest(base->digest));
+        QCOMPARE(built->details.value(QStringLiteral("baseDigest")).toString(), base->digestHex);
+        for (const QString& update : {update4, update5}) {
+            const auto delta = inspectPackage(update, CancellationToken());
+            QVERIFY(delta.ok());
+            QCOMPARE(delta->kind, PackageKind::Ps5Delta);
+            const auto references = countOccurrences(update, base->digest, CancellationToken());
+            QVERIFY(references.ok());
+            QVERIFY2(references.value() >= 1, qPrintable(update));
+            QVERIFY(QFileInfo(update + QStringLiteral(".naps_metric.json")).isFile());
+            QVERIFY(QFileInfo(QDir(out).filePath(QFileInfo(update).completeBaseName() + QStringLiteral("-build-logs"))).isDir());
+        }
+        // No work folder is left, and none stays listed for the sweep.
+        QCOMPARE(workFoldersIn(out), QStringList());
+        const QString index = QDir(Paths::localDir()).filePath(QStringLiteral("state/backport-work.txt"));
+        QVERIFY(!readAll(index).contains(QDir::toNativeSeparators(out).toUtf8()));
+        // The base is built once and checked; each update is built against that very file,
+        // and its full image is checked before the update gets its name.
+        {
+            const QList<QStringList> runs = commands();
+            QStringList names;
+            for (const QStringList& argv : runs)
+                names << argv.value(0);
+            const QStringList checked{QStringLiteral("img_create"), QStringLiteral("img_verify"), QStringLiteral("img_verify")};
+            QCOMPARE(names, checked + checked + checked);
+            QVERIFY(!runs[0].contains(QStringLiteral("--ref_pkg_path")));
+            for (const int create : {3, 6}) {
+                const qsizetype at = runs[create].indexOf(QStringLiteral("--ref_pkg_path"));
+                QVERIFY(at > 0 && at + 1 < runs[create].size());
+                QCOMPARE(runs[create].at(at + 1), QDir::toNativeSeparators(basePkg));
+                QVERIFY2(runs[create + 1].last().endsWith(QStringLiteral(".remastered.pkg")), qPrintable(runs[create + 1].last()));
+            }
+        }
+        const QByteArray baseBytes = readAll(basePkg);
+        const QByteArray update4Bytes = readAll(update4);
+
+        // ---- the existing base and no game folder: the base is extracted, and nothing is replaced ----
+        QFile::remove(log);
+        BackportUpdateRequest again;
+        again.basePackage = basePkg;
+        again.backport4xx = b4;
+        again.output = out;
+        auto second = runBackport(again, values);
+        QVERIFY2(second.ok(), qPrintable(errorOf(second).toLogString()));
+        const QString update4b = QDir(out).filePath(QStringLiteral("PPSA01234-backport-4xx-2.pkg"));
+        QCOMPARE(second->outputs, QStringList{update4b});
+        QCOMPARE(readAll(update4), update4Bytes);
+        QCOMPARE(readAll(basePkg), baseBytes);
+        QVERIFY(readAll(update4b).contains(base->digest));
+        QCOMPARE(workFoldersIn(out), QStringList());
+        {
+            const QList<QStringList> runs = commands();
+            QVERIFY(runs.size() >= 4);
+            QCOMPARE(runs[0].value(0), QStringLiteral("img_verify")); // the base, before anything is built against it
+            QStringList names;
+            for (const QStringList& argv : runs)
+                names << argv.value(0);
+            QCOMPARE(names.count(QStringLiteral("img_extract")), 1);
+            QCOMPARE(names.count(QStringLiteral("img_create")), 1);
+        }
+
+        // ---- a failed update: the publisher refuses the base ------------------------------------
+        const QStringList before = packagesIn(out);
+        {
+            EnvVar mode("FAKE_PUBCMD_MODE", "nonaps");
+            again.gameFolder = game;
+            auto failed = runBackport(again, values);
+            QCOMPARE(errorOf(failed).code, ErrorCode::ExternalToolFailed);
+            QVERIFY2(errorOf(failed).message.contains(QStringLiteral("not built by the Publishing Tools")),
+                     qPrintable(errorOf(failed).message));
+            QCOMPARE(workFoldersIn(out), QStringList());
+            QCOMPARE(packagesIn(out), before);
+        }
+
+        // ---- cancelled while the publisher builds the update ------------------------------------
+        {
+            EnvVar mode("FAKE_PUBCMD_MODE", "slow");
+            CancellationSource cancel;
+            std::atomic<bool> sawPartial{false}, finished{false};
+            std::thread canceller([&] {
+                while (!sawPartial && !finished) {
+                    for (const QString& work : workFoldersIn(out))
+                        if (!QDir(QDir(out).filePath(work)).entryList({QStringLiteral("*.partial.pkg")}, QDir::Files).isEmpty())
+                            sawPartial = true;
+                    if (!sawPartial)
+                        QThread::msleep(25);
+                }
+                cancel.cancel(QStringLiteral("test"));
+            });
+            auto cancelled = runBackport(again, values, cancel.token());
+            finished = true;
+            canceller.join();
+            QVERIFY2(sawPartial, "the publisher had written nothing when the job ended");
+            QVERIFY2(errorOf(cancelled).isCancelled(), qPrintable(errorOf(cancelled).toLogString()));
+            QCOMPARE(workFoldersIn(out), QStringList());
+            QCOMPARE(packagesIn(out), before);
+        }
+        QCOMPARE(readAll(basePkg), baseBytes);
+        QVERIFY(!readAll(index).contains(QDir::toNativeSeparators(out).toUtf8()));
     }
 
     // ---- end to end with real tools (skipped without them) -----------------------------

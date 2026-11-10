@@ -1,8 +1,9 @@
 // DLC conversion (the ppr-pkg Companion's DLC Converter): template
 // param.json, output names, the review plan, INI export, pkg-info parsing,
 // PS4 inspection, identity rules, and an end-to-end run with fpkg-cli when
-// FW_FPKG_CLI points at it (INI entry -> package, package -> retargeted
-// package, read back with pkg-info).
+// FW_DLC_E2E_CLI points at it (INI entry -> package, package -> retargeted
+// package, read back with pkg-info). The app's own FW_FPKG_CLI is ignored: a
+// developer who has it set does not start the real tool by running the tests.
 
 #include "engines/dlc/DlcConvert.h"
 #include "engines/dlc/DlcIdentity.h"
@@ -34,6 +35,14 @@ QByteArray readAll(const QString& p)
     return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
 }
 
+// The error of a call that must have failed (a marker error, not undefined
+// behaviour, when it succeeded).
+template <typename R>
+Error errorOf(const R& result)
+{
+    return result.ok() ? Error(ErrorCode::Internal, QStringLiteral("<the call succeeded>")) : result.error();
+}
+
 DlcItem iniItem(const QString& ini, int entry, const QString& cid, const QString& title)
 {
     DlcItem i;
@@ -56,6 +65,7 @@ class TstDlcConvert : public QObject {
     Q_OBJECT
 private:
     QTemporaryDir m_tmp;
+    QString m_e2eCli;
     QString dir(const QString& name)
     {
         const QString d = QDir(m_tmp.path()).filePath(name);
@@ -68,6 +78,8 @@ private slots:
     {
         QVERIFY(m_tmp.isValid());
         fwtest::isolateAppData(m_tmp);
+        m_e2eCli = qEnvironmentVariable("FW_DLC_E2E_CLI");
+        qunsetenv(kFpkgCliEnvVar.toLatin1().constData());
     }
 
     void identity()
@@ -81,7 +93,7 @@ private slots:
                  QStringLiteral("EP1004-PPSA05678_00-TESTDLC000000001"));
         QVERIFY(!retargetContentId(kCid, QStringLiteral("CUSA05678")).ok());
         QVERIFY(validateIdentity(QStringLiteral("PPSA01234"), kCid).ok());
-        QVERIFY(validateIdentity(QStringLiteral("PPSA01235"), kCid).error().message.contains(QStringLiteral("must match")));
+        QVERIFY(errorOf(validateIdentity(QStringLiteral("PPSA01235"), kCid)).message.contains(QStringLiteral("must match")));
         QVERIFY(hex32Problem(kZeroKey).isEmpty());
         QVERIFY(!hex32Problem(QStringLiteral("12")).isEmpty());
         // A trailing line feed does not make a valid ID.
@@ -317,15 +329,15 @@ private slots:
         // Tens of thousands of entries (each would be scanned against all earlier ones).
         auto many = inspectPs4Package(package(QStringLiteral("many.pkg"), {{"A", 0}}, 60000, 0));
         QVERIFY(!many.ok());
-        QCOMPARE(many.error().code, ErrorCode::CorruptData);
+        QCOMPARE(errorOf(many).code, ErrorCode::CorruptData);
         // The same key twice with empty values used to slip through.
         auto dup = inspectPs4Package(package(QStringLiteral("dup.pkg"), {{"TITLE", 0}, {"title", 0}}, 2, 0));
         QVERIFY(!dup.ok());
-        QVERIFY2(dup.error().message.contains(QStringLiteral("Duplicate")), qPrintable(dup.error().message));
+        QVERIFY2(errorOf(dup).message.contains(QStringLiteral("Duplicate")), qPrintable(errorOf(dup).message));
         // One value far larger than any real one.
         auto big = inspectPs4Package(package(QStringLiteral("big.pkg"), {{"TITLE", 1024 * 1024}}, 1, 1024 * 1024));
         QVERIFY(!big.ok());
-        QCOMPARE(big.error().code, ErrorCode::CorruptData);
+        QCOMPARE(errorOf(big).code, ErrorCode::CorruptData);
         // Messages keep their case.
         QByteArray cut = readAll(package(QStringLiteral("cut.pkg"), {{"TITLE", 8}}, 1, 64));
         qToBigEndian<quint32>(quint32(cut.size()), reinterpret_cast<uchar*>(cut.data()) + 0x100 + 20); // entry larger than the file
@@ -333,7 +345,7 @@ private slots:
         fwtest::writeTextFile(cutPath, cut);
         auto outside = inspectPs4Package(cutPath);
         QVERIFY(!outside.ok());
-        QCOMPARE(outside.error().message, QStringLiteral("PS4 entry 0x1000 is outside the package bounds."));
+        QCOMPARE(errorOf(outside).message, QStringLiteral("PS4 entry 0x1000 is outside the package bounds."));
     }
 
     void cliInfoParsing()
@@ -347,9 +359,13 @@ private slots:
     // ---- end to end with fpkg-cli (skipped without it) -----------------------------------
     void endToEnd()
     {
-        const QString cliPath = qEnvironmentVariable("FW_FPKG_CLI");
+        const QString cliPath = m_e2eCli;
         if (cliPath.isEmpty())
-            QSKIP("Set FW_FPKG_CLI to fpkg-cli.exe for the real DLC engine run.");
+            QSKIP("Set FW_DLC_E2E_CLI to fpkg-cli.exe for the real DLC engine run.");
+        // fpkg-cli works in the system temporary folder: that is a folder of this test.
+        const QByteArray temp = QDir::toNativeSeparators(dir(QStringLiteral("sys-temp"))).toLocal8Bit();
+        qputenv("TMP", temp);
+        qputenv("TEMP", temp);
         const FpkgCli cli = locateFpkgCli(cliPath);
         QVERIFY2(cli.ok(), qPrintable(cli.problems.join(u' ')));
 

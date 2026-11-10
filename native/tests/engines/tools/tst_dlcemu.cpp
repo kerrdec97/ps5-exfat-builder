@@ -1,6 +1,8 @@
-// dlc_emu.ini editor backend against goldens produced by the legacy Python
-// module (ui/dlc_emu_ini.py): render, validation messages, offline auto-find,
-// plus save with backup and refusal of invalid files.
+// dlc_emu.ini editor backend against goldens (tests/data/dlcemu: the output of
+// the legacy Python editor for sample.ini and app0, recorded when the editor
+// was ported; that module is not part of this repository, so the files are
+// kept as they are and not regenerated): render, validation messages, offline
+// auto-find, plus save with backup and refusal of invalid files.
 
 #include "engines/tools/DlcEmu.h"
 #include "support/TestSupport.h"
@@ -75,6 +77,7 @@ private slots:
             many.push_back(e);
         }
         const auto v = dlcemu::validate(many);
+        QVERIFY(!v.errors.isEmpty());
         QVERIFY(v.errors.first().startsWith(QStringLiteral("Too many entries: 1025")));
         QVERIFY(std::any_of(v.errors.begin(), v.errors.end(), [](const QString& e) { return e.contains(QStringLiteral("32 KiB")); }));
     }
@@ -92,11 +95,14 @@ private slots:
         QCOMPARE(s.prefixIsPlaceholder, m_expected.value(QStringLiteral("prefix_placeholder")).toBool());
         QCOMPARE(s.addcont, toList(m_expected.value(QStringLiteral("addcont"))));
         QCOMPARE(s.baseIds, toList(m_expected.value(QStringLiteral("base_ids"))));
+        QCOMPARE(s.notes, toList(m_expected.value(QStringLiteral("notes"))));
         const QJsonArray exp = m_expected.value(QStringLiteral("suggestions")).toArray();
+        QVERIFY(!exp.isEmpty());
         QCOMPARE(int(s.entries.size()), exp.size());
         for (int i = 0; i < exp.size(); ++i) {
             const QJsonObject e = exp[i].toObject();
             const dlcemu::Entry& got = s.entries[size_t(i)];
+            QCOMPARE(got.section, e.value(QStringLiteral("section")).toString());
             QCOMPARE(got.confidence, e.value(QStringLiteral("confidence")).toString());
             QCOMPARE(got.source, e.value(QStringLiteral("source")).toString());
             QCOMPARE(got.placeholder, e.value(QStringLiteral("placeholder")).toBool());
@@ -190,6 +196,7 @@ private slots:
         QCOMPARE(readFile(app0 + QStringLiteral("/dlc_emu.ini")), before); // untouched
         auto loaded = dlcemu::load(app0);
         QVERIFY(loaded.ok());
+        QCOMPARE(int(loaded->size()), 1);
         QCOMPARE(loaded->front().get(QStringLiteral("download_status")), QStringLiteral("INSTALLED"));
     }
 };
