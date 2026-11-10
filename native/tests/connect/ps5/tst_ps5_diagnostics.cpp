@@ -25,6 +25,7 @@
 using namespace fw;
 using namespace fw::ps5;
 using fake::FakeFtpServer;
+using ps5test::Module;
 
 namespace {
 
@@ -49,17 +50,6 @@ DiagnoseOptions options(const QString& folder, bool speed = false, qint64 bytes 
     o.epochSeconds = kEpoch;
     return o;
 }
-
-struct Module {
-    std::shared_ptr<SettingsSchema> schema = std::make_shared<SettingsSchema>();
-    DependencyRegistry deps;
-    JobFactory jobs;
-    Module()
-    {
-        ModuleContext ctx{*schema, deps, jobs};
-        registerModule(ctx);
-    }
-};
 
 const QString kGames = QStringLiteral("/data/etaHEN/games");
 const QString kProbe = QStringLiteral("/data/etaHEN/games/.exfatbuilder_wtest_1700000000.tmp");
@@ -403,7 +393,7 @@ private slots:
     {
         FakeFtpServer::Options so;
         so.root = freshRoot();
-        so.throttleBytesPerSec = 1024 * 1024; // 16 MiB would take 16 s
+        so.throttleBytesPerSec = 1024 * 1024; // 16 MiB would take many seconds: time to cancel
         FakeFtpServer srv(so);
         CancellationSource src;
         auto future = QtConcurrent::run([port = srv.port(), token = src.token()] {

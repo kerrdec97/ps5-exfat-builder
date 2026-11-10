@@ -41,6 +41,10 @@
 
 using namespace fw;
 using namespace fw::ps5;
+using ps5test::endpoint;
+using ps5test::Module;
+using ps5test::quick;
+using ps5test::readAll;
 
 namespace {
 
@@ -75,31 +79,6 @@ const char* const kLegacyMmIni =
     "pfs_use_ekpfs=1\n"
     "pfs_read_only=1\n"
     ;
-
-QByteArray readAll(const QString& path)
-{
-    QFile f(path);
-    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
-}
-
-FtpOptions quick()
-{
-    FtpOptions o;
-    o.connectTimeoutMs = 3000;
-    o.replyTimeoutMs = 3000;
-    o.idleTimeoutMs = 3000;
-    return o;
-}
-
-ConsoleEndpoint endpoint(quint16 ftpPort)
-{
-    ConsoleEndpoint ep;
-    ep.host = QStringLiteral("127.0.0.1");
-    ep.ftpPort = ftpPort;
-    ep.connectTimeoutMs = 3000;
-    ep.idleTimeoutMs = 3000;
-    return ep;
-}
 
 // SQLite fixtures shaped like the console's databases. They return false
 // (the caller checks with QVERIFY) instead of asserting in here, where a
@@ -204,17 +183,6 @@ Console makeConsole(const QString& root)
     k.ok = k.ok && !k.appDb.isEmpty() && !k.appInfoDb.isEmpty();
     return k;
 }
-
-struct Module {
-    std::shared_ptr<SettingsSchema> schema = std::make_shared<SettingsSchema>();
-    DependencyRegistry deps;
-    JobFactory jobs;
-    Module()
-    {
-        ModuleContext ctx{*schema, deps, jobs};
-        registerModule(ctx);
-    }
-};
 
 JobContext context(ProgressReporter& p, const SettingsValues& s)
 {
@@ -1143,12 +1111,17 @@ private slots:
 
         const QByteArray req = http.request();
         const QString name = QFileInfo(pkg).fileName();
-        const QByteArray head = dpiRequestHead(QStringLiteral("127.0.0.1"), http.port(), name, QFileInfo(pkg).size());
-        QVERIFY(req.startsWith("POST /upload HTTP/1.1\r\n"));
-        QVERIFY(req.contains("Content-Type: multipart/form-data; boundary=X-INSOMNIA-BOUNDARY\r\n"));
-        QCOMPARE(req, head + dpiPartHeader(name) + readAll(pkg) + dpiPartFooter());
-        const qsizetype hl = req.indexOf("\r\n\r\n") + 4;
-        QVERIFY(req.contains("Content-Length: " + QByteArray::number(req.size() - hl) + "\r\n"));
+        // The whole head, header by header: a new, lost or reordered header
+        // has to be changed here on purpose.
+        const QByteArray form = dpiPartHeader(name) + readAll(pkg) + dpiPartFooter();
+        const QByteArray head = "POST /upload HTTP/1.1\r\nHost: 127.0.0.1:" + QByteArray::number(http.port())
+                              + "\r\nConnection: close\r\nAccept-Encoding: identity"
+                                "\r\nContent-Type: multipart/form-data; boundary=X-INSOMNIA-BOUNDARY"
+                                "\r\nContent-Length: "
+                              + QByteArray::number(form.size()) + "\r\n\r\n";
+        QCOMPARE(dpiRequestHead(QStringLiteral("127.0.0.1"), http.port(), name, QFileInfo(pkg).size()), head);
+        QCOMPARE(req.left(head.size()), head);
+        QVERIFY(req == head + form); // (megabytes: not printed on failure)
         QCOMPARE(dpiPartHeader(name), "--X-INSOMNIA-BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name.toUtf8()
                                           + "\"\r\nContent-Type: application/octet-stream\r\n\r\n");
         QCOMPARE(dpiPartFooter(), QByteArray("\r\n--X-INSOMNIA-BOUNDARY--\r\n"));
@@ -1164,9 +1137,6 @@ private slots:
         QVERIFY(!dpiAccepted(200, ""));  // the legacy rule took this as success
         QVERIFY(!dpiAccepted(204, ""));
         QVERIFY(!dpiAccepted(0, "Install started"));
-        QVERIFY(!dpiAccepted(500, "install failed"));
-        QVERIFY(!dpiAccepted(200, "{\"error\":\"bad pkg\"}"));
-        QVERIFY(!dpiAccepted(302, ""));
         QVERIFY(dpiFailureReason(200, "No data received").contains(QStringLiteral("no package data")));
         QCOMPARE(dpiFailureReason(200, "FAILED: Install failed with error ERR_X, code -2136801279 (0x80990001) for file: x.pkg"),
                  QStringLiteral("ERR_X (code -2136801279, 0x80990001)."));

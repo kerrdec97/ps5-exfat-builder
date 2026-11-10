@@ -29,44 +29,12 @@
 using namespace fw;
 using namespace fw::ps5;
 using fake::FakeFtpServer;
+using ps5test::endpoint;
+using ps5test::Module;
+using ps5test::quick;
+using ps5test::readAll;
 
 namespace {
-
-QByteArray readAll(const QString& path)
-{
-    QFile f(path);
-    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
-}
-
-FtpOptions quick()
-{
-    FtpOptions o;
-    o.connectTimeoutMs = 3000;
-    o.replyTimeoutMs = 3000;
-    o.idleTimeoutMs = 3000;
-    return o;
-}
-
-ConsoleEndpoint endpoint(quint16 port)
-{
-    ConsoleEndpoint ep;
-    ep.host = QStringLiteral("127.0.0.1");
-    ep.ftpPort = port;
-    ep.connectTimeoutMs = 3000;
-    ep.idleTimeoutMs = 3000;
-    return ep;
-}
-
-struct Module {
-    std::shared_ptr<SettingsSchema> schema = std::make_shared<SettingsSchema>();
-    DependencyRegistry deps;
-    JobFactory jobs;
-    Module()
-    {
-        ModuleContext ctx{*schema, deps, jobs};
-        registerModule(ctx);
-    }
-};
 
 // Sends one raw command line (none: only reads, for the greeting) and returns
 // the reply line that carries the code; empty when nothing came in time. For
@@ -422,6 +390,11 @@ private slots:
         QCOMPARE(tail, readAll(src).mid(1000000));
         QCOMPARE(srv.sawCommand(QStringLiteral("EPSV")), refusePasv);
         QCOMPARE(srv.sawCommand(QStringLiteral("PORT")), !passive);
+        // Binary mode was asked for before any file data moved.
+        const QStringList sent = srv.commands();
+        const qsizetype binaryAt = sent.indexOf(QStringLiteral("TYPE I"));
+        const qsizetype storAt = sent.indexOf(QStringLiteral("STOR /game.exfat"));
+        QVERIFY2(binaryAt >= 0 && storAt > binaryAt, qPrintable(sent.join(QStringLiteral(" | "))));
         // A missing file is NotFound and the connection survives.
         QByteArray none;
         QBuffer nb(&none);
@@ -620,7 +593,7 @@ private slots:
         // A file that was on the console before must survive a refused write.
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/locked.bin")), "original"));
         auto o = server(root);
-        o.throttleBytesPerSec = 1024 * 1024; // 8 s for the whole file
+        o.throttleBytesPerSec = 1024 * 1024; // several seconds for the whole file: time to cancel
         o.readOnlyPaths = {QStringLiteral("/g/locked.bin")};
         o.refuseDeleteWhileOpen = true; // like a Windows-hosted server: the aborted STOR still holds the file
         FakeFtpServer srv(o);
@@ -656,6 +629,88 @@ private slots:
         QCOMPARE(r2->failed, 1);
         QCOMPARE(readAll(srv.path(QStringLiteral("/g/locked.bin"))), QByteArray("original"));
         QVERIFY(r2->removedPartials.isEmpty());
+    }
+
+    // The other direction: a cancelled download leaves no half file on this PC.
+    void cancellingADownloadRemovesItsPartFile()
+    {
+        const QString root = fresh(QStringLiteral("dlcancel"));
+        QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("g/huge.exfat")), 8 * 1024 * 1024, 12));
+        const QString local = fresh(QStringLiteral("dlcancel-local"));
+        // What was in the folder before stays.
+        QVERIFY(fwtest::writeTextFile(QDir(local).filePath(QStringLiteral("keep.txt")), "mine"));
+        auto o = server(root);
+        o.throttleBytesPerSec = 1024 * 1024; // seconds for the whole file: time to cancel
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        TransferPlan plan;
+        {
+            FtpClient c(quick());
+            QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+            auto p = planDownload(c, {QStringLiteral("/g/huge.exfat")}, local);
+            QVERIFY(p.ok());
+            plan = p.value();
+            c.quit();
+        }
+        QCOMPARE(int(plan.files.size()), 1);
+        const QString target = plan.files.front().local;
+        const QString part = target + QStringLiteral(".part");
+        ProgressReporter progress;
+        progress.begin(QStringLiteral("Downloading"), plan.totalBytes, 1);
+        CancellationSource cs;
+        Result<TransferReport> rep = Error(ErrorCode::Internal, QString());
+        std::unique_ptr<QThread> worker(QThread::create([&] { rep = runDownload(plan, opt, cs.token(), &progress); }));
+        worker->start();
+        const bool flowing = QTest::qWaitFor([&] { return progress.snapshot().done > 200 * 1024; }, 20000);
+        const bool partThere = QFileInfo::exists(part);
+        cs.cancel();
+        worker->wait();
+        QVERIFY2(flowing, qPrintable(srv.commands().join(QStringLiteral(" | "))));
+        QVERIFY(partThere);
+        QVERIFY(rep.ok());
+        QVERIFY(rep->cancelled);
+        QCOMPARE(rep->transferred, 0);
+        QCOMPARE(rep->removedPartials, QStringList{part});
+        QVERIFY(!QFileInfo::exists(part));
+        QVERIFY(!QFileInfo::exists(target)); // and nothing that looks like the finished file
+        QCOMPARE(QDir(local).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("keep.txt")});
+        QCOMPARE(readAll(QDir(local).filePath(QStringLiteral("keep.txt"))), QByteArray("mine"));
+    }
+
+    // The server says 226 but kept only part of the file: the upload counts as
+    // failed and the short file does not stay on the console under the game's name.
+    void uploadThatArrivesShortIsFailedAndRemoved()
+    {
+        const QString root = fresh(QStringLiteral("short"));
+        const QString local = fresh(QStringLiteral("short-local"));
+        const QString game = QDir(local).filePath(QStringLiteral("game.ffpkg"));
+        const QString other = QDir(local).filePath(QStringLiteral("other.bin"));
+        QVERIFY(fwtest::writeRandomFile(game, 300000, 31));
+        QVERIFY(fwtest::writeRandomFile(other, 5000, 32));
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("up/keep.bin")), "console file"));
+        auto o = server(root);
+        o.corruptStorPath = QStringLiteral("/up/game.ffpkg");
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        auto plan = planUpload({game, other}, QStringLiteral("/up"));
+        QVERIFY(plan.ok());
+        auto rep = runUpload(plan.value(), opt, {});
+        QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+        QCOMPARE(rep->failed, 1);
+        QCOMPARE(rep->transferred, 1);
+        QCOMPARE(rep->errors.size(), 1);
+        QVERIFY2(rep->errors.front().startsWith(QStringLiteral("/up/game.ffpkg: the PS5 reports 150000 bytes, expected 300000")),
+                 qPrintable(rep->errors.front()));
+        QCOMPARE(rep->removedPartials, QStringList{QStringLiteral("/up/game.ffpkg")});
+        QVERIFY(rep->leftoverPartials.isEmpty());
+        QVERIFY(!rep->outputs.contains(QStringLiteral("/up/game.ffpkg")));
+        QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/up/game.ffpkg"))));
+        QVERIFY(srv.sawCommand(QStringLiteral("DELE /up/game.ffpkg")));
+        // The other file of the run and what was on the console before are untouched.
+        QCOMPARE(readAll(srv.path(QStringLiteral("/up/other.bin"))), readAll(other));
+        QCOMPARE(readAll(srv.path(QStringLiteral("/up/keep.bin"))), QByteArray("console file"));
     }
 
     void noConnectionIsAnError()
@@ -1014,7 +1069,7 @@ private slots:
         QVERIFY2(nout.error().message.startsWith(QStringLiteral("Not downloaded: ")), qPrintable(nout.error().message));
     }
 
-    // ---- audit fixes -----------------------------------------------------------------------
+    // ---- busy servers, late replies, peers that are not FTP ---------------------------------
     void passiveModeHiccupDoesNotSwitchToEpsv()
     {
         const QString root = fresh(QStringLiteral("pasv421"));
@@ -1144,6 +1199,43 @@ private slots:
         COMPARE_ERROR_CODE(cut, ErrorCode::IoError);
         QCOMPARE(readAll(cfg2), QByteArray("keep me"));
         QCOMPARE(QDir(QFileInfo(cfg2).absolutePath()).entryList(QDir::Files), QStringList{QStringLiteral("config.ini")});
+    }
+
+    // The server takes the first rename (old file set aside) and refuses the
+    // second (new file into place): the old file must be back under its name.
+    void uploadReplacePutsTheOldFileBackWhenTheSwapIsRefused()
+    {
+        const QString root = fresh(QStringLiteral("swapback"));
+        const QString cfg = QDir(root).filePath(QStringLiteral("cfg/config.ini"));
+        QVERIFY(fwtest::writeTextFile(cfg, "old"));
+        auto o = server(root);
+        o.refuseRenameFromPaths = {QStringLiteral("/cfg/config.ini.new")};
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto st = c.uploadReplace(QStringLiteral("/cfg/config.ini"), "new contents", QStringLiteral(".new"));
+        COMPARE_ERROR_CODE(st, ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("the old file was kept")), qPrintable(st.error().message));
+        QVERIFY(c.isConnected());
+        QVERIFY(srv.sawCommand(QStringLiteral("RNTO /cfg/config.ini.replacing.bak"))); // it really was set aside …
+        QCOMPARE(readAll(cfg), QByteArray("old"));                                      // … and is back
+        QCOMPARE(QDir(QFileInfo(cfg).absolutePath()).entryList(QDir::Files), QStringList{QStringLiteral("config.ini")});
+
+        // The old file cannot be put back either: it is not deleted, and the
+        // message says under which name it is now.
+        const QString root2 = fresh(QStringLiteral("swapstuck"));
+        const QString cfg2 = QDir(root2).filePath(QStringLiteral("cfg/config.ini"));
+        QVERIFY(fwtest::writeTextFile(cfg2, "old"));
+        auto o2 = server(root2);
+        o2.refuseRenameFromPaths = {QStringLiteral("/cfg/config.ini.new"), QStringLiteral("/cfg/config.ini.replacing.bak")};
+        FakeFtpServer srv2(o2);
+        FtpClient c2(quick());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), srv2.port()).ok());
+        auto stuck = c2.uploadReplace(QStringLiteral("/cfg/config.ini"), "new contents", QStringLiteral(".new"));
+        QVERIFY(!stuck.ok());
+        QVERIFY2(stuck.error().message.contains(QStringLiteral("/cfg/config.ini.replacing.bak")), qPrintable(stuck.error().message));
+        QCOMPARE(readAll(cfg2 + QStringLiteral(".replacing.bak")), QByteArray("old"));
+        QVERIFY(!QFileInfo::exists(cfg2));
     }
 
     void listNamesKeepLeadingSpacesAndColonsStayOnTheConsole()

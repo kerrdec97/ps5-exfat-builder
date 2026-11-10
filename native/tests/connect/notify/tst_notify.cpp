@@ -5,7 +5,6 @@
 #include "connect/notify/DiscordWebhook.h"
 #include "connect/notify/Module.h"
 #include "connect/ps5/FakePs5.h"
-#include "connect/ps5/Ps5TestUtil.h"
 #include "jobs/JobQueue.h"
 #include "jobs/QueueCompletionWatcher.h"
 #include "support/ClosedPort.h"
@@ -262,13 +261,19 @@ private slots:
 
         const QString dir = fresh();
         QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/set.json"), "{\"discord_webhook\": \"" + kHook.toUtf8() + "\"}"));
-        COMPARE_VALUE(env.store->importLegacy(dir + QStringLiteral("/set.json")), 1);
+        const auto imported = env.store->importLegacy(dir + QStringLiteral("/set.json"));
+        QVERIFY(imported.ok());
+        QCOMPARE(imported.value(), 1);
         QCOMPARE(env.store->value(keys::kDiscordWebhookUrl).toString(), kHook);
         // Empty (the legacy default) and invalid values are not imported.
         QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/empty.json"), "{\"discord_webhook\": \"\"}"));
-        COMPARE_VALUE(env.store->importLegacy(dir + QStringLiteral("/empty.json")), 0);
+        const auto empty = env.store->importLegacy(dir + QStringLiteral("/empty.json"));
+        QVERIFY(empty.ok());
+        QCOMPARE(empty.value(), 0);
         QVERIFY(fwtest::writeTextFile(dir + QStringLiteral("/bad.json"), "{\"discord_webhook\": \"http://x/y\"}"));
-        COMPARE_VALUE(env.store->importLegacy(dir + QStringLiteral("/bad.json")), 0);
+        const auto bad = env.store->importLegacy(dir + QStringLiteral("/bad.json"));
+        QVERIFY(bad.ok());
+        QCOMPARE(bad.value(), 0);
         QCOMPARE(env.store->value(keys::kDiscordWebhookUrl).toString(), kHook);
     }
 

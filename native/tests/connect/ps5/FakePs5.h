@@ -12,9 +12,13 @@
 //
 // FakeFtpServer::Options::ftpsrv behaves like ps5-payload-dev ftpsrv v0.21:
 // the three-line greeting, USER answered 230 at once, FEAT listing only MLSD
-// KILL MTRW SELF, 502 for NLST and SITE AVAIL, and the per-connection SELF
-// decryption mode (on at login): SIZE and RETR of a file that starts with
-// SELF magic give a "decrypted" copy (ELF magic, 16 bytes shorter).
+// KILL MTRW SELF, 502 for PASS, NLST, EPSV, MDTM and SITE AVAIL, and the
+// per-connection SELF decryption mode (on at login): SIZE and RETR of a file
+// that starts with SELF magic give a "decrypted" copy (ELF magic, 16 bytes
+// shorter).
+//
+// The FTP server serves the folder Options::root and nothing else: a path
+// that would leave it is answered 550 (toLocalPath).
 //
 // Every server runs on its own thread with an event loop, so the code under
 // test can block the test thread the way a queue worker would. Header-only
@@ -56,10 +60,11 @@ public:
         m_thread.start();
         m_ctx = new QObject;
         m_ctx->moveToThread(&m_thread);
+        // Deleted by its own thread, when that thread ends.
+        QObject::connect(&m_thread, &QThread::finished, m_ctx, &QObject::deleteLater);
     }
     ~ServerThread()
     {
-        run([this] { delete m_ctx; });
         m_thread.quit();
         m_thread.wait();
     }
@@ -147,6 +152,7 @@ public:
         bool ftpsrv = false;             // behave like ftpsrv v0.21 (see the header)
         bool selfIgnored = false;        // ftpsrv: SELF answers "enabled" every time (cannot be turned off)
         QStringList unreadablePaths;     // RETR refused (550) for these virtual paths; SIZE and listings still show them
+        QStringList refuseRenameFromPaths; // RNFR refused (550) for these virtual paths; other renames work
     };
 
     explicit FakeFtpServer(Options o) : m_opt(std::move(o))
@@ -181,7 +187,6 @@ public:
                 return true;
         return false;
     }
-    int connections() const { return m_connections.load(); }
     int maxConcurrentTransfers() const { return m_maxActive.load(); }
     qint64 bytesReceived() const { return m_received.load(); }
     void setThrottle(qint64 bps)
@@ -245,7 +250,6 @@ private:
         s->ctrl = sock;
         sock->setParent(m_t.ctx());
         m_sessions.push_back(s);
-        m_connections.fetch_add(1);
         if (m_opt.ftpsrv && !m_opt.silentGreeting)
             reply(s.get(), "220-Welcome to ftpsrv.elf running on pid 77\r\n220-Version: v0.21.1 (built Aug 20 2026)\r\n220 Service is ready");
         else if (!m_opt.silentGreeting)
@@ -397,19 +401,36 @@ private:
         const bool drop = dropsHere(vpath);
         reply(s, "150 Opening BINARY mode data connection");
         beginActive();
+        QTcpSocket* d = s->data;
         auto pos = std::make_shared<qint64>(0);
-        auto timer = new QTimer(m_t.ctx());
-        timer->setInterval(m_opt.throttleBytesPerSec > 0 ? 20 : 0);
-        QObject::connect(timer, &QTimer::timeout, timer, [this, s, bytes, pos, timer, drop] {
-            QTcpSocket* d = s->data;
-            if (!d) {
-                timer->deleteLater();
+        auto done = std::make_shared<bool>(false);
+        // A throttled transfer is paced by a timer. Any other is driven by the
+        // socket itself (the next chunk when the last one has left), so a
+        // waiting or stalled transfer costs no processor time.
+        QTimer* pace = m_opt.throttleBytesPerSec > 0 ? new QTimer(d) : nullptr;
+        auto pump = [this, s, d, bytes, pos, done, pace, drop] {
+            if (*done)
+                return;
+            if (s->data != d) { // this data connection was given up for a new one
+                *done = true;
+                if (pace)
+                    pace->stop();
+                return;
+            }
+            if (d->state() != QAbstractSocket::ConnectedState) { // the client closed it: nothing more to send
+                *done = true;
+                if (pace)
+                    pace->stop();
+                finishData(s, "226 Transfer complete");
                 return;
             }
             if (d->bytesToWrite() > 256 * 1024)
                 return;
-            if (m_opt.stallAfterBytes >= 0 && *pos >= m_opt.stallAfterBytes)
+            if (m_opt.stallAfterBytes >= 0 && *pos >= m_opt.stallAfterBytes) {
+                if (pace)
+                    pace->stop();
                 return; // stall forever
+            }
             qint64 n = m_opt.throttleBytesPerSec > 0 ? std::max<qint64>(1, m_opt.throttleBytesPerSec / 50) : 256 * 1024;
             if (drop && !m_dropped)
                 n = std::min(n, std::max<qint64>(0, m_opt.dropAfterBytes - *pos));
@@ -422,10 +443,13 @@ private:
             }
             if (drop && !m_dropped && *pos >= m_opt.dropAfterBytes && *pos < bytes.size()) {
                 m_dropped = true;
-                timer->stop();
-                timer->deleteLater();
+                *done = true;
+                if (pace)
+                    pace->stop();
                 // Close after the bytes already written (FIN, not RST): on
                 // Windows an RST discards data the client has not read yet.
+                // With nothing left to write the close is immediate, so the
+                // reply is tied to the signal alone (never sent twice).
                 s->data = nullptr;
                 m_active.fetch_sub(1);
                 QObject::connect(d, &QTcpSocket::disconnected, d, [this, s, d] {
@@ -433,19 +457,24 @@ private:
                     dropReply(s);
                 });
                 d->disconnectFromHost();
-                if (d->state() == QAbstractSocket::UnconnectedState) {
-                    d->deleteLater();
-                    dropReply(s);
-                }
                 return;
             }
             if (*pos >= bytes.size()) {
-                timer->stop();
-                timer->deleteLater();
+                *done = true;
+                if (pace)
+                    pace->stop();
                 finishData(s, "226 Transfer complete");
             }
-        });
-        timer->start();
+        };
+        QObject::connect(d, &QTcpSocket::disconnected, d, pump);
+        if (pace) {
+            pace->setInterval(20);
+            QObject::connect(pace, &QTimer::timeout, d, pump);
+            pace->start();
+        } else {
+            QObject::connect(d, &QTcpSocket::bytesWritten, d, pump);
+        }
+        pump();
     }
 
     // Client -> server, appended to `file` (opened by the caller).
@@ -577,8 +606,7 @@ private:
                                                 QStringLiteral("RMD"),  QStringLiteral("DELE"), QStringLiteral("RNFR"), QStringLiteral("RNTO"),
                                                 QStringLiteral("LIST"), QStringLiteral("NLST"), QStringLiteral("MLSD"), QStringLiteral("RETR"),
                                                 QStringLiteral("STOR"), QStringLiteral("APPE")};
-        const bool listSwitches = arg.startsWith(u'-') && (cmd == u"LIST" || cmd == u"NLST" || cmd == u"MLSD"); // "LIST -a"
-        if (pathCommands.contains(cmd) && !listSwitches && local(s, arg).isEmpty()) {
+        if (pathCommands.contains(cmd) && local(s, arg).isEmpty()) {
             s->rest = 0;
             s->renameFrom.clear();
             reply(s, "550 No such file or directory.");
@@ -695,6 +723,8 @@ private:
         } else if (cmd == u"RNFR") {
             if (m_opt.renameRefused) {
                 reply(s, "502 RNFR not implemented.");
+            } else if (m_opt.refuseRenameFromPaths.contains(virtualPath(s, arg))) {
+                reply(s, "550 Permission denied.");
             } else if (QFileInfo::exists(local(s, arg))) {
                 s->renameFrom = local(s, arg);
                 reply(s, "350 Ready for RNTO.");
@@ -720,7 +750,7 @@ private:
                 reply(s, "500 Unknown command.");
                 return;
             }
-            const QString dir = local(s, arg.startsWith(u'-') ? QString() : arg);
+            const QString dir = local(s, arg); // the client lists the working folder: no switches, no path
             if (!QFileInfo(dir).isDir()) {
                 reply(s, "550 Failed to open directory.");
                 return;
@@ -826,7 +856,6 @@ private:
     std::vector<std::shared_ptr<Session>> m_sessions;
     mutable std::mutex m_mutex;
     QStringList m_commands;
-    std::atomic<int> m_connections{0};
     std::atomic<int> m_active{0};
     std::atomic<int> m_maxActive{0};
     std::atomic<qint64> m_received{0};
@@ -933,7 +962,6 @@ public:
         m_server = nullptr;
     }
     quint16 port() const { return m_port; }
-    int connections() const { return m_connections.load(); }
 
 private:
     void play(QTcpSocket* s, std::vector<Step> script, std::size_t i)

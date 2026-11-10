@@ -26,14 +26,11 @@
 using namespace fw;
 using namespace fw::ps5;
 using fake::FakeFtpServer;
+using ps5test::Module;
+using ps5test::quick;
+using ps5test::readAll;
 
 namespace {
-
-QByteArray readAll(const QString& path)
-{
-    QFile f(path);
-    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
-}
 
 bool writeBytes(const QString& path, const QByteArray& bytes)
 {
@@ -42,29 +39,9 @@ bool writeBytes(const QString& path, const QByteArray& bytes)
     return f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(bytes) == bytes.size();
 }
 
-FtpOptions quick()
-{
-    FtpOptions o;
-    o.connectTimeoutMs = 3000;
-    o.replyTimeoutMs = 3000;
-    o.idleTimeoutMs = 3000;
-    return o;
-}
-
 const QByteArray kElf = QByteArray("\x7f" "ELF", 4) + QByteArray(60, '\1');
 const QByteArray kSelf1 = QByteArray("\x4f\x15\x3d\x1d", 4) + QByteArray(60, '\2');
 const QByteArray kSelf2 = QByteArray("\x54\x14\xf5\xee", 4) + QByteArray(60, '\3');
-
-struct Module {
-    std::shared_ptr<SettingsSchema> schema = std::make_shared<SettingsSchema>();
-    DependencyRegistry deps;
-    JobFactory jobs;
-    Module()
-    {
-        ModuleContext ctx{*schema, deps, jobs};
-        registerModule(ctx);
-    }
-};
 
 } // namespace
 
