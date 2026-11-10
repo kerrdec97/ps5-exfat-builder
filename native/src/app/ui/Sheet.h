@@ -42,7 +42,7 @@ public:
     int exec();
     void open();                 // non-modal show (screenshots, countdowns)
     void close(int result = -1);
-    bool isOpen() const { return isVisible(); }
+    bool isOpen() const { return isVisible() && !m_closing; } // not while it fades away after its answer
     int result() const { return m_result; }
     // Sheets open right now, in any window. The main window's shortcuts, Esc
     // handling and drops stand down while one is up (a sheet is a child
@@ -77,8 +77,13 @@ protected:
 
 private:
     void relayout();
+    void applyShown();  // scrim and panel for the current m_shown
+    void finishClose(); // after the fade: hidden and deleted
     QLabel* addBodyLabel(const QString& text, Qt::TextFormat format);
     QPushButton* defaultButton() const; // Enter outside a button; focused when the sheet opens
+    motion::Value* m_shown; // 0 = gone .. 1 = open: the scrim fades, the panel rises 8 px and fades
+    bool m_closing = false; // answered, fading away
+    QRect m_panelRect;      // where the panel rests
     QWidget* m_panel;
     QVBoxLayout* m_body;
     QHBoxLayout* m_buttons;

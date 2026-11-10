@@ -8,6 +8,7 @@
 #include "app/ui/HomeKit.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/LibraryGrid.h"
+#include "app/ui/Motion.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Shell.h"
@@ -24,7 +25,10 @@
 #include <QHelpEvent>
 #include <QImage>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMimeData>
+#include <QPainter>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -33,6 +37,8 @@
 #include <QToolTip>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+
+#include <cmath>
 
 using namespace fw;
 using namespace fw::ui;
@@ -58,6 +64,21 @@ bool anyLabelShows(const QWidget* root, const QString& text)
         if (l->text() == text && l->textFormat() == Qt::PlainText)
             return true;
     return false;
+}
+
+// Motion is off on the offscreen platform: a test that is about it switches it on.
+struct MotionOn {
+    MotionOn() { motion::setOverride(true); }
+    ~MotionOn() { motion::clearOverride(); }
+};
+
+// Popups (menus, tooltips) are in no page screenshot. With FW_UI_GRAB_DIR set,
+// the tests that show one save a picture of it there, to look at.
+void saveGrab(QWidget* w, const char* name)
+{
+    const QString dir = qEnvironmentVariable("FW_UI_GRAB_DIR");
+    if (!dir.isEmpty())
+        w->grab().save(QStringLiteral("%1/%2.png").arg(dir, QLatin1String(name)));
 }
 
 void sendWheel(QWidget* w, int delta = -120)
@@ -1077,6 +1098,425 @@ private slots:
         QCOMPARE(queue.count(), 1);
         QTest::mouseClick(chip, Qt::RightButton, Qt::NoModifier, QPoint(2, 2));
         QCOMPARE(queue.count(), 1);
+    }
+
+    // ---- depth, badges, empty states ------------------------------------------------------
+
+    void whiteNeverSitsOnTheBrightGradient()
+    {
+        using namespace theme;
+        // WCAG contrast of white on a colour.
+        auto onWhite = [](const QColor& c) {
+            auto lin = [](qreal v) { return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); };
+            const qreal l = 0.2126 * lin(c.redF()) + 0.7152 * lin(c.greenF()) + 0.0722 * lin(c.blueF());
+            return 1.05 / (l + 0.05);
+        };
+        QVERIFY(onWhite(color::accent_fill) >= 4.5);
+        QVERIFY(onWhite(color::accent_fill_2) >= 4.5);
+        QVERIFY(onWhite(color::accent_fill_pressed) >= 4.5);
+        QVERIFY(onWhite(color::accent) < 4.5); // which is why the fill tokens exist
+        const QLinearGradient g = accentFillGradient(QRectF(0, 0, 100, 10));
+        QCOMPARE(g.stops().first().second, color::accent_fill);
+        QCOMPARE(g.stops().last().second, color::accent_fill_2);
+        QCOMPARE(withAlpha(color::accent_hi, 40).alpha(), 40);
+
+        // The primary button, the checked switch and a count on accent use them.
+        const QString qss = stylesheet();
+        const int primary = qss.indexOf(QStringLiteral("QPushButton[variant=\"primary\"] {"));
+        QVERIFY(primary >= 0);
+        const QString rule = qss.mid(primary, qss.indexOf(u'}', primary) - primary);
+        QVERIFY2(rule.contains(color::accent_fill.name()) && rule.contains(color::accent_fill_2.name()), qPrintable(rule));
+        QVERIFY(!rule.contains(color::accent.name()));
+        auto* sw = add<Switch>();
+        sw->setChecked(true);
+        QCoreApplication::processEvents();
+        const QImage on = sw->grab().toImage();
+        const QColor left = on.pixelColor(6, on.height() / 2);
+        QVERIFY2(qAbs(left.red() - color::accent_fill.red()) < 24 && qAbs(left.blue() - color::accent_fill.blue()) < 24,
+                 qPrintable(left.name()));
+    }
+
+    void badgesHaveOneLook()
+    {
+        using namespace theme;
+        Badge neutral(QStringLiteral("Folder"), Tone::Neutral);
+        neutral.setIconName(QString());
+        QCOMPARE(neutral.sizeHint().height(), size::badge);
+        QCOMPARE(neutral.sizeHint().width(), badgeWidth(QStringLiteral("Folder")));
+        Badge count(QStringLiteral("3"), Tone::Neutral);
+        count.setCount(true);
+        QCOMPARE(count.sizeHint().height(), size::badgeCount);
+        QVERIFY(count.sizeHint().width() >= size::badgeCount); // never narrower than a circle
+
+        // Painted by hand it is the same pill: neutral is bg_4 with a border_3 outline.
+        QImage img(badgeWidth(QStringLiteral("Folder")), size::badge, QImage::Format_ARGB32_Premultiplied);
+        img.fill(color::bg_2);
+        {
+            QPainter p(&img);
+            paintBadge(p, QRectF(img.rect()), QStringLiteral("Folder"), Tone::Neutral);
+        }
+        neutral.resize(neutral.sizeHint());
+        QImage widget(neutral.size(), QImage::Format_ARGB32_Premultiplied);
+        widget.fill(color::bg_2);
+        neutral.render(&widget, QPoint(), QRegion(), QWidget::DrawChildren);
+        QCOMPARE(widget, img);
+        QCOMPARE(img.pixelColor(img.width() / 2, 0), color::border_3);
+        QCOMPARE(img.pixelColor(4, img.height() / 2), color::bg_4);
+        // A tone is its colour as a tint: darker than the mark, lighter than the card.
+        img.fill(color::bg_2);
+        {
+            QPainter p(&img);
+            paintBadge(p, QRectF(img.rect()), QStringLiteral("Ready"), Tone::Ok);
+        }
+        const QColor tint = img.pixelColor(4, img.height() / 2);
+        QVERIFY2(tint.green() > color::bg_2.green() && tint.green() < color::success.green() / 2, qPrintable(tint.name()));
+    }
+
+    void emptyStateIsCompactAndNeverCutsItsText()
+    {
+        const QString text = QStringLiteral("Jobs you add appear here and run one after another while you keep working.");
+        auto* host = add<QWidget>();
+        host->setFixedWidth(theme::size::dock);
+        auto* col = new QVBoxLayout(host);
+        col->setContentsMargins(0, 0, 0, 0);
+        auto* empty = new EmptyState(QStringLiteral("queue"), QStringLiteral("No jobs yet"), text, host);
+        empty->setCompact(true);
+        col->addWidget(empty);
+        col->addStretch(1);
+        QVERIFY(empty->isCompact());
+        QTRY_VERIFY(empty->width() == theme::size::dock);
+        QTRY_VERIFY2(empty->height() <= 150, qPrintable(QString::number(empty->height())));
+        QLabel* caption = nullptr;
+        for (QLabel* l : empty->findChildren<QLabel*>())
+            if (l->text() == text)
+                caption = l;
+        QVERIFY(caption);
+        QVERIFY(caption->width() <= theme::size::emptyMax);
+        QVERIFY(caption->width() <= empty->width() - 2 * theme::space::xxl); // inside the margins of a 400 px dock
+        QVERIFY2(caption->height() >= caption->heightForWidth(caption->width()), "the caption is cut");
+        QVERIFY(caption->geometry().bottom() < empty->height());
+        // A list makes the state it is given compact.
+        auto* loose = new EmptyState(QStringLiteral("filter"), QStringLiteral("No jobs here"), QStringLiteral("Nothing matches."), host);
+        QVERIFY(!loose->isCompact());
+        const int tall = loose->sizeHint().height();
+        loose->setCompact(true);
+        QVERIFY(loose->sizeHint().height() < tall);
+    }
+
+    void pathFieldCutsALongPlaceholderInTheMiddle()
+    {
+        const QString longText = QStringLiteral("Not set: click the folder button to choose where it goes");
+        auto* field = add<PathField>(PathField::Mode::Directory);
+        field->setPlaceholder(longText);
+        field->setFixedWidth(260);
+        QCoreApplication::processEvents();
+        QCOMPARE(field->placeholder(), longText);
+        const QString shown = field->edit()->placeholderText();
+        QVERIFY2(shown != longText && shown.contains(QChar(0x2026)), qPrintable(shown));
+        // Cut in the middle: both ends are still there.
+        QVERIFY2(shown.startsWith(QStringLiteral("No")) && shown.endsWith(QStringLiteral("es")), qPrintable(shown));
+        QCOMPARE(field->edit()->toolTip(), plainTip(longText));
+        QCOMPARE(field->edit()->accessibleDescription(), longText);
+        // Room for all of it: nothing is cut and there is no tooltip.
+        field->setFixedWidth(860);
+        QCoreApplication::processEvents();
+        QCOMPARE(field->edit()->placeholderText(), longText);
+        QVERIFY(field->edit()->toolTip().isEmpty());
+        QVERIFY(field->edit()->accessibleDescription().isEmpty());
+    }
+
+    void longTooltipsAreWrappedAt360()
+    {
+        auto* target = add<QLabel>(QStringLiteral("hover me"));
+        QCoreApplication::processEvents();
+        auto shownTip = []() -> QLabel* {
+            for (QWidget* w : QApplication::topLevelWidgets())
+                if (w->windowType() == Qt::ToolTip && w->isVisible())
+                    return qobject_cast<QLabel*>(w);
+            return nullptr;
+        };
+        const QString longTip = QStringLiteral("A sentence that goes on and on. ").repeated(10).trimmed();
+        int tall = 0;
+        for (const QString& tipText : {longTip, plainTip(longTip)}) { // one plain line, and the app's own wrapped kind
+            QToolTip::showText(target->mapToGlobal(QPoint(5, 5)), tipText, target);
+            QLabel* tip = nullptr;
+            QTRY_VERIFY((tip = shownTip()));
+            QTRY_VERIFY2(tip->width() <= theme::size::toolTipMax, qPrintable(QString::number(tip->width())));
+            QVERIFY(tip->wordWrap());
+            QVERIFY2(tip->height() >= tip->heightForWidth(tip->width()), "the tooltip's text is cut");
+            QVERIFY(tip->height() > 3 * tip->fontMetrics().height()); // several lines now
+            tall = tip->height();
+            saveGrab(tip, tipText == longTip ? "tooltip-plain" : "tooltip-rich");
+            QToolTip::hideText();
+            QTRY_VERIFY(!shownTip());
+        }
+        // A short one is left alone: one line, as wide as its text.
+        QToolTip::showText(target->mapToGlobal(QPoint(5, 5)), QStringLiteral("Reorder"), target);
+        QLabel* tip = nullptr;
+        QTRY_VERIFY((tip = shownTip()));
+        QVERIFY(tip->width() < theme::size::toolTipMax);
+        QVERIFY(!tip->wordWrap());
+        QVERIFY2(tip->height() < tall / 3, qPrintable(QStringLiteral("%1 of %2").arg(tip->height()).arg(tall)));
+    }
+
+    void menuLeavesRoomForItsShadow()
+    {
+        const int margin = theme::size::popupShadow;
+        QMenu menu(m_window.get());
+        menu.addAction(QStringLiteral("Open queue"));
+        menu.addAction(QStringLiteral("Clear finished"));
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("Remove"));
+        const QPoint at = m_window->mapToGlobal(QPoint(120, 120));
+        menu.popup(at);
+        QTRY_VERIFY(menu.isVisible());
+        // The panel, not the clear margin around it, is where the menu was asked to be.
+        QCOMPARE(menu.pos(), at - QPoint(margin, margin));
+        const QRect first = menu.actionGeometry(menu.actions().constFirst());
+        QVERIFY(first.left() > margin && first.top() > margin);
+        QVERIFY(first.right() < menu.width() - margin);
+        saveGrab(&menu, "menu");
+        // The margin is beside the menu: a click there closes it.
+        QTest::mouseClick(&menu, Qt::LeftButton, Qt::NoModifier, QPoint(3, 3));
+        QTRY_VERIFY(!menu.isVisible());
+    }
+
+    // ---- motion ----------------------------------------------------------------------------
+
+    void motionIsOffWhereNobodyWatches()
+    {
+        motion::clearOverride();
+        QVERIFY(!motion::enabled()); // the offscreen platform these tests run on
+        {
+            MotionOn on;
+            QVERIFY(motion::enabled());
+            motion::setOverride(false);
+            QVERIFY(!motion::enabled());
+        }
+        QVERIFY(!motion::enabled());
+
+        // Off: a value is at its target at once and nothing runs.
+        auto* w = add<QWidget>();
+        QCoreApplication::processEvents();
+        auto* v = new motion::Value(w, 0.0, motion::base);
+        v->animateTo(1.0);
+        QCOMPARE(v->value(), 1.0);
+        QVERIFY(!v->isRunning());
+        QCOMPARE(motion::fast, 110);
+        QCOMPARE(motion::base, 160);
+        QCOMPARE(motion::slow, 220);
+    }
+
+    void motionValueEasesToItsTargetAndStopsWithItsWidget()
+    {
+        MotionOn on;
+        auto* w = add<QWidget>();
+        QCoreApplication::processEvents();
+        QVERIFY(w->isVisible());
+        auto* v = new motion::Value(w, 0.0, motion::slow);
+        int changes = 0;
+        v->onChange([&changes] { ++changes; });
+        v->animateTo(1.0);
+        QVERIFY(v->isRunning());
+        QVERIFY(v->value() < 1.0);
+        QCOMPARE(v->target(), 1.0);
+        QTRY_VERIFY(!v->isRunning());
+        QCOMPARE(v->value(), 1.0); // exactly the target
+        QVERIFY(changes > 1);
+
+        // Hidden half way: at its end state at once, nothing left running.
+        v->animateTo(0.0);
+        QVERIFY(v->isRunning());
+        w->hide();
+        QVERIFY(!v->isRunning());
+        QCOMPARE(v->value(), 0.0);
+        // And nothing starts for a widget nobody sees.
+        v->animateTo(1.0);
+        QVERIFY(!v->isRunning());
+        QCOMPARE(v->value(), 1.0);
+
+        // Deleted half way: no step arrives for a dead widget.
+        w->show();
+        QCoreApplication::processEvents();
+        v->animateTo(0.0);
+        QVERIFY(v->isRunning());
+        const int before = changes;
+        delete w;
+        QTest::qWait(motion::slow + 80);
+        QCOMPARE(changes, before);
+
+        // Several items painted by one widget: the one left fades out while the next fades in.
+        auto* many = add<QWidget>();
+        QCoreApplication::processEvents();
+        auto* hover = new motion::HoverFade(many);
+        hover->setHovered(0);
+        QTRY_COMPARE(hover->amount(0), 1.0);
+        hover->setHovered(1);
+        QCOMPARE(hover->hovered(), 1);
+        QVERIFY(hover->amount(0) > 0.0 && hover->amount(1) < 1.0);
+        QTRY_VERIFY(!hover->isRunning());
+        QCOMPARE(hover->amount(0), 0.0);
+        QCOMPARE(hover->amount(1), 1.0);
+        QCOMPARE(hover->amount(7), 0.0);
+        hover->reset();
+        QCOMPARE(hover->amount(1), 0.0);
+    }
+
+    void switchSlidesAndEndsAsIfItHadJumped()
+    {
+        // The reference: toggled with motion off.
+        auto* still = add<Switch>();
+        QCoreApplication::processEvents();
+        still->setChecked(true);
+        QCOMPARE(still->position(), 1.0);
+        QVERIFY(!still->isAnimating());
+        const QImage reference = still->grab().toImage();
+
+        MotionOn on;
+        auto* sw = add<Switch>();
+        QCoreApplication::processEvents();
+        sw->setChecked(true);
+        QVERIFY(sw->isChecked()); // the state is immediate; only the picture follows
+        QVERIFY(sw->isAnimating());
+        QVERIFY(sw->position() < 1.0);
+        QTRY_VERIFY(!sw->isAnimating());
+        QCOMPARE(sw->position(), 1.0);
+        QCOMPARE(sw->grab().toImage(), reference);
+        // Off again, and hidden before the knob gets there.
+        sw->setChecked(false);
+        QVERIFY(sw->isAnimating());
+        sw->hide();
+        QVERIFY(!sw->isAnimating());
+        QCOMPARE(sw->position(), 0.0);
+    }
+
+    void segmentedPillSlidesAndEndsOnTheNewSegment()
+    {
+        auto make = [this] {
+            auto* s = add<Segmented>();
+            s->addSegment(QStringLiteral("Low impact"));
+            s->addSegment(QStringLiteral("Balanced"));
+            s->addSegment(QStringLiteral("Maximum"));
+            return s;
+        };
+        Segmented* still = make();
+        QCoreApplication::processEvents();
+        still->setCurrentIndex(2);
+        QVERIFY(!still->isAnimating());
+        const QImage reference = still->grab().toImage();
+
+        MotionOn on;
+        Segmented* seg = make();
+        QCoreApplication::processEvents();
+        QSignalSpy spy(seg, &Segmented::currentChanged);
+        seg->setCurrentIndex(2);
+        QCOMPARE(seg->currentIndex(), 2); // at once
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(seg->isAnimating());
+        seg->setCurrentIndex(1); // sent somewhere else half way, and back
+        seg->setCurrentIndex(2);
+        QTRY_VERIFY(!seg->isAnimating());
+        QCOMPARE(seg->grab().toImage(), reference);
+    }
+
+    void progressBarEasesAndRunsNothingWhenIdleOrHidden()
+    {
+        // Motion off: the fill is at its fraction at once and nothing ticks.
+        auto* still = add<ProgressBar>();
+        QCoreApplication::processEvents();
+        still->setFraction(0.5);
+        QCOMPARE(still->shownFraction(), 0.5);
+        QVERIFY(!still->isAnimating());
+        still->setState(ProgressBar::State::Indeterminate);
+        QVERIFY(!still->isAnimating());
+        QCOMPARE(still->height(), theme::size::progress);
+
+        MotionOn on;
+        auto* bar = add<ProgressBar>();
+        QCoreApplication::processEvents();
+        QVERIFY(!bar->isAnimating()); // idle at 0
+        bar->setFraction(0.5);
+        QCOMPARE(bar->fraction(), 0.5);      // the value is immediate
+        QVERIFY(bar->shownFraction() < 0.5); // the picture eases
+        QVERIFY(bar->isAnimating());
+        QTRY_COMPARE(bar->shownFraction(), 0.5);
+        QVERIFY(bar->isAnimating()); // the highlight sweep of a running job
+        bar->setFraction(0.2);       // another job in the same bar: back at once
+        QCOMPARE(bar->shownFraction(), 0.2);
+        // Not running: nothing ticks.
+        bar->setState(ProgressBar::State::Paused);
+        QVERIFY(!bar->isAnimating());
+        bar->setState(ProgressBar::State::Determinate);
+        QVERIFY(bar->isAnimating());
+        bar->setFraction(1.0);
+        QTRY_VERIFY(!bar->isAnimating()); // arrived, and a full bar has no sweep
+        QCOMPARE(bar->shownFraction(), 1.0);
+        // Hidden: nothing ticks; shown again: it goes on.
+        bar->setState(ProgressBar::State::Indeterminate);
+        QVERIFY(bar->isAnimating());
+        bar->hide();
+        QVERIFY(!bar->isAnimating());
+        bar->show();
+        QVERIFY(bar->isAnimating());
+        bar->setState(ProgressBar::State::Done);
+        QVERIFY(!bar->isAnimating());
+    }
+
+    void sheetAndToastFadeButAnswerAtOnce()
+    {
+        MotionOn on;
+        QWidget* host = m_window.get();
+        auto* s = new Sheet(host, QStringLiteral("Delete it?"), Sheet::Icon::Warning);
+        s->addButton(QStringLiteral("Keep"), Sheet::Role::Safe);
+        QPushButton* del = s->addButton(QStringLiteral("Delete"), Sheet::Role::Destructive);
+        QPointer<Sheet> alive(s);
+        QTimer::singleShot(30, del, [del] { del->click(); }); // while it is still fading in
+        QCOMPARE(s->exec(), 1);          // the answer does not wait for the fade
+        QCOMPARE(Sheet::openCount(), 0); // and the sheet is not counted as open
+        QVERIFY(alive);
+        QVERIFY(!alive->isOpen());
+        QTRY_VERIFY(!alive); // faded away and deleted
+
+        // Opened and left alone it ends exactly as without motion: no effect left on the panel.
+        s = new Sheet(host, QStringLiteral("Done"), Sheet::Icon::Info);
+        s->addButton(QStringLiteral("OK"), Sheet::Role::Primary);
+        s->open();
+        QFrame* panel = s->findChild<QFrame*>(QStringLiteral("sheetPanel"));
+        QVERIFY(panel);
+        QVERIFY(panel->graphicsEffect());
+        QTRY_VERIFY(!panel->graphicsEffect());
+        QCOMPARE(panel->y(), (s->height() - panel->height()) / 2);
+        alive = s;
+        s->close();
+        QCOMPARE(Sheet::openCount(), 0);
+        QTRY_VERIFY(!alive);
+
+        // Closed before its first frame (a handler that answers at once): gone, not left fading for ever.
+        s = new Sheet(host, QStringLiteral("Done"), Sheet::Icon::Info);
+        s->addButton(QStringLiteral("OK"), Sheet::Role::Primary);
+        alive = s;
+        s->open();
+        s->close();
+        QVERIFY(!s->isVisible());
+        QCOMPARE(Sheet::openCount(), 0);
+        QTRY_VERIFY(!alive);
+
+        ToastHost toasts(host);
+        toasts.show(Tone::Ok, QStringLiteral("Done"), QString(), {}, 0);
+        QPointer<QFrame> toast(host->findChild<QFrame*>(QStringLiteral("toast")));
+        QVERIFY(toast);
+        QVERIFY(toast->graphicsEffect());      // sliding in
+        QTRY_VERIFY(!toast->graphicsEffect()); // arrived: nothing left on it
+        QCOMPARE(toast->x(), host->width() - theme::space::lg - theme::size::toast);
+        toasts.clear();
+        QCOMPARE(toasts.count(), 0); // out of the stack at once
+        QTRY_VERIFY(!toast);         // then faded and deleted
+        // Shown and dismissed in the same breath: gone as well.
+        toasts.show(Tone::Ok, QStringLiteral("Done"), QString(), {}, 0);
+        toast = host->findChild<QFrame*>(QStringLiteral("toast"));
+        QVERIFY(toast);
+        toasts.clear();
+        QTRY_VERIFY(!toast);
     }
 
     // ---- file manager -------------------------------------------------------------------

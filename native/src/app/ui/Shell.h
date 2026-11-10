@@ -32,12 +32,15 @@ signals:
 protected:
     void paintEvent(QPaintEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void enterEvent(QEnterEvent* e) override;
+    void leaveEvent(QEvent* e) override;
 
 private:
     QString m_key, m_icon;
     bool m_compact = false;
     bool m_externalBar = false;
     int m_count = 0;
+    motion::Value* m_hover; // the hover tint fades
 };
 
 class Sidebar : public QWidget {
@@ -63,13 +66,17 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* e) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    void syncBar(bool animate);
     QVBoxLayout* m_layout;
     QButtonGroup* m_group;
     QHash<QString, NavItem*> m_items;
     QList<QLabel*> m_groupLabels;
     QLabel* m_version;
+    QWidget* m_bar;         // the selection bar, over the items
+    motion::Value* m_barY;  // where it is on its way to the current item
     bool m_compact = false;
 };
 

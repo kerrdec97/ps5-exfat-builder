@@ -1,6 +1,7 @@
 #include "app/ui/Components.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Style.h"
 
 #include <QAccessible>
@@ -78,6 +79,7 @@ ChoiceTiles::ChoiceTiles(QWidget* parent) : QWidget(parent)
     sp.setHeightForWidth(true);
     setSizePolicy(sp);
     setProperty("fwNoRing", true); // the selected tile shows the focus itself
+    m_hover = new motion::HoverFade(this);
 }
 
 QString ChoiceTiles::choiceTitle(int index) const
@@ -178,7 +180,7 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         const Item& it = m_items[size_t(i)];
         const QRectF r = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
         const bool sel = i == m_current;
-        const bool hov = i == m_hover && it.enabled && !sel;
+        const qreal hov = it.enabled && !sel ? m_hover->amount(i) : 0.0;
         if (sel) {
             p.setPen(Qt::NoPen);
             p.setBrush(color::bg_2);
@@ -190,8 +192,8 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
         } else {
-            p.setPen(QPen(hov ? color::border_4 : color::border_3, 1));
-            p.setBrush(hov ? color::bg_3 : color::field_bg);
+            p.setPen(QPen(blend(color::border_3, color::border_4, hov), 1));
+            p.setBrush(blend(color::field_bg, color::bg_3, hov));
             p.drawRoundedRect(r, radius::md, radius::md);
         }
         const QColor fgTitle = !it.enabled ? color::fg_5 : color::fg_0;
@@ -261,18 +263,13 @@ void ChoiceTiles::mousePressEvent(QMouseEvent* e)
 void ChoiceTiles::mouseMoveEvent(QMouseEvent* e)
 {
     const int i = at(e->pos());
-    if (i != m_hover) {
-        m_hover = i;
+    if (i != m_hover->hovered()) {
         setCursor(i >= 0 && m_items[size_t(i)].enabled ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        update();
+        m_hover->setHovered(i);
     }
 }
 
-void ChoiceTiles::leaveEvent(QEvent*)
-{
-    m_hover = -1;
-    update();
-}
+void ChoiceTiles::leaveEvent(QEvent*) { m_hover->setHovered(-1); }
 
 void ChoiceTiles::keyPressEvent(QKeyEvent* e)
 {
@@ -306,6 +303,7 @@ DropZone::DropZone(const QString& icon, const QString& title, const QString& tex
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFixedHeight(148);
     setProperty("fwRadius", radius::md);
+    m_hover = new motion::Value(this, 0.0, motion::fast);
 }
 
 void DropZone::setTitle(const QString& title)
@@ -338,15 +336,13 @@ QSize DropZone::sizeHint() const { return {480, m_compact ? 96 : 148}; }
 
 void DropZone::enterEvent(QEnterEvent* e)
 {
-    m_hover = true;
-    update();
+    m_hover->animateTo(1.0);
     QAbstractButton::enterEvent(e);
 }
 
 void DropZone::leaveEvent(QEvent* e)
 {
-    m_hover = false;
-    update();
+    m_hover->animateTo(0.0);
     QAbstractButton::leaveEvent(e);
 }
 
@@ -355,33 +351,42 @@ void DropZone::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(1, 1, -1, -1);
-    const bool active = m_hl || m_hover || isDown();
+    // 0 = at rest .. 1 = hovered, pressed or a drag over the page.
+    const qreal active = m_hl || isDown() ? 1.0 : m_hover->value();
     p.setPen(Qt::NoPen);
     p.setBrush(color::field_bg);
     p.drawRoundedRect(r, radius::md, radius::md);
-    if (active) {
+    if (active > 0.0) {
         QRadialGradient glow(r.center(), r.width() * 0.6);
-        QColor a = color::accent;
-        a.setAlpha(m_hl ? 46 : 26);
-        glow.setColorAt(0, a);
+        glow.setColorAt(0, withAlpha(color::accent, int((m_hl ? 46 : 26) * active)));
         glow.setColorAt(1, Qt::transparent);
         p.setBrush(glow);
         p.drawRoundedRect(r, radius::md, radius::md);
     }
-    QPen pen(m_hl ? color::accent_hi : active ? color::accent : color::border_4, m_hl ? 2 : 1.4, Qt::DashLine);
+    QPen pen(m_hl ? color::accent_hi : blend(color::border_4, color::accent, active), m_hl ? 2 : 1.4, Qt::DashLine);
     pen.setDashPattern({5, 4});
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
     p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
 
     const qreal dpr = devicePixelRatioF();
+    // The icon square: bg_4, with the fill gradient fading in over it.
+    const auto iconSquare = [&](const QRectF& ir, qreal rad, int glyph) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color::bg_4);
+        p.drawRoundedRect(ir, rad, rad);
+        if (active > 0.0) {
+            p.setOpacity(active);
+            p.setBrush(accentFillGradient(ir));
+            p.drawRoundedRect(ir, rad, rad);
+            p.setOpacity(1.0);
+        }
+        drawIconFade(p, QRectF(ir.center().x() - glyph / 2.0, ir.center().y() - glyph / 2.0, glyph, glyph).toRect(), m_icon,
+                     glyph, color::fg_2, color::on_accent, active, dpr);
+    };
     if (m_compact) {
         const QRectF ir(r.left() + 22, r.center().y() - 20, 40, 40);
-        p.setPen(Qt::NoPen);
-        p.setBrush(active ? accentFillGradient(ir) : QBrush(color::bg_4));
-        p.drawRoundedRect(ir, 11, 11);
-        p.drawPixmap(QRectF(ir.center().x() - 10, ir.center().y() - 10, 20, 20).toRect(),
-                     iconPixmap(m_icon, 20, active ? color::on_accent : color::fg_2, dpr));
+        iconSquare(ir, 11, 20);
         const qreal tx = ir.right() + 16;
         p.setFont(font::bodyStrong());
         p.setPen(color::fg_0);
@@ -392,11 +397,7 @@ void DropZone::paintEvent(QPaintEvent*)
                    QFontMetrics(font::caption()).elidedText(m_text, Qt::ElideRight, int(r.right() - tx - 16)));
     } else {
         const QRectF ir(r.center().x() - 24, r.top() + 24, 48, 48);
-        p.setPen(Qt::NoPen);
-        p.setBrush(active ? accentFillGradient(ir) : QBrush(color::bg_4));
-        p.drawRoundedRect(ir, 13, 13);
-        p.drawPixmap(QRectF(ir.center().x() - 12, ir.center().y() - 12, 24, 24).toRect(),
-                     iconPixmap(m_icon, 24, active ? color::on_accent : color::fg_2, dpr));
+        iconSquare(ir, 13, 24);
         p.setFont(font::bodyStrong());
         p.setPen(color::fg_0);
         p.drawText(QRectF(r.left() + 16, ir.bottom() + 12, r.width() - 32, 20), Qt::AlignCenter, m_title);
@@ -408,6 +409,39 @@ void DropZone::paintEvent(QPaintEvent*)
 }
 
 // ---- Disclosure ----------------------------------------------------------------------
+
+namespace {
+
+// The disclosure's chevron: right when closed, down when open, turning in between.
+class Chevron : public QWidget {
+public:
+    explicit Chevron(QWidget* parent) : QWidget(parent)
+    {
+        setFixedSize(size::icon, size::icon);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+    motion::Value* turn = nullptr; // 0 = closed .. 1 = open
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        const qreal t = turn ? turn->value() : 0.0;
+        const qreal dpr = devicePixelRatioF();
+        if (t <= 0.0 || t >= 1.0) { // at rest: the icon itself, not a rotated one
+            p.drawPixmap(rect(), iconPixmap(t >= 1.0 ? QStringLiteral("chevron_down") : QStringLiteral("chevron_right"),
+                                            size::icon, color::fg_3, dpr));
+            return;
+        }
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.translate(width() / 2.0, height() / 2.0);
+        p.rotate(90.0 * t);
+        p.translate(-width() / 2.0, -height() / 2.0);
+        p.drawPixmap(rect(), iconPixmap(QStringLiteral("chevron_right"), size::icon, color::fg_3, dpr));
+    }
+};
+
+} // namespace
 
 Disclosure::Disclosure(const QString& title, const QString& captionText, QWidget* parent) : QWidget(parent)
 {
@@ -424,8 +458,11 @@ Disclosure::Disclosure(const QString& title, const QString& captionText, QWidget
     m_header->setAccessibleName(title);
     m_header->installEventFilter(this);
     auto* h = hbox(m_header, space::md, QMargins(space::lg, 14, space::lg, 14));
-    m_chevron = new QLabel(m_header);
-    m_chevron->setFixedSize(16, 16);
+    auto* chevron = new Chevron(m_header);
+    m_chevron = chevron;
+    m_turn = new motion::Value(chevron, 0.0, motion::fast);
+    chevron->turn = m_turn;
+    m_hover = new motion::Value(this, 0.0, motion::fast);
     h->addWidget(m_chevron);
     auto* col = new QVBoxLayout;
     col->setSpacing(1);
@@ -449,9 +486,8 @@ Disclosure::Disclosure(const QString& title, const QString& captionText, QWidget
 void Disclosure::setExpanded(bool on)
 {
     m_expanded = on;
-    m_bodyWidget->setVisible(on);
-    m_chevron->setPixmap(iconPixmap(on ? QStringLiteral("chevron_down") : QStringLiteral("chevron_right"), 16, color::fg_3,
-                                    devicePixelRatioF()));
+    m_bodyWidget->setVisible(on); // at once: only the chevron turns
+    m_turn->animateTo(on ? 1.0 : 0.0);
     m_header->setProperty("fwExpanded", on);
 #if QT_CONFIG(accessibility)
     if (QAccessible::isActive()) {
@@ -497,8 +533,10 @@ bool Disclosure::eventFilter(QObject* watched, QEvent* event)
                 return true;
             }
         }
-        if (event->type() == QEvent::Enter || event->type() == QEvent::Leave)
-            update();
+        if (event->type() == QEvent::Enter)
+            m_hover->animateTo(1.0);
+        else if (event->type() == QEvent::Leave)
+            m_hover->animateTo(0.0);
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -508,7 +546,7 @@ void Disclosure::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    paintPlate(p, r, radius::md, m_header->underMouse() && !m_expanded);
+    paintPlate(p, r, radius::md, m_expanded ? 0.0 : m_hover->value());
     if (m_expanded) {
         p.fillRect(QRectF(r.left() + space::lg, m_header->geometry().bottom(), r.width() - 2 * space::lg, 1), color::border_1);
     }
@@ -598,6 +636,7 @@ StatTile::StatTile(const QString& icon, const QString& overline, QWidget* parent
     m_footer = hbox(fw, space::sm);
     v->addWidget(fw);
     v->addStretch(1);
+    m_hover = new motion::Value(this, 0.0, motion::fast);
 }
 
 void StatTile::setValue(const QString& value, Tone tone)
@@ -651,15 +690,13 @@ void StatTile::keyPressEvent(QKeyEvent* e)
 
 void StatTile::enterEvent(QEnterEvent* e)
 {
-    m_hover = true;
-    update();
+    m_hover->animateTo(1.0);
     QWidget::enterEvent(e);
 }
 
 void StatTile::leaveEvent(QEvent* e)
 {
-    m_hover = false;
-    update();
+    m_hover->animateTo(0.0);
     QWidget::leaveEvent(e);
 }
 
@@ -667,7 +704,7 @@ void StatTile::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    paintPlate(p, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, m_hover);
+    paintPlate(p, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, m_hover->value());
 }
 
 // ---- ActionCard -------------------------------------------------------------------
@@ -683,21 +720,20 @@ ActionCard::ActionCard(const QString& icon, const QString& title, const QString&
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFixedHeight(84);
     setProperty("fwRadius", radius::md);
+    m_hover = new motion::Value(this, 0.0, motion::fast);
 }
 
 QSize ActionCard::sizeHint() const { return {260, 84}; }
 
 void ActionCard::enterEvent(QEnterEvent* e)
 {
-    m_hover = true;
-    update();
+    m_hover->animateTo(1.0);
     QAbstractButton::enterEvent(e);
 }
 
 void ActionCard::leaveEvent(QEvent* e)
 {
-    m_hover = false;
-    update();
+    m_hover->animateTo(0.0);
     QAbstractButton::leaveEvent(e);
 }
 
@@ -706,20 +742,29 @@ void ActionCard::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const bool active = m_hover || isDown();
+    const qreal active = isDown() ? 1.0 : m_hover->value(); // 0 = at rest .. 1 = hovered or pressed
     paintPlate(p, r, radius::md, active);
-    if (active) {
-        p.setPen(QPen(QBrush(accentGradient(r, 170)), 1.2));
+    if (active > 0.0) {
+        p.setPen(QPen(QBrush(accentGradient(r, int(170 * active))), 1.2));
         p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(r, radius::md, radius::md);
     }
     const qreal dpr = devicePixelRatioF();
     const QRectF ir(r.left() + 16, r.center().y() - 21, 42, 42);
+    // The icon square: the gradient as a tint, the fill gradient fading in over it.
     p.setPen(Qt::NoPen);
-    p.setBrush(active ? accentFillGradient(ir) : accentGradient(ir, 60));
-    p.drawRoundedRect(ir, 11, 11);
-    p.drawPixmap(QRectF(ir.center().x() - 10, ir.center().y() - 10, 20, 20).toRect(),
-                 iconPixmap(m_icon, 20, active ? color::on_accent : color::accent_hi, dpr));
+    if (active < 1.0) {
+        p.setBrush(accentGradient(ir, 60));
+        p.drawRoundedRect(ir, 11, 11);
+    }
+    if (active > 0.0) {
+        p.setOpacity(active);
+        p.setBrush(accentFillGradient(ir));
+        p.drawRoundedRect(ir, 11, 11);
+        p.setOpacity(1.0);
+    }
+    drawIconFade(p, QRectF(ir.center().x() - 10, ir.center().y() - 10, 20, 20).toRect(), m_icon, 20, color::accent_hi,
+                 color::on_accent, active, dpr);
     const qreal tx = ir.right() + 14;
     const qreal tw = r.right() - 36 - tx;
     p.setFont(font::bodyStrong());
@@ -734,8 +779,8 @@ void ActionCard::paintEvent(QPaintEvent*)
         p.drawText(QRectF(tx, y, tw, 16), Qt::AlignLeft | Qt::AlignVCenter, l);
         y += 16;
     }
-    p.drawPixmap(QRectF(r.right() - 30, r.center().y() - 8, 16, 16).toRect(),
-                 iconPixmap(QStringLiteral("chevron_right"), 16, active ? color::accent_hi : color::fg_5, dpr));
+    drawIconFade(p, QRectF(r.right() - 30, r.center().y() - 8, 16, 16).toRect(), QStringLiteral("chevron_right"), 16, color::fg_5,
+                 color::accent_hi, active, dpr);
 }
 
 } // namespace fw::ui

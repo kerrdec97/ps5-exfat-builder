@@ -1,6 +1,7 @@
 #include "app/ui/Widgets.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -734,7 +735,12 @@ Switch::Switch(QWidget* parent) : QAbstractButton(parent)
     setFocusPolicy(Qt::TabFocus);
     setProperty("fwRadius", radius::pill);
     setAttribute(Qt::WA_Hover);
+    m_position = new motion::Value(this, 0.0, motion::base);
+    connect(this, &QAbstractButton::toggled, this, [this](bool on) { m_position->animateTo(on ? 1.0 : 0.0); });
 }
+
+qreal Switch::position() const { return m_position->value(); }
+bool Switch::isAnimating() const { return m_position->isRunning(); }
 
 void Switch::enterEvent(QEnterEvent* e)
 {
@@ -754,34 +760,35 @@ void Switch::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    const bool on = isChecked();
-    const bool enabled = isEnabled();
-    QColor fill, border, knob;
-    if (!enabled) {
-        fill = color::bg_2;
-        border = color::border_3;
-        knob = color::fg_5;
-    } else if (on) {
-        border = Qt::transparent;
-        knob = color::on_accent;
-    } else {
-        fill = color::field_bg;
-        border = m_hover ? color::fg_5 : color::border_control;
-        knob = color::fg_3;
-    }
+    const qreal t = m_position->value(); // 0 = off .. 1 = on
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    if (enabled && on) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(accentFillGradient(r, m_hover ? 235 : 255));
+    const qreal rad = r.height() / 2;
+    QColor knob;
+    if (!isEnabled()) {
+        p.setPen(QPen(color::border_3, 1));
+        p.setBrush(color::bg_2);
+        p.drawRoundedRect(r, rad, rad);
+        knob = color::fg_5;
     } else {
-        p.setPen(QPen(border, 1));
-        p.setBrush(fill);
+        // The off track with the on track over it: they cross-fade while the knob slides.
+        if (t < 1.0) {
+            p.setPen(QPen(m_hover ? color::fg_5 : color::border_control, 1));
+            p.setBrush(color::field_bg);
+            p.drawRoundedRect(r, rad, rad);
+        }
+        if (t > 0.0) {
+            p.setOpacity(t);
+            p.setPen(Qt::NoPen);
+            p.setBrush(accentFillGradient(r, m_hover ? 235 : 255));
+            p.drawRoundedRect(r, rad, rad);
+            p.setOpacity(1.0);
+        }
+        knob = blend(color::fg_3, color::on_accent, t);
     }
-    p.drawRoundedRect(r, r.height() / 2, r.height() / 2);
     p.setPen(Qt::NoPen);
     p.setBrush(knob);
-    const int x = on ? width() - 3 - size::switchKnob : 3;
-    p.drawEllipse(QRectF(x, (height() - size::switchKnob) / 2.0, size::switchKnob, size::switchKnob));
+    const qreal off = 3, on = width() - 3 - size::switchKnob;
+    p.drawEllipse(QRectF(off + (on - off) * t, (height() - size::switchKnob) / 2.0, size::switchKnob, size::switchKnob));
 }
 
 // ---- segmented ----------------------------------------------------------------
@@ -793,7 +800,11 @@ Segmented::Segmented(QWidget* parent) : QWidget(parent)
     setMouseTracking(true);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setFont(font::body());
+    m_hover = new motion::HoverFade(this);
+    m_slide = new motion::Value(this, 1.0, motion::base);
 }
+
+bool Segmented::isAnimating() const { return m_slide->isRunning(); }
 
 void Segmented::addSegment(const QString& text, const QString& iconName, const QVariant& value)
 {
@@ -831,7 +842,15 @@ void Segmented::setCurrentIndex(int index)
 {
     if (index < 0 || index >= count() || index == m_current)
         return;
+    // The pill slides from where it is now (maybe half way) to the new segment.
+    const QRectF target = segmentRect(m_current);
+    const qreal t = m_slide->value();
+    m_slideFrom = t >= 1.0 ? target
+                           : QRectF(m_slideFrom.x() + (target.x() - m_slideFrom.x()) * t, target.y(),
+                                    m_slideFrom.width() + (target.width() - m_slideFrom.width()) * t, target.height());
     m_current = index;
+    m_slide->jumpTo(0.0);
+    m_slide->animateTo(1.0);
     update();
 #if QT_CONFIG(accessibility)
     if (QAccessible::isActive()) {
@@ -881,6 +900,16 @@ QSize Segmented::sizeHint() const
     return {w, 34};
 }
 
+QRectF Segmented::segmentRect(int index) const
+{
+    if (index < 0 || index >= count())
+        return {};
+    int x = 3;
+    for (int i = 0; i < index; ++i)
+        x += segmentWidth(i) + 2;
+    return QRectF(x, 3, segmentWidth(index), height() - 6);
+}
+
 int Segmented::segmentAt(const QPoint& pt) const
 {
     int x = 3;
@@ -900,23 +929,30 @@ void Segmented::paintEvent(QPaintEvent*)
     p.setPen(QPen(color::border_3, 1));
     p.setBrush(color::field_bg);
     p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::control + 1, radius::control + 1);
+    // The selection pill, on its way to the current segment or on it.
+    if (m_current >= 0 && m_current < count()) {
+        const QRectF to = segmentRect(m_current);
+        const qreal t = m_slide->value();
+        const QRectF pill = t >= 1.0 ? to
+                                     : QRectF(m_slideFrom.x() + (to.x() - m_slideFrom.x()) * t, to.y(),
+                                              m_slideFrom.width() + (to.width() - m_slideFrom.width()) * t, to.height());
+        p.setPen(QPen(withAlpha(color::accent_hi, 80), 1));
+        p.setBrush(accentGradient(pill, 70));
+        p.drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
+    }
     int x = 3;
     for (int i = 0; i < count(); ++i) {
         const auto& s = m_segments[size_t(i)];
         const int w = segmentWidth(i);
         const QRect r(x, 3, w, height() - 6);
         const bool sel = i == m_current;
-        const bool hov = i == m_hover && s.enabled && !sel;
-        if (sel) {
-            p.setPen(QPen(withAlpha(color::accent_hi, 80), 1));
-            p.setBrush(accentGradient(QRectF(r), 70));
-            p.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
-        } else if (hov) {
+        const qreal hov = s.enabled && !sel ? m_hover->amount(i) : 0.0;
+        if (hov > 0.0) {
             p.setPen(Qt::NoPen);
-            p.setBrush(color::bg_3);
+            p.setBrush(withAlpha(color::bg_3, int(255 * hov)));
             p.drawRoundedRect(r, radius::sm, radius::sm);
         }
-        QColor fg = !s.enabled ? color::fg_5 : sel ? color::fg_0 : hov ? color::fg_1 : color::fg_3;
+        const QColor fg = !s.enabled ? color::fg_5 : sel ? color::fg_0 : blend(color::fg_3, color::fg_1, hov);
         p.setPen(fg);
         p.setFont(sel ? font::bodyStrong() : font::body());
         int tx = x + 10;
@@ -941,20 +977,9 @@ void Segmented::mousePressEvent(QMouseEvent* e)
         setCurrentIndex(i);
 }
 
-void Segmented::mouseMoveEvent(QMouseEvent* e)
-{
-    const int i = segmentAt(e->pos());
-    if (i != m_hover) {
-        m_hover = i;
-        update();
-    }
-}
+void Segmented::mouseMoveEvent(QMouseEvent* e) { m_hover->setHovered(segmentAt(e->pos())); }
 
-void Segmented::leaveEvent(QEvent*)
-{
-    m_hover = -1;
-    update();
-}
+void Segmented::leaveEvent(QEvent*) { m_hover->setHovered(-1); }
 
 void Segmented::keyPressEvent(QKeyEvent* e)
 {
@@ -975,21 +1000,34 @@ void Segmented::keyPressEvent(QKeyEvent* e)
 
 // ---- progress -----------------------------------------------------------------
 
+namespace {
+constexpr int kFrameMs = 16;
+constexpr int kSweepPeriodMs = 2400; // one highlight sweep every 2.4 s ...
+constexpr int kSweepMs = 900;        // ... that takes 0.9 s to cross the fill
+constexpr int kBandPeriodMs = 1400;  // the indeterminate band, edge to edge
+} // namespace
+
 ProgressBar::ProgressBar(QWidget* parent) : QWidget(parent)
 {
     setFixedHeight(size::progress);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_timer.setInterval(16);
-    connect(&m_timer, &QTimer::timeout, this, [this] {
-        if (!window()->isMinimized()) // nothing to animate for a minimised window
-            update();
-    });
+    m_shown = new motion::Value(this, 0.0, motion::slow);
+    connect(&m_timer, &QTimer::timeout, this, &ProgressBar::tick);
 }
+
+double ProgressBar::shownFraction() const { return m_shown->value(); }
+bool ProgressBar::isAnimating() const { return m_timer.isActive() || m_shown->isRunning(); }
 
 void ProgressBar::setFraction(double f)
 {
     m_fraction = std::clamp(f, 0.0, 1.0);
+    // Forwards the fill eases; back (another job in the same bar) it jumps.
+    if (m_fraction < m_shown->value())
+        m_shown->jumpTo(m_fraction);
+    else
+        m_shown->animateTo(m_fraction);
+    updateTimer();
     update();
 }
 
@@ -998,17 +1036,45 @@ void ProgressBar::setState(State s)
     if (m_state == s)
         return;
     m_state = s;
-    m_t0 = QDateTime::currentMSecsSinceEpoch();
     updateTimer();
     update();
 }
 
+// The timer runs only for a visible bar whose job runs: every frame for the
+// indeterminate band; for the sweep 0.9 s out of every 2.4 s, with one long
+// sleep in between. Never when motion is off.
 void ProgressBar::updateTimer()
 {
-    if (m_state == State::Indeterminate && isVisible())
-        m_timer.start();
-    else
+    const bool band = m_state == State::Indeterminate;
+    const bool sweep = m_state == State::Determinate && m_fraction > 0.0 && m_fraction < 1.0;
+    if ((band || sweep) && isVisible() && motion::enabled()) {
+        if (!m_timer.isActive()) {
+            m_t0 = QDateTime::currentMSecsSinceEpoch();
+            m_timer.start(kFrameMs);
+        }
+    } else if (m_timer.isActive()) {
         m_timer.stop();
+        update(); // without the highlight
+    }
+}
+
+void ProgressBar::tick()
+{
+    if (window()->isMinimized()) { // nothing to animate for a minimised window
+        m_timer.start(500);
+        return;
+    }
+    if (m_state == State::Determinate) {
+        const qint64 t = (QDateTime::currentMSecsSinceEpoch() - m_t0) % kSweepPeriodMs;
+        if (t >= kSweepMs) {
+            m_timer.start(int(kSweepPeriodMs - t)); // sleep until the next sweep
+            update();
+            return;
+        }
+    }
+    if (m_timer.interval() != kFrameMs)
+        m_timer.start(kFrameMs);
+    update();
 }
 
 void ProgressBar::showEvent(QShowEvent*) { updateTimer(); }
@@ -1020,21 +1086,27 @@ void ProgressBar::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
     p.setBrush(color::bg_5);
-    p.drawRoundedRect(rect(), height() / 2.0, height() / 2.0);
+    const qreal rad = height() / 2.0;
+    p.drawRoundedRect(rect(), rad, rad);
     QColor fill = color::accent;
-    double frac = m_fraction;
+    double frac = m_shown->value();
     const bool gradient = m_state == State::Determinate || m_state == State::Indeterminate;
     switch (m_state) {
     case State::Done: fill = color::success; frac = 1.0; break;
     case State::Failed: fill = color::danger; break;
     case State::Paused: fill = color::fg_4; break;
     case State::Indeterminate: {
-        const double t = std::fmod((QDateTime::currentMSecsSinceEpoch() - m_t0) / 1400.0, 1.0);
-        const double segW = width() * 0.35;
+        // A gradient band, 30 % wide, that travels left to right (and stands
+        // in the middle while motion is off). It is cut at the track's ends.
+        const double segW = width() * 0.30;
+        const double t = m_timer.isActive()
+                             ? std::fmod((QDateTime::currentMSecsSinceEpoch() - m_t0) / double(kBandPeriodMs), 1.0) : 0.5;
         const double x = -segW + t * (width() + segW);
-        p.setClipRect(rect());
-        p.setBrush(accentGradient(QRectF(x, 0, segW, height())));
-        p.drawRoundedRect(QRectF(x, 0, segW, height()), height() / 2.0, height() / 2.0);
+        const double left = std::max(x, 0.0), right = std::min(x + segW, double(width()));
+        if (right - left >= 1.0) {
+            p.setBrush(accentGradient(QRectF(x, 0, segW, height())));
+            p.drawRoundedRect(QRectF(left, 0, right - left, height()), rad, rad);
+        }
         return;
     }
     case State::Determinate: break;
@@ -1045,7 +1117,21 @@ void ProgressBar::paintEvent(QPaintEvent*)
             p.setBrush(accentGradient(QRectF(0, 0, width(), height())));
         else
             p.setBrush(fill);
-        p.drawRoundedRect(fr, height() / 2.0, height() / 2.0);
+        p.drawRoundedRect(fr, rad, rad);
+        // While the job runs: a soft highlight that crosses the filled part.
+        if (m_state == State::Determinate && m_timer.isActive()) {
+            const qint64 t = (QDateTime::currentMSecsSinceEpoch() - m_t0) % kSweepPeriodMs;
+            if (t < kSweepMs) {
+                const double bandW = std::max(32.0, fr.width() * 0.35);
+                const double x = -bandW + (double(t) / kSweepMs) * (fr.width() + bandW);
+                QLinearGradient light(QPointF(x, 0), QPointF(x + bandW, 0));
+                light.setColorAt(0, withAlpha(color::on_accent, 0));
+                light.setColorAt(0.5, withAlpha(color::on_accent, 64));
+                light.setColorAt(1, withAlpha(color::on_accent, 0));
+                p.setBrush(light);
+                p.drawRoundedRect(fr, rad, rad); // the fill's own shape: nothing spills past its round end
+            }
+        }
     }
 }
 

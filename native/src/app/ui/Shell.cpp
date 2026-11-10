@@ -1,6 +1,7 @@
 #include "app/ui/Shell.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 
 #include <QEvent>
 #include <QHBoxLayout>
@@ -13,6 +14,28 @@
 namespace fw::ui {
 
 using namespace theme;
+
+namespace {
+
+// The sidebar's one selection bar: it slides from item to item.
+class SelectionBar : public QWidget {
+public:
+    explicit SelectionBar(QWidget* parent) : QWidget(parent)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setProperty("fwNoRing", true);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        NavItem::paintSelectionBar(p, QRectF(rect()));
+    }
+};
+
+} // namespace
 
 // ---- nav item ------------------------------------------------------------------
 
@@ -27,6 +50,19 @@ NavItem::NavItem(const QString& key, const QString& iconName, const QString& tex
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFixedHeight(size::navItem);
     setProperty("fwRadius", radius::control);
+    m_hover = new motion::Value(this, 0.0, motion::fast);
+}
+
+void NavItem::enterEvent(QEnterEvent* e)
+{
+    m_hover->animateTo(1.0);
+    QAbstractButton::enterEvent(e);
+}
+
+void NavItem::leaveEvent(QEvent* e)
+{
+    m_hover->animateTo(0.0);
+    QAbstractButton::leaveEvent(e);
 }
 
 void NavItem::setCompact(bool compact)
@@ -74,8 +110,10 @@ void NavItem::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const bool sel = isChecked();
-    const bool hover = underMouse();
     const bool down = isDown();
+    if (!underMouse() && m_hover->target() > 0.0)
+        m_hover->animateTo(0.0); // the pointer left without a leave event (the item was hidden under it)
+    const qreal hover = m_hover->value(); // fades in and out
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (sel) {
         // Selected: the signature gradient as an 18 % tint, and the bar.
@@ -84,16 +122,18 @@ void NavItem::paintEvent(QPaintEvent*)
         p.drawRoundedRect(r, radius::control, radius::control);
         if (!m_externalBar)
             paintSelectionBar(p, barRect());
-    } else if (down || hover) {
+    } else if (down || hover > 0.0) {
         p.setPen(Qt::NoPen);
-        p.setBrush(down ? color::bg_3 : withAlpha(color::bg_3, 153)); // hover: bg_3 at 60 %
+        p.setBrush(down ? color::bg_3 : withAlpha(color::bg_3, int(153 * hover))); // hover: bg_3 at 60 %
         p.drawRoundedRect(r, radius::control, radius::control);
     }
-    const QColor iconColor = sel ? color::accent_hi : hover ? color::fg_0 : color::fg_4;
-    const QColor textColor = sel ? color::fg_0 : hover ? color::fg_0 : color::fg_2;
+    const QColor textColor = sel ? color::fg_0 : blend(color::fg_2, color::fg_0, hover);
     const int ix = m_compact ? (width() - size::icon) / 2 : 14;
-    p.drawPixmap(QRect(ix, (height() - size::icon) / 2, size::icon, size::icon),
-                 iconPixmap(m_icon, size::icon, iconColor, devicePixelRatioF()));
+    const QRect iconRect(ix, (height() - size::icon) / 2, size::icon, size::icon);
+    if (sel)
+        p.drawPixmap(iconRect, iconPixmap(m_icon, size::icon, color::accent_hi, devicePixelRatioF()));
+    else
+        drawIconFade(p, iconRect, m_icon, size::icon, color::fg_4, color::fg_0, hover, devicePixelRatioF());
     if (!m_compact) {
         p.setPen(textColor);
         p.setFont(sel ? font::bodyStrong() : font::body());
@@ -145,6 +185,40 @@ Sidebar::Sidebar(QWidget* parent) : QWidget(parent)
         if (auto* n = qobject_cast<NavItem*>(b))
             emit selected(n->key());
     });
+    // One selection bar for all items, over them: it slides to the item
+    // that becomes current.
+    m_bar = new SelectionBar(inner);
+    m_barY = new motion::Value(inner, 0.0, motion::base);
+    m_barY->onChange([this] { m_bar->move(m_bar->x(), qRound(m_barY->value())); });
+}
+
+void Sidebar::syncBar(bool animate)
+{
+    NavItem* cur = m_items.value(current());
+    if (!cur || cur->isHidden()) {
+        m_bar->hide();
+        return;
+    }
+    const QRect r = cur->barRect().translated(cur->pos());
+    const bool slide = animate && !m_bar->isHidden();
+    m_bar->resize(r.size());
+    if (slide) {
+        m_bar->move(r.x(), m_bar->y());
+        m_barY->animateTo(r.y());
+    } else {
+        m_barY->jumpTo(r.y());
+        m_bar->move(r.topLeft());
+    }
+    m_bar->raise();
+    m_bar->show();
+}
+
+bool Sidebar::eventFilter(QObject* watched, QEvent* event)
+{
+    // An item moved or changed size (first layout, compact mode): the bar follows at once.
+    if ((event->type() == QEvent::Move || event->type() == QEvent::Resize) && qobject_cast<NavItem*>(watched))
+        syncBar(false);
+    return QWidget::eventFilter(watched, event);
 }
 
 void Sidebar::paintEvent(QPaintEvent*)
@@ -175,6 +249,12 @@ NavItem* Sidebar::addItem(const QString& key, const QString& iconName, const QSt
     m_group->addButton(item);
     m_layout->addWidget(item);
     connect(item, &NavItem::moveFocusRequested, this, [this, item](int delta) { focusNeighbour(item, delta); });
+    item->setExternalBar(true);
+    item->installEventFilter(this);
+    connect(item, &QAbstractButton::toggled, this, [this](bool on) {
+        if (on)
+            syncBar(true);
+    });
     return item;
 }
 

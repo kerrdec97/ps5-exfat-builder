@@ -1,6 +1,7 @@
 #include "app/ui/LibraryGrid.h"
 
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Style.h"
 
 #include <QContextMenuEvent>
@@ -143,6 +144,10 @@ LibraryGrid::LibraryGrid(QWidget* parent) : QWidget(parent)
     setProperty("fwNoRing", true); // the current item shows the focus itself
     setAccessibleName(QStringLiteral("Items"));
     m_headers = {QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Formats"), QStringLiteral("Status")};
+    m_hover = new motion::HoverFade(this, [this](int i) {
+        if (i < count())
+            update(itemRect(i).adjusted(-4, -4, 4, 4)); // one tile, not the grid
+    });
 }
 
 int LibraryGrid::coverDecodeCount() { return covers().decodes; }
@@ -162,7 +167,7 @@ void LibraryGrid::setItems(std::vector<GridItem> items)
     }
     const bool changed = keep != m_selected;
     m_selected = keep;
-    m_hover = -1;
+    m_hover->reset();
     m_anchor = std::min(m_anchor, count() - 1);
     updateGeometry();
     update();
@@ -414,9 +419,9 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     const GridItem& it = m_items[size_t(i)];
     const QRectF r = QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5);
     const bool sel = m_selected.contains(it.key);
-    const bool hov = i == m_hover;
+    const qreal hov = m_hover->amount(i); // 0..1: the hover tint fades
     // Card.
-    paintPlate(p, r, radius::md, hov ? 1.0 : 0.0);
+    paintPlate(p, r, radius::md, hov);
     // Cover.
     const QRectF cover(r.left() + 1, r.top() + 1, r.width() - 2, r.width() - 2);
     paintCover(p, it, cover, radius::md - 1, false);
@@ -446,7 +451,7 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
         p.setPen(QPen(QBrush(accentGradient(r, 240)), 2));
         p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
     }
-    if (sel || hov || !m_selected.isEmpty())
+    if (sel || i == m_hover->hovered() || !m_selected.isEmpty())
         paintCheck(p, checkRect(i), sel, true);
     // Keyboard focus only, and inside the tile: outside it the grid's own
     // edge would cut the ring of the first row and of the outer columns.
@@ -490,10 +495,10 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     const GridItem& it = m_items[size_t(i)];
     const QRectF r = QRectF(rect);
     const bool sel = m_selected.contains(it.key);
-    const bool hov = i == m_hover;
-    if (sel || hov) {
+    const qreal hov = m_hover->amount(i);
+    if (sel || hov > 0.0) {
         p.setPen(Qt::NoPen);
-        p.setBrush(sel ? color::accent_lo : color::bg_3);
+        p.setBrush(sel ? color::accent_lo : withAlpha(color::bg_3, int(255 * hov)));
         p.drawRoundedRect(r.adjusted(0, 2, 0, -2), radius::sm, radius::sm);
     }
     paintCheck(p, checkRect(i), sel, false);
@@ -599,24 +604,13 @@ void LibraryGrid::mouseDoubleClickEvent(QMouseEvent* e)
 void LibraryGrid::mouseMoveEvent(QMouseEvent* e)
 {
     const int i = itemAt(e->position().toPoint());
-    if (i != m_hover) {
-        const int old = m_hover;
-        m_hover = i;
+    if (i != m_hover->hovered()) {
         setCursor(i >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        if (old >= 0 && old < count())
-            update(itemRect(old).adjusted(-4, -4, 4, 4));
-        if (i >= 0)
-            update(itemRect(i).adjusted(-4, -4, 4, 4));
+        m_hover->setHovered(i); // repaints the tile it left and the one it entered
     }
 }
 
-void LibraryGrid::leaveEvent(QEvent*)
-{
-    const int old = m_hover;
-    m_hover = -1;
-    if (old >= 0 && old < count())
-        update(itemRect(old).adjusted(-4, -4, 4, 4));
-}
+void LibraryGrid::leaveEvent(QEvent*) { m_hover->setHovered(-1); }
 
 void LibraryGrid::contextMenuEvent(QContextMenuEvent* e)
 {

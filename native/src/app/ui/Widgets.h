@@ -26,6 +26,11 @@ class QMimeData;
 
 namespace fw::ui {
 
+namespace motion {
+class Value;
+class HoverFade;
+} // namespace motion
+
 // ---- labels ------------------------------------------------------------------
 enum class TextStyle { Display, Title, Stat, Subtitle, BodyStrong, Body, Caption, Overline, Mono, MonoSmall };
 QFont fontFor(TextStyle style);
@@ -244,6 +249,10 @@ public:
     explicit Switch(QWidget* parent = nullptr);
     QSize sizeHint() const override { return {theme::size::switchW, theme::size::switchH}; }
 
+    // 0 = off, 1 = on, in between while the knob slides (tests).
+    qreal position() const;
+    bool isAnimating() const;
+
 protected:
     void paintEvent(QPaintEvent* e) override;
     void enterEvent(QEnterEvent* e) override;
@@ -251,6 +260,7 @@ protected:
 
 private:
     bool m_hover = false;
+    motion::Value* m_position; // the knob slides, the track cross-fades
 };
 
 // ---- segmented control -----------------------------------------------------------
@@ -270,6 +280,7 @@ public:
     void setSegmentEnabled(int index, bool enabled);
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
+    bool isAnimating() const; // the selection pill is sliding (tests)
 signals:
     void currentChanged(int index);
 
@@ -288,9 +299,12 @@ private:
     };
     int segmentAt(const QPoint& p) const;
     int segmentWidth(int i) const;
+    QRectF segmentRect(int i) const;
     std::vector<Segment> m_segments;
     int m_current = -1;
-    int m_hover = -1;
+    motion::HoverFade* m_hover;
+    motion::Value* m_slide; // 0..1 from m_slideFrom to the current segment
+    QRectF m_slideFrom;
 };
 
 // ---- progress --------------------------------------------------------------------
@@ -305,6 +319,11 @@ public:
     State state() const { return m_state; }
     QSize sizeHint() const override { return {120, theme::size::progress}; }
     QSize minimumSizeHint() const override { return {40, theme::size::progress}; }
+    // The fill eases to a new fraction: what is painted right now (tests).
+    double shownFraction() const;
+    // A timer or an animation of this bar is running (tests): only while it
+    // is visible and its job runs.
+    bool isAnimating() const;
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -313,10 +332,12 @@ protected:
 
 private:
     void updateTimer();
+    void tick();
     double m_fraction = 0;
     State m_state = State::Determinate;
-    QTimer m_timer;
+    QTimer m_timer;       // frames of the sweep / the indeterminate band, and the wait between sweeps
     qint64 m_t0 = 0;
+    motion::Value* m_shown; // the painted fraction
 };
 
 // Progress block: bar + percent (mono fg_0), caption line, optional stepper.

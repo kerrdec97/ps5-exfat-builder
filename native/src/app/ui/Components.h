@@ -67,7 +67,7 @@ private:
     int at(const QPoint& p) const;
     std::vector<Item> m_items;
     int m_current = -1;
-    int m_hover = -1;
+    motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades
     bool m_keyNav = false; // an arrow key chose the tile last
 };
 
@@ -89,7 +89,8 @@ protected:
 
 private:
     QString m_icon, m_title, m_text;
-    bool m_hl = false, m_hover = false, m_compact = false;
+    bool m_hl = false, m_compact = false;
+    motion::Value* m_hover; // the hover glow fades
 };
 
 class Disclosure : public QWidget {
@@ -111,7 +112,9 @@ protected:
 
 private:
     QWidget* m_header;
-    QLabel* m_chevron;
+    QWidget* m_chevron;      // turns when the body opens
+    motion::Value* m_turn;   // 0 = closed (right), 1 = open (down)
+    motion::Value* m_hover;  // pointer over the header
     QLabel* m_title;
     QLabel* m_caption;
     Badge* m_summary;
@@ -162,7 +165,7 @@ private:
     QLabel* m_value;
     QLabel* m_caption;
     QHBoxLayout* m_footer;
-    bool m_hover = false;
+    motion::Value* m_hover; // the hover tint fades
 };
 
 class ActionCard : public QAbstractButton {
@@ -179,7 +182,7 @@ protected:
 
 private:
     QString m_icon, m_text;
-    bool m_hover = false;
+    motion::Value* m_hover; // the hover tint fades
 };
 
 } // namespace fw::ui

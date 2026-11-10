@@ -96,7 +96,7 @@ private:
     Mode m_mode = Mode::Grid;
     int m_current = -1;
     int m_anchor = -1;
-    int m_hover = -1;
+    motion::HoverFade* m_hover; // the item under the pointer; its tint fades
     bool m_keyNav = false; // the keyboard moved the current item last: show where it is
 };
 
