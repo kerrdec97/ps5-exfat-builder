@@ -87,10 +87,11 @@ QString plainTip(const QString& text)
 
 QString regionLabel(const QString& code)
 {
-    if (code == u"UP") return QStringLiteral("US");
-    if (code == u"EP") return QStringLiteral("UK");
+    // The same names as the Region column.
+    if (code == u"UP") return QStringLiteral("Americas");
+    if (code == u"EP") return QStringLiteral("Europe");
     if (code == u"JP") return QStringLiteral("Japan");
-    if (code == u"HP") return QStringLiteral("Hong Kong");
+    if (code == u"HP") return QStringLiteral("Asia");
     if (code == u"KP") return QStringLiteral("Korea");
     return code;
 }
@@ -206,6 +207,13 @@ void DlcPage::buildListCard()
         updateState();
     });
     m_table->addAction(removeAct);
+    auto* iconAct = new QAction(QStringLiteral("Choose icon0.png…"), m_table);
+    connect(iconAct, &QAction::triggered, this, [this] {
+        const QList<int> rows = selectedRows();
+        if (!rows.isEmpty())
+            chooseIcon(rows.first());
+    });
+    m_table->addAction(iconAct);
     card->body()->addWidget(m_table, 1);
 
     auto* actions = new QWidget(card);
@@ -491,7 +499,10 @@ void DlcPage::addInputs(const QStringList& paths)
         }
     }
     if (added > 0 || failed > 0)
-        m_loadRow->set(QStringLiteral("%1 entries added; %2 files failed").arg(added).arg(failed), failed ? Tone::Warn : Tone::Ok);
+        m_loadRow->set(QStringLiteral("%1 added; %2 failed")
+                           .arg(added == 1 ? QStringLiteral("1 entry") : QStringLiteral("%1 entries").arg(added),
+                                failed == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(failed)),
+                       failed ? Tone::Warn : Tone::Ok);
     updateState();
 }
 
@@ -891,10 +902,10 @@ void DlcPage::changeRegion()
     const QString sourceTid = first.item.titleId;
 
     auto* s = new Sheet(window(), QStringLiteral("DLC regions / targets"), Sheet::Icon::None, 1000);
-    s->addText(QStringLiteral("Selected: %1 DLC entries. Original: %2 / %3<br>Find the game, choose a region, then apply. Each DLC "
+    s->addText(QStringLiteral("Selected: %1. Original: %2 / %3<br>Find the game, choose a region, then apply. Each DLC "
                               "item keeps its own suffix; an exact observed DLC SKU is used when available. Game identifiers can "
                               "be shared across regions.")
-                   .arg(rows.size())
+                   .arg(rows.size() == 1 ? QStringLiteral("1 DLC entry") : QStringLiteral("%1 DLC entries").arg(rows.size()))
                    .arg(Sheet::monoSpan(sourceTid), Sheet::monoSpan(sourceCid)));
     // Query row
     auto* qrow = new QWidget(s);
@@ -1148,8 +1159,9 @@ void DlcPage::changeRegion()
                 status->setText(err);
                 return;
             }
-            appendLog(QStringLiteral("Target set: %1 row(s) \u2192 %2 / %3 (%4)")
-                          .arg(rows.size()).arg(targetTid->text(), targetCid->text(), st->evidence));
+            appendLog(QStringLiteral("Target set: %1 → %2 / %3 (%4)")
+                          .arg(rows.size() == 1 ? QStringLiteral("1 row") : QStringLiteral("%1 rows").arg(rows.size()))
+                          .arg(targetTid->text(), targetCid->text(), st->evidence));
             s->close(add ? 1 : 2);
         });
     }
@@ -1248,11 +1260,11 @@ QString DlcPage::validateForm()
         return QStringLiteral("Packages are still being read. Try again in a moment.");
     if (const QString k = dlc::hex32Problem(m_key->text().trimmed()); !k.isEmpty()) {
         setInputError(m_key, true);
-        return QStringLiteral("The entitlement key must be exactly 32 hex characters.");
+        return QStringLiteral("The entitlement key must be exactly 32 hexadecimal characters.");
     }
     if (const QString p = dlc::hex32Problem(m_passcode->text().trimmed()); !p.isEmpty()) {
         setInputError(m_passcode, true);
-        return QStringLiteral("PKG source passcode must be exactly 32 hex characters.");
+        return QStringLiteral("The PKG source passcode must be exactly 32 hexadecimal characters.");
     }
     if (outputFolder().isEmpty())
         return QStringLiteral("Select the output folder.");

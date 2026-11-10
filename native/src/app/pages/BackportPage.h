@@ -203,6 +203,7 @@ private:
     // activity log
     void log(const QString& level, const QString& message, bool toBox = true);
     static bool testMode();
+    static bool mayReadSharedFiles();
     bool persistAllowed() const;
     bool reloadSettings(int changing = 0);
     void persistSettings(int keys);

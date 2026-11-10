@@ -172,9 +172,13 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
         w->setWordWrap(true);
         v->addWidget(w);
         if (!who[2].isEmpty()) {
-            auto* g = label(who[2], TextStyle::Caption, color::fg_4, cell);
-            g->setToolTip(QStringLiteral("https://") + who[2]);
-            v->addWidget(g);
+            // It reads as a link, so it is one.
+            const QString url = QStringLiteral("https://") + who[2];
+            auto* g = new Link(who[2], cell);
+            g->setFont(font::caption());
+            g->setToolTip(url);
+            connect(g, &Link::activated, this, [url] { QDesktopServices::openUrl(QUrl(url)); });
+            v->addWidget(g, 0, Qt::AlignLeft);
         }
         v->addStretch(1);
         pg->addWidget(cell);
@@ -207,7 +211,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     content()->addWidget(columns);
 
     // ---- Third-party notices (folded)
-    auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("Full licence texts ship in the LICENSES folder next to the app."), this);
+    auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("The full licence texts are in the app's LICENSES folder."), this);
     third->setObjectName(QStringLiteral("about-notices"));
     const QList<QStringList> rows = thirdPartyComponents();
     third->setSummary(QStringLiteral("%1 components").arg(rows.size()));
@@ -232,6 +236,13 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     tgrid->setColumnStretch(0, 2);
     tgrid->setColumnStretch(1, 3);
     third->body()->addLayout(tgrid);
+    // The release is one exe that unpacks itself: show where the texts are.
+    const QString licences = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("LICENSES"));
+    if (QFileInfo(licences).isDir()) {
+        auto* open = button(QStringLiteral("Open the LICENSES folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), third);
+        connect(open, &QPushButton::clicked, this, [licences] { openInFileManager(licences); });
+        third->body()->addWidget(open, 0, Qt::AlignLeft);
+    }
     content()->addWidget(third);
 }
 

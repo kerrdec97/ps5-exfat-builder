@@ -39,6 +39,7 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     m_folder = new PathField(PathField::Mode::Directory, pick);
     m_folder->setDialogTitle(QStringLiteral("Choose the game folder (app0)"));
     m_folder->setPlaceholder(QStringLiteral("The game's app0 folder, where dlc_emu.ini lives"));
+    m_folder->edit()->setAccessibleName(QStringLiteral("Game folder"));
     pick->body()->addWidget(m_folder);
     auto* help = caption(QStringLiteral("dlc_emu.ini lists the add-ons the DLC emulator presents to the game."), pick);
     help->setToolTip(QStringLiteral("One entry per add-on. The file lives in the game's app0 folder and may hold at most 1,024 entries and 32 KiB."));
@@ -65,6 +66,7 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     for (QWidget* b : std::initializer_list<QWidget*>{m_find, m_add, m_duplicate, m_remove, m_save})
         h->addWidget(b);
     m_table = new QTableWidget(0, ColumnCount, card);
+    m_table->setAccessibleName(QStringLiteral("dlc_emu.ini entries"));
     m_table->setHorizontalHeaderLabels({QStringLiteral("Section"), QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"), QStringLiteral("download_status"), QStringLiteral("entitlement_key")});
     m_table->horizontalHeader()->setFixedHeight(32);
     m_table->horizontalHeader()->setHighlightSections(false);
@@ -197,6 +199,7 @@ void DlcEmuEditor::addRow(const dlc::Entry& e)
     }
     section->setCurrentText(e.section);
     section->setProperty("fwNoRing", false);
+    section->setAccessibleName(QStringLiteral("Section type"));
     connect(section, &QComboBox::currentIndexChanged, this, [this](int) { m_dirty = true; revalidate(); });
     m_table->setCellWidget(r, SectionCol, section);
     auto* anchor = new QTableWidgetItem;
@@ -207,6 +210,7 @@ void DlcEmuEditor::addRow(const dlc::Entry& e)
         const QString key = kColumns[c - ContentIdCol];
         if (c == StatusCol) {
             auto* status = new QComboBox(m_table);
+            status->setAccessibleName(QStringLiteral("download_status"));
             status->addItem(QString());
             status->addItems(dlc::downloadStatuses());
             if (!e.get(key).isEmpty() && status->findText(e.get(key)) < 0) {

@@ -37,6 +37,7 @@ namespace {
 QLineEdit* searchInput(const QString& placeholder, QWidget* parent)
 {
     auto* e = textInput(placeholder, false, parent);
+    e->setAccessibleName(placeholder);
     e->setClearButtonEnabled(true);
     e->setToolTip(QStringLiteral("Title, title ID or file name"));
     e->addAction(icon(QStringLiteral("search"), color::fg_4), QLineEdit::LeadingPosition);
@@ -859,6 +860,7 @@ void LibraryPage::showRenamePreview(const QJsonArray& items, const QString& pres
     auto* s = new Sheet(window(), QStringLiteral("Preview: %1").arg(plural(items.size(), QStringLiteral("dump"), QStringLiteral("dumps"))), Sheet::Icon::None, 900);
     s->addText(QStringLiteral("Pattern %1. You can edit a proposed name; names that exist already are skipped.").arg(Sheet::monoSpan(preset)));
     auto* table = new QTableWidget(0, 4, s);
+    table->setAccessibleName(QStringLiteral("Folders to rename"));
     table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("Proposed name"), QStringLiteral("Status")});
     table->horizontalHeader()->setFixedHeight(32);
     table->horizontalHeader()->setHighlightSections(false);
@@ -1233,6 +1235,7 @@ void LibraryPage::renameImagesSheet(const QStringList& paths)
         s->body()->addWidget(field(QStringLiteral("New name"), name, QStringLiteral("The extension stays; nothing inside the image changes."), s));
     } else {
         table = new QTableWidget(int(list.size()), 3, s);
+        table->setAccessibleName(QStringLiteral("Images to rename"));
         table->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Current name"), QStringLiteral("New name")});
         table->horizontalHeader()->setFixedHeight(32);
         table->horizontalHeader()->setHighlightSections(false);
@@ -1349,6 +1352,7 @@ QWidget* LibraryPage::buildLanguagesTab()
     }
     th->addWidget(m_chips);
     m_langTable = new QTableWidget(0, 5, m_langCard);
+    m_langTable->setAccessibleName(QStringLiteral("Languages"));
     m_langTable->setHorizontalHeaderLabels({QStringLiteral("Keep"), QStringLiteral("Language"), QStringLiteral("Code"), QStringLiteral("Folder or file"), QStringLiteral("Size")});
     m_langTable->horizontalHeader()->setFixedHeight(32);
     m_langTable->horizontalHeader()->setHighlightSections(false);

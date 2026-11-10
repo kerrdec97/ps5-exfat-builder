@@ -6,8 +6,8 @@
 //             list (LibraryGrid): title, ID, version, size and the formats this
 //             game exists in (its folder plus any image of it found in the
 //             library and output folders); search, filter, sort; bulk build /
-//             backport / remove; per game build, FPKG, backport, languages,
-//             DLC list, rename, show in folder.
+//             backport / remove; per game build, FPKG, pack with zstd,
+//             backport, languages, DLC list, rename, show in folder.
 //  * Images — .exfat / .ffpkg / .ffpfs / .ffpfsc files in the library folders,
 //             their sub-folders and the default output folder, with the title
 //             and ID read from inside each image (services/ImageInfo); open in

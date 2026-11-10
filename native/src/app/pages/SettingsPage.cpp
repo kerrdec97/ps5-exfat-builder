@@ -280,7 +280,6 @@ QString SettingsPage::sectionCaption(const QString& section) const
         {QStringLiteral("FPKG"), QStringLiteral("Defaults for FPKG packages.")},
         {QStringLiteral("PFS"), QStringLiteral("Defaults for PFS and FFPFSC images.")},
         {QStringLiteral("PlayGo"), QStringLiteral("PlayGo chunk layout and AMPR index.")},
-        {QStringLiteral("Backport"), QStringLiteral("Defaults for Backport jobs.")},
         {QStringLiteral("DLC"), QStringLiteral("DLC packages from DLC INIs and DLC .pkg files.")},
         {QStringLiteral("Firmware and SDK"), QStringLiteral("Firmware targets and SDK versions.")},
         {QStringLiteral("Tools"), QStringLiteral("External tools the app uses. Nothing is downloaded; a private build includes your own copies.")},
