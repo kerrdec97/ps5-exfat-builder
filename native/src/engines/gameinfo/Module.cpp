@@ -170,13 +170,9 @@ public:
         if (!run.ok())
             return run.takeError();
         const RenameRunResult& r = run.value();
-        if (ctx.token.isCancelled())
-            return Error(ErrorCode::Cancelled,
-                         QStringLiteral("Cancelled after renaming %1 dump(s). Undo log: %2")
-                             .arg(r.renamed)
-                             .arg(QDir::toNativeSeparators(r.undoLogPath)));
         fillOutcome(o, r);
-        o.summary = QStringLiteral("Renamed %1 dump(s).").arg(r.renamed);
+        o.summary = r.cancelled ? QStringLiteral("Cancelled after renaming %1 dump(s).").arg(r.renamed)
+                                : QStringLiteral("Renamed %1 dump(s).").arg(r.renamed);
         if (r.skipped + r.failed > 0)
             o.summary += QStringLiteral("  %1 skipped/failed.").arg(r.skipped + r.failed);
         // Verification: every renamed dump is at its new name and gone from the old one.
@@ -187,10 +183,17 @@ public:
                     || (QFileInfo::exists(it.sourcePath)
                         && QDir::cleanPath(it.sourcePath).compare(QDir::cleanPath(it.targetPath), Qt::CaseInsensitive) != 0)))
                 ++bad;
-        o.verification = (bad + r.failed) == 0 ? Verification::Passed : Verification::Failed;
-        o.verificationDetail = bad + r.failed == 0
-                                   ? QStringLiteral("%1 folder(s) checked at their new names").arg(r.renamed)
-                                   : QStringLiteral("%1 dump(s) could not be renamed").arg(bad + r.failed);
+        if (bad + r.failed > 0) {
+            o.verification = Verification::Failed;
+            o.verificationDetail = QStringLiteral("%1 dump(s) could not be renamed").arg(bad + r.failed);
+        } else if (r.cancelled) {
+            // What was renamed stays renamed and is in the undo log; the rest was not reached.
+            o.verification = Verification::Inconclusive;
+            o.verificationDetail = QStringLiteral("cancelled; %1 folder(s) checked at their new names").arg(r.renamed);
+        } else {
+            o.verification = Verification::Passed;
+            o.verificationDetail = QStringLiteral("%1 folder(s) checked at their new names").arg(r.renamed);
+        }
         ctx.log.info(o.summary);
         return o;
     }
@@ -205,20 +208,39 @@ private:
     }
 
     // Per-item edits from the preview: {"source": path, "name": text, "selected": bool}.
+    // When an apply job carries edits, a dump that none of them names is left
+    // alone: it was not in the preview the user approved.
     void applyEdits(std::vector<RenameItem>& plan) const
     {
+        if (!m_p.contains(QStringLiteral("items")))
+            return;
+        const auto key = [](const QString& path) {
+            const QString c = QDir::cleanPath(QDir::fromNativeSeparators(path));
+#ifdef Q_OS_WIN
+            return c.toLower();
+#else
+            return c;
+#endif
+        };
         const QJsonArray edits = m_p.value(QStringLiteral("items")).toArray();
+        std::vector<bool> named(plan.size(), false);
         for (const auto& v : edits) {
             const QJsonObject e = v.toObject();
-            const QString src = QDir::cleanPath(QDir::fromNativeSeparators(e.value(QStringLiteral("source")).toString()));
-            for (auto& it : plan)
-                if (QDir::cleanPath(it.sourcePath) == src) {
+            const QString src = key(e.value(QStringLiteral("source")).toString());
+            for (std::size_t i = 0; i < plan.size(); ++i)
+                if (key(plan[i].sourcePath) == src) {
+                    named[i] = true;
                     if (e.contains(QStringLiteral("name")))
-                        it.proposedName = e.value(QStringLiteral("name")).toString();
+                        plan[i].proposedName = e.value(QStringLiteral("name")).toString();
                     if (e.contains(QStringLiteral("selected")))
-                        it.selected = e.value(QStringLiteral("selected")).toBool(true);
+                        plan[i].selected = e.value(QStringLiteral("selected")).toBool(true);
                 }
         }
+        if (mode() != u"apply")
+            return;
+        for (std::size_t i = 0; i < plan.size(); ++i)
+            if (!named[i])
+                plan[i].selected = false;
     }
 
     static void fillOutcome(JobOutcome& o, const RenameRunResult& r)
@@ -226,8 +248,10 @@ private:
         QJsonArray items;
         for (const auto& it : r.items) {
             items.append(it.toJson());
+            // (A "not selected" item with a message is one a cancel left untouched.)
             if (it.status == RenameStatus::Failed || it.status == RenameStatus::TargetExists
-                || it.status == RenameStatus::Duplicate || it.status == RenameStatus::InvalidName)
+                || it.status == RenameStatus::Duplicate || it.status == RenameStatus::InvalidName
+                || (it.status == RenameStatus::NotSelected && !it.message.isEmpty()))
                 o.warnings << QStringLiteral("%1: %2%3").arg(it.currentName, renameStatusName(it.status),
                                                              it.message.isEmpty() ? QString() : QStringLiteral(" — ") + it.message);
         }
@@ -248,10 +272,35 @@ private:
             return r.takeError();
         JobOutcome o;
         fillOutcome(o, r.value());
-        o.summary = QStringLiteral("Restored %1 dump name(s).").arg(r.value().renamed);
-        o.verification = r.value().failed == 0 ? Verification::Passed : Verification::Failed;
-        o.verificationDetail = r.value().failed == 0 ? QStringLiteral("every logged rename was reversed")
-                                                     : QStringLiteral("%1 rename(s) could not be reversed").arg(r.value().failed);
+        // Not reversed without being an error: the original name is taken, or
+        // the undo was cancelled before the entry was reached.
+        int blocked = 0, notReached = 0;
+        for (const auto& it : r.value().items) {
+            blocked += it.status == RenameStatus::TargetExists ? 1 : 0;
+            notReached += it.status == RenameStatus::NotSelected ? 1 : 0;
+        }
+        const int left = r.value().failed + blocked + notReached;
+        o.summary = r.value().cancelled
+                        ? QStringLiteral("Cancelled after restoring %1 dump name(s).").arg(r.value().renamed)
+                        : QStringLiteral("Restored %1 dump name(s).").arg(r.value().renamed);
+        if (left > 0)
+            o.summary += QStringLiteral("  %1 not restored.").arg(left);
+        if (r.value().failed > 0) {
+            o.verification = Verification::Failed;
+            o.verificationDetail = QStringLiteral("%1 rename(s) could not be reversed").arg(r.value().failed + blocked);
+        } else if (left > 0) {
+            o.verification = Verification::Inconclusive;
+            o.verificationDetail =
+                blocked > 0 && notReached > 0
+                    ? QStringLiteral("%1 rename(s) not reversed: the original name is taken; %2 not reached before the cancel")
+                          .arg(blocked)
+                          .arg(notReached)
+                    : blocked > 0 ? QStringLiteral("%1 rename(s) not reversed: the original name is taken").arg(blocked)
+                                  : QStringLiteral("cancelled; %1 rename(s) not reversed").arg(notReached);
+        } else {
+            o.verification = Verification::Passed;
+            o.verificationDetail = QStringLiteral("every logged rename was reversed");
+        }
         return o;
     }
 

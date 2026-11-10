@@ -245,6 +245,76 @@ private slots:
         QCOMPARE(i->titleId, QStringLiteral("CUSA01234"));
         QVERIFY(!i->canRebuild);
         QVERIFY(i->rebuildLimitation.contains(QStringLiteral("PS4 PKG inspection is supported")));
+        // Only the hex digits are upper-cased, not the words around them.
+        QCOMPARE(i->drm, QStringLiteral("PS4 header DRM 0x0"));
+        for (const auto& [k, v] : i->metadata)
+            if (k == u"headerContentType")
+                QCOMPARE(v, QStringLiteral("0x1C"));
+    }
+
+    // A crafted param.sfo inside a PS4 package is refused before it costs memory or time.
+    void ps4InspectionRefusesHostileSfo()
+    {
+        struct Field {
+            QByteArray key;
+            quint32 length;
+        };
+        const auto package = [&](const QString& name, const std::vector<Field>& fields, quint32 claimedCount, quint32 dataBytes) {
+            QByteArray table, keys;
+            for (const Field& f : fields) {
+                QByteArray e(16, '\0');
+                qToLittleEndian<quint16>(quint16(keys.size()), e.data());
+                qToLittleEndian<quint16>(0x0204, e.data() + 2);
+                qToLittleEndian<quint32>(f.length, e.data() + 4);
+                table += e;
+                keys += f.key + '\0';
+            }
+            table.resize(qsizetype(claimedCount) * 16, '\0');
+            QByteArray sfo("\0PSF", 4);
+            sfo += QByteArray(16, '\0');
+            qToLittleEndian<quint32>(quint32(20 + table.size()), sfo.data() + 8);
+            qToLittleEndian<quint32>(quint32(20 + table.size() + keys.size()), sfo.data() + 12);
+            qToLittleEndian<quint32>(claimedCount, sfo.data() + 16);
+            sfo += table + keys + QByteArray(qsizetype(dataBytes), '\0');
+            QByteArray pkg(0x200, '\0');
+            pkg.replace(0, 4, QByteArray("\x7F" "CNT", 4));
+            qToBigEndian<quint32>(1, pkg.data() + 0x10);
+            qToBigEndian<quint32>(0x100, pkg.data() + 0x18);
+            pkg.replace(0x40, 36, "UP9000-CUSA01234_00-OLDPS4DLC0000001");
+            qToBigEndian<quint32>(0x1C, pkg.data() + 0x74);
+            QByteArray entry(32, '\0');
+            qToBigEndian<quint32>(0x1000, entry.data());
+            qToBigEndian<quint32>(0x200, entry.data() + 16);
+            qToBigEndian<quint32>(quint32(sfo.size()), entry.data() + 20);
+            pkg.replace(0x100, 32, entry);
+            pkg += sfo;
+            const QString p = QDir(dir(QStringLiteral("ps4-hostile"))).filePath(name);
+            fwtest::writeTextFile(p, pkg);
+            return p;
+        };
+        // A sane file with these helpers parses.
+        auto ok = inspectPs4Package(package(QStringLiteral("ok.pkg"), {{"TITLE", 8}, {"TITLE_ID", 8}}, 2, 64));
+        QVERIFY2(ok.ok(), ok.ok() ? "" : qPrintable(ok.error().message));
+        // Tens of thousands of entries (each would be scanned against all earlier ones).
+        auto many = inspectPs4Package(package(QStringLiteral("many.pkg"), {{"A", 0}}, 60000, 0));
+        QVERIFY(!many.ok());
+        QCOMPARE(many.error().code, ErrorCode::CorruptData);
+        // The same key twice with empty values used to slip through.
+        auto dup = inspectPs4Package(package(QStringLiteral("dup.pkg"), {{"TITLE", 0}, {"title", 0}}, 2, 0));
+        QVERIFY(!dup.ok());
+        QVERIFY2(dup.error().message.contains(QStringLiteral("Duplicate")), qPrintable(dup.error().message));
+        // One value far larger than any real one.
+        auto big = inspectPs4Package(package(QStringLiteral("big.pkg"), {{"TITLE", 1024 * 1024}}, 1, 1024 * 1024));
+        QVERIFY(!big.ok());
+        QCOMPARE(big.error().code, ErrorCode::CorruptData);
+        // Messages keep their case.
+        QByteArray cut = readAll(package(QStringLiteral("cut.pkg"), {{"TITLE", 8}}, 1, 64));
+        qToBigEndian<quint32>(quint32(cut.size()), reinterpret_cast<uchar*>(cut.data()) + 0x100 + 20); // entry larger than the file
+        const QString cutPath = QDir(dir(QStringLiteral("ps4-hostile"))).filePath(QStringLiteral("cut2.pkg"));
+        fwtest::writeTextFile(cutPath, cut);
+        auto outside = inspectPs4Package(cutPath);
+        QVERIFY(!outside.ok());
+        QCOMPARE(outside.error().message, QStringLiteral("PS4 entry 0x1000 is outside the package bounds."));
     }
 
     void cliInfoParsing()

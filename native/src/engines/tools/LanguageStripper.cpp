@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -360,26 +361,52 @@ Result<StripResult> stripLanguages(const StripPlan& plan, const CancellationToke
         progress->setPhases({QStringLiteral("Backing up"), QStringLiteral("Checking backup"), QStringLiteral("Removing")}, {10, 4, 1});
         progress->beginPhase(0, total);
     }
+    // What goes into the backup, as it was just before it was read. Removal
+    // works from this list (checked against the verified ZIP), never from a
+    // second look at the folder.
+    struct BackedFile {
+        QString rel, abs;
+        qint64 size;
+        QDateTime modified;
+    };
+    struct BackedItem {
+        QString rel, abs;
+        bool isFile = false;
+        std::vector<BackedFile> files;
+        QStringList dirs; // below `abs`
+    };
+    std::vector<BackedItem> backed;
     {
         zip::Writer w;
         FW_TRY(w.open(result.backupZip));
         const QDir base(root);
         for (const QString& abs : absPaths) {
+            BackedItem item;
+            item.abs = abs;
+            item.rel = base.relativeFilePath(abs);
             const QFileInfo fi(abs);
             if (fi.isFile()) {
-                FW_TRY(w.addFile(base.relativeFilePath(abs), abs, zip::Method::Store, token, progress));
+                item.isFile = true;
+                item.files.push_back({item.rel, abs, fi.size(), fi.lastModified()});
+                FW_TRY(w.addFile(item.rel, abs, zip::Method::Store, token, progress));
+                backed.push_back(std::move(item));
                 continue;
             }
-            FW_TRY(w.addDirectory(base.relativeFilePath(abs)));
+            FW_TRY(w.addDirectory(item.rel));
             QDirIterator it(abs, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
             while (it.hasNext()) {
                 it.next();
                 const QString rel = base.relativeFilePath(it.filePath());
-                if (it.fileInfo().isDir())
+                if (it.fileInfo().isDir()) {
                     FW_TRY(w.addDirectory(rel));
-                else
+                    item.dirs << it.filePath();
+                } else {
+                    const QFileInfo now(it.filePath()); // a fresh look, like the one before removal
+                    item.files.push_back({rel, it.filePath(), now.size(), now.lastModified()});
                     FW_TRY(w.addFile(rel, it.filePath(), zip::Method::Store, token, progress));
+                }
             }
+            backed.push_back(std::move(item));
         }
         QJsonArray items;
         for (const QString& abs : absPaths)
@@ -392,31 +419,107 @@ Result<StripResult> stripLanguages(const StripPlan& plan, const CancellationToke
     }
     if (progress)
         progress->beginPhase(1, total);
+    QHash<QString, qint64> verified; // file entry name -> size, from the ZIP that was read back
     {
         zip::Reader r;
         FW_TRY(r.open(result.backupZip));
         auto st = r.verifyAll(token, progress);
         if (!st.ok()) {
             QFile::remove(result.backupZip);
+            if (st.error().isCancelled())
+                return Error::cancelled();
             return Error(ErrorCode::VerificationFailed, QStringLiteral("The backup could not be verified, so nothing was removed."),
                          st.error().toLogString());
         }
+        for (const auto& e : r.entries())
+            if (!e.isDirectory())
+                verified.insert(e.name, qint64(e.uncompressedSize));
     }
     log.info(QStringLiteral("Language backup verified: %1").arg(QDir::toNativeSeparators(result.backupZip)));
 
     if (progress)
-        progress->beginPhase(2, absPaths.size(), 0, false);
-    for (const QString& abs : absPaths) {
-        LanguageItem m;
-        measure(abs, m);
-        const Status st = removeTreeSafely(abs, root);
-        if (st.ok()) {
+        progress->beginPhase(2, qint64(backed.size()), 0, false);
+    const auto removeLink = [](const QString& p) { return QFile::remove(p) || QDir().rmdir(p); };
+    const auto removeFile = [](const QString& p) {
+        if (QFile::remove(p))
+            return true;
+        QFile::setPermissions(p, QFileInfo(p).permissions() | QFileDevice::WriteOwner | QFileDevice::WriteUser);
+        return QFile::remove(p);
+    };
+    const auto removeEmptyDir = [](const QString& p) {
+        if (QDir().rmdir(p))
+            return true;
+        // A read-only folder: Windows refuses to remove it until the attribute is cleared.
+        QFile::setPermissions(p, QFileInfo(p).permissions() | QFileDevice::WriteOwner | QFileDevice::WriteUser);
+        return QDir().rmdir(p);
+    };
+    constexpr qsizetype kMaxListed = 200;
+    for (const BackedItem& item : backed) {
+        // Links are removed as links; nothing is deleted through one.
+        QStringList links;
+        if (!item.isFile && isJunctionOrSymlink(item.abs))
+            links << item.abs;
+        for (const QString& d : item.dirs)
+            if (isJunctionOrSymlink(d))
+                links << d;
+        const auto behindLink = [&links](const QString& p) {
+            for (const QString& l : links)
+                if (p.size() > l.size() && p.startsWith(l) && p.at(l.size()) == u'/')
+                    return true;
+            return false;
+        };
+        for (const BackedFile& f : item.files) {
+            if (behindLink(f.abs))
+                continue;
+            if (isJunctionOrSymlink(f.abs)) {
+                removeLink(f.abs);
+                continue;
+            }
+            const QFileInfo now(f.abs);
+            if (!now.exists())
+                continue;
+            const auto inZip = verified.constFind(f.rel);
+            if (!now.isFile() || now.size() != f.size || now.lastModified() != f.modified || inZip == verified.cend()
+                || inZip.value() != f.size) {
+                // Not what was backed up: it stays.
+                if (result.leftInPlace.size() < kMaxListed)
+                    result.leftInPlace << f.rel;
+                log.warn(QStringLiteral("Left in place, changed after it was backed up: %1").arg(f.rel));
+                continue;
+            }
+            if (removeFile(f.abs))
+                result.bytesFreed += f.size;
+            else
+                log.warn(QStringLiteral("Could not remove %1").arg(f.rel));
+        }
+        if (!item.isFile) {
+            for (const QString& l : std::as_const(links))
+                if (!behindLink(l))
+                    removeLink(l);
+            // Deepest first. Only an empty folder goes, so a file that appeared
+            // after the backup keeps its folder.
+            QStringList dirs = item.dirs;
+            dirs << item.abs;
+            std::sort(dirs.begin(), dirs.end(), [](const QString& a, const QString& b) { return a.size() > b.size(); });
+            for (const QString& d : std::as_const(dirs))
+                if (!links.contains(d) && !behindLink(d) && QFileInfo(d).isDir())
+                    removeEmptyDir(d);
+        }
+        if (!QFileInfo::exists(item.abs) && !QFileInfo(item.abs).isSymLink()) {
             ++result.removed;
-            result.bytesFreed += m.bytes;
-            log.info(QStringLiteral("Removed %1").arg(QDir(root).relativeFilePath(abs)));
+            log.info(QStringLiteral("Removed %1").arg(item.rel));
         } else {
-            result.failed << QDir(root).relativeFilePath(abs);
-            log.warn(QStringLiteral("Could not remove %1: %2").arg(QDir(root).relativeFilePath(abs), st.error().message));
+            result.failed << item.rel;
+            log.warn(QStringLiteral("Could not remove %1 completely").arg(item.rel));
+            // Say what is still there (files that were not in the backup included).
+            if (!item.isFile && !isJunctionOrSymlink(item.abs)) {
+                QDirIterator it(item.abs, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+                while (it.hasNext() && result.leftInPlace.size() < kMaxListed) {
+                    const QString rel = QDir(root).relativeFilePath(it.next());
+                    if (!result.leftInPlace.contains(rel))
+                        result.leftInPlace << rel;
+                }
+            }
         }
         if (progress)
             progress->advance(1);
@@ -424,51 +527,111 @@ Result<StripResult> stripLanguages(const StripPlan& plan, const CancellationToke
     return result;
 }
 
-Result<int> restoreLanguages(const QString& backupZip, const QString& gameRoot, const CancellationToken& token,
-                             ProgressReporter* progress)
+Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QString& gameRoot,
+                                            const CancellationToken& token, ProgressReporter* progress)
 {
     if (!isGameRoot(gameRoot))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is not a game folder (no eboot.bin).").arg(QDir::toNativeSeparators(gameRoot)));
+    const QString zipName = QFileInfo(backupZip).fileName();
     zip::Reader r;
     FW_TRY(r.open(backupZip));
-    if (!r.find(QString::fromLatin1(kManifestName)))
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is not a Language Stripper backup.").arg(QFileInfo(backupZip).fileName()));
-    for (const auto& e : r.entries())
-        if (zip::Reader::safeRelativePath(e.name).isEmpty())
-            return Error(ErrorCode::CorruptData, QStringLiteral("The backup contains an unsafe path (%1); nothing was restored.").arg(e.name));
+    const zip::Entry* manifestEntry = r.find(QString::fromLatin1(kManifestName));
+    if (!manifestEntry)
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is not a Language Stripper backup.").arg(zipName));
+
+    // The manifest says what the backup may put back; the ZIP must agree with it.
+    auto manifestBytes = r.readAll(*manifestEntry, 4 * 1024 * 1024);
+    if (!manifestBytes.ok())
+        return Error(ErrorCode::CorruptData, QStringLiteral("The list of removed items in %1 could not be read; nothing was restored.").arg(zipName),
+                     manifestBytes.error().toLogString());
+    const QJsonObject manifest = QJsonDocument::fromJson(manifestBytes.value()).object();
+    const QJsonValue removedValue = manifest.value(QStringLiteral("removed"));
+    if (!removedValue.isArray() || removedValue.toArray().isEmpty())
+        return Error(ErrorCode::CorruptData, QStringLiteral("The list of removed items in %1 is damaged; nothing was restored.").arg(zipName));
+    QStringList listed;
+    for (const auto& v : removedValue.toArray()) {
+        // The same rules as for removing: inside the game, never a system file.
+        const QString safe = v.isString() ? zip::Reader::safeRelativePath(v.toString()) : QString();
+        const QString top = safe.section(u'/', 0, 0).toLower();
+        if (safe.isEmpty() || top == u"sce_sys" || top == u"sce_module"
+            || safe.compare(QStringLiteral("eboot.bin"), Qt::CaseInsensitive) == 0)
+            return Error(ErrorCode::CorruptData,
+                         QStringLiteral("%1 lists an item that a language backup never holds (%2); nothing was restored.")
+                             .arg(zipName, v.toString().left(200)));
+        listed << safe;
+    }
+    const auto isListed = [&listed](const QString& rel) {
+        for (const QString& l : listed)
+            if (rel == l || (rel.size() > l.size() && rel.startsWith(l) && rel.at(l.size()) == u'/'))
+                return true;
+        return false;
+    };
     qint64 total = 0;
-    for (const auto& e : r.entries())
-        total += qint64(e.uncompressedSize);
-    if (progress)
-        progress->begin(QStringLiteral("Restoring"), total);
-    int restored = 0;
-    const QDir root(gameRoot);
     for (const auto& e : r.entries()) {
         if (e.name == QLatin1String(kManifestName))
             continue;
-        const QString target = root.filePath(zip::Reader::safeRelativePath(e.name));
+        QString safe = zip::Reader::safeRelativePath(e.name);
+        if (safe.isEmpty())
+            return Error(ErrorCode::CorruptData, QStringLiteral("The backup contains an unsafe path (%1); nothing was restored.").arg(e.name));
+        while (safe.endsWith(u'/'))
+            safe.chop(1);
+        if (!isListed(safe))
+            return Error(ErrorCode::CorruptData,
+                         QStringLiteral("%1 holds a file that its list of removed items does not cover (%2); nothing was restored.")
+                             .arg(zipName, e.name.left(200)));
+        total += qint64(e.uncompressedSize);
+    }
+
+    RestoreResult result;
+    result.backupGame = manifest.value(QStringLiteral("game")).toString();
+    const QDir root(QDir(gameRoot).absolutePath());
+    result.otherGame = !result.backupGame.isEmpty()
+                       && result.backupGame.compare(root.dirName(), Qt::CaseInsensitive) != 0;
+    if (progress)
+        progress->begin(QStringLiteral("Restoring"), total);
+    for (const auto& e : r.entries()) {
+        if (e.name == QLatin1String(kManifestName))
+            continue;
+        const QString rel = zip::Reader::safeRelativePath(e.name);
+        const QString target = root.filePath(rel);
         if (e.isDirectory()) {
             QDir().mkpath(target);
             continue;
         }
-        if (QFileInfo::exists(target))
-            continue; // never overwrite what is there now
+        if (QFileInfo::exists(target) || QFileInfo(target).isSymLink()) {
+            result.skippedExisting << rel; // never overwrite what is there now
+            continue;
+        }
         QDir().mkpath(QFileInfo(target).absolutePath());
         PartFile part(target);
         QFile out(toLongPath(part.partPath()));
+        const auto failed = [&] { return Error(ErrorCode::IoError, QStringLiteral("Could not restore %1.").arg(e.name), out.errorString()); };
         if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not restore %1.").arg(e.name), out.errorString());
+            return failed();
         FW_TRY(r.read(e, [&](const QByteArray& c) -> Status {
             if (out.write(c) != c.size())
-                return Error(ErrorCode::IoError, QStringLiteral("Could not restore %1.").arg(e.name), out.errorString());
+                return failed();
             return success();
         }, token, progress));
+        if (!out.flush()) // the time stamp must come after the last write
+            return failed();
         out.setFileTime(e.modified, QFileDevice::FileModificationTime);
         out.close();
+        if (out.error() != QFileDevice::NoError)
+            return failed();
         FW_TRY(part.commit(false));
-        ++restored;
+        ++result.restored;
     }
-    return restored;
+    return result;
+}
+
+Result<int> restoreLanguages(const QString& backupZip, const QString& gameRoot, const CancellationToken& token,
+                             ProgressReporter* progress)
+{
+    auto r = restoreLanguageBackup(backupZip, gameRoot, token, progress);
+    if (!r.ok())
+        return r.takeError();
+    return r->restored;
 }
 
 } // namespace fw::tools

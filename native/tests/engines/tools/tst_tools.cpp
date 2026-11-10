@@ -9,6 +9,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUrl>
@@ -163,6 +165,120 @@ private slots:
         QVERIFY(QDir(plan.backupFolder).entryList(QDir::Files).isEmpty());
     }
 
+    // Removal acts on what the verified backup holds: a file that changed, or
+    // appeared, after the backup pass stays where it is.
+    void stripLeavesWhatChangedOrAppearedAfterTheBackup()
+    {
+        const QString g = makeGame(QStringLiteral("GameE"));
+        fwtest::writeTextFile(g + QStringLiteral("/data/ja-JP/sub/more.bin"), QByteArray(50, 'm'));
+        fwtest::writeTextFile(g + QStringLiteral("/data/ja-JP/sub/still-being-written.bin"), QByteArray(60, 'w'));
+        StripPlan plan;
+        plan.gameRoot = g;
+        plan.remove = {QStringLiteral("data/ja-JP"), QStringLiteral("audio/ja")};
+        plan.backupFolder = m_root.filePath(QStringLiteral("backups-e"));
+        QDir().mkpath(plan.backupFolder);
+        bool interfered = false;
+        // Another program writes into the folder once the backup pass is over.
+        ProgressReporter progress([&](const ProgressSnapshot& p) {
+            if (p.phaseIndex < 1 || interfered)
+                return;
+            interfered = true;
+            fwtest::writeTextFile(g + QStringLiteral("/data/ja-JP/sub/still-being-written.bin"), QByteArray(90, 'W'));
+            fwtest::writeTextFile(g + QStringLiteral("/data/ja-JP/new-save.dat"), "arrived late");
+        }, 0);
+        auto r = stripLanguages(plan, CancellationToken(), &progress);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QVERIFY(interfered);
+        // Neither file is in the backup in this form, so neither was deleted.
+        QCOMPARE(readFile(g + QStringLiteral("/data/ja-JP/sub/still-being-written.bin")), QByteArray(90, 'W'));
+        QCOMPARE(readFile(g + QStringLiteral("/data/ja-JP/new-save.dat")), QByteArray("arrived late"));
+        // Everything that was backed up unchanged is gone.
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/data/ja-JP/text.bin")));
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/data/ja-JP/sub/more.bin")));
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/audio/ja")));
+        QCOMPARE(r->removed, 1);
+        QCOMPARE(r->failed, QStringList{QStringLiteral("data/ja-JP")});
+        QVERIFY(r->leftInPlace.contains(QStringLiteral("data/ja-JP/sub/still-being-written.bin")));
+        QVERIFY(r->leftInPlace.contains(QStringLiteral("data/ja-JP/new-save.dat")));
+        QCOMPARE(r->bytesFreed, qint64(2000 + 50 + 700));
+        zip::Reader z;
+        QVERIFY(z.open(r->backupZip).ok());
+        QCOMPARE(z.readAll(*z.find(QStringLiteral("data/ja-JP/sub/still-being-written.bin"))).value(), QByteArray(60, 'w'));
+        QVERIFY(!z.find(QStringLiteral("data/ja-JP/new-save.dat")));
+    }
+
+    // Restore puts back only what a valid manifest lists, and says what it skipped.
+    void restoreValidatesTheManifestAndNeverOverwrites()
+    {
+        const QString g = makeGame(QStringLiteral("GameF"));
+        const QString zips = m_root.filePath(QStringLiteral("crafted"));
+        QDir().mkpath(zips);
+        const auto makeZip = [&](const QString& name, const QByteArray& manifest,
+                                 const std::vector<std::pair<QString, QByteArray>>& files) {
+            const QString path = zips + u'/' + name;
+            zip::Writer w;
+            if (!w.open(path).ok())
+                return QString();
+            for (const auto& [n, data] : files)
+                if (!w.addData(n, data).ok())
+                    return QString();
+            if (!manifest.isNull() && !w.addData(QStringLiteral("farewell-language-strip.json"), manifest).ok())
+                return QString();
+            return w.finish().ok() ? path : QString();
+        };
+        const auto refused = [&](const QString& zip) {
+            auto r = restoreLanguageBackup(zip, g, CancellationToken(), nullptr);
+            return !zip.isEmpty() && !r.ok();
+        };
+        const QByteArray payload("payload");
+        // No manifest at all, a manifest that is not JSON, one without a list.
+        QVERIFY(refused(makeZip(QStringLiteral("none.zip"), QByteArray(), {{QStringLiteral("audio/xx/a.bin"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("garbage.zip"), "not json", {{QStringLiteral("audio/xx/a.bin"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("nolist.zip"), "{\"game\":\"GameF\"}", {{QStringLiteral("audio/xx/a.bin"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("badlist.zip"), "{\"game\":\"GameF\",\"removed\":[7]}", {})));
+        // A file the manifest does not cover (here a library the game would load).
+        QVERIFY(refused(makeZip(QStringLiteral("extra.zip"), "{\"game\":\"GameF\",\"removed\":[\"audio/xx\"]}",
+                                {{QStringLiteral("audio/xx/a.bin"), payload}, {QStringLiteral("fakelib/libc.prx"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("prefix.zip"), "{\"game\":\"GameF\",\"removed\":[\"audio/xx\"]}",
+                                {{QStringLiteral("audio/xxl/a.bin"), payload}})));
+        // A manifest that lists what the stripper never removes.
+        QVERIFY(refused(makeZip(QStringLiteral("system.zip"), "{\"game\":\"GameF\",\"removed\":[\"sce_module\"]}",
+                                {{QStringLiteral("sce_module/libx.prx"), payload}})));
+        QVERIFY(refused(makeZip(QStringLiteral("eboot.zip"), "{\"game\":\"GameF\",\"removed\":[\"eboot.bin\"]}", {})));
+        QVERIFY(refused(makeZip(QStringLiteral("escape.zip"), "{\"game\":\"GameF\",\"removed\":[\"../GameA/audio\"]}", {})));
+        // Refused means nothing was written.
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/audio/xx")));
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/audio/xxl")));
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/fakelib")));
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/sce_module")));
+
+        // A real backup from another game: restored, existing files kept and reported.
+        const QString other = makeGame(QStringLiteral("GameG"));
+        StripPlan plan;
+        plan.gameRoot = other;
+        plan.remove = {QStringLiteral("audio/ja"), QStringLiteral("data/ja-JP")};
+        plan.backupFolder = m_root.filePath(QStringLiteral("backups-g"));
+        QDir().mkpath(plan.backupFolder);
+        auto strip = stripLanguages(plan, CancellationToken(), nullptr);
+        QVERIFY2(strip.ok(), strip.ok() ? "" : qPrintable(strip.error().toLogString()));
+        QVERIFY(QFile::remove(g + QStringLiteral("/audio/ja/vo.bin")));
+        fwtest::writeTextFile(g + QStringLiteral("/data/ja-JP/text.bin"), "mine, different");
+        auto r = restoreLanguageBackup(strip->backupZip, g, CancellationToken(), nullptr);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QCOMPARE(r->restored, 1);
+        QCOMPARE(r->skippedExisting, QStringList{QStringLiteral("data/ja-JP/text.bin")});
+        QCOMPARE(r->backupGame, QStringLiteral("GameG"));
+        QVERIFY(r->otherGame);
+        QCOMPARE(readFile(g + QStringLiteral("/data/ja-JP/text.bin")), QByteArray("mine, different"));
+        QCOMPARE(readFile(g + QStringLiteral("/audio/ja/vo.bin")), QByteArray(700, 'J'));
+        // Back into its own game: same name, nothing skipped; time stamps come back too.
+        auto own = restoreLanguageBackup(strip->backupZip, other, CancellationToken(), nullptr);
+        QVERIFY(own.ok());
+        QVERIFY(!own->otherGame);
+        QCOMPARE(own->restored, 2);
+        QVERIFY(own->skippedExisting.isEmpty());
+    }
+
     void redactionCoversEverySpelling()
     {
         const QString home = QDir::homePath();
@@ -221,6 +337,111 @@ private slots:
         QCOMPARE(redactSecrets(QStringLiteral("\"https:\\/\\/discordapp.com\\/api\\/v10\\/webhooks\\/7\\/abc-DEF\"")),
                  QStringLiteral("\"https:\\/\\/discordapp.com\\/api\\/v10\\/webhooks\\/7\\/<token hidden>\""));
         QCOMPARE(redactSecrets(QStringLiteral("no secrets here")), QStringLiteral("no secrets here"));
+    }
+
+    // Nothing secret from the settings, the queue, the history or the logs may
+    // be anywhere in the ZIP; the keys stay so it is visible they were set.
+    void reportBundleHidesPasscodesKeysAndPublicAddresses()
+    {
+        const QString base = m_root.filePath(QStringLiteral("secrets"));
+        const QString logs = base + QStringLiteral("/logs");
+        const QByteArrayList secrets = {
+            "PASSCODE-SETTING-0123456789abcdef", "SRC-PASSCODE-fedcba9876543210ABCD", "00112233445566778899aabbccddeeff",
+            "WebHookTokenAAA111", "T000/B000/SLACKISHSECRET", "PASSCODE-QUEUE-zzzzzzzzzzzzzzzzzzzz",
+            "PASSCODE-OVERRIDE-yyyyyyyyyyyyyyyyy", "ffeeddccbbaa99887766554433221100", "DEEP-NESTED-PASSCODE-xxxxxxxxxxxxxx",
+            "PASSCODE-HISTORY-wwwwwwwwwwwwwwwww", "PASSCODE-IN-DETAIL-vvvvvvvvvvvvvvv", "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            "LOG-PASSCODE-uuuuuuuuuuuuuuuuuuuuu", "LOG-PASSCODE-EQ-ttttttttttttttttt", "LOG-PASSCODE-COLON-ssssssssssssss",
+            "LOG-ESCAPED-PASSCODE-rrrrrrrrrrrr", "API-TOKEN-qqqqqqqqqqqqqqqq", "DIAG-SECRET-pppppppppppp",
+            "203.0.113.7", "198.51.100.23", "8.8.4.4", "console.example.net",
+        };
+        fwtest::writeTextFile(
+            base + QStringLiteral("/settings.json"),
+            "{\n  \"version\": 3,\n  \"values\": {\n"
+            "    \"fpkg.passcode\": \"PASSCODE-SETTING-0123456789abcdef\",\n"
+            "    \"dlc.sourcePasscode\": \"SRC-PASSCODE-fedcba9876543210ABCD\",\n"
+            "    \"dlc.entitlementKey\": \"00112233445566778899aabbccddeeff\",\n"
+            "    \"general.discordWebhookUrl\": \"https://discord.com/api/webhooks/42/WebHookTokenAAA111\",\n"
+            "    \"notify.webhookUrl\": \"https://hooks.example.org/services/T000/B000/SLACKISHSECRET\",\n"
+            "    \"ps5.consoleIp\": \"203.0.113.7\",\n"
+            "    \"fpkg.unsetPasscode\": \"\",\n"
+            "    \"storage.defaultOutputFolder\": \"D:/Images\"\n  }\n}\n");
+        fwtest::writeTextFile(
+            base + QStringLiteral("/queue.json"),
+            "{\"jobs\": [{\"kind\": \"fpkg.build\", \"params\": {\"passcode\": \"PASSCODE-QUEUE-zzzzzzzzzzzzzzzzzzzz\","
+            " \"entitlementKey\": \"ffeeddccbbaa99887766554433221100\", \"host\": \"192.168.1.50\","
+            " \"items\": [{\"options\": {\"sourcePasscode\": \"DEEP-NESTED-PASSCODE-xxxxxxxxxxxxxx\", \"keep\": \"visible-value\"}}]},"
+            " \"overrides\": {\"fpkg.passcode\": \"PASSCODE-OVERRIDE-yyyyyyyyyyyyyyyyy\", \"ps5.consoleIp\": \"console.example.net\"}}]}");
+        fwtest::writeTextFile(
+            base + QStringLiteral("/history.jsonl"),
+            "{\"id\":\"a\",\"params\":{\"passcode\":\"PASSCODE-HISTORY-wwwwwwwwwwwwwwwww\",\"ip\":\"198.51.100.23\"},"
+            "\"error\":{\"detail\":\"fpkg-cli build --passcode PASSCODE-IN-DETAIL-vvvvvvvvvvvvvvv --entitlement-key=0f1e2d3c4b5a69788796a5b4c3d2e1f0 out\"}}\n"
+            "{\"id\":\"b\",\"params\":{\"host\":\"10.0.0.7\"}}\n"
+            "this line is damaged {\"passcode\": \"PASSCODE-HISTORY-wwwwwwwwwwwwwwwww\"\n");
+        fwtest::writeTextFile(
+            logs + QStringLiteral("/app.log"),
+            "12:00:01 run: tool.exe --passcode LOG-PASSCODE-uuuuuuuuuuuuuuuuuuuuu --out x.pkg\n"
+            "12:00:02 run: tool.exe --passcode=LOG-PASSCODE-EQ-ttttttttttttttttt\n"
+            "12:00:03 passcode: LOG-PASSCODE-COLON-ssssssssssssss (from settings)\n"
+            "12:00:04 job {\\\"passcode\\\":\\\"LOG-ESCAPED-PASSCODE-rrrrrrrrrrrr\\\",\\\"kind\\\":\\\"fpkg.build\\\"}\n"
+            "12:00:05 connected to 192.168.1.50:2121, relay 8.8.4.4, console 203.0.113.7\n"
+            "12:00:06 Windows 10.0.26300 build, tool 1.2.3\n");
+        fwtest::writeTextFile(logs + QStringLiteral("/events.jsonl"),
+                              "{\"event\":\"upload\",\"apiToken\":\"API-TOKEN-qqqqqqqqqqqqqqqq\",\"host\":\"192.168.1.50\"}\n");
+
+        ReportOptions opt;
+        opt.destinationFolder = base + QStringLiteral("/out");
+        QDir().mkpath(opt.destinationFolder);
+        opt.logsFolder = logs;
+        opt.extraFiles = {base + QStringLiteral("/settings.json"), base + QStringLiteral("/history.jsonl"),
+                          base + QStringLiteral("/queue.json")};
+        opt.diagnostics = {{QStringLiteral("deps"), QJsonObject{{QStringLiteral("clientSecret"), QStringLiteral("DIAG-SECRET-pppppppppppp")}}}};
+        for (const bool redactPaths : {true, false}) {
+            opt.redactUserPaths = redactPaths;
+            auto r = buildReportBundle(opt, CancellationToken(), nullptr);
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+            // The raw archive first (entries are deflated, but names and stored data are not).
+            const QByteArray raw = readFile(r->zipPath);
+            zip::Reader z;
+            QVERIFY(z.open(r->zipPath).ok());
+            QByteArray all;
+            for (const auto& e : z.entries())
+                all += z.readAll(e).value() + '\n';
+            QVERIFY(z.entries().size() >= 7);
+            for (const QByteArray& s : secrets) {
+                QVERIFY2(!all.contains(s), s.constData());
+                QVERIFY2(!raw.contains(s), s.constData());
+            }
+            // The keys are still there, so it is visible that they were set.
+            const QByteArray st = z.readAll(*z.find(QStringLiteral("settings.json"))).value();
+            for (const char* key : {"fpkg.passcode", "dlc.sourcePasscode", "dlc.entitlementKey", "general.discordWebhookUrl",
+                                    "notify.webhookUrl", "ps5.consoleIp"})
+                QVERIFY2(st.contains(key), key);
+            QVERIFY(st.contains("<hidden>"));
+            QVERIFY(st.contains("https://discord.com/api/webhooks/42/<token hidden>"));
+            QVERIFY(st.contains("D:/Images"));
+            const QJsonObject values = QJsonDocument::fromJson(st).object().value(QStringLiteral("values")).toObject();
+            QCOMPARE(values.value(QStringLiteral("fpkg.passcode")).toString(), QStringLiteral("<hidden>"));
+            QCOMPARE(values.value(QStringLiteral("fpkg.unsetPasscode")).toString(), QString()); // unset stays visibly unset
+            // Local addresses stay (they help with a connection problem); the rest of each file too.
+            const QByteArray queue = z.readAll(*z.find(QStringLiteral("queue.json"))).value();
+            QVERIFY(queue.contains("192.168.1.50"));
+            QVERIFY(queue.contains("visible-value"));
+            QVERIFY(queue.contains("fpkg.build"));
+            const QByteArray log = z.readAll(*z.find(QStringLiteral("logs/app.log"))).value();
+            QVERIFY(log.contains("192.168.1.50:2121"));
+            QVERIFY(log.contains("10.0.26300"));
+            QVERIFY(log.contains("--out x.pkg"));
+            QVERIFY(log.contains("tool 1.2.3"));
+            const QByteArray history = z.readAll(*z.find(QStringLiteral("history.jsonl"))).value();
+            QVERIFY(history.contains("10.0.0.7"));
+            QCOMPARE(history.count('\n'), 3); // still one record per line
+        }
+
+        // A file that is not valid JSON falls back to the text rules.
+        QCOMPARE(redactSecrets(QStringLiteral("{\"a\": {\"fpkg.passcode\": \"abc\\\"def\", broken")),
+                 QStringLiteral("{\"a\": {\"fpkg.passcode\": \"<hidden>\", broken"));
+        QCOMPARE(redactSecrets(QStringLiteral("[\"--passcode\", \"abc\"]")).contains(QStringLiteral("abc")), false);
+        QCOMPARE(redactSecrets(QStringLiteral("the non-secret value stays")), QStringLiteral("the non-secret value stays"));
     }
 };
 

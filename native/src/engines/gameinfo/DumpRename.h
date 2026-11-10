@@ -70,13 +70,18 @@ struct RenameRunResult {
     int skipped = 0;
     int failed = 0;
     QString undoLogPath; // empty when nothing was renamed
+    bool cancelled = false; // stopped early; the items not reached say so
 };
 
 // `undoLogPath` empty = Paths::dataDir()/rename-undo/<timestamp>.json.
+// Cancelled before the first rename: Error::cancelled(). Cancelled later: the
+// result, with `cancelled` set, so the caller still gets the undo log.
 Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QString& destinationRoot,
                                          const QString& undoLogPath, const CancellationToken& token,
                                          ProgressReporter* progress = nullptr);
 
+// An entry that cannot be put back because the original name is taken comes
+// back as TargetExists (counted in `skipped`). Cancelling follows the rule above.
 Result<RenameRunResult> undoDumpRenames(const QString& undoLogPath, const CancellationToken& token,
                                         ProgressReporter* progress = nullptr);
 

@@ -88,24 +88,36 @@ public:
         plan.gameRoot = m_p.value(QStringLiteral("gameRoot")).toString();
         plan.remove = toStringList(m_p.value(QStringLiteral("remove")));
         plan.backupFolder = backupFolder(ctx.settings);
+        // Checked here as well, so a refused folder is not created inside the game first.
+        if (isSameOrInside(plan.backupFolder, plan.gameRoot))
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("The backup folder cannot be inside the game folder."));
         QDir().mkpath(plan.backupFolder);
         auto r = stripLanguages(plan, ctx.token, ctx.progress);
         if (!r.ok())
             return r.takeError();
         JobOutcome o;
         o.outputs << r->backupZip;
-        o.verification = Verification::Passed;
-        o.verificationDetail = QStringLiteral("Backup read back and checked before anything was removed.");
-        o.summary = QStringLiteral("Removed %1 items, freed %2. Backup: %3")
+        o.summary = QStringLiteral("Removed %1 item(s), freed %2. Backup: %3")
                         .arg(r->removed).arg(formatBytes(r->bytesFreed), QFileInfo(r->backupZip).fileName());
         for (const QString& f : r->failed)
-            o.warnings << QStringLiteral("Could not remove %1 (still backed up).").arg(f);
+            o.warnings << QStringLiteral("Could not remove %1 completely (it is in the backup).").arg(f);
+        for (const QString& f : r->leftInPlace)
+            o.warnings << QStringLiteral("Left in place, because it changed or appeared after the backup was written: %1").arg(f);
         o.details.insert(QStringLiteral("removed"), r->removed);
         o.details.insert(QStringLiteral("bytesFreed"), r->bytesFreed);
-        if (!r->failed.isEmpty())
-            return Error(ErrorCode::IoError,
-                         QStringLiteral("%1 of %2 items could not be removed. Everything is in the backup %3.")
-                             .arg(r->failed.size()).arg(plan.remove.size()).arg(QFileInfo(r->backupZip).fileName()));
+        o.details.insert(QStringLiteral("backupZip"), QDir::toNativeSeparators(r->backupZip));
+        if (r->failed.isEmpty()) {
+            o.verification = Verification::Passed;
+            o.verificationDetail = QStringLiteral("Backup read back and checked before anything was removed.");
+        } else {
+            // The backup is good and what was removed is in it; the job did not do all it was asked.
+            o.verification = Verification::Inconclusive;
+            o.verificationDetail = QStringLiteral("Backup read back and checked; %1 of %2 item(s) could not be removed completely.")
+                                       .arg(r->failed.size()).arg(plan.remove.size());
+            o.summary = QStringLiteral("%1 of %2 item(s) could not be removed completely. Removed %3, freed %4. Backup: %5")
+                            .arg(r->failed.size()).arg(plan.remove.size()).arg(r->removed)
+                            .arg(formatBytes(r->bytesFreed), QDir::toNativeSeparators(r->backupZip));
+        }
         return o;
     }
 
@@ -127,15 +139,30 @@ public:
     QJsonObject parameters() const override { return m_p; }
     Result<JobOutcome> run(JobContext& ctx) override
     {
-        auto n = restoreLanguages(m_p.value(QStringLiteral("backupZip")).toString(), m_p.value(QStringLiteral("gameRoot")).toString(),
-                                  ctx.token, ctx.progress);
-        if (!n.ok())
-            return n.takeError();
+        const QString gameRoot = m_p.value(QStringLiteral("gameRoot")).toString();
+        auto r = restoreLanguageBackup(m_p.value(QStringLiteral("backupZip")).toString(), gameRoot, ctx.token, ctx.progress);
+        if (!r.ok())
+            return r.takeError();
         JobOutcome o;
-        o.summary = QStringLiteral("Restored %1 files.").arg(n.value());
-        o.details.insert(QStringLiteral("restored"), n.value());
+        const qsizetype skipped = r->skippedExisting.size();
+        o.summary = QStringLiteral("Restored %1 file(s).").arg(r->restored);
+        if (skipped > 0) {
+            o.summary += QStringLiteral(" %1 already in the game were left as they are.").arg(skipped);
+            constexpr qsizetype kMaxListed = 50;
+            for (const QString& f : r->skippedExisting.mid(0, kMaxListed))
+                o.warnings << QStringLiteral("Already in the game, not replaced: %1").arg(f);
+            if (skipped > kMaxListed)
+                o.warnings << QStringLiteral("…and %1 more that were already in the game.").arg(skipped - kMaxListed);
+        }
+        if (r->otherGame)
+            o.warnings << QStringLiteral("This backup was made from “%1”, and was restored into “%2”.")
+                              .arg(r->backupGame, QFileInfo(gameRoot).fileName());
+        o.details.insert(QStringLiteral("restored"), r->restored);
+        o.details.insert(QStringLiteral("skippedExisting"), int(skipped));
         o.verification = Verification::Passed;
-        o.verificationDetail = QStringLiteral("Every restored file matched its checksum in the backup.");
+        o.verificationDetail = skipped > 0 ? QStringLiteral("Every restored file matched its checksum in the backup; files already "
+                                                            "in the game were not compared.")
+                                           : QStringLiteral("Every restored file matched its checksum in the backup.");
         return o;
     }
 

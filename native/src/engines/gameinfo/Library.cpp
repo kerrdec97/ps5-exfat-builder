@@ -196,7 +196,9 @@ Result<LibraryScanResult> scanLibrary(const QStringList& libraryFolders, const L
         g.wrapper = QDir::cleanPath(c.wrapper.filePath());
         g.libraryFolder = c.library;
         g.modified = c.wrapper.lastModified();
-        auto meta = readGameMetadata(root);
+        auto meta = readGameMetadata(root, token);
+        if (!meta.ok() && meta.error().isCancelled())
+            return Error::cancelled();
         if (meta.ok()) {
             const GameMetadata& m = meta.value();
             g.title = m.title;
@@ -237,7 +239,9 @@ Result<LibraryScanResult> scanLibrary(const QStringList& libraryFolders, const L
             g.sizeBytes = size;
         }
         if (!g.sdkVersion.isValid() && g.wrapper != g.folder) {
-            auto wm = readGameMetadata(g.wrapper);
+            auto wm = readGameMetadata(g.wrapper, token);
+            if (!wm.ok() && wm.error().isCancelled())
+                return Error::cancelled();
             if (wm.ok() && wm.value().sdkVersion.isValid())
                 g.sdkVersion = wm.value().sdkVersion;
         }

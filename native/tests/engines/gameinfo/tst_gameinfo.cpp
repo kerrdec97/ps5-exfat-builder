@@ -924,6 +924,247 @@ private slots:
         QVERIFY(!badPreset.value()->validate(s).ok());
     }
 
+    // A partly reversed or cancelled undo is not "Passed", and still says what it did.
+    void undoIsTruthfulWhenBlockedOrCancelled()
+    {
+        Module mod;
+        const SettingsValues s = mod.settings();
+        const QString src = fresh(QStringLiteral("undo-truth"));
+        for (const char* n : {"a", "b", "c"})
+            makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA1000%1").arg(int(n[0] - 'a')),
+                        QStringLiteral("Game %1").arg(QLatin1String(n)));
+        RenamePlanOptions opt;
+        opt.preset = NamePreset::TitleId;
+        const QString log = QDir(fresh(QStringLiteral("undo-truth-log"))).filePath(QStringLiteral("log.json"));
+        auto run = applyDumpRenames(planDumpRenames(src, opt, {}).value(), {}, log, {});
+        QVERIFY(run.ok());
+        QCOMPARE(run->renamed, 3);
+        QVERIFY(!run->cancelled);
+
+        // Something new took the old name "b": that entry cannot be reversed.
+        QVERIFY(QDir().mkpath(QDir(src).filePath(QStringLiteral("b"))));
+        ProgressReporter progress;
+        auto undo = mod.jobs.create(jobkinds::kLibraryRename,
+                                    {{QStringLiteral("mode"), QStringLiteral("undo")}, {QStringLiteral("undoLog"), log}});
+        JobContext ctx = makeContext(progress, s, fresh(QStringLiteral("ut1")));
+        auto un = undo.value()->run(ctx);
+        QVERIFY(un.ok());
+        QCOMPARE(un->verification, Verification::Inconclusive);
+        QVERIFY2(un->verificationDetail.contains(QStringLiteral("original name is taken")), qPrintable(un->verificationDetail));
+        QVERIFY2(un->summary.contains(QStringLiteral("1 not restored")), qPrintable(un->summary));
+        QCOMPARE(un->details.value(QStringLiteral("renamed")).toInt(), 2);
+        QCOMPARE(QDir::fromNativeSeparators(un->details.value(QStringLiteral("undoLog")).toString()), log);
+        QCOMPARE(int(un->warnings.size()), 1);
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("PPSA10001/eboot.bin"))).isFile()); // untouched
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("a/eboot.bin"))).isFile());
+
+        // Cancel after the first restored name: the rest is listed, nothing claims success.
+        const QString src2 = fresh(QStringLiteral("undo-cancel"));
+        for (const char* n : {"a", "b", "c"})
+            makePs5Dump(QDir(src2).filePath(QLatin1String(n)), QStringLiteral("PPSA2000%1").arg(int(n[0] - 'a')),
+                        QStringLiteral("Game %1").arg(QLatin1String(n)));
+        const QString log2 = QDir(fresh(QStringLiteral("undo-cancel-log"))).filePath(QStringLiteral("log.json"));
+        QVERIFY(applyDumpRenames(planDumpRenames(src2, opt, {}).value(), {}, log2, {}).ok());
+        {
+            CancellationSource cancel;
+            ProgressReporter stopAfterOne([&](const ProgressSnapshot& p) {
+                if (p.done >= 1)
+                    cancel.cancel();
+            }, 0);
+            auto r = undoDumpRenames(log2, cancel.token(), &stopAfterOne);
+            QVERIFY(r.ok());
+            QVERIFY(r->cancelled);
+            QCOMPARE(r->renamed, 1);
+            QCOMPARE(int(r->items.size()), 3);
+            QCOMPARE(r->items.at(1).status, RenameStatus::NotSelected);
+            QVERIFY(!r->items.at(1).message.isEmpty());
+            QCOMPARE(r->undoLogPath, log2);
+        }
+        {
+            // Through the job: the entry restored above is passed over, one more
+            // is restored, then the cancel; not "Passed".
+            CancellationSource cancel;
+            ProgressReporter stopAfterOne([&](const ProgressSnapshot& p) {
+                if (p.done >= 2)
+                    cancel.cancel();
+            }, 0);
+            auto job = mod.jobs.create(jobkinds::kLibraryRename,
+                                       {{QStringLiteral("mode"), QStringLiteral("undo")}, {QStringLiteral("undoLog"), log2}});
+            JobContext c = makeContext(stopAfterOne, s, fresh(QStringLiteral("ut2")));
+            c.token = cancel.token();
+            auto o = job.value()->run(c);
+            QVERIFY(o.ok());
+            QCOMPARE(o->verification, Verification::Inconclusive);
+            QVERIFY2(o->summary.startsWith(QStringLiteral("Cancelled after restoring 1 ")), qPrintable(o->summary));
+            QVERIFY(!o->verificationDetail.contains(QStringLiteral("every logged rename")));
+        }
+        {
+            // Cancelled before anything was restored: plain Cancelled.
+            CancellationSource cancel;
+            cancel.cancel();
+            auto r = undoDumpRenames(log2, cancel.token());
+            QVERIFY(!r.ok());
+            QVERIFY(r.error().isCancelled());
+        }
+    }
+
+    // A cancelled apply keeps its outcome (what was renamed, the undo log) instead of an error.
+    void cancelledApplyKeepsOutcomeAndUndoLog()
+    {
+        Module mod;
+        const SettingsValues s = mod.settings();
+        const QString src = fresh(QStringLiteral("apply-cancel"));
+        for (const char* n : {"a", "b", "c"})
+            makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA3000%1").arg(int(n[0] - 'a')),
+                        QStringLiteral("Game %1").arg(QLatin1String(n)));
+        const QString log = QDir(fresh(QStringLiteral("apply-cancel-log"))).filePath(QStringLiteral("log.json"));
+        CancellationSource cancel;
+        ProgressReporter stopAfterOne([&](const ProgressSnapshot& p) {
+            if (p.done >= 1)
+                cancel.cancel();
+        }, 0);
+        auto job = mod.jobs.create(jobkinds::kLibraryRename, {{QStringLiteral("mode"), QStringLiteral("apply")},
+                                                              {QStringLiteral("source"), src},
+                                                              {QStringLiteral("preset"), QStringLiteral("ppsa")},
+                                                              {QStringLiteral("undoLog"), log}});
+        JobContext ctx = makeContext(stopAfterOne, s, fresh(QStringLiteral("ac1")));
+        ctx.token = cancel.token();
+        auto o = job.value()->run(ctx);
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Inconclusive);
+        QCOMPARE(o->details.value(QStringLiteral("renamed")).toInt(), 1);
+        QVERIFY2(o->summary.startsWith(QStringLiteral("Cancelled after renaming 1 dump(s).")), qPrintable(o->summary));
+        QCOMPARE(QDir::fromNativeSeparators(o->details.value(QStringLiteral("undoLog")).toString()), log);
+        QVERIFY(QFileInfo(log).isFile());
+        QCOMPARE(int(o->details.value(QStringLiteral("items")).toArray().size()), 3);
+        QCOMPARE(int(o->warnings.size()), 2); // the two dumps the cancel left untouched
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("PPSA30000"))).isDir());
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("b"))).isDir());
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("c"))).isDir());
+    }
+
+    // "apply" touches only the dumps its edits name, whatever the letter case of the path.
+    void applyRenamesOnlyWhatTheCallerSent()
+    {
+        Module mod;
+        const SettingsValues s = mod.settings();
+        const QString src = fresh(QStringLiteral("apply-only"));
+        makePs5Dump(QDir(src).filePath(QStringLiteral("Seen")), QStringLiteral("PPSA40001"), QStringLiteral("Seen"));
+        makePs5Dump(QDir(src).filePath(QStringLiteral("Unticked")), QStringLiteral("PPSA40002"), QStringLiteral("Unticked"));
+        // Copied in after the preview: no edit names it.
+        makePs5Dump(QDir(src).filePath(QStringLiteral("Late")), QStringLiteral("PPSA40003"), QStringLiteral("Late"));
+        QString untickedPath = QDir::toNativeSeparators(QDir(src).filePath(QStringLiteral("Unticked")));
+#ifdef Q_OS_WIN
+        untickedPath = untickedPath.toUpper(); // another spelling of the same folder
+#endif
+        ProgressReporter progress;
+        auto job = mod.jobs.create(
+            jobkinds::kLibraryRename,
+            {{QStringLiteral("mode"), QStringLiteral("apply")},
+             {QStringLiteral("source"), src},
+             {QStringLiteral("preset"), QStringLiteral("ppsa")},
+             {QStringLiteral("undoLog"), QDir(fresh(QStringLiteral("apply-only-log"))).filePath(QStringLiteral("l.json"))},
+             {QStringLiteral("items"),
+              QJsonArray{QJsonObject{{QStringLiteral("source"), QDir(src).filePath(QStringLiteral("Seen"))},
+                                     {QStringLiteral("selected"), true}},
+                         QJsonObject{{QStringLiteral("source"), untickedPath}, {QStringLiteral("selected"), false}}}}});
+        JobContext ctx = makeContext(progress, s, fresh(QStringLiteral("ao1")));
+        auto o = job.value()->run(ctx);
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->details.value(QStringLiteral("renamed")).toInt(), 1);
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("PPSA40001/eboot.bin"))).isFile());
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("Unticked/eboot.bin"))).isFile());
+        QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("Late/eboot.bin"))).isFile());
+        QVERIFY(!QFileInfo::exists(QDir(src).filePath(QStringLiteral("PPSA40002"))));
+        QVERIFY(!QFileInfo::exists(QDir(src).filePath(QStringLiteral("PPSA40003"))));
+    }
+
+    // ---- hostile input ---------------------------------------------------------------
+    void sfoBoundsEntryCountAndValueSizes()
+    {
+        // A crafted header: a million entries, each claiming nearly the whole file as its value.
+        const quint32 count = 0xFFFFF;
+        QByteArray sfo(20 + qsizetype(count) * 16, '\0');
+        qToLittleEndian<quint32>(0x46535000, sfo.data());
+        qToLittleEndian<quint32>(0x101, sfo.data() + 4);
+        qToLittleEndian<quint32>(0, sfo.data() + 8);
+        qToLittleEndian<quint32>(0, sfo.data() + 12);
+        qToLittleEndian<quint32>(count, sfo.data() + 16);
+        for (quint32 i = 0; i < count; ++i) {
+            char* e = sfo.data() + 20 + qsizetype(i) * 16;
+            qToLittleEndian<quint16>(0x0204, e + 2);
+            qToLittleEndian<quint32>(quint32(sfo.size() - 1), e + 4);
+        }
+        auto r = parseSfo(sfo);
+        QVERIFY(!r.ok());
+        QCOMPARE(r.error().code, ErrorCode::CorruptData);
+
+        // Within the entry limit, oversized and overlapping values are skipped, not copied.
+        const quint32 few = 4096;
+        QByteArray big(20 + qsizetype(few) * 16 + 8 * 1024 * 1024, '\0');
+        qToLittleEndian<quint32>(0x46535000, big.data());
+        qToLittleEndian<quint32>(0, big.data() + 8);
+        qToLittleEndian<quint32>(0, big.data() + 12);
+        qToLittleEndian<quint32>(few, big.data() + 16);
+        for (quint32 i = 0; i < few; ++i) {
+            char* e = big.data() + 20 + qsizetype(i) * 16;
+            qToLittleEndian<quint16>(0x0204, e + 2);
+            qToLittleEndian<quint32>(i == 0 ? 4u : quint32(big.size() - 1), e + 4); // only the first is sane
+        }
+        auto b = parseSfo(big);
+        QVERIFY(b.ok());
+        QCOMPARE(int(b->entries.size()), 1);
+        QCOMPARE(b->skippedEntries, int(few) - 1);
+
+        // 4,096 entries that each fit, but overlap: together they may not exceed the file.
+        QByteArray overlap(20 + qsizetype(few) * 16, '\0');
+        qToLittleEndian<quint32>(0x46535000, overlap.data());
+        qToLittleEndian<quint32>(few, overlap.data() + 16);
+        for (quint32 i = 0; i < few; ++i) {
+            char* e = overlap.data() + 20 + qsizetype(i) * 16;
+            qToLittleEndian<quint16>(0x0204, e + 2);
+            qToLittleEndian<quint32>(60000, e + 4);
+        }
+        auto ov = parseSfo(overlap);
+        QVERIFY(ov.ok());
+        qint64 copied = 0;
+        for (const auto& e : ov->entries)
+            copied += e.raw.size();
+        QVERIFY(copied <= overlap.size());
+        QVERIFY(ov->skippedEntries > 0);
+    }
+
+    void coverWithAnExtremeShapeStaysSmall()
+    {
+        const QString r = fresh(QStringLiteral("thin-cover"));
+        for (const QSize size : {QSize(1, 8192), QSize(8192, 1), QSize(3, 20000)}) {
+            QImage img(size, QImage::Format_RGB32);
+            img.fill(QColor(10, 120, 200));
+            const QString src = QDir(r).filePath(QStringLiteral("%1x%2.png").arg(size.width()).arg(size.height()));
+            QVERIFY(img.save(src, "PNG"));
+            auto out = normalizeCoverImage(src);
+            QVERIFY2(out.ok(), out.ok() ? "" : qPrintable(out.error().toLogString()));
+            QCOMPARE(out->size(), QSize(kCoverWidth, kCoverHeight));
+            QVERIFY(QColor(out->pixel(kCoverWidth / 2, kCoverHeight / 2)).blue() > 150);
+        }
+    }
+
+    void outOfRangeJsonNumbersAreIgnored()
+    {
+        auto p = parseParamJson("{\"titleId\":\"PPSA01234\",\"attribute\":1e300,\"attribute2\":-1e300,"
+                                "\"attribute3\":7,\"applicationCategoryType\":1e19,\"sdkVersion\":1e40}");
+        QVERIFY(p.ok());
+        QVERIFY(!p->attribute);
+        QVERIFY(!p->attribute2);
+        QVERIFY(!p->applicationCategoryType);
+        QCOMPARE(*p->attribute3, qint64(7));
+        QVERIFY(!p->sdkVersion.isValid());
+        QVERIFY(!parseVersionField(QJsonValue(1e40)).isValid());
+        QVERIFY(!parseVersionField(QJsonValue(1.9e19)).isValid());
+        // A packed quad word written as a number still decodes.
+        QCOMPARE(parseVersionField(QJsonValue(double(0x0450000000000000ULL))).toString(), QStringLiteral("4.50"));
+    }
+
     // ---- module registration -----------------------------------------------------------
     void settingsAreWellFormedAndLegacyKeysImport()
     {

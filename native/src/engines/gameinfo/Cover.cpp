@@ -123,12 +123,22 @@ Result<QImage> normalizeCoverImage(const QString& sourcePath)
         return Error(ErrorCode::Unsupported, QStringLiteral("The cover image is too large."));
 
     img = trimCoverBorders(img).convertToFormat(QImage::Format_RGB32);
-    const double scale = std::max(double(kCoverWidth) / img.width(), double(kCoverHeight) / img.height());
-    const int nw = std::max(1, int(std::lround(img.width() * scale)));
-    const int nh = std::max(1, int(std::lround(img.height() * scale)));
-    const QImage scaled = img.scaled(nw, nh, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    const int x = (nw - kCoverWidth) / 2, y = (nh - kCoverHeight) / 2;
-    return scaled.copy(x, y, kCoverWidth, kCoverHeight).convertToFormat(QImage::Format_RGB888);
+    if (img.isNull())
+        return Error(ErrorCode::CorruptData, QStringLiteral("The cover image could not be decoded."));
+    // Fill the cover: centre-crop the source to the cover's shape, then scale.
+    // Cropping first keeps the work bounded for a very long or very tall image.
+    int cw = img.width(), ch = img.height();
+    if (qint64(cw) * kCoverHeight > qint64(ch) * kCoverWidth)
+        cw = std::max(1, int(std::llround(double(ch) * kCoverWidth / kCoverHeight)));
+    else
+        ch = std::max(1, int(std::llround(double(cw) * kCoverHeight / kCoverWidth)));
+    cw = std::min(cw, img.width());
+    ch = std::min(ch, img.height());
+    const QImage scaled = img.copy((img.width() - cw) / 2, (img.height() - ch) / 2, cw, ch)
+                              .scaled(kCoverWidth, kCoverHeight, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    if (scaled.isNull())
+        return Error(ErrorCode::CorruptData, QStringLiteral("The cover image could not be resized."));
+    return scaled.convertToFormat(QImage::Format_RGB888);
 }
 
 Result<QString> normalizedCover(const QString& sourcePath, const QString& cacheDirIn)

@@ -86,8 +86,11 @@ SystemVersion parseVersionField(const QJsonValue& value)
             v.minorVersion = 0;
             return v;
         }
-        // A packed quad word written as a number.
-        s = QStringLiteral("0x%1").arg(quint64(d), 16, 16, QLatin1Char('0'));
+        // A packed quad word written as a number (anything larger cannot be
+        // converted and is not a version).
+        if (d >= 1.8e19)
+            return v;
+        s =QStringLiteral("0x%1").arg(quint64(d), 16, 16, QLatin1Char('0'));
     } else if (value.isString()) {
         s = value.toString().trimmed();
     } else {

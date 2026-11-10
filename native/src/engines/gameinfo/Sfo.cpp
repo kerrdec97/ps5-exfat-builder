@@ -10,6 +10,10 @@ namespace fw::gameinfo {
 namespace {
 
 constexpr qint64 kMaxSfoBytes = 16 * 1024 * 1024;
+// A real param.sfo has a few dozen entries and its largest value is 512 bytes
+// (PUBTOOLINFO); these limits only stop a crafted file from costing memory.
+constexpr quint32 kMaxSfoEntries = 4096;
+constexpr quint32 kMaxSfoValueBytes = 64 * 1024;
 
 quint32 u32At(const QByteArray& d, qsizetype off)
 {
@@ -75,8 +79,13 @@ Result<SfoFile> parseSfo(const QByteArray& data)
     const quint32 count = u32At(data, 16);
     if (keyTable > quint32(data.size()) || dataTable > quint32(data.size()))
         return Error(ErrorCode::CorruptData, QStringLiteral("param.sfo is damaged (its tables point outside the file)."));
+    if (count > kMaxSfoEntries)
+        return Error(ErrorCode::CorruptData, QStringLiteral("param.sfo is damaged (it lists too many entries)."),
+                     QStringLiteral("%1 entries").arg(count));
 
     const qsizetype size = data.size();
+    // Values of a valid file do not overlap, so together they fit in the file.
+    qsizetype valueBudget = size;
     for (quint32 i = 0; i < count; ++i) {
         const qsizetype base = 20 + qsizetype(i) * 16;
         if (base + 16 > size)
@@ -92,10 +101,12 @@ Result<SfoFile> parseSfo(const QByteArray& data)
         const qsizetype keyEnd = keyStart < size ? data.indexOf('\0', keyStart) : -1;
         const qsizetype valStart = qsizetype(dataTable) + qsizetype(dataOff);
         const qsizetype valLen = e.isInteger() ? 4 : qsizetype(e.length);
-        if (keyEnd < 0 || valStart > size || valStart + valLen > size) {
+        if (keyEnd < 0 || valStart > size || valStart + valLen > size || valLen > qsizetype(kMaxSfoValueBytes)
+            || valLen > valueBudget) {
             ++out.skippedEntries;
             continue;
         }
+        valueBudget -= valLen;
         e.key = QString::fromUtf8(data.constData() + keyStart, keyEnd - keyStart);
         e.raw = data.mid(valStart, valLen);
         out.entries.push_back(std::move(e));

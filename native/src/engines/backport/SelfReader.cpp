@@ -43,6 +43,10 @@ bool within(quint64 size, quint64 off, quint64 len)
 {
     return off <= size && len <= size - off;
 }
+
+// Room, on top of twice the SELF's own size, for the gaps between segments of
+// the unpacked ELF (see unwrap()).
+constexpr quint64 kUnwrapSlackBytes = 16ULL * 1024 * 1024;
 } // namespace
 
 bool hasSelfMagic(QByteArrayView data)
@@ -192,19 +196,24 @@ Result<QByteArray> unwrap(QByteArrayView data, QStringList* warnings)
     }
 
     const quint64 size = quint64(data.size());
+    // A fake-signed SELF is neither encrypted nor compressed, so the ELF it
+    // unpacks to is about as large as the SELF itself (alignment gaps aside).
+    // Program headers that claim far more would only make this allocate: a
+    // few hundred crafted bytes must not cost a gigabyte of zeros.
+    const quint64 maxOut = std::min<quint64>(quint64(kMaxExecBytes), 2 * size + kUnwrapSlackBytes);
     QByteArray out;
     bool inBounds = true;
     // Writes `bytes` at `at`, zero-filling up to `padTo`; refuses anything past
-    // kMaxExecBytes (checked without overflow) instead of writing it.
-    const auto place = [&out, &inBounds](quint64 at, QByteArrayView bytes, quint64 padTo) {
+    // `maxOut` (checked without overflow) instead of writing it.
+    const auto place = [&out, &inBounds, maxOut](quint64 at, QByteArrayView bytes, quint64 padTo) {
         const quint64 n = quint64(bytes.size());
-        if (!within(quint64(kMaxExecBytes), at, n) || padTo > quint64(kMaxExecBytes)) {
+        if (!inBounds || !within(maxOut, at, n) || padTo > maxOut) {
             inBounds = false;
             return;
         }
         const quint64 end = std::max<quint64>(at + n, padTo);
         if (quint64(out.size()) < end)
-            out.append(QByteArray(qsizetype(end - quint64(out.size())), '\0'));
+            out.resize(qsizetype(end), '\0');
         if (n > 0)
             std::memcpy(out.data() + at, bytes.data(), size_t(n));
     };

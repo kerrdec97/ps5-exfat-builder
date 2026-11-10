@@ -33,6 +33,11 @@ const QRegularExpression& sectionRe()
     return re;
 }
 
+// Bounds for the offline auto-find, which reads files of someone else's dump.
+constexpr qint64 kMaxParamJsonBytes = 8 * 1024 * 1024; // as the game-info reader
+constexpr qint64 kScanWindowBytes = 1024 * 1024;
+constexpr int kMaxScannedCodes = 2048; // dlc_emu itself reads at most 1,024 entries
+
 int codePoints(const QString& s)
 {
     return int(s.toUcs4().size());
@@ -343,7 +348,7 @@ QStringList paramJsonContentIds(const QString& app0)
     if (path.isEmpty())
         return raw;
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly))
+    if (!f.open(QIODevice::ReadOnly) || f.size() > kMaxParamJsonBytes)
         return raw;
     json::ParseOptions opt;
     opt.allowComments = true;
@@ -383,26 +388,43 @@ std::vector<Entry> scanBinaryForCodes(const QString& path, const QString& conten
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
         return out;
-    const QByteArray data = f.readAll();
     QSet<QString> seen;
     const auto isCodeChar = [](char c) { return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); };
-    const qsizetype n = data.size();
-    for (qsizetype i = 0; i + 16 <= n; ++i) {
-        if (i > 0 && data[i - 1] != '\0')
-            continue;
-        bool ok = true;
-        for (int k = 0; k < 16 && ok; ++k)
-            ok = isCodeChar(data[i + k]);
-        if (!ok || (i + 16 < n && data[i + 16] != '\0'))
-            continue;
-        const QString code = QString::fromLatin1(data.constData() + i, 16);
-        if (code == u"0123456789ABCDEF" || seen.contains(code))
-            continue;
-        seen.insert(code);
-        Entry e;
-        e.set(QStringLiteral("content_id"), contentPrefix + code);
-        out.push_back(e);
-        i += 16;
+    // A code is 16 characters between NULs (or the ends of the file). The file
+    // is read in windows; `data` always starts one byte before the next
+    // position to test, so a code across two windows is still seen whole.
+    QByteArray data;
+    qint64 dataOffset = 0; // file offset of data[0]
+    qsizetype i = 0;
+    bool atEnd = false;
+    while (!atEnd && int(out.size()) < kMaxScannedCodes) {
+        const QByteArray chunk = f.read(kScanWindowBytes);
+        atEnd = chunk.isEmpty() || f.atEnd();
+        data += chunk;
+        const qsizetype n = data.size();
+        // Before the end of the file the byte after the code must be in view too.
+        const qsizetype last = atEnd ? n - 16 : n - 17;
+        for (; i <= last && int(out.size()) < kMaxScannedCodes; ++i) {
+            if (dataOffset + i > 0 && data[i - 1] != '\0')
+                continue;
+            bool ok = true;
+            for (int k = 0; k < 16 && ok; ++k)
+                ok = isCodeChar(data[i + k]);
+            if (!ok || (i + 16 < n && data[i + 16] != '\0'))
+                continue;
+            const QString code = QString::fromLatin1(data.constData() + i, 16);
+            if (code == u"0123456789ABCDEF" || seen.contains(code))
+                continue;
+            seen.insert(code);
+            Entry e;
+            e.set(QStringLiteral("content_id"), contentPrefix + code);
+            out.push_back(e);
+            i += 16;
+        }
+        const qsizetype keepFrom = std::max<qsizetype>(0, i - 1);
+        data.remove(0, keepFrom);
+        dataOffset += keepFrom;
+        i -= keepFrom;
     }
     return out;
 }
@@ -477,21 +499,26 @@ Suggestions autoFind(const QString& app0, bool scanEboot, const std::vector<Entr
         if (!roots.root.isEmpty())
             root = roots.root;
         const QString eboot = QDir(root).filePath(QStringLiteral("eboot.bin"));
+        std::vector<Entry> scanned;
         if (QFileInfo(eboot).isFile())
-            for (Entry e : scanBinaryForCodes(eboot, prefix)) {
-                const QString c = e.get(QStringLiteral("content_id"));
-                if (c.isEmpty() || seen.contains(c))
-                    continue;
-                seen.insert(c);
-                if (looksLikeBaseGameId(c)) {
-                    baseIds.insert(c);
-                    continue;
-                }
-                e.placeholder = placeholder;
-                e.confidence = QStringLiteral("low");
-                e.source = QStringLiteral("eboot.bin scan");
-                s.entries.push_back(e);
+            scanned = scanBinaryForCodes(eboot, prefix);
+        if (int(scanned.size()) >= kMaxScannedCodes)
+            s.notes << QStringLiteral("The eboot.bin scan stopped after %1 possible codes; the rest of the file was not searched.")
+                           .arg(kMaxScannedCodes);
+        for (Entry e : scanned) {
+            const QString c = e.get(QStringLiteral("content_id"));
+            if (c.isEmpty() || seen.contains(c))
+                continue;
+            seen.insert(c);
+            if (looksLikeBaseGameId(c)) {
+                baseIds.insert(c);
+                continue;
             }
+            e.placeholder = placeholder;
+            e.confidence = QStringLiteral("low");
+            e.source = QStringLiteral("eboot.bin scan");
+            s.entries.push_back(e);
+        }
     }
     s.baseIds = baseIds.values();
     s.baseIds.sort();

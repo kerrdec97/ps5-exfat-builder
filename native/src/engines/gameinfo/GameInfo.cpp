@@ -103,10 +103,22 @@ void decideKind(GameMetadata& m)
     }
 }
 
+// True when `path` is `folder/<file>` or `folder/sce_sys/<file>`: where a
+// dump keeps its own metadata, as opposed to a file found by the deep walk.
+bool isOwnMetaFile(const QString& folder, const QString& path)
+{
+    if (path.isEmpty())
+        return false;
+    const QString dir = QDir::cleanPath(QFileInfo(path).absolutePath());
+    return dir.compare(folder, Qt::CaseInsensitive) == 0
+        || dir.compare(folder + QStringLiteral("/sce_sys"), Qt::CaseInsensitive) == 0;
+}
+
 void decidePlatform(GameMetadata& m)
 {
-    // PS4 dumps never carry a param.json, so even a damaged one means PS5.
-    if (m.paramJson || !m.paramJsonPath.isEmpty()) {
+    // PS4 dumps never carry their own param.json, so even a damaged one means PS5.
+    const bool hasJson = m.paramJson || !m.paramJsonPath.isEmpty();
+    if (hasJson && isOwnMetaFile(m.folder, m.paramJsonPath)) {
         m.platform = Platform::PS5;
         return;
     }
@@ -115,7 +127,18 @@ void decidePlatform(GameMetadata& m)
         m.platform = Platform::PS5;
         return;
     }
-    if (id.startsWith(u"CUSA") || m.paramSfo) {
+    // A param.json found only deeper down may be game data (a common name for
+    // engine configuration): it does not outweigh a PS4 title ID or the
+    // dump's own param.sfo.
+    if (id.startsWith(u"CUSA") || (m.paramSfo && isOwnMetaFile(m.folder, m.paramSfoPath))) {
+        m.platform = Platform::PS4;
+        return;
+    }
+    if (hasJson) {
+        m.platform = Platform::PS5;
+        return;
+    }
+    if (m.paramSfo) {
         m.platform = Platform::PS4;
         return;
     }
@@ -124,6 +147,75 @@ void decidePlatform(GameMetadata& m)
         if (f.open(QIODevice::ReadOnly) && f.read(4) == QByteArray("\x54\x14\xF5\xEE", 4))
             m.platform = Platform::PS5; // retail PS5 SELF magic
     }
+}
+
+constexpr int kMaxWalkFolders = 20000;
+
+struct MetaFiles {
+    QString paths[4]; // param.sfo, pfs-version.dat, param.json, nptitle.dat
+    bool npTitleSearched = false; // the walk saw the whole tree, so a missing nptitle.dat is final
+    bool cancelled = false;
+};
+
+// Finds the four metadata files the way findMetaFile() finds one, but with a
+// single walk for all that are not at the root or in sce_sys. nptitle.dat is
+// only a fallback, so the walk does not go on for its sake.
+MetaFiles locateMetaFiles(const QString& folder, const CancellationToken& token)
+{
+    static const QString names[4] = {QStringLiteral("param.sfo"), QStringLiteral("pfs-version.dat"),
+                                     QStringLiteral("param.json"), QStringLiteral("nptitle.dat")};
+    MetaFiles out;
+    const QDir base(folder);
+    int missing = 0; // of the first three
+    for (int i = 0; i < 4; ++i) {
+        for (const QString& p : {base.filePath(names[i]), base.filePath(QStringLiteral("sce_sys/") + names[i])})
+            if (QFileInfo(p).isFile()) {
+                out.paths[i] = QDir::cleanPath(p);
+                break;
+            }
+        if (out.paths[i].isEmpty() && i < 3)
+            ++missing;
+    }
+    if (missing == 0)
+        return out;
+    const bool directNpTitle = !out.paths[3].isEmpty();
+    bool wanted[4];
+    for (int i = 0; i < 4; ++i)
+        wanted[i] = out.paths[i].isEmpty();
+    struct Item {
+        QString path;
+        int depth;
+    };
+    std::vector<Item> stack{{folder, 0}};
+    int visited = 0;
+    while (!stack.empty() && missing > 0) {
+        if (token.isCancelled()) {
+            out.cancelled = true;
+            return out;
+        }
+        Item it = stack.back();
+        stack.pop_back();
+        if (++visited > kMaxWalkFolders)
+            break;
+        for (const QFileInfo& fi : sortedEntries(it.path, QDir::Files)) {
+            const QString lower = fi.fileName().toLower();
+            for (int i = 0; i < 4; ++i)
+                if (wanted[i] && lower == names[i]) {
+                    wanted[i] = false;
+                    out.paths[i] = fi.filePath();
+                    if (i < 3)
+                        --missing;
+                }
+        }
+        if (it.depth >= 5)
+            continue;
+        const QFileInfoList dirs = sortedSubdirs(it.path);
+        for (auto d = dirs.crbegin(); d != dirs.crend(); ++d)
+            if (!isLinkLike(*d))
+                stack.push_back({d->filePath(), it.depth + 1});
+    }
+    out.npTitleSearched = directNpTitle || !out.paths[3].isEmpty() || missing > 0;
+    return out;
 }
 
 } // namespace
@@ -193,7 +285,7 @@ bool hasEbootBin(const QString& folder)
     return QFileInfo(QDir(folder).filePath(QStringLiteral("eboot.bin"))).isFile();
 }
 
-Result<GameMetadata> readGameMetadata(const QString& folderIn)
+Result<GameMetadata> readGameMetadata(const QString& folderIn, const CancellationToken& token)
 {
     const QString folder = QDir::cleanPath(QFileInfo(folderIn).absoluteFilePath());
     if (!QFileInfo(folder).isDir())
@@ -205,8 +297,12 @@ Result<GameMetadata> readGameMetadata(const QString& folderIn)
 
     QString title, titleId, version;
 
+    const MetaFiles files = locateMetaFiles(folder, token);
+    if (files.cancelled)
+        return Error::cancelled();
+
     // 1. param.sfo
-    m.paramSfoPath = findMetaFile(folder, {QStringLiteral("param.sfo")});
+    m.paramSfoPath = files.paths[0];
     if (!m.paramSfoPath.isEmpty()) {
         auto sfo = readSfo(m.paramSfoPath);
         if (sfo.ok()) {
@@ -231,7 +327,7 @@ Result<GameMetadata> readGameMetadata(const QString& folderIn)
     const QString sfoVersion = version;
 
     // 2. pfs-version.dat overrides the version.
-    m.pfsVersionPath = findMetaFile(folder, {QStringLiteral("pfs-version.dat")});
+    m.pfsVersionPath = files.paths[1];
     if (!m.pfsVersionPath.isEmpty()) {
         bool ok = false;
         const QString line = firstLine(readSmall(m.pfsVersionPath, &ok));
@@ -241,7 +337,7 @@ Result<GameMetadata> readGameMetadata(const QString& folderIn)
 
     // 3. param.json (always parsed for the extra facts; used for the legacy
     //    fields only when the SFO gave neither title nor ID).
-    m.paramJsonPath = findMetaFile(folder, {QStringLiteral("param.json")});
+    m.paramJsonPath = files.paths[2];
     if (!m.paramJsonPath.isEmpty()) {
         auto pj = readParamJson(m.paramJsonPath);
         if (pj.ok()) {
@@ -265,7 +361,7 @@ Result<GameMetadata> readGameMetadata(const QString& folderIn)
 
     // 4. nptitle.dat (title only).
     if (title.isEmpty()) {
-        m.npTitlePath = findMetaFile(folder, {QStringLiteral("nptitle.dat")});
+        m.npTitlePath = files.npTitleSearched ? files.paths[3] : findMetaFile(folder, {QStringLiteral("nptitle.dat")});
         if (!m.npTitlePath.isEmpty()) {
             bool ok = false;
             const QByteArray bytes = readSmall(m.npTitlePath, &ok);

@@ -109,10 +109,12 @@ Result<std::vector<RenameItem>> planDumpRenames(const QString& sourceFolder, con
         it.sourcePath = QDir::cleanPath(e.filePath());
         it.gameRoot = root;
         it.currentName = e.fileName();
-        if (auto meta = readGameMetadata(root); meta.ok()) {
+        if (auto meta = readGameMetadata(root, token); meta.ok()) {
             it.title = meta.value().title;
             it.titleId = meta.value().titleId;
             it.version = meta.value().version;
+        } else if (meta.error().isCancelled()) {
+            return Error::cancelled();
         }
         if (it.titleId.isEmpty())
             for (const QString& cand : {e.fileName(), QFileInfo(root).fileName()}) {
@@ -193,6 +195,13 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
         progress->beginPhase(0, readyCount, readyCount, false);
 
     bool cancelled = false;
+    bool logWritten = false;
+    const auto step = [progress] {
+        if (progress) {
+            progress->advance(1);
+            progress->advanceFiles(1);
+        }
+    };
     for (RenameItem& it : plan) {
         if (isSkipStatus(it.status)) {
             ++out.skipped;
@@ -211,12 +220,14 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
         if (QFileInfo::exists(it.targetPath) || QFileInfo(it.targetPath).isSymLink()) {
             it.status = RenameStatus::TargetExists;
             ++out.skipped;
+            step();
             continue;
         }
         if (!destinationRoot.isEmpty() && !QDir().mkpath(destinationRoot)) {
             it.status = RenameStatus::Failed;
             it.message = QStringLiteral("The destination folder could not be created.");
             ++out.failed;
+            step();
             continue;
         }
         if (!QDir().rename(it.sourcePath, it.targetPath)) {
@@ -227,6 +238,7 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
                            : QStringLiteral("The folder could not be renamed. Close any program using files in it "
                                             "and try again.");
             ++out.failed;
+            step();
             continue;
         }
         it.status = RenameStatus::Renamed;
@@ -237,18 +249,19 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
         e.insert(QStringLiteral("time"), QDateTime::currentDateTime().toString(Qt::ISODate));
         entries.append(e);
         log.doc.insert(QStringLiteral("entries"), entries);
-        if (auto s = log.save(); !s.ok()) {
+        if (auto s = log.save(); s.ok()) {
+            logWritten = true;
+        } else {
             // The rename happened; say clearly that it cannot be undone automatically.
             it.message = QStringLiteral("Renamed, but the undo log could not be written: %1").arg(s.error().message);
         }
-        if (progress) {
-            progress->advance(1);
-            progress->advanceFiles(1);
-        }
+        step();
     }
-    if (out.renamed > 0)
+    // Only point at a log that exists (an earlier save may have succeeded).
+    if (out.renamed > 0 && logWritten)
         out.undoLogPath = log.path;
     out.items = std::move(plan);
+    out.cancelled = cancelled;
     if (cancelled && out.renamed == 0)
         return Error::cancelled();
     return out;
@@ -271,14 +284,22 @@ Result<RenameRunResult> undoDumpRenames(const QString& undoLogPath, const Cancel
     if (progress)
         progress->beginPhase(0, entries.size(), entries.size(), false);
     for (qsizetype i = entries.size() - 1; i >= 0; --i) {
-        if (!token.checkpoint())
-            break;
+        if (!out.cancelled && !token.checkpoint())
+            out.cancelled = true;
         QJsonObject e = entries.at(i).toObject();
         RenameItem it;
         it.sourcePath = QDir::fromNativeSeparators(e.value(QStringLiteral("from")).toString());
         it.targetPath = QDir::fromNativeSeparators(e.value(QStringLiteral("to")).toString());
         it.currentName = QFileInfo(it.targetPath).fileName();
         it.proposedName = QFileInfo(it.sourcePath).fileName();
+        if (out.cancelled && !e.value(QStringLiteral("undone")).toBool()) {
+            // Still listed, so the caller can tell which names are not back.
+            it.status = RenameStatus::NotSelected;
+            it.message = QStringLiteral("Cancelled before this name was restored.");
+            ++out.skipped;
+            out.items.push_back(std::move(it));
+            continue;
+        }
         if (e.value(QStringLiteral("undone")).toBool()) {
             it.status = RenameStatus::Restored;
             it.message = QStringLiteral("Already restored earlier.");
@@ -308,6 +329,8 @@ Result<RenameRunResult> undoDumpRenames(const QString& undoLogPath, const Cancel
             progress->advance(1);
     }
     out.undoLogPath = undoLogPath;
+    if (out.cancelled && out.renamed == 0)
+        return Error::cancelled();
     return out;
 }
 

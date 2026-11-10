@@ -59,15 +59,30 @@ struct StripResult {
     QString backupZip;
     int removed = 0;
     qint64 bytesFreed = 0;
-    QStringList failed;      // relative paths that could not be removed
+    QStringList failed;      // relative paths that could not be removed (completely)
+    QStringList leftInPlace; // files kept because they changed, or appeared, after they were backed up
 };
 
 // Backs up every item to "<backupFolder>/<game>_languages_<time>.zip"
-// (verified by reading it back), then deletes the items. Nothing is deleted if
+// (verified by reading it back), then deletes exactly the files that are in
+// the verified backup and have not changed since they were read; a file that
+// changed or appeared in the meantime stays where it is. Nothing is deleted if
 // the backup fails. A manifest inside the ZIP records what was removed.
 Result<StripResult> stripLanguages(const StripPlan& plan, const CancellationToken& token, ProgressReporter* progress);
 
+struct RestoreResult {
+    int restored = 0;
+    QStringList skippedExisting; // relative paths that are in the game already; left as they are
+    QString backupGame;          // the game folder name the backup was made from
+    bool otherGame = false;      // `backupGame` is not the name of the folder restored into
+};
+
 // Puts everything from a strip backup back into `gameRoot` (never overwrites).
+// The ZIP must carry a valid manifest and hold nothing but the items the
+// manifest lists; anything else is refused before a file is written.
+Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QString& gameRoot,
+                                            const CancellationToken& token, ProgressReporter* progress);
+// The same, returning only the number of restored files.
 Result<int> restoreLanguages(const QString& backupZip, const QString& gameRoot, const CancellationToken& token,
                              ProgressReporter* progress);
 
