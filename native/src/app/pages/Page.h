@@ -2,8 +2,10 @@
 
 // Page base classes.
 //
-//  * Page        — scrollable content under a PageHeader; navigation, F5,
-//                  drops, Ctrl+B and screenshot "demo states" are virtuals.
+//  * Page        — scrollable content under a PageHeader that stays at the
+//                  top (the title and the page's main buttons never scroll
+//                  out of reach); navigation, F5, drops, Ctrl+B and
+//                  screenshot "demo states" are virtuals.
 //  * JobFormPage — the "Form + dock" template (§2.4): a left form column
 //                  (max 760 px) and the 400 px Jobs dock; it owns the
 //                  Add-to-queue / primary buttons, the unavailable state when a
@@ -50,6 +52,11 @@ public:
     ui::PageHeader* header() { return m_header; }
     QVBoxLayout* content() { return m_content; }
     QScrollArea* scrollArea() { return m_scroll; }
+    // The strip above the scroll area that holds the header. It is part of
+    // the page while the content is at its top and gets a hairline once the
+    // content has moved under it.
+    QWidget* headerBar() const { return m_headerBar; }
+    bool isHeaderLined() const;
 
     virtual bool hasPrimaryAction() const { return false; }
     virtual void primaryAction() {}
@@ -78,6 +85,7 @@ protected:
 
 private:
     QString m_key, m_title;
+    QWidget* m_headerBar;
     ui::PageHeader* m_header;
     QScrollArea* m_scroll;
     QVBoxLayout* m_content;

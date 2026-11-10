@@ -8,7 +8,9 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
+#include <QPainter>
 #include <QPointer>
 #include <QScrollBar>
 #include <QShowEvent>
@@ -23,12 +25,102 @@ namespace fw::pages {
 using namespace ui;
 using namespace theme;
 
+namespace {
+
+// Header to content is 16 px, as between two cards: this much of it belongs
+// to the pinned strip (so its hairline has air above it), the rest to the
+// scrolling content.
+constexpr int kHeaderGap = space::sm;
+
+// The strip that holds the page header above the scroll area. At the top of
+// the page it is the page itself; once the content is scrolled it shows a
+// hairline, so what passes under it visibly goes somewhere.
+class HeaderBar : public QWidget {
+public:
+    HeaderBar(const QString& title, const QString& caption, QWidget* parent) : QWidget(parent)
+    {
+        setProperty("fwNoRing", true);
+        m_layout = vbox(this, 0, QMargins(space::xxl, space::xl, space::xxl, kHeaderGap));
+        m_header = new PageHeader(title, caption, this);
+        m_layout->addWidget(m_header);
+        // A page may hide its header (Home: the hero is its header).
+        m_header->installEventFilter(this);
+    }
+    PageHeader* header() const { return m_header; }
+    // The scroll area under the strip and the layout of its content.
+    void follow(QScrollArea* scroll, QVBoxLayout* content)
+    {
+        m_scroll = scroll;
+        m_content = content;
+        connect(scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) { setLined(value > 0); });
+        scroll->viewport()->installEventFilter(this); // the scroll bar comes and goes
+        sync();
+    }
+    void setLined(bool on)
+    {
+        if (on == m_lined)
+            return;
+        m_lined = on;
+        update();
+    }
+    bool isLined() const { return m_lined; }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        p.fillRect(rect(), color::bg_1);
+        if (m_lined)
+            p.fillRect(QRect(0, height() - 1, width(), 1), color::border_2);
+    }
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (m_scroll
+            && ((watched == m_header && (event->type() == QEvent::HideToParent || event->type() == QEvent::ShowToParent))
+                || (watched == m_scroll->viewport() && event->type() == QEvent::Resize)))
+            sync();
+        return QWidget::eventFilter(watched, event);
+    }
+
+private:
+    // Keeps the strip in step with the content: its right edge leaves the
+    // room the scroll bar takes from the content (header buttons and cards
+    // end on one line with or without a scroll bar), and without a header the
+    // content starts where the header would have.
+    void sync()
+    {
+        const bool shown = !m_header->isHidden();
+        if (isHidden() == shown)
+            setVisible(shown);
+        QMargins inner = m_content->contentsMargins();
+        inner.setTop(shown ? space::lg - kHeaderGap : space::xl);
+        if (inner != m_content->contentsMargins())
+            m_content->setContentsMargins(inner);
+        QMargins head = m_layout->contentsMargins();
+        head.setRight(space::xxl + std::max(0, m_scroll->width() - m_scroll->viewport()->width()));
+        if (head != m_layout->contentsMargins())
+            m_layout->setContentsMargins(head);
+    }
+    QVBoxLayout* m_layout;
+    PageHeader* m_header;
+    QScrollArea* m_scroll = nullptr;
+    QVBoxLayout* m_content = nullptr;
+    bool m_lined = false;
+};
+
+} // namespace
+
 Page::Page(AppContext& ctx, const QString& key, const QString& title, const QString& caption, QWidget* parent)
     : QWidget(parent), m_ctx(ctx), m_key(key), m_title(title)
 {
     qRegisterMetaType<NavRequest>();
     setProperty("fwNoRing", true);
     auto* outer = vbox(this, 0);
+    // The header is pinned: it sits above the scroll area, not in it.
+    auto* bar = new HeaderBar(title, caption, this);
+    m_headerBar = bar;
+    m_header = bar->header();
+    outer->addWidget(bar);
     m_scroll = new QScrollArea(this);
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
@@ -38,17 +130,18 @@ Page::Page(AppContext& ctx, const QString& key, const QString& title, const QStr
     m_scroll->viewport()->setProperty("fwNoRing", true);
     auto* inner = new QWidget(m_scroll);
     inner->setProperty("fwNoRing", true);
-    auto* il = vbox(inner, space::lg, QMargins(space::xxl, space::xl, space::xxl, space::xxl));
-    m_header = new PageHeader(title, caption, inner);
-    il->addWidget(m_header);
+    auto* il = vbox(inner, space::lg, QMargins(space::xxl, space::lg - kHeaderGap, space::xxl, space::xxl));
     m_content = new QVBoxLayout;
     m_content->setSpacing(space::lg);
     m_content->setContentsMargins(0, 0, 0, 0);
     il->addLayout(m_content);
     il->addStretch(1);
     m_scroll->setWidget(inner);
-    outer->addWidget(m_scroll);
+    outer->addWidget(m_scroll, 1);
+    bar->follow(m_scroll, il);
 }
+
+bool Page::isHeaderLined() const { return static_cast<const HeaderBar*>(m_headerBar)->isLined(); }
 
 // ---- JobFormPage ---------------------------------------------------------------------
 

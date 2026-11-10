@@ -2504,13 +2504,13 @@ void BuildImagePage::applyDemoState(const QString& name)
         m_version->setText(QStringLiteral("01.004.001"));
         renderFileName();
         QTimer::singleShot(0, this, [this] {
-            scrollArea()->verticalScrollBar()->setValue(m_packageCard->mapTo(scrollArea()->widget(), QPoint(0, 0)).y() - space::xl);
+            scrollArea()->verticalScrollBar()->setValue(m_packageCard->mapTo(scrollArea()->widget(), QPoint(0, 0)).y() - space::sm); // as far under the pinned header as the first card
         });
     }
     if (name.startsWith(QLatin1String("advanced-"))) {
         m_advanced->setExpanded(true);
         QTimer::singleShot(0, this, [this] {
-            scrollArea()->verticalScrollBar()->setValue(m_advanced->mapTo(scrollArea()->widget(), QPoint(0, 0)).y() - space::xl);
+            scrollArea()->verticalScrollBar()->setValue(m_advanced->mapTo(scrollArea()->widget(), QPoint(0, 0)).y() - space::sm); // as far under the pinned header as the first card
         });
     }
 }

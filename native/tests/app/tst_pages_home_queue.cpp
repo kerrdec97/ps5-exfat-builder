@@ -14,6 +14,9 @@
 
 #include <QDir>
 #include <QLabel>
+#include <QLayout>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
@@ -152,6 +155,59 @@ private slots:
         QTRY_COMPARE(tabs->segmentText(4), QStringLiteral("Not finished 1"));
         q.holdQueue(false);
         q.clearFinished();
+    }
+
+    // The title and the page's main buttons are pinned: they stay where they
+    // are, fully visible, however far the content is scrolled; the strip
+    // shows its hairline only while content is under it; header buttons end
+    // on one line with the content, with or without a scroll bar.
+    void pageHeaderStaysPutWhenThePageScrolls()
+    {
+        int scrolledPages = 0;
+        for (const QString& key : m_window->pageKeys()) {
+            pages::Page* page = m_window->page(key);
+            QVERIFY(page);
+            m_window->navigate(key);
+            QTest::qWait(30);
+            ui::PageHeader* header = page->header();
+            QScrollArea* scroll = page->scrollArea();
+            // The header is not part of what scrolls.
+            QVERIFY2(!scroll->widget()->isAncestorOf(header), qPrintable(key));
+            if (header->isHidden()) {
+                // A page without a header (Home): no strip, and the content starts 20 px down as before.
+                QVERIFY2(page->headerBar()->isHidden(), qPrintable(key));
+                QCOMPARE(scroll->mapTo(page, QPoint(0, 0)).y(), 0);
+                QCOMPARE(scroll->widget()->layout()->contentsMargins().top(), theme::space::xl);
+                continue;
+            }
+            QVERIFY2(page->headerBar()->isVisible(), qPrintable(key));
+            QVERIFY2(!page->isHeaderLined(), qPrintable(key));
+            // Header to content: 16 px, as between two cards.
+            QCOMPARE(page->headerBar()->layout()->contentsMargins().bottom() + scroll->widget()->layout()->contentsMargins().top(),
+                     theme::space::lg);
+            auto rightEdges = [&] {
+                const int headerRight = header->mapTo(page, QPoint(header->width(), 0)).x();
+                const int contentRight = scroll->viewport()->mapTo(page, QPoint(scroll->viewport()->width(), 0)).x() - theme::space::xxl;
+                return qMakePair(headerRight, contentRight);
+            };
+            QTRY_COMPARE(rightEdges().first, rightEdges().second);
+            QScrollBar* bar = scroll->verticalScrollBar();
+            if (bar->maximum() == 0)
+                continue;
+            ++scrolledPages;
+            const QPoint before = header->mapTo(page, QPoint(0, 0));
+            bar->setValue(bar->maximum());
+            QTest::qWait(10);
+            QVERIFY2(bar->value() > 0, qPrintable(key));
+            QCOMPARE(header->mapTo(page, QPoint(0, 0)), before);
+            QCOMPARE(header->visibleRegion().boundingRect(), header->rect());
+            QVERIFY2(page->isHeaderLined(), qPrintable(key));
+            QCOMPARE(rightEdges().first, rightEdges().second);
+            bar->setValue(0);
+            QVERIFY2(!page->isHeaderLined(), qPrintable(key));
+        }
+        QVERIFY2(scrolledPages >= 3, "the long pages (Build, Settings, Backport...) scroll in a 1440 x 920 window");
+        m_window->navigate(QStringLiteral("home"));
     }
 
     // "1 day ago", not "1 days ago".
