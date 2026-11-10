@@ -69,8 +69,7 @@ PlanOptions planOptionsFrom(const SettingsValues& s, qint64 time)
     PlanOptions p;
     p.excludes = s.stringList(keys::kExcludes);
     p.keepEmptyFolders = s.boolean(keys::kKeepEmptyFolders);
-    const QString ampr = s.string(keys::kAmprIndex);
-    p.ampr = ampr == u"off" ? AmprMode::Off : ampr == u"refresh" ? AmprMode::Refresh : AmprMode::Missing;
+    p.ampr = amprModeFromSetting(s.string(keys::kAmprIndex), AmprMode::Missing);
     p.time = time;
     return p;
 }
@@ -360,6 +359,9 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = QStringLiteral("missing");
         d.choices = {{QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
                       QStringLiteral("What Lazy_MkPFS does.")},
+                     {QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
+                      QStringLiteral("Adds the index when the dump has none and rebuilds one that no longer matches the "
+                                     "game's files. A game with asset packs keeps its own index.")},
                      {QStringLiteral("refresh"), QStringLiteral("Always rebuild it"),
                       QStringLiteral("Replaces the dump's own index in the image (legacy Build page behaviour).")},
                      {QStringLiteral("off"), QStringLiteral("Never add one"), {}}};

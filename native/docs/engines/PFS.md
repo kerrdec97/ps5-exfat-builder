@@ -168,7 +168,9 @@ reproduces this exactly (golden case `file_container_random_fallback`).
 ### ampr_emu.index (AMPRIDX3)
 
 Generated when the dump has `fakelib/libSceAmpr.sprx` (and, by default, no
-index yet). Header `"AMPRIDX3", u32 3, u32 24, u64 rows, u64 path blob
+index yet). `decideAmprIndex` in `AmprIndex.*` is the one rule behind
+`pfs.amprIndex`, `exfat.amprIndex` and `ufs2.amprIndex`; the build logs its
+outcome as `ampr_emu.index: added (the dump has none)` and so on. Header `"AMPRIDX3", u32 3, u32 24, u64 rows, u64 path blob
 length, u64 hash offset, u32 16, u32 slots`; records `u32 path offset, u32 path
 length, u64 size, i64 mtime (s)` for every packed file as `/app0/<path>`,
 sorted by lower-cased path (case-insensitive duplicates: first kept); NUL-
@@ -199,7 +201,7 @@ per job.
 | `pfs.imageVersion` | PFS · Image format (adv.) | PS5 | `pfs_version`; MkPFS `--version PS5` |
 | `pfs.excludes` | PFS · Source folder | `*.exfat *.ffpkg *.ffpfs *.ffpfsc` | none in Lazy; the legacy PFS tab refused dumps with stray images, the exFAT build excluded them |
 | `pfs.keepEmptyFolders` | PFS · Source folder | on | legacy PFS tab `_seed_empty_dir_markers` (`.pfskeep`) |
-| `pfs.amprIndex` | PFS · Source folder | add when missing | Lazy `ensure_ampr_index`; "refresh" = legacy Build page `_maybe_build_ampr_index` |
+| `pfs.amprIndex` | PFS · Source folder | add when missing | Lazy `ensure_ampr_index`; "refresh" = legacy Build page `_maybe_build_ampr_index`; "auto" (When the game uses the AMPR emulator) = add when missing, rebuild when the dump's index differs from a fresh one in more than file times, leave a game with asset packs alone (the default of `exfat.amprIndex` and `ufs2.amprIndex`) |
 | `pfs.deleteSourceAfterConvert` | PFS · After converting | off | legacy `pfs_delete_source_after_convert` |
 
 Legacy keys imported (`addLegacyKey`): `pfs_compression_level` (clamped to

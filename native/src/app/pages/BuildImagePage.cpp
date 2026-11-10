@@ -92,6 +92,7 @@ QString bucketTitle(const SettingDef& d)
         {QStringLiteral("exFAT images"), QStringLiteral("Image")},
         {QStringLiteral("exFAT contents"), QStringLiteral("Contents")},
         {QStringLiteral("FFPKG images (UFS2)"), QStringLiteral("Image")},
+        {QStringLiteral("FFPKG contents"), QStringLiteral("Contents")},
         {QStringLiteral("Folder images (.ffpfs)"), QStringLiteral("Files inside .ffpfs images")},
     };
     const QString g = d.group.isEmpty() ? d.section : d.group;
@@ -1229,7 +1230,7 @@ void BuildImagePage::onFormatChanged()
     if (t == jobs::kFormatExfat)
         m_advanced->setCaption(QStringLiteral("Free space, volume label, contents, verification"));
     else if (t == jobs::kFormatFfpkg)
-        m_advanced->setCaption(QStringLiteral("Block and fragment size, inodes, verification"));
+        m_advanced->setCaption(QStringLiteral("Block and fragment size, inodes, contents, verification"));
     else if (t == jobs::kFormatFfpfsc)
         m_advanced->setCaption(QStringLiteral("Threads, PFS format, source folder, verification"));
     else if (folder)

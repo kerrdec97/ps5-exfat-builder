@@ -124,6 +124,28 @@ void registerModule(ModuleContext& ctx)
     }
     {
         SettingDef d;
+        d.key = keys::kAmprIndex;
+        d.section = section;
+        d.group = QStringLiteral("FFPKG contents");
+        d.label = QStringLiteral("AMPR file index");
+        d.description = QStringLiteral("A game with fakelib/libSceAmpr.sprx needs ampr_emu.index, the list of its files, at "
+                                       "its top folder. A new or rebuilt index goes into the image only; the dump folder is "
+                                       "never changed.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("auto");
+        addChoice(d, QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
+                  QStringLiteral("Adds the index when the dump has none and rebuilds one that no longer matches the game's "
+                                 "files, as version 4 did. A game with asset packs keeps its own index."));
+        addChoice(d, QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
+                  QStringLiteral("An index the dump already has is copied as it is."));
+        addChoice(d, QStringLiteral("refresh"), QStringLiteral("Always rebuild it"));
+        addChoice(d, QStringLiteral("off"), QStringLiteral("Never add or change it"));
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
         d.key = keys::kDeleteSourceAfterBuild;
         d.section = section;
         d.group = QStringLiteral("Danger zone");

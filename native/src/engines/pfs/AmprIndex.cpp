@@ -208,4 +208,92 @@ Result<AmprLocalScan> scanAmprFolder(const QString& folder, const CancellationTo
     return out;
 }
 
+// ---- the index a folder build puts into its image --------------------------------------
+
+AmprMode amprModeFromSetting(const QString& value, AmprMode fallback)
+{
+    if (value == u"auto")
+        return AmprMode::Auto;
+    if (value == u"missing")
+        return AmprMode::Missing;
+    if (value == u"refresh")
+        return AmprMode::Refresh;
+    if (value == u"off")
+        return AmprMode::Off;
+    return fallback;
+}
+
+bool amprActionChangesImage(AmprIndexAction action)
+{
+    return action == AmprIndexAction::Added || action == AmprIndexAction::Rebuilt || action == AmprIndexAction::RebuiltAlways;
+}
+
+QString amprActionLogLine(AmprIndexAction action)
+{
+    switch (action) {
+    case AmprIndexAction::Off: return {};
+    case AmprIndexAction::NotNeeded: return QStringLiteral("ampr_emu.index: not needed (no fakelib/libSceAmpr.sprx)");
+    case AmprIndexAction::Added: return QStringLiteral("ampr_emu.index: added (the dump has none)");
+    case AmprIndexAction::Rebuilt: return QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)");
+    case AmprIndexAction::RebuiltAlways: return QStringLiteral("ampr_emu.index: rebuilt (set to always rebuild it)");
+    case AmprIndexAction::KeptUpToDate: return QStringLiteral("ampr_emu.index: kept (up to date)");
+    case AmprIndexAction::KeptExisting: return QStringLiteral("ampr_emu.index: kept (the dump has one)");
+    case AmprIndexAction::KeptForPacks:
+        return QStringLiteral("ampr_emu.index: kept (the game's asset packs need the index they were made with)");
+    }
+    return {};
+}
+
+AmprIndexDecision decideAmprIndex(AmprMode mode, const AmprIndexState& state, const std::function<QByteArray()>& fresh,
+                                  const std::function<Result<QByteArray>()>& existing)
+{
+    AmprIndexDecision d;
+    if (mode == AmprMode::Off)
+        return d;
+    if (!state.hasLibrary) {
+        d.action = AmprIndexAction::NotNeeded;
+        return d;
+    }
+    const AmprIndexAction kept = mode == AmprMode::Auto ? AmprIndexAction::KeptUpToDate : AmprIndexAction::KeptExisting;
+    if (state.hasIndex && mode == AmprMode::Missing) {
+        d.action = kept;
+        return d;
+    }
+    if (mode == AmprMode::Auto && state.hasAssetPacks) {
+        d.action = AmprIndexAction::KeptForPacks;
+        return d;
+    }
+    QByteArray index = fresh();
+    if (index.isEmpty()) { // nothing to list: the image stays as the dump is
+        d.action = state.hasIndex ? kept : AmprIndexAction::NotNeeded;
+        return d;
+    }
+    if (!state.hasIndex) {
+        d.action = AmprIndexAction::Added;
+    } else if (mode == AmprMode::Refresh) {
+        d.action = AmprIndexAction::RebuiltAlways;
+    } else {
+        // An index of another size cannot match; one that cannot be read is
+        // replaced like one that does not match.
+        bool same = false;
+        if (state.indexSize == index.size()) {
+            const Result<QByteArray> old = existing();
+            same = old.ok() && (old.value() == index || amprIndexesDifferOnlyInTimes(old.value(), index));
+        }
+        d.action = same ? AmprIndexAction::KeptUpToDate : AmprIndexAction::Rebuilt;
+    }
+    if (amprActionChangesImage(d.action))
+        d.index = std::move(index);
+    return d;
+}
+
+bool isAmprPackIndexName(const QString& fileName)
+{
+    for (const QLatin1String name : {QLatin1String("ampr_zstd.index"), QLatin1String("ampr_assets.index"),
+                                     QLatin1String("ampr_assets.index.runtime")})
+        if (fileName.compare(name, Qt::CaseInsensitive) == 0)
+            return true;
+    return false;
+}
+
 } // namespace fw::pfs

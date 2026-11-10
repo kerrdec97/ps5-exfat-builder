@@ -25,6 +25,7 @@ inline const QString kLabel = QStringLiteral("exfat.label");
 inline const QString kRequireEboot = QStringLiteral("exfat.requireEboot");
 inline const QString kExcludePatterns = QStringLiteral("exfat.excludePatterns");
 inline const QString kExcludeHidden = QStringLiteral("exfat.excludeHidden");
+inline const QString kAmprIndex = QStringLiteral("exfat.amprIndex");
 inline const QString kOverwriteExisting = QStringLiteral("exfat.overwriteExisting");
 inline const QString kAllocation = QStringLiteral("exfat.allocation");
 inline const QString kOpenRetries = QStringLiteral("exfat.openRetries");

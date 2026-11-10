@@ -269,6 +269,8 @@ private:
     static SettingsValues childSettings(const SettingsValues& s)
     {
         return s.withOverrides({{pfs::keys::kAmprIndex, QStringLiteral("off")},
+                                {exfat::keys::kAmprIndex, QStringLiteral("off")},
+                                {ufs2::keys::kAmprIndex, QStringLiteral("off")},
                                 {pfs::keys::kCompressFiles, false},
                                 {pfs::keys::kExcludes, QStringList()},
                                 {pfs::keys::kDeleteSourceAfterConvert, false},

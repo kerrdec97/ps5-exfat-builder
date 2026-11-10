@@ -13,6 +13,7 @@ inline const QString kBlockSize = QStringLiteral("ufs2.blockSize");             
 inline const QString kFragmentSize = QStringLiteral("ufs2.fragmentSize");       // newfs -f
 inline const QString kMinFreePercent = QStringLiteral("ufs2.minFreePercent");   // newfs -m
 inline const QString kBytesPerInode = QStringLiteral("ufs2.bytesPerInode");     // newfs -i
+inline const QString kAmprIndex = QStringLiteral("ufs2.amprIndex");
 inline const QString kDeleteSourceAfterBuild = QStringLiteral("ufs2.deleteSourceAfterBuild");
 } // namespace keys
 

@@ -230,8 +230,8 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
                              .arg(p.excludedSamples.join(QStringLiteral(", "))));
         if (p.emptyFolderMarkers)
             ctx.log.info(QStringLiteral("Kept %1 empty folder(s) with .pfskeep markers").arg(p.emptyFolderMarkers));
-        if (p.amprGenerated)
-            ctx.log.info(QStringLiteral("Added ampr_emu.index (fakelib/libSceAmpr.sprx found)"));
+        if (const QString line = amprActionLogLine(p.amprAction); !line.isEmpty())
+            ctx.log.info(line);
     } else {
         in.file = m_source;
         in.fileName = innerName().toLatin1();

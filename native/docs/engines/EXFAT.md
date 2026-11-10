@@ -150,6 +150,7 @@ overridden for a single job.
 | `exfat.requireEboot` | Build | on | yes | |
 | `exfat.excludePatterns` | Build | see above | yes | |
 | `exfat.excludeHidden` | Build | off | yes | `adv_excl_hidden` |
+| `exfat.amprIndex` | Build | `auto` | yes | none (the legacy app always rebuilt the index, in the dump) |
 | `exfat.overwriteExisting` | Build | on | yes | |
 | `exfat.allocation` (advanced) | Build | `contiguous` | | |
 | `exfat.openRetries` (advanced) | Build | 3 | | `adv_retries` (robocopy `/R`) |
@@ -171,6 +172,39 @@ Legacy options deliberately not carried over: OSFMount path (no OSFMount),
 robocopy threads (`adv_threads`; the writer is sequential by design and cannot
 fragment), robocopy log, write benchmark, auto-upload (FTP module), naming
 presets (Build page / gameinfo).
+
+### ampr_emu.index (`exfat.amprIndex`)
+
+A game with `fakelib/libSceAmpr.sprx` needs `ampr_emu.index` (the AMPR
+emulator's list of the game's files, format in `PFS.md`) at its top folder.
+The legacy app wrote one into the dump before every build
+(`_maybe_build_ampr_index`). Here the dump folder is never written: the build
+decides after the scan (`ExfatAmpr.*`, `pfs::decideAmprIndex`), writes a new
+index into the job's temporary folder and puts that file into the scanned tree
+as the root's `ampr_emu.index`, in place of the dump's own entry or as a new
+entry where the scanner would have listed it. A build that adds or changes
+nothing leaves the tree alone, so its image is byte for byte what it was before
+the setting existed.
+
+| Value | Label | What the build does when the game has `fakelib/libSceAmpr.sprx` |
+|---|---|---|
+| `auto` (default) | When the game uses the AMPR emulator | Adds the index when the dump has none; rebuilds it when the dump's differs from a freshly built one in more than file times (`pfs::amprIndexesDifferOnlyInTimes`, so a copied or re-saved dump is not "outdated"). A game with asset packs (`ampr_zstd.index`, `ampr_assets.index[.runtime]` at the top) keeps its index: it lists the files inside the packs. |
+| `missing` | Add when the dump has none | Adds one; a dump's own index is copied as it is. |
+| `refresh` | Always rebuild it | Adds or replaces it. |
+| `off` | Never add or change it | Nothing. |
+
+The rows are the files the image holds (exclusions applied) by the rules of
+the AMPR index tool (`pfs::amprToolRows`), so an index made with
+*AMPR index (folder)* is up to date. The job log says what was done:
+`ampr_emu.index: added (the dump has none)`, `rebuilt (it did not match the
+game's files)`, `kept (up to date)`, `not needed (no
+fakelib/libSceAmpr.sprx)`; the outcome details carry `amprIndex` (`added` /
+`rebuilt`) when the image differs from the folder. The build's verification
+scans the folder again and expects the new index in place of the folder's.
+`image.exfat.verify` against a folder accepts an image whose `ampr_emu.index`
+is the index of the folder's files (also with other file times) when the
+folder has none or another one. `image.convert` and the zstd build turn the
+setting off for their own builds: the tree they hand over goes in as it is.
 
 ## Performance
 
@@ -241,6 +275,12 @@ from filling up during a 100 GB build.
   import, validation, cancellation (no output, no `.part`, previous image
   kept), insufficient space, replacing images, source deletion gating, the
   verify and extract jobs.
+* `tst_exfat_ampr` — `exfat.amprIndex`: a missing index is added and an outdated
+  one rebuilt in the image only (every file of the dump hashed before and
+  after), an up-to-date one (also with other file times) kept byte for byte,
+  a packed game's index kept, `off` and the other choices, a game without the
+  AMPR library builds the bytes it built before, the verify job, source
+  deletion.
 * `tst_exfat_edit` — in-place deletes and replacements, rebuild and growth,
   cancellation and failed verification leaving the image byte-identical,
   interrupted-edit recovery, the edit job.

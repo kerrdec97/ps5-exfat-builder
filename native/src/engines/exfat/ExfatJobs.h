@@ -10,6 +10,7 @@
 #include "engines/exfat/ExfatEdit.h"
 #include "engines/exfat/ExfatWriter.h"
 #include "engines/exfat/SourceScan.h"
+#include "engines/pfs/AmprIndex.h"
 #include "jobs/Job.h"
 
 namespace fw::exfat {
@@ -20,6 +21,7 @@ void registerJobKinds(JobFactory& jobs);
 struct ExfatSettings {
     WriterOptions writer;
     ScanRules rules;
+    pfs::AmprMode ampr = pfs::AmprMode::Auto; // exfat.amprIndex
     bool requireEboot = true;
     bool overwrite = true;
     QString labelPolicy;     // fixed | titleId | none
