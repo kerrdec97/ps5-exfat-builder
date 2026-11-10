@@ -142,6 +142,8 @@ Status PfsBuildJob::validate(const SettingsValues& settings) const
         return Error(ErrorCode::NotFound, QStringLiteral("Choose an existing game folder or image to pack."));
     if (m_output.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the PFS image."));
+    if (QFileInfo(m_output).isDir())
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("The output must be a file name, not a folder."));
     if (archive::isZipSource(m_source)) { // #67: a zipped dump, unpacked in run()
         FW_TRY(archive::checkZipSource(m_source));
         if (QFileInfo::exists(m_output) && !m_params.value(QStringLiteral("replaceExisting")).toBool())
@@ -149,8 +151,6 @@ Status PfsBuildJob::validate(const SettingsValues& settings) const
                                                        .arg(QFileInfo(m_output).fileName()));
         return success();
     }
-    if (QFileInfo(m_output).isDir())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("The output must be a file name, not a folder."));
     const QFileInfo src(m_source);
     if (src.isDir() && isSameOrInside(m_output, m_source))
         return Error(ErrorCode::InvalidArgument,

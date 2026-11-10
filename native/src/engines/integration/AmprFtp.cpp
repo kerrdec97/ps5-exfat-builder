@@ -130,6 +130,9 @@ public:
         if (scan.approximateTimes > 0)
             o.warnings << QStringLiteral("The console did not give exact times for %1 file(s); their listed times were used.").arg(scan.approximateTimes);
         auto back = c.download(up->remotePath, ctx.token);
+        // Cancelled while reading back: the job was cancelled, not the check failed.
+        if (!back.ok() && back.error().isCancelled())
+            return back.takeError();
         if (back.ok() && back.value() == index) {
             o.verification = Verification::Passed;
             o.verificationDetail = QStringLiteral("ampr_emu.index read back from the console, %1").arg(formatBytes(index.size()));
@@ -214,12 +217,14 @@ Result<AmprUpload> uploadAmprIndex(ps5::FtpClient& c, const QString& remoteFolde
     }
     const bool existed = c.fileExists(out.remotePath);
     if (existed) {
-        if (c.fileExists(bak))
-            (void)c.dele(bak);
+        const bool backupRemoved = c.fileExists(bak) && c.dele(bak).ok();
         if (auto st = c.rename(out.remotePath, bak); !st.ok()) {
             (void)c.dele(tmp);
             return Error(ErrorCode::Unsupported,
-                         QStringLiteral("The PS5 FTP server refused to rename the old ampr_emu.index, so nothing was changed."),
+                         backupRemoved
+                             ? QStringLiteral("The PS5 FTP server refused to rename the old ampr_emu.index, so the index was not "
+                                              "replaced. The older ampr_emu.index.bak had already been removed.")
+                             : QStringLiteral("The PS5 FTP server refused to rename the old ampr_emu.index, so nothing was changed."),
                          st.error().detail);
         }
         out.backupPath = bak;

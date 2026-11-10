@@ -543,6 +543,29 @@ private slots:
         QVERIFY(!(*logical2)->read((*logical2)->find(QStringLiteral("data/big.bin")), 65536, tail.data(), tail.size()).ok());
     }
 
+    // A name cannot be a file and a folder at once, whatever sorts between
+    // the two ("a-1" comes after "a" and before "a/b").
+    void fileAndFolderOfOneNameAreRefused()
+    {
+        const QString dir = m_tmp.filePath(QStringLiteral("both"));
+        QVERIFY(QDir().mkpath(dir));
+        auto w = writeZstdPack(inputsOf({{"a", "file"}, {"a-1", "other"}, {"a/b", "inside"}}), {}, dir, {});
+        QVERIFY(!w.ok());
+        QVERIFY2(w.error().message.contains(QLatin1String("both a file and a folder")), qPrintable(w.error().toLogString()));
+        QVERIFY(QDir(dir).isEmpty());
+
+        // A loose file next to packed files below the same name.
+        const QString game = m_tmp.filePath(QStringLiteral("both-game"));
+        QVERIFY(QDir().mkpath(game));
+        QVERIFY(writeZstdPack(inputsOf({{"a/b", QByteArray(1000, 'x')}}), {}, game, {}).ok());
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/a"), "loose"));
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        auto logical = logicalGame(*files, {});
+        QVERIFY(!logical.ok());
+        QCOMPARE(logical.error().code, ErrorCode::CorruptData);
+    }
+
     // Stored paths are untrusted: nothing a pack index or an image lists may
     // be written outside the output folder.
     void hostPathsStayInsideTheirRoot()

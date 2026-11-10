@@ -676,6 +676,67 @@ private slots:
         QCOMPARE(queued.count(), 1);
     }
 
+    // ---- the zstd build's own details -------------------------------------------------------
+
+    void zstdBuildTitleKeepsTheFoldersWholeName()
+    {
+        const QString out = m_root.filePath(QStringLiteral("titles/x.exfat"));
+        const auto title = [&](const QJsonObject& extra, const QString& source) {
+            QJsonObject p{{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), source}, {QStringLiteral("output"), out}};
+            for (auto it = extra.begin(); it != extra.end(); ++it)
+                p.insert(it.key(), it.value());
+            auto job = m_env->jobs.create(integration::kZstdBuildJob, p);
+            return job.ok() ? (*job)->title() : QStringLiteral("(no job)");
+        };
+        QCOMPARE(title({}, m_root.filePath(QStringLiteral("titles/Astro Bot v1.020"))), QStringLiteral("Astro Bot v1.020"));
+        const QString zip = m_root.filePath(QStringLiteral("titles/Game v1.5.zip"));
+        QVERIFY(fwtest::writeTextFile(zip, "not a real archive"));
+        QCOMPARE(title({}, zip), QStringLiteral("Game v1.5"));
+        QCOMPARE(title({{QStringLiteral("title"), QStringLiteral("My title")}}, zip), QStringLiteral("My title"));
+    }
+
+    // The PFS exclusions mean the same with and without zstd packs: a
+    // trailing "/" or a leading "./" does not change what a pattern matches.
+    void zstdBuildReadsPfsExclusionsLikeThePfsScan()
+    {
+        Env env(m_root.filePath(QStringLiteral("excl-env")));
+        QVERIFY(env.store->setValue(pfs::keys::kExcludes, QStringList{QStringLiteral("ja.txt/"), QStringLiteral("./fakelib/libSceNpAuth.sprx")}).ok());
+        const QString dir = m_root.filePath(QStringLiteral("excl"));
+        QVERIFY(QDir().mkpath(dir));
+        for (const bool zstd : {false, true}) {
+            const QString image = dir + (zstd ? QStringLiteral("/zstd.ffpfs") : QStringLiteral("/plain.ffpfs"));
+            auto r = zstd ? env.run(integration::kZstdBuildJob, {{QStringLiteral("format"), QStringLiteral("ffpfs")}, {QStringLiteral("source"), m_game},
+                                                                 {QStringLiteral("output"), image}})
+                          : env.run(QStringLiteral("image.pfs.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), image}});
+            QVERIFY2(r && r->state == JobState::Succeeded, qPrintable(describe(r)));
+            auto files = integration::openGameFiles(image, {});
+            QVERIFY(files.ok());
+            auto logical = ampr::logicalGame(*files, {});
+            QVERIFY(logical.ok());
+            QVERIFY2((*logical)->find(QStringLiteral("data/level1.bin")) >= 0, qPrintable(image));
+            QCOMPARE((*logical)->find(QStringLiteral("data/strings/ja.txt")), -1);
+            QCOMPARE((*logical)->find(QStringLiteral("fakelib/libSceNpAuth.sprx")), -1);
+        }
+    }
+
+    // A ZIP source gets the same early output check as a folder.
+    void zippedBuildRefusesAFolderAsItsOutputAtOnce()
+    {
+        const QString zip = m_root.filePath(QStringLiteral("early/PPSA01234.zip"));
+        QVERIFY(QDir().mkpath(m_root.filePath(QStringLiteral("early/out.ffpfs")))); // a folder of that name
+        zipFolder(m_game, zip, QStringLiteral("PPSA01234/"));
+        if (QTest::currentTestFailed())
+            return;
+        auto job = m_env->jobs.create(QStringLiteral("image.pfs.build"),
+                                      {{QStringLiteral("source"), zip}, {QStringLiteral("output"), m_root.filePath(QStringLiteral("early/out.ffpfs"))},
+                                       {QStringLiteral("replaceExisting"), true}});
+        QVERIFY(job.ok());
+        const Status st = (*job)->validate(m_env->store->snapshot());
+        QVERIFY(!st.ok());
+        QCOMPARE(st.error().code, ErrorCode::InvalidArgument);
+        QVERIFY2(st.error().message.contains(QLatin1String("not a folder")), qPrintable(st.error().message));
+    }
+
 private:
     QTemporaryDir m_root;
     QString m_game;

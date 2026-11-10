@@ -299,7 +299,8 @@ Result<std::shared_ptr<UnpackedGame>> UnpackedGame::open(std::shared_ptr<GameFil
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 is listed twice in the packs.").arg(path));
         if (g->m_index.contains(path))
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 is both a folder and a packed file.").arg(path));
-        for (QString dir = parentOf(path); !dir.isEmpty() && !g->m_index.contains(dir); dir = parentOf(dir)) {
+        QString dir = parentOf(path);
+        for (; !dir.isEmpty() && !g->m_index.contains(dir); dir = parentOf(dir)) {
             GameItem d;
             d.path = dir;
             d.isDir = true;
@@ -308,6 +309,8 @@ Result<std::shared_ptr<UnpackedGame>> UnpackedGame::open(std::shared_ptr<GameFil
             g->m_items.push_back(d);
             g->m_sources.push_back({false, -1});
         }
+        if (!dir.isEmpty() && !g->m_items[size_t(g->m_index.value(dir))].isDir)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is both a file and a folder of packed files.").arg(dir));
         GameItem f;
         f.path = path;
         f.size = packed[size_t(i)].second;

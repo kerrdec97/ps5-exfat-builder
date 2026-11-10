@@ -22,6 +22,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRandomGenerator>
+#include <QSet>
 #include <QTimeZone>
 
 #include <cstring>
@@ -113,7 +114,15 @@ class ZstdBuildJob final : public Job {
 public:
     ZstdBuildJob(QJsonObject p, const JobFactory* factory) : m_p(std::move(p)), m_factory(factory) {}
     QString kind() const override { return kZstdBuildJob; }
-    QString title() const override { return QFileInfo(source()).completeBaseName(); }
+    QString title() const override
+    {
+        // Like the image builds: their "title" when given, else the folder's
+        // whole name ("Astro Bot v1.020") or the ZIP's name without ".zip".
+        const QString t = m_p.value(QStringLiteral("title")).toString();
+        if (!t.isEmpty())
+            return t;
+        return archive::isZipSource(source()) ? QFileInfo(source()).completeBaseName() : QFileInfo(source()).fileName();
+    }
     QString subtitle() const override
     {
         return QStringLiteral("zstd packs · .%1 → %2").arg(format(), native(QFileInfo(output()).absolutePath()));
@@ -292,11 +301,10 @@ private:
             for (const QJsonValue& v : m_p.value(QStringLiteral("excludes")).toArray())
                 rules.excludePatterns << v.toString();
         } else if (format() == u"ffpfs" || format() == u"ffpfsc") {
-            for (const QString& pat : s.stringList(pfs::keys::kExcludes)) {
-                rules.excludePatterns << pat;
-                if (!pat.endsWith(u'/'))
-                    rules.excludePatterns << pat + u'/';
-            }
+            // As the PFS scan reads them: "./" and a trailing "/" dropped, and
+            // each pattern matches files and folders alike.
+            for (const QString& pat : pfs::normalizeExcludes(s.stringList(pfs::keys::kExcludes)))
+                rules.excludePatterns << pat << pat + u'/';
         }
         if (rules.excludePatterns.isEmpty() && !rules.excludeHidden)
             return {};
@@ -650,16 +658,18 @@ Result<std::shared_ptr<ampr::GameFiles>> openGameFiles(const QString& path, cons
 
 std::optional<QString> findGameRoot(const ampr::GameFiles& files)
 {
+    QSet<QString> folded; // lower-cased folder paths, filled when first needed
     auto isRoot = [&](const QString& dir) {
         const QString sys = dir.isEmpty() ? QStringLiteral("sce_sys") : dir + QStringLiteral("/sce_sys");
         const int i = files.find(sys);
         if (i >= 0 && files.items()[size_t(i)].isDir)
             return true;
         // Case-insensitive fallback (exFAT and PFS images keep any case).
-        for (const auto& it : files.items())
-            if (it.isDir && it.path.compare(sys, Qt::CaseInsensitive) == 0)
-                return true;
-        return false;
+        if (folded.isEmpty())
+            for (const auto& it : files.items())
+                if (it.isDir)
+                    folded.insert(it.path.toLower());
+        return folded.contains(sys.toLower());
     };
     if (isRoot(QString()))
         return QString();

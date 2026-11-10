@@ -123,6 +123,22 @@ QByteArray buildAmprIndex(const std::vector<AmprRow>& input)
     return out;
 }
 
+bool amprIndexesDifferOnlyInTimes(const QByteArray& a, const QByteArray& b)
+{
+    const qint64 headerSize = 48;
+    if (a.size() != b.size() || a.size() < headerSize || std::memcmp(a.constData(), "AMPRIDX3", 8) != 0
+        || std::memcmp(a.constData(), b.constData(), size_t(headerSize)) != 0)
+        return false;
+    const quint64 rows = getU64(a.constData() + 16);
+    if (getU32(a.constData() + 12) != 24 || rows > quint64(a.size() - headerSize) / 24)
+        return false;
+    const qint64 recordsEnd = headerSize + qint64(rows) * 24;
+    for (qint64 r = headerSize; r < recordsEnd; r += 24)
+        if (std::memcmp(a.constData() + r, b.constData() + r, 16) != 0) // path offset, length, size
+            return false;
+    return std::memcmp(a.constData() + recordsEnd, b.constData() + recordsEnd, size_t(a.size() - recordsEnd)) == 0;
+}
+
 // ---- the stand-alone tool --------------------------------------------------------------
 
 bool amprToolSkips(const QByteArray& indexedPath)

@@ -443,6 +443,35 @@ private slots:
         QVERIFY(timer.elapsed() < 5000);
     }
 
+    // The marker of a staged extraction lives next to the staged folder, so
+    // an image file may have any name, the old marker's included.
+    void anImageFileMayBeNamedLikeTheOldMarker()
+    {
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/.fw-pfs-extract"), "game data", -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        const QString out = tmp.filePath(QStringLiteral("x"));
+        auto er = extractImage(image, out, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY2(er.ok(), er.ok() ? "" : qPrintable(er.error().toLogString()));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/.fw-pfs-extract")), QByteArray("game data"));
+        QCOMPARE(listTree(tmp.path()).filter(QStringLiteral("x.part")), QStringList());
+
+        // A leftover of an interrupted extraction is replaced; a folder of
+        // that name that is not ours is refused.
+        const QString again = tmp.filePath(QStringLiteral("y"));
+        QVERIFY(pfstest::writeFile(again + QStringLiteral(".part/half.bin"), "half", -1));
+        auto refused = extractImage(image, again, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY(!refused.ok());
+        QCOMPARE(refused.error().code, ErrorCode::AlreadyExists);
+        QVERIFY(pfstest::writeFile(again + QStringLiteral(".part.extracting"), "", -1));
+        auto replaced = extractImage(image, again, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY2(replaced.ok(), replaced.ok() ? "" : qPrintable(replaced.error().toLogString()));
+        QVERIFY(!QFileInfo::exists(again + QStringLiteral("/half.bin")));
+        QCOMPARE(listTree(tmp.path()).filter(QStringLiteral(".part")), QStringList());
+    }
+
     // A tiny image whose PFSC header declares a 16 GiB block offset table
     // (the inode and header stretched to a 1 TiB image the file does not
     // hold; Reviewer's craft_pfsc.py) is rejected without allocating it.

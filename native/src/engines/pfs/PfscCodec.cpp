@@ -8,6 +8,7 @@
 #include <zlib.h>
 
 #include <cstring>
+#include <system_error>
 
 namespace fw::pfs {
 
@@ -38,8 +39,18 @@ CompressPool::CompressPool(int threads, int level) : m_threads(std::max(1, threa
         return;
     }
     m_workers.reserve(size_t(m_threads));
-    for (int i = 0; i < m_threads; ++i)
-        m_workers.emplace_back([this] { workerMain(); });
+    try {
+        for (int i = 0; i < m_threads; ++i)
+            m_workers.emplace_back([this] { workerMain(); });
+    } catch (const std::system_error&) {
+        // The system would not start another thread: go on with the ones
+        // that run (or compress on the calling thread when none does).
+    }
+    m_threads = int(m_workers.size());
+    if (m_workers.empty()) {
+        m_threads = 1;
+        m_inline = std::make_unique<Deflater>(level);
+    }
 }
 
 CompressPool::~CompressPool()
