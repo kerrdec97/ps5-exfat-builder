@@ -3,6 +3,7 @@
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
 
+#include <QResizeEvent>
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
@@ -428,6 +429,25 @@ void SettingRow::setRestartNote(bool on)
 void SettingRow::resizeEvent(QResizeEvent* e)
 {
     QWidget::resizeEvent(e);
+    // The children already have their final widths here. A caption that only
+    // just wraps can be planned as one line by the layouts above (the page
+    // height is worked out before the scroll bar takes its width), which cuts
+    // both lines: ask for the missing height.
+    // Asked a few times per width at most: a row that cannot be given the
+    // height is left alone, and this can never become a resize loop.
+    if (m_helpFitWidth != width()) {
+        if (m_helpFitWidth != -1)
+            setMinimumHeight(0); // another width: let the layouts decide again
+        m_helpFitWidth = width();
+        m_helpFitTries = 0;
+    }
+    if (m_helpFitTries < 3 && isVisible() && m_help && m_help->isVisibleTo(this) && m_help->width() > 0) {
+        const int missing = m_help->heightForWidth(m_help->width()) - m_help->height();
+        if (missing > 0 && missing < 200) {
+            ++m_helpFitTries;
+            setMinimumHeight(height() + missing);
+        }
+    }
     // Narrow containers (the 400 px aside): label above the control.
     const bool narrow = width() < 520;
     if (narrow == m_narrow || !m_layout)

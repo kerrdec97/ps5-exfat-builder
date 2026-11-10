@@ -78,6 +78,8 @@ private:
     QBoxLayout* m_layout = nullptr;
     QWidget* m_right = nullptr;
     bool m_narrow = false;
+    int m_helpFitWidth = -1; // the width the caption's missing height was asked for
+    int m_helpFitTries = 0;  // how often at that width (bounded: never a resize loop)
     SettingDef m_def;
     SettingEditor* m_editor;
     QLabel* m_label;

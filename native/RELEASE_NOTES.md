@@ -112,6 +112,8 @@ stay valid.
 * The Queue shows the time left for the whole job, lists every job that runs
   at the same time, and its "Failed" tab is now "Not finished".
 * New app icon in all sizes. The Logs page no longer loses lines.
+* Settings: a description that just wraps onto a second line is no longer cut
+  off (Storage › Default output folder).
 * "When the queue finishes": with "Only if every job succeeded" off the action
   also runs after failures.
 

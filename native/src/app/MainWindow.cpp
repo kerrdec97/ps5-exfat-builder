@@ -1040,6 +1040,7 @@ int MainWindow::screenshotAllPages(const QString& dir)
     navigate(QStringLiteral("settings"));
     m_sidebar->focusCurrent();
     snap(QStringLiteral("focus-ring"));
+    m_focusRing->reset();
     resize(1100, 760);
     navigate(QStringLiteral("build"));
     snap(QStringLiteral("narrow-1100"));
