@@ -18,6 +18,7 @@
 #include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/SettingRow.h"
+#include "app/ui/Sheet.h"
 #include "app/ui/Shell.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
@@ -48,6 +49,13 @@ public:
     QString subtitle() const override { return QStringLiteral("test · fake"); }
     QStringList phases() const override { return {QStringLiteral("One"), QStringLiteral("Two")}; }
     QJsonObject parameters() const override { return m_p; }
+    Status validate(const SettingsValues&) const override
+    {
+        const QString needs = m_p.value(QStringLiteral("requires")).toString();
+        if (!needs.isEmpty() && !QFileInfo::exists(needs))
+            return Error(ErrorCode::NotFound, QStringLiteral("The source folder is gone."));
+        return success();
+    }
     Result<JobOutcome> run(JobContext& ctx) override
     {
         const int steps = m_p.value(QStringLiteral("steps")).toInt(5);
@@ -337,6 +345,71 @@ private slots:
         q.clearFinished();
         QTRY_COMPARE(page->list()->visibleCount(), 0);
         QTRY_VERIFY(m->jobId().isEmpty()); // the job left the queue
+    }
+
+    // Retry / Run again on a job whose source is gone: the reason is shown.
+    void retryFailureIsReported()
+    {
+        auto& q = m_ctx->queue();
+        const QString source = m_root.filePath(QStringLiteral("retry-source"));
+        QVERIFY(QDir().mkpath(source));
+        auto a = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Epsilon")}, {QStringLiteral("steps"), 2}, {QStringLiteral("requires"), source}});
+        QVERIFY(a.ok());
+        QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
+        QVERIFY(QDir(source).removeRecursively());
+
+        auto visibleSheets = [this] {
+            QList<ui::Sheet*> out;
+            for (ui::Sheet* s : m_window->findChildren<ui::Sheet*>())
+                if (s->isOpen())
+                    out << s;
+            return out;
+        };
+        auto sheetShows = [](ui::Sheet* s, const QString& text) {
+            for (const QLabel* l : s->findChildren<QLabel*>())
+                if (l->text() == text)
+                    return true;
+            return false;
+        };
+
+        // The monitor: nobody listens, so it says it itself, without blocking.
+        ui::JobMonitor monitor(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Compact, m_window.get());
+        monitor.setJobId(a.value());
+        QCOMPARE(visibleSheets().size(), 0);
+        monitor.retryButton()->click();
+        QCOMPARE(monitor.jobId(), a.value()); // still on the old job
+        QCOMPARE(visibleSheets().size(), 1);
+        QVERIFY(sheetShows(visibleSheets().first(), QStringLiteral("The source folder is gone.")));
+        visibleSheets().first()->close();
+        QCOMPARE(ui::Sheet::openCount(), 0);
+        {
+            // A page that listens gets the message instead.
+            QSignalSpy failed(&monitor, &ui::JobMonitor::retryFailed);
+            monitor.retryButton()->click();
+            QCOMPARE(failed.count(), 1);
+            QCOMPARE(failed.first().at(0).toString(), a.value());
+            QCOMPARE(failed.first().at(1).toString(), QStringLiteral("The source folder is gone."));
+            QCOMPARE(visibleSheets().size(), 0);
+        }
+
+        // The same from a row of a job list ("Run again" in its menu).
+        ui::JobList list(*m_ctx, m_window->queueModel(), ui::JobRow::Variant::Queue, m_window.get());
+        QTRY_VERIFY(list.visibleIds().contains(a.value()));
+        ui::JobRow* row = nullptr;
+        for (ui::JobRow* r : list.findChildren<ui::JobRow*>())
+            if (r->id() == a.value())
+                row = r;
+        QVERIFY(row);
+        emit row->retryRequested(a.value());
+        QCOMPARE(visibleSheets().size(), 1);
+        QVERIFY(sheetShows(visibleSheets().first(), QStringLiteral("The source folder is gone.")));
+        visibleSheets().first()->close();
+        QSignalSpy failed(&list, &ui::JobList::retryFailed);
+        emit row->retryRequested(a.value());
+        QCOMPARE(failed.count(), 1);
+        QCOMPARE(visibleSheets().size(), 0);
+        q.clearFinished();
+        QTRY_COMPARE(list.visibleCount(), 0);
     }
 
     void formPageSwitchesToTheMonitor()

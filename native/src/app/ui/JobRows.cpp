@@ -3,6 +3,7 @@
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
 #include "app/ui/LogView.h"
+#include "app/ui/Sheet.h"
 #include "app/services/JobSubmit.h"
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
@@ -16,6 +17,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMetaMethod>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -110,6 +112,22 @@ QString finishedNote(const JobRecord& r)
     if (parts.isEmpty() && r.outcome)
         parts << r.outcome->summary;
     return parts.join(QStringLiteral(" · "));
+}
+
+qint64 jobTimeLeftMs(const JobRecord& r)
+{
+    if (r.state != JobState::Running)
+        return -1;
+    const auto& p = r.progress;
+    // In the last stage the stage's own estimate is the job's.
+    if (p.etaMs >= 0 && p.phaseIndex >= p.phaseCount - 1)
+        return p.etaMs;
+    // Earlier: the time spent so far, scaled by the weighted share still to do.
+    const double f = p.overallFraction;
+    if (f < 0.02 || f >= 1.0 || p.elapsedMs < 5000)
+        return -1;
+    const qint64 ms = qint64(double(p.elapsedMs) * (1.0 - f) / f);
+    return std::max(ms, p.etaMs); // never less than what this stage still needs
 }
 
 // ---- row ---------------------------------------------------------------------------
@@ -238,14 +256,16 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
         m_bar->setState(r.state != JobState::Running ? ProgressBar::State::Paused
                         : r.progress.indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
         if (r.state == JobState::Cancelling) {
-            note = QStringLiteral("Stopping · the partial output is being removed");
+            note = QStringLiteral("Stopping at the next safe point…");
+        } else if (r.state == JobState::Paused) {
+            note = r.progress.phase.isEmpty() ? QStringLiteral("Paused") : QStringLiteral("Paused in %1").arg(r.progress.phase);
         } else {
             QStringList parts;
             if (!r.progress.phase.isEmpty())
                 parts << r.progress.phase;
             if (r.progress.unitIsBytes && r.progress.ratePerSec > 0)
                 parts << formatRate(r.progress.ratePerSec);
-            const QString eta = formatTimeLeft(r.progress.etaMs);
+            const QString eta = formatTimeLeft(jobTimeLeftMs(r));
             if (!eta.isEmpty())
                 parts << eta;
             note = parts.join(QStringLiteral(" · "));
@@ -256,8 +276,12 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
             note = waiting;
         else if (!r.overrides.isEmpty())
             note = QStringLiteral("%1 setting%2 overridden").arg(r.overrides.size()).arg(r.overrides.size() == 1 ? QString() : QStringLiteral("s"));
+        else if (AppContext::instance() && AppContext::instance()->queue().isHeld())
+            note = QStringLiteral("Waits for the queue to resume");
+        else if (queuePosition <= 1)
+            note = QStringLiteral("Starts next");
         else
-            note = queuePosition <= 1 ? QStringLiteral("Starts next") : QStringLiteral("Waits for the running job");
+            note = QStringLiteral("Waits for %1 job%2 ahead").arg(queuePosition - 1).arg(queuePosition == 2 ? QString() : QStringLiteral("s"));
         break;
     case JobState::Failed:
         note = r.error ? r.error->message : QStringLiteral("Failed");
@@ -276,7 +300,7 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
     }
     m_bar->setVisible(showBar);
     m_note->setText(QFontMetrics(m_note->font()).elidedText(note, Qt::ElideRight, 216));
-    m_note->setToolTip(note);
+    m_note->setToolTip(plainTip(note));
     setTextColor(m_note, noteColor);
 
     // Badge
@@ -421,9 +445,12 @@ void JobRow::paintEvent(QPaintEvent*)
 void JobRow::mousePressEvent(QMouseEvent* e)
 {
     m_pressPos = e->pos();
-    if (e->button() == Qt::LeftButton)
-        emit clicked(m_id);
+    const bool left = e->button() == Qt::LeftButton;
     QWidget::mousePressEvent(e);
+    if (left) {
+        e->accept();
+        emit clicked(m_id); // last: a slot may rebuild the list and delete this row
+    }
 }
 
 void JobRow::mouseMoveEvent(QMouseEvent* e)
@@ -440,10 +467,12 @@ void JobRow::mouseMoveEvent(QMouseEvent* e)
     drag->setMimeData(mime);
     drag->setPixmap(grab().scaledToWidth(std::min(width(), 320), Qt::SmoothTransformation));
     drag->setHotSpot(QPoint(16, height() / 2));
-    emit dragStarted(m_id);
     // The list waits for the drag to end before it rebuilds its rows.
     QPointer<JobRow> self(this);
     m_dragging = true;
+    emit dragStarted(m_id);
+    if (!self)
+        return; // the drag was this row's child
     drag->exec(Qt::MoveAction);
     if (self)
         m_dragging = false;
@@ -456,10 +485,14 @@ void JobRow::keyPressEvent(QKeyEvent* e)
     switch (e->key()) {
     case Qt::Key_Return:
     case Qt::Key_Enter:
-    case Qt::Key_Space:
-        emit clicked(m_id);
-        emit activated(m_id);
+    case Qt::Key_Space: {
+        QPointer<JobRow> self(this);
+        const QString id = m_id;
+        emit clicked(id);
+        if (self)
+            emit activated(id);
         return;
+    }
     case Qt::Key_Up:
         if (e->modifiers() & Qt::ControlModifier) { if (m_canUp) emit moveUpRequested(m_id); return; }
         emit focusNeighbourRequested(m_id, -1);
@@ -497,6 +530,7 @@ JobList::JobList(AppContext& ctx, JobQueueModel& model, JobRow::Variant variant,
     });
     connect(&m_model, &QAbstractItemModel::rowsInserted, this, &JobList::rebuild);
     connect(&m_model, &QAbstractItemModel::rowsRemoved, this, &JobList::rebuild);
+    connect(&m_ctx.queue(), &JobQueue::heldChanged, this, &JobList::rebuild); // "Starts next" / "Waits for the queue to resume"
     m_tick.setInterval(1000);
     connect(&m_tick, &QTimer::timeout, this, [this] {
         bool waiting = false;
@@ -550,13 +584,24 @@ void JobList::wire(JobRow* row)
             q.move(id, r + 1);
     });
     connect(row, &JobRow::removeRequested, this, [&q](const QString& id) { q.remove(id); });
-    connect(row, &JobRow::retryRequested, this, [&q](const QString& id) {
-        if (auto r = q.retry(id); r.ok())
+    connect(row, &JobRow::retryRequested, this, [this, &q](const QString& id) {
+        auto r = q.retry(id);
+        if (r.ok()) {
             q.startNow(r.value()); // this job only; a paused queue stays paused
+            return;
+        }
+        if (isSignalConnected(QMetaMethod::fromSignal(&JobList::retryFailed)))
+            emit retryFailed(id, r.error().message);
+        else
+            Sheet::notify(window(), QStringLiteral("This job cannot run again"), r.error().message, Sheet::Icon::Error);
     });
     connect(row, &JobRow::showInFolderRequested, this, [this](const QString& id) {
-        if (auto rec = m_ctx.queue().record(id); rec && rec->outcome && !rec->outcome->outputs.isEmpty())
-            openInFileManager(rec->outcome->outputs.first());
+        if (auto rec = m_ctx.queue().record(id); rec && rec->outcome && !rec->outcome->outputs.isEmpty()) {
+            const QString path = rec->outcome->outputs.first();
+            if (!openInFileManager(path))
+                Sheet::notify(window(), QStringLiteral("The output is not there any more"),
+                              QStringLiteral("%1 was moved or deleted, and so was its folder.").arg(nativePath(path)), Sheet::Icon::Warning);
+        }
     });
     // The confirm dialog is the page's job (it knows the window). Queued: the
     // row's button handler has returned before the sheet's nested loop runs.
@@ -866,6 +911,7 @@ void JobsDock::refresh()
     const JobRecord* running = nullptr;
     int total = 0; // user jobs only; system jobs (update.*) are hidden everywhere in the UI
     int queued = 0;
+    int runningCount = 0;
     qint64 etaMs = -1;
     for (int r = 0; r < rows; ++r) {
         const JobRecord* rec = m_model.recordAt(r);
@@ -876,8 +922,10 @@ void JobsDock::refresh()
             running = rec;
         if (rec->state == JobState::Queued)
             ++queued;
-        if (rec->state == JobState::Running && rec->progress.etaMs >= 0)
-            etaMs = std::max<qint64>(etaMs, 0) + rec->progress.etaMs;
+        if (rec->state == JobState::Running) {
+            ++runningCount;
+            etaMs = std::max(etaMs, jobTimeLeftMs(*rec)); // jobs run side by side: the longest one
+        }
     }
     m_count->setText(QString::number(total));
     m_count->setVisible(total > 0);
@@ -914,6 +962,10 @@ void JobsDock::refresh()
         foot = QStringLiteral("%1 · %2 more queued").arg(formatTimeLeft(etaMs), QString::number(queued));
     else if (etaMs >= 0)
         foot = formatTimeLeft(etaMs);
+    else if (runningCount > 0 && queued > 0)
+        foot = QStringLiteral("Running · %1 more queued").arg(queued);
+    else if (runningCount > 0)
+        foot = QStringLiteral("Running");
     else if (queued > 0)
         foot = QStringLiteral("%1 queued").arg(queued);
     else if (total > 0)

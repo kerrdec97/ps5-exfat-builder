@@ -145,6 +145,9 @@ signals:
     void openQueueRequested(const QString& id);
     void newJobRequested();
     void jobSwitched(const QString& id); // Retry / Run again: the monitor now follows the new job
+    // Retry / Run again could not queue the job (source gone, drive unplugged).
+    // While nothing is connected the monitor shows the message itself.
+    void retryFailed(const QString& id, const QString& message);
     void jobGone();                      // the job left the queue
 
 protected:

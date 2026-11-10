@@ -2,21 +2,30 @@
 
 #include "app/ui/Icons.h"
 #include "app/ui/Theme.h"
+#include "app/ui/Widgets.h"
 
 #include <QAbstractItemView>
+#include <QAbstractSlider>
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
+#include <QHelpEvent>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QRadioButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStyleFactory>
 #include <QStyleOption>
+#include <QTextDocument>
 #include <QTextEdit>
+#include <QToolTip>
 
 #include <algorithm>
 
@@ -224,9 +233,20 @@ QSize FwStyle::sizeFromContents(ContentsType type, const QStyleOption* option, c
     return s;
 }
 
+// Controls whose value the mouse wheel changes.
+static bool wheelChangesValue(const QWidget* w)
+{
+    return qobject_cast<const QComboBox*>(w) || qobject_cast<const QAbstractSpinBox*>(w)
+        || (qobject_cast<const QAbstractSlider*>(w) && !qobject_cast<const QScrollBar*>(w));
+}
+
 void FwStyle::polish(QWidget* widget)
 {
     QProxyStyle::polish(widget);
+    // Qt gives these focus on a wheel turn (Qt::WheelFocus) before the wheel
+    // event arrives; the app guard lets the wheel through to focused ones only.
+    if (wheelChangesValue(widget) && widget->focusPolicy() == Qt::WheelFocus)
+        widget->setFocusPolicy(Qt::StrongFocus);
     if (auto* menu = qobject_cast<QMenu*>(widget)) {
         menu->setWindowFlag(Qt::NoDropShadowWindowHint, true);
         menu->setAttribute(Qt::WA_TranslucentBackground, true);
@@ -237,6 +257,98 @@ void FwStyle::polish(QWidget* widget)
             combo->view()->setTextElideMode(Qt::ElideRight);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Markup the app wrote itself: one paragraph whose content is escaped
+// (plainTip(), the setting descriptions). Anything else that looks like
+// markup came from outside.
+bool isAppTip(const QString& tip)
+{
+    static const QLatin1String prefixes[] = {QLatin1String("<p style='white-space:pre-wrap'>"),
+                                             QLatin1String("<p style='white-space:normal'>")};
+    static const QLatin1String suffix("</p>");
+    for (const QLatin1String& prefix : prefixes) {
+        if (!tip.startsWith(prefix) || !tip.endsWith(suffix) || tip.size() < prefix.size() + suffix.size())
+            continue;
+        const QStringView inner = QStringView(tip).mid(prefix.size(), tip.size() - prefix.size() - suffix.size());
+        return !inner.contains(u'<');
+    }
+    return false;
+}
+
+class AppGuard : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        switch (event->type()) {
+        case QEvent::ToolTip: return toolTip(qobject_cast<QWidget*>(watched), static_cast<QHelpEvent*>(event));
+        case QEvent::Wheel:
+            if (auto* w = qobject_cast<QWidget*>(watched); w && wheelChangesValue(w) && !w->hasFocus()) {
+                event->ignore(); // on to the parent: the page scrolls
+                return true;
+            }
+            break;
+        case QEvent::KeyPress: return keyPress(watched, static_cast<QKeyEvent*>(event));
+        default: break;
+        }
+        return false;
+    }
+
+private:
+    static bool toolTip(QWidget* w, QHelpEvent* e)
+    {
+        if (!w)
+            return false;
+        QString tip = w->toolTip();
+        QRect rect;
+        if (tip.isEmpty()) {
+            // Item views take theirs from the model (Qt::ToolTipRole).
+            auto* view = qobject_cast<QAbstractItemView*>(w->parentWidget());
+            if (!view || view->viewport() != w)
+                return false;
+            const QModelIndex index = view->indexAt(e->pos());
+            tip = index.data(Qt::ToolTipRole).toString();
+            rect = view->visualRect(index);
+        }
+        if (tip.isEmpty() || !Qt::mightBeRichText(tip) || isAppTip(tip))
+            return false;
+        QToolTip::showText(e->globalPos(), plainTip(tip), w, rect);
+        return true;
+    }
+
+    static bool keyPress(QObject* watched, QKeyEvent* e)
+    {
+        if ((e->key() != Qt::Key_Return && e->key() != Qt::Key_Enter) || e->isAutoRepeat())
+            return false;
+        if (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier))
+            return false;
+        auto* b = qobject_cast<QAbstractButton*>(watched);
+        if (!b || !b->isEnabled())
+            return false;
+        // Toggles keep the platform's keys (Space); Enter is for actions.
+        if (qobject_cast<QCheckBox*>(b) || qobject_cast<QRadioButton*>(b) || qobject_cast<Switch*>(b))
+            return false;
+        b->click();
+        return true;
+    }
+};
+
+} // namespace
+
+void installAppGuard(QApplication* app)
+{
+    static QPointer<AppGuard> guard;
+    if (!app || guard)
+        return;
+    guard = new AppGuard(app);
+    app->installEventFilter(guard);
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 #include "app/models/JobQueueModel.h"
 #include "app/ui/Icons.h"
 #include "app/ui/JobRows.h"
+#include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
 
@@ -13,6 +14,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QMetaMethod>
 #include <QPainter>
 #include <QShowEvent>
 #include <QPainterPath>
@@ -195,7 +197,7 @@ void MetricTile::setHint(const QString& hint)
 {
     // The line keeps its height so the tiles of a row stay level.
     m_hint->setFullText(hint);
-    m_hint->setToolTip(hint);
+    m_hint->setToolTip(plainTip(hint));
 }
 
 QString MetricTile::value() const { return m_value->text(); }
@@ -238,7 +240,7 @@ void StageList::setStages(const QStringList& names)
         row.icon->setFixedSize(14, 14);
         row.name = new ElideLabel(n, Qt::ElideRight, row.widget);
         row.name->setFont(font::body());
-        row.name->setToolTip(n);
+        row.name->setToolTip(plainTip(n));
         row.time = label({}, TextStyle::MonoSmall, color::fg_3, row.widget);
         row.time->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row.time->setMinimumWidth(QFontMetrics(font::monoSmall()).horizontalAdvance(QStringLiteral("12 min 40 s")));
@@ -540,8 +542,12 @@ void JobMonitor::build()
     });
     connect(m_cancel, &QPushButton::clicked, this, [this] { emit cancelRequested(m_id); });
     connect(m_folder, &QPushButton::clicked, this, [this] {
-        if (auto rec = m_ctx.queue().record(m_id); rec && rec->outcome && !rec->outcome->outputs.isEmpty())
-            openInFileManager(rec->outcome->outputs.first());
+        if (auto rec = m_ctx.queue().record(m_id); rec && rec->outcome && !rec->outcome->outputs.isEmpty()) {
+            const QString path = rec->outcome->outputs.first();
+            if (!openInFileManager(path))
+                Sheet::notify(window(), QStringLiteral("The output is not there any more"),
+                              QStringLiteral("%1 was moved or deleted, and so was its folder.").arg(nativePath(path)), Sheet::Icon::Warning);
+        }
     });
     connect(m_retry, &QPushButton::clicked, this, &JobMonitor::retry);
     connect(m_newJob, &QPushButton::clicked, this, [this] { emit newJobRequested(); });
@@ -815,7 +821,7 @@ void JobMonitor::apply(const JobRecord& r)
     if (!r.subtitle.isEmpty())
         meta += QStringLiteral(" · ") + r.subtitle;
     m_meta->setFullText(meta);
-    m_meta->setToolTip(meta);
+    m_meta->setToolTip(plainTip(meta));
     QString badge = jobStateName(r.state);
     if (r.state == JobState::Running)
         badge = p.indeterminate ? QStringLiteral("Running") : QStringLiteral("Running · %1").arg(thinPercent(p.overallFraction));
@@ -918,7 +924,7 @@ void JobMonitor::apply(const JobRecord& r)
     m_detail->setVisible(!detail.isEmpty());
     const bool showItem = r.state == JobState::Running && !p.currentItem.isEmpty();
     m_item->setFullText(showItem ? p.currentItem : QString());
-    m_item->setToolTip(showItem ? p.currentItem : QString());
+    m_item->setToolTip(showItem ? plainTip(p.currentItem) : QString());
     m_item->setVisible(showItem);
 
     // Metrics
@@ -1034,7 +1040,7 @@ void JobMonitor::rebuildResult(const JobRecord& r)
             auto* path = new ElideLabel(nativePath(o), Qt::ElideMiddle, row);
             path->setFont(font::mono());
             setTextColor(path, color::fg_1);
-            path->setToolTip(nativePath(o));
+            path->setToolTip(plainTip(nativePath(o)));
             path->setTextInteractionFlags(Qt::TextSelectableByMouse);
             h->addWidget(path, 1);
             m_resultLayout->addWidget(row);
@@ -1076,8 +1082,13 @@ void JobMonitor::updateActions(const JobRecord& r)
 void JobMonitor::retry()
 {
     auto r = m_ctx.queue().retry(m_id);
-    if (!r.ok())
+    if (!r.ok()) {
+        if (isSignalConnected(QMetaMethod::fromSignal(&JobMonitor::retryFailed)))
+            emit retryFailed(m_id, r.error().message);
+        else
+            Sheet::notify(window(), QStringLiteral("This job cannot run again"), r.error().message, Sheet::Icon::Error);
         return;
+    }
     const QString id = r.value();
     m_ctx.queue().startNow(id); // this job only; a paused queue stays paused
     setJobId(id);

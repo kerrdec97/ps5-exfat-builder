@@ -320,6 +320,7 @@ void apply(QApplication* app)
     using namespace color;
     ui::initIcons();
     app->setStyle(new ui::FwStyle);
+    ui::installAppGuard(app);
     app->setFont(font::body());
 
     QPalette p;

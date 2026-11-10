@@ -52,6 +52,8 @@ public:
     void selectAll();
     void clearSelection();
     QString currentKey() const;
+    // How many cover files were opened and decoded so far, by any grid (tests).
+    static int coverDecodeCount();
 
     bool hasHeightForWidth() const override { return true; }
     int heightForWidth(int w) const override;
@@ -95,7 +97,6 @@ private:
     int m_current = -1;
     int m_anchor = -1;
     int m_hover = -1;
-    bool m_hoverCheck = false;
 };
 
 } // namespace fw::ui

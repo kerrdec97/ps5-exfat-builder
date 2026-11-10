@@ -23,6 +23,9 @@ Tone toneForState(JobState state);
 QString stateIcon(JobState state);           // row state glyph
 QString waitingText(const JobRecord& r, int maxAttempts); // "Retrying in 25 s · attempt 2 of 3" or ""
 QString finishedNote(const JobRecord& r);    // "Verified · 12 min 40 s", "2 warnings"
+// A rough estimate for the whole running job, in ms; -1 when unknown.
+// (ProgressSnapshot::etaMs is the current stage only.)
+qint64 jobTimeLeftMs(const JobRecord& r);
 
 class JobRow : public QWidget {
     Q_OBJECT
@@ -104,6 +107,9 @@ signals:
     void selectionChanged(const QString& id);
     void activated(const QString& id);
     void cancelRequested(const QString& id); // the page confirms, then cancels
+    // Retry / Run again could not queue the job (source gone, drive unplugged).
+    // While nothing is connected the list shows the message itself.
+    void retryFailed(const QString& id, const QString& message);
     void countChanged();
 
 protected:

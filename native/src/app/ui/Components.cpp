@@ -610,9 +610,12 @@ void StatTile::setCaption(const QString& caption)
 
 void StatTile::mouseReleaseEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton && rect().contains(e->pos()))
-        emit clicked();
+    const bool hit = e->button() == Qt::LeftButton && rect().contains(e->pos());
     QWidget::mouseReleaseEvent(e);
+    if (hit) {
+        e->accept();
+        emit clicked(); // last: a slot may rebuild the page this tile is on
+    }
 }
 
 void StatTile::enterEvent(QEnterEvent* e)

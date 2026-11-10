@@ -4,9 +4,14 @@
 
 #include <QApplication>
 #include <QEvent>
+#include <QAbstractSpinBox>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QPainter>
+#include <QPlainTextEdit>
+#include <QRandomGenerator>
+#include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -76,14 +81,40 @@ Sheet::~Sheet()
 
 void Sheet::setTitle(const QString& title) { m_title->setText(title); }
 
-QLabel* Sheet::addText(const QString& text)
+namespace {
+
+// Names the spans this process wrote. Text from outside cannot contain it, so
+// it cannot make addText() read a message as markup.
+const QString& spanMarker()
 {
-    auto* l = label(text, TextStyle::Body, color::fg_1, m_panel);
+    static const QString marker = QStringLiteral("fw%1").arg(QRandomGenerator::global()->generate64(), 0, 16);
+    return marker;
+}
+
+QString spanOpen()
+{
+    return QStringLiteral("<span class=\"%1\" style=\"font-family:'%2';font-size:12px\">").arg(spanMarker(), monoFamily());
+}
+
+} // namespace
+
+QLabel* Sheet::addBodyLabel(const QString& text, Qt::TextFormat format)
+{
+    QLabel* l = format == Qt::RichText ? richLabel(text, TextStyle::Body, color::fg_1, m_panel)
+                                       : label(text, TextStyle::Body, color::fg_1, m_panel);
     l->setWordWrap(true);
-    l->setTextFormat(text.contains(QLatin1String("<span")) ? Qt::RichText : Qt::PlainText);
     m_body->addWidget(l);
     return l;
 }
+
+QLabel* Sheet::addText(const QString& text)
+{
+    const bool ownMarkup = text.contains(QStringLiteral("<span class=\"%1\"").arg(spanMarker()));
+    return addBodyLabel(text, ownMarkup ? Qt::RichText : Qt::PlainText);
+}
+
+QLabel* Sheet::addPlainText(const QString& text) { return addBodyLabel(text, Qt::PlainText); }
+QLabel* Sheet::addRichText(const QString& html) { return addBodyLabel(html, Qt::RichText); }
 
 QCheckBox* Sheet::addCheckbox(const QString& text)
 {
@@ -107,7 +138,16 @@ QPushButton* Sheet::addButton(const QString& text, Role role)
 
 QString Sheet::monoSpan(const QString& text)
 {
-    return QStringLiteral("<span style=\"font-family:'%1';font-size:12px\">%2</span>").arg(monoFamily(), text.toHtmlEscaped());
+    return spanOpen() + text.toHtmlEscaped() + QStringLiteral("</span>");
+}
+
+QString Sheet::monoLines(const QStringList& plainLines)
+{
+    QStringList escaped;
+    escaped.reserve(plainLines.size());
+    for (const QString& line : plainLines)
+        escaped << line.toHtmlEscaped();
+    return spanOpen() + escaped.join(QStringLiteral("<br>")) + QStringLiteral("</span>");
 }
 
 void Sheet::relayout()
@@ -132,24 +172,25 @@ void Sheet::open()
     relayout();
     raise();
     show();
-    // Focus the safe action for destructive dialogs, the primary one otherwise.
-    QPushButton* focusTarget = nullptr;
-    bool destructive = false;
-    for (int i = 0; i < m_roles.size(); ++i)
-        if (m_roles[i] == Role::Destructive)
-            destructive = true;
-    for (int i = 0; i < m_roles.size(); ++i) {
-        if (destructive && m_roles[i] == Role::Safe) { focusTarget = m_buttonList[i]; break; }
-        if (!destructive && m_roles[i] == Role::Primary) { focusTarget = m_buttonList[i]; break; }
-    }
-    if (!focusTarget && !m_buttonList.isEmpty())
-        focusTarget = m_buttonList.last();
-    if (focusTarget) {
+    if (QPushButton* focusTarget = defaultButton()) {
         window()->setAttribute(Qt::WA_KeyboardFocusChange, true);
         focusTarget->setFocus(Qt::TabFocusReason);
     } else {
         setFocus();
     }
+}
+
+// The safe action for destructive dialogs, the primary one otherwise.
+QPushButton* Sheet::defaultButton() const
+{
+    const bool destructive = m_roles.contains(Role::Destructive);
+    for (int i = 0; i < m_roles.size(); ++i) {
+        if (destructive && m_roles[i] == Role::Safe)
+            return m_buttonList[i];
+        if (!destructive && m_roles[i] == Role::Primary)
+            return m_buttonList[i];
+    }
+    return m_buttonList.isEmpty() ? nullptr : m_buttonList.last();
 }
 
 int Sheet::exec()
@@ -198,6 +239,22 @@ void Sheet::keyPressEvent(QKeyEvent* e)
         close(-1);
         return;
     }
+    // Enter anywhere but on a button (those press themselves) is the default
+    // button. Not from a text field of a destructive sheet: its default is the
+    // safe button, and Enter there would throw away what was typed.
+    if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && !e->isAutoRepeat() && isVisible()
+        && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier))) {
+        QWidget* fw = QApplication::focusWidget();
+        const bool typing = qobject_cast<QLineEdit*>(fw) || qobject_cast<QPlainTextEdit*>(fw)
+                         || qobject_cast<QTextEdit*>(fw) || qobject_cast<QAbstractSpinBox*>(fw);
+        QPushButton* b = defaultButton();
+        if (auto* focused = qobject_cast<QPushButton*>(fw); focused && m_buttonList.contains(focused))
+            b = focused;
+        if (b && b->isEnabled() && !(typing && m_roles.contains(Role::Destructive))) {
+            b->click();
+            return;
+        }
+    }
     QWidget::keyPressEvent(e);
 }
 
@@ -238,10 +295,13 @@ bool Sheet::focusNextPrevChild(bool next)
 
 bool Sheet::confirm(QWidget* host, const QString& title, const QString& text, const QString& safeText,
                     const QString& actionText, bool destructive, Icon icon, const QString& checkboxText,
-                    bool* checkboxValue)
+                    bool* checkboxValue, Qt::TextFormat format)
 {
     auto* s = new Sheet(host, title, icon);
-    s->addText(text);
+    if (format == Qt::AutoText)
+        s->addText(text);
+    else
+        s->addBodyLabel(text, format == Qt::RichText ? Qt::RichText : Qt::PlainText);
     QCheckBox* cb = nullptr;
     if (!checkboxText.isEmpty())
         cb = s->addCheckbox(checkboxText);
@@ -253,12 +313,25 @@ bool Sheet::confirm(QWidget* host, const QString& title, const QString& text, co
     return r == 1;
 }
 
-void Sheet::message(QWidget* host, const QString& title, const QString& text, Icon icon, const QString& buttonText)
+void Sheet::message(QWidget* host, const QString& title, const QString& text, Icon icon, const QString& buttonText,
+                    Qt::TextFormat format)
 {
     auto* s = new Sheet(host, title, icon);
-    s->addText(text);
+    if (format == Qt::AutoText)
+        s->addText(text);
+    else
+        s->addBodyLabel(text, format == Qt::RichText ? Qt::RichText : Qt::PlainText);
     s->addButton(buttonText, Role::Primary);
     s->exec();
+}
+
+Sheet* Sheet::notify(QWidget* host, const QString& title, const QString& text, Icon icon, const QString& buttonText)
+{
+    auto* s = new Sheet(host, title, icon);
+    s->addPlainText(text);
+    s->addButton(buttonText, Role::Primary);
+    s->open();
+    return s;
 }
 
 // ---- toasts --------------------------------------------------------------------------
@@ -313,9 +386,12 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
             auto* l = new Link(a.text, t);
             auto fn = a.fn;
             connect(l, &Link::activated, this, [this, t, fn] {
+                // The action may close the window this host belongs to.
+                QPointer<ToastHost> self(this);
                 if (fn)
                     fn();
-                remove(t);
+                if (self)
+                    remove(t);
             });
             links->addWidget(l);
         }

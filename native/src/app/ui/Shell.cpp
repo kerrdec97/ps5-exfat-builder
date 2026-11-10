@@ -287,11 +287,17 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
 
 bool AppHeader::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::MouseButtonRelease) {
-        if (watched == m_queueChipWrap)
-            emit queueChipClicked();
-        else if (watched == m_consoleChipWrap)
-            emit consoleChipClicked();
+    if (event->type() == QEvent::MouseButtonRelease && (watched == m_queueChipWrap || watched == m_consoleChipWrap)) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        auto* chip = static_cast<QWidget*>(watched);
+        if (me->button() == Qt::LeftButton && chip->rect().contains(me->position().toPoint())) {
+            // Nothing after the signal: a slot may replace the window's content.
+            if (watched == m_queueChipWrap)
+                emit queueChipClicked();
+            else
+                emit consoleChipClicked();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }

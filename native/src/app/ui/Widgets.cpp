@@ -57,11 +57,28 @@ void setTextColor(QWidget* w, const QColor& color)
 
 QLabel* label(const QString& text, TextStyle style, const QColor& color, QWidget* parent)
 {
-    auto* l = new QLabel(text, parent);
+    auto* l = new QLabel(parent);
+    l->setTextFormat(Qt::PlainText);
+    l->setText(text);
     l->setFont(fontFor(style));
     setTextColor(l, color);
     l->setTextInteractionFlags(Qt::NoTextInteraction);
     return l;
+}
+
+QLabel* richLabel(const QString& html, TextStyle style, const QColor& color, QWidget* parent)
+{
+    QLabel* l = label({}, style, color, parent);
+    l->setTextFormat(Qt::RichText);
+    l->setText(html);
+    return l;
+}
+
+QString plainTip(const QString& text)
+{
+    if (text.isEmpty())
+        return text;
+    return QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(text.toHtmlEscaped());
 }
 
 QLabel* caption(const QString& text, QWidget* parent)
@@ -89,6 +106,7 @@ QLabel* heading(const QString& text, TextStyle style, QWidget* parent)
 ElideLabel::ElideLabel(const QString& text, Qt::TextElideMode mode, QWidget* parent)
     : QLabel(parent), m_text(text), m_mode(mode)
 {
+    setTextFormat(Qt::PlainText);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     setTextInteractionFlags(Qt::NoTextInteraction);
     relayout();
@@ -97,7 +115,6 @@ ElideLabel::ElideLabel(const QString& text, Qt::TextElideMode mode, QWidget* par
 void ElideLabel::setFullText(const QString& text)
 {
     m_text = text;
-    setToolTip(text);
     relayout();
 }
 
@@ -118,11 +135,13 @@ void ElideLabel::relayout()
     const int w = std::max(0, width() - 2);
     const QString shown = fm.elidedText(m_text, m_mode, w);
     QLabel::setText(shown);
-    setToolTip(shown != m_text ? m_text : QString());
+    setToolTip(shown != m_text ? plainTip(m_text) : QString());
 }
 
-Link::Link(const QString& text, QWidget* parent) : QLabel(text, parent)
+Link::Link(const QString& text, QWidget* parent) : QLabel(parent)
 {
+    setTextFormat(Qt::PlainText);
+    setText(text);
     setFont(font::body());
     setTextColor(this, color::accent_hi);
     setCursor(Qt::PointingHandCursor);
@@ -133,9 +152,14 @@ Link::Link(const QString& text, QWidget* parent) : QLabel(text, parent)
 
 void Link::mouseReleaseEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton && rect().contains(e->pos()))
-        emit activated();
+    // The slot may delete this link (an info bar clears its links): nothing
+    // touches it after the signal.
+    const bool hit = e->button() == Qt::LeftButton && rect().contains(e->pos());
     QLabel::mouseReleaseEvent(e);
+    if (hit) {
+        e->accept(); // handled: Qt does not go on to the parent of a link that may be gone
+        emit activated();
+    }
 }
 
 void Link::keyPressEvent(QKeyEvent* e)
@@ -493,7 +517,7 @@ void Badge::set(const QString& text, Tone tone)
     const bool resize = m_text != text;
     m_text = text;
     m_tone = tone;
-    setToolTip(text.size() > 32 ? text : QString());
+    setToolTip(text.size() > 32 ? plainTip(text) : QString());
     if (resize)
         updateGeometry();
     update();
@@ -952,9 +976,8 @@ void StageStepper::setStages(const QStringList& names, int current, bool failed)
         auto* ic = new QLabel(w);
         ic->setPixmap(iconPixmap(iconName, size::iconSm, c, devicePixelRatioF()));
         ic->setFixedSize(size::iconSm, size::iconSm);
-        auto* t = new QLabel(names.at(i), w);
+        auto* t = label(names.at(i), TextStyle::Caption, i == current && !failed ? color::fg_0 : c, w);
         t->setFont(f);
-        setTextColor(t, i == current && !failed ? color::fg_0 : c);
         h->addWidget(ic);
         h->addWidget(t);
         m_layout->addWidget(w);
@@ -1202,6 +1225,7 @@ void setInputError(QLineEdit* edit, bool error)
 QComboBox* dropdown(QWidget* parent)
 {
     auto* c = new QComboBox(parent);
+    c->setFocusPolicy(Qt::StrongFocus); // not WheelFocus: the wheel scrolls the page (see installAppGuard)
     c->setFixedHeight(size::control);
     c->setMaxVisibleItems(12);
     c->setSizeAdjustPolicy(QComboBox::AdjustToContents);
@@ -1564,19 +1588,20 @@ QString elideMiddle(const QString& s, int max)
 
 QString nativePath(const QString& path) { return QDir::toNativeSeparators(path); }
 
-void openInFileManager(const QString& path)
+bool openInFileManager(const QString& path)
 {
     if (path.isEmpty())
-        return;
+        return false;
     const QFileInfo fi(path);
 #ifdef Q_OS_WIN
-    if (fi.exists() && !fi.isDir()) {
-        QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(fi.absoluteFilePath())});
-        return;
-    }
+    if (fi.exists() && !fi.isDir())
+        return QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(fi.absoluteFilePath())});
 #endif
+    // A file that was moved away: its folder is the next best thing to show.
     const QString dir = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
-    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    if (!QFileInfo(dir).isDir())
+        return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 // ---- brand mark / icon tile ------------------------------------------------------

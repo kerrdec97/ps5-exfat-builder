@@ -61,9 +61,14 @@ void DependencyRow::setInfo(const DependencyInfo& info)
         detail = detail.isEmpty() ? QDir::toNativeSeparators(info.path) : QStringLiteral("%1 · %2").arg(detail, QDir::toNativeSeparators(info.path));
     if (detail.isEmpty())
         detail = info.purpose;
-    m_detail->setFullText(detail);
+    // The font first: the text is elided with it.
     m_detail->setFont(info.path.isEmpty() ? font::caption() : font::mono());
-    m_detail->setToolTip(QStringList{info.purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix}.join(QStringLiteral("\n")).trimmed());
+    m_detail->setFullText(detail);
+    QStringList tip;
+    for (const QString& part : {info.purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix})
+        if (!part.trimmed().isEmpty())
+            tip << part.trimmed();
+    m_detail->setToolTip(plainTip(tip.join(u'\n')));
     QString iconName;
     QColor c;
     Tone tone = Tone::Neutral;
