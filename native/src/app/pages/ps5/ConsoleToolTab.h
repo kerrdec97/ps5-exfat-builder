@@ -150,8 +150,5 @@ void styleToolTable(QTableWidget* table, int minimumRows);
 QTableWidgetItem* toolItem(const QString& text, bool mono = false, const QColor& color = theme::color::fg_1);
 // A badge on the left of a cell; the cell's item holds the text in Qt::UserRole.
 void setBadgeCell(QTableWidget* table, int row, int column, const QString& text, ui::Tone tone, const QString& icon = {});
-// Plain lines as the rich text of a sheet body: each line in the mono face,
-// one under the other. The lines are escaped here; callers pass them as they are.
-QString monoLines(const QStringList& lines);
 
 } // namespace fw::pages

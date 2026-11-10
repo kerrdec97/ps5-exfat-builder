@@ -39,13 +39,11 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     where->setFont(font::mono());
     setTextColor(where, color::fg_1);
     where->setToolTip(QStringLiteral("/%1\n%2").arg(path, nativePath(image)));
-    plainLabel(where);
     body()->addWidget(where);
     m_meta = caption({}, this);
     body()->addWidget(m_meta);
 
     m_errorBar = new InfoBar(Tone::Err, this);
-    plainLabels(m_errorBar); // the reader's message quotes the path
     m_errorBar->hide();
     body()->addWidget(m_errorBar);
 

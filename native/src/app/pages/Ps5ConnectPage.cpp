@@ -2358,7 +2358,7 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
                 for (const auto& f : r->files)
                     lines << QStringLiteral("%1 %2 — %3").arg(f.status, f.name, f.detail);
                 Sheet::message(self->window(), r->allVerified() ? QStringLiteral("Local files patched") : QStringLiteral("Patched with problems"),
-                               monoLines(lines), r->allVerified() ? Sheet::Icon::Info : Sheet::Icon::Warning);
+                               Sheet::monoLines(lines), r->allVerified() ? Sheet::Icon::Info : Sheet::Icon::Warning);
             }, Qt::QueuedConnection);
         });
     });

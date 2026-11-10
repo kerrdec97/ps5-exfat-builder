@@ -783,11 +783,10 @@ void SettingsPage::importLegacyFrom(const QString& path)
         return;
     }
     (void)m_ctx.settings().save();
-    // One span per line (monoSpan escapes what it is given).
     QStringList changed;
     for (const SettingDef* d : m_ctx.schema().all())
         if (m_ctx.settings().value(d->key) != before.value(d->key))
-            changed << Sheet::monoSpan(QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key))));
+            changed << QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key)));
     rebuild();
     const QString title = QStringLiteral("%1 value%2 imported").arg(r.value()).arg(r.value() == 1 ? QString() : QStringLiteral("s"));
     if (changed.isEmpty())
@@ -796,10 +795,10 @@ void SettingsPage::importLegacyFrom(const QString& path)
     {
         // A long list is cut so the button stays on screen.
         const int kShown = 16;
-        QStringList lines = changed.mid(0, kShown);
+        QString list = Sheet::monoLines(changed.mid(0, kShown)); // escapes the values
         if (changed.size() > kShown)
-            lines << QStringLiteral("… and %1 more").arg(changed.size() - kShown);
-        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(lines.join(QStringLiteral("<br>"))), Sheet::Icon::Info);
+            list += QStringLiteral("<br>… and %1 more").arg(changed.size() - kShown);
+        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(list), Sheet::Icon::Info);
     }
 }
 

@@ -601,7 +601,7 @@ void ShadowMountTab::push(bool confirmed)
                                      : QString();
         if (!Sheet::confirm(window(), QStringLiteral("Write %1 change%2 to the console?").arg(ch.size()).arg(ch.size() == 1 ? QString() : QStringLiteral("s")),
                             QStringLiteral("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
-                                .arg(monoLines(lines), Sheet::monoSpan(where), debugOff),
+                                .arg(Sheet::monoLines(lines), Sheet::monoSpan(where), debugOff),
                             QStringLiteral("Cancel"), QStringLiteral("Push"), false, Sheet::Icon::Info))
             return;
     }

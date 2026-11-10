@@ -345,7 +345,7 @@ void DlcEmuEditor::findEntries()
                 return; // another game was opened meanwhile: these IDs are not its IDs
             if (s.entries.empty()) {
                 Sheet::message(self->window(), QStringLiteral("No add-on entries found"),
-                               (s.notes.isEmpty() ? QStringLiteral("Nothing in the dump looks like an add-on content ID.") : s.notes.join(u' ')).toHtmlEscaped(), Sheet::Icon::Info);
+                               s.notes.isEmpty() ? QStringLiteral("Nothing in the dump looks like an add-on content ID.") : s.notes.join(u' '), Sheet::Icon::Info);
                 return;
             }
             auto* sheet = new Sheet(self->window(), QStringLiteral("Found %1 possible entr%2").arg(s.entries.size()).arg(s.entries.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")), Sheet::Icon::None, 900);

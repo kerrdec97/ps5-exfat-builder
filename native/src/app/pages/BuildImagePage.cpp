@@ -612,15 +612,12 @@ void BuildImagePage::buildSourceCard()
     m_stripTitle = new ElideLabel({}, Qt::ElideRight, strip);
     m_stripTitle->setFont(font::subtitle());
     setTextColor(m_stripTitle, color::fg_0);
-    plainLabel(m_stripTitle);
     m_stripMeta = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripMeta->setFont(font::caption());
     setTextColor(m_stripMeta, color::fg_3);
-    plainLabel(m_stripMeta);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripPath->setFont(font::monoSmall());
     setTextColor(m_stripPath, color::fg_4);
-    plainLabel(m_stripPath);
     scol->addWidget(m_stripTitle);
     scol->addWidget(m_stripMeta);
     scol->addWidget(m_stripPath);
@@ -636,7 +633,6 @@ void BuildImagePage::buildSourceCard()
     source->body()->addWidget(m_strip);
 
     m_sourceMsg = new MessageRow(source);
-    plainLabels(m_sourceMsg); // quotes folder names and what a ZIP reports
     source->body()->addWidget(m_sourceMsg);
     // Several games below the chosen folder: one link per game.
     m_rootsBox = new QWidget(source);
@@ -705,7 +701,6 @@ void BuildImagePage::buildFormatCard()
     });
     m_toolsRow = plainRow(QStringLiteral("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail);
     m_toolsRow->setAccessibleName(QStringLiteral("Sony Publishing Tools"));
-    plainLabel(m_toolsDetail); // shows the tools' path and what the check reports
     m_toolsDetail->setToolTip(QStringLiteral("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
 
     // One options panel per format: only that format's settings.
@@ -893,7 +888,6 @@ void BuildImagePage::buildPackageCard()
         bl->addWidget(field(QStringLiteral("Base package"), m_basePackage,
                             QStringLiteral("The .pkg the console already has; updates are built against it."), m_baseField));
         m_baseInfo = new MessageRow(m_baseField);
-        plainLabels(m_baseInfo); // the base package's title and ID
         m_baseInfo->hide();
         bl->addWidget(m_baseInfo);
     }
@@ -978,7 +972,6 @@ void BuildImagePage::buildSaveCard()
     ol->addWidget(label(QStringLiteral("Folder"), TextStyle::Body, color::fg_1, outField));
     ol->addWidget(m_output);
     m_spaceRow = new MessageRow(outField);
-    plainLabels(m_spaceRow);
     ol->addWidget(m_spaceRow);
     gh->addWidget(outField, 1);
 
@@ -1014,7 +1007,6 @@ void BuildImagePage::buildSaveCard()
     gh->addWidget(nameField, 1);
     dest->body()->addWidget(grid);
     m_spaceBar = new InfoBar(Tone::Err, dest);
-    plainLabels(m_spaceBar);
     m_spaceBar->hide();
     dest->body()->addWidget(m_spaceBar);
     form()->addWidget(dest);

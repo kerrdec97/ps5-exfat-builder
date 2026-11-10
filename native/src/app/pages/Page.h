@@ -182,16 +182,9 @@ private:
 // Shared helpers for pages
 //
 // Text that comes from outside the app (titles, IDs, names and paths from
-// dumps, ZIPs, images and packages, messages that quote them) is shown as it
-// is, never as markup: QLabel and tooltips otherwise take text that starts
-// like HTML for rich text.
-//  * plainLabel()  — the label shows its text and its tooltip literally;
-//  * plainLabels() — the same for every label inside a composite widget
-//                    (MessageRow, InfoBar, ErrorState);
-//  * plainTip()    — the text for setToolTip() on any other widget or item.
-QLabel* plainLabel(QLabel* label);
-void plainLabels(QWidget* widget);
-QString plainTip(const QString& text);
+// dumps, ZIPs, images and packages, messages that quote them) needs no helper
+// here: the labels of the widget library are plain text, and tooltips go
+// through ui::plainTip() or the application-wide tooltip rule (ui/Style.h).
 QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
 QString relativeTime(const QDateTime& t);         // "2 min ago"
 QString driveLabel(const QString& path);          // "D:" / "/"

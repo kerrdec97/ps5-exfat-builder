@@ -104,7 +104,6 @@ public:
         auto* title = new ElideLabel(e.title, Qt::ElideRight, this);
         title->setFont(font::bodyStrong());
         setTextColor(title, color::fg_0);
-        plainLabel(title);
         col->addWidget(title);
         QStringList meta{kindName, relativeTime(e.finished)};
         if (!e.error.isEmpty())
@@ -112,7 +111,6 @@ public:
         auto* metaLabel = new ElideLabel(meta.join(QStringLiteral(" · ")), Qt::ElideRight, this);
         metaLabel->setFont(font::caption());
         setTextColor(metaLabel, color::fg_3);
-        plainLabel(metaLabel);
         col->addWidget(metaLabel);
         h->addLayout(col, 1);
         QString result = e.state;
@@ -220,7 +218,6 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     m_continue = new InfoBar(Tone::Warn, this);
     m_continue->setObjectName(QStringLiteral("home-continue"));
     m_continue->setDismissable(true);
-    plainLabels(m_continue); // the job's title and error
     auto* retry = m_continue->addLink(QStringLiteral("Retry"));
     auto* openJob = m_continue->addLink(QStringLiteral("Open in queue"));
     m_continue->hide();
@@ -425,7 +422,6 @@ void HomePage::refreshChecklist()
         detail->setFont(font::caption());
         setTextColor(detail, next ? color::fg_2 : color::fg_4);
         detail->setToolTip(item.detail);
-        plainLabel(detail); // may name the console or a folder
         tv->addWidget(detail);
         h->addWidget(text, 1);
         if (!item.fixText.isEmpty()) {

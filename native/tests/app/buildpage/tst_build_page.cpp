@@ -856,15 +856,25 @@ private slots:
             ++checked;
         }
         QVERIFY(checked >= 3);
+        // What a tooltip shows for a text: Qt renders it when it looks like markup.
+        const auto shown = [](const QString& tip) {
+            if (!Qt::mightBeRichText(tip))
+                return tip;
+            QTextDocument doc;
+            doc.setHtml(tip);
+            return doc.toPlainText();
+        };
         QVERIFY(Qt::mightBeRichText(title));
-        QCOMPARE(pages::plainTip(title), Qt::convertFromPlainText(title));
-        QVERIFY(pages::plainTip(title).contains(QStringLiteral("&lt;b&gt;")));
-        QCOMPARE(pages::plainTip(QStringLiteral("D:\\Games & more\\a.bin")), QStringLiteral("D:\\Games & more\\a.bin"));
-        // The tooltip of an elided label goes through the same conversion.
+        QVERIFY(shown(title) != title); // handed over as it is, it would be rendered
+        QCOMPARE(shown(ui::plainTip(title)), title);
+        const QString folder = QStringLiteral("D:\\Games & more\\a.bin");
+        QCOMPARE(shown(ui::plainTip(folder)), folder);
+        // A tooltip set without the helper is shown literally all the same
+        // (the application-wide tooltip rule).
         strip->setToolTip(title);
         QHelpEvent tip(QEvent::ToolTip, QPoint(2, 2), strip->mapToGlobal(QPoint(2, 2)));
         QVERIFY(QCoreApplication::sendEvent(strip, &tip));
-        QCOMPARE(QToolTip::text(), pages::plainTip(title));
+        QCOMPARE(shown(QToolTip::text()), title);
         QToolTip::hideText();
         m_page->setSource({});
     }

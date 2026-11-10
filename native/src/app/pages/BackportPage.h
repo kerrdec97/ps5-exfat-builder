@@ -16,7 +16,6 @@
 
 #include "app/backport/BackportCore.h"
 #include "app/backport/BackportHost.h"
-#include "app/pages/GameTable.h" // the Library page's table (moved out of this page)
 #include "app/pages/Page.h"
 #include "app/services/AppStores.h"
 #include "app/ui/Components.h"

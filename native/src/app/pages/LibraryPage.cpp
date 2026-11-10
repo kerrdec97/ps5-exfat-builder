@@ -1572,16 +1572,17 @@ void LibraryPage::stripLanguages()
     for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it)
         if (it.value().size() == totalByRoot.value(it.key()))
             everything = true;
-    // One line per game, each its own span (monoSpan escapes what it is given);
-    // a long batch is cut so the buttons stay on screen.
+    // One line per game (monoLines escapes what it is given); a long batch is
+    // cut so the buttons stay on screen.
     QStringList lines;
     const int kShown = 10;
     for (auto it = byRoot.cbegin(); it != byRoot.cend() && lines.size() < kShown; ++it)
-        lines << Sheet::monoSpan(QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), elideMiddle(it.value().join(QStringLiteral(", ")), 160)));
+        lines << QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), elideMiddle(it.value().join(QStringLiteral(", ")), 160));
+    QString list = Sheet::monoLines(lines);
     if (byRoot.size() > kShown)
-        lines << QStringLiteral("… and %1 more").arg(plural(byRoot.size() - kShown, QStringLiteral("game"), QStringLiteral("games")));
+        list += QStringLiteral("<br>… and %1 more").arg(plural(byRoot.size() - kShown, QStringLiteral("game"), QStringLiteral("games")));
     const QString text = QStringLiteral("These files and folders are removed from the game:<br>%1<br><br>A backup ZIP is written first to %2. Restore from backup puts everything back.")
-                             .arg(lines.join(QStringLiteral("<br>")), Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
+                             .arg(list, Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
     if (!Sheet::confirm(window(), QStringLiteral("Remove the selected languages?"), text, QStringLiteral("Keep everything"), QStringLiteral("Remove languages"), true, Sheet::Icon::Warning))
         return;
     if (everything && !Sheet::confirm(window(), QStringLiteral("Remove every language?"),

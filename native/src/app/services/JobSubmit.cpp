@@ -86,7 +86,7 @@ bool cancelWithConfirm(AppContext& ctx, QWidget* host, const QString& id)
     const QString pct = rec->progress.indeterminate ? QString() : QStringLiteral(" is %1 done").arg(ui::thinPercent(rec->progress.overallFraction));
     bool remove = false;
     const bool ok = ui::Sheet::confirm(host ? host->window() : nullptr, QStringLiteral("Cancel the running job?"),
-                                       QStringLiteral("%1%2. The job stops at its next safe point and removes what it had not finished.")
+                                       QStringLiteral("%1%2. The job stops at its next safe point.")
                                            .arg(rec->title, pct), // plain text: shown as it is
                                        QStringLiteral("Keep running"), QStringLiteral("Cancel job"), true, ui::Sheet::Icon::Warning,
                                        QStringLiteral("Also remove the job from the queue"), &remove);

@@ -644,7 +644,7 @@ private slots:
     // Lists in a sheet: every line escaped once, one under the other.
     void monoLinesEscapeOnce()
     {
-        const QString html = pages::monoLines({QStringLiteral("debug: 1 → 0"), QStringLiteral("a<b & \"c\"")});
+        const QString html = ui::Sheet::monoLines({QStringLiteral("debug: 1 → 0"), QStringLiteral("a<b & \"c\"")});
         QCOMPARE(html.count(QStringLiteral("<br>")), 1);
         QVERIFY(html.contains(QStringLiteral("a&lt;b &amp; &quot;c&quot;")));
         QVERIFY(!html.contains(QStringLiteral("&amp;lt;")));
