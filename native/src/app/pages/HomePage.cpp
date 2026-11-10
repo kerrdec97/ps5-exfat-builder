@@ -45,8 +45,9 @@ QString kindIcon(const QString& kind)
         return QStringLiteral("extract");
     if (kind.startsWith(QLatin1String("ps5.")))
         return QStringLiteral("ps5");
-    if (kind.endsWith(QLatin1String(".build")) || kind == QLatin1String("ampr.pack"))
-        return QStringLiteral("build"); // ampr.pack: the Build page's packed folder
+    // image.build.zstd is an image build with zstd packs; ampr.pack the Build page's packed folder.
+    if (kind.contains(QLatin1String(".build")) || kind == QLatin1String("ampr.pack"))
+        return QStringLiteral("build");
     return QStringLiteral("layers");
 }
 
@@ -215,7 +216,7 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     });
     content()->addWidget(stats);
 
-    // ---- Pick up where you left off: the most recent failed / interrupted job.
+    // ---- Pick up where you left off: the most recent failed / interrupted / cancelled job.
     m_continue = new InfoBar(Tone::Warn, this);
     m_continue->setObjectName(QStringLiteral("home-continue"));
     m_continue->setDismissable(true);
@@ -485,7 +486,7 @@ void HomePage::refreshQueueTile()
         qc << QStringLiteral("%1 failed").arg(failed);
     if (m_ctx.queue().isHeld())
         qc << QStringLiteral("queue paused");
-    m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : QStringLiteral("Jobs run one after another")) : qc.join(QStringLiteral(" · ")));
+    m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : QStringLiteral("Jobs run in queue order")) : qc.join(QStringLiteral(" · ")));
     m_queueBar->setVisible(running > 0);
     if (running > 0) {
         m_queueBar->setState(indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
@@ -526,9 +527,10 @@ void HomePage::refresh()
     const bool nextToSource = folder.isEmpty();
     if (nextToSource)
         folder = QDir::homePath();
-    // Off the UI thread (refresh() runs on every queue change; a network drive answers slowly).
+    // Off the UI thread (a network drive answers slowly), and only while the
+    // page is on screen: refresh() runs on every queue change, onShown() asks again.
     const quint64 gen = ++m_spaceGen;
-    probeFreeSpace(this, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
+    probeFreeSpace(isVisible() ? this : nullptr, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
         if (gen != m_spaceGen)
             return;
         if (ready) {

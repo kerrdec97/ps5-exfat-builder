@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QHelpEvent>
 #include <QPointer>
 #include <QScrollBar>
@@ -225,10 +226,16 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
     m_options->build();
     card->body()->addWidget(m_options);
     auto updateSummary = [card, this] {
-        const int n = int(m_options->overrides().size());
+        // Rows the page hides (they do not apply to the current action) are not counted.
+        int n = 0;
+        const QVariantMap changed = m_options->overrides();
+        for (auto it = changed.cbegin(); it != changed.cend(); ++it)
+            if (SettingRow* row = m_options->row(it.key()); row && !row->isHidden())
+                ++n;
         card->setSummary(n > 0 ? QStringLiteral("%1 changed for this job").arg(n) : QStringLiteral("Defaults"),
                          n > 0 ? Tone::Info : Tone::Neutral);
     };
+    m_refreshOptionsSummary = updateSummary;
     connect(m_options, &JobOptionsPanel::overridesChanged, card, updateSummary);
     updateSummary();
     if (withOpenFolderRow) {
@@ -282,6 +289,9 @@ void JobFormPage::submitClicked(bool buildNow)
     }
     auto r = submit(buildNow);
     if (!r.ok()) {
+        // The user's own "Cancel" in a confirmation is not a failure to report.
+        if (r.error().isCancelled())
+            return;
         showFormError(r.error().code == ErrorCode::Unsupported ? QStringLiteral("Not available in this build")
                                                               : QStringLiteral("The job was not added"),
                       r.error().message);
@@ -390,7 +400,7 @@ QString relativeTime(const QDateTime& t)
         return QStringLiteral("%1 min ago").arg(s / 60);
     if (s < 86400)
         return QStringLiteral("%1 h ago").arg(s / 3600);
-    return QStringLiteral("%1 days ago").arg(s / 86400);
+    return s < 2 * 86400 ? QStringLiteral("1 day ago") : QStringLiteral("%1 days ago").arg(s / 86400);
 }
 
 QString driveLabel(const QString& path)
@@ -404,9 +414,18 @@ QString driveLabel(const QString& path)
 
 void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done)
 {
+    if (!context)
+        return; // nobody to answer
     QPointer<QObject> guard(context);
     (void)QtConcurrent::run([guard, folder, done = std::move(done)] {
-        const QString path = folder.isEmpty() ? QDir::homePath() : folder;
+        // A folder that is not created yet: the drive it will be on.
+        QString path = folder.isEmpty() ? QDir::homePath() : folder;
+        while (!QFileInfo::exists(path)) {
+            const QString parent = QFileInfo(path).absolutePath();
+            if (parent == path || parent.isEmpty())
+                break;
+            path = parent;
+        }
         const QStorageInfo si(path);
         const bool ready = si.isValid() && si.isReady();
         const qint64 available = ready ? si.bytesAvailable() : -1;
@@ -415,9 +434,8 @@ void probeFreeSpace(QObject* context, const QString& folder, std::function<void(
             label = label.left(2);
         else if (label.isEmpty())
             label = QStringLiteral("this drive");
-        if (!guard)
-            return;
-        QMetaObject::invokeMethod(guard.data(), [guard, ready, available, label, done] {
+        // The context is only touched on the UI thread, where the pointer is tested.
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, ready, available, label, done] {
             if (guard)
                 done(ready, available, label);
         }, Qt::QueuedConnection);

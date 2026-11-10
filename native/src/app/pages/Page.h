@@ -26,6 +26,8 @@
 #include <QVariantMap>
 #include <QWidget>
 
+#include <functional>
+
 namespace fw {
 class AppContext;
 class JobQueueModel;
@@ -137,6 +139,12 @@ protected:
                                           const QStringList& excludeKeys, const QString& settingsLink = {},
                                           bool withOpenFolderRow = true);
     ui::JobOptionsPanel* options() { return m_options; }
+    // After a page showed or hid rows of the job options card: its "n changed" summary again.
+    void refreshOptionsSummary()
+    {
+        if (m_refreshOptionsSummary)
+            m_refreshOptionsSummary();
+    }
     QString featureName() const { return m_feature; }
 
 private:
@@ -161,6 +169,7 @@ private:
     ui::Card* m_unavailableCard = nullptr;
     ui::InfoBar* m_error;
     ui::JobOptionsPanel* m_options = nullptr;
+    std::function<void()> m_refreshOptionsSummary;
     ui::Switch* m_openFolder = nullptr;
     ui::Card* m_sourceCard = nullptr;
 };

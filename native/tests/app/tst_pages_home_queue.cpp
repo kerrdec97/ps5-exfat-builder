@@ -116,6 +116,50 @@ private slots:
         QVERIFY(bar->isHidden());
         q.clearFinished();
     }
+
+    // The Queue's details name a job's parameters in words, and a job the user
+    // cancelled is not reported as a failure in the status bar.
+    void queueDetailsAndCounts()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build")))
+            QSKIP("image engines not registered in this build");
+        auto* queue = qobject_cast<pages::QueuePage*>(m_window->page(QStringLiteral("queue")));
+        QVERIFY(queue);
+        auto& q = m_ctx->queue();
+        const QString game = m_root.filePath(QStringLiteral("queue-game"));
+        QVERIFY(makeGame(game));
+        q.holdQueue(true);
+        auto r = jobs::submitImageBuild(*m_ctx, jobs::kFormatExfat, game, m_root.path(), QStringLiteral("queue-test"), {},
+                                        QJsonObject{{QStringLiteral("titleId"), QStringLiteral("PPSA00003")}});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().message));
+        m_window->navigate(QStringLiteral("queue"), {{QStringLiteral("jobId"), r.value()}});
+        auto* detail = queue->findChild<QWidget*>(QStringLiteral("queue-detail"));
+        QVERIFY(detail);
+        QStringList labels;
+        for (auto* l : detail->findChildren<QLabel*>())
+            labels << l->text();
+        QVERIFY2(labels.contains(QStringLiteral("Source")), qPrintable(labels.join(u'|')));
+        QVERIFY(labels.contains(QStringLiteral("Output")));
+        QVERIFY(labels.contains(QStringLiteral("Title ID")));
+        QVERIFY(!labels.contains(QStringLiteral("TitleId")));
+        QVERIFY(!queue->statusContext().contains(QStringLiteral("cancelled")));
+
+        q.cancel(r.value());
+        QVERIFY(waitTerminal(q, r.value()));
+        QCOMPARE(q.record(r.value())->state, JobState::Cancelled);
+        QVERIFY2(queue->statusContext().contains(QStringLiteral("0 failed · 1 cancelled")), qPrintable(queue->statusContext()));
+        q.holdQueue(false);
+        q.clearFinished();
+    }
+
+    // "1 day ago", not "1 days ago".
+    void relativeTimes()
+    {
+        const QDateTime now = QDateTime::currentDateTime();
+        QCOMPARE(pages::relativeTime(now.addSecs(-30 * 3600)), QStringLiteral("1 day ago"));
+        QCOMPARE(pages::relativeTime(now.addSecs(-50 * 3600)), QStringLiteral("2 days ago"));
+        QCOMPARE(pages::relativeTime(now.addSecs(-2 * 3600 - 5)), QStringLiteral("2 h ago"));
+    }
 };
 
 QTEST_MAIN(TstPagesHomeQueue)

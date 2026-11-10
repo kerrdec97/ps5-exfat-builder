@@ -40,6 +40,7 @@
 #include <memory>
 
 class QMenu;
+class QTimer;
 
 namespace fw::pages {
 
@@ -115,6 +116,7 @@ private:
     void applyRowVisibility();
     void updateAdvancedSummary();
     void updateClusterNote();
+    void updateSpeedNotes();
     void updatePfsRows();
     void browseSource();
     void onSummary(const ui::GameSummary& s);
@@ -208,6 +210,7 @@ private:
     ui::IconButton* m_nameMenuButton = nullptr;
     ui::Link* m_resetName = nullptr;
     bool m_nameEdited = false;
+    QString m_userStem; // what the user typed as the name (the FPKG tile borrows the field)
 
     ui::Disclosure* m_advanced = nullptr;
     QWidget* m_advancedHost = nullptr;
@@ -226,6 +229,7 @@ private:
     enum class SpaceCheck { Unknown, Checking, Ok, Warn, Insufficient, Unavailable };
     SpaceCheck m_spaceState = SpaceCheck::Unknown;
     QElapsedTimer m_spaceChecked; // since the last answer
+    QTimer* m_spaceTimer = nullptr; // the check waits for a pause in typing the folder
     void applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists);
     quint64 m_spaceGen = 0;
     bool m_spaceOk = true;

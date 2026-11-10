@@ -984,6 +984,145 @@ private slots:
         m_page->setFormat(jobs::kFormatExfat);
     }
 
+    // A name the user typed survives a visit to the FPKG tile (which borrows
+    // the field for its package name) and reading the source again (F5).
+    void typedNamesSurviveTheFpkgTileAndARefresh()
+    {
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        m_page->setSource({});
+        QVERIFY(selectSource(m_game));
+        m_page->setFileStem(QStringLiteral("MyGame"));
+        QCOMPARE(m_page->fileName(), QStringLiteral("MyGame.exfat"));
+        m_page->setFormat(pages::kFormatFpkg);
+        QVERIFY(m_page->fileName().endsWith(QStringLiteral(".pkg")));
+        m_page->setFormat(jobs::kFormatFfpkg);
+        QCOMPARE(m_page->fileName(), QStringLiteral("MyGame.ffpkg"));
+        QVERIFY(m_page->fileNameEdited());
+        m_page->setFormat(jobs::kFormatExfat);
+        m_page->refresh();
+        QVERIFY(selectSource(m_game)); // the summary is back
+        QTRY_VERIFY(m_page->summary().exists);
+        QCOMPARE(m_page->fileName(), QStringLiteral("MyGame.exfat"));
+        // Another source gets its own name again.
+        QVERIFY(selectSource(m_asciiGame));
+        QVERIFY(!m_page->fileNameEdited());
+        QVERIFY(m_page->fileName().startsWith(QStringLiteral("PPSA01234")));
+    }
+
+    // The exFAT size settings count in what the image needs; the speed note
+    // under the Speed row stays after the row is edited.
+    void sizeSettingsAndTheSpeedNote()
+    {
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(m_game));
+        ui::JobOptionsPanel* panel = m_page->optionsPanel(jobs::kFormatExfat);
+        const qint64 automatic = m_page->largestOutputFileBytes();
+        panel->setOverride(exfat::keys::kImageSizeGiB, 3.0);
+        QCOMPARE(m_page->largestOutputFileBytes(), qint64(3) << 30);
+        panel->clearOverrides();
+        panel->setOverride(exfat::keys::kSpareSpace, QStringLiteral("fixed"));
+        panel->setOverride(exfat::keys::kSpareSpaceMiB, 100);
+        QCOMPARE(m_page->largestOutputFileBytes(), automatic + (qint64(100) << 20));
+        panel->clearOverrides();
+        QCOMPARE(m_page->largestOutputFileBytes(), automatic);
+
+        const auto note = [&] {
+            auto* row = panel->row(general::keys::kPerformanceMode);
+            auto* message = row ? row->findChild<ui::MessageRow*>() : nullptr;
+            return message ? message->text() : QString();
+        };
+        QVERIFY2(note().contains(QStringLiteral("logical cores")), qPrintable(note()));
+        const QString mode = m_ctx->settings().value(general::keys::kPerformanceMode).toString();
+        panel->setOverride(general::keys::kPerformanceMode, mode == QLatin1String("lowImpact") ? QStringLiteral("balanced") : QStringLiteral("lowImpact"));
+        QVERIFY2(note().contains(QStringLiteral("logical cores")), qPrintable(note()));
+        QVERIFY(m_ctx->settings().setValue(general::keys::kPerformanceMode, mode == QLatin1String("maximum") ? QStringLiteral("balanced") : QStringLiteral("maximum")).ok());
+        QVERIFY2(note().contains(QStringLiteral("logical cores")), qPrintable(note()));
+        QVERIFY(m_ctx->settings().setValue(general::keys::kPerformanceMode, mode).ok());
+        panel->clearOverrides();
+        QVERIFY(note().contains(QStringLiteral("logical cores")));
+    }
+
+    // A zipped dump keeps the requested format (only images and .gp5 projects
+    // force FPKG); a ZIP that cannot be read shows its file name and reports
+    // nothing to the status bar.
+    void zipSourcesKeepTheFormat()
+    {
+        m_page->showForm();
+        const QString zip = path(QStringLiteral("not-really.zip"));
+        QVERIFY(fwtest::writeTextFile(zip, QByteArray(2048, 'z')));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatZstdFolder}, {QStringLiteral("source"), zip}});
+        QCOMPARE(m_page->format(), pages::kFormatZstdFolder);
+        QTRY_VERIFY_WITH_TIMEOUT(m_page->summary().exists, 15000);
+        QVERIFY(!m_page->summary().isGame);
+        QCOMPARE(m_page->statusContext(), QString());
+        bool named = false;
+        for (auto* l : m_page->findChildren<ui::ElideLabel*>())
+            named = named || l->fullText() == QLatin1String("not-really.zip");
+        QVERIFY(named);
+        // An image still means FPKG.
+        const QString image = path(QStringLiteral("PPSA05555 Other Game.exfat"));
+        QVERIFY(fwtest::writeTextFile(image, QByteArray(4096, '\0')));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), jobs::kFormatExfat}, {QStringLiteral("source"), image}});
+        QCOMPARE(m_page->format(), pages::kFormatFpkg);
+        QVERIFY(m_page->statusContext().contains(QStringLiteral("PPSA05555 Other Game")));
+        m_page->setSource({});
+        m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    // FPKG validation follows the engine: a content ID with another suffix
+    // than _00 is accepted, an update needs a base package that exists, and a
+    // base inspection that ends after the type left Backport changes nothing.
+    void fpkgValidationFollowsTheEngine()
+    {
+        auto& q = m_ctx->queue();
+        m_page->showForm();
+        const QString dump = path(QStringLiteral("Dumps/PPSA07777-app"));
+        QVERIFY(makeDump(dump, QStringLiteral("Suffix Game"), QStringLiteral("PPSA07777"), QStringLiteral("UP0000-PPSA07777_01-SUFFIXTEST000000")));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatFpkg},
+                                                     {QStringLiteral("packageType"), QStringLiteral("app")},
+                                                     {QStringLiteral("basePackage"), QString()},
+                                                     {QStringLiteral("source"), dump}});
+        QVERIFY(selectSource(dump));
+        m_page->setOutputFolder(path(QStringLiteral("fpkg-suffix")));
+        q.holdQueue(true);
+        QString id = addToQueue();
+        QVERIFY2(!id.isEmpty(), "a content ID the engine accepts was refused by the page");
+        QCOMPARE(q.record(id)->parameters.value(QStringLiteral("contentId")).toString(), QStringLiteral("UP0000-PPSA07777_01-SUFFIXTEST000000"));
+        QVERIFY(q.remove(id));
+
+        // Update: the base must exist, and its path is sent without the spaces around it.
+        const QString base = path(QStringLiteral("Packages/UP0000-PPSA01234_00-GOLDENTEST000000-A0100-V0100.pkg"));
+        QVERIFY(QFileInfo(base).isFile()); // written by backportUpdatesSubmitBackportJobs
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("update")},
+                                                     {QStringLiteral("basePackage"), path(QStringLiteral("Packages/missing.pkg"))}});
+        QVERIFY(addToQueue().isEmpty());
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("basePackage"), QStringLiteral("  ") + base + QStringLiteral(" ")}});
+        id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(clean(q.record(id)->parameters.value(QStringLiteral("basePackage")).toString()), clean(base));
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+
+        // Backport starts reading the base; App is chosen before the answer arrives.
+        QLineEdit* version = nullptr;
+        for (auto* e : m_page->packageCard()->findChildren<QLineEdit*>())
+            if (e->accessibleName() == QLatin1String("Version"))
+                version = e;
+        QVERIFY(version);
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("app")}, {QStringLiteral("basePackage"), QString()}});
+        QCOMPARE(version->text(), QStringLiteral("01.000.000"));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("backport")}, {QStringLiteral("basePackage"), base}});
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("app")}});
+        QTest::qWait(1500);
+        QCOMPARE(version->text(), QStringLiteral("01.000.000"));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("basePackage"), QString()}});
+        m_page->setOutputFolder({});
+        m_page->setSource({});
+        m_page->setFormat(jobs::kFormatExfat);
+    }
+
     // FPKG: a source without its own content ID and version (an image) must
     // not be packaged with the previous game's.
     void packageFieldsFollowTheSource()

@@ -8,6 +8,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "engines/gameinfo/Naming.h"
 #include "engines/general/Module.h"
 
 #include <QDir>
@@ -23,6 +24,9 @@
 #include <QPainterPath>
 #include <QScrollBar>
 #include <QTextDocument>
+#include <QTimer>
+
+#include <algorithm>
 
 namespace fw::pages {
 
@@ -43,6 +47,33 @@ void setBadge(Badge* b, const QString& text, Tone tone, const QString& icon = {}
 }
 
 bool isCompareImage(const QString& path) { return !imageFormatOf(path).isEmpty(); }
+
+bool samePath(const QString& a, const QString& b)
+{
+    return QString::compare(QDir::cleanPath(QFileInfo(a).absoluteFilePath()), QDir::cleanPath(QFileInfo(b).absoluteFilePath()),
+                            Qt::CaseInsensitive) == 0;
+}
+
+// "<folder of the image>/<its base name><suffix>": the default place for what
+// is made from an image (also right for an image in a drive root).
+QString nextToImage(const QString& image, const QString& suffix = {})
+{
+    const QFileInfo fi(image);
+    return QDir(fi.absolutePath()).filePath(fi.completeBaseName() + suffix);
+}
+
+// Why `name` cannot be a file or folder name in an image of `format` ("" = it can).
+QString imageNameProblem(const QString& name, const QString& format)
+{
+    if (name.isEmpty())
+        return QStringLiteral("Enter a name.");
+    if (name.contains(u'/'))
+        return QStringLiteral("A name cannot contain \"/\". Create the folders one at a time.");
+    if (name == QLatin1String(".") || name == QLatin1String(".."))
+        return QStringLiteral("\".\" and \"..\" cannot be used as names.");
+    // exFAT has the Windows rules; a UFS2 image (.ffpkg) takes any other name.
+    return format == QLatin1String("ffpkg") ? QString() : gameinfo::folderNameProblem(name);
+}
 
 // The four actions as one row of tiles: icon square, title, one short line.
 // Selection uses the signature gradient like ChoiceTiles; two columns when narrow.
@@ -292,12 +323,6 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         onCompareJob(id, true);
         onEditJobFinished(id);
     });
-    for (const JobRecord& rec : m_ctx.queue().records())
-        if (rec.kind == kCompareKind)
-            m_compareJobId = rec.id;
-    if (!m_compareJobId.isEmpty())
-        onCompareJob(m_compareJobId, isTerminal(m_ctx.queue().record(m_compareJobId)->state));
-
     openImage({});
 }
 
@@ -316,7 +341,7 @@ void ImageToolsPage::buildImageCard()
     m_imageCard->body()->addWidget(m_imageField);
     connect(m_imageField, &PathField::pathChanged, this, [this](const QString& p) {
         if (p != m_path)
-            openImage(p);
+            requestImage(p);
     });
 
     m_drop = new DropZone(QStringLiteral("drive"), QStringLiteral("Open an image"),
@@ -359,7 +384,7 @@ void ImageToolsPage::buildImageCard()
     sh->addWidget(change);
     auto* close = new IconButton(QStringLiteral("close"), QStringLiteral("Close the image"), IconButton::Size::Regular, m_strip);
     close->setToolTip(QStringLiteral("Close the image"));
-    connect(close, &QToolButton::clicked, this, [this] { openImage({}); });
+    connect(close, &QToolButton::clicked, this, [this] { requestImage({}); });
     sh->addWidget(close);
     m_strip->body()->addLayout(sh);
     m_strip->hide();
@@ -589,14 +614,29 @@ void ImageToolsPage::openImage(const QString& path)
     loadImage(path);
 }
 
+// The user asks for another image (or to close this one). The staged changes
+// are the only unsaved work on this page: they are not dropped without a question.
+void ImageToolsPage::requestImage(const QString& path)
+{
+    if (path != m_path && !m_ops.empty() && !m_demo) {
+        const QString what = QStringLiteral("%1 staged change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s"));
+        if (!Sheet::confirm(window(), QStringLiteral("Discard %1?").arg(what),
+                            QStringLiteral("They have not been applied to %1.").arg(Sheet::monoSpan(QFileInfo(m_path).fileName())),
+                            QStringLiteral("Keep editing"), QStringLiteral("Discard"))) {
+            const QSignalBlocker block(m_imageField);
+            m_imageField->setPath(m_path);
+            return;
+        }
+    }
+    openImage(path);
+}
+
 void ImageToolsPage::onEditJobFinished(const QString& id)
 {
     const auto rec = m_ctx.queue().record(id);
     if (!rec || m_demo || m_path.isEmpty() || !rec->kind.endsWith(QLatin1String(".edit")))
         return;
-    const QString image = rec->parameters.value(QStringLiteral("image")).toString();
-    if (QString::compare(QDir::cleanPath(QFileInfo(image).absoluteFilePath()), QDir::cleanPath(QFileInfo(m_path).absoluteFilePath()),
-                         Qt::CaseInsensitive) != 0)
+    if (!samePath(rec->parameters.value(QStringLiteral("image")).toString(), m_path))
         return;
     // The file is the edited image now: the strip and the tree are read again.
     // Changes staged since the job was started stay.
@@ -761,10 +801,8 @@ void ImageToolsPage::updateActions()
     m_verifyHelp->setText(cmp ? QString() : QStringLiteral("Reads the whole image and checks every checksum. Nothing is written."));
     m_verifyHelp->setVisible(!cmp);
 
-    if (open) {
-        const QFileInfo fi(m_path);
-        m_destination->setPlaceholder(nativePath(fi.absolutePath() + u'/' + fi.completeBaseName()));
-    }
+    if (open)
+        m_destination->setPlaceholder(nativePath(nextToImage(m_path)));
     queueButton()->setVisible(!(m_action == Action::Edit || (m_action == Action::Verify && cmp)) || !open);
     // A comparison's result is the row in this card (and its sheet): keep the form.
     setMonitorOnStart(!(m_action == Action::Verify && cmp));
@@ -820,6 +858,7 @@ void ImageToolsPage::updateAdvanced()
         if (auto* row = options()->row(key))
             row->setVisible(writes || !d || d->section != QLatin1String("Build"));
     }
+    refreshOptionsSummary();
     m_advanced->setCaption(writes ? QStringLiteral("Cluster size, verification, threads") : QStringLiteral("Verification, threads"));
     m_advanced->setVisible(open && !(m_action == Action::Verify && compareMode()));
 }
@@ -906,8 +945,11 @@ void ImageToolsPage::onCompareJob(const QString& id, bool finished)
     if (!rec || rec->kind != kCompareKind)
         return;
     if (id != m_compareJobId) {
-        // A comparison started elsewhere (Queue › Retry): the row follows the latest one.
+        // A comparison of the open image started elsewhere (Queue › Retry): the
+        // row follows the latest one. Another image's comparison is not its business.
         if (!finished && rec->state != JobState::Queued && rec->state != JobState::Running)
+            return;
+        if (m_path.isEmpty() || !samePath(rec->parameters.value(QStringLiteral("a")).toString(), m_path))
             return;
         m_compareJobId = id;
     }
@@ -937,7 +979,9 @@ void ImageToolsPage::showCompareState()
         if (rec->state == JobState::Running)
             setBadge(m_compareBadge, QStringLiteral("Comparing…"), Tone::Info, QStringLiteral("loader"));
         else
-            setBadge(m_compareBadge, rec->state == JobState::Paused ? QStringLiteral("Paused") : QStringLiteral("Queued"), Tone::Neutral);
+            setBadge(m_compareBadge, rec->state == JobState::Paused ? QStringLiteral("Paused")
+                                     : rec->state == JobState::Cancelling ? QStringLiteral("Cancelling…") : QStringLiteral("Queued"),
+                     Tone::Neutral);
         m_compareSummary->setText(QStringLiteral("%1 · follow it in the Jobs dock.").arg(rec->title));
         m_compareView->hide();
         return;
@@ -1048,14 +1092,10 @@ QString ImageToolsPage::convertOutput() const
 {
     const QString ext = jobs::outputExtension(convertTarget());
     QString out = m_convertOutput->path();
-    if (out.isEmpty()) {
-        const QFileInfo fi(m_path);
-        return fi.absolutePath() + u'/' + fi.completeBaseName() + ext;
-    }
-    if (!out.endsWith(ext, Qt::CaseInsensitive)) {
-        const QFileInfo fo(out);
-        out = (fo.suffix().isEmpty() || imageFormatOf(out).isEmpty() ? out : fo.absolutePath() + u'/' + fo.completeBaseName()) + ext;
-    }
+    if (out.isEmpty())
+        return nextToImage(m_path, ext);
+    if (!out.endsWith(ext, Qt::CaseInsensitive))
+        out = (QFileInfo(out).suffix().isEmpty() || imageFormatOf(out).isEmpty() ? out + ext : nextToImage(out, ext));
     return out;
 }
 
@@ -1070,10 +1110,15 @@ void ImageToolsPage::updateConvert()
     m_methodHelp->setText(method == u"repack" ? QStringLiteral("Rebuilds a PFS image of the game; needs room for a temporary copy.")
                                               : QStringLiteral("Fast and needs no extra space; the .ffpfsc holds the image file."));
     if (!m_path.isEmpty()) {
-        const QFileInfo fi(m_path);
-        m_convertOutput->setPlaceholder(nativePath(fi.absolutePath() + u'/' + fi.completeBaseName() + jobs::outputExtension(convertTarget())));
+        m_convertOutput->setPlaceholder(nativePath(nextToImage(m_path, jobs::outputExtension(convertTarget()))));
         m_convertOutput->setFilter(QStringLiteral("%1 image (*%2)").arg(imageFormatName(convertTarget()), jobs::outputExtension(convertTarget())));
     }
+    // A chosen name that carries another image format's extension is written
+    // with the target's: the field shows the file the job will make.
+    const QString chosen = m_convertOutput->path();
+    if (!chosen.isEmpty() && !convertTarget().isEmpty() && !imageFormatOf(chosen).isEmpty()
+        && !chosen.endsWith(jobs::outputExtension(convertTarget()), Qt::CaseInsensitive))
+        m_convertOutput->setPath(nativePath(convertOutput()));
 }
 
 // ---- Edit -------------------------------------------------------------------------------
@@ -1170,10 +1215,15 @@ void ImageToolsPage::clearStaged()
 
 void ImageToolsPage::rebuildStaged()
 {
+    // Later, not now: a row's own "remove" button is on the stack when it asks for this.
     while (QLayoutItem* it = m_stagedLayout->takeAt(0)) {
-        delete it->widget();
+        if (QWidget* w = it->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
         delete it;
     }
+    m_stagedRemove.clear();
     m_stagedCaption->setVisible(m_ops.empty());
     m_clear->setVisible(!m_ops.empty());
     m_stagedCard->setTitleText(m_ops.empty() ? QStringLiteral("Staged changes") : QStringLiteral("Staged changes · %1").arg(m_ops.size()));
@@ -1198,7 +1248,13 @@ void ImageToolsPage::rebuildStaged()
             if (i < m_ops.size())
                 m_ops.erase(m_ops.begin() + long(i));
             rebuildStaged();
+            // The keyboard stays in the list: on the row that took this one's place.
+            if (!m_stagedRemove.isEmpty())
+                m_stagedRemove[std::min(qsizetype(i), m_stagedRemove.size() - 1)]->setFocus();
+            else
+                m_treeView->setFocus();
         });
+        m_stagedRemove << x;
         h->addWidget(x);
         m_stagedLayout->addWidget(row);
         if (i + 1 < m_ops.size())
@@ -1221,8 +1277,12 @@ void ImageToolsPage::addFiles(bool folder)
         stage({QStringLiteral("add"), target.isEmpty() ? QFileInfo(d).fileName() : target + u'/' + QFileInfo(d).fileName(), d, {}});
         return;
     }
-    for (const QString& f : QFileDialog::getOpenFileNames(window(), QStringLiteral("Choose files to add")))
-        stage({QStringLiteral("add"), target.isEmpty() ? QFileInfo(f).fileName() : target + u'/' + QFileInfo(f).fileName(), f, {}});
+    // One rebuild of the list for the whole selection, not one per file.
+    const QStringList files = QFileDialog::getOpenFileNames(window(), QStringLiteral("Choose files to add"));
+    for (const QString& f : files)
+        m_ops.push_back({QStringLiteral("add"), target.isEmpty() ? QFileInfo(f).fileName() : target + u'/' + QFileInfo(f).fileName(), f, {}});
+    if (!files.isEmpty())
+        rebuildStaged();
 }
 
 void ImageToolsPage::replaceSelected()
@@ -1254,15 +1314,54 @@ void ImageToolsPage::newFolder()
     auto* nameField = field(target.isEmpty() ? QStringLiteral("Name (in the image root)") : QStringLiteral("Name (in /%1)").arg(target), name, {}, s);
     plainLabels(nameField); // the label names a folder of the image
     s->body()->addWidget(nameField);
+    const QString n = askName(s, name);
+    if (!n.isEmpty())
+        stage({QStringLiteral("mkdir"), target.isEmpty() ? n : target + u'/' + n, {}, {}});
+}
+
+// Runs a sheet that asks for a name in the image: the field has the focus, and
+// "Stage" keeps the sheet open with the reason while the name cannot be used.
+// Returns the name, or "" when the user cancelled.
+QString ImageToolsPage::askName(Sheet* s, QLineEdit* name)
+{
+    auto* why = new MessageRow(s);
+    plainLabels(why); // the reason may quote the name
+    s->body()->addWidget(why);
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
-    name->setFocus();
+    QPushButton* stageButton = s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
+    const QString format = m_tree.format;
+    const auto check = [name, why, format] {
+        const QString problem = imageNameProblem(name->text().trimmed(), format);
+        why->set(problem, Tone::Err);
+        setInputError(name, !problem.isEmpty());
+        return problem.isEmpty();
+    };
+    QObject::disconnect(stageButton, &QPushButton::clicked, s, nullptr); // an unusable name keeps the sheet open
+    connect(stageButton, &QPushButton::clicked, s, [s, name, check] {
+        if (check())
+            s->close(1);
+        else
+            name->setFocus();
+    });
+    connect(name, &QLineEdit::textEdited, why, [name, why] {
+        why->clear();
+        setInputError(name, false);
+    });
+    connect(name, &QLineEdit::returnPressed, stageButton, &QPushButton::click);
+    // The sheet focuses its primary button when it opens; the field is what the user came for.
+    QTimer::singleShot(0, name, [name] {
+        name->setFocus();
+        name->selectAll();
+    });
     if (s->exec() != 1)
-        return;
+        return {};
     const QString n = name->text().trimmed();
-    if (n.isEmpty() || n.contains(u'/'))
-        return;
-    stage({QStringLiteral("mkdir"), target.isEmpty() ? n : target + u'/' + n, {}, {}});
+    const QString problem = imageNameProblem(n, format);
+    if (!problem.isEmpty()) { // closed some other way with a name that cannot be used
+        showFormError(QStringLiteral("The name cannot be used"), problem);
+        return {};
+    }
+    return n;
 }
 
 void ImageToolsPage::renameSelected()
@@ -1274,16 +1373,9 @@ void ImageToolsPage::renameSelected()
     auto* name = textInput({}, true, s);
     name->setText(p.section(u'/', -1));
     s->body()->addWidget(field(QStringLiteral("New name"), name, {}, s));
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
-    name->setFocus();
-    name->selectAll();
-    if (s->exec() != 1)
-        return;
-    const QString n = name->text().trimmed();
-    if (n.isEmpty() || n.contains(u'/') || n == p.section(u'/', -1))
-        return;
-    stage({QStringLiteral("rename"), p, {}, n});
+    const QString n = askName(s, name);
+    if (!n.isEmpty() && n != p.section(u'/', -1))
+        stage({QStringLiteral("rename"), p, {}, n});
 }
 
 void ImageToolsPage::showTreeMenu(const QPoint& pos)
@@ -1356,6 +1448,9 @@ QString ImageToolsPage::validateForm()
         return QStringLiteral("The image does not exist.");
     if (m_summary.format.isEmpty())
         return QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file.");
+    // What is inside the image (packs, an inner image) decides which job extracts or converts it.
+    if ((m_action == Action::Extract || m_action == Action::Convert) && m_info->isBusy())
+        return QStringLiteral("The image is still being read. Try again in a moment.");
     switch (m_action) {
     case Action::Extract:
         if (!m_destination->path().isEmpty() && isSameOrInside(m_path, m_destination->path()))
@@ -1388,20 +1483,18 @@ Result<QString> ImageToolsPage::submit(bool)
     switch (m_action) {
     case Action::Extract: {
         QString dest = m_destination->path();
-        if (dest.isEmpty()) {
-            const QFileInfo fi(m_path);
-            dest = fi.absolutePath() + u'/' + fi.completeBaseName();
-        }
+        if (dest.isEmpty())
+            dest = nextToImage(m_path);
         // Packed games and images inside a PFS container are read through the
         // format-neutral reader (game.extract); everything else as before.
         if (!m_summary.packs.isEmpty() || (!m_summary.inner.isEmpty() && m_summary.fromImage))
             return jobs::submitGameExtract(m_ctx, m_path, dest, m_summary.packs.isEmpty() || m_unpackPacks->isChecked(),
-                                           options()->overrides());
-        return jobs::submitExtract(m_ctx, m_path, dest, options()->overrides());
+                                           jobOverrides());
+        return jobs::submitExtract(m_ctx, m_path, dest, jobOverrides());
     }
     case Action::Verify: {
         if (!compareMode())
-            return jobs::submitVerify(m_ctx, m_path, options()->overrides());
+            return jobs::submitVerify(m_ctx, m_path, jobOverrides());
         auto r = jobs::submitCompare(m_ctx, m_path, m_compareB->path(), m_compareDepth->currentValue().toString());
         if (r.ok()) {
             m_compareJobId = r.value();
@@ -1419,7 +1512,7 @@ Result<QString> ImageToolsPage::submit(bool)
                 return Error(ErrorCode::Cancelled, QStringLiteral("Nothing was converted."));
             replace = true;
         }
-        return jobs::submitConvert(m_ctx, m_path, convertTarget(), out, options()->overrides(), convertMethod(), replace);
+        return jobs::submitConvert(m_ctx, m_path, convertTarget(), out, jobOverrides(), convertMethod(), replace);
     }
     case Action::Edit: {
         // A sheet does not scroll: the first changes are listed, the rest counted.
@@ -1442,7 +1535,7 @@ Result<QString> ImageToolsPage::submit(bool)
                             lines.join(QStringLiteral("<br>")) + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
                             QStringLiteral("Keep editing"), QStringLiteral("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
             return Error(ErrorCode::Cancelled, QStringLiteral("Not applied."));
-        auto r = jobs::submitImageEdit(m_ctx, m_path, operationsJson(), options()->overrides());
+        auto r = jobs::submitImageEdit(m_ctx, m_path, operationsJson(), jobOverrides());
         if (r.ok()) {
             m_ops.clear();
             rebuildStaged();
@@ -1451,6 +1544,19 @@ Result<QString> ImageToolsPage::submit(bool)
     }
     }
     return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose an action."));
+}
+
+// The overrides of the rows this action shows: a value changed under Convert
+// is not sent with a later Extract, where its row is hidden.
+QVariantMap ImageToolsPage::jobOverrides() const
+{
+    QVariantMap out;
+    const JobOptionsPanel* panel = const_cast<ImageToolsPage*>(this)->options();
+    const QVariantMap all = panel->overrides();
+    for (auto it = all.cbegin(); it != all.cend(); ++it)
+        if (SettingRow* row = panel->row(it.key()); row && !row->isHidden())
+            out.insert(it.key(), it.value());
+    return out;
 }
 
 // ---- page hooks -------------------------------------------------------------------------
@@ -1474,8 +1580,10 @@ void ImageToolsPage::dropUrls(const QList<QUrl>& urls)
     const QString f = urls.first().toLocalFile();
     if (QFileInfo(f).isDir())
         m_compareB->setPath(f);
-    else
+    else if (m_ops.empty() || f == m_path)
         openImage(f);
+    else // the question about the staged changes waits until the drop itself is over
+        QTimer::singleShot(0, this, [this, f] { requestImage(f); });
 }
 
 void ImageToolsPage::setDragHighlight(bool on)
@@ -1492,8 +1600,11 @@ void ImageToolsPage::navigateWith(const QVariantMap& args)
     QString image = args.value(QStringLiteral("image")).toString();
     if (image.isEmpty())
         image = args.value(QStringLiteral("source")).toString();
-    if (!image.isEmpty())
-        openImage(image);
+    if (!image.isEmpty()) {
+        requestImage(image);
+        if (m_path != image) // the user kept the staged changes of the open image
+            return;
+    }
     const QString a = args.value(QStringLiteral("action")).toString();
     if (a == QLatin1String("extract"))
         setAction(Action::Extract);

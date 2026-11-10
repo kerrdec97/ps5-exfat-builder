@@ -197,6 +197,24 @@ QStringList wrapText(const QString& text, const QFont& font, int width, int maxL
     return out;
 }
 
+// Whether `text` takes at most `maxLines` lines of `width` (wrapText() cuts the rest with "…").
+bool fitsLines(const QString& text, const QFont& font, int width, int maxLines)
+{
+    if (text.isEmpty())
+        return true;
+    if (width <= 10)
+        return false;
+    QTextLayout layout(text, font);
+    layout.beginLayout();
+    int lines = 0;
+    for (QTextLine line = layout.createLine(); line.isValid(); line = layout.createLine()) {
+        line.setLineWidth(width);
+        ++lines;
+    }
+    layout.endLayout();
+    return lines <= maxLines;
+}
+
 class FormatTiles : public QWidget {
 public:
     explicit FormatTiles(QWidget* parent) : QWidget(parent)
@@ -345,6 +363,9 @@ protected:
         if (i != m_hover) {
             m_hover = i;
             setCursor(i >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            // A description cut with "…" in a narrow tile can be read in full on hover.
+            const bool cut = i >= 0 && !fitsLines(m_items[size_t(i)].description, font::caption(), tileRect(i).width() - 29, 3);
+            setToolTip(cut ? m_items[size_t(i)].description : QString());
             update();
         }
     }
@@ -529,13 +550,17 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
             m_ctx.checkDependenciesAsync();
         if (key == exfat::keys::kClusterSize)
             updateClusterNote();
-        if (key == general::keys::kFreeSpaceMarginMiB)
+        if (key == general::keys::kFreeSpaceMarginMiB || key == exfat::keys::kImageSizeGiB || key == exfat::keys::kSpareSpace
+            || key == exfat::keys::kSpareSpaceMiB)
             checkSpace();
         if (key == ampr::keys::kZstdPack)
             keepZstdPackOn();
+        if (key == kSpeed)
+            updateSpeedNotes();
     });
     connect(&ctx.settings(), &SettingsStore::resetDone, this, [this] {
         keepZstdPackOn();
+        updateSpeedNotes();
         checkSpace();
     });
     connect(&ctx, &AppContext::dependenciesChecked, this, &BuildImagePage::updateToolsStatus);
@@ -722,9 +747,7 @@ void BuildImagePage::buildFormatCard()
         on->hide();
     keepZstdPackOn();
     connect(m_formats[4].panel, &JobOptionsPanel::overridesChanged, this, &BuildImagePage::keepZstdPackOn);
-    for (auto& fo : m_formats)
-        if (SettingRow* row = fo.panel->row(kSpeed))
-            row->setMessage(speedNote(), Tone::Neutral);
+    updateSpeedNotes();
     // The PFS type row leads the PFS essentials; the tools row leads FPKG's.
     // (layout items 0 and 1 are the hairline and the space under it)
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[2].essentials->layout())) {
@@ -799,12 +822,25 @@ void BuildImagePage::buildFormatOptions(FormatOptions& fo, const QStringList& se
     }
     fo.advanced->setVisible(false);
     connect(fo.panel, &JobOptionsPanel::overridesChanged, this, [this, tile = fo.tile] {
+        updateSpeedNotes();
         if (tile != this->tile())
             return;
         updateAdvancedSummary();
         updateClusterNote();
         updatePfsRows();
+        if (m_output) // the image size and free-space rows change what the output needs
+            checkSpace();
     });
+}
+
+// The panel clears a row's message whenever it refreshes the row (an edit, a
+// change of the global value), so the note is put back each time.
+void BuildImagePage::updateSpeedNotes()
+{
+    for (auto& fo : m_formats)
+        if (fo.panel)
+            if (SettingRow* row = fo.panel->row(kSpeed))
+                row->setMessage(speedNote(), Tone::Neutral);
 }
 
 void BuildImagePage::buildPackageCard()
@@ -826,7 +862,7 @@ void BuildImagePage::buildPackageCard()
     m_contentId = textInput(QStringLiteral("UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx"), true, details);
     m_contentId->setMaxLength(36);
     m_contentId->setAccessibleName(QStringLiteral("Content ID"));
-    m_contentId->setToolTip(QStringLiteral("36 characters, read from sce_sys/param.json. Change it only if you know why."));
+    m_contentId->setToolTip(QStringLiteral("36 characters, read from sce_sys/param.json. It must match the source; for an add-on, enter the add-on's own ID."));
     auto* grid = new QWidget(details);
     auto* gh = hbox(grid, space::md);
     gh->setAlignment(Qt::AlignTop);
@@ -980,12 +1016,22 @@ void BuildImagePage::buildSaveCard()
     dest->body()->addWidget(m_spaceBar);
     form()->addWidget(dest);
 
+    // Typing a folder asks the drive once the typing pauses, not once per
+    // character (a half-typed network path can take seconds to answer). Until
+    // then the check counts as pending, so a start asks the drive itself.
+    m_spaceTimer = new QTimer(this);
+    m_spaceTimer->setSingleShot(true);
+    m_spaceTimer->setInterval(300);
+    connect(m_spaceTimer, &QTimer::timeout, this, &BuildImagePage::checkSpace);
     connect(m_output, &PathField::pathChanged, this, [this](const QString&) {
         renderFileName();
-        checkSpace();
+        ++m_spaceGen; // answers about the folder before are dropped
+        m_spaceState = SpaceCheck::Checking;
+        m_spaceTimer->start();
     });
     connect(m_fileName, &QLineEdit::textEdited, this, [this](const QString& text) {
         m_nameEdited = true;
+        m_userStem = text;
         m_resetName->show();
         const QString problem = text.trimmed().isEmpty() ? QString() : gameinfo::folderNameProblem(text.trimmed() + m_fileExt->text());
         setInputError(m_fileName, !problem.isEmpty());
@@ -1387,8 +1433,8 @@ void BuildImagePage::navigateWith(const QVariantMap& args)
         m_basePackage->setPath(args.value(QStringLiteral("basePackage")).toString());
     if (args.contains(QStringLiteral("source"))) {
         const QString src = args.value(QStringLiteral("source")).toString();
-        // Images and .gp5 projects can only be packaged.
-        if (!src.isEmpty() && QFileInfo(src).isFile())
+        // Images and .gp5 projects can only be packaged; a zipped dump is built like a folder.
+        if (!src.isEmpty() && QFileInfo(src).isFile() && sourceKindOf(src) != QLatin1String("zip"))
             setFormat(kFormatFpkg);
         setSource(src);
     }
@@ -1441,6 +1487,8 @@ void BuildImagePage::browseSource()
 
 void BuildImagePage::setSource(const QString& path)
 {
+    // Reading the same source again (F5) is not a new source.
+    const bool sameSource = !path.isEmpty() && QDir::fromNativeSeparators(path) == m_sourcePath;
     m_sourcePath = QDir::fromNativeSeparators(path);
     if (m_sourcePath != m_addonIdFor)
         m_addonIdFor.clear();
@@ -1449,7 +1497,8 @@ void BuildImagePage::setSource(const QString& path)
     m_sourceMsg->clear();
     m_rootsBox->hide();
     m_rootChoices.clear();
-    m_pendingRootNote.clear();
+    if (!sameSource)
+        m_pendingRootNote.clear();
     if (path.isEmpty()) {
         m_reader->cancel();
         m_strip->hide();
@@ -1471,13 +1520,19 @@ void BuildImagePage::setSource(const QString& path)
         emit statusContextChanged();
         return;
     }
-    // A new source gets its own name again (#16).
-    m_nameEdited = false;
+    // A new source gets its own name again (#16); the same one keeps the name the user typed.
+    if (!sameSource)
+        m_nameEdited = false;
     const QFileInfo fi(path);
     if (fi.isDir() || m_sourceKind == QLatin1String("zip")) {
         m_sourceBadge->set(QStringLiteral("Scanning\u2026"), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
         m_summary = {}; // nothing stale while the new folder is read
+        // …nor in the strip (when it shows the source before) and the status bar.
+        m_stripTitle->setFullText(fi.fileName());
+        m_stripMeta->setFullText({});
+        m_stripPath->setFullText(QDir::toNativeSeparators(m_sourcePath));
+        emit statusContextChanged();
         renderFileName();
         m_reader->summarize(m_sourcePath, true);
         (void)m_ctx.settings().setValue(general::keys::kLastSourceDir, fi.absolutePath());
@@ -1561,7 +1616,8 @@ void BuildImagePage::refreshSourceState()
     } else {
         m_drop->hide();
         m_strip->show();
-        m_stripTitle->setFullText(s.title);
+        // An archive that could not be read has no title: its file name then.
+        m_stripTitle->setFullText(s.title.isEmpty() ? QFileInfo(m_sourcePath).fileName() : s.title);
         if (file) {
             m_stripTile->setIconName(kind == QLatin1String("zip") ? QStringLiteral("archive")
                                      : kind == QLatin1String("gp5") ? QStringLiteral("file_cog")
@@ -1706,11 +1762,20 @@ void BuildImagePage::onPackageTypeChanged()
     if (backport) {
         if (m_inspectedBase != m_basePackage->path().trimmed())
             inspectBase();
-    } else if (!m_autoVersion.isEmpty()) {
-        if (m_version->text().trimmed() == m_autoVersion)
-            m_version->setText(m_summary.exists ? m_summary.version : QString());
-        m_autoVersion.clear();
+    } else {
+        // An inspection still running belongs to the Backport type: its late
+        // answer must not fill in a version or a base line for another type.
+        ++m_baseGen;
+        if (m_baseCancel)
+            m_baseCancel->cancel();
+        m_baseInfo->hide();
         m_inspectedBase.clear();
+        m_baseTitleId.clear();
+        if (!m_autoVersion.isEmpty()) {
+            if (m_version->text().trimmed() == m_autoVersion)
+                m_version->setText(m_summary.exists ? m_summary.version : QString());
+            m_autoVersion.clear();
+        }
     }
     renderFileName();
     updateOutput();
@@ -1907,6 +1972,13 @@ void BuildImagePage::renderFileName()
     }
     m_fileName->setPlaceholderText(m_summary.exists ? QString() : QStringLiteral("From the game's title and version"));
     if (m_nameEdited) {
+        // The FPKG tile shows its package name in this field; back on another
+        // tile the name the user typed returns.
+        if (m_fileName->text() != m_userStem) {
+            m_fileName->setText(m_userStem);
+            const QString stem = m_userStem.trimmed();
+            setInputError(m_fileName, !stem.isEmpty() && !gameinfo::folderNameProblem(stem + ext).isEmpty());
+        }
         m_resetName->show();
         return;
     }
@@ -1948,7 +2020,19 @@ qint64 BuildImagePage::neededBytes() const
     const QString f = format();
     if (f == jobs::kFormatFfpfsc || f == kFormatFpkg || f == kFormatZstdFolder)
         return m_summary.bytes; // compressed: never more than the source
-    return qint64(double(m_summary.bytes) * 1.006) + 64LL * 1024 * 1024;
+    qint64 need = qint64(double(m_summary.bytes) * 1.006) + 64LL * 1024 * 1024;
+    if (f == jobs::kFormatExfat) {
+        // The two exFAT settings that set the size: a fixed image size, or
+        // fixed free space on top of an automatically sized image.
+        if (const JobOptionsPanel* panel = optionsPanel(jobs::kFormatExfat)) {
+            const double fixedGiB = panel->effectiveValue(exfat::keys::kImageSizeGiB).toDouble();
+            if (fixedGiB > 0)
+                return qint64(fixedGiB * 1024.0 * 1024.0 * 1024.0);
+            if (panel->effectiveValue(exfat::keys::kSpareSpace).toString() == QLatin1String("fixed"))
+                need += std::max<qint64>(0, panel->effectiveValue(exfat::keys::kSpareSpaceMiB).toLongLong()) * 1024 * 1024;
+        }
+    }
+    return need;
 }
 
 qint64 BuildImagePage::largestOutputFileBytes() const
@@ -1962,10 +2046,7 @@ qint64 BuildImagePage::largestOutputFileBytes() const
 
 void BuildImagePage::updateOutput()
 {
-    if (!m_nameEdited || isFpkg())
-        renderFileName();
-    else
-        m_fileExt->setText(isZstdFolder() ? QString() : jobs::outputExtension(format()));
+    renderFileName(); // a name the user typed stays; only the extension follows the format
     QString placeholder;
     const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
     if (isFpkg())
@@ -2129,7 +2210,7 @@ QString BuildImagePage::validateForm()
         const QString v = m_version->text().trimmed();
         if (!v.isEmpty() && !ver.match(v).hasMatch())
             return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.001.");
-        return {};
+        return fo && fo->panel->hasErrors() ? fo->panel->errorMessages().join(u' ') : QString();
     }
     if (m_sourcePath.isEmpty())
         return isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump folder first.");
@@ -2173,20 +2254,26 @@ QString BuildImagePage::validateForm()
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
                                                   : QStringLiteral("The folder is not a game dump: sce_sys\\param.json is missing.");
-        static const QRegularExpression cid(QStringLiteral("^[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_00-[A-Z0-9]{16}$"));
+        const PackageType ptype = packageTypeKind();
+        // The engine's own rule (what the package name is made with). A backport
+        // update takes its ID from the base package: the field is hidden then.
         const QString c = m_contentId->text().trimmed();
-        setInputError(m_contentId, !c.isEmpty() && !cid.match(c).hasMatch());
-        if (!c.isEmpty() && !cid.match(c).hasMatch())
+        const bool badId = ptype != PackageType::Backport && !c.isEmpty() && !fpkg::isValidContentId(c);
+        setInputError(m_contentId, badId);
+        if (badId)
             return QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
         static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
         const QString v = m_version->text().trimmed();
         setInputError(m_version, !v.isEmpty() && !ver.match(v).hasMatch());
         if (!v.isEmpty() && !ver.match(v).hasMatch())
             return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.000.");
-        const QString type = m_packageType->currentValue().toString();
-        const PackageType ptype = packageTypeKind();
-        if (ptype == PackageType::Update && m_basePackage->path().isEmpty())
-            return QStringLiteral("An update needs the base package that is installed on the console.");
+        if (ptype == PackageType::Update) {
+            const QString base = m_basePackage->path().trimmed();
+            if (base.isEmpty())
+                return QStringLiteral("An update needs the base package that is installed on the console.");
+            if (!QFileInfo(base).isFile())
+                return QStringLiteral("The base package does not exist. Choose the .pkg that is installed on the console.");
+        }
         if (ptype == PackageType::Backport) {
             if (kind != QLatin1String("folder"))
                 return QStringLiteral("The game for a backport update is a game folder (or leave it empty to unpack the base package).");
@@ -2279,7 +2366,7 @@ Result<QString> BuildImagePage::submit(bool)
         }
         details.insert(QStringLiteral("packageType"), type);
         if (ptype == PackageType::Update)
-            details.insert(QStringLiteral("basePackage"), m_basePackage->path());
+            details.insert(QStringLiteral("basePackage"), m_basePackage->path().trimmed());
         if (ptype == PackageType::Addon) {
             details.insert(QStringLiteral("entitlementKey"), m_entitlementKey->text().trimmed());
             details.insert(QStringLiteral("volumeType"), m_volumeType->currentData().toString());
@@ -2310,11 +2397,11 @@ Result<QString> BuildImagePage::submit(bool)
 
 QString BuildImagePage::statusContext() const
 {
-    if (!m_summary.exists)
+    // A game or a file to package; a folder or a ZIP without a game is nothing to report.
+    if (!m_summary.exists || !m_summary.isGame)
         return {};
-    if (sourceKind() != QLatin1String("folder"))
-        return QStringLiteral("%1 \u00b7 %2").arg(m_summary.title, formatBytes(m_summary.bytes));
-    return m_summary.isGame ? QStringLiteral("%1 \u00b7 %2").arg(m_summary.title, formatBytes(m_summary.bytes)) : QString();
+    const QString title = m_summary.title.isEmpty() ? QFileInfo(m_sourcePath).fileName() : m_summary.title;
+    return QStringLiteral("%1 \u00b7 %2").arg(title, formatBytes(m_summary.bytes));
 }
 
 // ---- screenshots ------------------------------------------------------------------------
