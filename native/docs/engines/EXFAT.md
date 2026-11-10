@@ -203,7 +203,9 @@ fakelib/libSceAmpr.sprx)`; the outcome details carry `amprIndex` (`added` /
 scans the folder again and expects the new index in place of the folder's.
 `image.exfat.verify` against a folder accepts an image whose `ampr_emu.index`
 is the index of the folder's files (also with other file times) when the
-folder has none or another one. `image.convert` and the zstd build turn the
+folder has none or another one. `image.compare` (Image tools › Verify against
+a folder) lists such an index as the one difference it is and adds a line
+saying where it comes from. `image.convert` and the zstd build turn the
 setting off for their own builds: the tree they hand over goes in as it is.
 
 ## Performance

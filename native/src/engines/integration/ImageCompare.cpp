@@ -23,6 +23,14 @@ bool isPfsBuilderFile(const QString& path)
     return n == QLatin1String(".pfskeep") || n.compare(QLatin1String("ampr_emu.index"), Qt::CaseInsensitive) == 0;
 }
 
+// ampr_emu.index at the top of the game: a build puts a new one into the image
+// when the dump has none or an outdated one (exfat.amprIndex, ufs2.amprIndex,
+// pfs.amprIndex), so an image and the folder it was built from can differ in it.
+bool isRootAmprIndex(const QString& path)
+{
+    return path.compare(QLatin1String("ampr_emu.index"), Qt::CaseInsensitive) == 0;
+}
+
 template <typename T>
 void keep(std::vector<T>& list, int limit, T value)
 {
@@ -143,6 +151,17 @@ Result<CompareReport> compareTrees(FileTree& a, FileTree& b, const CompareOption
     rep.bytesB = b.totalBytes();
     const int limit = rep.listLimit;
     qint64 pfsArtefacts = 0;
+    // An image against a folder: a difference in the top ampr_emu.index is
+    // listed like any other, with a line that says where it comes from.
+    const bool imageAndFolder = (a.format() == TreeFormat::Folder) != (b.format() == TreeFormat::Folder);
+    bool builtIndexNoted = false;
+    const auto noteBuiltIndex = [&](const QString& path) {
+        if (!imageAndFolder || builtIndexNoted || !isRootAmprIndex(path))
+            return;
+        builtIndexNoted = true;
+        rep.warnings << QStringLiteral("ampr_emu.index is not the folder's: a build adds this file to the image, or rebuilds it for the "
+                                       "game's files, when the game uses the AMPR emulator (the \"AMPR file index\" setting).");
+    };
 
     const auto onlyIn = [&](const TreeItem& it, bool inA) {
         const FileTree& side = inA ? a : b;
@@ -154,6 +173,8 @@ Result<CompareReport> compareTrees(FileTree& a, FileTree& b, const CompareOption
             keep(inA ? rep.missing : rep.extra, limit, it.path);
             if (side.format() == TreeFormat::Pfs && isPfsBuilderFile(it.path))
                 ++pfsArtefacts;
+            else if (side.format() != TreeFormat::Folder)
+                noteBuiltIndex(it.path);
         }
     };
 
@@ -199,6 +220,7 @@ Result<CompareReport> compareTrees(FileTree& a, FileTree& b, const CompareOption
             if (common < 0) {
                 ++rep.sizeCount;
                 keep(rep.sizeDifferent, limit, SizeDifference{x.path, x.size, y.size});
+                noteBuiltIndex(x.path);
             } else {
                 if (x.size != y.size)
                     ++rep.paddedFiles;
@@ -273,6 +295,7 @@ Result<CompareReport> compareTrees(FileTree& a, FileTree& b, const CompareOption
                 ++rep.contentCount;
                 keep(rep.contentDifferent, limit, ContentDifference{x.path, pos + k});
                 differs = true;
+                noteBuiltIndex(x.path);
             }
             pos += n;
             consumed += n;
