@@ -88,7 +88,8 @@ struct CompareReport {
 };
 
 // Compares two open trees. Progress (when given): one phase, `phase`, with the
-// bytes to compare (full) or the files to check (structure) as its total.
+// bytes to compare as its total at full depth; at structure depth nothing is
+// read, so the phase has no total.
 Result<CompareReport> compareTrees(FileTree& a, FileTree& b, const CompareOptions& options,
                                    const CancellationToken& token, ProgressReporter* progress = nullptr, int phase = 0);
 

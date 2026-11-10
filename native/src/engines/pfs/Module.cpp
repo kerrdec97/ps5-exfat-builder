@@ -249,8 +249,8 @@ void registerModule(ModuleContext& ctx)
         d.group = QStringLiteral("Folder images (.ffpfs)");
         d.label = QStringLiteral("Never compress executables and system files");
         d.description = QStringLiteral(
-            "Keeps eboot*.bin, .prx/.sprx modules, sce_sys and sce_module, .json, .txt and .png files "
-            "uncompressed so the console can load them directly.");
+            "Keeps eboot*.bin, param*.sfx, keystone, .prx/.sprx modules, sce_sys and sce_module, .json, .txt and "
+            ".png files uncompressed so the console can load them directly.");
         d.type = SettingType::Bool;
         d.defaultValue = true;
         d.enabledWhenKey = keys::kCompressFiles;

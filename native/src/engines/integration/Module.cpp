@@ -374,13 +374,11 @@ public:
         ctx.progress->beginPhase(0, 0);
         ctx.progress->setCurrentItem(QFileInfo(a()).fileName());
         FW_TRY_ASSIGN(auto treeA, openFileTree(a(), ctx.token));
-        ctx.log.info(QStringLiteral("A: %1, %2 files, %3 folders, %4")
-                         .arg(treeA->describe(), formatCount(treeA->fileCount()), formatCount(treeA->dirCount()), formatBytes(treeA->totalBytes())));
+        ctx.log.info(QStringLiteral("A: %1").arg(treeLine(*treeA)));
         ctx.progress->beginPhase(1, 0);
         ctx.progress->setCurrentItem(QFileInfo(b()).fileName());
         FW_TRY_ASSIGN(auto treeB, openFileTree(b(), ctx.token));
-        ctx.log.info(QStringLiteral("B: %1, %2 files, %3 folders, %4")
-                         .arg(treeB->describe(), formatCount(treeB->fileCount()), formatCount(treeB->dirCount()), formatBytes(treeB->totalBytes())));
+        ctx.log.info(QStringLiteral("B: %1").arg(treeLine(*treeB)));
 
         CompareOptions opt;
         opt.depth = dep;
@@ -415,12 +413,21 @@ public:
             logSome(QStringLiteral("Different content: %1 (first difference at byte %2)").arg(d.path, formatCount(d.offset)));
         for (const UnreadableFile& u : rep.unreadable)
             logSome(QStringLiteral("Could not read %1: %2").arg(u.path, u.message));
-        if (logged > 20)
-            ctx.log.info(QStringLiteral("… %1 more differences (see the job's result).").arg(logged - 20));
+        // The lists are capped; the count of all differences is not.
+        if (const qint64 more = std::max<qint64>(rep.differenceCount(), logged) - 20; logged > 20 && more > 0)
+            ctx.log.info(QStringLiteral("… %1 more difference%2 (see the job's result).")
+                             .arg(formatCount(more), more == 1 ? QString() : QStringLiteral("s")));
         return out;
     }
 
 private:
+    // "exFAT image, 1 file, 12 folders, 48.2 GB"
+    static QString treeLine(const FileTree& t)
+    {
+        return QStringLiteral("%1, %2 file%3, %4 folder%5, %6")
+            .arg(t.describe(), formatCount(t.fileCount()), t.fileCount() == 1 ? QString() : QStringLiteral("s"),
+                 formatCount(t.dirCount()), t.dirCount() == 1 ? QString() : QStringLiteral("s"), formatBytes(t.totalBytes()));
+    }
     QString a() const { return m_p.value(QStringLiteral("a")).toString(); }
     QString b() const { return m_p.value(QStringLiteral("b")).toString(); }
     CompareDepth depth() const

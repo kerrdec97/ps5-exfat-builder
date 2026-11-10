@@ -74,6 +74,8 @@ struct ImageSummary {
     qint64 files = 0;
     qint64 dirs = 0;
     qint64 logicalBytes = 0;      // of the target (nested) image's files
+    qint64 outerFiles = 0;        // files of the image itself (1 for a container)
+    qint64 outerBytes = 0;        // their logical size: what a not-deep extraction writes
     qint64 imageBytes = 0;
     int blockSize = 0;
     bool caseInsensitive = false;

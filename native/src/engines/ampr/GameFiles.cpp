@@ -251,7 +251,9 @@ Result<std::shared_ptr<UnpackedGame>> UnpackedGame::open(std::shared_ptr<GameFil
     if (g->m_kind == PackKind::Zstd) {
         const int ix = base->find(kZstdIndexName);
         indexMtime = base->items()[size_t(ix)].mtime;
-        FW_TRY_ASSIGN(QByteArray bytes, readWhole(*base, ix, 1LL << 31));
+        // About 100 bytes per packed file: 256 MiB is far beyond any game and
+        // keeps a file that only claims to be an index from costing 2 GiB.
+        FW_TRY_ASSIGN(QByteArray bytes, readWhole(*base, ix, 256LL * 1024 * 1024));
         auto opener = [base](quint32 v) -> Result<std::shared_ptr<RandomAccess>> {
             const int i = base->find(zstdVolumeName(int(v)));
             if (i < 0 || base->items()[size_t(i)].isDir)

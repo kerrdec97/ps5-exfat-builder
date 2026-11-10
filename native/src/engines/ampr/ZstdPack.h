@@ -121,7 +121,9 @@ QByteArray encodeZstdVolumeHeader(quint32 volumeId, quint32 volumeCount, const s
 Status checkZstdVolumeHeader(const QByteArray& header, quint32 volumeId, const ZstdIndex& index);
 
 // Paths a pack may hold: non-empty, no '\\' or NUL, no empty, "." or ".."
-// component, at most 65,535 bytes.
+// component, at most 65,535 bytes. A drive letter passes ("C:/x" is a folder
+// named "C:" to the console): whoever writes such a path to this computer
+// goes through HostPaths.
 QString zstdPathProblem(const QByteArray& path);
 
 // ---- writing -------------------------------------------------------------------------
@@ -169,7 +171,8 @@ Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPac
                                      const CancellationToken& token, ProgressReporter* progress = nullptr);
 
 // Reads every volume back and checks the headers and each chunk's CRC
-// against what was written; zstd frames are decoded (their checksum).
+// against what was written (nothing is decompressed here: every frame was
+// decoded and compared when it was packed).
 // Progress advances by stored bytes.
 Status verifyWrittenZstdPack(const QString& outDir, const ZstdPackResult& result, const CancellationToken& token,
                              ProgressReporter* progress = nullptr);

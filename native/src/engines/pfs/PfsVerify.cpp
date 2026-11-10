@@ -276,6 +276,9 @@ Result<ImageSummary> inspectImage(const QString& image)
     sum.warnings << o.outer->warnings();
     if (o.outer->files().size() == 1 && o.outer->dirs().empty())
         sum.singleFile = o.outer->files().front().path;
+    sum.outerFiles = qint64(o.outer->files().size());
+    for (const PfsEntry& e : o.outer->files())
+        sum.outerBytes += o.outer->inodes()[e.inode].logicalSize();
     if (looksNested(*o.outer, true)) {
         FW_TRY(openNested(o));
         sum.nested = true;

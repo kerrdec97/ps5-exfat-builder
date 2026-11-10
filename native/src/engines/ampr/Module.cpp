@@ -28,7 +28,8 @@ void registerSettings(SettingsSchema& s)
         d.label = QStringLiteral("Compress game files (zstd packs)");
         d.description = QStringLiteral(
             "A smaller image: the game's files go into zstd packs that ampr-emu-ng reads on the console. The bundled "
-            "runtime goes to fakelib/libSceAmpr.sprx; mount with ShadowMount+ with its fakelib updates turned off. Not "
+            "runtime goes to fakelib/libSceAmpr.sprx; mount with ShadowMount+ with \"Update game fakelib emulators\" turned "
+            "off. Not "
             "every game works packed yet: keep your original dump.");
         d.type = SettingType::Bool;
         d.defaultValue = false;
@@ -297,7 +298,7 @@ void registerModule(ModuleContext& ctx)
 {
     registerSettings(ctx.settings);
     ctx.dependencies.add(QStringLiteral("ampr.runtime"), QStringLiteral("ampr-emu-ng runtime (zstd packs)"),
-                         QStringLiteral("Serves zstd-packed games on the console."), probeRuntime);
+                         QStringLiteral("Serves zstd-packed games on the console (bundled, GPL-3.0, quer3q/ampr-emu-ng)."), probeRuntime);
     ctx.jobs.add(kPackJob, QStringLiteral("Pack a game (zstd)"),
                  [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new PackJob(p)); });
     ctx.jobs.add(kUnpackJob, QStringLiteral("Unpack a packed game"),

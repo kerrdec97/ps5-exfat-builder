@@ -419,6 +419,7 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
     // The runtime (only this file of fakelib/).
     if (!QDir().mkpath(QFileInfo(runtimeTarget).absolutePath()))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(QFileInfo(runtimeTarget).absolutePath())));
+    const qint64 runtimeTime = QDateTime::currentSecsSinceEpoch(); // the time its index row carries
     FW_TRY(writeFileAtomic(runtimeTarget, runtime));
     if (rep.previousRuntime.kind != RuntimeKind::None && !rep.previousRuntime.bundled)
         log.info(QStringLiteral("fakelib/libSceAmpr.sprx: %1 replaced by %2.").arg(rep.previousRuntime.describe(), rep.runtime));
@@ -442,12 +443,13 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
     rep.storedBytes = pr.storedBytes;
     rep.volumes = qint64(pr.volumes.size());
     rep.threads = pr.threads;
-    log.info(QStringLiteral("Packed %1 files into %2 volume%3: %4 -> %5 (%6 zstd chunks, %7 stored raw), %8 threads.")
-                 .arg(formatCount(rep.packedFiles))
+    log.info(QStringLiteral("Packed %1 file%2 into %3 volume%4: %5 → %6 (%7 zstd chunks, %8 stored raw), %9 thread%10.")
+                 .arg(formatCount(rep.packedFiles), rep.packedFiles == 1 ? QString() : QStringLiteral("s"))
                  .arg(rep.volumes)
                  .arg(rep.volumes == 1 ? QString() : QStringLiteral("s"))
                  .arg(formatBytes(rep.packedBytes), formatBytes(rep.storedBytes), formatCount(pr.zstdChunks), formatCount(pr.rawChunks))
-                 .arg(pr.threads));
+                 .arg(pr.threads)
+                 .arg(pr.threads == 1 ? QString() : QStringLiteral("s")));
 
     if (o.verify) {
         if (progress && o.verifyPhase >= 0)
@@ -468,7 +470,7 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
     {
         GameItem rt;
         rt.path = fakelib + QStringLiteral("/libSceAmpr.sprx");
-        rt.mtime = QDateTime::currentSecsSinceEpoch();
+        rt.mtime = runtimeTime;
         indexFiles.push_back(amprFile(rt, runtime.size()));
     }
     FW_TRY_ASSIGN(rep.amprIndexWritten, writeAmprIndex(outFolder, std::move(indexFiles)));

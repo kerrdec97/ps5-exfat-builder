@@ -460,8 +460,10 @@ Result<JobOutcome> PfsExtractJob::run(JobContext& ctx)
     o.freeSpaceMargin = freeSpaceMarginFrom(ctx.settings);
     if (ctx.progress) {
         auto sum = inspectImage(m_image);
-        ctx.progress->beginPhase(0, sum.ok() ? (o.deep || !sum->nested ? sum->logicalBytes : 0) : 0,
-                                 sum.ok() ? sum->files : 0);
+        // Not deep: the nested image comes out as the one file it is.
+        const bool whole = sum.ok() && sum->nested && !o.deep;
+        ctx.progress->beginPhase(0, !sum.ok() ? 0 : whole ? sum->outerBytes : sum->logicalBytes,
+                                 !sum.ok() ? 0 : whole ? sum->outerFiles : sum->files);
     }
     FW_TRY_ASSIGN(const ExtractReport r, extractImage(m_image, m_output, o, ctx.token, hooksFor(ctx.progress)));
     JobOutcome outcome;
@@ -478,7 +480,8 @@ Result<JobOutcome> PfsExtractJob::run(JobContext& ctx)
     outcome.details.insert(QStringLiteral("folders"), r.dirs);
     outcome.details.insert(QStringLiteral("bytes"), r.bytes);
     outcome.details.insert(QStringLiteral("nested"), r.nested);
-    outcome.summary = QStringLiteral("%1 files · %2").arg(formatCount(r.files), formatBytes(r.bytes));
+    outcome.summary = QStringLiteral("%1 file%2 · %3").arg(formatCount(r.files), r.files == 1 ? QString() : QStringLiteral("s"),
+                                                           formatBytes(r.bytes));
     return outcome;
 }
 

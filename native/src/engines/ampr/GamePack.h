@@ -76,7 +76,7 @@ struct PackGameReport {
     int level = kZstdDefaultLevel;
     qint64 elapsedMs = 0;
 
-    QString summary() const;   // "4,810 files packed (38.4 GB from 90.6 GB), 312 loose"
+    QString summary() const;   // "4,810 files packed (38.4 GB from 90.6 GB, zstd level 5), 312 loose"
 };
 
 Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString& outFolder, const PackGameOptions& options,

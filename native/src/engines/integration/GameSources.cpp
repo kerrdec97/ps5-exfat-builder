@@ -440,7 +440,8 @@ public:
                 ++compared;
             }
             o.verification = Verification::Passed;
-            o.verificationDetail = QStringLiteral("%1 files read back, all identical").arg(formatCount(compared));
+            o.verificationDetail = compared == 1 ? QStringLiteral("1 file read back, identical")
+                                                 : QStringLiteral("%1 files read back, all identical").arg(formatCount(compared));
         }
         // Into place: a pre-existing empty folder goes, the stage takes its name.
         if (QFileInfo(out).isDir() && !QDir().rmdir(out))
@@ -451,10 +452,12 @@ public:
         guard.keep = true;
         o.outputs = {out};
         o.warnings = r->warnings + ampr::renamedWarnings(r->renamed);
+        const QString plural = r->files == 1 ? QString() : QStringLiteral("s");
         o.summary = r->kind == ampr::PackKind::None
-                        ? QStringLiteral("Extracted %1 files (%2).").arg(formatCount(r->files), formatBytes(r->bytes))
-                        : QStringLiteral("Extracted %1 files (%2); %3 came out of the %4 packs.")
-                              .arg(formatCount(r->files), formatBytes(r->bytes), formatCount(r->unpackedFiles), ampr::packKindName(r->kind));
+                        ? QStringLiteral("Extracted %1 file%2 (%3).").arg(formatCount(r->files), plural, formatBytes(r->bytes))
+                        : QStringLiteral("Extracted %1 file%2 (%3); %4 came out of the %5 packs.")
+                              .arg(formatCount(r->files), plural, formatBytes(r->bytes), formatCount(r->unpackedFiles),
+                                   ampr::packKindName(r->kind));
         o.details.insert(QStringLiteral("files"), r->files);
         o.details.insert(QStringLiteral("bytes"), r->bytes);
         return o;

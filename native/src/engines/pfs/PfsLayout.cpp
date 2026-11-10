@@ -280,7 +280,7 @@ Status finishLayout(FolderLayout& L, qint64 ndblock)
                      QStringLiteral("The image is too large for the PFS format at this block size (%1 blocks).")
                          .arg(ndblock));
     for (const Inode& ino : L.inodes)
-        if (ino.blocks > 0xFFFFFFFFu || ino.db[0] > kInt32Max)
+        if (ino.db[0] > kInt32Max) // (the block count fits: ndblock was checked above)
             return Error(ErrorCode::Unsupported, QStringLiteral("A file is too large for the PFS format."));
     return success();
 }

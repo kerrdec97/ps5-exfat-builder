@@ -47,21 +47,25 @@ quint64 amprPathHash(const QByteArray& path)
 QByteArray buildAmprIndex(const std::vector<AmprRow>& input)
 {
     // Keep the first of case-insensitively equal paths (walk order).
-    std::vector<AmprRow> rows;
+    // Each row with its key, made once (a dump has 100,000 rows and more).
+    std::vector<std::pair<QByteArray, const AmprRow*>> keyed;
     std::set<QByteArray> seen;
     for (const AmprRow& r : input) {
-        const QByteArray k = keyFor(r.path);
+        QByteArray k = keyFor(r.path);
         if (!seen.insert(k).second)
             continue;
-        rows.push_back(r);
+        keyed.emplace_back(std::move(k), &r);
     }
-    if (rows.empty())
+    if (keyed.empty())
         return {};
-    std::stable_sort(rows.begin(), rows.end(), [](const AmprRow& a, const AmprRow& b) {
-        const QByteArray ka = keyFor(a.path), kb = keyFor(b.path);
-        return std::lexicographical_compare(ka.begin(), ka.end(), kb.begin(), kb.end(),
+    std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) {
+        return std::lexicographical_compare(a.first.begin(), a.first.end(), b.first.begin(), b.first.end(),
                                             [](char x, char y) { return quint8(x) < quint8(y); });
     });
+    std::vector<AmprRow> rows;
+    rows.reserve(keyed.size());
+    for (const auto& k : keyed)
+        rows.push_back(*k.second);
 
     QByteArray records;
     QByteArray blob;

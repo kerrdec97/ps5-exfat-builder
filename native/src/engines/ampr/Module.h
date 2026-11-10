@@ -4,7 +4,7 @@
 //
 // Settings (Build > zstd packs, per job):
 //   ampr.zstdPack       pack the game's files into zstd packs before an image build
-//   ampr.zstdLevel      5 (fast, default), 9 (medium), 19 (smallest, slow)
+//   ampr.zstdLevel      3, 5 (fast, default), 9, 15 or 19 (smallest, very slow)
 //   ampr.packStrategy   everything (default) | compatible
 //   ampr.verifyPacks    read every volume back after packing (default on)
 //
@@ -15,6 +15,10 @@
 //               a packed copy of a game: the Build page's "Packed folder" output
 //   ampr.unpack {source (folder), output (new folder)}
 //               a packed game folder (zstd or LZ4) as plain files
+// Both write "<output>.part" and rename it when the job is done; the output
+// may be absent or an empty folder, and nothing else is ever removed.
+// Both write "<output>.part" and rename it when the job is done; the output
+// may be absent or an empty folder, and nothing else is ever removed.
 // Image builds with packs and image sources are jobs of the integration module.
 
 #include "core/Settings.h"
