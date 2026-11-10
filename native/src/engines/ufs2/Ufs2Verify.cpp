@@ -129,7 +129,8 @@ Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& ex
         stack.pop_back();
         std::map<QByteArray, int> byName;
         for (int c : img.liveChildren(it.img))
-            byName.emplace(img.nodes[size_t(c)].rawName, c);
+            if (!byName.emplace(img.nodes[size_t(c)].rawName, c).second)
+                rep.extra << joinPath(it.rel, img.nodes[size_t(c)].name) + QStringLiteral(" (listed twice)");
         for (int ec : expected.liveChildren(it.exp)) {
             if ((++n & 0xFF) == 0 && !token.checkpoint())
                 return Error::cancelled();

@@ -60,6 +60,9 @@ struct EditOptions {
     // Tests only: stop right after an in-place edit was applied, as if the
     // app had crashed (the journal stays behind).
     bool testCrashAfterApply = false;
+    // Tests only: called with the journal's path after an in-place edit was
+    // verified, just before the journal is removed.
+    std::function<void(const QString&)> testBeforeJournalRemoval;
 };
 
 struct EditResult {
@@ -72,6 +75,7 @@ struct EditResult {
     qint64 newVolumeBytes = 0;
     bool recoveredJournal = false; // an earlier interrupted edit was rolled back first
     bool restored = false;         // verification failed; the original image was kept or put back
+    bool changed = true;           // false: the operations left the tree as it was, nothing was written
     VerifyReport verification;
     QStringList warnings;
 

@@ -2,6 +2,8 @@
 
 #include "core/FileUtil.h"
 
+#include <QSet>
+
 #include <algorithm>
 #include <deque>
 #include <unordered_map>
@@ -352,9 +354,14 @@ Result<CheckReport> checkImage(const Ufs2Reader& r, const CancellationToken& tok
             add(QStringLiteral("Directory inode %1 does not start with a correct \".\" entry.").arg(dir));
         if (es.size() < 2 || es[1].rawName != ".." || es[1].ino != parent)
             add(QStringLiteral("Directory inode %1 does not have a correct \"..\" entry.").arg(dir));
+        QSet<QByteArray> names;
         for (size_t i = 0; i < es.size(); ++i) {
             const DirEntry& e = es[i];
             const bool dot = e.rawName == "." || e.rawName == "..";
+            // A kernel would only ever find one of two entries with one name.
+            if (!dot && names.contains(e.rawName))
+                add(QStringLiteral("Directory inode %1 lists the name \"%2\" twice.").arg(dir).arg(e.name));
+            names.insert(e.rawName);
             if (dot) {
                 if (i >= 2)
                     add(QStringLiteral("Directory inode %1 has an extra \"%2\" entry.").arg(dir).arg(e.name));

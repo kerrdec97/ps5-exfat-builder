@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QThread>
 
 #include <algorithm>
 #include <cstring>
@@ -41,7 +42,9 @@ Result<std::vector<EditOp>> parseEditOps(const QJsonArray& arr)
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Every change needs a path inside the image."));
         if ((e.kind == EditOp::Kind::Add || e.kind == EditOp::Kind::Replace) && e.localPath.trimmed().isEmpty())
             return Error(ErrorCode::InvalidArgument,
-                         QStringLiteral("Adding or replacing %1 needs a file or folder on this computer.").arg(e.imagePath));
+                         e.imagePath.trimmed().isEmpty()
+                             ? QStringLiteral("Adding to the image needs a file or folder on this computer.")
+                             : QStringLiteral("Adding or replacing %1 needs a file or folder on this computer.").arg(e.imagePath));
         ops.push_back(std::move(e));
     }
     return ops;
@@ -64,6 +67,8 @@ QJsonArray editOpsToJson(const std::vector<EditOp>& ops)
 
 QString EditResult::summary() const
 {
+    if (!changed)
+        return QStringLiteral("No changes were needed");
     QStringList parts;
     if (added)
         parts << (added == 1 ? QStringLiteral("1 file added") : QStringLiteral("%1 files added").arg(formatCount(added)));
@@ -155,7 +160,18 @@ Status writeExact(QFile& f, const char* p, qint64 n, const QString& what)
     return success();
 }
 
-Status writeJournal(const QString& image, const QString& journal, const std::vector<Range>& ranges)
+// A journal whose edit was verified but which could not be deleted or emptied
+// then is disowned by this file next to it (see retireJournal).
+QString journalDoneMarker(const QString& journal)
+{
+    return journal + QStringLiteral(".done");
+}
+
+// Copies everything the edit will overwrite. Nothing in the image has changed
+// yet, so a cancel simply stops (the .part journal is removed). `identity`
+// receives the bytes that tell this journal from any other.
+Status writeJournal(const QString& image, const QString& journal, const std::vector<Range>& ranges,
+                    const CancellationToken& token, ProgressReporter* progress, QByteArray* identity)
 {
     std::vector<Range> pieces;
     for (const Range& r : ranges)
@@ -187,11 +203,15 @@ Status writeJournal(const QString& image, const QString& journal, const std::vec
         if (!in.seek(p.offset))
             return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), in.errorString());
         for (qint64 done = 0; done < p.length;) {
+            if (!token.checkpoint())
+                return Error::cancelled();
             const qint64 n = std::min<qint64>(qint64(buf.size()), p.length - done);
             FW_TRY(readExact(in, buf.data(), n, QStringLiteral("the image")));
             FW_TRY(writeExact(out, buf.data(), n, what));
             sum = fnv(sum, buf.data(), n);
             done += n;
+            if (progress)
+                progress->advance(n);
         }
     }
     uchar tail[8];
@@ -199,7 +219,55 @@ Status writeJournal(const QString& image, const QString& journal, const std::vec
     FW_TRY(writeExact(out, reinterpret_cast<const char*>(tail), 8, what));
     FW_TRY(syncFile(out, what));
     out.close();
+    if (identity)
+        *identity = QByteArray(reinterpret_cast<const char*>(head), kJournalHeader)
+                    + QByteArray(reinterpret_cast<const char*>(tail), 8);
     return part.commit(false);
+}
+
+// The edit is verified, so its journal must never be applied. Deleting it can
+// fail while another program (a virus scanner, an indexer) holds the file:
+// the delete is retried, then the journal is emptied, then disowned through
+// a marker file. Recovery recognises both. False: none of that worked.
+bool retireJournal(const QString& journal, const QByteArray& identity)
+{
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        if (QFile::remove(journal) || !QFileInfo::exists(journal))
+            return true;
+        QThread::msleep(50);
+    }
+    {
+        QFile f(toLongPath(journal));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            f.close();
+            if (QFileInfo(journal).size() == 0)
+                return true;
+        }
+    }
+    QFile marker(toLongPath(journalDoneMarker(journal)));
+    return !identity.isEmpty() && marker.open(QIODevice::WriteOnly | QIODevice::Truncate)
+           && marker.write(identity) == identity.size() && marker.flush();
+}
+
+// True for a journal that retireJournal() emptied or disowned.
+bool journalIsRetired(const QString& journal)
+{
+    QFile j(toLongPath(journal));
+    if (!j.open(QIODevice::ReadOnly))
+        return false;
+    if (j.size() == 0)
+        return true;
+    QFile marker(toLongPath(journalDoneMarker(journal)));
+    if (!marker.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray identity = marker.read(kJournalHeader + 8 + 1);
+    if (identity.size() != kJournalHeader + 8 || j.size() < identity.size())
+        return false;
+    QByteArray own = j.read(kJournalHeader);
+    if (!j.seek(j.size() - 8))
+        return false;
+    own += j.read(8);
+    return own == identity;
 }
 
 // `writingBack` (optional) becomes true once the journal has been checked and
@@ -234,8 +302,9 @@ Status rollbackJournal(const QString& image, const QString& journal, bool* writi
         FW_TRY(readExact(j, reinterpret_cast<char*>(rec), 12, what));
         sum = fnv(sum, reinterpret_cast<const char*>(rec), 12);
         const qint64 len = get32(rec + 8);
-        if (qint64(get64(rec)) + len > imageSize)
-            return Error(ErrorCode::CorruptData, QStringLiteral("The undo journal is damaged."));
+        if (qint64(get64(rec)) < 0 || qint64(get64(rec)) > imageSize - len)
+            return Error(ErrorCode::CorruptData, QStringLiteral("The undo journal %1 is damaged; the image was not changed back.")
+                                                     .arg(QDir::toNativeSeparators(journal)));
         for (qint64 done = 0; done < len;) {
             const qint64 n = std::min<qint64>(qint64(buf.size()), len - done);
             FW_TRY(readExact(j, buf.data(), n, what));
@@ -254,7 +323,8 @@ Status rollbackJournal(const QString& image, const QString& journal, bool* writi
     QFile img(toLongPath(image));
     if (!img.open(QIODevice::ReadWrite))
         return Error(ErrorCode::IoError, QStringLiteral("Could not open the image to undo the edit."), img.errorString());
-    j.seek(kJournalHeader);
+    if (!j.seek(kJournalHeader))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not read %1.").arg(what), j.errorString());
     for (quint32 i = 0; i < count; ++i) {
         uchar rec[12];
         FW_TRY(readExact(j, reinterpret_cast<char*>(rec), 12, what));
@@ -442,8 +512,12 @@ Status applyOp(Model& m, const EditOp& op, const ScanRules& rules, const Cancell
             return Error(ErrorCode::InvalidArgument,
                          QStringLiteral("%1 is a folder. Only files can be replaced; delete the folder and add the new one.").arg(shown));
         const QFileInfo fi(op.localPath);
-        if (!fi.exists() || fi.isDir())
+        if (!fi.exists())
             return Error(ErrorCode::NotFound, QStringLiteral("The replacement file %1 does not exist.").arg(QDir::toNativeSeparators(op.localPath)));
+        if (fi.isDir())
+            return Error(ErrorCode::InvalidArgument,
+                         QStringLiteral("%1 is a folder; choose a file to replace %2 with.")
+                             .arg(QDir::toNativeSeparators(op.localPath), shown));
         MNode n = nodeFromLocal(m.nodes[size_t(idx)].name, fi, QDir::cleanPath(fi.absoluteFilePath()));
         MNode& t = m.nodes[size_t(idx)];
         t.size = n.size;
@@ -482,6 +556,13 @@ Status applyOp(Model& m, const EditOp& op, const ScanRules& rules, const Cancell
         if (!scanned.ok())
             return scanned.takeError();
         const SourceTree& st = scanned.value();
+        // What the scan skipped is not in the image afterwards: say so.
+        res.warnings += st.warnings;
+        if (st.excludedCount > 0)
+            res.warnings << (st.excludedCount == 1
+                                 ? QStringLiteral("1 item in %1 was left out (exclusion rules).")
+                                 : QStringLiteral("%1 items in %2 were left out (exclusion rules).").arg(formatCount(st.excludedCount)))
+                                .arg(QDir::toNativeSeparators(abs));
         std::vector<int> map(st.nodes.size(), -1);
         MNode root = nodeFromLocal(name, fi, abs);
         map[0] = m.add(parent, std::move(root));
@@ -781,6 +862,9 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
         ranges.push_back({p.offset, p.bytes.size()});
         journalBytes += p.bytes.size() + 12;
     }
+    qint64 journalData = 0;
+    for (const Range& r : ranges)
+        journalData += r.length;
     const QString journal = editJournalPath(image);
     FW_TRY(ensureFreeSpace(QFileInfo(image).absolutePath(), journalBytes, o.freeSpaceMarginBytes));
     // Replacement files must still be what was planned before anything changes.
@@ -795,12 +879,22 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
     if (log)
         log->info(QStringLiteral("Editing in place: %1 bytes of new data, %2 metadata patches, undo journal %3")
                       .arg(dataBytes).arg(patches.size()).arg(formatBytes(journalBytes)));
-    FW_TRY(writeJournal(image, journal, ranges));
+    // A marker of an earlier journal must not disown the one written now.
+    if (const QString marker = journalDoneMarker(journal); QFileInfo::exists(marker) && !QFile::remove(marker))
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("Could not remove %1, left by an earlier edit. Delete it, then try again.")
+                         .arg(QDir::toNativeSeparators(marker)));
+    // The journal copies as many bytes as the edit writes, so it is part of
+    // the writing phase: it shows progress and can be cancelled.
+    if (o.onPhase)
+        o.onPhase(1, journalData + dataBytes, qint64(writes.size()), true);
+    if (progress)
+        progress->setCurrentItem(QStringLiteral("Undo journal"));
+    QByteArray journalId;
+    FW_TRY(writeJournal(image, journal, ranges, token, progress, &journalId));
     ro.close();
 
     // Apply. From here on any failure or cancellation rolls back.
-    if (o.onPhase)
-        o.onPhase(1, dataBytes, qint64(writes.size()), true);
     {
         // Unbuffered: nothing may be left in a write buffer when a failure
         // rolls back through another handle (a later flush would put the new
@@ -887,9 +981,11 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
         res.restored = true;
         return res;
     }
-    if (!QFile::remove(journal))
-        res.warnings << QStringLiteral("The undo journal %1 could not be removed; delete it before editing this image again, "
-                                       "or the next edit will undo this one.")
+    if (o.testBeforeJournalRemoval)
+        o.testBeforeJournalRemoval(journal);
+    if (!retireJournal(journal, journalId))
+        res.warnings << QStringLiteral("The undo journal %1 could not be removed. Delete it by hand before this image is "
+                                       "edited, verified or extracted again; otherwise that step undoes this edit.")
                             .arg(QDir::toNativeSeparators(journal));
     return res;
 }
@@ -970,6 +1066,11 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
                           .arg(formatBytes(geo.volumeBytes()), formatBytes(plan->geo.volumeBytes()), plan->sizeChoice));
     }
     res.newVolumeBytes = plan->geo.volumeBytes();
+    if (tooLargeForDrive(QFileInfo(image).absolutePath(), res.newVolumeBytes))
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("The edited image would be %1, and its drive uses FAT32, which cannot store files of "
+                                    "4 GB or more. Move the image to an NTFS or exFAT drive first.")
+                         .arg(formatBytes(res.newVolumeBytes)));
     FW_TRY(ensureFreeSpace(QFileInfo(image).absolutePath(), res.newVolumeBytes, o.freeSpaceMarginBytes));
     if (!token.checkpoint())
         return Error::cancelled();
@@ -1037,8 +1138,22 @@ Result<bool> recoverInterruptedEdit(const QString& image, const Log* log)
         }
         QFile::remove(partJournal);
     }
-    if (!QFileInfo::exists(journal))
+    const QString marker = journalDoneMarker(journal);
+    if (!QFileInfo::exists(journal)) {
+        QFile::remove(marker); // nothing left to disown
         return false;
+    }
+    if (journalIsRetired(journal)) {
+        // Left by an edit that was verified: it only needs removing. The
+        // marker goes last, so a journal that is still held stays disowned.
+        if (QFile::remove(journal)) {
+            QFile::remove(marker);
+            if (log)
+                log->info(QStringLiteral("Removed %1, left by an earlier edit that was completed.")
+                              .arg(QDir::toNativeSeparators(journal)));
+        }
+        return false;
+    }
     if (log)
         log->warn(QStringLiteral("An earlier edit of %1 was interrupted; undoing it from %2.")
                       .arg(QDir::toNativeSeparators(image), QDir::toNativeSeparators(journal)));
@@ -1084,6 +1199,7 @@ Result<EditResult> editImage(const QString& image, const std::vector<EditOp>& op
                       .arg(d.added.size()).arg(d.replaced.size()).arg(d.removedTop.size())
                       .arg(inPlace ? QStringLiteral("in place") : QStringLiteral("rebuild")));
     if (d.added.empty() && d.replaced.empty() && d.removedTop.empty()) {
+        res.changed = false;
         res.inPlace = true;
         res.newVolumeBytes = res.oldVolumeBytes;
         res.verification.full = o.verify.full;

@@ -170,6 +170,7 @@ Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::findSuperblock(std::shared_ptr<U
     // images and UFS2Tool use 65536; some makefs builds put UFS2 at 8192.
     std::optional<Error> primaryError;
     std::optional<Error> signedError;
+    std::optional<Error> unsupported; // a recognised file system this app cannot read (UFS1)
     for (const qint64 loc : {kSuperblockOffset, qint64(8192), qint64(262144)}) {
         if (r->m_fileSize < loc + kSuperblockSize)
             continue;
@@ -182,11 +183,16 @@ Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::findSuperblock(std::shared_ptr<U
             return r;
         }
         Error e = sb.takeError();
+        if (e.code == ErrorCode::Unsupported && !unsupported)
+            unsupported = e;
         if (loc == kSuperblockOffset)
             primaryError = e;
         else if (!signedError && rd32s(sbuf.constData() + 0x55C) == kUfs2Magic)
             signedError = e;
     }
+    // UFS1 keeps its superblock at 8192, so the primary location only says "no signature".
+    if (unsupported)
+        return *unsupported;
     // Explain the primary location, unless only another location has a signature.
     Error e = *primaryError;
     if (signedError && e.message.contains(QLatin1String("no UFS2 signature")))
@@ -406,6 +412,8 @@ Result<QByteArray> Ufs2Reader::readLink(quint32 ino) const
     FW_TRY_ASSIGN(Inode in, readInode(ino));
     if (!in.isLink())
         return corrupt(QStringLiteral("inode %1 is not a symbolic link.").arg(ino));
+    if (in.size < 0)
+        return corrupt(QStringLiteral("symbolic link inode %1 has an invalid size %2.").arg(ino).arg(in.size));
     if (in.size < m_sb.maxsymlinklen && in.blocks == 0) {
         char raw[kNDirect * 8 + kNIndirect * 8];
         for (int i = 0; i < kNDirect; ++i)

@@ -7,9 +7,15 @@
 
 #include "core/PathSafety.h"
 #include "core/Paths.h"
+#include "core/Zip.h"
+#include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatJobs.h"
+#include "engines/exfat/ExfatVerify.h"
+#include "engines/exfat/Pipeline.h"
+#include "engines/exfat/PlatformFs.h"
 #include "support/TestSupport.h"
 
+#include <QDirIterator>
 #include <QJsonArray>
 #include <QTemporaryDir>
 #include <QTest>
@@ -580,6 +586,172 @@ private slots:
         QVERIFY(!r.ok());
         QCOMPARE(r.error().code, ErrorCode::CorruptData);
         QVERIFY(!QFileInfo::exists(path(QStringLiteral("xbad-out.part"))));
+    }
+
+    // "Check the image on its own" treats boot-region damage like the check
+    // against a folder does: a failed verification, never a pass or a job error.
+    void standaloneCheckFailsOnBootDamage()
+    {
+        const QString src = makeGame(QStringLiteral("alone"), 5);
+        const QString img = path(QStringLiteral("alone.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        auto good = m_env.run(kJobVerify, {{QStringLiteral("image"), img}});
+        QVERIFY2(good.ok(), qPrintable(good.ok() ? QString() : err(good.error())));
+        QCOMPARE(good->verification, Verification::Passed);
+
+        const QString badBackup = path(QStringLiteral("alone-backup.exfat"));
+        QVERIFY(QFile::copy(img, badBackup));
+        flipByte(badBackup, 12 * 512 + 100);
+        auto r = m_env.run(kJobVerify, {{QStringLiteral("image"), badBackup}});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Failed);
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("backup boot region")), qPrintable(r->verificationDetail));
+
+        const QString badMain = path(QStringLiteral("alone-main.exfat"));
+        QVERIFY(QFile::copy(img, badMain));
+        flipByte(badMain, 100);
+        r = m_env.run(kJobVerify, {{QStringLiteral("image"), badMain}});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Failed);
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("main boot sector")), qPrintable(r->verificationDetail));
+        QCOMPARE(r->summary, QStringLiteral("The image is damaged."));
+    }
+
+    // The extraction marker is compared the way the destination drive
+    // compares names: an entry with that name in another case is refused too.
+    void extractRefusesTheMarkerNameInAnyCase()
+    {
+        const QString src = makeGame(QStringLiteral("markersrc"), 2);
+        QVERIFY(writeBytes(src + QStringLiteral("/.FW-Extract-In-Progress"), "a real file of the game"));
+        const QString img = path(QStringLiteral("markersrc.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        const QString dest = path(QStringLiteral("markerdest"));
+        auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}});
+        QVERIFY(!r.ok());
+        QCOMPARE(r.error().code, ErrorCode::Unsupported);
+        QVERIFY2(r.error().message.contains(QStringLiteral(".FW-Extract-In-Progress")), qPrintable(err(r.error())));
+        QVERIFY(!QFileInfo::exists(dest));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
+    }
+
+    // A zipped dump: the image is named after the ZIP without ".zip", and
+    // "delete the source" neither deletes the ZIP nor claims it did.
+    void zippedSourceNamesTheImageAndIsNeverDeleted()
+    {
+        const QString src = path(QStringLiteral("zipgame"));
+        QVERIFY(writeBytes(src + QStringLiteral("/eboot.bin"), QByteArray("\x7F" "ELF fake eboot", 15)));
+        QVERIFY(writeBytes(src + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA01234","contentVersion":"01.000.000"})"));
+        QVERIFY(writeRandom(src + QStringLiteral("/data/content.bin"), 300 * 1024, 5));
+        const QString zipPath = path(QStringLiteral("ZippedGame.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(zipPath, true).ok());
+            QDirIterator it(src, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString p = it.next();
+                QVERIFY(w.addFile(QDir(src).relativeFilePath(p), p, zip::Method::Store, {}).ok());
+            }
+            QVERIFY(w.finish(false).ok());
+        }
+        const QString outDir = path(QStringLiteral("zip-out"));
+        QVERIFY(QDir().mkpath(outDir));
+        QCOMPARE(resolveBuildOutput(zipPath, outDir), outDir + QStringLiteral("/ZippedGame.exfat"));
+        QCOMPARE(resolveBuildOutput(src + u'/', outDir), outDir + QStringLiteral("/zipgame.exfat"));
+        QCOMPARE(resolveBuildOutput(src, outDir + u'/'), outDir + QStringLiteral("/zipgame.exfat"));
+
+        auto r = m_env.run(kJobBuild, buildParams(zipPath, outDir), {{keys::kDeleteSourceAfterVerify, true}});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Passed);
+        QCOMPARE(r->outputs, QStringList{outDir + QStringLiteral("/ZippedGame.exfat")});
+        QVERIFY(QFileInfo::exists(zipPath));
+        QVERIFY(!r->details.contains(QStringLiteral("sourceDeleted")));
+        QVERIFY2(r->warnings.join(u'\n').contains(QStringLiteral("was kept: only folders are deleted")),
+                 qPrintable(r->warnings.join(u'\n')));
+    }
+
+    void fat32LimitIsKnownByFileSystemName()
+    {
+        for (const char* fs : {"FAT32", "FAT", "fat16", "vfat", "msdos"})
+            QVERIFY2(limitsFilesTo4GiB(QString::fromLatin1(fs)), fs);
+        for (const char* fs : {"NTFS", "exFAT", "ReFS", "ext4", "apfs", ""})
+            QVERIFY2(!limitsFilesTo4GiB(QString::fromLatin1(fs)), fs);
+        QVERIFY(!tooLargeForDrive(m_tmp.path(), 4 * kGiB - 1)); // below the limit on any drive
+    }
+
+    // More buffers than a queue's default capacity used to block the constructor.
+    void pipelineTakesMoreThanEightBuffers()
+    {
+        ChunkPipeline pipe(12, 4096);
+        for (int i = 0; i < 12; ++i)
+            QVERIFY(pipe.takeFree() != nullptr);
+    }
+
+    // A buffer that cannot be allocated inside a worker thread used to end
+    // the whole app (an exception leaving a std::thread).
+    void workerThreadsReportAllocationFailureAsAnError()
+    {
+        const QString src = makeGame(QStringLiteral("oom"), 5);
+        const QString img = path(QStringLiteral("oom.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        CancellationToken token;
+        VerifyOptions vo;
+        vo.full = true;
+        vo.threads = 4;
+        vo.bufferBytes = qint64(1) << 46;
+        auto v = verifyImageAgainstFolder(img, src, {}, vo, token, nullptr);
+        QVERIFY(!v.ok());
+        QCOMPARE(v.error().code, ErrorCode::Internal);
+        QVERIFY2(v.error().message.contains(QStringLiteral("Not enough memory")), qPrintable(err(v.error())));
+
+        auto reader = ExfatReader::open(img);
+        QVERIFY(reader.ok());
+        auto tree = reader.value()->readTree(token);
+        QVERIFY(tree.ok());
+        const QString dest = path(QStringLiteral("oom-out"));
+        QVERIFY(QDir().mkpath(dest));
+        ExtractOptions eo;
+        eo.parallel = true;
+        eo.threads = 4;
+        eo.bufferBytes = qint64(1) << 46;
+        auto x = extractTree(*reader.value(), tree.value(), dest, eo, token, nullptr);
+        QVERIFY(!x.ok());
+        QCOMPARE(x.error().code, ErrorCode::Internal);
+        QVERIFY2(x.error().message.contains(QStringLiteral("Not enough memory")), qPrintable(err(x.error())));
+    }
+
+    // A Windows shortcut is a small file to copy as it is, whatever it points
+    // at: not a link to follow, and not an error when its target is gone.
+    void windowsShortcutsAreCopiedAsFiles()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("Shortcut files are a Windows matter.");
+#endif
+        const QString src = makeGame(QStringLiteral("lnk"), 2);
+        const QString elsewhere = path(QStringLiteral("lnk-target-folder"));
+        QVERIFY(writeRandom(elsewhere + QStringLiteral("/big.bin"), 100 * 1024, 7));
+        if (!QFile::link(elsewhere, src + QStringLiteral("/folder.lnk"))
+            || !QFile::link(path(QStringLiteral("no-such-file.bin")), src + QStringLiteral("/dead.lnk")))
+            QSKIP("Shortcuts cannot be created here.");
+        CancellationToken token;
+        auto tree = scanSource(src, {}, token);
+        QVERIFY2(tree.ok(), qPrintable(tree.ok() ? QString() : err(tree.error())));
+        int seen = 0;
+        for (const SourceNode& n : tree->nodes) {
+            QVERIFY2(!n.relativePath.startsWith(QStringLiteral("folder.lnk/")), qPrintable(n.relativePath));
+            if (n.relativePath != QStringLiteral("folder.lnk") && n.relativePath != QStringLiteral("dead.lnk"))
+                continue;
+            ++seen;
+            QVERIFY(!n.isDir);
+            QFile raw(n.absolutePath);
+            QVERIFY(raw.open(QIODevice::ReadOnly));
+            QVERIFY(raw.size() > 0);
+            QCOMPARE(n.size, raw.size());
+        }
+        QCOMPARE(seen, 2);
+        const QString img = path(QStringLiteral("lnk.exfat"));
+        auto r = m_env.run(kJobBuild, buildParams(src, img));
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Passed);
     }
 
     void titleIdDetection()

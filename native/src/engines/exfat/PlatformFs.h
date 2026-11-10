@@ -50,4 +50,11 @@ Result<std::unique_ptr<QFile>> openForRead(const QString& path, int retries, int
 // An I/O error for `file`, mapped to InsufficientSpace when the disk is full.
 Error fileError(const QString& userMessage, const QFileDevice& file);
 
+// True for the file systems that cannot hold a file of 4 GiB or more (FAT32
+// and older), by the name diskSpace() reports.
+bool limitsFilesTo4GiB(const QString& fileSystemName);
+// True when the drive holding `folder` is such a file system and `bytes`
+// is over its limit: checked before hours of writing fail at 4 GiB.
+bool tooLargeForDrive(const QString& folder, qint64 bytes);
+
 } // namespace fw::exfat

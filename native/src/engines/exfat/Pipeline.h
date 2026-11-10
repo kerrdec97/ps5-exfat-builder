@@ -73,12 +73,13 @@ public:
     ChunkPipeline(int bufferCount, qint64 bufferBytes)
     {
         m_buffers.resize(size_t(std::max(2, bufferCount)));
+        // Before the first push: a queue that is full blocks its producer.
+        m_free.setCapacity(m_buffers.size());
+        m_filled.setCapacity(m_buffers.size());
         for (auto& b : m_buffers) {
             b.resize(size_t(bufferBytes));
             m_free.push(&b);
         }
-        m_free.setCapacity(m_buffers.size());
-        m_filled.setCapacity(m_buffers.size());
     }
     ~ChunkPipeline() { abort(); }
 

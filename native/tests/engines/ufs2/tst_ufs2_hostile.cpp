@@ -6,6 +6,8 @@
 #include "Ufs2TestUtil.h"
 
 #include "engines/ufs2/Ufs2Check.h"
+#include "engines/ufs2/Ufs2Edit.h"
+#include "engines/ufs2/Ufs2Verify.h"
 
 #include <QElapsedTimer>
 #include <QTemporaryDir>
@@ -314,6 +316,148 @@ private slots:
         QVERIFY2(c->problems.join(u'\n').contains(QStringLiteral("more blocks than the image holds")),
                  qPrintable(c->problems.join(u'\n')));
         QVERIFY2(timer.elapsed() < kQuickMs, qPrintable(QString::number(timer.elapsed())));
+    }
+
+    // A folder that lists one name twice: a kernel would use only one entry,
+    // so neither the structure check nor the comparison may call it sound.
+    void nameListedTwiceIsReported()
+    {
+        const QString src = m_tmp.filePath("twins-src");
+        QVERIFY(mktext(src + "/eboot.bin", "eboot"));
+        QVERIFY(mktext(src + "/twins/aa.txt", "one"));
+        QVERIFY(mktext(src + "/twins/ab.txt", "two"));
+        const QString img = m_tmp.filePath("twins.ffpkg");
+        QVERIFY(buildImage(src, img).ok());
+        qint64 dirBytes = 0;
+        {
+            auto r = Ufs2Reader::open(img);
+            QVERIFY(r.ok());
+            const auto dir = r.value()->resolve(QStringLiteral("/twins"));
+            QVERIFY(dir.ok());
+            const auto in = r.value()->readInode(dir.value());
+            QVERIFY(in.ok());
+            dirBytes = in->db[0] * r.value()->sb().fsize;
+        }
+        {
+            QFile f(img);
+            QVERIFY(f.open(QIODevice::ReadWrite) && f.seek(dirBytes));
+            const QByteArray chunk = f.read(512);
+            const qsizetype at = chunk.indexOf("ab.txt");
+            QVERIFY(at > 0);
+            QVERIFY(f.seek(dirBytes + at) && f.write("aa.txt", 6) == 6);
+        }
+        auto r = Ufs2Reader::open(img);
+        QVERIFY(r.ok());
+        CancellationToken token;
+        const auto c = checkImage(*r.value(), token);
+        QVERIFY(c.ok());
+        QVERIFY2(c->problems.join(u'\n').contains(QStringLiteral("lists the name \"aa.txt\" twice")),
+                 qPrintable(c->problems.join(u'\n')));
+        const auto expected = scanLocalFolder(src, token);
+        QVERIFY(expected.ok());
+        const auto cmp = compareImage(*r.value(), expected.value(), CompareDepth::Full, token, nullptr);
+        QVERIFY(cmp.ok());
+        QVERIFY(!cmp->ok());
+        QVERIFY2(cmp->extra.join(u'\n').contains(QStringLiteral("twins/aa.txt (listed twice)")), qPrintable(cmp->extra.join(u'\n')));
+    }
+
+    // UFS1 keeps its superblock at 8192: the image is named for what it is.
+    void ufs1IsReportedAsUnsupported()
+    {
+        const QString img = m_tmp.filePath("ufs1.img");
+        {
+            QFile f(img);
+            QVERIFY(f.open(QIODevice::WriteOnly) && f.resize(400 * 1024));
+        }
+        QVERIFY(patch(img, 8192 + 0x55C, le32(0x00011954)));
+        const auto r = Ufs2Reader::open(img);
+        QVERIFY(!r.ok());
+        QCOMPARE(r.error().code, ErrorCode::Unsupported);
+        QVERIFY2(r.error().message.contains(QStringLiteral("UFS1")), qPrintable(r.error().message));
+    }
+
+    // di_nlink is 16 bits: a folder with too many sub-folders is refused when
+    // the image is planned, not after it was written and failed its check.
+    void tooManySubFoldersAreRefusedWhenPlanning()
+    {
+        SourceTree t;
+        TreeNode root;
+        root.kind = NodeKind::Dir;
+        t.nodes.push_back(root);
+        for (int i = 1; i <= 32766; ++i) {
+            TreeNode n;
+            n.name = QStringLiteral("d%1").arg(i);
+            n.rawName = n.name.toUtf8();
+            n.kind = NodeKind::Dir;
+            n.parent = 0;
+            t.nodes[0].children.push_back(i);
+            t.nodes.push_back(n);
+        }
+        t.recount();
+        Ufs2Writer w(t, WriterOptions{});
+        const auto plan = w.plan();
+        QVERIFY(!plan.ok());
+        QCOMPARE(plan.error().code, ErrorCode::Unsupported);
+        QVERIFY2(plan.error().message.contains(QStringLiteral("32,765")), qPrintable(plan.error().message));
+    }
+
+    // "Replace folder" matches files by the names stored in the image. A
+    // name with a backslash must not reach outside the chosen folder.
+    void replaceFolderIgnoresNamesThatLeaveTheFolder()
+    {
+        const QString base = m_tmp.filePath("replace");
+        QVERIFY(mktext(base + "/original.txt", "in the image"));
+        QVERIFY(mktext(base + "/local/d/ok.txt", "new ok"));
+        QVERIFY(mktext(base + "/local/outside.txt", "OUTSIDE THE CHOSEN FOLDER"));
+        SourceTree t;
+        const auto addNode = [&t](int parent, const QString& name, NodeKind kind, const QString& local) {
+            TreeNode n;
+            n.name = name;
+            n.rawName = name.toUtf8();
+            n.kind = kind;
+            n.parent = parent;
+            n.localPath = local;
+            n.size = local.isEmpty() ? 0 : QFileInfo(local).size();
+            const int idx = int(t.nodes.size());
+            t.nodes.push_back(n);
+            if (parent >= 0)
+                t.nodes[size_t(parent)].children.push_back(idx);
+            return idx;
+        };
+        addNode(-1, QString(), NodeKind::Dir, QString());
+        const int d = addNode(0, QStringLiteral("d"), NodeKind::Dir, QString());
+        addNode(d, QStringLiteral("ok.txt"), NodeKind::File, base + "/original.txt");
+        addNode(d, QStringLiteral("..\\outside.txt"), NodeKind::File, base + "/original.txt");
+        t.recount();
+        const QString img = m_tmp.filePath("replace.ffpkg");
+        CancellationToken token;
+        {
+            Ufs2Writer w(t, WriterOptions{});
+            QVERIFY(w.plan().ok());
+            QVERIFY(w.write(img, token, nullptr).ok());
+        }
+        auto r = Ufs2Reader::open(img);
+        QVERIFY(r.ok());
+        auto tree = r.value()->loadTree(token);
+        QVERIFY(tree.ok());
+        EditOp op;
+        op.kind = EditOp::Kind::Replace;
+        op.path = QStringLiteral("/d");
+        op.source = base + "/local/d";
+        const Status st = applyEdits(tree.value(), {op}, token);
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        int checked = 0;
+        for (const TreeNode& n : tree->nodes) {
+            if (n.name == QStringLiteral("ok.txt")) {
+                QVERIFY(n.localPath.endsWith(QStringLiteral("/local/d/ok.txt")));
+                ++checked;
+            } else if (n.name.contains(QStringLiteral("outside"))) {
+                QVERIFY2(n.localPath.isEmpty(), qPrintable(n.localPath));
+                QVERIFY(n.imageIno != 0);
+                ++checked;
+            }
+        }
+        QCOMPARE(checked, 2);
     }
 
     void foldersNestedDeeperThanTheLimitAreRefused_data()

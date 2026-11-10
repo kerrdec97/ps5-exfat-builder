@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <mutex>
 
 namespace fw::exfat {
@@ -252,10 +253,30 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
                     progress->advanceFiles(1);
             }
         };
+        // An exception that leaves a thread ends the whole app. A buffer that
+        // cannot be allocated (many threads, large I/O buffers) becomes this
+        // job's error instead.
+        const auto guarded = [&] {
+            try {
+                worker();
+            } catch (const std::exception& e) {
+                fail(Error(ErrorCode::Internal,
+                           QStringLiteral("Not enough memory to extract the files. Lower the I/O buffer size or the number "
+                                          "of files extracted at once in Settings, then try again."),
+                           QString::fromLocal8Bit(e.what())));
+            }
+        };
         std::vector<std::thread> pool;
         const int n = std::clamp(o.threads, 1, int(std::min<size_t>(files.size(), 128)));
-        for (int t = 0; t < n; ++t)
-            pool.emplace_back(worker);
+        try {
+            for (int t = 0; t < n; ++t)
+                pool.emplace_back(guarded);
+        } catch (const std::exception& e) {
+            // No more threads: the ones that started do the work.
+            if (pool.empty())
+                fail(Error(ErrorCode::Internal, QStringLiteral("Could not start a worker thread."),
+                           QString::fromLocal8Bit(e.what())));
+        }
         for (auto& t : pool)
             t.join();
         if (token.isCancelled())

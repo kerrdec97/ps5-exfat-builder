@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <exception>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -296,9 +297,34 @@ Result<VerifyReport> verifyImage(const QString& imagePath, const std::vector<Exp
                     report.mismatches.push_back(std::move(*m));
             }
         };
+        // An exception that leaves a thread ends the whole app. Buffers that
+        // cannot be allocated (many threads, large I/O buffers) become this
+        // job's error instead.
+        const auto guarded = [&] {
+            try {
+                worker();
+            } catch (const std::exception& e) {
+                std::lock_guard lock(mutex);
+                if (!fatal)
+                    fatal = Error(ErrorCode::Internal,
+                                  QStringLiteral("Not enough memory to compare the files. Lower the I/O buffer size or the "
+                                                 "number of worker threads in Settings, then try again."),
+                                  QString::fromLocal8Bit(e.what()));
+                stop = true;
+            }
+        };
         std::vector<std::thread> pool;
-        for (int t = 0; t < threads; ++t)
-            pool.emplace_back(worker);
+        try {
+            for (int t = 0; t < threads; ++t)
+                pool.emplace_back(guarded);
+        } catch (const std::exception& e) {
+            // No more threads: the ones that started do the work.
+            if (pool.empty()) {
+                std::lock_guard lock(mutex);
+                fatal = Error(ErrorCode::Internal, QStringLiteral("Could not start a worker thread."),
+                              QString::fromLocal8Bit(e.what()));
+            }
+        }
         for (auto& t : pool)
             t.join();
         if (anyCancelled || token.isCancelled())

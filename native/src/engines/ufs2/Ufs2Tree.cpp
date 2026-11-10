@@ -139,8 +139,22 @@ struct Scanner {
             n.rawName = std::move(raw).value();
             n.parent = parent;
             n.mtime = fi.lastModified().toSecsSinceEpoch();
-            if (fi.isDir()) {
+            // A Windows shortcut (.lnk) is an ordinary file to copy, whatever
+            // it points at. QFileInfo describes its target, so the file's own
+            // size and time come from an open handle.
+            const bool shortcut = fi.isShortcut();
+            if (!shortcut && fi.isDir()) {
                 n.kind = NodeKind::Dir;
+            } else if (shortcut) {
+                n.kind = NodeKind::File;
+                n.localPath = fi.absoluteFilePath();
+                QFile self(toLongPath(n.localPath));
+                if (!self.open(QIODevice::ReadOnly))
+                    return Error(ErrorCode::IoError,
+                                 QStringLiteral("Could not read %1.").arg(QDir::toNativeSeparators(n.localPath)),
+                                 self.errorString());
+                n.size = self.size();
+                n.mtime = self.fileTime(QFileDevice::FileModificationTime).toSecsSinceEpoch();
             } else if (fi.isFile()) {
                 n.kind = NodeKind::File;
                 n.size = fi.size();

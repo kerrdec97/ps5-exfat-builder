@@ -6,12 +6,14 @@
 #include "Ufs2TestUtil.h"
 
 #include "core/Settings.h"
+#include "core/Zip.h"
 #include "engines/general/Module.h"
 #include "engines/ufs2/Module.h"
 #include "engines/ufs2/Ufs2Check.h"
 #include "jobs/JobQueue.h"
 
 #include <QCryptographicHash>
+#include <QDirIterator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QStorageInfo>
@@ -519,6 +521,79 @@ private slots:
         QVERIFY(!o.ok() && o.error().isCancelled());
         QCOMPARE(sha(img), before);
         QVERIFY(!QFileInfo::exists(img + ".part"));
+    }
+
+    // The staging marker is compared the way the destination drive compares
+    // names: an entry with that name in another case is refused too.
+    void extractRefusesTheMarkerNameInAnyCase()
+    {
+        const QString src = freshGame("marker-src");
+        QVERIFY(mktext(src + "/.FW-EXTRACT-STAGING", "a real file of the game"));
+        const QString img = m_tmp.filePath("marker.ffpkg");
+        QVERIFY(runJob(ufs2::kinds::kBuild, buildParams(src, img)).ok());
+        const QString dest = m_tmp.filePath("marker-out");
+        auto o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", dest}});
+        QVERIFY(!o.ok());
+        QCOMPARE(o.error().code, ErrorCode::Unsupported);
+        QVERIFY2(o.error().message.contains(".FW-EXTRACT-STAGING"), qPrintable(o.error().toLogString()));
+        QVERIFY(!QFileInfo::exists(dest));
+        QVERIFY(!QFileInfo::exists(dest + ".part"));
+    }
+
+    // "Delete the game folder" with a zipped dump neither deletes the ZIP nor
+    // reports the temporary unpacked copy as the deleted source.
+    void zippedSourceIsNeverDeleted()
+    {
+        const QString src = freshGame("zip-src");
+        const QString zipPath = m_tmp.filePath("ZippedGame.zip");
+        {
+            zip::Writer w;
+            QVERIFY(w.open(zipPath, true).ok());
+            QDirIterator it(src, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString p = it.next();
+                QVERIFY(w.addFile(QDir(src).relativeFilePath(p), p, zip::Method::Store, {}).ok());
+            }
+            QVERIFY(w.finish(false).ok());
+        }
+        const QString img = m_tmp.filePath("zipped.ffpkg");
+        auto o = runJob(ufs2::kinds::kBuild, buildParams(zipPath, img), {{ufs2::keys::kDeleteSourceAfterBuild, true}});
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Passed);
+        QVERIFY(QFileInfo::exists(zipPath));
+        QVERIFY(!o->details.contains("sourceDeleted"));
+        QVERIFY2(o->warnings.join(u'\n').contains("was kept: only folders are deleted"), qPrintable(o->warnings.join(u'\n')));
+    }
+
+    // A Windows shortcut is a small file to copy as it is, whatever it points at.
+    void windowsShortcutsAreCopiedAsFiles()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("Shortcut files are a Windows matter.");
+#endif
+        const QString src = freshGame("lnk-src");
+        const QString elsewhere = m_tmp.filePath("lnk-target-folder");
+        QVERIFY(mkfile(elsewhere + "/big.bin", 100 * 1024, 7));
+        if (!QFile::link(elsewhere, src + "/folder.lnk") || !QFile::link(m_tmp.filePath("no-such-file.bin"), src + "/dead.lnk"))
+            QSKIP("Shortcuts cannot be created here.");
+        CancellationToken token;
+        auto tree = scanLocalFolder(src, token);
+        QVERIFY2(tree.ok(), tree.ok() ? "" : qPrintable(tree.error().toLogString()));
+        for (const char* name : {"/folder.lnk", "/dead.lnk"}) {
+            const int idx = tree->find(name);
+            QVERIFY2(idx > 0, name);
+            const TreeNode& n = tree->nodes[size_t(idx)];
+            QVERIFY(!n.isDir());
+            QFile raw(src + name);
+            QVERIFY(raw.open(QIODevice::ReadOnly));
+            QVERIFY(raw.size() > 0);
+            QCOMPARE(n.size, raw.size());
+        }
+        QVERIFY(tree->find("/folder.lnk/big.bin") < 0);
+        const QString img = m_tmp.filePath("lnk.ffpkg");
+        auto o = runJob(ufs2::kinds::kBuild, buildParams(src, img));
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Passed);
     }
 
     void runsThroughTheQueue()

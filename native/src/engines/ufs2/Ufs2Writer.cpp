@@ -363,6 +363,13 @@ Status Planner::finishDir(int node, quint32 ino, quint32 parentIno, quint32 dept
     for (const DirEnt& e : entries)
         if (e.type == kDtDir)
             ++subdirs;
+    // di_nlink is a signed 16-bit count of "." plus every sub-folder's "..".
+    if (2 + subdirs > 32767) {
+        const QString rel = t.relativePath(node);
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 has %2 sub-folders, more than a UFS2 folder can hold (32,765).")
+                         .arg(rel.isEmpty() ? QStringLiteral("The game folder") : rel, formatCount(subdirs)));
+    }
     PlanDir d;
     d.node = node;
     d.ino = ino;

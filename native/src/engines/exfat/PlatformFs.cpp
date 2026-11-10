@@ -48,9 +48,31 @@ QString keepStagedFolder(const QString& stage, const QString& output)
     return QDir().rename(stage, kept) ? kept : stage;
 }
 
+bool limitsFilesTo4GiB(const QString& fileSystemName)
+{
+    const QString fs = fileSystemName.toLower();
+    return fs == u"vfat" || fs == u"msdos" || fs.startsWith(u"fat");
+}
+
+bool tooLargeForDrive(const QString& folder, qint64 bytes)
+{
+    if (bytes < 4 * kGiB)
+        return false;
+    const auto ds = diskSpace(folder);
+    return ds.ok() && limitsFilesTo4GiB(ds->fileSystem);
+}
+
 Error fileError(const QString& userMessage, const QFileDevice& file)
 {
-    if (file.error() == QFileDevice::ResourceError)
+    bool full = file.error() == QFileDevice::ResourceError;
+#ifdef Q_OS_WIN
+    // Qt reports a failed WriteFile as a plain write error on Windows; the
+    // system's own text for "disk full" tells the two apart in any language.
+    if (!full && file.error() == QFileDevice::WriteError)
+        full = file.errorString() == qt_error_string(ERROR_DISK_FULL)
+               || file.errorString() == qt_error_string(ERROR_HANDLE_DISK_FULL);
+#endif
+    if (full)
         return Error(ErrorCode::InsufficientSpace,
                      QStringLiteral("The drive ran out of space. Free some space or choose another folder, then try again."),
                      userMessage + QStringLiteral(" ") + file.errorString());

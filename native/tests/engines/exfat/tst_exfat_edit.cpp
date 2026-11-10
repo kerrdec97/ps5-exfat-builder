@@ -14,6 +14,10 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 using namespace fw;
 using namespace fw::exfat;
 using namespace exfattest;
@@ -378,8 +382,9 @@ private slots:
                                  : op(EditOp::Kind::Add, QStringLiteral("cancel.bin"), local);
         CancellationSource cancel;
         bool sawWriting = false;
+        // After the undo journal: the cancel must roll back image writes.
         ProgressReporter progress([&](const ProgressSnapshot& s) {
-            if (s.done > 4 * kMiB && s.phaseIndex == 1) {
+            if (s.done > 4 * kMiB && s.phaseIndex == 1 && s.currentItem != QStringLiteral("Undo journal")) {
                 sawWriting = true;
                 cancel.cancel();
             }
@@ -394,6 +399,161 @@ private slots:
         QCOMPARE(fileHash(img), hash);
         QVERIFY(!QFileInfo::exists(editJournalPath(img)));
         QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+    }
+
+    // The journal of a big in-place replacement is as large as the new file:
+    // writing it reports progress and stops at Cancel, before the image is touched.
+    void journalWritingShowsProgressAndCanBeCancelled()
+    {
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        const QString local = path(QStringLiteral("journal-cancel.bin"));
+        QVERIFY(writeRandom(local, 20 * kMiB, 43));
+        CancellationSource cancel;
+        qint64 journalBytesSeen = 0;
+        ProgressReporter progress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 1 && s.currentItem == QStringLiteral("Undo journal") && s.done > 4 * kMiB) {
+                journalBytesSeen = s.done;
+                QVERIFY(s.total >= 40 * kMiB); // journal and new data
+                cancel.cancel();
+            }
+        }, 0);
+        progress.setPhases({QStringLiteral("Planning"), QStringLiteral("Writing"), QStringLiteral("Verifying")});
+        EditOptions o = options();
+        o.onPhase = [&](int phase, qint64 total, qint64 files, bool bytes) { progress.beginPhase(phase, total, files, bytes); };
+        auto r = editImage(img, {op(EditOp::Kind::Replace, QStringLiteral("data/large.bin"), local)}, o, cancel.token(), &progress);
+        QVERIFY(journalBytesSeen > 4 * kMiB);
+        QVERIFY2(journalBytesSeen < 20 * kMiB, "the cancel was not noticed while the journal was written");
+        QVERIFY(!r.ok());
+        QVERIFY2(r.error().isCancelled(), qPrintable(err(r.error())));
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+        QVERIFY(!QFileInfo::exists(editJournalPath(img) + QStringLiteral(".part")));
+    }
+
+    // After a verified edit the journal is deleted. When that fails because
+    // another program holds the file, the journal is emptied, or (held
+    // exclusively) disowned by a marker file: a later verify, extract or edit
+    // must not undo the good edit.
+    void verifiedEditSurvivesAJournalThatCannotBeDeleted_data()
+    {
+        QTest::addColumn<bool>("exclusive");
+        QTest::newRow("held open: emptied") << false;
+#ifdef Q_OS_WIN
+        QTest::newRow("held exclusively: disowned") << true;
+#endif
+    }
+    void verifiedEditSurvivesAJournalThatCannotBeDeleted()
+    {
+        QFETCH(bool, exclusive);
+        const QString img = freshImage();
+        const QString journal = editJournalPath(img);
+        const QString marker = journal + QStringLiteral(".done");
+        QFile holder;
+#ifdef Q_OS_WIN
+        HANDLE lock = INVALID_HANDLE_VALUE;
+#endif
+        EditOptions o = options();
+        o.testBeforeJournalRemoval = [&](const QString& j) {
+            if (!exclusive) {
+                holder.setFileName(j);
+                QVERIFY(holder.open(QIODevice::ReadOnly));
+                return;
+            }
+#ifdef Q_OS_WIN
+            lock = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(j).utf16()), GENERIC_READ, 0, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            QVERIFY(lock != INVALID_HANDLE_VALUE);
+#endif
+        };
+        CancellationToken token;
+        auto r = editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("data/medium.bin"))}, o, token);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(r->inPlace);
+        QVERIFY(r->verification.passed());
+        QVERIFY2(r->warnings.isEmpty(), qPrintable(r->warnings.join(u'\n')));
+        const QByteArray edited = fileHash(img);
+#ifdef Q_OS_WIN
+        QVERIFY(QFileInfo::exists(journal)); // it really could not be deleted
+        if (exclusive) {
+            QVERIFY(QFileInfo(journal).size() > 0);
+            QVERIFY(QFileInfo::exists(marker));
+            // Still held (it cannot even be read): nothing is undone and the
+            // journal stays disowned.
+            auto held = recoverInterruptedEdit(img);
+            QVERIFY(!held.ok() || !held.value());
+            QCOMPARE(fileHash(img), edited);
+            QVERIFY(QFileInfo::exists(marker));
+            CloseHandle(lock);
+        } else {
+            QCOMPARE(QFileInfo(journal).size(), qint64(0));
+        }
+#endif
+        holder.close();
+        auto rec = recoverInterruptedEdit(img);
+        QVERIFY2(rec.ok(), qPrintable(rec.ok() ? QString() : err(rec.error())));
+        QVERIFY(!rec.value());
+        QCOMPARE(fileHash(img), edited);
+        QVERIFY(!QFileInfo::exists(journal));
+        QVERIFY(!QFileInfo::exists(marker));
+        QVERIFY(treeOf(img).find(QStringLiteral("data/medium.bin")) < 0);
+        expectIntact(img);
+
+        // A marker left behind never disowns the journal of a later edit.
+        QVERIFY(writeBytes(marker, QByteArray(32, 'x')));
+        EditOptions crash = options();
+        crash.testCrashAfterApply = true;
+        QVERIFY(!editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("eboot.bin"))}, crash, token).ok());
+        QVERIFY(!QFileInfo::exists(marker));
+        auto undone = recoverInterruptedEdit(img);
+        QVERIFY(undone.ok());
+        QVERIFY(undone.value());
+        QCOMPARE(fileHash(img), edited);
+    }
+
+    // Operations that cancel each other out write nothing and claim nothing.
+    void operationsThatCancelOutAreNotReportedAsAnEdit()
+    {
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        CancellationToken token;
+        auto r = editImage(img, {op(EditOp::Kind::Mkdir, QStringLiteral("made-then-gone")),
+                                 op(EditOp::Kind::Delete, QStringLiteral("made-then-gone"))},
+                           options(), token);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(!r->changed);
+        QCOMPARE(r->summary(), QStringLiteral("No changes were needed"));
+        QCOMPARE(fileHash(img), hash);
+
+        const QJsonObject p{
+            {QStringLiteral("image"), img},
+            {QStringLiteral("operations"),
+             QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("mkdir")}, {QStringLiteral("imagePath"), QStringLiteral("gone")}},
+                        QJsonObject{{QStringLiteral("op"), QStringLiteral("delete")}, {QStringLiteral("imagePath"), QStringLiteral("gone")}}}}};
+        auto job = m_env.run(kJobEdit, p);
+        QVERIFY2(job.ok(), qPrintable(job.ok() ? QString() : err(job.error())));
+        QCOMPARE(job->verification, Verification::NotRun);
+        QCOMPARE(job->summary, QStringLiteral("No changes were needed"));
+        QCOMPARE(fileHash(img), hash);
+    }
+
+    // What the exclusion rules leave out of an added folder is reported.
+    void addingAFolderReportsWhatWasLeftOut()
+    {
+        const QString img = freshImage();
+        const QString folder = path(QStringLiteral("add-with-rules"));
+        QVERIFY(writeBytes(folder + QStringLiteral("/keep.txt"), "keep"));
+        QVERIFY(writeBytes(folder + QStringLiteral("/skip.tmp"), "skip"));
+        EditOptions o = options();
+        o.rules.excludePatterns << QStringLiteral("*.tmp");
+        CancellationToken token;
+        auto r = editImage(img, {op(EditOp::Kind::Add, QStringLiteral("extra"), folder)}, o, token);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY2(r->warnings.join(u'\n').contains(QStringLiteral("1 item in")), qPrintable(r->warnings.join(u'\n')));
+        QVERIFY(r->warnings.join(u'\n').contains(QStringLiteral("left out")));
+        const ImageTree t = treeOf(img);
+        QVERIFY(t.find(QStringLiteral("extra/keep.txt")) > 0);
+        QVERIFY(t.find(QStringLiteral("extra/skip.tmp")) < 0);
     }
 
     void failedVerificationKeepsTheOriginal_data()
