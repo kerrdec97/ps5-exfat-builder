@@ -1183,8 +1183,11 @@ void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& r
     // The console whose listing is on screen (the address fields may have been edited since).
     const QString consoleHost = browserHost();
     const int consolePort = browserPort();
-    const bool protectedDir = ps5::isProtectedRemotePath(remoteDir);
-    if (protectedDir && !confirmProtected(remoteDir, QStringLiteral("upload")))
+    // The folder itself, or the place a dropped folder's own name leads to
+    // ("system_ex" sent to "/"): the job refuses both unless this was confirmed.
+    const QString protectedTarget = ps5::protectedUploadTarget(remoteDir, localPaths);
+    const bool protectedDir = !protectedTarget.isEmpty();
+    if (protectedDir && !confirmProtected(protectedTarget, QStringLiteral("upload")))
         return;
     // The upload replaces files of the same name: say so when the open folder shows some.
     if (const QStringList taken = uploadCollisions(localPaths, remoteDir); !taken.isEmpty()) {
@@ -1305,7 +1308,9 @@ void Ps5ConnectPage::deleteSelected()
         if (e < 0)
             continue;
         const ps5::FtpEntry& entry = m_listing.entries[size_t(e)];
-        if (const auto child = ps5::remoteChild(m_remoteDir, entry.name))
+        // Deleting stays on the console, where ':' is an ordinary character
+        // in a name: the looser rule, so such an entry can be removed.
+        if (const auto child = ps5::listedChild(m_remoteDir, entry.name))
             sel.push_back({*child, entry.isDir});
     }
     if (sel.empty())
@@ -2358,7 +2363,7 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
                 for (const auto& f : r->files)
                     lines << QStringLiteral("%1 %2 — %3").arg(f.status, f.name, f.detail);
                 Sheet::message(self->window(), r->allVerified() ? QStringLiteral("Local files patched") : QStringLiteral("Patched with problems"),
-                               monoLines(lines), r->allVerified() ? Sheet::Icon::Info : Sheet::Icon::Warning);
+                               Sheet::monoLines(lines), r->allVerified() ? Sheet::Icon::Info : Sheet::Icon::Warning);
             }, Qt::QueuedConnection);
         });
     });

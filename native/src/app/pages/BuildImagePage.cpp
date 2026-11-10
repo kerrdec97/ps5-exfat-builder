@@ -475,7 +475,8 @@ QWidget* plainRow(const QString& title, const QString& help, QWidget* control, Q
 // Jobs that run the publisher and follow the live CPU limit.
 bool isPackageBuildKind(const QString& kind)
 {
-    return kind == QLatin1String("fpkg.build") || kind == QLatin1String("fpkg.addon") || kind == QLatin1String("fpkg.backport");
+    return kind == QLatin1String("fpkg.build") || kind == QLatin1String("fpkg.addon") || kind == QLatin1String("fpkg.backport")
+        || kind == QLatin1String("fpkg.verify") || kind == QLatin1String("fpkg.extract");
 }
 
 // "D:" for a volume root like "D:/".
@@ -533,9 +534,6 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         m_sourceBadge->set(QStringLiteral("Scanning\u2026 %1 files \u00b7 %2").arg(formatCount(files), formatBytes(bytes)), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
     });
-
-    // Work folders of backport builds that a crash or power loss left behind.
-    (void)QtConcurrent::run([] { fpkg::sweepStaleBackportWork(); });
 
     buildSourceCard();
     buildFormatCard();
@@ -612,15 +610,12 @@ void BuildImagePage::buildSourceCard()
     m_stripTitle = new ElideLabel({}, Qt::ElideRight, strip);
     m_stripTitle->setFont(font::subtitle());
     setTextColor(m_stripTitle, color::fg_0);
-    plainLabel(m_stripTitle);
     m_stripMeta = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripMeta->setFont(font::caption());
     setTextColor(m_stripMeta, color::fg_3);
-    plainLabel(m_stripMeta);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripPath->setFont(font::monoSmall());
     setTextColor(m_stripPath, color::fg_4);
-    plainLabel(m_stripPath);
     scol->addWidget(m_stripTitle);
     scol->addWidget(m_stripMeta);
     scol->addWidget(m_stripPath);
@@ -636,7 +631,6 @@ void BuildImagePage::buildSourceCard()
     source->body()->addWidget(m_strip);
 
     m_sourceMsg = new MessageRow(source);
-    plainLabels(m_sourceMsg); // quotes folder names and what a ZIP reports
     source->body()->addWidget(m_sourceMsg);
     // Several games below the chosen folder: one link per game.
     m_rootsBox = new QWidget(source);
@@ -705,7 +699,6 @@ void BuildImagePage::buildFormatCard()
     });
     m_toolsRow = plainRow(QStringLiteral("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail);
     m_toolsRow->setAccessibleName(QStringLiteral("Sony Publishing Tools"));
-    plainLabel(m_toolsDetail); // shows the tools' path and what the check reports
     m_toolsDetail->setToolTip(QStringLiteral("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
 
     // One options panel per format: only that format's settings.
@@ -866,7 +859,6 @@ void BuildImagePage::buildPackageCard()
     m_contentId = textInput(QStringLiteral("UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx"), true, details);
     m_contentId->setMaxLength(36);
     m_contentId->setAccessibleName(QStringLiteral("Content ID"));
-    m_contentId->setToolTip(QStringLiteral("36 characters, read from sce_sys/param.json. It must match the source; for an add-on, enter the add-on's own ID."));
     auto* grid = new QWidget(details);
     auto* gh = hbox(grid, space::md);
     gh->setAlignment(Qt::AlignTop);
@@ -893,7 +885,6 @@ void BuildImagePage::buildPackageCard()
         bl->addWidget(field(QStringLiteral("Base package"), m_basePackage,
                             QStringLiteral("The .pkg the console already has; updates are built against it."), m_baseField));
         m_baseInfo = new MessageRow(m_baseField);
-        plainLabels(m_baseInfo); // the base package's title and ID
         m_baseInfo->hide();
         bl->addWidget(m_baseInfo);
     }
@@ -978,7 +969,6 @@ void BuildImagePage::buildSaveCard()
     ol->addWidget(label(QStringLiteral("Folder"), TextStyle::Body, color::fg_1, outField));
     ol->addWidget(m_output);
     m_spaceRow = new MessageRow(outField);
-    plainLabels(m_spaceRow);
     ol->addWidget(m_spaceRow);
     gh->addWidget(outField, 1);
 
@@ -1014,7 +1004,6 @@ void BuildImagePage::buildSaveCard()
     gh->addWidget(nameField, 1);
     dest->body()->addWidget(grid);
     m_spaceBar = new InfoBar(Tone::Err, dest);
-    plainLabels(m_spaceBar);
     m_spaceBar->hide();
     dest->body()->addWidget(m_spaceBar);
     form()->addWidget(dest);
@@ -1765,6 +1754,13 @@ void BuildImagePage::onPackageTypeChanged()
     m_backportField->setVisible(t == QLatin1String("app") || backport);
     // A backport update takes its identity from the base package.
     m_contentId->parentWidget()->setVisible(!backport);
+    // An app or update package carries the game's own content ID (the engine
+    // refuses any other), so the field only shows it; an add-on has its own.
+    const bool ownId = t == QLatin1String("addon");
+    m_contentId->setReadOnly(!ownId);
+    m_contentId->setToolTip(ownId ? QStringLiteral("36 characters: the add-on's own content ID.")
+                                  : QStringLiteral("Read from the game's sce_sys/param.json. A package must carry the game's own content ID, so it "
+                                                   "cannot be changed here."));
     m_titleRow->setVisible(!backport);
     if (backport) {
         m_backportNote->setText(QStringLiteral(
@@ -1934,7 +1930,7 @@ void BuildImagePage::applyLiveCpuLimit()
             fpkg::setLiveCpuLimit(rec.id, cores);
             ++applied;
         }
-    m_liveNote->setText(applied > 0 ? QStringLiteral("Applied to %1 running package build%2.").arg(applied).arg(applied == 1 ? QString() : QStringLiteral("s"))
+    m_liveNote->setText(applied > 0 ? QStringLiteral("Applied to %1 running package job%2.").arg(applied).arg(applied == 1 ? QString() : QStringLiteral("s"))
                                     : QStringLiteral("Lower it any time, even while packing."));
 }
 
@@ -2280,7 +2276,10 @@ QString BuildImagePage::validateForm()
         const bool badId = ptype != PackageType::Backport && !c.isEmpty() && !fpkg::isValidContentId(c);
         setInputError(m_contentId, badId);
         if (badId)
-            return QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
+            return m_contentId->isReadOnly()
+                       ? QStringLiteral("The Content ID in the game's sce_sys/param.json must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 "
+                                        "(36 characters). Correct it there.")
+                       : QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
         static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
         const QString v = m_version->text().trimmed();
         setInputError(m_version, !v.isEmpty() && !ver.match(v).hasMatch());
@@ -2347,10 +2346,8 @@ Result<QString> BuildImagePage::submit(bool)
             out = outputFolder();
         QJsonObject extra{{QStringLiteral("title"), m_summary.title}, {QStringLiteral("titleId"), m_summary.titleId},
                           {QStringLiteral("version"), m_summary.version}, {QStringLiteral("sourceBytes"), m_summary.bytes}};
-        if (isZstdFolder()) {
-            overrides.insert(ampr::keys::kZstdPack, true); // what this output is, whatever the global setting says
+        if (isZstdFolder())
             r = jobs::submitPackFolder(m_ctx, m_summary.folder, QDir(out).filePath(fileName()), overrides, extra);
-        }
         else
             r = jobs::submitImageBuild(m_ctx, format(), m_summary.folder, out, fileName(), overrides, extra);
     } else {

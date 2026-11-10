@@ -64,6 +64,8 @@ public:
     void setDragHighlight(bool on) override;
     void navigateWith(const QVariantMap& args) override;
     QString statusContext() const override;
+    // Unsaved edits in the dlc_emu.ini editor ("" when there are none).
+    QString unsavedChanges() const override;
     QStringList demoStates() const override;
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;

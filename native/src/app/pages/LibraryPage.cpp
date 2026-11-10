@@ -1441,22 +1441,38 @@ void LibraryPage::onJobFinished(const QString& id)
         else
             showRenamePreview(rec->outcome->details.value(QStringLiteral("items")).toArray(), rec->outcome->details.value(QStringLiteral("preset")).toString());
     }
+    // A rename or undo that was cancelled, or met a folder in use or a taken
+    // name, still reports what it did: folders that moved are rescanned and
+    // the toast says "done" only when everything was.
     if (id == m_renameApplyId) {
         m_renameApplyId.clear();
+        const int renamed = rec->outcome ? rec->outcome->details.value(QStringLiteral("renamed")).toInt() : 0;
         const QString undo = rec->outcome ? rec->outcome->details.value(QStringLiteral("undoLog")).toString() : QString();
+        const QString undoHint = undo.isEmpty() ? QString() : QStringLiteral("An undo log was written: More › Rename dump folders… › Undo last rename.");
         if (rec->state == JobState::Succeeded && rec->outcome) {
-            const int n = rec->outcome->details.value(QStringLiteral("renamed")).toInt();
-            emit toastRequested(n > 0 ? Tone::Ok : Tone::Warn, rec->outcome->summary, undo.isEmpty() ? QString() : QStringLiteral("An undo log was written: More › Rename dump folders… › Undo last rename."));
-            scan();
+            const bool complete = renamed > 0 && rec->outcome->verification == Verification::Passed;
+            emit toastRequested(complete ? Tone::Ok : Tone::Warn, rec->outcome->summary, undoHint);
         } else {
-            emit toastRequested(Tone::Err, QStringLiteral("Rename failed"), rec->error ? rec->error->message : QStringLiteral("See the log."));
+            const QString why = rec->error ? rec->error->message : rec->outcome ? rec->outcome->summary : QStringLiteral("See the log.");
+            emit toastRequested(Tone::Err, QStringLiteral("Rename failed"), renamed > 0 && !undoHint.isEmpty() ? why + u' ' + undoHint : why);
         }
+        if (rec->state == JobState::Succeeded || renamed > 0)
+            scan();
     }
     if (id == m_renameUndoId) {
         m_renameUndoId.clear();
-        emit toastRequested(rec->state == JobState::Succeeded ? Tone::Ok : Tone::Err, rec->state == JobState::Succeeded ? QStringLiteral("Rename undone") : QStringLiteral("Undo failed"),
-                            rec->outcome ? rec->outcome->summary : (rec->error ? rec->error->message : QString()));
-        if (rec->state == JobState::Succeeded)
+        const int restored = rec->outcome ? rec->outcome->details.value(QStringLiteral("renamed")).toInt() : 0;
+        if (rec->state == JobState::Succeeded && rec->outcome) {
+            // The summary says how many names were not restored.
+            const bool complete = rec->outcome->verification == Verification::Passed;
+            emit toastRequested(complete ? Tone::Ok : Tone::Warn,
+                                complete ? QStringLiteral("Rename undone") : restored > 0 ? QStringLiteral("Rename partly undone") : QStringLiteral("Rename not undone"),
+                                rec->outcome->summary);
+        } else {
+            emit toastRequested(Tone::Err, QStringLiteral("Undo failed"),
+                                rec->error ? rec->error->message : rec->outcome ? rec->outcome->summary : QStringLiteral("See the log."));
+        }
+        if (rec->state == JobState::Succeeded || restored > 0)
             scan();
     }
     if (id == m_langJobId) {
@@ -1469,6 +1485,15 @@ void LibraryPage::onJobFinished(const QString& id)
     if (rec->kind == QLatin1String("tools.languages.strip") || rec->kind == QLatin1String("tools.languages.restore")) {
         if (rec->state == JobState::Succeeded && !m_langFolder->path().isEmpty())
             languageScan();
+        // What a restore left alone (files that exist already, a backup of a
+        // game with another name) is said, not only logged.
+        if (rec->kind == QLatin1String("tools.languages.restore") && rec->state == JobState::Succeeded && rec->outcome
+            && !rec->outcome->warnings.isEmpty()) {
+            const QStringList& w = rec->outcome->warnings;
+            emit toastRequested(Tone::Warn, QStringLiteral("Restored, with something to check"),
+                                w.size() > 2 ? QStringLiteral("%1\n… and %2 more in the job's details").arg(w.mid(0, 2).join(u'\n')).arg(w.size() - 2)
+                                             : w.join(u'\n'));
+        }
     }
     // A finished build, convert or edit may have added or changed an image.
     if (rec->state == JobState::Succeeded && (rec->kind.endsWith(QLatin1String(".build")) || rec->kind == QLatin1String("image.convert")
@@ -1572,16 +1597,17 @@ void LibraryPage::stripLanguages()
     for (auto it = byRoot.cbegin(); it != byRoot.cend(); ++it)
         if (it.value().size() == totalByRoot.value(it.key()))
             everything = true;
-    // One line per game, each its own span (monoSpan escapes what it is given);
-    // a long batch is cut so the buttons stay on screen.
+    // One line per game (monoLines escapes what it is given); a long batch is
+    // cut so the buttons stay on screen.
     QStringList lines;
     const int kShown = 10;
     for (auto it = byRoot.cbegin(); it != byRoot.cend() && lines.size() < kShown; ++it)
-        lines << Sheet::monoSpan(QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), elideMiddle(it.value().join(QStringLiteral(", ")), 160)));
+        lines << QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), elideMiddle(it.value().join(QStringLiteral(", ")), 160));
+    QString list = Sheet::monoLines(lines);
     if (byRoot.size() > kShown)
-        lines << QStringLiteral("… and %1 more").arg(plural(byRoot.size() - kShown, QStringLiteral("game"), QStringLiteral("games")));
+        list += QStringLiteral("<br>… and %1 more").arg(plural(byRoot.size() - kShown, QStringLiteral("game"), QStringLiteral("games")));
     const QString text = QStringLiteral("These files and folders are removed from the game:<br>%1<br><br>A backup ZIP is written first to %2. Restore from backup puts everything back.")
-                             .arg(lines.join(QStringLiteral("<br>")), Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
+                             .arg(list, Sheet::monoSpan(backup.isEmpty() ? QStringLiteral("the default backup folder") : nativePath(backup)));
     if (!Sheet::confirm(window(), QStringLiteral("Remove the selected languages?"), text, QStringLiteral("Keep everything"), QStringLiteral("Remove languages"), true, Sheet::Icon::Warning))
         return;
     if (everything && !Sheet::confirm(window(), QStringLiteral("Remove every language?"),
@@ -1685,6 +1711,11 @@ void LibraryPage::navigateWith(const QVariantMap& args)
         setTab(LanguagesTab);
         m_langFolder->setPath(args.value(QStringLiteral("languagesFolder")).toString());
     }
+}
+
+QString LibraryPage::unsavedChanges() const
+{
+    return m_dlc->hasUnsavedChanges() ? QStringLiteral("dlc_emu.ini has edits that are not saved") : QString();
 }
 
 QString LibraryPage::statusContext() const

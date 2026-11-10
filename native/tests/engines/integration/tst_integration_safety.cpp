@@ -205,21 +205,6 @@ bool renameExfatEntry(const QString& image, const QString& from, const QString& 
     return false;
 }
 
-// Takes away (or gives back) the right to list `dir`. False when this
-// machine cannot do that.
-bool denyListing(const QString& dir, bool deny)
-{
-#ifdef Q_OS_WIN
-    QProcess p;
-    p.start(QStringLiteral("icacls"),
-            {QDir::toNativeSeparators(dir), deny ? QStringLiteral("/deny") : QStringLiteral("/remove:d"),
-             deny ? QStringLiteral("*S-1-1-0:(RD)") : QStringLiteral("*S-1-1-0")});
-    return p.waitForFinished(20000) && p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
-#else
-    return QFile::setPermissions(dir, deny ? QFileDevice::Permissions() : QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
-#endif
-}
-
 } // namespace
 
 class TestIntegrationSafety : public QObject {
@@ -509,11 +494,11 @@ private slots:
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/a.bin"), compressible(300000, 1)));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/locked/secret.bin"), compressible(300000, 2)));
         const QString locked = game + QStringLiteral("/locked");
-        if (!denyListing(locked, true))
+        if (!fwtest::denyListing(locked, true))
             QSKIP("Access to a folder cannot be taken away here.");
         struct Restore {
             QString dir;
-            ~Restore() { (void)denyListing(dir, false); }
+            ~Restore() { (void)fwtest::denyListing(dir, false); }
         } restore{locked};
         if (!QDir(locked).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
             QSKIP("This account can still list the folder (administrator or root).");

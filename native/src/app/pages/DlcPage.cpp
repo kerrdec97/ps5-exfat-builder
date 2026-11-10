@@ -78,13 +78,6 @@ QByteArray resize512Png(const QString& path, QString* error)
     return png;
 }
 
-// Titles, file names and Store texts come from outside: a tooltip shows them
-// as text, never as markup.
-QString dlcTip(const QString& text)
-{
-    return text.isEmpty() ? QString() : QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(text.toHtmlEscaped());
-}
-
 QString regionLabel(const QString& code)
 {
     // The same names as the Region column.
@@ -532,7 +525,7 @@ void DlcPage::refreshRow(int r)
     m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon() : row.icon));
     m_table->item(r, IconCol)->setToolTip(QStringLiteral("Double-click to choose icon0.png"));
     m_table->item(r, TitleCol)->setText(row.item.title);
-    m_table->item(r, TitleCol)->setToolTip(dlcTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
+    m_table->item(r, TitleCol)->setToolTip(plainTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
                                                         .arg(row.item.title, row.item.titleId,
                                                              row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version,
                                                              nativePath(row.item.source),
@@ -549,15 +542,15 @@ void DlcPage::refreshRow(int r)
                                 : code == u"KP" ? QStringLiteral("Korea") : QStringLiteral("Unknown");
         m_table->item(r, RegionCol)->setText(row.item.targetMarket.isEmpty() ? QStringLiteral("%1 · %2").arg(shortName, code)
                                                                               : QStringLiteral("%1 Store").arg(row.item.targetMarket.section(u'(', 1).remove(u')')));
-        m_table->item(r, RegionCol)->setToolTip(dlcTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
+        m_table->item(r, RegionCol)->setToolTip(plainTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
                                                                                           : QStringLiteral("%1 (Store)").arg(row.item.targetMarket)));
     }
     m_table->item(r, VersionCol)->setText(row.item.version);
     m_table->item(r, SourceCol)->setText(QFileInfo(row.item.source).fileName()
                                          + (row.isPackage ? QString() : QStringLiteral(" [%1]").arg(row.item.entry + 1)));
-    m_table->item(r, SourceCol)->setToolTip(dlcTip(nativePath(row.item.source)));
+    m_table->item(r, SourceCol)->setToolTip(plainTip(nativePath(row.item.source)));
     m_table->item(r, ResultCol)->setText(row.result);
-    m_table->item(r, ResultCol)->setToolTip(dlcTip(row.warnings.isEmpty() ? row.result : row.result + QStringLiteral("\n") + row.warnings.join(u'\n')));
+    m_table->item(r, ResultCol)->setToolTip(plainTip(row.warnings.isEmpty() ? row.result : row.result + QStringLiteral("\n") + row.warnings.join(u'\n')));
     const bool problem = !dlc::validateIdentity(row.item.titleId, row.item.contentId).ok()
                       || (row.package && !row.package->canRebuild);
     m_table->item(r, ResultCol)->setForeground(problem ? toneText(Tone::Warn) : color::fg_2);
@@ -1260,11 +1253,11 @@ QString DlcPage::validateForm()
         return QStringLiteral("Packages are still being read. Try again in a moment.");
     if (const QString k = dlc::hex32Problem(m_key->text().trimmed()); !k.isEmpty()) {
         setInputError(m_key, true);
-        return QStringLiteral("The entitlement key must be exactly 32 hexadecimal characters.");
+        return QStringLiteral("The entitlement key %1").arg(k); // the engine's wording, with the length
     }
     if (const QString p = dlc::hex32Problem(m_passcode->text().trimmed()); !p.isEmpty()) {
         setInputError(m_passcode, true);
-        return QStringLiteral("The PKG source passcode must be exactly 32 hexadecimal characters.");
+        return QStringLiteral("The PKG source passcode %1").arg(p);
     }
     if (outputFolder().isEmpty())
         return QStringLiteral("Select the output folder.");

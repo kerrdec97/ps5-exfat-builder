@@ -8,7 +8,7 @@
 #include "engines/pfs/PfsSource.h"
 
 #include "engines/pfs/AmprIndex.h"
-#include "engines/pfs/FolderAccess.h"
+#include "core/FolderAccess.h"
 #include "engines/pfs/PfsFormat.h"
 
 #include <QDateTime>

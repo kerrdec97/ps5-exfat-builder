@@ -57,8 +57,10 @@ public:
     void toast(ui::Tone tone, const QString& title, const QString& body, const QList<ui::ToastHost::Action>& actions = {});
     void showShortcuts();
     // Asks, then queues the problem report. Returns true when the report job was queued.
-    bool reportProblem(const QStringList& extraFiles = {});
-    void checkForUpdates(bool silent);
+    bool reportProblem();
+    // `apiUrl` is for tests (a local server standing in for GitHub); the app
+    // passes none and the job refuses any other address.
+    void checkForUpdates(bool silent, const QString& apiUrl = {});
     void setSidebarCompact(bool compact);
 
 protected:
@@ -67,7 +69,6 @@ protected:
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
-    void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
@@ -84,7 +85,10 @@ private:
     void checkCrashFiles();
     void onUpdateCheckFinished(const JobRecord& rec);
     void onUpdateDownloadFinished(const JobRecord& rec);
-    void installUpdate(const QString& installer);
+    void setUpdateBanner(ui::InfoBar* bar);
+    void showUpdateAvailable();
+    void showUpdateDownloaded();
+    void runUpdateAction();
     void restoreWindowState();
     void saveWindowState();
     pages::Page* currentPageWidget() const;
@@ -114,20 +118,25 @@ private:
     QSet<QString> m_openFolderWhenDone;
     quint64 m_freeSpaceGen = 0; // refreshFreeSpace(): the newest probe wins
     // The app-update lifecycle (one owner: the update slots):
-    //   Idle ─▶ Checking ─▶ UpToDate | Available ─▶ Downloading ─▶ PendingInstall ─▶ Installing
-    // A second check, download or install request while one is under way is ignored.
-    enum class UpdateState { Idle, Checking, UpToDate, Available, Downloading, PendingInstall, Installing };
+    //   Idle ─▶ Checking ─▶ UpToDate | Available ─▶ Downloading ─▶ Downloaded
+    //                                      ▲              │ failed, refused or cancelled
+    //                                      └──────────────┘
+    // Available: a newer release exists; m_release says whether the app can
+    // download and check it ("canDownload") or it has to be fetched from its
+    // page. Downloaded: the verified program file lies in the cache folder
+    // (m_downloadedUpdate) for the user to put in place; the app never starts
+    // it and never replaces itself. A check from Available or Downloaded
+    // returns there when it fails. A second check or download while one is
+    // under way is ignored.
+    enum class UpdateState { Idle, Checking, UpToDate, Available, Downloading, Downloaded };
     UpdateState m_updateState = UpdateState::Idle;
     QString m_updateCheckId, m_updateDownloadId, m_reportJobId;
-    QJsonObject m_release;
-    QString m_pendingInstaller;
+    QJsonObject m_release;       // the details of the last successful check
+    QString m_downloadedUpdate;  // the verified file, while the state is Downloaded
     QPointer<ui::InfoBar> m_updateBanner;
-    QPointer<ui::InfoBar> m_installBanner; // "Install after the queue finishes"
     QPointer<ui::Sheet> m_countdown;
     QTimer m_freeSpaceTimer;
-    bool m_autoCompact = false;
-    bool m_userCompact = false;
-    bool m_closing = false;
+    bool m_userCompact = false; // the sidebar is collapsed (the header's menu button; remembered)
     bool m_closeInProgress = false; // closeEvent() is waiting for the backport engine to stop
 };
 

@@ -62,8 +62,9 @@
 //   Hex preview    no job: services/HexPreview reads slices of a file inside an image on a
 //                  worker thread (read-only, the image is not kept open between slices).
 //   Dump rename    library.rename   {mode: preview|apply|undo, source, preset?, destination?, items: [{source, name, selected}], undoLog}
-//   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate)
-//                  update.download  {release: <details>} → outputs[0] = verified installer
+//   Updates        update.check     {apiUrl?}            → details = ReleaseInfo (+ newer, upToDate, canDownload, note)
+//                  update.download  {release: <details>} → outputs[0] = the verified program file, left in the
+//                                   cache folder (details + file, sha256); nothing starts or replaces it
 //   Tools          tools.languages.scan    {folder, batch}
 //                  tools.languages.strip   {gameRoot, remove: [..], backupFolder?}
 //                  tools.languages.restore {backupZip, gameRoot}
@@ -123,14 +124,17 @@ Result<QString> submitFpkgBackport(AppContext& ctx, const QJsonObject& params, c
 Result<QString> submitDlcConvert(AppContext& ctx, const QJsonObject& params, const QVariantMap& overrides = {});
 Result<QString> scanLibrary(AppContext& ctx, const QStringList& folders);
 Result<QString> submitPayload(AppContext& ctx, const QString& host, int port, const QString& file);
-Result<QString> submitUpdateCheck(AppContext& ctx);
+// `apiUrl`: empty = GitHub (the job refuses any other address outside tests).
+Result<QString> submitUpdateCheck(AppContext& ctx, const QString& apiUrl = {});
 Result<QString> submitUpdateDownload(AppContext& ctx, const QJsonObject& release);
 Result<QString> submitLanguageScan(AppContext& ctx, const QString& folder, bool batch);
 Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, const QStringList& remove,
                                     const QString& backupFolder);
 Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip, const QString& gameRoot);
-// The ZIP holds the logs, the settings, history and queue files, `diagnostics`
-// and `extraFiles` (the crash report files after a crash).
+// The ZIP holds the logs with the newest crash reports beside them (text),
+// the settings, history and queue files, `diagnostics` and `extraFiles`. Of
+// the extra files a memory dump (.dmp) is never passed on (it cannot be
+// cleaned of secrets), nor a crash report the job finds by itself.
 Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics,
                                     const QStringList& extraFiles = {});
 // Of the crash files on disk (newest first, crash::previousCrashFiles()), the
@@ -150,7 +154,9 @@ Result<QString> submitShadowMountEject(AppContext& ctx, const QString& host, int
 // Watches the console's crash folder for `minutes` (0 = until stopped); `outputDir` empty = the job's default.
 Result<QString> submitCrashDumpCapture(AppContext& ctx, const QString& host, int port, int minutes, const QString& outputDir);
 // `folder` empty = the games folder from Settings.
-Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest);
+// `allowProtectedPaths`: the user confirmed a system folder (the checks write a small file there).
+Result<QString> submitFtpDiagnose(AppContext& ctx, const QString& host, int port, const QString& folder, bool speedTest,
+                                  bool allowProtectedPaths = false);
 // `operations` already in the engine's JSON shape (see the header comment).
 Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJsonArray& operations,
                                 const QVariantMap& overrides);

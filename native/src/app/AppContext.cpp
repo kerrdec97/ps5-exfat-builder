@@ -3,6 +3,7 @@
 #include "app/models/LogModel.h"
 #include "core/BuildInfo.h"
 #include "core/Paths.h"
+#include "engines/fpkg/BackportUpdate.h"
 #include "engines/general/Module.h"
 #include "engines/integration/Module.h"
 #include "registration/Registration.h"
@@ -118,11 +119,13 @@ Status AppContext::initialize(Mode mode)
                          {QStringLiteral("portable"), Paths::isPortable()}});
     if (mode == Mode::ReadOnly)
         return success();
-    Paths::sweepStaleTemp(24);
-    // Jobs run in the temporary folder chosen in Settings when there is one:
-    // a crash leaves their folders there, not under the app's own temp root.
-    if (const QString custom = snap.string(general::keys::kTempFolder).trimmed(); !custom.isEmpty())
-        Paths::sweepStaleTempIn(custom, 24);
+    // What a crash or power loss left behind, removed on background threads
+    // (it can take a while and must not hold up the start): job folders in the
+    // app's own temp root and in the temporary folder chosen in Settings (jobs
+    // run there when there is one), and the work folders of backport builds.
+    const QString customTemp = snap.string(general::keys::kTempFolder).trimmed();
+    Paths::sweepStaleTempInBackground(customTemp.isEmpty() ? QStringList() : QStringList{customTemp}, 24);
+    (void)QtConcurrent::run([] { fpkg::sweepStaleBackportWork(); });
 
     if (snap.boolean(general::keys::kRestoreQueue)) {
         auto st = m_queue->restoreQueue();

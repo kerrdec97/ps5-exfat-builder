@@ -15,6 +15,7 @@
 #include "app/pages/LibraryPage.h"
 #include "app/services/HexPreview.h"
 #include "app/services/ImageInfo.h"
+#include "app/services/ImageTree.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/LibraryGrid.h"
 #include "app/ui/SettingRow.h"
@@ -466,6 +467,83 @@ private slots:
         page->openImage(QStringLiteral("Q:/game.exfat"));
         QVERIFY2(page->convertOutput().startsWith(QStringLiteral("Q:/game")), qPrintable(page->convertOutput()));
         page->openImage({});
+    }
+
+    // An invalid value in a row that the chosen action hides cannot be
+    // corrected there, is not sent, and so does not block the job.
+    void errorInAHiddenJobSettingDoesNotBlock()
+    {
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_exfat}, {QStringLiteral("action"), QStringLiteral("convert")}});
+        QTRY_VERIFY_WITH_TIMEOUT(!page->isReading(), 15000);
+        auto* panel = page->findChild<ui::JobOptionsPanel*>();
+        QVERIFY(panel);
+        // A typed value of the Build section: shown for Convert, hidden for Extract.
+        ui::SettingRow* row = nullptr;
+        for (const QString& k : panel->keys()) {
+            const SettingDef* d = m_ctx->schema().find(k);
+            ui::SettingRow* r = panel->row(k);
+            if (!d || !r || r->isHidden() || d->section != QLatin1String("Build") || !d->enabledWhenKey.isEmpty()
+                || d->type != SettingType::Int)
+                continue;
+            if (auto* edit = r->findChild<QLineEdit*>()) {
+                edit->setText(QStringLiteral("abc"));
+                emit edit->editingFinished();
+                if (panel->errorKeys().contains(k)) {
+                    row = r;
+                    break;
+                }
+                emit r->useDefaultRequested();
+            }
+        }
+        if (!row)
+            QSKIP("no typed per-job number in the Build section");
+        QVERIFY(panel->hasErrors());
+        QVERIFY(!panel->errorMessage(panel->errorKeys().first()).isEmpty());
+        page->setAction(pages::ImageToolsPage::Action::Extract);
+        QVERIFY(row->isHidden());
+        page->setExtractDestination(m_root.filePath(QStringLiteral("extract-hidden-error")));
+        q.holdQueue(true);
+        const QString id = newJob(q, [&] { page->queueButton()->click(); });
+        QVERIFY2(!id.isEmpty(), "the hidden row's error blocked the job");
+        QVERIFY(q.remove(id));
+        // Shown again (Convert), the same error does block.
+        page->setAction(pages::ImageToolsPage::Action::Convert);
+        QVERIFY(!row->isHidden());
+        QVERIFY(newJob(q, [&] { page->queueButton()->click(); }).isEmpty());
+        q.holdQueue(false);
+        emit row->useDefaultRequested();
+        panel->clearOverrides();
+        QVERIFY(!panel->hasErrors());
+        page->openImage({});
+    }
+
+    // The file list of an image is read on a worker: a listing nobody waits
+    // for any more is abandoned and never reported.
+    void treeListingCanBeAbandoned()
+    {
+        CancellationSource stop;
+        stop.cancel();
+        QVERIFY(!ui::readImageTree(m_exfat, stop.token()).error.isEmpty());
+        QVERIFY(ui::readImageTree(m_exfat).error.isEmpty());
+
+        ui::ImageTreeReader reader;
+        QSignalSpy ready(&reader, &ui::ImageTreeReader::ready);
+        reader.read(m_exfat);
+        QVERIFY(reader.isBusy());
+        reader.cancel();
+        QVERIFY(!reader.isBusy());
+        QTest::qWait(400);
+        QCOMPARE(ready.count(), 0);
+        // A second read takes the place of the first: one answer, for the newest.
+        reader.read(m_ffpkg);
+        reader.read(m_exfat);
+        QTRY_COMPARE_WITH_TIMEOUT(ready.count(), 1, 15000);
+        const auto result = ready.first().first().value<ui::ImageTreeResult>();
+        QCOMPARE(result.image, m_exfat);
+        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+        QVERIFY(!reader.isBusy());
     }
 
     // Small texts of the two sheets: singular forms, and no "bytes 0–0" before anything was read.

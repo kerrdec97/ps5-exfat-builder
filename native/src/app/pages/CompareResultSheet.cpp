@@ -134,9 +134,8 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         path->setFont(font::mono());
         setTextColor(path, color::fg_1);
         path->setToolTip(nativePath(side.value(QStringLiteral("path")).toString()));
-        plainLabel(path);
         col->addWidget(path);
-        col->addWidget(plainLabel(caption(sideLine(side), row)));
+        col->addWidget(caption(sideLine(side), row));
         h->addLayout(col, 1);
         body()->addWidget(row);
     }
@@ -157,7 +156,6 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
     body()->addWidget(badges);
     auto* sum = label(summary, TextStyle::Body, color::fg_1, this);
     sum->setWordWrap(true);
-    plainLabel(sum);
     body()->addWidget(sum);
     body()->addWidget(caption(depthLine(d), this));
 
@@ -229,7 +227,6 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         h->addWidget(ic, 0, Qt::AlignTop);
         auto* t = caption(w, row);
         t->setWordWrap(true);
-        plainLabel(t);
         t->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         setTextColor(t, toneText(Tone::Warn));
         h->addWidget(t, 1, Qt::AlignTop);

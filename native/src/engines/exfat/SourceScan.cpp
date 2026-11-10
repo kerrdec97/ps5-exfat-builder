@@ -1,6 +1,7 @@
 #include "engines/exfat/SourceScan.h"
 
 #include "core/FileUtil.h"
+#include "core/FolderAccess.h"
 #include "engines/exfat/ExfatFormat.h"
 
 #include <QDir>
@@ -109,6 +110,17 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
     };
     std::vector<Pending> stack{{0, 0}};
     qint64 seen = 0;
+    // Qt's canonical path does not resolve an NTFS junction: the identity of
+    // the folder behind a link tells when it is one of the folders above it.
+    const auto leadsToAncestor = [&tree](const QString& link, int dirNode) {
+        const QString target = folderIdentity(link);
+        if (target.isEmpty())
+            return false;
+        for (int n = dirNode; n >= 0; n = tree.nodes[size_t(n)].parent)
+            if (folderIdentity(tree.nodes[size_t(n)].absolutePath) == target)
+                return true;
+        return false;
+    };
     const QDir::Filters filters = QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System;
 
     while (!stack.empty()) {
@@ -128,6 +140,8 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
                          QStringLiteral("Could not read the folder %1. Check that you have access to it, or exclude it.")
                              .arg(QDir::toNativeSeparators(dirAbs)));
         const QFileInfoList list = QDir(toLongPath(dirAbs)).entryInfoList(filters, QDir::NoSort);
+        if (list.isEmpty())
+            FW_TRY(ensureFolderListable(dirAbs)); // empty, or not allowed to look?
 
         std::vector<int> kids;
         kids.reserve(size_t(list.size()));
@@ -157,7 +171,7 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
                 if (isLink) {
                     const QString target = fi.canonicalFilePath();
                     const QString parentCanon = QFileInfo(dirAbs).canonicalFilePath();
-                    if (target.isEmpty() || isSameOrInside(parentCanon, target)) {
+                    if (target.isEmpty() || isSameOrInside(parentCanon, target) || leadsToAncestor(abs, cur.node)) {
                         tree.warnings << QStringLiteral("Skipped the folder link %1: it points back into the folder that contains it.")
                                              .arg(QDir::toNativeSeparators(rel));
                         ++tree.excludedCount;

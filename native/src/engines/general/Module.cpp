@@ -151,7 +151,9 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("General");
         d.group = QStringLiteral("When the queue finishes");
         d.label = QStringLiteral("Then");
-        d.description = QStringLiteral("What the computer does after the last job finishes. A countdown lets you cancel.");
+        d.description = QStringLiteral("What the computer does after the last job finishes, whether the jobs succeeded or failed "
+                                       "(the switch below can limit that). Nothing happens when every job was cancelled. A countdown "
+                                       "lets you cancel.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("none");
         d.choices = {{QStringLiteral("none"), QStringLiteral("Do nothing"), {}},
@@ -183,7 +185,9 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("General");
         d.group = QStringLiteral("When the queue finishes");
         d.label = QStringLiteral("Only if every job succeeded");
-        d.description = QStringLiteral("Leaves the computer on when a job failed, so you can see why.");
+        d.description = QStringLiteral("Leaves the computer on when a job failed, or was cancelled after it had started, so you can "
+                                       "see why. A job cancelled while it was still waiting does not count. Off: the action also runs "
+                                       "when jobs failed, even all of them.");
         d.type = SettingType::Bool;
         d.defaultValue = true;
         d.order = order++;

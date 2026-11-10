@@ -216,7 +216,7 @@ public:
         if (archive::isZipSource(m_source)) {
             const QString zip = m_source;
             FW_TRY(validate(ctx.settings));
-            FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+            FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             m_zip = zip;
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         }

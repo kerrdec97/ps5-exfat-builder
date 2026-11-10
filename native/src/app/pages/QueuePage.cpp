@@ -122,7 +122,7 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     auto* left = new QWidget(row);
     auto* lh = hbox(left, space::sm);
     // Names and values come from the stored job (paths, IDs): shown literally.
-    lh->addWidget(plainLabel(label(name, TextStyle::Body, color::fg_2, left)));
+    lh->addWidget(label(name, TextStyle::Body, color::fg_2, left));
     if (overridden) {
         auto* b = new Badge(QStringLiteral("Overridden"), Tone::Neutral, left);
         b->setIconName(QStringLiteral("advanced"));
@@ -136,7 +136,6 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     v->setMaximumWidth(240);
     v->setToolTip(value);
-    plainLabel(v);
     h->addWidget(v, 0, Qt::AlignRight);
     return row;
 }
@@ -196,7 +195,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     auto* card = new Card(m_columns, Card::Variant::Table);
     auto* h = card->header();
     m_filter = new Segmented(card);
-    for (const auto& s : {QStringLiteral("All"), QStringLiteral("Running"), QStringLiteral("Queued"), QStringLiteral("Done"), QStringLiteral("Failed")})
+    for (const auto& s : {QStringLiteral("All"), QStringLiteral("Running"), QStringLiteral("Queued"), QStringLiteral("Done"), QStringLiteral("Not finished")})
         m_filter->addSegment(s);
     m_filter->setAccessibleName(QStringLiteral("Filter jobs"));
     h->addWidget(m_filter);
@@ -325,8 +324,8 @@ void QueuePage::ensureSelection()
 
 void QueuePage::updateCounts()
 {
-    // The "Failed" tab lists the jobs that did not finish: failed, interrupted
-    // and cancelled ones (applyFilter), and its number counts what it lists.
+    // The "Not finished" tab lists failed, interrupted and cancelled jobs
+    // (applyFilter), and its number counts what it lists.
     int all = 0, running = 0, queued = 0, done = 0, failed = 0, cancelled = 0;
     for (int r = 0; r < m_model.rowCount(); ++r) {
         const JobRecord* rec = m_model.recordAt(r);
@@ -348,7 +347,7 @@ void QueuePage::updateCounts()
     m_filter->setSegmentText(1, seg(QStringLiteral("Running"), running));
     m_filter->setSegmentText(2, seg(QStringLiteral("Queued"), queued));
     m_filter->setSegmentText(3, seg(QStringLiteral("Done"), done));
-    m_filter->setSegmentText(4, seg(QStringLiteral("Failed"), failed + cancelled));
+    m_filter->setSegmentText(4, seg(QStringLiteral("Not finished"), failed + cancelled));
     const bool held = m_ctx.queue().isHeld();
     m_pauseQueue->setText(held ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
     setButtonIcon(m_pauseQueue, held ? QStringLiteral("play") : QStringLiteral("pause"));

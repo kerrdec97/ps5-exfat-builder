@@ -1,4 +1,4 @@
-#include "engines/pfs/FolderAccess.h"
+#include "core/FolderAccess.h"
 
 #include "core/FileUtil.h"
 
@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 #endif
 
-namespace fw::pfs {
+namespace fw {
 
 Status ensureFolderListable(const QString& dir)
 {
@@ -67,4 +67,4 @@ QString folderIdentity(const QString& dir)
 #endif
 }
 
-} // namespace fw::pfs
+} // namespace fw

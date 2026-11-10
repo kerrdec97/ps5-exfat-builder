@@ -782,7 +782,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
             for (const zip::Entry& e : zr.entries())
                 total = quint64(e.uncompressedSize) > kMaxBytes - total ? kMaxBytes : total + quint64(e.uncompressedSize);
             const qint64 bytes = qint64(total);
-            FW_TRY(ensureFreeSpace(ctx.tempDir, bytes, s.freeSpaceMarginBytes));
+            FW_TRY(ensureFreeTempSpace(ctx.tempDir, bytes, s.freeSpaceMarginBytes));
             FW_TRY(zr.extractAll(dest, ctx.token));
             folder = dest;
         } else {

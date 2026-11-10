@@ -27,13 +27,43 @@ bool isDigits(const QString& s)
     return true;
 }
 
-// "<file>.bak", then ".bak.2", ".bak.3"...: an older backup is never overwritten.
-QString freeBackupName(const QString& file)
+// The backups save() made of `file`, oldest first: "<file>.bak" is number 1,
+// "<file>.bak.N" number N. Anything else next to it ("autoload.txt.bak.old",
+// "autoload.txt.backup") is the user's own and is not listed.
+QList<QPair<int, QString>> backupsOf(const QString& file)
 {
-    QString b = file + QStringLiteral(".bak");
-    for (int n = 2; QFileInfo::exists(b) && n < 10000; ++n)
-        b = file + QStringLiteral(".bak.%1").arg(n);
-    return b;
+    const QFileInfo fi(file);
+    const QString stem = fi.fileName() + QStringLiteral(".bak");
+    QList<QPair<int, QString>> out;
+    for (const QFileInfo& b : fi.absoluteDir().entryInfoList({stem, stem + QStringLiteral(".*")}, QDir::Files)) {
+        const QString tail = b.fileName().mid(stem.size());
+        if (tail.isEmpty())
+            out.append({1, b.absoluteFilePath()});
+        else if (tail.size() > 1 && tail.size() < 9 && tail.startsWith(u'.') && isDigits(tail.mid(1)) && tail.mid(1).toInt() >= 2)
+            out.append({tail.mid(1).toInt(), b.absoluteFilePath()});
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// "<file>.bak", then ".bak.2", ".bak.3"...: the number after the newest
+// backup, so the numbers stay in the order the backups were made in and an
+// existing one is never overwritten.
+QString nextBackupName(const QString& file)
+{
+    const auto existing = backupsOf(file);
+    if (existing.isEmpty())
+        return file + QStringLiteral(".bak");
+    return file + QStringLiteral(".bak.%1").arg(existing.last().first + 1);
+}
+
+// Every changed save adds a backup to a folder the user copies to a USB
+// stick: the newest `keep` stay, the older ones go.
+void removeOldBackups(const QString& file, int keep)
+{
+    auto existing = backupsOf(file);
+    while (existing.size() > keep)
+        QFile::remove(existing.takeFirst().second);
 }
 
 Status needFolder(const QString& folder)
@@ -325,13 +355,15 @@ Result<SaveResult> save(const QString& folder, const QString& text)
         if (old.readAll() == bytes)
             return r; // nothing to write
         old.close();
-        const QString bak = freeBackupName(r.path);
+        const QString bak = nextBackupName(r.path);
         if (!QFile::copy(r.path, bak))
             return Error(ErrorCode::IoError, QStringLiteral("Could not back up the current autoload.txt, so it was not changed."));
         r.backupPath = bak;
     }
     FW_TRY(writeFileAtomic(r.path, bytes));
     r.changed = true;
+    // Only once the new file is in place: a failed save loses no backup.
+    removeOldBackups(r.path, kBackupsKept);
     return r;
 }
 

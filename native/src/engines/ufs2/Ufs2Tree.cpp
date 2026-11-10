@@ -1,6 +1,7 @@
 #include "engines/ufs2/Ufs2Tree.h"
 
 #include "core/FileUtil.h"
+#include "core/FolderAccess.h"
 #include "engines/ufs2/Ufs2Format.h"
 #include "engines/ufs2/Ufs2Reader.h"
 
@@ -105,25 +106,28 @@ struct Scanner {
     SourceTree& tree;
     const CancellationToken& token;
     qint64 seen = 0;
-    std::vector<QString> ancestors; // canonical paths on the current branch
+    // The folders on the current branch: canonical path and identity (Qt's
+    // canonical path does not resolve an NTFS junction, the identity does).
+    std::vector<std::pair<QString, QString>> ancestors;
 
     Status scanDir(int parent, const QString& dirPath)
     {
         const QString canon = QFileInfo(dirPath).canonicalFilePath();
-        if (!canon.isEmpty()) {
-            for (const QString& a : ancestors)
-                if (a == canon)
-                    return Error(ErrorCode::InvalidArgument,
-                                 QStringLiteral("The folder %1 links back into itself, so it cannot be put into an image.")
-                                     .arg(QDir::toNativeSeparators(dirPath)));
-        }
+        const QString identity = folderIdentity(dirPath);
+        for (const auto& [aCanon, aIdentity] : ancestors)
+            if ((!canon.isEmpty() && aCanon == canon) || (!identity.isEmpty() && aIdentity == identity))
+                return Error(ErrorCode::InvalidArgument,
+                             QStringLiteral("The folder %1 links back into itself, so it cannot be put into an image.")
+                                 .arg(QDir::toNativeSeparators(dirPath)));
         if (ancestors.size() > 1024)
             return Error(ErrorCode::Unsupported, QStringLiteral("The folder tree is nested too deeply."));
-        ancestors.push_back(canon);
+        ancestors.emplace_back(canon, identity);
 
         // No sorting: keep the listing order (see Ufs2Tree.h).
         QDirIterator it(dirPath, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
         std::vector<std::pair<int, QString>> subdirs;
+        if (!it.hasNext())
+            FW_TRY(ensureFolderListable(dirPath)); // empty, or not allowed to look?
         while (it.hasNext()) {
             const QFileInfo fi = it.nextFileInfo();
             if ((++seen & 0xFF) == 0 && !token.checkpoint())

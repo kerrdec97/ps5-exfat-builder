@@ -560,6 +560,49 @@ private slots:
         QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("fail"), true}}).ok());
         QVERIFY(QTest::qWaitFor([&] { return finished.count() == 3; }, 5000));
         QCOMPARE(due.count(), 1);
+
+        // A job cancelled while it was still waiting never ran: it does not
+        // count as a failure for that option.
+        q.holdQueue(true);
+        auto runs = q.enqueue(QStringLiteral("test.fake"), {});
+        auto waits = q.enqueue(QStringLiteral("test.fake"), {});
+        QVERIFY(runs.ok() && waits.ok());
+        q.cancel(waits.value());
+        QVERIFY(waitForState(q, waits.value(), JobState::Cancelled));
+        QVERIFY(!q.record(waits.value())->started.isValid());
+        q.holdQueue(false);
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 4; }, 5000));
+        QCOMPARE(finished.last().at(2).toInt(), 1); // still reported as cancelled
+        QCOMPARE(due.count(), 2);
+
+        // One cancelled after it had started does.
+        auto slow = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("steps"), 400}, {QStringLiteral("stepMs"), 20}});
+        auto after = q.enqueue(QStringLiteral("test.fake"), {});
+        QVERIFY(slow.ok() && after.ok());
+        QVERIFY(waitForState(q, slow.value(), JobState::Running));
+        q.cancel(slow.value());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 5; }, 10000));
+        QVERIFY(q.record(slow.value())->started.isValid());
+        QCOMPARE(due.count(), 2);
+
+        // With the option off the action runs after failures too, even when
+        // every job failed.
+        QVERIFY(store.setValue(general::keys::kAfterQueueOnlyIfOk, false).ok());
+        QVERIFY(q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("fail"), true}}).ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 6; }, 5000));
+        QCOMPARE(due.count(), 3);
+        QCOMPARE(due.last().at(2).toInt(), 0); // none succeeded
+        QCOMPARE(due.last().at(3).toInt(), 1);
+        // A run cancelled in full did nothing worth a shutdown.
+        q.holdQueue(true);
+        auto only = q.enqueue(QStringLiteral("test.fake"), {});
+        QVERIFY(only.ok());
+        q.cancel(only.value());
+        QVERIFY(waitForState(q, only.value(), JobState::Cancelled));
+        q.holdQueue(false);
+        QTest::qWait(300);
+        QCOMPARE(due.count(), 3);
+        QCOMPARE(finished.count(), 6);
     }
 
     void deleteSourceOnlyAfterFullVerification()

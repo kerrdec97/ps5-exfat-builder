@@ -13,7 +13,11 @@ QueueCompletionWatcher::QueueCompletionWatcher(JobQueue& queue, SettingsStore& s
             m_runIds << id;
         switch (rec->state) {
         case JobState::Succeeded: ++m_succeeded; break;
-        case JobState::Cancelled: ++m_cancelled; break;
+        case JobState::Cancelled:
+            ++m_cancelled;
+            if (rec->started.isValid())
+                ++m_cancelledAfterStart; // it had begun: for the after-queue action that is not a clean run
+            break;
         case JobState::Failed:
         case JobState::Interrupted: ++m_failed; break;
         default: break;
@@ -27,8 +31,8 @@ void QueueCompletionWatcher::onIdle()
     const int total = m_succeeded + m_failed + m_cancelled;
     if (total == 0)
         return;
-    const int ok = m_succeeded, failed = m_failed, cancelled = m_cancelled;
-    m_succeeded = m_failed = m_cancelled = 0;
+    const int ok = m_succeeded, failed = m_failed, cancelled = m_cancelled, cancelledAfterStart = m_cancelledAfterStart;
+    m_succeeded = m_failed = m_cancelled = m_cancelledAfterStart = 0;
     m_lastRun = m_runIds;
     m_runIds.clear();
     // A run the user cancelled in full did nothing worth a notification or a
@@ -41,9 +45,11 @@ void QueueCompletionWatcher::onIdle()
     const auto action = power::actionFromName(snap.string(QStringLiteral("general.afterQueueAction")));
     if (action == power::Action::None)
         return;
-    if (snap.boolean(QStringLiteral("general.afterQueueOnlyIfAllSucceeded")) && (failed > 0 || cancelled > 0))
-        return;
-    if (ok == 0)
+    // "Only if every job succeeded": a job that failed, or was cancelled after
+    // it had started, keeps the computer on. One cancelled while it was still
+    // waiting never ran and does not count. With the option off the action
+    // runs whatever the jobs did, also when every one of them failed.
+    if (snap.boolean(QStringLiteral("general.afterQueueOnlyIfAllSucceeded")) && (failed > 0 || cancelledAfterStart > 0))
         return;
     emit actionDue(action, int(snap.integer(QStringLiteral("general.afterQueueDelaySeconds"))), ok, failed);
 }

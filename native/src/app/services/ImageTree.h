@@ -4,10 +4,13 @@
 // (ExfatReader / Ufs2Reader) for the image editor. The result is a flat,
 // format-neutral node list; nodes[0] is the root.
 
+#include "core/Cancellation.h"
+
 #include <QDateTime>
 #include <QObject>
 #include <QString>
 
+#include <memory>
 #include <vector>
 
 namespace fw::ui {
@@ -39,7 +42,12 @@ class ImageTreeReader : public QObject {
     Q_OBJECT
 public:
     explicit ImageTreeReader(QObject* parent = nullptr);
-    void read(const QString& image); // cancels any earlier read's result
+    ~ImageTreeReader() override;
+    // Starts a listing; one that is still running is abandoned (its worker
+    // stops at the next folder) and never reports.
+    void read(const QString& image);
+    // Abandons the listing in flight, if any: ready() is not emitted for it.
+    void cancel();
     bool isBusy() const { return m_busy; }
 signals:
     void ready(const fw::ui::ImageTreeResult& result);
@@ -47,10 +55,12 @@ signals:
 private:
     quint64 m_generation = 0;
     bool m_busy = false;
+    std::shared_ptr<CancellationSource> m_cancel; // of the listing in flight
 };
 
-// Synchronous (worker threads, tests).
-ImageTreeResult readImageTree(const QString& image);
+// Synchronous (worker threads, tests). A cancelled token ends the listing
+// with an error.
+ImageTreeResult readImageTree(const QString& image, const CancellationToken& token = {});
 
 } // namespace fw::ui
 

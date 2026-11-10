@@ -42,7 +42,6 @@
 #include <QJsonDocument>
 #include <QMenu>
 #include <QMimeData>
-#include <QProcess>
 #include <QScreen>
 #include <QSettings>
 #include <QShortcut>
@@ -51,6 +50,7 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 namespace fw {
@@ -232,6 +232,7 @@ void MainWindow::buildPages()
     m_aboutPage = new pages::AboutPage(m_ctx, this);
     addPage(m_aboutPage, QStringLiteral("credits"), QStringLiteral("About"), true);
     connect(m_aboutPage, &pages::AboutPage::checkForUpdatesRequested, this, [this] { checkForUpdates(false); });
+    connect(m_aboutPage, &pages::AboutPage::updateActionRequested, this, &MainWindow::runUpdateAction);
     connect(m_aboutPage, &pages::AboutPage::reportProblemRequested, this, [this] { reportProblem(); });
     connect(m_aboutPage, &pages::AboutPage::shortcutsRequested, this, &MainWindow::showShortcuts);
     connect(m_ps5Page, &pages::Ps5ConnectPage::connectionChanged, this,
@@ -560,17 +561,31 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
 }
 
 // ---- updates --------------------------------------------------------------------------
+//
+// A release is the program file itself. The app finds it, can download and
+// check it, and then tells the user where it is: it never runs the downloaded
+// file, never closes for it and never replaces the running program.
 
-void MainWindow::checkForUpdates(bool silent)
+namespace {
+
+// The release page as the check reported it: a web address or nothing.
+QUrl releasePageOf(const QJsonObject& release)
+{
+    const QUrl url(release.value(QStringLiteral("pageUrl")).toString(), QUrl::StrictMode);
+    return url.isValid() && url.scheme() == QLatin1String("https") && !url.host().isEmpty() ? url : QUrl();
+}
+
+} // namespace
+
+void MainWindow::checkForUpdates(bool silent, const QString& apiUrl)
 {
     // Automated tests and CI runs set FW_OFFLINE so nothing contacts GitHub.
     if (silent && qEnvironmentVariableIsSet("FW_OFFLINE"))
         return;
-    // One check at a time, and never over a download or an install.
-    if (m_updateState == UpdateState::Checking || m_updateState == UpdateState::Downloading
-        || m_updateState == UpdateState::PendingInstall || m_updateState == UpdateState::Installing)
+    // One check at a time, and never over a download.
+    if (m_updateState == UpdateState::Checking || m_updateState == UpdateState::Downloading)
         return;
-    auto r = jobs::submitUpdateCheck(m_ctx);
+    auto r = jobs::submitUpdateCheck(m_ctx, apiUrl);
     if (!r.ok()) {
         if (!silent)
             toast(Tone::Warn, QStringLiteral("Update check not available"), r.error().message);
@@ -586,103 +601,152 @@ void MainWindow::onUpdateCheckFinished(const JobRecord& rec)
 {
     m_updateCheckId.clear();
     if (rec.state != JobState::Succeeded || !rec.outcome) {
-        m_updateState = UpdateState::Idle;
+        // What the last good answer said still holds: its banner stays usable.
+        m_updateState = !m_downloadedUpdate.isEmpty()                         ? UpdateState::Downloaded
+                        : m_release.value(QStringLiteral("newer")).toBool() ? UpdateState::Available
+                                                                              : UpdateState::Idle;
         m_aboutPage->setUpdateStatus(QStringLiteral("Check failed"), Tone::Warn);
         return;
     }
+    const QString downloadedVersion = m_downloadedUpdate.isEmpty() ? QString() : m_release.value(QStringLiteral("version")).toString();
     m_release = rec.outcome->details;
-    const bool newer = m_release.value(QStringLiteral("newer")).toBool() || m_release.value(QStringLiteral("newerThanRunning")).toBool();
-    const QString version = m_release.value(QStringLiteral("version")).toString();
-    if (!newer) {
+    if (!m_release.value(QStringLiteral("newer")).toBool()) {
         m_updateState = UpdateState::UpToDate;
+        m_downloadedUpdate.clear();
+        setUpdateBanner(nullptr);
         m_aboutPage->setUpdateStatus(QStringLiteral("Up to date"), Tone::Ok);
+        m_aboutPage->setUpdateAction({}, {});
         return;
     }
+    // The same release as the file that is already here: nothing to fetch again.
+    if (downloadedVersion == m_release.value(QStringLiteral("version")).toString() && QFileInfo(m_downloadedUpdate).isFile()) {
+        m_updateState = UpdateState::Downloaded;
+        showUpdateDownloaded();
+        return;
+    }
+    m_downloadedUpdate.clear();
     m_updateState = UpdateState::Available;
-    m_aboutPage->setUpdateStatus(QStringLiteral("Version %1 available").arg(version), Tone::Info);
-    if (m_updateBanner)
+    showUpdateAvailable();
+}
+
+// One update banner at a time: `bar` takes the place of the one shown (null: none).
+void MainWindow::setUpdateBanner(InfoBar* bar)
+{
+    if (m_updateBanner) {
+        m_updateBanner->hide();
+        emit m_updateBanner->dismissed(); // the banner area closes when nothing else is in it
         m_updateBanner->deleteLater();
-    auto* bar = new InfoBar(Tone::Info, this);
+    }
+    m_updateBanner = bar;
+    if (!bar)
+        return;
+    bar->setObjectName(QStringLiteral("update-banner"));
     bar->setDismissable(true);
+    showBanner(bar);
+}
+
+// State Available: the banner and the About page offer the one thing that can
+// be done with this release (download it, or open its page).
+void MainWindow::showUpdateAvailable()
+{
+    const QString version = m_release.value(QStringLiteral("version")).toString();
+    const bool canDownload = m_release.value(QStringLiteral("canDownload")).toBool();
+    const QUrl page = releasePageOf(m_release);
+    m_aboutPage->setUpdateStatus(QStringLiteral("Version %1 available").arg(version), Tone::Info);
+    auto* bar = new InfoBar(Tone::Info, this);
     bar->setTitle(QStringLiteral("Version %1 is available").arg(version));
-    bar->setMessage(QStringLiteral("A newer exFAT Image Builder is available. The download is checked against its SHA-256 before it runs."));
-    auto* notes = bar->addLink(QStringLiteral("What's new"));
-    const QString page = m_release.value(QStringLiteral("pageUrl")).toString();
-    connect(notes, &Link::activated, this, [page] { QDesktopServices::openUrl(QUrl(page)); });
-    auto* install = bar->addLink(QStringLiteral("Download and install"));
-    connect(install, &Link::activated, this, [this] {
-        if (m_updateState == UpdateState::Downloading) {
-            toast(Tone::Info, QStringLiteral("Already downloading"), QStringLiteral("The installer starts when the download is verified."));
+    if (canDownload) {
+        bar->setMessage(QStringLiteral("The download is checked against its SHA-256. Nothing is installed: you replace the program file yourself."));
+        if (page.isValid()) {
+            auto* notes = bar->addLink(QStringLiteral("What's new"));
+            connect(notes, &Link::activated, this, [page] { QDesktopServices::openUrl(page); });
+        }
+        auto* get = bar->addLink(QStringLiteral("Download"));
+        connect(get, &Link::activated, this, &MainWindow::runUpdateAction);
+        m_aboutPage->setUpdateAction(QStringLiteral("Download"), QStringLiteral("Downloads version %1 and checks it against its SHA-256").arg(version));
+    } else {
+        const QString note = m_release.value(QStringLiteral("note")).toString();
+        bar->setMessage(note.isEmpty() ? QStringLiteral("This release has no download the app can check itself. Get it from the release page.") : note);
+        if (page.isValid()) {
+            auto* open = bar->addLink(QStringLiteral("Open the release page"));
+            connect(open, &Link::activated, this, &MainWindow::runUpdateAction);
+            m_aboutPage->setUpdateAction(QStringLiteral("Open the release page"), page.toString());
+        } else {
+            m_aboutPage->setUpdateAction({}, {});
+        }
+    }
+    setUpdateBanner(bar);
+}
+
+// State Downloaded: where the verified file is and what to do with it.
+void MainWindow::showUpdateDownloaded()
+{
+    const QString version = m_release.value(QStringLiteral("version")).toString();
+    m_aboutPage->setUpdateStatus(QStringLiteral("Version %1 downloaded").arg(version), Tone::Ok);
+    m_aboutPage->setUpdateAction(QStringLiteral("Show in folder"), nativePath(m_downloadedUpdate));
+    auto* bar = new InfoBar(Tone::Ok, this);
+    bar->setTitle(QStringLiteral("Version %1 downloaded and verified").arg(version));
+    bar->setMessage(QStringLiteral("To update, close the app and replace your exFAT Image Builder.exe with the downloaded file (%1).")
+                        .arg(QFileInfo(m_downloadedUpdate).fileName()));
+    bar->setToolTip(plainTip(nativePath(m_downloadedUpdate)));
+    auto* show = bar->addLink(QStringLiteral("Show in folder"));
+    connect(show, &Link::activated, this, &MainWindow::runUpdateAction);
+    setUpdateBanner(bar);
+}
+
+// The one action the current state offers (the banner's link and the About
+// page's button both end here).
+void MainWindow::runUpdateAction()
+{
+    switch (m_updateState) {
+    case UpdateState::Available: {
+        if (!m_release.value(QStringLiteral("canDownload")).toBool()) {
+            if (const QUrl page = releasePageOf(m_release); page.isValid())
+                QDesktopServices::openUrl(page);
             return;
         }
-        if (m_updateState != UpdateState::Available)
-            return;
         auto r = jobs::submitUpdateDownload(m_ctx, m_release);
         if (!r.ok()) {
+            // Refused (not newer, not a GitHub release address, …): still Available.
             toast(Tone::Err, QStringLiteral("Download not started"), r.error().message);
             return;
         }
         m_updateDownloadId = r.value();
         m_updateState = UpdateState::Downloading;
-        toast(Tone::Info, QStringLiteral("Downloading the update"), QStringLiteral("You can keep working; the installer starts when the download is verified."));
-    });
-    m_updateBanner = bar;
-    showBanner(bar);
+        m_aboutPage->setUpdateStatus(QStringLiteral("Downloading version %1…").arg(m_release.value(QStringLiteral("version")).toString()), Tone::Info);
+        toast(Tone::Info, QStringLiteral("Downloading the update"),
+              QStringLiteral("You can keep working. The file is checked when the download ends; nothing is started or replaced."));
+        return;
+    }
+    case UpdateState::Downloading:
+        toast(Tone::Info, QStringLiteral("Already downloading"), QStringLiteral("The file is checked when the download ends."));
+        return;
+    case UpdateState::Downloaded:
+        if (!openInFileManager(m_downloadedUpdate))
+            toast(Tone::Warn, QStringLiteral("The downloaded file is gone"), nativePath(m_downloadedUpdate));
+        return;
+    case UpdateState::Idle:
+    case UpdateState::Checking:
+    case UpdateState::UpToDate:
+        return;
+    }
 }
 
 void MainWindow::onUpdateDownloadFinished(const JobRecord& rec)
 {
     m_updateDownloadId.clear();
     if (rec.state != JobState::Succeeded || !rec.outcome || rec.outcome->outputs.isEmpty()) {
-        m_updateState = UpdateState::Available; // the banner's link can try again
-        toast(Tone::Err, QStringLiteral("Update download failed"), rec.error ? rec.error->message : QStringLiteral("The installer could not be verified."));
+        m_updateState = UpdateState::Available; // Download can be tried again
+        m_aboutPage->setUpdateStatus(QStringLiteral("Version %1 available").arg(m_release.value(QStringLiteral("version")).toString()), Tone::Info);
+        if (rec.state == JobState::Cancelled)
+            toast(Tone::Info, QStringLiteral("Update download cancelled"), QStringLiteral("Nothing was kept."));
+        else
+            toast(Tone::Err, QStringLiteral("Update download failed"), rec.error ? rec.error->message : QStringLiteral("The downloaded file could not be verified."));
         return;
     }
-    installUpdate(rec.outcome->outputs.first());
-}
-
-void MainWindow::installUpdate(const QString& installer)
-{
-    if (m_updateState == UpdateState::Installing)
-        return;
-    if (m_ctx.queue().isBusy()) {
-        m_pendingInstaller = installer;
-        if (m_updateState == UpdateState::PendingInstall && m_installBanner)
-            return; // the banner and the idle connection exist already
-        m_updateState = UpdateState::PendingInstall;
-        auto* bar = new InfoBar(Tone::Info, this);
-        bar->setDismissable(true);
-        bar->setTitle(QStringLiteral("Install after the queue finishes"));
-        bar->setMessage(QStringLiteral("The update is downloaded and verified. It installs when no job is running."));
-        auto* now = bar->addLink(QStringLiteral("Install now"));
-        connect(now, &Link::activated, this, [this, installer] {
-            if (m_ctx.queue().isBusy()) {
-                toast(Tone::Warn, QStringLiteral("Jobs are still running"), QStringLiteral("Wait for the queue or cancel the jobs first."));
-                return;
-            }
-            installUpdate(installer);
-        });
-        m_installBanner = bar;
-        showBanner(bar);
-        QPointer<InfoBar> banner(bar);
-        auto* conn = new QMetaObject::Connection;
-        *conn = connect(&m_ctx.queue(), &JobQueue::idle, this, [this, installer, conn, banner] {
-            QObject::disconnect(*conn);
-            delete conn;
-            if (!m_pendingInstaller.isEmpty() && m_updateState == UpdateState::PendingInstall)
-                installUpdate(installer);
-        });
-        return;
-    }
-    m_pendingInstaller.clear();
-    if (QProcess::startDetached(installer, {})) {
-        m_updateState = UpdateState::Installing;
-        saveWindowState(); // quit() below skips closeEvent
-        m_closing = true;
-        QApplication::quit();
-    } else {
-        toast(Tone::Err, QStringLiteral("The installer did not start"), nativePath(installer));
-    }
+    m_downloadedUpdate = rec.outcome->outputs.first();
+    m_updateState = UpdateState::Downloaded;
+    showUpdateDownloaded();
 }
 
 // ---- crash files and problem reports -------------------------------------------------------
@@ -700,11 +764,11 @@ void MainWindow::checkCrashFiles()
     auto* bar = new InfoBar(Tone::Warn, this);
     bar->setDismissable(true);
     bar->setTitle(QStringLiteral("The app closed unexpectedly last time"));
-    bar->setMessage(QStringLiteral("A crash report was saved. Sending a problem report helps fix it; it contains logs and the crash file, never your games."));
+    bar->setMessage(QStringLiteral("A crash report was saved. Sending a problem report helps fix it; it contains logs and the crash report (text), never your games."));
     auto* report = bar->addLink(QStringLiteral("Create a problem report"));
-    connect(report, &Link::activated, this, [this, files, bar = QPointer<InfoBar>(bar)] {
+    connect(report, &Link::activated, this, [this, bar = QPointer<InfoBar>(bar)] {
         // The banner goes when the report is on its way; Cancel in the sheet leaves it.
-        if (reportProblem(files) && bar) {
+        if (reportProblem() && bar) {
             bar->hide();
             emit bar->dismissed(); // records the crash as acknowledged
         }
@@ -713,12 +777,16 @@ void MainWindow::checkCrashFiles()
     showBanner(bar);
 }
 
-bool MainWindow::reportProblem(const QStringList& extraFiles)
+bool MainWindow::reportProblem()
 {
+    // The newest crash reports go in as text. The memory dump of a crash never
+    // does: it can hold passcodes and paths that cannot be masked.
+    const QStringList crashFiles = crash::previousCrashFiles(QDir(Paths::logsDir()).filePath(QStringLiteral("crashes")));
+    const bool crashed = !crashFiles.isEmpty();
     auto* s = new Sheet(this, QStringLiteral("Report a problem"), Sheet::Icon::Info, size::dialogWide);
     s->addText(QStringLiteral("A ZIP is written to your Desktop with: the app's log files, the settings, queue and history files, the dependency statuses and a system summary%1. "
                               "It never contains game files. Attach it to a GitHub issue afterwards.")
-                   .arg(extraFiles.isEmpty() ? QString() : QStringLiteral(", and the crash report")));
+                   .arg(crashed ? QStringLiteral(", and the newest crash reports (text)") : QString()));
     auto* redact = s->addCheckbox(QStringLiteral("Hide my user name in paths"));
     redact->setChecked(m_ctx.settings().value(tools::keys::kRedactReports).toBool());
     const bool available = jobs::isAvailable(m_ctx, QStringLiteral("tools.report"));
@@ -736,11 +804,9 @@ bool MainWindow::reportProblem(const QStringList& extraFiles)
     QJsonObject diagnostics{{QStringLiteral("version"), QString::fromLatin1(build::kVersion)},
                             {QStringLiteral("dependencies"), deps},
                             {QStringLiteral("jobKinds"), QJsonArray::fromStringList(m_ctx.jobFactory().kinds())},
-                            {QStringLiteral("settingsCount"), int(m_ctx.schema().all().size())},
-                            {QStringLiteral("extraFiles"), QJsonArray::fromStringList(extraFiles)}};
+                            {QStringLiteral("settingsCount"), int(m_ctx.schema().all().size())}};
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-    // The crash files go into the ZIP themselves, not only their names.
-    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics, jobs::newestCrashFiles(extraFiles));
+    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics, jobs::newestCrashFiles(crashFiles));
     if (!r.ok()) {
         toast(Tone::Err, QStringLiteral("Report not created"), r.error().message);
         return false;
@@ -801,16 +867,6 @@ void MainWindow::saveWindowState()
     qs.setValue(QStringLiteral("window/lastPage"), currentPage());
 }
 
-void MainWindow::resizeEvent(QResizeEvent* event)
-{
-    QMainWindow::resizeEvent(event);
-    const bool narrow = width() < size::sidebarBreakpoint;
-    if (narrow != m_autoCompact) {
-        m_autoCompact = narrow;
-        setSidebarCompact(m_userCompact || m_autoCompact);
-    }
-}
-
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape && Sheet::openCount() == 0) {
@@ -829,41 +885,52 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     // A question is still open (answer it first), or this function is already
     // waiting for the backport engine below: a second close request starts nothing.
-    if (m_closeInProgress || (!m_closing && Sheet::openCount() > 0)) {
+    if (m_closeInProgress || Sheet::openCount() > 0) {
         event->ignore();
         return;
     }
     // Edits that exist only in this window.
-    if (const QString unsaved = !m_closing && m_ps5Page ? m_ps5Page->unsavedChanges() : QString(); !unsaved.isEmpty()) {
+    for (const QString& key : m_order) {
+        pages::Page* page = m_pages.value(key);
+        const QString unsaved = page ? page->unsavedChanges() : QString();
+        if (unsaved.isEmpty())
+            continue;
         const bool discard = Sheet::confirm(this, QStringLiteral("Close without saving?"),
-                                            QStringLiteral("On PS5 connect, %1. Closing the app discards this.").arg(unsaved),
+                                            QStringLiteral("On %1, %2. Closing the app discards this.").arg(page->title(), unsaved),
                                             QStringLiteral("Keep editing"), QStringLiteral("Close anyway"), true, Sheet::Icon::Warning);
         if (!discard) {
             event->ignore();
-            navigate(QStringLiteral("ps5"));
+            navigate(key);
             return;
         }
     }
-    // A backport run or restore in progress (the PS5 Backport engine runs it):
-    // cancel at the next safe point and wait for the worker (an apply in
-    // progress is rolled back from the verified backup first).
+    // A backport run or restore in progress (the PS5 Backport engine runs it).
+    // A run is cancelled at its next safe point (an apply in progress is rolled
+    // back from the verified backup first); a restore cannot be cancelled and
+    // is waited for, however long it takes.
     if (auto* bpPage = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); bpPage && bpPage->isBusy()) {
-        const bool stop = Sheet::confirm(this, QStringLiteral("Cancel the backport run?"),
-                                         QStringLiteral("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
-                                         QStringLiteral("Keep running"), QStringLiteral("Cancel and close"), true, Sheet::Icon::Warning);
-        if (!stop) {
+        const bool restoring = bpPage->isRestoring();
+        const bool go = restoring
+            ? Sheet::confirm(this, QStringLiteral("A restore is finishing"),
+                             QStringLiteral("The game's original files are being put back. This cannot be stopped half-way; the app closes when it is done."),
+                             QStringLiteral("Keep the app open"), QStringLiteral("Close when done"), false, Sheet::Icon::Info)
+            : Sheet::confirm(this, QStringLiteral("Cancel the backport run?"),
+                             QStringLiteral("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
+                             QStringLiteral("Keep running"), QStringLiteral("Cancel and close"), true, Sheet::Icon::Warning);
+        if (!go) {
             event->ignore();
             return;
         }
-        // The wait runs the event loop for up to two minutes: nothing in the window may be used meanwhile.
+        // The wait runs the event loop: nothing in the window may be used meanwhile.
         m_closeInProgress = true;
         centralWidget()->setEnabled(false);
-        m_status->setContext(QStringLiteral("Stopping the backport run…"));
-        bpPage->cancelAndWait(120000);
+        m_status->setContext(restoring ? QStringLiteral("A restore is finishing; the app closes when it is done…")
+                                       : QStringLiteral("Stopping the backport run…"));
+        bpPage->cancelAndWait(restoring ? std::numeric_limits<int>::max() : 120000);
         centralWidget()->setEnabled(true);
         m_closeInProgress = false;
     }
-    if (!m_closing && m_ctx.queue().isBusy() && m_ctx.settings().value(general::keys::kConfirmOnClose).toBool()) {
+    if (m_ctx.queue().isBusy() && m_ctx.settings().value(general::keys::kConfirmOnClose).toBool()) {
         // Stopped jobs are listed again at the next start only when the queue is restored.
         const bool restored = m_ctx.settings().value(general::keys::kRestoreQueue).toBool();
         const bool stop = Sheet::confirm(this, QStringLiteral("Stop the running jobs?"),
@@ -968,10 +1035,9 @@ int MainWindow::screenshotAllPages(const QString& dir)
     m_toasts->clear();
     setSidebarCompact(true);
     snap(QStringLiteral("sidebar-compact"));
-    setSidebarCompact(m_userCompact || m_autoCompact);
+    setSidebarCompact(m_userCompact);
     // Keyboard focus ring: Tab into the page.
     navigate(QStringLiteral("settings"));
-    setAttribute(Qt::WA_KeyboardFocusChange, true);
     m_sidebar->focusCurrent();
     snap(QStringLiteral("focus-ring"));
     resize(1100, 760);

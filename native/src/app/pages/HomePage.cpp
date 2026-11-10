@@ -104,7 +104,6 @@ public:
         auto* title = new ElideLabel(e.title, Qt::ElideRight, this);
         title->setFont(font::bodyStrong());
         setTextColor(title, color::fg_0);
-        plainLabel(title);
         col->addWidget(title);
         QStringList meta{kindName, relativeTime(e.finished)};
         if (!e.error.isEmpty())
@@ -112,7 +111,6 @@ public:
         auto* metaLabel = new ElideLabel(meta.join(QStringLiteral(" · ")), Qt::ElideRight, this);
         metaLabel->setFont(font::caption());
         setTextColor(metaLabel, color::fg_3);
-        plainLabel(metaLabel);
         col->addWidget(metaLabel);
         h->addLayout(col, 1);
         QString result = e.state;
@@ -220,7 +218,6 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     m_continue = new InfoBar(Tone::Warn, this);
     m_continue->setObjectName(QStringLiteral("home-continue"));
     m_continue->setDismissable(true);
-    plainLabels(m_continue); // the job's title and error
     auto* retry = m_continue->addLink(QStringLiteral("Retry"));
     auto* openJob = m_continue->addLink(QStringLiteral("Open in queue"));
     m_continue->hide();
@@ -425,7 +422,6 @@ void HomePage::refreshChecklist()
         detail->setFont(font::caption());
         setTextColor(detail, next ? color::fg_2 : color::fg_4);
         detail->setToolTip(item.detail);
-        plainLabel(detail); // may name the console or a folder
         tv->addWidget(detail);
         h->addWidget(text, 1);
         if (!item.fixText.isEmpty()) {
@@ -530,9 +526,10 @@ void HomePage::refresh()
     // Off the UI thread (a network drive answers slowly), and only while the
     // page is on screen: refresh() runs on every queue change, onShown() asks again.
     const quint64 gen = ++m_spaceGen;
-    probeFreeSpace(isVisible() ? this : nullptr, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
+    const auto show = [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
         if (gen != m_spaceGen)
             return;
+        m_spaceKnown = true;
         if (ready) {
             m_spaceTile->setValue(formatBytes(available));
             m_spaceTile->setCaption(QStringLiteral("on %1 · %2").arg(label, nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder")));
@@ -540,7 +537,19 @@ void HomePage::refresh()
             m_spaceTile->setValue(QStringLiteral("—"));
             m_spaceTile->setCaption(QStringLiteral("Output drive not available"));
         }
-    });
+    };
+    if (qApp->property("fwScreenshotMode").toBool()) {
+        // A screenshot run renders the page at once: the answer of a worker
+        // would come after the picture, so the drive is asked here.
+        const DriveSpace d = driveSpaceOf(folder);
+        show(d.ready, d.available, d.label);
+    } else {
+        if (!m_spaceKnown) { // the tile is never empty while the first answer is on its way
+            m_spaceTile->setValue(QStringLiteral("Checking…"));
+            m_spaceTile->setCaption(nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder"));
+        }
+        probeFreeSpace(isVisible() ? this : nullptr, folder, show);
+    }
 
     // Pick up where you left off: the most recent failed / interrupted / cancelled job.
     m_continueId.clear();

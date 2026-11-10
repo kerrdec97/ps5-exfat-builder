@@ -96,6 +96,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     statusRow->setSpacing(space::sm);
     m_updateBadge = new Badge(QStringLiteral("Updates not checked"), Tone::Neutral, product);
     m_updateBadge->setIconName({});
+    m_updateBadge->setObjectName(QStringLiteral("about-update-status"));
     statusRow->addWidget(m_updateBadge);
     auto* licence = new Badge(QStringLiteral("All rights reserved"), Tone::Neutral, product);
     licence->setIconName(QStringLiteral("shield"));
@@ -111,6 +112,11 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     m_checkUpdates->setToolTip(m_checkUpdates->isEnabled() ? QStringLiteral("Asks GitHub for the latest release") : QStringLiteral("Not available in this build"));
     connect(m_checkUpdates, &QPushButton::clicked, this, &AboutPage::checkForUpdatesRequested);
     pactions->addWidget(m_checkUpdates);
+    m_updateAction = button(QString(), ButtonVariant::Secondary, QString(), product);
+    m_updateAction->setObjectName(QStringLiteral("about-update-action"));
+    m_updateAction->hide();
+    connect(m_updateAction, &QPushButton::clicked, this, &AboutPage::updateActionRequested);
+    pactions->addWidget(m_updateAction);
     auto* logs = button(QStringLiteral("Open logs folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), product);
     connect(logs, &QPushButton::clicked, this, [] { openInFileManager(Paths::logsDir()); });
     pactions->addWidget(logs);
@@ -292,6 +298,13 @@ void AboutPage::setUpdateStatus(const QString& text, Tone tone)
 {
     m_updateBadge->set(text, tone);
     m_updateBadge->setIconName(tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone));
+}
+
+void AboutPage::setUpdateAction(const QString& text, const QString& toolTip)
+{
+    m_updateAction->setText(text);
+    m_updateAction->setToolTip(plainTip(toolTip));
+    m_updateAction->setVisible(!text.isEmpty());
 }
 
 QString AboutPage::statusContext() const

@@ -178,7 +178,7 @@ public:
 
         QString src = QFileInfo(source()).absoluteFilePath();
         if (archive::isZipSource(src)) {
-            FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress));
+            FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
             // Unpacking reports as a phase of its own, which replaced the job's.
             ctx.progress->setPhases(ph, weights);

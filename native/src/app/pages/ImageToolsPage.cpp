@@ -372,15 +372,12 @@ void ImageToolsPage::buildImageCard()
     m_stripTitle = new ElideLabel({}, Qt::ElideRight, m_strip);
     m_stripTitle->setFont(font::subtitle());
     setTextColor(m_stripTitle, color::fg_0);
-    plainLabel(m_stripTitle);
     m_stripMeta = new ElideLabel({}, Qt::ElideRight, m_strip);
     m_stripMeta->setFont(font::caption());
     setTextColor(m_stripMeta, color::fg_3);
-    plainLabel(m_stripMeta);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, m_strip);
     m_stripPath->setFont(font::monoSmall());
     setTextColor(m_stripPath, color::fg_4);
-    plainLabel(m_stripPath);
     col->addWidget(m_stripTitle);
     col->addWidget(m_stripMeta);
     col->addWidget(m_stripPath);
@@ -400,7 +397,6 @@ void ImageToolsPage::buildImageCard()
     m_strip->hide();
     m_imageCard->body()->addWidget(m_strip);
     m_imageMsg = new MessageRow(m_imageCard);
-    plainLabels(m_imageMsg); // what the reader reports about the image
     m_imageCard->body()->addWidget(m_imageMsg);
     form()->addWidget(m_imageCard);
 }
@@ -480,7 +476,6 @@ void ImageToolsPage::buildVerifyPanel()
     rh->addWidget(m_compareBadge, 0, Qt::AlignTop);
     m_compareSummary = caption({}, m_compareResultRow);
     m_compareSummary->setWordWrap(true);
-    plainLabel(m_compareSummary); // job titles, file names and errors
     rh->addWidget(m_compareSummary, 1);
     m_compareView = button(QStringLiteral("View result"), ButtonVariant::Secondary, QStringLiteral("list"), m_compareResultRow);
     m_compareView->hide();
@@ -544,7 +539,6 @@ void ImageToolsPage::buildEditPanel()
     auto* h = treeCard->header();
     h->addWidget(heading(QStringLiteral("Contents"), TextStyle::Subtitle, treeCard));
     m_treeCount = caption({}, treeCard);
-    plainLabel(m_treeCount); // its tooltip lists problems that quote names from the image
     h->addWidget(m_treeCount);
     h->addStretch(1);
     m_btnAddFiles = button(QStringLiteral("Add files…"), ButtonVariant::Secondary, QStringLiteral("file_plus"), treeCard);
@@ -595,7 +589,6 @@ void ImageToolsPage::buildEditPanel()
     m_treeEmpty->setCompact(true);
     treeCard->body()->addWidget(m_treeEmpty);
     m_treeError = new ErrorState(QStringLiteral("This image cannot be edited"), {}, {}, treeCard);
-    plainLabels(m_treeError);
     m_treeError->hide();
     treeCard->body()->addWidget(m_treeError);
     el->addWidget(treeCard);
@@ -668,6 +661,7 @@ void ImageToolsPage::loadImage(const QString& path)
         m_ops.clear();
     m_tree = {};
     m_treeFor.clear();
+    m_reader->cancel(); // a listing of the image shown before is abandoned
     m_summary = {};
     m_summary.path = path;
     m_summary.format = imageFormatOf(path, true);
@@ -1274,7 +1268,6 @@ void ImageToolsPage::rebuildStaged()
         auto* t = new ElideLabel(m_ops[i].describe(), Qt::ElideMiddle, row);
         t->setFont(font::mono());
         setTextColor(t, color::fg_1);
-        plainLabel(t); // names from the image and from the user's drive
         t->setToolTip(m_ops[i].describe());
         h->addWidget(t, 1);
         auto* x = new IconButton(QStringLiteral("close"), QStringLiteral("Remove this change"), IconButton::Size::Small, row);
@@ -1346,7 +1339,6 @@ void ImageToolsPage::newFolder()
     auto* s = new Sheet(window(), QStringLiteral("New folder"), Sheet::Icon::None);
     auto* name = textInput(QStringLiteral("Folder name"), true, s);
     auto* nameField = field(target.isEmpty() ? QStringLiteral("Name (in the image root)") : QStringLiteral("Name (in /%1)").arg(target), name, {}, s);
-    plainLabels(nameField); // the label names a folder of the image
     s->body()->addWidget(nameField);
     const QString n = askName(s, name);
     if (!n.isEmpty())
@@ -1359,7 +1351,6 @@ void ImageToolsPage::newFolder()
 QString ImageToolsPage::askName(Sheet* s, QLineEdit* name)
 {
     auto* why = new MessageRow(s);
-    plainLabels(why); // the reason may quote the name
     s->body()->addWidget(why);
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
     QPushButton* stageButton = s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
@@ -1555,16 +1546,14 @@ Result<QString> ImageToolsPage::submit(bool)
             if (o.op == QLatin1String("delete") || o.op == QLatin1String("replace"))
                 ++deletes;
             if (size_t(lines.size()) < kListed)
-                lines << Sheet::monoSpan(o.describe()); // escapes the names
+                lines << o.describe();
         }
+        QString list = Sheet::monoLines(lines); // escapes the names
         if (m_ops.size() > kListed)
-            lines << QStringLiteral("… and %1 more").arg(m_ops.size() - kListed);
+            list += QStringLiteral("<br>… and %1 more").arg(m_ops.size() - kListed);
         const QString count = QStringLiteral("%1 change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s"));
-        QString title = QStringLiteral("Apply %1 to %2?").arg(count, QFileInfo(m_path).fileName());
-        if (Qt::mightBeRichText(title)) // a file name that reads as markup stays out of the title
-            title = QStringLiteral("Apply %1?").arg(count);
-        if (!Sheet::confirm(window(), title,
-                            lines.join(QStringLiteral("<br>")) + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
+        if (!Sheet::confirm(window(), QStringLiteral("Apply %1 to %2?").arg(count, QFileInfo(m_path).fileName()),
+                            list + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
                             QStringLiteral("Keep editing"), QStringLiteral("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
             return Error(ErrorCode::Cancelled, QStringLiteral("Not applied."));
         auto r = jobs::submitImageEdit(m_ctx, m_path, operationsJson(), jobOverrides());

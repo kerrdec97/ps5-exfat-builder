@@ -50,47 +50,6 @@ QStringList listingOf(const SourceTree& t)
 
 QString seconds(qint64 ms) { return QStringLiteral("%1 s").arg(QString::number(double(ms) / 1000.0, 'f', 1)); }
 
-// True when the drive holding `folder` is FAT32 (or older) and `bytes` is
-// over its 4 GiB file limit: checked before hours of writing fail there.
-bool tooLargeForDrive(const QString& folder, qint64 bytes)
-{
-    if (bytes < 4096 * kMiB)
-        return false;
-    const auto ds = diskSpace(folder);
-    if (!ds.ok())
-        return false;
-    const QString fs = ds->fileSystem.toLower();
-    return fs == u"vfat" || fs == u"msdos" || fs.startsWith(u"fat");
-}
-
-// Gives a finished .part file its final name. When that fails (the image it
-// replaces is mounted or open in another program) the finished work is not
-// thrown away: it is moved to a free name next to it, "<name> (new).<ext>",
-// and the returned error says so. `what` starts that message.
-Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
-{
-    Status st = part.commit(replaceExisting);
-    if (st.ok())
-        return st;
-    const QFileInfo fi(part.finalPath());
-    const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
-    const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
-    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
-        return st; // nothing could be saved: the plain error stands
-    Error e = st.error();
-    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
-    if (e.code == ErrorCode::AlreadyExists)
-        e.message = QStringLiteral("%1, but %2 already exists. It was saved as %3.").arg(what, native(part.finalPath()), native(kept));
-    else if (fi.exists())
-        e.message = QStringLiteral("%1, but could not replace %2 because that file is in use. It was saved as %3. "
-                                   "Close the program that uses the old file, then rename the new one.")
-                        .arg(what, native(part.finalPath()), native(kept));
-    else
-        e.message = QStringLiteral("%1, but could not be named %2. It was saved as %3.")
-                        .arg(what, native(part.finalPath()), native(kept));
-    return e;
-}
-
 QJsonObject geometryJson(const PlanSummary& s)
 {
     const Geometry& g = s.geometry;
@@ -204,7 +163,7 @@ public:
         FW_TRY(validate(ctx.settings));
         if (archive::isZipSource(source())) {
             const QString zip = source();
-            FW_TRY_ASSIGN(m_unpacked, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+            FW_TRY_ASSIGN(m_unpacked, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, marginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_unpacked)));
         }
         const QString src = source(), out = output();

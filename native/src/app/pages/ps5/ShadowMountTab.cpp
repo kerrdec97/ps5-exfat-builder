@@ -149,6 +149,8 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     m_stop->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kShadowMountStop));
     m_eject->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kShadowMountEject));
     m_loader->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kPayloadSend));
+    connect(&m_ctx.queue(), &JobQueue::jobChanged, this, &ShadowMountTab::onStopJob);
+    connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &ShadowMountTab::onStopJob);
 
     // ---- The settings, one folded section per group.
     m_problems = new InfoBar(Tone::Warn, this);
@@ -601,7 +603,7 @@ void ShadowMountTab::push(bool confirmed)
                                      : QString();
         if (!Sheet::confirm(window(), QStringLiteral("Write %1 change%2 to the console?").arg(ch.size()).arg(ch.size() == 1 ? QString() : QStringLiteral("s")),
                             QStringLiteral("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
-                                .arg(monoLines(lines), Sheet::monoSpan(where), debugOff),
+                                .arg(Sheet::monoLines(lines), Sheet::monoSpan(where), debugOff),
                             QStringLiteral("Cancel"), QStringLiteral("Push"), false, Sheet::Icon::Info))
             return;
     }
@@ -642,20 +644,60 @@ void ShadowMountTab::safeToUnplug()
         emit toastRequested(Tone::Warn, QStringLiteral("No console address"), QStringLiteral("Enter the console's IP address at the top of the page first."));
         return;
     }
-    if (m_hasLoaded && m_loaded.value(QStringLiteral("debug"), QStringLiteral("1")) == u"0"
-        && !Sheet::confirm(window(), QStringLiteral("debug is off"),
-                           QStringLiteral("With debug=0 ShadowMount+ logs nothing, so the cleanup cannot be confirmed: the result will "
-                                          "stay amber. Send STOP anyway?"),
-                           QStringLiteral("Cancel"), QStringLiteral("Send STOP"), false, Sheet::Icon::Warning))
+    // One question, naming the console: stopping takes the images away from
+    // whatever runs from them.
+    const bool debugOff = m_hasLoaded && m_loaded.value(QStringLiteral("debug"), QStringLiteral("1")) == u"0";
+    if (!Sheet::confirm(window(), QStringLiteral("Stop ShadowMount+?"),
+                        QStringLiteral("ShadowMount+ on %1 is stopped and releases every image. A game that runs from an image loses its "
+                                       "files: close it first.%2")
+                            .arg(Sheet::monoSpan(ep.host),
+                                 debugOff ? QStringLiteral("<br><br>debug is off: ShadowMount+ logs nothing then, so the cleanup cannot be "
+                                                           "confirmed and the result stays amber.")
+                                          : QString()),
+                        QStringLiteral("Cancel"), QStringLiteral("Stop ShadowMount+"), true, Sheet::Icon::Warning))
         return;
     auto r = jobs::submitShadowMountStop(m_ctx, ep.host, ep.ftpPort);
     if (!r.ok()) {
         emit toastRequested(Tone::Err, QStringLiteral("Not started"), r.error().message);
         return;
     }
+    m_stopJobId = r.value();
     m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
-    setStatus(QStringLiteral("STOP sent. Wait for the green confirmation on the Queue page before unplugging."), Tone::Info);
-    emit toastRequested(Tone::Info, QStringLiteral("Stopping ShadowMount+"), QStringLiteral("Wait for the green confirmation before unplugging."));
+    onStopJob(m_stopJobId); // the status says whether STOP is on its way or still waits
+}
+
+// The status line says what the job is doing, not what was clicked.
+void ShadowMountTab::onStopJob(const QString& id)
+{
+    if (id.isEmpty() || id != m_stopJobId)
+        return;
+    const auto rec = m_ctx.queue().record(id);
+    if (!rec)
+        return;
+    switch (rec->state) {
+    case JobState::Queued:
+        setStatus(QStringLiteral("Waiting for the job that is running. STOP is sent after it; do not unplug yet."), Tone::Info);
+        return;
+    case JobState::Running:
+    case JobState::Paused:
+    case JobState::Cancelling:
+        setStatus(rec->progress.currentItem.isEmpty() ? QStringLiteral("Stopping ShadowMount+ and waiting for it to release the images. Do not unplug yet.")
+                                                      : rec->progress.currentItem,
+                  Tone::Info);
+        return;
+    case JobState::Succeeded:
+        // Green only when the cleanup was confirmed in the console's log.
+        if (rec->outcome)
+            setStatus(rec->outcome->summary, rec->outcome->verification == Verification::Passed ? Tone::Ok : Tone::Warn);
+        break;
+    case JobState::Cancelled:
+        setStatus(QStringLiteral("Cancelled. ShadowMount+ may still be running: do not unplug."), Tone::Warn);
+        break;
+    default:
+        setStatus(rec->error ? rec->error->message : QStringLiteral("ShadowMount+ was not stopped. See the log."), Tone::Err);
+        break;
+    }
+    m_stopJobId.clear();
 }
 
 void ShadowMountTab::ejectUsb()

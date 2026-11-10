@@ -329,6 +329,7 @@ void registerModule(ModuleContext& ctx)
         d.description = QStringLiteral("Folders that hold your PS5 game dumps, one game per sub-folder. "
                                        "The Library scans these. Files in them are only read.");
         d.type = SettingType::StringList;
+        d.folderList = true;
         d.defaultValue = QStringList();
         d.order = 100;
         s.add(d);

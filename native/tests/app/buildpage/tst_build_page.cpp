@@ -852,19 +852,30 @@ private slots:
             if (setting)
                 continue;
             for (auto* l : row->findChildren<QLabel*>())
-                QCOMPARE(l->textFormat(), Qt::PlainText);
+                if (l->pixmap().isNull()) // the icon is a picture, not text
+                    QCOMPARE(l->textFormat(), Qt::PlainText);
             ++checked;
         }
         QVERIFY(checked >= 3);
+        // What a tooltip shows for a text: Qt renders it when it looks like markup.
+        const auto shown = [](const QString& tip) {
+            if (!Qt::mightBeRichText(tip))
+                return tip;
+            QTextDocument doc;
+            doc.setHtml(tip);
+            return doc.toPlainText();
+        };
         QVERIFY(Qt::mightBeRichText(title));
-        QCOMPARE(pages::plainTip(title), Qt::convertFromPlainText(title));
-        QVERIFY(pages::plainTip(title).contains(QStringLiteral("&lt;b&gt;")));
-        QCOMPARE(pages::plainTip(QStringLiteral("D:\\Games & more\\a.bin")), QStringLiteral("D:\\Games & more\\a.bin"));
-        // The tooltip of an elided label goes through the same conversion.
+        QVERIFY(shown(title) != title); // handed over as it is, it would be rendered
+        QCOMPARE(shown(ui::plainTip(title)), title);
+        const QString folder = QStringLiteral("D:\\Games & more\\a.bin");
+        QCOMPARE(shown(ui::plainTip(folder)), folder);
+        // A tooltip set without the helper is shown literally all the same
+        // (the application-wide tooltip rule).
         strip->setToolTip(title);
         QHelpEvent tip(QEvent::ToolTip, QPoint(2, 2), strip->mapToGlobal(QPoint(2, 2)));
         QVERIFY(QCoreApplication::sendEvent(strip, &tip));
-        QCOMPARE(QToolTip::text(), pages::plainTip(title));
+        QCOMPARE(shown(QToolTip::text()), title);
         QToolTip::hideText();
         m_page->setSource({});
     }
@@ -1180,6 +1191,16 @@ private slots:
         QCOMPARE(contentId->text(), QStringLiteral("UP0000-PPSA01234_00-GOLDENTEST000000"));
         QCOMPARE(version->text(), QStringLiteral("01.000.000"));
         QCOMPARE(title->text(), QStringLiteral("Test Game"));
+        // The content ID of an app or update is the game's own: shown, not
+        // edited. An add-on has an ID of its own to enter.
+        QVERIFY(contentId->isReadOnly());
+        QVERIFY2(contentId->toolTip().contains(QStringLiteral("param.json")), qPrintable(contentId->toolTip()));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("update")}});
+        QVERIFY(contentId->isReadOnly());
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("addon")}});
+        QVERIFY(!contentId->isReadOnly());
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("app")}});
+        QVERIFY(contentId->isReadOnly());
         // An image has no param.json the page reads: nothing of the game before it may stay.
         const QString image = path(QStringLiteral("PPSA05555 Other Game.exfat"));
         QVERIFY(fwtest::writeTextFile(image, QByteArray(4096, '\0')));

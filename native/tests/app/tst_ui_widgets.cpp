@@ -161,6 +161,11 @@ private slots:
         QCOMPARE(wide->toolTip(), plainTip(wide->fullText()));
         QVERIFY(wide->toolTip().contains(QStringLiteral("&lt;img src=x&gt;&lt;b&gt;t&lt;/b&gt;")));
         QVERIFY(!wide->toolTip().contains(QStringLiteral("<img")));
+        // A tooltip the owner set says more than the label: a new layout keeps it.
+        wide->setToolTip(QStringLiteral("the owner's own text"));
+        wide->setFullText(wide->fullText() + QStringLiteral(" and more"));
+        wide->resize(wide->width() - 10, wide->height());
+        QCOMPARE(wide->toolTip(), QStringLiteral("the owner's own text"));
     }
 
     void toastShowsMarkupLiterally()
@@ -499,12 +504,46 @@ private slots:
         QVERIFY(guard.isNull());
     }
 
+    // ---- numbers ------------------------------------------------------------------------
+
+    // A typed number may use the system's decimal separator; it is stored with a dot.
+    void numberFieldsAcceptTheLocalesDecimalSeparator()
+    {
+        const QLocale german(QLocale::German, QLocale::Germany);
+        const QLocale english(QLocale::English, QLocale::UnitedStates);
+        QCOMPARE(german.decimalPoint(), QStringLiteral(","));
+        QCOMPARE(SettingEditor::numberText(QStringLiteral(" 1,5 "), german), QStringLiteral("1.5"));
+        QCOMPARE(SettingEditor::numberText(QStringLiteral("1.5"), german), QStringLiteral("1.5"));
+        QCOMPARE(SettingEditor::numberText(QStringLiteral("12"), german), QStringLiteral("12"));
+        // Not a number with one separator: left for the setting's own check to refuse.
+        QCOMPARE(SettingEditor::numberText(QStringLiteral("1.234,5"), german), QStringLiteral("1.234,5"));
+        QCOMPARE(SettingEditor::numberText(QStringLiteral("1,2,3"), german), QStringLiteral("1,2,3"));
+        QCOMPARE(SettingEditor::numberText(QStringLiteral("1,5"), english), QStringLiteral("1,5"));
+
+        SettingDef amount;
+        amount.key = QStringLiteral("test.amount");
+        amount.label = QStringLiteral("Amount");
+        amount.type = SettingType::Double;
+        SettingEditor ed(amount, m_window.get());
+        auto* edit = ed.widget()->findChild<QLineEdit*>();
+        QVERIFY(edit);
+        QSignalSpy spy(&ed, &SettingEditor::edited);
+        const QString sep = QLocale::system().decimalPoint();
+        edit->setText(QStringLiteral("2") + sep + QStringLiteral("5"));
+        emit edit->editingFinished();
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().first().toString(), QStringLiteral("2.5"));
+        QCOMPARE(ed.value().toString(), QStringLiteral("2.5"));
+        delete ed.widget();
+    }
+
     // ---- the list editor ----------------------------------------------------------------
 
     void stringListEditorKeepsPatternsAsWritten()
     {
+        // The definition says which kind of list it is, not the key's name.
         SettingDef patterns;
-        patterns.key = QStringLiteral("test.excludePatterns");
+        patterns.key = QStringLiteral("test.folderPatterns");
         patterns.label = QStringLiteral("Leave out");
         patterns.type = SettingType::StringList;
         SettingEditor ed(patterns, m_window.get());
@@ -533,6 +572,7 @@ private slots:
         folders.key = QStringLiteral("general.libraryFolders");
         folders.label = QStringLiteral("Library folders");
         folders.type = SettingType::StringList;
+        folders.folderList = true;
         SettingEditor fed(folders, m_window.get());
         QCOMPARE(fed.widget()->findChildren<QPushButton*>().size(), 1);
         fed.setValue(QStringList{QStringLiteral("D:/Dumps/A")});

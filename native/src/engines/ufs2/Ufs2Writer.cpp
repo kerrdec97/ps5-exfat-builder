@@ -652,7 +652,7 @@ QByteArray buildSuperblock(const Ufs2Writer::Plan& p, qint64 ndir, qint64 nbfree
     wr32(o + 0x0C8, quint32(nifree & 0xFFFFFFFF));
     wr32(o + 0x0CC, quint32(nffree & 0xFFFFFFFF));
     o[0x0D1] = 1;    // fs_clean
-    o[0x0D3] = char(0x80); // fs_old_flags = FS_FLAGS_UPDATED
+    o[0x0D3] = '\x80';     // fs_old_flags = FS_FLAGS_UPDATED
     o[0x0D4] = '/';  // fs_fsmnt
     wr32s(o + 0x35C, kMaxBSize);
     wr64(o + 0x368, g.totalFrags); // fs_providersize

@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Sheet.h"
 #include "connect/ps5/Module.h"
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
@@ -257,7 +258,19 @@ void DiagnosticsTab::run(bool speedTest)
         return;
     }
     const int port = m_src.port ? m_src.port() : 0;
-    auto r = jobs::submitFtpDiagnose(m_ctx, host, port, m_folder->text(), speedTest);
+    // The checks write into the folder: a system folder is asked about first,
+    // also when it is the games folder from Settings (no folder typed).
+    const QString typed = m_folder->text().trimmed();
+    const QString dir = ps5::normalizeRemotePath(typed.isEmpty() ? m_ctx.settings().value(ps5::keys::kGamesFolder).toString() : typed);
+    const bool protectedDir = ps5::isProtectedRemotePath(dir);
+    if (protectedDir) {
+        const bool go = ui::Sheet::confirm(window(), QStringLiteral("Test a system folder?"),
+                                           ps5::protectedPathWarning(dir, speedTest ? QStringLiteral("the speed test") : QStringLiteral("the write test")),
+                                           QStringLiteral("Cancel"), QStringLiteral("Continue anyway"), true, ui::Sheet::Icon::Warning);
+        if (!go || isRunning()) // the question ran an event loop
+            return;
+    }
+    auto r = jobs::submitFtpDiagnose(m_ctx, host, port, m_folder->text(), speedTest, protectedDir);
     if (!r.ok()) {
         setStatus(r.error().message, Tone::Err);
         return;

@@ -37,11 +37,21 @@ static bool useSegmented(const SettingDef& def)
 // separators; a pattern is shown and stored exactly as it is written.
 static bool isFolderList(const SettingDef& def)
 {
-    const QString name = def.key.section(u'.', -1);
-    return name.contains(QLatin1String("folder"), Qt::CaseInsensitive) || name.contains(QLatin1String("dir"), Qt::CaseInsensitive);
+    return def.type == SettingType::StringList && def.folderList;
 }
 
 static QString listText(const QStringList& items) { return items.join(QStringLiteral("; ")); }
+
+QString SettingEditor::numberText(const QString& typed, const QLocale& locale)
+{
+    const QString sep = locale.decimalPoint();
+    QString t = typed.trimmed();
+    // "1,5" where the comma is the decimal separator. A text that already
+    // has a dot, or more than one separator, is left for the check to refuse.
+    if (sep != QLatin1String(".") && !sep.isEmpty() && !t.contains(u'.') && t.count(sep) == 1)
+        t.replace(sep, QStringLiteral("."));
+    return t;
+}
 
 void SettingEditor::build(QWidget* parent)
 {
@@ -97,10 +107,10 @@ void SettingEditor::build(QWidget* parent)
         h->addWidget(edit);
         if (!m_def.unit.isEmpty())
             h->addWidget(caption(m_def.unit, wrap));
-        connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
+        connect(edit, &QLineEdit::editingFinished, this, [this, edit, numeric] {
             if (m_updating)
                 return;
-            const QString t = edit->text().trimmed();
+            const QString t = numeric ? numberText(edit->text()) : edit->text().trimmed();
             if (t == edit->property("fwLast").toString())
                 return;
             edit->setProperty("fwLast", t);
@@ -180,7 +190,7 @@ QVariant SettingEditor::value() const
             return seg->currentValue();
         return static_cast<QComboBox*>(m_control)->currentData();
     case SettingType::Int:
-    case SettingType::Double:
+    case SettingType::Double: return numberText(static_cast<QLineEdit*>(m_control)->text());
     case SettingType::String: return static_cast<QLineEdit*>(m_control)->text().trimmed();
     case SettingType::DirPath:
     case SettingType::FilePath: return static_cast<PathField*>(m_widget)->path();

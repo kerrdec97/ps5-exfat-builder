@@ -338,6 +338,8 @@ private slots:
         LeftoverOptions off{true, false, false};
         LeftoverContext none;
         QVERIFY(leftoverReason(root, QStringLiteral("_DUBLEX_"), true, on, none).size());
+        QVERIFY(leftoverReason(root, QStringLiteral("_Dublex_"), true, on, none).size()); // any case, like every other rule
+        QVERIFY(!leftoverReason(root, QStringLiteral("_DUBLEX_2"), true, on, none).size());
         QVERIFY(!leftoverReason(root, QStringLiteral("_DUBLEX_"), true, off, none).size());
         LeftoverContext onlySaved;
         onlySaved.childNames = {QStringLiteral("Saved")};

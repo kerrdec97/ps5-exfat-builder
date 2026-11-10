@@ -628,12 +628,8 @@ Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QStr
                 return failed();
             return success();
         }, token, progress));
-        if (!out.flush()) // the time stamp must come after the last write
-            return failed();
-        out.setFileTime(e.modified, QFileDevice::FileModificationTime);
-        out.close();
-        if (out.error() != QFileDevice::NoError)
-            return failed();
+        // A full or vanished drive often shows only here, not in write().
+        FW_TRY(finishWrittenFile(out, e.name, e.modified));
         FW_TRY(part.commit(false));
         ++result.restored;
     }

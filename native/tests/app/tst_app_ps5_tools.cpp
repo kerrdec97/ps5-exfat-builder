@@ -13,6 +13,7 @@
 #include "app/pages/ps5/ShadowMountTab.h"
 #include "app/pages/ps5/TransferPanel.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/ps5/Module.h"
@@ -21,10 +22,13 @@
 
 #include <QDir>
 #include <QFile>
+#include <QLabel>
+#include <QPushButton>
 #include <QSettings>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -504,6 +508,75 @@ private slots:
         tab.push(true);
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && tab.statusText().contains(QStringLiteral("changed on the console")), 15000);
         QCOMPARE(readAll(root + QStringLiteral("/data/shadowmount/config.ini")), QByteArray("debug=0\n"));
+    }
+
+    // Safe to unplug: one question that names the console, "Cancel" starts
+    // nothing, and the status line follows the job instead of saying "sent".
+    void safeToUnplugAsksAndFollowsItsJob()
+    {
+        const QString root = fresh(QStringLiteral("smp-stop"));
+        QVERIFY(writeBytes(root + QStringLiteral("/data/shadowmount/debug.log"), "ShadowMount+ v1.7beta11 exFAT/UFS/PFS/LVD/MD. FW: 9.60.\n"));
+        FakeFtpServer::Options o;
+        o.root = root;
+        FakeFtpServer srv(o);
+        auto ep = fakeConsole(srv.port());
+        pages::ShadowMountTab tab(*m_ctx, [ep] {
+            auto e = ep();
+            e.smpApiPort = 1;
+            return e;
+        });
+        tab.resize(1100, 900);
+        tab.show();
+        const auto stopJobs = [&] {
+            QStringList ids;
+            for (const JobRecord& r : m_ctx->queue().records())
+                if (r.kind == ps5::jobkinds::kShadowMountStop)
+                    ids << r.id;
+            return ids;
+        };
+        QString asked;
+        const auto answer = [&](const QString& button) {
+            auto* poll = new QTimer(&tab);
+            connect(poll, &QTimer::timeout, &tab, [&tab, &asked, poll, button] {
+                for (auto* s : tab.findChildren<ui::Sheet*>()) {
+                    if (!s->isVisible())
+                        continue;
+                    for (auto* b : s->findChildren<QPushButton*>()) {
+                        if (b->text() != button)
+                            continue;
+                        QStringList texts;
+                        for (auto* l : s->findChildren<QLabel*>())
+                            texts << l->text();
+                        asked = texts.join(u'\n');
+                        poll->stop();
+                        poll->deleteLater();
+                        b->click();
+                        return;
+                    }
+                }
+            });
+            poll->start(20);
+        };
+        const QStringList before = stopJobs();
+        answer(QStringLiteral("Cancel"));
+        tab.safeToUnplug(); // blocks in the question
+        QVERIFY2(asked.contains(QStringLiteral("Stop ShadowMount+?")) && asked.contains(ep().host), qPrintable(asked));
+        QCOMPARE(stopJobs(), before);
+        QVERIFY(!tab.statusText().contains(QStringLiteral("STOP")));
+
+        answer(QStringLiteral("Stop ShadowMount+"));
+        tab.safeToUnplug();
+        QStringList now = stopJobs();
+        QCOMPARE(now.size(), before.size() + 1);
+        const QString id = now.last();
+        // While the job is under way the line says so, and never "sent" before it is.
+        QVERIFY2(!tab.statusText().contains(QStringLiteral("STOP sent")), qPrintable(tab.statusText()));
+        QVERIFY(!tab.statusText().isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(m_ctx->queue().record(id) && isTerminal(m_ctx->queue().record(id)->state), 120000);
+        const auto rec = m_ctx->queue().record(id);
+        const QString verdict = rec->outcome ? rec->outcome->summary : rec->error ? rec->error->message : QString();
+        QVERIFY(!verdict.isEmpty());
+        QTRY_COMPARE(tab.statusText(), verdict); // the job's own verdict, whatever it is
     }
 };
 

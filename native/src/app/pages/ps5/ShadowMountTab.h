@@ -78,6 +78,7 @@ private:
     void populate(const ps5::MountConfigValues& values);
     void refreshMarks();
     void setStatus(const QString& text, ui::Tone tone);
+    void onStopJob(const QString& id); // the Safe to unplug job changed or ended
     void updateHeader();
     void finishLoad(const ps5::SmpRemoteState& state, const QString& consoleHost);
     QWidget* buildMicroMount(QWidget* parent);
@@ -108,6 +109,7 @@ private:
     QLabel* m_unknownText;
     ui::Disclosure* m_unknown;
     QList<ui::Disclosure*> m_groups;
+    QString m_stopJobId; // the Safe to unplug job the status line follows
     // MicroMount (archived)
     QTableWidget* m_mmTable = nullptr;
     QLabel* m_mmStatus = nullptr;

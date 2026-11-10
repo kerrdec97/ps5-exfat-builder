@@ -128,7 +128,7 @@ Sidebar::Sidebar(QWidget* parent) : QWidget(parent)
     outer->addWidget(inner, 1);
     m_group = new QButtonGroup(this);
     m_group->setExclusive(true);
-    m_version = label({}, TextStyle::Caption, color::fg_5, this);
+    m_version = label({}, TextStyle::Caption, color::fg_4, this);
     m_version->setContentsMargins(14, 10, 14, 2);
     connect(m_group, &QButtonGroup::buttonClicked, this, [this](QAbstractButton* b) {
         if (auto* n = qobject_cast<NavItem*>(b))
@@ -151,7 +151,7 @@ void Sidebar::paintEvent(QPaintEvent*)
 
 void Sidebar::addGroup(const QString& overline)
 {
-    auto* l = label(overline, TextStyle::Overline, color::fg_5, this);
+    auto* l = label(overline, TextStyle::Overline, color::fg_4, this);
     l->setContentsMargins(14, 16, 14, 6);
     m_groupLabels << l;
     m_layout->addWidget(l);

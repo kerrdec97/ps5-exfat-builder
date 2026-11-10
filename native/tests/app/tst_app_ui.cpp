@@ -15,6 +15,7 @@
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
 #include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/SettingRow.h"
@@ -22,19 +23,28 @@
 #include "app/ui/Shell.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/FileUtil.h"
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
 #include "connect/ps5/FakePs5.h"
+#include "connect/update/Module.h"
+#include "engines/ampr/Module.h"
 #include "engines/tools/DlcEmu.h"
 
+#include <QCryptographicHash>
+#include <QDesktopServices>
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QLabel>
 #include <QLineEdit>
 #include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -121,6 +131,92 @@ bool waitForState(JobQueue& q, const QString& id, JobState st, int ms = 10000)
     }, ms);
 }
 
+// A local stand-in for GitHub: GET <path> -> a fixed body.
+class MiniHttp : public QObject {
+public:
+    QMap<QString, QByteArray> routes;
+    QStringList requested;
+
+    MiniHttp()
+    {
+        connect(&m_server, &QTcpServer::newConnection, this, [this] {
+            while (QTcpSocket* s = m_server.nextPendingConnection()) {
+                connect(s, &QTcpSocket::readyRead, s, [this, s] {
+                    QByteArray& buf = m_buf[s];
+                    buf += s->readAll();
+                    if (!buf.contains("\r\n\r\n"))
+                        return;
+                    const QList<QByteArray> parts = buf.split(' ');
+                    const QString path = parts.size() > 1 ? QString::fromLatin1(parts[1]) : QString();
+                    buf.clear();
+                    requested << path;
+                    const bool known = routes.contains(path);
+                    const QByteArray body = known ? routes.value(path) : QByteArray("not found");
+                    s->write("HTTP/1.1 " + QByteArray(known ? "200" : "404") + " X\r\nContent-Length: " + QByteArray::number(body.size())
+                             + "\r\nConnection: close\r\n\r\n" + body);
+                    s->flush();
+                    s->disconnectFromHost();
+                });
+                connect(s, &QTcpSocket::disconnected, this, [this, s] {
+                    m_buf.remove(s);
+                    s->deleteLater();
+                });
+            }
+        });
+    }
+    bool listen() { return m_server.listen(QHostAddress::LocalHost, 0); }
+    QString base() const { return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort()); }
+
+private:
+    QTcpServer m_server;
+    QHash<QTcpSocket*, QByteArray> m_buf;
+};
+
+const QString kUpdateProgram = QStringLiteral("exFAT.Image.Builder.exe"); // as GitHub serves "exFAT Image Builder.exe"
+
+QString updateAssetPath(const QString& version, const QString& file)
+{
+    return QStringLiteral("/kerrdec97/ps5-exfat-builder/releases/download/v%1/%2").arg(version, file);
+}
+
+// The "latest release" document of GitHub's API, with or without the files.
+QByteArray updateRelease(const QString& base, const QString& version, bool withFiles, qint64 programSize)
+{
+    QJsonArray assets;
+    if (withFiles) {
+        assets.append(QJsonObject{{QStringLiteral("name"), kUpdateProgram},
+                                  {QStringLiteral("size"), programSize},
+                                  {QStringLiteral("browser_download_url"), base + updateAssetPath(version, kUpdateProgram)}});
+        assets.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("SHA256SUMS.txt")},
+                                  {QStringLiteral("size"), 90},
+                                  {QStringLiteral("browser_download_url"), base + updateAssetPath(version, QStringLiteral("SHA256SUMS.txt"))}});
+    }
+    const QJsonObject o{{QStringLiteral("html_url"), QStringLiteral("https://github.com/kerrdec97/ps5-exfat-builder/releases/tag/v") + version},
+                        {QStringLiteral("tag_name"), QStringLiteral("v") + version},
+                        {QStringLiteral("name"), QStringLiteral("exFAT Image Builder ") + version},
+                        {QStringLiteral("draft"), false},
+                        {QStringLiteral("prerelease"), false},
+                        {QStringLiteral("assets"), assets},
+                        {QStringLiteral("body"), QStringLiteral("Fixes")}};
+    return QJsonDocument(o).toJson();
+}
+
+QString labelTexts(QWidget* root)
+{
+    QStringList out;
+    for (auto* l : root->findChildren<QLabel*>())
+        out << l->text();
+    return out.join(u'\n');
+}
+
+ui::Link* linkIn(QWidget* root, const QString& text)
+{
+    for (auto* l : root->findChildren<ui::Link*>())
+        if (l->text() == text)
+            return l;
+    return nullptr;
+}
+
 } // namespace
 
 class TstAppUi : public QObject {
@@ -128,6 +224,21 @@ class TstAppUi : public QObject {
     QTemporaryDir m_root;
     std::unique_ptr<AppContext> m_ctx;
     std::unique_ptr<MainWindow> m_window;
+    QList<QUrl> m_openedUrls;
+
+    // The update banner on screen (an earlier one may still wait for its deletion).
+    ui::InfoBar* updateBanner() const
+    {
+        ui::InfoBar* shown = nullptr;
+        for (auto* b : m_window->findChildren<ui::InfoBar*>(QStringLiteral("update-banner")))
+            if (!b->isHidden())
+                shown = b;
+        return shown;
+    }
+
+public slots:
+    // Stands in for the browser (QDesktopServices::setUrlHandler).
+    void urlOpened(const QUrl& url) { m_openedUrls << url; }
 
 private slots:
     void initTestCase()
@@ -375,6 +486,7 @@ private slots:
 
         QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
         QTRY_VERIFY2(m->stateText().startsWith(QStringLiteral("Done")), qPrintable(m->stateText()));
+        QCOMPARE(m->stateText(), QStringLiteral("Done")); // what the verification found is in the result, not in the badge
         QCOMPARE(m->percentText(), ui::thinPercent(1.0));
         QVERIFY2(m->stageTexts().at(0).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(0)));
         QVERIFY2(m->stageTexts().at(1).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(1)));
@@ -880,6 +992,190 @@ private slots:
         QVERIFY(items[0].toObject().value(QStringLiteral("proposedName")).toString().startsWith(QStringLiteral("PPSA01234 Test Game")));
         QVERIFY(QFileInfo(dump).isDir()); // preview renames nothing
         m_ctx->queue().clearFinished();
+    }
+
+    // A Packed folder job is what it is whatever the global "zstd packs"
+    // switch says, from every page that queues one.
+    void packedFolderJobsCarryTheirOwnSwitch()
+    {
+        const QString src = m_root.filePath(QStringLiteral("pack-src/PPSA07777"));
+        QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(64, 'E')));
+        QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA07777"})"));
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        const auto id = jobs::submitPackFolder(*m_ctx, src, m_root.filePath(QStringLiteral("pack-out/PPSA07777")), {}, {});
+        QVERIFY2(id.ok(), qPrintable(id.ok() ? QString() : id.error().message));
+        QCOMPARE(q.record(id.value())->overrides.value(ampr::keys::kZstdPack).toBool(), true);
+        QVERIFY(q.remove(id.value()));
+        q.holdQueue(false);
+    }
+
+    // Home: the Free space tile shows a value in a screenshot run too (the
+    // worker's answer would come after the picture).
+    void homeFreeSpaceTileIsFilledForScreenshots()
+    {
+        auto* tile = m_window->page(QStringLiteral("home"))->findChild<ui::StatTile*>(QStringLiteral("home-space"));
+        QVERIFY(tile);
+        qApp->setProperty("fwScreenshotMode", true);
+        const auto reset = qScopeGuard([] { qApp->setProperty("fwScreenshotMode", QVariant()); });
+        m_window->navigate(QStringLiteral("queue"));
+        m_window->navigate(QStringLiteral("home"));
+        QStringList texts;
+        for (auto* l : tile->findChildren<QLabel*>())
+            texts << l->text();
+        const QString shown = texts.join(u'|');
+        QVERIFY2(shown.contains(QStringLiteral(" on ")) || shown.contains(QStringLiteral("|on ")) || shown.contains(QStringLiteral("not available")), qPrintable(shown));
+        QVERIFY2(!shown.contains(QStringLiteral("Checking")), qPrintable(shown));
+    }
+
+    // Settings > Storage > Temporary files measures and clears the temporary
+    // folder chosen there as well, and in it only the job folders the app made.
+    void temporaryFilesCoverTheChosenFolder()
+    {
+        auto* page = qobject_cast<pages::SettingsPage*>(m_window->page(QStringLiteral("settings")));
+        QVERIFY(page);
+        const QString custom = m_root.filePath(QStringLiteral("my temp"));
+        QString job;
+        {
+            TempDir t(QStringLiteral("job-J101010-002"), custom);
+            QVERIFY(t.isValid());
+            t.keep();
+            job = t.path();
+            QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("zip-source/eboot.bin")), QByteArray(70000, 'x')));
+        }
+        const QString mine = custom + QStringLiteral("/my notes/keep.txt");
+        QVERIFY(fwtest::writeTextFile(mine, "mine"));
+        QVERIFY(m_ctx->settings().setValue(general::keys::kTempFolder, custom).ok());
+        const auto restore = qScopeGuard([this] { (void)m_ctx->settings().setValue(general::keys::kTempFolder, QString()); });
+        m_window->navigate(QStringLiteral("settings"));
+        page->showSection(QStringLiteral("Storage"));
+        const QString customShown = QDir::toNativeSeparators(custom);
+        const auto usage = [&]() -> QString {
+            for (auto* l : page->findChildren<QLabel*>())
+                if (l->text().contains(customShown) && l->text().contains(QDir::toNativeSeparators(Paths::tempRoot())))
+                    return l->text();
+            return {};
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(!usage().isEmpty(), 10000);
+        QVERIFY2(!usage().startsWith(QStringLiteral("Nothing")), qPrintable(usage()));
+        QPushButton* clear = nullptr;
+        for (auto* b : page->findChildren<QPushButton*>())
+            if (b->text() == QStringLiteral("Clear"))
+                clear = b;
+        QVERIFY(clear);
+        QTRY_VERIFY(clear->isEnabled());
+        QTRY_VERIFY(!m_ctx->queue().isBusy());
+        clear->click();
+        QVERIFY(!QFileInfo::exists(job));
+        QVERIFY(QFile::exists(mine)); // the user's own folder in there is not the app's to remove
+        QTRY_VERIFY_WITH_TIMEOUT(usage().startsWith(QStringLiteral("Nothing to clear in")), 10000);
+    }
+
+    // A release is the program file itself: the app says "up to date", offers
+    // the release page when it cannot check the download, and otherwise
+    // downloads, verifies and then only tells where the file is. Nothing is
+    // started, nothing closes and the running program is not replaced.
+    void updateFlowFollowsWhatTheReleaseOffers()
+    {
+        update::setLoopbackAllowedForTests(true);
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), this, "urlOpened");
+        const auto restore = qScopeGuard([] {
+            QDesktopServices::unsetUrlHandler(QStringLiteral("https"));
+            update::setLoopbackAllowedForTests(false);
+        });
+        MiniHttp http;
+        QVERIFY(http.listen());
+        const QString api = http.base() + QStringLiteral("/latest");
+        pages::Page* about = m_window->page(QStringLiteral("about"));
+        QVERIFY(about);
+        auto* status = about->findChild<ui::Badge*>(QStringLiteral("about-update-status"));
+        auto* action = about->findChild<QPushButton*>(QStringLiteral("about-update-action"));
+        QVERIFY(status && action);
+        QVERIFY(action->isHidden());
+        m_window->navigate(QStringLiteral("about"));
+
+        // 1. Nothing newer.
+        http.routes[QStringLiteral("/latest")] = updateRelease(http.base(), QStringLiteral("1.0.0"), true, 6 * 1024 * 1024);
+        m_window->checkForUpdates(false, api);
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Up to date"), 15000);
+        QVERIFY(!updateBanner());
+        QVERIFY(action->isHidden());
+
+        // 2. Newer, but no file the app can check: the release page is the action.
+        http.routes[QStringLiteral("/latest")] = updateRelease(http.base(), QStringLiteral("9.1.0"), false, 0);
+        m_window->checkForUpdates(false, api);
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Version 9.1.0 available"), 15000);
+        QTRY_VERIFY(updateBanner());
+        ui::InfoBar* bar = updateBanner();
+        QVERIFY2(labelTexts(bar).contains(QStringLiteral("Version 9.1.0 is available")), qPrintable(labelTexts(bar)));
+        QVERIFY(!linkIn(bar, QStringLiteral("Download")));
+        ui::Link* open = linkIn(bar, QStringLiteral("Open the release page"));
+        QVERIFY(open);
+        QCOMPARE(action->text(), QStringLiteral("Open the release page"));
+        QVERIFY(!action->isHidden());
+        const int jobsBefore = int(m_ctx->queue().records().size());
+        emit open->activated();
+        QCOMPARE(m_openedUrls.size(), 1);
+        QCOMPARE(m_openedUrls.first().toString(), QStringLiteral("https://github.com/kerrdec97/ps5-exfat-builder/releases/tag/v9.1.0"));
+        action->click();
+        QCOMPARE(m_openedUrls.size(), 2);
+        QCOMPARE(int(m_ctx->queue().records().size()), jobsBefore); // no download job for such a release
+        m_openedUrls.clear();
+
+        // 3. Newer with the program and its checksum; the first download arrives damaged.
+        const QString version = QStringLiteral("9.2.0");
+        QByteArray program(6 * 1024 * 1024, 'p');
+        program[321] = 'q';
+        const QByteArray sums = QCryptographicHash::hash(program, QCryptographicHash::Sha256).toHex() + "  exFAT Image Builder.exe\n";
+        http.routes[QStringLiteral("/latest")] = updateRelease(http.base(), version, true, program.size());
+        http.routes[updateAssetPath(version, QStringLiteral("SHA256SUMS.txt"))] = sums;
+        QByteArray damaged = program;
+        damaged[1000] = 'x';
+        http.routes[updateAssetPath(version, kUpdateProgram)] = damaged;
+        m_window->checkForUpdates(false, api);
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Version 9.2.0 available"), 15000);
+        QTRY_VERIFY(updateBanner() && linkIn(updateBanner(), QStringLiteral("Download")));
+        bar = updateBanner();
+        QVERIFY(!linkIn(bar, QStringLiteral("Open the release page")));
+        QVERIFY(linkIn(bar, QStringLiteral("What's new")));
+        QCOMPARE(action->text(), QStringLiteral("Download"));
+        const QString file = QDir(Paths::cacheDir()).filePath(QStringLiteral("updates/") + kUpdateProgram);
+        QFile::remove(file);
+
+        emit linkIn(bar, QStringLiteral("Download"))->activated();
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Downloading version 9.2.0…"), 5000);
+        // The failed check of the file shows its error and the state is "available" again.
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Version 9.2.0 available"), 30000);
+        QVERIFY(!QFile::exists(file));
+        QVERIFY(updateBanner() == bar);
+        QVERIFY(linkIn(bar, QStringLiteral("Download")));
+
+        // The good file: downloaded, verified, and left where the banner says.
+        http.routes[updateAssetPath(version, kUpdateProgram)] = program;
+        action->click(); // the About page's button does the same as the banner's link
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Version 9.2.0 downloaded"), 30000);
+        QTRY_VERIFY(updateBanner() && updateBanner() != bar);
+        bar = updateBanner();
+        const QString text = labelTexts(bar);
+        QVERIFY2(text.contains(QStringLiteral("Version 9.2.0 downloaded and verified")), qPrintable(text));
+        QVERIFY2(text.contains(QStringLiteral("close the app and replace your exFAT Image Builder.exe")), qPrintable(text));
+        QVERIFY(!text.contains(QStringLiteral("install"), Qt::CaseInsensitive));
+        QVERIFY(linkIn(bar, QStringLiteral("Show in folder")));
+        QVERIFY(!linkIn(bar, QStringLiteral("Download")));
+        QCOMPARE(action->text(), QStringLiteral("Show in folder"));
+        QFile f(file);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), program);
+        // The app is still here and asked for nothing else.
+        QVERIFY(m_window->isVisible());
+        QVERIFY(m_openedUrls.isEmpty());
+        QCOMPARE(http.requested.count(updateAssetPath(version, kUpdateProgram)), 2);
+
+        // Another check finds the same release: the file is not fetched again.
+        m_window->checkForUpdates(false, api);
+        QTRY_VERIFY_WITH_TIMEOUT(http.requested.count(QStringLiteral("/latest")) == 4, 15000);
+        QTRY_COMPARE_WITH_TIMEOUT(status->text(), QStringLiteral("Version 9.2.0 downloaded"), 15000);
+        QTRY_VERIFY(updateBanner() && linkIn(updateBanner(), QStringLiteral("Show in folder")));
     }
 
     void screenshotsCoverEveryPage()

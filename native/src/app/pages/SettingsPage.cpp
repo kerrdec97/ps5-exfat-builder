@@ -6,6 +6,7 @@
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "engines/general/Module.h"
 
 #include <QAction>
 #include <QButtonGroup>
@@ -251,6 +252,22 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     connect(m_resetSection, &QPushButton::clicked, this, [this] {
         if (m_section == QLatin1String("Tools") && m_ctx.schema().inSection(m_section).empty())
             return;
+        // Stored values that would change: asked about first, as Reset all is.
+        // With none there is only a refused entry to take back: no question.
+        int changed = 0;
+        bool paths = false;
+        for (const SettingDef* d : m_ctx.schema().inSection(m_section)) {
+            if (m_ctx.settings().isDefault(d->key))
+                continue;
+            ++changed;
+            paths = paths || d->type == SettingType::DirPath || d->type == SettingType::FilePath;
+        }
+        if (changed > 0
+            && !Sheet::confirm(window(), changed == 1 ? QStringLiteral("Reset 1 setting?") : QStringLiteral("Reset %1 settings?").arg(changed),
+                               QStringLiteral("The settings you changed in %1 go back to their defaults.%2 Jobs already in the queue keep their settings.")
+                                   .arg(m_section, paths ? QStringLiteral(" Paths you entered there are cleared too.") : QString()),
+                               QStringLiteral("Keep settings"), QStringLiteral("Reset section"), true, Sheet::Icon::Warning))
+            return;
         m_ctx.settings().resetSection(m_section);
         (void)m_ctx.settings().save();
         rebuild(); // also forgets the refused values of the rows it replaces
@@ -261,6 +278,8 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         refreshRow(key);
         refreshDependencyStates();
         updateSectionHeader();
+        if (key == general::keys::kTempFolder)
+            updateTempUsage(); // "Temporary files" names and measures that folder too
     });
     connect(&m_ctx.settings(), &SettingsStore::resetDone, this, &SettingsPage::rebuild);
     connect(&m_ctx, &AppContext::dependenciesChecked, this, [this] {
@@ -479,7 +498,8 @@ void SettingsPage::buildSection(const QString& section)
         m_cardsLayout->addWidget(card);
     }
     if (section == QLatin1String("Storage")) {
-        // Temporary files (Paths::tempUsageBytes / sweepStaleTemp).
+        // Temporary files: the app's own temp root and, when one is chosen,
+        // the temporary folder of this section (jobs run there then).
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
         card->setTitle(QStringLiteral("Temporary files"));
@@ -498,7 +518,9 @@ void SettingsPage::buildSection(const QString& section)
                 emit toastRequested(Tone::Warn, QStringLiteral("Jobs are running"), QStringLiteral("Temporary files are cleared when the queue is idle."));
                 return;
             }
-            const int n = Paths::sweepStaleTemp(0);
+            int n = Paths::sweepStaleTemp(0);
+            if (const QString custom = m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed(); !custom.isEmpty())
+                n += Paths::sweepStaleTempIn(custom, 0);
             emit toastRequested(Tone::Ok, QStringLiteral("Temporary files cleared"), QStringLiteral("%1 folder%2 removed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
             updateTempUsage();
         });
@@ -624,13 +646,19 @@ void SettingsPage::updateTempUsage()
     if (!m_tempUsage)
         return;
     QPointer<SettingsPage> self(this);
-    (void)QtConcurrent::run([self] {
-        const qint64 bytes = Paths::tempUsageBytes();
-        QMetaObject::invokeMethod(qApp, [self, bytes] {
+    const QString custom = m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed();
+    (void)QtConcurrent::run([self, custom] {
+        // In the chosen folder only the job folders the app created count.
+        const qint64 bytes = Paths::tempUsageBytes() + (custom.isEmpty() ? 0 : Paths::tempUsageBytesIn(custom));
+        QMetaObject::invokeMethod(qApp, [self, bytes, custom] {
             if (!self || !self->m_tempUsage)
                 return;
-            self->m_tempUsage->setText(bytes > 0 ? QStringLiteral("%1 in %2").arg(formatBytes(bytes), nativePath(Paths::tempRoot()))
-                                                 : QStringLiteral("Nothing to clear in %1").arg(nativePath(Paths::tempRoot())));
+            if (custom != self->m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed())
+                return; // the folder was changed meanwhile: its own measurement follows
+            const QString where = custom.isEmpty() ? nativePath(Paths::tempRoot())
+                                                   : QStringLiteral("%1 and %2").arg(nativePath(Paths::tempRoot()), nativePath(custom));
+            self->m_tempUsage->setText(bytes > 0 ? QStringLiteral("%1 in %2").arg(formatBytes(bytes), where)
+                                                 : QStringLiteral("Nothing to clear in %1").arg(where));
             self->m_tempClear->setEnabled(bytes > 0);
         }, Qt::QueuedConnection);
     });
@@ -783,11 +811,10 @@ void SettingsPage::importLegacyFrom(const QString& path)
         return;
     }
     (void)m_ctx.settings().save();
-    // One span per line (monoSpan escapes what it is given).
     QStringList changed;
     for (const SettingDef* d : m_ctx.schema().all())
         if (m_ctx.settings().value(d->key) != before.value(d->key))
-            changed << Sheet::monoSpan(QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key))));
+            changed << QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key)));
     rebuild();
     const QString title = QStringLiteral("%1 value%2 imported").arg(r.value()).arg(r.value() == 1 ? QString() : QStringLiteral("s"));
     if (changed.isEmpty())
@@ -796,10 +823,10 @@ void SettingsPage::importLegacyFrom(const QString& path)
     {
         // A long list is cut so the button stays on screen.
         const int kShown = 16;
-        QStringList lines = changed.mid(0, kShown);
+        QString list = Sheet::monoLines(changed.mid(0, kShown)); // escapes the values
         if (changed.size() > kShown)
-            lines << QStringLiteral("… and %1 more").arg(changed.size() - kShown);
-        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(lines.join(QStringLiteral("<br>"))), Sheet::Icon::Info);
+            list += QStringLiteral("<br>… and %1 more").arg(changed.size() - kShown);
+        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(list), Sheet::Icon::Info);
     }
 }
 

@@ -15,6 +15,7 @@
 #include "core/Settings.h"
 
 #include <QHash>
+#include <QLocale>
 #include <QPointer>
 #include <QWidget>
 
@@ -34,6 +35,10 @@ public:
     void setEnabled(bool enabled);
     void setError(bool error);
     const SettingDef& def() const { return m_def; }
+    // What a typed number means: values are stored and shown with a dot, and
+    // the decimal separator of `locale` (a comma in much of Europe) is taken
+    // for one. "1,5" -> "1.5" there; everything else is returned trimmed.
+    static QString numberText(const QString& typed, const QLocale& locale = QLocale::system());
 signals:
     void edited(const QVariant& value); // user interaction only
 
@@ -99,6 +104,10 @@ public:
     void clearOverrides();
     bool hasErrors() const { return !m_errors.isEmpty(); }
     QStringList errorMessages() const { return m_errors.values(); }
+    // Which rows show an error, and the message of one: a page that hides
+    // rows for the chosen action leaves their errors out (see JobFormPage).
+    QStringList errorKeys() const { return m_errors.keys(); }
+    QString errorMessage(const QString& key) const { return m_errors.value(key); }
     int rowCount() const { return int(m_rows.size()); }
     SettingRow* row(const QString& key) const { return m_rows.value(key); }
     QStringList keys() const { return m_order; }

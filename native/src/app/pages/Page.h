@@ -60,6 +60,10 @@ public:
     virtual void navigateWith(const QVariantMap& args) { Q_UNUSED(args); }
     virtual QString statusContext() const { return {}; }     // status bar, right side
     virtual void onShown() {}
+    // Edits that exist only in this window and would be lost on exit, as the
+    // middle of a sentence ("autoload.txt has edits that are not saved");
+    // "" when there are none. The window asks before it closes.
+    virtual QString unsavedChanges() const { return {}; }
     // Screenshot states (CI evidence): names and how to enter/leave them.
     virtual QStringList demoStates() const { return {}; }
     virtual void applyDemoState(const QString& name) { Q_UNUSED(name); }
@@ -182,19 +186,22 @@ private:
 // Shared helpers for pages
 //
 // Text that comes from outside the app (titles, IDs, names and paths from
-// dumps, ZIPs, images and packages, messages that quote them) is shown as it
-// is, never as markup: QLabel and tooltips otherwise take text that starts
-// like HTML for rich text.
-//  * plainLabel()  — the label shows its text and its tooltip literally;
-//  * plainLabels() — the same for every label inside a composite widget
-//                    (MessageRow, InfoBar, ErrorState);
-//  * plainTip()    — the text for setToolTip() on any other widget or item.
-QLabel* plainLabel(QLabel* label);
-void plainLabels(QWidget* widget);
-QString plainTip(const QString& text);
+// dumps, ZIPs, images and packages, messages that quote them) needs no helper
+// here: the labels of the widget library are plain text, and tooltips go
+// through ui::plainTip() or the application-wide tooltip rule (ui/Style.h).
 QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
 QString relativeTime(const QDateTime& t);         // "2 min ago"
 QString driveLabel(const QString& path);          // "D:" / "/"
+// What the drive of `folder` (or of the nearest folder above it that exists)
+// reports. Blocking: a mapped network drive or an unplugged letter can take
+// seconds, so pages use probeFreeSpace(); screenshot runs, which render a page
+// at once, ask here.
+struct DriveSpace {
+    bool ready = false;
+    qint64 available = -1;
+    QString label; // "D:" / "/" / "this drive"
+};
+DriveSpace driveSpaceOf(const QString& folder);
 // Asks the drive of `folder` for its free space on a worker thread (a mapped
 // network drive or an unplugged letter can block for seconds) and calls
 // `done(ready, bytesAvailable, driveLabel)` on the UI thread while `context`

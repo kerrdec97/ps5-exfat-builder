@@ -106,6 +106,60 @@ private slots:
         QVERIFY(fwtest::writeTextFile(m_game + QStringLiteral("/empty.bin"), QByteArray()));
     }
 
+    // A conversion carries the image's tree over as it is: the build settings
+    // that leave files out, look for a game folder or rebuild an index are for
+    // builds from a dump, not for this.
+    void convertKeepsFilesTheBuildSettingsWouldLeaveOut()
+    {
+        Env env(m_root.filePath(QStringLiteral("e-neutral")));
+        const QString game = m_root.filePath(QStringLiteral("neutral/PPSA05678"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray(50000, 'E')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA05678","contentVersion":"01.000.000"})"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/keep.bin"), QByteArray(9000, 'k')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/notes.bak"), QByteArray(700, 'n')));
+        // A second game folder below the first: a game-root search would build from here only.
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/inner/eboot.bin"), QByteArray(300, 'i')));
+        const QString out = m_root.filePath(QStringLiteral("neutral-out"));
+        QDir().mkpath(out);
+        // Built before the user's exclusions exist: the image holds every file.
+        auto built = env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), game}, {QStringLiteral("output"), out + QStringLiteral("/game.exfat")}});
+        QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
+
+        QVERIFY(env.store->setValue(pfs::keys::kExcludes, QStringList{QStringLiteral("*.bak")}).ok());
+        QVERIFY(env.store->setValue(exfat::keys::kExcludePatterns, QStringList{QStringLiteral("*.bak"), QStringLiteral("keep.bin")}).ok());
+        QVERIFY(env.store->setValue(exfat::keys::kExcludeHidden, true).ok());
+
+        const QMap<QString, QByteArray> source = snapshot(game);
+        const auto treeOf = [&](const QString& image, const QString& name) {
+            const QString dir = m_root.filePath(QStringLiteral("neutral-x/") + name);
+            const QString kind = image.endsWith(QLatin1String(".exfat")) ? QStringLiteral("image.exfat.extract")
+                               : image.endsWith(QLatin1String(".ffpkg")) ? QStringLiteral("image.ffpkg.extract")
+                                                                         : QStringLiteral("image.pfs.extract");
+            auto x = env.run(kind, {{QStringLiteral("image"), image}, {QStringLiteral("output"), dir}});
+            if (!x || x->state != JobState::Succeeded)
+                qWarning() << "extract failed:" << describe(x);
+            QMap<QString, QByteArray> files = snapshot(dir);
+            files.remove(QStringLiteral(".pfskeep"));
+            return files;
+        };
+        const QStringList chain{QStringLiteral("game.exfat"), QStringLiteral("game.ffpfs"), QStringLiteral("game.ffpkg"), QStringLiteral("back.exfat")};
+        for (qsizetype i = 1; i < chain.size(); ++i) {
+            const QString format = QFileInfo(chain[i]).suffix();
+            auto conv = env.run(integration::kConvertJob, {{QStringLiteral("image"), out + u'/' + chain[i - 1]},
+                                                           {QStringLiteral("format"), format},
+                                                           {QStringLiteral("output"), out + u'/' + chain[i]},
+                                                           {QStringLiteral("method"), QStringLiteral("repack")}});
+            QVERIFY2(conv && conv->state == JobState::Succeeded, qPrintable(chain[i] + QStringLiteral(": ") + describe(conv)));
+            const QMap<QString, QByteArray> got = treeOf(out + u'/' + chain[i], chain[i]);
+            QVERIFY2(got.contains(QStringLiteral("data/notes.bak")), qPrintable(chain[i] + QStringLiteral(": ") + QStringList(got.keys()).join(u' ')));
+            QVERIFY2(got.contains(QStringLiteral("data/keep.bin")), qPrintable(chain[i]));
+            QVERIFY2(got.contains(QStringLiteral("eboot.bin")) && got.contains(QStringLiteral("data/inner/eboot.bin")), qPrintable(chain[i]));
+            QCOMPARE(got, source);
+        }
+        // The settings were not changed by the job.
+        QCOMPARE(env.store->value(pfs::keys::kExcludes).toStringList(), QStringList{QStringLiteral("*.bak")});
+    }
+
     void convertRoundTripThroughEveryFormat()
     {
         Env env(m_root.filePath(QStringLiteral("e1")));
