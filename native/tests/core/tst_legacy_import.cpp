@@ -25,6 +25,7 @@ const QMap<QString, QString>& notImported()
 {
     static const QMap<QString, QString> m = {
         {QStringLiteral("osfmount_path"), QStringLiteral("OSFMount is no longer used (native image engines)")},
+        {QStringLiteral("adv_threads"), QStringLiteral("robocopy /MT count (default 1), not the CPU threads per job")},
         {QStringLiteral("adv_robo_log"), QStringLiteral("robocopy is no longer used")},
         {QStringLiteral("adv_robo_log_dir"), QStringLiteral("robocopy is no longer used")},
         {QStringLiteral("adv_write_benchmark"), QStringLiteral("dead key in the legacy app")},
@@ -129,7 +130,8 @@ private slots:
         QCOMPARE(store.value(QStringLiteral("general.afterQueueDelaySeconds")).toInt(), 120);
         QCOMPARE(store.value(QStringLiteral("general.autoRetryCount")).toInt(), 2);
         QCOMPARE(store.value(QStringLiteral("general.checkForUpdatesOnStart")).toBool(), false);
-        QCOMPARE(store.value(QStringLiteral("performance.workerThreads")).toInt(), 8);
+        // adv_threads was robocopy's /MT count: it must not become the CPU thread count.
+        QCOMPARE(store.value(QStringLiteral("performance.workerThreads")).toInt(), 0);
         QCOMPARE(store.value(QStringLiteral("ps5.consoleIp")).toString(), QStringLiteral("192.168.1.50"));
         QCOMPARE(store.value(QStringLiteral("ps5.autoUploadAfterBuild")).toBool(), true);
         // Build tab naming (name_preset / name_custom_template): the Build page
