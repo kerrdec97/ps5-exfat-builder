@@ -953,6 +953,16 @@ QWidget* LibraryPage::buildImagesTab()
     th->addWidget(m_imageFormat);
     m_imageSort = combo({QStringLiteral("Title A–Z"), QStringLiteral("Title ID"), QStringLiteral("Largest first"), QStringLiteral("Newest first")}, QStringLiteral("Sort by"), tools);
     th->addWidget(m_imageSort);
+    // Renaming without selecting first: every image the list shows right now.
+    m_imagesRename = button(QStringLiteral("Rename images…"), ButtonVariant::Secondary, QStringLiteral("rename"), tools);
+    m_imagesRename->setToolTip(QStringLiteral("Name the listed image files after their title ID, title and version"));
+    connect(m_imagesRename, &QPushButton::clicked, this, [this] {
+        QStringList listed;
+        for (const GridItem& it : m_imagesGrid->items())
+            listed << it.key;
+        renameImagesSheet(listed);
+    });
+    th->addWidget(m_imagesRename);
     th->addStretch(1);
     m_imagesCount = caption({}, tools);
     m_imagesCount->setWordWrap(false);
@@ -965,6 +975,14 @@ QWidget* LibraryPage::buildImagesTab()
     m_imagesSelection = selectionBar(&m_imagesSelectionText, page);
     {
         auto* h = barLayout(m_imagesSelection);
+        auto* rename = button(QStringLiteral("Rename…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_imagesSelection);
+        rename->setToolTip(QStringLiteral("Name the selected image files after their title ID, title and version"));
+        connect(rename, &QPushButton::clicked, this, [this] { renameImagesSheet(m_imagesGrid->selectedKeys()); });
+        h->addWidget(rename);
+        auto* verify = button(QStringLiteral("Verify"), ButtonVariant::Secondary, QStringLiteral("shield_check"), m_imagesSelection);
+        verify->setToolTip(QStringLiteral("Queue a verify job for each selected image"));
+        connect(verify, &QPushButton::clicked, this, [this] { verifyImages(m_imagesGrid->selectedKeys()); });
+        h->addWidget(verify);
         m_imagesOpen = button(QStringLiteral("Open in Image tools"), ButtonVariant::Secondary, QStringLiteral("extract"), m_imagesSelection);
         connect(m_imagesOpen, &QPushButton::clicked, this, [this] {
             const QStringList sel = m_imagesGrid->selectedKeys();
@@ -972,13 +990,6 @@ QWidget* LibraryPage::buildImagesTab()
                 openInImageTools(sel.first(), QString());
         });
         h->addWidget(m_imagesOpen);
-        auto* verify = button(QStringLiteral("Verify"), ButtonVariant::Secondary, QStringLiteral("shield_check"), m_imagesSelection);
-        verify->setToolTip(QStringLiteral("Queue a verify job for each selected image"));
-        connect(verify, &QPushButton::clicked, this, [this] { verifyImages(m_imagesGrid->selectedKeys()); });
-        h->addWidget(verify);
-        auto* rename = button(QStringLiteral("Rename…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_imagesSelection);
-        connect(rename, &QPushButton::clicked, this, [this] { renameImagesSheet(m_imagesGrid->selectedKeys()); });
-        h->addWidget(rename);
         h->addStretch(1);
         auto* clear = new Link(QStringLiteral("Clear selection"), m_imagesSelection);
         connect(clear, &Link::activated, this, [this] { m_imagesGrid->clearSelection(); });
@@ -1137,6 +1148,8 @@ void LibraryPage::updateImageSelection()
     m_imagesSelection->setVisible(n > 0);
     m_imagesSelectionText->setText(QStringLiteral("%1 selected").arg(n));
     m_imagesOpen->setVisible(n == 1);
+    // With a selection the bar's "Rename…" is the one; without, the tool row offers it for the whole list.
+    m_imagesRename->setVisible(n == 0 && m_imagesGrid->count() > 0);
 }
 
 void LibraryPage::openInImageTools(const QString& image, const QString& action)
@@ -1194,12 +1207,24 @@ void LibraryPage::imageMenu(const QString& path, const QPoint& pos)
     menu.exec(pos);
 }
 
-QString LibraryPage::imageFileName(const ImageSummary& s, const QString& preset)
+QString LibraryPage::imageFileName(const ImageSummary& s, const QString& preset, const QString& customTemplate)
 {
     const QFileInfo fi(s.path);
+    if (preset == QLatin1String("custom") && !s.titleId.isEmpty()) {
+        // The Build page's template language (Settings › Build › Output name).
+        gameinfo::ImageNameFields f;
+        f.titleId = s.titleId;
+        f.title = s.title;
+        f.version = s.version;
+        f.type = s.format == QLatin1String("exfat") ? QStringLiteral("exFAT") : s.format == QLatin1String("ffpkg") ? QStringLiteral("ffpkg") : QStringLiteral("PFS");
+        f.folderName = fi.completeBaseName(); // also what is left when the template renders to nothing
+        if (s.modified.isValid())
+            f.date = s.modified.date().toString(Qt::ISODate); // the image's own date, not today's
+        return gameinfo::renderImageName(gameinfo::ImageNamePreset::Custom, customTemplate, f) + u'.' + fi.suffix();
+    }
     QString n = s.titleId.isEmpty() ? fi.completeBaseName() : s.titleId;
     if (preset != QLatin1String("id") && !s.title.isEmpty() && !s.titleId.isEmpty())
-        n += u' ' + s.title;
+        n += (preset == QLatin1String("id-dash-title") ? QStringLiteral(" - ") : QStringLiteral(" ")) + s.title;
     if (preset == QLatin1String("id-title-version") && !s.version.isEmpty() && !s.titleId.isEmpty())
         n += QStringLiteral(" (%1)").arg(s.version);
     return sanitizeFileName(n.simplified()) + u'.' + fi.suffix();
@@ -1228,21 +1253,32 @@ int LibraryPage::renameImages(const QList<QPair<QString, QString>>& renames, QSt
     return done;
 }
 
-void LibraryPage::renameImagesSheet(const QStringList& paths)
+// The rename sheet for `list`, not shown yet. `renames` gives the (file, new
+// name) pairs it holds; call it once the sheet was answered with "Rename".
+Sheet* LibraryPage::buildRenameImagesSheet(const QList<ImageSummary>& list, std::function<QList<QPair<QString, QString>>()>& renames)
 {
-    if (paths.isEmpty() || m_demo)
-        return;
-    QList<ImageSummary> list;
-    for (const QString& p : paths)
-        list << (image(p) ? *image(p) : readImageSummary(p, false));
-    auto* s = new Sheet(window(), paths.size() == 1 ? QStringLiteral("Rename the image") : QStringLiteral("Rename %1 images").arg(paths.size()),
-                        Sheet::Icon::None, paths.size() == 1 ? size::dialogWide : 900);
+    auto* s = new Sheet(window(), list.size() == 1 ? QStringLiteral("Rename the image") : QStringLiteral("Rename %1 images").arg(list.size()),
+                        Sheet::Icon::None, list.size() == 1 ? size::dialogWide : 900);
     auto* pattern = new Segmented(s);
+    pattern->setAccessibleName(QStringLiteral("Pattern"));
     pattern->addSegment(QStringLiteral("PPSA only"), {}, QStringLiteral("id"));
     pattern->addSegment(QStringLiteral("PPSA Title"), {}, QStringLiteral("id-title"));
     pattern->addSegment(QStringLiteral("PPSA Title (version)"), {}, QStringLiteral("id-title-version"));
-    pattern->setCurrentIndex(2);
+    pattern->addSegment(QStringLiteral("PPSA - Title"), {}, QStringLiteral("id-dash-title"));
+    pattern->addSegment(QStringLiteral("Custom"), {}, QStringLiteral("custom"));
+    pattern->setCurrentIndex(std::max(0, pattern->indexOfValue(m_imageRenamePattern)));
     s->body()->addWidget(field(QStringLiteral("Pattern"), pattern, {}, s));
+    // Any other order or punctuation: the template of the Build page's names.
+    auto* tpl = textInput({}, true, s);
+    tpl->setAccessibleName(QStringLiteral("Name template"));
+    QString startTemplate = m_imageRenameTemplate;
+    if (startTemplate.isEmpty() && m_ctx.settings().value(gameinfo::keys::kNamePreset).toString() == QLatin1String("custom"))
+        startTemplate = m_ctx.settings().value(gameinfo::keys::kNameTemplate).toString().trimmed();
+    tpl->setText(startTemplate.isEmpty() ? QStringLiteral("%PPSA% - %TITLE%") : startTemplate);
+    QWidget* tplField = field(QStringLiteral("Template"), tpl,
+                              QStringLiteral("Tokens: %PPSA% %TITLE% %VERSION% %TYPE% %DATE%. Empty brackets left by a missing value are removed."), s);
+    tplField->setHidden(pattern->currentValue().toString() != QLatin1String("custom"));
+    s->body()->addWidget(tplField);
     QLineEdit* name = nullptr;
     QTableWidget* table = nullptr;
     if (list.size() == 1) {
@@ -1280,30 +1316,63 @@ void LibraryPage::renameImagesSheet(const QStringList& paths)
         }
         s->body()->addWidget(table);
     }
-    const auto fill = [list, pattern, name, table] {
+    // The new names follow the pattern (and the template) as they change: the preview is live.
+    const auto fill = [list, pattern, tpl, name, table] {
         const QString preset = pattern->currentValue().toString();
         if (name)
-            name->setText(imageFileName(list.first(), preset));
+            name->setText(imageFileName(list.first(), preset, tpl->text()));
         if (table)
             for (int r = 0; r < list.size(); ++r)
-                table->item(r, 2)->setText(imageFileName(list[r], preset));
+                table->item(r, 2)->setText(imageFileName(list[r], preset, tpl->text()));
     };
     fill();
-    connect(pattern, &Segmented::currentChanged, s, [fill](int) { fill(); });
+    connect(pattern, &Segmented::currentChanged, s, [this, s, pattern, tplField, fill](int) {
+        const QString preset = pattern->currentValue().toString();
+        if (!m_demo)
+            m_imageRenamePattern = preset; // the sheet opens next time the way it was left
+        const bool custom = preset == QLatin1String("custom");
+        if (tplField->isHidden() == custom) {
+            tplField->setHidden(!custom);
+            if (s->isVisible())
+                s->refit();
+        }
+        fill();
+    });
+    connect(tpl, &QLineEdit::textChanged, s, [this, fill](const QString& text) {
+        if (!m_demo)
+            m_imageRenameTemplate = text;
+        fill();
+    });
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Rename"), Sheet::Role::Primary);
+    renames = [list, name, table] {
+        QList<QPair<QString, QString>> out;
+        if (name) {
+            out.append({list.first().path, imageRenameTarget(name->text(), list.first().path)});
+        } else {
+            for (int r = 0; r < table->rowCount(); ++r)
+                if (table->item(r, 0)->checkState() == Qt::Checked) {
+                    const QString source = table->item(r, 0)->data(Qt::UserRole).toString();
+                    out.append({source, imageRenameTarget(table->item(r, 2)->text(), source)});
+                }
+        }
+        return out;
+    };
+    return s;
+}
+
+void LibraryPage::renameImagesSheet(const QStringList& paths)
+{
+    if (paths.isEmpty() || m_demo)
+        return;
+    QList<ImageSummary> list;
+    for (const QString& p : paths)
+        list << (image(p) ? *image(p) : readImageSummary(p, false));
+    std::function<QList<QPair<QString, QString>>()> collect;
+    Sheet* s = buildRenameImagesSheet(list, collect);
     if (s->exec() != 1)
         return;
-    QList<QPair<QString, QString>> renames;
-    if (name) {
-        renames.append({list.first().path, imageRenameTarget(name->text(), list.first().path)});
-    } else {
-        for (int r = 0; r < table->rowCount(); ++r)
-            if (table->item(r, 0)->checkState() == Qt::Checked) {
-                const QString source = table->item(r, 0)->data(Qt::UserRole).toString();
-                renames.append({source, imageRenameTarget(table->item(r, 2)->text(), source)});
-            }
-    }
+    const QList<QPair<QString, QString>> renames = collect(); // the sheet's widgets live until the event loop runs again
     QStringList skipped;
     const int done = renameImages(renames, &skipped);
     if (done > 0)
@@ -1746,7 +1815,8 @@ QString LibraryPage::statusContext() const
 
 QStringList LibraryPage::demoStates() const
 {
-    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("images"), QStringLiteral("languages"), QStringLiteral("dlc")};
+    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("images"), QStringLiteral("images-rename"),
+            QStringLiteral("languages"), QStringLiteral("dlc")};
 }
 
 void LibraryPage::applyDemoState(const QString& name)
@@ -1774,11 +1844,22 @@ void LibraryPage::applyDemoState(const QString& name)
             m_gamesGrid->setSelectedKeys({items[1].key, items[3].key});
     } else if (name == QLatin1String("images")) {
         setTab(ImagesTab);
+    } else if (name == QLatin1String("images-rename")) {
+        // The rename sheet for the whole list, with the template in use.
+        setTab(ImagesTab);
+        std::function<QList<QPair<QString, QString>>()> unused;
+        Sheet* s = buildRenameImagesSheet(m_images, unused);
+        if (auto* pattern = s->findChild<Segmented*>())
+            pattern->setCurrentValue(QStringLiteral("custom"));
+        s->open();
+        m_demoSheet = s;
     }
 }
 
 void LibraryPage::clearDemoState()
 {
+    if (auto* s = qobject_cast<Sheet*>(m_demoSheet.data()))
+        s->close(0);
     if (m_demo) {
         m_demo = false;
         m_demoGames.clear();
