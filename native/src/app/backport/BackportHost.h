@@ -14,10 +14,12 @@
 //  * stdin stays open for the worker's whole life (EOF means cancel);
 //    cancel = "cancel\n", then after 1.5 s the process TREE is killed, but
 //    only while the last progress phase is "engine" (export and apply finish
-//    or roll back their current step themselves);
+//    or roll back their current step themselves; a restore is never killed);
 //  * stderr is drained continuously (last 200 lines kept);
-//  * no result line: CANCELLED when cancel was asked, otherwise FAILED
-//    "The backport worker stopped unexpectedly" with the stderr tail.
+//  * no result line: CANCELLED when cancel was asked during the engine stage,
+//    FAILED "stopped during <phase>" when it was asked later (files may have
+//    been written), otherwise FAILED "The backport worker stopped
+//    unexpectedly"; the last two carry the stderr tail.
 //
 // Per-user folders are the original program's (so a backport applied by the
 // standalone PS5 Backport GUI is recognised here and vice versa):
@@ -63,6 +65,10 @@ QString engineExecutable();
 // Removes every PYTHON* variable (the engine must not see a local Python).
 QProcessEnvironment workerEnvironment();
 
+// True while a PS5 Backport GUI process runs that is not a worker of this app
+// (the standalone program, which shares the settings and the ledger).
+bool foreignEngineRunning();
+
 // One worker process (one job). Not reusable: create one per job.
 class Worker : public QObject {
     Q_OBJECT
@@ -88,6 +94,7 @@ private:
     void onFinished();
     void handleLine(const QByteArray& line);
     void killTree();
+    bool killable() const;
 
     QProcess* m_proc = nullptr;
     QByteArray m_outBuf, m_errBuf;
@@ -96,7 +103,7 @@ private:
     bool m_haveResult = false;
     bool m_cancelled = false;
     bool m_done = false;
-    QString m_phase = QStringLiteral("engine");
+    QString m_phase; // the last progress phase; empty until the worker reports one
     QString m_cmd;
     QString m_jobPath;
     QElapsedTimer m_clock;

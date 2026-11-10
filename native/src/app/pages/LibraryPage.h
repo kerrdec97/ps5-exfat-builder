@@ -21,10 +21,14 @@
 #include "app/services/ImageInfo.h"
 
 #include <QCheckBox>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTableWidget>
+
+#include <functional>
+#include <vector>
 
 namespace fw::ui {
 class DropZone;
@@ -32,6 +36,17 @@ class LibraryGrid;
 } // namespace fw::ui
 
 namespace fw::pages {
+
+// The library after a scan of `scanFolders` listed `scanned`. Games that were
+// already known keep what is not read from disk (when they were first seen,
+// their status and backport notes); new ones are stamped `now`. A known game
+// the scan did not list is dropped when it lives under a scan folder that can
+// be reached (it is gone), and kept when its scan folder cannot be reached
+// right now, or when it was added by hand from outside every scan folder and
+// `stillThere(folder)` says so.
+std::vector<ui::LibraryGame> mergeScanResult(const std::vector<ui::LibraryGame>& known, std::vector<ui::LibraryGame> scanned,
+                                             const QStringList& scanFolders, const QDateTime& now,
+                                             const std::function<bool(const QString&)>& stillThere);
 
 class LibraryPage : public Page {
     Q_OBJECT

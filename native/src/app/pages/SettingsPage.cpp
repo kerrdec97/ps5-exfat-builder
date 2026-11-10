@@ -377,7 +377,14 @@ SettingRow* SettingsPage::addRow(const SettingDef& def, QWidget* parent, QVBoxLa
 void SettingsPage::rebuild()
 {
     while (QLayoutItem* it = m_cardsLayout->takeAt(0)) {
-        delete it->widget();
+        // A rebuild can start inside a click handler of a widget on one of
+        // these cards (a "How to fix…" link, the Import button): the cards
+        // leave the page now and are destroyed once that event is over.
+        if (QWidget* w = it->widget()) {
+            w->hide();
+            w->setParent(nullptr);
+            w->deleteLater();
+        }
         delete it;
     }
     m_rows.clear();
@@ -563,9 +570,10 @@ void SettingsPage::buildSection(const QString& section)
         auto* list = new DependencyList(m_ctx, depIds, card);
         card->body()->addWidget(list);
         connect(again, &QPushButton::clicked, list, &DependencyList::checkAgain);
+        // Queued: going to Tools rebuilds this page, and the link that asked is on this card.
         connect(list, &DependencyList::fixRequested, this, [this](const QString&, const QString& how, const QString& settingKey) {
             navigateWith({{QStringLiteral("section"), QStringLiteral("Tools")}, {QStringLiteral("key"), settingKey}, {QStringLiteral("howToFix"), how}});
-        });
+        }, Qt::QueuedConnection);
         m_cardsLayout->addWidget(card);
     }
     if (!advanced.empty()) {

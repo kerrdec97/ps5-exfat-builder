@@ -14,6 +14,7 @@
 #include "engines/dlc/DlcSettings.h"
 #include "support/TestSupport.h"
 
+#include <QAction>
 #include <QDir>
 #include <QFile>
 #include <QSettings>
@@ -46,6 +47,10 @@ private slots:
     {
         QVERIFY(m_root.isValid());
         fwtest::isolateAppData(m_root);
+        // The main window builds the Backport page, which reads the PS5 Backport
+        // settings: never the user's.
+        qputenv("D97BETA_CONFIG_DIR", QDir::toNativeSeparators(m_root.filePath(QStringLiteral("bp-config"))).toUtf8());
+        qputenv("D97BETA_DATA_DIR", QDir::toNativeSeparators(m_root.filePath(QStringLiteral("bp-data"))).toUtf8());
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_root.filePath(QStringLiteral("qsettings")));
         qputenv("FW_TEST_AUTO_ACCEPT", "1"); // the review sheet answers itself
@@ -160,6 +165,33 @@ private slots:
         QVERIFY(info.ok());
         QCOMPARE(info->contentId, QStringLiteral("EP1004-PPSA05678_00-SEASONPASS000001"));
         QCOMPARE(info->title, QStringLiteral("Season Pass"));
+    }
+
+    // Removing the first of two rows: the table reports the selection change
+    // while it still has one row more than the page's own list.
+    void removingTheFirstRowKeepsTheListInStep()
+    {
+        m_page->clearList();
+        m_page->addInputs({m_ini});
+        QCOMPARE(m_page->rowCount(), 2);
+        QAction* remove = nullptr;
+        for (QAction* a : m_page->table()->actions())
+            if (a->text() == QLatin1String("Remove from the list"))
+                remove = a;
+        QVERIFY(remove);
+        m_page->table()->setFocus();
+        m_page->table()->selectRow(0);
+        remove->trigger();
+        QCOMPARE(m_page->rowCount(), 1);
+        QCOMPARE(m_page->table()->rowCount(), 1);
+        QCOMPARE(m_page->items()[0].title, QStringLiteral("Art Book"));
+        // Both rows at once.
+        m_page->clearList();
+        m_page->addInputs({m_ini});
+        m_page->table()->selectAll();
+        remove->trigger();
+        QCOMPARE(m_page->rowCount(), 0);
+        QCOMPARE(m_page->table()->rowCount(), 0);
     }
 };
 

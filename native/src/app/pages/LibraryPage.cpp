@@ -18,10 +18,12 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
+#include <QSet>
 
 #include <algorithm>
 
@@ -162,6 +164,45 @@ QList<ImageSummary> demoImages()
 
 } // namespace
 
+std::vector<LibraryGame> mergeScanResult(const std::vector<LibraryGame>& known, std::vector<LibraryGame> scanned,
+                                         const QStringList& scanFolders, const QDateTime& now,
+                                         const std::function<bool(const QString&)>& stillThere)
+{
+    const auto key = [](const QString& folder) { return QDir::cleanPath(QDir::fromNativeSeparators(folder)).toLower(); };
+    QHash<QString, const LibraryGame*> before;
+    for (const LibraryGame& g : known)
+        before.insert(key(g.info.folder), &g);
+    QSet<QString> listed;
+    for (LibraryGame& g : scanned) {
+        const QString k = key(g.info.folder);
+        listed.insert(k);
+        const LibraryGame* old = before.value(k);
+        g.lastSeen = old && old->lastSeen.isValid() ? old->lastSeen : now;
+        if (old) {
+            g.status = old->status;
+            g.issues = old->issues;
+            g.canRun = old->canRun;
+            g.plan = old->plan;
+        }
+    }
+    for (const LibraryGame& g : known) {
+        const QString k = key(g.info.folder);
+        if (listed.contains(k))
+            continue;
+        bool underScanFolder = false, scanFolderReachable = false;
+        for (const QString& f : scanFolders) {
+            const QString fk = key(f);
+            if (k != fk && !k.startsWith(fk.endsWith(u'/') ? fk : fk + u'/'))
+                continue;
+            underScanFolder = true;
+            scanFolderReachable = scanFolderReachable || QFileInfo(f).isDir();
+        }
+        if (underScanFolder ? !scanFolderReachable : (!stillThere || stillThere(g.info.folder)))
+            scanned.push_back(g);
+    }
+    return scanned;
+}
+
 LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStore& library, QWidget* parent)
     : Page(ctx, QStringLiteral("library"), QStringLiteral("Library"),
            QStringLiteral("Your game dumps and images in one place."), parent),
@@ -281,8 +322,10 @@ QWidget* LibraryPage::buildGamesTab()
         h->addWidget(build);
         auto* bp = button(QStringLiteral("Backport…"), ButtonVariant::Secondary, QStringLiteral("backports"), m_gamesSelection);
         connect(bp, &QPushButton::clicked, this, [this] {
-            for (const QString& f : m_gamesGrid->selectedKeys())
-                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), f}}});
+            // One request for the whole selection: one scan on the Backport page.
+            const QStringList selected = m_gamesGrid->selectedKeys();
+            if (!selected.isEmpty())
+                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
         h->addWidget(bp);
         auto* remove = button(QStringLiteral("Remove from library"), ButtonVariant::Subtle, QStringLiteral("close"), m_gamesSelection);
@@ -438,7 +481,14 @@ void LibraryPage::rebuildFolders()
 {
     auto* fl = static_cast<FlowLayout*>(m_folders->layout());
     while (QLayoutItem* it = fl->takeAt(0)) {
-        delete it->widget();
+        // This runs from the click handlers of the widgets it replaces (the
+        // remove button of a chip, the "Add folder…" link): they must outlive
+        // the event that is still being delivered to them.
+        if (QWidget* w = it->widget()) {
+            w->hide();
+            w->setParent(nullptr);
+            w->deleteLater();
+        }
         delete it;
     }
     const QStringList folders = m_demo ? QStringList{QStringLiteral("D:/Games"), QStringLiteral("E:/PS5")} : m_library.scanFolders();
@@ -470,7 +520,7 @@ void LibraryPage::rebuildFolders()
             firstChip = chip;
     }
     auto* add = new Link(QStringLiteral("Add folder…"), m_folders);
-    connect(add, &Link::activated, this, &LibraryPage::addFolders);
+    connect(add, &Link::activated, this, &LibraryPage::addFolders, Qt::QueuedConnection);
     fl->addWidget(add);
     // The flow layout aligns tops; the label and the link take the chips' height to line up.
     const int h = firstChip->sizeHint().height();
@@ -543,8 +593,7 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
     if (selected.size() > 1) {
         menu.addAction(QStringLiteral("Build %1 images…").arg(selected.size()), this, &LibraryPage::buildSelected);
         menu.addAction(QStringLiteral("Backport %1 games…").arg(selected.size()), this, [this, selected] {
-            for (const QString& f : selected)
-                emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), f}}});
+            emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
         menu.addSeparator();
         menu.addAction(QStringLiteral("Remove %1 from the library").arg(selected.size()), this, [this, selected] {
@@ -1341,11 +1390,13 @@ void LibraryPage::onJobFinished(const QString& id)
         for (const auto& v : rec->outcome->details.value(QStringLiteral("games")).toArray()) {
             LibraryGame g;
             g.info = GameSummary::fromJson(v.toObject());
-            g.lastSeen = QDateTime::currentDateTime();
             games.push_back(g);
         }
-        if (!games.empty())
-            m_library.setGames(std::move(games));
+        // The scan covers the library folders only: a dump that was added by
+        // hand from somewhere else stays, and so does everything the list
+        // knows about a game beyond what the scan reads.
+        m_library.setGames(mergeScanResult(m_library.games(), std::move(games), m_library.scanFolders(), QDateTime::currentDateTime(),
+                                           [](const QString& folder) { return readGameSummary(folder, false).isGame; }));
         m_library.setLastScan(QDateTime::currentDateTime());
         m_scanJobId.clear();
     }

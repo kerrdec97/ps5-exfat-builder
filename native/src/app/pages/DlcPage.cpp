@@ -181,10 +181,18 @@ void DlcPage::buildListCard()
     connect(removeAct, &QAction::triggered, this, [this] {
         QList<int> rows = selectedRows();
         std::sort(rows.begin(), rows.end(), std::greater<>());
-        for (int r : rows) {
-            m_rows.erase(m_rows.begin() + r);
-            m_table->removeRow(r);
+        {
+            // removeRow() reports the selection change before the row has left
+            // the table: keep the slots out until m_rows matches again.
+            const QSignalBlocker blocker(m_table);
+            for (int r : rows) {
+                if (r < 0 || r >= int(m_rows.size()))
+                    continue;
+                m_table->removeRow(r);
+                m_rows.erase(m_rows.begin() + r);
+            }
         }
+        updateRegionLine();
         updateState();
     });
     m_table->addAction(removeAct);
@@ -740,7 +748,7 @@ void DlcPage::updateRegionLine()
 {
     const QList<int> rows = selectedRows();
     const int r = rows.isEmpty() ? (m_rows.empty() ? -1 : 0) : rows.first();
-    if (r < 0) {
+    if (r < 0 || r >= int(m_rows.size())) {
         m_regionLine->setText(QStringLiteral("Import DLC to find the game's regional releases. Change region\u2026 applies a reviewed target."));
         return;
     }
