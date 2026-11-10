@@ -96,11 +96,11 @@ Result<ImagePlan> planImage(const SourceTree& tree, const WriterOptions& o)
     ImagePlan plan;
     const int cluster = o.clusterBytes > 0 ? o.clusterBytes : kAutoClusterBytes;
     if (o.clusterBytes <= 0)
-        plan.clusterChoice = QStringLiteral("%1 KiB (automatic)").arg(cluster / 1024);
+        plan.clusterChoice = QStringLiteral("%1 KB (automatic)").arg(cluster / 1024);
     else if (cluster == kAutoClusterBytes)
-        plan.clusterChoice = QStringLiteral("%1 KiB (set in Settings)").arg(cluster / 1024);
+        plan.clusterChoice = QStringLiteral("%1 KB (set in Settings)").arg(cluster / 1024);
     else
-        plan.clusterChoice = QStringLiteral("%1 KiB (set in Settings; ShadowMount+ 1.7 and later need 64 KiB)").arg(cluster / 1024);
+        plan.clusterChoice = QStringLiteral("%1 KB (set in Settings; ShadowMount+ 1.7 and later need 64 KB)").arg(cluster / 1024);
 
     // Clusters needed, apart from the allocation bitmap (which depends on the
     // volume size).
@@ -155,11 +155,13 @@ Result<ImagePlan> planImage(const SourceTree& tree, const WriterOptions& o)
                              .arg(formatBytes(v), formatBytes(minimum.ok() ? minimum->volumeBytes() : estimate)),
                          geo.error().toLogString());
         }
-        plan.sizeChoice = QStringLiteral("%1 (set for this build)").arg(formatBytes(geo->volumeBytes()));
+        plan.sizeChoice = QStringLiteral("%1 (fixed size)").arg(formatBytes(geo->volumeBytes()));
     } else if (o.spare == SpareMode::Legacy) {
         const qint64 v = legacyImageBytes(tree, cluster);
         geo = fit(std::max(v, estimate), 0, true);
-        plan.sizeChoice = QStringLiteral("%1 (automatic: data, metadata and 1 %% spare, 1-8 GB)").arg(formatBytes(v));
+        // The size the image really gets: `fit` may have grown the estimate.
+        plan.sizeChoice = QStringLiteral("%1 (automatic: data, metadata and 1 % spare, 1 to 8 GB)")
+                              .arg(geo.ok() ? formatBytes(geo->volumeBytes()) : QString());
     } else {
         geo = fit(estimate, spareClusters, true);
         plan.sizeChoice = QStringLiteral("%1 (automatic: smallest size with %2 free)")

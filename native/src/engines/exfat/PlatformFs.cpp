@@ -17,9 +17,62 @@
 
 namespace fw::exfat {
 
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
+{
+    Status st = part.commit(replaceExisting);
+    if (st.ok())
+        return st;
+    const QFileInfo fi(part.finalPath());
+    const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
+    const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
+    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
+        return st; // nothing could be saved: the plain error stands
+    Error e = st.error();
+    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    const QString name = QDir::toNativeSeparators(part.finalPath());
+    const QString keptName = QDir::toNativeSeparators(kept);
+    if (e.code == ErrorCode::AlreadyExists)
+        e.message = QStringLiteral("%1, but %2 already exists. It was saved as %3.").arg(what, name, keptName);
+    else if (fi.exists())
+        e.message = QStringLiteral("%1, but could not replace %2 because that file is in use. It was saved as %3. "
+                                   "Close the program that uses the old file, then rename the new one.")
+                        .arg(what, name, keptName);
+    else
+        e.message = QStringLiteral("%1, but could not be named %2. It was saved as %3.").arg(what, name, keptName);
+    return e;
+}
+
+QString keepStagedFolder(const QString& stage, const QString& output)
+{
+    const QString kept = uniquePath(output + QStringLiteral(".new"));
+    return QDir().rename(stage, kept) ? kept : stage;
+}
+
+bool limitsFilesTo4GiB(const QString& fileSystemName)
+{
+    const QString fs = fileSystemName.toLower();
+    return fs == u"vfat" || fs == u"msdos" || fs.startsWith(u"fat");
+}
+
+bool tooLargeForDrive(const QString& folder, qint64 bytes)
+{
+    if (bytes < 4 * kGiB)
+        return false;
+    const auto ds = diskSpace(folder);
+    return ds.ok() && limitsFilesTo4GiB(ds->fileSystem);
+}
+
 Error fileError(const QString& userMessage, const QFileDevice& file)
 {
-    if (file.error() == QFileDevice::ResourceError)
+    bool full = file.error() == QFileDevice::ResourceError;
+#ifdef Q_OS_WIN
+    // Qt reports a failed WriteFile as a plain write error on Windows; the
+    // system's own text for "disk full" tells the two apart in any language.
+    if (!full && file.error() == QFileDevice::WriteError)
+        full = file.errorString() == qt_error_string(ERROR_DISK_FULL)
+               || file.errorString() == qt_error_string(ERROR_HANDLE_DISK_FULL);
+#endif
+    if (full)
         return Error(ErrorCode::InsufficientSpace,
                      QStringLiteral("The drive ran out of space. Free some space or choose another folder, then try again."),
                      userMessage + QStringLiteral(" ") + file.errorString());
@@ -28,19 +81,11 @@ Error fileError(const QString& userMessage, const QFileDevice& file)
 
 Status syncFile(QFile& file, const QString& displayName)
 {
+    // The flush here keeps the "drive ran out of space" wording; the device
+    // flush itself is the shared one.
     if (!file.flush())
         return fileError(QStringLiteral("Could not write %1.").arg(displayName), file);
-#ifdef Q_OS_WIN
-    const intptr_t h = _get_osfhandle(file.handle());
-    if (h == -1 || !FlushFileBuffers(reinterpret_cast<HANDLE>(h)))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
-                     QStringLiteral("FlushFileBuffers failed (%1)").arg(GetLastError()));
-#else
-    if (::fsync(file.handle()) != 0)
-        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
-                     QStringLiteral("fsync failed"));
-#endif
-    return success();
+    return flushToDisk(file, displayName);
 }
 
 #ifdef Q_OS_WIN

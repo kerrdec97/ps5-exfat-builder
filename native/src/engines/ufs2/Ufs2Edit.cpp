@@ -1,5 +1,8 @@
 #include "engines/ufs2/Ufs2Edit.h"
 
+#include "core/PathSafety.h"
+#include "engines/ufs2/Ufs2Format.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonObject>
@@ -72,6 +75,11 @@ Result<int> replaceInDir(SourceTree& tree, int dir, const QString& local, const 
         if (!token.checkpoint())
             return Error::cancelled();
         TreeNode& n = tree.nodes[size_t(c)];
+        // The name comes from the image. One with '\', ':' or the like could
+        // name a file outside `local` on Windows; no file in `local` can
+        // carry such a name anyway.
+        if (!isSafeEntryName(n.name))
+            continue;
         const QFileInfo fi(QDir(local).filePath(n.name));
         if (!n.isDir() && fi.isFile()) {
             n.localPath = fi.absoluteFilePath();
@@ -207,7 +215,7 @@ Status applyEdits(SourceTree& tree, const std::vector<EditOp>& ops, const Cancel
                                  QStringLiteral("%1 is a folder, so replace it with a folder.").arg(where));
                 FW_TRY_ASSIGN(int k, replaceInDir(tree, idx, fi.absoluteFilePath(), token));
                 if (log)
-                    log->append(QStringLiteral("Replaced %1 files in %2").arg(k).arg(where));
+                    log->append(QStringLiteral("Replaced %1 in %2").arg(counted(k, "file", "files"), where));
             }
             break;
         }

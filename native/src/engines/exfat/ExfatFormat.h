@@ -75,6 +75,9 @@ inline quint64 get64(const uchar* p) { return quint64(get32(p)) | (quint64(get32
 inline qint64 alignUp(qint64 v, qint64 a) { return (v + a - 1) / a * a; }
 inline qint64 ceilDiv(qint64 v, qint64 d) { return (v + d - 1) / d; }
 
+// A count with its noun for messages: "1 file", "2,345 files".
+QString counted(qint64 n, const char* one, const char* many);
+
 // ---- checksums -------------------------------------------------------------------
 // Boot checksum over sectors 0..10 of a boot region, skipping VolumeFlags
 // (bytes 106-107) and PercentInUse (byte 112) of sector 0 (§3.4).

@@ -1,9 +1,12 @@
 #include "engines/exfat/ExfatFormat.h"
 
+#include "core/FileUtil.h"
+
 #include <QTimeZone>
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 
 namespace fw::exfat {
 
@@ -219,7 +222,7 @@ quint16 UpcaseTable::nameHash(const QString& name) const
 Result<Geometry> computeGeometry(qint64 volumeBytes, int sectorBytes, int clusterBytes)
 {
     if (sectorBytes < 512 || sectorBytes > 4096 || !std::has_single_bit(unsigned(sectorBytes)))
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("The sector size must be 512 or 4096 bytes."),
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("The sector size must be 512, 1024, 2048 or 4096 bytes."),
                      QStringLiteral("sector size %1").arg(sectorBytes));
     if (clusterBytes < sectorBytes || clusterBytes > 32 * kMiB || !std::has_single_bit(unsigned(clusterBytes)))
         return Error(ErrorCode::InvalidArgument,
@@ -258,6 +261,11 @@ Result<Geometry> computeGeometry(qint64 volumeBytes, int sectorBytes, int cluste
     g.clusterHeapOffset = quint32(heapOff / sectorBytes);
     g.clusterCount = quint32(clusters);
     return g;
+}
+
+QString counted(qint64 n, const char* one, const char* many)
+{
+    return n == 1 ? QStringLiteral("1 ") + QLatin1String(one) : formatCount(n) + u' ' + QLatin1String(many);
 }
 
 // ---- boot region ----------------------------------------------------------------------------
@@ -374,6 +382,9 @@ Result<BootInfo> parseBootRegion(const QByteArray& region)
         return bad(QStringLiteral("NumberOfFats %1").arg(info.numberOfFats));
     if (g.volumeLength < quint64((1u << 20) >> g.bytesPerSectorShift))
         return bad(QStringLiteral("VolumeLength %1 too small").arg(g.volumeLength));
+    // Larger than any file can be: the byte size would not fit 63 bits.
+    if (g.volumeLength > (quint64(std::numeric_limits<qint64>::max()) >> g.bytesPerSectorShift))
+        return bad(QStringLiteral("VolumeLength %1 too large").arg(g.volumeLength));
     if (g.fatOffset < 24)
         return bad(QStringLiteral("FatOffset %1 < 24").arg(g.fatOffset));
     const quint64 fatEnd = quint64(g.fatOffset) + quint64(g.fatLength) * info.numberOfFats;

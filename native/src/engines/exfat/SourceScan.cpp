@@ -137,12 +137,16 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
             const QString name = fi.fileName();
             const QString abs = dirAbs + u'/' + name;
             const QString rel = dirRel.isEmpty() ? name : dirRel + u'/' + name;
-            const bool isLink = fi.isSymLink() || fi.isJunction();
+            // A Windows shortcut (.lnk) is an ordinary file to copy, whatever
+            // it points at. QFileInfo describes its target, so the file's own
+            // size and times are read from an open handle below.
+            const bool shortcut = fi.isShortcut();
+            const bool isLink = !shortcut && (fi.isSymLink() || fi.isJunction());
             if (isLink && !fi.exists())
                 return Error(ErrorCode::NotFound,
                              QStringLiteral("%1 is a link whose target is missing. Remove it or exclude it, then try again.")
                                  .arg(QDir::toNativeSeparators(abs)));
-            const bool isDir = fi.isDir();
+            const bool isDir = !shortcut && fi.isDir();
             if (isDir) {
                 if (matcher.excludesDir(name, rel)) {
                     ++tree.excludedCount;
@@ -177,6 +181,18 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
             n.modified = fi.lastModified();
             n.created = fi.birthTime().isValid() ? fi.birthTime() : n.modified;
             n.accessed = fi.lastRead().isValid() ? fi.lastRead() : n.modified;
+            if (shortcut) {
+                QFile self(toLongPath(abs));
+                if (!self.open(QIODevice::ReadOnly))
+                    return Error(ErrorCode::IoError, QStringLiteral("Could not read %1.").arg(QDir::toNativeSeparators(abs)),
+                                 self.errorString());
+                n.size = self.size();
+                n.modified = self.fileTime(QFileDevice::FileModificationTime);
+                const QDateTime born = self.fileTime(QFileDevice::FileBirthTime);
+                const QDateTime read = self.fileTime(QFileDevice::FileAccessTime);
+                n.created = born.isValid() ? born : n.modified;
+                n.accessed = read.isValid() ? read : n.modified;
+            }
             n.parent = cur.node;
             if (isDir)
                 ++tree.dirCount;

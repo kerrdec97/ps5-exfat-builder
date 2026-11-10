@@ -7,6 +7,7 @@
 #include "engines/exfat/ExfatReader.h"
 #include "engines/exfat/ExfatVerify.h"
 #include "engines/exfat/Module.h"
+#include "engines/exfat/PlatformFs.h"
 #include "engines/general/Module.h"
 
 #include <QDir>
@@ -80,8 +81,13 @@ QString resolveBuildOutput(const QString& source, const QString& output)
     if (output.trimmed().isEmpty())
         return {};
     QString out = QDir::cleanPath(QFileInfo(output).absoluteFilePath());
-    if (output.endsWith(u'/') || output.endsWith(u'\\') || QFileInfo(out).isDir())
-        out += u'/' + sanitizeFileName(QFileInfo(source).fileName()) + QStringLiteral(".exfat");
+    if (output.endsWith(u'/') || output.endsWith(u'\\') || QFileInfo(out).isDir()) {
+        // "D:/Games/Game/" still names the image Game; a zipped dump gives
+        // its name without ".zip".
+        const QFileInfo src(QDir::cleanPath(source));
+        const QString base = archive::isZipSource(source) ? src.completeBaseName() : src.fileName();
+        out += u'/' + sanitizeFileName(base) + QStringLiteral(".exfat");
+    }
     return out;
 }
 
@@ -211,6 +217,7 @@ public:
             const QString zip = m_source;
             FW_TRY(validate(ctx.settings));
             FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress));
+            m_zip = zip;
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         }
         FW_TRY(validate(ctx.settings));
@@ -245,13 +252,10 @@ public:
         const QString outDir = QFileInfo(m_output).absolutePath();
         if (!QDir().mkpath(outDir))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(outDir)));
-        if (auto ds = diskSpace(outDir); ds.ok()) {
-            const QString fs = ds->fileSystem.toLower();
-            if ((fs == u"vfat" || fs == u"msdos" || fs.startsWith(u"fat")) && volume >= 4 * kGiB)
-                return Error(ErrorCode::Unsupported,
-                             QStringLiteral("The output drive uses FAT32, which cannot store files of 4 GB or more. "
-                                            "Choose a folder on an NTFS or exFAT drive."));
-        }
+        if (tooLargeForDrive(outDir, volume))
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("The output drive uses FAT32, which cannot store files of 4 GB or more. "
+                                        "Choose a folder on an NTFS or exFAT drive."));
         FW_TRY(ensureFreeSpace(outDir, volume, x.marginBytes));
         if (!ctx.token.checkpoint())
             return Error::cancelled();
@@ -281,7 +285,9 @@ public:
             o.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
 
-        FW_TRY(part.commit(x.overwrite));
+        FW_TRY(commitOrKeep(part, x.overwrite,
+                            x.verify ? QStringLiteral("The image was built and verified")
+                                     : QStringLiteral("The image was built")));
         o.outputs << m_output;
         // An undo journal of the image that was just replaced must never be
         // applied to the new one.
@@ -291,12 +297,17 @@ public:
 
         // Delete the source only after a full content-verified pass (audit C2).
         if (x.deleteSource) {
-            if (o.verification != Verification::Passed || !x.fullVerify) {
+            if (!m_zip.isEmpty()) {
+                // m_source is the unpacked copy in the job's temporary folder.
+                o.warnings << QStringLiteral("The ZIP %1 was kept: only folders are deleted after a build.").arg(native(m_zip));
+            } else if (o.verification != Verification::Passed || !x.fullVerify) {
                 o.warnings << QStringLiteral("The source folder was kept: it is deleted only after a full byte-for-byte "
                                              "verification.");
             } else if (tree.excludedCount > 0) {
-                o.warnings << QStringLiteral("The source folder was kept: %1 items in it were left out of the image.")
-                                  .arg(formatCount(tree.excludedCount));
+                o.warnings << (tree.excludedCount == 1
+                                   ? QStringLiteral("The source folder was kept: 1 item in it was left out of the image.")
+                                   : QStringLiteral("The source folder was kept: %1 items in it were left out of the image.")
+                                         .arg(formatCount(tree.excludedCount)));
             } else if (const Status st = removeTreeSafely(m_source); !st.ok()) {
                 o.warnings << QStringLiteral("The source folder could not be deleted: %1").arg(st.error().message);
             } else {
@@ -305,8 +316,8 @@ public:
             }
         }
 
-        o.summary = QStringLiteral("%1 image, %2 files (%3)")
-                        .arg(formatBytes(volume), formatCount(tree.fileCount), formatBytes(tree.totalBytes));
+        o.summary = QStringLiteral("%1 image, %2 (%3)")
+                        .arg(formatBytes(volume), counted(tree.fileCount, "file", "files"), formatBytes(tree.totalBytes));
         o.details.insert(QStringLiteral("image"), m_output);
         o.details.insert(QStringLiteral("volumeBytes"), double(volume));
         o.details.insert(QStringLiteral("clusterBytes"), double(plan.geo.clusterBytes()));
@@ -325,6 +336,7 @@ public:
 private:
     QJsonObject m_p;
     QString m_source, m_output, m_label;
+    QString m_zip; // the zipped dump m_source was unpacked from, if any
     bool m_hasLabel = false;
     QStringList m_excludes;
 };
@@ -363,7 +375,7 @@ public:
         ctx.progress->beginPhase(0, 0);
         FW_TRY_ASSIGN(const bool recovered, recoverInterruptedEdit(m_image, &ctx.log));
         if (m_source.trimmed().isEmpty())
-            return runStandalone(ctx, recovered);
+            return runStandalone(ctx, recovered, x.fullVerify);
         ScanRules rules = x.rules;
         rules.excludePatterns += m_excludes;
         FW_TRY_ASSIGN(VerifyReport rep, verifyImageAgainstFolder(m_image, m_source, rules, verifyOptions(x, ctx, 1),
@@ -380,22 +392,35 @@ public:
 private:
     // Without a source folder: the structure must be intact, and in "full"
     // mode every file must read back to its full length without errors.
-    Result<JobOutcome> runStandalone(JobContext& ctx, bool recovered)
+    Result<JobOutcome> runStandalone(JobContext& ctx, bool recovered, bool full)
     {
-        FW_TRY_ASSIGN(auto reader, ExfatReader::open(m_image));
-        FW_TRY_ASSIGN(ImageTree tree, reader->readTree(ctx.token, true));
         JobOutcome o;
         if (recovered)
             o.warnings << QStringLiteral("An interrupted edit of this image was undone before verifying it.");
-        o.warnings << tree.warnings;
-        if (!tree.problems.isEmpty()) {
+        // A damaged image is a failed verification, not a job error, exactly
+        // as when it is compared with its folder.
+        const auto damaged = [&o](const QString& detail, const QStringList& problems = {}) {
             o.verification = Verification::Failed;
-            o.verificationDetail = QStringLiteral("The image is damaged: %1").arg(tree.problems.first());
-            o.details.insert(QStringLiteral("problems"), QJsonArray::fromStringList(tree.problems));
+            o.verificationDetail = detail;
+            if (!problems.isEmpty())
+                o.details.insert(QStringLiteral("problems"), QJsonArray::fromStringList(problems));
             o.summary = QStringLiteral("The image is damaged.");
             return o;
+        };
+        auto opened = ExfatReader::open(m_image);
+        if (!opened.ok()) {
+            if (opened.error().code != ErrorCode::CorruptData)
+                return opened.takeError();
+            return damaged(opened.error().message);
         }
-        const bool full = ctx.settings.string(QStringLiteral("verification.mode")) != QStringLiteral("structure");
+        const std::unique_ptr<ExfatReader> reader = std::move(opened).value();
+        FW_TRY_ASSIGN(ImageTree tree, reader->readTree(ctx.token, true));
+        o.warnings << tree.warnings;
+        if (!tree.problems.isEmpty())
+            return damaged(QStringLiteral("The image is damaged: %1.").arg(tree.problems.first()), tree.problems);
+        if (!reader->volume().backupBootMatches)
+            return damaged(QStringLiteral("The image is damaged: %1.").arg(reader->volume().backupProblem),
+                           {reader->volume().backupProblem});
         qint64 files = 0, bytes = 0;
         for (const ImageEntry& e : tree.entries)
             if (!e.isDir) {
@@ -429,8 +454,9 @@ private:
             }
         }
         o.verification = Verification::Passed;
-        o.verificationDetail = full ? QStringLiteral("Structure intact; %1 files (%2) read back without errors.").arg(formatCount(files), formatBytes(bytes))
-                                    : QStringLiteral("Structure intact; %1 files.").arg(formatCount(files));
+        o.verificationDetail = full ? QStringLiteral("Structure intact; %1 (%2) read back without errors.")
+                                          .arg(counted(files, "file", "files"), formatBytes(bytes))
+                                    : QStringLiteral("Structure intact; %1.").arg(counted(files, "file", "files"));
         o.summary = QStringLiteral("The image is intact.");
         return o;
     }
@@ -484,9 +510,19 @@ public:
         FW_TRY_ASSIGN(std::unique_ptr<ExfatReader> reader, ExfatReader::open(m_image));
         FW_TRY_ASSIGN(ImageTree tree, reader->readTree(ctx.token, true));
         FW_TRY(ExfatReader::requireIntact(tree));
-        if (tree.find(kExtractMarker) >= 0)
-            return Error(ErrorCode::Unsupported, QStringLiteral("This image holds a file named %1, which this app "
-                                                                "uses itself. Rename it in the image first.").arg(kExtractMarker));
+        // The marker lives in the output's top folder, on a drive that
+        // ignores case: an entry named like it in any case would be written
+        // into the marker and deleted with it.
+        qint64 largest = 0;
+        for (const ImageEntry& e : tree.entries)
+            if (!e.isDir)
+                largest = std::max(largest, e.size);
+        for (const int c : tree.root().children)
+            if (tree.entries[size_t(c)].name.compare(kExtractMarker, Qt::CaseInsensitive) == 0)
+                return Error(ErrorCode::Unsupported,
+                             QStringLiteral("This image holds a file named %1, which this app uses itself. Rename it in "
+                                            "the image first.")
+                                 .arg(tree.entries[size_t(c)].name));
 
         // Work in "<output>.part"; a leftover one is ours only if it has our marker.
         const QString stage = m_output + QStringLiteral(".part");
@@ -499,6 +535,11 @@ public:
         }
         if (!QDir().mkpath(parent))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(parent)));
+        if (tooLargeForDrive(parent, largest))
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("The image holds a file of %1, and the destination drive uses FAT32, which cannot "
+                                        "store files of 4 GB or more. Extract to a folder on an NTFS or exFAT drive.")
+                             .arg(formatBytes(largest)));
         FW_TRY(ensureFreeSpace(parent, tree.totalBytes + (tree.dirCount + tree.fileCount) * 4096, x.marginBytes));
         if (!QDir().mkpath(stage) || !QFile(stage + u'/' + kExtractMarker).open(QIODevice::WriteOnly))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(stage)));
@@ -518,8 +559,8 @@ public:
         eo.threads = x.extractThreads;
         eo.bufferBytes = x.writer.bufferBytes;
         FW_TRY_ASSIGN(ExtractStats st, extractTree(*reader, tree, stage, eo, ctx.token, ctx.progress));
-        ctx.log.info(QStringLiteral("Extracted %1 files, %2 in %3 ms (%4)")
-                         .arg(formatCount(st.files), formatBytes(st.bytes))
+        ctx.log.info(QStringLiteral("Extracted %1, %2 in %3 ms (%4)")
+                         .arg(counted(st.files, "file", "files"), formatBytes(st.bytes))
                          .arg(st.elapsedMs)
                          .arg(rate(st.bytes, st.elapsedMs)));
         JobOutcome o;
@@ -527,13 +568,17 @@ public:
         for (int i = 0; i < st.renamed.size() && i < 20; ++i)
             o.warnings << QStringLiteral("Renamed for this drive: %1").arg(st.renamed[i]);
         if (st.renamed.size() > 20)
-            o.warnings << QStringLiteral("%1 more names were changed.").arg(st.renamed.size() - 20);
+            o.warnings << (st.renamed.size() == 21 ? QStringLiteral("1 more name was changed.")
+                                                   : QStringLiteral("%1 more names were changed.").arg(st.renamed.size() - 20));
         for (const QString& n : st.renamed)
             ctx.log.info(QStringLiteral("Renamed for this drive: %1").arg(n));
         if (recovered)
             o.warnings << QStringLiteral("An interrupted edit of this image was undone before extracting it.");
         if (!QFile::remove(stage + u'/' + kExtractMarker))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not finish the extraction folder."));
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not finish the extraction: the marker file %1 could not be removed from the "
+                                        "new folder. Close any program looking at that folder, then try again.")
+                             .arg(kExtractMarker));
 
         if (x.verify) {
             ctx.progress->beginPhase(2, 0);
@@ -554,15 +599,19 @@ public:
             o.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
         reader.reset();
-        if (QFileInfo(m_output).isDir() && !QDir().rmdir(m_output))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(m_output)));
-        if (!QDir().rename(stage, m_output))
+        if ((QFileInfo(m_output).isDir() && !QDir().rmdir(m_output)) || !QDir().rename(stage, m_output)) {
+            // The files are extracted (and verified): they are not deleted
+            // because a folder name could not be taken.
+            guard.keep = true;
+            const QString kept = keepStagedFolder(stage, m_output);
             return Error(ErrorCode::IoError,
-                         QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.")
-                             .arg(native(m_output)));
+                         QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
+                                        "open in another program. They were saved in %3.")
+                             .arg(x.verify ? QStringLiteral(" and verified") : QString(), native(m_output), native(kept)));
+        }
         guard.keep = true;
         o.outputs << m_output;
-        o.summary = QStringLiteral("%1 files, %2").arg(formatCount(st.files), formatBytes(st.bytes));
+        o.summary = QStringLiteral("%1, %2").arg(counted(st.files, "file", "files"), formatBytes(st.bytes));
         o.details.insert(QStringLiteral("files"), double(st.files));
         o.details.insert(QStringLiteral("folders"), double(st.dirs));
         o.details.insert(QStringLiteral("bytes"), double(st.bytes));
@@ -625,8 +674,9 @@ public:
         FW_TRY_ASSIGN(EditResult r, editImage(m_image, m_ops.value(), eo, ctx.token, ctx.progress, &ctx.log));
         JobOutcome o;
         o.warnings = r.warnings;
-        const bool changed = r.added + r.replaced + r.deleted + r.foldersAdded > 0;
-        if (!changed) {
+        // The engine decides: operations that cancel each other out (create a
+        // folder, then delete it) count as changes but write nothing.
+        if (!r.changed) {
             o.verification = Verification::NotRun;
             o.verificationDetail = QStringLiteral("Nothing needed to change.");
         } else {

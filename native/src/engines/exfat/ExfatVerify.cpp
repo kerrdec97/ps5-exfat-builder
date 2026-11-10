@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <exception>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -20,11 +21,12 @@ QString VerifyReport::summary() const
 {
     if (passed()) {
         if (full)
-            return QStringLiteral("%1 files and %2 folders compared byte for byte, all identical (%3).")
-                .arg(formatCount(filesChecked), formatCount(dirsChecked), formatBytes(bytesCompared));
-        return QStringLiteral("%1 files and %2 folders checked: names, sizes and the image structure match "
+            return QStringLiteral("%1 and %2 compared byte for byte, all identical (%3).")
+                .arg(counted(filesChecked, "file", "files"), counted(dirsChecked, "folder", "folders"),
+                     formatBytes(bytesCompared));
+        return QStringLiteral("%1 and %2 checked: names, sizes and the image structure match "
                               "(contents were not compared).")
-            .arg(formatCount(filesChecked), formatCount(dirsChecked));
+            .arg(counted(filesChecked, "file", "files"), counted(dirsChecked, "folder", "folders"));
     }
     const qint64 n = qint64(mismatches.size()) + structureProblems.size();
     QStringList first;
@@ -42,7 +44,7 @@ QString VerifyReport::summary() const
     s += first.join(QStringLiteral("; "));
     if (n > first.size())
         s += QStringLiteral("; and %1 more").arg(formatCount(n - first.size()));
-    return s + u'.';
+    return s.endsWith(u'.') ? s : s + u'.'; // a problem may be a whole sentence already
 }
 
 QJsonObject VerifyReport::toJson(int maxMismatches) const
@@ -178,11 +180,12 @@ Result<VerifyReport> verifyImage(const QString& imagePath, const std::vector<Exp
     const ImageTree& tree = treeR.value();
     report.structureProblems = tree.problems;
     if (tree.problemCount > tree.problems.size())
-        report.structureProblems << QStringLiteral("and %1 more structure problems").arg(tree.problemCount - tree.problems.size());
+        report.structureProblems << QStringLiteral("and %1")
+                                        .arg(counted(tree.problemCount - tree.problems.size(), "more structure problem",
+                                                     "more structure problems"));
     report.warnings = tree.warnings;
     if (o.requireBackupBoot && !reader.volume().backupBootMatches)
-        report.structureProblems << QStringLiteral("the backup boot region does not match the main one (%1)")
-                                        .arg(reader.volume().backupProblem);
+        report.structureProblems << reader.volume().backupProblem;
 
     // Names, types and sizes.
     QHash<QString, int> folded;
@@ -222,7 +225,7 @@ Result<VerifyReport> verifyImage(const QString& imagePath, const std::vector<Exp
         if (e.size != x.size) {
             report.mismatches.push_back({x.path, QStringLiteral("size"),
                                          QStringLiteral("%1 in the image, %2 expected")
-                                             .arg(formatCount(e.size), formatCount(x.size))});
+                                             .arg(counted(e.size, "byte", "bytes"), counted(x.size, "byte", "bytes"))});
             continue;
         }
         if (x.unchangedFirstCluster >= 0) {
@@ -296,9 +299,34 @@ Result<VerifyReport> verifyImage(const QString& imagePath, const std::vector<Exp
                     report.mismatches.push_back(std::move(*m));
             }
         };
+        // An exception that leaves a thread ends the whole app. Buffers that
+        // cannot be allocated (many threads, large I/O buffers) become this
+        // job's error instead.
+        const auto guarded = [&] {
+            try {
+                worker();
+            } catch (const std::exception& e) {
+                std::lock_guard lock(mutex);
+                if (!fatal)
+                    fatal = Error(ErrorCode::Internal,
+                                  QStringLiteral("Not enough memory to compare the files. Lower the I/O buffer size or the "
+                                                 "number of worker threads in Settings, then try again."),
+                                  QString::fromLocal8Bit(e.what()));
+                stop = true;
+            }
+        };
         std::vector<std::thread> pool;
-        for (int t = 0; t < threads; ++t)
-            pool.emplace_back(worker);
+        try {
+            for (int t = 0; t < threads; ++t)
+                pool.emplace_back(guarded);
+        } catch (const std::exception& e) {
+            // No more threads: the ones that started do the work.
+            if (pool.empty()) {
+                std::lock_guard lock(mutex);
+                fatal = Error(ErrorCode::Internal, QStringLiteral("Could not start a worker thread."),
+                              QString::fromLocal8Bit(e.what()));
+            }
+        }
         for (auto& t : pool)
             t.join();
         if (anyCancelled || token.isCancelled())

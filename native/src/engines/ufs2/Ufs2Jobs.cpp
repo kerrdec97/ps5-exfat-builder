@@ -50,6 +50,47 @@ QStringList listingOf(const SourceTree& t)
 
 QString seconds(qint64 ms) { return QStringLiteral("%1 s").arg(QString::number(double(ms) / 1000.0, 'f', 1)); }
 
+// True when the drive holding `folder` is FAT32 (or older) and `bytes` is
+// over its 4 GiB file limit: checked before hours of writing fail there.
+bool tooLargeForDrive(const QString& folder, qint64 bytes)
+{
+    if (bytes < 4096 * kMiB)
+        return false;
+    const auto ds = diskSpace(folder);
+    if (!ds.ok())
+        return false;
+    const QString fs = ds->fileSystem.toLower();
+    return fs == u"vfat" || fs == u"msdos" || fs.startsWith(u"fat");
+}
+
+// Gives a finished .part file its final name. When that fails (the image it
+// replaces is mounted or open in another program) the finished work is not
+// thrown away: it is moved to a free name next to it, "<name> (new).<ext>",
+// and the returned error says so. `what` starts that message.
+Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
+{
+    Status st = part.commit(replaceExisting);
+    if (st.ok())
+        return st;
+    const QFileInfo fi(part.finalPath());
+    const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
+    const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
+    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
+        return st; // nothing could be saved: the plain error stands
+    Error e = st.error();
+    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    if (e.code == ErrorCode::AlreadyExists)
+        e.message = QStringLiteral("%1, but %2 already exists. It was saved as %3.").arg(what, native(part.finalPath()), native(kept));
+    else if (fi.exists())
+        e.message = QStringLiteral("%1, but could not replace %2 because that file is in use. It was saved as %3. "
+                                   "Close the program that uses the old file, then rename the new one.")
+                        .arg(what, native(part.finalPath()), native(kept));
+    else
+        e.message = QStringLiteral("%1, but could not be named %2. It was saved as %3.")
+                        .arg(what, native(part.finalPath()), native(kept));
+    return e;
+}
+
 QJsonObject geometryJson(const PlanSummary& s)
 {
     const Geometry& g = s.geometry;
@@ -152,7 +193,9 @@ public:
             return Error(ErrorCode::InvalidArgument,
                          QStringLiteral("The image cannot be saved inside the game folder it is built from. Choose another output folder."));
         if (QFileInfo::exists(out) && !replaceExisting())
-            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists.").arg(QFileInfo(out).fileName()));
+            return Error(ErrorCode::AlreadyExists,
+                         QStringLiteral("%1 already exists. Choose another name, or allow replacing the existing image.")
+                             .arg(QFileInfo(out).fileName()));
         return validateParams(formatParams(settings));
     }
 
@@ -173,8 +216,9 @@ public:
         FW_TRY_ASSIGN(SourceTree tree, scanLocalFolder(src, ctx.token));
         if (tree.fileCount == 0 && tree.dirCount == 0)
             return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is empty.").arg(native(src)));
-        ctx.log.info(QStringLiteral("%1 files in %2 folders, %3").arg(formatCount(tree.fileCount), formatCount(tree.dirCount),
-                                                                      formatBytes(tree.totalBytes)));
+        ctx.log.info(QStringLiteral("%1 in %2, %3").arg(counted(tree.fileCount, "file", "files"),
+                                                        counted(tree.dirCount, "folder", "folders"),
+                                                        formatBytes(tree.totalBytes)));
 
         QStringList notes;
         WriterOptions opt;
@@ -205,6 +249,10 @@ public:
         FW_TRY(ensureFreeSpace(outDir, plan.imageBytes, marginBytes(ctx.settings)));
         if (!QDir().mkpath(outDir))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(outDir)));
+        if (tooLargeForDrive(outDir, plan.imageBytes))
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("The output drive uses FAT32, which cannot store files of 4 GB or more. "
+                                        "Choose a folder on an NTFS or exFAT drive."));
 
         PartFile part(out);
         QFile::remove(part.partPath()); // left by an interrupted build of this image
@@ -227,10 +275,12 @@ public:
             outcome.summary = QStringLiteral("Not saved: the new image failed verification.");
             return outcome; // the .part file is removed with `part`
         }
-        FW_TRY(part.commit(replaceExisting()));
+        FW_TRY(commitOrKeep(part, replaceExisting(),
+                            v.verification == Verification::Passed ? QStringLiteral("The image was built and verified")
+                                                                   : QStringLiteral("The image was built")));
         outcome.outputs << out;
-        outcome.summary = QStringLiteral("%1 · %2 · %3 files").arg(QFileInfo(out).fileName(), formatBytes(ws.imageBytes),
-                                                                    formatCount(tree.fileCount));
+        outcome.summary = QStringLiteral("%1 · %2 · %3").arg(QFileInfo(out).fileName(), formatBytes(ws.imageBytes),
+                                                              counted(tree.fileCount, "file", "files"));
         ctx.log.info(QStringLiteral("Saved %1").arg(native(out)));
 
         if (ctx.settings.boolean(keys::kDeleteSourceAfterBuild)) {
@@ -241,7 +291,13 @@ public:
                 why = QStringLiteral("the folder has no eboot.bin");
             else if (auto again = scanLocalFolder(src, ctx.token); !again.ok() || listingOf(again.value()) != listingOf(tree))
                 why = QStringLiteral("files in it changed while the image was being built");
-            if (why.isEmpty()) {
+            if (!m_unpacked.isEmpty()) {
+                // `src` is the unpacked copy in the job's temporary folder.
+                const QString w = QStringLiteral("The ZIP %1 was kept: only folders are deleted after a build.")
+                                      .arg(native(absolute(m_p.value(QStringLiteral("source")).toString())));
+                outcome.warnings << w;
+                ctx.log.warn(w);
+            } else if (why.isEmpty()) {
                 Status st = removeTreeSafely(src);
                 if (st.ok()) {
                     ctx.log.info(QStringLiteral("Deleted the game folder %1").arg(native(src)));
@@ -319,8 +375,8 @@ public:
                     outcome.verification = Verification::Failed;
                     outcome.verificationDetail = read.error().message;
                 } else {
-                    outcome.verificationDetail = QStringLiteral("Structure check passed and all %1 files (%2) read back without errors.")
-                                                     .arg(formatCount(tree.fileCount), formatBytes(read.value()));
+                    outcome.verificationDetail = QStringLiteral("Structure check passed; %1 (%2) read back without errors.")
+                                                     .arg(counted(tree.fileCount, "file", "files"), formatBytes(read.value()));
                 }
             }
         }
@@ -381,6 +437,15 @@ public:
         for (const QString& s : skipped)
             outcome.warnings << QStringLiteral("Not extracted (link or special file): %1").arg(s);
         FW_TRY(ensureFreeSpace(out, tree.totalBytes, marginBytes(ctx.settings)));
+        qint64 largest = 0;
+        for (const TreeNode& n : tree.nodes)
+            if (!n.isDir())
+                largest = std::max(largest, n.size);
+        if (tooLargeForDrive(QFileInfo(out).absolutePath(), largest))
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("The image holds a file of %1, and the destination drive uses FAT32, which cannot "
+                                        "store files of 4 GB or more. Extract to a folder on an NTFS or exFAT drive.")
+                             .arg(formatBytes(largest)));
 
         // Staging folder; a leftover of ours (it carries the marker) is replaced.
         if (QFileInfo::exists(staging)) {
@@ -388,8 +453,15 @@ public:
                 return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Move or delete it first.").arg(native(staging)));
             FW_TRY(removeTreeSafely(staging, QFileInfo(staging).absolutePath()));
         }
-        if (tree.findChild(0, kStagingMarker.toUtf8()) >= 0)
-            return Error(ErrorCode::Unsupported, QStringLiteral("The image contains a file named %1.").arg(kStagingMarker));
+        // The marker lives in the staging folder, on a drive that ignores
+        // case: an entry named like it in any case would be written into the
+        // marker and deleted with it.
+        for (const int c : tree.liveChildren(0))
+            if (tree.nodes[size_t(c)].name.compare(kStagingMarker, Qt::CaseInsensitive) == 0)
+                return Error(ErrorCode::Unsupported,
+                             QStringLiteral("This image holds a file named %1, which this app uses itself. Rename it in "
+                                            "the image first.")
+                                 .arg(tree.nodes[size_t(c)].name));
         if (!QDir().mkpath(staging) || !QFile(QDir(staging).filePath(kStagingMarker)).open(QIODevice::WriteOnly))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(staging)));
         struct Cleanup {
@@ -407,7 +479,9 @@ public:
         for (int i = 0; i < ex.renamed.size() && i < 20; ++i)
             outcome.warnings << QStringLiteral("Renamed for this drive: %1").arg(ex.renamed[i]);
         if (ex.renamed.size() > 20)
-            outcome.warnings << QStringLiteral("%1 more names were changed.").arg(ex.renamed.size() - 20);
+            outcome.warnings << (ex.renamed.size() == 21
+                                     ? QStringLiteral("1 more name was changed.")
+                                     : QStringLiteral("%1 more names were changed.").arg(ex.renamed.size() - 20));
 
         if (verifyEnabled(ctx.settings)) {
             const CompareDepth depth = verifyDepth(ctx.settings);
@@ -425,14 +499,23 @@ public:
             outcome.verification = Verification::Skipped;
         }
         QFile::remove(QDir(staging).filePath(kStagingMarker));
-        if (QFileInfo(out).isDir() && !QDir().rmdir(out))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(out)));
-        if (!QDir().rename(staging, out))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not rename the extracted folder to %1.").arg(native(out)));
+        if ((QFileInfo(out).isDir() && !QDir().rmdir(out)) || !QDir().rename(staging, out)) {
+            // The files are extracted (and verified): they are not deleted
+            // because a folder name could not be taken.
+            cleanup.armed = false;
+            QString kept = uniquePath(out + QStringLiteral(".new"));
+            if (!QDir().rename(staging, kept))
+                kept = staging;
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
+                                        "open in another program. They were saved in %3.")
+                             .arg(outcome.verification == Verification::Passed ? QStringLiteral(" and verified") : QString(),
+                                  native(out), native(kept)));
+        }
         cleanup.armed = false;
         outcome.outputs << out;
-        outcome.summary = QStringLiteral("%1 files (%2) extracted").arg(formatCount(ex.files), formatBytes(ex.bytes));
-        ctx.log.info(QStringLiteral("Extracted %1 files to %2").arg(formatCount(ex.files), native(out)));
+        outcome.summary = QStringLiteral("%1 (%2) extracted").arg(counted(ex.files, "file", "files"), formatBytes(ex.bytes));
+        ctx.log.info(QStringLiteral("Extracted %1 to %2").arg(counted(ex.files, "file", "files"), native(out)));
         return outcome;
     }
 
@@ -520,6 +603,11 @@ public:
                 outcome.warnings << n;
             Ufs2Writer writer(tree, opt);
             FW_TRY_ASSIGN(PlanSummary plan, writer.plan());
+            if (tooLargeForDrive(QFileInfo(img).absolutePath(), plan.imageBytes))
+                return Error(ErrorCode::Unsupported,
+                             QStringLiteral("The edited image would be %1, and its drive uses FAT32, which cannot store "
+                                            "files of 4 GB or more. Move the image to an NTFS or exFAT drive first.")
+                                 .arg(formatBytes(plan.imageBytes)));
             FW_TRY(ensureFreeSpace(QFileInfo(img).absolutePath(), plan.imageBytes, marginBytes(ctx.settings)));
             QFile::remove(part.partPath());
             ctx.progress->beginPhase(1, tree.totalBytes, tree.fileCount);
@@ -542,7 +630,7 @@ public:
             // before the original is replaced.
         }
         ctx.progress->beginPhase(3, 0, 0, false);
-        FW_TRY(part.commit(true));
+        FW_TRY(commitOrKeep(part, true, QStringLiteral("The edited image was built and verified")));
         outcome.outputs << img;
         outcome.summary = QStringLiteral("%1 change%2 applied to %3").arg(ops.size()).arg(ops.size() == 1 ? QString() : QStringLiteral("s"),
                                                                            QFileInfo(img).fileName());

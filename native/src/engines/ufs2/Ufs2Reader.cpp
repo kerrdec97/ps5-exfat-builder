@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <set>
+#include <utility>
 
 namespace fw::ufs2 {
 
@@ -16,6 +18,10 @@ namespace {
 
 constexpr qint32 kUfs1Magic = 0x00011954;
 constexpr qint64 kMaxDirectoryBytes = 256LL * 1024 * 1024;
+// Limits for images that were not written here: deeper or larger than any
+// real game folder, small enough that a damaged image cannot exhaust memory.
+constexpr int kMaxFolderDepth = 256;
+constexpr size_t kMaxTreeNodes = 10'000'000;
 
 Error corruptError(const QString& path, const QString& what)
 {
@@ -107,6 +113,9 @@ Result<SuperblockInfo> parseSuperblock(const char* d, qint64 imageBytes, qint64 
         return bad(QStringLiteral("inode count"));
     if (s.size <= 0 || s.size > qint64(s.ncg) * s.fpg || s.size <= qint64(s.ncg - 1) * s.fpg)
         return bad(QStringLiteral("file system size %1 for %2 groups").arg(s.size).arg(s.ncg));
+    // The byte size must fit 63 bits, or the comparison with the file below means nothing.
+    if (s.size > std::numeric_limits<qint64>::max() / s.fsize)
+        return bad(QStringLiteral("file system size %1").arg(s.size));
     const qint64 inodeFrags = ceilDiv(s.ipg, s.inopb) * s.frag;
     if (s.sblkno < 0 || s.cblkno <= s.sblkno || s.iblkno <= s.cblkno || s.iblkno + inodeFrags > s.dblkno
         || s.dblkno > s.fpg)
@@ -115,7 +124,8 @@ Result<SuperblockInfo> parseSuperblock(const char* d, qint64 imageBytes, qint64 
         return bad(QStringLiteral("cylinder group metadata overlaps the superblock"));
     if (s.cgsize < kCgHeaderBase || s.cgsize > (s.iblkno - s.cblkno) * qint64(s.fsize) || s.cgsize > s.bsize * 2)
         return bad(QStringLiteral("cylinder group size %1").arg(s.cgsize));
-    if (s.cssize < s.ncg * kCsumSize || s.csaddr < 0 || s.csaddr + ceilDiv(s.cssize, s.fsize) > s.size)
+    if (s.cssize < qint64(s.ncg) * kCsumSize || s.csaddr < 0 || s.csaddr > s.size
+        || s.csaddr + ceilDiv(s.cssize, s.fsize) > s.size)
         return bad(QStringLiteral("summary area"));
     if (s.maxfilesize <= 0 || s.maxsymlinklen < 0 || s.maxsymlinklen > (kNDirect + kNIndirect) * 8)
         return bad(QStringLiteral("file size limits"));
@@ -160,6 +170,7 @@ Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::findSuperblock(std::shared_ptr<U
     // images and UFS2Tool use 65536; some makefs builds put UFS2 at 8192.
     std::optional<Error> primaryError;
     std::optional<Error> signedError;
+    std::optional<Error> unsupported; // a recognised file system this app cannot read (UFS1)
     for (const qint64 loc : {kSuperblockOffset, qint64(8192), qint64(262144)}) {
         if (r->m_fileSize < loc + kSuperblockSize)
             continue;
@@ -172,11 +183,16 @@ Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::findSuperblock(std::shared_ptr<U
             return r;
         }
         Error e = sb.takeError();
+        if (e.code == ErrorCode::Unsupported && !unsupported)
+            unsupported = e;
         if (loc == kSuperblockOffset)
             primaryError = e;
         else if (!signedError && rd32s(sbuf.constData() + 0x55C) == kUfs2Magic)
             signedError = e;
     }
+    // UFS1 keeps its superblock at 8192, so the primary location only says "no signature".
+    if (unsupported)
+        return *unsupported;
     // Explain the primary location, unless only another location has a signature.
     Error e = *primaryError;
     if (signedError && e.message.contains(QLatin1String("no UFS2 signature")))
@@ -220,7 +236,7 @@ Result<Inode> Ufs2Reader::readInode(quint32 ino) const
 }
 
 Status Ufs2Reader::walkIndirect(qint64 ptr, int level, qint64 firstLbn, qint64 nblocks, InodeBlocks& out,
-                                quint32 ino, int depth) const
+                                quint32 ino, int depth, const CancellationToken* token) const
 {
     qint64 span = 1; // logical blocks covered by one pointer of this block
     for (int i = 1; i < level; ++i)
@@ -234,6 +250,12 @@ Status Ufs2Reader::walkIndirect(qint64 ptr, int level, qint64 firstLbn, qint64 n
         return corrupt(QStringLiteral("inode %1 has an invalid indirect block %2.").arg(ino).arg(ptr));
     if (depth > 3)
         return corrupt(QStringLiteral("inode %1 has too many indirect levels.").arg(ino));
+    // Every block of a sound map is a block of its own. Pointers that lead
+    // back to the same blocks would otherwise multiply without end.
+    if (qint64(out.data.size() + out.indirect.size()) > m_sb.size / m_sb.frag + kNDirect)
+        return corrupt(QStringLiteral("inode %1 maps more blocks than the image holds.").arg(ino));
+    if (token && !token->checkpoint())
+        return Error::cancelled();
     out.indirect.push_back(ptr);
     QByteArray blk(m_sb.bsize, '\0');
     FW_TRY(readAt(ptr * m_sb.fsize, blk.data(), m_sb.bsize));
@@ -254,13 +276,13 @@ Status Ufs2Reader::walkIndirect(qint64 ptr, int level, qint64 firstLbn, qint64 n
                 return corrupt(QStringLiteral("inode %1 has an invalid block pointer %2.").arg(ino).arg(p));
             out.data.push_back({childFirst, p, m_sb.frag});
         } else {
-            FW_TRY(walkIndirect(p, level - 1, childFirst, nblocks, out, ino, depth + 1));
+            FW_TRY(walkIndirect(p, level - 1, childFirst, nblocks, out, ino, depth + 1, token));
         }
     }
     return success();
 }
 
-Result<InodeBlocks> Ufs2Reader::blocks(const Inode& in, quint32 ino) const
+Result<InodeBlocks> Ufs2Reader::blocks(const Inode& in, quint32 ino, const CancellationToken* token) const
 {
     InodeBlocks out;
     if (in.size < 0 || in.size > m_sb.maxfilesize)
@@ -295,7 +317,7 @@ Result<InodeBlocks> Ufs2Reader::blocks(const Inode& in, quint32 ino) const
             if (p != 0)
                 ++out.strayPointers;
         } else {
-            FW_TRY(walkIndirect(p, level, first, nblocks, out, ino, 1));
+            FW_TRY(walkIndirect(p, level, first, nblocks, out, ino, 1, token));
         }
         first += span;
         span *= m_sb.nindir;
@@ -333,13 +355,16 @@ Result<std::vector<FileExtent>> Ufs2Reader::extents(const Inode& in, quint32 ino
     return out;
 }
 
-Result<std::vector<DirEntry>> Ufs2Reader::readDirectory(quint32 ino, bool includeDots) const
+Result<std::vector<DirEntry>> Ufs2Reader::readDirectory(quint32 ino, bool includeDots, qint64* dirBytes) const
 {
     FW_TRY_ASSIGN(Inode in, readInode(ino));
     if (!in.isDir())
         return corrupt(QStringLiteral("inode %1 is not a directory.").arg(ino));
-    if (in.size <= 0 || in.size % kDirBlockSize != 0 || in.size > kMaxDirectoryBytes)
+    // A directory has no holes, so it cannot be larger than the image.
+    if (in.size <= 0 || in.size % kDirBlockSize != 0 || in.size > kMaxDirectoryBytes || in.size > m_fileSize)
         return corrupt(QStringLiteral("directory inode %1 has an invalid size %2.").arg(ino).arg(in.size));
+    if (dirBytes)
+        *dirBytes = in.size;
     FW_TRY_ASSIGN(std::vector<FileExtent> ext, extents(in, ino));
     QByteArray data(in.size, '\0');
     for (const FileExtent& e : ext) {
@@ -387,6 +412,8 @@ Result<QByteArray> Ufs2Reader::readLink(quint32 ino) const
     FW_TRY_ASSIGN(Inode in, readInode(ino));
     if (!in.isLink())
         return corrupt(QStringLiteral("inode %1 is not a symbolic link.").arg(ino));
+    if (in.size < 0)
+        return corrupt(QStringLiteral("symbolic link inode %1 has an invalid size %2.").arg(ino).arg(in.size));
     if (in.size < m_sb.maxsymlinklen && in.blocks == 0) {
         char raw[kNDirect * 8 + kNIndirect * 8];
         for (int i = 0; i < kNDirect; ++i)
@@ -489,12 +516,23 @@ Result<SourceTree> Ufs2Reader::loadTree(const CancellationToken& token, QStringL
     root.mtime = topInode.mtime;
     tree.nodes.push_back(root);
     std::set<quint32> visited{top};
-    std::vector<int> stack{0};
+    std::vector<std::pair<int, int>> stack{{0, 0}}; // node, folder levels above it
     qint64 n = 0;
+    qint64 dirBytesTotal = 0;
     while (!stack.empty()) {
-        const int dirNode = stack.back();
+        const auto [dirNode, depth] = stack.back();
         stack.pop_back();
-        FW_TRY_ASSIGN(std::vector<DirEntry> entries, readDirectory(tree.nodes[size_t(dirNode)].imageIno));
+        if (!token.checkpoint())
+            return Error::cancelled();
+        qint64 dirBytes = 0;
+        FW_TRY_ASSIGN(std::vector<DirEntry> entries,
+                      readDirectory(tree.nodes[size_t(dirNode)].imageIno, false, &dirBytes));
+        // Folders of a sound image do not share blocks: together they are
+        // smaller than the image. Shared blocks would list the same entries
+        // again for every folder.
+        dirBytesTotal += dirBytes;
+        if (dirBytesTotal > m_fileSize)
+            return corrupt(QStringLiteral("its folders take more space than the whole image."));
         for (DirEntry& e : entries) {
             if ((++n & 0xFF) == 0 && !token.checkpoint())
                 return Error::cancelled();
@@ -519,12 +557,17 @@ Result<SourceTree> Ufs2Reader::loadTree(const CancellationToken& token, QStringL
                 }
                 continue;
             }
+            if (tree.nodes.size() >= kMaxTreeNodes)
+                return corrupt(QStringLiteral("it holds more than %1 files and folders.")
+                                   .arg(formatCount(qint64(kMaxTreeNodes))));
             const int idx = int(tree.nodes.size());
             const bool isDir = node.isDir();
+            if (isDir && depth + 1 > kMaxFolderDepth)
+                return corrupt(QStringLiteral("its folders are nested more than %1 deep.").arg(kMaxFolderDepth));
             tree.nodes.push_back(std::move(node));
             tree.nodes[size_t(dirNode)].children.push_back(idx);
             if (isDir)
-                stack.push_back(idx);
+                stack.push_back({idx, depth + 1});
         }
     }
     tree.recount();

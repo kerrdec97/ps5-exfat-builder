@@ -120,8 +120,11 @@ private:
     Status openVolume();
     QIODevice* io() { return m_dev ? static_cast<QIODevice*>(m_dev.get()) : &m_file; }
     Result<quint32> fatEntry(quint32 cluster);
-    // Follows a FAT chain. `expected` < 0: until end of chain.
-    bool followChain(quint32 first, qint64 expected, std::vector<Extent>& out, QString& problem);
+    // Follows a FAT chain. `expected` < 0: until end of chain (a folder
+    // without a length of its own, so at most the largest folder). Returns
+    // false with an empty `problem` when `token` was cancelled.
+    bool followChain(quint32 first, qint64 expected, std::vector<Extent>& out, QString& problem,
+                     const CancellationToken* token = nullptr);
     Result<QByteArray> readExtents(const std::vector<Extent>& extents, qint64 bytes);
 
     QString m_path;

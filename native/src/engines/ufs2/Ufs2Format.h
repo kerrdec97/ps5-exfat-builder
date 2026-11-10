@@ -62,6 +62,8 @@ inline void wr64(char* p, qint64 v) { qToLittleEndian<qint64>(v, p); }
 
 inline qint64 alignUp(qint64 v, qint64 a) { return ((v + a - 1) / a) * a; }
 inline qint64 ceilDiv(qint64 v, qint64 d) { return (v + d - 1) / d; }
+// A count with its noun for messages: "1 file", "2,345 files".
+QString counted(qint64 n, const char* one, const char* many);
 int log2Int(qint64 v);
 bool isPowerOfTwo(qint64 v);
 

@@ -363,6 +363,13 @@ Status Planner::finishDir(int node, quint32 ino, quint32 parentIno, quint32 dept
     for (const DirEnt& e : entries)
         if (e.type == kDtDir)
             ++subdirs;
+    // di_nlink is a signed 16-bit count of "." plus every sub-folder's "..".
+    if (2 + subdirs > 32767) {
+        const QString rel = t.relativePath(node);
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 has %2 sub-folders, more than a UFS2 folder can hold (32,765).")
+                         .arg(rel.isEmpty() ? QStringLiteral("The game folder") : rel, formatCount(subdirs)));
+    }
     PlanDir d;
     d.node = node;
     d.ino = ino;
@@ -989,8 +996,9 @@ Result<PlanSummary> Ufs2Writer::plan()
     m_summary.dataBytes = p.dataBytes;
     m_summary.files = m_tree.fileCount;
     m_summary.dirs = m_tree.dirCount;
-    // A last group too short for its own header still gets one (UFS2Tool
-    // writes it past fs_size), so the file can be longer than fs_size.
+    // The file never ends before the last group's inode table. The geometry
+    // drops a last group too short for its own metadata, so this is fs_size
+    // today; the maximum only guards that rule.
     qint64 end = g.totalBytes;
     {
         const int last = g.ncg - 1;
@@ -1035,7 +1043,8 @@ Result<WriteStats> Ufs2Writer::write(const QString& path, const CancellationToke
         if (segs[i - 1].offset + segs[i - 1].length > segs[i].offset)
             return Error(ErrorCode::Internal, QStringLiteral("Image layout error (overlapping regions at %1).").arg(segs[i].offset));
 
-    QDir().mkpath(QFileInfo(path).absolutePath());
+    if (const QString dir = QFileInfo(path).absolutePath(); !QDir().mkpath(dir))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(dir)));
     QFile out(toLongPath(path));
     if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(QDir::toNativeSeparators(path)),
