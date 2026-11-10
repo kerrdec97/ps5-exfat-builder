@@ -247,6 +247,23 @@ QSize FwStyle::sizeFromContents(ContentsType type, const QStyleOption* option, c
     return s;
 }
 
+void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, const QPalette& pal, bool enabled,
+                           const QString& text, QPalette::ColorRole textRole) const
+{
+    // The text of a dropdown that is narrower than it ends in an ellipsis
+    // instead of being cut by the edge of the field (the stylesheet style
+    // only clips it).
+    if (qobject_cast<QComboBox*>(dynamic_cast<QWidget*>(painter->device()))) {
+        const QRect room = painter->hasClipping() ? rect.intersected(painter->clipBoundingRect().toAlignedRect()) : rect;
+        const QFontMetrics fm = painter->fontMetrics();
+        if (room.width() > 0 && fm.horizontalAdvance(text) > room.width()) {
+            QProxyStyle::drawItemText(painter, room, flags, pal, enabled, fm.elidedText(text, Qt::ElideRight, room.width()), textRole);
+            return;
+        }
+    }
+    QProxyStyle::drawItemText(painter, rect, flags, pal, enabled, text, textRole);
+}
+
 // Controls whose value the mouse wheel changes.
 static bool wheelChangesValue(const QWidget* w)
 {

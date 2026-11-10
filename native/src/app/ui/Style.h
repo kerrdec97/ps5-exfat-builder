@@ -29,6 +29,8 @@ public:
     int styleHint(StyleHint hint, const QStyleOption* option = nullptr, const QWidget* widget = nullptr,
                   QStyleHintReturn* returnData = nullptr) const override;
     void polish(QWidget* widget) override;
+    void drawItemText(QPainter* painter, const QRect& rect, int flags, const QPalette& pal, bool enabled, const QString& text,
+                      QPalette::ColorRole textRole = QPalette::NoRole) const override;
     QSize sizeFromContents(ContentsType type, const QStyleOption* option, const QSize& size,
                            const QWidget* widget) const override;
 };
