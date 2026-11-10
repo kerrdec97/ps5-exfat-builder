@@ -1,4 +1,4 @@
-# exFAT Image Builder 5.0.1 · release notes
+# exFAT Image Builder 5.0.2 · release notes
 
 **Download `exFAT Image Builder.exe`** (GitHub lists it as
 `exFAT.Image.Builder.exe`) and run it: one file, nothing to unzip or install,
@@ -7,7 +7,122 @@ Redistributable. The first start unpacks the program once to
 `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime` (with `portable.txt`
 next to the exe: beside the exe instead). Check it against `SHA256SUMS.txt`.
 
-## What's new
+## What's new in 5.0.2
+
+A maintenance release. Every part of the app was read line by line (engines,
+queue, launcher, console code, every page, the build scripts and the tests);
+this version carries the fixes. No new features, and images built with 5.0.1
+stay valid.
+
+### Safety of your files
+* **Unpacking a crafted packed game or image can no longer write outside the
+  folder you chose** (Unpack, Extract, Pack with zstd, FPKG from an image).
+  Such names are refused before anything is written.
+* **Pack and Unpack never delete anything they did not create**: they work in
+  `<output>.part` and rename it when done. A Packed folder no longer shares
+  its loose files with the original dump through hard links.
+* **A finished, verified image is never thrown away** when the file it should
+  replace is open elsewhere (mounted, being uploaded): it is saved next to it
+  as "<name> (new)" and the message says where.
+* The clean-up at start no longer removes your own folders named `fw-…` from a
+  temporary folder you chose in Settings; only the app's own job folders go.
+* Unpacking a ZIP fails with a clear message when the drive fills up, instead
+  of leaving empty files that the image was then built from.
+* Converting an image keeps every file, whatever "Leave out" patterns are set.
+* Removing and restoring languages touch only files that are safely in the
+  checked backup; Dump Rename applies only what the preview showed and says
+  exactly what a cancelled rename or undo did.
+* A game folder the app is not allowed to read now stops the build instead of
+  producing an image without those files.
+
+### Damaged and crafted files
+* A damaged or deliberately broken `.exfat`, `.ffpkg` or PFS image, `.pkg`,
+  `param.sfo`, cover or `eboot.bin` can no longer hang the app or use up all
+  memory; it is reported as damaged within moments.
+* Titles, file names and messages that come from dumps, images, packages, tools
+  or a console are always shown as plain text, never as formatting.
+* Problem reports no longer contain passcodes, the DLC entitlement key, tokens
+  or webhook addresses; a console address is kept only when it is a local
+  network address. Crash reports (text) are now really included.
+
+### Updates
+* **"Check for updates" now finds version 5 releases** (5.0.0 and 5.0.1 said
+  "Up to date" for every release). When a version is available the app
+  downloads it from GitHub on request, checks it against the release's SHA-256
+  list and shows where the file is; you replace the program file yourself.
+  There is no installer any more and the running program is never replaced.
+
+### Backport
+* A run can no longer be started twice, and a scan that finishes during a run
+  no longer makes the page forget the run.
+* **The settings shared with the standalone PS5 Backport GUI are no longer
+  overwritten with an old copy**: a change made in the other program is kept,
+  and a damaged or locked settings file is left alone.
+* An apply still running in the standalone program is no longer offered as
+  "interrupted". "Clear list" asks first; "Switch AMPR / PlayGo" no longer
+  crashes when both lists are left on "Keep".
+
+### Build image and FPKG
+* **Pause really pauses an FPKG build**: Sony's publisher is suspended until
+  you resume. Performance mode and the CPU limit also apply to package
+  verification, extraction and backport builds.
+* "Overwrite" keeps your previous package until the new one passed its checks.
+* Importing old settings no longer limits builds to one CPU thread.
+* The free-space check is repeated when you press the button, so freeing space
+  or plugging the drive in is enough. A Packed folder can be saved to a FAT32
+  drive again; files of 4 GB or more are refused up front on FAT32 for every
+  image format.
+* An image or `.gp5` source no longer inherits the content ID and version of
+  the game chosen before; the Content ID field is read-only except for add-ons.
+* Images built with zstd packs are uploaded to the PS5 when "Upload new images
+  to the PS5" is on. zstd builds include folders that are links or junctions.
+* Zipped dumps: stage names stay right after "Unpacking ZIP", the image is
+  named without ".zip", and a ZIP is never deleted by "delete the source".
+
+### Image tools, Library, DLC
+* Image tools reads the file tree again after an edit, keeps staged changes on
+  F5 and asks before discarding them; Extract waits until the image was read.
+* Editing an exFAT image in place shows progress, can be cancelled, and a
+  finished edit can no longer be undone later by a leftover undo file.
+* Library: a rescan keeps dumps you added by hand; renaming several images
+  keeps their extension; games that carry a backport show a badge.
+* DLC and dlc_emu.ini: deleting a row is safe, unsaved edits are asked about,
+  keys stay with their entry, and one backup copy is kept instead of many.
+
+### PS5 connect
+* Fixed a crash when a folder listing changed under the right-click menu.
+* Disconnect really stops (queued deletes no longer run after it); Rename
+  refuses a name that already exists; cancelling a transfer, dropping files on
+  the page and uploading over a file ask first.
+* `/user`, `/mnt` and folders named like system folders get the same extra
+  confirmation as the system folders themselves.
+* A payload or package the console stopped accepting part-way is reported as
+  failed instead of "sent"; a transfer that gives up no longer leaves a
+  half-written file behind without saying so.
+* Pushing ShadowMount+ settings keeps comments, line endings and unusual
+  characters of the lines it does not change. "Safe to unplug" asks before it
+  stops ShadowMount+. "Find my PS5" only searches private home networks.
+
+### Interface
+* Text colours match the design again: links are blue, captions are dimmer than
+  body text, errors red, confirmations green, and the separator lines are back.
+* Scrolling a page no longer changes a dropdown or number field under the
+  pointer. Enter presses the focused button and a dialog's default button.
+* Retry, Run again and Show in folder say why nothing happened.
+* The Queue shows the time left for the whole job, lists every job that runs
+  at the same time, and its "Failed" tab is now "Not finished".
+* New app icon in all sizes. The Logs page no longer loses lines.
+* "When the queue finishes": with "Only if every job succeeded" off the action
+  also runs after failures.
+
+### Under the hood
+* The program file no longer contains the folder path of the PC it was built
+  on. The launcher loads Windows libraries only from the Windows folder.
+* 63 automated test programs (53 in 5.0.1) with about 250 new test cases, among them crafted-image,
+  path-traversal and shared-settings tests. Not tested: a PS5 console, real
+  Sony tools, a real GitHub release.
+
+## What version 5 brought (5.0.0 and 5.0.1)
 
 Version 5 is a complete rewrite of the app as a native C++20 / Qt 6 Windows
 program, with a new interface and the PS5 Backport engine built in.
@@ -226,7 +341,7 @@ translations (#35), a dump checker (#26), antivirus false positives until the
 exe is code-signed (#78).
 
 ## How it was tested
-* **Automated tests** (53 test programs) on Windows (MSVC 2022, Qt 6.10):
+* **Automated tests** (63 test programs) on Windows (MSVC 2022, Qt 6.10):
   every engine, byte-for-byte golden comparisons with UFS2Tool and
   Lazy_MkPFS, every page opening, the job monitor following a real job
   (stages, clocks, live log, Run again) and the form → monitor switch,
@@ -264,7 +379,7 @@ exe is code-signed (#78).
   7 Days to Die, Astro Bot. Keep your original dump.
 * LZ4 packs are only read (unpacked), never written.
 
-## Reliability and safety fixes from the engineering audit
+## Reliability and safety fixes from the first engineering audit (5.0.0)
 A read of every engine, the queue, the launcher, the console code and the
 interface before this release. What changed:
 * **Queue**: a job's context menu, drag or cancel confirmation can no longer

@@ -2,6 +2,15 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
+## [5.0.2] - 2026-11-10
+
+A maintenance release after a line-by-line audit of the whole app: path
+traversal on unpack closed, crafted images and packages can no longer hang the
+app, verified work is never thrown away, the update check finds version 5
+releases, the Backport tab no longer overwrites the settings it shares with the
+standalone PS5 Backport GUI, pause works for FPKG builds, and several hundred
+smaller fixes. The full notes are in `native/RELEASE_NOTES.md`.
+
 ## [5.0.1] - 2026-11-08 — version 5
 
 A complete rewrite as a native C++20 / Qt 6 Windows program, with a new
