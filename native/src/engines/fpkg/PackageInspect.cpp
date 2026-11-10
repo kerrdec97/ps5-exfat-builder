@@ -166,6 +166,20 @@ QString titleIdFromContentId(const QString& contentId)
     return isStrictContentId(contentId) ? contentId.mid(7, 9) : QString();
 }
 
+bool isPlausibleDigest(const QByteArray& digest)
+{
+    if (digest.size() != 32)
+        return false;
+    bool seen[256] = {};
+    int distinct = 0;
+    for (const char c : digest)
+        if (!seen[quint8(c)]) {
+            seen[quint8(c)] = true;
+            ++distinct;
+        }
+    return distinct >= 8;
+}
+
 Result<std::optional<QByteArray>> findParamJsonInPackage(const QString& path, const CancellationToken& token)
 {
     static const QByteArray needle("\"contentId\"");

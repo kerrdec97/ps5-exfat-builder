@@ -19,7 +19,7 @@
 //   chunks) | cr (CR line ends) | nobar (no bar) | strictpaths (non-ASCII
 //   src_path or reserved dst_path fails) | nocompanion (update without
 //   .remastered.pkg)
-// FAKE_PUBCMD_VERIFY=fail, FAKE_PUBCMD_EXTRACT=fail|slow,
+// FAKE_PUBCMD_VERIFY=fail|softfail ([Error], exit 0), FAKE_PUBCMD_EXTRACT=fail|slow,
 // FAKE_PUBCMD_EXTRACT_PARAM=<param.json text>, FAKE_DDS2PNG_MODE=fail|wrong,
 // FAKE_PUBCMD_LOG=<file>: one JSON line per run (argv, cwd, TEMP, TMP, start
 //   and end time, CPU count samples, priority class). FAKE_PUBCMD_DELAY_MS:
@@ -455,6 +455,10 @@ int imgVerify(const std::vector<std::string>& args)
         return fail("File not found");
     if (data.compare(0, 4, "\x7F" "FIH", 4) != 0)
         return fail("Cannot parse the package (not a full image)");
+    if (env("FAKE_PUBCMD_VERIFY") == "softfail") {
+        out("[Error] Integrity check failed" + nl());
+        return 0;
+    }
     out("[Info] Verification passed" + nl());
     return 0;
 }

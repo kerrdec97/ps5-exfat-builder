@@ -406,6 +406,91 @@ private slots:
                             [](const QString& w) { return w.contains(QStringLiteral("img_verify")); }));
     }
 
+    // "Overwrite" deletes the old package only after img_verify passed; when it
+    // does not, the old one is back under its name and the new one is kept.
+    void overwriteKeepsTheOldPackageUntilVerified()
+    {
+        const QString game = dir(QStringLiteral("overwrite/game"));
+        const QString out = m_root.filePath(QStringLiteral("overwrite/out"));
+        makeSimpleDump(game);
+        auto job = buildJob(game, out);
+        const QVariantMap overwrite{{keys::kOutputConflict, QStringLiteral("overwrite")}};
+        const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        const QString kept = QDir(out).filePath(kStem + QStringLiteral(" (1).pkg"));
+        const auto asideLeft = [&] {
+            const QStringList files = filesIn(out);
+            return std::any_of(files.begin(), files.end(), [](const QString& f) { return f.contains(QStringLiteral(".fw-replaced")); });
+        };
+        put(out, kStem + QStringLiteral(".pkg"), "previous good");
+        {
+            EnvVar env("FAKE_PUBCMD_VERIFY", "fail");
+            auto rr = run(job, overwrite);
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QCOMPARE(rr.result->verification, Verification::Inconclusive);
+            QCOMPARE(readAll(pkg), QByteArray("previous good"));
+            QCOMPARE(rr.result->outputs, QStringList{kept});
+            QVERIFY(checkPackageHeader(kept).ok);
+            QVERIFY(!asideLeft());
+            QVERIFY(std::any_of(rr.result->warnings.begin(), rr.result->warnings.end(),
+                                [](const QString& w) { return w.contains(QStringLiteral("was put back")); }));
+        }
+        auto rr = run(job, overwrite);
+        QVERIFY(rr.result.ok());
+        QCOMPARE(rr.result->verification, Verification::Passed);
+        QCOMPARE(rr.result->outputs, QStringList{pkg});
+        QVERIFY(checkPackageHeader(pkg).ok);
+        QVERIFY(!asideLeft());
+        QVERIFY(std::any_of(rr.result->warnings.begin(), rr.result->warnings.end(),
+                            [](const QString& w) { return w.contains(QStringLiteral("was replaced")); }));
+    }
+
+    // The required integrity pass of the backport flow fails on an [Error]
+    // line even when the tool exits with 0.
+    void publisherVerifyFailsOnErrorLines()
+    {
+        const QString d = dir(QStringLiteral("pubverify"));
+        put(d, QStringLiteral("base.pkg"), fullPackageBytes());
+        const SettingsValues values = m_env.values(baseSettings());
+        const FpkgSettings s = FpkgSettings::from(values);
+        const PubToolchain tc = locatePubTools(s.pubToolsPath);
+        QVERIFY(tc.ok());
+        ProgressReporter reporter([](const ProgressSnapshot&) {}, 0);
+        JobContext ctx;
+        ctx.jobId = QStringLiteral("Jverify");
+        ctx.progress = &reporter;
+        ctx.log = Log(QStringLiteral("fpkg.backport"), ctx.jobId);
+        ctx.settings = values;
+        ctx.tempDir = dir(QStringLiteral("pubverify/temp"));
+        const QString pkg = QDir(d).filePath(QStringLiteral("base.pkg"));
+        auto good = verifyPublisherPackage(pkg, tc, s, ctx);
+        QVERIFY2(good.ok(), qPrintable(good.ok() ? QString() : good.error().toLogString()));
+        QVERIFY(good->integrityPassed && good->formatPassed);
+        EnvVar soft("FAKE_PUBCMD_VERIFY", "softfail");
+        auto bad = verifyPublisherPackage(pkg, tc, s, ctx);
+        QVERIFY(!bad.ok());
+        QCOMPARE(bad.error().code, ErrorCode::VerificationFailed);
+    }
+
+    // The queue must not run another job on the files these jobs read or write.
+    void busyPathsCoverBaseAndOutput()
+    {
+        const QString d = dir(QStringLiteral("busy"));
+        const auto abs = [&](const char* rel) { return QDir::cleanPath(QDir(d).filePath(QString::fromLatin1(rel))); };
+        QDir().mkpath(abs("patch"));
+        auto update = buildJob(abs("patch"), QString(),
+                               {{QStringLiteral("basePackage"), abs("base.pkg")}, {QStringLiteral("baseFolder"), abs("base-game")}});
+        const QStringList busy = update.busyPaths();
+        for (const char* rel : {"patch", "patch-pkg", "base.pkg", "base-game"})
+            QVERIFY2(busy.contains(abs(rel)), rel);
+        AddonRequest ar;
+        ar.payloadFolder = abs("addon");
+        ar.output = abs("addon-out");
+        ar.entitlementKey = kKey;
+        const QStringList addonBusy = FpkgAddonJob(ar).busyPaths();
+        QVERIFY(addonBusy.contains(abs("addon")));
+        QVERIFY(addonBusy.contains(abs("addon-out")));
+    }
+
     void outputConflictPolicies()
     {
         const QString game = dir(QStringLiteral("conflict/game"));
@@ -814,6 +899,12 @@ private slots:
         QVERIFY(gp5.contains("patch-base"));
         QVERIFY(!gp5.contains("patch-base/playgo-chunks") && !gp5.contains("patch-base\\playgo-chunks"));
         QVERIFY(gp5.contains("dst_path=\"sce_sys/param.json\""));
+        // No temporary folder is set: the base was extracted next to the output, in a work
+        // folder that is gone when the build ends.
+        const QString extractedTo = inv.first().value(QStringLiteral("argv")).toArray().last().toString();
+        QVERIFY2(extractedTo.contains(QStringLiteral(".fw-stage-")), qPrintable(extractedTo));
+        QVERIFY(QDir(out).entryList({QStringLiteral(".fw-stage-*")}, QDir::AllEntries | QDir::Hidden).isEmpty());
+        QVERIFY(readAll(QDir(out).filePath(stem + QStringLiteral("-build-logs/01-create-gp5.log"))).contains("temporary paths"));
 
         // Exact source: no extraction, the base is not checked (warning).
         QFile::remove(m_fakeLog);
@@ -994,6 +1085,24 @@ private slots:
         QCOMPARE(QFileInfo(rr.result->outputs.first()).fileName(), kStem + QStringLiteral(".pkg"));
         QVERIFY(QFileInfo::exists(project)); // the user's project is never removed
         QCOMPARE(QDir::cleanPath(invocations().first().value(QStringLiteral("cwd")).toString()), QDir::cleanPath(QFileInfo(game).canonicalFilePath()));
+        // img_verify gets the project's own passcode, not the one from the settings.
+        QFile::remove(m_fakeLog);
+        g.passcode = QStringLiteral("0123456789abcdef0123456789abcdef");
+        put(game, QStringLiteral("my.gp5"), writeGp5(g));
+        QVERIFY(run(job).result.ok());
+        {
+            const auto inv = invocations();
+            QCOMPARE(inv.size(), 2);
+            const QJsonArray argv = inv[1].value(QStringLiteral("argv")).toArray();
+            QCOMPARE(argv.at(0).toString(), QStringLiteral("img_verify"));
+            QCOMPARE(argv.at(2).toString(), g.passcode);
+        }
+        g.passcode = kDefaultPasscode;
+        put(game, QStringLiteral("my.gp5"), writeGp5(g));
+        // "Stop with an error" refuses an existing package before packing, as for a folder.
+        QFile::remove(m_fakeLog);
+        QCOMPARE(run(job, {{keys::kOutputConflict, QStringLiteral("fail")}}).result.error().code, ErrorCode::AlreadyExists);
+        QVERIFY(invocations().isEmpty());
         // Missing files and non-ASCII source paths are refused before packing.
         g.files.push_back({QStringLiteral("Data/missing.pak"), QStringLiteral("Data/missing.pak"), std::nullopt, false});
         put(game, QStringLiteral("my.gp5"), writeGp5(g));

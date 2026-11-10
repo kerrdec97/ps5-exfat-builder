@@ -318,6 +318,76 @@ private slots:
         QVERIFY(left.contains("12345678"));
     }
 
+    void sweepKeepsUnreachableFoldersAndSeesReusedIds()
+    {
+        const QString out = dir(QStringLiteral("sweep2"));
+        const QString index = QDir(Paths::localDir()).filePath(QStringLiteral("state/backport-work.txt"));
+        // A folder made by this run is its own: the marker carries the process id and start time.
+        const QString own = QDir(out).filePath(QStringLiteral(".fw-stage-0000aaaa"));
+        QVERIFY(createTrackedWorkFolder(own).ok());
+        const QByteArray marker = readAll(QDir(own).filePath(QStringLiteral(".fw-owned")));
+        QVERIFY(marker.startsWith(QByteArray::number(QCoreApplication::applicationPid())));
+        // As left by an earlier process that had the id this one has now: the same id, another start time.
+        const QString reused = QDir(out).filePath(QStringLiteral(".fw-stage-0000bbbb"));
+        put(reused, QStringLiteral(".fw-owned"), QByteArray::number(QCoreApplication::applicationPid()) + " 12345");
+        put(reused, QStringLiteral("big.bin"), "x");
+        // On a drive that is not connected right now: the line must survive the sweep.
+        QString offline;
+        for (char letter = 'Z'; letter >= 'D' && offline.isEmpty(); --letter)
+            if (!QFileInfo::exists(QStringLiteral("%1:/").arg(QLatin1Char(letter))))
+                offline = QStringLiteral("%1:\\out\\.fw-stage-0000cccc").arg(QLatin1Char(letter));
+        QStringList lines = QString::fromUtf8(readAll(index)).split(u'\n', Qt::SkipEmptyParts);
+        lines << QDir::toNativeSeparators(reused);
+        if (!offline.isEmpty())
+            lines << offline;
+        QVERIFY(fwtest::writeTextFile(index, lines.join(u'\n').toUtf8()));
+
+        const int removed = sweepStaleBackportWork();
+        QVERIFY(QFileInfo::exists(own));
+#ifdef Q_OS_WIN
+        QCOMPARE(removed, 1);
+        QVERIFY(!QFileInfo::exists(reused));
+        if (!offline.isEmpty())
+            QVERIFY(readAll(index).contains("0000cccc"));
+#else
+        Q_UNUSED(removed);
+#endif
+        removeTrackedWorkFolder(own);
+        QVERIFY(!QFileInfo::exists(own));
+    }
+
+    // An update keeps the base's PlayGo layout whatever the PlayGo settings say.
+    void updateSettingsKeepTheBaseLayout()
+    {
+        FpkgSettings s;
+        s.playGoFallback = false;
+        s.useSourcePlayGoTable = true;
+        s.playGoAllLanguages = true;
+        s.outputConflict = OutputConflict::Overwrite;
+        const FpkgSettings in = backportUpdateSettings(s, 7, {QStringLiteral("en-US"), QStringLiteral("ja-JP")});
+        QCOMPARE(in.playGoChunkCount, 7);
+        QCOMPARE(in.playGoForcedLanguages, (QStringList{QStringLiteral("en-US"), QStringLiteral("ja-JP")}));
+        QVERIFY(in.playGoFallback && !in.useSourcePlayGoTable && !in.playGoAllLanguages);
+        QCOMPARE(in.outputConflict, OutputConflict::Fail);
+        QCOMPARE(in.postVerify, PostVerify::HeaderOnly);
+        QVERIFY(!in.clearVersionFileUri && !in.lowerRequiredFirmware && !in.clearAttribute3);
+        // The base's table could not be read: the user's PlayGo settings stay.
+        const FpkgSettings plain = backportUpdateSettings(s, 0, {});
+        QVERIFY(!plain.playGoFallback && plain.useSourcePlayGoTable && plain.playGoAllLanguages);
+    }
+
+    void digestPlausibility()
+    {
+        QByteArray digest;
+        for (int i = 0; i < 32; ++i)
+            digest += char(0xA0 + i);
+        QVERIFY(isPlausibleDigest(digest));
+        QVERIFY(!isPlausibleDigest(QByteArray(32, '\0')));
+        QVERIFY(!isPlausibleDigest(QByteArray(32, 'x')));
+        QVERIFY(!isPlausibleDigest(QByteArray("\x01\x02\x03\x04", 4).repeated(8)));
+        QVERIFY(!isPlausibleDigest(digest.left(31)));
+    }
+
     void publisherTemp()
     {
         bool aliased = false;

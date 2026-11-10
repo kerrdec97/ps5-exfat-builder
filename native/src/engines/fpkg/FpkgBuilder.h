@@ -155,6 +155,11 @@ struct OutputMove {
     QString finalPath; // where it belongs
 };
 using RenameFn = std::function<bool(const QString& from, const QString& to)>;
+// An existing output that "Overwrite" set aside and has not deleted yet.
+struct ReplacedOutput {
+    QString finalPath; // the name the new file took
+    QString aside;     // where the old file is now
+};
 
 // Puts every finished file in place as one step, following the conflict
 // policy: first every existing file at a final name is set aside (renamed
@@ -163,13 +168,23 @@ using RenameFn = std::function<bool(const QString& from, const QString& to)>;
 // far is undone, so the folder never holds a mix of old and new outputs.
 // The new files are never deleted: after a failure each one is kept under a
 // free numbered name ("name (n).pkg"), or under its partial name when even
-// that rename fails; the error names them and `kept` lists them. Notes for
-// the outcome go to `notes`. `renameFn` replaces QFile::rename (tests use it
-// to simulate a file another program holds open).
+// that rename fails; the error names them and `kept` lists them. Numbered
+// names of one call share their n, so an update and its .remastered.pkg stay
+// a pair. Notes for the outcome go to `notes`. `renameFn` replaces
+// QFile::rename (tests use it to simulate a file another program holds open).
+// With `replaced`, "Overwrite" does not delete the old files: they are
+// listed there and the caller ends the step with discardReplaced() or
+// restoreReplaced() once the new package's checks are over.
 Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy, QStringList& notes,
-                    QStringList* kept = nullptr, const RenameFn& renameFn = {});
+                    QStringList* kept = nullptr, const RenameFn& renameFn = {},
+                    std::vector<ReplacedOutput>* replaced = nullptr);
 // One file: placeOutputs({{partial, finalPath}}, ...).
 Status placeOutput(const QString& partial, const QString& finalPath, OutputConflict policy, QStringList& notes);
+// The new files passed their checks: deletes the old ones.
+void discardReplaced(const std::vector<ReplacedOutput>& replaced, QStringList& notes);
+// The new files did not pass: each of `placed` moves to a free numbered name
+// (updated in place) and the old files get their names back.
+void restoreReplaced(const std::vector<ReplacedOutput>& replaced, QStringList& placed, QStringList& notes);
 
 // ---- validation (cheap; runs on the UI thread) ----------------------------------------------
 Status validateBuildRequest(const BuildRequest& request, const FpkgSettings& settings);

@@ -348,6 +348,10 @@ private slots:
         QVERIFY(!leftoverReason({QStringLiteral("MyGame")}, QStringLiteral("Saved"), true, on, none).size());
         QVERIFY(leftoverReason({QStringLiteral("fakelib")}, QStringLiteral("ampr_emu.index"), false, on, none).size());
         QVERIFY(!leftoverReason({QStringLiteral("fakelib")}, QStringLiteral("ampr_emu.index"), false, off, none).size());
+        // The option decides only fakelib/ampr_emu.index: the root index and
+        // fakelib/libSceAmpr.sprx are base exclusions, whatever it says.
+        QVERIFY(baseExclusionReason({QStringLiteral("fakelib")}, QStringLiteral("libSceAmpr.sprx"), false).size());
+        QVERIFY(!leftoverReason(root, QStringLiteral("ampr_emu.index"), false, on, none).size());
         LeftoverOptions noDlc{false, true, true};
         QVERIFY(leftoverReason(root, QStringLiteral("dlc_emu.ini"), false, noDlc, none).size());
         QVERIFY(leftoverReason({QStringLiteral("fakelib2")}, QStringLiteral("libSceAppContent.prx"), false, noDlc, none).size());
@@ -506,6 +510,24 @@ private slots:
         QCOMPARE(ini.entries[1].mountFolder(), QString()); // not under /app0
         QCOMPARE(ini.warnings.size(), 1);                  // the duplicate
         QVERIFY(!parseDlcEmuIni(QByteArray(70 * 1024, 'x')).warnings.isEmpty());
+        // A header with a trailing comment or an unknown name starts its own
+        // entry: its keys never overwrite the entry before it.
+        const DlcEmuIni odd = parseDlcEmuIni(
+            "[PSAC]\ncontent_id=UP0000-PPSA01234_00-DLC000000000000A\nmount_point=/app0/addcont0\n"
+            "[PSAC] ; second\ncontent_id=UP0000-PPSA01234_00-DLC000000000000B\nmount_point=/app0/addcont1\n"
+            "[my-dlc]\ncontent_id=UP0000-PPSA01234_00-DLC000000000000C\nmount_point=/app0/addcont2\n");
+        QCOMPARE(int(odd.entries.size()), 2);
+        QCOMPARE(odd.entries[0].contentId, QStringLiteral("UP0000-PPSA01234_00-DLC000000000000A"));
+        QCOMPARE(odd.entries[0].mountFolder(), QStringLiteral("addcont0"));
+        QCOMPARE(odd.entries[1].mountFolder(), QStringLiteral("addcont1"));
+        QCOMPARE(int(odd.allEntries.size()), 3);
+        QCOMPARE(odd.allEntries[2].section, QStringLiteral("MY-DLC"));
+        // A mount point never leads out of the game folder.
+        DlcEmuEntry escape;
+        escape.mountPoint = QStringLiteral("/app0/D:/elsewhere");
+        QCOMPARE(escape.mountFolder(), QString());
+        escape.mountPoint = QStringLiteral("/app0/../up");
+        QCOMPARE(escape.mountFolder(), QString());
         QVERIFY(isAddcontFolderName(QStringLiteral("AddCont12")));
         QVERIFY(!isAddcontFolderName(QStringLiteral("addcont")));
         QVERIFY(bytesImportAmpr(QByteArray("....libSceAmpr.sprx....")));
@@ -927,6 +949,13 @@ private slots:
         QByteArray truncated = ucp.left(ucp.size() - 16);
         QVERIFY(!checkUcp(truncated).structureOk);
         QVERIFY(!checkUcp("short").structureOk);
+        // An entry whose offset + size wraps around is outside the file.
+        QByteArray wrapping = ucp;
+        qToBigEndian<quint64>(0xFFFFFFFFFFFFFFF0ull, wrapping.data() + 0x60 + 32);
+        qToBigEndian<quint64>(0x20, wrapping.data() + 0x60 + 40);
+        QVERIFY(!checkUcp(wrapping).structureOk);
+        // Not an archive: returned as it is, nothing is written past its end.
+        QCOMPARE(withRepairedUcpDigest("short"), QByteArray("short"));
     }
 
     // ---- tool output ----------------------------------------------------------------------------------
@@ -1157,6 +1186,52 @@ private slots:
             QCOMPARE(readAll(keptUpd), QByteArray("old update"));
             QCOMPARE(readAll(keptFull), QByteArray("old full"));
             QCOMPARE(files().size(), 4);
+            QCOMPARE(notes.size(), 2);
+        }
+
+        // "Keep both" gives the pair one number, also when only one of the
+        // two names has older copies: "UPDATE_x (2).pkg" belongs to "x (2).remastered.pkg".
+        reset();
+        put(d, QStringLiteral("UPDATE_x (1).pkg"), "older update");
+        {
+            QStringList notes;
+            QVERIFY(placeOutputs(moves, OutputConflict::KeepBoth, notes).ok());
+            QCOMPARE(readAll(at("UPDATE_x (1).pkg")), QByteArray("older update"));
+            QCOMPARE(readAll(at("UPDATE_x (2).pkg")), QByteArray("old update"));
+            QCOMPARE(readAll(at("x (2).remastered.pkg")), QByteArray("old full"));
+            QVERIFY(!QFileInfo::exists(keptFull));
+        }
+
+        // "Overwrite" with the old files kept until the caller's checks are
+        // over: put back (the new pair moves to one numbered name) ...
+        reset();
+        {
+            QStringList notes;
+            std::vector<ReplacedOutput> replaced;
+            QVERIFY(placeOutputs(moves, OutputConflict::Overwrite, notes, nullptr, {}, &replaced).ok());
+            QVERIFY(notes.isEmpty());
+            QCOMPARE(int(replaced.size()), 2);
+            QCOMPARE(readAll(upd), QByteArray("new update"));
+            QCOMPARE(readAll(replaced[0].aside), QByteArray("old update"));
+            QStringList placed{upd, full};
+            restoreReplaced(replaced, placed, notes);
+            QCOMPARE(placed, (QStringList{keptUpd, keptFull}));
+            QCOMPARE(readAll(upd), QByteArray("old update"));
+            QCOMPARE(readAll(full), QByteArray("old full"));
+            QCOMPARE(readAll(keptUpd), QByteArray("new update"));
+            QCOMPARE(readAll(keptFull), QByteArray("new full"));
+            QCOMPARE(files().size(), 4);
+            QCOMPARE(notes.size(), 3);
+        }
+        // ... or deleted.
+        reset();
+        {
+            QStringList notes;
+            std::vector<ReplacedOutput> replaced;
+            QVERIFY(placeOutputs(moves, OutputConflict::Overwrite, notes, nullptr, {}, &replaced).ok());
+            QCOMPARE(files().size(), 4);
+            discardReplaced(replaced, notes);
+            QCOMPARE(files(), (QStringList{QStringLiteral("UPDATE_x.pkg"), QStringLiteral("x.remastered.pkg")}));
             QCOMPARE(notes.size(), 2);
         }
     }

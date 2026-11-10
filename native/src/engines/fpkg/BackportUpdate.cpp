@@ -338,11 +338,45 @@ void writeWorkIndex(const QStringList& lines)
     }
 }
 
+// When a process started (Windows: its creation time in 100 ns units), or 0
+// when that cannot be told.
+qint64 processStartTime(qint64 pid)
+{
+#ifdef Q_OS_WIN
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!h)
+        return 0;
+    FILETIME created{}, exited{}, kernel{}, user{};
+    const BOOL ok = GetProcessTimes(h, &created, &exited, &kernel, &user);
+    CloseHandle(h);
+    return ok ? qint64((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime) : 0;
+#else
+    Q_UNUSED(pid);
+    return 0;
+#endif
+}
+
+// False when not even the drive (or share) of `path` can be seen: the path
+// may only be out of reach, on a drive that is not connected right now.
+bool anyAncestorExists(const QString& path)
+{
+    QString p = QFileInfo(path).absoluteFilePath();
+    while (true) {
+        const QString up = QFileInfo(p).absolutePath();
+        if (up == p || up.isEmpty())
+            return false;
+        if (QFileInfo::exists(up))
+            return true;
+        p = up;
+    }
+}
+
 // Creates `dir` (a fresh folder), records it and writes the owner marker.
 Status createWorkFolder(const QString& dir)
 {
     if (QFileInfo::exists(dir))
-        return Error(ErrorCode::AlreadyExists, QStringLiteral("The work folder already contains files. Choose a fresh work folder."));
+        return Error(ErrorCode::AlreadyExists,
+                     QStringLiteral("The work folder %1 already exists. Start the job again.").arg(native(dir)));
     if (!QDir().mkpath(dir))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(dir)));
     {
@@ -352,8 +386,14 @@ Status createWorkFolder(const QString& dir)
         writeWorkIndex(lines);
     }
     QFile marker(QDir(dir).filePath(QStringLiteral(".fw-owned")));
-    if (marker.open(QIODevice::WriteOnly))
-        marker.write(QByteArray::number(QCoreApplication::applicationPid()));
+    if (marker.open(QIODevice::WriteOnly)) {
+        // "<pid>" or "<pid> <start time>": the start time tells this run from
+        // a later process that was given the same id.
+        QByteArray owner = QByteArray::number(QCoreApplication::applicationPid());
+        if (const qint64 started = processStartTime(QCoreApplication::applicationPid()); started > 0)
+            owner += ' ' + QByteArray::number(started);
+        marker.write(owner);
+    }
     return success();
 }
 
@@ -558,6 +598,25 @@ Status validateBackportRequest(const BackportUpdateRequest& r, const FpkgSetting
     return success();
 }
 
+FpkgSettings backportUpdateSettings(const FpkgSettings& s, int baseChunks, const QStringList& baseLanguages)
+{
+    FpkgSettings in = innerSettings(s);
+    // Only contentVersion changes in the update's param.json (the backport's own param.json is kept as shipped).
+    in.clearVersionFileUri = false;
+    in.lowerRequiredFirmware = false;
+    in.clearAttribute3 = false;
+    if (baseChunks > 0 && !baseLanguages.isEmpty()) {
+        in.playGoChunkCount = baseChunks;
+        in.playGoForcedLanguages = baseLanguages;
+        in.playGoAllLanguages = false;
+        // The generated layout is the one that honours them: not a single
+        // chunk, and not the table of the game folder.
+        in.playGoFallback = true;
+        in.useSourcePlayGoTable = false;
+    }
+    return in;
+}
+
 QStringList backportPhases(const BackportUpdateRequest& r)
 {
     QStringList p{QStringLiteral("Checking the inputs")};
@@ -579,23 +638,38 @@ int sweepStaleBackportWork()
     int removed = 0;
     for (const QString& line : lines) {
         const QFileInfo fi(line);
-        if (!fi.isDir())
-            continue; // gone: drop the line
+        if (!fi.isDir()) {
+            // Gone: drop the line. Not when its drive is not connected: the
+            // folder may still be there, for a sweep after the drive is back.
+            if (!anyAncestorExists(line))
+                keep << line;
+            continue;
+        }
         if (!isWorkFolderName(fi.fileName()) || isLinkOrReparsePoint(fi.absoluteFilePath())) {
             keep << line; // never delete anything this app did not name
             continue;
         }
-        qint64 pid = 0;
+        qint64 pid = 0, started = 0;
         {
             QFile marker(QDir(fi.absoluteFilePath()).filePath(QStringLiteral(".fw-owned")));
-            if (marker.open(QIODevice::ReadOnly) && marker.size() < 64)
-                pid = marker.readAll().trimmed().toLongLong();
+            if (marker.open(QIODevice::ReadOnly) && marker.size() < 64) {
+                const QList<QByteArray> owner = marker.readAll().simplified().split(' ');
+                pid = owner.value(0).toLongLong();
+                started = owner.value(1).toLongLong();
+            }
         } // closed before the folder is removed (Windows will not delete an open file)
         if (pid <= 0) {
             keep << line; // no marker: leave it alone
             continue;
         }
-        if (pid == QCoreApplication::applicationPid() || processIsRunning(pid)) {
+        bool ownerAlive = pid == QCoreApplication::applicationPid() || processIsRunning(pid);
+        if (ownerAlive && started > 0) {
+            // The same id, started at another time: a different process.
+            const qint64 now = processStartTime(pid);
+            if (now > 0 && now != started)
+                ownerAlive = false;
+        }
+        if (ownerAlive) {
             keep << line;
             continue;
         }
@@ -798,6 +872,13 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
                      QStringLiteral("The base package has no readable param.json; it may be a retail (encrypted) package."));
     base = Identity{bi.titleId, bi.contentId, bi.version, bi.title};
     FW_TRY(validateIdentity(base, native(basePath)));
+    // An empty digest occurs in any file, so the check that the update
+    // references this base would pass for every delta.
+    if (!isPlausibleDigest(bi.digest))
+        return Error(ErrorCode::CorruptData,
+                     QStringLiteral("The base package carries no content digest (the 32 bytes at 0x30 are empty or "
+                                    "repeat), so an update cannot be tied to it. Use the package the Publishing Tools "
+                                    "built."));
     log.info(QStringLiteral("    title      : %1 [%2]").arg(base.title, base.titleId));
     log.info(QStringLiteral("    contentId  : %1").arg(base.contentId));
     log.info(QStringLiteral("    version    : %1").arg(base.version));
@@ -866,11 +947,27 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
 
     // The base tree: the game folder, or the base package extracted once for every update.
     QString baseTree = gameFolder;
+    WorkFolder treeGuard; // the extracted base, when it goes next to the outputs
     if (baseTree.isEmpty()) {
         log.info(QStringLiteral("==> Extracting the base package to the work tree (no game folder given)"));
-        auto ex = extractPackage(basePath, QDir(ctx.tempDir).filePath(QStringLiteral("base-tree")), tc, s, ctx);
-        if (!ex.ok())
-            return ex.takeError();
+        // Under the user's temporary folder when one is set, else next to the
+        // outputs: the app data drive is often too small for a whole game.
+        QString treeDir = QDir(ctx.tempDir).filePath(QStringLiteral("base-tree"));
+        if (s.userTempFolder.isEmpty() || !QFileInfo(s.userTempFolder).isDir()) {
+            const QString work = QDir(output).filePath(QStringLiteral(".fw-stage-%1").arg(randomTag(8)));
+            FW_TRY(createWorkFolder(work));
+            treeGuard.dir = work;
+            treeDir = QDir(work).filePath(QStringLiteral("base-tree"));
+        }
+        auto ex = extractPackage(basePath, treeDir, tc, s, ctx);
+        if (!ex.ok()) {
+            Error e = ex.takeError();
+            if (e.code == ErrorCode::InsufficientSpace)
+                e.message += QStringLiteral(" The base package is extracted there first: give the game folder the base "
+                                            "was built from to skip this, or set a temporary folder on another drive in "
+                                            "Settings > Storage.");
+            return e;
+        }
         baseTree = ex.value();
     }
     {
@@ -946,16 +1043,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
         br.contentVersion = newVersion;
         br.output = work;
         br.keepNapsMetric = true;
-        FpkgSettings in = innerSettings(s);
-        // Only contentVersion changes in the update's param.json (the backport's own param.json is kept as shipped).
-        in.clearVersionFileUri = false;
-        in.lowerRequiredFirmware = false;
-        in.clearAttribute3 = false;
-        if (baseChunks > 0 && !baseLanguages.isEmpty()) {
-            in.playGoChunkCount = baseChunks;
-            in.playGoForcedLanguages = baseLanguages;
-            in.playGoAllLanguages = false;
-        }
+        const FpkgSettings in = backportUpdateSettings(s, baseChunks, baseLanguages);
         log.info(QStringLiteral("==> Building the delta against the base (compression %1)")
                      .arg(s.compressionLevel ? QString::number(*s.compressionLevel) : QStringLiteral("7, tool default")));
         auto built = runBuild(br, in, sub);

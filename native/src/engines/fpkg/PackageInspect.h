@@ -42,7 +42,13 @@ struct PackageIdentity {
 // Errors only when the file cannot be read or is shorter than 80 bytes.
 Result<PackageIdentity> inspectPackage(const QString& path, const CancellationToken& token);
 
-// The bytes of the param.json object (see above), or nullopt.
+// A digest that can identify a package: 32 bytes with at least 8 different
+// values (not zeros or a repeated pattern, which any file contains).
+bool isPlausibleDigest(const QByteArray& digest);
+
+// The bytes of the param.json object (see above), or nullopt. The search
+// gives up (nullopt) after a fixed amount of work, so a crafted file cannot
+// keep it busy.
 Result<std::optional<QByteArray>> findParamJsonInPackage(const QString& path, const CancellationToken& token);
 
 // The package's own sce_sys/playgo-chunk.dat ("plgx" header, version 0x1000,

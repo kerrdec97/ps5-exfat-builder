@@ -228,7 +228,9 @@ void registerFpkgSettings(SettingsSchema& s)
                       QStringLiteral("Keep the project files"),
                       QStringLiteral("Keeps <name>.gp5, <name>.playgo-scenario.json and .gp5-assets\\<name>\\ next to the "
                                      "package after a successful build. They are always kept after a failure. The "
-                                     "build logs are always kept."),
+                                     "build logs are always kept. A project built from an image, or from a folder "
+                                     "whose path has non-ASCII characters, names temporary paths and cannot be built "
+                                     "again as it is."),
                       false, order++));
     s.add(boolSetting(keys::kPrescan, fpkg, QStringLiteral("Packing"),
                       QStringLiteral("Pre-read source files before packing"),
@@ -244,8 +246,8 @@ void registerFpkgSettings(SettingsSchema& s)
         d.label = QStringLiteral("When the package already exists");
         d.description = QStringLiteral(
             "Keep both renames the existing file to \"name (1).pkg\" and saves the new package under the normal name. "
-            "Overwrite replaces it only after the new package passed its checks; the old file is restored if that "
-            "fails. Stop fails the job before packing starts.");
+            "Overwrite replaces it only after the new package passed its checks; if it does not, the old file is put "
+            "back and the new package is kept as \"name (1).pkg\". Stop fails the job before packing starts.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("keepBoth");
         d.choices = {{QStringLiteral("keepBoth"), QStringLiteral("Keep both"), {}},
@@ -290,8 +292,8 @@ void registerFpkgSettings(SettingsSchema& s)
                                      "libSceGameUpdate modules in fakelib out of the package."),
                       true, order++));
     s.add(boolSetting(keys::kRemoveAmprLeftovers, fpkg, filesGroup, QStringLiteral("Leave out AMPR emulator leftovers"),
-                      QStringLiteral("Leaves ampr_emu.index and fakelib\\ampr_emu.index out of the package. "
-                                     "fakelib\\libSceAmpr.sprx is always left out."),
+                      QStringLiteral("Leaves fakelib\\ampr_emu.index out of the package. ampr_emu.index in the game's "
+                                     "top folder and fakelib\\libSceAmpr.sprx are always left out."),
                       true, order++));
     s.add(boolSetting(keys::kRemoveDumpLeftovers, fpkg, filesGroup, QStringLiteral("Leave out dump leftovers"),
                       QStringLiteral("Leaves the _DUBLEX_ folder and Unreal Engine \"Saved\" folders (Engine\\Saved, "
