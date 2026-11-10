@@ -6,6 +6,7 @@
 
 #include "core/Cancellation.h"
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -19,26 +20,34 @@ public:
     explicit ConsoleWorker(ConsoleSession* session) : m_session(session) {}
 
     // Worker thread: runs `request` now, or after the running one when called
-    // from inside it (the client's nested event loop delivered it).
-    void run(std::function<void()> request)
+    // from inside it (the client's nested event loop delivered it). A request
+    // posted before the last cancelRunning() is dropped: a disconnect also
+    // stops what was still waiting (the other deletes of a selection).
+    void run(std::function<void()> request, quint64 epoch)
     {
-        m_pending.push_back(std::move(request));
+        m_pending.push_back({std::move(request), epoch});
         if (m_busy)
             return;
         m_busy = true;
         while (!m_pending.empty()) {
             auto next = std::move(m_pending.front());
             m_pending.pop_front();
-            next();
+            if (next.epoch == m_epoch.load())
+                next.fn();
         }
         m_busy = false;
     }
 
+    // Any thread: the value a request posted now has to carry.
+    quint64 epoch() const { return m_epoch.load(); }
+
     // Any thread: stops the running operation (where the client can be
-    // cancelled); later requests get a fresh token.
+    // cancelled) and drops the requests that wait behind it; later requests
+    // get a fresh token.
     void cancelRunning()
     {
         std::lock_guard lock(m_cancelMutex);
+        ++m_epoch;
         m_cancel.cancel(QStringLiteral("Disconnected"));
         m_cancel = CancellationSource();
     }
@@ -53,7 +62,8 @@ public slots:
         m_client = std::make_unique<ps5::FtpClient>(opt);
         auto st = m_client->open(host, port, token());
         if (!st.ok()) {
-            const QString why = st.error().message;
+            // A cancelled attempt (Disconnect while connecting) is not a failure to report.
+            const QString why = st.error().isCancelled() ? QString() : st.error().message;
             m_client.reset();
             emit m_session->disconnected(why);
             return;
@@ -170,10 +180,16 @@ private:
         return m_cancel.token();
     }
 
+    struct Request {
+        std::function<void()> fn;
+        quint64 epoch = 0;
+    };
+
     ConsoleSession* m_session;
     std::unique_ptr<ps5::FtpClient> m_client;
-    std::deque<std::function<void()>> m_pending; // worker thread only
-    bool m_busy = false;                          // worker thread only
+    std::deque<Request> m_pending; // worker thread only
+    bool m_busy = false;           // worker thread only
+    std::atomic<quint64> m_epoch{0};
     std::mutex m_cancelMutex;
     CancellationSource m_cancel;
 };
@@ -205,7 +221,7 @@ ConsoleSession::~ConsoleSession()
     // Stop what is running, close the connection (after it, if the request
     // arrives inside it), then let the thread finish before the worker goes.
     m_worker->cancelRunning();
-    QMetaObject::invokeMethod(m_worker, [w = m_worker] { w->run([w] { w->doDisconnect(); }); }, Qt::BlockingQueuedConnection);
+    QMetaObject::invokeMethod(m_worker, [w = m_worker] { w->run([w] { w->doDisconnect(); }, w->epoch()); }, Qt::BlockingQueuedConnection);
     m_thread.quit();
     m_thread.wait(); // every client wait has a timeout; never delete a running worker
     delete m_worker;
@@ -213,7 +229,7 @@ ConsoleSession::~ConsoleSession()
 
 void ConsoleSession::post(std::function<void()> request)
 {
-    QMetaObject::invokeMethod(m_worker, [w = m_worker, r = std::move(request)]() mutable { w->run(std::move(r)); },
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, r = std::move(request), epoch = m_worker->epoch()]() mutable { w->run(std::move(r), epoch); },
                               Qt::QueuedConnection);
 }
 

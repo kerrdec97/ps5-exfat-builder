@@ -210,12 +210,13 @@ bool FakelibTab::checkWithUser(const QString& localPath, bool* confirmed)
 {
     const fl::LocalCheck check = fl::checkLocalFile(localPath);
     *confirmed = false;
+    // The message is plain text and the sheet shows it as such.
     if (check.verdict == fl::Verdict::Reject) {
-        Sheet::message(window(), QStringLiteral("Unsupported file"), check.message.toHtmlEscaped(), Sheet::Icon::Warning);
+        Sheet::message(window(), QStringLiteral("Unsupported file"), check.message, Sheet::Icon::Warning);
         return false;
     }
     if (check.verdict == fl::Verdict::Confirm) {
-        if (!Sheet::confirm(window(), QStringLiteral("Upload anyway?"), check.message.toHtmlEscaped(), QStringLiteral("Cancel"),
+        if (!Sheet::confirm(window(), QStringLiteral("Upload anyway?"), check.message, QStringLiteral("Cancel"),
                             QStringLiteral("Upload"), false, Sheet::Icon::Warning))
             return false;
         *confirmed = true;
@@ -232,12 +233,14 @@ void FakelibTab::askAdd()
     if (!checkWithUser(path, &confirmed))
         return;
     const QString name = QFileInfo(path).fileName();
-    for (const fl::Overlay& o : m_listing.overlays) {
+    // A copy: a listing that arrives while a question is open replaces m_listing.
+    const std::vector<fl::Overlay> overlays = m_listing.overlays;
+    for (const fl::Overlay& o : overlays) {
         if (o.name != name)
             continue;
         const QString text = o.enabled ? QStringLiteral("%1 is already enabled on the console. Replace it with the chosen file?").arg(Sheet::monoSpan(name))
                                        : QStringLiteral("A disabled %1 is on the console. The new one is added as enabled and the disabled copy stays.").arg(Sheet::monoSpan(name));
-        if (!Sheet::confirm(window(), o.enabled ? QStringLiteral("Replace %1?").arg(name.toHtmlEscaped()) : QStringLiteral("Add %1?").arg(name.toHtmlEscaped()), text,
+        if (!Sheet::confirm(window(), o.enabled ? QStringLiteral("Replace %1?").arg(name) : QStringLiteral("Add %1?").arg(name), text,
                             QStringLiteral("Cancel"), o.enabled ? QStringLiteral("Replace") : QStringLiteral("Add"), o.enabled, Sheet::Icon::Warning))
             return;
     }
@@ -264,15 +267,18 @@ void FakelibTab::askReplace()
     bool confirmed = false;
     if (!checkWithUser(path, &confirmed))
         return;
-    replaceSelected(path, confirmed);
+    replaceOverlay(target, path, confirmed); // the overlay the dialog named, whatever is selected now
 }
 
 void FakelibTab::replaceSelected(const QString& localPath, bool confirmed)
 {
     const int r = selectedRow();
-    if (r < 0)
-        return;
-    const fl::Overlay target = m_listing.overlays[size_t(r)];
+    if (r >= 0)
+        replaceOverlay(m_listing.overlays[size_t(r)], localPath, confirmed);
+}
+
+void FakelibTab::replaceOverlay(const fl::Overlay& target, const QString& localPath, bool confirmed)
+{
     runAndRefresh(QStringLiteral("Replacing %1").arg(target.name), [target, localPath, confirmed](ps5::FtpClient& c, const CancellationToken& t) {
         return fl::replace(c, target, localPath, confirmed, t);
     });
@@ -284,20 +290,23 @@ void FakelibTab::askRemove()
     if (r < 0)
         return;
     const fl::Overlay target = m_listing.overlays[size_t(r)];
-    if (!Sheet::confirm(window(), QStringLiteral("Remove %1 from the PS5?").arg(target.name.toHtmlEscaped()),
+    if (!Sheet::confirm(window(), QStringLiteral("Remove %1 from the PS5?").arg(target.name),
                         QStringLiteral("Deletes %1. There is no recycle bin on the console; this cannot be undone. Disable keeps the file instead.")
                             .arg(Sheet::monoSpan(target.path())),
                         QStringLiteral("Keep"), QStringLiteral("Remove")))
         return;
-    removeSelected();
+    removeOverlay(target); // the overlay the question named, whatever is selected now
 }
 
 void FakelibTab::removeSelected()
 {
     const int r = selectedRow();
-    if (r < 0)
-        return;
-    const fl::Overlay target = m_listing.overlays[size_t(r)];
+    if (r >= 0)
+        removeOverlay(m_listing.overlays[size_t(r)]);
+}
+
+void FakelibTab::removeOverlay(const fl::Overlay& target)
+{
     runAndRefresh(QStringLiteral("Removing %1").arg(target.name), [target](ps5::FtpClient& c, const CancellationToken&) { return fl::remove(c, target); });
 }
 

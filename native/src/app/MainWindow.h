@@ -108,6 +108,7 @@ private:
     QSystemTrayIcon* m_tray = nullptr;
     QHash<QString, pages::Page*> m_pages;
     QStringList m_order;
+    pages::Page* m_shownPage = nullptr; // the page navigate() showed last (null before the first call)
     pages::HomePage* m_home = nullptr;
     pages::QueuePage* m_queuePage = nullptr;
     pages::SettingsPage* m_settingsPage = nullptr;

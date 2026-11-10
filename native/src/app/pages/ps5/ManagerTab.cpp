@@ -412,15 +412,15 @@ void Ps5ManagerTab::uploadSelected()
     const QString dir = g.status == ps5::GameStatus::SizeMismatch ? ps5::remoteParent(g.remotePath)
                         : folders.isEmpty()                         ? endpoint().gamesFolder
                                                                     : folders.first();
-    const QString title = g.status == ps5::GameStatus::SizeMismatch ? QStringLiteral("Upload %1 again?").arg(g.name.toHtmlEscaped())
-                                                                    : QStringLiteral("Upload %1?").arg(g.name.toHtmlEscaped());
+    const ps5::ConsoleEndpoint ep = endpoint(); // the console the question is about
+    const QString title = g.status == ps5::GameStatus::SizeMismatch ? QStringLiteral("Upload %1 again?").arg(g.name)
+                                                                    : QStringLiteral("Upload %1?").arg(g.name);
     const QString text = g.status == ps5::GameStatus::SizeMismatch
                              ? QStringLiteral("The copy on the PS5 (%1) has a different size from the local image (%2). It is overwritten by %3. Unmount the game first.")
                                    .arg(sizeText(g.remoteSize), sizeText(g.localSize), Sheet::monoSpan(nativePath(g.localPath)))
                              : QStringLiteral("%1 (%2) is uploaded to %3.").arg(Sheet::monoSpan(g.name), sizeText(g.localSize), Sheet::monoSpan(dir));
     if (!Sheet::confirm(window(), title, text, QStringLiteral("Cancel"), QStringLiteral("Upload"), g.status == ps5::GameStatus::SizeMismatch, Sheet::Icon::Info))
         return;
-    const ps5::ConsoleEndpoint ep = endpoint();
     auto r = jobs::submitFtpUploadMany(m_ctx, ep.host, ep.ftpPort, {g.localPath}, dir, false);
     if (!r.ok()) {
         emit toastRequested(Tone::Err, QStringLiteral("Upload not started"), r.error().message);

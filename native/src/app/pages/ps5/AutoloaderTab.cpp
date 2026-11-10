@@ -282,11 +282,9 @@ void AutoloaderTab::save()
 {
     const al::Validation v = al::validate(m_editor->toPlainText(), m_files, true);
     if (!v.errors.isEmpty()) {
-        QStringList shown;
-        for (const QString& e : v.errors.mid(0, 4))
-            shown << e.toHtmlEscaped();
+        // Plain text, one problem per line.
         if (!Sheet::confirm(window(), QStringLiteral("Save autoload.txt with problems?"),
-                            QStringLiteral("The autoloader would stumble on these lines:<br>%1").arg(shown.join(QStringLiteral("<br>"))),
+                            QStringLiteral("The autoloader would stumble on these lines:\n%1").arg(v.errors.mid(0, 4).join(u'\n')),
                             QStringLiteral("Keep editing"), QStringLiteral("Save anyway"), false, Sheet::Icon::Warning))
             return;
     }
@@ -328,24 +326,26 @@ void AutoloaderTab::saveNow()
 
 void AutoloaderTab::addPayload()
 {
+    const QString dir = folder();
     const QString src = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose a payload to add"), QString(),
                                                      QStringLiteral("Payloads (*.elf *.bin);;All files (*)"));
-    if (src.isEmpty())
-        return;
+    if (src.isEmpty() || dir != folder())
+        return; // the folder changed under the dialog: the choice was made for the other one
     const QString name = QFileInfo(src).fileName();
     if (!al::isPayloadName(name)) {
         Sheet::message(window(), QStringLiteral("Not a payload"), QStringLiteral("Only .elf and .bin files can be autoloaded; .js files are not run by the autoloader."), Sheet::Icon::Warning);
         return;
     }
     bool overwrite = false;
-    if (QFileInfo::exists(QDir(folder()).filePath(name))) {
-        if (!Sheet::confirm(window(), QStringLiteral("Replace %1?").arg(name.toHtmlEscaped()),
+    if (QFileInfo::exists(QDir(dir).filePath(name))) {
+        if (!Sheet::confirm(window(), QStringLiteral("Replace %1?").arg(name),
                             QStringLiteral("%1 is already in the folder. Replace it with the chosen file?").arg(Sheet::monoSpan(name)),
                             QStringLiteral("Cancel"), QStringLiteral("Replace"), true, Sheet::Icon::Warning))
             return;
         overwrite = true;
     }
-    addPayloadFile(src, overwrite);
+    if (dir == folder())
+        addPayloadFile(src, overwrite);
 }
 
 void AutoloaderTab::addPayloadFile(const QString& source, bool overwrite)
@@ -370,15 +370,19 @@ void AutoloaderTab::addPayloadFile(const QString& source, bool overwrite)
         });
 }
 
-void AutoloaderTab::askDelete(const QString& fileName)
+void AutoloaderTab::askDelete(const QString& fileNameIn)
 {
-    if (!Sheet::confirm(window(), QStringLiteral("Delete %1?").arg(fileName.toHtmlEscaped()),
+    // Copies: the chip that owns the name can be rebuilt while the question is open.
+    const QString fileName = fileNameIn;
+    const QString dir = folder();
+    if (!Sheet::confirm(window(), QStringLiteral("Delete %1?").arg(fileName),
                         QStringLiteral("%1 is removed from the folder (to the recycle bin when the system has one), and its lines in "
                                        "autoload.txt with the sleeps right after them are taken out of the editor.")
                             .arg(Sheet::monoSpan(fileName)),
                         QStringLiteral("Keep"), QStringLiteral("Delete"), true, Sheet::Icon::Warning))
         return;
-    deletePayloadFile(fileName);
+    if (dir == folder())
+        deletePayloadFile(fileName);
 }
 
 void AutoloaderTab::deletePayloadFile(const QString& fileName)

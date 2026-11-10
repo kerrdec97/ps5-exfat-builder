@@ -122,7 +122,11 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     connect(m_header->helpButton(), &QToolButton::clicked, this, [this] {
         QMenu menu(this);
         menu.addAction(QStringLiteral("Keyboard shortcuts"), this, &MainWindow::showShortcuts);
-        menu.addAction(QStringLiteral("Open logs folder"), this, [] { openInFileManager(Paths::logsDir()); });
+        // Where the log files are written: general.logFolder when it is set, else the default folder.
+        menu.addAction(QStringLiteral("Open logs folder"), this, [this] {
+            const QString log = m_ctx.logFilePath();
+            openInFileManager(log.isEmpty() ? Paths::logsDir() : QFileInfo(log).absolutePath());
+        });
         menu.addAction(QStringLiteral("Report a problem…"), this, [this] { reportProblem(); });
         auto* upd = menu.addAction(QStringLiteral("Check for updates"), this, [this] { checkForUpdates(false); });
         upd->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("update.check")));
@@ -308,8 +312,12 @@ void MainWindow::navigate(const QString& requested, const QVariantMap& requested
     pages::Page* p = m_pages.value(key);
     if (!p)
         return;
-    if (m_stack->currentWidget() != p) {
+    // The first page added is the stack's current widget from the start, with
+    // nothing selected in the sidebar and onShown() not called yet: the first
+    // navigation counts as a change even when it leads to that page.
+    if (m_stack->currentWidget() != p || m_shownPage != p) {
         m_stack->setCurrentWidget(p);
+        m_shownPage = p;
         m_sidebar->setCurrent(key);
         p->onShown();
     }
@@ -715,7 +723,8 @@ void MainWindow::reportProblem(const QStringList& extraFiles)
                             {QStringLiteral("settingsCount"), int(m_ctx.schema().all().size())},
                             {QStringLiteral("extraFiles"), QJsonArray::fromStringList(extraFiles)}};
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics);
+    // The crash files go into the ZIP themselves, not only their names.
+    auto r = jobs::submitProblemReport(m_ctx, desktop.isEmpty() ? QDir::homePath() : desktop, diagnostics, jobs::newestCrashFiles(extraFiles));
     if (!r.ok()) {
         toast(Tone::Err, QStringLiteral("Report not created"), r.error().message);
         return;

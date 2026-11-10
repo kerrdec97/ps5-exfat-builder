@@ -35,6 +35,7 @@
 #include <vector>
 
 class QComboBox;
+class QTimer;
 
 namespace fw::ui {
 class Segmented;
@@ -69,6 +70,7 @@ public:
     QVariant data(const QModelIndex& index, int role) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
     void append(const ps5::KlogLine& line);
+    void append(const std::vector<ps5::KlogLine>& lines); // one model change for the whole batch
     void clear();
     QString allText() const;
     int warnings() const { return m_warnings; }
@@ -155,6 +157,8 @@ private:
     void downloadSelected();
     void deleteSelected();
     void renameSelected();
+    // The listed name a rename to `newName` would land on ("" when it is free).
+    QString renameCollision(const QString& dir, const QString& oldName, const QString& newName) const;
     void newFolder();
     void goBack();
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -166,12 +170,15 @@ private:
     void showPayload(int index);
     void addOrEditPayload(int index);
     void sendPayload(int index);
+    int payloadIndex(const ui::PayloadEntry& entry) const; // -1 when it is not in the list any more
     // Kernel log
     QWidget* buildKlog(QWidget* parent);
     void klogToggle();
     void klogState(ps5::KlogState state, const QString& detail);
     void klogExport();
     void klogFilterChanged();
+    void updateKlogStats();
+    void flushKlog();
     void klogSnapshot();
     // Y2JB
     QWidget* buildY2jb(QWidget* parent);
@@ -195,6 +202,7 @@ private:
     std::vector<ps5::smp::StorageItem> m_storage;
     QString m_smpVersion;
     QString m_payloadSendId;
+    QString m_payloadSendPath; // the payload that job sends
     // ftp
     QString m_remoteDir;
     ui::RemoteListing m_listing;
@@ -252,7 +260,11 @@ private:
     QSortFilterProxyModel* m_klogProxy;
     QLabel* m_klogStats;
     bool m_klogPaused = false;
-    std::deque<ps5::KlogLine> m_klogHeld;
+    bool m_klogLive = false;                   // the card's chip says "live"
+    std::deque<ps5::KlogLine> m_klogHeld;      // received while paused
+    std::vector<ps5::KlogLine> m_klogIncoming; // received since the last flush
+    QTimer* m_klogFlush = nullptr;
+    quint64 m_klogGen = 0; // bumped on Connect/Disconnect: calls of an earlier client are ignored
     // y2jb
     ui::Segmented* m_region;
     ui::PathField* m_pkg;

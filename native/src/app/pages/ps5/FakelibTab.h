@@ -36,6 +36,8 @@ private:
     void askAdd();
     void askReplace();
     void askRemove();
+    void replaceOverlay(const ps5::fakelib::Overlay& target, const QString& localPath, bool confirmed);
+    void removeOverlay(const ps5::fakelib::Overlay& target);
     // Reject → message; Confirm → question. Returns false when the user stops.
     bool checkWithUser(const QString& localPath, bool* confirmed);
 

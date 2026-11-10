@@ -571,10 +571,14 @@ void ShadowMountTab::push(bool confirmed)
         return;
     }
     const ps5::MountConfigFiles files = ps5::applyMountConfigChanges(ps5::MountTool::ShadowMountPlus, m_config, m_profiles, ch, m_format);
+    // What the new files were made from: the push is refused when the console's differ (also when a
+    // load finishes while the question below is open).
+    const std::optional<QString> expectConfig = m_configExists ? m_config : QString();
+    const std::optional<QString> expectProfiles = m_profilesExists ? m_profiles : QString();
     if (!confirmed) {
         QStringList lines;
         for (auto it = ch.cbegin(); it != ch.cend(); ++it)
-            lines << QStringLiteral("%1: %2 → %3").arg(it.key(), shortValue(m_loaded.value(it.key())), shortValue(it.value())).toHtmlEscaped();
+            lines << QStringLiteral("%1: %2 → %3").arg(it.key(), shortValue(m_loaded.value(it.key())), shortValue(it.value()));
         QString where = ps5::mountConfigRemotePath(ps5::MountTool::ShadowMountPlus);
         if (files.profilesChanged)
             where += QStringLiteral(" and ") + ps5::smpProfilesRemotePath();
@@ -583,13 +587,11 @@ void ShadowMountTab::push(bool confirmed)
                                      : QString();
         if (!Sheet::confirm(window(), QStringLiteral("Write %1 change%2 to the console?").arg(ch.size()).arg(ch.size() == 1 ? QString() : QStringLiteral("s")),
                             QStringLiteral("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
-                                .arg(Sheet::monoSpan(lines.join(QStringLiteral("<br>"))), Sheet::monoSpan(where), debugOff),
+                                .arg(monoLines(lines), Sheet::monoSpan(where), debugOff),
                             QStringLiteral("Cancel"), QStringLiteral("Push"), false, Sheet::Icon::Info))
             return;
     }
     const QString backupDir = ps5::newConsoleBackupDir();
-    const std::optional<QString> expectConfig = m_configExists ? m_config : QString();
-    const std::optional<QString> expectProfiles = m_profilesExists ? m_profiles : QString();
     const QString apiVersion = m_apiVersion;
     setStatus(QStringLiteral("Pushing…"), Tone::Info);
     m_push->setEnabled(false);

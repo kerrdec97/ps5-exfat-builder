@@ -1,6 +1,7 @@
 #include "app/pages/ps5/TransferPanel.h"
 
 #include "app/AppContext.h"
+#include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
 #include "connect/ps5/Module.h"
 #include "core/FileUtil.h"
@@ -49,8 +50,12 @@ TransferRow::TransferRow(QWidget* parent) : QWidget(parent)
     m_cancel = new IconButton(QStringLiteral("close"), QStringLiteral("Cancel"), IconButton::Size::Small, acts);
     m_retry = new IconButton(QStringLiteral("rotate_ccw"), QStringLiteral("Retry"), IconButton::Size::Small, acts);
     m_remove = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove from the list"), IconButton::Size::Small, acts);
-    for (auto* b : {m_pause, m_cancel, m_retry, m_remove})
-        ah->addWidget(b);
+    // Cancel deletes a part-sent upload: it sits apart from Pause, and asks first.
+    ah->addWidget(m_pause);
+    ah->addWidget(m_retry);
+    ah->addSpacing(space::md);
+    ah->addWidget(m_cancel);
+    ah->addWidget(m_remove);
     h->addWidget(acts, 0, Qt::AlignTop);
     connect(m_pause, &QToolButton::clicked, this, [this] {
         if (m_pause->iconName() == u"play")
@@ -123,11 +128,11 @@ void TransferRow::setRecord(const JobRecord& r)
         stats = r.error ? r.error->message : QStringLiteral("The transfer failed.");
         break;
     case JobState::Cancelled: word = QStringLiteral("Cancelled"); tone = Tone::Neutral; stats = r.error ? r.error->message : stats; break;
-    case JobState::Interrupted: word = QStringLiteral("Interrupted"); tone = Tone::Warn; stats = QStringLiteral("The app closed during the transfer; retry to continue."); break;
+    case JobState::Interrupted: word = QStringLiteral("Interrupted"); tone = Tone::Warn; stats = QStringLiteral("The app closed during the transfer; retry to send it again."); break;
     }
     m_badge->set(word, tone);
-    if (r.state == JobState::Running)
-        m_badge->setIconName({});
+    // The percentage stands alone; every other state has its tone's glyph again.
+    m_badge->setIconName(r.state == JobState::Running ? QString() : defaultBadgeIcon(tone));
     m_stats->setText(stats);
     setTextColor(m_stats, r.state == JobState::Failed ? color::danger_hi : color::fg_3);
     m_tile->setTone(r.state == JobState::Failed ? Tone::Err : r.state == JobState::Succeeded ? Tone::Ok : Tone::Info);
@@ -232,12 +237,16 @@ void TransferPanel::sync(const QString& id)
         auto& q = m_ctx.queue();
         connect(row, &TransferRow::pauseRequested, &q, &JobQueue::pauseJob);
         connect(row, &TransferRow::resumeRequested, &q, &JobQueue::resumeJob);
-        connect(row, &TransferRow::cancelRequested, &q, &JobQueue::cancel);
+        // A running transfer is cancelled only after the question every other job gets; a waiting one just goes.
+        connect(row, &TransferRow::cancelRequested, this, [this](const QString& jid) { jobs::cancelWithConfirm(m_ctx, this, jid); });
         connect(row, &TransferRow::retryRequested, this, [this](const QString& jid) {
-            if (auto r2 = m_ctx.queue().retry(jid); r2.ok()) {
-                m_ctx.queue().remove(jid);
-                m_ctx.queue().startNow(r2.value()); // this job only; a paused queue stays paused
+            auto r2 = m_ctx.queue().retry(jid);
+            if (!r2.ok()) {
+                emit toastRequested(Tone::Err, QStringLiteral("Transfer not started again"), r2.error().message);
+                return;
             }
+            m_ctx.queue().remove(jid);
+            m_ctx.queue().startNow(r2.value()); // this job only; a paused queue stays paused
         });
         connect(row, &TransferRow::removeRequested, &q, [&q](const QString& jid) { q.remove(jid); });
     }
@@ -277,32 +286,44 @@ void TransferPanel::clearFinished()
             m_ctx.queue().remove(id);
 }
 
-void TransferPanel::updateHeader()
+void TransferPanel::showSummary(const std::vector<JobState>& states)
 {
-    const int total = int(m_order.size());
-    const int active = activeCount();
-    int failed = 0;
-    if (m_specimenMode) {
-        for (const JobRecord& r : m_specimen)
-            failed += r.state == JobState::Failed;
-    } else {
-        for (const QString& id : m_order)
-            if (const auto r = m_ctx.queue().record(id); r && r->state == JobState::Failed)
-                ++failed;
+    int active = 0, failed = 0, stopped = 0;
+    for (const JobState s : states) {
+        active += !isTerminal(s);
+        failed += s == JobState::Failed;
+        stopped += s == JobState::Cancelled || s == JobState::Interrupted;
     }
+    const int total = int(states.size());
     m_empty->setVisible(total == 0);
     m_list->setVisible(total > 0);
     m_clear->setVisible(total > active);
-    if (total == 0)
-        m_summary->set(QStringLiteral("Idle"), Tone::Neutral);
-    else if (failed > 0)
-        m_summary->set(QStringLiteral("%1 active · %2 failed").arg(active).arg(failed), Tone::Err);
-    else if (active > 0)
-        m_summary->set(QStringLiteral("%1 active").arg(active), Tone::Info);
-    else
-        m_summary->set(QStringLiteral("All done"), Tone::Ok);
-    if (active > 0 && failed == 0)
-        m_summary->setIconName(QStringLiteral("loader"));
+    // "All done" only when every transfer went through.
+    QStringList parts;
+    if (active > 0)
+        parts << QStringLiteral("%1 active").arg(active);
+    if (failed > 0)
+        parts << QStringLiteral("%1 failed").arg(failed);
+    if (stopped > 0)
+        parts << QStringLiteral("%1 not finished").arg(stopped);
+    const Tone tone = total == 0 ? Tone::Neutral : parts.isEmpty() ? Tone::Ok : failed > 0 ? Tone::Err : active > 0 ? Tone::Info : Tone::Warn;
+    m_summary->set(total == 0 ? QStringLiteral("Idle") : parts.isEmpty() ? QStringLiteral("All done") : parts.join(QStringLiteral(" · ")), tone);
+    // The glyph follows the state too: the spinner only while something moves and nothing failed.
+    m_summary->setIconName(active > 0 && failed == 0 ? QStringLiteral("loader") : defaultBadgeIcon(tone));
+}
+
+void TransferPanel::updateHeader()
+{
+    std::vector<JobState> states;
+    if (m_specimenMode) {
+        for (const JobRecord& r : m_specimen)
+            states.push_back(r.state);
+    } else {
+        for (const QString& id : m_order)
+            if (const auto r = m_ctx.queue().record(id))
+                states.push_back(r->state);
+    }
+    showSummary(states);
 }
 
 void TransferPanel::setSpecimen(const std::vector<JobRecord>& records)
@@ -324,17 +345,7 @@ void TransferPanel::setSpecimen(const std::vector<JobRecord>& records)
             m_rows->insertWidget(i++, line);
         }
     }
-    m_empty->setVisible(records.empty());
-    m_list->setVisible(!records.empty());
-    const int active = activeCount();
-    m_clear->setVisible(int(records.size()) > active);
-    int failed = 0;
-    for (const JobRecord& r : records)
-        failed += r.state == JobState::Failed;
-    if (failed > 0)
-        m_summary->set(QStringLiteral("%1 active · %2 failed").arg(active).arg(failed), Tone::Err);
-    else
-        m_summary->set(QStringLiteral("%1 active").arg(active), Tone::Info);
+    updateHeader();
 }
 
 void TransferPanel::clearSpecimen()

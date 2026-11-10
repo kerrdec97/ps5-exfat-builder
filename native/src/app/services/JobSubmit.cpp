@@ -87,7 +87,7 @@ bool cancelWithConfirm(AppContext& ctx, QWidget* host, const QString& id)
     bool remove = false;
     const bool ok = ui::Sheet::confirm(host ? host->window() : nullptr, QStringLiteral("Cancel the running job?"),
                                        QStringLiteral("%1%2. The job stops at its next safe point and removes what it had not finished.")
-                                           .arg(rec->title.toHtmlEscaped(), pct),
+                                           .arg(rec->title, pct), // plain text: shown as it is
                                        QStringLiteral("Keep running"), QStringLiteral("Cancel job"), true, ui::Sheet::Icon::Warning,
                                        QStringLiteral("Also remove the job from the queue"), &remove);
     if (!ok)
@@ -284,15 +284,32 @@ Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip,
                    QJsonObject{{QStringLiteral("backupZip"), backupZip}, {QStringLiteral("gameRoot"), gameRoot}}, {});
 }
 
-Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics)
+Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics,
+                                    const QStringList& extraFiles)
 {
     QJsonObject p;
     p.insert(QStringLiteral("destinationFolder"), destinationFolder);
     p.insert(QStringLiteral("logsFolder"), QFileInfo(ctx.logFilePath()).absolutePath());
-    p.insert(QStringLiteral("extraFiles"),
-             QJsonArray::fromStringList({Paths::settingsFile(), Paths::historyFile(), Paths::queueFile()}));
+    QStringList files{Paths::settingsFile(), Paths::historyFile(), Paths::queueFile()};
+    for (const QString& f : extraFiles)
+        if (!f.isEmpty() && !files.contains(f))
+            files << f;
+    p.insert(QStringLiteral("extraFiles"), QJsonArray::fromStringList(files));
     p.insert(QStringLiteral("diagnostics"), diagnostics);
     return enqueue(ctx, QStringLiteral("tools.report"), p, {});
+}
+
+QStringList newestCrashFiles(const QStringList& crashFiles)
+{
+    if (crashFiles.isEmpty())
+        return {};
+    // crash-<date>-<time>.txt and .dmp belong to one crash.
+    const QString stem = QFileInfo(crashFiles.first()).completeBaseName();
+    QStringList out;
+    for (const QString& f : crashFiles)
+        if (QFileInfo(f).completeBaseName() == stem)
+            out << f;
+    return out;
 }
 
 QString imageEditKind(const QString& image)

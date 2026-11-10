@@ -120,7 +120,13 @@ Result<QString> submitLanguageScan(AppContext& ctx, const QString& folder, bool 
 Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, const QStringList& remove,
                                     const QString& backupFolder);
 Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip, const QString& gameRoot);
-Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics);
+// The ZIP holds the logs, the settings, history and queue files, `diagnostics`
+// and `extraFiles` (the crash report files after a crash).
+Result<QString> submitProblemReport(AppContext& ctx, const QString& destinationFolder, const QJsonObject& diagnostics,
+                                    const QStringList& extraFiles = {});
+// Of the crash files on disk (newest first, crash::previousCrashFiles()), the
+// ones of the newest crash: its report and its dump.
+QStringList newestCrashFiles(const QStringList& crashFiles);
 
 Result<QString> submitFtpDownload(AppContext& ctx, const QString& host, int port, const QStringList& remotePaths,
                                   const QString& localDir, bool overwrite);

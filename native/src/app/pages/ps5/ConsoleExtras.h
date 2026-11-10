@@ -50,9 +50,12 @@ public:
     void clearDemo() override;
     void start();
     QString jobId() const { return m_jobId; }
+    bool isWatching() const { return m_watching; } // its job waits or runs
 
 private:
     void onJob(const QString& id);
+    void setWatching(bool on);
+    bool m_watching = false;
     ui::PathField* m_folder;
     QSpinBox* m_minutes;
     QPushButton* m_start;

@@ -155,6 +155,15 @@ DiagnosticsTab::DiagnosticsTab(AppContext& ctx, Source source, QWidget* parent)
     connect(m_cancel, &QPushButton::clicked, this, &DiagnosticsTab::cancel);
     connect(&m_ctx.queue(), &JobQueue::jobChanged, this, &DiagnosticsTab::onJobChanged);
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &DiagnosticsTab::onJobFinished);
+    // A job that is taken out of the queue while it waits never finishes.
+    connect(&m_ctx.queue(), &JobQueue::jobRemoved, this, [this](const QString& id) {
+        if (id != m_jobId)
+            return;
+        m_jobId.clear();
+        setRunning(false);
+        clearResult();
+        setStatus(QStringLiteral("Removed from the queue before it ran."));
+    });
     clearResult();
     setRunning(false);
     prefillFolder();
@@ -253,6 +262,7 @@ void DiagnosticsTab::run(bool speedTest)
         setStatus(r.error().message, Tone::Err);
         return;
     }
+    clearResult(); // nothing of an earlier run stays under the new verdict
     m_jobId = r.value();
     m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
     setRunning(true);
@@ -290,6 +300,8 @@ void DiagnosticsTab::onJobFinished(const QString& id)
     if (id == m_jobId) {
         m_jobId.clear();
         setRunning(false);
+    } else if (!m_jobId.isEmpty()) {
+        return; // another diagnosis (retried from the Queue): this tab's own run keeps the view
     }
     const QString when = rec->finished.isValid() ? rec->finished.toLocalTime().toString(QStringLiteral("HH:mm")) : QString();
     if (rec->outcome && !rec->outcome->details.isEmpty()) {
@@ -315,10 +327,12 @@ void DiagnosticsTab::onJobFinished(const QString& id)
         showResult(d, verdict, tone, QStringLiteral("Finished %1 · %2").arg(when, summary));
         return;
     }
+    clearResult(); // no result of this run: none of an earlier one either
     if (rec->state == JobState::Cancelled) {
         m_verdict->set(QStringLiteral("Cancelled"), Tone::Neutral);
         m_verdict->setIconName({});
-        setStatus(QStringLiteral("Cancelled at %1. Any file the checks wrote was removed; the log says otherwise.").arg(when));
+        setStatus(QStringLiteral("Cancelled%1. Any file the checks wrote was removed; if one could not be, the log says so.")
+                      .arg(when.isEmpty() ? QString() : QStringLiteral(" at %1").arg(when)));
         return;
     }
     m_verdict->set(QStringLiteral("Failed"), Tone::Err);
