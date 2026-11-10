@@ -500,6 +500,35 @@ private slots:
         QCOMPARE(redactSecrets(QStringLiteral("no secrets here")), QStringLiteral("no secrets here"));
     }
 
+    // Of an over-long history the newest records are kept, from the start of a line.
+    void reportKeepsTheEndOfAVeryLongFile()
+    {
+        const QString base = m_root.filePath(QStringLiteral("longfile"));
+        QByteArray history;
+        const QByteArray filler(2000, 'x');
+        int n = 0;
+        while (history.size() < 17 * 1024 * 1024)
+            history += "{\"n\":" + QByteArray::number(n++) + ",\"note\":\"" + filler + "\"}\n";
+        fwtest::writeTextFile(base + QStringLiteral("/history.jsonl"), history);
+        ReportOptions opt;
+        opt.destinationFolder = base + QStringLiteral("/out");
+        QDir().mkpath(opt.destinationFolder);
+        opt.extraFiles = {base + QStringLiteral("/history.jsonl")};
+        opt.redactUserPaths = false;
+        auto r = buildReportBundle(opt, CancellationToken(), nullptr);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        zip::Reader z;
+        QVERIFY(z.open(r->zipPath).ok());
+        const QByteArray kept = z.readAll(*z.find(QStringLiteral("history.jsonl"))).value();
+        QVERIFY(kept.size() <= 16 * 1024 * 1024);
+        QVERIFY(kept.size() > 15 * 1024 * 1024);
+        QVERIFY2(kept.startsWith("{\"n\":"), kept.left(40).constData());                      // a whole first line
+        QVERIFY(kept.contains("{\"n\":" + QByteArray::number(n - 1) + ","));                   // the newest record
+        QVERIFY(!kept.contains("{\"n\":0,"));                                                  // the oldest is what was dropped
+        // No report is left behind under a temporary name.
+        QCOMPARE(QDir(opt.destinationFolder).entryList(QDir::Files).size(), 1);
+    }
+
     // Nothing secret from the settings, the queue, the history or the logs may
     // be anywhere in the ZIP; the keys stay so it is visible they were set.
     void reportBundleHidesPasscodesKeysAndPublicAddresses()
