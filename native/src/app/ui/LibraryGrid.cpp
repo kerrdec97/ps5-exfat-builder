@@ -380,7 +380,7 @@ void LibraryGrid::paintCheck(QPainter& p, const QRectF& r, bool on, bool round)
     const qreal rad = round ? r.width() / 2 : 5;
     p.setPen(Qt::NoPen);
     if (on) {
-        p.setBrush(accentGradient(r));
+        p.setBrush(accentFillGradient(r));
         p.drawRoundedRect(r, rad, rad);
         p.drawPixmap(QRectF(r.center().x() - 7, r.center().y() - 7, 14, 14).toRect(), iconPixmap(QStringLiteral("check"), 14, color::on_accent, devicePixelRatioF()));
     } else {

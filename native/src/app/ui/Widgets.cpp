@@ -463,14 +463,14 @@ void Card::paintEvent(QPaintEvent*)
     } else {
         // Cards sit slightly lifted: a faint top-down sheen over bg_2.
         QLinearGradient sheen(r.topLeft(), r.bottomLeft());
-        sheen.setColorAt(0, QColor(0x15, 0x1a, 0x27));
+        sheen.setColorAt(0, color::bg_2_hi);
         sheen.setColorAt(1, color::bg_2);
         p.setPen(QPen(color::border_2, 1));
         p.setBrush(sheen);
         p.drawRoundedRect(r, radius::md, radius::md);
         if (m_selected) {
             p.setBrush(accentGradient(r, 26));
-            p.setPen(QPen(QColor(141, 181, 255, 90), 1));
+            p.setPen(QPen(withAlpha(color::accent_hi, 90), 1));
             p.drawRoundedRect(r, radius::md, radius::md);
         }
     }
@@ -664,13 +664,13 @@ void Switch::paintEvent(QPaintEvent*)
         knob = color::on_accent;
     } else {
         fill = color::field_bg;
-        border = m_hover ? color::border_4 : color::border_control;
+        border = m_hover ? color::fg_5 : color::border_control;
         knob = color::fg_3;
     }
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (enabled && on) {
         p.setPen(Qt::NoPen);
-        p.setBrush(accentGradient(r, m_hover ? 235 : 255));
+        p.setBrush(accentFillGradient(r, m_hover ? 235 : 255));
     } else {
         p.setPen(QPen(border, 1));
         p.setBrush(fill);
@@ -806,7 +806,7 @@ void Segmented::paintEvent(QPaintEvent*)
         const bool sel = i == m_current;
         const bool hov = i == m_hover && s.enabled && !sel;
         if (sel) {
-            p.setPen(QPen(QColor(141, 181, 255, 80), 1));
+            p.setPen(QPen(withAlpha(color::accent_hi, 80), 1));
             p.setBrush(accentGradient(QRectF(r), 70));
             p.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), radius::sm, radius::sm);
         } else if (hov) {
@@ -917,7 +917,7 @@ void ProgressBar::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
-    p.setBrush(color::bg_4);
+    p.setBrush(color::bg_5);
     p.drawRoundedRect(rect(), height() / 2.0, height() / 2.0);
     QColor fill = color::accent;
     double frac = m_fraction;
@@ -1733,17 +1733,18 @@ void BrandMark::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    // A white glyph sits on it: the fill tokens.
     QLinearGradient g(r.topLeft(), r.bottomRight());
-    g.setColorAt(0, color::accent);
-    g.setColorAt(1, color::accent_2);
-    p.setPen(QPen(QColor(255, 255, 255, 45), 1));
+    g.setColorAt(0, color::accent_fill);
+    g.setColorAt(1, color::accent_fill_2);
+    p.setPen(QPen(withAlpha(color::on_accent, 45), 1));
     p.setBrush(g);
     const qreal rad = m_px * 0.3;
     p.drawRoundedRect(r, rad, rad);
     // Gloss on the upper half.
     QLinearGradient gloss(r.topLeft(), QPointF(r.left(), r.center().y()));
-    gloss.setColorAt(0, QColor(255, 255, 255, 50));
-    gloss.setColorAt(1, QColor(255, 255, 255, 0));
+    gloss.setColorAt(0, withAlpha(color::on_accent, 40));
+    gloss.setColorAt(1, withAlpha(color::on_accent, 0));
     p.setPen(Qt::NoPen);
     p.setBrush(gloss);
     p.drawRoundedRect(r, rad, rad);
@@ -1795,7 +1796,7 @@ void IconTile::paintEvent(QPaintEvent*)
         b.setAlpha(40);
         g.setColorAt(0, a);
         g.setColorAt(1, b);
-        p.setPen(QPen(QColor(141, 181, 255, 70), 1));
+        p.setPen(QPen(withAlpha(color::accent_hi, 70), 1));
         p.setBrush(g);
     }
     p.drawRoundedRect(r, rad, rad);

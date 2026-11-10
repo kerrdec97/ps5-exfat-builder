@@ -372,8 +372,8 @@ private slots:
         side->setFixedHeight(200);
         QCoreApplication::processEvents();
         const QImage sideShot = side->grab().toImage();
-        QCOMPARE(sideShot.pixelColor(side->width() - 1, 150), color::border_1);
-        QVERIFY(sideShot.pixelColor(side->width() - 3, 150) != color::border_1);
+        QCOMPARE(sideShot.pixelColor(side->width() - 1, 150), color::border_2);
+        QVERIFY(sideShot.pixelColor(side->width() - 3, 150) != color::border_2);
     }
 
     // ---- the wheel ---------------------------------------------------------------------

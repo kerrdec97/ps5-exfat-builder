@@ -48,16 +48,23 @@ static void paintCheck(QPainter* p, const QRect& r, const QStyleOption* opt, boo
     if (!enabled) {
         fill = color::bg_2;
         border = color::border_3;
-    } else if (on || partial) {
-        fill = border = hover ? color::accent_hover : color::accent;
     } else if (hover) {
-        border = color::border_4;
+        border = color::fg_5;
     }
     p->save();
     p->setRenderHint(QPainter::Antialiasing);
-    p->setPen(QPen(border, 1));
-    p->setBrush(fill);
     const QRectF rf = QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (enabled && (on || partial)) {
+        // A white mark sits on it: the fill gradient, not the bright accent.
+        QLinearGradient g(rf.topLeft(), rf.topRight());
+        g.setColorAt(0, hover ? color::accent_fill_hover : color::accent_fill);
+        g.setColorAt(1, hover ? color::accent_fill_2_hover : color::accent_fill_2);
+        p->setPen(Qt::NoPen);
+        p->setBrush(g);
+    } else {
+        p->setPen(QPen(border, 1));
+        p->setBrush(fill);
+    }
     if (radio)
         p->drawEllipse(rf);
     else
@@ -74,7 +81,7 @@ static void paintCheck(QPainter* p, const QRect& r, const QStyleOption* opt, boo
         }
     } else if (partial) {
         p->setPen(Qt::NoPen);
-        p->setBrush(color::on_accent);
+        p->setBrush(enabled ? color::on_accent : color::fg_5);
         p->drawRect(QRect(box.center().x() - 4, box.center().y(), 10, 2));
     }
     p->restore();
@@ -136,9 +143,14 @@ void FwStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option
     }
     case PE_PanelItemViewItem:
     case PE_PanelItemViewRow:
-        // Hairline rows, hover and selection are painted by delegates / QSS.
+        // Tables and trees ask for this before every cell (and a tree for its
+        // branch area); the stylesheet keeps selected cells clear over it.
+        // Hairlines and hover come from delegates / QSS.
         if (option->state & State_Selected) {
             painter->fillRect(option->rect, color::accent_lo);
+            // The accent bar, on the part that touches the view's left edge.
+            if (element == PE_PanelItemViewRow && option->rect.left() <= 0 && option->rect.right() >= 2)
+                painter->fillRect(QRect(0, option->rect.top(), 2, option->rect.height()), color::accent);
             return;
         }
         if (option->state & State_MouseOver) {
@@ -173,7 +185,7 @@ void FwStyle::drawControl(ControlElement element, const QStyleOption* option, QP
 int FwStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, const QWidget* widget) const
 {
     switch (metric) {
-    case PM_ScrollBarExtent: return 10;
+    case PM_ScrollBarExtent: return size::scrollBar;
     case PM_FocusFrameHMargin:
     case PM_FocusFrameVMargin: return 0;
     case PM_IndicatorWidth:
@@ -294,6 +306,22 @@ bool isAppTip(const QString& tip)
     return false;
 }
 
+// Qt sizes a tooltip for its text alone: a long one becomes one very long
+// line, or a paragraph as wide as Qt likes. A tip wider than the design's
+// limit is narrowed to it afterwards and made as tall as the wrapped text
+// needs (never narrower than its longest word, which cannot wrap).
+void limitToolTipWidth(QWidget* w)
+{
+    auto* tip = qobject_cast<QLabel*>(w);
+    if (!tip || w->width() <= size::toolTipMax)
+        return;
+    if (!tip->wordWrap())
+        tip->setWordWrap(true); // a plain-text tip; Qt decides again for the next text
+    const int target = std::max(size::toolTipMax, tip->minimumSizeHint().width());
+    if (w->width() > target)
+        w->resize(target, tip->heightForWidth(target));
+}
+
 class AppGuard : public QObject {
 public:
     using QObject::QObject;
@@ -310,6 +338,10 @@ protected:
             }
             break;
         case QEvent::KeyPress: return keyPress(watched, static_cast<QKeyEvent*>(event));
+        case QEvent::Resize:
+            if (auto* w = qobject_cast<QWidget*>(watched); w && w->isWindow() && w->windowType() == Qt::ToolTip)
+                limitToolTipWidth(w);
+            break;
         case QEvent::FocusIn:
             // Delivered before QApplication::focusChanged: see hasKeyboardFocus().
             if (auto* w = qobject_cast<QWidget*>(watched)) {

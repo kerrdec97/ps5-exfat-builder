@@ -58,7 +58,7 @@ void NavItem::paintEvent(QPaintEvent*)
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (sel) {
         // Selected: a soft gradient wash with a hairline edge and a glowing bar.
-        p.setPen(QPen(QColor(141, 181, 255, 40), 1));
+        p.setPen(QPen(withAlpha(color::accent_hi, 40), 1));
         p.setBrush(accentGradient(r, 46));
         p.drawRoundedRect(r, 9, 9);
         QLinearGradient bar(QPointF(0, (height() - 18) / 2.0), QPointF(0, (height() + 18) / 2.0));
@@ -87,7 +87,7 @@ void NavItem::paintEvent(QPaintEvent*)
             const int bw = std::max(20, fm.horizontalAdvance(n) + 12);
             const QRect br(width() - 10 - bw, (height() - 18) / 2, bw, 18);
             p.setPen(Qt::NoPen);
-            p.setBrush(accentGradient(br, 255));
+            p.setBrush(accentFillGradient(br));
             p.drawRoundedRect(br, 9, 9);
             p.setPen(color::on_accent);
             p.setFont(font::caption());
@@ -144,9 +144,9 @@ void Sidebar::paintEvent(QPaintEvent*)
     QColor a = color::accent;
     a.setAlpha(16);
     glow.setColorAt(0, a);
-    glow.setColorAt(1, QColor(0, 0, 0, 0));
+    glow.setColorAt(1, Qt::transparent);
     p.fillRect(QRect(0, 0, width(), 260), glow);
-    p.fillRect(QRect(width() - 1, 0, 1, height()), color::border_1);
+    p.fillRect(QRect(width() - 1, 0, 1, height()), color::border_2);
 }
 
 void Sidebar::addGroup(const QString& overline)
@@ -342,10 +342,10 @@ void AppHeader::paintEvent(QPaintEvent*)
     QColor g = color::accent;
     g.setAlpha(28);
     glow.setColorAt(0, g);
-    glow.setColorAt(1, QColor(0, 0, 0, 0));
+    glow.setColorAt(1, Qt::transparent);
     p.fillRect(rect(), glow);
     QLinearGradient line(QPointF(0, 0), QPointF(width(), 0));
-    QColor a = color::accent, b = color::accent_2, c = color::border_1;
+    QColor a = color::accent, b = color::accent_2, c = color::border_2;
     a.setAlpha(110);
     b.setAlpha(60);
     line.setColorAt(0, a);
@@ -400,7 +400,7 @@ void StatusBar::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), color::bg_0);
-    p.fillRect(QRect(0, 0, width(), 1), color::border_1);
+    p.fillRect(QRect(0, 0, width(), 1), color::border_2);
 }
 
 // ---- page header --------------------------------------------------------------------

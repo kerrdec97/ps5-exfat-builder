@@ -27,7 +27,7 @@ namespace {
 void paintCardSurface(QPainter& p, const QRectF& r, qreal rad, bool hover = false)
 {
     QLinearGradient sheen(r.topLeft(), r.bottomLeft());
-    sheen.setColorAt(0, hover ? QColor(0x19, 0x1f, 0x2e) : QColor(0x15, 0x1a, 0x27));
+    sheen.setColorAt(0, hover ? color::bg_3_hi : color::bg_2_hi);
     sheen.setColorAt(1, hover ? color::bg_3 : color::bg_2);
     p.setPen(QPen(hover ? color::border_4 : color::border_2, 1));
     p.setBrush(sheen);
@@ -62,7 +62,7 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
 void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr)
 {
     p.setPen(Qt::NoPen);
-    p.setBrush(accentGradient(r));
+    p.setBrush(accentFillGradient(r));
     p.drawEllipse(r);
     const int is = int(r.width() * 0.62);
     p.drawPixmap(QRectF(r.center().x() - is / 2.0, r.center().y() - is / 2.0, is, is).toRect(),
@@ -210,7 +210,7 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         const QRectF ir(r.left() + 14, r.top() + 14, 34, 34);
         p.setPen(Qt::NoPen);
         if (sel) {
-            p.setBrush(accentGradient(ir));
+            p.setBrush(accentFillGradient(ir));
         } else {
             p.setBrush(color::bg_4);
         }
@@ -386,7 +386,7 @@ void DropZone::paintEvent(QPaintEvent*)
         QColor a = color::accent;
         a.setAlpha(m_hl ? 46 : 26);
         glow.setColorAt(0, a);
-        glow.setColorAt(1, QColor(0, 0, 0, 0));
+        glow.setColorAt(1, Qt::transparent);
         p.setBrush(glow);
         p.drawRoundedRect(r, radius::md, radius::md);
     }
@@ -400,7 +400,7 @@ void DropZone::paintEvent(QPaintEvent*)
     if (m_compact) {
         const QRectF ir(r.left() + 22, r.center().y() - 20, 40, 40);
         p.setPen(Qt::NoPen);
-        p.setBrush(active ? accentGradient(ir) : QBrush(color::bg_4));
+        p.setBrush(active ? accentFillGradient(ir) : QBrush(color::bg_4));
         p.drawRoundedRect(ir, 11, 11);
         p.drawPixmap(QRectF(ir.center().x() - 10, ir.center().y() - 10, 20, 20).toRect(),
                      iconPixmap(m_icon, 20, active ? color::on_accent : color::fg_2, dpr));
@@ -415,7 +415,7 @@ void DropZone::paintEvent(QPaintEvent*)
     } else {
         const QRectF ir(r.center().x() - 24, r.top() + 24, 48, 48);
         p.setPen(Qt::NoPen);
-        p.setBrush(active ? accentGradient(ir) : QBrush(color::bg_4));
+        p.setBrush(active ? accentFillGradient(ir) : QBrush(color::bg_4));
         p.drawRoundedRect(ir, 13, 13);
         p.drawPixmap(QRectF(ir.center().x() - 12, ir.center().y() - 12, 24, 24).toRect(),
                      iconPixmap(m_icon, 24, active ? color::on_accent : color::fg_2, dpr));
@@ -570,9 +570,9 @@ void HeroBanner::paintEvent(QPaintEvent*)
     clip.addRoundedRect(r, radius::lg, radius::lg);
     p.setClipPath(clip);
     QLinearGradient base(r.topLeft(), r.bottomRight());
-    base.setColorAt(0, QColor(0x14, 0x22, 0x4d));
-    base.setColorAt(0.55, QColor(0x1c, 0x17, 0x45));
-    base.setColorAt(1, QColor(0x10, 0x12, 0x22));
+    base.setColorAt(0, color::hero_0);
+    base.setColorAt(0.55, color::hero_1);
+    base.setColorAt(1, color::hero_2);
     p.fillRect(r, base);
     // Soft light blobs.
     auto blob = [&](QPointF c, qreal radiusPx, QColor col) {
@@ -582,9 +582,9 @@ void HeroBanner::paintEvent(QPaintEvent*)
         g.setColorAt(1, col);
         p.fillRect(r, g);
     };
-    blob(QPointF(r.right() - 120, r.top() + 10), 260, QColor(0x8b, 0x5c, 0xf6, 90));
-    blob(QPointF(r.right() - 330, r.bottom() + 40), 220, QColor(0x3d, 0x7b, 0xff, 80));
-    blob(QPointF(r.left() + 40, r.top() - 40), 200, QColor(0x3d, 0x7b, 0xff, 50));
+    blob(QPointF(r.right() - 120, r.top() + 10), 260, withAlpha(color::accent_2, 90));
+    blob(QPointF(r.right() - 330, r.bottom() + 40), 220, withAlpha(color::accent, 80));
+    blob(QPointF(r.left() + 40, r.top() - 40), 200, withAlpha(color::accent, 50));
     // Decorative stacked-layers glyph, large and faint.
     const int gs = int(std::min(r.height() * 1.15, 230.0));
     p.setOpacity(0.10);
@@ -592,7 +592,7 @@ void HeroBanner::paintEvent(QPaintEvent*)
                  iconPixmap(QStringLiteral("layers"), gs, color::fg_0, devicePixelRatioF()));
     p.setOpacity(1);
     p.setClipping(false);
-    p.setPen(QPen(QColor(141, 181, 255, 50), 1));
+    p.setPen(QPen(withAlpha(color::accent_hi, 50), 1));
     p.setBrush(Qt::NoBrush);
     p.drawRoundedRect(r, radius::lg, radius::lg);
 }
@@ -738,7 +738,7 @@ void ActionCard::paintEvent(QPaintEvent*)
     const qreal dpr = devicePixelRatioF();
     const QRectF ir(r.left() + 16, r.center().y() - 21, 42, 42);
     p.setPen(Qt::NoPen);
-    p.setBrush(active ? accentGradient(ir) : accentGradient(ir, 60));
+    p.setBrush(active ? accentFillGradient(ir) : accentGradient(ir, 60));
     p.drawRoundedRect(ir, 11, 11);
     p.drawPixmap(QRectF(ir.center().x() - 10, ir.center().y() - 10, 20, 20).toRect(),
                  iconPixmap(m_icon, 20, active ? color::on_accent : color::accent_hi, dpr));
