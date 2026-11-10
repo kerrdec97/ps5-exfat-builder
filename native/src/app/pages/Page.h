@@ -26,6 +26,8 @@
 #include <QVariantMap>
 #include <QWidget>
 
+#include <functional>
+
 namespace fw {
 class AppContext;
 class JobQueueModel;
@@ -83,7 +85,12 @@ public:
     JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QString& key, const QString& title,
                 const QString& caption, const QString& primaryText, const QString& featureName, QWidget* parent = nullptr);
     bool hasPrimaryAction() const override { return true; }
-    void primaryAction() override { submitClicked(true); }
+    // Ctrl+B acts on the form the user sees, not on the one hidden behind the monitor.
+    void primaryAction() override
+    {
+        if (m_view == View::Form)
+            submitClicked(true);
+    }
     ui::JobsDock* dock() { return m_dock; }
     QVBoxLayout* form() { return m_form; }
     QVBoxLayout* aside() { return m_aside; }
@@ -95,7 +102,9 @@ public:
     void clearDemoState() override;
     void setDragHighlight(bool on) override;
     ui::Card* sourceCard() const { return m_sourceCard; }
-    bool openOutputWhenDone() const;
+    // "Open the output folder when done" for the job being submitted; a page
+    // with its own switch for it answers from that one.
+    virtual bool openOutputWhenDone() const;
 
     // What the left column shows: the form, or the job monitor that replaces
     // it while a job the page started runs.
@@ -132,7 +141,16 @@ protected:
                                           const QStringList& excludeKeys, const QString& settingsLink = {},
                                           bool withOpenFolderRow = true);
     ui::JobOptionsPanel* options() { return m_options; }
+    // After a page showed or hid rows of the job options card: its "n changed" summary again.
+    void refreshOptionsSummary()
+    {
+        if (m_refreshOptionsSummary)
+            m_refreshOptionsSummary();
+    }
     QString featureName() const { return m_feature; }
+    // For a page whose outputs differ (Build: image, package, packed folder):
+    // what the "not available in this build" state names.
+    void setFeatureName(const QString& name);
 
 private:
     void submitClicked(bool buildNow);
@@ -156,11 +174,24 @@ private:
     ui::Card* m_unavailableCard = nullptr;
     ui::InfoBar* m_error;
     ui::JobOptionsPanel* m_options = nullptr;
+    std::function<void()> m_refreshOptionsSummary;
     ui::Switch* m_openFolder = nullptr;
     ui::Card* m_sourceCard = nullptr;
 };
 
 // Shared helpers for pages
+//
+// Text that comes from outside the app (titles, IDs, names and paths from
+// dumps, ZIPs, images and packages, messages that quote them) is shown as it
+// is, never as markup: QLabel and tooltips otherwise take text that starts
+// like HTML for rich text.
+//  * plainLabel()  — the label shows its text and its tooltip literally;
+//  * plainLabels() — the same for every label inside a composite widget
+//                    (MessageRow, InfoBar, ErrorState);
+//  * plainTip()    — the text for setToolTip() on any other widget or item.
+QLabel* plainLabel(QLabel* label);
+void plainLabels(QWidget* widget);
+QString plainTip(const QString& text);
 QString humanTime(const QDateTime& t);            // "2026-11-04 14:36"
 QString relativeTime(const QDateTime& t);         // "2 min ago"
 QString driveLabel(const QString& path);          // "D:" / "/"

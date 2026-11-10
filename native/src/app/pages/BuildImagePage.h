@@ -2,8 +2,9 @@
 
 // Build (Main artboard): one page for every output the app makes.
 //
-//   Source       drop zone → game strip. A folder for every format; with FPKG
-//                also an .exfat / .ffpfsc / .ffpkg image or a .gp5 project.
+//   Source       drop zone → game strip. A folder for every format; a zipped
+//                dump for the images and the packed folder; with FPKG also an
+//                .exfat / .ffpfs / .ffpfsc / .ffpkg image or a .gp5 project.
 //                A wrapper folder is searched for the game folder below it.
 //   Format       five tiles (exFAT, FFPKG, PFS, FPKG, Packed folder) and, under
 //                them, the two or three settings people change for that output.
@@ -30,6 +31,7 @@
 #include "core/FileUtil.h"
 
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPointer>
 #include <QSet>
@@ -39,6 +41,7 @@
 #include <memory>
 
 class QMenu;
+class QTimer;
 
 namespace fw::pages {
 
@@ -62,6 +65,7 @@ public:
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
     void setDragHighlight(bool on) override;
+    bool openOutputWhenDone() const override;
 
     void setSource(const QString& path);
     QString source() const;
@@ -73,7 +77,8 @@ public:
     void setFileStem(const QString& stem); // as if typed by the user
     void setOutputFolder(const QString& dir); // as if chosen with Browse…
     bool fileNameEdited() const { return m_nameEdited; }
-    void showSpaceError(qint64 needed, qint64 free, const QString& drive); // real flow + demo state
+    // Real flow + demo state. `reserve` is the free-space reserve that was counted on top of `needed`.
+    void showSpaceError(qint64 needed, qint64 free, const QString& drive, qint64 reserve = 0);
 
     // Introspection for tests and screenshots.
     ui::JobOptionsPanel* optionsPanel(const QString& format) const; // panel of a tile ("ffpfs" → the PFS panel)
@@ -84,6 +89,8 @@ public:
     QWidget* packageCard() const { return m_packageCard; }
     QString sourceMessage() const;
     QStringList gameRootChoices() const { return m_rootChoices; }
+    // The largest single file the output can have (what a FAT32 drive limits); 0 = no such limit known.
+    qint64 largestOutputFileBytes() const;
 
 protected:
     Result<QString> submit(bool buildNow) override;
@@ -111,6 +118,7 @@ private:
     void applyRowVisibility();
     void updateAdvancedSummary();
     void updateClusterNote();
+    void updateSpeedNotes();
     void updatePfsRows();
     void browseSource();
     void onSummary(const ui::GameSummary& s);
@@ -119,6 +127,8 @@ private:
     void updateOutput();
     void renderFileName();
     void checkSpace();
+    void checkSpaceNow(); // the same check, answered before it returns
+    void keepZstdPackOn();
     void updateToolsStatus();
     void applyLiveCpuLimit();
     void pickFromDlcEmu();
@@ -133,7 +143,7 @@ private:
     QString tile() const;
     bool isFpkg() const { return tile() == kFormatFpkg; }
     bool isZstdFolder() const { return tile() == kFormatZstdFolder; }
-    QString sourceKind() const; // folder / exfat / ffpfsc / ffpkg / gp5
+    QString sourceKind() const; // folder / zip / exfat / ffpfsc / ffpkg / gp5
     QString outputFolder() const; // where the output goes (resolved defaults)
     QString expectedPackagePath() const;
     FormatOptions* current();
@@ -144,7 +154,6 @@ private:
     QString m_sourcePath;
     QString m_sourceKind;              // sourceKindOf(m_sourcePath), decided when the source is set (never a stat per repaint)
     QSet<QString> m_liveLimitApplied;  // package builds whose live CPU limit was applied on start
-    ui::Card* m_sourceCard = nullptr;
     ui::Badge* m_sourceBadge = nullptr;
     QWidget* m_strip = nullptr;
     ui::ElideLabel* m_stripTitle = nullptr;
@@ -176,7 +185,6 @@ private:
     QWidget* m_baseField = nullptr;
     ui::PathField* m_basePackage = nullptr;
     QWidget* m_addonField = nullptr;
-    QWidget* m_idRow = nullptr;          // Content ID + version
     QWidget* m_titleRow = nullptr;
     QWidget* m_backportField = nullptr;  // the two backport pickers + note
     ui::PathField* m_backport4 = nullptr;
@@ -185,6 +193,8 @@ private:
     ui::MessageRow* m_baseInfo = nullptr;
     QString m_baseTitleId;               // from the inspected base package
     QString m_autoVersion;               // the version this page filled in
+    QString m_detailsFor;                // the source the Package fields were last filled from
+    QString m_addonIdFor, m_addonId;     // "From dlc_emu.ini…": the payload folder and the entry's content ID
     quint64 m_baseGen = 0;
     QString m_inspectedBase;             // the base path last inspected
     std::shared_ptr<CancellationSource> m_baseCancel;
@@ -200,10 +210,11 @@ private:
     ui::IconButton* m_nameMenuButton = nullptr;
     ui::Link* m_resetName = nullptr;
     bool m_nameEdited = false;
+    QString m_userStem; // what the user typed as the name (the FPKG tile borrows the field)
 
     ui::Disclosure* m_advanced = nullptr;
     QWidget* m_advancedHost = nullptr;
-    ui::Switch* m_openFolder = nullptr;
+    ui::Switch* m_openWhenDone = nullptr; // "Open the output folder when done"
     ui::Link* m_settingsLink = nullptr;
 
     ui::Card* m_summaryCard = nullptr;
@@ -213,9 +224,12 @@ private:
     QLabel* m_liveNote = nullptr;
 
     // The free-space check of the output folder; validateForm() refuses to
-    // start on Insufficient and Unavailable and finishes a Checking one first.
+    // start on Insufficient and Unavailable, but only on a fresh answer: it
+    // asks the drive again unless the last answer is positive and recent.
     enum class SpaceCheck { Unknown, Checking, Ok, Warn, Insufficient, Unavailable };
     SpaceCheck m_spaceState = SpaceCheck::Unknown;
+    QElapsedTimer m_spaceChecked; // since the last answer
+    QTimer* m_spaceTimer = nullptr; // the check waits for a pause in typing the folder
     void applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists);
     quint64 m_spaceGen = 0;
     bool m_spaceOk = true;

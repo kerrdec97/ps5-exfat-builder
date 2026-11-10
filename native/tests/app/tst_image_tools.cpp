@@ -17,6 +17,7 @@
 #include "app/services/ImageInfo.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/LibraryGrid.h"
+#include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "support/TestSupport.h"
@@ -24,11 +25,16 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QTreeWidgetItemIterator>
+#include <QUrl>
 
 using namespace fw;
 
@@ -68,6 +74,15 @@ bool waitTerminal(JobQueue& q, const QString& id, int ms = 120000)
         auto r = q.record(id);
         return r && isTerminal(r->state);
     }, ms);
+}
+
+// Whether the Edit tree lists `path` ('/'-separated, as the page stages it).
+bool treeHas(QTreeWidget* tree, const QString& path)
+{
+    for (QTreeWidgetItemIterator it(tree); *it; ++it)
+        if ((*it)->data(0, Qt::UserRole).toString() == path)
+            return true;
+    return false;
 }
 
 QByteArray fileBytes(const QString& path)
@@ -196,12 +211,22 @@ private slots:
         m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_exfat}, {QStringLiteral("action"), QStringLiteral("extract")}});
         const QString dest = m_root.filePath(QStringLiteral("extracted"));
         page->setExtractDestination(dest);
+        // While the image's summary is still being read, Extract would pick the wrong job: it waits.
+        QVERIFY(page->isReading());
+        QVERIFY(newJob(q, [&] { page->primaryAction(); }).isEmpty());
         const auto runPrimary = [&]() -> QString {
+            page->showForm(); // "Back to the image" after the job before
+            if (!QTest::qWaitFor([&] { return !page->isReading(); }, 15000))
+                return {};
             const QString id = newJob(q, [&] { page->primaryAction(); });
             return !id.isEmpty() && waitTerminal(q, id) ? id : QString();
         };
         QString id = runPrimary();
         QVERIFY(!id.isEmpty());
+        // The monitor took the form's place: Ctrl+B and drops do not reach the hidden form.
+        QVERIFY(page->isMonitorShown());
+        QVERIFY(newJob(q, [&] { page->primaryAction(); }).isEmpty());
+        QVERIFY(!page->acceptsDrop({QUrl::fromLocalFile(m_ffpkg)}));
         QCOMPARE(q.record(id)->kind, QStringLiteral("image.exfat.extract"));
         QCOMPARE(q.record(id)->state, JobState::Succeeded);
         QCOMPARE(fileBytes(dest + QStringLiteral("/data/notes.txt")), QByteArray("Hello, image!\n"));
@@ -220,6 +245,17 @@ private slots:
         page->setConvertTarget(jobs::kFormatFfpfsc);
         QCOMPARE(page->convertMethod(), QStringLiteral("direct"));
         QCOMPARE(page->convertOutput(), m_root.filePath(QStringLiteral("game.ffpfsc")));
+        // A chosen name with another format's extension follows the target, in the field too.
+        page->setConvertOutput(m_root.filePath(QStringLiteral("chosen.ffpkg")));
+        page->setConvertTarget(jobs::kFormatFfpfs);
+        QCOMPARE(page->convertOutput(), m_root.filePath(QStringLiteral("chosen.ffpfs")));
+        bool shown = false;
+        for (auto* f : page->findChildren<ui::PathField*>())
+            shown = shown || QDir::fromNativeSeparators(f->path()) == m_root.filePath(QStringLiteral("chosen.ffpfs"));
+        QVERIFY(shown);
+        page->setConvertTarget(jobs::kFormatFfpfsc);
+        QCOMPARE(page->convertOutput(), m_root.filePath(QStringLiteral("chosen.ffpfsc")));
+        page->setConvertOutput({});
         const QString packed = m_root.filePath(QStringLiteral("packed ü.ffpfsc"));
         page->setConvertOutput(packed);
         id = runPrimary();
@@ -264,16 +300,230 @@ private slots:
         page->stage({QStringLiteral("add"), QStringLiteral("data/extra.txt"), extra, {}});
         page->stage({QStringLiteral("delete"), QStringLiteral("data/notes.txt"), {}, {}});
         QCOMPARE(page->primaryButton()->text(), QStringLiteral("Apply 2 changes"));
+        QVERIFY(treeHas(page->tree(), QStringLiteral("data/notes.txt")));
+        QVERIFY(!treeHas(page->tree(), QStringLiteral("data/extra.txt")));
+        page->showForm();
         answerSheetSoon(this, m_window.get(), 1);
         const QString id = newJob(q, [&] { page->primaryAction(); });
         QVERIFY(!id.isEmpty());
         QVERIFY(waitTerminal(q, id));
         QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
         QVERIFY(page->staged().empty());
+        // The tree is read again when the job ends: it shows the edited image.
+        QTRY_VERIFY_WITH_TIMEOUT(treeHas(page->tree(), QStringLiteral("data/extra.txt")), 15000);
+        QVERIFY(!treeHas(page->tree(), QStringLiteral("data/notes.txt")));
         auto slice = ui::readHexSlice(copy, QStringLiteral("data/extra.txt"), 0);
         QVERIFY(slice.ok());
         QCOMPARE(slice.data, QByteArray("added by the test"));
         QVERIFY(!ui::readHexSlice(copy, QStringLiteral("data/notes.txt"), 0).ok());
+        page->openImage({});
+        q.clearFinished();
+    }
+
+    // The confirmation lists the first changes and counts the rest (a sheet
+    // does not scroll), with names shown literally; "Keep editing" keeps the
+    // staged list, and so does reading the same image again.
+    void editConfirmationListsTheFirstChanges()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
+            QSKIP("image editing not registered in this build");
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_exfat}});
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+        page->showForm();
+        for (int i = 0; i < 30; ++i)
+            page->stage({QStringLiteral("mkdir"), QStringLiteral("new <b>%1</b> & co").arg(i), {}, {}});
+        QCOMPARE(page->staged().size(), size_t(30));
+        page->refresh(); // F5 on the open image
+        QCOMPARE(page->staged().size(), size_t(30));
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+
+        QStringList texts;
+        QTimer::singleShot(300, this, [&] {
+            for (auto* s : m_window->findChildren<ui::Sheet*>())
+                if (s->isOpen()) {
+                    for (auto* l : s->findChildren<QLabel*>())
+                        texts << l->text();
+                    s->close(0); // Keep editing
+                    return;
+                }
+        });
+        QVERIFY(newJob(q, [&] { page->primaryAction(); }).isEmpty());
+        const QString text = texts.join(u'\n');
+        QVERIFY2(text.contains(QStringLiteral("Apply 30 changes to game.exfat?")), qPrintable(text));
+        QVERIFY2(text.contains(QStringLiteral("… and 18 more")), qPrintable(text));
+        QCOMPARE(text.count(QStringLiteral("New folder /new")), 12);
+        QVERIFY(text.contains(QStringLiteral("&lt;b&gt;0&lt;/b&gt; &amp; co"))); // escaped exactly once
+        QVERIFY(!text.contains(QStringLiteral("&lt;br")));
+        QCOMPARE(page->staged().size(), size_t(30));
+        // "Keep editing" is the user's own answer, not an error to report.
+        for (auto* bar : page->findChildren<ui::InfoBar*>())
+            QVERIFY(!bar->isVisible());
+
+        // Another image is asked for: the staged changes are not dropped without a question.
+        answerSheetSoon(this, m_window.get(), 0); // Keep editing
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}, {QStringLiteral("action"), QStringLiteral("verify")}});
+        QCOMPARE(page->imagePath(), m_exfat);
+        QCOMPARE(page->staged().size(), size_t(30));
+        QCOMPARE(page->action(), pages::ImageToolsPage::Action::Edit);
+        answerSheetSoon(this, m_window.get(), 1); // Discard
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpkg}, {QStringLiteral("action"), QStringLiteral("verify")}});
+        QCOMPARE(page->imagePath(), m_ffpkg);
+        QVERIFY(page->staged().empty());
+        page->openImage({});
+    }
+
+    // New folder: the name field has the focus, a name the image cannot hold
+    // keeps the sheet open with the reason, a good one is staged.
+    void newFolderSheetChecksTheName()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.edit")))
+            QSKIP("image editing not registered in this build");
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        m_window->navigate(QStringLiteral("edit"), {{QStringLiteral("image"), m_exfat}});
+        QTRY_VERIFY_WITH_TIMEOUT(page->tree()->topLevelItemCount() >= 2, 15000);
+        QAbstractButton* mkdir = nullptr;
+        for (auto* b : page->findChildren<ui::IconButton*>())
+            if (b->accessibleName() == QLatin1String("New folder"))
+                mkdir = b;
+        QVERIFY(mkdir && mkdir->isEnabled());
+        bool sheetSeen = false, focusOk = false, keptOpen = false, reasonShown = false;
+        QTimer::singleShot(300, this, [&] {
+            for (auto* s : m_window->findChildren<ui::Sheet*>()) {
+                if (!s->isOpen())
+                    continue;
+                sheetSeen = true;
+                auto* name = s->findChild<QLineEdit*>();
+                QPushButton* stage = nullptr;
+                for (auto* b : s->findChildren<QPushButton*>())
+                    if (b->text() == QLatin1String("Stage"))
+                        stage = b;
+                if (!name || !stage) {
+                    s->close(0);
+                    return;
+                }
+                focusOk = !m_window->isActiveWindow() || name->hasFocus();
+                name->setText(QStringLiteral("a/b"));
+                stage->click();
+                keptOpen = s->isOpen();
+                for (auto* row : s->findChildren<ui::MessageRow*>())
+                    reasonShown = reasonShown || !row->text().isEmpty();
+                name->setText(QStringLiteral("con:fig"));
+                stage->click();
+                keptOpen = keptOpen && s->isOpen();
+                name->setText(QStringLiteral("  New Stuff "));
+                stage->click();
+                return;
+            }
+        });
+        mkdir->click();
+        QVERIFY(sheetSeen);
+        QVERIFY(focusOk);
+        QVERIFY(keptOpen);
+        QVERIFY(reasonShown);
+        QCOMPARE(page->staged().size(), size_t(1));
+        QCOMPARE(page->staged().front().op, QStringLiteral("mkdir"));
+        QCOMPARE(page->staged().front().imagePath, QStringLiteral("New Stuff"));
+        page->clearStaged();
+        page->openImage({});
+    }
+
+    // Job settings of rows that the current action hides are neither counted nor sent.
+    void hiddenJobSettingsAreNotSent()
+    {
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_exfat}, {QStringLiteral("action"), QStringLiteral("convert")}});
+        QTRY_VERIFY_WITH_TIMEOUT(!page->isReading(), 15000);
+        auto* panel = page->findChild<ui::JobOptionsPanel*>();
+        QVERIFY(panel);
+        // A switch of the Build section: shown for Convert, hidden for Extract.
+        QString key;
+        for (const QString& k : panel->keys()) {
+            const SettingDef* d = m_ctx->schema().find(k);
+            if (d && d->section == QLatin1String("Build") && m_ctx->settings().value(k).typeId() == QMetaType::Bool
+                && panel->row(k) && !panel->row(k)->isHidden() && d->enabledWhenKey.isEmpty()) {
+                key = k;
+                break;
+            }
+        }
+        if (key.isEmpty())
+            QSKIP("no per-job switch in the Build section");
+        panel->setOverride(key, !m_ctx->settings().value(key).toBool());
+        QVERIFY(panel->overrides().contains(key));
+        page->setAction(pages::ImageToolsPage::Action::Extract);
+        QVERIFY(panel->row(key)->isHidden());
+        page->setExtractDestination(m_root.filePath(QStringLiteral("extract-hidden-rows")));
+        q.holdQueue(true);
+        const QString id = newJob(q, [&] { page->queueButton()->click(); });
+        QVERIFY(!id.isEmpty());
+        QVERIFY(!q.record(id)->overrides.contains(key));
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+        panel->clearOverrides();
+        // An image in a drive root gets its defaults without a doubled separator.
+        page->openImage(QStringLiteral("Q:/game.exfat"));
+        QVERIFY2(page->convertOutput().startsWith(QStringLiteral("Q:/game")), qPrintable(page->convertOutput()));
+        page->openImage({});
+    }
+
+    // Small texts of the two sheets: singular forms, and no "bytes 0–0" before anything was read.
+    void sheetTextsCountCorrectly()
+    {
+        const auto side = [](const QString& path) {
+            return QJsonObject{{QStringLiteral("path"), path}, {QStringLiteral("kind"), QStringLiteral("folder")},
+                               {QStringLiteral("files"), 1}, {QStringLiteral("dirs"), 1}, {QStringLiteral("bytes"), 10}};
+        };
+        const QJsonObject d{{QStringLiteral("a"), side(QStringLiteral("D:/a"))}, {QStringLiteral("b"), side(QStringLiteral("D:/b"))},
+                            {QStringLiteral("depth"), QStringLiteral("full")}, {QStringLiteral("identical"), true},
+                            {QStringLiteral("counts"), QJsonObject{{QStringLiteral("differences"), 0}}}};
+        const QStringList notes{QStringLiteral("n1"), QStringLiteral("n2"), QStringLiteral("n3"), QStringLiteral("<b>n4</b>")};
+        auto* compare = new pages::CompareResultSheet(m_window.get(), d, QStringLiteral("Identical."), notes);
+        QStringList texts;
+        for (auto* l : compare->findChildren<QLabel*>())
+            texts << l->text();
+        QString all = texts.join(u'\n');
+        QVERIFY2(all.contains(QStringLiteral("1 file · 1 folder ·")), qPrintable(all));
+        QVERIFY(all.contains(QStringLiteral("1 more note in Copy report.")));
+        QVERIFY(!all.contains(QStringLiteral("1 files")));
+        delete compare;
+
+        auto* hex = new pages::HexPreviewSheet(m_window.get(), m_exfat, QStringLiteral("data/notes.txt"), 14);
+        texts.clear();
+        for (auto* l : hex->findChildren<QLabel*>())
+            texts << l->text();
+        all = texts.join(u'\n');
+        QVERIFY2(!all.contains(QStringLiteral("0–0")), qPrintable(all));
+        QVERIFY(all.contains(QStringLiteral("14 bytes")));
+        delete hex;
+        // A file name that reads as markup stays out of the sheet's title.
+        hex = new pages::HexPreviewSheet(m_window.get(), m_exfat, QStringLiteral("data/<b>x</b>.bin"), 14);
+        for (auto* l : hex->findChildren<QLabel*>())
+            QVERIFY2(!l->text().startsWith(QStringLiteral("Preview · <b>")), qPrintable(l->text()));
+        delete hex;
+    }
+
+    // The comparison row follows comparisons of the open image only.
+    void compareRowIgnoresOtherImages()
+    {
+        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.compare")))
+            QSKIP("image.compare not registered in this build");
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        page->showForm();
+        page->openImage(m_exfat);
+        QVERIFY(page->compareJobId().isEmpty());
+        auto other = jobs::submitCompare(*m_ctx, m_ffpkg, m_src, QStringLiteral("structure"));
+        QVERIFY(other.ok());
+        QVERIFY(waitTerminal(q, other.value()));
+        QTest::qWait(100);
+        QVERIFY(page->compareJobId().isEmpty());
+        QCOMPARE(page->compareStatus(), QStringLiteral("Not compared"));
+        auto own = jobs::submitCompare(*m_ctx, m_exfat, m_src, QStringLiteral("structure"));
+        QVERIFY(own.ok());
+        QVERIFY(waitTerminal(q, own.value()));
+        QTRY_COMPARE(page->compareJobId(), own.value());
         page->openImage({});
         q.clearFinished();
     }

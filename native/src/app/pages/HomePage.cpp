@@ -45,8 +45,9 @@ QString kindIcon(const QString& kind)
         return QStringLiteral("extract");
     if (kind.startsWith(QLatin1String("ps5.")))
         return QStringLiteral("ps5");
-    if (kind.endsWith(QLatin1String(".build")) || kind == QLatin1String("ampr.pack"))
-        return QStringLiteral("build"); // ampr.pack: the Build page's packed folder
+    // image.build.zstd is an image build with zstd packs; ampr.pack the Build page's packed folder.
+    if (kind.contains(QLatin1String(".build")) || kind == QLatin1String("ampr.pack"))
+        return QStringLiteral("build");
     return QStringLiteral("layers");
 }
 
@@ -99,9 +100,11 @@ public:
         h->addWidget(tile);
         auto* col = new QVBoxLayout;
         col->setSpacing(1);
+        // The job's title and error quote names from dumps and images: shown literally.
         auto* title = new ElideLabel(e.title, Qt::ElideRight, this);
         title->setFont(font::bodyStrong());
         setTextColor(title, color::fg_0);
+        plainLabel(title);
         col->addWidget(title);
         QStringList meta{kindName, relativeTime(e.finished)};
         if (!e.error.isEmpty())
@@ -109,6 +112,7 @@ public:
         auto* metaLabel = new ElideLabel(meta.join(QStringLiteral(" · ")), Qt::ElideRight, this);
         metaLabel->setFont(font::caption());
         setTextColor(metaLabel, color::fg_3);
+        plainLabel(metaLabel);
         col->addWidget(metaLabel);
         h->addLayout(col, 1);
         QString result = e.state;
@@ -119,7 +123,7 @@ public:
             badge->setIconName({});
         h->addWidget(badge, 0, Qt::AlignVCenter);
         auto* folder = new IconButton(QStringLiteral("folder_open"), QStringLiteral("Show output in folder"), IconButton::Size::Small, this);
-        folder->setToolTip(m_output.isEmpty() ? QStringLiteral("No output") : nativePath(m_output));
+        folder->setToolTip(m_output.isEmpty() ? QStringLiteral("No output") : plainTip(nativePath(m_output)));
         folder->setEnabled(!m_output.isEmpty());
         QObject::connect(folder, &QToolButton::clicked, this, [this] { openInFileManager(m_output); });
         h->addWidget(folder, 0, Qt::AlignVCenter);
@@ -212,10 +216,11 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     });
     content()->addWidget(stats);
 
-    // ---- Pick up where you left off: the most recent failed / interrupted job.
+    // ---- Pick up where you left off: the most recent failed / interrupted / cancelled job.
     m_continue = new InfoBar(Tone::Warn, this);
     m_continue->setObjectName(QStringLiteral("home-continue"));
     m_continue->setDismissable(true);
+    plainLabels(m_continue); // the job's title and error
     auto* retry = m_continue->addLink(QStringLiteral("Retry"));
     auto* openJob = m_continue->addLink(QStringLiteral("Open in queue"));
     m_continue->hide();
@@ -224,10 +229,16 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
         if (m_continueId.isEmpty())
             return;
         auto r = m_ctx.queue().retry(m_continueId);
-        if (r.ok()) {
-            m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
-            emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), r.value()}}});
+        if (!r.ok()) {
+            emit toastRequested(Tone::Err, QStringLiteral("Could not retry"), r.error().message);
+            return;
         }
+        // The failed job has been dealt with: the retry is a new job, and the
+        // bar would otherwise keep offering the old one, even after it succeeds.
+        m_continueDismissed = m_continueId;
+        m_continue->hide();
+        m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
+        emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), r.value()}}});
     });
     connect(openJob, &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("queue"), {{QStringLiteral("jobId"), m_continueId}}});
@@ -414,6 +425,7 @@ void HomePage::refreshChecklist()
         detail->setFont(font::caption());
         setTextColor(detail, next ? color::fg_2 : color::fg_4);
         detail->setToolTip(item.detail);
+        plainLabel(detail); // may name the console or a folder
         tv->addWidget(detail);
         h->addWidget(text, 1);
         if (!item.fixText.isEmpty()) {
@@ -474,7 +486,7 @@ void HomePage::refreshQueueTile()
         qc << QStringLiteral("%1 failed").arg(failed);
     if (m_ctx.queue().isHeld())
         qc << QStringLiteral("queue paused");
-    m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : QStringLiteral("Jobs run one after another")) : qc.join(QStringLiteral(" · ")));
+    m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : QStringLiteral("Jobs run in queue order")) : qc.join(QStringLiteral(" · ")));
     m_queueBar->setVisible(running > 0);
     if (running > 0) {
         m_queueBar->setState(indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
@@ -515,9 +527,10 @@ void HomePage::refresh()
     const bool nextToSource = folder.isEmpty();
     if (nextToSource)
         folder = QDir::homePath();
-    // Off the UI thread (refresh() runs on every queue change; a network drive answers slowly).
+    // Off the UI thread (a network drive answers slowly), and only while the
+    // page is on screen: refresh() runs on every queue change, onShown() asks again.
     const quint64 gen = ++m_spaceGen;
-    probeFreeSpace(this, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
+    probeFreeSpace(isVisible() ? this : nullptr, folder, [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
         if (gen != m_spaceGen)
             return;
         if (ready) {
@@ -543,7 +556,7 @@ void HomePage::refresh()
             m_continue->setTitle(QStringLiteral("%1 · %2").arg(rec->title, m_ctx.jobFactory().displayName(rec->kind)));
             // One calm line here; the queue shows the whole message.
             m_continue->setMessage(elideMiddle(why, 110));
-            m_continue->setToolTip(why.size() > 110 ? why : QString());
+            m_continue->setToolTip(why.size() > 110 ? plainTip(why) : QString());
             break;
         }
     }

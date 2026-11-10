@@ -6,7 +6,8 @@
 // (format, size, title read from inside the image) and offers four actions,
 // each with only its own options:
 //
-//   Extract  — copy the files out (image.<fmt>.extract / fpkg.extract)
+//   Extract  — copy the files out (image.<fmt>.extract / fpkg.extract;
+//              game.extract for a packed game or an image inside a PFS image)
 //   Verify   — check the image against its own checksums (image.<fmt>.verify /
 //              fpkg.verify), or compare it with a folder or another image
 //              (image.compare; result in CompareResultSheet)
@@ -30,10 +31,13 @@
 
 #include <functional>
 
+class QLineEdit;
+
 namespace fw::ui {
 class ChoiceTiles;
 class Disclosure;
 class DropZone;
+class Sheet;
 class Switch;
 } // namespace fw::ui
 
@@ -61,6 +65,7 @@ public:
     void openImage(const QString& path); // "" closes it
     QString imagePath() const { return m_path; }
     const ui::ImageSummary& imageSummary() const { return m_summary; }
+    bool isReading() const { return m_info->isBusy(); } // the summary from inside the image is on its way
     void setAction(Action action);
     Action action() const { return m_action; }
     bool isActionEnabled(Action action) const;
@@ -120,6 +125,10 @@ private:
     void buildVerifyPanel();
     void buildConvertPanel();
     void buildEditPanel();
+    void loadImage(const QString& path); // openImage() without touching the form's error bar
+    void requestImage(const QString& path); // openImage() for a user action: asks before staged changes are dropped
+    QVariantMap jobOverrides() const;
+    void onEditJobFinished(const QString& id);
     void onSummary(const ui::ImageSummary& s);
     void showStrip();
     void updateActions();   // tiles enabled, panels shown, primary text, kinds
@@ -129,6 +138,7 @@ private:
     void updateConvert();
     void rebuildConvertChoices();
     void ensureTree();
+    bool usesGameExtract() const;
     // Compare
     void updateCompareKind();
     bool checkCompareInputs(QString* problem);
@@ -145,6 +155,7 @@ private:
     void deleteSelected();
     void newFolder();
     void renameSelected();
+    QString askName(ui::Sheet* sheet, QLineEdit* name);
     void showTreeMenu(const QPoint& pos);
     void setDemoImage(const QString& path, qint64 bytes);
 
@@ -176,6 +187,7 @@ private:
 
     // extract
     ui::PathField* m_destination = nullptr;
+    QLabel* m_extractNote = nullptr; // what happens to a folder that has files in it
 
     // verify / compare
     ui::Segmented* m_verifyMode = nullptr;
@@ -227,6 +239,7 @@ private:
     QVBoxLayout* m_stagedLayout = nullptr;
     QLabel* m_stagedCaption = nullptr;
     QPushButton* m_clear = nullptr;
+    QList<ui::IconButton*> m_stagedRemove; // the rows' remove buttons, in order
 };
 
 } // namespace fw::pages

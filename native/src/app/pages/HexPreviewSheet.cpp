@@ -1,11 +1,13 @@
 #include "app/pages/HexPreviewSheet.h"
 
+#include "app/pages/Page.h"
 #include "core/FileUtil.h"
 
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QScrollBar>
 #include <QStyle>
+#include <QTextDocument>
 
 #include <algorithm>
 
@@ -14,8 +16,20 @@ namespace fw::pages {
 using namespace ui;
 using namespace theme;
 
+namespace {
+
+// The file's name is stored in the image; one that reads as markup stays out
+// of the title (the line under it shows the whole path literally).
+QString previewTitle(const QString& path)
+{
+    const QString title = QStringLiteral("Preview · %1").arg(path.section(u'/', -1));
+    return Qt::mightBeRichText(title) ? QStringLiteral("Preview") : title;
+}
+
+} // namespace
+
 HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QString& path, qint64 knownSize)
-    : Sheet(host, QStringLiteral("Preview · %1").arg(path.section(u'/', -1)), Icon::None, size::dialogWide),
+    : Sheet(host, previewTitle(path), Icon::None, size::dialogWide),
       m_image(image), m_path(path), m_size(knownSize)
 {
     m_reader = new HexSliceReader(this);
@@ -25,11 +39,13 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     where->setFont(font::mono());
     setTextColor(where, color::fg_1);
     where->setToolTip(QStringLiteral("/%1\n%2").arg(path, nativePath(image)));
+    plainLabel(where);
     body()->addWidget(where);
     m_meta = caption({}, this);
     body()->addWidget(m_meta);
 
     m_errorBar = new InfoBar(Tone::Err, this);
+    plainLabels(m_errorBar); // the reader's message quotes the path
     m_errorBar->hide();
     body()->addWidget(m_errorBar);
 
@@ -71,6 +87,7 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
 void HexPreviewSheet::start()
 {
     m_loaded = 0;
+    m_ended = false;
     m_error.clear();
     m_view->clear();
     m_reader->read(m_image, m_path, 0, kHexPreviewChunk);
@@ -79,7 +96,7 @@ void HexPreviewSheet::start()
 
 void HexPreviewSheet::loadMore()
 {
-    if (m_reader->isBusy() || !m_error.isEmpty() || (m_size >= 0 && m_loaded >= m_size))
+    if (m_reader->isBusy() || !m_error.isEmpty() || m_ended || (m_size >= 0 && m_loaded >= m_size))
         return;
     m_reader->read(m_image, m_path, m_loaded, kHexPreviewChunk);
     updateStatus();
@@ -107,6 +124,8 @@ void HexPreviewSheet::showSlice(const HexSlice& s)
         else
             m_view->appendPlainText(lines);
         bar->setValue(m_loaded == 0 ? 0 : keep);
+    } else if (m_size > 0 && m_loaded < m_size) {
+        m_ended = true; // nothing came although the file goes on: asking again would do nothing
     }
     m_loaded = s.end();
     updateStatus();
@@ -127,12 +146,16 @@ void HexPreviewSheet::updateStatus()
         status = QStringLiteral("Reading…");
     else if (m_size == 0)
         status = QStringLiteral("The file is empty.");
+    else if (m_ended)
+        status = QStringLiteral("Nothing more can be read.");
+    else if (m_loaded == 0)
+        status = QString(); // nothing read yet: no "bytes 0–0"
     else if (m_size > 0)
         status = QStringLiteral("Showing bytes 0–%1 of %2%3")
                      .arg(formatCount(std::max<qint64>(0, m_loaded - 1)), formatCount(m_size),
                           busy ? QStringLiteral(" · reading…") : m_loaded >= m_size ? QStringLiteral(" · end of file") : QString());
     m_status->setText(status);
-    m_more->setEnabled(!busy && m_error.isEmpty() && m_size > 0 && m_loaded < m_size);
+    m_more->setEnabled(!busy && m_error.isEmpty() && !m_ended && m_size > 0 && m_loaded < m_size);
 }
 
 } // namespace fw::pages

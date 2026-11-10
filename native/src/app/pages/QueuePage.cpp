@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QMenu>
 #include <QPainter>
@@ -71,13 +72,57 @@ private:
     QString m_count;
 };
 
+// The label of a job parameter in the details ("contentId" → "Content ID");
+// unknown names are shown as words ("remoteDir" → "Remote dir").
+QString parameterLabel(const QString& key)
+{
+    static const QHash<QString, QString> known = {
+        {QStringLiteral("source"), QStringLiteral("Source")},
+        {QStringLiteral("output"), QStringLiteral("Output")},
+        {QStringLiteral("outputDir"), QStringLiteral("Output folder")},
+        {QStringLiteral("destination"), QStringLiteral("Destination")},
+        {QStringLiteral("image"), QStringLiteral("Image")},
+        {QStringLiteral("package"), QStringLiteral("Package")},
+        {QStringLiteral("basePackage"), QStringLiteral("Base package")},
+        {QStringLiteral("game"), QStringLiteral("Game folder")},
+        {QStringLiteral("fileName"), QStringLiteral("File name")},
+        {QStringLiteral("format"), QStringLiteral("Format")},
+        {QStringLiteral("title"), QStringLiteral("Title")},
+        {QStringLiteral("titleId"), QStringLiteral("Title ID")},
+        {QStringLiteral("contentId"), QStringLiteral("Content ID")},
+        {QStringLiteral("contentVersion"), QStringLiteral("Version")},
+        {QStringLiteral("version"), QStringLiteral("Version")},
+        {QStringLiteral("packageType"), QStringLiteral("Package type")},
+        {QStringLiteral("backport4xx"), QStringLiteral("Backport 4.xx")},
+        {QStringLiteral("backport5xx"), QStringLiteral("Backport 5.xx+")},
+        {QStringLiteral("entitlementKey"), QStringLiteral("Entitlement key")},
+        {QStringLiteral("volumeType"), QStringLiteral("Volume type")},
+        {QStringLiteral("remoteDir"), QStringLiteral("Folder on the console")},
+        {QStringLiteral("host"), QStringLiteral("Console")},
+        {QStringLiteral("a"), QStringLiteral("A")},
+        {QStringLiteral("b"), QStringLiteral("B")},
+        {QStringLiteral("depth"), QStringLiteral("Depth")},
+        {QStringLiteral("method"), QStringLiteral("Method")},
+    };
+    if (const auto it = known.constFind(key); it != known.constEnd())
+        return it.value();
+    QString out;
+    for (const QChar c : key) {
+        if (c.isUpper() && !out.isEmpty() && !out.back().isSpace())
+            out += u' ';
+        out += out.isEmpty() ? c.toUpper() : c.toLower();
+    }
+    return out;
+}
+
 QWidget* detailRow(const QString& name, const QString& value, bool mono, bool overridden, QWidget* parent)
 {
     auto* row = new QWidget(parent);
     auto* h = hbox(row, space::md, QMargins(0, 5, 0, 5));
     auto* left = new QWidget(row);
     auto* lh = hbox(left, space::sm);
-    lh->addWidget(label(name, TextStyle::Body, color::fg_2, left));
+    // Names and values come from the stored job (paths, IDs): shown literally.
+    lh->addWidget(plainLabel(label(name, TextStyle::Body, color::fg_2, left)));
     if (overridden) {
         auto* b = new Badge(QStringLiteral("Overridden"), Tone::Neutral, left);
         b->setIconName(QStringLiteral("advanced"));
@@ -91,6 +136,7 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     v->setMaximumWidth(240);
     v->setToolTip(value);
+    plainLabel(v);
     h->addWidget(v, 0, Qt::AlignRight);
     return row;
 }
@@ -98,7 +144,7 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
 } // namespace
 
 QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logModel, QWidget* parent)
-    : Page(ctx, QStringLiteral("queue"), QStringLiteral("Queue"), QStringLiteral("Jobs run one at a time, in this order."), parent),
+    : Page(ctx, QStringLiteral("queue"), QStringLiteral("Queue"), QStringLiteral("Jobs run in this order."), parent),
       m_model(queueModel), m_logModel(logModel)
 {
     m_clearFinished = button(QStringLiteral("Clear finished"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
@@ -135,7 +181,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     m_emptyCard = new Card(this);
     m_emptyCard->setObjectName(QStringLiteral("queue-empty"));
     auto* hero = new EmptyState(QStringLiteral("queue"), QStringLiteral("Nothing in the queue"),
-                                QStringLiteral("Jobs you start wait here and run one at a time while you keep working."), m_emptyCard);
+                                QStringLiteral("Jobs you start wait here and run in order while you keep working."), m_emptyCard);
     auto* b1 = hero->addAction(QStringLiteral("Build an image"), ButtonVariant::Primary);
     auto* b2 = hero->addAction(QStringLiteral("Backport a game"));
     connect(b1, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
@@ -224,8 +270,9 @@ void QueuePage::updateEta()
             continue;
         if (rec->isActive()) {
             ++running;
+            // Jobs that run at the same time end together: the longest one, not the sum.
             if (rec->progress.etaMs >= 0)
-                eta = std::max<qint64>(eta, 0) + rec->progress.etaMs;
+                eta = std::max<qint64>(eta, rec->progress.etaMs);
         } else if (rec->state == JobState::Queued) {
             ++queued;
         }
@@ -233,7 +280,7 @@ void QueuePage::updateEta()
     if (m_ctx.queue().isHeld())
         m_eta->setText(QStringLiteral("Queue paused · running jobs continue"));
     else if (eta >= 0)
-        m_eta->setText(QStringLiteral("Running job: %1").arg(formatTimeLeft(eta).toLower()));
+        m_eta->setText((running > 1 ? QStringLiteral("Running jobs: %1") : QStringLiteral("Running job: %1")).arg(formatTimeLeft(eta).toLower()));
     else if (queued > 0 && running == 0)
         m_eta->setText(QStringLiteral("Waiting to start"));
     else
@@ -278,7 +325,9 @@ void QueuePage::ensureSelection()
 
 void QueuePage::updateCounts()
 {
-    int all = 0, running = 0, queued = 0, done = 0, failed = 0;
+    // The "Failed" tab lists the jobs that did not finish: failed, interrupted
+    // and cancelled ones (applyFilter), and its number counts what it lists.
+    int all = 0, running = 0, queued = 0, done = 0, failed = 0, cancelled = 0;
     for (int r = 0; r < m_model.rowCount(); ++r) {
         const JobRecord* rec = m_model.recordAt(r);
         if (!rec || !visibleJob(*rec))
@@ -290,6 +339,7 @@ void QueuePage::updateCounts()
         case JobState::Cancelling: ++running; break;
         case JobState::Queued: ++queued; break;
         case JobState::Succeeded: ++done; break;
+        case JobState::Cancelled: ++cancelled; break;
         default: ++failed; break;
         }
     }
@@ -298,14 +348,14 @@ void QueuePage::updateCounts()
     m_filter->setSegmentText(1, seg(QStringLiteral("Running"), running));
     m_filter->setSegmentText(2, seg(QStringLiteral("Queued"), queued));
     m_filter->setSegmentText(3, seg(QStringLiteral("Done"), done));
-    m_filter->setSegmentText(4, seg(QStringLiteral("Failed"), failed));
+    m_filter->setSegmentText(4, seg(QStringLiteral("Failed"), failed + cancelled));
     const bool held = m_ctx.queue().isHeld();
     m_pauseQueue->setText(held ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
     setButtonIcon(m_pauseQueue, held ? QStringLiteral("play") : QStringLiteral("pause"));
     setButtonVariant(m_pauseQueue, held ? ButtonVariant::Primary : ButtonVariant::Secondary);
     m_pauseQueue->setToolTip(held ? QStringLiteral("Start the next waiting job when the current one ends.")
                                   : QStringLiteral("Finish the running job, then wait. Nothing is cancelled."));
-    m_clearFinished->setEnabled(done + failed > 0);
+    m_clearFinished->setEnabled(done + failed + cancelled > 0);
     m_clearFinished->setVisible(all > 0);
     updateEta();
     m_columns->setVisible(all > 0 || m_demo);
@@ -339,15 +389,17 @@ void QueuePage::updateDetail()
     }
     int overrides = 0;
     for (auto it = r.parameters.constBegin(); it != r.parameters.constEnd(); ++it) {
-        if (!it.value().isString())
+        // The queue file is the user's to damage: a parameter without a name is skipped.
+        if (!it.value().isString() || it.key().isEmpty())
             continue;
         const QString v = it.value().toString();
-        if (v.isEmpty() || v.size() > 260)
+        if (v.isEmpty())
             continue;
-        QString name = it.key();
-        name[0] = name[0].toUpper();
+        const QString key = it.key();
         const bool pathLike = v.contains(u'/') || v.contains(u'\\');
-        m_dSettingsLayout->addWidget(detailRow(name, pathLike ? nativePath(v) : v, pathLike || name.contains(QLatin1String("Id")) || name == QLatin1String("Version"), false, m_dSettings));
+        const bool mono = pathLike || key.endsWith(QLatin1String("Id")) || key.contains(QLatin1String("version"), Qt::CaseInsensitive);
+        // A long value (a deep path) is elided by the row, with the whole text in its tooltip.
+        m_dSettingsLayout->addWidget(detailRow(parameterLabel(key), pathLike ? nativePath(v) : v, mono, false, m_dSettings));
     }
     for (auto it = r.overrides.cbegin(); it != r.overrides.cend(); ++it) {
         const SettingDef* def = m_ctx.schema().find(it.key());
@@ -387,7 +439,7 @@ void QueuePage::cancelWithConfirm(const QString& id)
 QString QueuePage::statusContext() const
 {
     // The jobs this page lists (update checks and other system jobs stay out).
-    int running = 0, queued = 0, done = 0, failed = 0;
+    int running = 0, queued = 0, done = 0, failed = 0, cancelled = 0;
     for (int r = 0; r < m_model.rowCount(); ++r) {
         const JobRecord* rec = m_model.recordAt(r);
         if (!rec || !visibleJob(*rec))
@@ -398,10 +450,14 @@ QString QueuePage::statusContext() const
         case JobState::Cancelling: ++running; break;
         case JobState::Queued: ++queued; break;
         case JobState::Succeeded: ++done; break;
+        case JobState::Cancelled: ++cancelled; break;
         default: ++failed; break;
         }
     }
-    return QStringLiteral("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running).arg(queued).arg(done).arg(failed);
+    QString text = QStringLiteral("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running).arg(queued).arg(done).arg(failed);
+    if (cancelled > 0)
+        text += QStringLiteral(" · %1 cancelled").arg(cancelled);
+    return text;
 }
 
 void QueuePage::applyDemoState(const QString& name)

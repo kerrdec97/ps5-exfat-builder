@@ -5,12 +5,17 @@
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
+#include <QHelpEvent>
 #include <QPointer>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QStorageInfo>
+#include <QTextDocument>
+#include <QToolTip>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -84,6 +89,7 @@ JobFormPage::JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QStri
     m_formWidget = new QWidget(left);
     m_form = vbox(m_formWidget, space::lg);
     m_error = new InfoBar(Tone::Err, m_formWidget);
+    plainLabels(m_error); // messages quote file names and what the engines report
     m_error->setDismissable(true);
     m_error->hide();
     m_form->addWidget(m_error);
@@ -173,6 +179,20 @@ void JobFormPage::setRequiredKinds(const QStringList& kinds)
     refreshAvailability();
 }
 
+void JobFormPage::setFeatureName(const QString& name)
+{
+    if (name == m_feature)
+        return;
+    m_feature = name;
+    // The state card carries the name: it is made again when it is next needed.
+    if (m_unavailableCard) {
+        m_unavailableCard->hide();
+        m_unavailableCard->deleteLater();
+        m_unavailableCard = nullptr;
+        m_unavailable = nullptr;
+    }
+}
+
 void JobFormPage::refreshAvailability()
 {
     const QStringList missing = jobs::missingKinds(m_ctx, m_kinds);
@@ -193,6 +213,7 @@ void JobFormPage::refreshAvailability()
     m_primary->setEnabled(m_available);
     m_queue->setEnabled(m_available);
     m_primary->setToolTip(m_available ? QString() : QStringLiteral("Not available in this build"));
+    m_queue->setToolTip(m_primary->toolTip());
 }
 
 void JobFormPage::showFormError(const QString& title, const QString& message)
@@ -220,10 +241,16 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
     m_options->build();
     card->body()->addWidget(m_options);
     auto updateSummary = [card, this] {
-        const int n = int(m_options->overrides().size());
+        // Rows the page hides (they do not apply to the current action) are not counted.
+        int n = 0;
+        const QVariantMap changed = m_options->overrides();
+        for (auto it = changed.cbegin(); it != changed.cend(); ++it)
+            if (SettingRow* row = m_options->row(it.key()); row && !row->isHidden())
+                ++n;
         card->setSummary(n > 0 ? QStringLiteral("%1 changed for this job").arg(n) : QStringLiteral("Defaults"),
                          n > 0 ? Tone::Info : Tone::Neutral);
     };
+    m_refreshOptionsSummary = updateSummary;
     connect(m_options, &JobOptionsPanel::overridesChanged, card, updateSummary);
     updateSummary();
     if (withOpenFolderRow) {
@@ -277,6 +304,9 @@ void JobFormPage::submitClicked(bool buildNow)
     }
     auto r = submit(buildNow);
     if (!r.ok()) {
+        // The user's own "Cancel" in a confirmation is not a failure to report.
+        if (r.error().isCancelled())
+            return;
         showFormError(r.error().code == ErrorCode::Unsupported ? QStringLiteral("Not available in this build")
                                                               : QStringLiteral("The job was not added"),
                       r.error().message);
@@ -317,6 +347,58 @@ void JobFormPage::clearDemoState()
 
 // ---- helpers ------------------------------------------------------------------------
 
+namespace {
+
+// Shows a widget's tooltip literally. The widget keeps its own tooltip text
+// (ElideLabel sets the full text when it elides); only the display changes.
+class PlainTipFilter : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() != QEvent::ToolTip)
+            return false;
+        auto* w = qobject_cast<QWidget*>(watched);
+        if (!w || w->toolTip().isEmpty() || !Qt::mightBeRichText(w->toolTip()))
+            return false;
+        QToolTip::showText(static_cast<QHelpEvent*>(event)->globalPos(), plainTip(w->toolTip()), w);
+        return true;
+    }
+};
+
+} // namespace
+
+QLabel* plainLabel(QLabel* label)
+{
+    if (!label)
+        return label;
+    label->setTextFormat(Qt::PlainText);
+    static QPointer<PlainTipFilter> filter;
+    if (!filter)
+        filter = new PlainTipFilter(QCoreApplication::instance());
+    label->removeEventFilter(filter); // installed once, however often this is called
+    label->installEventFilter(filter);
+    return label;
+}
+
+void plainLabels(QWidget* widget)
+{
+    if (!widget)
+        return;
+    plainLabel(qobject_cast<QLabel*>(widget));
+    for (QLabel* l : widget->findChildren<QLabel*>())
+        plainLabel(l);
+}
+
+QString plainTip(const QString& text)
+{
+    // A tooltip has no format switch: text that would be taken for markup is
+    // handed over as markup that shows exactly that text.
+    return Qt::mightBeRichText(text) ? Qt::convertFromPlainText(text) : text;
+}
+
 QString humanTime(const QDateTime& t)
 {
     return t.isValid() ? t.toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QString();
@@ -333,7 +415,7 @@ QString relativeTime(const QDateTime& t)
         return QStringLiteral("%1 min ago").arg(s / 60);
     if (s < 86400)
         return QStringLiteral("%1 h ago").arg(s / 3600);
-    return QStringLiteral("%1 days ago").arg(s / 86400);
+    return s < 2 * 86400 ? QStringLiteral("1 day ago") : QStringLiteral("%1 days ago").arg(s / 86400);
 }
 
 QString driveLabel(const QString& path)
@@ -347,9 +429,18 @@ QString driveLabel(const QString& path)
 
 void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done)
 {
+    if (!context)
+        return; // nobody to answer
     QPointer<QObject> guard(context);
     (void)QtConcurrent::run([guard, folder, done = std::move(done)] {
-        const QString path = folder.isEmpty() ? QDir::homePath() : folder;
+        // A folder that is not created yet: the drive it will be on.
+        QString path = folder.isEmpty() ? QDir::homePath() : folder;
+        while (!QFileInfo::exists(path)) {
+            const QString parent = QFileInfo(path).absolutePath();
+            if (parent == path || parent.isEmpty())
+                break;
+            path = parent;
+        }
         const QStorageInfo si(path);
         const bool ready = si.isValid() && si.isReady();
         const qint64 available = ready ? si.bytesAvailable() : -1;
@@ -358,9 +449,8 @@ void probeFreeSpace(QObject* context, const QString& folder, std::function<void(
             label = label.left(2);
         else if (label.isEmpty())
             label = QStringLiteral("this drive");
-        if (!guard)
-            return;
-        QMetaObject::invokeMethod(guard.data(), [guard, ready, available, label, done] {
+        // The context is only touched on the UI thread, where the pointer is tested.
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, ready, available, label, done] {
             if (guard)
                 done(ready, available, label);
         }, Qt::QueuedConnection);
