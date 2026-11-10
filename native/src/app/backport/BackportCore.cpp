@@ -262,7 +262,9 @@ std::pair<QString, QString> nameFromFolder(const QString& name)
     return {t, version};
 }
 
-Game readGame(const QString& folder)
+Game readGame(const QString& folder) { return readGame(folder, readLedger()); }
+
+Game readGame(const QString& folder, const QJsonArray& ledger)
 {
     Game g;
     g.path = QDir::toNativeSeparators(folder);
@@ -350,7 +352,7 @@ Game readGame(const QString& folder)
             g.notes << QStringLiteral("fakelib holds another tool's AGC / AGCDriver / PSML: the build replaces them with this "
                                       "program's set and the originals backup keeps the dump's copies");
         }
-        g.appliedRecord = activeLedgerRecord(folder);
+        g.appliedRecord = activeLedgerRecord(folder, ledger);
     } catch (const std::exception& e) {
         g.error = QStringLiteral("Error: %1").arg(QString::fromLocal8Bit(e.what()));
     }
@@ -401,11 +403,15 @@ QString journalState(const QString& journal, bool* readable)
 }
 } // namespace
 
-QJsonObject activeLedgerRecord(const QString& gameDir)
+QJsonArray readLedger() { return ledgerRows(); }
+
+QJsonObject activeLedgerRecord(const QString& gameDir) { return activeLedgerRecord(gameDir, ledgerRows()); }
+
+QJsonObject activeLedgerRecord(const QString& gameDir, const QJsonArray& ledger)
 {
     const QString key = normKey(gameDir);
     std::vector<QJsonObject> rows;
-    for (const QJsonValue& v : ledgerRows()) {
+    for (const QJsonValue& v : ledger) {
         const QJsonObject r = v.toObject();
         if (normKey(r.value(QStringLiteral("game_dir")).toString()) != key)
             continue;
@@ -588,6 +594,8 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
         QFile pf(probe);
         if (!pf.open(QIODevice::WriteOnly) || pf.write("ok") != 2) {
             r.errors << QStringLiteral("Cannot write to the %1 folder %2: %3").arg(label, d, pf.errorString());
+            pf.close();
+            QFile::remove(probe); // it may have been created before the write failed
             continue;
         }
         pf.close();
@@ -676,6 +684,12 @@ UserLibrary checkUserLibrary(const QString& path, const QString& kind)
     QFile f(toLongPath(path));
     if (!f.open(QIODevice::ReadOnly)) {
         u.error = QStringLiteral("%1: cannot be read (%2)").arg(name, f.errorString());
+        return u;
+    }
+    // Every known AMPR / PlayGo library is well below 1 MiB; anything far
+    // larger is not one, and is not read into memory to find that out.
+    if (f.size() > 32LL * 1024 * 1024) {
+        u.error = QStringLiteral("%1 is not a signed PS5 library (.sprx)").arg(name);
         return u;
     }
     const QByteArray data = f.readAll();
@@ -802,11 +816,12 @@ void appendAppLog(const QString& level, const QString& message)
     const Folders f = folders();
     QDir().mkpath(f.logDir);
     QFile lf(QDir(f.logDir).filePath(QStringLiteral("app_%1.log").arg(QDate::currentDate().toString(QStringLiteral("yyyyMMdd")))));
-    if (!lf.open(QIODevice::Append | QIODevice::Text))
+    // The standalone program appends to the same file: one unbuffered write
+    // per line keeps the lines of the two whole.
+    if (!lf.open(QIODevice::Append | QIODevice::Text | QIODevice::Unbuffered))
         return;
-    QTextStream ts(&lf);
-    ts.setEncoding(QStringConverter::Utf8);
-    ts << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")) << " [" << level << "] " << message << "\n";
+    const QString line = QStringLiteral("%1 [%2] %3\n").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")), level, message);
+    lf.write(line.toUtf8());
 }
 
 } // namespace fw::bp

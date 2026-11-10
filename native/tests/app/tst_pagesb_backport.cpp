@@ -21,6 +21,7 @@
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/Paths.h"
 #include "support/TestSupport.h"
 
 #include <QComboBox>
@@ -205,6 +206,31 @@ private slots:
                                       {QStringLiteral("future_key"), QJsonObject{{QStringLiteral("keep"), true}}}})
                 .toJson()));
 
+        // Game 3 has a backport applied (ledger and journal say so), and the
+        // Library knows that game: it must hear about it.
+        const QString game3 = QDir(m_games).filePath(QStringLiteral("PPSA10003 Game 3"));
+        const QString journal = m_root.filePath(QStringLiteral("out/Originals/_backport_details/PPSA10003/APPLY_JOURNAL.json"));
+        QVERIFY(fwtest::writeTextFile(journal, R"({"state":"APPLIED"})"));
+        QVERIFY(fwtest::writeTextFile(
+            bp::folders().ledgerPath,
+            QJsonDocument(QJsonObject{{QStringLiteral("applied"),
+                                       QJsonArray{QJsonObject{{QStringLiteral("game_dir"), QDir::toNativeSeparators(game3)},
+                                                              {QStringLiteral("state"), QStringLiteral("APPLIED")},
+                                                              {QStringLiteral("journal"), QDir::toNativeSeparators(journal)},
+                                                              {QStringLiteral("started_at"), QStringLiteral("2026-01-01T10:00:00")},
+                                                              {QStringLiteral("applied_at"), QStringLiteral("2026-01-01 10:05")}}}}})
+                .toJson()));
+        QVERIFY(fwtest::writeTextFile(
+            QDir(Paths::dataDir()).filePath(QStringLiteral("library.json")),
+            QJsonDocument(QJsonObject{{QStringLiteral("folders"), QJsonArray{}},
+                                      {QStringLiteral("games"),
+                                       QJsonArray{QJsonObject{{QStringLiteral("info"), QJsonObject{{QStringLiteral("folder"), game3},
+                                                                                                   {QStringLiteral("title"), QStringLiteral("Game 3")},
+                                                                                                   {QStringLiteral("isGame"), true}}},
+                                                              {QStringLiteral("status"), QString()},
+                                                              {QStringLiteral("lastSeen"), QStringLiteral("2026-01-01T09:00:00")}}}}})
+                .toJson()));
+
         qunsetenv("FW_OFFLINE"); // the page behaves as for a user: it scans, prepares the engine and saves its settings
         theme::apply(qApp);
         m_ctx = std::make_unique<AppContext>();
@@ -267,6 +293,20 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(page()->statusContext().contains(QStringLiteral("Ready")), 30000);
         QVERIFY(!page()->isBusy());
         QCOMPARE(starts(), 0); // the self-test is not a run
+
+        // The applied backport is seen, and the Library is told.
+        const pages::BackportRow* applied = nullptr;
+        for (const auto& r : model()->rows())
+            if (r.game.titleId == QLatin1String("PPSA10003"))
+                applied = &r;
+        QVERIFY(applied);
+        QCOMPARE(applied->status, QStringLiteral("Backport applied"));
+        QVERIFY(!applied->checked);
+        const QString library = QDir(Paths::dataDir()).filePath(QStringLiteral("library.json"));
+        QTRY_COMPARE_WITH_TIMEOUT(readJson(library).value(QStringLiteral("games")).toArray().first().toObject().value(QStringLiteral("status")).toString(),
+                                  QStringLiteral("Backported"), 10000);
+        QCOMPARE(readJson(library).value(QStringLiteral("games")).toArray().first().toObject().value(QStringLiteral("lastSeen")).toString(),
+                 QStringLiteral("2026-01-01T09:00:00")); // not "recently added" because of it
     }
 
     void settingsFileIsMergedNotReplaced()
@@ -381,6 +421,9 @@ private slots:
         QCOMPARE(job.value(QStringLiteral("output_root")).toString(), QDir::toNativeSeparators(m_out)); // native separators
         cancelRun();
         QCOMPARE(starts(), before + 1);
+        // A cancelled batch is reported as cancelled, not as "finished" with a logs question.
+        QTest::qWait(300);
+        QVERIFY2(!m_sheetsSeen.join(u'\n').contains(QStringLiteral("switch finished")), qPrintable(m_sheetsSeen.join(u'\n')));
     }
 
     // A second start while the first is still checking its destinations must

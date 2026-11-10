@@ -158,11 +158,11 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         m_search->selectAll();
     });
     // Every keystroke rebuilds the matching rows: wait for a short pause first.
-    auto* searchDelay = new QTimer(this);
-    searchDelay->setSingleShot(true);
-    searchDelay->setInterval(150);
-    connect(m_search, &QLineEdit::textChanged, searchDelay, qOverload<>(&QTimer::start));
-    connect(searchDelay, &QTimer::timeout, this, [this] { setSearchText(m_search->text()); });
+    m_searchDelay = new QTimer(this);
+    m_searchDelay->setSingleShot(true);
+    m_searchDelay->setInterval(150);
+    connect(m_search, &QLineEdit::textChanged, m_searchDelay, qOverload<>(&QTimer::start));
+    connect(m_searchDelay, &QTimer::timeout, this, [this] { setSearchText(m_search->text()); });
 
     auto* columns = new QWidget(this);
     m_columns = columns;
@@ -253,7 +253,7 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
             return;
         m_ctx.settings().resetSection(m_section);
         (void)m_ctx.settings().save();
-        rebuild();
+        rebuild(); // also forgets the refused values of the rows it replaces
         emit toastRequested(Tone::Ok, QStringLiteral("%1 reset").arg(m_section), QStringLiteral("Defaults are back for this section."));
     });
 
@@ -303,6 +303,7 @@ void SettingsPage::showSection(const QString& section)
         b->setChecked(true);
     if (!m_search->text().trimmed().isEmpty())
         m_search->clear();
+    m_searchDelay->stop(); // the rebuild below is the one; no second one 150 ms later
     rebuild();
 }
 
@@ -319,6 +320,7 @@ void SettingsPage::setSearchText(const QString& text)
 {
     if (m_search->text() != text)
         m_search->setText(text);
+    m_searchDelay->stop();
     rebuild();
 }
 
@@ -388,6 +390,15 @@ void SettingsPage::rebuild()
         delete it;
     }
     m_rows.clear();
+    // A refused value is only on screen in the editor that was just replaced:
+    // the new rows show the stored values, so its error has nothing to point at.
+    if (!m_errors.isEmpty()) {
+        m_errors.clear();
+        QTimer::singleShot(0, this, [this] {
+            emit attentionChanged();
+            emit statusContextChanged();
+        });
+    }
     m_advancedKeys.clear();
     m_advancedFold = nullptr;
     m_fixBar = nullptr;
@@ -616,7 +627,7 @@ void SettingsPage::updateTempUsage()
     QPointer<SettingsPage> self(this);
     (void)QtConcurrent::run([self] {
         const qint64 bytes = Paths::tempUsageBytes();
-        QMetaObject::invokeMethod(self.data(), [self, bytes] {
+        QMetaObject::invokeMethod(qApp, [self, bytes] {
             if (!self || !self->m_tempUsage)
                 return;
             self->m_tempUsage->setText(bytes > 0 ? QStringLiteral("%1 in %2").arg(formatBytes(bytes), nativePath(Paths::tempRoot()))
@@ -626,6 +637,15 @@ void SettingsPage::updateTempUsage()
     });
 }
 
+namespace {
+// "Key label: reason" -> "reason"; a message without that form is shown whole.
+QString refusalText(const QString& message)
+{
+    const QString reason = message.section(QStringLiteral(": "), 1);
+    return reason.isEmpty() ? message : reason;
+}
+} // namespace
+
 void SettingsPage::applyValue(const QString& key, const QVariant& value)
 {
     SettingRow* row = m_rows.value(key);
@@ -633,7 +653,7 @@ void SettingsPage::applyValue(const QString& key, const QVariant& value)
     if (!st.ok()) {
         m_errors.insert(key, st.error().message);
         if (row)
-            row->setMessage(st.error().message.section(QStringLiteral(": "), 1), Tone::Err);
+            row->setMessage(refusalText(st.error().message), Tone::Err);
         emit attentionChanged();
         emit statusContextChanged();
         return;
@@ -656,7 +676,7 @@ void SettingsPage::refreshRow(const QString& key)
         return;
     row->editor()->setValue(m_ctx.settings().value(key));
     if (m_errors.contains(key))
-        row->setMessage(m_errors.value(key).section(QStringLiteral(": "), 1), Tone::Err);
+        row->setMessage(refusalText(m_errors.value(key)), Tone::Err);
 }
 
 void SettingsPage::refreshDependencyStates()
@@ -764,16 +784,24 @@ void SettingsPage::importLegacyFrom(const QString& path)
         return;
     }
     (void)m_ctx.settings().save();
+    // One span per line (monoSpan escapes what it is given).
     QStringList changed;
     for (const SettingDef* d : m_ctx.schema().all())
         if (m_ctx.settings().value(d->key) != before.value(d->key))
-            changed << QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key))).toHtmlEscaped();
+            changed << Sheet::monoSpan(QStringLiteral("%1 › %2: %3").arg(d->section, d->label, SettingRow::displayValue(*d, m_ctx.settings().value(d->key))));
     rebuild();
     const QString title = QStringLiteral("%1 value%2 imported").arg(r.value()).arg(r.value() == 1 ? QString() : QStringLiteral("s"));
     if (changed.isEmpty())
         Sheet::message(window(), title, QStringLiteral("Every imported value already matched the current settings, so nothing changed."), Sheet::Icon::Info);
     else
-        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(Sheet::monoSpan(changed.join(QStringLiteral("<br>")))), Sheet::Icon::Info);
+    {
+        // A long list is cut so the button stays on screen.
+        const int kShown = 16;
+        QStringList lines = changed.mid(0, kShown);
+        if (changed.size() > kShown)
+            lines << QStringLiteral("… and %1 more").arg(changed.size() - kShown);
+        Sheet::message(window(), title, QStringLiteral("Changed:<br>%1").arg(lines.join(QStringLiteral("<br>"))), Sheet::Icon::Info);
+    }
 }
 
 void SettingsPage::resetAll()

@@ -78,6 +78,13 @@ QByteArray resize512Png(const QString& path, QString* error)
     return png;
 }
 
+// Titles, file names and Store texts come from outside: a tooltip shows them
+// as text, never as markup.
+QString plainTip(const QString& text)
+{
+    return text.isEmpty() ? QString() : QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(text.toHtmlEscaped());
+}
+
 QString regionLabel(const QString& code)
 {
     if (code == u"UP") return QStringLiteral("US");
@@ -117,7 +124,10 @@ DlcPage::DlcPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     updateState();
 }
 
-DlcPage::~DlcPage() = default;
+DlcPage::~DlcPage()
+{
+    m_work.cancel(); // a package read or lookup still running stops at its next check
+}
 
 void DlcPage::buildListCard()
 {
@@ -220,6 +230,7 @@ void DlcPage::buildListCard()
     card->body()->addWidget(actions);
 
     m_regionLine = caption(QString(), card);
+    m_regionLine->setTextFormat(Qt::PlainText); // carries names from the Store lookup
     m_regionLine->setWordWrap(true);
     m_regionLine->setTextInteractionFlags(Qt::TextSelectableByMouse);
     card->body()->addWidget(m_regionLine);
@@ -408,10 +419,14 @@ void DlcPage::addInputs(const QStringList& paths)
                 QByteArray icon;
             };
             auto* watcher = new QFutureWatcher<std::shared_ptr<Loaded>>(this);
-            connect(watcher, &QFutureWatcher<std::shared_ptr<Loaded>>::finished, this, [this, watcher, path] {
+            connect(watcher, &QFutureWatcher<std::shared_ptr<Loaded>>::finished, this, [this, watcher, path, gen = m_listGen] {
                 watcher->deleteLater();
                 --m_loading;
                 m_loadingPaths.remove(path.toLower());
+                if (gen != m_listGen) {
+                    updateState(); // the list was cleared while this package was read
+                    return;
+                }
                 const auto loaded = watcher->result();
                 if (!loaded->info.ok()) {
                     appendLog(QStringLiteral("LOAD FAILED: %1 \u2014 %2").arg(nativePath(path), loaded->info.error().message));
@@ -456,18 +471,17 @@ void DlcPage::addInputs(const QStringList& paths)
                 addRow(std::move(r));
                 updateState();
             });
-            watcher->setFuture(QtConcurrent::run([cliPath, path, passcode, tempDir] {
+            watcher->setFuture(QtConcurrent::run([cliPath, path, passcode, tempDir, cancel = m_work.token()] {
                 auto loaded = std::make_shared<Loaded>();
-                CancellationSource cancel;
                 const dlc::FpkgCli cli = dlc::locateFpkgCli(cliPath);
                 if (!cli.ok() && !dlc::looksLikePs4Package(path)) {
                     loaded->info = Error(ErrorCode::DependencyMissing, cli.problems.join(u' '));
                     return loaded;
                 }
-                loaded->info = dlc::inspectDlcPackage(cli, path, passcode, cancel.token());
+                loaded->info = dlc::inspectDlcPackage(cli, path, passcode, cancel);
                 if (loaded->info.ok() && loaded->info->isDlc) {
                     QDir().mkpath(tempDir);
-                    loaded->icon = dlc::extractDlcIcon(cli, path, passcode, tempDir, cancel.token());
+                    loaded->icon = dlc::extractDlcIcon(cli, path, passcode, tempDir, cancel);
                 }
                 return loaded;
             }));
@@ -507,11 +521,11 @@ void DlcPage::refreshRow(int r)
     m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon() : row.icon));
     m_table->item(r, IconCol)->setToolTip(QStringLiteral("Double-click to choose icon0.png"));
     m_table->item(r, TitleCol)->setText(row.item.title);
-    m_table->item(r, TitleCol)->setToolTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
-                                               .arg(row.item.title, row.item.titleId,
-                                                    row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version,
-                                                    nativePath(row.item.source),
-                                                    row.isPackage ? QString() : QStringLiteral(" [entry %1]").arg(row.item.entry + 1)));
+    m_table->item(r, TitleCol)->setToolTip(plainTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
+                                                        .arg(row.item.title, row.item.titleId,
+                                                             row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version,
+                                                             nativePath(row.item.source),
+                                                             row.isPackage ? QString() : QStringLiteral(" [entry %1]").arg(row.item.entry + 1))));
     m_table->item(r, ContentIdCol)->setText(row.item.contentId);
     m_table->item(r, ContentIdCol)->setFont(font::mono());
     m_table->item(r, TitleIdCol)->setText(row.item.titleId);
@@ -524,15 +538,15 @@ void DlcPage::refreshRow(int r)
                                 : code == u"KP" ? QStringLiteral("Korea") : QStringLiteral("Unknown");
         m_table->item(r, RegionCol)->setText(row.item.targetMarket.isEmpty() ? QStringLiteral("%1 · %2").arg(shortName, code)
                                                                               : QStringLiteral("%1 Store").arg(row.item.targetMarket.section(u'(', 1).remove(u')')));
-        m_table->item(r, RegionCol)->setToolTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
-                                                                                 : QStringLiteral("%1 (Store)").arg(row.item.targetMarket));
+        m_table->item(r, RegionCol)->setToolTip(plainTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
+                                                                                          : QStringLiteral("%1 (Store)").arg(row.item.targetMarket)));
     }
     m_table->item(r, VersionCol)->setText(row.item.version);
     m_table->item(r, SourceCol)->setText(QFileInfo(row.item.source).fileName()
                                          + (row.isPackage ? QString() : QStringLiteral(" [%1]").arg(row.item.entry + 1)));
-    m_table->item(r, SourceCol)->setToolTip(nativePath(row.item.source));
+    m_table->item(r, SourceCol)->setToolTip(plainTip(nativePath(row.item.source)));
     m_table->item(r, ResultCol)->setText(row.result);
-    m_table->item(r, ResultCol)->setToolTip(row.warnings.isEmpty() ? row.result : row.result + QStringLiteral("\n") + row.warnings.join(u'\n'));
+    m_table->item(r, ResultCol)->setToolTip(plainTip(row.warnings.isEmpty() ? row.result : row.result + QStringLiteral("\n") + row.warnings.join(u'\n')));
     const bool problem = !dlc::validateIdentity(row.item.titleId, row.item.contentId).ok()
                       || (row.package && !row.package->canRebuild);
     m_table->item(r, ResultCol)->setForeground(problem ? toneText(Tone::Warn) : color::fg_2);
@@ -557,8 +571,10 @@ void DlcPage::syncFromTable(int r, int c)
     } else if (c == TitleIdCol) {
         row.item.titleId = text.trimmed().toUpper();
     }
-    const Status st = dlc::validateIdentity(row.item.titleId, row.item.contentId);
-    row.result = st.ok() ? QStringLiteral("Manual target; compatibility unverified") : st.error().message;
+    if (c == ContentIdCol || c == TitleIdCol) {
+        const Status st = dlc::validateIdentity(row.item.titleId, row.item.contentId);
+        row.result = st.ok() ? QStringLiteral("Manual target; compatibility unverified") : st.error().message;
+    }
     refreshRow(r);
     updateState();
 }
@@ -571,6 +587,8 @@ void DlcPage::chooseIcon(int r)
                                                       QStringLiteral("PNG (*.png)"));
     if (file.isEmpty())
         return;
+    if (r >= int(m_rows.size()))
+        return; // the list changed under the file dialog
     QString why;
     const QByteArray png = resize512Png(file, &why);
     if (png.isEmpty()) {
@@ -592,6 +610,11 @@ void DlcPage::chooseIcon(int r)
 
 void DlcPage::clearList()
 {
+    // Packages still being read and lookups still running belong to the old
+    // list: they are told to stop, and what they still deliver is dropped.
+    ++m_listGen;
+    m_work.cancel();
+    m_work = CancellationSource();
     m_rows.clear();
     m_table->setRowCount(0);
     m_lookupQueue.clear();
@@ -714,9 +737,21 @@ void DlcPage::pumpLookups()
             continue;
         m_lookupRunning.insert(k);
         auto* w = new QFutureWatcher<std::shared_ptr<dlc::DlcLookupResult>>(this);
-        connect(w, &QFutureWatcher<std::shared_ptr<dlc::DlcLookupResult>>::finished, this, [this, w, k] {
+        connect(w, &QFutureWatcher<std::shared_ptr<dlc::DlcLookupResult>>::finished, this, [this, w, k, gen = m_listGen] {
             w->deleteLater();
             m_lookupRunning.remove(k);
+            if (gen != m_listGen) {
+                // Started for a list that was cleared (and cancelled with it):
+                // not a result. A row of the new list with this key asks again.
+                for (const Row& r : m_rows)
+                    if (lookupKey(r) == k && !m_lookupQueue.contains(k)) {
+                        m_lookupQueue << k;
+                        break;
+                    }
+                updateRegionLine();
+                pumpLookups();
+                return;
+            }
             m_lookups.insert(k, w->result());
             const auto& res = *w->result();
             int observed = 0;
@@ -735,10 +770,9 @@ void DlcPage::pumpLookups()
             pumpLookups();
         });
         const QString cacheDir = m_cacheDir;
-        w->setFuture(QtConcurrent::run([cacheDir, cid, title] {
-            CancellationSource cancel;
+        w->setFuture(QtConcurrent::run([cacheDir, cid, title, cancel = m_work.token()] {
             dlc::DlcLookupService svc(cacheDir);
-            return std::make_shared<dlc::DlcLookupResult>(svc.resolveRegions(dlc::titleIdOf(cid), cid, title, cancel.token()));
+            return std::make_shared<dlc::DlcLookupResult>(svc.resolveRegions(dlc::titleIdOf(cid), cid, title, cancel));
         }));
     }
     updateRegionLine();

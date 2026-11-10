@@ -43,6 +43,9 @@ QStringList discoverGames(const QStringList& roots, int depth, const QStringList
                           const std::atomic_bool* cancel = nullptr);
 
 Game readGame(const QString& folder);
+// The same with the ledger already read (readLedger()): a scan reads it once,
+// not once per game.
+Game readGame(const QString& folder, const QJsonArray& ledger);
 
 // "N.NN" with 1 <= N <= 30.
 bool plausibleVersion(const QString& v);
@@ -54,7 +57,9 @@ qint64 executableBytes(const QString& folder, const std::atomic_bool* cancel = n
 
 // ---- ledger (applied_backports.json, written by the worker) -----------------------------
 
+QJsonArray readLedger(); // the "applied" rows
 QJsonObject activeLedgerRecord(const QString& gameDir); // {} when none
+QJsonObject activeLedgerRecord(const QString& gameDir, const QJsonArray& ledger);
 
 // Ledger rows whose apply never finished (ledger and journal both IN_PROGRESS)
 // and whose journal has not been written for `quietSeconds`: a journal that is
@@ -86,7 +91,7 @@ enum SettingsKey { ScanRootsKey = 1, OutputDirKey = 2, BackupDirKey = 4, ScanDep
 // file is never replaced: false, with the reason in `error`.
 bool saveSettings(const Settings& s, int keys, QString* error = nullptr);
 bool saveSettings(const Settings& s); // all four keys
-// "D:/a/b/" -> "D:\\a\\b" (empty stays empty).
+// Cleaned, with native separators (empty stays empty).
 QString nativeFolder(const QString& path);
 
 // ---- preflight (gui.App.preflight) ------------------------------------------------------

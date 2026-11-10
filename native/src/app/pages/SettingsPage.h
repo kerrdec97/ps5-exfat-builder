@@ -67,6 +67,7 @@ private:
     QString m_section;
     bool m_advanced = false;
     QLineEdit* m_search;
+    QTimer* m_searchDelay = nullptr;
     QWidget* m_columns;
     QWidget* m_sectionList;
     QPushButton* m_importBtn;

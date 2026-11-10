@@ -194,7 +194,8 @@ private:
     QStringList chooseBackportFiles(const QString& question, const QString& fileTitle, bool* cancelled);
     void pickRestore();
     void runRestore(const QString& backupRun);
-    void exportLogs(const QString& note, bool reveal);
+    void exportLogs(const QString& note, bool showSheet);
+    void syncLibraryStatus();
     void reportProblem();
     void openPath(const QString& path);
     void saveDestinations();
@@ -214,6 +215,7 @@ private:
     QString outputRoot() const;
 
     // ---- state
+    ui::LibraryStore& m_library;
     bp::Settings m_settings;
     BackportGameModel* m_model;
     BackportFilterModel* m_proxy;
@@ -241,6 +243,8 @@ private:
     // scan that is restarted before it listed every game loses nothing.
     QHash<QString, BackportRow> m_rowMemory;
     bool m_settingsMissing = false; // settings.json did not exist at the last read
+    bool m_offerPending = false;    // interrupted applies are offered when the page is next in front
+    bool m_exporting = false;       // a support ZIP is being written
     quint64 m_scanGen = 0;
     std::shared_ptr<std::atomic_bool> m_scanCancel;
     Kind m_kind = Kind::Backport;

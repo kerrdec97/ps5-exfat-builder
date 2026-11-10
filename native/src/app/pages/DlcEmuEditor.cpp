@@ -189,6 +189,12 @@ void DlcEmuEditor::addRow(const dlc::Entry& e)
     m_table->insertRow(r);
     auto* section = new QComboBox(m_table);
     section->addItems(dlc::sectionTypes());
+    // A type the file has but the list does not: kept as it is, so it is not
+    // silently turned into another one and the validation can name it.
+    if (!e.section.isEmpty() && section->findText(e.section) < 0) {
+        section->addItem(e.section);
+        section->setItemData(section->count() - 1, QStringLiteral("Not a known section type"), Qt::ToolTipRole);
+    }
     section->setCurrentText(e.section);
     section->setProperty("fwNoRing", false);
     connect(section, &QComboBox::currentIndexChanged, this, [this](int) { m_dirty = true; revalidate(); });
@@ -203,6 +209,10 @@ void DlcEmuEditor::addRow(const dlc::Entry& e)
             auto* status = new QComboBox(m_table);
             status->addItem(QString());
             status->addItems(dlc::downloadStatuses());
+            if (!e.get(key).isEmpty() && status->findText(e.get(key)) < 0) {
+                status->addItem(e.get(key));
+                status->setItemData(status->count() - 1, QStringLiteral("Not a known download status"), Qt::ToolTipRole);
+            }
             status->setCurrentText(e.get(key));
             connect(status, &QComboBox::currentIndexChanged, this, [this](int) { m_dirty = true; revalidate(); });
             m_table->setCellWidget(r, c, status);
@@ -415,7 +425,7 @@ void DlcEmuEditor::save()
     const QString file = QDir(app0).filePath(QStringLiteral("dlc_emu.ini"));
     const bool exists = QFile::exists(file);
     if (!Sheet::confirm(window(), QStringLiteral("Write dlc_emu.ini?"),
-                        QStringLiteral("%1 entr%2 are written to %3.%4").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")).arg(Sheet::monoSpan(nativePath(file)),
+                        QStringLiteral("%1 entr%2 written to %3.%4").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y is") : QStringLiteral("ies are")).arg(Sheet::monoSpan(nativePath(file)),
                                                                                                                exists ? QStringLiteral(" The current file is kept as dlc_emu.ini.bak.") : QString()),
                         QStringLiteral("Cancel"), QStringLiteral("Save"), false, Sheet::Icon::Info))
         return;

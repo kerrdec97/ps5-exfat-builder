@@ -42,7 +42,9 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     header()->addAction(m_openFolder);
     connect(copy, &QToolButton::clicked, this, [this] {
         QGuiApplication::clipboard()->setText(shownText());
-        emit toastRequested(Tone::Ok, QStringLiteral("Copied"), QStringLiteral("%1 lines on the clipboard").arg(formatCount(m_filter->rowCount())));
+        const int n = m_filter->rowCount();
+        emit toastRequested(Tone::Ok, QStringLiteral("Copied"),
+                            n == 1 ? QStringLiteral("1 line on the clipboard") : QStringLiteral("%1 lines on the clipboard").arg(formatCount(n)));
     });
     connect(exportBtn, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Export the shown log lines"),
@@ -118,6 +120,7 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     dh->setSpacing(space::md);
     dh->addWidget(label(QStringLiteral("Selected line"), TextStyle::Overline, color::fg_4, m_detail));
     m_detailMeta = caption({}, m_detail);
+    m_detailMeta->setTextFormat(Qt::PlainText);
     m_detailMeta->setWordWrap(false);
     dh->addWidget(m_detailMeta);
     dh->addStretch(1);
@@ -126,7 +129,10 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     auto* copyLine = new Link(QStringLiteral("Copy line"), m_detail);
     dh->addWidget(copyLine);
     dl->addLayout(dh);
+    // Log messages carry file names, console output and other outside text:
+    // shown as text, never as markup.
     m_detailText = label({}, TextStyle::Mono, color::fg_1, m_detail);
+    m_detailText->setTextFormat(Qt::PlainText);
     m_detailText->setWordWrap(true);
     m_detailText->setTextInteractionFlags(Qt::TextSelectableByMouse);
     dl->addWidget(m_detailText);
@@ -281,7 +287,7 @@ void LogsPage::updateFooter()
     if (!m_search->text().trimmed().isEmpty())
         by << QStringLiteral("“%1”").arg(m_search->text().trimmed());
     const int shown = m_filter->rowCount(), total = m_model.rowCount();
-    m_footerLeft->setFullText(by.isEmpty() ? QStringLiteral("%1 lines").arg(formatCount(total))
+    m_footerLeft->setFullText(by.isEmpty() ? (total == 1 ? QStringLiteral("1 line") : QStringLiteral("%1 lines").arg(formatCount(total)))
                                            : QStringLiteral("Showing %1 of %2 lines · %3").arg(formatCount(shown), formatCount(total), by.join(QStringLiteral(" · "))));
     const QString path = m_ctx.logFilePath();
     const QFileInfo fi(path);
@@ -336,6 +342,9 @@ QString LogsPage::shownText() const
 
 void LogsPage::navigateWith(const QVariantMap& args)
 {
+    // "Show me this job's log": what was filtered before would hide it.
+    if (args.contains(QStringLiteral("jobId")) || args.contains(QStringLiteral("source")) || args.contains(QStringLiteral("level")))
+        clearFilters();
     if (args.contains(QStringLiteral("jobId")))
         setJobFilter(args.value(QStringLiteral("jobId")).toString());
     if (args.contains(QStringLiteral("source"))) {

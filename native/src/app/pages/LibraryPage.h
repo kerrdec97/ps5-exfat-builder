@@ -48,6 +48,10 @@ std::vector<ui::LibraryGame> mergeScanResult(const std::vector<ui::LibraryGame>&
                                              const QStringList& scanFolders, const QDateTime& now,
                                              const std::function<bool(const QString&)>& stillThere);
 
+// The file name an image is renamed to: `typed`, made safe, with the
+// extension of the image it is (a name typed without it keeps the image an image).
+QString imageRenameTarget(const QString& typed, const QString& sourcePath);
+
 class LibraryPage : public Page {
     Q_OBJECT
 public:
@@ -97,6 +101,7 @@ private:
     void gameMenu(const QString& folder, const QPoint& pos);
     void buildSelected();
     const std::vector<ui::LibraryGame>& games() const;
+    void removeGames(const QStringList& folders);
     const ui::LibraryGame* game(const QString& folder) const;
     QStringList formatsOf(const ui::GameSummary& g) const;
     // Images

@@ -353,7 +353,8 @@ QVariant BackportGameModel::data(const QModelIndex& index, int role) const
         if (!r.detail.isEmpty())
             t << QStringLiteral("Status: %1 — %2").arg(r.status, r.detail);
         t << QStringLiteral("Double-click for details, right-click for actions.");
-        return t.join(u'\n');
+        // Titles and notes come from the dump: shown as text, never as markup.
+        return QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(t.join(u'\n').toHtmlEscaped());
     }
     return {};
 }
@@ -461,10 +462,11 @@ bool BackportFilterModel::lessThan(const QModelIndex& a, const QModelIndex& b) c
 
 // ---- page ----------------------------------------------------------------------------------
 
-BackportPage::BackportPage(AppContext& ctx, JobQueueModel&, LogModel&, LibraryStore&, QWidget* parent)
+BackportPage::BackportPage(AppContext& ctx, JobQueueModel&, LogModel&, LibraryStore& library, QWidget* parent)
     : Page(ctx, QStringLiteral("backport"), QStringLiteral("Backport"),
            QStringLiteral("Make games run on older PS5 firmware. The originals are always backed up first."),
-           parent)
+           parent),
+      m_library(library)
 {
     bp::SettingsFile settingsState = bp::SettingsFile::Missing;
     QString settingsError;
@@ -577,6 +579,7 @@ void BackportPage::buildLibraryCard()
     sh->addWidget(none);
     sh->addWidget(clear);
     m_scanLabel = label({}, TextStyle::Caption, color::fg_4, sub);
+    m_scanLabel->setTextFormat(Qt::PlainText);
     sh->addSpacing(space::sm);
     sh->addWidget(m_scanLabel);
     m_libraryCard->body()->addWidget(sub);
@@ -718,8 +721,11 @@ void BackportPage::buildProgressCard()
     card->body()->addWidget(row);
     auto* labels = new QWidget(card);
     auto* lh = hbox(labels, space::md);
+    // Game titles and the engine's stage names: plain text, whatever they hold.
     m_current = label(QStringLiteral("Idle"), TextStyle::Body, color::fg_1, labels);
+    m_current->setTextFormat(Qt::PlainText);
     m_stage = label({}, TextStyle::Caption, color::accent_hi, labels);
+    m_stage->setTextFormat(Qt::PlainText);
     m_stage->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     lh->addWidget(m_current, 1);
     lh->addWidget(m_stage);
@@ -851,6 +857,7 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
     m_engineBadge->setIconName(QString());
     sup->setTitle(QStringLiteral("Backups & support"), m_engineBadge);
     m_engineLine = label({}, TextStyle::Caption, color::fg_4, sup);
+    m_engineLine->setTextFormat(Qt::PlainText);
     m_engineLine->setWordWrap(true);
     sup->body()->addWidget(m_engineLine);
     auto* restore = button(QStringLiteral("Restore originals from a backup\u2026"), ButtonVariant::Secondary, QStringLiteral("undo"), sup);
@@ -1240,6 +1247,11 @@ QString BackportPage::statusContext() const
 
 void BackportPage::onShown()
 {
+    if (m_offerPending && m_engine == Engine::Ready)
+        QTimer::singleShot(0, this, [this] {
+            if (m_offerPending && isVisible())
+                offerInterruptedRestores();
+        });
     if (m_shownOnce || testMode())
         return;
     m_shownOnce = true;
@@ -1316,7 +1328,10 @@ void BackportPage::engineReady()
     m_engineLine->setText(QStringLiteral("PS5 Backport GUI %1 by Deckerr97  \u00b7  backend %2")
                               .arg(QLatin1String(bp::kEngineVersion), m_engineRevision));
     log(QStringLiteral("INFO"), QStringLiteral("Backport engine ready (backend %1)").arg(m_engineRevision));
-    offerInterruptedRestores();
+    // The question belongs to this page: it waits until the page is in front.
+    m_offerPending = true;
+    if (isVisible())
+        offerInterruptedRestores();
 }
 
 // The engine check shared by every action that starts a worker.
@@ -1349,6 +1364,7 @@ void BackportPage::showEngineState()
 
 void BackportPage::offerInterruptedRestores()
 {
+    m_offerPending = false;
     const auto rows = bp::interruptedApplies();
     QPointer<BackportPage> self(this);
     for (const QJsonObject& row : rows) {
@@ -1371,7 +1387,11 @@ void BackportPage::offerInterruptedRestores()
                                QStringLiteral("PS5 Backport GUI is running. Close it, or let it finish, before restoring."), Sheet::Icon::Warning);
                 return;
             }
-            runRestore(row.value(QStringLiteral("backup_dir")).toString());
+            // The backup run is the folder that holds the journal, as for a
+            // restore chosen by hand.
+            const QString journal = row.value(QStringLiteral("journal")).toString();
+            runRestore(QFileInfo(journal).isFile() ? QDir::toNativeSeparators(QFileInfo(journal).absolutePath())
+                                                   : row.value(QStringLiteral("backup_dir")).toString());
             return; // one at a time; the rest are offered again next time
         }
     }
@@ -1493,10 +1513,11 @@ void BackportPage::rescan()
                                                   : QStringLiteral("Reading %1 game folders…").arg(n));
         });
         int count = 0;
+        const QJsonArray ledger = bp::readLedger();
         for (const QString& g : games) {
             if (cancel->load())
                 return;
-            bp::Game game = bp::readGame(g);
+            bp::Game game = bp::readGame(g, ledger);
             ++count;
             QMetaObject::invokeMethod(qApp, [self, gen, game, prev] {
                 if (!self || gen != self->m_scanGen)
@@ -1552,6 +1573,33 @@ void BackportPage::onScanFinished(quint64 gen, int count)
     updateButtons();
     updateLibraryState();
     updateStats();
+    syncLibraryStatus();
+}
+
+// The Library marks the games that carry a backport: it hears here what the
+// scan and the runs found for the folders both pages know.
+void BackportPage::syncLibraryStatus()
+{
+    if (m_demo || m_library.games().empty() || m_model->rows().empty())
+        return;
+    QHash<QString, bool> backported;
+    for (const auto& r : m_model->rows())
+        backported.insert(r.game.key, r.game.alreadyBackported || !r.game.appliedRecord.isEmpty());
+    std::vector<LibraryGame> games = m_library.games();
+    bool changed = false;
+    const QString mark = QStringLiteral("Backported");
+    for (LibraryGame& g : games) {
+        const auto it = backported.constFind(bp::normKey(g.info.folder));
+        if (it == backported.constEnd())
+            continue;
+        const QString status = it.value() ? mark : (g.status == mark ? QString() : g.status);
+        if (status != g.status) {
+            g.status = status;
+            changed = true;
+        }
+    }
+    if (changed)
+        m_library.setGames(std::move(games));
 }
 
 void BackportPage::editScanLocations()
@@ -1734,8 +1782,11 @@ void BackportPage::preflightDone(const bp::Preflight& pf, const QStringList& key
         setRunState(RunState::Idle);
         for (const QString& e : pf.errors)
             log(QStringLiteral("ERROR"), e);
+        QStringList shown = pf.errors.mid(0, 10);
+        if (pf.errors.size() > shown.size())
+            shown << QStringLiteral("… and %1 more (see Activity)").arg(pf.errors.size() - shown.size());
         Sheet::message(window(), QStringLiteral("The run cannot start"),
-                       QStringLiteral("The run cannot start:\n\n• ") + pf.errors.join(QStringLiteral("\n• ")), Sheet::Icon::Error);
+                       QStringLiteral("The run cannot start:\n\n• ") + shown.join(QStringLiteral("\n• ")), Sheet::Icon::Error);
         return;
     }
     if (!pf.warnings.isEmpty()) {
@@ -2083,6 +2134,7 @@ void BackportPage::runFinished()
     int done = 0;
     QStringList failedNotes;
     bool anyRetry = false;
+    const QJsonArray ledger = bp::readLedger();
     for (auto& r : m_model->rows()) {
         if (!m_runKeys.contains(r.game.key))
             continue;
@@ -2092,8 +2144,9 @@ void BackportPage::runFinished()
             if (!r.result.isEmpty())
                 failedNotes << QStringLiteral("%1: %2").arg(r.game.titleId.isEmpty() ? r.game.title : r.game.titleId, r.detail).left(200);
         }
-        r.game.appliedRecord = bp::activeLedgerRecord(r.game.path);
+        r.game.appliedRecord = bp::activeLedgerRecord(r.game.path, ledger);
     }
+    syncLibraryStatus();
     for (const auto& r : m_model->rows())
         anyRetry = anyRetry || r.status == QLatin1String("Failed") || r.status == QLatin1String("Partial") || r.status == QLatin1String("Cancelled");
     m_retry->setEnabled(anyRetry);
@@ -2167,13 +2220,32 @@ void BackportPage::startBatch(Kind kind, std::vector<Item> items)
 void BackportPage::batchFinished()
 {
     const Kind kind = m_kind;
+    const bool cancelled = isCancelling() && kind != Kind::Restore;
     setRunState(RunState::Idle);
     m_kind = Kind::Backport;
     updateButtons();
     showEngineState();
+    m_stage->clear();
+    if (cancelled) {
+        static const QHash<int, QString> what = {{int(Kind::Sdk), QStringLiteral("SDK rebuild")},
+                                                 {int(Kind::ProBuild), QStringLiteral("PS5 Pro build")},
+                                                 {int(Kind::Fakelib), QStringLiteral("AMPR / PlayGo switch")}};
+        int made = 0;
+        for (const auto& [item, res] : m_batchResults)
+            if (res.value(QStringLiteral("status")).toString() == QLatin1String("DONE")) {
+                ++made;
+                log(QStringLiteral("OK"), QStringLiteral("%1: %2").arg(item.name, res.value(QStringLiteral("headline")).toString()));
+                log(QStringLiteral("OK"), QStringLiteral("    ZIP: %1").arg(res.value(QStringLiteral("output")).toString()));
+            }
+        const int left = int(m_items.size()) - made;
+        const QString summary = QStringLiteral("%1 done, %2 not made").arg(made).arg(left);
+        m_current->setText(QStringLiteral("%1 cancelled").arg(what.value(int(kind))));
+        log(QStringLiteral("WARN"), QStringLiteral("%1 cancelled: %2").arg(what.value(int(kind)), summary));
+        emit toastRequested(Tone::Warn, QStringLiteral("%1 cancelled").arg(what.value(int(kind))), summary + u'.');
+        return;
+    }
     m_bar->setFraction(m_batchResults.empty() ? 0 : 1);
     m_percent->setText(m_batchResults.empty() ? QStringLiteral("0%") : QStringLiteral("100%"));
-    m_stage->clear();
     if (kind == Kind::Restore) {
         m_current->setText(QStringLiteral("Restore finished"));
         if (m_batchResults.empty())
@@ -2223,12 +2295,15 @@ void BackportPage::batchFinished()
             lines << QStringLiteral("\u2718 %1: %2").arg(item.name, headline.left(160));
         }
     }
-    QString text = lines.join(u'\n');
+    // A long batch is cut so the buttons stay on screen (the Activity log has every line).
+    const int kShown = 14;
+    QString text = lines.mid(0, kShown).join(u'\n');
+    if (lines.size() > kShown)
+        text += QStringLiteral("\n… and %1 more (see Activity)").arg(lines.size() - kShown);
     if (ok > 0) {
         if (kind == Kind::Sdk) {
-            int pair = m_batchResults.front().second.value(QStringLiteral("pair")).toInt(5);
             text += QStringLiteral("\n\nThese builds need firmware %1.00 or later; keep the FW 4xx ZIP for older consoles.\n\n%2")
-                        .arg(pair)
+                        .arg(m_sdkPair) // what was asked for; a failed first item reports none
                         .arg(QString::fromUtf8(kSdkRebuildCaveat));
             log(QStringLiteral("INFO"), QString::fromUtf8(kSdkRebuildCaveat));
         } else if (kind == Kind::ProBuild) {
@@ -2305,6 +2380,14 @@ void BackportPage::rebuildWithSdk(const QStringList& keys)
                          k, QFileInfo(zip).fileName()});
     }
     if (items.empty()) {
+        if (!keys.isEmpty()) {
+            QPointer<BackportPage> self(this);
+            Sheet::message(window(), QStringLiteral("Backport"),
+                           QStringLiteral("The selected games have no backport ZIP from this session yet. Run Start Backport first, or choose a "
+                                          "backport ZIP next."));
+            if (!self || !isIdle())
+                return;
+        }
         const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("Choose the FW 4xx backport ZIP(s) to rebuild with SDK %1").arg(pair),
                                                                 m_outField->path(), QStringLiteral("Backport ZIP (*.zip);;All files (*)"));
         for (const QString& f : files)
@@ -2317,11 +2400,6 @@ void BackportPage::rebuildWithSdk(const QStringList& keys)
                               {QStringLiteral("version"), QString()},
                               {QStringLiteral("source_sdk"), QString()}},
                              QString(), QFileInfo(f).fileName()});
-        if (items.empty() && !keys.isEmpty()) {
-            Sheet::message(window(), QStringLiteral("Backport"),
-                           QStringLiteral("The selected games have no backport ZIP from this session yet. Run Start Backport first, or choose a backport ZIP."));
-            return;
-        }
     }
     startBatch(Kind::Sdk, std::move(items));
 }
@@ -2434,6 +2512,7 @@ bool BackportPage::chooseFakelib(const QStringList& names, QJsonValue* ampr, QJs
     if (pkg.size() > 240)
         pkg = pkg.left(240) + QStringLiteral("\u2026");
     auto* pk = label((names.size() > 1 ? QStringLiteral("Packages: ") : QStringLiteral("Package: ")) + pkg, TextStyle::Caption, color::fg_3, s);
+    pk->setTextFormat(Qt::PlainText); // file names
     pk->setWordWrap(true);
     s->body()->addWidget(pk);
     struct Row {
@@ -2461,6 +2540,7 @@ bool BackportPage::chooseFakelib(const QStringList& names, QJsonValue* ampr, QJs
         h->addWidget(r.combo, 1);
         v->addLayout(h);
         r.prov = label(QStringLiteral("The package's own %1 stays as it is.").arg(r.name), TextStyle::Caption, color::fg_3, w);
+        r.prov->setTextFormat(Qt::PlainText); // may name a file the user chose
         r.prov->setWordWrap(true);
         r.prov->setContentsMargins(76, 0, 0, 0);
         v->addWidget(r.prov);
@@ -2551,14 +2631,21 @@ void BackportPage::pickRestore()
     QFile jf(journal);
     QJsonParseError pe;
     QJsonDocument doc;
+    QString why;
     if (jf.open(QIODevice::ReadOnly)) {
         QByteArray b = jf.readAll();
         if (b.startsWith("\xEF\xBB\xBF"))
             b.remove(0, 3);
         doc = QJsonDocument::fromJson(b, &pe);
+        if (pe.error != QJsonParseError::NoError)
+            why = pe.errorString();
+        else if (!doc.isObject())
+            why = QStringLiteral("it is not a journal");
+    } else {
+        why = jf.errorString();
     }
     if (!doc.isObject()) {
-        Sheet::message(window(), QStringLiteral("Restore"), QStringLiteral("The journal cannot be read: %1").arg(pe.errorString()), Sheet::Icon::Error);
+        Sheet::message(window(), QStringLiteral("Restore"), QStringLiteral("The journal cannot be read: %1").arg(why), Sheet::Icon::Error);
         return;
     }
     const QJsonObject j = doc.object();
@@ -2774,26 +2861,46 @@ void BackportPage::showDetails(const QString& key)
 
 // ---- logs and reports -------------------------------------------------------------------------
 
-void BackportPage::exportLogs(const QString& note, bool reveal)
+// Writes the support ZIP on a pool thread (it reads and compresses every log)
+// and then shows it in Explorer; `showSheet` also says where it was saved.
+void BackportPage::exportLogs(const QString& note, bool showSheet)
 {
+    if (m_exporting)
+        return;
+    m_exporting = true;
     QStringList hostLogs;
     const QString ourLogs = QDir(Paths::logsDir()).absolutePath();
     for (const QFileInfo& fi : QDir(ourLogs).entryInfoList({QStringLiteral("*.log")}, QDir::Files, QDir::Time).mid(0, 3))
         hostLogs << fi.absoluteFilePath();
-    const QString res = bp::makeSupportZip(note, m_engineRevision, hostLogs);
-    if (res.startsWith(u'!')) {
-        Sheet::message(window(), QStringLiteral("Export logs"), QStringLiteral("Could not write the log ZIP: %1").arg(res.mid(1)), Sheet::Icon::Error);
-        return;
-    }
-    log(QStringLiteral("OK"), QStringLiteral("Support logs saved: %1").arg(QDir::toNativeSeparators(res)));
-    if (reveal)
-        Sheet::message(window(), QStringLiteral("Logs saved"),
-                       QStringLiteral("Saved:\n%1\n\nSend this file with your report. It contains this program's logs only (no game files). Your user "
-                                      "folder is shown as ~ and the console IP is left out, but the names of the game and output folders you chose are in it.")
-                           .arg(QDir::toNativeSeparators(res)));
+    log(QStringLiteral("INFO"), QStringLiteral("Saving the support logs ZIP\u2026"));
+    const QString revision = m_engineRevision;
+    QPointer<BackportPage> self(this);
+    (void)QtConcurrent::run([self, note, revision, hostLogs, showSheet] {
+        const QString res = bp::makeSupportZip(note, revision, hostLogs);
+        QMetaObject::invokeMethod(qApp, [self, res, showSheet] {
+            if (!self)
+                return;
+            self->m_exporting = false;
+            if (res.startsWith(u'!')) {
+                self->log(QStringLiteral("ERROR"), QStringLiteral("Could not write the log ZIP: %1").arg(res.mid(1)));
+                Sheet::message(self->window(), QStringLiteral("Export logs"), QStringLiteral("Could not write the log ZIP: %1").arg(res.mid(1)),
+                               Sheet::Icon::Error);
+                return;
+            }
+            self->log(QStringLiteral("OK"), QStringLiteral("Support logs saved: %1").arg(QDir::toNativeSeparators(res)));
 #ifdef Q_OS_WIN
-    QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(res)});
+            QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(res)});
 #endif
+            if (showSheet)
+                Sheet::message(self->window(), QStringLiteral("Logs saved"),
+                               QStringLiteral("Saved:\n%1\n\nSend this file with your report. It contains this program's logs only (no game files). "
+                                              "Your user folder is shown as ~ and the console IP is left out, but the names of the game and "
+                                              "output folders you chose are in it.")
+                                   .arg(QDir::toNativeSeparators(res)));
+            else
+                emit self->toastRequested(Tone::Ok, QStringLiteral("Logs saved"), QDir::toNativeSeparators(res));
+        });
+    });
 }
 
 void BackportPage::reportProblem()

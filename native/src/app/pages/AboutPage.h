@@ -14,6 +14,13 @@ public:
     explicit AboutPage(AppContext& ctx, QWidget* parent = nullptr);
     QString statusContext() const override;
     void setUpdateStatus(const QString& text, ui::Tone tone);
+    // The rows of the third-party table: component, use, licence. They follow
+    // packaging/THIRD_PARTY_NOTICES-native.md (its table, then the bundled
+    // separate program).
+    static QList<QStringList> thirdPartyComponents();
+    // The line under the licence: what a private build carries (looked up in
+    // `toolsDir`, the app's tools folder), or the public build's text.
+    static QString affiliationNote(const QString& toolsDir);
 signals:
     void checkForUpdatesRequested();
     void reportProblemRequested();
