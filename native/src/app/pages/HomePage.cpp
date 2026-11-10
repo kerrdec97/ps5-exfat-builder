@@ -487,8 +487,9 @@ void HomePage::refreshQueueTile()
         qc << QStringLiteral("%1 waiting").arg(queued);
     if (failed > 0)
         qc << QStringLiteral("%1 failed").arg(failed);
+    // A list that waits to be started says how; a queue paused while it runs says so.
     if (m_ctx.queue().isHeld())
-        qc << QStringLiteral("queue paused");
+        qc << (running == 0 && queued > 0 ? QStringLiteral("press Start queue") : QStringLiteral("queue paused"));
     m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : QStringLiteral("Jobs run in queue order")) : qc.join(QStringLiteral(" · ")));
     m_queueBar->setVisible(running > 0);
     if (running > 0) {

@@ -277,7 +277,8 @@ void QueuePage::updateEta()
         }
     }
     if (m_ctx.queue().isHeld())
-        m_eta->setText(QStringLiteral("Queue paused · running jobs continue"));
+        m_eta->setText(running == 0 && queued > 0 ? QStringLiteral("Waiting · press Start queue")
+                                                  : QStringLiteral("Queue paused · running jobs continue"));
     else if (eta >= 0)
         m_eta->setText((running > 1 ? QStringLiteral("Running jobs: %1") : QStringLiteral("Running job: %1")).arg(formatTimeLeft(eta).toLower()));
     else if (queued > 0 && running == 0)
@@ -348,12 +349,18 @@ void QueuePage::updateCounts()
     m_filter->setSegmentText(2, seg(QStringLiteral("Queued"), queued));
     m_filter->setSegmentText(3, seg(QStringLiteral("Done"), done));
     m_filter->setSegmentText(4, seg(QStringLiteral("Not finished"), failed + cancelled));
+    // One button: it starts a list that waits (made with "Add to queue", or
+    // restored when the app started), resumes a queue paused while it ran,
+    // and pauses a queue that runs.
     const bool held = m_ctx.queue().isHeld();
-    m_pauseQueue->setText(held ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
+    const QueueSwitch next = queueSwitch(held, running, queued);
+    m_pauseQueue->setText(next == QueueSwitch::Start ? startQueueText(queued)
+                          : next == QueueSwitch::Resume ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
     setButtonIcon(m_pauseQueue, held ? QStringLiteral("play") : QStringLiteral("pause"));
     setButtonVariant(m_pauseQueue, held ? ButtonVariant::Primary : ButtonVariant::Secondary);
-    m_pauseQueue->setToolTip(held ? QStringLiteral("Start the next waiting job when the current one ends.")
-                                  : QStringLiteral("Finish the running job, then wait. Nothing is cancelled."));
+    m_pauseQueue->setToolTip(next == QueueSwitch::Start ? QStringLiteral("Run the waiting jobs, one after another.")
+                             : next == QueueSwitch::Resume ? QStringLiteral("Start the next waiting job when the current one ends.")
+                                                           : QStringLiteral("Finish the running job, then wait. Nothing is cancelled."));
     m_clearFinished->setEnabled(done + failed + cancelled > 0);
     m_clearFinished->setVisible(all > 0);
     updateEta();

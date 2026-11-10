@@ -575,11 +575,12 @@ private slots:
         QTRY_COMPARE(list.visibleIds(), (QStringList{c.value(), b.value()}));
         QVERIFY(rowB && rowC && rowC->hasFocus());
 
-        // While the queue is paused nothing "starts next".
+        // While the queue is paused nothing "starts next": with no job
+        // running, the rows wait for "Start queue".
         QString notes; // the note's tooltip has the text in full
         for (const QLabel* l : rowC->findChildren<QLabel*>())
             notes += l->toolTip() + u'|';
-        QVERIFY2(notes.contains(QStringLiteral("Waits for the queue to resume")), qPrintable(notes));
+        QVERIFY2(notes.contains(QStringLiteral("Waits for Start queue")), qPrintable(notes));
         q.remove(b.value());
         q.remove(c.value());
         QTRY_COMPARE(list.visibleCount(), 0);

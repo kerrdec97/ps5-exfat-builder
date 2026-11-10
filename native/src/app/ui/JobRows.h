@@ -27,6 +27,18 @@ QString finishedNote(const JobRecord& r);    // "Verified · 12 min 40 s", "2 wa
 // (ProgressSnapshot::etaMs is the current stage only.)
 qint64 jobTimeLeftMs(const JobRecord& r);
 
+// What the queue's one switch does next, from the queue's state (the user's
+// jobs; system jobs do not count):
+//   Pause   the queue is not held: "Pause queue"
+//   Start   held, jobs wait and nothing runs: "Start queue". That is the list
+//           made with "Add to queue", a queue restored when the app starts,
+//           and a paused queue whose running job has ended.
+//   Resume  held while a job still runs, or with nothing waiting: "Resume queue"
+enum class QueueSwitch { Pause, Start, Resume };
+QueueSwitch queueSwitch(bool held, int running, int waiting);
+// "Start queue (3)"; without the number for less than two waiting jobs.
+QString startQueueText(int waiting);
+
 class JobRow : public QWidget {
     Q_OBJECT
 public:
@@ -154,6 +166,7 @@ public:
     JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent = nullptr);
     void refresh();
     JobList* list() const { return m_list; } // the rows under the running block (tests)
+    QPushButton* startQueueButton() const { return m_start; }
     // The job the page's monitor shows: the dock hides its own running block
     // for it (nothing is shown twice). "" = none.
     void setWatchedJob(const QString& id);
@@ -171,6 +184,7 @@ private:
     JobQueueModel& m_model;
     Badge* m_count;
     IconButton* m_pause;
+    QPushButton* m_start; // "Start queue (n)", while a list waits to be started
     Card* m_running;
     ElideLabel* m_runTitle;
     ElideLabel* m_runMeta;
