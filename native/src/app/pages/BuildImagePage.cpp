@@ -1253,6 +1253,7 @@ void BuildImagePage::onFormatChanged()
     if (folder)
         keepZstdPackOn();
     setRequiredKinds({pkg ? QStringLiteral("fpkg.build") : folder ? ampr::kPackJob : jobs::imageBuildKind(format())});
+    updateStartHint();
     applyRowVisibility();
     updateAdvancedSummary();
     updateClusterNote();
@@ -1497,6 +1498,7 @@ void BuildImagePage::setSource(const QString& path)
     if (m_sourcePath != m_addonIdFor)
         m_addonIdFor.clear();
     m_sourceKind = sourceKindOf(m_sourcePath); // one stat here, not one per status-bar refresh
+    updateStartHint();
     clearFormError();
     m_sourceMsg->clear();
     m_rootsBox->hide();
@@ -1792,9 +1794,22 @@ void BuildImagePage::onPackageTypeChanged()
             m_autoVersion.clear();
         }
     }
+    updateStartHint();
     renderFileName();
     updateOutput();
     checkSpace();
+}
+
+// What the form knows to be missing without reading anything, in the words
+// validateForm() uses: the tooltip of the two start buttons.
+void BuildImagePage::updateStartHint()
+{
+    // A backport update needs no game folder (the base package is unpacked).
+    const bool backportType = m_packageType && isFpkg() && packageTypeKind() == PackageType::Backport;
+    if (!m_sourcePath.isEmpty() || backportType)
+        setStartHint({});
+    else
+        setStartHint(isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump first."));
 }
 
 void BuildImagePage::browseBackport(PathField* f, const QString& label)

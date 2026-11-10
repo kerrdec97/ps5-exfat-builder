@@ -1372,6 +1372,8 @@ QWidget* LibraryPage::buildLanguagesTab()
     m_langEmpty = new EmptyState(QStringLiteral("language"), QStringLiteral("Nothing scanned yet"),
                                  QStringLiteral("Scan a game to see the languages it ships."), m_langCard);
     m_langEmpty->setCompact(true);
+    connect(m_langEmpty->addAction(QStringLiteral("Choose a game folder…")), &QPushButton::clicked, this,
+            [this] { m_langFolder->browseButton()->click(); });
     m_langCard->body()->addWidget(m_langEmpty);
     auto* tf = m_langCard->footer();
     m_langSummary = caption({}, m_langCard);

@@ -13,8 +13,12 @@
 #include "support/TestSupport.h"
 
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
 #include <QLabel>
 #include <QLayout>
+#include <QMimeData>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -207,6 +211,98 @@ private slots:
             QVERIFY2(!page->isHeaderLined(), qPrintable(key));
         }
         QVERIFY2(scrolledPages >= 3, "the long pages (Build, Settings, Backport...) scroll in a 1440 x 920 window");
+        m_window->navigate(QStringLiteral("home"));
+    }
+
+    // The start buttons stay enabled and say, as a tooltip, the first thing
+    // the form already knows to be missing; the tooltip goes with the reason.
+    void startButtonsSayWhatIsMissing()
+    {
+        auto* build = qobject_cast<pages::JobFormPage*>(m_window->page(QStringLiteral("build")));
+        QVERIFY(build);
+        m_window->navigate(QStringLiteral("build"));
+        QVERIFY(build->primaryButton()->isEnabled());
+        QCOMPARE(build->primaryButton()->toolTip(), QStringLiteral("Choose the game dump first."));
+        QCOMPARE(build->queueButton()->toolTip(), build->primaryButton()->toolTip());
+        const QString game = m_root.filePath(QStringLiteral("hint-game"));
+        QVERIFY(makeGame(game));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("source"), game}});
+        QCOMPARE(build->primaryButton()->toolTip(), QString());
+        QVERIFY(build->primaryButton()->isEnabled());
+
+        auto* tools = qobject_cast<pages::JobFormPage*>(m_window->page(QStringLiteral("imagetools")));
+        QVERIFY(tools);
+        QCOMPARE(tools->primaryButton()->toolTip(), QStringLiteral("Open an image first."));
+        auto* dlc = qobject_cast<pages::JobFormPage*>(m_window->page(QStringLiteral("dlc")));
+        QVERIFY(dlc);
+        QCOMPARE(dlc->primaryButton()->toolTip(), QStringLiteral("Add DLC INIs or DLC packages first."));
+
+        // Backport: nothing is ticked in an empty library.
+        pages::Page* backport = m_window->page(QStringLiteral("backport"));
+        QVERIFY(backport);
+        QPushButton* start = nullptr;
+        for (QPushButton* b : backport->header()->findChildren<QPushButton*>())
+            if (b->text() == QLatin1String("Start Backport"))
+                start = b;
+        QVERIFY(start);
+        QVERIFY(start->isEnabled());
+        QCOMPARE(start->toolTip(), QStringLiteral("Select at least one game in the Game library."));
+        m_window->navigate(QStringLiteral("home"));
+    }
+
+    // A folder dragged over a page that does not take it itself: the sidebar
+    // marks the page the drop opens (Build), and the mark goes when the drag
+    // leaves. Over the Build page its own drop zone lights up instead.
+    void dragOverTheWindowShowsWhereTheDropGoes()
+    {
+        const QString game = m_root.filePath(QStringLiteral("drag-game"));
+        QVERIFY(makeGame(game));
+        QMimeData mime;
+        mime.setUrls({QUrl::fromLocalFile(game)});
+        ui::NavItem* buildItem = m_window->sidebar()->item(QStringLiteral("build"));
+        ui::NavItem* toolsItem = m_window->sidebar()->item(QStringLiteral("imagetools"));
+        QVERIFY(buildItem && toolsItem);
+        // An image goes to Image tools (the name is enough to tell).
+        const QString image = m_root.filePath(QStringLiteral("drag.exfat"));
+        QVERIFY(fwtest::writeRandomFile(image, 4096, 3));
+        QMimeData imageMime;
+        imageMime.setUrls({QUrl::fromLocalFile(image)});
+
+        m_window->navigate(QStringLiteral("queue"));
+        QDragEnterEvent enter(QPoint(600, 400), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(m_window.get(), &enter);
+        QVERIFY(buildItem->isDropTarget());
+        QVERIFY(!toolsItem->isDropTarget());
+        QDragLeaveEvent leave;
+        QCoreApplication::sendEvent(m_window.get(), &leave);
+        QVERIFY(!buildItem->isDropTarget());
+        QDragEnterEvent enterImage(QPoint(600, 400), Qt::CopyAction, &imageMime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(m_window.get(), &enterImage);
+        QVERIFY(toolsItem->isDropTarget());
+        QVERIFY(!buildItem->isDropTarget());
+        QCoreApplication::sendEvent(m_window.get(), &leave);
+        QVERIFY(!toolsItem->isDropTarget());
+
+        // Something no page opens: no mark anywhere.
+        const QString note = m_root.filePath(QStringLiteral("note.txt"));
+        QVERIFY(fwtest::writeTextFile(note, "x"));
+        QMimeData other;
+        other.setUrls({QUrl::fromLocalFile(note)});
+        QDragEnterEvent enterOther(QPoint(600, 400), Qt::CopyAction, &other, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(m_window.get(), &enterOther);
+        QVERIFY(!buildItem->isDropTarget() && !toolsItem->isDropTarget());
+        QCoreApplication::sendEvent(m_window.get(), &leave);
+
+        // The Build page takes a game folder itself.
+        auto* build = qobject_cast<pages::JobFormPage*>(m_window->page(QStringLiteral("build")));
+        QVERIFY(build && build->sourceCard());
+        m_window->navigate(QStringLiteral("build"));
+        QDragEnterEvent enterBuild(QPoint(600, 400), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(m_window.get(), &enterBuild);
+        QVERIFY(!buildItem->isDropTarget());
+        QVERIFY(build->sourceCard()->dropHighlight());
+        QCoreApplication::sendEvent(m_window.get(), &leave);
+        QVERIFY(!build->sourceCard()->dropHighlight());
         m_window->navigate(QStringLiteral("home"));
     }
 

@@ -1200,6 +1200,14 @@ void BackportPage::updateButtons()
     for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild})
         w->setEnabled(!busy);
     m_rootsBtn->setText(QStringLiteral("Locations (%1)").arg(m_settings.scanRoots.size()));
+    updateStartTip();
+}
+
+// The Start button says what a click would ask for; it stays enabled, and the
+// click still explains it.
+void BackportPage::updateStartTip()
+{
+    m_start->setToolTip(isIdle() && m_selected == 0 ? QStringLiteral("Select at least one game in the Game library.") : QString());
 }
 
 void BackportPage::updateStats()
@@ -1228,6 +1236,8 @@ void BackportPage::updateStats()
     set(QStringLiteral("Running"), running);
     set(QStringLiteral("Done"), done);
     set(QStringLiteral("Failed / partial"), failed);
+    m_selected = sel;
+    updateStartTip();
     m_countBadge->set(games == 0 ? QStringLiteral("No games yet")
                                  : games == 1 ? QStringLiteral("1 game found") : QStringLiteral("%1 games found").arg(games),
                       games ? Tone::Info : Tone::Neutral);

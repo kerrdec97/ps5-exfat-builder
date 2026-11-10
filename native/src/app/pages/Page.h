@@ -147,6 +147,12 @@ protected:
     virtual QString validateForm() { return {}; }
     void showFormError(const QString& title, const QString& message);
     void clearFormError();
+    // The first thing the form already knows to be missing ("Choose the game
+    // dump first."), shown as the tooltip of the two start buttons; "" when
+    // nothing is known to be missing. Only what the page has at hand: this is
+    // not validateForm() and must cost nothing.
+    void setStartHint(const QString& hint);
+    QString startHint() const { return m_startHint; }
     void setSourceCard(ui::Card* card) { m_sourceCard = card; }
     // Standard "job settings" card with the schema's perJob settings.
     ui::JobOptionsPanel* addJobOptionsCard(const QString& title, const QStringList& sections,
@@ -166,7 +172,9 @@ protected:
 
 private:
     void submitClicked(bool buildNow);
+    void applyStartTip();
     QString m_feature;
+    QString m_startHint;
     QStringList m_kinds;
     bool m_available = true;
     void setView(View view);

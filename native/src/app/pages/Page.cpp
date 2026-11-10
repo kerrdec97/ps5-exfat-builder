@@ -301,7 +301,22 @@ void JobFormPage::refreshAvailability()
     }
     m_primary->setEnabled(m_available);
     m_queue->setEnabled(m_available);
-    m_primary->setToolTip(m_available ? QString() : QStringLiteral("Not available in this build"));
+    applyStartTip();
+}
+
+void JobFormPage::setStartHint(const QString& hint)
+{
+    if (hint == m_startHint)
+        return;
+    m_startHint = hint;
+    applyStartTip();
+}
+
+// The two buttons say why a click would not start anything; the click itself
+// still explains it in the form (the buttons stay enabled for that).
+void JobFormPage::applyStartTip()
+{
+    m_primary->setToolTip(m_available ? m_startHint : QStringLiteral("Not available in this build"));
     m_queue->setToolTip(m_primary->toolTip());
 }
 

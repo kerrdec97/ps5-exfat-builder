@@ -150,6 +150,7 @@ private:
     void updateStats();
     void updateModeLine();
     void updateButtons();
+    void updateStartTip();
     void setState(const QString& text, ui::Tone tone);
 
     // engine
@@ -260,6 +261,7 @@ private:
     bool m_shownOnce = false;
     bool m_demo = false;
     bool m_suppressSave = false;
+    int m_selected = 0; // ticked games, as counted by updateStats()
     QString m_rowSavedStatus, m_rowSavedTone, m_rowSavedDetail;
 
     // ---- widgets

@@ -447,9 +447,14 @@ void SettingsPage::rebuild()
             }
             m_cardsLayout->addWidget(card);
         }
-        if (n == 0)
-            m_cardsLayout->addWidget(new EmptyState(QStringLiteral("search"), QStringLiteral("No setting matches"),
-                                                    QStringLiteral("Try a shorter word, or browse the sections."), m_cards));
+        if (n == 0) {
+            auto* none = new EmptyState(QStringLiteral("search"), QStringLiteral("No setting matches"),
+                                        QStringLiteral("Try a shorter word, or browse the sections."), m_cards);
+            // Queued: clearing the search rebuilds the cards, this button among them.
+            connect(none->addAction(QStringLiteral("Clear search")), &QPushButton::clicked, this, [this] { m_search->clear(); },
+                    Qt::QueuedConnection);
+            m_cardsLayout->addWidget(none);
+        }
         m_secCaption->setText(n == 0 ? QStringLiteral("Nothing matches “%1”.").arg(query)
                                      : QStringLiteral("%1 setting%2 match “%3”.").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(query));
         refreshDependencyStates();

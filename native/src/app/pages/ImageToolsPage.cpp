@@ -839,6 +839,13 @@ void ImageToolsPage::updatePrimary()
         break;
     }
     primaryButton()->setText(text);
+    // What is known to be missing, in validateForm()'s words.
+    if (m_path.isEmpty())
+        setStartHint(QStringLiteral("Open an image first."));
+    else if (m_action == Action::Edit && m_ops.empty() && m_tree.error.isEmpty())
+        setStartHint(QStringLiteral("Stage at least one change."));
+    else
+        setStartHint({});
 }
 
 void ImageToolsPage::updateKinds()

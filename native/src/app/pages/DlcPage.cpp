@@ -677,6 +677,9 @@ void DlcPage::updateState()
         m_countBadge->set(QStringLiteral("Nothing added"), Tone::Neutral);
     m_output->setPlaceholder(m_rows.empty() ? QStringLiteral("A \"DLC packages\" folder next to the first input")
                                             : nativePath(outputFolder()));
+    // What is known to be missing, in validateForm()'s words.
+    setStartHint(!any ? QStringLiteral("Add DLC INIs or DLC packages first.")
+                      : m_loading > 0 ? QStringLiteral("Packages are still being read. Try again in a moment.") : QString());
     const DependencyInfo info = m_ctx.dependencies().last(QStringLiteral("dlc.fpkgcli"));
     if (info.id.isEmpty()) {
         m_engineBadge->set(QStringLiteral("Checking\u2026"), Tone::Neutral);

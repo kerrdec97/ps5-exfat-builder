@@ -105,6 +105,14 @@ void NavItem::setExternalBar(bool external)
     update();
 }
 
+void NavItem::setDropTarget(bool on)
+{
+    if (m_dropTarget == on)
+        return;
+    m_dropTarget = on;
+    update();
+}
+
 void NavItem::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -127,7 +135,15 @@ void NavItem::paintEvent(QPaintEvent*)
         p.setBrush(down ? color::bg_3 : withAlpha(color::bg_3, int(153 * hover))); // hover: bg_3 at 60 %
         p.drawRoundedRect(r, radius::control, radius::control);
     }
-    const QColor textColor = sel ? color::fg_0 : blend(color::fg_2, color::fg_0, hover);
+    if (m_dropTarget) {
+        // What is being dragged over the window opens here: the dashed line of a drop zone.
+        QPen pen(color::accent_hi, 1, Qt::DashLine);
+        pen.setDashPattern({4, 3});
+        p.setPen(pen);
+        p.setBrush(withAlpha(color::accent, 30));
+        p.drawRoundedRect(r, radius::control, radius::control);
+    }
+    const QColor textColor = sel || m_dropTarget ? color::fg_0 : blend(color::fg_2, color::fg_0, hover);
     const int ix = m_compact ? (width() - size::icon) / 2 : 14;
     const QRect iconRect(ix, (height() - size::icon) / 2, size::icon, size::icon);
     if (sel)

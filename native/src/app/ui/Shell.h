@@ -26,6 +26,10 @@ public:
     QRect barRect() const;
     static void paintSelectionBar(QPainter& p, const QRectF& r);
     void setExternalBar(bool external);
+    // While something is dragged over the window that a drop would open on
+    // this item's page: a dashed accent outline, as on a drop zone.
+    void setDropTarget(bool on);
+    bool isDropTarget() const { return m_dropTarget; }
 signals:
     void moveFocusRequested(int delta); // Up / Down arrows
 
@@ -39,6 +43,7 @@ private:
     QString m_key, m_icon;
     bool m_compact = false;
     bool m_externalBar = false;
+    bool m_dropTarget = false;
     int m_count = 0;
     motion::Value* m_hover; // the hover tint fades
 };
