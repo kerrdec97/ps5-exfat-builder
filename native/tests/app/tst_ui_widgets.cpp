@@ -1647,6 +1647,47 @@ private slots:
 
         delete tiles;
         QTRY_VERIFY(!glow);
+
+        // A tile widget that fills its container to the edge (a plain box of
+        // a layout): the glow lives one level up, where there is room, under
+        // that box, and follows the box as well.
+        auto* outer = add<QWidget>();
+        outer->setFixedSize(400, 200);
+        auto* box = new QWidget(outer);
+        box->setGeometry(30, 30, 200, 100);
+        box->show();
+        auto* flush = new QWidget(box);
+        flush->setGeometry(0, 0, 200, 100);
+        flush->show();
+        QPointer<SelectionGlow> lifted = new SelectionGlow(flush);
+        QCOMPARE(lifted->parentWidget(), outer);
+        QCOMPARE(lifted->geometry(), QRect(30, 30, 200, 100).adjusted(-s, -s, s, s));
+        QVERIFY(outer->children().indexOf(lifted.data()) < outer->children().indexOf(box));
+        box->move(50, 40);
+        QCOMPARE(lifted->geometry(), QRect(50, 40, 200, 100).adjusted(-s, -s, s, s));
+        box->hide();
+        QVERIFY(lifted->isHidden());
+        box->show();
+        QVERIFY(!lifted->isHidden());
+        delete box;
+        QTRY_VERIFY(!lifted);
+
+        // The tile widget is deleted and its container moves before the glow
+        // itself is gone (a page that rebuilds its tiles): nothing is touched.
+        auto* box2 = new QWidget(outer);
+        box2->setGeometry(30, 30, 200, 100);
+        box2->show();
+        auto* tiles2 = new QWidget(box2);
+        tiles2->setGeometry(0, 0, 200, 100);
+        tiles2->show();
+        QPointer<SelectionGlow> orphan = new SelectionGlow(tiles2);
+        delete tiles2;
+        QVERIFY(orphan); // deleted later
+        box2->move(60, 50);
+        box2->resize(180, 90);
+        box2->hide();
+        QTRY_VERIFY(!orphan);
+        delete box2;
     }
 
     // The running stage's dot swings only while it is switched on, on screen

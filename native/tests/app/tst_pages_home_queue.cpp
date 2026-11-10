@@ -255,6 +255,33 @@ private slots:
         m_window->navigate(QStringLiteral("home"));
     }
 
+    // The pinned start button can be pressed with the form scrolled anywhere:
+    // what it answers (at the form's top) is brought into view.
+    void formErrorIsBroughtIntoView()
+    {
+        auto* dlc = qobject_cast<pages::JobFormPage*>(m_window->page(QStringLiteral("dlc")));
+        QVERIFY(dlc);
+        m_window->navigate(QStringLiteral("dlc"));
+        QTest::qWait(30);
+        QScrollBar* bar = dlc->scrollArea()->verticalScrollBar();
+        QVERIFY2(bar->maximum() > 0, "the DLC form is longer than a 1440 x 920 window");
+        bar->setValue(bar->maximum());
+        QVERIFY(dlc->isHeaderLined());
+        QVERIFY(dlc->primaryButton()->visibleRegion().boundingRect() == dlc->primaryButton()->rect()); // still there to press
+        QTest::mouseClick(dlc->primaryButton(), Qt::LeftButton); // nothing was added: the form says so
+        QCOMPARE(bar->value(), 0);
+        ui::InfoBar* error = nullptr;
+        for (ui::InfoBar* b : dlc->scrollArea()->widget()->findChildren<ui::InfoBar*>())
+            if (!b->isHidden())
+                for (const QLabel* l : b->findChildren<QLabel*>())
+                    if (l->text() == QLatin1String("Add DLC INIs or DLC packages first."))
+                        error = b;
+        QVERIFY(error);
+        QTRY_VERIFY(!error->visibleRegion().isEmpty());
+        dlc->clearDemoState(); // takes the error away again
+        m_window->navigate(QStringLiteral("home"));
+    }
+
     // A folder dragged over a page that does not take it itself: the sidebar
     // marks the page the drop opens (Build), and the mark goes when the drag
     // leaves. Over the Build page its own drop zone lights up instead.

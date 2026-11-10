@@ -47,16 +47,14 @@ bool isInput(const QString& p)
     return p.endsWith(QStringLiteral(".ini"), Qt::CaseInsensitive) || p.endsWith(QStringLiteral(".pkg"), Qt::CaseInsensitive);
 }
 
-QPixmap placeholderIcon()
+// An entry without an icon0.png: the generated cover the Library uses, in the
+// colour of the game the add-on belongs to (its title ID).
+QPixmap placeholderIcon(const QString& title, const QString& titleId)
 {
     QPixmap pm(40, 40);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setBrush(color::bg_3);
-    p.setPen(Qt::NoPen);
-    p.drawRoundedRect(QRectF(0, 0, 40, 40), 6, 6);
-    icon(QStringLiteral("package"), color::fg_4).paint(&p, QRect(10, 10, 20, 20));
+    paintCoverPlaceholder(p, QRectF(0, 0, 40, 40), title, titleId, 6);
     return pm;
 }
 
@@ -523,7 +521,7 @@ void DlcPage::refreshRow(int r)
         return;
     const Row& row = m_rows[size_t(r)];
     m_syncing = true;
-    m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon() : row.icon));
+    m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon(row.item.title, row.item.titleId) : row.icon));
     m_table->item(r, IconCol)->setToolTip(QStringLiteral("Double-click to choose icon0.png"));
     m_table->item(r, TitleCol)->setText(row.item.title);
     m_table->item(r, TitleCol)->setToolTip(plainTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")

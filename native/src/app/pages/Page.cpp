@@ -327,6 +327,9 @@ void JobFormPage::showFormError(const QString& title, const QString& message)
     m_error->setMessage(message);
     m_error->clearLinks();
     m_error->show();
+    // The start buttons are pinned and can be pressed from anywhere in the
+    // form: the answer is at the form's top, so that is brought into view.
+    scrollArea()->verticalScrollBar()->setValue(0);
 }
 
 void JobFormPage::clearFormError() { m_error->hide(); }

@@ -17,6 +17,8 @@
 #include "app/ui/Widgets.h"
 
 #include <QAbstractButton>
+#include <QList>
+#include <QPointer>
 #include <QVariant>
 #include <QWidget>
 
@@ -26,6 +28,8 @@ class QVBoxLayout;
 class QHBoxLayout;
 
 namespace fw::ui {
+
+class SelectionGlow;
 
 class ChoiceTiles : public QWidget {
     Q_OBJECT
@@ -68,6 +72,7 @@ private:
     std::vector<Item> m_items;
     int m_current = -1;
     motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades
+    SelectionGlow* m_glow;      // the selected tile's soft glow
     bool m_keyNav = false; // an arrow key chose the tile last
 };
 
@@ -201,9 +206,10 @@ void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr);
 
 // The soft glow of the selected tile of a widget that paints its tiles
 // itself: the signature gradient at 18 %, fading out over 6 px. Painted (no
-// graphics effect), and it lies outside the tile, so it is drawn by a sibling
-// placed under the target widget that follows it; the target's own geometry
-// does not change. The object belongs to the target.
+// graphics effect), and it lies outside the tile, so it is drawn by a widget
+// of its own placed under the target (in the nearest ancestor with room for
+// it) that follows the target; the target's own geometry does not change.
+// The object belongs to the target.
 class SelectionGlow : public QWidget {
 public:
     explicit SelectionGlow(QWidget* target);
@@ -219,9 +225,11 @@ protected:
 
 private:
     void follow();
-    QWidget* m_target;
+    QPointer<QWidget> m_target;
+    QList<QPointer<QWidget>> m_chain; // the target and its ancestors up to the glow's parent: watched
     QRectF m_rect;
     qreal m_radius = 0;
+    bool m_following = false;
 };
 
 } // namespace fw::ui

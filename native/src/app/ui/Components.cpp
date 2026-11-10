@@ -4,6 +4,7 @@
 #include "app/ui/Motion.h"
 #include "app/ui/Style.h"
 
+#include <QAbstractScrollArea>
 #include <QAccessible>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -12,7 +13,9 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QRadialGradient>
+#include <QScopeGuard>
 #include <QTextLayout>
 #include <QVBoxLayout>
 
@@ -71,7 +74,6 @@ SelectionGlow::SelectionGlow(QWidget* target) : QWidget(target->parentWidget()),
     setProperty("fwNoRing", true);
     // It dies with its target, wherever the target is moved to.
     connect(target, &QObject::destroyed, this, &QObject::deleteLater);
-    target->installEventFilter(this);
     follow();
 }
 
@@ -86,29 +88,58 @@ void SelectionGlow::setItemRect(const QRectF& r, qreal radius)
 
 void SelectionGlow::follow()
 {
-    if (parentWidget() != m_target->parentWidget())
-        setParent(m_target->parentWidget());
-    if (!parentWidget())
+    // (The target may be gone while this object still waits for its own deletion.)
+    if (m_following || !m_target)
         return;
-    setGeometry(m_target->geometry().adjusted(-kSpread, -kSpread, kSpread, kSpread));
-    stackUnder(m_target);
-    setVisible(!m_target->isHidden());
+    m_following = true;
+    const auto done = qScopeGuard([this] { m_following = false; });
+    // The glow needs room around the target. A tile widget often fills its
+    // parent to the edge (a plain container of a layout), so the glow lives
+    // in the nearest ancestor that has the room, under the branch the target
+    // is in; the containers in between paint nothing.
+    QWidget* host = m_target->parentWidget();
+    QWidget* branch = m_target;
+    QList<QPointer<QWidget>> chain{m_target};
+    while (host) {
+        chain << host;
+        const QRect r = QRect(m_target->mapTo(host, QPoint(0, 0)), m_target->size()).adjusted(-kSpread, -kSpread, kSpread, kSpread);
+        QWidget* up = host->parentWidget();
+        const auto* area = up ? qobject_cast<QAbstractScrollArea*>(up->parentWidget()) : nullptr;
+        if (host->rect().contains(r) || !up || host->isWindow() || (area && area->viewport() == up))
+            break; // room enough, or as far up as it may go (a window, the content of a scroll area)
+        branch = host;
+        host = up;
+    }
+    // Whatever moves, resizes, hides or re-parents anything on the way up moves the glow.
+    for (const QPointer<QWidget>& w : std::as_const(m_chain))
+        if (w && !chain.contains(w))
+            w->removeEventFilter(this);
+    for (const QPointer<QWidget>& w : std::as_const(chain))
+        if (!m_chain.contains(w))
+            w->installEventFilter(this);
+    m_chain = chain;
+    if (!host)
+        return;
+    if (parentWidget() != host)
+        setParent(host);
+    setGeometry(QRect(m_target->mapTo(host, QPoint(0, 0)), m_target->size()).adjusted(-kSpread, -kSpread, kSpread, kSpread));
+    stackUnder(branch);
+    setVisible(m_target->isVisibleTo(host));
 }
 
 bool SelectionGlow::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == m_target) {
-        switch (event->type()) {
-        case QEvent::Move:
-        case QEvent::Resize:
-        case QEvent::ShowToParent:
-        case QEvent::HideToParent:
-        case QEvent::ParentChange:
+    switch (event->type()) {
+    case QEvent::Move:
+    case QEvent::Resize:
+    case QEvent::ShowToParent:
+    case QEvent::HideToParent:
+    case QEvent::ParentChange:
+        if (watched != this)
             follow();
-            break;
-        default:
-            break;
-        }
+        break;
+    default:
+        break;
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -147,6 +178,7 @@ ChoiceTiles::ChoiceTiles(QWidget* parent) : QWidget(parent)
     setSizePolicy(sp);
     setProperty("fwNoRing", true); // the selected tile shows the focus itself
     m_hover = new motion::HoverFade(this);
+    m_glow = new SelectionGlow(this);
 }
 
 QString ChoiceTiles::choiceTitle(int index) const
@@ -312,6 +344,10 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
             p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
         }
     }
+    // The selected tile's soft glow lies outside the tile: its own widget
+    // draws it, around wherever the tile was just painted.
+    m_glow->setItemRect(m_current >= 0 && m_current < count() ? QRectF(tileRect(m_current)).adjusted(0.5, 0.5, -0.5, -0.5) : QRectF(),
+                        radius::md);
 }
 
 void ChoiceTiles::mousePressEvent(QMouseEvent* e)
