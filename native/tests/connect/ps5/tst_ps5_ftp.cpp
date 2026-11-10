@@ -116,6 +116,22 @@ private slots:
         auto dosFile = parseListLine(QStringLiteral("12-31-99  11:59AM              42 a.txt"), now);
         QVERIFY(dosFile);
         QCOMPARE(dosFile->size, qint64(42));
+        QCOMPARE(dosFile->modified, QDateTime(QDate(1999, 12, 31), QTime(11, 59), QTimeZone::utc())); // two-digit year
+        // 12 o'clock in the 12-hour clock: midnight and noon.
+        auto midnight = parseListLine(QStringLiteral("03-04-24  12:05AM              1 m.txt"), now);
+        auto noon = parseListLine(QStringLiteral("03-04-24  12:05PM              1 n.txt"), now);
+        QVERIFY(midnight && noon);
+        QCOMPARE(midnight->modified.time(), QTime(0, 5));
+        QCOMPARE(noon->modified.time(), QTime(12, 5));
+        // Game images are far larger than 4 GiB: sizes keep all their digits.
+        const qint64 hundredGiB = 107374182400LL;
+        auto bigUnix = parseListLine(QStringLiteral("-rw-r--r-- 1 root wheel 107374182400 Jan 01 12:00 big.exfat"), now);
+        auto bigDos = parseListLine(QStringLiteral("01-02-24  03:04PM        107374182400 big.exfat"), now);
+        auto bigMlsd = parseMlsdLine(QStringLiteral("type=file;size=107374182400;modify=20240102030405; big.exfat"));
+        QVERIFY(bigUnix && bigDos && bigMlsd);
+        QCOMPARE(bigUnix->size, hundredGiB);
+        QCOMPARE(bigDos->size, hundredGiB);
+        QCOMPARE(bigMlsd->size, hundredGiB);
         QVERIFY(!parseListLine(QStringLiteral("total 12"), now));
         QVERIFY(!parseListLine(QStringLiteral("drwxr-xr-x 1 root root 4096 Jan 01 12:00 ."), now));
         QVERIFY(!parseListLine(QStringLiteral("garbage"), now));
