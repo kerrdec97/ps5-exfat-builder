@@ -290,9 +290,9 @@ void ConsoleHero::paintEvent(QPaintEvent*)
     p.setClipPath(clip);
     // Deep blue-black with the brand's light behind the console tile.
     QLinearGradient base(r.topLeft(), r.bottomRight());
-    base.setColorAt(0, QColor(0x12, 0x1a, 0x33));
-    base.setColorAt(0.5, QColor(0x12, 0x15, 0x26));
-    base.setColorAt(1, QColor(0x0f, 0x12, 0x1d));
+    base.setColorAt(0, color::console_0);
+    base.setColorAt(0.5, color::console_1);
+    base.setColorAt(1, color::console_2);
     p.fillRect(r, base);
     auto blob = [&](QPointF c, qreal rad, QColor col) {
         QRadialGradient g(c, rad);
@@ -302,8 +302,8 @@ void ConsoleHero::paintEvent(QPaintEvent*)
         p.fillRect(r, g);
     };
     const bool on = m_state == State::Connected;
-    blob(QPointF(r.left() + 60, r.top() + 50), 220, on ? QColor(0x2e, 0xd3, 0x9a, 34) : QColor(0x3d, 0x7b, 0xff, 60));
-    blob(QPointF(r.right() - 180, r.top() - 30), 260, QColor(0x8b, 0x5c, 0xf6, 40));
+    blob(QPointF(r.left() + 60, r.top() + 50), 220, on ? withAlpha(color::success, 34) : withAlpha(color::accent, 60));
+    blob(QPointF(r.right() - 180, r.top() - 30), 260, withAlpha(color::accent_2, 40));
     // A large, faint console glyph on the right.
     const int gs = int(std::min(r.height() * 1.1, 200.0));
     p.setOpacity(0.06);
@@ -312,7 +312,7 @@ void ConsoleHero::paintEvent(QPaintEvent*)
     // The signature gradient along the top edge.
     p.fillRect(QRectF(r.left(), r.top(), r.width(), 2), accentGradient(QRectF(r.left(), r.top(), r.width(), 2), on ? 230 : 140));
     p.setClipping(false);
-    p.setPen(QPen(QColor(141, 181, 255, 46), 1));
+    p.setPen(QPen(withAlpha(color::accent_hi, 46), 1));
     p.setBrush(Qt::NoBrush);
     p.drawRoundedRect(r, radius::lg, radius::lg);
 }

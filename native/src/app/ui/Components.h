@@ -102,6 +102,10 @@ public:
     bool isExpanded() const { return m_expanded; }
     void setSummary(const QString& text, Tone tone = Tone::Neutral); // right side of the header
     void setCaption(const QString& text);
+    // For a disclosure inside a card: a plain header row under a hairline
+    // instead of a plate of its own (a plate in a plate has two outlines).
+    void setPlain(bool plain);
+    bool isPlain() const { return m_plain; }
 
 signals:
     void toggled(bool expanded);
@@ -121,6 +125,7 @@ private:
     QWidget* m_bodyWidget;
     QVBoxLayout* m_body;
     bool m_expanded = false;
+    bool m_plain = false;
 };
 
 class HeroBanner : public QWidget {
@@ -145,6 +150,11 @@ class StatTile : public QWidget {
 public:
     StatTile(const QString& icon, const QString& overline, QWidget* parent = nullptr);
     void setValue(const QString& value, Tone tone = Tone::Neutral);
+    // The icon tile's tone as the state of what the tile reports: Neutral is
+    // the quiet tile (nothing to say), Info the accent tile (active), Ok /
+    // Warn / Err the badge tones. Without this call the tile follows setValue().
+    void setIconTone(Tone tone);
+    Tone iconTone() const;
     void setCaption(const QString& caption);
     QLabel* valueLabel() { return m_value; }
     QHBoxLayout* footer() { return m_footer; }
@@ -166,6 +176,7 @@ private:
     QLabel* m_caption;
     QHBoxLayout* m_footer;
     motion::Value* m_hover; // the hover tint fades
+    bool m_iconToneSet = false;
 };
 
 class ActionCard : public QAbstractButton {
@@ -183,6 +194,34 @@ protected:
 private:
     QString m_icon, m_text;
     motion::Value* m_hover; // the hover tint fades
+};
+
+// The check mark of a selected tile: a round bubble in the fill gradient.
+void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr);
+
+// The soft glow of the selected tile of a widget that paints its tiles
+// itself: the signature gradient at 18 %, fading out over 6 px. Painted (no
+// graphics effect), and it lies outside the tile, so it is drawn by a sibling
+// placed under the target widget that follows it; the target's own geometry
+// does not change. The object belongs to the target.
+class SelectionGlow : public QWidget {
+public:
+    explicit SelectionGlow(QWidget* target);
+    // The tile to glow around, in the target's coordinates (an empty
+    // rectangle: no glow), and its corner radius.
+    void setItemRect(const QRectF& r, qreal radius);
+    QRectF itemRect() const { return m_rect; }
+    static constexpr int kSpread = 6;
+
+protected:
+    void paintEvent(QPaintEvent* e) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    void follow();
+    QWidget* m_target;
+    QRectF m_rect;
+    qreal m_radius = 0;
 };
 
 } // namespace fw::ui

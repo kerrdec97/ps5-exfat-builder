@@ -147,6 +147,18 @@ QColor withAlpha(QColor c, int alpha)
     return c;
 }
 
+namespace cover {
+QLinearGradient gradient(int index)
+{
+    const Stops& s = stops[((index % count) + count) % count];
+    QLinearGradient g(0, 0, 1, 1);
+    g.setCoordinateMode(QGradient::ObjectMode);
+    g.setColorAt(0, s.from);
+    g.setColorAt(1, s.to);
+    return g;
+}
+} // namespace cover
+
 QString hex(const QColor& c)
 {
     if (c.alpha() < 255)

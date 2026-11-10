@@ -183,6 +183,29 @@ private slots:
         QCOMPARE(m_ctx->settings().value(ps5::keys::kConsoleIp).toString(), QStringLiteral("192.168.1.98"));
     }
 
+    // The result list is as tall as its rows need (three at least), not a
+    // fixed block whose lower half stays empty.
+    void findListIsAsTallAsItsRows()
+    {
+        auto* sheet = new ui::Sheet(m_window.get(), QStringLiteral("Find my PS5"));
+        auto* panel = new pages::FindConsolePanel(sheet);
+        sheet->body()->addWidget(panel);
+        sheet->addButton(QStringLiteral("Cancel"), ui::Sheet::Role::Safe);
+        sheet->open();
+        QCOMPARE(panel->resultArea()->height(), int(pages::FindConsolePanel::kAreaMin));
+        panel->showSpecimen(); // two consoles
+        QCOMPARE(panel->table()->rowCount(), 2);
+        QCOMPARE(panel->resultArea()->height(), int(pages::FindConsolePanel::kAreaMin));
+        QVERIFY(pages::FindConsolePanel::kAreaMin < pages::FindConsolePanel::kAreaMax);
+        QCoreApplication::processEvents();
+        // Both rows are in view, with less than two rows of air under them.
+        const QRect last = panel->table()->visualRect(panel->table()->model()->index(1, 0));
+        QVERIFY(panel->table()->viewport()->rect().contains(last));
+        QVERIFY(panel->table()->viewport()->height() - last.bottom() < 2 * theme::size::row);
+        sheet->close(0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
     void diagnosticsTabRunsTheJob()
     {
         fake::FakeFtpServer::Options o;

@@ -78,6 +78,16 @@ public:
     void rowChanged(const QString& key);
     void allChanged();
 
+    // The Status column's badge: its text ("Patching… 42%"), its tone, and
+    // the width a row asks of the column (with room for a percentage that is
+    // still growing, so the column does not twitch while a game runs).
+    static QString statusText(const BackportRow& row);
+    static ui::Tone statusTone(const BackportRow& row);
+    static int statusWidth(const BackportRow& row);
+    // The column is as wide as its widest state, within these limits and
+    // while the title column keeps at least kTitleColMin.
+    static constexpr int kStatusColMin = 150, kStatusColMax = 300, kTitleColMin = 200;
+
 signals:
     void checkedChanged();
 
@@ -151,6 +161,7 @@ private:
     void updateModeLine();
     void updateButtons();
     void updateStartTip();
+    void fitStatusColumn();
     void setState(const QString& text, ui::Tone tone);
 
     // engine
@@ -283,7 +294,7 @@ private:
     QLabel* m_percent;
     QLabel* m_current;
     QLabel* m_stage;
-    QHash<QString, QLabel*> m_chips;
+    QHash<QString, ui::Badge*> m_chips;
     QLabel* m_modeLine;
     QTextEdit* m_logBox;
     QPushButton* m_openOutput;

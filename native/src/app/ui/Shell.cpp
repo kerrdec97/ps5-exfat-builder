@@ -515,6 +515,7 @@ PageHeader::PageHeader(const QString& title, const QString& captionText, QWidget
     auto* h = hbox(this, space::lg, QMargins(0, 0, 0, space::xs));
     h->setAlignment(Qt::AlignTop);
     m_icon = new IconTile(QString(), 46, this);
+    m_icon->setAccent(true);
     m_icon->hide();
     h->addWidget(m_icon, 0, Qt::AlignTop);
     auto* col = new QVBoxLayout;
@@ -526,9 +527,11 @@ PageHeader::PageHeader(const QString& title, const QString& captionText, QWidget
     col->addWidget(m_title);
     col->addWidget(m_caption);
     h->addLayout(col, 1);
+    // The page's buttons keep their own width at the right edge (the caption
+    // stops at 760 px; what is left over is not theirs to fill).
     auto* actions = new QWidget(this);
     m_actions = hbox(actions, space::sm);
-    h->addWidget(actions, 0, Qt::AlignTop);
+    h->addWidget(actions, 0, Qt::AlignTop | Qt::AlignRight);
 }
 
 void PageHeader::setCaption(const QString& text)

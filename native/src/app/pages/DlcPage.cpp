@@ -239,6 +239,7 @@ void DlcPage::buildListCard()
     card->body()->addWidget(m_loadRow);
 
     auto* logTitle = new Disclosure(QStringLiteral("Conversion log"), QString(), card);
+    logTitle->setPlain(true); // a row of this card, not a plate in it
     m_log = new QPlainTextEdit(logTitle);
     m_log->setReadOnly(true);
     m_log->setMinimumHeight(140);

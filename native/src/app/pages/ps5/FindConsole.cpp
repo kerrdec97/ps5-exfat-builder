@@ -64,9 +64,11 @@ FindConsolePanel::FindConsolePanel(QWidget* parent) : QWidget(parent)
     tl->addWidget(m_status);
     l->addWidget(top);
 
-    // Fixed height: the sheet sizes itself once, when it opens.
+    // As tall as its rows, between three rows (the usual one or two consoles,
+    // and the "No PS5 found" state, need no more) and five; see fitArea().
     auto* area = new QWidget(this);
-    area->setFixedHeight(5 * size::row + 40);
+    m_area = area;
+    area->setFixedHeight(kAreaMin);
     auto* al = vbox(area, 0);
     m_table = new QTableWidget(0, 4, area);
     m_table->setHorizontalHeaderLabels({QStringLiteral("Address"), QStringLiteral("Port"), QStringLiteral("Server greeting"), QStringLiteral("Answered in")});
@@ -115,6 +117,7 @@ void FindConsolePanel::start(const ps5::DiscoveryOptions& options)
     m_table->setRowCount(0);
     m_table->show();
     m_empty->hide();
+    fitArea();
     m_scope = describeScope(options);
     m_bar->setState(ProgressBar::State::Indeterminate);
     m_bar->show();
@@ -173,6 +176,7 @@ void FindConsolePanel::onFinished(int generation, const Result<std::vector<ps5::
         m_table->setRowCount(0);
         m_table->hide();
         m_empty->show();
+        fitArea();
         m_status->setText(result.error().isCancelled() ? QStringLiteral("Search stopped.") : result.error().message);
         setTextColor(m_status, result.error().isCancelled() ? color::fg_3 : color::danger_hi);
         emit finished(0);
@@ -216,7 +220,24 @@ void FindConsolePanel::setResults(std::vector<ps5::DiscoveredConsole> results)
                               .arg(portsText(m_options), m_scope));
         setTextColor(m_status, color::fg_2);
     }
+    fitArea();
     emit selectionChanged(selected().has_value());
+}
+
+// The list is as tall as the consoles found, within its limits; the sheet it
+// is in (which lays itself out when it opens) is told when that changes.
+void FindConsolePanel::fitArea()
+{
+    const int rows = m_table->isHidden() ? 0 : m_table->rowCount();
+    const int h = std::clamp(m_table->horizontalHeader()->height() + rows * size::row + 2 * m_table->frameWidth() + 4, kAreaMin, kAreaMax);
+    if (h == m_area->height())
+        return;
+    m_area->setFixedHeight(h);
+    for (QWidget* w = parentWidget(); w; w = w->parentWidget())
+        if (auto* sheet = qobject_cast<Sheet*>(w)) {
+            sheet->refit();
+            break;
+        }
 }
 
 std::optional<ps5::DiscoveredConsole> FindConsolePanel::selected() const

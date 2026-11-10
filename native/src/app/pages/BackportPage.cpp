@@ -86,21 +86,6 @@ QString tip(const char* t)
     return QStringLiteral("<p style='white-space:normal'>%1</p>").arg(QString::fromUtf8(t).toHtmlEscaped());
 }
 
-QColor toneColor(const QString& tone)
-{
-    if (tone == QLatin1String("idle") || tone == QLatin1String("good"))
-        return color::success;
-    if (tone == QLatin1String("warn"))
-        return color::warn;
-    if (tone == QLatin1String("bad"))
-        return color::danger;
-    if (tone == QLatin1String("busy"))
-        return color::accent_hi;
-    if (tone == QLatin1String("muted"))
-        return color::fg_5;
-    return color::fg_3; // info
-}
-
 QString nameOr(const BackportRow& r)
 {
     return r.game.title.isEmpty() ? r.game.path : r.game.title;
@@ -149,7 +134,7 @@ QPixmap coverFor(const BackportRow& r, int px, qreal dpr)
     if (!r.game.icon.isEmpty())
         key = r.game.icon + u'|' + QString::number(px);
     else
-        key = QStringLiteral("initials|") + title + u'|' + QString::number(px);
+        key = QStringLiteral("initials|") + title + u'|' + r.game.titleId + u'|' + QString::number(px);
     auto it = cache.find(key);
     if (it != cache.end())
         return *it;
@@ -169,24 +154,8 @@ QPixmap coverFor(const BackportRow& r, int px, qreal dpr)
         if (!src.isNull()) {
             p.drawPixmap(QRect(0, 0, dpx, dpx), src.scaled(dpx, dpx, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
         } else {
-            QLinearGradient g(0, 0, dpx, dpx);
-            g.setColorAt(0, color::accent_lo);
-            g.setColorAt(1, QColor(0x2a, 0x1f, 0x55));
-            p.fillRect(QRect(0, 0, dpx, dpx), g);
-            QString initials;
-            for (const QString& w : title.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts)) {
-                if (initials.size() >= 2)
-                    break;
-                if (w.at(0).isLetterOrNumber())
-                    initials += w.at(0).toUpper();
-            }
-            if (initials.isEmpty())
-                initials = QStringLiteral("?");
-            QFont f = font::bodyStrong();
-            f.setPixelSize(int(dpx * 0.36));
-            p.setFont(f);
-            p.setPen(color::accent_hi);
-            p.drawText(QRect(0, 0, dpx, dpx), Qt::AlignCenter, initials);
+            // The same generated cover as in the Library (the clip above rounds it).
+            paintCoverPlaceholder(p, QRectF(0, 0, dpx, dpx), title, r.game.titleId, 0);
         }
     }
     out.setDevicePixelRatio(dpr);
@@ -195,6 +164,8 @@ QPixmap coverFor(const BackportRow& r, int px, qreal dpr)
 }
 
 // ---- delegate ---------------------------------------------------------------------------
+
+constexpr int kStatusPadLeft = 8, kStatusPadRight = 10; // around the Status badge in its cell
 
 class GameDelegate final : public QStyledItemDelegate {
 public:
@@ -213,11 +184,8 @@ public:
         p->save();
         p->setRenderHint(QPainter::Antialiasing);
         const QRect r = opt.rect;
-        // Row background: selection / hover over the card.
-        if (opt.state & QStyle::State_Selected)
-            p->fillRect(r, color::accent_lo);
-        else if (opt.state & QStyle::State_MouseOver)
-            p->fillRect(r, color::bg_3);
+        // Selection (with its accent bar) and hover are the style's, painted
+        // before this; the row only adds its hairline.
         p->fillRect(QRect(r.left(), r.bottom(), r.width(), 1), color::border_1);
         const qreal dpr = p->device() ? p->device()->devicePixelRatioF() : 1.0;
         switch (idx.column()) {
@@ -225,7 +193,7 @@ public:
             const QRectF b(r.center().x() - 9.5, r.center().y() - 9.5, 19, 19);
             if (row->checked) {
                 p->setPen(Qt::NoPen);
-                p->setBrush(accentGradient(b));
+                p->setBrush(accentFillGradient(b)); // white sits on it
                 p->drawRoundedRect(b, 5, 5);
                 p->drawPixmap(QRectF(b.center().x() - 7, b.center().y() - 7, 14, 14).toRect(),
                               iconPixmap(QStringLiteral("check"), 14, color::on_accent, dpr));
@@ -277,24 +245,23 @@ public:
             break;
         }
         case BackportGameModel::StatusCol: {
-            const QColor c = toneColor(row->tone);
-            const QRect sr = r.adjusted(8, 0, -10, 0);
-            QString text = row->status;
-            if (row->tone == QLatin1String("busy") && row->pct > 0)
-                text += QStringLiteral(" %1%").arg(row->pct);
-            const QFontMetrics fm(font::caption());
-            const int tw = std::min(fm.horizontalAdvance(text) + 34, sr.width());
-            const QRectF pill(sr.left(), r.center().y() - 11, tw, 22);
-            QColor fill = c;
-            fill.setAlpha(34);
-            p->setPen(Qt::NoPen);
-            p->setBrush(fill);
-            p->drawRoundedRect(pill, 11, 11);
-            p->setBrush(c);
-            p->drawEllipse(QPointF(pill.left() + 11, pill.center().y()), 3.5, 3.5);
-            p->setPen(row->tone == QLatin1String("muted") ? color::fg_4 : c.lighter(118));
-            p->setFont(font::caption());
-            p->drawText(pill.adjusted(20, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, fm.elidedText(text, Qt::ElideRight, int(pill.width()) - 28));
+            // The library's badge. The column is as wide as its widest state
+            // (fitStatusColumn); a state longer than the column's limit is
+            // cut here, and the row's tooltip always has it whole.
+            const QRect sr = r.adjusted(kStatusPadLeft, 0, -kStatusPadRight, 0);
+            const Tone tone = BackportGameModel::statusTone(*row);
+            const QString icon = tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone);
+            const QString text = BackportGameModel::statusText(*row);
+            const int full = badgeWidth(text, !icon.isEmpty());
+            const int w = std::min(full, sr.width());
+            QString shown = text;
+            if (w < full) {
+                // Cut the words, keep the percentage.
+                const QFontMetrics fm(font::chip());
+                const QString pct = text.mid(row->status.size());
+                shown = fm.elidedText(row->status, Qt::ElideRight, w - (full - fm.horizontalAdvance(text)) - fm.horizontalAdvance(pct)) + pct;
+            }
+            paintBadge(*p, QRectF(sr.left(), r.center().y() - size::badge / 2.0, w, size::badge), shown, tone, icon);
             break;
         }
         default:
@@ -309,6 +276,32 @@ public:
 // ---- model --------------------------------------------------------------------------------
 
 BackportGameModel::BackportGameModel(QObject* parent) : QAbstractTableModel(parent) {}
+
+QString BackportGameModel::statusText(const BackportRow& row)
+{
+    return row.tone == QLatin1String("busy") && row.pct > 0 ? QStringLiteral("%1 %2%").arg(row.status).arg(row.pct) : row.status;
+}
+
+Tone BackportGameModel::statusTone(const BackportRow& row)
+{
+    if (row.tone == QLatin1String("idle") || row.tone == QLatin1String("good"))
+        return Tone::Ok;
+    if (row.tone == QLatin1String("warn"))
+        return Tone::Warn;
+    if (row.tone == QLatin1String("bad"))
+        return Tone::Err;
+    if (row.tone == QLatin1String("busy"))
+        return Tone::Info;
+    return Tone::Neutral; // info, muted
+}
+
+int BackportGameModel::statusWidth(const BackportRow& row)
+{
+    const bool icon = statusTone(row) != Tone::Neutral;
+    // A running game: as if it were at 100 % already.
+    const QString text = row.tone == QLatin1String("busy") ? QStringLiteral("%1 100%").arg(row.status) : row.status;
+    return kStatusPadLeft + badgeWidth(text, icon) + kStatusPadRight;
+}
 
 int BackportGameModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : int(m_rows.size()); }
 int BackportGameModel::columnCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : ColumnCount; }
@@ -356,8 +349,9 @@ QVariant BackportGameModel::data(const QModelIndex& index, int role) const
             t << QStringLiteral("Note: %1").arg(n);
         if (!r.game.error.isEmpty())
             t << QStringLiteral("Metadata: %1").arg(r.game.error);
-        if (!r.detail.isEmpty())
-            t << QStringLiteral("Status: %1 — %2").arg(r.status, r.detail);
+        // Always: the Status column may cut a long state.
+        t << (r.detail.isEmpty() ? QStringLiteral("Status: %1").arg(statusText(r))
+                                 : QStringLiteral("Status: %1 — %2").arg(statusText(r), r.detail));
         t << QStringLiteral("Double-click for details, right-click for actions.");
         // Titles and notes come from the dump: shown as text, never as markup.
         return QStringLiteral("<p style='white-space:pre-wrap'>%1</p>").arg(t.join(u'\n').toHtmlEscaped());
@@ -578,17 +572,22 @@ void BackportPage::buildLibraryCard()
     auto* sh = hbox(sub, space::md);
     m_search->setParent(sub);
     sh->addWidget(m_search, 1);
-    sh->addSpacing(space::sm);
-    auto* all = new Link(QStringLiteral("Select all"), sub);
-    auto* none = new Link(QStringLiteral("Select none"), sub);
-    auto* clear = new Link(QStringLiteral("Clear list"), sub);
+    // The three list actions are one group next to the search; the time of
+    // the last scan is meta text at the far end.
+    auto* links = new QWidget(sub);
+    auto* lh = hbox(links, space::md);
+    auto* all = new Link(QStringLiteral("Select all"), links);
+    auto* none = new Link(QStringLiteral("Select none"), links);
+    auto* clear = new Link(QStringLiteral("Clear list"), links);
     clear->setToolTip(QStringLiteral("Remove every game and scan location from the list. Nothing is deleted from disk."));
-    sh->addWidget(all);
-    sh->addWidget(none);
-    sh->addWidget(clear);
+    lh->addWidget(all);
+    lh->addWidget(none);
+    lh->addWidget(clear);
+    sh->addWidget(links);
+    sh->addStretch(1);
     m_scanLabel = label({}, TextStyle::Caption, color::fg_4, sub);
     m_scanLabel->setTextFormat(Qt::PlainText);
-    sh->addSpacing(space::sm);
+    m_scanLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     sh->addWidget(m_scanLabel);
     m_libraryCard->body()->addWidget(sub);
 
@@ -615,7 +614,12 @@ void BackportPage::buildLibraryCard()
     hh->resizeSection(BackportGameModel::PpsaCol, 112);
     hh->resizeSection(BackportGameModel::SdkCol, 60);
     hh->resizeSection(BackportGameModel::FwCol, 96);
-    hh->resizeSection(BackportGameModel::StatusCol, 186);
+    hh->resizeSection(BackportGameModel::StatusCol, BackportGameModel::kStatusColMin);
+    // The Status column follows its widest state.
+    connect(m_model, &QAbstractItemModel::rowsInserted, this, &BackportPage::fitStatusColumn);
+    connect(m_model, &QAbstractItemModel::rowsRemoved, this, &BackportPage::fitStatusColumn);
+    connect(m_model, &QAbstractItemModel::modelReset, this, &BackportPage::fitStatusColumn);
+    connect(m_model, &QAbstractItemModel::dataChanged, this, &BackportPage::fitStatusColumn);
     m_table->viewport()->installEventFilter(this);
     hh->setSectionsClickable(true);
     hh->setHighlightSections(false);
@@ -709,10 +713,9 @@ void BackportPage::buildProgressCard()
     auto* ch = hbox(chipsWrap, 6);
     for (const QString& name : {QStringLiteral("Games"), QStringLiteral("Selected"), QStringLiteral("Ready"), QStringLiteral("Running"),
                                 QStringLiteral("Done"), QStringLiteral("Failed / partial")}) {
-        auto* chip = new QLabel(chipsWrap);
-        chip->setFont(font::caption());
-        chip->setStyleSheet(QStringLiteral("QLabel{background:%1;border:1px solid %2;border-radius:10px;padding:2px 9px;color:%3;}")
-                                .arg(hex(color::bg_3), hex(color::border_2), hex(color::fg_2)));
+        // The library's neutral badge: one chip look in the app.
+        auto* chip = new Badge(name, Tone::Neutral, chipsWrap);
+        chip->setIconName(QString());
         chip->setProperty("chipName", name);
         m_chips.insert(name, chip);
         ch->addWidget(chip);
@@ -783,7 +786,8 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
     save->setTitle(QStringLiteral("Save to"));
     m_outField = new PathField(PathField::Mode::Directory, save);
     m_outField->setDialogTitle(QStringLiteral("Choose the folder for Backport ZIPs"));
-    m_outField->setPlaceholder(QStringLiteral("Not set: click the folder button"));
+    m_outField->setPlaceholder(QStringLiteral("Choose a folder…"));
+    m_outField->edit()->setToolTip(QStringLiteral("Where each game's backport ZIP is saved. Click Browse… to choose the folder."));
     m_outField->edit()->setAccessibleName(QStringLiteral("Folder for backport ZIPs"));
     m_suppressSave = true;
     m_outField->setPath(m_settings.outputDir);
@@ -793,7 +797,8 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
                                         "folder. Each run's loose files and reports are kept in its _backport_details subfolder."));
     m_bakField = new PathField(PathField::Mode::Directory, save);
     m_bakField->setDialogTitle(QStringLiteral("Choose the folder for Originals backup ZIPs"));
-    m_bakField->setPlaceholder(QStringLiteral("Not set: click the folder button"));
+    m_bakField->setPlaceholder(QStringLiteral("Choose a folder…"));
+    m_bakField->edit()->setToolTip(QStringLiteral("Where the untouched originals of the replaced files are saved. Click Browse… to choose the folder."));
     m_bakField->edit()->setAccessibleName(QStringLiteral("Folder for originals backup ZIPs"));
     m_bakField->setPath(m_settings.backupDir);
     m_bakField->edit()->setCursorPosition(m_settings.backupDir.size());
@@ -2981,6 +2986,24 @@ void BackportPage::reportProblem()
     QDesktopServices::openUrl(url);
 }
 
+// As wide as the widest state in the list, within the column's limits and as
+// long as the title keeps its room (a state that does not fit is cut in its
+// cell; the row's tooltip has it whole).
+void BackportPage::fitStatusColumn()
+{
+    int w = BackportGameModel::kStatusColMin;
+    for (const BackportRow& r : m_model->rows())
+        w = std::max(w, BackportGameModel::statusWidth(r));
+    int others = 0;
+    for (int c = 0; c < BackportGameModel::ColumnCount; ++c)
+        if (c != BackportGameModel::TitleCol && c != BackportGameModel::StatusCol && !m_table->isColumnHidden(c))
+            others += m_table->columnWidth(c);
+    const int room = m_table->viewport()->width() - others - BackportGameModel::kTitleColMin;
+    w = std::clamp(w, BackportGameModel::kStatusColMin, std::max(BackportGameModel::kStatusColMin, std::min(BackportGameModel::kStatusColMax, room)));
+    if (m_table->columnWidth(BackportGameModel::StatusCol) != w)
+        m_table->setColumnWidth(BackportGameModel::StatusCol, w);
+}
+
 bool BackportPage::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == m_table->viewport() && event->type() == QEvent::Resize) {
@@ -2988,6 +3011,7 @@ bool BackportPage::eventFilter(QObject* watched, QEvent* event)
         m_table->setColumnHidden(BackportGameModel::FwCol, w < 720);
         m_table->setColumnHidden(BackportGameModel::SdkCol, w < 620);
         m_table->setColumnHidden(BackportGameModel::CoverCol, w < 520);
+        fitStatusColumn();
     }
     return Page::eventFilter(watched, event);
 }

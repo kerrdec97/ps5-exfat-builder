@@ -50,6 +50,8 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
     return out;
 }
 
+} // namespace
+
 void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr)
 {
     p.setPen(Qt::NoPen);
@@ -60,7 +62,72 @@ void paintCheckBubble(QPainter& p, const QRectF& r, qreal dpr)
                  iconPixmap(QStringLiteral("check"), is, color::on_accent, dpr));
 }
 
-} // namespace
+// ---- SelectionGlow ----------------------------------------------------------------------
+
+SelectionGlow::SelectionGlow(QWidget* target) : QWidget(target->parentWidget()), m_target(target)
+{
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setFocusPolicy(Qt::NoFocus);
+    setProperty("fwNoRing", true);
+    // It dies with its target, wherever the target is moved to.
+    connect(target, &QObject::destroyed, this, &QObject::deleteLater);
+    target->installEventFilter(this);
+    follow();
+}
+
+void SelectionGlow::setItemRect(const QRectF& r, qreal radius)
+{
+    if (r == m_rect && qFuzzyCompare(radius + 1.0, m_radius + 1.0))
+        return;
+    m_rect = r;
+    m_radius = radius;
+    update();
+}
+
+void SelectionGlow::follow()
+{
+    if (parentWidget() != m_target->parentWidget())
+        setParent(m_target->parentWidget());
+    if (!parentWidget())
+        return;
+    setGeometry(m_target->geometry().adjusted(-kSpread, -kSpread, kSpread, kSpread));
+    stackUnder(m_target);
+    setVisible(!m_target->isHidden());
+}
+
+bool SelectionGlow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_target) {
+        switch (event->type()) {
+        case QEvent::Move:
+        case QEvent::Resize:
+        case QEvent::ShowToParent:
+        case QEvent::HideToParent:
+        case QEvent::ParentChange:
+            follow();
+            break;
+        default:
+            break;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void SelectionGlow::paintEvent(QPaintEvent*)
+{
+    if (m_rect.isEmpty())
+        return;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setBrush(Qt::NoBrush);
+    // Rings that fade outwards from the tile's edge (18 % there), one per pixel.
+    const QRectF r = m_rect.translated(kSpread, kSpread);
+    for (int i = 0; i < kSpread; ++i) {
+        const qreal t = 1.0 - qreal(i) / kSpread;
+        p.setPen(QPen(QBrush(accentGradient(r, int(46 * t * t))), 1.5));
+        p.drawRoundedRect(r.adjusted(-i - 0.5, -i - 0.5, i + 0.5, i + 0.5), m_radius + i, m_radius + i);
+    }
+}
 
 // ---- ChoiceTiles ----------------------------------------------------------------------
 
@@ -483,6 +550,20 @@ Disclosure::Disclosure(const QString& title, const QString& captionText, QWidget
     setExpanded(false);
 }
 
+void Disclosure::setPlain(bool plain)
+{
+    if (plain == m_plain)
+        return;
+    m_plain = plain;
+    // Inside a card it is a row of that card, under a hairline: no plate of
+    // its own, no side padding, a quieter title.
+    m_header->layout()->setContentsMargins(plain ? QMargins(0, space::md, 0, space::sm) : QMargins(space::lg, 14, space::lg, 14));
+    m_header->setProperty("fwRadius", plain ? radius::sm : radius::md);
+    m_title->setFont(plain ? font::bodyStrong() : font::subtitle());
+    m_body->setContentsMargins(plain ? QMargins(0, 0, 0, 0) : QMargins(space::lg, 0, space::lg, space::lg));
+    update();
+}
+
 void Disclosure::setExpanded(bool on)
 {
     m_expanded = on;
@@ -546,6 +627,11 @@ void Disclosure::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (m_plain) {
+        // A row of the card it sits in: only a hairline above it.
+        p.fillRect(QRectF(0, 0, width(), 1), color::border_1);
+        return;
+    }
     paintPlate(p, r, radius::md, m_expanded ? 0.0 : m_hover->value());
     if (m_expanded) {
         p.fillRect(QRectF(r.left() + space::lg, m_header->geometry().bottom(), r.width() - 2 * space::lg, 1), color::border_1);
@@ -643,11 +729,21 @@ void StatTile::setValue(const QString& value, Tone tone)
 {
     m_value->setText(value);
     setTextColor(m_value, tone == Tone::Neutral ? color::fg_0 : toneText(tone));
+    if (m_iconToneSet)
+        return; // the page decides the tile's tone itself
     if (tone == Tone::Neutral || tone == Tone::Info)
         m_tile->setTone(Tone::Info);
     else
         m_tile->setTone(tone);
 }
+
+void StatTile::setIconTone(Tone tone)
+{
+    m_iconToneSet = true;
+    m_tile->setTone(tone);
+}
+
+Tone StatTile::iconTone() const { return m_tile->isToned() ? m_tile->tone() : Tone::Info; }
 
 void StatTile::setCaption(const QString& caption)
 {

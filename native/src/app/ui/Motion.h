@@ -9,7 +9,9 @@
 // mode (qApp property "fwScreenshotMode"), on the offscreen and minimal
 // platforms (tests), and when Windows has its animations switched off.
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QTimer>
 #include <QVariantAnimation>
 
 #include <functional>
@@ -70,6 +72,33 @@ public:
 private:
     Value m_in, m_out;
     int m_current = -1, m_previous = -1;
+};
+
+// A slow, endless swing 0 -> 1 -> 0 for one small mark that says "this is
+// running" (the current stage's dot). It moves only while it is switched on,
+// its owner is visible and motion is enabled; otherwise it rests at 0 and no
+// timer runs.
+class Pulse : public QObject {
+    Q_OBJECT
+public:
+    explicit Pulse(QWidget* owner, int periodMs = 1800);
+    void setActive(bool on);
+    bool isActive() const { return m_active; }
+    bool isRunning() const { return m_timer.isActive(); } // tests
+    qreal value() const { return m_value; }               // 0..1, eased
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    void sync();
+    void tick();
+    QWidget* m_owner;
+    QTimer m_timer;
+    QElapsedTimer m_clock;
+    int m_period;
+    qreal m_value = 0.0;
+    bool m_active = false;
 };
 
 } // namespace fw::ui::motion

@@ -30,6 +30,9 @@ namespace {
 
 constexpr int kRecentRows = 6;
 constexpr int kSetupColumn = 380;
+// Free space under this is marked as low on the Free space tile (a mark
+// only: builds do their own exact check). Hardly any PS5 game fits in 20 GB.
+constexpr qint64 kLowSpaceBytes = 20LL * 1024 * 1024 * 1024;
 const char* const kSetupExpandedKey = "home/setupExpanded";
 
 // The sidebar icon of the page a job kind belongs to.
@@ -360,6 +363,8 @@ void HomePage::refreshConsoleTile()
         m_consoleTile->setValue(QStringLiteral("Not connected"));
         m_consoleTile->setCaption(QStringLiteral("Address %1").arg(ip));
     }
+    // The tile's mark says the state at a glance: green only while connected.
+    m_consoleTile->setIconTone(m_consoleTone == Tone::Ok ? Tone::Ok : Tone::Neutral);
 }
 
 void HomePage::setPayloadStore(PayloadStore* store)
@@ -473,6 +478,8 @@ void HomePage::refreshQueueTile()
         m_queueTile->setValue(QStringLiteral("%1 waiting").arg(queued));
     else
         m_queueTile->setValue(QStringLiteral("Idle"));
+    // Working: accent. Nothing running but something failed: danger. Otherwise quiet.
+    m_queueTile->setIconTone(running > 0 ? Tone::Info : failed > 0 ? Tone::Err : Tone::Neutral);
     QStringList qc;
     if (running > 0 && !stage.isEmpty())
         qc << stage;
@@ -537,6 +544,8 @@ void HomePage::refresh()
             m_spaceTile->setValue(QStringLiteral("—"));
             m_spaceTile->setCaption(QStringLiteral("Output drive not available"));
         }
+        // Too little for almost any game image, or no drive at all: a warning mark.
+        m_spaceTile->setIconTone(!ready || available < kLowSpaceBytes ? Tone::Warn : Tone::Neutral);
     };
     if (qApp->property("fwScreenshotMode").toBool()) {
         // A screenshot run renders the page at once: the answer of a worker
@@ -546,6 +555,7 @@ void HomePage::refresh()
     } else {
         if (!m_spaceKnown) { // the tile is never empty while the first answer is on its way
             m_spaceTile->setValue(QStringLiteral("Checking…"));
+            m_spaceTile->setIconTone(Tone::Neutral);
             m_spaceTile->setCaption(nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder"));
         }
         probeFreeSpace(isVisible() ? this : nullptr, folder, show);

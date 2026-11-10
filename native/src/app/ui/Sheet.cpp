@@ -433,14 +433,46 @@ Sheet* Sheet::notify(QWidget* host, const QString& title, const QString& text, I
 
 // ---- toasts --------------------------------------------------------------------------
 
+namespace {
+constexpr int kToastShadow = 16; // how far a toast's painted shadow reaches
+constexpr int kToastShadowDrop = 4;
+} // namespace
+
 ToastHost::ToastHost(QWidget* host) : QWidget(host)
 {
-    setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    // The host itself only paints the toasts' shadows, under them: it takes
+    // no clicks and is shown only while there is a toast.
+    setAttribute(Qt::WA_TransparentForMouseEvents, true);
     setProperty("fwNoRing", true);
     host->installEventFilter(this);
     setGeometry(host->rect());
     setAttribute(Qt::WA_NoSystemBackground);
     hide();
+}
+
+// A soft shadow under each toast (toasts are children of the window, so no
+// window can cast one): four stacked rounded rectangles, black at 8, 6, 4 and
+// 2 %, each 4 px larger than the one before, dropped a little.
+void ToastHost::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    for (QWidget* t : m_toasts) {
+        if (!t->isVisible())
+            continue;
+        // A toast that is fading in or out takes its shadow with it.
+        qreal opacity = 1.0;
+        if (auto* fx = qobject_cast<QGraphicsOpacityEffect*>(t->graphicsEffect()))
+            opacity = fx->opacity();
+        const QRectF r = QRectF(t->geometry().translated(-pos())).translated(0, kToastShadowDrop);
+        static constexpr int kAlpha[] = {20, 15, 10, 5}; // 8, 6, 4, 2 % of 255
+        for (int i = 0; i < 4; ++i) {
+            const qreal grow = (i + 1) * (kToastShadow / 4.0);
+            p.setBrush(withAlpha(color::shadow, int(kAlpha[i] * opacity)));
+            p.drawRoundedRect(r.adjusted(-grow, -grow, grow, grow), radius::md + grow, radius::md + grow);
+        }
+    }
 }
 
 bool ToastHost::eventFilter(QObject* watched, QEvent* event)
@@ -525,6 +557,7 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
             t->setProperty(kSlide, qRound((1.0 - v) * 12));
             if (parentWidget())
                 t->move(parentWidget()->width() - space::lg - size::toast + t->property(kSlide).toInt(), t->y());
+            update(); // its shadow follows
         });
         t->move(t->x() + 12, t->y());
         in->animateTo(1.0);
@@ -565,6 +598,7 @@ void ToastHost::remove(QWidget* toast)
         }
         auto* out = new motion::Value(toast, fade->opacity(), motion::fast);
         QPointer<ToastHost> self(this);
+        update(); // its shadow goes at once (110 ms before the toast has faded)
         out->onChange([self, toast, out, fade] {
             fade->setOpacity(out->value());
             if (out->value() > 0.0)
@@ -601,6 +635,7 @@ void ToastHost::relayout()
             break; // the lowest one: children are in stacking order
         }
     int y = parentWidget()->height() - space::lg;
+    QRect all;
     for (auto it = m_toasts.rbegin(); it != m_toasts.rend(); ++it) {
         QWidget* t = *it;
         QLayout* l = t->layout();
@@ -612,8 +647,20 @@ void ToastHost::relayout()
             t->stackUnder(sheet);
         else
             t->raise();
+        all |= QRect(parentWidget()->width() - space::lg - size::toast, y, size::toast, h);
         y -= space::sm;
     }
+    // The shadows: this widget, just large enough for them (and for a toast
+    // that is still sliding in), right under the toasts.
+    if (m_toasts.empty()) {
+        hide();
+        return;
+    }
+    const int m = kToastShadow + kToastShadowDrop;
+    setGeometry(all.adjusted(-m, -m, m, m).intersected(parentWidget()->rect()));
+    stackUnder(m_toasts.back()); // the newest was placed first above: it is the lowest of them
+    setVisible(true);
+    update();
 }
 
 } // namespace fw::ui

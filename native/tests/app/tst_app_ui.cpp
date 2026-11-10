@@ -18,6 +18,7 @@
 #include "app/ui/Components.h"
 #include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
+#include "app/ui/Motion.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Shell.h"
@@ -40,6 +41,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QScopeGuard>
 #include <QSettings>
@@ -665,6 +667,46 @@ private slots:
         p.progress.phase.clear();
         m.setDemoRecord(p, lines);
         QVERIFY2(!m.detailText().contains(QStringLiteral("“”")), qPrintable(m.detailText()));
+    }
+
+    // The monitor's result: what a successful job made sits on the
+    // success-tinted plate; a failure leads with its error in the danger bar.
+    // The running stage's dot moves only while the monitor is on screen, a
+    // stage runs and motion is on.
+    void monitorResultPlateAndRunningStage()
+    {
+        ui::JobMonitor m(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Wide, m_window.get());
+        m.show();
+        QStringList lines;
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("done"), &lines), lines);
+        QWidget* result = m.resultBlock();
+        QVERIFY(result && !result->isHidden());
+        QVERIFY(result->property("fwTinted").toBool());
+        QVERIFY(result->layout()->contentsMargins().left() >= theme::space::sm); // the plate has an inside
+        QVERIFY(qobject_cast<ui::MessageRow*>(result->layout()->itemAt(0)->widget()));
+        QVERIFY(!m.isStagePulsing());
+
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("failed"), &lines), lines);
+        QVERIFY(!result->property("fwTinted").toBool());
+        QCOMPARE(result->layout()->contentsMargins(), QMargins());
+        QVERIFY2(qobject_cast<ui::InfoBar*>(result->layout()->itemAt(0)->widget()), "the error comes first");
+
+        // Motion off (the offscreen platform): the dot is there, and still.
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines), lines);
+        QVERIFY(result->isHidden());
+        QVERIFY(!m.isStagePulsing());
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("done"), &lines), lines);
+
+        ui::motion::setOverride(true);
+        const auto restore = qScopeGuard([] { ui::motion::clearOverride(); });
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines), lines);
+        QTRY_VERIFY(m.isStagePulsing()); // once the new stage rows are on screen
+        m.hide();
+        QVERIFY(!m.isStagePulsing()); // nothing ticks for a monitor nobody sees
+        m.show();
+        QVERIFY(m.isStagePulsing());
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("done"), &lines), lines);
+        QVERIFY(!m.isStagePulsing()); // no stage is running
     }
 
     // Retry / Run again on a job whose source is gone: the reason is shown.

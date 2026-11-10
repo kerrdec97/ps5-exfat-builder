@@ -4,6 +4,7 @@
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
+#include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "engines/ampr/Lz4Pack.h"
@@ -226,6 +227,11 @@ public:
         sp.setHeightForWidth(true);
         setSizePolicy(sp);
         setProperty("fwRadius", radius::md);
+        m_hover = new motion::HoverFade(this, [this](int i) {
+            if (i >= 0 && i < count())
+                update(tileRect(i));
+        });
+        m_glow = new SelectionGlow(this);
     }
     void addTile(const QString& title, const QString& description, const QString& icon, const QString& value,
                  const QString& tag = {})
@@ -235,8 +241,10 @@ public:
             m_current = 0;
             setAccessibleDescription(QStringLiteral("Selected: %1").arg(title));
         }
+        m_hover->reset();
         updateGeometry();
         update();
+        syncGlow();
     }
     int count() const { return int(m_items.size()); }
     int currentIndex() const { return m_current; }
@@ -255,6 +263,7 @@ public:
         m_current = i;
         setAccessibleDescription(QStringLiteral("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
         update();
+        syncGlow();
         if (onChanged)
             onChanged(i);
     }
@@ -284,7 +293,7 @@ protected:
             const Item& it = m_items[size_t(i)];
             const QRectF r = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
             const bool sel = i == m_current;
-            const bool hov = i == m_hover && !sel;
+            const qreal hov = sel ? 0.0 : m_hover->amount(i); // the hover tint fades
             if (sel) {
                 p.setPen(Qt::NoPen);
                 p.setBrush(color::bg_2);
@@ -295,42 +304,28 @@ protected:
                 p.setBrush(Qt::NoBrush);
                 p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
             } else {
-                p.setPen(QPen(hov ? color::border_4 : color::border_3, 1));
-                p.setBrush(hov ? color::bg_3 : color::field_bg);
+                // As the library's choice tiles: a well in the card that lifts on hover.
+                p.setPen(QPen(blend(color::border_3, color::border_4, hov), 1));
+                p.setBrush(blend(color::field_bg, color::bg_3, hov));
                 p.drawRoundedRect(r, radius::md, radius::md);
             }
-            // Icon square, top left.
+            // Icon square, top left (white only on the fill gradient).
             const QRectF ir(r.left() + 14, r.top() + 14, 32, 32);
             p.setPen(Qt::NoPen);
-            p.setBrush(sel ? QBrush(accentGradient(ir)) : QBrush(color::bg_4));
+            p.setBrush(sel ? QBrush(accentFillGradient(ir)) : QBrush(color::bg_4));
             p.drawRoundedRect(ir, 9, 9);
             p.drawPixmap(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18).toRect(),
                          iconPixmap(it.icon, 18, sel ? color::on_accent : color::fg_2, dpr));
             // Check bubble and tag, top right.
             qreal right = r.right() - 14;
             if (sel) {
-                const QRectF cb(right - 20, r.top() + 20, 20, 20);
-                p.setPen(Qt::NoPen);
-                p.setBrush(accentGradient(cb));
-                p.drawEllipse(cb);
-                p.drawPixmap(QRectF(cb.center().x() - 6, cb.center().y() - 6, 12, 12).toRect(),
-                             iconPixmap(QStringLiteral("check"), 12, color::on_accent, dpr));
+                paintCheckBubble(p, QRectF(right - 20, r.top() + 20, 20, 20), dpr);
                 right -= 28;
             }
             if (!it.tag.isEmpty()) {
-                const QFontMetrics cfm(font::caption());
-                const qreal tw = cfm.horizontalAdvance(it.tag) + 14;
-                if (right - tw > ir.right() + 8) {
-                    const QRectF tagR(right - tw, r.top() + 21, tw, 18);
-                    QColor tint = color::accent;
-                    tint.setAlpha(46);
-                    p.setPen(Qt::NoPen);
-                    p.setBrush(tint);
-                    p.drawRoundedRect(tagR, 9, 9);
-                    p.setPen(color::accent_hi);
-                    p.setFont(font::caption());
-                    p.drawText(tagR, Qt::AlignCenter, it.tag);
-                }
+                const qreal tw = badgeWidth(it.tag);
+                if (right - tw > ir.right() + 8)
+                    paintBadge(p, QRectF(right - tw, ir.center().y() - size::badge / 2.0, tw, size::badge), it.tag, Tone::Info);
             }
             // Title and up to three lines of description.
             const qreal tx = r.left() + 14;
@@ -365,19 +360,19 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override
     {
         const int i = at(e->pos());
-        if (i != m_hover) {
-            m_hover = i;
+        if (i != m_hover->hovered()) {
+            m_hover->setHovered(i);
             setCursor(i >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
             // A description cut with "…" in a narrow tile can be read in full on hover.
             const bool cut = i >= 0 && !fitsLines(m_items[size_t(i)].description, font::caption(), tileRect(i).width() - 29, 3);
             setToolTip(cut ? m_items[size_t(i)].description : QString());
-            update();
         }
     }
-    void leaveEvent(QEvent*) override
+    void leaveEvent(QEvent*) override { m_hover->setHovered(-1); }
+    void resizeEvent(QResizeEvent* e) override
     {
-        m_hover = -1;
-        update();
+        QWidget::resizeEvent(e);
+        syncGlow();
     }
     void keyPressEvent(QKeyEvent* e) override
     {
@@ -432,9 +427,15 @@ private:
                 return i;
         return -1;
     }
+    // The selected tile's soft glow lies outside the tile: its own widget draws it.
+    void syncGlow()
+    {
+        m_glow->setItemRect(m_current >= 0 ? QRectF(tileRect(m_current)).adjusted(0.5, 0.5, -0.5, -0.5) : QRectF(), radius::md);
+    }
     std::vector<Item> m_items;
     int m_current = -1;
-    int m_hover = -1;
+    motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades
+    SelectionGlow* m_glow;
 };
 
 FormatTiles* tilesOf(QWidget* w) { return static_cast<FormatTiles*>(w); }
@@ -896,9 +897,10 @@ void BuildImagePage::buildPackageCard()
     m_backportField = new QWidget(details);
     {
         auto* bl = vbox(m_backportField, space::md);
+        // One under the other, each as wide as the card: these are long paths
+        // ("…\FW 4xx PPSA01342 Demon's Souls (01.004.000) backport files.zip").
         auto* row = new QWidget(m_backportField);
-        auto* rh = hbox(row, space::md);
-        rh->setAlignment(Qt::AlignTop);
+        auto* rh = vbox(row, space::md);
         const auto picker = [this, row](const QString& label, const QString& hint, const QString& name) {
             auto* f = new PathField(PathField::Mode::Directory, row);
             f->setPlaceholder(QStringLiteral("Optional \u00b7 folder or ZIP"));
@@ -919,8 +921,8 @@ void BuildImagePage::buildPackageCard()
                                QStringLiteral("Backport 5.xx+ files"));
         m_backport4 = p4;
         m_backport5 = p5;
-        rh->addWidget(w4, 1);
-        rh->addWidget(w5, 1);
+        rh->addWidget(w4);
+        rh->addWidget(w5);
         bl->addWidget(row);
         m_backportNote = caption(QString(), m_backportField);
         m_backportNote->setWordWrap(true);

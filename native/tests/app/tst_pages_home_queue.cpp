@@ -5,9 +5,11 @@
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/pages/BackportPage.h"
 #include "app/pages/HomePage.h"
 #include "app/pages/QueuePage.h"
 #include "app/services/JobSubmit.h"
+#include "app/ui/Components.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
 #include "support/TestSupport.h"
@@ -19,6 +21,9 @@
 #include <QLayout>
 #include <QMimeData>
 #include <QPushButton>
+#include <QScopeGuard>
+#include <QSortFilterProxyModel>
+#include <QTableView>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -304,6 +309,107 @@ private slots:
         QCoreApplication::sendEvent(m_window.get(), &leave);
         QVERIFY(!build->sourceCard()->dropHighlight());
         m_window->navigate(QStringLiteral("home"));
+    }
+
+    // Backport › Status: the library's badge. The column is as wide as its
+    // widest state while the title keeps its room, and a state it has to cut
+    // is whole in the row's tooltip, always.
+    void backportStatusColumnNeverCutsAStateWithoutATooltip()
+    {
+        using pages::BackportGameModel;
+        using pages::BackportRow;
+        // The badge's text, tone and width.
+        BackportRow busy;
+        busy.status = QStringLiteral("Patching, signing and packaging");
+        busy.tone = QStringLiteral("busy");
+        busy.pct = 42;
+        QCOMPARE(BackportGameModel::statusText(busy), QStringLiteral("Patching, signing and packaging 42%"));
+        QCOMPARE(BackportGameModel::statusTone(busy), ui::Tone::Info);
+        // Room for the percentage that is still growing: the column does not twitch.
+        QVERIFY(BackportGameModel::statusWidth(busy) >= ui::badgeWidth(QStringLiteral("Patching, signing and packaging 100%"), true));
+        BackportRow ready;
+        QCOMPARE(BackportGameModel::statusText(ready), QStringLiteral("Ready"));
+        QCOMPARE(BackportGameModel::statusTone(ready), ui::Tone::Ok);
+        BackportRow muted;
+        muted.tone = QStringLiteral("muted");
+        QCOMPARE(BackportGameModel::statusTone(muted), ui::Tone::Neutral);
+        BackportRow bad;
+        bad.tone = QStringLiteral("bad");
+        QCOMPARE(BackportGameModel::statusTone(bad), ui::Tone::Err);
+
+        pages::Page* page = m_window->page(QStringLiteral("backport"));
+        QVERIFY(page);
+        m_window->navigate(QStringLiteral("backport"));
+        page->applyDemoState(QStringLiteral("running"));
+        const auto leave = qScopeGuard([&] {
+            page->clearDemoState();
+            m_window->navigate(QStringLiteral("home"));
+        });
+        QTest::qWait(30);
+        auto* table = page->findChild<QTableView*>();
+        QVERIFY(table);
+        auto* proxy = qobject_cast<QSortFilterProxyModel*>(table->model());
+        QVERIFY(proxy);
+        auto* model = qobject_cast<BackportGameModel*>(proxy->sourceModel());
+        QVERIFY(model && !model->rows().empty());
+        int widest = BackportGameModel::kStatusColMin;
+        bool anyBusy = false;
+        for (int r = 0; r < int(model->rows().size()); ++r) {
+            const BackportRow& row = model->rows()[size_t(r)];
+            anyBusy = anyBusy || row.tone == QLatin1String("busy");
+            widest = std::max(widest, BackportGameModel::statusWidth(row));
+            // Whole in the tooltip of every cell of the row, cut or not.
+            for (int c = 0; c < BackportGameModel::ColumnCount; ++c) {
+                const QString tip = model->index(r, c).data(Qt::ToolTipRole).toString();
+                QVERIFY2(tip.contains(QStringLiteral("Status: %1").arg(BackportGameModel::statusText(row)).toHtmlEscaped()), qPrintable(tip));
+            }
+        }
+        QVERIFY(anyBusy);
+        const int column = table->columnWidth(BackportGameModel::StatusCol);
+        QVERIFY2(column >= BackportGameModel::kStatusColMin && column <= BackportGameModel::kStatusColMax, qPrintable(QString::number(column)));
+        // As wide as the widest state, unless the title would be left with too little.
+        const int title = table->columnWidth(BackportGameModel::TitleCol);
+        QVERIFY2(column == std::min(widest, int(BackportGameModel::kStatusColMax)) || title <= BackportGameModel::kTitleColMin + 2,
+                 qPrintable(QStringLiteral("status %1 of %2, title %3").arg(column).arg(widest).arg(title)));
+        QVERIFY2(title >= BackportGameModel::kTitleColMin - 2, qPrintable(QString::number(title)));
+    }
+
+    // Home: the mark of each status tile says its state (quiet when there is
+    // nothing to say, danger for failed jobs with nothing running).
+    void homeTilesCarryTheToneOfTheirState()
+    {
+        auto* home = qobject_cast<pages::HomePage*>(m_window->page(QStringLiteral("home")));
+        QVERIFY(home);
+        m_window->navigate(QStringLiteral("home"));
+        auto* console = home->findChild<ui::StatTile*>(QStringLiteral("home-console"));
+        auto* queue = home->findChild<ui::StatTile*>(QStringLiteral("home-queue"));
+        auto* space = home->findChild<ui::StatTile*>(QStringLiteral("home-space"));
+        QVERIFY(console && queue && space);
+        QCOMPARE(console->iconTone(), ui::Tone::Neutral); // no console set up
+        home->setConsoleStatus(QStringLiteral("PS5 at 192.168.1.40"), ui::Tone::Ok);
+        QCOMPARE(console->iconTone(), ui::Tone::Ok);
+        home->setConsoleStatus(QString(), ui::Tone::Neutral);
+        QCOMPARE(console->iconTone(), ui::Tone::Neutral);
+
+        auto& q = m_ctx->queue();
+        q.clearFinished();
+        home->refresh();
+        QCOMPARE(queue->iconTone(), ui::Tone::Neutral); // idle
+        // A build whose source disappears before it starts fails: danger, as nothing runs.
+        const QString game = m_root.filePath(QStringLiteral("tone-game"));
+        QVERIFY(makeGame(game));
+        q.holdQueue(true);
+        auto r = jobs::submitImageBuild(*m_ctx, jobs::kFormatExfat, game, m_root.path(), QStringLiteral("tone-test"), {});
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().message));
+        QVERIFY(QDir(game).removeRecursively());
+        q.holdQueue(false);
+        QVERIFY(waitTerminal(q, r.value()));
+        QCOMPARE(q.record(r.value())->state, JobState::Failed);
+        home->refresh();
+        QCOMPARE(queue->iconTone(), ui::Tone::Err);
+        q.clearFinished();
+        home->refresh();
+        QCOMPARE(queue->iconTone(), ui::Tone::Neutral);
     }
 
     // "1 day ago", not "1 days ago".

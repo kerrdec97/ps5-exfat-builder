@@ -23,6 +23,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
+#include <QPainter>
 #include <QSet>
 
 #include <algorithm>
@@ -33,6 +34,21 @@ using namespace ui;
 using namespace theme;
 
 namespace {
+
+// A library folder in the row under the tool bar: a small pill-shaped plate
+// (it sits on the page, like the cards).
+class FolderChip : public QWidget {
+public:
+    using QWidget::QWidget;
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        paintPlate(p, r, r.height() / 2.0);
+    }
+};
 
 QLineEdit* searchInput(const QString& placeholder, QWidget* parent)
 {
@@ -462,6 +478,7 @@ void LibraryPage::rebuildGames()
         it.size = s.bytes > 0 ? formatBytes(s.bytes) : QString();
         it.path = nativePath(s.folder);
         it.coverPath = s.coverPath;
+        it.coverId = s.titleId;
         if (it.coverPath.isEmpty() && !m_demo && QFileInfo::exists(s.folder + QStringLiteral("/sce_sys/icon0.png")))
             it.coverPath = s.folder + QStringLiteral("/sce_sys/icon0.png");
         it.chips = QStringList{QStringLiteral("Folder")} + formatsOf(s);
@@ -518,9 +535,8 @@ void LibraryPage::rebuildFolders()
     fl->addWidget(title);
     QWidget* firstChip = nullptr;
     for (const QString& f : folders) {
-        auto* chip = new QWidget(m_folders);
+        auto* chip = new FolderChip(m_folders);
         chip->setObjectName(QStringLiteral("libraryFolderChip"));
-        chip->setAttribute(Qt::WA_StyledBackground, true);
         auto* ch = hbox(chip, 4, QMargins(8, 2, 2, 2));
         auto* ic = new QLabel(chip);
         ic->setPixmap(iconPixmap(QStringLiteral("folder"), size::iconSm, color::fg_3, devicePixelRatioF()));
@@ -533,7 +549,6 @@ void LibraryPage::rebuildFolders()
                 m_library.removeScanFolder(f);
         });
         ch->addWidget(x);
-        chip->setStyleSheet(QStringLiteral("#libraryFolderChip { background: %1; border: 1px solid %2; border-radius: 12px; }").arg(hex(color::bg_2), hex(color::border_3)));
         fl->addWidget(chip);
         if (!firstChip)
             firstChip = chip;
@@ -1082,6 +1097,7 @@ void LibraryPage::rebuildImages()
         it.size = formatBytes(s->bytes);
         it.path = nativePath(s->path);
         it.coverPath = s->coverPath;
+        it.coverId = s->titleId;
         it.icon = imageFormatIcon(s->format);
         it.chips = {s->formatName()};
         if (!s->inner.isEmpty())
