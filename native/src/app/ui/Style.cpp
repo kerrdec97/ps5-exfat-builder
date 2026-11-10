@@ -330,6 +330,17 @@ QRect menuPanel(const QMenu* menu)
     return menu->rect().adjusted(m, m, -m, -m);
 }
 
+// In the 26 px the stylesheet keeps free at the right of a dropdown
+// (QComboBox::drop-down), inside its 1 px border.
+void paintDropdownChevron(QComboBox* combo)
+{
+    const QColor c = !combo->isEnabled() ? color::fg_5
+                   : combo->underMouse() || (combo->view() && combo->view()->isVisible()) ? color::fg_1 : color::fg_3;
+    const QRect r(combo->width() - 1 - 26 + (26 - size::icon) / 2, (combo->height() - size::icon) / 2, size::icon, size::icon);
+    QPainter p(combo);
+    p.drawPixmap(r, iconPixmap(QStringLiteral("chevron_down"), size::icon, c, combo->devicePixelRatioF()));
+}
+
 bool isSubMenu(const QMenu* menu)
 {
     const auto* parent = qobject_cast<const QMenu*>(QApplication::activePopupWidget());
@@ -362,6 +373,13 @@ protected:
             if (auto* menu = qobject_cast<QMenu*>(watched)) {
                 QPainter p(menu); // before the menu paints its panel over it
                 paintShadow(p, QRectF(menuPanel(menu)).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, size::popupShadow - 2);
+            } else if (auto* combo = qobject_cast<QComboBox*>(watched)) {
+                // The stylesheet draws a dropdown as a field and leaves its
+                // arrow area empty: the chevron that tells it from a text
+                // field is painted over it, after the dropdown itself.
+                watched->event(event);
+                paintDropdownChevron(combo);
+                return true;
             }
             break;
         case QEvent::Show:

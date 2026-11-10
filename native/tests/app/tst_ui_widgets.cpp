@@ -29,6 +29,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -1201,6 +1202,16 @@ private slots:
         const int tall = loose->sizeHint().height();
         loose->setCompact(true);
         QVERIFY(loose->sizeHint().height() < tall);
+        // Without a caption it is simply shorter, at any width, and Qt has nothing to warn about.
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("Negative sizes")));
+        auto* bare = new EmptyState(QStringLiteral("search"), QStringLiteral("No PS5 found"), QString(), host);
+        bare->setCompact(true);
+        col->insertWidget(1, bare);
+        bare->show();
+        QCoreApplication::processEvents();
+        host->setFixedWidth(220);
+        QCoreApplication::processEvents();
+        QVERIFY(bare->sizeHint().height() < loose->sizeHint().height());
     }
 
     void pathFieldCutsALongPlaceholderInTheMiddle()

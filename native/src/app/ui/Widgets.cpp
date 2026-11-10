@@ -1361,6 +1361,9 @@ EmptyState::EmptyState(const QString& iconName, const QString& title, const QStr
 {
     m_layout = vbox(this, 0, QMargins(space::xxl, space::xxxl, space::xxl, space::xxxl));
     m_layout->setAlignment(Qt::AlignHCenter);
+    // In a place taller than it needs (a list's whole area) it stays one
+    // block in the middle, not spread out over the height.
+    m_layout->addStretch(1);
     auto* tile = new IconTile(iconName, size::emptyTile, this);
     tile->setTone(Tone::Neutral);
     m_layout->addWidget(tile, 0, Qt::AlignHCenter);
@@ -1375,9 +1378,11 @@ EmptyState::EmptyState(const QString& iconName, const QString& title, const QStr
     m_caption->setVisible(!text.isEmpty());
     m_layout->addWidget(m_caption, 0, Qt::AlignHCenter);
     auto* actions = new QWidget(this);
+    actions->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     m_actions = hbox(actions, space::sm, QMargins(0, space::md, 0, 0));
     m_layout->addWidget(actions, 0, Qt::AlignHCenter);
     actions->hide();
+    m_layout->addStretch(1);
     fitText();
 }
 
@@ -1402,7 +1407,8 @@ void EmptyState::setCompact(bool compact)
 // height changed.
 static bool fitWrapped(QLabel* l, int width)
 {
-    const QSize s(width, l->heightForWidth(width));
+    // (A label without text has no height for a width: it takes no room.)
+    const QSize s(width, l->text().isEmpty() ? 0 : std::max(0, l->heightForWidth(width)));
     if (l->minimumSize() == s && l->maximumSize() == s)
         return false;
     const bool taller = l->maximumHeight() != s.height();
@@ -1564,7 +1570,9 @@ PathField::PathField(Mode mode, QWidget* parent) : QWidget(parent), m_mode(mode)
     m_errorLabel->setWordWrap(true);
     auto* ic = new QLabel(m_errorRow);
     ic->setPixmap(iconPixmap(QStringLiteral("error"), size::iconSm, color::danger, devicePixelRatioF()));
-    ic->setFixedSize(size::iconSm, size::iconSm);
+    ic->setFixedSize(size::iconSm, QFontMetrics(font::caption()).height()); // level with the first line of the message
+    ic->setAlignment(Qt::AlignCenter);
+    m_errorLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     er->addWidget(ic, 0, Qt::AlignTop);
     er->addWidget(m_errorLabel, 1);
     l->addWidget(m_errorRow);
@@ -1702,9 +1710,13 @@ MessageRow::MessageRow(QWidget* parent) : QWidget(parent)
 {
     auto* h = hbox(this, 6);
     m_icon = new QLabel(this);
-    m_icon->setFixedSize(size::iconSm, size::iconSm);
+    // As tall as one line of the caption beside it, the glyph in its middle:
+    // level with the first line however tall the row gets.
+    m_icon->setFixedSize(size::iconSm, QFontMetrics(font::caption()).height());
+    m_icon->setAlignment(Qt::AlignCenter);
     m_text = label({}, TextStyle::Caption, color::fg_3, this);
     m_text->setWordWrap(true);
+    m_text->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     h->addWidget(m_icon, 0, Qt::AlignTop);
     h->addWidget(m_text, 1);
     hide();
