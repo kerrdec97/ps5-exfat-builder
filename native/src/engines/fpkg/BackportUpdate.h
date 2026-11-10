@@ -76,12 +76,20 @@ Status validateBackportRequest(const BackportUpdateRequest& request, const FpkgS
 
 QStringList backportPhases(const BackportUpdateRequest& request);
 
+// The settings one update is built with: the job's, with the checks and the
+// clean-up this flow does itself switched off, param.json left as shipped
+// and, when the base's PlayGo table was read (baseChunks > 0 and languages),
+// a generated layout with exactly that chunk count and those languages,
+// whatever the PlayGo settings say.
+FpkgSettings backportUpdateSettings(const FpkgSettings& settings, int baseChunks, const QStringList& baseLanguages);
+
 // Work folders (<output>\.ppr-backport-*, .ppr-sdkbase-*, and the zstd and
 // FPKG staging folders .fw-zstd-*, .fw-stage-*) are listed in
-// <local data>\state\backport-work.txt with an owner marker; a folder whose
-// owner process no longer runs (a crash or power loss) is removed by this
-// sweep, which runs when the app starts and before every backport job.
-// Returns how many were removed.
+// <local data>\state\backport-work.txt with an owner marker (process id and
+// start time); a folder whose owner process no longer runs (a crash or power
+// loss) is removed by this sweep, which runs when the app starts and before
+// every backport job. A folder on a drive that is not connected stays listed
+// for a later sweep. Returns how many were removed.
 int sweepStaleBackportWork();
 
 // Creates `dir` (which must not exist; its name must start with one of the

@@ -8,10 +8,11 @@
 // user's own Sony Publishing Tools.
 //
 // App-wide settings the engine also reads (declared by engines/general):
-// performance.workerThreads (img_create CPU-core limit, pre-scan and DDS
-// parallelism), storage.tempFolder (job temp and the SDK's TEMP/TMP),
-// storage.defaultOutputFolder, storage.freeSpaceMarginMiB,
-// performance.ioBufferMiB, performance.keepComputerAwake (applied by the
+// performance.workerThreads and performance.mode (CPU-core limit and
+// priority of every publisher run, pre-scan and DDS parallelism),
+// storage.tempFolder (job temp, the SDK's TEMP/TMP, and where images are
+// staged and bases extracted), storage.defaultOutputFolder,
+// storage.freeSpaceMarginMiB, performance.keepComputerAwake (applied by the
 // queue) and verification.verifyAfterBuild.
 
 #include "core/Settings.h"
@@ -107,10 +108,9 @@ struct FpkgSettings {
     int cpuCoreLimit = 0;          // effective workers (performance.workerThreads / mode); 0 = no limit
     int priorityMode = 2;          // performance.mode for Sony's publisher (applyProcessPriority)
     int workerThreads = 1;         // effective thread count (>= 1)
-    qint64 ioBufferBytes = 4 * 1024 * 1024;
     qint64 freeSpaceMarginBytes = 512LL * 1024 * 1024;
     QString defaultOutputDir;      // storage.defaultOutputFolder
-    QString userTempFolder;        // storage.tempFolder ("" = not set: image sources are staged on the output drive)
+    QString userTempFolder;        // storage.tempFolder (not set or gone: images are staged and bases extracted on the output drive)
 
     static FpkgSettings from(const SettingsValues& values);
 };

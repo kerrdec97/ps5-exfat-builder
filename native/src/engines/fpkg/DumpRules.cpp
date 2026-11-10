@@ -142,13 +142,10 @@ QString leftoverReason(const QStringList& parts, const QString& name, bool isDir
                 return QStringLiteral("DLC emulator module (\"Keep the DLC emulator\" is off)");
         }
     }
-    if (o.removeAmprLeftovers && !isDir) {
-        if (depth == 0 && low == u"ampr_emu.index")
-            return QStringLiteral("AMPR emulator leftover");
-        if (depth == 1 && eqi(parts[0], QStringLiteral("fakelib"))
-            && (low == u"ampr_emu.index" || low == u"libsceampr.sprx"))
-            return QStringLiteral("AMPR emulator leftover");
-    }
+    // The root ampr_emu.index and fakelib/libSceAmpr.sprx are base exclusions
+    // (always left out); the option decides only fakelib/ampr_emu.index.
+    if (o.removeAmprLeftovers && !isDir && depth == 1 && eqi(parts[0], QStringLiteral("fakelib")) && low == u"ampr_emu.index")
+        return QStringLiteral("AMPR emulator leftover");
     if (o.removeDumpLeftovers && isDir) {
         if (depth == 0 && name == u"_DUBLEX_")
             return QStringLiteral("dump leftover (_DUBLEX_)");
@@ -174,7 +171,9 @@ QString DlcEmuEntry::mountFolder() const
         rel.chop(1);
     while (rel.startsWith(u'/'))
         rel.remove(0, 1);
-    if (rel.isEmpty() || rel.contains(QStringLiteral("..")))
+    // A relative path below the app root only: no "..", no drive or stream
+    // ("C:", "x:y"), which would lead out of the game folder.
+    if (rel.isEmpty() || rel.contains(QStringLiteral("..")) || rel.contains(u':'))
         return {};
     return rel;
 }
@@ -189,17 +188,19 @@ DlcEmuIni parseDlcEmuIni(const QByteArray& text)
     QString s = QString::fromUtf8(text);
     if (s.startsWith(QChar(0xFEFF)))
         s.remove(0, 1);
-    static const QRegularExpression sectionRe(QStringLiteral("^\\[([A-Za-z0-9_]+)\\]$"));
     std::vector<DlcEmuEntry> raw;
     bool inEntry = false;
     for (QString line : s.split(u'\n')) {
         line = line.trimmed();
         if (line.isEmpty() || line.startsWith(u'#') || line.startsWith(u';'))
             continue;
-        const auto m = sectionRe.match(line);
-        if (m.hasMatch()) {
+        if (line.startsWith(u'[')) {
+            // Every header starts a new entry, also one with a trailing
+            // comment or an unknown name ("[PSAC] ; second", "[my-dlc]"):
+            // its keys must never land in the entry before it.
+            const qsizetype close = line.indexOf(u']');
             raw.push_back(DlcEmuEntry{});
-            raw.back().section = m.captured(1).toUpper();
+            raw.back().section = line.mid(1, close < 0 ? -1 : close - 1).trimmed().toUpper();
             inEntry = true;
             continue;
         }

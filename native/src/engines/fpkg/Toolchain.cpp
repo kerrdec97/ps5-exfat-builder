@@ -269,7 +269,7 @@ SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools)
     }
     if (libSha == kPprPkgOwnLibSha256) {
         st.text = QStringLiteral("This is ppr-pkg's own libScePubTools.dll, not the SDK Fix one. Use the patched DLL from "
-                                 "sdk-fpkg279-fix12.");
+                                 "sdk-fpkg279-fix13.");
         return st;
     }
     const SdkFixRelease* match = nullptr;

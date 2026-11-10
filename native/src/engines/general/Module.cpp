@@ -195,12 +195,11 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("General");
         d.group = QStringLiteral("Behaviour");
         d.label = QStringLiteral("Retry failed jobs automatically");
-        d.description = QStringLiteral("Retries a job that failed because of a read/write error, a tool failure or a timeout. Never retries cancelled jobs, verification failures, missing tools or a full disk.");
+        d.description = QStringLiteral("How many times a job is tried again after it failed because of a read/write error, a tool failure or a timeout. Never retries cancelled jobs, verification failures, missing tools or a full disk.");
         d.type = SettingType::Int;
         d.defaultValue = 0;
         d.minimum = 0;
         d.maximum = 5;
-        d.unit = QStringLiteral("times");
         d.order = order++;
         s.add(d);
     }
@@ -210,6 +209,7 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("General");
         d.group = QStringLiteral("Behaviour");
         d.label = QStringLiteral("Wait before retrying");
+        d.description = QStringLiteral("Seconds between a failure and the automatic retry, for example to let a drive or a network share come back.");
         d.type = SettingType::Int;
         d.defaultValue = 30;
         d.minimum = 0;
@@ -232,7 +232,6 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = 1;
         d.minimum = 1;
         d.maximum = 8;
-        d.unit = QStringLiteral("jobs");
         d.order = order++;
         s.add(d);
     }
@@ -270,7 +269,6 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = 0;
         d.minimum = 0;
         d.maximum = 256;
-        d.unit = QStringLiteral("threads");
         d.perJob = true;
         d.order = order++;
         s.add(d);
@@ -371,7 +369,7 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("Verification");
         d.group = QStringLiteral("After building");
         d.label = QStringLiteral("Verify every output");
-        d.description = QStringLiteral("Reads each finished image or package back and compares it with the source. A job is only reported as done after verification passes.");
+        d.description = QStringLiteral("Reads each finished image back and compares it with the source; FPKG packages are checked with img_verify instead (Verification > FPKG packages). A job is only reported as done after verification passes.");
         d.type = SettingType::Bool;
         d.defaultValue = true;
         d.perJob = true;
@@ -423,7 +421,6 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = 5;
         d.minimum = 1;
         d.maximum = 50;
-        d.unit = QStringLiteral("files");
         d.restartRequired = true;
         d.order = order++;
         s.add(d);
@@ -434,6 +431,7 @@ void registerModule(ModuleContext& ctx)
         d.section = QStringLiteral("Logging");
         d.group = QStringLiteral("Log files");
         d.label = QStringLiteral("Maximum log file size");
+        d.description = QStringLiteral("When the log file reaches this size it is closed and a new one is started.");
         d.type = SettingType::Int;
         d.defaultValue = 8;
         d.minimum = 1;
@@ -479,7 +477,8 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("output_dir"), keys::kDefaultOutputDir);
     s.addLegacyKey(QStringLiteral("temp_dir"), keys::kTempFolder);
     s.addLegacyKey(QStringLiteral("logs_dir"), keys::kLogFolder);
-    s.addLegacyKey(QStringLiteral("adv_threads"), keys::kWorkerThreads);
+    // adv_threads is not mapped: it was the robocopy copy-thread count (1 by
+    // default), not the CPU threads of performance.workerThreads.
     s.addLegacyKey(QStringLiteral("shutdown_action"), keys::kAfterQueueAction);
     s.addLegacyKey(QStringLiteral("shutdown_delay"), keys::kAfterQueueDelay, [](const QVariant& v) -> std::optional<QVariant> {
         return QVariant(std::clamp<qint64>(v.toLongLong(), 10, 3600));

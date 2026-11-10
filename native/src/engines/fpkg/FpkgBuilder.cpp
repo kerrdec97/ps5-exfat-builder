@@ -45,7 +45,7 @@ QString listSome(const QStringList& items, int max = 20)
     QStringList shown = items.mid(0, max);
     QString s = shown.join(QStringLiteral("; "));
     if (items.size() > max)
-        s += QStringLiteral(" ... and %1 more").arg(items.size() - max);
+        s += QStringLiteral(" … and %1 more").arg(items.size() - max);
     return s;
 }
 
@@ -283,10 +283,27 @@ QString joinNative(const QStringList& paths)
     return shown.join(QStringLiteral(", "));
 }
 
+QString numberedPath(const QString& path, int n)
+{
+    const QFileInfo fi(path);
+    return fi.dir().filePath(numberedName(fi.fileName(), n));
+}
+
+// The first n for which "name (n)" is free for every path (0: none, each
+// file then takes its own first free number). One number for all of them
+// keeps an update and its .remastered.pkg a pair.
+int freeNumber(const QStringList& paths)
+{
+    for (int n = 1; n < 10000; ++n)
+        if (std::none_of(paths.begin(), paths.end(), [n](const QString& p) { return nameTaken(numberedPath(p, n)); }))
+            return n;
+    return 0;
+}
+
 } // namespace
 
 Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy, QStringList& notes, QStringList* kept,
-                    const RenameFn& renameFn)
+                    const RenameFn& renameFn, std::vector<ReplacedOutput>* replaced)
 {
     const RenameFn doRename = renameFn ? renameFn : RenameFn([](const QString& from, const QString& to) {
         return QFile::rename(from, to);
@@ -298,6 +315,10 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
     };
     std::vector<Aside> asides;
     std::optional<Error> failure;
+    QStringList finals;
+    for (const OutputMove& m : moves)
+        finals << m.finalPath;
+    const int keepBothNumber = policy == OutputConflict::KeepBoth ? freeNumber(finals) : 0;
 
     // 1. Every existing output is set aside before anything new takes its name.
     for (const OutputMove& m : moves) {
@@ -311,7 +332,7 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
         }
         QString aside;
         if (policy == OutputConflict::KeepBoth) {
-            aside = keepBothName(m.finalPath);
+            aside = keepBothNumber > 0 ? numberedPath(m.finalPath, keepBothNumber) : keepBothName(m.finalPath);
         } else {
             aside = m.finalPath + QStringLiteral(".fw-replaced");
             for (int n = 2; nameTaken(aside); ++n)
@@ -344,15 +365,17 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
     }
 
     if (!failure) {
+        std::vector<ReplacedOutput> old;
         for (const Aside& a : asides) {
             if (policy == OutputConflict::KeepBoth)
                 notes << QStringLiteral("The existing %1 was renamed to %2.").arg(fileName(a.finalPath), fileName(a.aside));
-            else if (QFile::remove(a.aside))
-                notes << QStringLiteral("The existing %1 was replaced.").arg(fileName(a.finalPath));
             else
-                notes << QStringLiteral("The existing %1 was replaced, but its old copy could not be deleted: %2")
-                             .arg(fileName(a.finalPath), QDir::toNativeSeparators(a.aside));
+                old.push_back({a.finalPath, a.aside});
         }
+        if (replaced)
+            *replaced = std::move(old);
+        else
+            discardReplaced(old, notes);
         return success();
     }
 
@@ -378,6 +401,7 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
     // 4. Keep the new files (they may be hours of packing): under a free
     // numbered name, else under their partial name.
     QStringList keptHere;
+    const int keptNumber = freeNumber(finals);
     for (size_t i = 0; i < moves.size(); ++i) {
         const OutputMove& m = moves[i];
         if (stuckAtFinal[i]) {
@@ -386,7 +410,7 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
         }
         if (!nameTaken(m.partial))
             continue;
-        const QString numbered = keepBothName(m.finalPath);
+        const QString numbered = keptNumber > 0 ? numberedPath(m.finalPath, keptNumber) : keepBothName(m.finalPath);
         if (!numbered.isEmpty() && doRename(m.partial, numbered))
             keptHere << numbered;
         else
@@ -408,6 +432,41 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
 Status placeOutput(const QString& partial, const QString& finalPath, OutputConflict policy, QStringList& notes)
 {
     return placeOutputs({OutputMove{partial, finalPath}}, policy, notes);
+}
+
+void discardReplaced(const std::vector<ReplacedOutput>& replaced, QStringList& notes)
+{
+    for (const ReplacedOutput& r : replaced) {
+        const QString name = QFileInfo(r.finalPath).fileName();
+        if (QFile::remove(r.aside))
+            notes << QStringLiteral("The existing %1 was replaced.").arg(name);
+        else
+            notes << QStringLiteral("The existing %1 was replaced, but its old copy could not be deleted: %2")
+                         .arg(name, QDir::toNativeSeparators(r.aside));
+    }
+}
+
+void restoreReplaced(const std::vector<ReplacedOutput>& replaced, QStringList& placed, QStringList& notes)
+{
+    if (replaced.empty())
+        return;
+    // The new files first, all under the same number, so the old names are free again.
+    const int n = freeNumber(placed);
+    for (QString& p : placed) {
+        const QString to = n > 0 ? numberedPath(p, n) : keepBothName(p);
+        if (!to.isEmpty() && QFile::rename(p, to))
+            p = to;
+    }
+    for (auto it = replaced.rbegin(); it != replaced.rend(); ++it) {
+        const QString name = QFileInfo(it->finalPath).fileName();
+        if (!nameTaken(it->finalPath) && QFile::rename(it->aside, it->finalPath))
+            notes << QStringLiteral("The previous %1 was put back.").arg(name);
+        else
+            notes << QStringLiteral("The previous %1 could not be put back; it is now %2.")
+                         .arg(name, QDir::toNativeSeparators(it->aside));
+    }
+    notes << (placed.size() == 1 ? QStringLiteral("The new package was kept as %1.").arg(joinNative(placed))
+                                 : QStringLiteral("The new packages were kept as %1.").arg(joinNative(placed)));
 }
 
 // ---- planning ----------------------------------------------------------------------------
@@ -775,7 +834,7 @@ Gp5Project projectFromPlan(const BuildPlan& plan, const FpkgSettings& s, const s
 
 namespace {
 
-Status checkOutputAndTemp(const QString& output, const QString& sourceDir)
+Status checkOutputFolder(const QString& output, const QString& sourceDir)
 {
     if (!sourceDir.isEmpty() && isSameOrInside(output, sourceDir))
         return Error(ErrorCode::InvalidArgument,
@@ -840,11 +899,11 @@ Status validateBuildRequest(const BuildRequest& r, const FpkgSettings& s)
             FW_TRY(stager->probe(r.source));
         } else {
             return Error(ErrorCode::InvalidArgument,
-                         QStringLiteral("Choose a game folder, a .gp5 project or an .exfat, .ffpfsc or .ffpkg image."));
+                         QStringLiteral("Choose a game folder, a .gp5 project or an .exfat, .ffpkg, .ffpfs or .ffpfsc image."));
         }
     }
     const QString output = r.output.isEmpty() ? defaultOutputFolder(r.source, s.defaultOutputDir) : r.output;
-    FW_TRY(checkOutputAndTemp(output, sourceDirOf(r.source)));
+    FW_TRY(checkOutputFolder(output, sourceDirOf(r.source)));
     if (!r.contentId.isEmpty() && !isValidContentId(r.contentId))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("\"%1\" is not a valid PS5 Content ID.").arg(r.contentId));
     if (!r.contentVersion.isEmpty() && !ContentVersion::parse(r.contentVersion))
@@ -921,7 +980,7 @@ Status validateAddonRequest(const AddonRequest& r, const FpkgSettings& s)
     if (!r.contentId.isEmpty() && !isValidContentId(r.contentId))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("\"%1\" is not a valid PS5 Content ID.").arg(r.contentId));
     const QString output = r.output.isEmpty() ? defaultOutputFolder(r.payloadFolder, s.defaultOutputDir) : r.output;
-    FW_TRY(checkOutputAndTemp(output, src.absoluteFilePath()));
+    FW_TRY(checkOutputFolder(output, src.absoluteFilePath()));
     const QString pc = passcodeProblem(s.passcode);
     if (!pc.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Package passcode: %1").arg(pc));
@@ -977,6 +1036,15 @@ QString chooseWorkingDir(const PubToolchain& tc, const QString& gp5Tool)
     return QFileInfo(gp5Tool).absolutePath();
 }
 
+// A warning only: the size of the compressed package is not known before packing.
+QString fatWarning(const QString& output)
+{
+    const QString fs = QString::fromLatin1(QStorageInfo(output).fileSystemType()).toUpper();
+    if (fs.startsWith(QStringLiteral("FAT")) || fs == u"VFAT")
+        return QStringLiteral("The output drive is FAT32, which cannot hold files of 4 GB or more.");
+    return {};
+}
+
 QByteArray logBytes(const QStringList& lines)
 {
     QByteArray out;
@@ -990,22 +1058,35 @@ QByteArray logBytes(const QStringList& lines)
 Status writeZeroFile(const QString& path, qint64 size, const CancellationToken& token)
 {
     const QFileInfo fi(path);
-    if (fi.isFile() && fi.size() == size)
-        return success();
+    static const QByteArray zeros(256 * 1024, '\0');
+    // A file kept from an earlier build is reused only when it really is all zeros.
+    if (fi.isFile() && fi.size() == size) {
+        QFile old(toLongPath(path));
+        bool same = old.open(QIODevice::ReadOnly);
+        for (qint64 left = size; same && left > 0;) {
+            const QByteArray part = old.read(std::min<qint64>(left, zeros.size()));
+            same = !part.isEmpty() && std::all_of(part.begin(), part.end(), [](char c) { return c == '\0'; });
+            left -= part.size();
+        }
+        if (same)
+            return success();
+    }
     QDir().mkpath(fi.absolutePath());
     QFile f(toLongPath(path));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(fi.fileName()), f.errorString());
-    static const QByteArray zeros(256 * 1024, '\0');
     qint64 left = size;
     while (left > 0) {
-        if (token.isCancelled())
+        if (!token.checkpoint())
             return Error::cancelled();
         const qint64 n = std::min<qint64>(left, zeros.size());
         if (f.write(zeros.constData(), n) != n)
             return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(fi.fileName()), f.errorString());
         left -= n;
     }
+    // QFile buffers: a full disk may only show at the flush.
+    if (!f.flush() || f.error() != QFileDevice::NoError)
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(fi.fileName()), f.errorString());
     return success();
 }
 
@@ -1020,7 +1101,7 @@ Status prescanFiles(const QStringList& files, int threads, const CancellationTok
     for (int t = 0; t < n; ++t) {
         pool.emplace_back([&] {
             for (qsizetype i = next++; i < files.size(); i = next++) {
-                if (token.isCancelled())
+                if (!token.checkpoint())
                     return;
                 QFile f(toLongPath(files[i]));
                 char b = 0;
@@ -1050,6 +1131,37 @@ void logToolLine(const Log& log, const ToolLine& l)
     case LineKind::Info: log.info(QStringLiteral("SDK: %1").arg(l.text.isEmpty() ? l.raw.trimmed() : l.text)); break;
     case LineKind::Dropped: break;
     }
+}
+
+// What every publisher run of a job shares: the performance mode's priority
+// and the CPU-core limit, which the user can change while the job runs.
+void applyJobLimits(ToolRunOptions& o, const FpkgSettings& s, const JobContext& ctx)
+{
+    o.cpuCoreLimit = s.cpuCoreLimit;
+    o.priorityMode = s.priorityMode;
+    o.liveLimitKey = ctx.jobId;
+    o.log = ctx.log;
+}
+
+// TEMP/TMP for a publisher run: a private folder under the job's temporary folder.
+QProcessEnvironment publisherEnv(const QString& tempDir, AsciiAliases& aliases, const Log& log)
+{
+    QDir().mkpath(tempDir);
+    // An ASCII path for the SDK (the user folder may not be), then its 8.3 alias when shorter.
+    auto mapped = aliases.map(tempDir, QStringLiteral("tmp"));
+    bool aliased = false;
+    const QString t = publisherTempPath(mapped.ok() ? mapped.value() : tempDir, &aliased);
+    if (aliased)
+        log.debug(QStringLiteral("Using a short path alias for the same private publisher temporary folder (SDK "
+                                 "path-length limit)."));
+    if (t.size() > kPublisherTempMaxChars)
+        log.warn(QStringLiteral("The publisher's temporary path is %1 characters long (the SDK may fail above %2). Choose a "
+                                "shorter temporary folder in Settings > Storage if this step fails.")
+                     .arg(t.size()).arg(kPublisherTempMaxChars));
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("TEMP"), t);
+    env.insert(QStringLiteral("TMP"), t);
+    return env;
 }
 
 Status writeImgCreateLog(const QString& logsDir, const ToolRunResult& r)
@@ -1087,6 +1199,7 @@ struct PackJob {
     QString stem;
     QString logsDir;
     QString contentId;
+    QString passcode;            // for img_verify; "" = the settings' (a .gp5 project has its own)
     bool update = false;
     QString basePackage;         // real path
     UpdateOutput updateOutput = UpdateOutput::Both;
@@ -1158,9 +1271,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     env.insert(QStringLiteral("TMP"), sdkTmpTool);
     ro.environment = env;
     ro.watchFile = partial;
-    ro.cpuCoreLimit = s.cpuCoreLimit;
-    ro.priorityMode = s.priorityMode;
-    ro.liveLimitKey = ctx.jobId;
+    applyJobLimits(ro, s, ctx);
     // Monotonic: a second ruler line from the tool must not send the bar backwards.
     ro.onBar = [pr, best = std::make_shared<int>(0)](int steps) {
         *best = std::max(*best, steps);
@@ -1190,7 +1301,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         log.warn(st.error().message);
     for (const QString& w : r.warnings)
         j.outcome.warnings << QStringLiteral("Publishing Tools: %1").arg(w);
-    if (r.cancelled || ctx.token.isCancelled())
+    if (r.cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (!r.ok())
         return packFailure(r, j.what);
@@ -1230,9 +1341,12 @@ Result<JobOutcome> packAndFinish(PackJob& j)
             fullPackage = partialCompanion; // checked below, then removed
         }
     }
+    // "Overwrite": the old files stay set aside until the checks below are
+    // over, and come back when the new package does not pass them.
+    std::vector<ReplacedOutput> replaced;
     {
         QStringList kept;
-        if (Status st = placeOutputs(moves, s.outputConflict, notes, &kept); !st.ok()) {
+        if (Status st = placeOutputs(moves, s.outputConflict, notes, &kept, {}, &replaced); !st.ok()) {
             keptPartials = kept;
             for (const QString& k : std::as_const(kept))
                 log.warn(QStringLiteral("The finished package was kept as %1.").arg(native(k)));
@@ -1258,19 +1372,38 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         j.outcome.warnings << QStringLiteral("Install the base package on the console first, then %1.")
                                   .arg(updatePackageName(j.stem));
 
+    const auto settleReplaced = [&](bool passed) {
+        QStringList more;
+        if (passed)
+            discardReplaced(replaced, more);
+        else
+            restoreReplaced(replaced, placed, more);
+        replaced.clear();
+        for (const QString& n : std::as_const(more))
+            log.info(n);
+        j.outcome.warnings << more;
+        j.outcome.outputs = placed;
+    };
+
     // Optional deep check with the user's tool.
     j.outcome.verification = Verification::Passed;
-    j.outcome.verificationDetail = QStringLiteral("Header and plaintext debug marker checked.");
+    j.outcome.verificationDetail = QStringLiteral("Header and plaintext debug marker checked only; the package content "
+                                                  "was not read (img_verify is off).");
     if (s.postVerify != PostVerify::HeaderOnly) {
         pr->beginPhase(PhVerify, 0);
         ToolRunOptions vo;
         vo.program = native(j.tc->exe);
-        vo.arguments = imgVerifyArgs(s.passcode, s.postVerify == PostVerify::ToolFull, j.aliases->toToolPath(fullPackage));
+        vo.arguments = imgVerifyArgs(j.passcode.isEmpty() ? s.passcode : j.passcode, s.postVerify == PostVerify::ToolFull,
+                                     j.aliases->toToolPath(fullPackage));
         vo.workingDirectory = ro.workingDirectory;
+        vo.environment = ro.environment;
         vo.withBar = false;
         vo.onLine = ro.onLine;
+        applyJobLimits(vo, s, ctx);
+        (void)ctx.token.checkpoint(); // a paused job waits here; a cancelled one is reported by the run below
         auto vr = runPubTool(vo, ctx.token);
         if (vr.ok() && (vr->cancelled || ctx.token.isCancelled())) {
+            settleReplaced(false);
             log.warn(QStringLiteral("img_verify was cancelled; the package was kept: %1").arg(native(placed.value(0))));
             return Error::cancelled();
         }
@@ -1288,6 +1421,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
             log.warn(j.outcome.verificationDetail);
         }
     }
+    settleReplaced(j.outcome.verification == Verification::Passed);
     if (j.update && j.updateOutput == UpdateOutput::UpdateOnly)
         QFile::remove(partialCompanion);
     dropPartials.dismiss();
@@ -1354,17 +1488,58 @@ Status checkUpdateAgainstBase(const BuildPlan& plan, const QStringList& roots, Q
     return success();
 }
 
-Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolchain& tc, const FpkgSettings& s,
-                                    JobContext& ctx, AsciiAliases& aliases)
+// The user's temporary folder, when one is set and still exists (the queue
+// uses the default one otherwise).
+bool hasUserTempFolder(const FpkgSettings& s)
 {
-    const QString dest = QDir(ctx.tempDir).filePath(QStringLiteral("patch-base"));
-    removeTreeNoFollow(dest);
-    if (!QDir().mkpath(dest))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not create a folder for the base package's files."));
+    return !s.userTempFolder.isEmpty() && QFileInfo(s.userTempFolder).isDir();
+}
+
+// A folder for a large temporary tree (a staged image, an extracted base
+// package): under the job's temporary folder when the user chose one, else in
+// a tracked work folder next to the output, because the app data drive is
+// often the small one. `guard` removes that work folder when the build ends.
+Result<QString> largeWorkFolder(const QString& name, const QString& output, const FpkgSettings& s, const JobContext& ctx,
+                                TrackedWorkFolder& guard)
+{
+    QString parent = ctx.tempDir;
+    if (!hasUserTempFolder(s)) {
+        (void)sweepStaleBackportWork();
+        parent = QDir(output).filePath(
+            QStringLiteral(".fw-stage-%1").arg(QRandomGenerator::global()->generate(), 8, 16, QLatin1Char('0')));
+        FW_TRY(createTrackedWorkFolder(parent));
+        guard.dir = parent;
+    }
+    const QString dir = QDir(parent).filePath(name);
+    removeTreeNoFollow(dir);
+    if (!QDir().mkpath(dir))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not create a temporary folder in %1.").arg(native(parent)));
+    return dir;
+}
+
+bool onSameVolume(const QString& a, const QString& b)
+{
+    const QStorageInfo sa(a), sb(b);
+    return sa.isValid() && sb.isValid() && sa.rootPath().compare(sb.rootPath(), Qt::CaseInsensitive) == 0;
+}
+
+Result<QString> extractBaseForMerge(const QString& basePackage, const QString& output, const PubToolchain& tc,
+                                    const FpkgSettings& s, JobContext& ctx, AsciiAliases& aliases, TrackedWorkFolder& guard)
+{
+    FW_TRY_ASSIGN(const QString dest, largeWorkFolder(QStringLiteral("patch-base"), output, s, ctx, guard));
     // The base's files are needed only where the update folder lacks them.
     // img_extract cannot pick files, so the whole base is extracted; packages
     // are Kraken-compressed, so the tree is usually larger than the file.
-    FW_TRY(ensureFreeSpace(dest, kExtractedTreeFactor * QFileInfo(basePackage).size(), s.freeSpaceMarginBytes));
+    if (Status st = ensureFreeSpace(dest, kExtractedTreeFactor * QFileInfo(basePackage).size(), s.freeSpaceMarginBytes);
+        !st.ok()) {
+        Error e = st.takeError();
+        e.message += hasUserTempFolder(s)
+            ? QStringLiteral(" The base package is extracted to the temporary folder first: give the original game "
+                             "folder to skip this, or choose a temporary folder with more room in Settings > Storage.")
+            : QStringLiteral(" The base package is extracted next to the output first: give the original game folder "
+                             "to skip this, or set a temporary folder on another drive in Settings > Storage.");
+        return e;
+    }
     FW_TRY(mapDir(aliases, QFileInfo(basePackage).absolutePath(), QStringLiteral("ref")));
     auto destTool = aliases.map(dest, QStringLiteral("base"));
     if (!destTool.ok())
@@ -1375,7 +1550,9 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolcha
     o.program = native(tc.exe);
     o.arguments = imgExtractArgs(s.passcode, aliases.toToolPath(basePackage), native(destTool.value()));
     o.workingDirectory = chooseWorkingDir(tc, dest);
+    o.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     o.withBar = false;
+    applyJobLimits(o, s, ctx);
     const qint64 free0 = diskSpace(dest).ok() ? diskSpace(dest)->available : 0;
     ProgressReporter* pr = ctx.progress;
     o.pollBytes = [dest, free0] {
@@ -1387,7 +1564,7 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolcha
     auto r = runPubTool(o, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (!r->ok())
         return packFailure(r.value(), QStringLiteral("Extracting the base package"));
@@ -1407,7 +1584,6 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     const Log& log = ctx.log;
     pr->setPhases(buildPhases(), kBuildWeights);
     FW_TRY(validateBuildRequest(req, s));
-    ScopeExit clearLive([&] { clearLiveCpuLimit(ctx.jobId); });
 
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
@@ -1423,8 +1599,15 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     const QFileInfo srcInfo(req.source);
     const QString output = QFileInfo(req.output.isEmpty() ? defaultOutputFolder(req.source, s.defaultOutputDir) : req.output)
                                .absoluteFilePath();
+    const bool outputIsNew = !QFileInfo::exists(output);
     if (!QDir().mkpath(output))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create the output folder %1.").arg(native(output)));
+    // A build that fails before it wrote anything leaves no empty folder
+    // behind (rmdir only removes an empty one).
+    ScopeExit dropEmptyOutput([&] {
+        if (outputIsNew)
+            QDir().rmdir(output);
+    });
 
     // ---- source -------------------------------------------------------------------
     pr->beginPhase(PhPrepare, 0);
@@ -1432,7 +1615,9 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     const bool gp5Source = srcInfo.isFile() && srcInfo.suffix().compare(QStringLiteral("gp5"), Qt::CaseInsensitive) == 0;
     QStringList forbidden;
     std::shared_ptr<SourceStager> folderStager = srcInfo.isDir() ? folderStagerFor(req.source) : nullptr;
-    TrackedWorkFolder stageGuard; // a staging folder on the output drive, removed when the build ends
+    // Work folders on the output drive (a staged image, an extracted base),
+    // removed when the build ends, after the ASCII links into them.
+    TrackedWorkFolder stageGuard, baseGuard;
     if (srcInfo.isDir() && !folderStager) {
         sourceRoot = srcInfo.absoluteFilePath();
     } else if (!gp5Source) {
@@ -1441,21 +1626,16 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             return Error(ErrorCode::Unsupported, QStringLiteral("No reader for %1 images is available.").arg(srcInfo.suffix()));
         // Staged next to the output (the drive the package goes to) unless the
         // user chose a temporary folder: the app data drive is often the small one.
-        QString stage = QDir(ctx.tempDir).filePath(QStringLiteral("stage"));
-        if (s.userTempFolder.isEmpty()) {
-            (void)sweepStaleBackportWork();
-            stage = QDir(output).filePath(QStringLiteral(".fw-stage-%1").arg(QRandomGenerator::global()->generate(), 8, 16, QLatin1Char('0')));
-            FW_TRY(createTrackedWorkFolder(stage));
-            stageGuard.dir = stage;
-        } else {
-            removeTreeNoFollow(stage);
-            if (!QDir().mkpath(stage))
-                return Error(ErrorCode::IoError, QStringLiteral("Could not create the staging folder."));
-        }
+        FW_TRY_ASSIGN(const QString stage, largeWorkFolder(QStringLiteral("stage"), output, s, ctx, stageGuard));
         const qint64 estimated = stager->estimateStagedBytes(req.source); // opens the image once
         const qint64 est = estimated > 0 ? estimated : srcInfo.size();
-        FW_TRY(ensureFreeSpace(stage, est + est / 50, s.freeSpaceMarginBytes));
-        if (s.userTempFolder.isEmpty()) {
+        // When the staged tree shares the drive with the package, both must
+        // fit: asking only for the tree would copy it and then stop.
+        qint64 stageNeed = est + est / 50;
+        if (onSameVolume(stage, output))
+            stageNeed += qint64(double(est) * 1.1 * (req.isUpdate() ? 2.0 : 1.0));
+        FW_TRY(ensureFreeSpace(stage, stageNeed, s.freeSpaceMarginBytes));
+        if (!stageGuard.dir.isEmpty()) {
             // Staged onto the output drive: a FAT32 drive cannot hold the game's
             // files above 4 GiB (nor the package), so stop before copying anything.
             FW_TRY_ASSIGN(const QStringList volumeNotes, checkOutputVolume(output, est));
@@ -1466,7 +1646,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
                                 : note);
         pr->beginPhase(PhPrepare, est);
         FW_TRY(stager->stage(req.source, stage, ctx.token, pr));
-        if (ctx.token.isCancelled())
+        if (!ctx.token.checkpoint())
             return Error::cancelled();
         sourceRoot = findAppRoot(stage, 3);
         if (sourceRoot.isEmpty())
@@ -1494,17 +1674,20 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             return Error(ErrorCode::Unsupported,
                          QStringLiteral("%1 is a %2 project; only prospero_app projects are built from .gp5 files (use "
                                         "\"Build an add-on\" for add-ons).").arg(srcInfo.fileName(), g.volumeType));
-        if (!passcodeProblem(g.passcode).isEmpty())
-            return Error(ErrorCode::CorruptData, QStringLiteral("The project's passcode is not 32 characters."));
+        if (const QString pc = passcodeProblem(g.passcode); !pc.isEmpty())
+            return Error(ErrorCode::CorruptData, QStringLiteral("The project's passcode: %1").arg(pc));
         QStringList missing, nonAscii, badDst;
         bool relative = false;
         QString paramSrc, keystoneSrc;
+        qint64 sourceBytes = 0;
         for (const Gp5FileEntry& f : g.files) {
             const QString real = resolveGp5SourcePath(g, f.src);
             if (!QFileInfo(f.src).isAbsolute())
                 relative = true;
             if (!QFileInfo(real).isFile())
                 missing << f.src;
+            else
+                sourceBytes += QFileInfo(real).size();
             if (!isAsciiPath(f.src))
                 nonAscii << f.src;
             const QString pr2 = pathRuleProblem(f.dst);
@@ -1544,6 +1727,24 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             return Error(ErrorCode::CorruptData,
                          QStringLiteral("The project needs the dump's own 96-byte sce_sys/keystone."));
         const QString stem = packageStem(cid, *ver);
+        // The checks a folder build makes before packing: the name conflict
+        // that would stop the job, and room for the package.
+        QStringList finals;
+        if (!req.isUpdate()) {
+            finals << QDir(output).filePath(fullPackageName(stem));
+        } else {
+            if (req.updateOutput != UpdateOutput::FullOnly) finals << QDir(output).filePath(updatePackageName(stem));
+            if (req.updateOutput != UpdateOutput::UpdateOnly) finals << QDir(output).filePath(companionName(stem));
+        }
+        if (s.outputConflict == OutputConflict::Fail)
+            for (const QString& f : std::as_const(finals))
+                if (QFileInfo::exists(f))
+                    return Error(ErrorCode::AlreadyExists,
+                                 QStringLiteral("%1 already exists in the output folder.").arg(QFileInfo(f).fileName()));
+        const qint64 needOut = qint64(double(sourceBytes) * 1.1 * (req.isUpdate() ? 2.0 : 1.0));
+        FW_TRY(ensureFreeSpace(output, needOut, s.freeSpaceMarginBytes));
+        if (const QString w = fatWarning(output); !w.isEmpty())
+            outcome.warnings << w;
         const QString logsDir = QDir(output).filePath(stem + QStringLiteral("-build-logs"));
         QDir().mkpath(logsDir);
         (void)writeFileAtomic(QDir(logsDir).filePath(QStringLiteral("01-create-gp5.log")),
@@ -1569,6 +1770,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         j.stem = stem;
         j.logsDir = logsDir;
         j.contentId = cid;
+        j.passcode = g.passcode;
         j.update = req.isUpdate();
         j.basePackage = QFileInfo(req.basePackage).absoluteFilePath();
         j.updateOutput = req.updateOutput;
@@ -1602,14 +1804,15 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             if (!req.baseFolder.isEmpty()) {
                 roots << QFileInfo(req.baseFolder).absoluteFilePath();
             } else {
-                auto extracted = extractBaseForMerge(QFileInfo(req.basePackage).absoluteFilePath(), tc, s, ctx, aliases);
+                auto extracted = extractBaseForMerge(QFileInfo(req.basePackage).absoluteFilePath(), output, tc, s, ctx,
+                                                     aliases, baseGuard);
                 if (!extracted.ok())
                     return extracted.takeError();
                 roots << extracted.value();
             }
         }
     }
-    if (ctx.token.isCancelled())
+    if (!ctx.token.checkpoint())
         return Error::cancelled();
 
     // ---- plan ---------------------------------------------------------------------------
@@ -1665,14 +1868,13 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             generated += e.size;
     const qint64 needOut = qint64(double(plan.uncompressedBytes) * 1.1 * (plan.isUpdate ? 2.0 : 1.0)) + generated;
     FW_TRY(ensureFreeSpace(output, needOut, s.freeSpaceMarginBytes));
-    if (QStorageInfo(output).fileSystemType().toUpper().startsWith("FAT")
-        || QStorageInfo(output).fileSystemType().compare("vfat", Qt::CaseInsensitive) == 0)
-        outcome.warnings << QStringLiteral("The output drive is FAT/FAT32, which cannot hold files above 4 GiB.");
+    if (const QString w = fatWarning(output); !w.isEmpty())
+        outcome.warnings << w;
 
     // ---- generated inputs -------------------------------------------------------------------
     pr->beginPhase(PhGenerate, generated);
     for (const QString& r : roots)
-        FW_TRY(mapDir(aliases, r, r == roots.first() ? QStringLiteral("src") : QStringLiteral("upd")));
+        FW_TRY(mapDir(aliases, r, plan.isUpdate && r == roots.first() ? QStringLiteral("upd") : QStringLiteral("src")));
     FW_TRY(mapDir(aliases, output, QStringLiteral("out")));
     if (plan.isUpdate)
         FW_TRY(mapDir(aliases, QFileInfo(req.basePackage).absolutePath(), QStringLiteral("ref")));
@@ -1689,7 +1891,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         for (int t = 0; t < std::min<int>(threads, int(conv.size())); ++t) {
             pool.emplace_back([&] {
                 for (size_t i = next++; i < conv.size(); i = next++) {
-                    if (ctx.token.isCancelled())
+                    if (!ctx.token.checkpoint())
                         return;
                     const ImageConversion& c = conv[i];
                     const QString out = QDir(plan.assetsDir).filePath(QStringLiteral("sce_sys/") + c.dst.section(u'/', -1));
@@ -1735,7 +1937,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         FW_TRY(finalizeParam(plan, po, s));
     }
     for (const PlannedEntry& e : plan.entries) {
-        if (ctx.token.isCancelled())
+        if (!ctx.token.checkpoint())
             return Error::cancelled();
         switch (e.kind) {
         case EntryKind::Payload:
@@ -1751,7 +1953,11 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             QFile in(toLongPath(e.origin));
             if (!in.open(QIODevice::ReadOnly))
                 return Error(ErrorCode::IoError, QStringLiteral("%1 could not be read.").arg(e.dst), in.errorString());
-            FW_TRY(writeFileAtomic(e.src, withRepairedUcpDigest(in.readAll())));
+            // Read again since planning: only an archive that still passes the check is corrected.
+            const QByteArray archive = in.readAll();
+            if (!checkUcp(archive).structureOk)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while it was being packed.").arg(e.dst));
+            FW_TRY(writeFileAtomic(e.src, withRepairedUcpDigest(archive)));
             pr->advance(e.size);
             break;
         }
@@ -1773,6 +1979,12 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
               << QStringLiteral("files=%1").arg(plan.fileEntries)
               << QStringLiteral("bytes=%1").arg(plan.uncompressedBytes)
               << QStringLiteral("empty_dirs=%1").arg(plan.emptyDirs.size());
+    // Staged images, an extracted base and ASCII links are gone when the build ends.
+    if (!aliases.links().isEmpty() || folderStager || !srcInfo.isDir()
+        || (req.isUpdate() && !req.exactSource && req.baseFolder.isEmpty()))
+        createLog << QStringLiteral("note: the project names temporary paths (a staged image, an extracted base package "
+                                    "or ASCII folder links) that are removed when the build ends; a kept project cannot "
+                                    "be built again as it is");
     createLog << plan.log;
     for (const QString& n : std::as_const(plan.paramNotes))
         createLog << QStringLiteral("param.json: %1").arg(n);
@@ -1785,7 +1997,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         createLog << QStringLiteral("warning: %1").arg(w);
     FW_TRY(writeFileAtomic(QDir(plan.logsDir).filePath(QStringLiteral("01-create-gp5.log")), logBytes(createLog)));
     log.info(QStringLiteral("Project written: %1").arg(native(plan.gp5Path)));
-    if (ctx.token.isCancelled())
+    if (!ctx.token.checkpoint())
         return Error::cancelled();
 
     // ---- pre-scan ------------------------------------------------------------------------------
@@ -1842,7 +2054,6 @@ Result<JobOutcome> runAddon(const AddonRequest& req, const FpkgSettings& s, JobC
     const Log& log = ctx.log;
     pr->setPhases(addonPhases(), kBuildWeights);
     FW_TRY(validateAddonRequest(req, s));
-    ScopeExit clearLive([&] { clearLiveCpuLimit(ctx.jobId); });
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
         return Error(ErrorCode::DependencyMissing, tc.problems.join(u' '));
@@ -1853,8 +2064,13 @@ Result<JobOutcome> runAddon(const AddonRequest& req, const FpkgSettings& s, JobC
 
     const QString src = QFileInfo(req.payloadFolder).absoluteFilePath();
     const QString output = QFileInfo(req.output.isEmpty() ? defaultOutputFolder(src, s.defaultOutputDir) : req.output).absoluteFilePath();
+    const bool outputIsNew = !QFileInfo::exists(output);
     if (!QDir().mkpath(output))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create the output folder %1.").arg(native(output)));
+    ScopeExit dropEmptyOutput([&] {
+        if (outputIsNew)
+            QDir().rmdir(output);
+    });
     pr->beginPhase(PhPlan, 0);
     auto prm = readParamJson(findPathCaseInsensitive(src, QStringLiteral("sce_sys/param.json"), false));
     if (!prm.ok())
@@ -1990,12 +2206,14 @@ Result<JobOutcome> runVerify(const VerifyRequest& req, const FpkgSettings& s, Jo
     ro.program = native(tc.exe);
     ro.arguments = imgVerifyArgs(passcode, req.integrity, aliases.toToolPath(target));
     ro.workingDirectory = chooseWorkingDir(tc, target);
+    ro.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("verify-tmp")), aliases, ctx.log);
     ro.withBar = false;
     ro.onLine = [&ctx](const ToolLine& l) { logToolLine(ctx.log, l); };
+    applyJobLimits(ro, s, ctx);
     auto r = runPubTool(ro, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     o.outputs << QFileInfo(target).absoluteFilePath();
     if (r->ok()) {
@@ -2059,7 +2277,9 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     ro.program = native(tc.exe);
     ro.arguments = imgExtractArgs(passcode, aliases.toToolPath(target), native(destTool.value()));
     ro.workingDirectory = chooseWorkingDir(tc, target);
+    ro.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     ro.withBar = false;
+    applyJobLimits(ro, s, ctx);
     const qint64 free0 = diskSpace(dest).ok() ? diskSpace(dest)->available : 0;
     ro.pollBytes = [dest, free0] {
         auto d = diskSpace(dest);
@@ -2070,7 +2290,7 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     auto r = runPubTool(ro, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (!r->ok())
         return packFailure(r.value(), QStringLiteral("img_extract"));
@@ -2148,26 +2368,6 @@ QString redactedCommand(const QStringList& args)
     return QStringLiteral("prospero-pub-cmd ") + shown.join(u' ');
 }
 
-QProcessEnvironment publisherEnv(const QString& tempDir, AsciiAliases& aliases, const Log& log)
-{
-    QDir().mkpath(tempDir);
-    // An ASCII path for the SDK (the user folder may not be), then its 8.3 alias when shorter.
-    auto mapped = aliases.map(tempDir, QStringLiteral("tmp"));
-    bool aliased = false;
-    const QString t = publisherTempPath(mapped.ok() ? mapped.value() : tempDir, &aliased);
-    if (aliased)
-        log.debug(QStringLiteral("Using a short path alias for the same private publisher temporary folder (SDK "
-                                 "path-length limit)."));
-    if (t.size() > kPublisherTempMaxChars)
-        log.warn(QStringLiteral("The publisher's temporary path is %1 characters long (the SDK may fail above %2). Choose a "
-                                "shorter temporary folder in Settings > Storage if this step fails.")
-                     .arg(t.size()).arg(kPublisherTempMaxChars));
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("TEMP"), t);
-    env.insert(QStringLiteral("TMP"), t);
-    return env;
-}
-
 } // namespace
 
 Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, const PubToolchain& tc, const FpkgSettings& s,
@@ -2192,8 +2392,7 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
         o.workingDirectory = chooseWorkingDir(tc, tool);
         o.environment = env;
         o.withBar = false;
-        o.cpuCoreLimit = s.cpuCoreLimit;
-        o.priorityMode = s.priorityMode;
+        applyJobLimits(o, s, ctx);
         o.onLine = [&log](const ToolLine& l) { logToolLine(log, l); };
         log.info(redactedCommand(o.arguments));
         return runPubTool(o, ctx.token);
@@ -2201,9 +2400,11 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
     auto r1 = pass(false, true);
     if (!r1.ok())
         return r1.takeError();
-    if (r1->cancelled || ctx.token.isCancelled())
+    if (r1->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
-    if (r1->exitCode != 0 || r1->crashed)
+    // An [Error] line fails the required pass even with exit code 0, as for
+    // every other run of the tool.
+    if (!r1->ok())
         return Error(ErrorCode::VerificationFailed,
                      QStringLiteral("Required publisher full integrity verification failed (exit %1). No final output "
                                     "was published.").arg(r1->exitCode),
@@ -2213,14 +2414,14 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
     auto r2 = pass(true, false);
     if (!r2.ok())
         return r2.takeError();
-    if (r2->cancelled || ctx.token.isCancelled())
+    if (r2->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     rep.formatExitCode = r2->exitCode;
     rep.formatPassed = r2->exitCode == 0 && !r2->crashed;
     if (rep.formatPassed)
         log.info(QStringLiteral("    SDK application/SELF format diagnostics passed; console compatibility remains untested."));
     else
-        log.warn(QStringLiteral("    [Warn] SDK application/SELF format diagnostics reported errors (exit %1). Package "
+        log.warn(QStringLiteral("    SDK application/SELF format diagnostics reported errors (exit %1). Package "
                                 "integrity passed; format acceptance and console compatibility remain unverified. "
                                 "Review the diagnostic errors above.").arg(r2->exitCode));
     return rep;
@@ -2247,8 +2448,7 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
     o.workingDirectory = chooseWorkingDir(tc, destination);
     o.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     o.withBar = false;
-    o.cpuCoreLimit = s.cpuCoreLimit;
-    o.priorityMode = s.priorityMode;
+    applyJobLimits(o, s, ctx);
     const qint64 free0 = diskSpace(destination).ok() ? diskSpace(destination)->available : 0;
     ProgressReporter* pr = ctx.progress;
     o.pollBytes = [destination, free0] {
@@ -2261,7 +2461,7 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
     auto r = runPubTool(o, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     // Exit code 0 with an [Error] line is a failure too (§4.4): a partly
     // extracted base must never become the tree an update delta is planned on.

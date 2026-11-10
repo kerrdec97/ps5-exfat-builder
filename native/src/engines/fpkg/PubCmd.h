@@ -10,8 +10,11 @@
 // "[Debug]" and "Creating an image" are info; everything else is dropped.
 // The size of the file being written is polled every 500 ms as a second
 // progress signal, and the CPU-core limit can be changed while it runs.
+// While the job's token is paused the tool and every process it started are
+// suspended (within 250 ms) and resumed when the job continues.
 
 #include "core/Cancellation.h"
+#include "core/Log.h"
 #include "core/Result.h"
 
 #include <QByteArray>
@@ -86,6 +89,7 @@ struct ToolRunOptions {
     std::function<void(int steps)> onBar;
     std::function<void(qint64 bytes)> onBytesWritten;
     std::function<void(const ToolLine&)> onLine;
+    Log log{QStringLiteral("fpkg")}; // "Paused ..." / "Resumed ..." notices (the job's log when set)
 };
 
 struct ToolRunResult {
@@ -114,11 +118,21 @@ Result<ToolRunResult> runPubTool(const ToolRunOptions& options, const Cancellati
 QString formatElapsed(qint64 ms);
 
 // ---- CPU-core limit -----------------------------------------------------------------------------
-// The UI calls this while a job runs; the running img_create follows within
-// 250 ms. 0 = all cores. clearLiveCpuLimit() is called when the job ends.
+// The UI calls this while a job runs; the publisher run in progress follows
+// within 250 ms and every later run of the job starts with it. 0 = all cores.
+// clearLiveCpuLimit() is called once, when the job ends.
 void setLiveCpuLimit(const QString& jobId, int cores);
 std::optional<int> liveCpuLimit(const QString& jobId);
 void clearLiveCpuLimit(const QString& jobId);
+// For a job's run(): forgets the job's live limit when the job ends, however
+// many publisher runs it made.
+struct LiveCpuLimitScope {
+    explicit LiveCpuLimitScope(QString id) : jobId(std::move(id)) {}
+    ~LiveCpuLimitScope() { clearLiveCpuLimit(jobId); }
+    LiveCpuLimitScope(const LiveCpuLimitScope&) = delete;
+    LiveCpuLimitScope& operator=(const LiveCpuLimitScope&) = delete;
+    QString jobId;
+};
 
 // Tests: observe (or replace) how the limit is applied. Default: fw::setProcessCpuLimit.
 using CpuLimitApplier = std::function<bool(qint64 pid, int cores)>;

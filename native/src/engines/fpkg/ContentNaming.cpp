@@ -8,7 +8,7 @@ namespace fw::fpkg {
 
 bool isValidContentId(const QString& id)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_[0-9]{2}-[A-Z0-9]{16}$"));
+    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-[A-Z]{4}[0-9]{5}_[0-9]{2}-[A-Z0-9]{16}\\z"));
     return re.match(id).hasMatch();
 }
 
@@ -51,12 +51,15 @@ QString ContentVersion::packageComponent() const
 ContentVersion ContentVersion::next() const
 {
     ContentVersion v = *this;
-    v.patch = 0;
-    if (v.minor >= 999) {
-        v.minor = 0;
-        v.major = std::min(99, v.major + 1);
-    } else {
+    if (v.minor < 999) {
         ++v.minor;
+        v.patch = 0;
+    } else if (v.major < 99) {
+        ++v.major;
+        v.minor = 0;
+        v.patch = 0;
+    } else {
+        v.patch = 999; // 99.999.x: nothing higher than 99.999.999 exists
     }
     return v;
 }

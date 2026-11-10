@@ -9,7 +9,35 @@
 #include <algorithm>
 #include <map>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace fw::fpkg {
+
+namespace {
+
+// For a folder that lists as empty: tells "really empty" from "could not be
+// listed" (access denied, device error), which QDir reports the same way.
+bool canListFolder(const QString& dir)
+{
+#ifdef Q_OS_WIN
+    const QString pattern = toLongPath(dir) + QStringLiteral("\\*");
+    WIN32_FIND_DATAW fd{};
+    const HANDLE h = FindFirstFileExW(reinterpret_cast<LPCWSTR>(pattern.utf16()), FindExInfoBasic, &fd,
+                                      FindExSearchNameMatch, nullptr, 0);
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD err = GetLastError();
+        return err == ERROR_FILE_NOT_FOUND || err == ERROR_NO_MORE_FILES;
+    }
+    FindClose(h);
+    return true;
+#else
+    return QFileInfo(dir).isReadable();
+#endif
+}
+
+} // namespace
 
 const ScannedFile* ScanResult::findFile(const QString& rel) const
 {
@@ -209,6 +237,10 @@ private:
                              QStringLiteral("The folder %1 could not be read.").arg(QDir::toNativeSeparators(dir)));
             const QFileInfoList infos = d.entryInfoList(
                 QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::NoSort);
+            // Never package an unreadable folder as an empty one.
+            if (infos.isEmpty() && !canListFolder(dir))
+                return Error(ErrorCode::IoError,
+                             QStringLiteral("The folder %1 could not be read.").arg(QDir::toNativeSeparators(dir)));
             for (const QFileInfo& fi : infos) {
                 const QString name = fi.fileName();
                 if (r > 0 && parts.isEmpty() && fi.isDir()

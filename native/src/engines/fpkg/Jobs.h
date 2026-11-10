@@ -34,6 +34,8 @@ public:
     QString subtitle() const override;
     QStringList phases() const override { return buildPhases(); }
     QJsonObject parameters() const override { return m_request.toJson(); }
+    // Also the base package and folder of an update, and "<source>-pkg" when no output is named.
+    QStringList busyPaths() const override;
     Status validate(const SettingsValues& settings) const override;
     Result<JobOutcome> run(JobContext& ctx) override;
     const BuildRequest& request() const { return m_request; }
@@ -51,6 +53,7 @@ public:
     QString subtitle() const override { return QStringLiteral("FPKG add-on (prospero_ac, experimental)"); }
     QStringList phases() const override { return addonPhases(); }
     QJsonObject parameters() const override { return m_request.toJson(); }
+    QStringList busyPaths() const override; // the add-on folder and the output folder
     Status validate(const SettingsValues& settings) const override;
     Result<JobOutcome> run(JobContext& ctx) override;
 

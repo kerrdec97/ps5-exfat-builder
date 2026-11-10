@@ -172,10 +172,9 @@ Status writeSelfRepairCopy(const QString& src, const QString& dst, const Cancell
     const QByteArray head = f.read(4);
     if (head != kPs4SelfMagic)
         return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while it was being copied.").arg(QFileInfo(src).fileName()));
-    f.seek(0);
-    if (f.write(kPs5SelfMagic) != 4)
+    // QFile buffers: a failed write (full disk) may only show at the flush.
+    if (!f.seek(0) || f.write(kPs5SelfMagic) != 4 || !f.flush() || f.error() != QFileDevice::NoError)
         return Error(ErrorCode::IoError, QStringLiteral("Could not fix %1.").arg(QFileInfo(src).fileName()), f.errorString());
-    f.flush();
     f.setFileTime(QFileInfo(src).lastModified(), QFileDevice::FileModificationTime);
     return success();
 }
@@ -235,7 +234,8 @@ UcpCheck checkUcp(const QByteArray& d)
         const qint64 rec = kUcpHeader + i * kUcpRecord;
         const quint64 off = qFromBigEndian<quint64>(d.constData() + rec + 32);
         const quint64 size = qFromBigEndian<quint64>(d.constData() + rec + 40);
-        if (off < quint64(tableEnd) || off + size > quint64(d.size())) {
+        // Written so that off + size cannot wrap.
+        if (off < quint64(tableEnd) || size > quint64(d.size()) || off > quint64(d.size()) - size) {
             c.problem = QStringLiteral("entry %1 lies outside the file").arg(i);
             return c;
         }
@@ -247,6 +247,8 @@ UcpCheck checkUcp(const QByteArray& d)
 
 QByteArray withRepairedUcpDigest(const QByteArray& data)
 {
+    if (data.size() < kUcpHeader)
+        return data; // not an archive: nothing to correct
     QByteArray out = data;
     const QByteArray digest = ucpDigest(data);
     std::copy(digest.begin(), digest.end(), out.begin() + kUcpDigestAt);

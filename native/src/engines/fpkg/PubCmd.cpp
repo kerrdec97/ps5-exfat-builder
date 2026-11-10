@@ -7,10 +7,19 @@
 #include <QFileInfo>
 #include <QHash>
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <vector>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
+#include <signal.h>
+#include <sys/types.h>
+#endif
 
 namespace fw::fpkg {
 
@@ -293,15 +302,157 @@ bool applyCpuLimit(qint64 pid, int cores)
 
 namespace {
 
+// Suspends and resumes the tool together with every process it started, for
+// Pause. On Windows the tool joins a second job object (nested in the
+// runner's, no limits of its own) whose only use is to list that tree; if
+// that fails only the tool's own process is suspended.
+class TreeSuspender {
+public:
+    TreeSuspender() = default;
+    TreeSuspender(const TreeSuspender&) = delete;
+    TreeSuspender& operator=(const TreeSuspender&) = delete;
+    ~TreeSuspender()
+    {
+        resume();
+#ifdef Q_OS_WIN
+        if (m_job)
+            CloseHandle(m_job);
+#endif
+    }
+
+    // Called while the new process is still suspended by the runner, so
+    // every child it starts later is in the list.
+    void attach(qint64 pid)
+    {
+        m_pid = pid;
+#ifdef Q_OS_WIN
+        HANDLE h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, DWORD(pid));
+        if (!h)
+            return;
+        m_job = CreateJobObjectW(nullptr, nullptr);
+        if (m_job && !AssignProcessToJobObject(m_job, h)) {
+            CloseHandle(m_job);
+            m_job = nullptr;
+        }
+        CloseHandle(h);
+#endif
+    }
+
+    bool suspended() const { return m_suspended; }
+
+    // Returns how many processes were suspended (0: nothing could be).
+    int suspend()
+    {
+        if (m_suspended || m_pid <= 0)
+            return 0;
+#ifdef Q_OS_WIN
+        const NtProcessFn fn = ntProcessFn("NtSuspendProcess");
+        if (!fn)
+            return 0;
+        // A process that was listed but not yet stopped may start another
+        // one: list again until a pass finds nothing new.
+        for (int pass = 0; pass < 8; ++pass) {
+            bool added = false;
+            for (const DWORD pid : treePids()) {
+                if (std::any_of(m_held.begin(), m_held.end(), [pid](const Held& p) { return p.pid == pid; }))
+                    continue;
+                HANDLE h = OpenProcess(PROCESS_SUSPEND_RESUME, FALSE, pid);
+                if (!h)
+                    continue; // already gone
+                if (fn(h) < 0) {
+                    CloseHandle(h);
+                    continue;
+                }
+                m_held.push_back({pid, h});
+                added = true;
+            }
+            if (!added)
+                break;
+        }
+        m_suspended = !m_held.empty();
+        return int(m_held.size());
+#else
+        // The runner made the tool the leader of its own process group.
+        if (::kill(-pid_t(m_pid), SIGSTOP) != 0)
+            return 0;
+        m_suspended = true;
+        return 1;
+#endif
+    }
+
+    void resume()
+    {
+        if (!m_suspended)
+            return;
+        m_suspended = false;
+#ifdef Q_OS_WIN
+        // The handles opened for suspending are used again, so a process id
+        // that was reused in the meantime is never touched.
+        const NtProcessFn fn = ntProcessFn("NtResumeProcess");
+        for (auto it = m_held.rbegin(); it != m_held.rend(); ++it) {
+            if (fn)
+                fn(it->handle);
+            CloseHandle(it->handle);
+        }
+        m_held.clear();
+#else
+        ::kill(-pid_t(m_pid), SIGCONT);
+#endif
+    }
+
+private:
+#ifdef Q_OS_WIN
+    using NtProcessFn = LONG(NTAPI*)(HANDLE);
+    static NtProcessFn ntProcessFn(const char* name)
+    {
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        return ntdll ? reinterpret_cast<NtProcessFn>(reinterpret_cast<void*>(GetProcAddress(ntdll, name))) : nullptr;
+    }
+
+    std::vector<DWORD> treePids() const
+    {
+        std::vector<DWORD> pids;
+        if (m_job) {
+            for (DWORD capacity = 64; capacity <= 16384; capacity *= 4) {
+                std::vector<char> buf(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + capacity * sizeof(ULONG_PTR));
+                auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buf.data());
+                const BOOL ok = QueryInformationJobObject(m_job, JobObjectBasicProcessIdList, list, DWORD(buf.size()), nullptr);
+                if (!ok && GetLastError() != ERROR_MORE_DATA)
+                    break;
+                if (ok || list->NumberOfProcessIdsInList >= list->NumberOfAssignedProcesses) {
+                    for (DWORD i = 0; i < list->NumberOfProcessIdsInList; ++i)
+                        pids.push_back(DWORD(list->ProcessIdList[i]));
+                    return pids;
+                }
+            }
+            pids.clear();
+        }
+        pids.push_back(DWORD(m_pid));
+        return pids;
+    }
+
+    struct Held {
+        DWORD pid;
+        HANDLE handle;
+    };
+    HANDLE m_job = nullptr;
+    std::vector<Held> m_held;
+#endif
+    qint64 m_pid = 0;
+    bool m_suspended = false;
+};
+
 class Watcher {
 public:
-    Watcher(const ToolRunOptions& o) : m_opt(o) {}
+    Watcher(const ToolRunOptions& o, const CancellationToken& token) : m_opt(o), m_token(token) {}
     ~Watcher() { stop(); }
 
+    // Runs while the new process is still suspended by the runner.
     void start(qint64 pid, int appliedLimit)
     {
         m_pid = pid;
         m_applied = appliedLimit;
+        m_tree.attach(pid);
         m_thread = std::thread([this] { loop(); });
     }
     void stop()
@@ -313,9 +464,29 @@ public:
         m_cv.notify_all();
         if (m_thread.joinable())
             m_thread.join();
+        m_tree.resume();
     }
 
 private:
+    // The tool cannot reach a checkpoint, so Pause suspends it. Cancel is
+    // not delayed: the runner's job object ends suspended processes too.
+    void followPause()
+    {
+        const bool want = m_token.isPaused() && !m_token.isCancelled();
+        if (want == m_tree.suspended())
+            return;
+        const QString tool = QFileInfo(m_opt.program).fileName();
+        if (!want) {
+            m_tree.resume();
+            m_opt.log.info(QStringLiteral("Resumed %1.").arg(tool));
+        } else if (m_tree.suspend() > 0) {
+            m_opt.log.info(QStringLiteral("Paused %1.").arg(tool));
+        } else if (!m_pauseFailed) {
+            m_pauseFailed = true;
+            m_opt.log.warn(QStringLiteral("%1 could not be paused; it keeps running.").arg(tool));
+        }
+    }
+
     void loop()
     {
         qint64 lastSize = -1;
@@ -326,6 +497,7 @@ private:
             if (m_stop)
                 break;
             lock.unlock();
+            followPause();
             if (!m_opt.liveLimitKey.isEmpty()) {
                 if (const auto live = liveCpuLimit(m_opt.liveLimitKey); live && *live != m_applied) {
                     applyCpuLimit(m_pid, *live);
@@ -350,6 +522,9 @@ private:
     }
 
     const ToolRunOptions& m_opt;
+    const CancellationToken m_token;
+    TreeSuspender m_tree;
+    bool m_pauseFailed = false;
     qint64 m_pid = 0;
     int m_applied = 0;
     std::thread m_thread;
@@ -389,7 +564,7 @@ Result<ToolRunResult> runPubTool(const ToolRunOptions& o, const CancellationToke
         },
         {}, false);
 
-    Watcher watcher(o);
+    Watcher watcher(o, token);
     ProcessSpec spec;
     spec.program = o.program;
     spec.arguments = o.arguments;

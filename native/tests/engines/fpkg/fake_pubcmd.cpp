@@ -19,12 +19,16 @@
 //   chunks) | cr (CR line ends) | nobar (no bar) | strictpaths (non-ASCII
 //   src_path or reserved dst_path fails) | nocompanion (update without
 //   .remastered.pkg)
-// FAKE_PUBCMD_VERIFY=fail, FAKE_PUBCMD_EXTRACT=fail|slow,
+// FAKE_PUBCMD_VERIFY=fail|softfail ([Error], exit 0), FAKE_PUBCMD_EXTRACT=fail|slow,
 // FAKE_PUBCMD_EXTRACT_PARAM=<param.json text>, FAKE_DDS2PNG_MODE=fail|wrong,
 // FAKE_PUBCMD_LOG=<file>: one JSON line per run (argv, cwd, TEMP, TMP, start
-//   and end time, CPU count samples). FAKE_PUBCMD_DELAY_MS: delay per bar step.
+//   and end time, CPU count samples, priority class). FAKE_PUBCMD_DELAY_MS:
+//   delay per bar step.
 // FAKE_PUBCMD_CHILD_PIDFILE=<file>: img_create starts a child that sleeps and
-//   writes its pid there (process-tree kill tests).
+//   writes its pid there (process-tree kill tests); the child also appends
+//   one byte to <file>.ticks every 100 ms.
+// FAKE_PUBCMD_TICKFILE=<file>: img_create appends one byte per bar step
+//   (pause tests: a suspended tool stops counting).
 
 #include <chrono>
 #include <cstdint>
@@ -129,6 +133,16 @@ int cpuCount()
 #endif
 }
 
+// The Windows priority class (0x40 idle, 0x4000 below normal, 0x20 normal); 0 elsewhere.
+unsigned long priorityClass()
+{
+#ifdef _WIN32
+    return GetPriorityClass(GetCurrentProcess());
+#else
+    return 0;
+#endif
+}
+
 std::string jsonEscape(const std::string& s)
 {
     std::string o;
@@ -170,9 +184,19 @@ void record(const std::vector<std::string>& args)
       << ",\"cpus\":" << cpuCount() << ",\"cpuSamples\":[";
     for (size_t i = 0; i < g_cpuSamples.size(); ++i)
         j << (i ? "," : "") << g_cpuSamples[i];
-    j << "]}\n";
+    j << "],\"priority\":" << priorityClass() << "}\n";
     std::ofstream f(u8(logPath), std::ios::app | std::ios::binary);
     f << j.str();
+}
+
+// One byte per tick: the file size is the count, and a reader never sees a
+// half-written number.
+void writeTick(const std::string& path)
+{
+    if (path.empty())
+        return;
+    std::ofstream f(u8(path), std::ios::app | std::ios::binary);
+    f << 'x';
 }
 
 bool readFile(const std::string& path, std::string& data)
@@ -382,6 +406,7 @@ int imgCreate(const std::vector<std::string>& args)
                 out("=");
         }
         sleepMs(delay);
+        writeTick(env("FAKE_PUBCMD_TICKFILE"));
         if (i == 10 && mode != "nooutput") {
             std::ofstream f(u8(outPath), std::ios::binary | std::ios::trunc);
             f << "partial";
@@ -430,6 +455,10 @@ int imgVerify(const std::vector<std::string>& args)
         return fail("File not found");
     if (data.compare(0, 4, "\x7F" "FIH", 4) != 0)
         return fail("Cannot parse the package (not a full image)");
+    if (env("FAKE_PUBCMD_VERIFY") == "softfail") {
+        out("[Error] Integrity check failed" + nl());
+        return 0;
+    }
     out("[Info] Verification passed" + nl());
     return 0;
 }
@@ -525,7 +554,10 @@ int main(int argc, char** argv)
         std::ofstream f(u8(args[2]), std::ios::trunc);
         f << pid;
         f.close();
-        sleepMs(60000);
+        for (int tick = 0; tick < 600; ++tick) {
+            sleepMs(100);
+            writeTick(args[2] + ".ticks");
+        }
         return 0;
     }
     const std::string self = args.empty() ? std::string() : pathToU8(u8(args[0]).filename());

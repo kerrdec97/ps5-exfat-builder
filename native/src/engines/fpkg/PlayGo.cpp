@@ -232,6 +232,17 @@ QString cString(const QByteArray& d, const Section& s, quint32 rel)
     return QString::fromLatin1(d.constData() + start, int(i - start));
 }
 
+// A label from the dump for a project attribute: a control character (other
+// than tab and line breaks, which are escaped) would make the project
+// invalid XML.
+QString projectLabel(QString label)
+{
+    for (QChar& c : label)
+        if (c.unicode() < 0x20 && c != u'\t' && c != u'\r' && c != u'\n')
+            c = u'_';
+    return label;
+}
+
 } // namespace
 
 Result<PlayGoTable> parsePlayGoChunkDat(const QByteArray& d)
@@ -555,7 +566,7 @@ Status planScript(PlayGoPlan& plan, const PlayGoInputs& in)
         doc.insert(QStringLiteral("chunkDefaultLanguage"), json::Value(canonicalPlayGoLanguage(def)));
         info = checkScenarioFile(doc);
         if (!info.valid)
-            return Error(ErrorCode::Internal, QStringLiteral("The all-languages PlayGo scenario failed validation (%1).").arg(info.problem));
+            return Error(ErrorCode::Internal, QStringLiteral("The PlayGo scenario with the forced language list failed validation (%1).").arg(info.problem));
         plan.notes << QStringLiteral("PlayGo: %1 language(s) forced (%2)")
                           .arg(listed.size())
                           .arg(in.forcedLanguages.isEmpty() ? QStringLiteral("all PlayGo languages") : QStringLiteral("the base package's own set"));
@@ -602,7 +613,7 @@ Status planScript(PlayGoPlan& plan, const PlayGoInputs& in)
         ci.scenarios.push_back({{{QStringLiteral("id"), QString::number(s.id)},
                                  {QStringLiteral("type"), s.type},
                                  {QStringLiteral("initial_chunk_count"), QString::number(n)},
-                                 {QStringLiteral("label"), s.title.isEmpty() ? QStringLiteral("Scenario #%1").arg(s.id) : s.title}},
+                                 {QStringLiteral("label"), s.title.isEmpty() ? QStringLiteral("Scenario #%1").arg(s.id) : projectLabel(s.title)}},
                                 chunkRangeText(n)});
     }
     return success();
@@ -657,7 +668,7 @@ void planSourceTable(PlayGoPlan& plan, const PlayGoInputs& in, const PlayGoTable
         gc.attrs.emplace_back(QStringLiteral("id"), QString::number(c));
         if (ch.languageMask != t.languageMask)
             gc.attrs.emplace_back(QStringLiteral("languages"), languagesInMask(ch.languageMask).join(u' '));
-        gc.attrs.emplace_back(QStringLiteral("label"), ch.label.isEmpty() ? QStringLiteral("Chunk #%1").arg(c) : ch.label);
+        gc.attrs.emplace_back(QStringLiteral("label"), ch.label.isEmpty() ? QStringLiteral("Chunk #%1").arg(c) : projectLabel(ch.label));
         ci.chunks.push_back(gc);
     }
     ci.scenariosAttrs = {{QStringLiteral("default_id"), QString::number(t.defaultScenario)}};
@@ -679,7 +690,7 @@ void planSourceTable(PlayGoPlan& plan, const PlayGoInputs& in, const PlayGoTable
         ci.scenarios.push_back({{{QStringLiteral("id"), QString::number(s)},
                                  {QStringLiteral("type"), QStringLiteral("playmode")},
                                  {QStringLiteral("initial_chunk_count"), QString::number(t.chunkCount)},
-                                 {QStringLiteral("label"), sc.label.isEmpty() ? QStringLiteral("Scenario #%1").arg(s) : sc.label}},
+                                 {QStringLiteral("label"), sc.label.isEmpty() ? QStringLiteral("Scenario #%1").arg(s) : projectLabel(sc.label)}},
                                 ids.join(u' ')});
     }
 

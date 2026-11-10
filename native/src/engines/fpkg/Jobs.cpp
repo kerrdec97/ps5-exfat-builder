@@ -3,6 +3,7 @@
 #include "engines/fpkg/BackportUpdate.h"
 
 #include "core/FileUtil.h"
+#include "engines/fpkg/PubCmd.h"
 #include "engines/fpkg/SourceScanner.h"
 #include "engines/fpkg/Toolchain.h"
 
@@ -13,6 +14,18 @@ namespace fw::fpkg {
 
 namespace {
 QString nativePath(const QString& p) { return QDir::toNativeSeparators(p); }
+
+// Everything the job reads or writes, so the queue never runs another job on
+// the same files at the same time. The output named here is the one next to
+// the source; a default output folder from the settings is not known here.
+QStringList busyList(const QString& source, const QString& output, const QStringList& more)
+{
+    QStringList out;
+    for (const QString& p : QStringList{source, output.isEmpty() ? defaultOutputFolder(source, {}) : output} + more)
+        if (!p.isEmpty())
+            out << QDir::cleanPath(QFileInfo(p).absoluteFilePath());
+    return out;
+}
 } // namespace
 
 FpkgBuildJob::FpkgBuildJob(BuildRequest request) : m_request(std::move(request))
@@ -44,6 +57,11 @@ QString FpkgBuildJob::subtitle() const
     return m_request.output.isEmpty() ? kind : QStringLiteral("%1 → %2").arg(kind, nativePath(m_request.output));
 }
 
+QStringList FpkgBuildJob::busyPaths() const
+{
+    return busyList(m_request.source, m_request.output, {m_request.basePackage, m_request.baseFolder});
+}
+
 Status FpkgBuildJob::validate(const SettingsValues& settings) const
 {
     return validateBuildRequest(m_request, FpkgSettings::from(settings));
@@ -51,6 +69,7 @@ Status FpkgBuildJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgBuildJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runBuild(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 
@@ -61,6 +80,11 @@ QString FpkgAddonJob::title() const
     return m_request.contentId.isEmpty() ? QFileInfo(m_request.payloadFolder).fileName() : m_request.contentId;
 }
 
+QStringList FpkgAddonJob::busyPaths() const
+{
+    return busyList(m_request.payloadFolder, m_request.output, {});
+}
+
 Status FpkgAddonJob::validate(const SettingsValues& settings) const
 {
     return validateAddonRequest(m_request, FpkgSettings::from(settings));
@@ -68,6 +92,7 @@ Status FpkgAddonJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgAddonJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runAddon(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 
@@ -94,6 +119,7 @@ Status FpkgVerifyJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgVerifyJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runVerify(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 
@@ -125,6 +151,7 @@ Status FpkgExtractJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgExtractJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runExtract(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 

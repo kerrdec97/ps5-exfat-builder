@@ -35,7 +35,7 @@ HeaderCheck checkPackageHeader(const QString& path)
     if (head[5] != 0)
         c.problems << QStringLiteral("the package is signed (byte 5 = %1), so it is not a debug package").arg(int(quint8(head[5])));
     c.superblockOffset = qFromLittleEndian<quint64>(head.constData() + 0x20);
-    if (c.superblockOffset + 896 > quint64(c.size)) {
+    if (c.superblockOffset > quint64(c.size) - 896) { // size >= 4096 here; written so the sum cannot wrap
         c.problems << QStringLiteral("the superblock offset 0x%1 lies outside the file").arg(c.superblockOffset, 0, 16);
         return c;
     }

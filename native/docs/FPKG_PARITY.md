@@ -736,7 +736,8 @@ Legacy import (`SettingsSchema::addLegacyKey`): `fpkg_pubtools_path` → `fpkg.p
 | `fpkg.extract` | `package`, `destination` (must be empty), `passcode` | Extract (indeterminate + bytes written) |
 | `fpkg.addon` | `payloadFolder`, `contentId`, `entitlementKey` | as build, `prospero_ac`, no `chunk_info` |
 
-Build flow (`FpkgBuilder::run`): validate toolchain → resolve source (extract images to `<job temp>/stage`) → read
+Build flow (`FpkgBuilder::run`): validate toolchain → resolve source (extract images to a staging folder: a work
+folder next to the output, or `<job temp>/stage` when a temporary folder is set; see `engines/FPKG.md`) → read
 `param.json`, keystone, base checks → scan + rules → plan PlayGo, payloads, fillers, empty dirs → generate assets in
 `<output>/.gp5-assets/<stem>/` → size class → write scenario + GP5 → `01` log → path-rule gate → pre-scan → aliases →
 `img_create` into `<stem>.partial.pkg` (live CPU limit, progress) → `02` log → success rules (§4.4) → header check

@@ -9,19 +9,26 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace fw::fpkg {
 
 namespace {
 
-constexpr qint64 kFirstWindow = 64LL * 1024 * 1024;
 constexpr qint64 kMaxWindow = 1024LL * 1024 * 1024;
 constexpr qint64 kBlock = 8LL * 1024 * 1024;
 constexpr int kMaxObject = 65536;
+// Work limits of the param.json search, in bytes looked at. A real package
+// costs a few hundred KiB; the limits only end a crafted tail (runs of '{'
+// before every "contentId") that would otherwise keep a thread busy for days.
+constexpr qint64 kParamSearchBudget = 256LL * 1024 * 1024; // per file
+constexpr qint64 kParamCandidateBudget = 1024 * 1024;      // per "contentId"
+constexpr int kParseCost = 4;                               // a parsed byte against a scanned one
 
-// End of the JSON object that starts at data[start] ('{'), or -1 within `limit` bytes.
-qint64 objectEnd(const QByteArray& data, qint64 start, qint64 limit)
+// End of the JSON object that starts at data[start] ('{'), or -1 within `limit`
+// bytes. `scanned` receives the number of bytes looked at.
+qint64 objectEnd(const QByteArray& data, qint64 start, qint64 limit, qint64* scanned)
 {
     int depth = 0;
     bool inString = false;
@@ -43,11 +50,16 @@ qint64 objectEnd(const QByteArray& data, qint64 start, qint64 limit)
         else if (c == '{' || c == '[')
             ++depth;
         else if (c == '}' || c == ']') {
-            if (--depth == 0)
+            if (--depth == 0) {
+                *scanned = i - start + 1;
                 return c == '}' ? i : -1;
-        } else if (c == '\0')
+            }
+        } else if (c == '\0') {
+            *scanned = i - start + 1;
             return -1;
+        }
     }
+    *scanned = std::max<qint64>(0, end - start);
     return -1;
 }
 
@@ -58,13 +70,15 @@ qint64 objectEnd(const QByteArray& data, qint64 start, qint64 limit)
 // keeps the last match in it: same result). With `pick`, every candidate up
 // to `neighbourhood` bytes below the first one is collected and `pick`
 // chooses among them (update images hold several param.json copies).
+// `giveUp` (optional) ends the search early with what was found so far.
 using Finder = std::function<QList<qint64>(const QByteArray&, qint64, qint64)>;
 using Acceptor = std::function<std::optional<QByteArray>(const QByteArray&, qint64)>;
 using Picker = std::function<QByteArray(const std::vector<QByteArray>&)>;
 
 Result<std::optional<QByteArray>> scanFromEnd(const QString& path, const CancellationToken& token, qint64 before,
                                               qint64 after, const Finder& findCandidates, const Acceptor& accept,
-                                              const Picker& pick = {}, qint64 neighbourhood = 0)
+                                              const Picker& pick = {}, qint64 neighbourhood = 0,
+                                              const std::function<bool()>& giveUp = {})
 {
     QFile f(toLongPath(path));
     if (!f.open(QIODevice::ReadOnly))
@@ -74,8 +88,9 @@ Result<std::optional<QByteArray>> scanFromEnd(const QString& path, const Cancell
     std::vector<QByteArray> hits;
     qint64 firstHit = -1;
     qint64 end = len;
-    while (end > floor) {
-        if (token.isCancelled())
+    bool stopped = false;
+    while (end > floor && !stopped) {
+        if (!token.checkpoint())
             return Error::cancelled();
         if (firstHit >= 0 && end < firstHit - neighbourhood)
             break;
@@ -92,6 +107,13 @@ Result<std::optional<QByteArray>> scanFromEnd(const QString& path, const Cancell
         for (qint64 off : cands) {
             if (firstHit >= 0 && readFrom + off < firstHit - neighbourhood)
                 break;
+            // Per candidate: one block can hold hundreds of thousands of them.
+            if (token.isCancelled())
+                return Error::cancelled();
+            if (giveUp && giveUp()) {
+                stopped = true;
+                break;
+            }
             if (auto hit = accept(block, off)) {
                 if (!pick)
                     return std::optional<QByteArray>(*hit);
@@ -134,7 +156,7 @@ QString packageKindName(PackageKind kind)
 
 bool isStrictContentId(const QString& id)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_[0-9]{2}-[A-Z0-9_]{16}$"));
+    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_[0-9]{2}-[A-Z0-9_]{16}\\z"));
     return re.match(id).hasMatch();
 }
 
@@ -143,29 +165,53 @@ QString titleIdFromContentId(const QString& contentId)
     return isStrictContentId(contentId) ? contentId.mid(7, 9) : QString();
 }
 
+bool isPlausibleDigest(const QByteArray& digest)
+{
+    if (digest.size() != 32)
+        return false;
+    bool seen[256] = {};
+    int distinct = 0;
+    for (const char c : digest)
+        if (!seen[quint8(c)]) {
+            seen[quint8(c)] = true;
+            ++distinct;
+        }
+    return distinct >= 8;
+}
+
 Result<std::optional<QByteArray>> findParamJsonInPackage(const QString& path, const CancellationToken& token)
 {
     static const QByteArray needle("\"contentId\"");
+    const auto budget = std::make_shared<qint64>(kParamSearchBudget);
     return scanFromEnd(
         path, token, kMaxObject, kMaxObject,
         [](const QByteArray& b, qint64 from, qint64 to) { return occurrences(b, needle, from, to); },
-        [](const QByteArray& b, qint64 at) -> std::optional<QByteArray> {
+        [budget](const QByteArray& b, qint64 at) -> std::optional<QByteArray> {
             // Nearest '{' first, up to 64 KiB back.
             const qint64 lowest = std::max<qint64>(0, at - kMaxObject);
-            for (qint64 i = at; i > lowest; --i) {
+            qint64 spent = 0;
+            qint64 i = at;
+            std::optional<QByteArray> found;
+            for (; i >= lowest && spent < kParamCandidateBudget; --i) {
                 if (b[i] != '{')
                     continue;
-                const qint64 e = objectEnd(b, i, kMaxObject);
+                qint64 scanned = 0;
+                const qint64 e = objectEnd(b, i, kMaxObject, &scanned);
+                spent += scanned;
                 if (e < 0 || e < at)
                     continue;
                 const QByteArray slice = b.mid(i, e - i + 1);
+                spent += slice.size() * kParseCost;
                 auto doc = json::parse(slice, {false, false, false, 64});
                 if (!doc.ok() || !doc->isObject())
                     continue;
-                if (doc->contains(QStringLiteral("contentId")) && doc->contains(QStringLiteral("contentVersion")))
-                    return slice;
+                if (doc->contains(QStringLiteral("contentId")) && doc->contains(QStringLiteral("contentVersion"))) {
+                    found = slice;
+                    break;
+                }
             }
-            return std::nullopt;
+            *budget -= spent + (at - std::max(i, lowest));
+            return found;
         },
         // Update images also carry the base's param.json (origin/target copies):
         // the newest contentVersion is the package's own.
@@ -182,7 +228,7 @@ Result<std::optional<QByteArray>> findParamJsonInPackage(const QString& path, co
             }
             return best;
         },
-        1024 * 1024);
+        1024 * 1024, [budget] { return *budget <= 0; });
 }
 
 Result<std::optional<QByteArray>> findPlayGoChunkDatInPackage(const QString& path, const CancellationToken& token)
@@ -262,7 +308,7 @@ Result<qint64> countOccurrences(const QString& path, const QByteArray& needle, c
     qint64 count = 0;
     QByteArray carry;
     while (true) {
-        if (token.isCancelled())
+        if (!token.checkpoint())
             return Error::cancelled();
         const QByteArray chunk = f.read(kBlock);
         if (chunk.isEmpty()) {
