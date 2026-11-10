@@ -150,6 +150,10 @@ private slots:
         QCOMPARE(ContentVersion::parse(QStringLiteral("01.020.000"))->packageComponent(), QStringLiteral("0120"));
         QCOMPARE(ContentVersion::parse(QStringLiteral("01.000.000"))->next().text(), QStringLiteral("01.001.000"));
         QCOMPARE(ContentVersion::parse(QStringLiteral("01.999.005"))->next().text(), QStringLiteral("02.000.000"));
+        // At the top the suggestion never goes below its input.
+        QCOMPARE(ContentVersion::parse(QStringLiteral("99.999.005"))->next().text(), QStringLiteral("99.999.999"));
+        QVERIFY(isValidContentId(kCid));
+        QVERIFY(!isValidContentId(kCid + u'\n'));
         QCOMPARE(ContentVersion::parse(QStringLiteral("01.002.000"))->compare(*ContentVersion::parse(QStringLiteral("01.001.999"))), 1);
         QCOMPARE(ContentVersion::parse(QStringLiteral("01.001.000"))->compare(*ContentVersion::parse(QStringLiteral("01.001.000"))), 0);
 

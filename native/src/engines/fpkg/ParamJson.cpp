@@ -74,11 +74,13 @@ std::optional<quint64> parseHexOrNumber(const json::Value& v)
 }
 
 namespace {
-QString describe(const json::Value& v)
+// The value of `key` for a note: "missing" only when the key is absent (an
+// explicit null reads "null").
+QString describe(const json::Value& p, const QString& key)
 {
-    if (!v.isString() && v.isNull())
+    if (!p.contains(key))
         return QStringLiteral("missing");
-    return QString::fromUtf8(json::write(v, {-1, false, false}));
+    return QString::fromUtf8(json::write(p.value(key), {-1, false, false}));
 }
 } // namespace
 
@@ -88,7 +90,7 @@ QStringList applyParamPatch(json::Value& p, const ParamPatchOptions& o)
     const QString drmKey = QStringLiteral("applicationDrmType");
     const json::Value& drm = p.value(drmKey);
     if (!(drm.isString() && drm.toString() == u"standard")) {
-        notes << QStringLiteral("applicationDrmType %1 -> \"standard\"").arg(p.contains(drmKey) ? describe(drm) : QStringLiteral("missing"));
+        notes << QStringLiteral("applicationDrmType %1 -> \"standard\"").arg(describe(p, drmKey));
         p.insert(drmKey, json::Value(QStringLiteral("standard")));
     }
 
@@ -119,7 +121,7 @@ QStringList applyParamPatch(json::Value& p, const ParamPatchOptions& o)
             if (sdkFw != 0 && *req > sdkFw) {
                 const QString text = QStringLiteral("0x%1").arg(sdkFw, 16, 16, QLatin1Char('0'));
                 notes << QStringLiteral("requiredSystemSoftwareVersion %1 -> %2 (the firmware of sdkVersion)")
-                             .arg(describe(p.value(reqKey)), text);
+                             .arg(describe(p, reqKey), text);
                 p.insert(reqKey, json::Value(text));
             }
         }
@@ -128,7 +130,7 @@ QStringList applyParamPatch(json::Value& p, const ParamPatchOptions& o)
     if (!o.contentVersion.isEmpty()) {
         const QString key = QStringLiteral("contentVersion");
         if (p.value(key).toString() != o.contentVersion) {
-            notes << QStringLiteral("contentVersion %1 -> %2").arg(describe(p.value(key)), o.contentVersion);
+            notes << QStringLiteral("contentVersion %1 -> %2").arg(describe(p, key), o.contentVersion);
             p.insert(key, json::Value(o.contentVersion));
         }
     }

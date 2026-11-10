@@ -471,6 +471,25 @@ private slots:
         QCOMPARE(bad.error().code, ErrorCode::VerificationFailed);
     }
 
+    // A build that fails before it wrote anything does not leave its new,
+    // empty output folder next to the game.
+    void failedBuildLeavesNoEmptyOutputFolder()
+    {
+        const QString game = dir(QStringLiteral("emptyout/game"));
+        const QString out = m_root.filePath(QStringLiteral("emptyout/out"));
+        makeSimpleDump(game);
+        QFile::remove(QDir(game).filePath(QStringLiteral("sce_sys/keystone")));
+        auto job = buildJob(game, out);
+        auto rr = run(job);
+        QVERIFY(!rr.result.ok());
+        QCOMPARE(rr.result.error().code, ErrorCode::CorruptData);
+        QVERIFY(!QFileInfo::exists(out));
+        // A folder that was there before stays, empty or not.
+        QDir().mkpath(out);
+        QVERIFY(!run(job).result.ok());
+        QVERIFY(QFileInfo(out).isDir());
+    }
+
     // The queue must not run another job on the files these jobs read or write.
     void busyPathsCoverBaseAndOutput()
     {

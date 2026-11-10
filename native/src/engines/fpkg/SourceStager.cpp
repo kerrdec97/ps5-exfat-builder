@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include <algorithm>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -47,8 +48,15 @@ std::shared_ptr<SourceStager> sourceStagerFor(const QString& path)
 
 std::shared_ptr<SourceStager> folderStagerFor(const QString& folder)
 {
-    std::lock_guard lock(stagerMutex());
-    for (const auto& [ext, s] : stagers())
+    // handlesFolder() reads the disk: ask each stager once, outside the lock.
+    std::vector<std::shared_ptr<SourceStager>> distinct;
+    {
+        std::lock_guard lock(stagerMutex());
+        for (const auto& [ext, s] : stagers())
+            if (std::find(distinct.begin(), distinct.end(), s) == distinct.end())
+                distinct.push_back(s);
+    }
+    for (const auto& s : distinct)
         if (s->handlesFolder(folder))
             return s;
     return nullptr;

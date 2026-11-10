@@ -16,7 +16,6 @@ namespace fw::fpkg {
 
 namespace {
 
-constexpr qint64 kFirstWindow = 64LL * 1024 * 1024;
 constexpr qint64 kMaxWindow = 1024LL * 1024 * 1024;
 constexpr qint64 kBlock = 8LL * 1024 * 1024;
 constexpr int kMaxObject = 65536;
@@ -157,7 +156,7 @@ QString packageKindName(PackageKind kind)
 
 bool isStrictContentId(const QString& id)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_[0-9]{2}-[A-Z0-9_]{16}$"));
+    static const QRegularExpression re(QStringLiteral("^[A-Z]{2}[0-9]{4}-(?:PPSA|CUSA)[0-9]{5}_[0-9]{2}-[A-Z0-9_]{16}\\z"));
     return re.match(id).hasMatch();
 }
 

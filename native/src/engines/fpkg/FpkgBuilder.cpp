@@ -45,7 +45,7 @@ QString listSome(const QStringList& items, int max = 20)
     QStringList shown = items.mid(0, max);
     QString s = shown.join(QStringLiteral("; "));
     if (items.size() > max)
-        s += QStringLiteral(" ... and %1 more").arg(items.size() - max);
+        s += QStringLiteral(" … and %1 more").arg(items.size() - max);
     return s;
 }
 
@@ -834,7 +834,7 @@ Gp5Project projectFromPlan(const BuildPlan& plan, const FpkgSettings& s, const s
 
 namespace {
 
-Status checkOutputAndTemp(const QString& output, const QString& sourceDir)
+Status checkOutputFolder(const QString& output, const QString& sourceDir)
 {
     if (!sourceDir.isEmpty() && isSameOrInside(output, sourceDir))
         return Error(ErrorCode::InvalidArgument,
@@ -899,11 +899,11 @@ Status validateBuildRequest(const BuildRequest& r, const FpkgSettings& s)
             FW_TRY(stager->probe(r.source));
         } else {
             return Error(ErrorCode::InvalidArgument,
-                         QStringLiteral("Choose a game folder, a .gp5 project or an .exfat, .ffpfsc or .ffpkg image."));
+                         QStringLiteral("Choose a game folder, a .gp5 project or an .exfat, .ffpkg, .ffpfs or .ffpfsc image."));
         }
     }
     const QString output = r.output.isEmpty() ? defaultOutputFolder(r.source, s.defaultOutputDir) : r.output;
-    FW_TRY(checkOutputAndTemp(output, sourceDirOf(r.source)));
+    FW_TRY(checkOutputFolder(output, sourceDirOf(r.source)));
     if (!r.contentId.isEmpty() && !isValidContentId(r.contentId))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("\"%1\" is not a valid PS5 Content ID.").arg(r.contentId));
     if (!r.contentVersion.isEmpty() && !ContentVersion::parse(r.contentVersion))
@@ -980,7 +980,7 @@ Status validateAddonRequest(const AddonRequest& r, const FpkgSettings& s)
     if (!r.contentId.isEmpty() && !isValidContentId(r.contentId))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("\"%1\" is not a valid PS5 Content ID.").arg(r.contentId));
     const QString output = r.output.isEmpty() ? defaultOutputFolder(r.payloadFolder, s.defaultOutputDir) : r.output;
-    FW_TRY(checkOutputAndTemp(output, src.absoluteFilePath()));
+    FW_TRY(checkOutputFolder(output, src.absoluteFilePath()));
     const QString pc = passcodeProblem(s.passcode);
     if (!pc.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Package passcode: %1").arg(pc));
@@ -1387,7 +1387,8 @@ Result<JobOutcome> packAndFinish(PackJob& j)
 
     // Optional deep check with the user's tool.
     j.outcome.verification = Verification::Passed;
-    j.outcome.verificationDetail = QStringLiteral("Header and plaintext debug marker checked.");
+    j.outcome.verificationDetail = QStringLiteral("Header and plaintext debug marker checked only; the package content "
+                                                  "was not read (img_verify is off).");
     if (s.postVerify != PostVerify::HeaderOnly) {
         pr->beginPhase(PhVerify, 0);
         ToolRunOptions vo;
@@ -1598,8 +1599,15 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     const QFileInfo srcInfo(req.source);
     const QString output = QFileInfo(req.output.isEmpty() ? defaultOutputFolder(req.source, s.defaultOutputDir) : req.output)
                                .absoluteFilePath();
+    const bool outputIsNew = !QFileInfo::exists(output);
     if (!QDir().mkpath(output))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create the output folder %1.").arg(native(output)));
+    // A build that fails before it wrote anything leaves no empty folder
+    // behind (rmdir only removes an empty one).
+    ScopeExit dropEmptyOutput([&] {
+        if (outputIsNew)
+            QDir().rmdir(output);
+    });
 
     // ---- source -------------------------------------------------------------------
     pr->beginPhase(PhPrepare, 0);
@@ -1866,7 +1874,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     // ---- generated inputs -------------------------------------------------------------------
     pr->beginPhase(PhGenerate, generated);
     for (const QString& r : roots)
-        FW_TRY(mapDir(aliases, r, r == roots.first() ? QStringLiteral("src") : QStringLiteral("upd")));
+        FW_TRY(mapDir(aliases, r, plan.isUpdate && r == roots.first() ? QStringLiteral("upd") : QStringLiteral("src")));
     FW_TRY(mapDir(aliases, output, QStringLiteral("out")));
     if (plan.isUpdate)
         FW_TRY(mapDir(aliases, QFileInfo(req.basePackage).absolutePath(), QStringLiteral("ref")));
@@ -2056,8 +2064,13 @@ Result<JobOutcome> runAddon(const AddonRequest& req, const FpkgSettings& s, JobC
 
     const QString src = QFileInfo(req.payloadFolder).absoluteFilePath();
     const QString output = QFileInfo(req.output.isEmpty() ? defaultOutputFolder(src, s.defaultOutputDir) : req.output).absoluteFilePath();
+    const bool outputIsNew = !QFileInfo::exists(output);
     if (!QDir().mkpath(output))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create the output folder %1.").arg(native(output)));
+    ScopeExit dropEmptyOutput([&] {
+        if (outputIsNew)
+            QDir().rmdir(output);
+    });
     pr->beginPhase(PhPlan, 0);
     auto prm = readParamJson(findPathCaseInsensitive(src, QStringLiteral("sce_sys/param.json"), false));
     if (!prm.ok())
@@ -2408,7 +2421,7 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
     if (rep.formatPassed)
         log.info(QStringLiteral("    SDK application/SELF format diagnostics passed; console compatibility remains untested."));
     else
-        log.warn(QStringLiteral("    [Warn] SDK application/SELF format diagnostics reported errors (exit %1). Package "
+        log.warn(QStringLiteral("    SDK application/SELF format diagnostics reported errors (exit %1). Package "
                                 "integrity passed; format acceptance and console compatibility remain unverified. "
                                 "Review the diagnostic errors above.").arg(r2->exitCode));
     return rep;

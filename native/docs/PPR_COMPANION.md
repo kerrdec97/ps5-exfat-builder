@@ -12,8 +12,9 @@ embedded .NET add-on and ported into this app's own pages and engines.
 | Create tab "dual backports": one SDK base PKG + separate updates | Build image › FPKG › **App** with backport files | same job, `buildBase` |
 | Base inspection (kind, digest at 0x30..0x4F, param.json), delta checks (LIH, base digest, CE-107891-6), remastered identity/version check, two-pass img_verify (integrity required, format diagnostic), `-2/-3` naming, `.naps_metric.json` kept | same, with the Companion's messages | `PackageInspect.*`, `verifyPublisherPackage` |
 | SDK Fix toolchain verification (fix13/fix12 SHA-256 pairs, ppr-pkg DLL refused, 7 `ext\` files) | required for backport updates | `checkSdkFixToolchain` (Toolchain.cpp) |
-| Publisher TEMP short-name alias / 120-character limit | every publisher run | `publisherTempPath` |
-| Process priority copied to Sony's publisher | Performance mode | `applyProcessPriority` (core) |
+| Publisher TEMP short-name alias / 120-character limit | every publisher run (`img_create`, `img_verify`, `img_extract`): a private folder under the job's temp folder | `publisherTempPath`, `publisherEnv` (FpkgBuilder.cpp) |
+| Process priority copied to Sony's publisher | Performance mode, on every publisher run, with the CPU-core limit (also the one changed while the job runs) | `applyProcessPriority` (core), `applyJobLimits` (FpkgBuilder.cpp) |
+| Pause / Resume of a running build | the queue's Pause: the publisher and its child processes are suspended until Resume | `runPubTool` (PubCmd.cpp) |
 | DLC Converter tab (INIs/PKGs, edit, icon0, Change region…, Preview, Convert, Save updated INIs, results report) | **DLC** page | `engines/dlc/*` (`dlc.convert`), fpkg-cli |
 | DLC region lookup (PlayStation Store, SerialStation, ProsperoPatches, 7-day cache) | Change region… and the region line | `DlcLookup.*` (cache in the app's cache folder) |
 | Backport files from the Backport tab | right-click a backported game › Package as an installable update | navigates to Build › Backport |
@@ -32,15 +33,22 @@ embedded .NET add-on and ported into this app's own pages and engines.
 | [Backport] OutputFolder | the Build page's Save to folder (default: the base package's folder) |
 | [SdkFix] Enabled | always on: this app's FPKG engine is the GP5 + Sony publisher pipeline |
 | PubToolsDll (libScePubTools for ppr-pkg's Kraken) | not needed: fpkg-cli uses its own copy or the built-in encoder |
-| Dark mode, engine folder/manifest check, Pause/Resume, CloseAfterBuild, PprPkgWindow, StageRoot/StageCopyFallback, VerifyOriginal | not applicable: they concern hosting ppr-pkg's window or its hard-link staging; this app never stages or modifies the game folder |
+| Dark mode, engine folder/manifest check, CloseAfterBuild, PprPkgWindow, StageRoot/StageCopyFallback, VerifyOriginal | not applicable: they concern hosting ppr-pkg's window or its hard-link staging; this app never stages or modifies the game folder |
 | Build queue | the app's own Queue page |
 
 ## Known differences
 
 * Like the Companion, an update keeps the base package's PlayGo chunk count
   and languages (read from the base's playgo-chunk.dat by the app itself, not
-  through LibProsperoPkg). If that table cannot be read, the update falls back
-  to the game folder's own PlayGo layout and the log says so.
+  through LibProsperoPkg), whatever the PlayGo settings say. If that table
+  cannot be read, the update falls back to the game folder's own PlayGo layout
+  and the log says so.
+* A base package whose digest field (0x30..0x4F) is empty or a repeated
+  pattern is refused: every file "references" such a digest, so the
+  CE-107891-6 check would prove nothing.
+* Without a game folder the base package is extracted into a work folder next
+  to the outputs (or under the temporary folder when one is set in Settings ›
+  Storage), not into the app's own data folder.
 * fpkg-cli cannot build entitlement-only (no data) DLC or DLC with Free DRM;
   such packages are listed and can be exported as updated INIs, but not
   rebuilt.

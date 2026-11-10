@@ -1,152 +1,126 @@
-# Building PS5 packages (FPKG)
+# FPKG packages (PS5 debug packages)
 
-The Build tab can turn a PS5 game dump folder into an installable debug
-package (`.pkg`). Choose **FPKG** under *Output format*.
+The **Build** page can turn a PS5 game dump into an installable debug package
+(`.pkg`). Choose **FPKG** as the format. The app prepares the project and
+drives your own copy of Sony's Publishing Tools, which do the packing.
 
-## What you need to supply
-
-The app does **not** include any Sony software and never downloads it.
-You provide:
+## What you need
 
 | What | Why |
 |---|---|
-| `prospero-pub-cmd.exe` from a Publishing Tools build you are entitled to use | It does the actual packing (`img_create`) and the optional deep check (`img_verify`). Select the `.exe` itself, its folder, or a toolkit folder containing `toolchain\` or `bin\`. |
-| A Publishing Tools build that makes **plaintext debug** packages | A stock Publishing Tools install makes packages a debug console will not install. The app checks every package for the plaintext debug marker. A package without it is reported as a **failure**, not a success, and is not kept. |
-| Microsoft Visual C++ 2015-2022 Redistributable (x64) | The Publishing Tools need it. The app checks for it and tells you if it is missing. |
-| A dump with `sce_sys/param.json` and its 96-byte `sce_sys/keystone` | The Content ID and version come from `param.json`. The debug toolchain uses the dump's keystone. |
+| `prospero-pub-cmd.exe` from Publishing Tools you are entitled to use | It packs (`img_create`), checks (`img_verify`) and unpacks (`img_extract`). The app does not include or download any Sony software. Choose the `.exe`, its folder, or a toolkit folder with `toolchain\` or `bin\` in **Settings › Tools**. The `SCE_PROSPERO_PUBTOOLS` environment variable is used when the setting is empty. |
+| Publishing Tools that make plaintext debug packages | A package without the plaintext debug marker cannot be installed on a debug console. The app checks every package for it and reports a package without it as failed. |
+| Microsoft Visual C++ 2015-2022 Redistributable (x64) | The Publishing Tools need it. The app tells you when it is missing. |
+| A dump with `sce_sys\param.json` and its own 96-byte `sce_sys\keystone` | The Content ID, version and title come from `param.json`; the tools need the dump's keystone. |
+| For backport packages: a verified SDK Fix toolchain (`sdk-fpkg279-fix13` recommended, `fix12` accepted) | Updates against a base package need it. The app checks the files and says what is wrong. |
+| Free space on the output drive | About 1.1 times the game's size (twice that for an update), plus the game's size again when the source is an image. |
 
-The tool location is saved in your settings (`fpkg_pubtools_path`). You can
-also set the `SCE_PROSPERO_PUBTOOLS` environment variable.
+## Building a package
 
-## What the app does
+1. On the **Build** page choose the source and the format **FPKG**.
+2. Under **Package** choose the **Package type** and fill in its fields (below).
+3. Choose the folder under **Save to**, or leave it empty.
+4. Start the build. It runs as a job in the queue; the log shows each step.
 
-1. **Pre-flight.** Checks the tools, reads `param.json` (Content ID, version),
-   checks the keystone, and scans the folder. Problems such as non-ASCII
-   paths, `%` or `;` in names, names ending in a dot, links, and missing free
-   space are all reported before anything slow starts.
-2. **Project.** Writes a GP5 project beside the output:
-   * files in the order the Publishing Tools lay them out (each folder sorted
-     case-insensitively);
-   * files the SDK generates itself (`param.sfo`, PlayGo tables,
-     `sce_sys/about`, `.dds` and so on), dump tool output (`.exfat`, `.ffpkg`,
-     …), the dump emulation libraries `fakelib/libSceAmpr.sprx` and
-     `libScePlayGo.sprx`, and OS clutter (`._*`, `.DS_Store`, `Thumbs.db`, …)
-     are left out. Every exclusion is listed in `01-create-gp5.log`;
-   * empty folders (for example DLC mount folders such as `addcont0`) are
-     declared so they exist in the package;
-   * a normalised copy of `param.json`: DRM type `standard`, and for full
-     game builds the package size class chosen from the data size. If that
-     forces a lower `addcontMountLevel`, the log warns that separately
-     installed DLC may not mount;
-   * a PlayGo layout where every chunk is installed before the game starts,
-     every scenario lists every chunk, and chunks without game data get a
-     1 MiB placeholder. Default: 100 chunks (1-255 allowed).
-3. **Pack.** Runs `img_create` into `<name>.partial.pkg` and shows its
-   progress bar (or the bytes written when no bar is printed). Any `[Error]`
-   line fails the build even if the tool exits 0. Known SDK errors are
-   explained in plain words.
-4. **Check.** Reads the package header: FIH magic, unsigned flag, superblock
-   mode, plaintext debug marker. Only then is the file renamed to
-   `<ContentID>-A<ver>-V<ver>.pkg`. An existing file of that name is never
-   overwritten; a numbered copy is saved instead.
-5. **Verify** (optional, on by default). Runs `img_verify`. A failure here
-   keeps the package and marks the job with a warning.
-6. **Clean up.** Removes the project files unless *Keep project files* is
-   ticked, and always keeps `<name>-build-logs\` (`01-create-gp5.log`,
-   `02-img-create.log`).
+### App
 
-**Cancel** stops the Publishing Tools at once (the whole process tree) and
-deletes the partial package. The final name only ever appears on success.
+The game itself. The source can be:
 
-## Compression
+* a game folder (the folder that holds `sce_sys`);
+* an image: `.exfat`, `.ffpkg`, `.ffpfs` or `.ffpfsc`. Its files are copied to
+  a temporary work folder next to the output first (or to the temporary
+  folder from **Settings › Storage**, when one is set), and removed afterwards;
+* a `.gp5` project of your own. It is passed to the tools as it is; its
+  version and title cannot be changed on the page.
 
-*Tool default* passes no level, so the Publishing Tools use their own
-default. *Fast (2)*, *Standard (4)*, *Smallest (7)* and *Maximum (9)* pass
-`--compression_level`.
+**Content ID** is read from `param.json`. **Version** and **Title** can be
+changed for the package; the dump is never modified.
 
-## Updates
+You can add backport files (4.xx and/or 5.xx+) to an App build. The job then
+builds the base package and the backport updates in one go.
 
-Fill in *Base package (updates only)* to build an update against an earlier
-package (`--ref_pkg_path`). The base must have been built by the Publishing
-Tools, with the same Content ID and a lower `contentVersion`; the dump must
-carry the new version. The build writes `UPDATE_<name>.pkg` (the delta) and
-`<name>.remastered.pkg` (the full game); the header check runs on the full
-package. The size class is not changed for updates.
+### Add-on
 
-## Verifying or extracting an existing package
+Additional content (DLC) with data, volume type `prospero_ac`. The source is
+the add-on's own folder (for example `addcont0`), not the game. It must hold
+the add-on's own `sce_sys\param.json`. Enter the 32-character hexadecimal
+**Entitlement key**, or use **From dlc_emu.ini…** to pick an add-on the game's
+`dlc_emu.ini` lists. Add-ons without data (`prospero_al`) are not supported.
 
-*Verify a package…* runs the header checks and your tool's `img_verify`.
-*Extract a package…* runs `img_extract` into an **empty** folder (a folder
-with files in it is refused). Both write their output to the Output Log.
+Add-on packages are experimental: they have not been tested on a console.
 
-## Add-on (DLC) packages
+### Update
 
-**What the Publishing Tools interface offers.** The strings of
-`prospero-pub-cmd.exe` (see `docs/farewell/FPKG_RESEARCH.md` §1.4 and §1.11)
-list three volume types: `prospero_app` (game), `prospero_ac` (add-on with
-content) and `prospero_al` (entitlement-only add-on). They also list an
-`entitlement_key` that the GP5 `<package>` element carries for add-ons. The
-reference FPKG builder never built add-ons through these tools; it used a
-different library. So this path has **not been run against real
-Publishing Tools or installed on a console**.
+An update for a game that is already installed. The source is the folder with
+the new or changed files (its `param.json` carries the new version, or you
+enter the version on the page). **Base package** is the `.pkg` the console
+already has. It must have been built by the Publishing Tools, with the same
+Content ID and a lower version.
 
-**What this app does.** *Build an add-on (DLC)…* in the FPKG panel builds a
-`prospero_ac` package:
-* input: the add-on's content folder, which must contain the add-on's own
-  `sce_sys/param.json` (as a dumped add-on does), and its 32-hex-character
-  entitlement key;
-* both can be filled from the selected game's `dlc_emu.ini`: `[PSAC]` entries
-  whose `mount_point` folder exists locally with a `param.json` are offered,
-  and the others are listed with the reason they can't be built;
-* the project uses volume type `prospero_ac`, the entitlement key, the
-  add-on's Content ID and no PlayGo chunk table;
-* packing, progress, `[Error]` handling, the header/plaintext-marker check,
-  never-overwrite naming and optional `img_verify` work as for games.
+The build writes `UPDATE_<name>.pkg` (the update to install) and
+`<name>.remastered.pkg` (the full game with the update, used for checking).
+Install the base package first, then the update.
 
-**Precise limitations.**
-* `prospero_al` (entitlement-only) is **refused**. It has no file system,
-  and the PS5 debug installer refuses such packages, so a "successful" build
-  would be useless.
-* An add-on **without** `sce_sys/param.json` is refused. The fields the
-  Publishing Tools need in an add-on's `param.json` are not documented, so
-  the app does not make one up. An unlock-only add-on is possible with a
-  folder that holds just a real `param.json`.
-* The entitlement key is never guessed or extracted: you enter it, or it
-  comes from `dlc_emu.ini`. (Reading it from `license.info` needs a library
-  this app doesn't use.)
-* Add-ons are built one at a time from the dialog, not through the queue.
+Files the update folder does not have are taken from the original game
+folder when you give one; otherwise the base package is unpacked first, which
+needs about twice its size in free space.
 
-## Coverage summary
+### Backport
 
-| Area | Status | Tested how |
-|---|---|---|
-| Compression (`--compression_level`, presets) | Done | argv tests; stand-in tool |
-| PFS | Done by the Publishing Tools (`img_create`); the app marks placeholder payloads `pfs_compression="disable"` and checks the outer superblock (mode 13, plaintext marker) | header tests |
-| GP5 project (order, exclusions, empty dirs, `param.json` normalisation) | Done | unit tests; stand-in tool parses it |
-| PlayGo (every chunk initial and in every scenario, placeholders, languages) | Done | unit tests |
-| Create (`img_create`, progress, cancel, errors, naming) | Done | end-to-end against the stand-in on Linux and on Windows (compiled stand-in) |
-| Verify (header checks + `img_verify`) | Done | stand-in tool |
-| Extract (`img_extract`, empty folder only) | Done | stand-in tool |
-| Update builds (`--ref_pkg_path`, `.remastered.pkg`) | Done | stand-in tool |
-| Add-on `prospero_ac` | Done (experimental) | GP5 tests; end-to-end against the stand-in; `dlc_emu.ini` mapping |
-| Add-on `prospero_al` | Refused (installer rejects it) | test |
-| Non-ASCII folder paths | Done on Windows (junctions) | Windows CI |
-| Real Publishing Tools / console install | **Not tested** | needs the owner's tools and a PS5 |
+Backport files as their own small update that installs over the base package,
+so the base stays the original game. Choose the **Base package**, the
+**Backport 4.xx** and/or **Backport 5.xx+** files (a folder or a ZIP, with the
+files laid out as in the game's top folder: `eboot.bin`, `sce_module\`,
+`fakelib\` …) and, if you have it, the game folder the base was built from.
 
-## Limitations
+The result is `<TITLEID>-backport-4xx.pkg` and/or
+`<TITLEID>-backport-5xxplus.pkg`. The two are alternatives: install the base
+package first, then the one update that fits your firmware. An update only
+installs over exactly the base package it was built against.
 
-* **Not yet tested with real Publishing Tools or on a console.** The
-  project format, PlayGo layout and header checks follow published behaviour
-  of existing tools. The automated tests use a stand-in for
-  `prospero-pub-cmd.exe`. Please report results with the build logs.
-* Source must be a dump **folder**. Build from an `.exfat`/`.ffpkg` by
-  extracting it first (Extract tab).
-* File and folder names **inside** the game must be ASCII (the
-  Publishing Tools' rule). A non-ASCII path **to** the game or output
-  folder is handled on Windows with a temporary NTFS junction under an ASCII
-  temp folder, removed afterwards.
-* No PS4→PS5 SELF repair (PS4-magic executables are reported), no `.ucp`
-  digest repair, no DDS→PNG recovery, no source-layout PlayGo (the dump's
-  own chunk table is not reused).
-* Building straight from an `.exfat` / `.ffpkg` image is not offered; extract
-  it first (Extract tab).
+## Where the output goes
+
+* The folder under **Save to**. When it is empty: the default output folder
+  from **Settings › Storage**, else `<source>-pkg` next to the source. Backport
+  packages go next to the base package by default.
+* A full package is named `<Content ID>-A<version>-V<version>.pkg`.
+* `<name>-build-logs\` next to the package holds `01-create-gp5.log` (what was
+  packaged, what was left out and why) and `02-img-create.log` (the tool's
+  run). The logs are always kept.
+* When a package of that name already exists, **Settings › FPKG › When the
+  package already exists** decides: **Keep both** renames the old one to
+  `name (1).pkg`; **Overwrite** replaces it only after the new package passed
+  its checks (if it does not, the old one is put back and the new one is kept
+  as `name (1).pkg`); **Stop with an error** refuses the build before packing.
+  Backport packages never replace a file: a second build is named `…-2.pkg`.
+
+## Checks
+
+* Before packing: the tools, `param.json`, the keystone, file names the tools
+  do not accept (non-ASCII characters, `%`, `;`, a name ending in a dot),
+  links, names that differ only in letter case, and free space.
+* After packing: the package header and the plaintext debug marker, always.
+  Then `img_verify`, unless you turned it off under **Settings ›
+  Verification**. When `img_verify` reports a problem the package is kept and
+  the job is marked with a warning. Backport packages must pass the integrity
+  check, or nothing is published.
+* Left out of every package, and listed in the log: files the tools generate
+  themselves (`param.sfo`, PlayGo tables, `sce_sys\about`, `.dds` …), image
+  and package files in the game's top folder, dump helper libraries, and
+  operating-system clutter (`Thumbs.db`, `.DS_Store` …).
+
+**Pause** suspends the Publishing Tools until you resume. **Cancel** stops
+them at once and removes the unfinished package; the logs stay.
+
+## Limits
+
+* File and folder names inside the game must be plain ASCII (a rule of the
+  Publishing Tools). A non-ASCII path to the game or output folder is fine:
+  the app gives the tools a temporary ASCII link.
+* A FAT32 drive cannot hold a package of 4 GB or more. Use NTFS or exFAT.
+* The base package of an update or backport must be a debug package built by
+  the Publishing Tools. Retail (encrypted) packages cannot be used.
+* Add-ons need their own `param.json` and entitlement key; the app does not
+  make them up.
+* The app cannot test a package on a console. Keep the build logs when you
+  report a problem.

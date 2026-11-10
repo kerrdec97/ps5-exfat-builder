@@ -103,7 +103,6 @@ FpkgSettings FpkgSettings::from(const SettingsValues& v)
     s.workerThreads = general::workerThreads(v);
     s.cpuCoreLimit = s.workerThreads >= cores ? 0 : s.workerThreads;
     s.priorityMode = general::performanceMode(v);
-    s.ioBufferBytes = general::ioBufferBytes(v);
     s.freeSpaceMarginBytes = general::freeSpaceMarginBytes(v);
     s.defaultOutputDir = v.string(general::keys::kDefaultOutputDir).trimmed();
     s.userTempFolder = v.string(general::keys::kTempFolder).trimmed();
@@ -190,7 +189,7 @@ void registerFpkgSettings(SettingsSchema& s)
         d.choices = {{QStringLiteral("default"), QStringLiteral("Tool default (7)"), {}},
                      {QStringLiteral("9"), QStringLiteral("9 (maximum)"), {}},
                      {QStringLiteral("8"), QStringLiteral("8"), {}},
-                     {QStringLiteral("7"), QStringLiteral("7 (smallest, explicit)"), {}},
+                     {QStringLiteral("7"), QStringLiteral("7 (the tool's default, passed explicitly)"), {}},
                      {QStringLiteral("6"), QStringLiteral("6"), {}},
                      {QStringLiteral("5"), QStringLiteral("5"), {}},
                      {QStringLiteral("4"), QStringLiteral("4 (standard)"), {}},
@@ -339,7 +338,6 @@ void registerFpkgSettings(SettingsSchema& s)
         d.defaultValue = 100;
         d.minimum = 1;
         d.maximum = 255;
-        d.unit = QStringLiteral("chunks");
         d.enabledWhenKey = keys::kPlayGoFallback;
         d.perJob = true;
         d.order = order++;

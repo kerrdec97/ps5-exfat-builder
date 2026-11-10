@@ -4,14 +4,16 @@
 // own prospero-pub-cmd.
 //
 // Build flow: validate the toolchain -> resolve the source (stage an image
-// into the job's temp folder; extract or read the base of an update) -> read
+// into a work folder next to the output, or under the job's temp folder when
+// the user set one; extract or read the base of an update) -> read
 // param.json, keystone, base checks -> scan + rules -> plan PlayGo, payloads,
 // fillers, empty folders, image/SELF/UCP repairs -> size class -> write the
 // generated inputs, the scenario sidecar and the GP5 -> 01 log -> path-rule
 // gate -> pre-scan -> ASCII links -> img_create into <stem>.partial.pkg (live
 // CPU limit, progress) -> 02 log -> success rules -> header check -> output
-// conflict policy and rename -> optional img_verify and SHA-256 -> cleanup
-// (logs are always kept; the project is kept on failure or when asked).
+// conflict policy and rename -> optional img_verify (a package "Overwrite"
+// replaced is deleted only after it passed) and SHA-256 -> cleanup (logs are
+// always kept; the project is kept on failure or when asked).
 
 #include "core/OrderedJson.h"
 #include "core/Result.h"

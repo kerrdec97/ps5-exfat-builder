@@ -26,6 +26,7 @@
 #include <QRegularExpression>
 
 #include <functional>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -111,7 +112,7 @@ bool isPayload(const QString& rel)
 
 bool isVersionText(const QString& v)
 {
-    static const QRegularExpression re(QStringLiteral("^[0-9]{2}\\.[0-9]{3}\\.[0-9]{3}$"));
+    static const QRegularExpression re(QStringLiteral("^[0-9]{2}\\.[0-9]{3}\\.[0-9]{3}\\z"));
     return re.match(v).hasMatch();
 }
 
@@ -124,16 +125,17 @@ struct Identity {
 
 Status validateIdentity(const Identity& id, const QString& where)
 {
+    // PS5 titles only: a CUSA (PS4) title is refused here.
     if (!id.titleId.startsWith(QStringLiteral("PPSA")))
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("Missing or unsupported PS5 game identifier in %1").arg(where));
-    static const QRegularExpression tid(QStringLiteral("^(?:PPSA|CUSA)[0-9]{5}$"));
+    static const QRegularExpression tid(QStringLiteral("^PPSA[0-9]{5}\\z"));
     if (!tid.match(id.titleId).hasMatch())
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Title ID must be PPSA or CUSA followed by exactly five digits."));
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("Title ID must be PPSA followed by exactly five digits."));
     if (!isStrictContentId(id.contentId))
         return Error(ErrorCode::InvalidArgument,
-                     QStringLiteral("Content ID must use XX0000-PPSA00000_00-XXXXXXXXXXXXXXXX (or CUSA), with a "
-                                    "16-character uppercase alphanumeric/underscore suffix."));
+                     QStringLiteral("Content ID must use XX0000-PPSA00000_00-XXXXXXXXXXXXXXXX, with a 16-character "
+                                    "uppercase alphanumeric/underscore suffix."));
     if (id.titleId != id.contentId.mid(7, 9))
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("Title ID must match the game identifier embedded in the Content ID."));
@@ -419,6 +421,17 @@ struct WorkFolder {
     }
 };
 
+// Removes the output folder again when the job made it and left nothing in
+// it (rmdir only removes an empty folder).
+struct NewOutputFolder {
+    QString dir;
+    ~NewOutputFolder()
+    {
+        if (!dir.isEmpty())
+            QDir().rmdir(dir);
+    }
+};
+
 QString freshName(const QString& path)
 {
     QString cand = path;
@@ -589,9 +602,8 @@ Status validateBackportRequest(const BackportUpdateRequest& r, const FpkgSetting
     }
     if (!r.version.isEmpty() && !isVersionText(r.version))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The new version must use NN.NNN.NNN (e.g. 01.000.001)."));
-    const QString pc = passcodeProblem(s.passcode);
-    if (!pc.isEmpty() || s.passcode.size() != 32)
-        return Error(ErrorCode::InvalidArgument, QStringLiteral("Package passcode must contain exactly 32 characters."));
+    if (const QString pc = passcodeProblem(s.passcode); !pc.isEmpty())
+        return Error(ErrorCode::InvalidArgument, QStringLiteral("Package passcode: %1").arg(pc));
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
         return Error(ErrorCode::DependencyMissing, tc.problems.join(u' '));
@@ -630,57 +642,78 @@ QStringList backportPhases(const BackportUpdateRequest& r)
     return p;
 }
 
+namespace {
+
+// True when the folder of this index line was left by a process that no
+// longer runs. `keep` receives the line unless it can be dropped right away
+// (a stale folder stays listed until it is really gone).
+bool isStaleWorkFolder(const QString& line, QStringList& keep)
+{
+    const QFileInfo fi(line);
+    if (!fi.isDir()) {
+        // Gone: drop the line. Not when its drive is not connected: the
+        // folder may still be there, for a sweep after the drive is back.
+        if (!anyAncestorExists(line))
+            keep << line;
+        return false;
+    }
+    keep << line;
+    if (!isWorkFolderName(fi.fileName()) || isLinkOrReparsePoint(fi.absoluteFilePath()))
+        return false; // never delete anything this app did not name
+    qint64 pid = 0, started = 0;
+    {
+        QFile marker(QDir(fi.absoluteFilePath()).filePath(QStringLiteral(".fw-owned")));
+        if (marker.open(QIODevice::ReadOnly) && marker.size() < 64) {
+            const QList<QByteArray> owner = marker.readAll().simplified().split(' ');
+            pid = owner.value(0).toLongLong();
+            started = owner.value(1).toLongLong();
+        }
+    } // closed before the folder is removed (Windows will not delete an open file)
+    if (pid <= 0)
+        return false; // no marker: leave it alone
+    bool ownerAlive = pid == QCoreApplication::applicationPid() || processIsRunning(pid);
+    if (ownerAlive && started > 0) {
+        // The same id, started at another time: a different process.
+        const qint64 now = processStartTime(pid);
+        if (now > 0 && now != started)
+            ownerAlive = false;
+    }
+    return !ownerAlive;
+}
+
+} // namespace
+
 int sweepStaleBackportWork()
 {
-    QMutexLocker lock(&workMutex());
-    const QStringList lines = readWorkIndex();
-    QStringList keep;
-    int removed = 0;
-    for (const QString& line : lines) {
-        const QFileInfo fi(line);
-        if (!fi.isDir()) {
-            // Gone: drop the line. Not when its drive is not connected: the
-            // folder may still be there, for a sweep after the drive is back.
-            if (!anyAncestorExists(line))
-                keep << line;
-            continue;
+    // Decided under the lock, deleted outside it: removing a whole game tree
+    // takes a while, and a job that starts meanwhile must not wait for it.
+    QStringList stale;
+    {
+        QMutexLocker lock(&workMutex());
+        const QStringList lines = readWorkIndex();
+        QStringList keep;
+        for (const QString& line : lines) {
+            if (isStaleWorkFolder(line, keep))
+                stale << line;
         }
-        if (!isWorkFolderName(fi.fileName()) || isLinkOrReparsePoint(fi.absoluteFilePath())) {
-            keep << line; // never delete anything this app did not name
-            continue;
-        }
-        qint64 pid = 0, started = 0;
-        {
-            QFile marker(QDir(fi.absoluteFilePath()).filePath(QStringLiteral(".fw-owned")));
-            if (marker.open(QIODevice::ReadOnly) && marker.size() < 64) {
-                const QList<QByteArray> owner = marker.readAll().simplified().split(' ');
-                pid = owner.value(0).toLongLong();
-                started = owner.value(1).toLongLong();
-            }
-        } // closed before the folder is removed (Windows will not delete an open file)
-        if (pid <= 0) {
-            keep << line; // no marker: leave it alone
-            continue;
-        }
-        bool ownerAlive = pid == QCoreApplication::applicationPid() || processIsRunning(pid);
-        if (ownerAlive && started > 0) {
-            // The same id, started at another time: a different process.
-            const qint64 now = processStartTime(pid);
-            if (now > 0 && now != started)
-                ownerAlive = false;
-        }
-        if (ownerAlive) {
-            keep << line;
-            continue;
-        }
-        removeTreeNoFollow(fi.absoluteFilePath());
-        if (QFileInfo::exists(fi.absoluteFilePath())) // not the cached QFileInfo
-            keep << line;
-        else
-            ++removed;
+        if (keep != lines)
+            writeWorkIndex(keep);
     }
-    if (keep != lines)
-        writeWorkIndex(keep);
+    int removed = 0;
+    QStringList gone;
+    for (const QString& line : std::as_const(stale)) {
+        removeTreeNoFollow(QFileInfo(line).absoluteFilePath());
+        if (!QFileInfo::exists(line)) {
+            gone << line;
+            ++removed;
+        }
+    }
+    if (!gone.isEmpty()) {
+        QMutexLocker lock(&workMutex());
+        QStringList lines = readWorkIndex();
+        lines.removeIf([&](const QString& l) { return gone.contains(l, Qt::CaseInsensitive); });
+        writeWorkIndex(lines);
+    }
     return removed;
 }
 
@@ -729,6 +762,9 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
         : req.output;
     output = full(output);
     FW_TRY(ensureNoLinks(output));
+    NewOutputFolder newOutput;
+    if (!QFileInfo::exists(output))
+        newOutput.dir = output;
 
     // ---- backport inputs: unpack ZIPs, unwrap one wrapper folder, check them -------------------
     std::vector<Selected> sel = selections(req);
@@ -740,9 +776,12 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
             log.info(QStringLiteral("Unpacking the %1 backport ZIP %2").arg(b.label, native(b.raw)));
             zip::Reader zr;
             FW_TRY(zr.open(b.raw));
-            qint64 bytes = 0;
+            // The sizes come from the ZIP's own headers: add them without overflow.
+            constexpr quint64 kMaxBytes = quint64(std::numeric_limits<qint64>::max());
+            quint64 total = 0;
             for (const zip::Entry& e : zr.entries())
-                bytes += qint64(e.uncompressedSize);
+                total = quint64(e.uncompressedSize) > kMaxBytes - total ? kMaxBytes : total + quint64(e.uncompressedSize);
+            const qint64 bytes = qint64(total);
             FW_TRY(ensureFreeSpace(ctx.tempDir, bytes, s.freeSpaceMarginBytes));
             FW_TRY(zr.extractAll(dest, ctx.token));
             folder = dest;
@@ -803,8 +842,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
                 FW_TRY(requireSameIdentity(bid.value(), gid.value(), QStringLiteral("%1 backport metadata").arg(b.label)));
             }
         }
-        log.info(sel.empty() ? QStringLiteral("Building one base package.")
-                             : QStringLiteral("Building one base package and separate optional backport updates."));
+        log.info(QStringLiteral("Building one base package and separate optional backport updates."));
         pr->beginPhase(++phase, 1000, 0, false);
         // Built in a private folder next to the outputs, checked, verified, and
         // only then given a name nothing else uses (an existing package is
@@ -983,10 +1021,13 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
             log.warn(QStringLiteral("Build set incomplete; the base package remains safe at %1").arg(native(basePath)));
         for (const QString& u : std::as_const(updates))
             log.warn(QStringLiteral("Completed update remains safe at %1").arg(native(u)));
-        log.warn(QStringLiteral("Source folders were retained. Repair the failed input and retry; existing outputs will "
-                                "receive new names."));
+        log.warn(ctx.token.isCancelled()
+                     ? QStringLiteral("The job was cancelled. Source folders were retained; the next run gives its outputs "
+                                      "new names.")
+                     : QStringLiteral("Source folders were retained. Repair the failed input and retry; existing outputs "
+                                      "will receive new names."));
     };
-    const QString titleId = base.titleId.isEmpty() ? QFileInfo(basePath).completeBaseName() : base.titleId;
+    const QString titleId = base.titleId; // validated above: never empty
     for (const Selected& b : sel) {
         pr->beginPhase(++phase, 1000, 0, false);
         if (!ctx.token.checkpoint()) {
@@ -1006,7 +1047,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
             if (rel.endsWith(QStringLiteral(".esbak"), Qt::CaseInsensitive))
                 continue;
             if (!isPayload(rel)) {
-                log.warn(QStringLiteral("    [Warn] Not shipped (sce_sys/about is a reserved node the SDK regenerates): %1").arg(rel));
+                log.warn(QStringLiteral("    Not shipped (sce_sys/about is a reserved node the SDK regenerates): %1").arg(rel));
                 continue;
             }
             ++total;
@@ -1019,7 +1060,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
             const QString w = QStringLiteral("None of the %1 backport files replace anything in the game. The backport "
                                              "folder is probably rooted at the wrong level - its contents must sit at the "
                                              "game root (eboot.bin, sce_module/, fakelib/ ...).").arg(b.label);
-            log.warn(QStringLiteral("    [Warn] ") + w);
+            log.warn(QStringLiteral("    ") + w);
             outcome.warnings << w;
         }
         log.info(QStringLiteral("==> Setting contentVersion to %1").arg(newVersion));

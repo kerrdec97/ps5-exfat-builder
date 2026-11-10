@@ -1,12 +1,13 @@
 #pragma once
 
-// Image sources (.exfat, .ffpfsc, .ffpkg) for FPKG builds.
+// Image sources (.exfat, .ffpkg, .ffpfs, .ffpfsc) for FPKG builds.
 //
 // The FPKG engine does not read images itself. Image readers live in other
 // modules; the app registers one SourceStager per image type at start-up
 // (after every module registered), and an FPKG build whose source is such an
-// image asks the stager to copy the image's tree into a folder under the job's
-// temporary folder. The app root inside that folder is then found by the FPKG
+// image asks the stager to copy the image's tree into a staging folder (in a
+// work folder next to the output, or under the job's temporary folder when
+// the user set one). The app root inside that folder is then found by the FPKG
 // engine (the first folder with sce_sys, breadth-first, at most three levels
 // deep), so a stager may simply extract the whole image.
 //

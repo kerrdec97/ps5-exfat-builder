@@ -4,8 +4,8 @@
 
 namespace fw::general {
 
-// App-wide settings (General, Performance, Storage, Logging, Advanced) and the
-// dependency probes every workflow shares.
+// App-wide settings (General, Performance, Storage, Verification, Logging,
+// Advanced) and the legacy keys that map onto them.
 void registerModule(ModuleContext& ctx);
 
 // Keys declared here (consumers: JobQueue, main.cpp, FileUtil callers).
