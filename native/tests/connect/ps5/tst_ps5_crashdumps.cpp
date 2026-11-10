@@ -108,16 +108,19 @@ private slots:
         const QString crash = root + kRoot + "/PPSA34008_1792103554";
         CancellationSource cancel;
         QStringList seen;
+        bool crashWritten = true;
         auto r = captureCrashDumps(endpoint(srv.port()), fastOptions(out), cancel.token(), [&](const QString& text) {
             seen << text;
             if (text.contains(QStringLiteral("older crash folder"))) { // baseline taken: now the game crashes
-                QVERIFY(writeFile(crash + "/report.log", "report"));
-                QVERIFY(writeFile(crash + "/core.prosperodmp", core));
-                QVERIFY(writeFile(crash + "/core.prosperodmp.tmp", "partial core"));
+                crashWritten = writeFile(crash + "/report.log", "report") && writeFile(crash + "/core.prosperodmp", core)
+                    && writeFile(crash + "/core.prosperodmp.tmp", "partial core");
+                if (!crashWritten)
+                    cancel.cancel(); // no crash will appear: do not wait for one
             }
             if (text.startsWith(QStringLiteral("Crash report ready")))
                 cancel.cancel();
         });
+        QVERIFY(crashWritten);
         QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().message));
         QCOMPARE(r->baseline, QStringList{QStringLiteral("PPSA00001_1000")});
         QCOMPARE(int(r->crashes.size()), 1);
@@ -137,10 +140,13 @@ private slots:
         QVERIFY(z.open(c.zipPath).ok());
         QVERIFY(z.find(QStringLiteral("capture.txt")));
         // The note names the folder that was really watched.
-        const QByteArray note = z.readAll(*z.find(QStringLiteral("capture.txt"))).value();
+        const auto noteBytes = z.readAll(*z.find(QStringLiteral("capture.txt")));
+        QVERIFY(noteBytes.ok());
+        const QByteArray note = noteBytes.value();
         QVERIFY2(note.contains("Console folder: " + kRoot.toUtf8() + "/PPSA34008_1792103554\n"), note.constData());
         QVERIFY(z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/report.log")));
-        QCOMPARE(z.readAll(*z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp"))).value(), core);
+        QVERIFY(z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp")));
+        COMPARE_VALUE(z.readAll(*z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp"))), core);
         QVERIFY(!z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp.tmp")));
         // The core was fetched before the report (core first).
         const QStringList cmds = srv.commands();
@@ -158,7 +164,7 @@ private slots:
     void folderWithoutACoreIsReported()
     {
         const QString root = fresh(QStringLiteral("console"));
-        QDir().mkpath(root + kRoot);
+        QVERIFY(QDir().mkpath(root + kRoot));
         FakeFtpServer::Options so;
         so.root = root;
         FakeFtpServer srv(so);
@@ -166,12 +172,17 @@ private slots:
         CancellationSource cancel;
         auto opt = fastOptions(out);
         opt.folderTimeoutMs = 1200; // the console never writes the core
+        bool crashWritten = true;
         auto r = captureCrashDumps(endpoint(srv.port()), opt, cancel.token(), [&](const QString& text) {
-            if (text.startsWith(QStringLiteral("Watching for new crashes")))
-                QVERIFY(writeFile(root + kRoot + "/PPSA22222_5/report.log", "report only"));
+            if (text.startsWith(QStringLiteral("Watching for new crashes"))) {
+                crashWritten = writeFile(root + kRoot + "/PPSA22222_5/report.log", "report only");
+                if (!crashWritten)
+                    cancel.cancel(); // no crash will appear: do not wait for one
+            }
             if (text.startsWith(QStringLiteral("Crash report ready")))
                 cancel.cancel();
         });
+        QVERIFY(crashWritten);
         QVERIFY(r.ok());
         QCOMPARE(int(r->crashes.size()), 1);
         QVERIFY(!r->crashes.front().hasCore);

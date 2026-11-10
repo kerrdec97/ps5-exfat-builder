@@ -4,6 +4,7 @@
 // FakeFtpServer (never a real console).
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/Autoloader.h"
 #include "connect/ps5/ConsoleGames.h"
@@ -230,9 +231,11 @@ private slots:
         QCOMPARE(QFileInfo(s2->backupPath).fileName(), QStringLiteral("autoload.txt.bak"));
         QCOMPARE(readAll(s2->backupPath), onDisk);
         auto s3 = save(dir, QStringLiteral("b.elf\n"));
+        QVERIFY(s3.ok());
         QCOMPARE(QFileInfo(s3->backupPath).fileName(), QStringLiteral("autoload.txt.bak.2"));
         QCOMPARE(readAll(s3->backupPath), QByteArray("a.elf\n"));
         auto again = load(dir);
+        QVERIFY(again.ok());
         QVERIFY(again->existed);
         QCOMPARE(again->text, QStringLiteral("b.elf\n"));
 
@@ -243,12 +246,15 @@ private slots:
         QVERIFY(ownFile.open(QIODevice::WriteOnly) && ownFile.write("mine") == 4);
         ownFile.close();
         auto s4 = save(dir, QStringLiteral("c.elf\n"));
+        QVERIFY(s4.ok());
         QCOMPARE(QFileInfo(s4->backupPath).fileName(), QStringLiteral("autoload.txt.bak.3"));
         QVERIFY(QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
         auto s5 = save(dir, QStringLiteral("d.elf\n"));
+        QVERIFY(s5.ok());
         QCOMPARE(QFileInfo(s5->backupPath).fileName(), QStringLiteral("autoload.txt.bak.4"));
         QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
         auto s6 = save(dir, QStringLiteral("e.elf\n"));
+        QVERIFY(s6.ok());
         // The number goes on from the newest backup, not back to a freed one.
         QCOMPARE(QFileInfo(s6->backupPath).fileName(), QStringLiteral("autoload.txt.bak.5"));
         QCOMPARE(readAll(s6->backupPath), QByteArray("d.elf\n"));
@@ -258,7 +264,9 @@ private slots:
                               QStringLiteral("autoload.txt.bak.old")}));
         QCOMPARE(readAll(own), QByteArray("mine"));
         QVERIFY(QFile::remove(own));
-        QCOMPARE(load(dir)->text, QStringLiteral("e.elf\n"));
+        const auto newest = load(dir);
+        QVERIFY(newest.ok());
+        QCOMPARE(newest->text, QStringLiteral("e.elf\n"));
 
         // Payload files: copied in, listed, refused when not a payload, deleted.
         const QString src = fresh(QStringLiteral("al-src"));
@@ -266,24 +274,24 @@ private slots:
         QVERIFY(writeBytes(QDir(src).filePath(QStringLiteral("notes.txt")), "x"));
         auto added = addPayload(dir, QDir(src).filePath(QStringLiteral("kstuff.elf")), false);
         QVERIFY(added.ok());
-        QCOMPARE(added.value(), QStringLiteral("kstuff.elf"));
+        COMPARE_VALUE(added, QStringLiteral("kstuff.elf"));
         QCOMPARE(readAll(QDir(dir).filePath(QStringLiteral("kstuff.elf"))), kElf);
-        QCOMPARE(addPayload(dir, QDir(src).filePath(QStringLiteral("kstuff.elf")), false).error().code, ErrorCode::AlreadyExists);
+        COMPARE_ERROR_CODE(addPayload(dir, QDir(src).filePath(QStringLiteral("kstuff.elf")), false), ErrorCode::AlreadyExists);
         QVERIFY(writeBytes(QDir(src).filePath(QStringLiteral("kstuff.elf")), kSelf1));
         QVERIFY(addPayload(dir, QDir(src).filePath(QStringLiteral("kstuff.elf")), true).ok());
         QCOMPARE(readAll(QDir(dir).filePath(QStringLiteral("kstuff.elf"))), kSelf1);
-        QCOMPARE(addPayload(dir, QDir(src).filePath(QStringLiteral("notes.txt")), false).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(addPayload(dir, QDir(src).filePath(QStringLiteral("notes.txt")), false), ErrorCode::InvalidArgument);
         QVERIFY(writeBytes(QDir(dir).filePath(QStringLiteral("Alpha.bin")), "b"));
         QVERIFY(writeBytes(QDir(dir).filePath(QStringLiteral("zeta.js")), "j"));
         QCOMPARE(payloadFiles(dir), (QStringList{QStringLiteral("Alpha.bin"), QStringLiteral("kstuff.elf")})); // no .js
-        QCOMPARE(addPayload(dir, QDir(dir).filePath(QStringLiteral("zeta.js")), false).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(addPayload(dir, QDir(dir).filePath(QStringLiteral("zeta.js")), false), ErrorCode::InvalidArgument);
         QVERIFY(!deletePayload(dir, QStringLiteral("../outside.elf"), false).ok());
         QVERIFY(!deletePayload(dir, QStringLiteral("autoload.txt"), false).ok());
         bool trashed = true;
         QVERIFY(deletePayload(dir, QStringLiteral("zeta.js"), false, &trashed).ok()); // never the real recycle bin in tests
         QVERIFY(!trashed);
         QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("zeta.js"))));
-        QCOMPARE(deletePayload(dir, QStringLiteral("zeta.js"), false).error().code, ErrorCode::NotFound);
+        COMPARE_ERROR_CODE(deletePayload(dir, QStringLiteral("zeta.js"), false), ErrorCode::NotFound);
     }
 
     void autoloaderFolderSettingAndLegacyKey()
@@ -297,7 +305,7 @@ private slots:
         QVERIFY(fwtest::writeTextFile(legacy, "{\"al_dir\":\"D:/PS5/ps5_autoloader\"}"));
         SettingsStore store(mod.schema, QDir(fresh(QStringLiteral("al-store"))).filePath(QStringLiteral("s.json")));
         QVERIFY(store.load().ok());
-        QCOMPARE(store.importLegacy(legacy).value(), 1);
+        COMPARE_VALUE(store.importLegacy(legacy), 1);
         QCOMPARE(autoloader::folderFromSettings(store.snapshot()), QStringLiteral("D:/PS5/ps5_autoloader"));
     }
 
@@ -307,9 +315,10 @@ private slots:
     {
         using namespace fakelib;
         const QString dir = fresh(QStringLiteral("fl-local"));
+        bool allWritten = true;
         auto put = [&](const QString& rel, const QByteArray& b) {
             const QString p = QDir(dir).filePath(rel);
-            writeBytes(p, b);
+            allWritten = writeBytes(p, b) && allWritten;
             return p;
         };
         QCOMPARE(checkLocalFile(put(QStringLiteral("libA.sprx"), kElf)).verdict, Verdict::Ok);
@@ -329,6 +338,7 @@ private slots:
         const LocalCheck kernel = checkLocalFile(put(QStringLiteral("libkernel.sprx"), kElf));
         QCOMPARE(kernel.verdict, Verdict::Reject);
         QVERIFY(kernel.message.contains(QStringLiteral("deletes libkernel")));
+        QVERIFY(allWritten); // no verdict above was about a file that is not there
         QVERIFY(isListedName(QStringLiteral("libA.sprx")));
         QVERIFY(!isListedName(QStringLiteral("libA.sprx.uploading")));
         QVERIFY(!isListedName(QStringLiteral("libA.sprx.replacing.bak")));
@@ -360,10 +370,10 @@ private slots:
         QVERIFY(writeBytes(odd, "not an elf at all"));
         QVERIFY(add(c, libA, false).ok());
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))), kElf);
-        QCOMPARE(add(c, odd, false).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(add(c, odd, false), ErrorCode::InvalidArgument);
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/libOdd.prx"))));
         QVERIFY(add(c, odd, true).ok());
-        QCOMPARE(add(c, QDir(local).filePath(QStringLiteral("eboot.bin")), true).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(add(c, QDir(local).filePath(QStringLiteral("eboot.bin")), true), ErrorCode::InvalidArgument);
 
         // Listing skips folders, other files and the temporaries of a safe replace.
         QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib/libX.sprx.uploading")), "t"));
@@ -386,6 +396,7 @@ private slots:
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))));
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))), kElf);
         auto after = list(c);
+        QVERIFY(after.ok());
         QCOMPARE(int(after->overlays.size()), 2);
         QCOMPARE(after->enabledCount(), 1);
         ampr = after->overlays[1];
@@ -394,7 +405,7 @@ private slots:
 
         // A copy of the same name in the other folder is never overwritten.
         QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx")), kSelf2));
-        QCOMPARE(setEnabled(c, ampr, true).error().code, ErrorCode::AlreadyExists);
+        COMPARE_ERROR_CODE(setEnabled(c, ampr, true), ErrorCode::AlreadyExists);
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))), kSelf2);
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libSceAmpr.sprx"))), kElf);
         QVERIFY(QFile::remove(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))));
@@ -414,6 +425,7 @@ private slots:
         QVERIFY(remove(c, ampr).ok());
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/libSceAmpr.sprx"))));
         auto last = list(c);
+        QVERIFY(last.ok());
         QCOMPARE(int(last->overlays.size()), 1);
 
         // Overlays disabled by older versions sit in fakelib/disabled, which
@@ -422,18 +434,21 @@ private slots:
         QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libTwin.sprx")), kElf));
         QVERIFY(writeBytes(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libTwin.sprx")), kSelf1));
         auto legacy = list(c);
+        QVERIFY(legacy.ok());
         QCOMPARE(legacy->legacyCount(), 2);
         const auto old = std::find_if(legacy->overlays.begin(), legacy->overlays.end(), [](const Overlay& x) { return x.name == u"libOld.sprx"; });
         QVERIFY(old != legacy->overlays.end() && old->legacyFolder && !old->enabled);
         QCOMPARE(old->path(), QStringLiteral("/data/shadowmount/fakelib/disabled/libOld.sprx"));
         auto moved = moveLegacyDisabled(c);
-        QCOMPARE(moved.error().code, ErrorCode::AlreadyExists); // libTwin is in both: that one stays
+        COMPARE_ERROR_CODE(moved, ErrorCode::AlreadyExists); // libTwin is in both: that one stays
         QVERIFY(moved.error().message.contains(QStringLiteral("libTwin.sprx")));
         QCOMPARE(readAll(srv.path(QStringLiteral("/data/shadowmount/fakelib.disabled/libOld.sprx"))), kElf);
         QVERIFY(QFile::remove(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled/libTwin.sprx"))));
-        QCOMPARE(moveLegacyDisabled(c).value(), 0);
+        COMPARE_VALUE(moveLegacyDisabled(c), 0);
         QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/data/shadowmount/fakelib/disabled")))); // removed once empty
-        QCOMPARE(list(c)->legacyCount(), 0);
+        const auto tidy = list(c);
+        QVERIFY(tidy.ok());
+        QCOMPARE(tidy->legacyCount(), 0);
     }
 
     void fakelibKeepsTheOriginalWhenTheServerCannotRename()
@@ -523,10 +538,11 @@ private slots:
 
     void siteAvailAndFolderParsing()
     {
-        QCOMPARE(parseSiteAvail(QStringLiteral("123456789")).value(), qint64(123456789));
-        QCOMPARE(parseSiteAvail(QStringLiteral("Available: 2 GB")).value(), qint64(2) * 1024 * 1024 * 1024);
-        QCOMPARE(parseSiteAvail(QStringLiteral("1.5 TiB free")).value(), qint64(1.5 * 1024.0 * 1024 * 1024 * 1024));
-        QCOMPARE(parseSiteAvail(QStringLiteral("512 bytes")).value(), qint64(512));
+        using Bytes = std::optional<qint64>;
+        QCOMPARE(parseSiteAvail(QStringLiteral("123456789")), Bytes(123456789));
+        QCOMPARE(parseSiteAvail(QStringLiteral("Available: 2 GB")), Bytes(qint64(2) * 1024 * 1024 * 1024));
+        QCOMPARE(parseSiteAvail(QStringLiteral("1.5 TiB free")), Bytes(qint64(1.5 * 1024.0 * 1024 * 1024 * 1024)));
+        QCOMPARE(parseSiteAvail(QStringLiteral("512 bytes")), Bytes(512));
         QVERIFY(!parseSiteAvail(QStringLiteral("not supported")).has_value());
         QCOMPARE(splitConsoleFolders(QStringLiteral(" /data/etaHEN/games/ ; /mnt/usb0/games\n\n/data/etaHEN/games")),
                  (QStringList{QStringLiteral("/data/etaHEN/games"), QStringLiteral("/mnt/usb0/games")}));
@@ -560,7 +576,7 @@ private slots:
         QCOMPARE(int(list->games.size()), 5); // 4 images + 1 dump folder, readme.txt left out
         QCOMPARE(list->folderErrors.size(), 1);
         QVERIFY(list->folderErrors.first().startsWith(QStringLiteral("/mnt/usb1/games: ")));
-        QCOMPARE(list->freeBytes.value(), qint64(123456789)); // the fake's SITE AVAIL
+        QCOMPARE(list->freeBytes, std::optional<qint64>(123456789)); // the fake's SITE AVAIL
         QCOMPARE(list->imageBytes, qint64(10 + 10 + 3 + 4));
         QVERIFY(srv.sawCommand(QStringLiteral("SITE AVAIL")));
 
@@ -568,6 +584,8 @@ private slots:
         QCOMPARE(int(local.size()), 3);
         const auto rows = mergeGames(list->games, local);
         QCOMPARE(int(rows.size()), 6);
+        for (const char* n : {"Same.exfat", "Diff.ffpkg", "Ps5Only.ffpfsc", "LocalOnly.ffpfs", "Usb.exfat", "PPSA01234-dump"})
+            QVERIFY2(std::any_of(rows.begin(), rows.end(), [&](const GameRow& r) { return r.name == QLatin1String(n); }), n);
         auto find = [&](const QString& n) { return *std::find_if(rows.begin(), rows.end(), [&](const GameRow& r) { return r.name == n; }); };
         QCOMPARE(find(QStringLiteral("Same.exfat")).status, GameStatus::OnPs5);
         QCOMPARE(find(QStringLiteral("Diff.ffpkg")).status, GameStatus::SizeMismatch);

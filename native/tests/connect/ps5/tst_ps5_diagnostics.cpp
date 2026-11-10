@@ -112,10 +112,15 @@ private slots:
         QCOMPARE(hosts.last(), QStringLiteral("192.168.1.254"));
         QVERIFY(!hosts.contains(QStringLiteral("192.168.1.20")));
         // Whatever this machine has: never loopback, always a private range.
-        for (const QString& prefix : localSubnetPrefixes()) {
+        // (The rules themselves are checked with fixed addresses above; a PC
+        // without a LAN address has nothing to add here.)
+        const QStringList own = localSubnetPrefixes();
+        for (const QString& prefix : own) {
             QVERIFY2(!prefix.startsWith(QStringLiteral("127.")), qPrintable(prefix));
             QVERIFY2(isPrivateLanAddress(QHostAddress(prefix + QStringLiteral(".1"))), qPrintable(prefix));
         }
+        if (own.isEmpty())
+            qInfo("This PC has no LAN address: its own network prefixes were not checked.");
     }
 
     void discoveryFindsListenersOnInjectedHosts()
@@ -191,7 +196,8 @@ private slots:
         o.bannerWaitMs = 30000; // would wait 30 s for a greeting
         CancellationSource pre;
         pre.cancel();
-        QVERIFY(discoverConsoles(o, pre.token()).error().isCancelled());
+        const auto before = discoverConsoles(o, pre.token());
+        QVERIFY(!before.ok() && before.error().isCancelled());
 
         CancellationSource src;
         QElapsedTimer t;
@@ -212,7 +218,8 @@ private slots:
     {
         FtpFeatures f;
         QCOMPARE(classifyFtpServer(f, QStringLiteral("FakePS5 FTP ready")).label, QStringLiteral("Unknown / generic FTP"));
-        QVERIFY(classifyFtpServer(f, {}).evidence.first().startsWith(QStringLiteral("No zftpd")));
+        const QStringList generic = classifyFtpServer(f, {}).evidence;
+        QVERIFY(!generic.isEmpty() && generic.first().startsWith(QStringLiteral("No zftpd")));
         f.xcrypt = true;
         auto likely = classifyFtpServer(f, {});
         QCOMPARE(likely.label, QStringLiteral("zftpd"));
@@ -321,7 +328,7 @@ private slots:
 
         ConsoleEndpoint noHost = endpoint(21);
         noHost.host.clear();
-        QCOMPARE(diagnoseFtp(noHost, options(kGames)).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(diagnoseFtp(noHost, options(kGames)), ErrorCode::InvalidArgument);
     }
 
     void notWritableAndLeftoverProbeAreReported()
@@ -468,12 +475,14 @@ private slots:
 
         // A folder that cannot be written: inconclusive with a warning.
         auto ro = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("/nope")}});
+        QVERIFY(ro.ok());
         auto roOut = ro.value()->run(ctx);
         QVERIFY(roOut.ok());
         QCOMPARE(roOut->verification, Verification::Inconclusive);
         QVERIFY(!roOut->warnings.isEmpty());
 
         auto rel = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("relative")}});
+        QVERIFY(rel.ok());
         QVERIFY(rel.value()->validate(s).ok()); // normalised to "/relative"
 
         // The checks write a probe file: a protected folder needs the
@@ -483,12 +492,15 @@ private slots:
                                   {keys::kGamesFolder, QStringLiteral("/system_ex/app")}},
                                  {});
         auto fromSettings = mod.jobs.create(jobkinds::kFtpDiagnose, {});
-        QCOMPARE(fromSettings.value()->validate(sys).error().code, ErrorCode::PermissionDenied);
+        QVERIFY(fromSettings.ok());
+        COMPARE_ERROR_CODE(fromSettings.value()->validate(sys), ErrorCode::PermissionDenied);
         QVERIFY(fromSettings.value()->validate(s).ok());
         auto confirmed = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("allowProtectedPaths"), true}});
+        QVERIFY(confirmed.ok());
         QVERIFY(confirmed.value()->validate(sys).ok());
         auto typed = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("/user")}});
-        QCOMPARE(typed.value()->validate(s).error().code, ErrorCode::PermissionDenied);
+        QVERIFY(typed.ok());
+        COMPARE_ERROR_CODE(typed.value()->validate(s), ErrorCode::PermissionDenied);
     }
 };
 

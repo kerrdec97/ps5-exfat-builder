@@ -146,6 +146,7 @@ public:
         int dropControlOnRnfr = 0;       // close the control connection on the Nth RNFR (1-based; 0: never)
         bool ftpsrv = false;             // behave like ftpsrv v0.21 (see the header)
         bool selfIgnored = false;        // ftpsrv: SELF answers "enabled" every time (cannot be turned off)
+        QStringList unreadablePaths;     // RETR refused (550) for these virtual paths; SIZE and listings still show them
     };
 
     explicit FakeFtpServer(Options o) : m_opt(std::move(o))
@@ -769,6 +770,11 @@ private:
             reply(s, m_opt.failFirstTransferReply);
         } else if (cmd == u"RETR") {
             QFile f(local(s, arg));
+            if (m_opt.unreadablePaths.contains(virtualPath(s, arg))) {
+                reply(s, "550 Permission denied.");
+                s->rest = 0;
+                return;
+            }
             if (!QFileInfo(f.fileName()).isFile() || !f.open(QIODevice::ReadOnly)) {
                 reply(s, "550 Failed to open file.");
                 s->rest = 0;

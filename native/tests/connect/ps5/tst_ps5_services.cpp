@@ -101,16 +101,20 @@ ConsoleEndpoint endpoint(quint16 ftpPort)
     return ep;
 }
 
-// SQLite fixtures shaped like the console's databases.
-void makeAppInfoDb(const QString& path, const QString& titleId)
+// SQLite fixtures shaped like the console's databases. They return false
+// (the caller checks with QVERIFY) instead of asserting in here, where a
+// failed check would only leave the helper and the test would carry on with
+// half a fixture.
+bool makeAppInfoDb(const QString& path, const QString& titleId)
 {
     const QString name = QUuid::createUuid().toString();
+    bool ok = false;
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
         db.setDatabaseName(path);
-        QVERIFY(db.open());
+        ok = db.open();
         QSqlQuery q(db);
-        QVERIFY(q.exec(QStringLiteral("CREATE TABLE tbl_appinfo (titleId TEXT, key TEXT, val TEXT)")));
+        ok = ok && q.exec(QStringLiteral("CREATE TABLE tbl_appinfo (titleId TEXT, key TEXT, val TEXT)"));
         for (const QString& tid : {titleId, QStringLiteral("CUSA00001")})
             for (const auto& [k, v] : std::initializer_list<std::pair<const char*, const char*>>{
                      {"VERSION_FILE_URI", "http://gs-sec.ww.np.dl.playstation.net/x.xml"},
@@ -120,22 +124,24 @@ void makeAppInfoDb(const QString& path, const QString& titleId)
                 q.addBindValue(tid);
                 q.addBindValue(QString::fromLatin1(k));
                 q.addBindValue(QString::fromLatin1(v));
-                QVERIFY(q.exec());
+                ok = ok && q.exec();
             }
         db.close();
     }
     QSqlDatabase::removeDatabase(name);
+    return ok;
 }
 
-void makeAppDb(const QString& path, const QString& titleId, bool fieldList)
+bool makeAppDb(const QString& path, const QString& titleId, bool fieldList)
 {
     const QString name = QUuid::createUuid().toString();
+    bool ok = false;
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
         db.setDatabaseName(path);
-        QVERIFY(db.open());
+        ok = db.open();
         QSqlQuery q(db);
-        QVERIFY(q.exec(QStringLiteral("CREATE TABLE tbl_contentinfo (titleId TEXT, AppInfoJson TEXT)")));
+        ok = ok && q.exec(QStringLiteral("CREATE TABLE tbl_contentinfo (titleId TEXT, AppInfoJson TEXT)"));
         const QString blob = fieldList
             ? QStringLiteral("{\"big\":12345678901234567890,\"field_list\":[{\"key\":\"TITLE\",\"data\":\"YouTube\"},"
                              "{\"key\":\"CONTENT_VERSION\",\"data\":\"01.020.000\"},{\"key\":\"VERSION_FILE_URI\",\"data\":\"http://x\"},"
@@ -144,12 +150,14 @@ void makeAppDb(const QString& path, const QString& titleId, bool fieldList)
         q.prepare(QStringLiteral("INSERT INTO tbl_contentinfo VALUES (?, ?)"));
         q.addBindValue(titleId);
         q.addBindValue(blob);
-        QVERIFY(q.exec());
+        ok = ok && q.exec();
         db.close();
     }
     QSqlDatabase::removeDatabase(name);
+    return ok;
 }
 
+// The stored JSON of one title; empty when the database or the row cannot be read.
 QString appDbJson(const QString& path, const QString& titleId)
 {
     const QString name = QUuid::createUuid().toString();
@@ -157,13 +165,14 @@ QString appDbJson(const QString& path, const QString& titleId)
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
         db.setDatabaseName(path);
-        db.open();
-        QSqlQuery q(db);
-        q.prepare(QStringLiteral("SELECT AppInfoJson FROM tbl_contentinfo WHERE titleId = ?"));
-        q.addBindValue(titleId);
-        if (q.exec() && q.next())
-            out = q.value(0).toString();
-        db.close();
+        if (db.open()) {
+            QSqlQuery q(db);
+            q.prepare(QStringLiteral("SELECT AppInfoJson FROM tbl_contentinfo WHERE titleId = ?"));
+            q.addBindValue(titleId);
+            if (q.exec() && q.next())
+                out = q.value(0).toString();
+            db.close();
+        }
     }
     QSqlDatabase::removeDatabase(name);
     return out;
@@ -173,10 +182,12 @@ const QByteArray kParam = "{\n  \"contentVersion\": \"01.020.000\",\n  \"masterV
                           "  \"versionFileUri\": \"http://gs-sec.ww.np.dl.playstation.net/x.xml\",\n  \"size\": 12345678901234567890,\n"
                           "  \"titleId\": \"PPSA01650\"\n}\n";
 
-// A fake console holding the YouTube metadata files Y2JB patches.
+// A fake console holding the YouTube metadata files Y2JB patches. `ok` is
+// false when a file could not be made: the caller checks it first.
 struct Console {
     QString root;
     QByteArray appDb, appInfoDb;
+    bool ok = false;
 };
 
 Console makeConsole(const QString& root)
@@ -184,12 +195,13 @@ Console makeConsole(const QString& root)
     Console k;
     k.root = root;
     const QString tid = QStringLiteral("PPSA01650");
-    fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("user/appmeta/%1/param.json").arg(tid)), kParam);
-    QDir().mkpath(QDir(root).filePath(QStringLiteral("system_data/priv/mms")));
-    makeAppInfoDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")), tid);
-    makeAppDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")), tid, true);
+    k.ok = fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("user/appmeta/%1/param.json").arg(tid)), kParam)
+        && QDir().mkpath(QDir(root).filePath(QStringLiteral("system_data/priv/mms")))
+        && makeAppInfoDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")), tid)
+        && makeAppDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")), tid, true);
     k.appDb = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")));
     k.appInfoDb = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")));
+    k.ok = k.ok && !k.appDb.isEmpty() && !k.appInfoDb.isEmpty();
     return k;
 }
 
@@ -246,12 +258,14 @@ private slots:
         const QString f = m_tmp.filePath(QStringLiteral("payload.elf"));
         QVERIFY(fwtest::writeRandomFile(f, 5 * 1024 * 1024 + 3, 77));
         qint64 lastSent = 0, total = 0;
+        bool wentBack = false;
         auto r = sendPayloadFile(QStringLiteral("127.0.0.1"), sink.port(), f, {}, {}, [&](qint64 s, qint64 t) {
-            QVERIFY(s >= lastSent);
+            wentBack = wentBack || s < lastSent;
             lastSent = s;
             total = t;
         });
         QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QVERIFY(!wentBack);
         QCOMPARE(r->bytes, QFileInfo(f).size());
         QCOMPARE(lastSent, total);
         QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 1; }, 15000));
@@ -271,10 +285,12 @@ private slots:
         QVERIFY(refused.error().message.contains(QStringLiteral("payload loader")));
         COMPARE_ERROR_CODE(sendPayloadFile(QStringLiteral("127.0.0.1"), closedPort(), m_tmp.filePath(QStringLiteral("none.elf"))),
                            ErrorCode::NotFound);
-        QCOMPARE(sendPayloadData(QString(), 9090, "x").error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(sendPayloadData(QString(), 9090, "x"), ErrorCode::InvalidArgument);
         // The loader hints are for a loader that does not answer, not for a missing address.
-        QVERIFY(!sendPayloadData(QString(), 9021, "x").error().message.contains(QStringLiteral("elfldr")));
-        QVERIFY(!sendPayloadData(QString(), 9090, "x").error().message.contains(QStringLiteral("DPI")));
+        const auto noHost9021 = sendPayloadData(QString(), 9021, "x");
+        QVERIFY(!noHost9021.ok() && !noHost9021.error().message.contains(QStringLiteral("elfldr")));
+        const auto noHost9090 = sendPayloadData(QString(), 9090, "x");
+        QVERIFY(!noHost9090.ok() && !noHost9090.error().message.contains(QStringLiteral("DPI")));
 
         // A loader that never reads: the send stalls and times out.
         fake::FakeTcpSink stuck(true);
@@ -283,7 +299,7 @@ private slots:
         QElapsedTimer t;
         t.start();
         auto r = sendPayloadData(QStringLiteral("127.0.0.1"), stuck.port(), QByteArray(64 * 1024 * 1024, 'p'), o);
-        QCOMPARE(r.error().code, ErrorCode::Timeout);
+        COMPARE_ERROR_CODE(r, ErrorCode::Timeout);
         QVERIFY(t.elapsed() < 15000);
 
         // Cancellation.
@@ -292,6 +308,7 @@ private slots:
         PayloadOptions slow;
         slow.sendTimeoutMs = 20000;
         auto c = sendPayloadData(QStringLiteral("127.0.0.1"), stuck.port(), QByteArray(64 * 1024 * 1024, 'p'), slow, cs.token());
+        QVERIFY(!c.ok());
         QVERIFY(c.error().isCancelled());
 
         // A loader that closes part-way: an error, never "all bytes sent".
@@ -300,7 +317,7 @@ private slots:
         auto cut = sendPayloadData(QStringLiteral("127.0.0.1"), closing.port(), QByteArray(48 * 1024 * 1024, 'p'), {}, {},
                                    [&](qint64 sent, qint64) { reported = sent; });
         QVERIFY(!cut.ok());
-        QCOMPARE(cut.error().code, ErrorCode::IoError);
+        COMPARE_ERROR_CODE(cut, ErrorCode::IoError);
         QVERIFY2(cut.error().message.contains(QStringLiteral("closed the connection")), qPrintable(cut.error().message));
         QVERIFY(reported < 48 * 1024 * 1024);
         QVERIFY(probeTcpPort(QStringLiteral("127.0.0.1"), stuck.port(), 2000, QStringLiteral("test")).ok());
@@ -324,7 +341,8 @@ private slots:
         QCOMPARE(s.feed("one\r\ntw"), QStringList{QStringLiteral("one")});
         QCOMPARE(s.feed("o\n\n\nprice " + euro.left(1)), QStringList{QStringLiteral("two")});
         QCOMPARE(s.feed(euro.mid(1) + "\n"), QStringList{QString::fromUtf8("price €")});
-        QCOMPARE(s.feed("bad \xFF\n").front().contains(QChar(0xFFFD)), true);
+        const QStringList replaced = s.feed("bad \xFF\n");
+        QVERIFY(replaced.size() == 1 && replaced.front().contains(QChar(0xFFFD)));
         QCOMPARE(s.feed("tail"), QStringList());
         QCOMPARE(s.flush(), QStringLiteral("tail"));
     }
@@ -391,6 +409,7 @@ private slots:
                                  [](const QString& l) { return l.contains(QStringLiteral("marker")); }, 3000, 2000, {});
         QCOMPARE(r.outcome, KlogSession::Outcome::Matched);
         QCOMPARE(r.matchedLine, QStringLiteral("the marker line"));
+        QVERIFY(!r.lines.isEmpty());
         QCOMPARE(r.lines.front(), QStringLiteral("noise"));
 
         QElapsedTimer t;
@@ -479,29 +498,34 @@ private slots:
         QVERIFY(t.elapsed() >= 1500);    // the second unmount + the settle time
         QVERIFY(QFileInfo(QDir(root).filePath(QStringLiteral("data/shadowmount/STOP"))).isFile());
         QCOMPARE(QFileInfo(QDir(root).filePath(QStringLiteral("data/shadowmount/STOP"))).size(), 0);
-        QVERIFY(status.first().contains(QStringLiteral("klog")));
+        QVERIFY(!status.isEmpty() && status.first().contains(QStringLiteral("klog")));
 
         // Balanced but the settle time does not fit before the timeout: amber.
         fake::FakeLineServer late({{{0, "[shutdown] stop requested\n"}, {10, "unmount start x\n"}, {10, "unmount complete x\n"}}},
                                   false);
         ep.klogPort = late.port();
         auto early = stopShadowMount(ep, {}, {}, 600, 1000, 5000);
+        QVERIFY(early.ok());
         QCOMPARE(early->outcome, StopOutcome::Timeout);
 
         // The exit line confirms without waiting.
         fake::FakeLineServer exitLine({{{100, "x shadowmountplus.elf calls exit() exit_value=0\n"}}}, false);
         ep.klogPort = exitLine.port();
         auto ex = stopShadowMount(ep, {}, {}, 5000, 1000, 60000); // settle longer than the timeout
+        QVERIFY(ex.ok());
         QCOMPARE(ex->outcome, StopOutcome::Confirmed);
 
         // klog closes while waiting: amber.
         fake::FakeLineServer closing({{{0, "[shutdown] stop requested\n"}}}, true);
         ep.klogPort = closing.port();
-        QCOMPARE(stopShadowMount(ep, {}, {}, 3000, 1000, 500)->outcome, StopOutcome::KlogLost);
+        auto lost = stopShadowMount(ep, {}, {}, 3000, 1000, 500);
+        QVERIFY(lost.ok());
+        QCOMPARE(lost->outcome, StopOutcome::KlogLost);
 
         // No klog server: STOP is still sent, the result is amber.
         ep.klogPort = closedPort();
         auto none = stopShadowMount(ep, {}, {}, 2000, 1000);
+        QVERIFY(none.ok());
         QCOMPARE(none->outcome, StopOutcome::NoKlog);
         QVERIFY(stopOutcomeMessage(none->outcome).contains(QStringLiteral("NOT confirmed")));
 
@@ -509,6 +533,7 @@ private slots:
         fake::FakeLineServer quiet({{}}, false);
         ep.klogPort = quiet.port();
         auto slow = stopShadowMount(ep, {}, {}, 500, 1000);
+        QVERIFY(slow.ok());
         QCOMPARE(slow->outcome, StopOutcome::Timeout);
 
         // No FTP: an error (nothing was sent).
@@ -563,6 +588,7 @@ private slots:
                                   false);
         ep.klogPort = fail.port();
         auto f = stopShadowMount(ep, {}, {}, 5000, 2000);
+        QVERIFY(f.ok());
         QCOMPARE(f->outcome, StopOutcome::Incomplete);
         QCOMPARE(f->problems.size(), 1);
         QVERIFY(stopOutcomeMessage(f->outcome).contains(QStringLiteral("could not release")));
@@ -571,7 +597,9 @@ private slots:
                                     {20, "[SHUTDOWN] some image mounts or devices were not fully released\n"}}},
                                   false);
         ep.klogPort = half.port();
-        QCOMPARE(stopShadowMount(ep, {}, {}, 800, 2000)->outcome, StopOutcome::Incomplete);
+        auto cutShort = stopShadowMount(ep, {}, {}, 800, 2000);
+        QVERIFY(cutShort.ok());
+        QCOMPARE(cutShort->outcome, StopOutcome::Incomplete);
     }
 
     // No klog: the tail of /data/shadowmount/debug.log is followed over FTP.
@@ -616,6 +644,7 @@ private slots:
         // Without debug.log there is nothing to follow: amber at once.
         QVERIFY(QFile::remove(log));
         auto none = stopShadowMount(ep, {}, {}, 2000, 1000);
+        QVERIFY(none.ok());
         QCOMPARE(none->outcome, StopOutcome::NoKlog);
     }
 
@@ -635,14 +664,18 @@ private slots:
         QVERIFY(st->configExists && !st->profilesExists);
         QCOMPARE(st->logVersion, QStringLiteral("1.7beta11"));
         QCOMPARE(st->format, SmpConfigFormat::Flat17);
-        QCOMPARE(loadSmpState(c, QStringLiteral("1.6test15"))->format, SmpConfigFormat::Flat16); // the API version wins
-        QCOMPARE(loadSmpState(c, {}, {}, 10)->logVersion, QString()); // debug.log larger than the limit: not read
+        const auto byApi = loadSmpState(c, QStringLiteral("1.6test15"));
+        QVERIFY(byApi.ok());
+        QCOMPARE(byApi->format, SmpConfigFormat::Flat16); // the API version wins
+        const auto bigLog = loadSmpState(c, {}, {}, 10);
+        QVERIFY(bigLog.ok());
+        QCOMPARE(bigLog->logVersion, QString()); // debug.log larger than the limit: not read
 
         const QString backups = fresh(QStringLiteral("smp-state-bak"));
         // Someone (the SMP web UI) saved the file after it was loaded: refused.
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("data/shadowmount/config.ini")), "debug=0\nfuture=1\n"));
         auto conflict = pushMountConfig(c, MountTool::ShadowMountPlus, QStringLiteral("debug=1\nscan_interval_seconds=30\n"), backups, {}, st->config);
-        QCOMPARE(conflict.error().code, ErrorCode::AlreadyExists);
+        COMPARE_ERROR_CODE(conflict, ErrorCode::AlreadyExists);
         QVERIFY(conflict.error().message.contains(QStringLiteral("changed on the console")));
         QCOMPARE(readAll(QDir(root).filePath(QStringLiteral("data/shadowmount/config.ini"))), QByteArray("debug=0\nfuture=1\n"));
         // Loaded again: accepted.
@@ -654,7 +687,9 @@ private slots:
         QVERIFY2(prof.ok(), prof.ok() ? "" : qPrintable(prof.error().toLogString()));
         QVERIFY(prof->backupPath.isEmpty());
         QCOMPARE(readAll(QDir(root).filePath(QStringLiteral("data/shadowmount/profiles.ini"))), QByteArray("[config]\nversion = 2\n"));
-        QCOMPARE(loadSmpState(c)->profilesExists, true);
+        const auto reloaded = loadSmpState(c);
+        QVERIFY(reloaded.ok());
+        QCOMPARE(reloaded->profilesExists, true);
     }
 
     // ---- ShadowMount+ 1.7 HTTP API --------------------------------------------------------------------
@@ -696,20 +731,22 @@ private slots:
         const smp::StorageItem* data = smp::storageFor(items.value(), QStringLiteral("/data/etaHEN/games"));
         QVERIFY(data);
         QCOMPARE(data->availableBytes, qint64(500000000000));
-        QCOMPARE(smp::storageFor(items.value(), QStringLiteral("/mnt/usb0/x"))->mountPoint, QStringLiteral("/mnt/usb0"));
+        const smp::StorageItem* usb = smp::storageFor(items.value(), QStringLiteral("/mnt/usb0/x"));
+        QVERIFY(usb);
+        QCOMPARE(usb->mountPoint, QStringLiteral("/mnt/usb0"));
         QVERIFY(!smp::storageFor(items.value(), QStringLiteral("/mnt/usb01")));
         auto job = smp::eject(host, api.port(), items->at(1));
         QVERIFY2(job.ok(), job.ok() ? "" : qPrintable(job.error().toLogString()));
-        QCOMPARE(job.value(), qint64(7));
+        COMPARE_VALUE(job, qint64(7));
         QCOMPARE(api.requests().back().value(QStringLiteral("path")).toString(), QStringLiteral("/mnt/usb0"));
         QVERIFY(!smp::eject(host, api.port(), items->at(0)).ok()); // /data is not ejectable
         smp::StorageItem stale = items->at(1);
         stale.mountId = QStringLiteral("0000000000000000");
         auto refused = smp::eject(host, api.port(), stale);
-        QCOMPARE(refused.error().code, ErrorCode::AlreadyExists);
+        COMPARE_ERROR_CODE(refused, ErrorCode::AlreadyExists);
         QVERIFY(refused.error().message.contains(QStringLiteral("usb_mount_changed")));
-        QCOMPARE(smp::debugLog(host, api.port()).value(), QStringLiteral("line 1\nline 2"));
-        QCOMPARE(smp::kernelLog(host, api.port()).error().code, ErrorCode::NotFound);
+        COMPARE_VALUE(smp::debugLog(host, api.port()), QStringLiteral("line 1\nline 2"));
+        COMPARE_ERROR_CODE(smp::kernelLog(host, api.port()), ErrorCode::NotFound);
         QVERIFY(!smp::version(host, closedPort()).ok()); // no API: an error, never a hang
 
         // Status replies.
@@ -733,7 +770,7 @@ private slots:
         QVERIFY(smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")}, {QStringLiteral("result_error"), QString()}}).succeeded);
         // Something that is not the API streams without end: cut off, not buffered.
         fake::FakeLineServer flood({{{0, QByteArray(5 * 1024 * 1024, 'x')}}}, false);
-        QCOMPARE(smp::version(host, flood.port()).error().code, ErrorCode::CorruptData);
+        COMPARE_ERROR_CODE(smp::version(host, flood.port()), ErrorCode::CorruptData);
         QCOMPARE(smp::logText({{QStringLiteral("status"), 0}, {QStringLiteral("text"), QStringLiteral("abc")}}), QStringLiteral("abc"));
 
         // The eject job.
@@ -742,6 +779,7 @@ private slots:
         ProgressReporter progress;
         JobContext ctx = context(progress, s);
         auto ej = mod.jobs.create(jobkinds::kShadowMountEject, {{QStringLiteral("pollMs"), 50}});
+        QVERIFY(ej.ok());
         QVERIFY(ej.value()->validate(s).ok());
         statusCalls = 0;
         auto out = ej.value()->run(ctx);
@@ -749,7 +787,8 @@ private slots:
         QCOMPARE(out->verification, Verification::Passed);
         QVERIFY(out->summary.contains(QStringLiteral("/mnt/usb0")));
         auto wrong = mod.jobs.create(jobkinds::kShadowMountEject, {{QStringLiteral("path"), QStringLiteral("/data")}, {QStringLiteral("pollMs"), 50}});
-        QCOMPARE(wrong.value()->run(ctx).error().code, ErrorCode::NotFound);
+        QVERIFY(wrong.ok());
+        COMPARE_ERROR_CODE(wrong.value()->run(ctx), ErrorCode::NotFound);
     }
 
     void y2jbYoutubeVersionsPerFirmware()
@@ -784,6 +823,7 @@ private slots:
         QCOMPARE(canonicalSmpKey(QStringLiteral("read_only")), QStringLiteral("mount_read_only"));
         QCOMPARE(canonicalSmpKey(QStringLiteral("LANG")), QStringLiteral("language"));
         QCOMPARE(canonicalSmpKey(QStringLiteral("api_bind_adress")), QStringLiteral("api_bind_address"));
+        QVERIFY(findSmpKey(QStringLiteral("scan_interval_seconds")) && findSmpKey(QStringLiteral("fakelib_default_mode")));
         QCOMPARE(findSmpKey(QStringLiteral("scan_interval_seconds"))->section, QStringLiteral("scan"));
         QCOMPARE(findSmpKey(QStringLiteral("scan_interval_seconds"))->v2Key, QStringLiteral("interval_seconds"));
         QVERIFY(findSmpKey(QStringLiteral("fakelib_default_mode"))->choices.contains(QStringLiteral("emulators")));
@@ -1051,7 +1091,7 @@ private slots:
         FtpClient c(quick());
         QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
         auto missing = loadMountConfig(c, MountTool::ShadowMountPlus);
-        QCOMPARE(missing.error().code, ErrorCode::NotFound);
+        COMPARE_ERROR_CODE(missing, ErrorCode::NotFound);
         QVERIFY(missing.error().message.contains(QStringLiteral("normal")));
 
         const QString backups = fresh(QStringLiteral("smp-bak"));
@@ -1060,7 +1100,7 @@ private slots:
         QVERIFY2(first.ok(), first.ok() ? "" : qPrintable(first.error().toLogString()));
         QVERIFY(first->backupPath.isEmpty()); // nothing existed
         QVERIFY(first->swapped);
-        QCOMPARE(loadMountConfig(c, MountTool::ShadowMountPlus).value(), text);
+        COMPARE_VALUE(loadMountConfig(c, MountTool::ShadowMountPlus), text);
 
         auto second = pushMountConfig(c, MountTool::ShadowMountPlus, QStringLiteral("debug=0\n"), backups);
         QVERIFY(second.ok());
@@ -1082,7 +1122,7 @@ private slots:
         QCOMPARE(readAll(direct->backupPath), QByteArray("old=1\n"));
         QCOMPARE(readAll(QDir(fo.root).filePath(QStringLiteral("data/micromount/config.ini"))), QByteArray("new=2\n"));
         QVERIFY(fwtest::writeTextFile(QDir(fo.root).filePath(QStringLiteral("data/micromount/debug.log")), "log line\n"));
-        QCOMPARE(fetchMountDebugLog(c2, MountTool::MicroMount).value(), QStringLiteral("log line\n"));
+        COMPARE_VALUE(fetchMountDebugLog(c2, MountTool::MicroMount), QStringLiteral("log line\n"));
     }
 
     // ---- DPI installer -----------------------------------------------------------------------------
@@ -1143,7 +1183,7 @@ private slots:
             t.start();
             auto r = installPackage(QStringLiteral("127.0.0.1"), closing.port(), big, {}, {}, [&](qint64 s, qint64) { sent = s; });
             QVERIFY(!r.ok());
-            QCOMPARE(r.error().code, ErrorCode::IoError);
+            COMPARE_ERROR_CODE(r, ErrorCode::IoError);
             QVERIFY(sent < QFileInfo(big).size()); // never "all sent"
             QVERIFY(t.elapsed() < 20000);
         }
@@ -1154,7 +1194,7 @@ private slots:
             QVERIFY(fwtest::writeRandomFile(small, 4096, 7));
             auto r = installPackage(QStringLiteral("127.0.0.1"), flood.port(), small);
             QVERIFY(!r.ok());
-            QCOMPARE(r.error().code, ErrorCode::CorruptData);
+            COMPARE_ERROR_CODE(r, ErrorCode::CorruptData);
         }
         // A package that shrinks while it is sent ends with a clear error, not a 30 s wait.
         {
@@ -1183,6 +1223,7 @@ private slots:
         QVERIFY(fwtest::writeRandomFile(pkg, 1000, 1));
         fake::FakeHttpUpload chunked("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\nsuccess\r\n0\r\n\r\n");
         auto c = installPackage(QStringLiteral("127.0.0.1"), chunked.port(), pkg);
+        QVERIFY2(c.ok(), c.ok() ? "" : qPrintable(c.error().toLogString()));
         QCOMPARE(c->body, QByteArray("success"));
         QVERIFY(c->accepted);
         fake::FakeHttpUpload failing("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 13\r\n\r\ninstall error");
@@ -1213,12 +1254,12 @@ private slots:
                                         .replace("\"localVersion\": \"01.00\"", "\"localVersion\": \"01.02\"")
                                         .replace("\"versionFileUri\": \"http://gs-sec.ww.np.dl.playstation.net/x.xml\"",
                                                  "\"versionFileUri\": \"http://127.0.0.2\"");
-        QCOMPARE(p.value(), expected); // everything else byte-for-byte, incl. the 20-digit number
+        COMPARE_VALUE(p, expected); // everything else byte-for-byte, incl. the 20-digit number
         QVERIFY(verifyParamJsonText(p.value()).ok);
         QVERIFY(!verifyParamJsonText(kParam).ok);
         QVERIFY(verifyParamJsonText("{\"titleId\":\"x\"}").ok); // legacy: absent keys are not checked
         QVERIFY(verifyParamJsonText("{\"titleId\":\"x\"}").reason.contains(QStringLiteral("nothing to block"))); // ... and it says so
-        QCOMPARE(patchParamJsonText("{\"titleId\":\"x\"}").value(), QByteArray("{\"titleId\":\"x\"}"));
+        COMPARE_VALUE(patchParamJsonText("{\"titleId\":\"x\"}"), QByteArray("{\"titleId\":\"x\"}"));
         QVERIFY(!patchParamJsonText("{broken").ok());
     }
 
@@ -1228,17 +1269,17 @@ private slots:
         const QString ai = QDir(dir).filePath(QStringLiteral("appinfo.db"));
         const QString app = QDir(dir).filePath(QStringLiteral("app.db"));
         const QString appTop = QDir(dir).filePath(QStringLiteral("app-top.db"));
-        makeAppInfoDb(ai, QStringLiteral("PPSA01650"));
-        makeAppDb(app, QStringLiteral("PPSA01650"), true);
-        makeAppDb(appTop, QStringLiteral("PPSA01650"), false);
+        QVERIFY(makeAppInfoDb(ai, QStringLiteral("PPSA01650")));
+        QVERIFY(makeAppDb(app, QStringLiteral("PPSA01650"), true));
+        QVERIFY(makeAppDb(appTop, QStringLiteral("PPSA01650"), false));
 
         QVERIFY(!verifyAppInfoDb(ai, QStringLiteral("PPSA01650")).ok);
-        QCOMPARE(patchAppInfoDb(ai, QStringLiteral("PPSA01651")).value(), 0); // wrong region: no rows
-        QCOMPARE(patchAppInfoDb(ai, QStringLiteral("PPSA01650")).value(), 2);
+        COMPARE_VALUE(patchAppInfoDb(ai, QStringLiteral("PPSA01651")), 0); // wrong region: no rows
+        COMPARE_VALUE(patchAppInfoDb(ai, QStringLiteral("PPSA01650")), 2);
         QVERIFY(verifyAppInfoDb(ai, QStringLiteral("PPSA01650")).ok);
         QVERIFY(!verifyAppInfoDb(ai, QStringLiteral("CUSA00001")).ok); // other titles untouched
 
-        QCOMPARE(patchAppDb(app, QStringLiteral("PPSA01650")).value(), 1);
+        COMPARE_VALUE(patchAppDb(app, QStringLiteral("PPSA01650")), 1);
         const PatchCheck v = verifyAppDb(app, QStringLiteral("PPSA01650"));
         QVERIFY2(v.ok, qPrintable(v.reason));
         QVERIFY(v.reason.contains(QStringLiteral("field_list")));
@@ -1251,9 +1292,9 @@ private slots:
         QVERIFY2(blob.contains(QStringLiteral("{\"key\":\"CONTENT_VERSION\",\"data\":\"99.999.999\"}")), qPrintable(blob));
         QVERIFY2(!blob.contains(QStringLiteral("\"CONTENT_VERSION\":")), qPrintable(blob));
 
-        QCOMPARE(patchAppDb(appTop, QStringLiteral("PPSA01650")).value(), 1);
+        COMPARE_VALUE(patchAppDb(appTop, QStringLiteral("PPSA01650")), 1);
         QVERIFY(verifyAppDb(appTop, QStringLiteral("PPSA01650")).reason.contains(QStringLiteral("top-level")));
-        QCOMPARE(patchAppDb(appTop, QStringLiteral("PPSA09999")).value(), 0);
+        COMPARE_VALUE(patchAppDb(appTop, QStringLiteral("PPSA09999")), 0);
         QVERIFY(!patchAppDb(QDir(dir).filePath(QStringLiteral("none.db")), QStringLiteral("x")).ok());
         QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("none.db")))); // never created
     }
@@ -1262,7 +1303,7 @@ private slots:
     {
         const QString dir = fresh(QStringLiteral("local-patch"));
         QVERIFY(fwtest::writeTextFile(QDir(dir).filePath(QStringLiteral("param.json")), kParam));
-        makeAppInfoDb(QDir(dir).filePath(QStringLiteral("appinfo.db")), QStringLiteral("PPSA01651"));
+        QVERIFY(makeAppInfoDb(QDir(dir).filePath(QStringLiteral("appinfo.db")), QStringLiteral("PPSA01651")));
         QVERIFY(fwtest::writeTextFile(QDir(dir).filePath(QStringLiteral("param.json.bak")), "older backup"));
         auto r = patchLocalFolder(dir, Y2jbRegion::EU);
         QVERIFY(r.ok());
@@ -1286,9 +1327,9 @@ private slots:
         const QString root = fresh(QStringLiteral("console"));
         const QString tid = QStringLiteral("PPSA01650");
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("user/appmeta/%1/param.json").arg(tid)), kParam));
-        QDir().mkpath(QDir(root).filePath(QStringLiteral("system_data/priv/mms")));
-        makeAppInfoDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")), tid);
-        makeAppDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")), tid, true);
+        QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("system_data/priv/mms"))));
+        QVERIFY(makeAppInfoDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db")), tid));
+        QVERIFY(makeAppDb(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")), tid, true));
         const QByteArray origAppDb = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")));
         // An older remote backup must not be overwritten.
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("system_data/priv/mms/appinfo.db.bak")), "older"));
@@ -1331,6 +1372,7 @@ private slots:
         QVERIFY(fwtest::writeTextFile(sysMeta + QStringLiteral("/param.json"), "{\"titleId\":\"x\"}"));
         auto again = autoBlockOverFtp(c, Y2jbRegion::USA, fresh(QStringLiteral("y2jb-bak-again")));
         QVERIFY(again.ok());
+        QCOMPARE(int(again->files.size()), 4);
         QCOMPARE(again->files[0].status, QStringLiteral("✓"));
         QVERIFY2(again->files[0].detail.contains(QStringLiteral("already patched")), qPrintable(again->files[0].detail));
         QCOMPARE(again->files[1].status, QStringLiteral("○"));
@@ -1351,8 +1393,8 @@ private slots:
         const QString root = fresh(QStringLiteral("place"));
         const QString tid = QStringLiteral("PPSA01651");
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("user/download/%1/download0.dat").arg(tid)), "old dat"));
-        QDir().mkpath(QDir(root).filePath(QStringLiteral("user/appmeta")));
-        QDir().mkpath(QDir(root).filePath(QStringLiteral("user/catalog_downloader/appmeta")));
+        QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("user/appmeta"))));
+        QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("user/catalog_downloader/appmeta"))));
         fake::FakeFtpServer::Options fo;
         fo.root = root;
         fake::FakeFtpServer srv(fo);
@@ -1370,10 +1412,12 @@ private slots:
         // Icon: PNG and exactly 512x512.
         const QString notPng = QDir(local).filePath(QStringLiteral("icon.txt"));
         QVERIFY(fwtest::writeTextFile(notPng, "nope"));
-        QVERIFY(validateY2jbIcon(notPng).error().message.contains(QStringLiteral("not a valid PNG")));
+        const auto notPngCheck = validateY2jbIcon(notPng);
+        QVERIFY(!notPngCheck.ok() && notPngCheck.error().message.contains(QStringLiteral("not a valid PNG")));
         const QString small = QDir(local).filePath(QStringLiteral("small.png"));
         QImage(256, 256, QImage::Format_RGB32).save(small, "PNG");
-        QVERIFY(validateY2jbIcon(small).error().message.contains(QStringLiteral("256x256")));
+        const auto smallCheck = validateY2jbIcon(small);
+        QVERIFY(!smallCheck.ok() && smallCheck.error().message.contains(QStringLiteral("256x256")));
         const QString icon = QDir(local).filePath(QStringLiteral("icon0.png"));
         QImage img(512, 512, QImage::Format_RGB32);
         img.fill(Qt::red);
@@ -1410,24 +1454,28 @@ private slots:
         FtpClient c(quick());
         QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
         const QString backups = fresh(QStringLiteral("bk"));
-        QCOMPARE(backupRemoteFile(c, QStringLiteral("/f.bin"), backups).value(), QDir(backups).filePath(QStringLiteral("f.bin")));
-        QCOMPARE(backupRemoteFile(c, QStringLiteral("/f.bin"), backups).value(), QDir(backups).filePath(QStringLiteral("f.bin.2")));
-        QVERIFY(backupRemoteFile(c, QStringLiteral("/none.bin"), backups).value().isEmpty());
-#ifndef Q_OS_WIN
-        // Exists but cannot be read: the backup (and so the write) is refused.
-        QFile::setPermissions(QDir(root).filePath(QStringLiteral("f.bin")), QFileDevice::WriteOwner);
-        if (!QFile(QDir(root).filePath(QStringLiteral("f.bin"))).open(QIODevice::ReadOnly)) { // not root
-            auto r = backupRemoteFile(c, QStringLiteral("/f.bin"), backups);
-            QVERIFY(!r.ok());
-            QVERIFY(r.error().message.contains(QStringLiteral("not changed")));
-        }
-#endif
+        COMPARE_VALUE(backupRemoteFile(c, QStringLiteral("/f.bin"), backups), QDir(backups).filePath(QStringLiteral("f.bin")));
+        COMPARE_VALUE(backupRemoteFile(c, QStringLiteral("/f.bin"), backups), QDir(backups).filePath(QStringLiteral("f.bin.2")));
+        COMPARE_VALUE(backupRemoteFile(c, QStringLiteral("/none.bin"), backups), QString());
+        // Exists (SIZE and the listing show it) but cannot be read: the backup,
+        // and so the write that would follow it, is refused.
+        fo.unreadablePaths = {QStringLiteral("/f.bin")};
+        fake::FakeFtpServer locked(fo);
+        FtpClient c2(quick());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), locked.port()).ok());
+        auto r = backupRemoteFile(c2, QStringLiteral("/f.bin"), backups);
+        QVERIFY(!r.ok());
+        QVERIFY2(r.error().message.contains(QStringLiteral("not changed")), qPrintable(r.error().message));
+        QVERIFY(locked.sawCommand(QStringLiteral("RETR /f.bin")));
+        // Nothing half-made is left beside the two real backups.
+        QCOMPARE(QDir(backups).entryList(QDir::Files, QDir::Name), (QStringList{QStringLiteral("f.bin"), QStringLiteral("f.bin.2")}));
     }
 
     // ---- Y2JB review fixes: never truncate the live database, restore on failure -------------
     void y2jbDropMidUploadKeepsTheLiveDatabase()
     {
         const Console k = makeConsole(fresh(QStringLiteral("y2-drop")));
+        QVERIFY(k.ok);
         fake::FakeFtpServer::Options fo;
         fo.root = k.root;
         fo.dropAfterBytes = 2048;
@@ -1437,6 +1485,7 @@ private slots:
         QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
         auto r = autoBlockOverFtp(c, Y2jbRegion::USA, fresh(QStringLiteral("y2-drop-bak")));
         QVERIFY(r.ok());
+        QCOMPARE(int(r->files.size()), 4);
         QCOMPARE(r->files[3].name, QStringLiteral("app.db"));
         QCOMPARE(r->files[3].status, QStringLiteral("!"));
         QVERIFY2(r->files[3].detail.contains(QStringLiteral("still in place")), qPrintable(r->files[3].detail));
@@ -1444,7 +1493,6 @@ private slots:
         QCOMPARE(r->errors.size(), 1);
         // The live database was never truncated, and no temporary file is left.
         QCOMPARE(readAll(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db"))), k.appDb);
-        QVERIFY(!srv.sawCommand(QStringLiteral("STOR /system_data/priv/mms/app.db\r")));
         for (const QString& cmd : srv.commands())
             QVERIFY2(cmd != QStringLiteral("STOR /system_data/priv/mms/app.db"), "STOR over the live database");
         QVERIFY(!QFileInfo::exists(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db.uploading"))));
@@ -1458,6 +1506,7 @@ private slots:
     void y2jbBadReadBackIsRolledBack()
     {
         const Console k = makeConsole(fresh(QStringLiteral("y2-corrupt")));
+        QVERIFY(k.ok);
         fake::FakeFtpServer::Options fo;
         fo.root = k.root;
         fo.corruptStorPath = QStringLiteral("/system_data/priv/mms/app.db.uploading"); // 226, but half the file
@@ -1467,6 +1516,7 @@ private slots:
         const QString backups = fresh(QStringLiteral("y2-corrupt-bak"));
         auto r = autoBlockOverFtp(c, Y2jbRegion::USA, backups);
         QVERIFY(r.ok());
+        QCOMPARE(int(r->files.size()), 4);
         // The short upload is caught before the swap: the live database is never replaced.
         QCOMPARE(r->files[3].status, QStringLiteral("!"));
         QVERIFY2(r->files[3].detail.contains(QStringLiteral("the original is still in place")), qPrintable(r->files[3].detail));
@@ -1480,6 +1530,7 @@ private slots:
     void y2jbIncompleteDownloadIsNeverUsed()
     {
         const Console k = makeConsole(fresh(QStringLiteral("y2-short")));
+        QVERIFY(k.ok);
         fake::FakeFtpServer::Options fo;
         fo.root = k.root;
         fo.shortRetrPath = QStringLiteral("/system_data/priv/mms/app.db");
@@ -1489,6 +1540,7 @@ private slots:
         const QString backups = fresh(QStringLiteral("y2-short-bak"));
         auto r = autoBlockOverFtp(c, Y2jbRegion::USA, backups);
         QVERIFY(r.ok());
+        QCOMPARE(int(r->files.size()), 4);
         QCOMPARE(r->files[3].status, QStringLiteral("!"));
         QVERIFY(r->files[3].detail.contains(QStringLiteral("incomplete")));
         QVERIFY(r->files[3].backup.isEmpty());
@@ -1504,7 +1556,7 @@ private slots:
     {
         const QString dir = fresh(QStringLiteral("integrity"));
         const QString good = QDir(dir).filePath(QStringLiteral("good.db"));
-        makeAppDb(good, QStringLiteral("PPSA01650"), true);
+        QVERIFY(makeAppDb(good, QStringLiteral("PPSA01650"), true));
         QVERIFY(checkSqliteIntegrity(good).ok);
         // A database whose index no longer matches its table.
         const QString bad = QDir(dir).filePath(QStringLiteral("bad.db"));
@@ -1639,7 +1691,7 @@ private slots:
         QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
         auto text = loadMountConfig(c, MountTool::ShadowMountPlus);
         QVERIFY2(text.ok(), text.ok() ? "" : qPrintable(text.error().toLogString()));
-        QCOMPARE(text.value(), QStringLiteral("debug=1\nscanpath=/mnt/usb0\n"));
+        COMPARE_VALUE(text, QStringLiteral("debug=1\nscanpath=/mnt/usb0\n"));
         QCOMPARE(readAll(cfg), QByteArray("debug=1\nscanpath=/mnt/usb0\n"));
         QVERIFY(!QFileInfo::exists(cfg + QStringLiteral(".replacing.bak")));
         // And the push that follows sees the file it expects.
@@ -1686,6 +1738,7 @@ private slots:
         ProgressReporter progress;
 
         auto pj = mod.jobs.create(jobkinds::kPayloadSend, {{QStringLiteral("file"), elf}, {QStringLiteral("target"), QStringLiteral("shadowmount")}});
+        QVERIFY(pj.ok());
         QVERIFY(pj.value()->validate(s).ok());
         JobContext ctx = context(progress, s);
         auto po = pj.value()->run(ctx);
@@ -1694,12 +1747,14 @@ private slots:
         QVERIFY(QTest::qWaitFor([&] { return sink.received().size() == 1; }, 15000));
         QCOMPARE(sink.received().front(), readAll(elf));
         auto badTarget = mod.jobs.create(jobkinds::kPayloadSend, {{QStringLiteral("file"), elf}, {QStringLiteral("target"), QStringLiteral("x")}});
+        QVERIFY(badTarget.ok());
         QVERIFY(!badTarget.value()->validate(s).ok());
 
         const QByteArray body = "SUCCESS: PKG installation started from file: shadowmountplus.elf";
         const QByteArray ok = "HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\n\r\n" + body;
         fake::FakeHttpUpload http(ok);
         auto dj = mod.jobs.create(jobkinds::kDpiInstall, {{QStringLiteral("package"), elf}, {QStringLiteral("port"), http.port()}});
+        QVERIFY(dj.ok());
         QVERIFY(dj.value()->validate(s).ok());
         auto dout = dj.value()->run(ctx);
         QVERIFY2(dout.ok(), dout.ok() ? "" : qPrintable(dout.error().toLogString()));
@@ -1707,6 +1762,7 @@ private slots:
         // "No data received" is a failure; the installer's temporary folder is cleared after it.
         fake::FakeHttpUpload empty("HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\nNo data received");
         auto dj2 = mod.jobs.create(jobkinds::kDpiInstall, {{QStringLiteral("package"), elf}, {QStringLiteral("port"), empty.port()}});
+        QVERIFY(dj2.ok());
         auto dout2 = dj2.value()->run(ctx);
         QVERIFY(!dout2.ok());
         QVERIFY2(dout2.error().message.contains(QStringLiteral("no package data")), qPrintable(dout2.error().message));
@@ -1719,6 +1775,7 @@ private slots:
             const QString big = m_tmp.filePath(QStringLiteral("big.pkg"));
             QVERIFY(fwtest::writeRandomFile(big, 48 * 1024 * 1024, 5));
             auto dj3 = mod.jobs.create(jobkinds::kDpiInstall, {{QStringLiteral("package"), big}, {QStringLiteral("port"), slow.port()}});
+            QVERIFY(dj3.ok());
             CancellationSource cs;
             ProgressReporter p3;
             JobContext ctx3 = context(p3, s);
@@ -1738,16 +1795,20 @@ private slots:
                                 {{keys::kConsoleIp, QStringLiteral("127.0.0.1")}, {keys::kFtpPort, ftp.port()}, {keys::kKlogPort, klog.port()}},
                                 {});
         auto sj = mod.jobs.create(jobkinds::kShadowMountStop, {});
+        QVERIFY(sj.ok());
         JobContext ctx2 = context(progress, s2);
         auto so = sj.value()->run(ctx2);
         QVERIFY(so.ok());
         QCOMPARE(so->verification, Verification::Passed);
 
         auto ab = mod.jobs.create(jobkinds::kY2jbAutoBlock, {{QStringLiteral("region"), QStringLiteral("USA")}});
-        QVERIFY(ab.value()->validate(s2).error().message.contains(QStringLiteral("Settings menu"))); // needs confirmed=true
+        QVERIFY(ab.ok());
+        const auto unconfirmed = ab.value()->validate(s2); // needs confirmed=true
+        QVERIFY(!unconfirmed.ok() && unconfirmed.error().message.contains(QStringLiteral("Settings menu")));
         auto ab2 = mod.jobs.create(jobkinds::kY2jbAutoBlock, {{QStringLiteral("region"), QStringLiteral("USA")},
                                                               {QStringLiteral("confirmed"), true},
                                                               {QStringLiteral("backupDir"), fresh(QStringLiteral("abk"))}});
+        QVERIFY(ab2.ok());
         QVERIFY(ab2.value()->validate(s2).ok());
         auto abo = ab2.value()->run(ctx2);
         QVERIFY(abo.ok());
