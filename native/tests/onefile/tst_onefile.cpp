@@ -17,6 +17,7 @@
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -188,11 +189,27 @@ class TstOnefile : public QObject {
         return r.exitCode == 0;
     }
 
-    // The single complete runtime folder under `root` (fails the test otherwise).
+    // The single complete runtime folder under `root`, or an empty string
+    // when there is none or more than one (the caller asserts on that).
     static QString onlyRuntime(const QString& root)
     {
         const QStringList l = folders(root);
         return l.size() == 1 ? root + QLatin1Char('/') + l.first() : QString();
+    }
+
+    // cmd.exe-style start without redirection: the launcher runs inside a
+    // console of its own and what that console shows comes back as `out`.
+    Run runInConsole(const QStringList& args)
+    {
+        QProcess p;
+        p.setProgram(QStringLiteral(FW_ONEFILE_CONSOLE_PATH));
+        p.setArguments(QStringList{QDir::toNativeSeparators(m_onefile)} + args);
+        p.setProcessEnvironment(envFor(fresh()));
+        p.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* a) { a->flags |= CREATE_NO_WINDOW; });
+        p.start();
+        if (!p.waitForStarted(30000))
+            return Run{-2, {}, p.errorString()};
+        return finish(p);
     }
 
 private slots:
@@ -484,21 +501,31 @@ private slots:
         const QString v09 = m_tmp.filePath(QStringLiteral("dist-0.9.0-inuse/")) + kEntry;
         QVERIFY(packTo(v09, QStringLiteral("0.9.0")));
         const Dirs d = fresh();
+        // The old program stays alive until this file exists, however long the
+        // new launcher takes to unpack and to look at the old runtime.
+        const QString release = m_tmp.filePath(QStringLiteral("release-0.9.0-inuse"));
         QProcess running;
-        setup(running, v09, {QStringLiteral("--sleep=4000")}, envFor(d), {}, QString());
+        setup(running, v09, {QStringLiteral("--wait-file=") + QDir::toNativeSeparators(release)}, envFor(d), {}, QString());
+        const auto letGo = qScopeGuard([&] {
+            writeFile(release, "go");
+            if (running.state() != QProcess::NotRunning && !running.waitForFinished(60000))
+                running.kill();
+        });
         running.start();
-        QVERIFY(running.waitForStarted());
+        QVERIFY(running.waitForStarted(30000));
         QByteArray early; // the old program is running once it has printed everything
-        QTRY_VERIFY_WITH_TIMEOUT((early += running.readAllStandardOutput()).contains("\nend\n"), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT((early += running.readAllStandardOutput()).contains("\nend\n"), 120000);
 
         const Run r = run(m_onefile, {}, envFor(d));
         QVERIFY2(r.exitCode == 0, qPrintable(r.describe()));
         QVERIFY2(r.err.contains(QLatin1String("kept old runtime in use 0.9.0-")), qPrintable(r.err));
         QCOMPARE(folders(d.runtime()).size(), 2);
 
+        QVERIFY(writeFile(release, "go"));
         const Run old = finish(running);
-        QCOMPARE(old.exitCode, 0);
+        QVERIFY2(old.exitCode == 0, qPrintable(old.describe()));
         const Run again = run(m_onefile, {}, envFor(d));
+        QVERIFY2(again.exitCode == 0, qPrintable(again.describe()));
         QVERIFY2(again.err.contains(QLatin1String("removed old runtime 0.9.0-")), qPrintable(again.err));
         QCOMPARE(folders(d.runtime()).size(), 1);
     }
@@ -538,19 +565,6 @@ private slots:
 
     // cmd.exe-style start without redirection: output with arguments reaches
     // the console; a plain start leaves the console alone.
-    Run runInConsole(const QStringList& args)
-    {
-        QProcess p;
-        p.setProgram(QStringLiteral(FW_ONEFILE_CONSOLE_PATH));
-        p.setArguments(QStringList{QDir::toNativeSeparators(m_onefile)} + args);
-        p.setProcessEnvironment(envFor(fresh()));
-        p.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* a) { a->flags |= CREATE_NO_WINDOW; });
-        p.start();
-        if (!p.waitForStarted())
-            return Run{-2, {}, p.errorString()};
-        return finish(p);
-    }
-
     void consoleWithoutRedirectionShowsOutput()
     {
         const Run r = runInConsole({QStringLiteral("--hello"), QStringLiteral("--exit=5")});

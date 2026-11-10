@@ -3,6 +3,8 @@
 
 #include "Ufs2TestUtil.h"
 
+#include "support/SparseFile.h"
+
 #include <QTemporaryDir>
 
 using namespace ufs2test;
@@ -10,7 +12,16 @@ using namespace ufs2test;
 class TestUfs2Format : public QObject {
     Q_OBJECT
 
+private:
+    QTemporaryDir m_appData;
+
 private slots:
+    void initTestCase()
+    {
+        QVERIFY(m_appData.isValid());
+        fwtest::isolateAppData(m_appData);
+    }
+
     void dotNetRandomMatchesDotNet()
     {
         // Printed by .NET 8: new Random(seed).Next(1, int.MaxValue), six times.
@@ -67,6 +78,7 @@ private slots:
         // UFS2Tool printed "Auto-sized to: 11,010,048 bytes" for eboot.bin
         // (200,000 bytes) + sce_sys/param.json (24 bytes).
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         QVERIFY(mkfile(tmp.filePath("src/eboot.bin"), 200000, 1));
         QVERIFY(mktext(tmp.filePath("src/sce_sys/param.json"), "{\"titleId\":\"PPSA00000\"}\n"));
         CancellationToken token;
@@ -74,10 +86,18 @@ private slots:
         QVERIFY(tree.ok());
         QCOMPARE(ufs2toolAutoSize(tree.value(), FormatParams{}), qint64(11010048));
         // ...and 525,336,576 bytes for 30 files of 1..30 MB (the multi-group case).
+        // Only the sizes count, so the files are sparse where the file system
+        // can do that: 465 MB of sizes, next to nothing on disk.
         QTemporaryDir tmp2;
+        QVERIFY(tmp2.isValid());
+        QVERIFY(QDir().mkpath(tmp2.filePath("src")));
         for (int i = 1; i <= 30; ++i) {
-            QFile f(tmp2.filePath(QStringLiteral("src/f%1.bin").arg(i)));
-            QVERIFY(QDir().mkpath(tmp2.filePath("src")) && f.open(QIODevice::WriteOnly) && f.resize(qint64(i) * 1000000));
+            const QString path = tmp2.filePath(QStringLiteral("src/f%1.bin").arg(i));
+            const qint64 size = qint64(i) * 1000000;
+            if (fwtest::makeSparseFile(path, size) < 0) {
+                QFile f(path);
+                QVERIFY(f.open(QIODevice::WriteOnly) && f.resize(size));
+            }
         }
         auto tree2 = scanLocalFolder(tmp2.filePath("src"), token);
         QVERIFY(tree2.ok());
@@ -90,7 +110,7 @@ private slots:
         QVERIFY(validateParams(FormatParams{32768, 32768, 0, 131072}).ok());
         QVERIFY(validateParams(FormatParams{65536, 8192, 99, 524288}).ok());
         // The legacy UI offered 128 KiB blocks; UFS2Tool rejects them.
-        QCOMPARE(validateParams(FormatParams{131072, 65536, 0, 262144}).error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(validateParams(FormatParams{131072, 65536, 0, 262144}), ErrorCode::InvalidArgument);
         QVERIFY(!validateParams(FormatParams{32768, 65536, 0, 262144}).ok()); // fragment > block
         QVERIFY(!validateParams(FormatParams{65536, 4096, 0, 262144}).ok());  // 16 fragments per block
         QVERIFY(!validateParams(FormatParams{65536, 65536, 100, 262144}).ok());

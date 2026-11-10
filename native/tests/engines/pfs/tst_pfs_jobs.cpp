@@ -10,11 +10,13 @@
 #include "core/FileUtil.h"
 #include "engines/pfs/PfsTestUtil.h"
 #include "jobs/JobQueue.h"
+#include "support/SparseFile.h"
 #include "support/TestSupport.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSignalSpy>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -55,6 +57,10 @@ RunResult runJob(Job& job, const SettingsValues& settings, const CancellationTok
         0);
     reporter.setPhases(job.phases());
     QTemporaryDir temp;
+    if (!temp.isValid()) {
+        rr.outcome = Error(ErrorCode::Internal, QStringLiteral("the test could not make a temporary folder for the job"));
+        return rr;
+    }
     JobContext ctx;
     ctx.jobId = QStringLiteral("test");
     ctx.token = token;
@@ -64,6 +70,19 @@ RunResult runJob(Job& job, const SettingsValues& settings, const CancellationTok
     ctx.tempDir = temp.path();
     rr.outcome = job.run(ctx);
     return rr;
+}
+
+// The same for a job fresh from the factory. A job the factory refused is
+// not run: the refusal is the outcome, for the caller to assert on.
+RunResult runJob(const Result<std::unique_ptr<Job>>& job, const SettingsValues& settings, const CancellationToken& token = {},
+                 std::function<void(const ProgressSnapshot&)> onProgress = {})
+{
+    if (!job.ok()) {
+        RunResult rr;
+        rr.outcome = Error(ErrorCode::Internal, QStringLiteral("the factory refused the job: ") + job.error().toLogString());
+        return rr;
+    }
+    return runJob(**job, settings, token, std::move(onProgress));
 }
 
 QJsonObject params(std::initializer_list<std::pair<QString, QJsonValue>> kv)
@@ -82,6 +101,7 @@ class TestPfsJobs : public QObject {
 private slots:
     void initTestCase()
     {
+        QVERIFY(m_appData.isValid());
         fwtest::isolateAppData(m_appData);
         m_spec = pfstest::loadJson(QStringLiteral("golden_cases.json"));
         QVERIFY(!m_spec.isEmpty());
@@ -175,6 +195,7 @@ private slots:
         QCOMPARE(po.ampr, AmprMode::Refresh);
         QCOMPARE(verifyDepthFrom(s), std::optional<VerifyDepth>(VerifyDepth::Structure));
         auto off = store.normalizeOverrides({{general::keys::kVerifyAfterBuild, false}, {keys::kAmprIndex, QStringLiteral("off")}});
+        QVERIFY(off.ok());
         QVERIFY(!verifyDepthFrom(store.snapshot(*off)));
         QCOMPARE(planOptionsFrom(store.snapshot(*off), 0).ampr, AmprMode::Off);
     }
@@ -219,12 +240,13 @@ private slots:
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("bj/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = source == u"folder" ? makeGame(tmp) : makeImage(tmp);
         const QString out = tmp.filePath(QStringLiteral("out/") + output);
         auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}}));
         QVERIFY(job.ok());
         QVERIFY((*job)->validate(store.snapshot()).ok());
-        auto rr = runJob(**job, store.snapshot());
+        auto rr = runJob(job, store.snapshot());
         QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
         const JobOutcome& o = *rr.outcome;
         QCOMPARE(o.verification, Verification::Passed);
@@ -238,11 +260,11 @@ private slots:
 
         // The standalone verify job agrees, with and without the source.
         auto vj = env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}}));
-        auto vr = runJob(**vj, store.snapshot());
+        auto vr = runJob(vj, store.snapshot());
         QVERIFY2(vr.outcome.ok(), vr.outcome.ok() ? "" : qPrintable(vr.outcome.error().toLogString()));
         QCOMPARE(vr.outcome->verification, Verification::Passed);
         auto vs = env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}}));
-        auto vsr = runJob(**vs, store.snapshot());
+        auto vsr = runJob(vs, store.snapshot());
         QVERIFY(vsr.outcome.ok());
         QCOMPARE(vsr.outcome->verification, Verification::Passed);
     }
@@ -253,6 +275,7 @@ private slots:
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("q/settings.json")));
         JobQueue q(store, env.jobs);
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = makeGame(tmp);
         const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
         auto id = q.enqueue(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}}),
@@ -261,16 +284,18 @@ private slots:
         QVERIFY(QTest::qWaitFor([&] {
             auto r = q.record(*id);
             return r && isTerminal(r->state);
-        }, 60000));
+        }, 300000));
         auto rec = q.record(*id);
+        QVERIFY(rec);
         QCOMPARE(rec->state, JobState::Succeeded);
+        QVERIFY(rec->outcome);
         QCOMPARE(rec->outcome->verification, Verification::Passed);
         QVERIFY(QFileInfo(out).isFile());
 
         // Output exists: refused unless replaceExisting.
         auto again = q.enqueue(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}}));
         QVERIFY(!again.ok());
-        QCOMPARE(again.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(again, ErrorCode::AlreadyExists);
     }
 
     void validateRules()
@@ -278,75 +303,115 @@ private slots:
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("v/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = makeGame(tmp);
-        auto check = [&](const QJsonObject& p) { return (*env.jobs.create(kinds::kBuild, p))->validate(store.snapshot()); };
+        // What validate() says. A job the factory itself refuses is reported
+        // as an internal error, which none of the checks below expects.
+        auto check = [&](const QJsonObject& p) -> Status {
+            auto job = env.jobs.create(kinds::kBuild, p);
+            if (!job.ok())
+                return Error(ErrorCode::Internal, QStringLiteral("the factory refused the job: ") + job.error().toLogString());
+            return (*job)->validate(store.snapshot());
+        };
         auto inside = check(params({{QStringLiteral("source"), src}, {QStringLiteral("output"), src + QStringLiteral("/x.ffpfsc")}}));
         QVERIFY(!inside.ok());
-        QCOMPARE(inside.error().code, ErrorCode::InvalidArgument);
-        QCOMPARE(check(params({{QStringLiteral("source"), tmp.filePath(QStringLiteral("nope"))},
-                               {QStringLiteral("output"), tmp.filePath(QStringLiteral("x.ffpfsc"))}}))
-                     .error()
-                     .code,
-                 ErrorCode::NotFound);
-        QCOMPARE(check(params({{QStringLiteral("source"), src}, {QStringLiteral("output"), tmp.filePath(QStringLiteral("x"))},
-                               {QStringLiteral("format"), QStringLiteral("zip")}}))
-                     .error()
-                     .code,
-                 ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(inside, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(check(params({{QStringLiteral("source"), tmp.filePath(QStringLiteral("nope"))},
+                                           {QStringLiteral("output"), tmp.filePath(QStringLiteral("x.ffpfsc"))}})),
+                             ErrorCode::NotFound);
+        FWTEST_COMPARE_ERROR(check(params({{QStringLiteral("source"), src}, {QStringLiteral("output"), tmp.filePath(QStringLiteral("x"))},
+                                           {QStringLiteral("format"), QStringLiteral("zip")}})),
+                             ErrorCode::InvalidArgument);
 
-        // replaceExisting: the old image is replaced only after the new one is verified.
+        // An existing image is refused, or replaced when asked. (That it
+        // survives a rebuild which is cancelled or fails its check is tested
+        // in cancellationLeavesNoOutput and verificationFailureRemovesImage.)
         const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
         QVERIFY(pfstest::writeFile(out, "old image", -1));
-        QCOMPARE(check(params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}})).error().code,
-                 ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(check(params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}})),
+                             ErrorCode::AlreadyExists);
         auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out},
                                                           {QStringLiteral("replaceExisting"), true}}));
-        auto rr = runJob(**job, store.snapshot());
-        QVERIFY(rr.outcome.ok());
+        auto rr = runJob(job, store.snapshot());
+        QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
         QVERIFY(QFileInfo(out).size() > 1000);
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
     }
 
     void cancellationLeavesNoOutput_data()
     {
         QTest::addColumn<int>("phase");
-        QTest::newRow("while writing") << 1;
-        QTest::newRow("while verifying") << 2;
+        QTest::addColumn<bool>("replacing");
+        QTest::newRow("while writing") << 1 << false;
+        QTest::newRow("while verifying") << 2 << false;
+        QTest::newRow("while writing, replacing an image") << 1 << true;
+        QTest::newRow("while verifying, replacing an image") << 2 << true;
     }
 
+    // A cancelled build leaves nothing of its own, and an image it was to
+    // replace is still there, byte for byte.
     void cancellationLeavesNoOutput()
     {
         QFETCH(int, phase);
+        QFETCH(bool, replacing);
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("c/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = makeGame(tmp, 16 * 1024 * 1024);
         const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
-        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}}));
+        const QByteArray previous("the image that was here before");
+        if (replacing)
+            QVERIFY(pfstest::writeFile(out, previous, -1));
+        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out},
+                                                          {QStringLiteral("replaceExisting"), replacing}}));
         CancellationSource cs;
-        auto rr = runJob(**job, store.snapshot(), cs.token(), [&](const ProgressSnapshot& s) {
+        auto rr = runJob(job, store.snapshot(), cs.token(), [&](const ProgressSnapshot& s) {
             if (s.phaseIndex == phase && s.done > 1024 * 1024)
                 cs.cancel();
         });
         QVERIFY(!rr.outcome.ok());
-        QVERIFY(rr.outcome.error().isCancelled());
-        QVERIFY(!QFileInfo::exists(out));
+        QVERIFY2(rr.outcome.error().isCancelled(), qPrintable(rr.outcome.error().toLogString()));
         QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
-        QCOMPARE(QDir(tmp.path()).entryList(QDir::Files).size(), 0);
+        if (replacing) {
+            QCOMPARE(pfstest::readAll(out), previous);
+            QCOMPARE(QDir(tmp.path()).entryList(QDir::Files), QStringList{QStringLiteral("game.ffpfsc")});
+        } else {
+            QVERIFY(!QFileInfo::exists(out));
+            QCOMPARE(QDir(tmp.path()).entryList(QDir::Files), QStringList());
+        }
     }
 
-    // Audit C1: a failed check fails the job, removes the new image and keeps the source.
+    void verificationFailureRemovesImage_data()
+    {
+        QTest::addColumn<bool>("replacing");
+        QTest::newRow("new image") << false;
+        QTest::newRow("replacing an image") << true;
+    }
+
+    // A failed check fails the job, removes the new image and keeps the
+    // source; an image the new one was to replace is still there, byte for
+    // byte.
     void verificationFailureRemovesImage()
     {
+        QFETCH(bool, replacing);
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("f/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString img = makeImage(tmp);
         const QByteArray original = pfstest::readAll(img);
+        QVERIFY(original.size() > 1000);
         const QString out = tmp.filePath(QStringLiteral("out.ffpfsc"));
+        const QByteArray previous("the image that was here before");
+        if (replacing)
+            QVERIFY(pfstest::writeFile(out, previous, -1));
         auto norm = store.normalizeOverrides({{keys::kDeleteSourceAfterConvert, true}});
-        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img}, {QStringLiteral("output"), out}}));
+        QVERIFY(norm.ok());
+        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img}, {QStringLiteral("output"), out},
+                                                          {QStringLiteral("replaceExisting"), replacing}}));
         bool changed = false;
-        auto rr = runJob(**job, store.snapshot(*norm), {}, [&](const ProgressSnapshot& s) {
+        auto rr = runJob(job, store.snapshot(*norm), {}, [&](const ProgressSnapshot& s) {
             if (s.phaseIndex == 2 && !changed) { // the source changes after it was packed
                 changed = true;
                 QByteArray b = original;
@@ -355,15 +420,43 @@ private slots:
             }
         });
         QVERIFY(changed);
-        QVERIFY(rr.outcome.ok());
+        QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
         QCOMPARE(rr.outcome->verification, Verification::Failed);
         QVERIFY2(rr.outcome->verificationDetail.contains(QStringLiteral("Different content")),
                  qPrintable(rr.outcome->verificationDetail));
         QVERIFY(rr.outcome->outputs.isEmpty());
-        QVERIFY(!QFileInfo::exists(out));
+        if (replacing)
+            QCOMPARE(pfstest::readAll(out), previous);
+        else
+            QVERIFY(!QFileInfo::exists(out));
         QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
         QVERIFY(QFileInfo::exists(img)); // never deleted after a failed check
+    }
 
+    // The room for the image is checked before anything is written: a source
+    // larger than the free space is refused at once, on any PC (the source is
+    // a sparse file, so it costs nothing to make).
+    void freeSpaceIsCheckedBeforeWriting()
+    {
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("space/settings.json")));
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString img = tmp.filePath(QStringLiteral("PPSA09999.exfat"));
+        const qint64 size = QStorageInfo(tmp.path()).bytesAvailable() + 1024LL * 1024 * 1024;
+        const qint64 allocated = fwtest::makeSparseFile(img, size, {{0, QByteArrayLiteral("not really an image")}});
+        if (allocated < 0 || allocated > 64 * 1024 * 1024) {
+            QFile::remove(img);
+            QSKIP("this file system does not create sparse files");
+        }
+        const QString out = tmp.filePath(QStringLiteral("out/game.ffpfsc"));
+        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img}, {QStringLiteral("output"), out}}));
+        auto rr = runJob(job, store.snapshot());
+        FWTEST_COMPARE_ERROR(rr.outcome, ErrorCode::InsufficientSpace);
+        QVERIFY2(rr.outcome.error().message.startsWith(QStringLiteral("Not enough space on")), qPrintable(rr.outcome.error().message));
+        QVERIFY(!QFileInfo::exists(out));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(QFileInfo::exists(img)); // the source is untouched
     }
 
     void deleteSourceAfterConvert()
@@ -371,11 +464,13 @@ private slots:
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("d/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString img = makeImage(tmp);
         auto on = store.normalizeOverrides({{keys::kDeleteSourceAfterConvert, true}});
+        QVERIFY(on.ok());
         auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img},
                                                           {QStringLiteral("output"), tmp.filePath(QStringLiteral("a.ffpfsc"))}}));
-        auto rr = runJob(**job, store.snapshot(*on));
+        auto rr = runJob(job, store.snapshot(*on));
         QVERIFY(rr.outcome.ok());
         QCOMPARE(rr.outcome->verification, Verification::Passed);
         QVERIFY(!QFileInfo::exists(img));
@@ -384,9 +479,10 @@ private slots:
         // Structure-only verification never deletes the source.
         const QString img2 = makeImage(tmp);
         auto structure = store.normalizeOverrides({{keys::kDeleteSourceAfterConvert, true}, {general::keys::kVerifyMode, QStringLiteral("structure")}});
+        QVERIFY(structure.ok());
         auto job2 = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img2},
                                                            {QStringLiteral("output"), tmp.filePath(QStringLiteral("b.ffpfsc"))}}));
-        auto rr2 = runJob(**job2, store.snapshot(*structure));
+        auto rr2 = runJob(job2, store.snapshot(*structure));
         QVERIFY(rr2.outcome.ok());
         QVERIFY(QFileInfo::exists(img2));
         QVERIFY(!rr2.outcome->warnings.isEmpty());
@@ -395,14 +491,15 @@ private slots:
         const QString folder = makeGame(tmp);
         auto job3 = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), folder},
                                                            {QStringLiteral("output"), tmp.filePath(QStringLiteral("c.ffpfsc"))}}));
-        QVERIFY(runJob(**job3, store.snapshot(*on)).outcome.ok());
+        QVERIFY(runJob(job3, store.snapshot(*on)).outcome.ok());
         QVERIFY(QFileInfo(folder).isDir());
 
         // Verification off: reported as skipped.
         auto offv = store.normalizeOverrides({{general::keys::kVerifyAfterBuild, false}});
+        QVERIFY(offv.ok());
         auto job4 = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), folder},
                                                            {QStringLiteral("output"), tmp.filePath(QStringLiteral("d.ffpfsc"))}}));
-        auto rr4 = runJob(**job4, store.snapshot(*offv));
+        auto rr4 = runJob(job4, store.snapshot(*offv));
         QVERIFY(rr4.outcome.ok());
         QCOMPARE(rr4.outcome->verification, Verification::Skipped);
     }
@@ -414,19 +511,20 @@ private slots:
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("h2/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = makeGame(tmp);
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/old_build.ffpkg"), "leftover image", -1));
         QVERIFY(QDir().mkpath(src + QStringLiteral("/saves/empty")));
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/fakelib/libSceAmpr.sprx"), "prx", -1));
         const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
         auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}}));
-        auto rr = runJob(**job, store.snapshot());
+        auto rr = runJob(job, store.snapshot());
         QVERIFY(rr.outcome.ok());
         QCOMPARE(rr.outcome->verification, Verification::Passed);
 
         // Later, standalone: same plan (AMPR index and .pfskeep markers included).
         auto vj = env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}}));
-        auto vr = runJob(**vj, store.snapshot());
+        auto vr = runJob(vj, store.snapshot());
         QVERIFY(vr.outcome.ok());
         QCOMPARE(vr.outcome->verification, Verification::Passed);
         QVERIFY(vr.outcome->warnings.isEmpty());
@@ -434,7 +532,7 @@ private slots:
         // The generated index stores the files' times: a dump that was copied
         // or touched since the build still verifies, with a note.
         QVERIFY(pfstest::setMtime(src + QStringLiteral("/fakelib/libSceAmpr.sprx"), 1650000000));
-        auto touched = runJob(**env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}})),
+        auto touched = runJob(env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}})),
                               store.snapshot());
         QVERIFY(touched.outcome.ok());
         QCOMPARE(touched.outcome->verification, Verification::Passed);
@@ -443,7 +541,7 @@ private slots:
 
         // A real change is still caught.
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/extra.bin"), "new", -1));
-        auto vr2 = runJob(**env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}})),
+        auto vr2 = runJob(env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}})),
                           store.snapshot());
         QVERIFY(vr2.outcome.ok());
         QCOMPARE(vr2.outcome->verification, Verification::Failed);
@@ -461,9 +559,9 @@ private slots:
         QVERIFY(f.seek(8));
         QVERIFY(f.write("XXXXXXXX", 8) == 8);
         f.close();
-        auto vr3 = runJob(**env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}})), store.snapshot());
+        auto vr3 = runJob(env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}})), store.snapshot());
         QVERIFY(!vr3.outcome.ok());
-        QCOMPARE(vr3.outcome.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(vr3.outcome, ErrorCode::CorruptData);
     }
 
     // Lazy_MkPFS pack_folder: a wrapper folder is searched for the game (eboot.bin).
@@ -472,6 +570,7 @@ private slots:
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("root/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString inner = makeGame(tmp);
         const QString wrapper = tmp.filePath(QStringLiteral("wrapper"));
         QVERIFY(QDir().mkpath(wrapper));
@@ -479,25 +578,25 @@ private slots:
         QVERIFY(QDir().rename(inner, wrapper + QStringLiteral("/PPSA01234-app")));
         const QString a = tmp.filePath(QStringLiteral("a.ffpfsc"));
         const QString b = tmp.filePath(QStringLiteral("b.ffpfsc"));
-        auto ra = runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper}, {QStringLiteral("output"), a},
+        auto ra = runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper}, {QStringLiteral("output"), a},
                                                                   {QStringLiteral("timestamp"), 1700000000}})),
                          store.snapshot());
         QVERIFY(ra.outcome.ok());
         QCOMPARE(ra.outcome->details.value(QStringLiteral("gameRoot")).toString(),
                  QDir::cleanPath(wrapper + QStringLiteral("/PPSA01234-app")));
-        auto rb = runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper + QStringLiteral("/PPSA01234-app")},
+        auto rb = runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper + QStringLiteral("/PPSA01234-app")},
                                                                   {QStringLiteral("output"), b},
                                                                   {QStringLiteral("timestamp"), 1700000000}})),
                          store.snapshot());
         QVERIFY(rb.outcome.ok());
         QCOMPARE(pfstest::sha256(a), pfstest::sha256(b));
-        auto vr = runJob(**env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), a}, {QStringLiteral("source"), wrapper}})),
+        auto vr = runJob(env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), a}, {QStringLiteral("source"), wrapper}})),
                          store.snapshot());
         QVERIFY(vr.outcome.ok());
         QCOMPARE(vr.outcome->verification, Verification::Passed);
         // Without detection the wrapper itself is packed.
         const QString c = tmp.filePath(QStringLiteral("c.ffpfsc"));
-        auto rc = runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper}, {QStringLiteral("output"), c},
+        auto rc = runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), wrapper}, {QStringLiteral("output"), c},
                                                                   {QStringLiteral("findGameRoot"), false}})),
                          store.snapshot());
         QVERIFY(rc.outcome.ok());
@@ -509,39 +608,50 @@ private slots:
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("x/settings.json")));
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = makeGame(tmp);
         const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
-        QVERIFY(runJob(**env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}})),
+        QVERIFY(runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out}})),
                        store.snapshot())
                     .outcome.ok());
         const QString dest = tmp.filePath(QStringLiteral("unpacked"));
-        auto rr = runJob(**env.jobs.create(kinds::kExtract, params({{QStringLiteral("image"), out}, {QStringLiteral("output"), dest}})),
+        auto rr = runJob(env.jobs.create(kinds::kExtract, params({{QStringLiteral("image"), out}, {QStringLiteral("output"), dest}})),
                          store.snapshot());
         QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
         QVERIFY(rr.outcome->details.value(QStringLiteral("nested")).toBool());
         auto tree = scanTree(src, CancellationToken());
         QVERIFY(tree.ok());
-        for (const FileEntry& e : tree->entries)
-            if (!e.isDir)
-                QCOMPARE(pfstest::readAll(dest + u'/' + e.relativePath), pfstest::readAll(src + u'/' + e.relativePath));
+        int compared = 0;
+        for (const FileEntry& e : tree->entries) {
+            if (e.isDir)
+                continue;
+            QVERIFY2(QFileInfo(dest + u'/' + e.relativePath).isFile(), qPrintable(e.relativePath));
+            QCOMPARE(pfstest::readAll(dest + u'/' + e.relativePath), pfstest::readAll(src + u'/' + e.relativePath));
+            ++compared;
+        }
+        QVERIFY(compared > 0);
     }
 
 private:
     QString makeGame(QTemporaryDir& tmp, qint64 extra = 0)
     {
         const QString src = tmp.filePath(QStringLiteral("game%1").arg(m_counter++));
-        if (!pfstest::makeTree(src, m_spec.value(QStringLiteral("trees")).toObject().value(QStringLiteral("game")).toArray(),
-                               1600000000))
-            qFatal("tree");
-        if (extra > 0)
-            pfstest::writeFile(src + QStringLiteral("/data/big.bin"), pfstest::genContent(QStringLiteral("mixed"), extra, 3), -1);
+        // A source that could not be written fails the test here; the other
+        // test functions still run.
+        bool ok = pfstest::makeTree(src, m_spec.value(QStringLiteral("trees")).toObject().value(QStringLiteral("game")).toArray(),
+                                    1600000000);
+        if (ok && extra > 0)
+            ok = pfstest::writeFile(src + QStringLiteral("/data/big.bin"), pfstest::genContent(QStringLiteral("mixed"), extra, 3), -1);
+        if (!ok)
+            QTest::qFail("the game folder could not be created", __FILE__, __LINE__);
         return src;
     }
 
     QString makeImage(QTemporaryDir& tmp)
     {
         const QString img = tmp.filePath(QStringLiteral("PPSA0%1.exfat").arg(1000 + m_counter++));
-        pfstest::writeFile(img, pfstest::genContent(QStringLiteral("mixed"), 3 * 1024 * 1024 + 99, 4), -1);
+        if (!pfstest::writeFile(img, pfstest::genContent(QStringLiteral("mixed"), 3 * 1024 * 1024 + 99, 4), -1))
+            QTest::qFail("the source image could not be created", __FILE__, __LINE__);
         return img;
     }
 

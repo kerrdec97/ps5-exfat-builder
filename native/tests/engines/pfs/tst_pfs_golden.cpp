@@ -1,10 +1,12 @@
 // Golden compatibility: the native builder must produce byte-identical images
-// to the vendored Lazy_MkPFS for the same input and options.
+// to Lazy_MkPFS for the same input and options.
 //
-// The references (SHA-256 + size) come from native/tests/data/pfs/make_golden.py,
-// which runs vendor/lazy_mkpfs on trees generated from golden_cases.json with a
-// pinned timestamp. This test regenerates the same trees, builds them natively
-// and compares hashes.
+// The references (SHA-256 + size, native/tests/data/pfs/golden.json) were made
+// by native/tests/data/pfs/make_golden.py, which runs Lazy_MkPFS on trees
+// generated from golden_cases.json with a pinned timestamp. Lazy_MkPFS is not
+// part of this repository, so the references are a frozen record (the commit
+// is in golden.json; the script says how to run it against a checkout). This
+// test regenerates the same trees, builds them natively and compares hashes.
 
 #include "engines/pfs/PfsBuilder.h"
 #include "engines/pfs/PfsSource.h"
@@ -26,11 +28,12 @@ class TestPfsGolden : public QObject {
 private slots:
     void initTestCase()
     {
+        QVERIFY(m_appData.isValid());
         fwtest::isolateAppData(m_appData);
         m_spec = pfstest::loadJson(QStringLiteral("golden_cases.json"));
         m_golden = pfstest::loadJson(QStringLiteral("golden.json"));
         QVERIFY2(!m_spec.isEmpty(), "golden_cases.json missing");
-        QVERIFY2(!m_golden.isEmpty(), "golden.json missing (run make_golden.py --write)");
+        QVERIFY2(!m_golden.isEmpty(), "golden.json missing (it is made by make_golden.py --write, which needs Lazy_MkPFS)");
         qInfo("zlib %s; references generated with Python %s, zlib %s", qPrintable(zlibVersionString()),
               qPrintable(m_golden.value(QStringLiteral("python")).toString()),
               qPrintable(m_golden.value(QStringLiteral("zlib")).toString()));
@@ -41,10 +44,13 @@ private slots:
         QTest::addColumn<QJsonObject>("testCase");
         QTest::addColumn<int>("threads");
         const QJsonArray cases = m_spec.value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        int index = 0;
         for (const auto& v : cases) {
             const QJsonObject c = v.toObject();
             const QByteArray name = c.value(QStringLiteral("name")).toString().toLatin1();
-            QTest::newRow(name.constData()) << c << 3;
+            // One to four threads in turn: the bytes must not depend on the count.
+            QTest::newRow(name.constData()) << c << 1 + index++ % 4;
         }
     }
 

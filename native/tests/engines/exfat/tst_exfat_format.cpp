@@ -115,7 +115,7 @@ private slots:
             bad[offset] = char(bad[offset] ^ 0x5A);
             auto e = parseBootRegion(bad);
             QVERIFY2(!e.ok(), qPrintable(QString::number(offset)));
-            QCOMPARE(e.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(e, ErrorCode::CorruptData);
             QVERIFY(e.error().message.startsWith(QStringLiteral("The image is damaged")));
         }
     }
@@ -212,34 +212,41 @@ private slots:
         QVERIFY(plan->clusterChoice.contains(QStringLiteral("ShadowMount+")));
     }
 
-    void legacySizeRuleMatchesThePowerShellScript()
+    // The legacy script's rule (Get-OptimalImageSizeBytesFromStats, as it is
+    // recorded in native/docs/LEGACY_INVENTORY.md): data rounded up to clusters,
+    // 4 bytes of FAT and one bitmap bit per data cluster, 512 bytes per file and
+    // folder, 64 MiB; a spare of 1 % kept between 1 GiB and 8 GiB; at least the
+    // raw bytes plus 1 GiB; rounded up to 1 MiB. The sizes below were worked
+    // out by hand from that rule (the script itself is not in this repository),
+    // so they do not repeat the code's arithmetic.
+    void legacySizeRuleGivesTheRecordedSizes()
     {
-        // Get-OptimalImageSizeBytesFromStats on a hand-made tree: 3 files, 1 folder.
-        SourceTree t;
-        t.nodes.resize(5);
-        t.nodes[0].isDir = true;
-        t.nodes[1].isDir = true;
-        t.nodes[2].size = 100;
-        t.nodes[3].size = 65536;
-        t.nodes[4].size = 10 * kGiB + 1;
-        t.fileCount = 3;
-        t.dirCount = 1;
-        t.totalBytes = 100 + 65536 + 10 * kGiB + 1;
-        const qint64 c = 65536;
-        const qint64 data = c + c + (10 * kGiB / c + 1) * c;
-        const qint64 clusters = data / c;
-        const qint64 base = data + clusters * 4 + (clusters + 7) / 8 + 4 * 512 + 64 * kMiB;
-        const qint64 spare = std::clamp<qint64>((base + 99) / 100, kGiB, 8 * kGiB);
-        const qint64 expected = alignUp(std::max(base + spare, t.totalBytes + kGiB), kMiB);
-        QCOMPARE(legacyImageBytes(t, 65536), expected);
-        // Small trees get the 1 GiB minimum slack.
-        SourceTree small;
-        small.nodes.resize(2);
-        small.nodes[0].isDir = true;
-        small.nodes[1].size = 10;
-        small.fileCount = 1;
-        small.totalBytes = 10;
-        QCOMPARE(legacyImageBytes(small, 32768), alignUp(32768 + 4 + 1 + 512 + 64 * kMiB + kGiB, kMiB));
+        const auto tree = [](const QList<qint64>& fileSizes, int folders) {
+            SourceTree t;
+            t.nodes.resize(size_t(1 + folders + fileSizes.size()));
+            for (int i = 0; i <= folders; ++i)
+                t.nodes[size_t(i)].isDir = true; // the root, then the folders
+            for (qsizetype i = 0; i < fileSizes.size(); ++i) {
+                t.nodes[size_t(1 + folders + i)].size = fileSizes[i];
+                t.totalBytes += fileSizes[i];
+            }
+            t.fileCount = fileSizes.size();
+            t.dirCount = folders;
+            return t;
+        };
+        // 100 bytes, 64 KiB and 10 GiB + 1 in one folder, 64 KiB clusters:
+        // data 10,737,614,848 (163,843 clusters), FAT 655,372, bitmap 20,481,
+        // entries 2,048, base 10,805,401,613; 1 % is under 1 GiB, so the spare
+        // is 1 GiB: 11,879,143,437, rounded up to 11,329 MiB.
+        QCOMPARE(legacyImageBytes(tree({100, 65536, 10 * kGiB + 1}, 1), 65536), qint64(11879317504LL));
+        // One 10-byte file, 32 KiB clusters: base 67,142,149 plus the 1 GiB
+        // minimum spare, rounded up to 1,089 MiB.
+        QCOMPARE(legacyImageBytes(tree({10}, 0), 32768), qint64(1141899264LL));
+        // Five files of 200 GiB and one of 123,456,789 bytes in two folders:
+        // base 1,073,999,998,556; 1 % is over 8 GiB, so the spare is 8 GiB:
+        // 1,082,589,933,148, rounded up to 1,032,439 MiB.
+        QCOMPARE(legacyImageBytes(tree({200 * kGiB, 200 * kGiB, 200 * kGiB, 200 * kGiB, 200 * kGiB, 123456789}, 2), 65536),
+                 qint64(1082590756864LL));
     }
 
     void readsAVolumeFormattedByMkfsExfat()

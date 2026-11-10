@@ -62,14 +62,25 @@ bool processAlive(qint64 pid)
 #endif
 }
 
-class EnvVar {
-public:
-    EnvVar(const char* name, const QByteArray& value) : m_name(name) { qputenv(name, value); }
-    ~EnvVar() { qunsetenv(m_name); }
+// The request of a job, or an empty one (which the job refuses) with a
+// warning: a parameter object that is not accepted must not end the program.
+template <typename Request>
+Request requestFrom(const QJsonObject& parameters)
+{
+    auto r = Request::fromJson(parameters);
+    if (r.ok())
+        return r.value();
+    qWarning("The job parameters were not accepted: %s", qPrintable(r.error().toLogString()));
+    return Request{};
+}
 
-private:
-    const char* m_name;
-};
+QStringList argvOf(const QJsonObject& invocation)
+{
+    QStringList out;
+    for (const auto& a : invocation.value(QStringLiteral("argv")).toArray())
+        out << a.toString();
+    return out;
+}
 
 // Copies a prepared tree into the destination (stands in for an image reader).
 class FolderStager : public SourceStager {
@@ -201,7 +212,25 @@ class TstFpkgBuild : public QObject {
         p.insert(QStringLiteral("source"), source);
         if (!output.isEmpty())
             p.insert(QStringLiteral("output"), output);
-        return FpkgBuildJob(BuildRequest::fromJson(p).value());
+        return FpkgBuildJob(requestFrom<BuildRequest>(p));
+    }
+
+    // The ASCII links of this process that still exist, in every folder the
+    // engine may put them (the redirected temporary folder and %ProgramData%,
+    // and the drive's root as the last resort).
+    QStringList aliasLinksLeft() const
+    {
+        const QString mine = QStringLiteral("a%1-").arg(QCoreApplication::applicationPid(), 0, 16);
+        QStringList left;
+        for (const QString& base : {QDir::tempPath(),
+                                    QDir(qEnvironmentVariable("ProgramData")).filePath(QStringLiteral("fw-fpkg")),
+                                    QDir(m_root.path()).rootPath()}) {
+            const QDir aliases(QDir(base).filePath(AsciiAliases::aliasFolderName()));
+            for (const QString& n : aliases.entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System | QDir::Hidden))
+                if (n.startsWith(mine))
+                    left << aliases.filePath(n);
+        }
+        return left;
     }
 
 private slots:
@@ -209,6 +238,7 @@ private slots:
     {
         QVERIFY(m_root.isValid());
         fwtest::isolateAppData(m_root);
+        QVERIFY(confineEngineTo(m_root.path()));
         m_tools = dir(QStringLiteral("tools"));
         const QString exe = QDir(m_tools).filePath(QStringLiteral("toolchain/prospero-pub-cmd.exe"));
         QDir().mkpath(QDir(m_tools).filePath(QStringLiteral("toolchain/ext")));
@@ -216,7 +246,7 @@ private slots:
         QVERIFY(QFile::copy(QStringLiteral(FW_FAKE_PUBCMD), QDir(m_tools).filePath(QStringLiteral("prospero-dds2png.exe"))));
         QVERIFY(put(m_tools, QStringLiteral("toolchain/libScePubTools.dll"), ""));
         m_fakeLog = m_root.filePath(QStringLiteral("fake.log"));
-        qputenv("FAKE_PUBCMD_LOG", m_fakeLog.toUtf8());
+        setEnv("FAKE_PUBCMD_LOG", m_fakeLog);
         m_sink = std::make_shared<CallbackSink>([this](const LogRecord& r) {
             std::lock_guard lock(m_logMutex);
             m_logLines << r.message;
@@ -237,7 +267,7 @@ private slots:
     {
         const QString game = dir(QStringLiteral("full/PPSA01234-app"));
         const QString out = m_root.filePath(QStringLiteral("full/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         put(game, QStringLiteral("Thumbs.db"), "junk");
         auto job = buildJob(game, out);
         auto rr = run(job);
@@ -272,7 +302,10 @@ private slots:
         QVERIFY(argv.at(4).toString().endsWith(kStem + QStringLiteral(".partial.pkg")));
         const QString temp = inv[0].value(QStringLiteral("TEMP")).toString();
         QCOMPARE(inv[0].value(QStringLiteral("TMP")).toString(), temp);
-        QVERIFY2(QFileInfo(temp).fileName().startsWith(QStringLiteral("sdk-tmp-")), qPrintable(temp));
+        // (A long temporary path is given to the tool in its 8.3 spelling.)
+        const QString tempName = QFileInfo(QDir::fromNativeSeparators(temp)).fileName();
+        QVERIFY2(tempName.startsWith(QStringLiteral("sdk-tmp-")) || tempName.startsWith(QStringLiteral("SDK-TM~"), Qt::CaseInsensitive),
+                 qPrintable(temp));
         QVERIFY(!QFileInfo::exists(temp)); // removed after the run
         QCOMPARE(QDir::cleanPath(inv[0].value(QStringLiteral("cwd")).toString()),
                  QDir::cleanPath(QFileInfo(QDir(m_tools).filePath(QStringLiteral("toolchain"))).canonicalFilePath()));
@@ -295,7 +328,7 @@ private slots:
     {
         const QString game = dir(QStringLiteral("proj/game"));
         const QString out = m_root.filePath(QStringLiteral("proj/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         auto rr = run(job, {{keys::kKeepIntermediate, true}, {keys::kCompressionLevel, QStringLiteral("9")},
                             {keys::kPostVerify, QStringLiteral("toolFormat")}});
@@ -322,6 +355,7 @@ private slots:
         QCOMPARE(project->emptyDirs, QStringList{QStringLiteral("addcont0")});
         QVERIFY(QFileInfo::exists(QDir(out).filePath(kStem + QStringLiteral(".playgo-scenario.json"))));
         const auto inv = invocations();
+        QCOMPARE(inv.size(), 2);
         const QJsonArray argv = inv[0].value(QStringLiteral("argv")).toArray();
         QCOMPARE(argv.at(3).toString(), QStringLiteral("--compression_level"));
         QCOMPARE(argv.at(4).toString(), QStringLiteral("9"));
@@ -357,12 +391,12 @@ private slots:
         EnvVar env("FAKE_PUBCMD_MODE", mode);
         const QString game = dir(QStringLiteral("fail/game"));
         const QString out = m_root.filePath(QStringLiteral("fail/out-") + QString::fromLatin1(mode));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         auto rr = run(job);
         QVERIFY(!rr.result.ok());
         QCOMPARE(int(rr.result.error().code), code);
-        QVERIFY2(rr.result.error().message.contains(needle), qPrintable(rr.result.error().message));
+        QVERIFY2(errorOf(rr.result).message.contains(needle), qPrintable(errorOf(rr.result).message));
         // No package, no partials; the project and the logs are kept for diagnosis.
         for (const QString& f : filesIn(out)) {
             QVERIFY2(!f.endsWith(QStringLiteral(".pkg")) && !f.contains(QStringLiteral(".partial")), qPrintable(f));
@@ -374,17 +408,23 @@ private slots:
     void barVariantsAndMissingKeystoneMessage()
     {
         const QString game = dir(QStringLiteral("bars/game"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         for (const QByteArray& mode : {QByteArray("split"), QByteArray("cr"), QByteArray("nobar")}) {
             EnvVar env("FAKE_PUBCMD_MODE", mode);
             const QString out = m_root.filePath(QStringLiteral("bars/out-") + QString::fromLatin1(mode));
             auto job = buildJob(game, out);
             auto rr = run(job);
             QVERIFY2(rr.result.ok(), mode.constData());
-            bool full = false;
-            for (const auto& s : rr.snapshots)
+            bool full = false, partWay = false;
+            for (const auto& s : rr.snapshots) {
                 full = full || (s.phaseIndex == 4 && s.done == 1000);
-            QCOMPARE(full, mode != "nobar");
+                partWay = partWay || (s.phaseIndex == 4 && s.done > 0 && s.done < 1000);
+            }
+            // Without a bar there is nothing to count: no steps are invented.
+            if (mode == "nobar")
+                QVERIFY2(!partWay, "bar steps were reported for a tool that printed no bar");
+            else
+                QVERIFY2(full, mode.constData());
         }
         // The tool's own keystone error is explained (a .gp5 project without a keystone entry
         // never reaches it, so drive the parser directly).
@@ -396,7 +436,7 @@ private slots:
         EnvVar env("FAKE_PUBCMD_VERIFY", "fail");
         const QString game = dir(QStringLiteral("vfail/game"));
         const QString out = m_root.filePath(QStringLiteral("vfail/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         auto rr = run(job);
         QVERIFY(rr.result.ok());
@@ -412,7 +452,7 @@ private slots:
     {
         const QString game = dir(QStringLiteral("overwrite/game"));
         const QString out = m_root.filePath(QStringLiteral("overwrite/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         const QVariantMap overwrite{{keys::kOutputConflict, QStringLiteral("overwrite")}};
         const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
@@ -468,7 +508,7 @@ private slots:
         EnvVar soft("FAKE_PUBCMD_VERIFY", "softfail");
         auto bad = verifyPublisherPackage(pkg, tc, s, ctx);
         QVERIFY(!bad.ok());
-        QCOMPARE(bad.error().code, ErrorCode::VerificationFailed);
+        QCOMPARE(errorOf(bad).code, ErrorCode::VerificationFailed);
     }
 
     // A build that fails before it wrote anything does not leave its new,
@@ -477,12 +517,12 @@ private slots:
     {
         const QString game = dir(QStringLiteral("emptyout/game"));
         const QString out = m_root.filePath(QStringLiteral("emptyout/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         QFile::remove(QDir(game).filePath(QStringLiteral("sce_sys/keystone")));
         auto job = buildJob(game, out);
         auto rr = run(job);
         QVERIFY(!rr.result.ok());
-        QCOMPARE(rr.result.error().code, ErrorCode::CorruptData);
+        QCOMPARE(errorOf(rr.result).code, ErrorCode::CorruptData);
         QVERIFY(!QFileInfo::exists(out));
         // A folder that was there before stays, empty or not.
         QDir().mkpath(out);
@@ -514,7 +554,7 @@ private slots:
     {
         const QString game = dir(QStringLiteral("conflict/game"));
         const QString out = m_root.filePath(QStringLiteral("conflict/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         QVERIFY(run(job).result.ok());
         const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
@@ -535,9 +575,51 @@ private slots:
         put(out, kStem + QStringLiteral(".pkg"), "keep me");
         QFile::remove(m_fakeLog);
         auto stop = run(job, {{keys::kOutputConflict, QStringLiteral("fail")}});
-        QCOMPARE(stop.result.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(stop.result).code, ErrorCode::AlreadyExists);
         QCOMPARE(readAll(pkg), QByteArray("keep me"));
         QVERIFY(invocations().isEmpty()); // refused before packing
+    }
+
+    // The update is built against the package given as its base: the stand-in
+    // writes the base's content digest into the update, as the real tool does.
+    void updateCarriesTheDigestOfItsBase()
+    {
+        const QString game = dir(QStringLiteral("digest/PPSA01234-app"));
+        const QString baseOut = m_root.filePath(QStringLiteral("digest/base-out"));
+        QVERIFY(makeSimpleDump(game));
+        auto baseJob = buildJob(game, baseOut);
+        auto built = run(baseJob);
+        QVERIFY2(built.result.ok(), qPrintable(built.result.ok() ? QString() : built.result.error().toLogString()));
+        const QString basePkg = built.result->outputs.value(0);
+        const QByteArray digest = readAll(basePkg).mid(0x30, 32);
+        QVERIFY(digest.size() == 32 && digest != QByteArray(32, '\0'));
+
+        const QString update = dir(QStringLiteral("digest/patch"));
+        QVERIFY(put(update, QStringLiteral("sce_sys/param.json"),
+                    QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.001.000\",\"applicationCategoryType\":0}").arg(kCid).toUtf8()));
+        QVERIFY(put(update, QStringLiteral("Data/A.pak"), QByteArray(10, 'u')));
+        QFile::remove(m_fakeLog);
+        auto job = buildJob(update, m_root.filePath(QStringLiteral("digest/out")),
+                            QJsonObject{{QStringLiteral("basePackage"), basePkg}, {QStringLiteral("baseFolder"), game}});
+        auto rr = run(job);
+        QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+        QCOMPARE(rr.result->outputs.size(), 2);
+        const QByteArray delta = readAll(rr.result->outputs[0]);
+        QVERIFY(delta.startsWith(QByteArray("\x7F" "LIH", 4)));
+        QVERIFY(delta.contains(digest));
+        const auto inv = invocations();
+        QVERIFY(!inv.isEmpty());
+        const QStringList argv = argvOf(inv.first());
+        const qsizetype at = argv.indexOf(QStringLiteral("--ref_pkg_path"));
+        QVERIFY(at > 0 && at + 1 < argv.size());
+        QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(argv.at(at + 1))), QDir::cleanPath(basePkg));
+
+        // A base the tool did not build: its own message is explained to the user.
+        EnvVar mode("FAKE_PUBCMD_MODE", "nonaps");
+        auto refused = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}});
+        QCOMPARE(errorOf(refused.result).code, ErrorCode::ExternalToolFailed);
+        QVERIFY2(errorOf(refused.result).message.contains(QStringLiteral("not built by the Publishing Tools")),
+                 qPrintable(errorOf(refused.result).message));
     }
 
     // The finished package cannot always take its name (on Windows the old one
@@ -562,17 +644,17 @@ private slots:
         // A full package: the existing one stays, the new one is kept as its partial file.
         const QString game = dir(QStringLiteral("place/game"));
         const QString out = dir(QStringLiteral("place/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
         QVERIFY(put(out, QFileInfo(pkg).fileName(), "previous"));
         QVERIFY(takeNumberedNames(pkg));
         auto job = buildJob(game, out);
         auto rr = run(job);
         QVERIFY(!rr.result.ok());
-        QCOMPARE(rr.result.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(rr.result).code, ErrorCode::AlreadyExists);
         const QString keptPkg = QDir(out).filePath(kStem + QStringLiteral(".partial.pkg"));
-        QVERIFY2(rr.result.error().message.contains(QDir::toNativeSeparators(keptPkg)),
-                 qPrintable(rr.result.error().toLogString()));
+        QVERIFY2(errorOf(rr.result).message.contains(QDir::toNativeSeparators(keptPkg)),
+                 qPrintable(errorOf(rr.result).toLogString()));
         QVERIFY(checkPackageHeader(keptPkg).ok);
         QCOMPARE(readAll(pkg), QByteArray("previous"));
         QVERIFY(logged(QStringLiteral("The finished package was kept as")));
@@ -581,7 +663,7 @@ private slots:
         // .remastered.pkg could not. Neither is replaced; the new update is
         // kept under the first free number, its .remastered.pkg as a partial.
         const QString base = dir(QStringLiteral("place/base-game"));
-        makeSimpleDump(base);
+        QVERIFY(makeSimpleDump(base));
         QVERIFY(put(m_root.filePath(QStringLiteral("place/base")), QStringLiteral("base.pkg"), fullPackageBytes()));
         const QString update = dir(QStringLiteral("place/patch"));
         put(update, QStringLiteral("sce_sys/param.json"),
@@ -616,11 +698,14 @@ private slots:
     {
         EnvVar mode("FAKE_PUBCMD_MODE", "slow");
         const QString pidFile = m_root.filePath(QStringLiteral("child.pid"));
+        const QString ticks = m_root.filePath(QStringLiteral("cancel.ticks"));
         QFile::remove(pidFile);
+        QFile::remove(ticks);
         EnvVar child("FAKE_PUBCMD_CHILD_PIDFILE", pidFile.toUtf8());
+        EnvVar tick("FAKE_PUBCMD_TICKFILE", ticks.toUtf8());
         const QString game = dir(QStringLiteral("cancel/game"));
         const QString out = m_root.filePath(QStringLiteral("cancel/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         CancellationSource cancel;
         std::thread canceller([&] {
@@ -629,13 +714,13 @@ private slots:
             QThread::msleep(300);
             cancel.cancel(QStringLiteral("test"));
         });
-        QElapsedTimer t;
-        t.start();
         auto rr = run(job, {}, cancel.token());
         canceller.join();
         QVERIFY(!rr.result.ok());
-        QVERIFY(rr.result.error().isCancelled());
-        QVERIFY2(t.elapsed() < 9000, "img_create was not stopped");
+        QVERIFY(errorOf(rr.result).isCancelled());
+        // The tool counts its bar steps into the tick file: it was stopped before the last one.
+        const qint64 steps = QFileInfo(ticks).size();
+        QVERIFY2(steps > 10 && steps < kBarSteps, qPrintable(QStringLiteral("img_create was not stopped (%1 steps)").arg(steps)));
         for (const QString& f : filesIn(out))
             QVERIFY2(!f.contains(QStringLiteral(".partial")) && !f.endsWith(QStringLiteral(".part")) && !f.endsWith(QStringLiteral(".pkg")),
                      qPrintable(f));
@@ -669,7 +754,7 @@ private slots:
         EnvVar delay("FAKE_PUBCMD_DELAY_MS", "60");
         const QString game = dir(QStringLiteral("cpu/game"));
         const QString out = m_root.filePath(QStringLiteral("cpu/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         const QString id = QStringLiteral("Jcpu");
         std::thread changer([&] {
@@ -688,6 +773,7 @@ private slots:
             QCOMPARE(calls.last(), 2);
         }
         QVERIFY(!liveCpuLimit(id)); // cleared when the job ends
+        QVERIFY(!invocations().isEmpty());
         const QJsonArray samples = invocations().first().value(QStringLiteral("cpuSamples")).toArray();
         QVERIFY(samples.size() >= 3);
         QVERIFY(std::any_of(samples.begin(), samples.end(), [](const QJsonValue& v) { return v.toInt() == 1; }));
@@ -702,7 +788,7 @@ private slots:
             QSKIP("needs at least 3 logical processors");
         const QString game = dir(QStringLiteral("limits/game"));
         const QString out = m_root.filePath(QStringLiteral("limits/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         const QVariantMap low{{general::keys::kWorkerThreads, 1},
                               {general::keys::kPerformanceMode, QStringLiteral("lowImpact")}};
@@ -767,7 +853,7 @@ private slots:
         EnvVar child("FAKE_PUBCMD_CHILD_PIDFILE", pidFile.toUtf8());
         const QString game = dir(QStringLiteral("pause/game"));
         const QString out = m_root.filePath(QStringLiteral("pause/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         CancellationSource source;
         qint64 before = -1, after = -1, childBefore = -1, childAfter = -1;
@@ -775,7 +861,19 @@ private slots:
             for (int i = 0; i < 400 && QFileInfo(ticks).size() < 5; ++i)
                 QThread::msleep(25);
             source.pause();
-            QThread::msleep(800); // the tool is suspended within 250 ms
+            // The tool is suspended within 250 ms on an idle machine; wait
+            // until neither counter has moved for half a second (a tool that
+            // is never suspended runs to its last step, which fails below).
+            qint64 seen = -1, childSeen = -1;
+            for (int i = 0; i < 40; ++i) {
+                QThread::msleep(500);
+                const qint64 now = QFileInfo(ticks).size(), childNow = QFileInfo(childTicks).size();
+                const bool still = now == seen && childNow == childSeen;
+                seen = now;
+                childSeen = childNow;
+                if (still)
+                    break;
+            }
             before = QFileInfo(ticks).size();
             childBefore = QFileInfo(childTicks).size();
             QThread::msleep(1000);
@@ -803,7 +901,7 @@ private slots:
     {
         const QString game = dir(QStringLiteral("pausewait/game"));
         const QString out = m_root.filePath(QStringLiteral("pausewait/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         CancellationSource source;
         source.pause();
@@ -822,7 +920,7 @@ private slots:
     void updateBuildWithBaseFolder()
     {
         const QString base = dir(QStringLiteral("upd/base-game"));
-        makeSimpleDump(base);
+        QVERIFY(makeSimpleDump(base));
         put(base, QStringLiteral("Data/base_only.pak"), QByteArray(300, 'B'));
         const QString basePkg = m_root.filePath(QStringLiteral("upd/base/base.pkg"));
         QVERIFY(put(m_root.filePath(QStringLiteral("upd/base")), QStringLiteral("base.pkg"), fullPackageBytes()));
@@ -840,6 +938,7 @@ private slots:
                                                   QDir(out).filePath(stem + QStringLiteral(".remastered.pkg"))}));
         QVERIFY(!checkPackageHeader(rr.result->outputs[0]).hasFih); // the delta
         QVERIFY(checkPackageHeader(rr.result->outputs[1]).ok);
+        QVERIFY(!invocations().isEmpty());
         const QJsonArray argv = invocations().first().value(QStringLiteral("argv")).toArray();
         QVERIFY(argv.contains(QStringLiteral("--ref_pkg_path")));
         // The project merges both trees: update data wins, missing files come from the base.
@@ -856,8 +955,8 @@ private slots:
         QVERIFY(!readAll(src.value(QStringLiteral("sce_sys/param.json"))).contains("attributePub"));
 
         // Output selection.
-        auto onlyUpdate = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}});
-        QVERIFY(onlyUpdate.result.ok());
+        auto overwritten = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}});
+        QVERIFY(overwritten.result.ok());
         QJsonObject pu = p;
         pu.insert(QStringLiteral("updateOutput"), QStringLiteral("update"));
         auto jobU = buildJob(update, m_root.filePath(QStringLiteral("upd/out-u")), pu);
@@ -876,25 +975,25 @@ private slots:
         put(update, QStringLiteral("sce_sys/param.json"),
             QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.000.000\",\"applicationCategoryType\":0}").arg(kCid).toUtf8());
         auto lower = run(job);
-        QCOMPARE(lower.result.error().code, ErrorCode::InvalidArgument);
-        QVERIFY(lower.result.error().message.contains(QStringLiteral("01.001.000"))); // suggested version
+        QCOMPARE(errorOf(lower.result).code, ErrorCode::InvalidArgument);
+        QVERIFY(errorOf(lower.result).message.contains(QStringLiteral("01.001.000"))); // suggested version
         put(update, QStringLiteral("sce_sys/param.json"),
             QStringLiteral("{\"contentId\":\"UP0000-PPSA01234_00-OTHERGAME0000000\",\"contentVersion\":\"01.001.000\",\"applicationCategoryType\":0}").toUtf8());
-        QCOMPARE(run(job).result.error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(errorOf(run(job).result).code, ErrorCode::InvalidArgument);
         const QString empty = dir(QStringLiteral("upd/empty"));
         auto nothing = buildJob(empty, m_root.filePath(QStringLiteral("upd/out-n")), p);
         auto rn = run(nothing);
-        QCOMPARE(rn.result.error().code, ErrorCode::InvalidArgument);
-        QVERIFY(rn.result.error().message.contains(QStringLiteral("nothing")));
+        QCOMPARE(errorOf(rn.result).code, ErrorCode::InvalidArgument);
+        QVERIFY(errorOf(rn.result).message.contains(QStringLiteral("nothing")));
         put(m_root.filePath(QStringLiteral("upd/base")), QStringLiteral("x.remastered.pkg"), fullPackageBytes());
         QJsonObject pr{{QStringLiteral("basePackage"), m_root.filePath(QStringLiteral("upd/base/x.remastered.pkg"))}};
         auto remastered = buildJob(update, out, pr);
-        QCOMPARE(run(remastered).result.error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(errorOf(run(remastered).result).code, ErrorCode::InvalidArgument);
         put(m_root.filePath(QStringLiteral("upd/base")), QStringLiteral("delta.pkg"), QByteArray(5000, 'D'));
         QJsonObject pd{{QStringLiteral("basePackage"), m_root.filePath(QStringLiteral("upd/base/delta.pkg"))},
                        {QStringLiteral("baseFolder"), base}};
         auto delta = buildJob(update, out, pd);
-        QVERIFY(run(delta).result.error().message.contains(QStringLiteral("not a full PS5 package")));
+        QVERIFY(errorOf(run(delta).result).message.contains(QStringLiteral("not a full PS5 package")));
     }
 
     void updateExtractsBaseOrUsesExactSource()
@@ -911,7 +1010,12 @@ private slots:
         auto rr = run(job, {{keys::kKeepIntermediate, true}});
         QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
         const auto inv = invocations();
-        QCOMPARE(inv.first().value(QStringLiteral("argv")).toArray().at(0).toString(), QStringLiteral("img_extract"));
+        QVERIFY(!inv.isEmpty());
+        // The base package itself is what the tool is asked to extract, with the settings' passcode.
+        const QStringList extractArgs = argvOf(inv.first());
+        QCOMPARE(extractArgs.size(), 6);
+        QCOMPARE(extractArgs.mid(0, 5), (QStringList{QStringLiteral("img_extract"), QStringLiteral("--passcode"), kDefaultPasscode,
+                                                     QStringLiteral("--no_progress_bar"), QDir::toNativeSeparators(basePkg)}));
         const QString stem = kCid + QStringLiteral("-A0102-V0102");
         const QByteArray gp5 = readAll(QDir(out).filePath(stem + QStringLiteral(".gp5")));
         QVERIFY(gp5.contains("dst_path=\"Data/base_only.pak\""));
@@ -920,7 +1024,7 @@ private slots:
         QVERIFY(gp5.contains("dst_path=\"sce_sys/param.json\""));
         // No temporary folder is set: the base was extracted next to the output, in a work
         // folder that is gone when the build ends.
-        const QString extractedTo = inv.first().value(QStringLiteral("argv")).toArray().last().toString();
+        const QString extractedTo = extractArgs.last();
         QVERIFY2(extractedTo.contains(QStringLiteral(".fw-stage-")), qPrintable(extractedTo));
         QVERIFY(QDir(out).entryList({QStringLiteral(".fw-stage-*")}, QDir::AllEntries | QDir::Hidden).isEmpty());
         QVERIFY(readAll(QDir(out).filePath(stem + QStringLiteral("-build-logs/01-create-gp5.log"))).contains("temporary paths"));
@@ -934,6 +1038,7 @@ private slots:
         auto exact = buildJob(update, out, pe);
         auto re = run(exact);
         QVERIFY2(re.result.ok(), qPrintable(re.result.ok() ? QString() : re.result.error().toLogString()));
+        QVERIFY(!invocations().isEmpty());
         for (const auto& i : invocations())
             QVERIFY(i.value(QStringLiteral("argv")).toArray().at(0).toString() != u"img_extract");
         QVERIFY(std::any_of(re.result->warnings.begin(), re.result->warnings.end(),
@@ -948,11 +1053,10 @@ private slots:
         put(addon, QStringLiteral("data.bin"), QByteArray(300, 'd'));
         const QString out = m_root.filePath(QStringLiteral("addon/out"));
         auto make = [&](const QString& key, const QString& volume, const QString& folder) {
-            return FpkgAddonJob(AddonRequest::fromJson({{QStringLiteral("payloadFolder"), folder},
-                                                        {QStringLiteral("output"), out},
-                                                        {QStringLiteral("entitlementKey"), key},
-                                                        {QStringLiteral("volumeType"), volume}})
-                                    .value());
+            return FpkgAddonJob(requestFrom<AddonRequest>({{QStringLiteral("payloadFolder"), folder},
+                                                           {QStringLiteral("output"), out},
+                                                           {QStringLiteral("entitlementKey"), key},
+                                                           {QStringLiteral("volumeType"), volume}}));
         };
         auto job = make(kKey, QStringLiteral("prospero_ac"), addon);
         auto rr = run(job, {{keys::kKeepIntermediate, true}});
@@ -964,15 +1068,18 @@ private slots:
         QCOMPARE(project->volumeType, QStringLiteral("prospero_ac"));
         QCOMPARE(project->entitlementKey, kKey.toLower());
         QVERIFY(!project->hasChunkInfo);
-        QCOMPARE(run(job, {}).result.ok(), true); // keep both
+        // "Keep both": the first package is moved aside under the next free name.
+        QVERIFY(run(job, {}).result.ok());
+        QVERIFY(checkPackageHeader(QDir(out).filePath(kAddonCid + QStringLiteral("-A0100-V0100.pkg"))).ok);
+        QVERIFY(checkPackageHeader(QDir(out).filePath(kAddonCid + QStringLiteral("-A0100-V0100 (1).pkg"))).ok);
         auto al = make(kKey, QStringLiteral("prospero_al"), addon);
-        QCOMPARE(run(al).result.error().code, ErrorCode::Unsupported);
+        QCOMPARE(errorOf(run(al).result).code, ErrorCode::Unsupported);
         auto badKey = make(QStringLiteral("xyz"), QStringLiteral("prospero_ac"), addon);
-        QCOMPARE(run(badKey).result.error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(errorOf(run(badKey).result).code, ErrorCode::InvalidArgument);
         const QString noParam = dir(QStringLiteral("addon/addcont1"));
         put(noParam, QStringLiteral("data.bin"), "x");
         auto np = make(kKey, QStringLiteral("prospero_ac"), noParam);
-        QVERIFY(run(np).result.error().message.contains(QStringLiteral("param.json")));
+        QVERIFY(errorOf(run(np).result).message.contains(QStringLiteral("param.json")));
         // dlc_emu.ini candidates for the add-on dialog.
         const QString gameDir = m_root.filePath(QStringLiteral("addon"));
         put(gameDir, QStringLiteral("dlc_emu.ini"),
@@ -991,15 +1098,32 @@ private slots:
     {
         const QString game = dir(QStringLiteral("vx/game"));
         const QString out = m_root.filePath(QStringLiteral("vx/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto build = buildJob(game, out);
         QVERIFY(run(build).result.ok());
         const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
 
-        FpkgVerifyJob verify(VerifyRequest::fromJson({{QStringLiteral("package"), pkg}}).value());
+        FpkgVerifyJob verify(requestFrom<VerifyRequest>({{QStringLiteral("package"), pkg}}));
+        QFile::remove(m_fakeLog);
         auto v = run(verify);
         QVERIFY(v.result.ok());
         QCOMPARE(v.result->verification, Verification::Passed);
+        {
+            const auto inv = invocations();
+            QCOMPARE(inv.size(), 1);
+            QCOMPARE(argvOf(inv[0]), (QStringList{QStringLiteral("img_verify"), QStringLiteral("--passcode"), kDefaultPasscode,
+                                                  QStringLiteral("--format_check"), QStringLiteral("on"),
+                                                  QStringLiteral("--integrity_check"), QStringLiteral("on"),
+                                                  QStringLiteral("--no_progress_bar"), QDir::toNativeSeparators(pkg)}));
+        }
+        // The package was built with the settings' passcode: another one does not open it.
+        const QString otherPasscode = QStringLiteral("0123456789abcdef0123456789abcdef");
+        {
+            FpkgVerifyJob wrong(requestFrom<VerifyRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("passcode"), otherPasscode}}));
+            auto vw = run(wrong);
+            QVERIFY(vw.result.ok());
+            QCOMPARE(vw.result->verification, Verification::Failed);
+        }
         {
             EnvVar fail("FAKE_PUBCMD_VERIFY", "fail");
             auto vf = run(verify);
@@ -1009,38 +1133,67 @@ private slots:
         // An update delta is verified through its .remastered.pkg.
         put(out, QStringLiteral("UPDATE_X-A0100-V0100.pkg"), QByteArray(5000, 'D'));
         put(out, QStringLiteral("X-A0100-V0100.remastered.pkg"), fullPackageBytes());
-        FpkgVerifyJob verifyDelta(VerifyRequest::fromJson({{QStringLiteral("package"), QDir(out).filePath(QStringLiteral("UPDATE_X-A0100-V0100.pkg"))}}).value());
+        FpkgVerifyJob verifyDelta(requestFrom<VerifyRequest>({{QStringLiteral("package"), QDir(out).filePath(QStringLiteral("UPDATE_X-A0100-V0100.pkg"))}}));
         auto vd = run(verifyDelta);
         QVERIFY(vd.result.ok());
         QCOMPARE(vd.result->verification, Verification::Passed);
         QVERIFY(vd.result->outputs.first().endsWith(QStringLiteral(".remastered.pkg")));
 
         const QString dest = m_root.filePath(QStringLiteral("vx/extracted"));
-        FpkgExtractJob extract(ExtractRequest::fromJson({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest}}).value());
+        FpkgExtractJob extract(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest}}));
+        QFile::remove(m_fakeLog);
         auto x = run(extract);
         QVERIFY(x.result.ok());
-        QVERIFY(QFileInfo::exists(QDir(dest).filePath(QStringLiteral("eboot.bin"))));
-        QVERIFY(x.result->summary.contains(QStringLiteral("files")));
-        QCOMPARE(run(extract).result.error().code, ErrorCode::AlreadyExists); // never into a non-empty folder
         {
+            const auto inv = invocations();
+            QCOMPARE(inv.size(), 1);
+            QCOMPARE(argvOf(inv[0]), (QStringList{QStringLiteral("img_extract"), QStringLiteral("--passcode"), kDefaultPasscode,
+                                                  QStringLiteral("--no_progress_bar"), QDir::toNativeSeparators(pkg),
+                                                  QDir::toNativeSeparators(dest)}));
+        }
+        QVERIFY(QFileInfo::exists(QDir(dest).filePath(QStringLiteral("eboot.bin"))));
+        // The tool was given this package: its own param.json came out.
+        QVERIFY(readAll(QDir(dest).filePath(QStringLiteral("sce_sys/param.json"))).contains(kCid.toUtf8()));
+        QVERIFY(x.result->summary.contains(QStringLiteral("files")));
+        QCOMPARE(errorOf(run(extract).result).code, ErrorCode::AlreadyExists); // never into a non-empty folder
+        {
+            // A wrong passcode: the tool refuses, and the folder made for it is removed.
+            const QString destW = m_root.filePath(QStringLiteral("vx/extracted-wrong"));
+            FpkgExtractJob xw(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), destW},
+                                                           {QStringLiteral("passcode"), otherPasscode}}));
+            QCOMPARE(errorOf(run(xw).result).code, ErrorCode::ExternalToolFailed);
+            QVERIFY(!QFileInfo::exists(destW));
+        }
+        {
+            // The tool fails after it wrote its first file.
             EnvVar fail("FAKE_PUBCMD_EXTRACT", "fail");
             const QString dest2 = m_root.filePath(QStringLiteral("vx/extracted2"));
-            FpkgExtractJob x2(ExtractRequest::fromJson({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest2}}).value());
-            QCOMPARE(run(x2).result.error().code, ErrorCode::ExternalToolFailed);
-            QVERIFY(!QFileInfo::exists(dest2)); // created by the job, removed again
+            FpkgExtractJob x2(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest2}}));
+            QCOMPARE(errorOf(run(x2).result).code, ErrorCode::ExternalToolFailed);
+            QVERIFY(!QFileInfo::exists(dest2)); // created by the job, removed again with what was in it
         }
         {
             EnvVar slow("FAKE_PUBCMD_EXTRACT", "slow");
             const QString dest3 = dir(QStringLiteral("vx/extracted3")); // exists and is empty
-            FpkgExtractJob x3(ExtractRequest::fromJson({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest3}}).value());
+            FpkgExtractJob x3(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest3}}));
             CancellationSource cancel;
+            // Cancel once the tool has written its files (it then idles for 10 s).
+            std::atomic<bool> sawOutput{false}, finished{false};
             std::thread t([&] {
-                QThread::msleep(700);
+                const QString last = QDir(dest3).filePath(QStringLiteral("playgo-chunks/001.bin"));
+                while (!sawOutput && !finished) {
+                    if (QFileInfo::exists(last))
+                        sawOutput = true;
+                    else
+                        QThread::msleep(25);
+                }
                 cancel.cancel();
             });
             auto r3 = run(x3, {}, cancel.token());
+            finished = true;
             t.join();
-            QVERIFY(r3.result.error().isCancelled());
+            QVERIFY2(sawOutput, "the tool had written nothing when the job ended");
+            QVERIFY(errorOf(r3.result).isCancelled());
             QVERIFY(QFileInfo(dest3).isDir());
             QVERIFY(QDir(dest3).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)); // partial output removed
         }
@@ -1048,40 +1201,42 @@ private slots:
 
     void nonAsciiFoldersGoThroughLinks()
     {
-        EnvVar strict("FAKE_PUBCMD_MODE", "strictpaths");
+        if (!isAsciiPath(m_root.path()))
+            QSKIP("The temporary folder itself has a non-ASCII path: the links would be made outside it.");
         const QString game = dir(QStringLiteral("Yōtei ゲーム"));
         const QString out = m_root.filePath(QStringLiteral("Ausgabe é"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto job = buildJob(game, out);
         auto rr = run(job);
         QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
         QCOMPARE(QFileInfo(rr.result->outputs.first()).absolutePath(), QFileInfo(out).absoluteFilePath());
         QVERIFY(checkPackageHeader(rr.result->outputs.first()).ok);
+        QCOMPARE(invocations().size(), 2);
         for (const auto& inv : invocations()) {
             for (const auto& a : inv.value(QStringLiteral("argv")).toArray())
                 QVERIFY2(isAsciiPath(a.toString()), qPrintable(a.toString()));
             QVERIFY(isAsciiPath(inv.value(QStringLiteral("TEMP")).toString()));
         }
-        QVERIFY(logged(QStringLiteral("Using the ASCII link")));
-        // Every link was removed; the real folders are untouched.
-        const QString base = QDir(QDir::tempPath()).filePath(AsciiAliases::aliasFolderName());
-        const QString mine = QStringLiteral("a%1-").arg(QCoreApplication::applicationPid(), 0, 16);
-        for (const QString& n : QDir(base).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System))
-            QVERIFY2(!n.startsWith(mine), qPrintable(n));
+        // The links were made in the folder for them under this test's temporary folder ...
+        const QString linkFolder = QDir::toNativeSeparators(QDir(QDir::tempPath()).filePath(AsciiAliases::aliasFolderName()));
+        QVERIFY(QFileInfo(linkFolder).isDir());
+        QVERIFY2(logged(QStringLiteral("Using the ASCII link ") + linkFolder), qPrintable(linkFolder));
+        // ... and every one was removed; the real folders are untouched.
+        QCOMPARE(aliasLinksLeft(), QStringList());
         QVERIFY(QFileInfo::exists(QDir(game).filePath(QStringLiteral("eboot.bin"))));
         // A name inside the game that the tools reject stops the build before packing.
         put(game, QStringLiteral("Data/café.pak"), "x");
         QFile::remove(m_fakeLog);
         auto bad = run(job);
-        QCOMPARE(bad.result.error().code, ErrorCode::Unsupported);
-        QVERIFY(bad.result.error().message.contains(QStringLiteral("non-ASCII")));
+        QCOMPARE(errorOf(bad.result).code, ErrorCode::Unsupported);
+        QVERIFY(errorOf(bad.result).message.contains(QStringLiteral("non-ASCII")));
         QVERIFY(invocations().isEmpty());
     }
 
     void gp5ProjectSource()
     {
         const QString game = dir(QStringLiteral("gp5src/game"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         Gp5Project g;
         g.passcode = kDefaultPasscode;
         g.contentId = kCid;
@@ -1103,6 +1258,7 @@ private slots:
         QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
         QCOMPARE(QFileInfo(rr.result->outputs.first()).fileName(), kStem + QStringLiteral(".pkg"));
         QVERIFY(QFileInfo::exists(project)); // the user's project is never removed
+        QVERIFY(!invocations().isEmpty());
         QCOMPARE(QDir::cleanPath(invocations().first().value(QStringLiteral("cwd")).toString()), QDir::cleanPath(QFileInfo(game).canonicalFilePath()));
         // img_verify gets the project's own passcode, not the one from the settings.
         QFile::remove(m_fakeLog);
@@ -1120,31 +1276,31 @@ private slots:
         put(game, QStringLiteral("my.gp5"), writeGp5(g));
         // "Stop with an error" refuses an existing package before packing, as for a folder.
         QFile::remove(m_fakeLog);
-        QCOMPARE(run(job, {{keys::kOutputConflict, QStringLiteral("fail")}}).result.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(run(job, {{keys::kOutputConflict, QStringLiteral("fail")}}).result).code, ErrorCode::AlreadyExists);
         QVERIFY(invocations().isEmpty());
         // Missing files and non-ASCII source paths are refused before packing.
         g.files.push_back({QStringLiteral("Data/missing.pak"), QStringLiteral("Data/missing.pak"), std::nullopt, false});
         put(game, QStringLiteral("my.gp5"), writeGp5(g));
-        QCOMPARE(run(job).result.error().code, ErrorCode::NotFound);
+        QCOMPARE(errorOf(run(job).result).code, ErrorCode::NotFound);
         g.files.pop_back();
         put(game, QStringLiteral("Data/ü.pak"), "x");
         g.files.push_back({QStringLiteral("Data/u.pak"), QStringLiteral("Data/ü.pak"), std::nullopt, false});
         put(game, QStringLiteral("my.gp5"), writeGp5(g));
-        QCOMPARE(run(job).result.error().code, ErrorCode::Unsupported);
+        QCOMPARE(errorOf(run(job).result).code, ErrorCode::Unsupported);
         // Version or title changes cannot apply to a user's project.
         auto changed = buildJob(project, out, {{QStringLiteral("contentVersion"), QStringLiteral("01.001.000")}});
-        QCOMPARE(run(changed).result.error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(errorOf(run(changed).result).code, ErrorCode::InvalidArgument);
     }
 
     void imageSourceThroughStager()
     {
         const QString tree = dir(QStringLiteral("img/tree"));
-        makeSimpleDump(QDir(tree).filePath(QStringLiteral("PPSA01234-app")));
+        QVERIFY(makeSimpleDump(QDir(tree).filePath(QStringLiteral("PPSA01234-app"))));
         const QString image = m_root.filePath(QStringLiteral("img/game.exfat"));
         put(m_root.filePath(QStringLiteral("img")), QStringLiteral("game.exfat"), "not really an image");
         unregisterSourceStagers();
         auto job = buildJob(image, m_root.filePath(QStringLiteral("img/out")));
-        QCOMPARE(run(job).result.error().code, ErrorCode::Unsupported);
+        QCOMPARE(errorOf(run(job).result).code, ErrorCode::Unsupported);
         auto stager = std::make_shared<FolderStager>(tree);
         registerSourceStager(stager);
         auto rr = run(job);
@@ -1158,7 +1314,7 @@ private slots:
     void imagesAndSelfRepairsInTheProject()
     {
         const QString game = dir(QStringLiteral("rep/game"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         put(game, QStringLiteral("sce_sys/pic2.dds"), "DDS ");
         put(game, QStringLiteral("eboot.bin"), QByteArray("\x4F\x15\x3D\x1D", 4) + QByteArray(100, '\0'));
         const QString out = m_root.filePath(QStringLiteral("rep/out"));
@@ -1179,8 +1335,8 @@ private slots:
 
         EnvVar wrong("FAKE_DDS2PNG_MODE", "wrong");
         auto bad = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}});
-        QCOMPARE(bad.result.error().code, ErrorCode::ExternalToolFailed);
-        QVERIFY(bad.result.error().message.contains(QStringLiteral("pic2.png")));
+        QCOMPARE(errorOf(bad.result).code, ErrorCode::ExternalToolFailed);
+        QVERIFY(errorOf(bad.result).message.contains(QStringLiteral("pic2.png")));
     }
 
     void sameContentIdNeverOverlaps()
@@ -1188,7 +1344,7 @@ private slots:
         EnvVar delay("FAKE_PUBCMD_DELAY_MS", "15");
         const QString game = dir(QStringLiteral("same/game"));
         const QString out = m_root.filePath(QStringLiteral("same/out"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         auto a = buildJob(game, out);
         auto b = buildJob(game, out);
         RunResult ra, rb;
@@ -1209,7 +1365,7 @@ private slots:
     void jobFactoryRoundTripAndValidation()
     {
         const QString game = dir(QStringLiteral("factory/game"));
-        makeSimpleDump(game);
+        QVERIFY(makeSimpleDump(game));
         const QJsonObject params{{QStringLiteral("source"), game},
                                  {QStringLiteral("output"), m_root.filePath(QStringLiteral("factory/out"))},
                                  {QStringLiteral("contentVersion"), QStringLiteral("01.000.000")}};
@@ -1222,15 +1378,15 @@ private slots:
         QVERIFY(!m_env.jobs.create(QStringLiteral("fpkg.build"), {{QStringLiteral("source"), game}, {QStringLiteral("updateOutput"), QStringLiteral("x")}}).ok());
         QVERIFY(m_env.jobs.create(QStringLiteral("fpkg.verify"), {{QStringLiteral("package"), QStringLiteral("x.pkg")}}).ok());
         // validate(): no tools, missing source, output inside the source, bad override.
-        QCOMPARE(job.value()->validate(m_env.values()).error().code, ErrorCode::DependencyMissing);
+        QCOMPARE(errorOf(job.value()->validate(m_env.values())).code, ErrorCode::DependencyMissing);
         auto missing = buildJob(m_root.filePath(QStringLiteral("nope")), QString());
-        QCOMPARE(missing.validate(m_env.values(baseSettings())).error().code, ErrorCode::NotFound);
+        QCOMPARE(errorOf(missing.validate(m_env.values(baseSettings()))).code, ErrorCode::NotFound);
         auto inside = buildJob(game, QDir(game).filePath(QStringLiteral("out")));
-        QCOMPARE(inside.validate(m_env.values(baseSettings())).error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(errorOf(inside.validate(m_env.values(baseSettings()))).code, ErrorCode::InvalidArgument);
         auto badVer = buildJob(game, QString(), {{QStringLiteral("contentVersion"), QStringLiteral("1.0")}});
-        QCOMPARE(badVer.validate(m_env.values(baseSettings())).error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(errorOf(badVer.validate(m_env.values(baseSettings()))).code, ErrorCode::InvalidArgument);
         auto noSceSys = buildJob(dir(QStringLiteral("factory/plain")), QString());
-        QCOMPARE(noSceSys.validate(m_env.values(baseSettings())).error().code, ErrorCode::NotFound);
+        QCOMPARE(errorOf(noSceSys.validate(m_env.values(baseSettings()))).code, ErrorCode::NotFound);
     }
 };
 

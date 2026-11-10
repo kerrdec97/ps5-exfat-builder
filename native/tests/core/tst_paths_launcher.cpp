@@ -75,6 +75,7 @@ private slots:
     void portableTxtNextToTheLauncherMeansPortable()
     {
         const QString dir = folder(QStringLiteral("portable launcher"), true);
+        QVERIFY(QFileInfo::exists(dir + QStringLiteral("/portable.txt"))); // without it the resolver would turn to the PC's own folders
         qunsetenv("FW_DATA_DIR");
         setEnv("FW_LAUNCHER_DIR", dir);
         Paths::resetForTests();
@@ -88,6 +89,7 @@ private slots:
     void theDataDirOverrideStillWins()
     {
         const QString dir = folder(QStringLiteral("portable launcher 2"), true);
+        QVERIFY(QFileInfo::exists(dir + QStringLiteral("/portable.txt")));
         const QString override = m_root.filePath(QStringLiteral("override"));
         setEnv("FW_DATA_DIR", override);
         setEnv("FW_LAUNCHER_DIR", dir);

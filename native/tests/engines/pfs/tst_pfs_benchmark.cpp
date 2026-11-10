@@ -1,10 +1,15 @@
-// PFS throughput benchmark: native builder vs the vendored Lazy_MkPFS on the
-// same input. Logs MB/s (source bytes per second) and checks that both
-// produce the same bytes. Size, level and repeats: FW_PFS_BENCH_MIB (default
-// 24), FW_PFS_BENCH_LEVEL (default 9, the app's default), FW_PFS_BENCH_REPEAT
-// (default 1; native and Lazy runs alternate and the best of each is kept,
-// which evens out a busy machine). The Python comparison is skipped when
-// python3 with the "cryptography" package is not available.
+// PFS throughput benchmark: the native builder with one thread and with every
+// core on the same input. Logs MB/s (source bytes per second) and checks that
+// both produce the same bytes. Size, level and repeats: FW_PFS_BENCH_MIB
+// (default 24), FW_PFS_BENCH_LEVEL (default 9, the app's default),
+// FW_PFS_BENCH_REPEAT (default 1; the best run is kept, which evens out a busy
+// machine).
+//
+// With FW_LAZY_MKPFS_DIR naming a checkout of Lazy_MkPFS (it is not part of
+// this repository; the references were made with commit 78bdd00) and a
+// python3 that has the "cryptography" package, the same input is also built
+// with Lazy_MkPFS, timed and compared byte for byte. Without them that part
+// is left out and the log says why.
 
 #include "engines/pfs/PfsBuilder.h"
 #include "engines/pfs/PfsSource.h"
@@ -54,41 +59,64 @@ bool writeMixed(const QString& path, qint64 size, quint64 seed)
     return true;
 }
 
-QString pythonExe()
+// The Lazy_MkPFS comparison: the interpreter to run it with, or why it cannot
+// run here. Python is only looked for (and started) when the reference
+// sources were named, so a plain test run starts no outside program.
+struct Lazy {
+    QString python;
+    QString whyNot;
+};
+
+Lazy findLazy()
 {
+    Lazy lazy;
+    const QString dir = qEnvironmentVariable("FW_LAZY_MKPFS_DIR");
+    if (dir.isEmpty()) {
+        lazy.whyNot = QStringLiteral("the Lazy_MkPFS sources are not part of this repository and FW_LAZY_MKPFS_DIR does not name a copy");
+        return lazy;
+    }
+    if (!QFileInfo(dir + QStringLiteral("/main_file.py")).isFile()) {
+        lazy.whyNot = QStringLiteral("FW_LAZY_MKPFS_DIR (%1) holds no main_file.py").arg(dir);
+        return lazy;
+    }
     for (const char* name : {"python3", "python"}) {
         const QString p = QStandardPaths::findExecutable(QLatin1String(name));
         if (p.isEmpty())
             continue;
         QProcess probe;
         probe.start(p, {QStringLiteral("-I"), QStringLiteral("-c"), QStringLiteral("import cryptography, zlib")});
-        if (probe.waitForFinished(30000) && probe.exitCode() == 0)
-            return p;
+        if (probe.waitForFinished(30000) && probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == 0) {
+            lazy.python = p;
+            return lazy;
+        }
     }
-    return {};
+    lazy.whyNot = QStringLiteral("no python3 with the cryptography package was found");
+    return lazy;
 }
 
-std::optional<double> runLazy(const QString& mode, const QString& src, const QString& out, int level, int cpu)
+// Seconds Lazy_MkPFS took, or nothing with the reason in `whyNot`.
+std::optional<double> runLazy(const QString& python, const QString& mode, const QString& src, const QString& out, int level,
+                              int cpu, QString* whyNot)
 {
-    const QString py = pythonExe();
-    if (py.isEmpty())
-        return std::nullopt;
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
-    p.start(py, {QStringLiteral("-I"), fwtest::dataDir() + QStringLiteral("/pfs/bench_lazy.py"), mode, src, out,
-                 QString::number(level), QString::number(cpu), QString::number(kTime)});
-    if (!p.waitForFinished(60 * 60 * 1000) || p.exitCode() != 0) {
-        qWarning("Lazy_MkPFS failed: %s", p.readAll().right(2000).constData());
+    p.start(python, {QStringLiteral("-I"), fwtest::dataDir() + QStringLiteral("/pfs/bench_lazy.py"), mode, src, out,
+                     QString::number(level), QString::number(cpu), QString::number(kTime)});
+    if (!p.waitForFinished(60 * 60 * 1000) || p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
+        *whyNot = QStringLiteral("Lazy_MkPFS failed: ") + QString::fromUtf8(p.readAll().right(2000));
         return std::nullopt;
     }
     const QString text = QString::fromUtf8(p.readAll());
     const qsizetype at = text.lastIndexOf(QStringLiteral("seconds="));
-    if (at < 0)
+    if (at < 0) {
+        *whyNot = QStringLiteral("bench_lazy.py printed no time: ") + text.right(2000);
         return std::nullopt;
+    }
     return text.mid(at + 8).trimmed().section(u'\n', 0, 0).toDouble();
 }
 
 struct NativeRun {
+    QString error; // empty when the image was written
     double seconds = 0;
     QString sha;
     BuildStats stats;
@@ -105,11 +133,14 @@ NativeRun runNative(const BuildInput& in, int threads, int level, const QString&
     auto st = writeImage(in, OutputFormat::Container, o, out, CancellationToken());
     NativeRun r;
     r.seconds = double(t.nsecsElapsed()) / 1e9;
-    if (!st.ok())
-        qWarning("%s", qPrintable(st.error().toLogString()));
-    else
-        r.stats = *st;
+    if (!st.ok()) {
+        r.error = st.error().toLogString();
+        return r;
+    }
+    r.stats = *st;
     r.sha = pfstest::sha256(out);
+    if (r.sha.isEmpty())
+        r.error = QStringLiteral("the image could not be read back: ") + out;
     return r;
 }
 
@@ -121,12 +152,13 @@ class TestPfsBenchmark : public QObject {
 private slots:
     void initTestCase()
     {
+        QVERIFY(m_appData.isValid() && m_work.isValid());
         fwtest::isolateAppData(m_appData);
         m_mib = envInt("FW_PFS_BENCH_MIB", 24);
         m_level = int(envInt("FW_PFS_BENCH_LEVEL", 9));
         m_repeat = int(envInt("FW_PFS_BENCH_REPEAT", 1));
         m_cores = std::max(1, QThread::idealThreadCount());
-        QVERIFY(m_work.isValid());
+        m_lazy = findLazy();
     }
 
     void benchmark_data()
@@ -161,15 +193,22 @@ private slots:
         }
 
         const NativeRun one = runNative(in, 1, m_level, m_work.filePath(QStringLiteral("n1.ffpfsc")));
+        QVERIFY2(one.error.isEmpty(), qPrintable(one.error));
         const QString pyOut = m_work.filePath(QStringLiteral("lazy.ffpfsc"));
         NativeRun many;
         std::optional<double> py;
+        QString noLazy = m_lazy.whyNot;
         for (int r = 0; r < m_repeat; ++r) {
             const NativeRun n = runNative(in, m_cores, m_level, m_work.filePath(QStringLiteral("nn.ffpfsc")));
+            QVERIFY2(n.error.isEmpty(), qPrintable(n.error));
             if (r == 0 || n.seconds < many.seconds)
                 many = n;
-            const auto p = runLazy(mode, src, pyOut, m_level, m_cores);
-            if (p && (!py || *p < *py))
+            if (m_lazy.python.isEmpty())
+                continue;
+            const auto p = runLazy(m_lazy.python, mode, src, pyOut, m_level, m_cores, &noLazy);
+            // The reference was asked for by name: when it cannot run, that is a failure, not a quiet pass.
+            QVERIFY2(p.has_value(), qPrintable(noLazy));
+            if (!py || *p < *py)
                 py = p;
         }
         QCOMPARE(one.sha, many.sha);
@@ -200,14 +239,15 @@ private slots:
             QCOMPARE(pySha, many.sha);
         } else {
             qInfo("%s", qPrintable(line));
-            qInfo("Lazy_MkPFS comparison skipped (python3 with the cryptography package not found)");
+            qInfo("Lazy_MkPFS comparison left out: %s", qPrintable(noLazy));
         }
     }
 
 private:
     QTemporaryDir m_appData;
     QTemporaryDir m_work;
-    qint64 m_mib = 64;
+    Lazy m_lazy;
+    qint64 m_mib = 24;
     int m_level = 9;
     int m_repeat = 1;
     int m_cores = 1;

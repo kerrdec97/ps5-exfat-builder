@@ -64,6 +64,14 @@ namespace {
 
 QString q(const char* s) { return QString::fromUtf8(s); }
 
+// The error of a call that must have failed (a marker error, not undefined
+// behaviour, when it succeeded).
+template <typename R>
+Error errorOf(const R& result)
+{
+    return result.ok() ? Error(ErrorCode::Internal, QStringLiteral("<the call succeeded>")) : result.error();
+}
+
 const QString kSourceCid = QStringLiteral("EP0700-PPSA01234_00-DLCSUFFIX0000001");
 const QString kSourceProductUrl = QStringLiteral("https://store.playstation.com/en-gb/product/EP0700-PPSA01234_00-DLCSUFFIX0000001");
 const QString kGameName = QStringLiteral("Example Quest");
@@ -438,6 +446,7 @@ private slots:
 
         // With a concept to verify against, any name starting with the query is kept.
         const auto conceptHits = lk::parseSearch(us, market(q("US")), kGameName, true);
+        QVERIFY(conceptHits.ok());
         ids.clear();
         for (const DlcCandidate& c : conceptHits.value())
             ids << c.contentId.mid(20);
@@ -448,6 +457,7 @@ private slots:
         const QByteArray parentOnly = R"({"links":[{"id":"UP0700-PPSA05678_00-ADDONNAMEONLY000","name":"Bonus Pack","top_category":"add_on","parent_name":"Example Quest"},
 {"id":"UP0700-PPSA05678_00-ORPHANADDON00000","name":"Example Quest Bonus","metadata":{"top_category":{"values":["ADD_ON"]}}}]})";
         const auto parents = lk::parseSearch(parentOnly, market(q("US")), kGameName, true);
+        QVERIFY(parents.ok());
         QCOMPARE(int(parents.value().size()), 2);
         QCOMPARE(int(lk::parseSearch(parentOnly, market(q("US")), kGameName, false).value().size()), 1);
         QCOMPARE(parents.value()[1].gameName, kGameName);
@@ -859,6 +869,7 @@ private slots:
             VERIFY_WARNING(r, q("Regional lookup reached its time limit. Local editing remains available."));
             QCOMPARE(r.warnings.last(), q(kNoStoreRelease));
             QVERIFY(r.candidates.empty());
+            QVERIFY(!web->timeouts().isEmpty());
             for (int t : web->timeouts())
                 QVERIFY(t <= 3000);
             const DlcLookupResult free = svc.lookup(q("ABCDEFGHIJKLMNOP"), {});
@@ -1062,6 +1073,7 @@ private slots:
             QFile f(QDir(tmp.path()).filePath(name(i)));
             QVERIFY(f.open(QIODevice::WriteOnly));
             f.write("{}");
+            QVERIFY(f.flush()); // a write after the time was set would make it "now" on some systems
             QVERIFY(f.setFileTime(old.addSecs(i * 60), QFileDevice::FileModificationTime));
         }
         QVERIFY(fwtest::writeTextFile(QDir(tmp.path()).filePath(q("notes.json")), "{}"));
@@ -1157,8 +1169,8 @@ private slots:
         QCOMPARE(propose(otherDlc, src, q("x"))->contentId, q("UP0700-PPSA05678_00-DLCSUFFIX0000001"));
         const QString noMapping =
             q("This release has no observed content ID for the same platform. Choose another release or use manual identifiers.");
-        QCOMPARE(propose(demo, src, q("x")).error().message, noMapping);
-        QCOMPARE(propose(cand(q("CUSA00001"), q("UP0001-CUSA00001_00-OLDGAME000000000"), q("Game"), q("UP")), src, q("x")).error().message,
+        QCOMPARE(errorOf(propose(demo, src, q("x"))).message, noMapping);
+        QCOMPARE(errorOf(propose(cand(q("CUSA00001"), q("UP0001-CUSA00001_00-OLDGAME000000000"), q("Game"), q("UP")), src, q("x"))).message,
                  noMapping);
 
         const DlcCandidate gameNoMarket = cand(q("PPSA05678"), q("UP0700-PPSA05678_00-EXAMPLEQUEST0000"), q("Game"), QString());

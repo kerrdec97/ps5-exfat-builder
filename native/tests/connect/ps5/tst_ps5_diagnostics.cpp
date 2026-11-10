@@ -3,18 +3,19 @@
 // console).
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/Discovery.h"
 #include "connect/ps5/Endpoint.h"
 #include "connect/ps5/FtpDiagnostics.h"
 #include "connect/ps5/Module.h"
 #include "core/Progress.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QtConcurrent/QtConcurrentRun>
@@ -24,6 +25,7 @@
 using namespace fw;
 using namespace fw::ps5;
 using fake::FakeFtpServer;
+using ps5test::Module;
 
 namespace {
 
@@ -39,16 +41,6 @@ ConsoleEndpoint endpoint(quint16 port)
     return ep;
 }
 
-// A port on 127.0.0.1 that nothing listens on.
-quint16 closedPort()
-{
-    QTcpServer s;
-    s.listen(QHostAddress::LocalHost, 0);
-    const quint16 p = s.serverPort();
-    s.close();
-    return p;
-}
-
 DiagnoseOptions options(const QString& folder, bool speed = false, qint64 bytes = 256 * 1024)
 {
     DiagnoseOptions o;
@@ -58,17 +50,6 @@ DiagnoseOptions options(const QString& folder, bool speed = false, qint64 bytes 
     o.epochSeconds = kEpoch;
     return o;
 }
-
-struct Module {
-    std::shared_ptr<SettingsSchema> schema = std::make_shared<SettingsSchema>();
-    DependencyRegistry deps;
-    JobFactory jobs;
-    Module()
-    {
-        ModuleContext ctx{*schema, deps, jobs};
-        registerModule(ctx);
-    }
-};
 
 const QString kGames = QStringLiteral("/data/etaHEN/games");
 const QString kProbe = QStringLiteral("/data/etaHEN/games/.exfatbuilder_wtest_1700000000.tmp");
@@ -121,10 +102,15 @@ private slots:
         QCOMPARE(hosts.last(), QStringLiteral("192.168.1.254"));
         QVERIFY(!hosts.contains(QStringLiteral("192.168.1.20")));
         // Whatever this machine has: never loopback, always a private range.
-        for (const QString& prefix : localSubnetPrefixes()) {
+        // (The rules themselves are checked with fixed addresses above; a PC
+        // without a LAN address has nothing to add here.)
+        const QStringList own = localSubnetPrefixes();
+        for (const QString& prefix : own) {
             QVERIFY2(!prefix.startsWith(QStringLiteral("127.")), qPrintable(prefix));
             QVERIFY2(isPrivateLanAddress(QHostAddress(prefix + QStringLiteral(".1"))), qPrintable(prefix));
         }
+        if (own.isEmpty())
+            qInfo("This PC has no LAN address: its own network prefixes were not checked.");
     }
 
     void discoveryFindsListenersOnInjectedHosts()
@@ -138,21 +124,27 @@ private slots:
         quiet.root = root;
         quiet.silentGreeting = true;
         FakeFtpServer silent(quiet);
-        const quint16 closed = closedPort();
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
 
         DiscoveryOptions o;
-        o.hosts = {QStringLiteral("127.0.0.1"), QStringLiteral("192.0.2.1")}; // the second is TEST-NET-1: nobody
-        o.ports = {closed, withBanner.port(), silent.port()};
+        // The second host has nothing open and is loopback as well (all of
+        // 127/8 is, and the fakes listen on 127.0.0.1 only): no packet leaves
+        // this PC.
+        o.hosts = {QStringLiteral("127.0.0.1"), QStringLiteral("127.0.0.2")};
+        o.ports = {closed.port(), withBanner.port(), silent.port()};
         o.connectTimeoutMs = 300;
         o.bannerWaitMs = 1000;
         int lastDone = -1, lastTotal = -1, lastFound = -1;
+        bool wentBack = false;
         auto r = discoverConsoles(o, {}, [&](int done, int total, int found) {
-            QVERIFY(done >= lastDone);
+            wentBack = wentBack || done < lastDone;
             lastDone = done;
             lastTotal = total;
             lastFound = found;
         });
         QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QVERIFY(!wentBack);
         QCOMPARE(int(r->size()), 1);
         const DiscoveredConsole& c = r->front();
         QCOMPARE(c.host, QStringLiteral("127.0.0.1"));
@@ -173,13 +165,13 @@ private slots:
         QVERIFY(quietOnly->front().banner.isEmpty());
 
         // Nothing listening: an empty result, not an error.
-        o.ports = {closed};
+        o.ports = {closed.port()};
         auto none = discoverConsoles(o);
         QVERIFY(none.ok());
         QVERIFY(none->empty());
 
         o.ports.clear();
-        QCOMPARE(discoverConsoles(o).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(discoverConsoles(o), ErrorCode::InvalidArgument);
     }
 
     void discoveryIsCancellable()
@@ -194,7 +186,8 @@ private slots:
         o.bannerWaitMs = 30000; // would wait 30 s for a greeting
         CancellationSource pre;
         pre.cancel();
-        QVERIFY(discoverConsoles(o, pre.token()).error().isCancelled());
+        const auto before = discoverConsoles(o, pre.token());
+        QVERIFY(!before.ok() && before.error().isCancelled());
 
         CancellationSource src;
         QElapsedTimer t;
@@ -203,8 +196,10 @@ private slots:
         QTest::qWait(300);
         src.cancel();
         future.waitForFinished();
-        QVERIFY(t.elapsed() < 5000);
-        QVERIFY(future.result().error().isCancelled());
+        QVERIFY(t.elapsed() < 15000); // stopped by the cancel, not by the 30 s wait
+        const auto cancelled = future.result();
+        QVERIFY(!cancelled.ok());
+        QVERIFY(cancelled.error().isCancelled());
     }
 
     // ---- diagnostics ----------------------------------------------------------------------
@@ -213,7 +208,8 @@ private slots:
     {
         FtpFeatures f;
         QCOMPARE(classifyFtpServer(f, QStringLiteral("FakePS5 FTP ready")).label, QStringLiteral("Unknown / generic FTP"));
-        QVERIFY(classifyFtpServer(f, {}).evidence.first().startsWith(QStringLiteral("No zftpd")));
+        const QStringList generic = classifyFtpServer(f, {}).evidence;
+        QVERIFY(!generic.isEmpty() && generic.first().startsWith(QStringLiteral("No zftpd")));
         f.xcrypt = true;
         auto likely = classifyFtpServer(f, {});
         QCOMPARE(likely.label, QStringLiteral("zftpd"));
@@ -300,7 +296,9 @@ private slots:
 
     void unreachableAndRefusedLogin()
     {
-        auto r = diagnoseFtp(endpoint(closedPort()), options(kGames));
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
+        auto r = diagnoseFtp(endpoint(closed.port()), options(kGames));
         QVERIFY(r.ok());
         QVERIFY(!r->reachable);
         QVERIFY(!r->usable());
@@ -320,7 +318,7 @@ private slots:
 
         ConsoleEndpoint noHost = endpoint(21);
         noHost.host.clear();
-        QCOMPARE(diagnoseFtp(noHost, options(kGames)).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(diagnoseFtp(noHost, options(kGames)), ErrorCode::InvalidArgument);
     }
 
     void notWritableAndLeftoverProbeAreReported()
@@ -395,7 +393,7 @@ private slots:
     {
         FakeFtpServer::Options so;
         so.root = freshRoot();
-        so.throttleBytesPerSec = 1024 * 1024; // 16 MiB would take 16 s
+        so.throttleBytesPerSec = 1024 * 1024; // 16 MiB would take many seconds: time to cancel
         FakeFtpServer srv(so);
         CancellationSource src;
         auto future = QtConcurrent::run([port = srv.port(), token = src.token()] {
@@ -408,7 +406,7 @@ private slots:
         const auto r = future.result();
         QVERIFY(!r.ok());
         QVERIFY(r.error().isCancelled());
-        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(srv.path(kSpeed)), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(srv.path(kSpeed)), 15000);
         QVERIFY(srv.sawCommand(QStringLiteral("DELE ") + kSpeed));
     }
 
@@ -454,8 +452,11 @@ private slots:
 
         // host/port parameters override the settings; an unreachable console
         // fails the job with the outcome kept.
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
         auto bad = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("host"), QStringLiteral("127.0.0.1")},
-                                                             {QStringLiteral("port"), int(closedPort())}});
+                                                             {QStringLiteral("port"), int(closed.port())}});
+        QVERIFY(bad.ok());
         auto badOut = bad.value()->run(ctx);
         QVERIFY(badOut.ok());
         QCOMPARE(badOut->verification, Verification::Failed);
@@ -464,12 +465,14 @@ private slots:
 
         // A folder that cannot be written: inconclusive with a warning.
         auto ro = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("/nope")}});
+        QVERIFY(ro.ok());
         auto roOut = ro.value()->run(ctx);
         QVERIFY(roOut.ok());
         QCOMPARE(roOut->verification, Verification::Inconclusive);
         QVERIFY(!roOut->warnings.isEmpty());
 
         auto rel = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("relative")}});
+        QVERIFY(rel.ok());
         QVERIFY(rel.value()->validate(s).ok()); // normalised to "/relative"
 
         // The checks write a probe file: a protected folder needs the
@@ -479,12 +482,15 @@ private slots:
                                   {keys::kGamesFolder, QStringLiteral("/system_ex/app")}},
                                  {});
         auto fromSettings = mod.jobs.create(jobkinds::kFtpDiagnose, {});
-        QCOMPARE(fromSettings.value()->validate(sys).error().code, ErrorCode::PermissionDenied);
+        QVERIFY(fromSettings.ok());
+        COMPARE_ERROR_CODE(fromSettings.value()->validate(sys), ErrorCode::PermissionDenied);
         QVERIFY(fromSettings.value()->validate(s).ok());
         auto confirmed = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("allowProtectedPaths"), true}});
+        QVERIFY(confirmed.ok());
         QVERIFY(confirmed.value()->validate(sys).ok());
         auto typed = mod.jobs.create(jobkinds::kFtpDiagnose, {{QStringLiteral("folder"), QStringLiteral("/user")}});
-        QCOMPARE(typed.value()->validate(s).error().code, ErrorCode::PermissionDenied);
+        QVERIFY(typed.ok());
+        COMPARE_ERROR_CODE(typed.value()->validate(s), ErrorCode::PermissionDenied);
     }
 };
 

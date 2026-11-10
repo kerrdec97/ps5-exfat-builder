@@ -125,7 +125,8 @@ private slots:
         qunsetenv("FW_OFFLINE"); // the page behaves as for a user (scan on first show, engine prepare)
         m_ctx = std::make_unique<AppContext>();
         QVERIFY(m_ctx->initialize().ok());
-        (void)m_ctx->settings().setValue(QStringLiteral("general.checkForUpdatesOnStart"), false); // no network
+        // With FW_OFFLINE gone this setting is what keeps the window off the network.
+        QVERIFY(m_ctx->settings().setValue(QStringLiteral("general.checkForUpdatesOnStart"), false).ok());
         m_window = std::make_unique<MainWindow>(*m_ctx);
         m_window->resize(1440, 920);
         m_window->show();
@@ -156,7 +157,7 @@ private slots:
         shot(QStringLiteral("1-scanned"));
     }
 
-    void withoutEngineStartIsRefused()
+    void withoutEngineThePageSaysSo()
     {
         if (m_e2e)
             QSKIP("the engine is configured");

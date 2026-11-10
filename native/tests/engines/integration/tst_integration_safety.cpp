@@ -36,6 +36,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
 #include <cstring>
 
 using namespace fw;
@@ -155,16 +156,18 @@ ampr::PackInput input(const QByteArray& path, const QByteArray& data)
     return p;
 }
 
-void zipFolder(const QString& folder, const QString& zipPath, const QString& prefix)
+bool zipFolder(const QString& folder, const QString& zipPath, const QString& prefix)
 {
     zip::Writer w;
-    QVERIFY(w.open(zipPath, true).ok());
+    if (!w.open(zipPath, true).ok())
+        return false;
     QDirIterator it(folder, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString p = it.next();
-        QVERIFY(w.addFile(prefix + QDir(folder).relativeFilePath(p), p, zip::Method::Deflate, {}).ok());
+        if (!w.addFile(prefix + QDir(folder).relativeFilePath(p), p, zip::Method::Deflate, {}).ok())
+            return false;
     }
-    QVERIFY(w.finish(true).ok());
+    return w.finish(true).ok();
 }
 
 // Renames the entry `from` of an exFAT image to `to` (same length, at most 15
@@ -323,12 +326,14 @@ private slots:
         // The (empty) output gains a file while the job is packing: the job
         // fails at the end and the folder with the user's file is untouched.
         QVERIFY(QDir().mkpath(packed));
-        bool dropped = false;
+        // The sink may run on any of the job's threads: one of them does the deed.
+        std::atomic<bool> dropped{false};
+        std::atomic_flag droppedOnce = ATOMIC_FLAG_INIT;
         auto late = m_env->runDirect(ampr::kPackJob, pack, [&](const ProgressSnapshot& s) {
-            if (!dropped && s.phase == u"Packing")
+            if (s.phase == u"Packing" && !droppedOnce.test_and_set())
                 dropped = fwtest::writeTextFile(packed + QStringLiteral("/keep.txt"), "mine");
         });
-        QVERIFY(dropped);
+        QVERIFY(dropped.load());
         QVERIFY(!late.ok());
         QCOMPARE(late.error().code, ErrorCode::AlreadyExists);
         QCOMPARE(listAll(base), QStringList({QStringLiteral("packed"), QStringLiteral("packed/keep.txt")}));
@@ -355,13 +360,14 @@ private slots:
         const QString moving = m_root.filePath(QStringLiteral("owned-src/PPSA01234"));
         for (const QString& rel : {QStringLiteral("eboot.bin"), QStringLiteral("sce_sys/param.json"), QStringLiteral("data/level1.bin")})
             QVERIFY(fwtest::writeTextFile(moving + u'/' + rel, fileBytes(m_game + u'/' + rel)));
-        bool shrunk = false;
+        std::atomic<bool> shrunk{false};
+        std::atomic_flag shrunkOnce = ATOMIC_FLAG_INIT;
         auto failed = m_env->runDirect(ampr::kPackJob, {{QStringLiteral("source"), moving}, {QStringLiteral("output"), packed}},
                                        [&](const ProgressSnapshot& s) {
-                                           if (!shrunk && s.phase == u"Packing")
+                                           if (s.phase == u"Packing" && !shrunkOnce.test_and_set())
                                                shrunk = QFile::resize(moving + QStringLiteral("/data/level1.bin"), 1000);
                                        });
-        QVERIFY(shrunk);
+        QVERIFY(shrunk.load());
         QVERIFY(!failed.ok());
         QVERIFY(!failed.error().isCancelled());
         QCOMPARE(listAll(base), QStringList({QStringLiteral("packed")}));
@@ -532,7 +538,7 @@ private slots:
     {
         const QString zip = m_root.filePath(QStringLiteral("zips/PPSA01234.zip"));
         QVERIFY(QDir().mkpath(QFileInfo(zip).absolutePath()));
-        zipFolder(m_game, zip, QStringLiteral("PPSA01234/"));
+        QVERIFY(zipFolder(m_game, zip, QStringLiteral("PPSA01234/")));
         if (QTest::currentTestFailed())
             return;
         const QString out = m_root.filePath(QStringLiteral("zips/out"));
@@ -709,7 +715,7 @@ private slots:
     {
         const QString zip = m_root.filePath(QStringLiteral("early/PPSA01234.zip"));
         QVERIFY(QDir().mkpath(m_root.filePath(QStringLiteral("early/out.ffpfs")))); // a folder of that name
-        zipFolder(m_game, zip, QStringLiteral("PPSA01234/"));
+        QVERIFY(zipFolder(m_game, zip, QStringLiteral("PPSA01234/")));
         if (QTest::currentTestFailed())
             return;
         auto job = m_env->jobs.create(QStringLiteral("image.pfs.build"),

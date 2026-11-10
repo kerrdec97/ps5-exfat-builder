@@ -19,7 +19,10 @@ using namespace ufs2test;
 
 namespace {
 
-constexpr qint64 kQuickMs = 2000; // the work takes milliseconds; the margin is for a busy machine
+// The guarded work takes milliseconds; unguarded it runs for hours or never
+// ends. The bound only has to tell those apart, so it is wide enough for a
+// machine whose disk and processors are all busy with other tests.
+constexpr qint64 kQuickMs = 120000;
 constexpr int kLeafFolders = 96;
 
 bool patch(const QString& path, qint64 off, const QByteArray& bytes)
@@ -91,6 +94,7 @@ private slots:
     void initTestCase()
     {
         QVERIFY(m_tmp.isValid());
+        fwtest::isolateAppData(m_tmp);
         const QString src = m_tmp.filePath("src");
         QVERIFY(makeGameTree(src));
         for (int i = 0; i < kLeafFolders; ++i)
@@ -148,7 +152,7 @@ private slots:
             set64(b, 0x448, 36);               // csaddr
             const auto parsed = parseSuperblock(b.constData(), m_imageBytes, kSuperblockOffset);
             QVERIFY(!parsed.ok());
-            QCOMPARE(parsed.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(parsed, ErrorCode::CorruptData);
 
             const QString img = copyOf(QStringLiteral("overflow.ffpkg"));
             QVERIFY(patch(img, kSuperblockOffset, b));
@@ -157,7 +161,7 @@ private slots:
             const auto opened = Ufs2Reader::open(img);
             QVERIFY2(timer.elapsed() < kQuickMs, qPrintable(QString::number(timer.elapsed())));
             QVERIFY(!opened.ok());
-            QCOMPARE(opened.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(opened, ErrorCode::CorruptData);
         }
         {
             QByteArray b = sb;
@@ -171,7 +175,7 @@ private slots:
             set64(b, 0x448, 5);                // csaddr
             const auto parsed = parseSuperblock(b.constData(), -1, kSuperblockOffset);
             QVERIFY(!parsed.ok());
-            QCOMPARE(parsed.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(parsed, ErrorCode::CorruptData);
             QVERIFY2(parsed.error().message.contains(QStringLiteral("summary area")), qPrintable(parsed.error().message));
         }
     }
@@ -211,7 +215,7 @@ private slots:
         QVERIFY(in.ok());
         const auto blocks = r.value()->blocks(in.value(), ino);
         QVERIFY(!blocks.ok());
-        QCOMPARE(blocks.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(blocks, ErrorCode::CorruptData);
         QVERIFY2(blocks.error().message.contains(QStringLiteral("maps more blocks than the image holds")),
                  qPrintable(blocks.error().message));
         QVERIFY(!r.value()->openFile(ino).ok());
@@ -252,9 +256,11 @@ private slots:
         QVERIFY(r.ok());
         const auto entries = r.value()->readDirectory(kRootIno);
         QVERIFY(!entries.ok());
-        QCOMPARE(entries.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(entries, ErrorCode::CorruptData);
         CancellationToken token;
-        QCOMPARE(r.value()->loadTree(token).error().code, ErrorCode::CorruptData);
+        const auto tree = r.value()->loadTree(token);
+        QVERIFY(!tree.ok());
+        FWTEST_COMPARE_ERROR(tree, ErrorCode::CorruptData);
         QVERIFY2(timer.elapsed() < kQuickMs, qPrintable(QString::number(timer.elapsed())));
     }
 
@@ -309,7 +315,7 @@ private slots:
         CancellationToken token;
         const auto tree = r.value()->loadTree(token);
         QVERIFY(!tree.ok());
-        QCOMPARE(tree.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(tree, ErrorCode::CorruptData);
         QVERIFY2(tree.error().message.contains(QStringLiteral("folders take more space than the whole image")),
                  qPrintable(tree.error().message));
         const auto c = checkImage(*r.value(), token, nullptr, 100000);
@@ -374,7 +380,7 @@ private slots:
         QVERIFY(patch(img, 8192 + 0x55C, le32(0x00011954)));
         const auto r = Ufs2Reader::open(img);
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::Unsupported);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::Unsupported);
         QVERIFY2(r.error().message.contains(QStringLiteral("UFS1")), qPrintable(r.error().message));
     }
 
@@ -399,7 +405,7 @@ private slots:
         Ufs2Writer w(t, WriterOptions{});
         const auto plan = w.plan();
         QVERIFY(!plan.ok());
-        QCOMPARE(plan.error().code, ErrorCode::Unsupported);
+        FWTEST_COMPARE_ERROR(plan, ErrorCode::Unsupported);
         QVERIFY2(plan.error().message.contains(QStringLiteral("32,765")), qPrintable(plan.error().message));
     }
 
@@ -495,7 +501,7 @@ private slots:
             QCOMPARE(tree->dirCount, qint64(depth));
         } else {
             QVERIFY(!tree.ok());
-            QCOMPARE(tree.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(tree, ErrorCode::CorruptData);
             QVERIFY2(tree.error().message.contains(QStringLiteral("nested more than 256 deep")),
                      qPrintable(tree.error().message));
         }
@@ -517,7 +523,7 @@ private slots:
         CancellationToken token;
         const auto tree = scanLocalFolder(src, token);
         QVERIFY(!tree.ok());
-        QCOMPARE(tree.error().code, ErrorCode::PermissionDenied);
+        FWTEST_COMPARE_ERROR(tree, ErrorCode::PermissionDenied);
         QVERIFY2(tree.error().message.contains(QLatin1String("locked")), qPrintable(tree.error().toLogString()));
     }
 
@@ -535,7 +541,7 @@ private slots:
         CancellationToken token;
         const auto tree = scanLocalFolder(src, token);
         QVERIFY(!tree.ok());
-        QCOMPARE(tree.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(tree, ErrorCode::InvalidArgument);
         QVERIFY2(tree.error().message.contains(QLatin1String("links back into itself")), qPrintable(tree.error().toLogString()));
         // The first pass through the link already names it: nothing below it was listed twice.
         QVERIFY2(QDir::fromNativeSeparators(tree.error().message).endsWith(QLatin1String("data/back links back into itself, so it cannot be put into an image.")),

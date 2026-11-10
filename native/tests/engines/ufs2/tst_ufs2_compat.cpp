@@ -8,8 +8,10 @@
 //  * FreeBSD fsck_ffs / dumpfs (ufsutils: fsck.ufs, dumpfs.ufs; FW_FSCK_UFS /
 //    FW_DUMPFS_UFS or PATH) must accept the native images.
 //  * UFS2Tool's own fsck_ufs and ls must accept them too.
-//  * NetBSD makefs (PATH) images must be readable by the native reader.
-// Each check is skipped when its tool is not installed.
+//  * NetBSD makefs (FW_MAKEFS or PATH) images must be readable by the native
+//    reader.
+// Each check is skipped when its tool is not installed. The file-system tools
+// are taken from PATH on Unix only; on Windows the variable must name them.
 
 #include "Ufs2TestUtil.h"
 
@@ -98,7 +100,11 @@ private:
     }
 
 private slots:
-    void initTestCase() { QVERIFY(m_tmp.isValid()); }
+    void initTestCase()
+    {
+        QVERIFY(m_tmp.isValid());
+        fwtest::isolateAppData(m_tmp);
+    }
 
     void identical_gameTree_legacyParams()
     {
@@ -276,7 +282,13 @@ private slots:
             QVERIFY(mkfile(src + QStringLiteral("/small/%1/f%2.bin").arg(i % 30).arg(i), 3000 + i, quint32(9000 + i)));
         const QString ref = m_tmp.filePath("bench-ufs2tool.ffpkg");
         const QString mine = m_tmp.filePath("bench-native.ffpkg");
+        // Unix only: a "sync" on a Windows PATH is another tool (it asks for a
+        // licence to be accepted and flushes every drive), not coreutils.
+#ifdef Q_OS_UNIX
         const QString sync = QStandardPaths::findExecutable(QStringLiteral("sync"));
+#else
+        const QString sync;
+#endif
         auto flush = [&] {
             if (!sync.isEmpty())
                 runTool(sync, {});
@@ -356,9 +368,9 @@ private slots:
 
     void readsNetBsdMakefsImage()
     {
-        const QString makefs = findTool(QStringLiteral("FW_MAKEFS"), {QStringLiteral("makefs")});
+        const QString makefs = findUnixTool(QStringLiteral("FW_MAKEFS"), {QStringLiteral("makefs")});
         if (makefs.isEmpty())
-            QSKIP("makefs (NetBSD makefs, an independent FFS writer) not available");
+            QSKIP("makefs (NetBSD makefs, an independent FFS writer) not available (set FW_MAKEFS)");
         const QString src = m_tmp.filePath("makefs-src");
         QVERIFY(makeGameTree(src, 3 * 1024 * 1024 + 777));
         QVERIFY(mkfile(src + "/frag/tail.bin", 9000, 21)); // ends in a fragment
@@ -379,6 +391,7 @@ private slots:
         QVERIFY2(check->ok(), qPrintable(check->problems.join(u'\n')));
         // Every file reads back identically.
         const auto expected = snapshotFolder(src);
+        QVERIFY(expected.size() >= 8);
         for (auto it = expected.begin(); it != expected.end(); ++it) {
             if (it.key().endsWith(u'/'))
                 continue;

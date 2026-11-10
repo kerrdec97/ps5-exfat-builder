@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QtEndian>
 
+#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -40,6 +41,69 @@ inline bool put(const QString& root, const QString& rel, const QByteArray& data)
     return fwtest::writeTextFile(QDir(root).filePath(rel), data);
 }
 
+// The error of a call that must have failed. error() of a success is
+// undefined (it ends the test program); this gives a marker error instead,
+// so the check that follows fails in the ordinary way.
+template <typename R>
+fw::Error errorOf(const R& result)
+{
+    return result.ok() ? fw::Error(fw::ErrorCode::Internal, QStringLiteral("<the call succeeded>")) : result.error();
+}
+
+// Sets an environment variable of this process (and of the tools it starts)
+// from a QString. qputenv() would send the UTF-8 bytes through the ANSI code
+// page on Windows and damage a path with other characters; the stand-in tool
+// reads the wide environment. An empty value removes the variable.
+inline void setEnv(const char* name, const QString& value)
+{
+#ifdef Q_OS_WIN
+    _wputenv_s(reinterpret_cast<const wchar_t*>(QString::fromLatin1(name).utf16()),
+               reinterpret_cast<const wchar_t*>(value.utf16()));
+#else
+    if (value.isEmpty())
+        qunsetenv(name);
+    else
+        qputenv(name, value.toLocal8Bit());
+#endif
+}
+
+// Sets a variable for a scope and puts the earlier state back afterwards.
+class EnvVar {
+public:
+    EnvVar(const char* name, const QByteArray& utf8Value)
+        : m_name(name), m_wasSet(qEnvironmentVariableIsSet(name)), m_before(qEnvironmentVariable(name))
+    {
+        setEnv(name, QString::fromUtf8(utf8Value));
+    }
+    ~EnvVar() { setEnv(m_name, m_wasSet ? m_before : QString()); }
+    EnvVar(const EnvVar&) = delete;
+    EnvVar& operator=(const EnvVar&) = delete;
+
+private:
+    const char* m_name;
+    bool m_wasSet;
+    QString m_before;
+};
+
+// Keeps the FPKG engine inside `root` and away from the developer's own
+// tools: no toolkit from SCE_PROSPERO_PUBTOOLS, and the system temporary
+// folder and %ProgramData% (where the engine puts its ASCII links and a work
+// folder) are folders under `root`. False when a folder could not be made or
+// the temporary folder did not follow.
+inline bool confineEngineTo(const QString& root)
+{
+    qunsetenv("SCE_PROSPERO_PUBTOOLS");
+    const QString temp = QDir(root).filePath(QStringLiteral("sys-temp"));
+    const QString programData = QDir(root).filePath(QStringLiteral("program-data"));
+    if (!QDir().mkpath(temp) || !QDir().mkpath(programData))
+        return false;
+    setEnv("TMP", QDir::toNativeSeparators(temp));
+    setEnv("TEMP", QDir::toNativeSeparators(temp));
+    setEnv("TMPDIR", QDir::toNativeSeparators(temp));
+    setEnv("ProgramData", QDir::toNativeSeparators(programData));
+    return QFileInfo(QDir::tempPath()) == QFileInfo(temp);
+}
+
 inline QByteArray be32(quint32 v)
 {
     QByteArray b(4, '\0');
@@ -61,47 +125,52 @@ inline QByteArray makePng(int colorType, int bitDepth = 8)
 }
 
 // The synthetic dump of the golden tests (see tests/data/fpkg/make_goldens.py).
-inline void makeGoldenDump(const QString& d)
+// False when a golden source file is missing or a file could not be written.
+[[nodiscard]] inline bool makeGoldenDump(const QString& d)
 {
-    put(d, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(1000, '\0'));
-    put(d, QStringLiteral("sce_sys/param.json"), golden(QStringLiteral("source_param.json")));
-    put(d, QStringLiteral("sce_sys/keystone"), QByteArray(96, 'K'));
-    put(d, QStringLiteral("sce_sys/icon0.png"), makePng(2));
-    put(d, QStringLiteral("sce_sys/param.sfo"), "sfo");
-    put(d, QStringLiteral("sce_sys/about/right.sprx"), "x");
-    put(d, QStringLiteral("sce_sys/playgo-scenario.json"), golden(QStringLiteral("source_scenario.json")));
-    put(d, QStringLiteral("sce_module/libc.prx"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(100, '\0'));
-    put(d, QStringLiteral("Data/b.pak"), QByteArray(300, 'b'));
-    put(d, QStringLiteral("Data/A.pak"), QByteArray(200, 'a'));
-    put(d, QStringLiteral("Data/_x.bin"), QByteArray());
-    put(d, QStringLiteral("Data/1.bin"), "1");
-    put(d, QStringLiteral("Data/a&b.bin"), "&");
-    QDir().mkpath(QDir(d).filePath(QStringLiteral("Data/Empty")));
-    put(d, QStringLiteral("Data/JunkOnly/.DS_Store"), "junk");
-    put(d, QStringLiteral("Data/Emptied/old.gp5"), "<x/>");
-    QDir().mkpath(QDir(d).filePath(QStringLiteral("addcont0")));
-    put(d, QStringLiteral("dlc_emu.ini"),
-        "[PSAC]\r\ncontent_id=UP0000-PPSA01234_00-GOLDENDLC0000001\r\nmount_point=/app0/addcont0\r\n");
-    put(d, QStringLiteral("._eboot.bin"), "ad");
-    put(d, QStringLiteral("Thumbs.db"), "x");
-    put(d, QStringLiteral("old.exfat"), "img");
-    put(d, QStringLiteral("fakelib/libSceAmpr.sprx"), "a");
+    const QByteArray param = golden(QStringLiteral("source_param.json"));
+    const QByteArray scenario = golden(QStringLiteral("source_scenario.json"));
+    return !param.isEmpty() && !scenario.isEmpty()
+        && put(d, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(1000, '\0'))
+        && put(d, QStringLiteral("sce_sys/param.json"), param)
+        && put(d, QStringLiteral("sce_sys/keystone"), QByteArray(96, 'K'))
+        && put(d, QStringLiteral("sce_sys/icon0.png"), makePng(2))
+        && put(d, QStringLiteral("sce_sys/param.sfo"), "sfo")
+        && put(d, QStringLiteral("sce_sys/about/right.sprx"), "x")
+        && put(d, QStringLiteral("sce_sys/playgo-scenario.json"), scenario)
+        && put(d, QStringLiteral("sce_module/libc.prx"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(100, '\0'))
+        && put(d, QStringLiteral("Data/b.pak"), QByteArray(300, 'b'))
+        && put(d, QStringLiteral("Data/A.pak"), QByteArray(200, 'a'))
+        && put(d, QStringLiteral("Data/_x.bin"), QByteArray())
+        && put(d, QStringLiteral("Data/1.bin"), "1")
+        && put(d, QStringLiteral("Data/a&b.bin"), "&")
+        && QDir().mkpath(QDir(d).filePath(QStringLiteral("Data/Empty")))
+        && put(d, QStringLiteral("Data/JunkOnly/.DS_Store"), "junk")
+        && put(d, QStringLiteral("Data/Emptied/old.gp5"), "<x/>")
+        && QDir().mkpath(QDir(d).filePath(QStringLiteral("addcont0")))
+        && put(d, QStringLiteral("dlc_emu.ini"),
+               "[PSAC]\r\ncontent_id=UP0000-PPSA01234_00-GOLDENDLC0000001\r\nmount_point=/app0/addcont0\r\n")
+        && put(d, QStringLiteral("._eboot.bin"), "ad")
+        && put(d, QStringLiteral("Thumbs.db"), "x")
+        && put(d, QStringLiteral("old.exfat"), "img")
+        && put(d, QStringLiteral("fakelib/libSceAmpr.sprx"), "a");
 }
 
-// A small game dump for end-to-end builds.
-inline void makeSimpleDump(const QString& d, const QString& cid = kCid, const QString& version = QStringLiteral("01.000.000"))
+// A small game dump for end-to-end builds. False when a file could not be written.
+[[nodiscard]] inline bool makeSimpleDump(const QString& d, const QString& cid = kCid,
+                                         const QString& version = QStringLiteral("01.000.000"))
 {
-    put(d, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(1000, '\0'));
-    put(d, QStringLiteral("sce_sys/param.json"),
-        QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"%2\",\"applicationCategoryType\":0,"
-                       "\"applicationDrmType\":\"free\",\"localizedParameters\":{\"defaultLanguage\":\"en-US\","
-                       "\"en-US\":{\"titleName\":\"Test Game\"}}}").arg(cid, version).toUtf8());
-    put(d, QStringLiteral("sce_sys/keystone"), QByteArray(96, 'K'));
-    put(d, QStringLiteral("sce_sys/icon0.png"), makePng(2));
-    put(d, QStringLiteral("sce_sys/param.sfo"), "sfo");
-    put(d, QStringLiteral("Data/A.pak"), QByteArray(2000, 'a'));
-    put(d, QStringLiteral("Data/shared.pak"), QByteArray(200, 'n'));
-    QDir().mkpath(QDir(d).filePath(QStringLiteral("addcont0")));
+    return put(d, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(1000, '\0'))
+        && put(d, QStringLiteral("sce_sys/param.json"),
+               QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"%2\",\"applicationCategoryType\":0,"
+                              "\"applicationDrmType\":\"free\",\"localizedParameters\":{\"defaultLanguage\":\"en-US\","
+                              "\"en-US\":{\"titleName\":\"Test Game\"}}}").arg(cid, version).toUtf8())
+        && put(d, QStringLiteral("sce_sys/keystone"), QByteArray(96, 'K'))
+        && put(d, QStringLiteral("sce_sys/icon0.png"), makePng(2))
+        && put(d, QStringLiteral("sce_sys/param.sfo"), "sfo")
+        && put(d, QStringLiteral("Data/A.pak"), QByteArray(2000, 'a'))
+        && put(d, QStringLiteral("Data/shared.pak"), QByteArray(200, 'n'))
+        && QDir().mkpath(QDir(d).filePath(QStringLiteral("addcont0")));
 }
 
 // ---- PlayGo tables (hand-built, our own layout description) --------------------------

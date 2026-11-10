@@ -216,11 +216,24 @@ private slots:
         QDir().mkpath(a);
         QDir().mkpath(b);
         QVERIFY(fwtest::writeTextFile(legacy, QStringLiteral(R"({"bp_folders": ["%1"], "bp_scan_folder": "%2", "shutdown_action": "sleep", "retry_count": 9})").arg(a, b).toUtf8()));
+        // No module registers an importer today, so the test brings its own:
+        // it needs two legacy keys at once to produce one value.
+        int calls = 0;
+        reg.schema->addLegacyImporter([&calls, a](const QJsonObject& file) {
+            ++calls;
+            QVariantMap out;
+            const QJsonArray folders = file.value(QStringLiteral("bp_folders")).toArray();
+            if (folders.size() == 1 && folders.at(0).toString() == a)
+                out.insert(general::keys::kDefaultOutputDir, file.value(QStringLiteral("bp_scan_folder")).toString());
+            return out;
+        });
         SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("s8/settings.json")));
         QVERIFY(store.load().ok());
         auto n = store.importLegacy(legacy);
         QVERIFY(n.ok());
-        QVERIFY(n.value() >= 2);
+        QCOMPARE(calls, 1);
+        QCOMPARE(n.value(), 3); // two mapped keys and the importer's one
+        QCOMPARE(QDir::cleanPath(store.value(general::keys::kDefaultOutputDir).toString()), QDir::cleanPath(b));
         QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("sleep"));
         QCOMPARE(store.value(general::keys::kAutoRetryCount).toInt(), 5); // clamped
     }

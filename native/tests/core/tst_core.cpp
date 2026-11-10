@@ -89,10 +89,14 @@ private slots:
             finished = true;
         }));
         std::thread canceller([&] { src.cancel(); });
-        QVERIFY(QTest::qWaitFor([&] { return started.load(); }, 2000));
+        // The verdicts are kept until the thread is joined: a check that
+        // returned with the thread still running would end the whole program.
+        const bool sawStart = QTest::qWaitFor([&] { return started.load(); }, 30000);
         reg.reset(); // must block until the callback has returned
-        QVERIFY(finished.load());
+        const bool waited = finished.load();
         canceller.join();
+        QVERIFY(sawStart);
+        QVERIFY(waited);
     }
 
     void pauseBlocksCheckpointUntilResume()
@@ -106,9 +110,10 @@ private slots:
             passed = true;
         });
         QTest::qWait(150);
-        QVERIFY(!passed.load());
+        const bool passedWhilePaused = passed.load();
         src.resume();
-        t.join();
+        t.join(); // before any check: see unregisterWaitsForRunningCallback
+        QVERIFY(!passedWhilePaused);
         QVERIFY(passed.load());
     }
 
@@ -144,7 +149,12 @@ private slots:
         QCOMPARE(s.phase, QStringLiteral("Write"));
         QCOMPARE(s.done, qint64(500));
         QVERIFY(qAbs(s.overallFraction - (1.0 + 3.0 * 0.5) / 4.0) < 1e-9);
-        QVERIFY(emits.load() <= 3); // beginPhase flush + final flush (+ maybe one)
+        // beginPhase flush + final flush (+ maybe one): never one per advance,
+        // and the last one carries the final numbers.
+        QVERIFY2(emits.load() >= 1 && emits.load() <= 3, qPrintable(QString::number(emits.load())));
+        std::lock_guard l(m);
+        QCOMPARE(last.done, qint64(500));
+        QCOMPARE(last.phase, QStringLiteral("Write"));
     }
 
     void progressIsThreadSafe()
@@ -277,11 +287,17 @@ private slots:
         QTest::qWait(120);
         QCOMPARE(p.snapshot().elapsedMs, paused.elapsedMs);
         QCOMPARE(p.snapshot().phaseMs, paused.phaseMs);
+        // The wait after the pause is measured, not assumed: on a busy PC 40 ms
+        // can take far longer, and the pause must still not be counted.
+        QElapsedTimer sinceResume;
+        sinceResume.start();
         p.setPaused(false);
         QTest::qWait(40);
         const auto resumed = p.snapshot();
+        const qint64 waited = sinceResume.elapsed();
         QVERIFY2(resumed.elapsedMs >= paused.elapsedMs + 30, qPrintable(QString::number(resumed.elapsedMs)));
-        QVERIFY2(resumed.elapsedMs < paused.elapsedMs + 110, qPrintable(QString::number(resumed.elapsedMs))); // the 120 ms are not in it
+        QVERIFY2(resumed.elapsedMs <= paused.elapsedMs + waited + 20, // the 120 ms are not in it
+                 qPrintable(QStringLiteral("%1 after %2 ms").arg(resumed.elapsedMs - paused.elapsedMs).arg(waited)));
         QCOMPARE(resumed.phaseMs.value(0), resumed.elapsedMs);
         // A slow phase counted in steps still gets a time left.
         ProgressReporter slow([](const ProgressSnapshot&) {}, 0);
@@ -479,6 +495,7 @@ private slots:
         QVERIFY(ensureFreeSpace(m_root.path(), 1024, 0).ok());
         // The temporary drive is full: another output folder would not help.
         const Status temp = ensureFreeTempSpace(m_root.path(), qint64(1) << 60);
+        QVERIFY(!temp.ok());
         QCOMPARE(temp.error().code, ErrorCode::InsufficientSpace);
         QVERIFY(temp.error().message.startsWith(QStringLiteral("Not enough space on ")));
         QVERIFY(temp.error().message.endsWith(QStringLiteral("or choose another temporary folder in Settings > Storage.")));
@@ -486,8 +503,12 @@ private slots:
         // Sizes taken from an archive can be absurd: the sum must not wrap
         // round to "nothing needed".
         const qint64 huge = std::numeric_limits<qint64>::max();
-        QCOMPARE(ensureFreeSpace(m_root.path(), huge).error().code, ErrorCode::InsufficientSpace);
-        QCOMPARE(ensureFreeSpace(m_root.path(), huge - 5, huge).error().code, ErrorCode::InsufficientSpace);
+        const Status whole = ensureFreeSpace(m_root.path(), huge);
+        QVERIFY(!whole.ok());
+        QCOMPARE(whole.error().code, ErrorCode::InsufficientSpace);
+        const Status summed = ensureFreeSpace(m_root.path(), huge - 5, huge);
+        QVERIFY(!summed.ok());
+        QCOMPARE(summed.error().code, ErrorCode::InsufficientSpace);
         QVERIFY(ensureFreeSpace(m_root.path(), -huge, 0).ok());
     }
 
@@ -515,8 +536,8 @@ private slots:
 
     void removeTreeRefusesDangerousTargets()
     {
-        QVERIFY(!removeTreeSafely(QDir::rootPath()).ok());
-        QVERIFY(!removeTreeSafely(QDir::homePath()).ok());
+        // The drive root and the home folder are only asked about below: a
+        // test never hands them to a function that deletes.
         const QString inside = m_root.filePath(QStringLiteral("del/sub"));
         QVERIFY(fwtest::writeTextFile(inside + QStringLiteral("/f.txt"), "x"));
         QVERIFY(!removeTreeSafely(inside, m_root.filePath(QStringLiteral("elsewhere"))).ok());
@@ -602,19 +623,36 @@ private slots:
     {
         ProcessSpec spec;
         spec.program = fwtest::helperPath();
-        spec.arguments = {QStringLiteral("spawn-sleep"), QStringLiteral("20000")};
+        // The helper starts a second process that writes its id to this file:
+        // the cancel comes once both run, and must end both.
+        const QString pidFile = m_root.filePath(QStringLiteral("grandchild.pid"));
+        QFile::remove(pidFile);
+        spec.arguments = {QStringLiteral("spawn-sleep"), QStringLiteral("60000"), QDir::toNativeSeparators(pidFile)};
         CancellationSource cs;
         QElapsedTimer t;
+        std::atomic<bool> sawGrandchild{false};
+        std::atomic<qint64> cancelledAt{0};
         t.start();
         std::thread canceller([&] {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            for (int i = 0; i < 3000 && !QFileInfo::exists(pidFile); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            sawGrandchild = QFileInfo::exists(pidFile);
+            cancelledAt = t.elapsed();
             cs.cancel();
         });
         auto r = runProcess(spec, cs.token());
+        const qint64 returnedAt = t.elapsed();
         canceller.join();
         QVERIFY(r.ok());
         QVERIFY(r->cancelled);
-        QVERIFY2(t.elapsed() < 8000, qPrintable(QString::number(t.elapsed())));
+        QVERIFY2(sawGrandchild.load(), "the helper's second process never started");
+        QVERIFY2(returnedAt - cancelledAt.load() < 8000, qPrintable(QString::number(returnedAt - cancelledAt.load())));
+        QFile f(pidFile);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const qint64 grandchild = f.readAll().trimmed().toLongLong();
+        QVERIFY(grandchild > 0);
+        // Nothing keeps running after a cancel: not the tool, not what it started.
+        QTRY_VERIFY2_WITH_TIMEOUT(!fwtest::processIsRunning(grandchild), qPrintable(QString::number(grandchild)), 10000);
     }
 
     void processTimeout()

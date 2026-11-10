@@ -158,12 +158,13 @@ class TstPagesbBackport : public QObject {
     {
         return QTest::qWaitFor([this] { return !page()->isBusy(); }, ms);
     }
-    void cancelRun()
+    bool cancelRun()
     {
         QPushButton* cancel = headerButton(QStringLiteral("Cancel"));
-        QVERIFY(cancel);
+        if (!cancel)
+            return false;
         clickLater(cancel);
-        QVERIFY(waitIdle());
+        return waitIdle();
     }
 
 private slots:
@@ -235,7 +236,8 @@ private slots:
         theme::apply(qApp);
         m_ctx = std::make_unique<AppContext>();
         QVERIFY(m_ctx->initialize().ok());
-        (void)m_ctx->settings().setValue(QStringLiteral("general.checkForUpdatesOnStart"), false); // no network
+        // With FW_OFFLINE gone this setting is what keeps the window off the network.
+        QVERIFY(m_ctx->settings().setValue(QStringLiteral("general.checkForUpdatesOnStart"), false).ok());
         m_window = std::make_unique<MainWindow>(*m_ctx);
         m_window->resize(1440, 920);
         m_window->show();
@@ -336,8 +338,15 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(rows(), 3, 30000);
 
         // The same folder again: nothing is written and nothing is scanned again.
+        // The file is dated an hour back first: a rewrite then shows on every
+        // file system, however coarse its clock.
+        {
+            QFile f(m_settingsFile);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            QVERIFY(f.setFileTime(QDateTime::currentDateTime().addSecs(-3600), QFileDevice::FileModificationTime));
+        }
         const QDateTime stamp = QFileInfo(m_settingsFile).lastModified();
-        QTest::qWait(1100);
+        QVERIFY(stamp.secsTo(QDateTime::currentDateTime()) > 3000);
         page()->navigateWith({{QStringLiteral("folder"), mine}});
         QCOMPARE(QFileInfo(m_settingsFile).lastModified(), stamp);
 
@@ -419,7 +428,7 @@ private slots:
         QCOMPARE(job.value(QStringLiteral("ampr")).toString(), bp::variants().front().id);
         QVERIFY(job.value(QStringLiteral("playgo")).isNull());
         QCOMPARE(job.value(QStringLiteral("output_root")).toString(), QDir::toNativeSeparators(m_out)); // native separators
-        cancelRun();
+        QVERIFY(cancelRun());
         QCOMPARE(starts(), before + 1);
         // A cancelled batch is reported as cancelled, not as "finished" with a logs question.
         QTest::qWait(300);
@@ -457,7 +466,7 @@ private slots:
         QCOMPARE(rows(), 3);
         QVERIFY(page()->isBusy());
 
-        cancelRun();
+        QVERIFY(cancelRun());
         QCOMPARE(starts(), before + 1); // the games after the cancelled one were not started
         QVERIFY(headerButton(QStringLiteral("Start Backport")));
     }
@@ -509,7 +518,7 @@ private slots:
             QVERIFY(page()->isBusy());
             QVERIFY(headerButton(QStringLiteral("Cancel")));
             QVERIFY(!headerButton(QStringLiteral("Start Backport")));
-            cancelRun();
+            QVERIFY(cancelRun());
         }
         if (!scanWasRunning)
             qWarning("the scan always finished before the run began; the overlap was not exercised");

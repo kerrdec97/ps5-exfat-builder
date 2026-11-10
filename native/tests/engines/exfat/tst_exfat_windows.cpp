@@ -22,6 +22,8 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QRandomGenerator>
+#include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QtEndian>
@@ -102,12 +104,12 @@ QByteArray vhdFooter(qint64 diskBytes)
 }
 
 // Wraps a bare volume into "<vhd>": MBR + 1 MiB gap + volume + padding + footer.
-bool wrapInVhd(const QString& volume, const QString& vhd, qint64 extraBytes = 0)
+bool wrapInVhd(const QString& volume, const QString& vhd)
 {
     QFile in(volume), out(vhd);
     if (!in.open(QIODevice::ReadOnly) || !out.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
-    const qint64 volSectors = (in.size() + extraBytes + 511) / 512;
+    const qint64 volSectors = (in.size() + 511) / 512;
     out.write(mbrFor(volSectors));
     out.write(QByteArray(int((kPartitionStart - 1) * 512), '\0'));
     QByteArray buf;
@@ -120,9 +122,26 @@ bool wrapInVhd(const QString& volume, const QString& vhd, qint64 extraBytes = 0)
     return out.error() == QFile::NoError;
 }
 
+// Windows PowerShell of this installation (Windows is not always on C:).
 QString powershell()
 {
-    return QStringLiteral("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe");
+    QString root = qEnvironmentVariable("SystemRoot");
+    if (root.isEmpty())
+        root = QStringLiteral("C:/Windows");
+    return QDir::fromNativeSeparators(root) + QStringLiteral("/System32/WindowsPowerShell/v1.0/powershell.exe");
+}
+
+// `text` as a single-quoted PowerShell string.
+QString psQuoted(const QString& text)
+{
+    return u'\'' + QString(text).replace(u'\'', QStringLiteral("''")) + u'\'';
+}
+
+// Only a letter Windows gave to a new volume is ever used: never A to C.
+bool isUsableLetter(const QString& letter)
+{
+    static const QRegularExpression usable(QStringLiteral("^[D-Z]$"));
+    return usable.match(letter).hasMatch();
 }
 
 Result<QString> ps(const QString& script, int timeoutMs = 180000)
@@ -140,12 +159,15 @@ Result<QString> ps(const QString& script, int timeoutMs = 180000)
     return r->output.trimmed();
 }
 
-// Mounts a VHD and returns the partition's drive letter ("X").
+// Mounts a VHD and returns the partition's drive letter ("X"). The script
+// itself refuses a letter that is not D to Z or that does not belong to the
+// disk of the image it has just mounted. The image may be left mounted when
+// this fails: the caller dismounts it in every case.
 Result<QString> mountVhd(const QString& vhd)
 {
     auto out = ps(QStringLiteral(
                       "$ErrorActionPreference='Stop';"
-                      "$img = Mount-DiskImage -ImagePath '%1' -PassThru;"
+                      "$img = Mount-DiskImage -ImagePath %1 -PassThru;"
                       "$disk = $img | Get-Disk;"
                       "if ($disk.IsOffline) { Set-Disk -Number $disk.Number -IsOffline $false };"
                       "if ($disk.IsReadOnly) { Set-Disk -Number $disk.Number -IsReadOnly $false };"
@@ -153,19 +175,37 @@ Result<QString> mountVhd(const QString& vhd)
                       "$part = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.Type -ne 'Reserved' } | Select-Object -First 1;"
                       "if (-not $part.DriveLetter) { $part | Add-PartitionAccessPath -AssignDriveLetter; Start-Sleep -Seconds 2;"
                       "  $part = Get-Partition -DiskNumber $disk.Number -PartitionNumber $part.PartitionNumber };"
-                      "Write-Output ('LETTER=' + $part.DriveLetter)")
-                      .arg(QDir::toNativeSeparators(vhd)));
+                      "$letter = [string]$part.DriveLetter;"
+                      "if ($letter -cnotmatch '^[D-Z]$') { throw 'Windows gave the volume no usable drive letter' };"
+                      "if ((Get-Partition -DriveLetter $letter).DiskNumber -ne $disk.Number) { throw 'the drive letter is not on the mounted image' };"
+                      "Write-Output ('LETTER=' + $letter)")
+                      .arg(psQuoted(QDir::toNativeSeparators(vhd))));
     if (!out.ok())
         return out;
     const int at = out->lastIndexOf(QStringLiteral("LETTER="));
     if (at < 0)
         return Error(ErrorCode::ExternalToolFailed, QStringLiteral("no drive letter"), out.value());
-    return out->mid(at + 7, 1);
+    const QString letter = out->mid(at + 7, 1);
+    if (!isUsableLetter(letter))
+        return Error(ErrorCode::ExternalToolFailed, QStringLiteral("no usable drive letter"), out.value());
+    return letter;
 }
 
 void dismountVhd(const QString& vhd)
 {
-    (void)ps(QStringLiteral("Dismount-DiskImage -ImagePath '%1' | Out-Null").arg(QDir::toNativeSeparators(vhd)));
+    (void)ps(QStringLiteral("Dismount-DiskImage -ImagePath %1 | Out-Null").arg(psQuoted(QDir::toNativeSeparators(vhd))));
+}
+
+// The partition of the mounted image `vhd` that has drive letter `letter`, as
+// the PowerShell variable $part; the script stops when the letter belongs to
+// any other disk, so nothing but the test's own image can be formatted.
+QString partitionOfImage(const QString& vhd, const QString& letter)
+{
+    return QStringLiteral("$ErrorActionPreference='Stop';"
+                          "$disk = Get-DiskImage -ImagePath %1 | Get-Disk;"
+                          "$part = Get-Partition -DiskNumber $disk.Number | Where-Object { [string]$_.DriveLetter -ceq '%2' };"
+                          "if (-not $part) { throw 'drive %2 is not on the mounted image' };")
+        .arg(psQuoted(QDir::toNativeSeparators(vhd)), letter);
 }
 
 QMap<QString, QByteArray> snapshot(const QString& root, const QStringList& skipTop = {})
@@ -248,13 +288,22 @@ private slots:
         QVERIFY2(built && built->state == JobState::Succeeded, built && built->error ? qPrintable(built->error->toLogString()) : "");
         const QString vhd = m_root.filePath(QStringLiteral("native.vhd"));
         QVERIFY(wrapInVhd(image, vhd));
+        // Whatever happens below, the image does not stay attached to this PC
+        // (mounting can fail after the image was attached).
+        bool attached = true;
+        const auto detach = qScopeGuard([&] {
+            if (attached)
+                dismountVhd(vhd);
+        });
         auto letter = mountVhd(vhd);
-        QVERIFY2(letter.ok() && letter->size() == 1, letter.ok() ? qPrintable(letter.value()) : qPrintable(letter.error().toLogString()));
+        QVERIFY2(letter.ok(), letter.ok() ? "" : qPrintable(letter.error().toLogString()));
         const QString drive = letter.value() + QStringLiteral(":/");
         const auto expected = snapshot(m_src);
+        QVERIFY(expected.size() > 300);
         const auto got = snapshot(drive, {QStringLiteral("System Volume Information")});
         auto chk = ps(QStringLiteral("chkdsk %1: ; exit $LASTEXITCODE").arg(letter.value()));
         dismountVhd(vhd);
+        attached = false;
         QCOMPARE(got.keys(), expected.keys());
         QVERIFY2(got == expected, "file contents differ through the Windows exFAT driver");
         QVERIFY2(chk.ok(), chk.ok() ? "" : qPrintable(chk.error().detail));
@@ -273,12 +322,21 @@ private slots:
         }
         const QString vhd = m_root.filePath(QStringLiteral("windows.vhd"));
         QVERIFY(wrapInVhd(blankVol, vhd));
+        bool attached = true;
+        const auto detach = qScopeGuard([&] {
+            if (attached)
+                dismountVhd(vhd);
+        });
         auto letter = mountVhd(vhd);
-        QVERIFY2(letter.ok() && letter->size() == 1, letter.ok() ? qPrintable(letter.value()) : qPrintable(letter.error().toLogString()));
-        auto fmt = ps(QStringLiteral("Format-Volume -DriveLetter %1 -FileSystem exFAT -AllocationUnitSize 32768 -NewFileSystemLabel WINFMT -Force -Confirm:$false | Out-Null;"
-                                     "Copy-Item -Recurse -Force -Path '%2\\*' -Destination '%1:\\'")
-                          .arg(letter.value(), QDir::toNativeSeparators(m_src)));
+        QVERIFY2(letter.ok(), letter.ok() ? "" : qPrintable(letter.error().toLogString()));
+        // Formatted through the partition object of the mounted image, not by
+        // letter: a letter that moved to another disk meanwhile stops the script.
+        auto fmt = ps(partitionOfImage(vhd, letter.value())
+                      + QStringLiteral("$part | Format-Volume -FileSystem exFAT -AllocationUnitSize 32768 -NewFileSystemLabel WINFMT -Force -Confirm:$false | Out-Null;"
+                                       "Copy-Item -Recurse -Force -Path %1 -Destination '%2:\\'")
+                            .arg(psQuoted(QDir::toNativeSeparators(m_src) + QStringLiteral("\\*")), letter.value()));
         dismountVhd(vhd);
+        attached = false;
         QVERIFY2(fmt.ok(), fmt.ok() ? "" : qPrintable(fmt.error().detail));
 
         // Cut the partition out of the VHD and read it with the native reader.
@@ -300,6 +358,7 @@ private slots:
         auto ex = env.run(exfat::kJobExtract, {{QStringLiteral("image"), volume}, {QStringLiteral("output"), out}});
         QVERIFY2(ex && ex->state == JobState::Succeeded, ex && ex->error ? qPrintable(ex->error->toLogString()) : "");
         const auto expected = snapshot(m_src);
+        QVERIFY(expected.size() > 300);
         const auto got = snapshot(out, {QStringLiteral("System Volume Information")});
         QCOMPARE(got.keys(), expected.keys());
         QVERIFY2(got == expected, "the native reader disagrees with the Windows exFAT driver");

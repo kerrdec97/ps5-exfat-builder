@@ -23,6 +23,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -31,12 +32,11 @@ using namespace fw::bp;
 
 namespace {
 
-void writeFile(const QString& path, const QByteArray& data)
+bool writeFile(const QString& path, const QByteArray& data)
 {
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile f(path);
-    QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write(data);
+    return f.open(QIODevice::WriteOnly) && f.write(data) == data.size();
 }
 
 struct Run {
@@ -77,15 +77,18 @@ Run runJob(const QJsonObject& job, int timeoutMs, const std::function<void(Worke
 class TestBackportEngine : public QObject {
     Q_OBJECT
 private:
-    QTemporaryDir m_cfg, m_data;
+    QTemporaryDir m_cfg, m_data, m_home;
     QString m_engine, m_game;
 
 private slots:
     void initTestCase()
     {
-        QVERIFY(m_cfg.isValid() && m_data.isValid());
+        QVERIFY(m_cfg.isValid() && m_data.isValid() && m_home.isValid());
         qputenv("D97BETA_CONFIG_DIR", QDir::toNativeSeparators(m_cfg.path()).toUtf8());
         qputenv("D97BETA_DATA_DIR", QDir::toNativeSeparators(m_data.path()).toUtf8());
+        // The engine's own work folder too: an opt-in real run must not share
+        // the one the installed app and the standalone program use.
+        qputenv("D97BETA_ENGINE_HOME", QDir::toNativeSeparators(m_home.path()).toUtf8());
         m_engine = qEnvironmentVariable("FW_BACKPORT_ENGINE");
         m_game = qEnvironmentVariable("FW_BACKPORT_E2E_GAME");
         QVERIFY(folders().configDir.startsWith(QDir::fromNativeSeparators(m_cfg.path()), Qt::CaseInsensitive));
@@ -115,22 +118,21 @@ private slots:
     {
         QTemporaryDir root;
         const QString g1 = root.filePath(QStringLiteral("a/b/PPSA11111 First (01.000.000)"));
-        writeFile(g1 + QStringLiteral("/eboot.bin"), QByteArray("\x7f" "ELF", 4) + QByteArray(64, 'x'));
-        writeFile(g1 + QStringLiteral("/sce_sys/param.json"),
+        QVERIFY(writeFile(g1 + QStringLiteral("/eboot.bin"), QByteArray("\x7f" "ELF", 4) + QByteArray(64, 'x')));
+        QVERIFY(writeFile(g1 + QStringLiteral("/sce_sys/param.json"),
                   R"({"titleId":"PPSA11111","contentVersion":"01.000.000","sdkVersion":"0x0800000000000000",
                      "requiredSystemSoftwareVersion":"0x0700000000000000",
-                     "localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"First Game"}}})");
+                     "localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"First Game"}}})"));
         // A game folder is not searched further.
-        writeFile(g1 + QStringLiteral("/sub/eboot.bin"), "x");
+        QVERIFY(writeFile(g1 + QStringLiteral("/sub/eboot.bin"), "x"));
         const QString g2 = root.filePath(QStringLiteral("PPSA22222 Second Game 02.000.000"));
-        writeFile(g2 + QStringLiteral("/eboot.bin"), "x");
+        QVERIFY(writeFile(g2 + QStringLiteral("/eboot.bin"), "x"));
         // Skipped folders.
-        writeFile(root.filePath(QStringLiteral("$RECYCLE.BIN/x/eboot.bin")), "x");
-        writeFile(root.filePath(QStringLiteral("System Volume Information/eboot.bin")), "x");
-        // Too deep for depth 1.
+        QVERIFY(writeFile(root.filePath(QStringLiteral("$RECYCLE.BIN/x/eboot.bin")), "x"));
+        QVERIFY(writeFile(root.filePath(QStringLiteral("System Volume Information/eboot.bin")), "x"));
         const QStringList all = discoverGames({root.path()}, 6, {});
         QCOMPARE(all.size(), 2);
-        QCOMPARE(discoverGames({root.path()}, 1, {}).size(), 1);
+        QCOMPARE(discoverGames({root.path()}, 1, {}).size(), 1); // "a/b/…" is too deep for depth 1
         // Excluded subtree.
         QCOMPARE(discoverGames({root.path()}, 6, {root.filePath(QStringLiteral("a"))}).size(), 1);
 
@@ -154,7 +156,7 @@ private slots:
     {
         QTemporaryDir root;
         const QString game = root.filePath(QStringLiteral("game"));
-        writeFile(game + QStringLiteral("/eboot.bin"), "x");
+        QVERIFY(writeFile(game + QStringLiteral("/eboot.bin"), "x"));
         Preflight p = preflight({}, {}, {game});
         QVERIFY(p.errors.join(u'|').contains(QStringLiteral("Backport output folder is not set.")));
         p = preflight(root.filePath(QStringLiteral("out")), root.filePath(QStringLiteral("out/bak")), {game});
@@ -170,13 +172,13 @@ private slots:
     {
         QTemporaryDir root;
         const QString elf = root.filePath(QStringLiteral("libSceAmpr.sprx"));
-        writeFile(elf, QByteArray("\x7f" "ELF", 4) + QByteArray(100, 0));
+        QVERIFY(writeFile(elf, QByteArray("\x7f" "ELF", 4) + QByteArray(100, 0)));
         QVERIFY(checkUserLibrary(elf, QStringLiteral("ampr")).error.contains(QStringLiteral("plain ELF")));
         const QString junk = root.filePath(QStringLiteral("junk.sprx"));
-        writeFile(junk, QByteArray(100, 'j'));
+        QVERIFY(writeFile(junk, QByteArray(100, 'j')));
         QVERIFY(checkUserLibrary(junk, QStringLiteral("ampr")).error.contains(QStringLiteral("not a signed PS5 library")));
         const QString self = root.filePath(QStringLiteral("mine.sprx"));
-        writeFile(self, QByteArray("\x4f\x15\x3d\x1d", 4) + QByteArray(200, 1));
+        QVERIFY(writeFile(self, QByteArray("\x4f\x15\x3d\x1d", 4) + QByteArray(200, 1)));
         const UserLibrary u = checkUserLibrary(self, QStringLiteral("playgo"));
         QVERIFY(u.ok);
         QVERIFY(u.label.startsWith(QStringLiteral("your file mine.sprx (")));
@@ -187,7 +189,7 @@ private slots:
 
     void settingsRoundTrip()
     {
-        writeFile(folders().settingsPath, R"({"klog_ip":"192.168.1.2","geometry":"1x1","scan_depth":40})");
+        QVERIFY(writeFile(folders().settingsPath, R"({"klog_ip":"192.168.1.2","geometry":"1x1","scan_depth":40})"));
         Settings s = loadSettings();
         QCOMPARE(s.scanDepth, 12); // clamped
         s.scanRoots = {QStringLiteral("D:\\Games")};
@@ -207,18 +209,18 @@ private slots:
     // asked keys in the file as it is NOW and keeps everything else.
     void settingsSaveMergesIntoTheFile()
     {
-        writeFile(folders().settingsPath,
+        QVERIFY(writeFile(folders().settingsPath,
                   R"({"scan_roots":["D:\\A"],"output_dir":"D:\\Out","backup_dir":"D:\\Bak","scan_depth":6,)"
-                  R"("klog_ip":"10.0.0.9","future_key":{"keep":[1,2,3]}})");
+                  R"("klog_ip":"10.0.0.9","future_key":{"keep":[1,2,3]}})"));
         SettingsFile state = SettingsFile::Missing;
         Settings s = loadSettings(&state);
         QCOMPARE(state, SettingsFile::Ok);
         QCOMPARE(s.scanRoots, QStringList{QStringLiteral("D:\\A")});
 
         // The other program adds a location and moves the output folder after this app loaded.
-        writeFile(folders().settingsPath,
+        QVERIFY(writeFile(folders().settingsPath,
                   R"({"scan_roots":["D:\\A","E:\\B"],"output_dir":"D:\\Elsewhere","backup_dir":"D:\\Bak","scan_depth":6,)"
-                  R"("klog_ip":"10.0.0.9","future_key":{"keep":[1,2,3]},"geometry":"900x700"})");
+                  R"("klog_ip":"10.0.0.9","future_key":{"keep":[1,2,3]},"geometry":"900x700"})"));
         s.scanDepth = 3; // the one thing the user changed here
         QString err;
         QVERIFY2(saveSettings(s, ScanDepthKey, &err), qPrintable(err));
@@ -260,7 +262,7 @@ private slots:
         const QByteArray notUtf8 = QByteArray("{\"output_dir\":\"D:/Sp") + QByteArray::fromHex("e4df") + QByteArray("\"}");
         const QList<QByteArray> damaged = {cutShort, notUtf8, QByteArray("[1,2,3]")};
         for (const QByteArray& bytes : damaged) {
-            writeFile(folders().settingsPath, bytes);
+            QVERIFY(writeFile(folders().settingsPath, bytes));
             SettingsFile state = SettingsFile::Ok;
             QString why;
             const Settings s = loadSettings(&state, &why);
@@ -278,7 +280,7 @@ private slots:
             QCOMPARE(f.readAll(), bytes);
         }
         // A file with nothing in it holds nothing to lose: it counts as absent.
-        writeFile(folders().settingsPath, "  \r\n");
+        QVERIFY(writeFile(folders().settingsPath, "  \r\n"));
         SettingsFile state = SettingsFile::Ok;
         (void)loadSettings(&state);
         QCOMPARE(state, SettingsFile::Missing);
@@ -294,12 +296,12 @@ private slots:
     {
         QTemporaryDir root;
         const QString journal = QDir::toNativeSeparators(root.filePath(QStringLiteral("bak/PPSA11111/APPLY_JOURNAL.json")));
-        writeFile(journal, R"({"state":"IN_PROGRESS"})");
+        QVERIFY(writeFile(journal, R"({"state":"IN_PROGRESS"})"));
         const QJsonObject row{{QStringLiteral("state"), QStringLiteral("IN_PROGRESS")},
                               {QStringLiteral("journal"), journal},
                               {QStringLiteral("game_dir"), QStringLiteral("D:\\Games\\PPSA11111")},
                               {QStringLiteral("backup_dir"), QFileInfo(journal).absolutePath()}};
-        writeFile(folders().ledgerPath, QJsonDocument(QJsonObject{{QStringLiteral("applied"), QJsonArray{row}}}).toJson());
+        QVERIFY(writeFile(folders().ledgerPath, QJsonDocument(QJsonObject{{QStringLiteral("applied"), QJsonArray{row}}}).toJson()));
         QVERIFY(unfinishedApplies(kApplyQuietSeconds).empty()); // written this second
         QCOMPARE(unfinishedApplies(0).size(), size_t(1));       // the rule itself still finds it
         {
@@ -311,7 +313,7 @@ private slots:
         QCOMPARE(stale.size(), size_t(1));
         QCOMPARE(stale.front().value(QStringLiteral("journal")).toString(), journal);
         // A finished journal is never offered, whatever the ledger says.
-        writeFile(journal, R"({"state":"ROLLED_BACK"})");
+        QVERIFY(writeFile(journal, R"({"state":"ROLLED_BACK"})"));
         QVERIFY(unfinishedApplies(0).empty());
         QFile::remove(folders().ledgerPath);
     }
@@ -323,33 +325,47 @@ private slots:
 #ifndef Q_OS_WIN
         QSKIP("process list is read on Windows only");
 #else
+        // The check is by program name over the whole PC: with the real
+        // program open it would hold before the stand-in starts.
+        if (foreignEngineRunning())
+            QSKIP("A program named PS5BackportGUI.exe is already running on this PC; close it to run this test.");
         QTemporaryDir root;
         const QString exe = root.filePath(QStringLiteral("PS5BackportGUI.exe"));
         QVERIFY(QFile::copy(fwtest::helperPath(), exe));
         // The helper starts a second copy through cmd.exe, which exits at once:
         // that copy has no living parent, as a program started by the user.
+        // Both sleep until the test ends them (the second names itself in a file).
+        const QString pidFile = root.filePath(QStringLiteral("second.pid"));
         QProcess own;
-        own.start(exe, {QStringLiteral("spawn-sleep"), QStringLiteral("4000")});
+        const auto endBoth = qScopeGuard([&] {
+            QFile f(pidFile);
+            if (f.open(QIODevice::ReadOnly))
+                fwtest::endProcess(f.readAll().trimmed().toLongLong());
+            own.kill();
+            own.waitForFinished(10000);
+            // The folder (with the program in it) can only go once both have ended.
+            (void)QTest::qWaitFor([] { return !foreignEngineRunning(); }, 15000);
+        });
+        own.start(exe, {QStringLiteral("spawn-sleep"), QStringLiteral("120000"), QDir::toNativeSeparators(pidFile)});
         QVERIFY(own.waitForStarted(10000));
         QVERIFY(own.waitForReadyRead(10000)); // "spawned"
-        QTRY_VERIFY_WITH_TIMEOUT(foreignEngineRunning(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(pidFile), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(foreignEngineRunning(), 30000);
         const QString journal = root.filePath(QStringLiteral("APPLY_JOURNAL.json"));
-        writeFile(journal, R"({"state":"IN_PROGRESS"})");
+        QVERIFY(writeFile(journal, R"({"state":"IN_PROGRESS"})"));
         {
             QFile jf(journal);
             QVERIFY(jf.open(QIODevice::ReadWrite));
             QVERIFY(jf.setFileTime(QDateTime::currentDateTime().addSecs(-2 * kApplyQuietSeconds), QFileDevice::FileModificationTime));
         }
-        writeFile(folders().ledgerPath,
+        QVERIFY(writeFile(folders().ledgerPath,
                   QJsonDocument(QJsonObject{{QStringLiteral("applied"),
                                              QJsonArray{QJsonObject{{QStringLiteral("state"), QStringLiteral("IN_PROGRESS")},
                                                                     {QStringLiteral("journal"), QDir::toNativeSeparators(journal)}}}}})
-                      .toJson());
+                      .toJson()));
         QCOMPARE(unfinishedApplies(kApplyQuietSeconds).size(), size_t(1));
         QVERIFY(interruptedApplies().empty()); // not offered while that program runs
         QFile::remove(folders().ledgerPath);
-        own.waitForFinished(10000);
-        QTest::qWait(500); // the second copy ends with the first; the folder can go
 #endif
     }
 
@@ -363,7 +379,7 @@ private slots:
         const QString mine = QDir(jobs).filePath(QStringLiteral("job_%1_1700000000002.json").arg(QCoreApplication::applicationPid()));
         const QString dead = QDir(jobs).filePath(QStringLiteral("job_999999996_1700000000003.json"));
         for (const QString& p : {stale, fresh, mine, dead})
-            writeFile(p, "{}");
+            QVERIFY(writeFile(p, "{}"));
         const QDateTime old = QDateTime::currentDateTime().addDays(-3);
         for (const QString& p : {stale, mine, dead}) {
             QFile f(p);
@@ -397,6 +413,10 @@ private slots:
     {
         if (!m_engine.isEmpty())
             QSKIP("FW_BACKPORT_ENGINE is set");
+        // Asked before anything is started: with an engine in reach the
+        // start below would run it.
+        if (!engineExecutable().isEmpty())
+            QSKIP("an engine is installed next to the test");
         Worker w;
         QString err;
         QVERIFY(!w.start(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("selftest")}}, &err));
@@ -411,6 +431,7 @@ private slots:
         QCOMPARE(r.result.value(QStringLiteral("status")).toString(), QStringLiteral("DONE"));
         QVERIFY(!r.result.value(QStringLiteral("revision")).toString().isEmpty());
         const QJsonObject mods = r.result.value(QStringLiteral("modules")).toObject();
+        QVERIFY(!mods.isEmpty());
         for (auto it = mods.begin(); it != mods.end(); ++it)
             QVERIFY2(it.value().toBool(), qPrintable(it.key()));
         QDir jobs(folders().jobsDir);

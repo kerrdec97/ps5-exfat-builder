@@ -64,6 +64,14 @@ QString errorText(const Result<T>& r)
     return r.ok() ? QStringLiteral("<ok>") : r.error().message;
 }
 
+// The error of a call that must have failed (a marker error, not undefined
+// behaviour, when it succeeded).
+template <typename R>
+Error errorOf(const R& result)
+{
+    return result.ok() ? Error(ErrorCode::Internal, QStringLiteral("<the call succeeded>")) : result.error();
+}
+
 DlcTarget target(const QString& titleId, const QString& contentId, std::optional<QString> title = std::nullopt)
 {
     return DlcTarget{titleId, contentId, std::move(title)};
@@ -133,7 +141,7 @@ QByteArray sampleIni()
     QVERIFY2(var##_result.ok(), qPrintable(errorText(var##_result)));                              \
     const QByteArray var = var##_result.value()
 
-class TestDlcIni : public QObject {
+class TstDlcIni : public QObject {
     Q_OBJECT
 
 private slots:
@@ -269,7 +277,7 @@ private slots:
         QVERIFY(dir.isValid());
         const auto missing = DlcIniDocument::load(dir.filePath(QStringLiteral("nope.ini")));
         QCOMPARE(errorText(missing), QStringLiteral("DLC INI does not exist."));
-        QCOMPARE(missing.error().code, ErrorCode::NotFound);
+        QCOMPARE(errorOf(missing).code, ErrorCode::NotFound);
         QCOMPARE(errorText(DlcIniDocument::load(dir.path())), QStringLiteral("DLC INI does not exist."));
         QCOMPARE(errorText(DlcIniDocument::load(QString())), QStringLiteral("DLC INI does not exist."));
     }
@@ -793,7 +801,7 @@ private slots:
         QVERIFY(writeAll(taken, "keep"));
         const Status existing = doc.saveUpdated(taken, changes);
         QVERIFY(!existing.ok());
-        QCOMPARE(existing.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(existing).code, ErrorCode::AlreadyExists);
         QCOMPARE(readAll(taken), QByteArray("keep"));
 
         const QString out = dir.filePath(QStringLiteral("dlc-PPSA05678-updated.ini"));
@@ -808,7 +816,7 @@ private slots:
         QCOMPARE(back->entries()[0].titleId, tid);
 
         // A second save to the same name never overwrites.
-        QCOMPARE(doc.saveUpdated(out, changes).error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(doc.saveUpdated(out, changes)).code, ErrorCode::AlreadyExists);
 
         // A document parsed from bytes has no source file to protect.
         PARSE_OK(fromBytes, sampleIni());
@@ -831,6 +839,13 @@ private slots:
         QByteArray edited = sampleIni();
         edited.replace("version=2", "version=3"); // same size
         QVERIFY(writeAll(src, edited));
+        {
+            // The two writes can fall into one tick of the file system's clock
+            // (two seconds on FAT): give the second one a later time for certain.
+            QFile rewritten(src);
+            QVERIFY(rewritten.open(QIODevice::ReadWrite));
+            QVERIFY(rewritten.setFileTime(loaded->sourceModifiedUtc().addSecs(4), QFileDevice::FileModificationTime));
+        }
         const QString out = dir.filePath(QStringLiteral("out.ini"));
         QCOMPARE(errorText(loaded->saveUpdated(out, changes)), changed);
         QVERIFY(!QFileInfo::exists(out));
@@ -897,7 +912,7 @@ private slots:
 
         const Status again = writeNewFile(path, "other");
         QVERIFY(!again.ok());
-        QCOMPARE(again.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(errorOf(again).code, ErrorCode::AlreadyExists);
         QCOMPARE(readAll(path), QByteArray("abc"));
 
         const QString noDir = dir.filePath(QStringLiteral("missing/new.ini"));
@@ -912,5 +927,5 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(TestDlcIni)
+QTEST_GUILESS_MAIN(TstDlcIni)
 #include "tst_dlc_ini.moc"

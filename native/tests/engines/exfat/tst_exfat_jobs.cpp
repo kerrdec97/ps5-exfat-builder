@@ -38,7 +38,8 @@ private:
     QString makeGame(const QString& name, int smallFiles = 50)
     {
         const QString src = path(name);
-        makeSampleTree(src, smallFiles);
+        if (!makeSampleTree(src, smallFiles))
+            QTest::qFail("the sample tree could not be created", __FILE__, __LINE__);
         return src;
     }
 
@@ -158,7 +159,7 @@ private slots:
     {
         const QString src = makeGame(QStringLiteral("Astro PPSA01325"));
         const QString outDir = path(QStringLiteral("out1"));
-        QDir().mkpath(outDir);
+        QVERIFY(QDir().mkpath(outDir));
         QList<ProgressSnapshot> snaps;
         std::mutex snapsMutex; // verification reports from several threads
         auto r = m_env.run(kJobBuild, buildParams(src, outDir), {}, nullptr, [&](const ProgressSnapshot& s) {
@@ -193,9 +194,14 @@ private slots:
     void buildJobSettingsAreHonoured()
     {
         const QString src = makeGame(QStringLiteral("opts"), 10);
-        writeBytes(src + QStringLiteral("/skip.tmp"), "x");
-        writeBytes(src + QStringLiteral("/data/also.skip"), "x");
-        writeBytes(src + QStringLiteral("/.hidden"), "x");
+        QVERIFY(writeBytes(src + QStringLiteral("/skip.tmp"), "x"));
+        QVERIFY(writeBytes(src + QStringLiteral("/data/also.skip"), "x"));
+        // Hidden the Unix way (a leading dot) and the Windows way (the attribute).
+        QVERIFY(writeBytes(src + QStringLiteral("/.hidden"), "x"));
+        QVERIFY(writeBytes(src + QStringLiteral("/data/attribute.bin"), "x"));
+#ifdef Q_OS_WIN
+        QVERIFY(setHiddenAttribute(src + QStringLiteral("/data/attribute.bin")));
+#endif
         const QString out = path(QStringLiteral("opts.exfat"));
         QVariantMap o;
         o.insert(keys::kClusterSize, QStringLiteral("131072"));
@@ -222,20 +228,33 @@ private slots:
             QVERIFY(tree.ok());
             QVERIFY(tree->find(QStringLiteral("skip.tmp")) < 0);
             QVERIFY(tree->find(QStringLiteral("data/also.skip")) < 0);
-#ifndef Q_OS_WIN
+            // Each platform's own kind of hidden file is left out, the other kind is an ordinary file.
+#ifdef Q_OS_WIN
+            QVERIFY(tree->find(QStringLiteral("data/attribute.bin")) < 0);
+            QVERIFY(tree->find(QStringLiteral(".hidden")) > 0);
+#else
             QVERIFY(tree->find(QStringLiteral(".hidden")) < 0);
+            QVERIFY(tree->find(QStringLiteral("data/attribute.bin")) > 0);
 #endif
-            QVERIFY(!tree->entries[size_t(tree->find(QStringLiteral("data/big.bin")))].noFatChain);
+            const int big = tree->find(QStringLiteral("data/big.bin"));
+            QVERIFY(big > 0);
+            QVERIFY(!tree->entries[size_t(big)].noFatChain);
         }
 
+        // The label of the image at `out`; an image that cannot be opened has
+        // none of the labels compared below.
+        const auto labelOf = [](const QString& image) {
+            auto reader = ExfatReader::open(image);
+            return reader.ok() ? reader.value()->volume().label : QStringLiteral("<unreadable image>");
+        };
         // An explicit label wins; "none" leaves the volume unnamed.
         p.insert(QStringLiteral("label"), QStringLiteral("CUSTOM"));
         QVERIFY(m_env.run(kJobBuild, p, o).ok());
-        QCOMPARE(ExfatReader::open(out).value()->volume().label, QStringLiteral("CUSTOM"));
+        QCOMPARE(labelOf(out), QStringLiteral("CUSTOM"));
         p.remove(QStringLiteral("label"));
         o.insert(keys::kLabelPolicy, QStringLiteral("none"));
         QVERIFY(m_env.run(kJobBuild, p, o).ok());
-        QCOMPARE(ExfatReader::open(out).value()->volume().label, QString());
+        QCOMPARE(labelOf(out), QString());
         // A fixed image size.
         o.insert(keys::kImageSizeGiB, 0.25);
         QVERIFY(m_env.run(kJobBuild, p, o).ok());
@@ -251,14 +270,14 @@ private slots:
         const QString src = makeGame(QStringLiteral("val"), 2);
         auto r = m_env.run(kJobBuild, buildParams(path(QStringLiteral("nope")), path(QStringLiteral("x.exfat"))));
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::NotFound);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::NotFound);
 
         r = m_env.run(kJobBuild, buildParams(src, src + QStringLiteral("/inside.exfat")));
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InvalidArgument);
 
         const QString noEboot = path(QStringLiteral("noeboot"));
-        writeBytes(noEboot + QStringLiteral("/sub/eboot.bin"), "x");
+        QVERIFY(writeBytes(noEboot + QStringLiteral("/sub/eboot.bin"), "x"));
         r = m_env.run(kJobBuild, buildParams(noEboot, path(QStringLiteral("noeboot.exfat"))));
         QVERIFY(!r.ok());
         QVERIFY2(r.error().message.contains(QStringLiteral("eboot.bin")), qPrintable(r.error().message));
@@ -266,22 +285,22 @@ private slots:
         QVERIFY(m_env.run(kJobBuild, buildParams(noEboot, path(QStringLiteral("noeboot.exfat"))), o).ok());
 
         const QString existing = path(QStringLiteral("existing.exfat"));
-        writeBytes(existing, "OLD");
+        QVERIFY(writeBytes(existing, "OLD"));
         r = m_env.run(kJobBuild, buildParams(src, existing), {{keys::kOverwriteExisting, false}});
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::AlreadyExists);
         QCOMPARE(readAllOf(existing), QByteArray("OLD"));
 
         r = m_env.run(kJobBuild, [&] { auto p = buildParams(src, path(QStringLiteral("l.exfat"))); p.insert(QStringLiteral("label"), QStringLiteral("TOO LONG LABEL")); return p; }());
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InvalidArgument);
     }
 
     void replacingAnImageKeepsTheOldOneUntilTheNewOneIsDone()
     {
         const QString src = makeGame(QStringLiteral("replace"), 2);
         const QString out = path(QStringLiteral("replace.exfat"));
-        writeBytes(out, "OLD IMAGE");
+        QVERIFY(writeBytes(out, "OLD IMAGE"));
         auto r = m_env.run(kJobBuild, buildParams(src, out));
         QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
         QVERIFY(ExfatReader::open(out).ok());
@@ -299,7 +318,7 @@ private slots:
 #endif
         const QString src = makeGame(QStringLiteral("locked"), 2);
         const QString out = path(QStringLiteral("locked.exfat"));
-        writeBytes(out, "OLD IMAGE");
+        QVERIFY(writeBytes(out, "OLD IMAGE"));
         QFile holder(out);
         QVERIFY(holder.open(QIODevice::ReadOnly)); // opened without delete sharing
         auto r = m_env.run(kJobBuild, buildParams(src, out));
@@ -334,7 +353,7 @@ private slots:
         QVERIFY(writeRandom(src + QStringLiteral("/data/large1.bin"), 48 * kMiB, 77));
         QVERIFY(writeRandom(src + QStringLiteral("/data/large2.bin"), 48 * kMiB, 78));
         const QString out = path(QStringLiteral("cancel.exfat"));
-        writeBytes(out, "PREVIOUS IMAGE"); // must survive (audit M2)
+        QVERIFY(writeBytes(out, "PREVIOUS IMAGE")); // must survive the cancelled rebuild
         CancellationSource cancel;
         bool sawWriting = false;
         auto r = m_env.run(kJobBuild, buildParams(src, out), {}, &cancel, [&](const ProgressSnapshot& s) {
@@ -361,13 +380,48 @@ private slots:
         QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
     }
 
+    // A file changes (same size, other bytes) after it was written into the
+    // image: the check fails, the new image is not saved, the image that was
+    // there stays byte for byte, and the source is kept although "delete the
+    // source" is on.
+    void failedVerificationKeepsThePreviousImageAndTheSource()
+    {
+        const QString src = makeGame(QStringLiteral("verifyfail"), 5);
+        const QString out = path(QStringLiteral("verifyfail.exfat"));
+        QVERIFY(writeBytes(out, "PREVIOUS IMAGE"));
+        // The first report of the verification phase comes from the job's own
+        // thread before any file is compared; later ones come from several.
+        std::once_flag once;
+        bool tampered = false;
+        auto r = m_env.run(kJobBuild, buildParams(src, out), {{keys::kDeleteSourceAfterVerify, true}}, nullptr,
+                           [&](const ProgressSnapshot& s) {
+                               if (s.phaseIndex != 2)
+                                   return;
+                               std::call_once(once, [&] {
+                                   QFile f(src + QStringLiteral("/data/medium.bin"));
+                                   char c = 0;
+                                   tampered = f.open(QIODevice::ReadWrite) && f.seek(1000) && f.read(&c, 1) == 1 && f.seek(1000)
+                                              && f.putChar(char(c ^ 0x55));
+                               });
+                           });
+        QVERIFY(tampered);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Failed);
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("1 problem")), qPrintable(r->verificationDetail));
+        QVERIFY(r->outputs.isEmpty());
+        QCOMPARE(readAllOf(out), QByteArray("PREVIOUS IMAGE"));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(QFileInfo::exists(src + QStringLiteral("/eboot.bin")));
+        QVERIFY(!r->details.contains(QStringLiteral("sourceDeleted")));
+    }
+
     void insufficientSpaceIsReportedBeforeWriting()
     {
         const QString src = makeGame(QStringLiteral("space"), 2);
         const QString out = path(QStringLiteral("space.exfat"));
         auto r = m_env.run(kJobBuild, buildParams(src, out), {{keys::kImageSizeGiB, 100000.0}});
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::InsufficientSpace);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InsufficientSpace);
         QVERIFY2(r.error().message.startsWith(QStringLiteral("Not enough space on")), qPrintable(r.error().message));
         QVERIFY2(r.error().message.contains(QStringLiteral("Free ")) && r.error().message.contains(QStringLiteral("choose another output folder")),
                  qPrintable(r.error().message));
@@ -394,7 +448,7 @@ private slots:
         QCOMPARE(r->verification, Verification::Skipped);
         QVERIFY(QFileInfo::exists(a + QStringLiteral("/eboot.bin")));
         // Something was left out of the image: kept.
-        writeBytes(a + QStringLiteral("/Thumbs.db"), "x");
+        QVERIFY(writeBytes(a + QStringLiteral("/Thumbs.db"), "x"));
         r = m_env.run(kJobBuild, buildParams(a, path(QStringLiteral("del-a3.exfat"))), o);
         QVERIFY(r.ok());
         QCOMPARE(r->verification, Verification::Passed);
@@ -421,7 +475,7 @@ private slots:
         QCOMPARE(r->verification, Verification::Passed);
 
         flipByte(src + QStringLiteral("/data/medium.bin"), 1000);
-        writeBytes(src + QStringLiteral("/extra-in-source.txt"), "x");
+        QVERIFY(writeBytes(src + QStringLiteral("/extra-in-source.txt"), "x"));
         r = m_env.run(kJobVerify, p);
         QVERIFY(r.ok());
         QCOMPARE(r->verification, Verification::Failed);
@@ -461,21 +515,21 @@ private slots:
         // A non-empty destination is refused.
         auto again = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}});
         QVERIFY(!again.ok());
-        QCOMPARE(again.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(again, ErrorCode::AlreadyExists);
 
         // An empty destination folder is fine; a stale .part of ours is replaced,
         // somebody else's is not touched.
         const QString dest2 = path(QStringLiteral("xdest2"));
-        QDir().mkpath(dest2);
-        QDir().mkpath(dest2 + QStringLiteral(".part"));
-        writeBytes(dest2 + QStringLiteral(".part/.fw-extract-in-progress"), {});
-        writeBytes(dest2 + QStringLiteral(".part/half.bin"), "partial");
+        QVERIFY(QDir().mkpath(dest2));
+        QVERIFY(QDir().mkpath(dest2 + QStringLiteral(".part")));
+        QVERIFY(writeBytes(dest2 + QStringLiteral(".part/.fw-extract-in-progress"), {}));
+        QVERIFY(writeBytes(dest2 + QStringLiteral(".part/half.bin"), "partial"));
         r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest2}},
                       {{keys::kExtractParallel, true}, {keys::kExtractThreads, 4}});
         QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
         QCOMPARE(listing(dest2), listing(src));
         const QString dest3 = path(QStringLiteral("xdest3"));
-        writeBytes(dest3 + QStringLiteral(".part/user-file.txt"), "mine");
+        QVERIFY(writeBytes(dest3 + QStringLiteral(".part/user-file.txt"), "mine"));
         r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest3}});
         QVERIFY(!r.ok());
         QCOMPARE(readAllOf(dest3 + QStringLiteral(".part/user-file.txt")), QByteArray("mine"));
@@ -584,7 +638,7 @@ private slots:
         flipByte(img, 100);
         auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), path(QStringLiteral("xbad-out"))}});
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::CorruptData);
         QVERIFY(!QFileInfo::exists(path(QStringLiteral("xbad-out.part"))));
     }
 
@@ -628,7 +682,7 @@ private slots:
         const QString dest = path(QStringLiteral("markerdest"));
         auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}});
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::Unsupported);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::Unsupported);
         QVERIFY2(r.error().message.contains(QStringLiteral(".FW-Extract-In-Progress")), qPrintable(err(r.error())));
         QVERIFY(!QFileInfo::exists(dest));
         QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
@@ -723,7 +777,7 @@ private slots:
         vo.bufferBytes = qint64(1) << 46;
         auto v = verifyImageAgainstFolder(img, src, {}, vo, token, nullptr);
         QVERIFY(!v.ok());
-        QCOMPARE(v.error().code, ErrorCode::Internal);
+        FWTEST_COMPARE_ERROR(v, ErrorCode::Internal);
         QVERIFY2(v.error().message.contains(QStringLiteral("Not enough memory")), qPrintable(err(v.error())));
 
         auto reader = ExfatReader::open(img);
@@ -738,7 +792,7 @@ private slots:
         eo.bufferBytes = qint64(1) << 46;
         auto x = extractTree(*reader.value(), tree.value(), dest, eo, token, nullptr);
         QVERIFY(!x.ok());
-        QCOMPARE(x.error().code, ErrorCode::Internal);
+        FWTEST_COMPARE_ERROR(x, ErrorCode::Internal);
         QVERIFY2(x.error().message.contains(QStringLiteral("Not enough memory")), qPrintable(err(x.error())));
     }
 
@@ -780,13 +834,13 @@ private slots:
     void titleIdDetection()
     {
         const QString a = path(QStringLiteral("tid/Some Game"));
-        writeBytes(a + QStringLiteral("/sce_sys/param.json"), R"({"titleId": "ppsa09876"})");
+        QVERIFY(writeBytes(a + QStringLiteral("/sce_sys/param.json"), R"({"titleId": "ppsa09876"})"));
         QCOMPARE(detectTitleId(a, QString()), QStringLiteral("PPSA09876"));
         const QString b = path(QStringLiteral("tid/CUSA-12345 Old Game"));
-        QDir().mkpath(b);
+        QVERIFY(QDir().mkpath(b));
         QCOMPARE(detectTitleId(b, QString()), QStringLiteral("CUSA12345"));
         const QString c = path(QStringLiteral("tid/nothing"));
-        QDir().mkpath(c);
+        QVERIFY(QDir().mkpath(c));
         QCOMPARE(detectTitleId(c, path(QStringLiteral("PPLH_00001 x.exfat"))), QStringLiteral("PPLH00001"));
         QCOMPARE(detectTitleId(c, QString()), QString());
     }

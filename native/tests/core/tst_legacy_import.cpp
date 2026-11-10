@@ -17,13 +17,12 @@ using namespace fw;
 
 namespace {
 
-// Legacy keys handled by whole-file importers (not per-key mappings).
-const QStringList kImporterKeys = {QStringLiteral("bp_folders"), QStringLiteral("bp_scan_folder")};
-
 // Deliberately not imported — key → reason.
 const QMap<QString, QString>& notImported()
 {
     static const QMap<QString, QString> m = {
+        {QStringLiteral("bp_folders"), QStringLiteral("the Backport tab keeps its folders in the PS5 Backport program's own settings.json")},
+        {QStringLiteral("bp_scan_folder"), QStringLiteral("see bp_folders")},
         {QStringLiteral("osfmount_path"), QStringLiteral("OSFMount is no longer used (native image engines)")},
         {QStringLiteral("adv_threads"), QStringLiteral("robocopy /MT count (default 1), not the CPU threads per job")},
         {QStringLiteral("adv_robo_log"), QStringLiteral("robocopy is no longer used")},
@@ -107,7 +106,7 @@ private slots:
         QVERIFY(legacy.size() >= 100);
         QStringList undecided, both;
         for (const QString& k : legacy.keys()) {
-            const bool mapped = reg.schema->legacyKeys().count(k) > 0 || kImporterKeys.contains(k);
+            const bool mapped = reg.schema->legacyKeys().count(k) > 0;
             const bool skipped = notImported().contains(k);
             if (!mapped && !skipped)
                 undecided << k;

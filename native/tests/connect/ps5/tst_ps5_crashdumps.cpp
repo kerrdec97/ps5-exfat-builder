@@ -6,16 +6,17 @@
 // the in-process fake FTP server on 127.0.0.1, never a real console.
 
 #include "FakePs5.h"
+#include "Ps5TestUtil.h"
 
 #include "connect/ps5/CrashDumps.h"
 #include "connect/ps5/Module.h"
 #include "core/Zip.h"
+#include "support/ClosedPort.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QFile>
 #include <QRandomGenerator>
-#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -35,15 +36,6 @@ ConsoleEndpoint endpoint(quint16 port)
     ep.connectTimeoutMs = 2000;
     ep.idleTimeoutMs = 5000;
     return ep;
-}
-
-quint16 closedPort()
-{
-    QTcpServer s;
-    s.listen(QHostAddress::LocalHost, 0);
-    const quint16 p = s.serverPort();
-    s.close();
-    return p;
 }
 
 QByteArray randomBytes(int n, quint32 seed)
@@ -116,16 +108,19 @@ private slots:
         const QString crash = root + kRoot + "/PPSA34008_1792103554";
         CancellationSource cancel;
         QStringList seen;
+        bool crashWritten = true;
         auto r = captureCrashDumps(endpoint(srv.port()), fastOptions(out), cancel.token(), [&](const QString& text) {
             seen << text;
             if (text.contains(QStringLiteral("older crash folder"))) { // baseline taken: now the game crashes
-                QVERIFY(writeFile(crash + "/report.log", "report"));
-                QVERIFY(writeFile(crash + "/core.prosperodmp", core));
-                QVERIFY(writeFile(crash + "/core.prosperodmp.tmp", "partial core"));
+                crashWritten = writeFile(crash + "/report.log", "report") && writeFile(crash + "/core.prosperodmp", core)
+                    && writeFile(crash + "/core.prosperodmp.tmp", "partial core");
+                if (!crashWritten)
+                    cancel.cancel(); // no crash will appear: do not wait for one
             }
             if (text.startsWith(QStringLiteral("Crash report ready")))
                 cancel.cancel();
         });
+        QVERIFY(crashWritten);
         QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : r.error().message));
         QCOMPARE(r->baseline, QStringList{QStringLiteral("PPSA00001_1000")});
         QCOMPARE(int(r->crashes.size()), 1);
@@ -145,10 +140,13 @@ private slots:
         QVERIFY(z.open(c.zipPath).ok());
         QVERIFY(z.find(QStringLiteral("capture.txt")));
         // The note names the folder that was really watched.
-        const QByteArray note = z.readAll(*z.find(QStringLiteral("capture.txt"))).value();
+        const auto noteBytes = z.readAll(*z.find(QStringLiteral("capture.txt")));
+        QVERIFY(noteBytes.ok());
+        const QByteArray note = noteBytes.value();
         QVERIFY2(note.contains("Console folder: " + kRoot.toUtf8() + "/PPSA34008_1792103554\n"), note.constData());
         QVERIFY(z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/report.log")));
-        QCOMPARE(z.readAll(*z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp"))).value(), core);
+        QVERIFY(z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp")));
+        COMPARE_VALUE(z.readAll(*z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp"))), core);
         QVERIFY(!z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp.tmp")));
         // The core was fetched before the report (core first).
         const QStringList cmds = srv.commands();
@@ -166,7 +164,7 @@ private slots:
     void folderWithoutACoreIsReported()
     {
         const QString root = fresh(QStringLiteral("console"));
-        QDir().mkpath(root + kRoot);
+        QVERIFY(QDir().mkpath(root + kRoot));
         FakeFtpServer::Options so;
         so.root = root;
         FakeFtpServer srv(so);
@@ -174,12 +172,17 @@ private slots:
         CancellationSource cancel;
         auto opt = fastOptions(out);
         opt.folderTimeoutMs = 1200; // the console never writes the core
+        bool crashWritten = true;
         auto r = captureCrashDumps(endpoint(srv.port()), opt, cancel.token(), [&](const QString& text) {
-            if (text.startsWith(QStringLiteral("Watching for new crashes")))
-                QVERIFY(writeFile(root + kRoot + "/PPSA22222_5/report.log", "report only"));
+            if (text.startsWith(QStringLiteral("Watching for new crashes"))) {
+                crashWritten = writeFile(root + kRoot + "/PPSA22222_5/report.log", "report only");
+                if (!crashWritten)
+                    cancel.cancel(); // no crash will appear: do not wait for one
+            }
             if (text.startsWith(QStringLiteral("Crash report ready")))
                 cancel.cancel();
         });
+        QVERIFY(crashWritten);
         QVERIFY(r.ok());
         QCOMPARE(int(r->crashes.size()), 1);
         QVERIFY(!r->crashes.front().hasCore);
@@ -193,7 +196,9 @@ private slots:
         auto opt = fastOptions(out);
         opt.runForMs = 2500;
         CancellationSource cancel;
-        auto r = captureCrashDumps(endpoint(closedPort()), opt, cancel.token());
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
+        auto r = captureCrashDumps(endpoint(closed.port()), opt, cancel.token());
         QVERIFY(r.ok());
         QCOMPARE(r->warnings.size(), 1);
         QVERIFY(r->warnings.front().contains(QStringLiteral("waiting for the console FTP service")));
@@ -205,10 +210,12 @@ private slots:
     {
         CancellationSource cancel;
         ConsoleEndpoint none;
-        QCOMPARE(captureCrashDumps(none, fastOptions(fresh(QStringLiteral("o"))), cancel.token()).error().code,
-                 ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(captureCrashDumps(none, fastOptions(fresh(QStringLiteral("o"))), cancel.token()), ErrorCode::InvalidArgument);
+        // Refused before anything is contacted or written (the port is never used).
+        const fwtest::ClosedPort closed;
+        QVERIFY(closed.isValid());
         CrashCaptureOptions noOut;
-        QCOMPARE(captureCrashDumps(endpoint(closedPort()), noOut, cancel.token()).error().code, ErrorCode::InvalidArgument);
+        COMPARE_ERROR_CODE(captureCrashDumps(endpoint(closed.port()), noOut, cancel.token()), ErrorCode::InvalidArgument);
     }
 
     void jobIsRegistered()

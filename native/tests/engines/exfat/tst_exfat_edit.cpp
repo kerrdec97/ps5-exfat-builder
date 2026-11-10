@@ -80,17 +80,53 @@ private:
         QVERIFY2(t->warnings.isEmpty(), qPrintable(t->warnings.join(u'\n'))); // no lost clusters
     }
 
+    // The image's tree. An image that cannot be read fails the test here and
+    // gives an empty tree, in which nothing is found.
     ImageTree treeOf(const QString& image)
     {
         CancellationToken token;
-        return ExfatReader::open(image).value()->readTree(token).value();
+        auto r = ExfatReader::open(image);
+        if (!r.ok()) {
+            QTest::qFail(qPrintable(err(r.error())), __FILE__, __LINE__);
+            return {};
+        }
+        auto t = r.value()->readTree(token);
+        if (!t.ok()) {
+            QTest::qFail(qPrintable(err(t.error())), __FILE__, __LINE__);
+            return {};
+        }
+        return std::move(t).value();
+    }
+
+    // The entry `file` of `tree`; a missing one fails the test here and gives
+    // an empty entry.
+    static ImageEntry entryOf(const ImageTree& tree, const QString& file)
+    {
+        const int i = tree.find(file);
+        if (i < 0) {
+            QTest::qFail(qPrintable(QStringLiteral("not in the image: ") + file), __FILE__, __LINE__);
+            return {};
+        }
+        return tree.entries[size_t(i)];
+    }
+
+    static quint16 volumeFlagsOf(const QString& img)
+    {
+        const QByteArray b = readAllOf(img).left(512);
+        if (b.size() < 512)
+            return 0xFFFF; // unreadable: no real flag word looks like this
+        return quint16(uchar(b[int(kVolumeFlagsOffset)]) | (uchar(b[int(kVolumeFlagsOffset) + 1]) << 8));
     }
 
     QByteArray contentOf(const QString& image, const QString& file)
     {
         auto r = ExfatReader::open(image);
+        if (!r.ok())
+            return QByteArray("<unreadable image>");
         CancellationToken token;
         auto t = r.value()->readTree(token);
+        if (!t.ok())
+            return QByteArray("<unreadable image>");
         const int i = t->find(file);
         if (i < 0)
             return QByteArray("<missing>");
@@ -114,17 +150,13 @@ private:
         QVERIFY2(v->passed(), qPrintable(v->summary()));
     }
 
-    // Manual cross-checks with other exFAT drivers: FW_EXFAT_KEEP_EDIT=<dir>.
+    // Manual cross-checks with other exFAT drivers: FW_EXFAT_KEEP_EDIT=<dir>
+    // receives a copy in the new sub-folder "fw-exfat-edit-<name>".
     void keep(const QString& image, const QString& expected, const QString& name)
     {
-        const QByteArray dir = qgetenv("FW_EXFAT_KEEP_EDIT");
-        if (dir.isEmpty())
-            return;
-        const QString d = QString::fromLocal8Bit(dir) + u'/' + name;
-        QDir(d).removeRecursively();
-        QDir().mkpath(d);
-        QFile::copy(image, d + QStringLiteral("/image.exfat"));
-        QDir().rename(expected, d + QStringLiteral("/expected"));
+        const QString problem = keepForCrossCheck("FW_EXFAT_KEEP_EDIT", QStringLiteral("fw-exfat-edit-") + name, image,
+                                                  QStringLiteral("image.exfat"), expected, QStringLiteral("expected"));
+        QVERIFY2(problem.isEmpty(), qPrintable(problem));
     }
 
     // A copy of the source tree to model the expected result of an edit.
@@ -151,7 +183,7 @@ private slots:
         QVERIFY(m_tmp.isValid());
         fwtest::isolateAppData(m_tmp);
         m_src = path(QStringLiteral("src"));
-        makeSampleTree(m_src, 60);
+        QVERIFY(makeSampleTree(m_src, 60));
         QVERIFY(writeRandom(m_src + QStringLiteral("/data/large.bin"), 24 * kMiB, 11));
         m_master = path(QStringLiteral("master.exfat"));
         WriterOptions o;
@@ -232,8 +264,7 @@ private slots:
         expectMatchesFolder(img, expected);
         keep(img, expected, QStringLiteral("replace"));
         // The entry took the replacement's modification time.
-        const ImageTree t = treeOf(img);
-        const ImageEntry& e = t.entries[size_t(t.find(QStringLiteral("data/large.bin")))];
+        const ImageEntry e = entryOf(treeOf(img), QStringLiteral("data/large.bin"));
         QVERIFY(qAbs(e.modified.msecsTo(QFileInfo(smaller).lastModified())) < 10);
     }
 
@@ -242,6 +273,7 @@ private slots:
         const QString img = freshImage();
         const ImageTree before = treeOf(img);
         auto reader = ExfatReader::open(img);
+        QVERIFY2(reader.ok(), qPrintable(reader.ok() ? QString() : err(reader.error())));
         const qint64 oldSize = reader.value()->geometry().volumeBytes();
         const quint32 serial = reader.value()->volume().boot.serial;
         reader.value().reset();
@@ -251,8 +283,8 @@ private slots:
         const QString newFile = path(QStringLiteral("new data.bin"));
         QVERIFY(writeRandom(newFile, 20 * kMiB, 32)); // more than the 2 MiB free
         const QString folder = path(QStringLiteral("patch folder"));
-        writeBytes(folder + QStringLiteral("/sub/one.txt"), "one");
-        writeBytes(folder + QStringLiteral("/two.txt"), "two");
+        QVERIFY(writeBytes(folder + QStringLiteral("/sub/one.txt"), "one"));
+        QVERIFY(writeBytes(folder + QStringLiteral("/two.txt"), "two"));
         CancellationToken token;
         auto r = editImage(img, {op(EditOp::Kind::Replace, QStringLiteral("eboot.bin"), bigger),
                                  op(EditOp::Kind::Add, QStringLiteral("added/deep/new data.bin"), newFile),
@@ -284,17 +316,17 @@ private slots:
         const QString expected = mirror(QStringLiteral("exp-rebuild"));
         QVERIFY(QFile::remove(expected + QStringLiteral("/eboot.bin")));
         QVERIFY(QFile::copy(bigger, expected + QStringLiteral("/eboot.bin")));
-        writeBytes(expected + QStringLiteral("/added/deep/new data.bin"), readAllOf(newFile));
-        writeBytes(expected + QStringLiteral("/sce_sys/patch folder/sub/one.txt"), "one");
-        writeBytes(expected + QStringLiteral("/sce_sys/patch folder/two.txt"), "two");
-        QDir().mkpath(expected + QStringLiteral("/brand new/folder"));
+        QVERIFY(writeBytes(expected + QStringLiteral("/added/deep/new data.bin"), readAllOf(newFile)));
+        QVERIFY(writeBytes(expected + QStringLiteral("/sce_sys/patch folder/sub/one.txt"), "one"));
+        QVERIFY(writeBytes(expected + QStringLiteral("/sce_sys/patch folder/two.txt"), "two"));
+        QVERIFY(QDir().mkpath(expected + QStringLiteral("/brand new/folder")));
         QVERIFY(QFile::remove(expected + QStringLiteral("/data/big.bin")));
         expectMatchesFolder(img, expected);
         keep(img, expected, QStringLiteral("rebuild"));
         // Unchanged entries keep their times.
-        const ImageTree t = treeOf(img);
-        const ImageEntry& a = before.entries[size_t(before.find(QStringLiteral("data/medium.bin")))];
-        const ImageEntry& b = t.entries[size_t(t.find(QStringLiteral("data/medium.bin")))];
+        const ImageEntry a = entryOf(before, QStringLiteral("data/medium.bin"));
+        const ImageEntry b = entryOf(treeOf(img), QStringLiteral("data/medium.bin"));
+        QVERIFY(a.modified.isValid());
         QCOMPARE(b.modified, a.modified);
         QCOMPARE(b.attributes, a.attributes);
     }
@@ -351,13 +383,13 @@ private slots:
                                  op(EditOp::Kind::Delete, QStringLiteral("no/such/file"))},
                            options(), token);
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::NotFound);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::NotFound);
         r = editImage(img, {op(EditOp::Kind::Add, QStringLiteral("eboot.bin"), m_src + QStringLiteral("/eboot.bin"))}, options(), token);
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::AlreadyExists);
         r = editImage(img, {op(EditOp::Kind::Replace, QStringLiteral("data"), m_src + QStringLiteral("/eboot.bin"))}, options(), token);
         QVERIFY(!r.ok());
-        QCOMPARE(r.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InvalidArgument);
         r = editImage(img, {op(EditOp::Kind::Add, QStringLiteral("bad:name.txt"), m_src + QStringLiteral("/eboot.bin"))}, options(), token);
         QVERIFY(!r.ok());
         r = editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("../x"))}, options(), token);
@@ -649,12 +681,6 @@ private slots:
         QVERIFY(treeOf(img).warnings.join(u' ').indexOf(QStringLiteral("VolumeDirty")) < 0);
     }
 
-    static quint16 volumeFlagsOf(const QString& img)
-    {
-        const QByteArray b = readAllOf(img).left(512);
-        return quint16(uchar(b[int(kVolumeFlagsOffset)]) | (uchar(b[int(kVolumeFlagsOffset) + 1]) << 8));
-    }
-
     void interruptedInPlaceEditIsRolledBack()
     {
         const QString img = freshImage();
@@ -676,7 +702,7 @@ private slots:
         flipByte(journal, saved.size() / 2);
         auto bad = recoverInterruptedEdit(img);
         QVERIFY(!bad.ok());
-        QCOMPARE(bad.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(bad, ErrorCode::CorruptData);
         QVERIFY(writeBytes(journal, saved));
         // The next edit (or an explicit recovery) undoes it first.
         auto rec = recoverInterruptedEdit(img);
@@ -749,7 +775,7 @@ private slots:
         const QByteArray hashC = fileHash(c);
         auto rec = recoverInterruptedEdit(c);
         QVERIFY(!rec.ok());
-        QCOMPARE(rec.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(rec, ErrorCode::CorruptData);
         QVERIFY2(rec.error().message.contains(QStringLiteral("does not belong")), qPrintable(rec.error().message));
         QCOMPARE(fileHash(c), hashC);
         QFile::remove(editJournalPath(c));
@@ -759,7 +785,7 @@ private slots:
     {
         const QString img = freshImage();
         const QString local = path(QStringLiteral("job-add.txt"));
-        writeBytes(local, "added by the job");
+        QVERIFY(writeBytes(local, "added by the job"));
         const QJsonObject p{
             {QStringLiteral("image"), img},
             {QStringLiteral("operations"),
@@ -796,7 +822,7 @@ private slots:
                                                                                                {QStringLiteral("imagePath"), QStringLiteral("x")},
                                                                                                {QStringLiteral("localPath"), path(QStringLiteral("missing"))}}}}});
         QVERIFY(!bad.ok());
-        QCOMPARE(bad.error().code, ErrorCode::NotFound);
+        FWTEST_COMPARE_ERROR(bad, ErrorCode::NotFound);
     }
 };
 

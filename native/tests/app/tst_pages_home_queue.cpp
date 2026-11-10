@@ -69,8 +69,7 @@ private slots:
 
     void homeStopsOfferingARetriedJob()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build")))
-            QSKIP("image engines not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build"))); // every engine is linked into the app tests
         auto* home = qobject_cast<pages::HomePage*>(m_window->page(QStringLiteral("home")));
         QVERIFY(home);
         auto* bar = home->findChild<ui::InfoBar*>(QStringLiteral("home-continue"));
@@ -121,8 +120,7 @@ private slots:
     // cancelled is not reported as a failure in the status bar.
     void queueDetailsAndCounts()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build")))
-            QSKIP("image engines not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build"))); // every engine is linked into the app tests
         auto* queue = qobject_cast<pages::QueuePage*>(m_window->page(QStringLiteral("queue")));
         QVERIFY(queue);
         auto& q = m_ctx->queue();

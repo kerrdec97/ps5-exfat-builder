@@ -28,6 +28,7 @@
 #include "core/Paths.h"
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
+#include "ConsoleTestUtil.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/update/Module.h"
 #include "engines/ampr/Module.h"
@@ -48,9 +49,15 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
+
 using namespace fw;
 
 namespace {
+
+// A fake job with "gated" set stays in its first phase until the test opens
+// the gate, so what is asserted "while it runs" does not race its clock.
+std::atomic<bool> g_fakeJobGateOpen{true};
 
 class FakeJob : public Job {
 public:
@@ -77,6 +84,11 @@ public:
                 return Error::cancelled();
             QThread::msleep(stepMs);
             ctx.progress->advance(1);
+        }
+        while (m_p.value(QStringLiteral("gated")).toBool() && !g_fakeJobGateOpen.load()) {
+            if (!ctx.token.checkpoint())
+                return Error::cancelled();
+            QThread::msleep(5);
         }
         if (m_p.value(QStringLiteral("fail")).toBool())
             return Error(ErrorCode::IoError, QStringLiteral("Disk on fire"));
@@ -114,12 +126,14 @@ public:
         setRequiredKinds({QStringLiteral("test.fake")});
     }
     int steps = 40;
+    bool gated = false;
 
 protected:
     Result<QString> submit(bool) override
     {
         return m_ctx.queue().enqueue(QStringLiteral("test.fake"),
-                                     QJsonObject{{QStringLiteral("title"), QStringLiteral("Delta")}, {QStringLiteral("steps"), steps}, {QStringLiteral("stepMs"), 25}});
+                                     QJsonObject{{QStringLiteral("title"), QStringLiteral("Delta")}, {QStringLiteral("steps"), steps}, {QStringLiteral("stepMs"), 25},
+                                                 {QStringLiteral("gated"), gated}});
     }
 };
 
@@ -250,6 +264,7 @@ private slots:
         theme::apply(qApp);
         m_ctx = std::make_unique<AppContext>();
         QVERIFY(m_ctx->initialize().ok());
+        QVERIFY(fwtest::closeConsoleServices(m_ctx->settings()));
         m_ctx->mutableJobFactory().add(QStringLiteral("test.fake"), QStringLiteral("Fake"),
                                        [](const QJsonObject& p) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new FakeJob(p)); });
         m_window = std::make_unique<MainWindow>(*m_ctx);
@@ -456,7 +471,10 @@ private slots:
         QVERIFY(page);
         auto& q = m_ctx->queue();
         q.holdQueue(true);
-        auto a = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Gamma")}, {QStringLiteral("steps"), 60}, {QStringLiteral("stepMs"), 20}});
+        g_fakeJobGateOpen = false; // the job runs until the checks on the running state are done
+        const auto openGate = qScopeGuard([] { g_fakeJobGateOpen = true; });
+        auto a = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Gamma")}, {QStringLiteral("steps"), 6}, {QStringLiteral("stepMs"), 20},
+                                                                    {QStringLiteral("gated"), true}});
         QVERIFY(a.ok());
         QTRY_COMPARE(page->list()->visibleCount(), 1);
         page->selectJob(a.value());
@@ -484,6 +502,7 @@ private slots:
         QVERIFY(!m->retryButton()->isVisibleTo(m));
         QCOMPARE(m->metricValues().value(4), QStringLiteral("1 of 2")); // stage
 
+        g_fakeJobGateOpen = true;
         QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
         QTRY_VERIFY2(m->stateText().startsWith(QStringLiteral("Done")), qPrintable(m->stateText()));
         QCOMPARE(m->stateText(), QStringLiteral("Done")); // what the verification found is in the result, not in the badge
@@ -732,7 +751,12 @@ private slots:
         const QString queued = q.records().back().id;
 
         // The primary button starts the job and the monitor takes the form's place.
+        // The job stays running until the checks on that state are done.
+        g_fakeJobGateOpen = false;
+        const auto openGate = qScopeGuard([] { g_fakeJobGateOpen = true; });
+        page.gated = true;
         page.primaryButton()->click();
+        page.gated = false;
         QVERIFY(page.isMonitorShown());
         const QString started = page.monitor()->jobId();
         QVERIFY(!started.isEmpty());
@@ -745,6 +769,7 @@ private slots:
         QVERIFY(waitForState(q, started, JobState::Running));
         QCOMPARE(q.records().front().id, started); // moved ahead of the queued job
         QTRY_VERIFY(page.monitor()->stateText().startsWith(QStringLiteral("Running")));
+        g_fakeJobGateOpen = true;
         QVERIFY(waitForState(q, started, JobState::Succeeded));
         QTRY_VERIFY(page.monitor()->stateText().startsWith(QStringLiteral("Done")));
 
@@ -844,11 +869,6 @@ private slots:
         QVERIFY(state->isVisibleTo(&page));
         QVERIFY(!page.primaryButton()->isEnabled());
         QVERIFY(!page.queueButton()->isEnabled());
-        auto r = jobs::submitImageBuild(*m_ctx, jobs::kFormatExfat, m_root.path(), m_root.path(), QStringLiteral("x.exfat"), {});
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build"))) {
-            QVERIFY(!r.ok());
-            QCOMPARE(r.error().code, ErrorCode::Unsupported);
-        }
     }
 
     void imageEditorStagesAndOpensRealImage()
@@ -868,8 +888,7 @@ private slots:
         QCOMPARE(ops[1].toObject().value(QStringLiteral("op")).toString(), QStringLiteral("delete"));
         page->clearStaged();
         QVERIFY(page->staged().empty());
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build")))
-            QSKIP("exFAT engine not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("image.exfat.build"))); // every engine is linked into the app tests
         // Build a small image with the real engine and browse it.
         const QString src = m_root.filePath(QStringLiteral("edit-src"));
         QVERIFY(fwtest::writeTextFile(src + QStringLiteral("/sce_sys/param.json"), "{\"titleId\":\"PPSA00001\"}"));
@@ -973,8 +992,7 @@ private slots:
 
     void libraryRenamePreviewUsesTheEngine()
     {
-        if (!jobs::isAvailable(*m_ctx, QStringLiteral("library.rename")))
-            QSKIP("library.rename not registered in this build");
+        QVERIFY(jobs::isAvailable(*m_ctx, QStringLiteral("library.rename"))); // every engine is linked into the app tests
         const QString lib = m_root.filePath(QStringLiteral("rename-lib"));
         const QString dump = lib + QStringLiteral("/GameA");
         QVERIFY(fwtest::writeTextFile(dump + QStringLiteral("/eboot.bin"), "x"));

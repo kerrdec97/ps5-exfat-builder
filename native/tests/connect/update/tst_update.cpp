@@ -436,12 +436,14 @@ private slots:
         // A checksum file that lists other files only → refused.
         http.routes[sumsPath] = {200, QByteArray(64, 'f') + "  something else.exe\n"};
         auto unlisted = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
+        QVERIFY(unlisted);
         QCOMPARE(unlisted->state, JobState::Failed);
         QCOMPARE(unlisted->error->code, ErrorCode::VerificationFailed);
 
         // Wrong checksum → refused, nothing left behind.
         http.routes[sumsPath] = {200, QByteArray(64, 'f') + "  exFAT Image Builder.exe\n"};
         auto bad = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
+        QVERIFY(bad);
         QCOMPARE(bad->state, JobState::Failed);
         QCOMPARE(bad->error->code, ErrorCode::VerificationFailed);
         QVERIFY(nothingLeft());
@@ -450,6 +452,7 @@ private slots:
         http.routes[sumsPath] = {200, sumsLine(payload)};
         http.routes[assetPath(version, kProgram)] = {200, payload, true};
         auto cut = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
+        QVERIFY(cut);
         QCOMPARE(cut->state, JobState::Failed);
         QVERIFY(nothingLeft());
 
@@ -458,6 +461,7 @@ private slots:
         http.routes[sumsPath] = {200, sumsLine(longer)};
         http.routes[assetPath(version, kProgram)] = {200, longer};
         auto big = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
+        QVERIFY(big);
         QCOMPARE(big->state, JobState::Failed);
         QCOMPARE(big->error->code, ErrorCode::VerificationFailed);
         QVERIFY(nothingLeft());
@@ -467,6 +471,7 @@ private slots:
         http.routes[sumsPath] = {200, sumsLine(shorter)};
         http.routes[assetPath(version, kProgram)] = {200, shorter};
         auto small = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
+        QVERIFY(small);
         QCOMPARE(small->state, JobState::Failed);
         QCOMPARE(small->error->code, ErrorCode::VerificationFailed);
         QVERIFY(nothingLeft());

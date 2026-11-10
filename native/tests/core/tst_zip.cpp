@@ -22,9 +22,6 @@ QByteArray readFile(const QString& p)
     QFile f(p);
     return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
 }
-} // namespace
-
-namespace {
 
 // A Python that really runs. On Windows the Microsoft Store "App execution
 // alias" stubs in ...\WindowsApps only print "Python was not found", so
@@ -191,9 +188,13 @@ private slots:
     void corruptionIsDetected()
     {
         const QString z = makeSample(QStringLiteral("corrupt.zip"));
+        QVERIFY(!z.isEmpty());
         QByteArray bytes = readFile(z);
         // Flip a byte inside big.bin's stored data (just after its local header).
-        const qsizetype at = bytes.indexOf("game/big.bin") + 12 + 1000;
+        const qsizetype name = bytes.indexOf("game/big.bin");
+        QVERIFY(name >= 0);
+        const qsizetype at = name + 12 + 1000;
+        QVERIFY(at < bytes.size());
         bytes[at] = char(bytes[at] ^ 0x5A);
         QVERIFY(fwtest::writeTextFile(z, bytes));
         zip::Reader r;

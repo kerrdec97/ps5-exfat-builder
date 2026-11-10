@@ -22,6 +22,7 @@
 #include "app/ui/Sheet.h"
 #include "app/ui/Shell.h"
 #include "app/ui/Theme.h"
+#include "ConsoleTestUtil.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/ps5/Module.h"
 #include "core/Log.h"
@@ -65,14 +66,8 @@ bool writeBytes(const QString& path, const QByteArray& bytes)
     return f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(bytes) == bytes.size();
 }
 
-quint16 closedPort()
-{
-    QTcpServer s;
-    s.listen(QHostAddress::LocalHost, 0);
-    const quint16 p = s.serverPort();
-    s.close();
-    return p;
-}
+// Reserved for the whole run: nothing listens there and nobody else gets it.
+quint16 closedPort() { return fwtest::refusedPort(); }
 
 QPushButton* buttonIn(QWidget* root, const QString& text)
 {
@@ -138,16 +133,10 @@ int rowOf(QTableWidget* t, const QString& name)
     return -1;
 }
 
+// The stand-in console: FTP on `port`, every other service refuses.
 pages::ConsoleToolTab::EndpointFn fakeConsole(quint16 port)
 {
-    return [port] {
-        ps5::ConsoleEndpoint ep;
-        ep.host = QStringLiteral("127.0.0.1");
-        ep.ftpPort = port;
-        ep.connectTimeoutMs = 3000;
-        ep.idleTimeoutMs = 5000;
-        return ep;
-    };
+    return [port] { return fwtest::loopbackConsole(port); };
 }
 
 } // namespace
@@ -218,6 +207,7 @@ private slots:
         QVERIFY(m_ctx->initialize().ok());
         m_ctx->queue().holdQueue(false);
         (void)m_ctx->settings().setValue(ps5::keys::kConnectTimeout, 3);
+        QVERIFY(fwtest::closeConsoleServices(m_ctx->settings()));
     }
 
     void cleanupTestCase() { m_ctx.reset(); }
@@ -872,7 +862,7 @@ private slots:
         const QString src = fresh(QStringLiteral("al-src")) + QStringLiteral("/kstuff.elf");
         QVERIFY(writeBytes(src, QByteArray("\x7f" "ELF", 4) + QByteArray(40, '\1')));
         QVERIFY(writeBytes(dir + QStringLiteral("/autoload.txt"), "elfldr.elf\n"));
-        pages::AutoloaderTab tab(*m_ctx, fakeConsole(1));
+        pages::AutoloaderTab tab(*m_ctx, fakeConsole(fwtest::refusedPort()));
         tab.setUseRecycleBin(false);
         tab.resize(1100, 900);
         tab.openFolder(dir);

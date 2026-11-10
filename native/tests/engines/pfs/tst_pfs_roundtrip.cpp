@@ -39,11 +39,15 @@ PlanOptions planOptions()
     return p;
 }
 
+// The plan for `root`. A folder that cannot be planned fails the test here
+// (the other test functions still run) and gives an empty plan.
 SourcePlan plan(const QString& root, const PlanOptions& po = planOptions())
 {
     auto r = planFolder(root, po, CancellationToken());
-    if (!r.ok())
-        qFatal("plan failed: %s", qPrintable(r.error().toLogString()));
+    if (!r.ok()) {
+        QTest::qFail(qPrintable(QStringLiteral("plan failed: ") + r.error().toLogString()), __FILE__, __LINE__);
+        return {};
+    }
     return std::move(r).value();
 }
 
@@ -94,6 +98,7 @@ class TestPfsRoundTrip : public QObject {
 private slots:
     void initTestCase()
     {
+        QVERIFY(m_appData.isValid());
         fwtest::isolateAppData(m_appData);
         m_spec = pfstest::loadJson(QStringLiteral("golden_cases.json"));
         QVERIFY(!m_spec.isEmpty());
@@ -113,6 +118,7 @@ private slots:
     {
         QFETCH(QString, mode);
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::makeTree(src, tree("game"), 1600000000));
         QVERIFY(QDir().mkpath(src + QStringLiteral("/data/empty_folder")));
@@ -217,6 +223,7 @@ private slots:
     {
         QFETCH(bool, container);
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::makeTree(src, tree("game"), 1600000000));
         const SourcePlan p0 = plan(src);
@@ -232,9 +239,13 @@ private slots:
             ex.format = fmt;
             ex.plan = &p;
             auto r = verifyImage(out, ex, depth, CancellationToken());
-            if (!r.ok())
-                qFatal("%s", qPrintable(errText(r.error())));
-            return std::move(r).value();
+            if (r.ok())
+                return std::move(r).value();
+            // A check that could not run fails the test here, whatever the caller expects of the report.
+            QTest::qFail(qPrintable(errText(r.error())), __FILE__, __LINE__);
+            VerifyReport failed;
+            failed.fail(errText(r.error()));
+            return failed;
         };
         QVERIFY(verifyWith(p0, VerifyDepth::Full).passed);
 
@@ -274,6 +285,7 @@ private slots:
     void exclusionsDoNotCauseFalseFailures()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::makeTree(src, tree("game"), 1600000000));
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/old_build.ffpkg"), "leftover", -1));
@@ -308,6 +320,7 @@ private slots:
     void corruptionDetected()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString file = tmp.filePath(QStringLiteral("game.exfat"));
         QVERIFY(pfstest::writeFile(file, pfstest::genContent(QStringLiteral("text"), 3 * 1024 * 1024, 5), -1));
         BuildInput in;
@@ -320,7 +333,9 @@ private slots:
         ex.kind = VerifyExpectation::Kind::File;
         ex.file = file;
         ex.fileName = "game.exfat";
-        QVERIFY(verifyImage(out, ex, VerifyDepth::Full, CancellationToken())->passed);
+        const auto intact = verifyImage(out, ex, VerifyDepth::Full, CancellationToken());
+        QVERIFY2(intact.ok(), intact.ok() ? "" : qPrintable(errText(intact.error())));
+        QVERIFY(intact->passed);
 
         // A byte inside the 3rd compressed block (payload starts at block 6, PFSC data at +64 KiB).
         const qint64 payload = 6 * 0x10000;
@@ -333,11 +348,11 @@ private slots:
         const Status rs = img->readFile(img->inodes()[img->files().front().inode],
                                         [](const char*, qint64) { return success(); }, CancellationToken());
         QVERIFY(!rs.ok());
-        QCOMPARE(rs.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(rs, ErrorCode::CorruptData);
         for (VerifyDepth d : {VerifyDepth::Full, VerifyDepth::Structure}) {
             auto vr = verifyImage(out, ex, d, CancellationToken());
             QVERIFY(!vr.ok());
-            QCOMPARE(vr.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(vr, ErrorCode::CorruptData);
         }
         img.reset();
         keep.reset();
@@ -364,13 +379,14 @@ private slots:
         QVERIFY(writeFileAtomic(out, good.left(0x30000)).ok());
         auto t = verifyImage(out, ex, VerifyDepth::Structure, CancellationToken());
         QVERIFY(!t.ok());
-        QCOMPARE(t.error().code, ErrorCode::CorruptData);
+        FWTEST_COMPARE_ERROR(t, ErrorCode::CorruptData);
     }
 
     // Lazy's RAM mode leaves the last block short; such images still read correctly.
     void shortImageReadable()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), pfstest::genContent(QStringLiteral("random"), 1000, 1), -1));
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/z.bin"), pfstest::genContent(QStringLiteral("text"), 70000, 2), -1));
@@ -381,7 +397,9 @@ private slots:
         std::shared_ptr<FileByteSource> keep;
         auto full = openImage(out, keep);
         QVERIFY(full);
-        const Inode& last = full->inodes()[full->findFile("z.bin")->inode];
+        const PfsEntry* lastEntry = full->findFile("z.bin");
+        QVERIFY(lastEntry);
+        const Inode& last = full->inodes()[lastEntry->inode];
         const qint64 end = last.db[0] * 0x10000 + 70000;
         full.reset();
         keep.reset();
@@ -390,12 +408,15 @@ private slots:
         auto img = openImage(out, keep);
         QVERIFY(img);
         QCOMPARE(img->missingTailBytes(), qint64(2 * 0x10000 - 70000));
-        QCOMPARE(readImageFile(*img, *img->findFile("z.bin")), pfstest::readAll(src + QStringLiteral("/z.bin")));
+        const PfsEntry* shortEntry = img->findFile("z.bin");
+        QVERIFY(shortEntry);
+        QCOMPARE(readImageFile(*img, *shortEntry), pfstest::readAll(src + QStringLiteral("/z.bin")));
     }
 
     void extractRoundTrip()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::makeTree(src, tree("game"), 1600000000));
         QVERIFY(QDir().mkpath(src + QStringLiteral("/empty")));
@@ -437,7 +458,7 @@ private slots:
         eo.deep = true;
         auto r4 = extractImage(folderImg, tmp.filePath(QStringLiteral("x1")), eo, CancellationToken());
         QVERIFY(!r4.ok());
-        QCOMPARE(r4.error().code, ErrorCode::AlreadyExists);
+        FWTEST_COMPARE_ERROR(r4, ErrorCode::AlreadyExists);
         QVERIFY(pfstest::writeFile(tmp.filePath(QStringLiteral("x1/eboot.bin")), "modified", -1));
         eo.overwrite = true;
         auto r5 = extractImage(folderImg, tmp.filePath(QStringLiteral("x1")), eo, CancellationToken());
@@ -448,6 +469,7 @@ private slots:
     void cancelledExtractLeavesNothing()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString file = tmp.filePath(QStringLiteral("big.exfat"));
         QVERIFY(pfstest::writeFile(file, pfstest::genContent(QStringLiteral("mixed"), 12 * 1024 * 1024, 9), -1));
         BuildInput in;
@@ -474,6 +496,7 @@ private slots:
     void threadDeterminism()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::makeTree(src, tree("game"), 1600000000));
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/big/blob.bin"),
@@ -503,12 +526,13 @@ private slots:
     void sourceRules()
     {
         QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
         const QString src = tmp.filePath(QStringLiteral("src"));
         QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "x", -1));
         QVERIFY(pfstest::writeFile(src + QString::fromUtf8("/d\xc3\xa9mo.bin"), "x", -1));
         auto bad = planFolder(src, planOptions(), CancellationToken());
         QVERIFY(!bad.ok());
-        QCOMPARE(bad.error().code, ErrorCode::InvalidArgument);
+        FWTEST_COMPARE_ERROR(bad, ErrorCode::InvalidArgument);
         PlanOptions po = planOptions();
         po.excludes = {QString::fromUtf8("d\xc3\xa9mo.bin")};
         QVERIFY(planFolder(src, po, CancellationToken()).ok());

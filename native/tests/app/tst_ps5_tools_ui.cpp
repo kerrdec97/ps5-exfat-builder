@@ -11,6 +11,7 @@
 #include "app/services/AppStores.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
+#include "ConsoleTestUtil.h"
 #include "connect/notify/Module.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/ps5/Module.h"
@@ -21,6 +22,7 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QLabel>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QTabBar>
 #include <QTcpServer>
@@ -32,14 +34,8 @@ using namespace fw;
 
 namespace {
 
-quint16 closedPort()
-{
-    QTcpServer s;
-    s.listen(QHostAddress::LocalHost, 0);
-    const quint16 p = s.serverPort();
-    s.close();
-    return p;
-}
+// Reserved for the whole run: nothing listens there and nobody else gets it.
+quint16 closedPort() { return fwtest::refusedPort(); }
 
 ui::Sheet* sheetOf(QWidget* w)
 {
@@ -94,6 +90,7 @@ private slots:
         m_ctx = std::make_unique<AppContext>();
         QVERIFY(m_ctx->initialize().ok());
         (void)m_ctx->settings().setValue(ps5::keys::kConnectTimeout, 3);
+        QVERIFY(fwtest::closeConsoleServices(m_ctx->settings()));
         m_window = std::make_unique<MainWindow>(*m_ctx);
         m_window->resize(1440, 920);
         m_window->show();
@@ -321,6 +318,12 @@ private slots:
         auto* page = home();
         (void)m_ctx->settings().setValue(ps5::keys::kConsoleIp, QString());
         (void)m_ctx->settings().setValue(ps5::keys::kFtpPort, 2121);
+        // The list judges the ports as a user has them (the defaults). Nothing
+        // here connects: the console is 192.168.1.20 in name only.
+        for (const QString& key : {ps5::keys::kPayloadPort, ps5::keys::kShadowMountPort, ps5::keys::kMicroMountPort,
+                                   ps5::keys::kKlogPort, ps5::keys::kDpiPort, ps5::keys::kSmpApiPort})
+            m_ctx->settings().reset(key);
+        const auto closeAgain = qScopeGuard([this] { (void)fwtest::closeConsoleServices(m_ctx->settings()); });
         auto* store = new ui::PayloadStore(m_window.get());
         page->setPayloadStore(store);
         QCOMPARE(page->checklistProgress(), QStringLiteral("0 / 5 complete"));

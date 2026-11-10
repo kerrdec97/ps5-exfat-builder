@@ -69,6 +69,12 @@ struct Env {
     }
 };
 
+// False also when the job was refused before it could be queued.
+bool succeeded(const std::optional<JobRecord>& r)
+{
+    return r && r->state == JobState::Succeeded;
+}
+
 QString describe(const std::optional<JobRecord>& r)
 {
     if (!r)
@@ -206,8 +212,8 @@ private slots:
         Env env(m_root.filePath(QStringLiteral("e2")));
         const QString out = m_root.filePath(QStringLiteral("wrapped"));
         QDir().mkpath(out);
-        QVERIFY(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.exfat")}})->state == JobState::Succeeded);
-        QVERIFY(env.run(QStringLiteral("image.ffpkg.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.ffpkg")}})->state == JobState::Succeeded);
+        QVERIFY(succeeded(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.exfat")}})));
+        QVERIFY(succeeded(env.run(QStringLiteral("image.ffpkg.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/g.ffpkg")}})));
         // The exFAT and UFS2 images packed as they are into .ffpfsc containers.
         for (const QString& inner : {QStringLiteral("g.exfat"), QStringLiteral("g.ffpkg")}) {
             const QString box = out + u'/' + QFileInfo(inner).suffix() + QStringLiteral("-box.ffpfsc");

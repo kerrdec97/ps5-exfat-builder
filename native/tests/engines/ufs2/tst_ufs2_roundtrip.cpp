@@ -7,67 +7,18 @@
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Edit.h"
 #include "engines/ufs2/Ufs2Verify.h"
+#include "support/SparseFile.h"
 
 #include <QElapsedTimer>
 #include <QScopeGuard>
 #include <QStorageInfo>
 #include <QTemporaryDir>
 
-#ifdef Q_OS_WIN
-#include <windows.h>
-#include <winioctl.h>
-#else
-#include <sys/stat.h>
-#endif
-
 using namespace ufs2test;
 
 namespace {
 
 constexpr qint64 kGiB = 1024LL * 1024 * 1024;
-
-// A sparse file of `size` bytes holding `marks` (offset, bytes) and zeros
-// elsewhere. Returns the bytes it takes on disk, -1 when it could not be made.
-qint64 makeSparseFile(const QString& path, qint64 size, const QList<QPair<qint64, QByteArray>>& marks)
-{
-#ifdef Q_OS_WIN
-    const std::wstring native = QDir::toNativeSeparators(path).toStdWString();
-    HANDLE h = CreateFileW(native.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return -1;
-    DWORD ret = 0;
-    bool ok = DeviceIoControl(h, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &ret, nullptr);
-    LARGE_INTEGER li;
-    li.QuadPart = size;
-    ok = ok && SetFilePointerEx(h, li, nullptr, FILE_BEGIN) && SetEndOfFile(h);
-    for (const auto& m : marks) {
-        li.QuadPart = m.first;
-        DWORD written = 0;
-        ok = ok && SetFilePointerEx(h, li, nullptr, FILE_BEGIN)
-             && WriteFile(h, m.second.constData(), DWORD(m.second.size()), &written, nullptr) && written == DWORD(m.second.size());
-    }
-    CloseHandle(h);
-    if (!ok)
-        return -1;
-    DWORD high = 0;
-    const DWORD low = GetCompressedFileSizeW(native.c_str(), &high);
-    if (low == INVALID_FILE_SIZE && GetLastError() != NO_ERROR)
-        return -1;
-    return (qint64(high) << 32) | low;
-#else
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly) || !f.resize(size))
-        return -1;
-    for (const auto& m : marks)
-        if (!f.seek(m.first) || f.write(m.second) != m.second.size())
-            return -1;
-    f.close();
-    struct stat sb;
-    if (::stat(QFile::encodeName(path).constData(), &sb) != 0)
-        return -1;
-    return qint64(sb.st_blocks) * 512;
-#endif
-}
 
 // Reads the whole image back into a snapshot like snapshotFolder().
 QMap<QString, QByteArray> snapshotImage(const QString& image)
@@ -156,6 +107,7 @@ private slots:
     void initTestCase()
     {
         QVERIFY(m_tmp.isValid());
+        fwtest::isolateAppData(m_tmp);
         m_src = m_tmp.filePath("rich");
         makeRichTree(m_src);
     }
@@ -204,7 +156,7 @@ private slots:
         QCOMPARE(cmp->filesCompared, qint64(2414));
         // Paths resolve, Unicode included.
         QVERIFY(r.value()->resolve(QStringLiteral("/Ünïcödé/emoji 🎮.txt")).ok());
-        QCOMPARE(r.value()->resolve(QStringLiteral("/nope")).error().code, ErrorCode::NotFound);
+        FWTEST_COMPARE_ERROR(r.value()->resolve(QStringLiteral("/nope")), ErrorCode::NotFound);
     }
 
     void emptyFolderAndOnlyEmptyFiles()
@@ -228,9 +180,19 @@ private slots:
         auto r = Ufs2Reader::open(img);
         QVERIFY(r.ok());
         CancellationToken token;
+        // The comparison's report. One that could not run fails the test here
+        // and reports the reason as a change, so no later check passes on it.
         auto compare = [&](CompareDepth d) {
             auto tree = scanLocalFolder(src, token);
-            return compareImage(*r.value(), tree.value(), d, token, nullptr).value();
+            auto report = tree.ok() ? compareImage(*r.value(), tree.value(), d, token, nullptr)
+                                    : Result<CompareReport>(tree.error());
+            if (report.ok())
+                return std::move(report).value();
+            const QString why = QStringLiteral("the comparison did not run: ") + report.error().toLogString();
+            QTest::qFail(qPrintable(why), __FILE__, __LINE__);
+            CompareReport failed;
+            failed.changed << why;
+            return failed;
         };
         QVERIFY(compare(CompareDepth::Full).ok());
         // Same size, one byte different: only a full comparison sees it.
@@ -238,10 +200,10 @@ private slots:
             QFile f(src + "/data/big.pak");
             QVERIFY(f.open(QIODevice::ReadWrite) && f.seek(1500000));
             char c = 0;
-            f.read(&c, 1);
+            QCOMPARE(f.read(&c, 1), qint64(1));
             c = char(c ^ 0x5A);
-            f.seek(1500000);
-            f.write(&c, 1);
+            QVERIFY(f.seek(1500000));
+            QCOMPARE(f.write(&c, 1), qint64(1));
         }
         QVERIFY(compare(CompareDepth::Structure).ok());
         auto full = compare(CompareDepth::Full);
@@ -288,13 +250,13 @@ private slots:
             QVERIFY(patch(p, kSuperblockOffset + 0x55C, le32(0x12345678)));
             auto o = Ufs2Reader::open(p);
             QVERIFY(!o.ok());
-            QCOMPARE(o.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(o, ErrorCode::CorruptData);
         }
         // 2. Superblock geometry (block size).
         {
             const QString p = copy("bad-bsize.ffpkg");
             QVERIFY(patch(p, kSuperblockOffset + 0x30, le32(3000)));
-            QCOMPARE(Ufs2Reader::open(p).error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(Ufs2Reader::open(p), ErrorCode::CorruptData);
         }
         // 3. Truncated image (incomplete copy).
         {
@@ -302,16 +264,16 @@ private slots:
             QFile f(p);
             QVERIFY(f.resize(f.size() - 65536));
             auto o = Ufs2Reader::open(p);
-            QCOMPARE(o.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(o, ErrorCode::CorruptData);
             QVERIFY(o.error().message.contains(QStringLiteral("incomplete")));
         }
         // 4. Not an image at all.
         {
             const QString p = m_tmp.filePath("random.bin");
             QVERIFY(mkfile(p, 300000, 77));
-            QCOMPARE(Ufs2Reader::open(p).error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(Ufs2Reader::open(p), ErrorCode::CorruptData);
             QVERIFY(mkfile(p, 100, 77));
-            QCOMPARE(Ufs2Reader::open(p).error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(Ufs2Reader::open(p), ErrorCode::CorruptData);
         }
         // 5. A cylinder-group header.
         {
@@ -352,14 +314,17 @@ private slots:
         {
             const QString p = copy("bad-dir.ffpkg");
             auto rr = Ufs2Reader::open(p);
-            const qint64 rootBlock = rr.value()->readInode(kRootIno)->db[0];
+            QVERIFY(rr.ok());
+            const auto root = rr.value()->readInode(kRootIno);
+            QVERIFY(root.ok());
+            const qint64 rootBlock = root->db[0];
             rr = Error(ErrorCode::Internal, QString());
             QVERIFY(patch(p, rootBlock * sb.fsize + 12 + 4, QByteArray(2, '\0'))); // ".." d_reclen
             auto o = Ufs2Reader::open(p);
             QVERIFY(o.ok());
-            QCOMPARE(o.value()->readDirectory(kRootIno).error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(o.value()->readDirectory(kRootIno), ErrorCode::CorruptData);
             CancellationToken token;
-            QCOMPARE(o.value()->loadTree(token).error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(o.value()->loadTree(token), ErrorCode::CorruptData);
             const auto c = check(p);
             QVERIFY(c.ok() && !c->ok());
         }
@@ -367,6 +332,7 @@ private slots:
         {
             const QString p = copy("bad-ptr.ffpkg");
             auto rr = Ufs2Reader::open(p);
+            QVERIFY(rr.ok());
             auto ino = rr.value()->resolve(QStringLiteral("/eboot.bin"));
             QVERIFY(ino.ok());
             const qint64 off = (qint64(ino.value() / quint32(sb.ipg)) * sb.fpg + sb.iblkno) * sb.fsize
@@ -376,8 +342,9 @@ private slots:
             wr64(v.data(), sb.size + 100);
             QVERIFY(patch(p, off, v));
             auto o = Ufs2Reader::open(p);
+            QVERIFY(o.ok());
             auto s = o.value()->openFile(ino.value());
-            QCOMPARE(s.error().code, ErrorCode::CorruptData);
+            FWTEST_COMPARE_ERROR(s, ErrorCode::CorruptData);
             const auto c = check(p);
             QVERIFY(c.ok() && !c->ok());
         }
@@ -385,7 +352,9 @@ private slots:
         {
             const QString p = copy("bad-nlink.ffpkg");
             auto rr = Ufs2Reader::open(p);
+            QVERIFY(rr.ok());
             auto ino = rr.value()->resolve(QStringLiteral("/sce_sys"));
+            QVERIFY(ino.ok());
             rr = Error(ErrorCode::Internal, QString());
             const qint64 off = (qint64(ino.value() / quint32(sb.ipg)) * sb.fpg + sb.iblkno) * sb.fsize
                                + qint64(ino.value() % quint32(sb.ipg)) * kInodeSize + 2;
@@ -431,7 +400,7 @@ private slots:
         Ufs2Writer w(tree.value(), WriterOptions{});
         auto st = w.write(m_tmp.filePath("shrink.ffpkg"), token, nullptr);
         QVERIFY(!st.ok());
-        QCOMPARE(st.error().code, ErrorCode::IoError);
+        FWTEST_COMPARE_ERROR(st, ErrorCode::IoError);
         QVERIFY(st.error().message.contains(QStringLiteral("shorter")));
     }
 
@@ -483,7 +452,7 @@ private slots:
         const QList<QPair<qint64, QByteArray>> marks = {
             {0, QByteArrayLiteral("head")}, {4 * kGiB - 5, QByteArrayLiteral("edge!")},
             {4 * kGiB + 1, QByteArrayLiteral("past 4 GiB")}, {size - 5, QByteArrayLiteral("tail!")}};
-        const qint64 allocated = makeSparseFile(src + QStringLiteral("/huge.bin"), size, marks);
+        const qint64 allocated = fwtest::makeSparseFile(src + QStringLiteral("/huge.bin"), size, marks);
         if (allocated < 0 || allocated > 64 * 1024 * 1024)
             QSKIP("this file system does not create sparse files");
         QVERIFY(mktext(src + QStringLiteral("/small.txt"), "small"));
@@ -537,16 +506,6 @@ private slots:
         QCOMPARE(readAll(dest + QStringLiteral("/small.txt")), QByteArray("small"));
     }
 
-    void windowsFileNames()
-    {
-        QCOMPARE(hostFileName(QStringLiteral("a:b?.txt"), true), QStringLiteral("a_b_.txt"));
-        QCOMPARE(hostFileName(QStringLiteral("CON"), true), QStringLiteral("_CON"));
-        QCOMPARE(hostFileName(QStringLiteral("nul.txt"), true), QStringLiteral("_nul.txt"));
-        QCOMPARE(hostFileName(QStringLiteral("trailing. "), true), QStringLiteral("trailing"));
-        QCOMPARE(hostFileName(QStringLiteral("a:b?.txt"), false), QStringLiteral("a:b?.txt"));
-        QCOMPARE(hostFileName(QStringLiteral("日本.bin"), true), QStringLiteral("日本.bin"));
-    }
-
     void editsRebuildTheTree()
     {
         const QString src = m_tmp.filePath("edit-src");
@@ -593,22 +552,31 @@ private slots:
         QCOMPARE(snap.value(QStringLiteral("data/level1/level2/level3/deep.bin")), readAll(src + "/data/level1/level2/level3/deep.bin"));
         // Invalid edits are refused.
         auto t2 = r.value()->loadTree(token);
+        QVERIFY(t2.ok());
         auto bad = parseEditOps(QJsonArray{QJsonObject{{"op", "add"}, {"path", "/eboot.bin"}, {"source", local + "/single.txt"}}});
-        QCOMPARE(applyEdits(t2.value(), bad.value(), token).error().code, ErrorCode::AlreadyExists);
+        QVERIFY(bad.ok());
+        FWTEST_COMPARE_ERROR(applyEdits(t2.value(), bad.value(), token), ErrorCode::AlreadyExists);
         bad = parseEditOps(QJsonArray{QJsonObject{{"op", "delete"}, {"path", "/missing"}}});
-        QCOMPARE(applyEdits(t2.value(), bad.value(), token).error().code, ErrorCode::NotFound);
+        QVERIFY(bad.ok());
+        FWTEST_COMPARE_ERROR(applyEdits(t2.value(), bad.value(), token), ErrorCode::NotFound);
         bad = parseEditOps(QJsonArray{QJsonObject{{"op", "replace"}, {"path", "/sce_sys"}, {"source", local + "/single.txt"}}});
-        QCOMPARE(applyEdits(t2.value(), bad.value(), token).error().code, ErrorCode::InvalidArgument);
+        QVERIFY(bad.ok());
+        FWTEST_COMPARE_ERROR(applyEdits(t2.value(), bad.value(), token), ErrorCode::InvalidArgument);
         QVERIFY(!parseEditOps(QJsonArray{QJsonObject{{"op", "explode"}, {"path", "/x"}}}).ok());
         QVERIFY(!parseEditOps(QJsonArray{QJsonObject{{"op", "rename"}, {"path", "/x"}}}).ok());
     }
 
     void benchmark()
     {
-        // ~200 MiB of random data in large and small files.
+        // Random data in six large and 2000 small files. FW_UFS2_BENCH_MIB sets
+        // the amount in the large ones: the default of 48 keeps an ordinary
+        // test run light (the same code runs, on less data); for numbers
+        // worth quoting set 192 or more on a machine that does nothing else.
+        const int asked = qEnvironmentVariableIntValue("FW_UFS2_BENCH_MIB");
+        const qint64 bigBytes = qint64(asked > 0 ? asked : 48) * 1024 * 1024 / 6;
         const QString src = m_tmp.filePath("bench");
         for (int i = 0; i < 6; ++i)
-            QVERIFY(mkfile(src + QStringLiteral("/big%1.bin").arg(i), 32 * 1024 * 1024 + i, quint32(900 + i)));
+            QVERIFY(mkfile(src + QStringLiteral("/big%1.bin").arg(i), bigBytes + i, quint32(900 + i)));
         for (int i = 0; i < 2000; ++i)
             QVERIFY(mkfile(src + QStringLiteral("/small/%1/f%2.bin").arg(i % 20).arg(i), 4000 + i, quint32(5000 + i)));
         CancellationToken token;

@@ -17,6 +17,18 @@
 #include <QStandardPaths>
 #include <QTest>
 
+// QCOMPARE on the error code of a result that must have failed. A result that
+// succeeded fails the test here; asking it for its error would end the whole
+// test program instead.
+#ifndef FWTEST_COMPARE_ERROR
+#define FWTEST_COMPARE_ERROR(result, expectedCode)                                \
+    do {                                                                          \
+        const auto& fwtestResult_ = (result);                                     \
+        QVERIFY2(!fwtestResult_.ok(), "this succeeded; expected " #expectedCode); \
+        QCOMPARE(fwtestResult_.error().code, expectedCode);                       \
+    } while (false)
+#endif
+
 namespace ufs2test {
 
 using namespace fw;
@@ -45,8 +57,8 @@ inline bool makeGameTree(const QString& root, qint64 bigFile = 2 * 1024 * 1024)
     return ok;
 }
 
-// Many entries in one directory (several directory blocks at 4 KiB... here
-// 64 KiB blocks need ~2000+ long names to span blocks).
+// Many entries in one directory. With 64 KiB blocks it takes a few thousand
+// long names for the directory to span several blocks.
 inline bool makeWideDir(const QString& dir, int count, int nameLen, quint32 seed)
 {
     bool ok = QDir().mkpath(dir);
@@ -70,6 +82,20 @@ inline QString findTool(const QString& envName, const QStringList& names)
             return p;
     }
     return {};
+}
+
+// The same for the file-system tools, which are looked for on PATH only where
+// they are system tools (the Unixes). On Windows a program that happens to
+// be called "makefs" or "dumpfs" is somebody else's and is not run: there
+// only the variable counts.
+inline QString findUnixTool(const QString& envName, const QStringList& names)
+{
+#ifdef Q_OS_UNIX
+    return findTool(envName, names);
+#else
+    Q_UNUSED(names);
+    return findTool(envName, {});
+#endif
 }
 
 struct ToolRun {
@@ -102,8 +128,8 @@ inline ToolRun runUfs2Tool(const QStringList& args)
 }
 
 // FreeBSD fsck_ffs / dumpfs ports (Debian/Ubuntu "ufsutils": fsck.ufs, dumpfs.ufs).
-inline QString fsckUfs() { return findTool(QStringLiteral("FW_FSCK_UFS"), {QStringLiteral("fsck.ufs"), QStringLiteral("fsck_ufs"), QStringLiteral("fsck_ffs")}); }
-inline QString dumpfsUfs() { return findTool(QStringLiteral("FW_DUMPFS_UFS"), {QStringLiteral("dumpfs.ufs"), QStringLiteral("dumpfs")}); }
+inline QString fsckUfs() { return findUnixTool(QStringLiteral("FW_FSCK_UFS"), {QStringLiteral("fsck.ufs"), QStringLiteral("fsck_ufs"), QStringLiteral("fsck_ffs")}); }
+inline QString dumpfsUfs() { return findUnixTool(QStringLiteral("FW_DUMPFS_UFS"), {QStringLiteral("dumpfs.ufs"), QStringLiteral("dumpfs")}); }
 
 inline QByteArray readAll(const QString& path)
 {
