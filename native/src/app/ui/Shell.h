@@ -20,6 +20,12 @@ public:
     void setCompact(bool compact);
     void setCount(int count); // 0 hides the badge
     QSize sizeHint() const override;
+    // The 3 px selection bar: where it sits in this item, and how it looks.
+    // A Sidebar draws one bar for all its items (it slides between them) and
+    // tells them not to draw their own.
+    QRect barRect() const;
+    static void paintSelectionBar(QPainter& p, const QRectF& r);
+    void setExternalBar(bool external);
 signals:
     void moveFocusRequested(int delta); // Up / Down arrows
 
@@ -30,6 +36,7 @@ protected:
 private:
     QString m_key, m_icon;
     bool m_compact = false;
+    bool m_externalBar = false;
     int m_count = 0;
 };
 

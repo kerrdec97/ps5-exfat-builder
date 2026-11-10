@@ -126,9 +126,10 @@ inline constexpr int check = 18;
 inline constexpr int switchW = 42, switchH = 24, switchKnob = 16;
 inline constexpr int progress = 8;
 inline constexpr int badge = 22, badgeCount = 18;
-inline constexpr int scrollBar = 12; // an 8 px handle, 2 px inset
+inline constexpr int scrollBar = 10; // an 8 px handle, 2 px in from the outer edge
 inline constexpr int tableHeader = 32;
 inline constexpr int toolTipMax = 360;
+inline constexpr int popupShadow = 12; // clear margin around a menu panel, for its painted shadow
 inline constexpr int emptyTile = 44, emptyMax = 360;
 inline constexpr int dialog = 480;
 inline constexpr int dialogWide = 640;

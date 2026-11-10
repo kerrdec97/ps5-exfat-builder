@@ -29,22 +29,15 @@ namespace {
 constexpr int kMinTile = 168;
 constexpr int kGap = 16;
 constexpr int kText = 84;    // under the cover: title, subtitle, chips
-constexpr int kHeader = 34;  // list
+constexpr int kHeader = size::tableHeader; // list
 constexpr int kRow = 56;
 constexpr int kListCover = 40;
+constexpr int kChipGap = 4;
 
 QColor mix(const QColor& a, const QColor& b, qreal t)
 {
     return QColor::fromRgbF(float(a.redF() * (1 - t) + b.redF() * t), float(a.greenF() * (1 - t) + b.greenF() * t),
                             float(a.blueF() * (1 - t) + b.blueF() * t), 1.0f);
-}
-
-QFont chipFont()
-{
-    QFont f = font::caption();
-    f.setPixelSize(11);
-    f.setWeight(QFont::DemiBold);
-    return f;
 }
 
 QFont headerFont()
@@ -394,33 +387,20 @@ void LibraryGrid::paintCheck(QPainter& p, const QRectF& r, bool on, bool round)
 
 qreal LibraryGrid::paintChips(QPainter& p, const GridItem& it, qreal x, qreal y, qreal maxRight)
 {
-    const QFont f = chipFont();
-    const QFontMetrics fm(f);
-    p.setFont(f);
+    // `y` is the top of the 22 px chips.
     const auto chip = [&](const QString& t, bool neutral) {
-        const qreal w = fm.horizontalAdvance(t) + 14;
-        const QRectF cr(x, y, w, 18);
-        p.setPen(Qt::NoPen);
-        if (neutral) {
-            p.setBrush(color::bg_4);
-        } else {
-            QColor tint = color::accent;
-            tint.setAlpha(46);
-            p.setBrush(tint);
-        }
-        p.drawRoundedRect(cr, 9, 9);
-        p.setPen(neutral ? color::fg_2 : color::accent_hi);
-        p.drawText(cr, Qt::AlignCenter, t);
-        x += w + 5;
+        const qreal w = badgeWidth(t);
+        paintBadge(p, QRectF(x, y, w, size::badge), t, neutral ? Tone::Neutral : Tone::Info);
+        x += w + kChipGap;
     };
     for (int c = 0; c < it.chips.size(); ++c) {
-        const qreal w = fm.horizontalAdvance(it.chips[c]) + 14;
+        const qreal w = badgeWidth(it.chips[c]);
         const int rest = int(it.chips.size()) - c - 1;
-        const qreal more = rest > 0 ? fm.horizontalAdvance(QStringLiteral("+%1").arg(rest)) + 19 : 0;
+        const qreal more = rest > 0 ? badgeWidth(QStringLiteral("+%1").arg(rest)) + kChipGap : 0;
         if (x + w + more > maxRight) {
             // Not all fit: a "+N" chip says how many are left out.
             const QString plus = QStringLiteral("+%1").arg(it.chips.size() - c);
-            if (x + fm.horizontalAdvance(plus) + 14 <= maxRight)
+            if (x + badgeWidth(plus) <= maxRight)
                 chip(plus, true);
             break;
         }
@@ -436,9 +416,7 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     const bool sel = m_selected.contains(it.key);
     const bool hov = i == m_hover;
     // Card.
-    p.setPen(QPen(hov && !sel ? color::border_4 : color::border_2, 1));
-    p.setBrush(hov ? color::bg_3 : color::bg_2);
-    p.drawRoundedRect(r, radius::md, radius::md);
+    paintPlate(p, r, radius::md, hov ? 1.0 : 0.0);
     // Cover.
     const QRectF cover(r.left() + 1, r.top() + 1, r.width() - 2, r.width() - 2);
     paintCover(p, it, cover, radius::md - 1, false);
@@ -453,13 +431,13 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     p.setFont(font::caption());
     p.setPen(color::fg_3);
     p.drawText(QRectF(x, y, w, 16), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(font::caption()).elidedText(it.subtitle, Qt::ElideRight, int(w)));
-    y += 22;
+    y += 20;
     qreal sizeW = 0;
     if (!it.size.isEmpty()) {
         p.setFont(font::caption());
         sizeW = QFontMetrics(font::caption()).horizontalAdvance(it.size);
         p.setPen(color::fg_4);
-        p.drawText(QRectF(r.right() - 12 - sizeW, y, sizeW, 18), Qt::AlignRight | Qt::AlignVCenter, it.size);
+        p.drawText(QRectF(r.right() - 12 - sizeW, y, sizeW, size::badge), Qt::AlignRight | Qt::AlignVCenter, it.size);
     }
     paintChips(p, it, x, y, r.right() - 12 - sizeW - 6);
     // Selection.
@@ -490,7 +468,7 @@ void LibraryGrid::paintHeader(QPainter& p)
     qreal right = width() - 12;
     const auto col = [&](const QString& t, qreal w) {
         right -= w;
-        p.drawText(QRectF(right, y, w, kHeader - 6), Qt::AlignLeft | Qt::AlignVCenter, t);
+        p.drawText(QRectF(right, y, w, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, t);
         right -= 12;
     };
     if (badges && wide && m_headers.size() > 4)
@@ -502,7 +480,7 @@ void LibraryGrid::paintHeader(QPainter& p)
     if (wide && m_headers.size() > 1)
         col(m_headers[1], 170);
     if (!m_headers.isEmpty())
-        p.drawText(QRectF(titleX, y, right - titleX, kHeader - 6), Qt::AlignLeft | Qt::AlignVCenter, m_headers[0]);
+        p.drawText(QRectF(titleX, y, right - titleX, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, m_headers[0]);
     p.setPen(QPen(color::border_2, 1));
     p.drawLine(QPointF(0, kHeader - 0.5), QPointF(width(), kHeader - 0.5));
 }
@@ -533,20 +511,15 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     if (badges && wide) {
         const QRectF c = colRect(140);
         if (!it.badge.isEmpty()) {
-            const QFont f = chipFont();
-            p.setFont(f);
-            const qreal bw = std::min(c.width(), qreal(QFontMetrics(f).horizontalAdvance(it.badge) + 16));
-            const QRectF br(c.left(), c.center().y() - 10, bw, 20);
-            p.setPen(Qt::NoPen);
-            p.setBrush(toneTint(it.badgeTone));
-            p.drawRoundedRect(br, 10, 10);
-            p.setPen(toneText(it.badgeTone));
-            p.drawText(br, Qt::AlignCenter, QFontMetrics(f).elidedText(it.badge, Qt::ElideRight, int(bw - 12)));
+            const int full = badgeWidth(it.badge);
+            const qreal bw = std::min(c.width(), qreal(full));
+            const QString shown = bw < full ? QFontMetrics(font::chip()).elidedText(it.badge, Qt::ElideRight, int(bw - 16)) : it.badge;
+            paintBadge(p, QRectF(c.left(), c.center().y() - size::badge / 2.0, bw, size::badge), shown, it.badgeTone);
         }
     }
     {
         const QRectF c = colRect(wide ? 170 : 120);
-        paintChips(p, it, c.left(), c.center().y() - 9, c.right());
+        paintChips(p, it, c.left(), c.center().y() - size::badge / 2.0, c.right());
     }
     {
         const QRectF c = colRect(80);

@@ -26,7 +26,7 @@ NavItem::NavItem(const QString& key, const QString& iconName, const QString& tex
     setAccessibleName(text);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFixedHeight(size::navItem);
-    setProperty("fwRadius", radius::sm);
+    setProperty("fwRadius", radius::control);
 }
 
 void NavItem::setCompact(bool compact)
@@ -48,6 +48,27 @@ QSize NavItem::sizeHint() const
     return {m_compact ? 44 : 224, size::navItem};
 }
 
+QRect NavItem::barRect() const { return QRect(1, (height() - 18) / 2, 3, 18); }
+
+void NavItem::paintSelectionBar(QPainter& p, const QRectF& r)
+{
+    QLinearGradient bar(r.topLeft(), r.bottomLeft());
+    bar.setColorAt(0, color::accent_hi);
+    bar.setColorAt(1, color::accent_2_hi);
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(bar);
+    p.drawRoundedRect(r, r.width() / 2.0, r.width() / 2.0);
+    p.restore();
+}
+
+void NavItem::setExternalBar(bool external)
+{
+    m_externalBar = external;
+    update();
+}
+
 void NavItem::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -57,20 +78,16 @@ void NavItem::paintEvent(QPaintEvent*)
     const bool down = isDown();
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (sel) {
-        // Selected: a soft gradient wash with a hairline edge and a glowing bar.
-        p.setPen(QPen(withAlpha(color::accent_hi, 40), 1));
-        p.setBrush(accentGradient(r, 46));
-        p.drawRoundedRect(r, 9, 9);
-        QLinearGradient bar(QPointF(0, (height() - 18) / 2.0), QPointF(0, (height() + 18) / 2.0));
-        bar.setColorAt(0, color::accent_hi);
-        bar.setColorAt(1, color::accent_2_hi);
+        // Selected: the signature gradient as an 18 % tint, and the bar.
         p.setPen(Qt::NoPen);
-        p.setBrush(bar);
-        p.drawRoundedRect(QRectF(1, (height() - 18) / 2.0, 3, 18), 1.5, 1.5);
+        p.setBrush(accentGradient(r, 46));
+        p.drawRoundedRect(r, radius::control, radius::control);
+        if (!m_externalBar)
+            paintSelectionBar(p, barRect());
     } else if (down || hover) {
         p.setPen(Qt::NoPen);
-        p.setBrush(down ? color::bg_4 : color::bg_3);
-        p.drawRoundedRect(r, 9, 9);
+        p.setBrush(down ? color::bg_3 : withAlpha(color::bg_3, 153)); // hover: bg_3 at 60 %
+        p.drawRoundedRect(r, radius::control, radius::control);
     }
     const QColor iconColor = sel ? color::accent_hi : hover ? color::fg_0 : color::fg_4;
     const QColor textColor = sel ? color::fg_0 : hover ? color::fg_0 : color::fg_2;
@@ -83,15 +100,9 @@ void NavItem::paintEvent(QPaintEvent*)
         int right = width() - 10;
         if (m_count > 0) {
             const QString n = QString::number(m_count);
-            const QFontMetrics fm(font::caption());
-            const int bw = std::max(20, fm.horizontalAdvance(n) + 12);
-            const QRect br(width() - 10 - bw, (height() - 18) / 2, bw, 18);
-            p.setPen(Qt::NoPen);
-            p.setBrush(accentFillGradient(br));
-            p.drawRoundedRect(br, 9, 9);
-            p.setPen(color::on_accent);
-            p.setFont(font::caption());
-            p.drawText(br, Qt::AlignCenter, n);
+            const int bw = std::max(20, badgeWidth(n, false, true));
+            const QRect br(width() - 10 - bw, (height() - size::badgeCount) / 2, bw, size::badgeCount);
+            paintBadge(p, br, n, Tone::Info, {}, true);
             right = br.left() - 6;
             p.setPen(textColor);
             p.setFont(sel ? font::bodyStrong() : font::body());
@@ -249,9 +260,9 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     auto* brand = new QWidget(this);
     auto* bl = hbox(brand, 10, QMargins(4, 0, 0, 0));
     bl->addWidget(new BrandMark(28, brand), 0, Qt::AlignVCenter);
-    auto* name = label(QStringLiteral("exFAT Image Builder"), TextStyle::Subtitle, color::fg_0, brand);
+    auto* name = label(QStringLiteral("exFAT Image Builder"), TextStyle::BodyStrong, color::fg_0, brand);
     bl->addWidget(name, 0, Qt::AlignVCenter);
-    m_versionPill = new Badge(QString(), Tone::Info, brand);
+    m_versionPill = new Badge(QString(), Tone::Neutral, brand);
     m_versionPill->setIconName(QString());
     m_versionPill->hide();
     bl->addWidget(m_versionPill, 0, Qt::AlignVCenter);
@@ -329,7 +340,7 @@ void AppHeader::setConsoleChip(const QString& text, Tone tone, bool visible)
 
 void AppHeader::setVersion(const QString& version)
 {
-    m_versionPill->set(version, Tone::Info);
+    m_versionPill->set(version, Tone::Neutral);
     m_versionPill->setVisible(!version.isEmpty());
 }
 
@@ -337,21 +348,19 @@ void AppHeader::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), color::bg_0);
-    // A faint brand glow under the logo and a gradient hairline along the bottom.
+    // A faint brand glow under the logo; the edge to the page is border_2,
+    // tinted by the gradient where the glow meets it.
     QRadialGradient glow(QPointF(70, height() / 2.0), 220);
-    QColor g = color::accent;
-    g.setAlpha(28);
-    glow.setColorAt(0, g);
+    glow.setColorAt(0, withAlpha(color::accent, 28));
     glow.setColorAt(1, Qt::transparent);
     p.fillRect(rect(), glow);
-    QLinearGradient line(QPointF(0, 0), QPointF(width(), 0));
-    QColor a = color::accent, b = color::accent_2, c = color::border_2;
-    a.setAlpha(110);
-    b.setAlpha(60);
-    line.setColorAt(0, a);
-    line.setColorAt(0.35, b);
-    line.setColorAt(1, c);
-    p.fillRect(QRect(0, height() - 1, width(), 1), line);
+    const QRect edge(0, height() - 1, width(), 1);
+    p.fillRect(edge, color::border_2);
+    QLinearGradient tint(QPointF(0, 0), QPointF(std::min(width(), 480), 0));
+    tint.setColorAt(0, withAlpha(color::accent, 90));
+    tint.setColorAt(0.5, withAlpha(color::accent_2, 45));
+    tint.setColorAt(1, withAlpha(color::accent_2, 0));
+    p.fillRect(edge, tint);
 }
 
 // ---- status bar -------------------------------------------------------------------

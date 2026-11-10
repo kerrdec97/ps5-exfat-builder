@@ -256,7 +256,8 @@ QCheckBox::indicator { width: 18px; height: 18px; }
 QRadioButton { spacing: 10px; }
 
 /* ---- popups: bg_3 with a border_4 outline ------------------------------------ */
-QMenu { background: {bg_3}; border: 1px solid {border_4}; border-radius: 12px; padding: 6px; }
+/* The 12 px margin (size::popupShadow) is where the app guard paints a menu's shadow. */
+QMenu { background: {bg_3}; border: 1px solid {border_4}; border-radius: 12px; padding: 6px; margin: 12px; }
 QMenu::item { min-height: 32px; padding: 0 14px 0 10px; border-radius: 7px; color: {fg_1}; }
 QMenu::item:selected { background: {bg_4}; color: {fg_0}; }
 QMenu::item:disabled { color: {fg_5}; }
@@ -267,12 +268,13 @@ QToolTip {
     color: {fg_1}; font-size: 12px;
 }
 
-/* ---- scrollbars: an 8 px pill, 2 px in from every edge ----------------------- */
-QScrollBar:vertical { background: transparent; width: 12px; margin: 0; }
-QScrollBar::handle:vertical { background: {bg_5}; border-radius: 4px; margin: 2px; min-height: 32px; }
+/* ---- scrollbars: an 8 px pill, 2 px in from the outer edge and both ends; the
+   bar stays 10 px wide, so nothing a scroll area holds is laid out narrower -- */
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: {bg_5}; border-radius: 4px; margin: 2px 2px 2px 0; min-height: 32px; }
 QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed { background: {border_control}; }
-QScrollBar:horizontal { background: transparent; height: 12px; margin: 0; }
-QScrollBar::handle:horizontal { background: {bg_5}; border-radius: 4px; margin: 2px; min-width: 32px; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: {bg_5}; border-radius: 4px; margin: 0 2px 2px 2px; min-width: 32px; }
 QScrollBar::handle:horizontal:hover, QScrollBar::handle:horizontal:pressed { background: {border_control}; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }

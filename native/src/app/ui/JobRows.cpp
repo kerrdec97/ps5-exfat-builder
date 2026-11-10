@@ -447,10 +447,13 @@ void JobRow::showMenu(const QPoint& globalPos)
 void JobRow::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    if (m_selected)
+    if (m_selected) {
+        // Like a selected table row: accent_lo and the accent bar at its left edge.
         p.fillRect(rect(), color::accent_lo);
-    else if (underMouse())
+        p.fillRect(QRect(0, 0, 2, height()), color::accent);
+    } else if (underMouse()) {
         p.fillRect(rect(), color::bg_3);
+    }
     if (m_divider)
         p.fillRect(QRect(0, height() - 1, width(), 1), color::border_1);
 }
@@ -569,6 +572,8 @@ void JobList::setEmptyWidget(QWidget* w)
 {
     m_empty = w;
     w->setParent(this);
+    if (auto* state = qobject_cast<EmptyState*>(w))
+        state->setCompact(true); // inside a list: never a tall block
     rebuild();
 }
 

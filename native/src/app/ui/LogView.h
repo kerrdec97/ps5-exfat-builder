@@ -60,7 +60,7 @@ private:
     bool m_small = false;
     bool m_dirty = false; // changed while hidden: refreshed when shown
     QVBoxLayout* m_lines;
-    QLabel* m_emptyLabel;
+    QWidget* m_emptyLabel; // the compact empty state: a glyph and "Nothing yet."
 };
 
 // The live log console of the job monitor: a terminal-like well (bg_0, mono)

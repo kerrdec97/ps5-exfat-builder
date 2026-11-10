@@ -24,16 +24,6 @@ using namespace theme;
 
 namespace {
 
-void paintCardSurface(QPainter& p, const QRectF& r, qreal rad, bool hover = false)
-{
-    QLinearGradient sheen(r.topLeft(), r.bottomLeft());
-    sheen.setColorAt(0, hover ? color::bg_3_hi : color::bg_2_hi);
-    sheen.setColorAt(1, hover ? color::bg_3 : color::bg_2);
-    p.setPen(QPen(hover ? color::border_4 : color::border_2, 1));
-    p.setBrush(sheen);
-    p.drawRoundedRect(r, rad, rad);
-}
-
 // Wraps `text` into at most `maxLines` lines of `width` px, eliding the last.
 QStringList wrapLines(const QString& text, const QFont& font, int width, int maxLines)
 {
@@ -226,26 +216,14 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         p.setFont(font::bodyStrong());
         const QFontMetrics tfm(font::bodyStrong());
         QString title = it.title;
-        int tagW = 0;
-        if (!it.tag.isEmpty()) {
-            const QFontMetrics cfm(font::caption());
-            tagW = cfm.horizontalAdvance(it.tag) + 14;
-        }
-        title = tfm.elidedText(title, Qt::ElideRight, int(right - tx - (tagW ? tagW + 6 : 0)));
+        const int tagW = it.tag.isEmpty() ? 0 : badgeWidth(it.tag);
+        title = tfm.elidedText(title, Qt::ElideRight, int(right - tx - (tagW ? tagW + 8 : 0)));
         p.setPen(fgTitle);
         const QRectF titleR(tx, ir.top(), right - tx, 20);
         p.drawText(titleR, Qt::AlignLeft | Qt::AlignVCenter, title);
-        if (tagW) {
-            const QRectF tagR(tx + tfm.horizontalAdvance(title) + 8, ir.top() + 1, tagW, 18);
-            p.setPen(Qt::NoPen);
-            QColor tint = color::accent;
-            tint.setAlpha(46);
-            p.setBrush(tint);
-            p.drawRoundedRect(tagR, 9, 9);
-            p.setPen(color::accent_hi);
-            p.setFont(font::caption());
-            p.drawText(tagR, Qt::AlignCenter, it.tag);
-        }
+        if (tagW)
+            paintBadge(p, QRectF(tx + tfm.horizontalAdvance(title) + 8, ir.top() - 1, tagW, size::badge), it.tag,
+                       it.enabled ? Tone::Info : Tone::Neutral);
         // Description: up to three lines under the title, aligned with it.
         p.setFont(font::caption());
         p.setPen(fgText);
@@ -530,7 +508,7 @@ void Disclosure::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    paintCardSurface(p, r, radius::md, m_header->underMouse() && !m_expanded);
+    paintPlate(p, r, radius::md, m_header->underMouse() && !m_expanded);
     if (m_expanded) {
         p.fillRect(QRectF(r.left() + space::lg, m_header->geometry().bottom(), r.width() - 2 * space::lg, 1), color::border_1);
     }
@@ -689,7 +667,7 @@ void StatTile::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    paintCardSurface(p, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, m_hover);
+    paintPlate(p, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, m_hover);
 }
 
 // ---- ActionCard -------------------------------------------------------------------
@@ -729,7 +707,7 @@ void ActionCard::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     const bool active = m_hover || isDown();
-    paintCardSurface(p, r, radius::md, active);
+    paintPlate(p, r, radius::md, active);
     if (active) {
         p.setPen(QPen(QBrush(accentGradient(r, 170)), 1.2));
         p.setBrush(Qt::NoBrush);

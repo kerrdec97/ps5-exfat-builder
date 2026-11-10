@@ -33,7 +33,7 @@ Sheet::Sheet(QWidget* host, const QString& title, Icon icon, int width) : QWidge
     m_panel = new QFrame(this);
     m_panel->setObjectName(QStringLiteral("sheetPanel"));
     m_panel->setStyleSheet(QStringLiteral("#sheetPanel{background:%1;border:1px solid %2;border-radius:%3px;}")
-                               .arg(hex(color::bg_2), hex(color::border_3)).arg(radius::md));
+                               .arg(hex(color::bg_3), hex(color::border_4)).arg(radius::md));
     m_panel->setProperty("fwNoRing", true);
     auto* outer = vbox(m_panel, space::md, QMargins(space::xl, space::xl, space::xl, space::xl));
 
@@ -389,7 +389,7 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
     auto* t = new QFrame(parentWidget());
     t->setObjectName(QStringLiteral("toast"));
     t->setStyleSheet(QStringLiteral("#toast{background:%1;border:1px solid %2;border-radius:%3px;}")
-                         .arg(hex(color::bg_3), hex(color::border_3)).arg(radius::md));
+                         .arg(hex(color::bg_3), hex(color::border_4)).arg(radius::md));
     t->setFixedWidth(size::toast);
     t->setProperty("fwNoRing", true);
     auto* h = hbox(t, 10, QMargins(space::md, space::md, space::md, space::md));

@@ -16,6 +16,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
@@ -322,6 +323,19 @@ void limitToolTipWidth(QWidget* w)
         w->resize(target, tip->heightForWidth(target));
 }
 
+// The visible panel of a menu: its window without the shadow's margin.
+QRect menuPanel(const QMenu* menu)
+{
+    const int m = size::popupShadow;
+    return menu->rect().adjusted(m, m, -m, -m);
+}
+
+bool isSubMenu(const QMenu* menu)
+{
+    const auto* parent = qobject_cast<const QMenu*>(QApplication::activePopupWidget());
+    return parent && parent != menu && parent->activeAction() == menu->menuAction();
+}
+
 class AppGuard : public QObject {
 public:
     using QObject::QObject;
@@ -341,6 +355,33 @@ protected:
         case QEvent::Resize:
             if (auto* w = qobject_cast<QWidget*>(watched); w && w->isWindow() && w->windowType() == Qt::ToolTip)
                 limitToolTipWidth(w);
+            break;
+        // Menus: a translucent window with a clear margin around the panel
+        // (the stylesheet's `margin`), where the soft shadow is painted.
+        case QEvent::Paint:
+            if (auto* menu = qobject_cast<QMenu*>(watched)) {
+                QPainter p(menu); // before the menu paints its panel over it
+                paintShadow(p, QRectF(menuPanel(menu)).adjusted(0.5, 0.5, -0.5, -0.5), radius::md, size::popupShadow - 2);
+            }
+            break;
+        case QEvent::Show:
+            // The panel, not the margin, goes where the menu was asked to be.
+            // A submenu is placed by its first item, margin included.
+            if (auto* menu = qobject_cast<QMenu*>(watched); menu && !isSubMenu(menu))
+                menu->move(menu->pos() - QPoint(size::popupShadow, size::popupShadow));
+            break;
+        case QEvent::MouseButtonPress:
+            // A click on the margin is a click beside the menu: it closes.
+            if (auto* menu = qobject_cast<QMenu*>(watched);
+                menu && !menuPanel(menu).contains(static_cast<QMouseEvent*>(event)->position().toPoint())) {
+                for (int guard = 0; guard < 16; ++guard) {
+                    auto* open = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (!open)
+                        break;
+                    open->close();
+                }
+                return true;
+            }
             break;
         case QEvent::FocusIn:
             // Delivered before QApplication::focusChanged: see hasKeyboardFocus().

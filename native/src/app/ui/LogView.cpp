@@ -59,9 +59,9 @@ void LogDelegate::paint(QPainter* p, const QStyleOptionViewItem& option, const Q
 {
     p->save();
     p->setRenderHint(QPainter::Antialiasing);
-    if (option.state & QStyle::State_Selected)
-        p->fillRect(option.rect, color::accent_lo);
-    else if (option.state & QStyle::State_MouseOver)
+    // The selected row itself (accent_lo and the accent bar) is painted by
+    // FwStyle before this; only the hover is the delegate's.
+    if (!(option.state & QStyle::State_Selected) && (option.state & QStyle::State_MouseOver))
         p->fillRect(option.rect, color::bg_3);
     p->fillRect(QRect(option.rect.left(), option.rect.bottom(), option.rect.width(), 1), color::border_1);
     const auto level = LogLevel(index.data(LogModel::LevelRole).toInt());
@@ -144,7 +144,16 @@ ActivityWell::ActivityWell(LogModel& model, QWidget* parent) : Card(parent, Card
 {
     m_lines = body();
     m_lines->setSpacing(0);
-    m_emptyLabel = label(QStringLiteral("Nothing yet."), TextStyle::Mono, color::fg_4, this);
+    // Compact empty state: one quiet line as tall as a log line, so the well
+    // keeps its height when the first line arrives.
+    m_emptyLabel = new QWidget(this);
+    auto* emptyRow = hbox(m_emptyLabel, space::sm);
+    auto* emptyIcon = new QLabel(m_emptyLabel);
+    emptyIcon->setFixedSize(size::iconSm, size::iconSm);
+    emptyIcon->setPixmap(iconPixmap(QStringLiteral("terminal"), size::iconSm, color::fg_5, devicePixelRatioF()));
+    emptyRow->addWidget(emptyIcon);
+    emptyRow->addWidget(label(QStringLiteral("Nothing yet."), TextStyle::Caption, color::fg_4, m_emptyLabel), 1);
+    m_emptyLabel->setMinimumHeight(font::lineMono);
     m_lines->addWidget(m_emptyLabel);
     connect(&m_model, &LogModel::rowsAppended, this, [this](int) { refresh(); });
     connect(&m_model, &QAbstractItemModel::modelReset, this, [this] { refresh(); });
