@@ -32,8 +32,10 @@ public:
     IniDocument() = default;
     explicit IniDocument(const QString& text, Quoting quoting = Quoting::None);
 
-    // The edited text. An untouched document gives back exactly the input
-    // (line endings are normalised to the input's first line ending).
+    // The edited text. An untouched document gives back exactly the input:
+    // every line keeps its own ending (a file may mix them), a leading byte
+    // order mark stays, and a changed line keeps its inline comment. New
+    // lines get the first line's ending.
     QString text() const;
     Quoting quoting() const { return m_quoting; }
 
@@ -41,7 +43,7 @@ public:
     bool hasSection(const QString& section) const;
     QStringList keys(const QString& section) const; // distinct, in file order
     bool contains(const QString& section, const QString& key) const;
-    QString value(const QString& section, const QString& key) const;       // first occurrence
+    QString value(const QString& section, const QString& key) const;       // last occurrence
     QStringList values(const QString& section, const QString& key) const;  // every occurrence
 
     // Sets the value of the first occurrence (later duplicates are removed);
@@ -62,10 +64,12 @@ private:
     struct Line {
         enum Kind { Other, Section, KeyValue } kind = Other;
         QString raw;      // the original text (without line ending)
+        QString eol;      // its own line ending; empty: the document's (new lines, an unterminated last line)
         QString section;  // section this line belongs to (Section: its own name)
         QString key;      // KeyValue
         QString value;    // KeyValue, unquoted
         bool dirty = false;
+        bool keepComment = false; // dirty: write the inline comment of `raw` behind the new value
     };
     QString render(const Line& l) const;
     int sectionEnd(const QString& section) const; // index after the section's last non-blank line (-1: missing)
@@ -74,8 +78,9 @@ private:
 
     std::vector<Line> m_lines;
     Quoting m_quoting = Quoting::None;
-    QString m_eol = QStringLiteral("\n");
+    QString m_eol = QStringLiteral("\n"); // for new lines: the first line's ending
     bool m_trailingNewline = true;
+    bool m_bom = false; // the text began with U+FEFF
 };
 
 } // namespace fw::ps5

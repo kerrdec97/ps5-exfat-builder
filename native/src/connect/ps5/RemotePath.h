@@ -35,6 +35,15 @@ QString localNameProblem(const QString& name);
 // not empty. Use this, not joinRemote(), for names the console sent.
 std::optional<QString> remoteChild(const QString& dir, const QString& name);
 
+// The looser rule for work that stays on the console (deleting an existing
+// entry): ':' is an ordinary character on its file systems, so a listed name
+// with one ("Save: slot 1.dat") is allowed. '\\' stays refused, as a server
+// that treats it as a separator would let a listed name leave its folder.
+// Never for a name or path that reaches this PC (a download, a compare with a
+// local folder, an index): those use remoteNameProblem() / remoteChild().
+QString listedNameProblem(const QString& name);
+std::optional<QString> listedChild(const QString& dir, const QString& name);
+
 // The directories that need an extra confirmation before any write (upload,
 // delete, rename, move, new folder): firmware and system state (/system,
 // /system_ex, /system_data, /system_tmp, /preinst, /preinst2, /mini-syscore,

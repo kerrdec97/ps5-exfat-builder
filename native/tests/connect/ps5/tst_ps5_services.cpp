@@ -709,6 +709,18 @@ private slots:
         QVERIFY(busy.finished && !busy.succeeded);
         QVERIFY(busy.blocking.contains(QStringLiteral("a.exfat")));
         QVERIFY(!smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("measuring")}}).finished);
+        // A named error decides, also next to "completed"; zero and "" mean no error.
+        const auto odd = smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")},
+                                              {QStringLiteral("result_error"), QStringLiteral("usb_eject_unconfirmed")}});
+        QVERIFY(odd.finished && !odd.succeeded && odd.unconfirmed);
+        const auto eio = smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")}, {QStringLiteral("result_error"), QStringLiteral("EIO")}});
+        QVERIFY(eio.finished && !eio.succeeded);
+        QVERIFY(!smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")}, {QStringLiteral("result"), QStringLiteral("failed")}}).succeeded);
+        QVERIFY(smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")}, {QStringLiteral("result_error"), 0}}).succeeded);
+        QVERIFY(smp::parseJobStatus({{QStringLiteral("state"), QStringLiteral("completed")}, {QStringLiteral("result_error"), QString()}}).succeeded);
+        // Something that is not the API streams without end: cut off, not buffered.
+        fake::FakeLineServer flood({{{0, QByteArray(5 * 1024 * 1024, 'x')}}}, false);
+        QCOMPARE(smp::version(host, flood.port()).error().code, ErrorCode::CorruptData);
         QCOMPARE(smp::logText({{QStringLiteral("status"), 0}, {QStringLiteral("text"), QStringLiteral("abc")}}), QStringLiteral("abc"));
 
         // The eject job.
@@ -875,7 +887,7 @@ private slots:
         const auto f16 = applyMountConfigChanges(MountTool::ShadowMountPlus, original, {}, changes, SmpConfigFormat::Flat16);
         QCOMPARE(f16.config, QStringLiteral("# my settings\n"
                                             "debug=1\n"
-                                            "read_only = 1\n"
+                                            "read_only = 1   # rw please\n" // the comment behind a changed value stays
                                             "kstuff_delay=PPSA01234:30\n"
                                             "kstuff_no_pause=PPSA05678\n"
                                             "future_key = keep me\n"
@@ -942,7 +954,7 @@ private slots:
                                                    changedMountValues(parsed, edited), SmpConfigFormat::V2);
         QVERIFY(files.configChanged && files.profilesChanged);
         // config.ini: only the touched lines change; [smb:NAS] and the quoting survive.
-        QVERIFY2(files.config.contains(QStringLiteral("[general]\ndebug = off\nfuture = 7\n")), qPrintable(files.config));
+        QVERIFY2(files.config.contains(QStringLiteral("[general]\ndebug = off   ; keep the log\nfuture = 7\n")), qPrintable(files.config));
         QVERIFY(files.config.contains(QStringLiteral("path = \"/mnt/usb1/odd #name\"\n")));
         QVERIFY(files.config.contains(QStringLiteral("[smb:NAS]\npath = smb://nas/games\npassword = \"p#ss\\\"word\"\n")));
         QVERIFY(files.config.contains(QStringLiteral("[fan]\ntarget_temperature = 70\n")));
@@ -1106,6 +1118,50 @@ private slots:
         QCOMPARE(dpiFailureReason(200, "FAILED: Install failed with error ERR_X, code -2136801279 (0x80990001) for file: x.pkg"),
                  QStringLiteral("ERR_X (code -2136801279, 0x80990001)."));
         QVERIFY(dpiFailureReason(500, "boom").startsWith(QStringLiteral("HTTP 500")));
+
+        // The console closes the connection part-way: the rest of the package
+        // is not read from disk for nothing, and it is an error at once.
+        {
+            fake::FakeTcpSink closing(false, 64 * 1024);
+            const QString big = m_tmp.filePath(QStringLiteral("closing.pkg"));
+            QVERIFY(fwtest::writeRandomFile(big, 48 * 1024 * 1024, 6));
+            qint64 sent = 0;
+            QElapsedTimer t;
+            t.start();
+            auto r = installPackage(QStringLiteral("127.0.0.1"), closing.port(), big, {}, {}, [&](qint64 s, qint64) { sent = s; });
+            QVERIFY(!r.ok());
+            QCOMPARE(r.error().code, ErrorCode::IoError);
+            QVERIFY(sent < QFileInfo(big).size()); // never "all sent"
+            QVERIFY(t.elapsed() < 20000);
+        }
+        // Something that is not the installer answers without end: cut off.
+        {
+            fake::FakeLineServer flood({{{0, "HTTP/1.1 200 OK\r\n\r\n" + QByteArray(2 * 1024 * 1024, 'x')}}}, false);
+            const QString small = m_tmp.filePath(QStringLiteral("small.pkg"));
+            QVERIFY(fwtest::writeRandomFile(small, 4096, 7));
+            auto r = installPackage(QStringLiteral("127.0.0.1"), flood.port(), small);
+            QVERIFY(!r.ok());
+            QCOMPARE(r.error().code, ErrorCode::CorruptData);
+        }
+        // A package that shrinks while it is sent ends with a clear error, not a 30 s wait.
+        {
+            const QByteArray ok = "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nSUCCESS";
+            fake::FakeHttpUpload http(ok);
+            const QString pkg = m_tmp.filePath(QStringLiteral("shrinks.pkg"));
+            QVERIFY(fwtest::writeRandomFile(pkg, 6 * 1024 * 1024, 8));
+            bool cut = false;
+            auto r = installPackage(QStringLiteral("127.0.0.1"), http.port(), pkg, {}, {}, [&](qint64 s, qint64) {
+                if (!cut && s > 0) {
+                    cut = true;
+                    QFile f(pkg);
+                    if (f.open(QIODevice::ReadWrite))
+                        f.resize(1024 * 1024);
+                }
+            });
+            QVERIFY(cut);
+            if (!r.ok()) // (the whole file may already have been read before the first report)
+                QVERIFY2(r.error().message.contains(QStringLiteral("changed while")), qPrintable(r.error().message));
+        }
         QVERIFY(!dpiAccepted(500, "install failed"));
         QVERIFY(!dpiAccepted(200, "{\"error\":\"bad pkg\"}"));
         QVERIFY(!dpiAccepted(302, ""));
@@ -1147,6 +1203,7 @@ private slots:
         QVERIFY(verifyParamJsonText(p.value()).ok);
         QVERIFY(!verifyParamJsonText(kParam).ok);
         QVERIFY(verifyParamJsonText("{\"titleId\":\"x\"}").ok); // legacy: absent keys are not checked
+        QVERIFY(verifyParamJsonText("{\"titleId\":\"x\"}").reason.contains(QStringLiteral("nothing to block"))); // ... and it says so
         QCOMPARE(patchParamJsonText("{\"titleId\":\"x\"}").value(), QByteArray("{\"titleId\":\"x\"}"));
         QVERIFY(!patchParamJsonText("{broken").ok());
     }
@@ -1248,6 +1305,23 @@ private slots:
                  (QStringList{QStringLiteral("app.db"), QStringLiteral("app.db.bak"), QStringLiteral("appinfo.db"),
                               QStringLiteral("appinfo.db.bak")}));
         QVERIFY(r->ok());
+
+        // A second run changes nothing in param.json: the console is not
+        // written to for a no-op (no new remote backup), and a param.json
+        // without the two keys is "nothing to block", not "patched".
+        const QString userBackup = QDir(root).filePath(QStringLiteral("user/appmeta/%1/param_backup.json").arg(tid));
+        const QString sysMeta = QDir(root).filePath(QStringLiteral("system_data/priv/appmeta/%1").arg(tid));
+        QVERIFY(QFile::remove(userBackup));
+        QVERIFY(fwtest::writeTextFile(sysMeta + QStringLiteral("/param.json"), "{\"titleId\":\"x\"}"));
+        auto again = autoBlockOverFtp(c, Y2jbRegion::USA, fresh(QStringLiteral("y2jb-bak-again")));
+        QVERIFY(again.ok());
+        QCOMPARE(again->files[0].status, QStringLiteral("✓"));
+        QVERIFY2(again->files[0].detail.contains(QStringLiteral("already patched")), qPrintable(again->files[0].detail));
+        QCOMPARE(again->files[1].status, QStringLiteral("○"));
+        QVERIFY2(again->files[1].detail.contains(QStringLiteral("nothing to block")), qPrintable(again->files[1].detail));
+        QVERIFY(!QFileInfo::exists(userBackup));
+        QVERIFY(!QFileInfo::exists(sysMeta + QStringLiteral("/param_backup.json")));
+        QCOMPARE(readAll(sysMeta + QStringLiteral("/param.json")), QByteArray("{\"titleId\":\"x\"}"));
 
         // Wrong region: databases are not uploaded (0 rows), reported as failures.
         const QByteArray before = readAll(QDir(root).filePath(QStringLiteral("system_data/priv/mms/app.db")));
@@ -1377,10 +1451,13 @@ private slots:
         const QString backups = fresh(QStringLiteral("y2-corrupt-bak"));
         auto r = autoBlockOverFtp(c, Y2jbRegion::USA, backups);
         QVERIFY(r.ok());
-        QCOMPARE(r->files[3].status, QStringLiteral("✗"));
-        QVERIFY2(r->files[3].detail.contains(QStringLiteral("restored from the local backup")), qPrintable(r->files[3].detail));
+        // The short upload is caught before the swap: the live database is never replaced.
+        QCOMPARE(r->files[3].status, QStringLiteral("!"));
+        QVERIFY2(r->files[3].detail.contains(QStringLiteral("the original is still in place")), qPrintable(r->files[3].detail));
         QCOMPARE(readAll(QDir(k.root).filePath(QStringLiteral("system_data/priv/mms/app.db"))), k.appDb);
-        QVERIFY(!r->allVerified());
+        QVERIFY(!r->errors.isEmpty());
+        QVERIFY(!r->ok());
+        QVERIFY(!srv.sawCommand(QStringLiteral("RNTO /system_data/priv/mms/app.db")));
         QCOMPARE(readAll(r->files[3].backup), k.appDb);
     }
 
@@ -1457,16 +1534,103 @@ private slots:
         doc.set(QString(), QStringLiteral("a"), QStringLiteral("2"));
         doc.set(QStringLiteral("s"), QStringLiteral("k"), QStringLiteral("p\"q"));
         doc.set(QStringLiteral("t"), QStringLiteral("n"), QStringLiteral("v"));
-        QCOMPARE(doc.text(), QStringLiteral("a=2\r\n# note\r\n[S]\r\nk = \"p\\\"q\"\r\nK2=plain # c\r\n\r\n[t]\r\nn = v\r\n"));
+        // The inline comment of a changed line stays behind the new value.
+        QCOMPARE(doc.text(), QStringLiteral("a=2\r\n# note\r\n[S]\r\nk = \"p\\\"q\" ; why\r\nK2=plain # c\r\n\r\n[t]\r\nn = v\r\n"));
         doc.remove(QStringLiteral("S"), QStringLiteral("K2"));
         doc.removeSection(QStringLiteral("t"));
-        QCOMPARE(doc.text(), QStringLiteral("a=2\r\n# note\r\n[S]\r\nk = \"p\\\"q\"\r\n"));
+        QCOMPARE(doc.text(), QStringLiteral("a=2\r\n# note\r\n[S]\r\nk = \"p\\\"q\" ; why\r\n"));
         // Flat: the last of repeated keys wins; a list keeps its place.
         IniDocument flat(QStringLiteral("x=1\nscanpath=/a\ny=2\nscanpath=/b\nx=3\n"));
         QCOMPARE(flat.value({}, QStringLiteral("x")), QStringLiteral("3"));
         flat.setList({}, QStringLiteral("scanpath"), {QStringLiteral("/c"), QStringLiteral("/d")});
         QCOMPARE(flat.text(), QStringLiteral("x=1\nscanpath=/c\nscanpath=/d\ny=2\nx=3\n"));
         QCOMPARE(IniDocument::unquote(QStringLiteral(" v # c"), false), QStringLiteral("v"));
+    }
+
+    void iniDocumentKeepsEndingsBomAndComments()
+    {
+        // Mixed line endings: every line keeps its own, also after an edit elsewhere.
+        const QString mixed = QStringLiteral("a=1\r\nb=2\nc=3\r\n# end");
+        IniDocument doc(mixed);
+        QCOMPARE(doc.text(), mixed);
+        doc.set({}, QStringLiteral("b"), QStringLiteral("5"));
+        QCOMPARE(doc.text(), QStringLiteral("a=1\r\nb=5\nc=3\r\n# end"));
+        // A new line takes the first line's ending; the old last line gets one.
+        doc.set({}, QStringLiteral("d"), QStringLiteral("9"));
+        QCOMPARE(doc.text(), QStringLiteral("a=1\r\nb=5\nc=3\r\nd=9\r\n# end"));
+        // A byte order mark is not part of the first key and is written back.
+        const QString bom = QChar(0xFEFF) + QStringLiteral("[config]\nversion = 2\n\n[general]\ndebug = on\n");
+        IniDocument withBom(bom, IniDocument::Quoting::V2);
+        QCOMPARE(withBom.text(), bom);
+        QCOMPARE(withBom.value(QStringLiteral("config"), QStringLiteral("version")), QStringLiteral("2"));
+        withBom.set(QStringLiteral("general"), QStringLiteral("debug"), QStringLiteral("off"));
+        QCOMPARE(withBom.text(), QChar(0xFEFF) + QStringLiteral("[config]\nversion = 2\n\n[general]\ndebug = off\n"));
+        // Comments: behind a quoted value that holds a ';' itself, and only on
+        // the first line when a key becomes a list.
+        IniDocument q(QStringLiteral("[s]\nk = \"a;b\"   # note\nlist = one ; first\n"), IniDocument::Quoting::V2);
+        q.set(QStringLiteral("s"), QStringLiteral("k"), QStringLiteral("c"));
+        q.setList(QStringLiteral("s"), QStringLiteral("list"), {QStringLiteral("x"), QStringLiteral("y")});
+        QCOMPARE(q.text(), QStringLiteral("[s]\nk = c   # note\nlist = x ; first\nlist = y\n"));
+
+        // Bytes that are not UTF-8 (a Latin-1 comment) and a BOM survive a load and push unchanged.
+        const QByteArray latin = QByteArray("\xEF\xBB\xBF# caf\xE9 \xFF\xFE\r\ndebug=1\n# \xC3\xA9 \xF0\x9F\x8E\xAE ok\n\xC3(\n\xE2\x82\n");
+        const QString decoded = decodeConfigText(latin);
+        QCOMPARE(encodeConfigText(decoded), latin);
+        QVERIFY(decoded.contains(QStringLiteral("debug=1")));
+        QVERIFY(decoded.contains(QString::fromUtf8("\xC3\xA9 \xF0\x9F\x8E\xAE ok")));
+        IniDocument raw(decoded);
+        raw.set({}, QStringLiteral("debug"), QStringLiteral("0"));
+        QCOMPARE(encodeConfigText(raw.text()), QByteArray(latin).replace("debug=1", "debug=0"));
+        QCOMPARE(encodeConfigText(decodeConfigText("plain = text\n")), QByteArray("plain = text\n"));
+    }
+
+    void profileEditsLeaveUntouchedEmptySectionsAndRepeatedUnknownKeys()
+    {
+        // A [game:*] section that holds only the user's comment is not this edit's to remove.
+        const QString config = QStringLiteral("[config]\nversion = 2\n\n[general]\ndebug = on\n");
+        const QString profiles = QStringLiteral("[config]\nversion = 2\n\n"
+                                                "[game:PPSA09999]\n; notes for later\n\n"
+                                                "[game:PPSA01234]\nfakelib = full\n\n"
+                                                "[image:old.exfat]\nmount_mode = rw\n");
+        const MountConfigValues parsed = parseMountConfig(MountTool::ShadowMountPlus, config, profiles);
+        MountConfigValues edited = parsed;
+        edited.insert(QStringLiteral("image_rw"), QString());
+        const auto files = applyMountConfigChanges(MountTool::ShadowMountPlus, config, profiles, changedMountValues(parsed, edited),
+                                                   SmpConfigFormat::V2);
+        QVERIFY(files.profilesChanged);
+        QVERIFY2(files.profiles.contains(QStringLiteral("[game:PPSA09999]\n; notes for later\n")), qPrintable(files.profiles));
+        QVERIFY(files.profiles.contains(QStringLiteral("[game:PPSA01234]\nfakelib = full\n")));
+        QVERIFY(!files.profiles.contains(QStringLiteral("old.exfat"))); // the section this edit emptied goes
+
+        // An unknown key that repeats is one line per value again, never a line break inside a value.
+        const QString flat = QStringLiteral("debug=1\nfuture_list=a\nfuture_list=b\n");
+        const MountConfigValues fp = parseMountConfig(MountTool::ShadowMountPlus, flat, {});
+        QCOMPARE(fp.value(QStringLiteral("future_list")), QStringLiteral("a\nb"));
+        const auto out = applyMountConfigChanges(MountTool::ShadowMountPlus, flat, {}, {{QStringLiteral("future_list"), QStringLiteral("a\nc")}},
+                                                 SmpConfigFormat::Flat17);
+        QCOMPARE(out.config, QStringLiteral("debug=1\nfuture_list=a\nfuture_list=c\n"));
+    }
+
+    void interruptedConfigReplaceIsPutBackOnLoad()
+    {
+        // What a lost connection between uploadReplace()'s two renames leaves behind.
+        fake::FakeFtpServer::Options fo;
+        fo.root = fresh(QStringLiteral("cfg-heal"));
+        const QString cfg = QDir(fo.root).filePath(QStringLiteral("data/shadowmount/config.ini"));
+        QVERIFY(fwtest::writeTextFile(cfg + QStringLiteral(".replacing.bak"), "debug=1\nscanpath=/mnt/usb0\n"));
+        fake::FakeFtpServer srv(fo);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto text = loadMountConfig(c, MountTool::ShadowMountPlus);
+        QVERIFY2(text.ok(), text.ok() ? "" : qPrintable(text.error().toLogString()));
+        QCOMPARE(text.value(), QStringLiteral("debug=1\nscanpath=/mnt/usb0\n"));
+        QCOMPARE(readAll(cfg), QByteArray("debug=1\nscanpath=/mnt/usb0\n"));
+        QVERIFY(!QFileInfo::exists(cfg + QStringLiteral(".replacing.bak")));
+        // And the push that follows sees the file it expects.
+        auto pushed = pushMountConfig(c, MountTool::ShadowMountPlus, QStringLiteral("debug=0\nscanpath=/mnt/usb0\n"),
+                                      fresh(QStringLiteral("cfg-heal-bak")), {}, text.value());
+        QVERIFY2(pushed.ok(), pushed.ok() ? "" : qPrintable(pushed.error().toLogString()));
+        QCOMPARE(readAll(cfg), QByteArray("debug=0\nscanpath=/mnt/usb0\n"));
     }
 
     void consoleServicesProbe()

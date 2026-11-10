@@ -45,9 +45,10 @@ std::optional<FtpEntry> parseListLine(const QString& lineIn, const QDateTime& no
         return std::nullopt;
 
     // Unix style. The group column is optional; backtracking settles it.
+    // Exactly one separator before the name: further spaces belong to it.
     static const QRegularExpression unixRe(QStringLiteral(
         "^([\\-dlcbpsD])[rwxsStTl\\-]{9}[@+.]?\\s+\\d+\\s+\\S+\\s+(?:\\S+\\s+)?(\\d+)\\s+"
-        "([A-Za-z]{3})\\s+(\\d{1,2})\\s+(\\d{1,2}:\\d{2}(?::\\d{2})?|\\d{4})\\s+(.*)$"));
+        "([A-Za-z]{3})\\s+(\\d{1,2})\\s+(\\d{1,2}:\\d{2}(?::\\d{2})?|\\d{4})\\s(.*)$"));
     if (const auto m = unixRe.match(line); m.hasMatch()) {
         FtpEntry e;
         const QChar type = m.captured(1).front();
@@ -73,7 +74,8 @@ std::optional<FtpEntry> parseListLine(const QString& lineIn, const QDateTime& no
                 const QTime t = QTime::fromString(tod.left(5), QStringLiteral("H:mm"));
                 int year = now.date().year();
                 QDateTime dt(QDate(year, month, day), t, QTimeZone::utc());
-                if (dt.isValid() && dt > now.addDays(2))
+                // In the future, or a day this year does not have (29 Feb): last year's.
+                if (!dt.isValid() || dt > now.addDays(2))
                     dt = QDateTime(QDate(year - 1, month, day), t, QTimeZone::utc());
                 e.modified = dt;
             } else {

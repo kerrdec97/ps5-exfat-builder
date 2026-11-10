@@ -151,6 +151,13 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& values)
 
 // ---- FTP ---------------------------------------------------------------------------------
 
+// Config bytes <-> text without loss, so a push never rewrites what it did
+// not touch. Valid UTF-8 is read as such and a byte order mark stays (as
+// U+FEFF); a byte that is not UTF-8 (a Latin-1 comment) becomes a lone low
+// surrogate U+DC80..U+DCFF and is written back as that one byte.
+QString decodeConfigText(const QByteArray& bytes);
+QByteArray encodeConfigText(const QString& text);
+
 // RETR of config.ini; NotFound when the tool has never written one (normal
 // on first use).
 Result<QString> loadMountConfig(FtpClient& client, MountTool tool, const CancellationToken& token = {});

@@ -39,6 +39,40 @@ bool needsQuotes(const QString& v)
     return false;
 }
 
+// The inline comment of a key line as it was written, with the blanks before
+// it ("  # keep on"); empty when the line has none.
+QString commentTail(const QString& raw, bool v2)
+{
+    const qsizetype eq = raw.indexOf(u'=');
+    if (eq < 0)
+        return {};
+    qsizetype i = eq + 1;
+    while (i < raw.size() && raw.at(i).isSpace())
+        ++i;
+    if (v2 && i < raw.size() && raw.at(i) == u'"') {
+        // A quoted value may hold # and ; itself: look behind its closing quote.
+        for (++i; i < raw.size(); ++i) {
+            if (raw.at(i) == u'\\') {
+                ++i;
+                continue;
+            }
+            if (raw.at(i) == u'"') {
+                ++i;
+                break;
+            }
+        }
+    }
+    for (; i < raw.size(); ++i) {
+        if (raw.at(i) != u'#' && raw.at(i) != u';')
+            continue;
+        qsizetype start = i;
+        while (start > eq + 1 && raw.at(start - 1).isSpace())
+            --start;
+        return raw.mid(start);
+    }
+    return {};
+}
+
 } // namespace
 
 QString IniDocument::unquote(const QString& rawIn, bool v2)
@@ -68,21 +102,33 @@ QString IniDocument::unquote(const QString& rawIn, bool v2)
     return raw.left(cut).trimmed();
 }
 
-IniDocument::IniDocument(const QString& text, Quoting quoting) : m_quoting(quoting)
+IniDocument::IniDocument(const QString& textIn, Quoting quoting) : m_quoting(quoting)
 {
+    if (textIn.isEmpty())
+        return;
+    // A byte order mark is not part of the first line; it is written back.
+    m_bom = textIn.startsWith(QChar(0xFEFF));
+    const QString text = m_bom ? textIn.mid(1) : textIn;
     if (text.isEmpty())
         return;
     QStringList rows = text.split(u'\n');
     m_trailingNewline = text.endsWith(u'\n');
     if (m_trailingNewline)
         rows.removeLast();
+    // New lines get the first line's ending; every existing line keeps its own.
     if (!rows.isEmpty() && rows.front().endsWith(u'\r'))
         m_eol = QStringLiteral("\r\n");
     QString section;
-    for (QString row : rows) {
-        if (row.endsWith(u'\r'))
-            row.chop(1);
+    for (qsizetype i = 0; i < rows.size(); ++i) {
+        QString row = rows.at(i);
         Line l;
+        const bool terminated = m_trailingNewline || i + 1 < rows.size();
+        if (row.endsWith(u'\r') && terminated) {
+            row.chop(1);
+            l.eol = QStringLiteral("\r\n");
+        } else if (terminated) {
+            l.eol = QStringLiteral("\n");
+        }
         l.raw = row;
         const QString t = row.trimmed();
         QString name;
@@ -135,18 +181,26 @@ QString IniDocument::render(const Line& l) const
             break;
         indent += c;
     }
-    return indent + l.key + (spaced ? QStringLiteral(" = ") : QStringLiteral("=")) + formatValue(l.value);
+    return indent + l.key + (spaced ? QStringLiteral(" = ") : QStringLiteral("=")) + formatValue(l.value)
+         + (l.keepComment ? commentTail(l.raw, m_quoting == Quoting::V2) : QString());
 }
 
 QString IniDocument::text() const
 {
-    QStringList out;
-    out.reserve(qsizetype(m_lines.size()));
-    for (const Line& l : m_lines)
-        out << render(l);
-    if (out.isEmpty())
+    if (m_lines.empty())
         return {};
-    return out.join(m_eol) + (m_trailingNewline ? m_eol : QString());
+    QString out;
+    if (m_bom)
+        out += QChar(0xFEFF);
+    for (std::size_t i = 0; i < m_lines.size(); ++i) {
+        const Line& l = m_lines[i];
+        out += render(l);
+        // Its own ending; a new line (or the old last line, now followed by
+        // one) gets the document's.
+        if (i + 1 < m_lines.size() || m_trailingNewline)
+            out += l.eol.isEmpty() ? m_eol : l.eol;
+    }
+    return out;
 }
 
 QStringList IniDocument::sections() const
@@ -245,13 +299,14 @@ void IniDocument::setList(const QString& section, const QString& key, const QStr
     if (values == this->values(section, key))
         return;
     int first = -1;
-    QString likeRaw, keyAsWritten = key;
+    QString likeRaw, likeEol, keyAsWritten = key;
     for (int i = 0; i < int(m_lines.size());) {
         const Line& l = m_lines[size_t(i)];
         if (l.kind == Line::KeyValue && same(l.section, section) && same(l.key, key)) {
             if (first < 0) {
                 first = i;
                 likeRaw = l.raw;
+                likeEol = l.eol;
                 keyAsWritten = l.key;
             }
             m_lines.erase(m_lines.begin() + i);
@@ -289,6 +344,7 @@ void IniDocument::setList(const QString& section, const QString& key, const QStr
             at = int(m_lines.size());
         }
     }
+    bool firstLine = true;
     for (const QString& v : values) {
         Line l;
         l.kind = Line::KeyValue;
@@ -296,7 +352,11 @@ void IniDocument::setList(const QString& section, const QString& key, const QStr
         l.key = keyAsWritten;
         l.value = v;
         l.raw = likeRaw;
+        l.eol = likeEol;
         l.dirty = true;
+        // The comment behind the old value stays with the line that replaces it.
+        l.keepComment = firstLine;
+        firstLine = false;
         insertAt(at++, l);
     }
 }

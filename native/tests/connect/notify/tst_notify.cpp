@@ -229,6 +229,15 @@ private slots:
         QCOMPARE(e.value(QStringLiteral("color")).toInt(), 0xe5484d);
         QCOMPARE(e.value(QStringLiteral("timestamp")).toString(), QStringLiteral("2026-11-04T12:00:00Z"));
         QVERIFY(!e.value(QStringLiteral("footer")).toObject().value(QStringLiteral("text")).toString().isEmpty());
+        // A title cannot plant a masked link ("[text](address)") in the channel.
+        const QueueRunSummary link = summarizeRun({record(QStringLiteral("9"), QStringLiteral("test.titled"),
+                                                          QStringLiteral("[Patch notes](evil.example)"), JobState::Succeeded)},
+                                                  [](const QString&) { return QStringLiteral("Build exFAT image"); },
+                                                  [](const QString&) { return true; });
+        const QString linkDesc = QJsonDocument::fromJson(discordPayload(link, QDateTime::currentDateTimeUtc()))
+                                     .object().value(QStringLiteral("embeds")).toArray().at(0).toObject()
+                                     .value(QStringLiteral("description")).toString();
+        QVERIFY2(linkDesc.contains(QStringLiteral("\\[Patch notes\\]\\(evil.example\\)")), qPrintable(linkDesc));
         QCOMPARE(body.value(QStringLiteral("allowed_mentions")).toObject().value(QStringLiteral("parse")).toArray().size(), 0);
 
         std::vector<JobRecord> many;

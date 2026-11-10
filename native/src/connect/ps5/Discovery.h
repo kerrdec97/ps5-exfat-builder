@@ -1,7 +1,7 @@
 #pragma once
 
 // "Find my PS5": the legacy auto-detect IP sweep (_auto_detect_ip): every
-// address .1–.254 of the PC's /24 networks is probed on the FTP ports 2121,
+// address .1–.254 of the PC's private /24 networks is probed on the FTP ports 2121,
 // 1337, 2120 and 2122 with a 0.3 s connect timeout, 50 probes at a time. A host that accepts
 // a connection is reported with its open ports and, when an FTP greeting
 // arrives within a moment, the server's banner.
@@ -45,8 +45,14 @@ struct DiscoveryOptions {
 // Called on the calling thread of discoverConsoles() as probes complete.
 using DiscoveryProgress = std::function<void(int probedHosts, int totalHosts, int found)>;
 
-// "a.b.c" prefixes of the /24 networks of the given addresses: IPv4 only,
-// loopback (127/8), link-local (169.254/16), 0.0.0.0 and broadcast skipped,
+// True for an IPv4 address in a private range: 10/8, 172.16/12, 192.168/16 or
+// link-local 169.254/16. Only the networks of such addresses are searched, so
+// a PC with a public address, on a carrier or campus network or behind a VPN
+// adapter never probes hosts that are not the user's own.
+bool isPrivateLanAddress(const QHostAddress& address);
+
+// "a.b.c" prefixes of the /24 networks of the given addresses: only
+// isPrivateLanAddress() ones (so no loopback, public, multicast or IPv6),
 // duplicates removed, order kept.
 QStringList subnetPrefixesFor(const QList<QHostAddress>& addresses);
 

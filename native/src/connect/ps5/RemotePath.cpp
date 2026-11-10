@@ -54,18 +54,27 @@ QString joinRemote(const QString& dir, const QString& name)
     return (base == u"/" ? QString() : base) + u'/' + parts.join(u'/');
 }
 
-QString remoteNameProblem(const QString& name)
+QString listedNameProblem(const QString& name)
 {
     if (name.isEmpty())
         return QStringLiteral("empty name");
     if (name == u"." || name == u"..")
         return QStringLiteral("reserved name \"%1\"").arg(name);
     for (QChar c : name) {
-        if (c == u'/' || c == u'\\' || c == u':')
+        if (c == u'/' || c == u'\\')
             return QStringLiteral("the name contains \"%1\"").arg(c);
         if (c.unicode() < 0x20)
             return QStringLiteral("the name contains a control character");
     }
+    return {};
+}
+
+QString remoteNameProblem(const QString& name)
+{
+    if (const QString why = listedNameProblem(name); !why.isEmpty())
+        return why;
+    if (name.contains(u':'))
+        return QStringLiteral("the name contains \":\"");
     return {};
 }
 
@@ -92,6 +101,14 @@ QString localNameProblem(const QString& name)
 std::optional<QString> remoteChild(const QString& dir, const QString& name)
 {
     if (!remoteNameProblem(name).isEmpty())
+        return std::nullopt;
+    const QString base = cleanRemotePath(dir);
+    return (base == u"/" ? QString() : base) + u'/' + name;
+}
+
+std::optional<QString> listedChild(const QString& dir, const QString& name)
+{
+    if (!listedNameProblem(name).isEmpty())
         return std::nullopt;
     const QString base = cleanRemotePath(dir);
     return (base == u"/" ? QString() : base) + u'/' + name;

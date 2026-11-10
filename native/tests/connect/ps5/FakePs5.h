@@ -36,6 +36,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
+#include <QElapsedTimer>
 #include <QTimer>
 
 #include <algorithm>
@@ -130,6 +131,9 @@ public:
         QByteArray extraFeatures;        // added to the FEAT reply, e.g. " XCRYPT\r\n CPFR\r\n"
         bool refuseEpsv = false;         // EPSV answers 502 (with refusePasv: no passive mode at all)
         QStringList refuseDeletePaths;   // DELE refused (550) for these virtual paths; STOR still allowed
+        QByteArray failFirstPasvReply;   // answer the first PASV with this (e.g. "421 Too many connections")
+        int lateListReplyMs = 0;         // the first listing's closing 226 comes this late (stale-reply tests)
+        int dropControlOnRnfr = 0;       // close the control connection on the Nth RNFR (1-based; 0: never)
         bool ftpsrv = false;             // behave like ftpsrv v0.21 (see the header)
         bool selfIgnored = false;        // ftpsrv: SELF answers "enabled" every time (cannot be turned off)
     };
@@ -442,13 +446,20 @@ private:
         QTcpSocket* d = s->data;
         auto got = std::make_shared<qint64>(0);
         auto done = std::make_shared<bool>(false);
+        auto clock = std::make_shared<QElapsedTimer>();
+        clock->start();
         if (m_opt.throttleBytesPerSec > 0 || m_opt.stallAfterBytes >= 0)
             d->setReadBufferSize(64 * 1024);
         m_openForWrite.insert(file->fileName());
-        auto pump = [this, s, d, file, got, done, drop, vpath] {
+        auto pump = [this, s, d, file, got, done, drop, vpath, clock] {
             if (*done)
                 return;
-            qint64 budget = m_opt.throttleBytesPerSec > 0 ? std::max<qint64>(1, m_opt.throttleBytesPerSec / 50) : (1LL << 40);
+            // By the clock, not per call: the pump also runs on every readyRead,
+            // and a budget per call would let a fast client finish a "slow"
+            // upload long before its time.
+            qint64 budget = m_opt.throttleBytesPerSec > 0
+                ? std::max<qint64>(0, (clock->elapsed() + 20) * m_opt.throttleBytesPerSec / 1000 - *got)
+                : (1LL << 40);
             if (m_opt.stallAfterBytes >= 0)
                 budget = std::min(budget, m_opt.stallAfterBytes - *got);
             if (drop && !m_dropped)
@@ -582,6 +593,9 @@ private:
             ++m_pasvDrops; // e.g. a Wi-Fi blip before the STOR is sent
             s->inbuf.clear();
             s->ctrl->abort();
+        } else if (cmd == u"PASV" && !m_opt.failFirstPasvReply.isEmpty() && !m_failedPasv) {
+            m_failedPasv = true;
+            reply(s, m_opt.failFirstPasvReply);
         } else if (cmd == u"PASV") {
             if (m_opt.refusePasv)
                 reply(s, "502 PASV not implemented.");
@@ -651,6 +665,9 @@ private:
                 reply(s, "250 Delete operation successful.");
             else
                 reply(s, "550 Delete operation failed.");
+        } else if (cmd == u"RNFR" && m_opt.dropControlOnRnfr > 0 && ++m_rnfrSeen == m_opt.dropControlOnRnfr) {
+            s->inbuf.clear();
+            s->ctrl->abort();
         } else if (cmd == u"RNFR") {
             if (m_opt.renameRefused) {
                 reply(s, "502 RNFR not implemented.");
@@ -709,6 +726,17 @@ private:
                 reply(s, "150 Here comes the directory listing.");
                 beginActive();
                 s->data->write(out);
+                if (m_opt.lateListReplyMs > 0 && !m_lateListDone) {
+                    // The data arrives and closes at once; only the 226 is late.
+                    m_lateListDone = true;
+                    QTcpSocket* d = s->data;
+                    s->data = nullptr;
+                    m_active.fetch_sub(1);
+                    QObject::connect(d, &QTcpSocket::disconnected, d, &QObject::deleteLater);
+                    d->disconnectFromHost();
+                    QTimer::singleShot(m_opt.lateListReplyMs, s->ctrl, [this, s] { reply(s, "226 Directory send OK."); });
+                    return;
+                }
                 finishData(s, "226 Directory send OK.");
             });
         } else if ((cmd == u"RETR" || cmd == u"STOR" || cmd == u"APPE") && !m_opt.failFirstTransferReply.isEmpty()
@@ -775,6 +803,9 @@ private:
     std::atomic<qint64> m_received{0};
     bool m_dropped = false;
     int m_goneLeft = 0; // connections still to refuse after a goneAfterDrop drop (-1: all)
+    bool m_failedPasv = false;
+    bool m_lateListDone = false;
+    int m_rnfrSeen = 0;
     int m_pasvDrops = 0;
     bool m_failedTransfer = false;
     int m_corruptLeft = 1;

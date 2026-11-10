@@ -41,13 +41,15 @@ QString plural(int n, const QString& one, const QString& many)
     return QStringLiteral("%1 %2").arg(n).arg(n == 1 ? one : many);
 }
 
-// Discord markdown would turn "*" and "_" in game titles into formatting.
+// Discord markdown would turn "*" and "_" in game titles into formatting, and
+// "[text](address)" into a link that hides where it goes.
 QString escapeMarkdown(const QString& s)
 {
     QString out;
     out.reserve(s.size() + 8);
     for (const QChar c : s) {
-        if (c == u'\\' || c == u'*' || c == u'_' || c == u'~' || c == u'`' || c == u'|' || c == u'>')
+        if (c == u'\\' || c == u'*' || c == u'_' || c == u'~' || c == u'`' || c == u'|' || c == u'>' || c == u'['
+            || c == u']' || c == u'(' || c == u')')
             out += u'\\';
         out += c;
     }

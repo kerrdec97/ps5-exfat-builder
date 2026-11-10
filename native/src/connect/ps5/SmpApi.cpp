@@ -118,6 +118,9 @@ Result<ApiReply> call(const QString& host, quint16 port, const QString& path, co
                          + QByteArray::number(body.size()) + "\r\n\r\n" + body;
     s.write(req);
     s.flush();
+    // The largest real answer is the log tail; whatever sends more is not the
+    // API and must not grow the buffer (or reset the idle timer) for ever.
+    constexpr qsizetype kMaxReplyBytes = 4 * 1024 * 1024;
     QByteArray buf;
     QElapsedTimer idle;
     idle.start();
@@ -125,6 +128,12 @@ Result<ApiReply> call(const QString& host, quint16 port, const QString& path, co
         if (s.bytesAvailable() > 0) {
             buf += s.readAll();
             idle.restart();
+            if (buf.size() > kMaxReplyBytes) {
+                s.abort();
+                return Error(ErrorCode::CorruptData,
+                             QStringLiteral("The answer on the ShadowMount+ API port is not from ShadowMount+. Check the "
+                                            "API port in Settings."));
+            }
         }
         const Head h = parseHead(buf);
         const bool closed = s.state() != QAbstractSocket::ConnectedState && s.bytesAvailable() == 0;
@@ -270,9 +279,16 @@ JobStatus parseJobStatus(const QJsonObject& o)
     if (!src.isEmpty() || !dst.isEmpty())
         s.blocking = dst.isEmpty() ? src : QStringLiteral("%1 → %2").arg(src, dst);
     const QString low = (state + u' ' + reason).toLower();
-    s.unconfirmed = low.contains(QLatin1String("usb_eject_unconfirmed"));
-    const bool failed = low.contains(QLatin1String("fail")) || low.contains(QLatin1String("error")) || low.contains(QLatin1String("cancel"))
-                      || low.contains(QLatin1String("busy")) || s.unconfirmed;
+    // A named error decides, wherever the reply carries it: "completed" next
+    // to a result_error must never read as "safe to unplug". Zero and "none"
+    // are how an API says "no error".
+    const QString rawError = text(o, "result_error").trimmed().toLower();
+    const bool namedError = !rawError.isEmpty() && rawError != u"0" && rawError != u"none" && rawError != u"ok"
+                         && rawError != u"null" && rawError != u"success";
+    const QString bad = low + u' ' + text(o, "result").toLower() + u' ' + (namedError ? rawError : QString());
+    s.unconfirmed = bad.contains(QLatin1String("usb_eject_unconfirmed"));
+    const bool failed = bad.contains(QLatin1String("fail")) || bad.contains(QLatin1String("error")) || bad.contains(QLatin1String("cancel"))
+                      || bad.contains(QLatin1String("busy")) || s.unconfirmed || namedError;
     s.succeeded = !failed && (low.contains(QLatin1String("completed")) || low.contains(QLatin1String("done")) || low.contains(QLatin1String("success")));
     s.finished = s.succeeded || failed || o.value(QStringLiteral("finished")).toBool(false) || o.value(QStringLiteral("active")) == QJsonValue(false);
     return s;

@@ -28,6 +28,34 @@ FtpOptions ftpOptionsFor(const ConsoleEndpoint& ep)
     return o;
 }
 
+namespace {
+
+// Two sources that end at the same target would be written by two workers at
+// once. The first keeps the target; later ones are left out and reported.
+void dropDuplicateTargets(TransferPlan& plan, bool upload)
+{
+    QSet<QString> seen;
+    std::vector<TransferFile> kept;
+    kept.reserve(plan.files.size());
+    for (TransferFile& f : plan.files) {
+        // The console's paths are compared as they are; this PC's as its file system does.
+        const QString key = upload ? f.remote : hostNameKey(QDir::cleanPath(f.local));
+        if (seen.contains(key)) {
+            plan.totalBytes -= std::max<qint64>(0, f.size);
+            plan.skipped << (upload ? QStringLiteral("%1: another source is sent to the same file on the PS5 (%2)")
+                                          .arg(QDir::toNativeSeparators(f.local), f.remote)
+                                    : QStringLiteral("%1: another source is saved under the same name on this PC (%2)")
+                                          .arg(f.remote, QDir::toNativeSeparators(f.local)));
+            continue;
+        }
+        seen.insert(key);
+        kept.push_back(std::move(f));
+    }
+    plan.files = std::move(kept);
+}
+
+} // namespace
+
 Result<TransferPlan> planUpload(const QStringList& localSources, const QString& remoteDirIn,
                                 const CancellationToken& token)
 {
@@ -61,6 +89,7 @@ Result<TransferPlan> planUpload(const QStringList& localSources, const QString& 
         }
     }
     plan.directories.removeDuplicates();
+    dropDuplicateTargets(plan, true);
     return plan;
 }
 
@@ -136,6 +165,7 @@ Result<TransferPlan> planDownload(FtpClient& c, const QStringList& remoteSources
         }
     }
     plan.directories.removeDuplicates();
+    dropDuplicateTargets(plan, false);
     return plan;
 }
 
@@ -206,7 +236,8 @@ struct Shared {
     {
         std::lock_guard lock(mutex);
         ++report.failed;
-        report.errors << QStringLiteral("%1: %2").arg(QFileInfo(f.local).fileName(), why);
+        // The console path: many files of a game share a bare name (param.json).
+        report.errors << QStringLiteral("%1: %2").arg(f.remote, why);
     }
 };
 
@@ -538,6 +569,9 @@ void runWorkers(Shared& sh, OneFn one)
                 if (i >= sh.plan.files.size())
                     break;
                 const Outcome o = one(sh, c, sh.plan.files[i]);
+                // Done files count themselves; a skipped or failed one is dealt with too.
+                if ((o == Outcome::Skipped || o == Outcome::Failed) && sh.progress)
+                    sh.progress->advanceFiles(1);
                 if (!counted && c.isConnected()) {
                     counted = true;
                     sh.workersConnected.fetch_add(1);

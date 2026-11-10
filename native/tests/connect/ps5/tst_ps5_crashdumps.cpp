@@ -144,6 +144,9 @@ private slots:
         zip::Reader z;
         QVERIFY(z.open(c.zipPath).ok());
         QVERIFY(z.find(QStringLiteral("capture.txt")));
+        // The note names the folder that was really watched.
+        const QByteArray note = z.readAll(*z.find(QStringLiteral("capture.txt"))).value();
+        QVERIFY2(note.contains("Console folder: " + kRoot.toUtf8() + "/PPSA34008_1792103554\n"), note.constData());
         QVERIFY(z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/report.log")));
         QCOMPARE(z.readAll(*z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp"))).value(), core);
         QVERIFY(!z.find(QStringLiteral("crash_dumps/PPSA34008_1792103554/core.prosperodmp.tmp")));

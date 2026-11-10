@@ -45,9 +45,11 @@ struct TransferPlan {
     std::vector<TransferFile> files;
     QStringList directories; // remote (upload) or local (download) folders to create
     qint64 totalBytes = 0;
-    // Download: console entries left out because their names are unsafe
-    // ("path: reason"), e.g. containing '/', '\\' or ':' (remoteNameProblem /
-    // localNameProblem). They are reported, never written.
+    // Entries left out of the plan ("path: reason"). Download: console entries
+    // whose names are unsafe on this PC (containing '/', '\\' or ':', see
+    // localNameProblem) or collide with another entry here. Both directions: a
+    // source that would be written to the same target as an earlier one. They
+    // are reported, never written.
     QStringList skipped;
 };
 
