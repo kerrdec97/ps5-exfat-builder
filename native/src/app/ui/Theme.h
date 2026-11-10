@@ -93,7 +93,7 @@ inline const QColor hero_0{QStringLiteral("#14224d")};
 inline const QColor hero_1{QStringLiteral("#1c1745")};
 inline const QColor hero_2{QStringLiteral("#101222")};
 // The PS5 connect banner's backdrop: deep blue-black, a shade lighter than a
-// card at the top left (fg_0 on it 16.1 to 17.6, fg_3 6.8 to 7.5).
+// card at the top left (fg_0 on it 16.2 to 17.6, fg_3 6.9 to 7.5).
 inline const QColor console_0{QStringLiteral("#121a33")};
 inline const QColor console_1{QStringLiteral("#121526")};
 inline const QColor console_2{QStringLiteral("#0f121d")};
