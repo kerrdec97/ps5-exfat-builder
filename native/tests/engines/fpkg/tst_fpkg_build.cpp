@@ -590,6 +590,131 @@ private slots:
         QCOMPARE(samples.last().toInt(), 2);
     }
 
+    // Performance mode, the core limit, a live limit and the private TEMP
+    // apply to every publisher run of a job, not only to img_create.
+    void limitsApplyToEveryPublisherRun()
+    {
+        if (QThread::idealThreadCount() < 3)
+            QSKIP("needs at least 3 logical processors");
+        const QString game = dir(QStringLiteral("limits/game"));
+        const QString out = m_root.filePath(QStringLiteral("limits/out"));
+        makeSimpleDump(game);
+        auto job = buildJob(game, out);
+        const QVariantMap low{{general::keys::kWorkerThreads, 1},
+                              {general::keys::kPerformanceMode, QStringLiteral("lowImpact")}};
+        const QString ownTemp = QDir::toNativeSeparators(qEnvironmentVariable("TEMP"));
+        const auto checkRun = [&](const QJsonObject& r, const QString& command, int cpus) {
+            QCOMPARE(r.value(QStringLiteral("argv")).toArray().first().toString(), command);
+            QCOMPARE(r.value(QStringLiteral("cpus")).toInt(), cpus);
+#ifdef Q_OS_WIN
+            QCOMPARE(r.value(QStringLiteral("priority")).toInt(), 0x40); // idle
+            const QString temp = r.value(QStringLiteral("TEMP")).toString();
+            QVERIFY(!temp.isEmpty());
+            QCOMPARE(r.value(QStringLiteral("TMP")).toString(), temp);
+            QVERIFY2(temp.compare(ownTemp, Qt::CaseInsensitive) != 0, qPrintable(temp));
+#endif
+        };
+
+        QVERIFY(run(job, low).result.ok());
+        QList<QJsonObject> runs = invocations();
+        QCOMPARE(runs.size(), 2);
+        checkRun(runs[0], QStringLiteral("img_create"), 1);
+        checkRun(runs[1], QStringLiteral("img_verify"), 1);
+        QCOMPARE(runs[1].value(QStringLiteral("TEMP")), runs[0].value(QStringLiteral("TEMP")));
+
+        // A live limit set for the job reaches its later runs too, and is forgotten when the job ends.
+        QFile::remove(m_fakeLog);
+        const QString id = QStringLiteral("Jlive");
+        setLiveCpuLimit(id, 2);
+        QVERIFY(run(job, low, {}, id).result.ok());
+        runs = invocations();
+        QCOMPARE(runs.size(), 2);
+        checkRun(runs[0], QStringLiteral("img_create"), 2);
+        checkRun(runs[1], QStringLiteral("img_verify"), 2);
+        QVERIFY(!liveCpuLimit(id));
+
+        // The verify and extract jobs.
+        QFile::remove(m_fakeLog);
+        VerifyRequest vr;
+        vr.package = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        FpkgVerifyJob verify(vr);
+        QVERIFY(run(verify, low).result.ok());
+        ExtractRequest er;
+        er.package = vr.package;
+        er.destination = m_root.filePath(QStringLiteral("limits/extracted"));
+        FpkgExtractJob extract(er);
+        QVERIFY(run(extract, low).result.ok());
+        runs = invocations();
+        QCOMPARE(runs.size(), 2);
+        checkRun(runs[0], QStringLiteral("img_verify"), 1);
+        checkRun(runs[1], QStringLiteral("img_extract"), 1);
+    }
+
+    // Pause suspends the tool and the processes it started: nothing moves until Resume.
+    void pauseSuspendsTheToolTree()
+    {
+        EnvVar delay("FAKE_PUBCMD_DELAY_MS", "60");
+        const QString ticks = m_root.filePath(QStringLiteral("pause.ticks"));
+        const QString pidFile = m_root.filePath(QStringLiteral("pause-child.pid"));
+        const QString childTicks = pidFile + QStringLiteral(".ticks");
+        for (const QString& f : {ticks, pidFile, childTicks})
+            QFile::remove(f);
+        EnvVar tick("FAKE_PUBCMD_TICKFILE", ticks.toUtf8());
+        EnvVar child("FAKE_PUBCMD_CHILD_PIDFILE", pidFile.toUtf8());
+        const QString game = dir(QStringLiteral("pause/game"));
+        const QString out = m_root.filePath(QStringLiteral("pause/out"));
+        makeSimpleDump(game);
+        auto job = buildJob(game, out);
+        CancellationSource source;
+        qint64 before = -1, after = -1, childBefore = -1, childAfter = -1;
+        std::thread pauser([&] {
+            for (int i = 0; i < 400 && QFileInfo(ticks).size() < 5; ++i)
+                QThread::msleep(25);
+            source.pause();
+            QThread::msleep(800); // the tool is suspended within 250 ms
+            before = QFileInfo(ticks).size();
+            childBefore = QFileInfo(childTicks).size();
+            QThread::msleep(1000);
+            after = QFileInfo(ticks).size();
+            childAfter = QFileInfo(childTicks).size();
+            source.resume();
+        });
+        auto rr = run(job, {}, source.token());
+        pauser.join();
+        QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+        QVERIFY(before >= 5);
+        QVERIFY2(before < kBarSteps, "the tool finished before it was paused");
+        QCOMPARE(after, before);
+#ifdef Q_OS_WIN
+        QVERIFY2(childBefore > 0, "the stand-in did not start its child");
+        QCOMPARE(childAfter, childBefore);
+#endif
+        QVERIFY(logged(QStringLiteral("Paused prospero-pub-cmd.exe.")));
+        QVERIFY(logged(QStringLiteral("Resumed prospero-pub-cmd.exe.")));
+        QVERIFY(checkPackageHeader(rr.result->outputs.value(0)).ok);
+    }
+
+    // Between the tool runs a paused job waits at the next phase boundary.
+    void pausedJobWaitsBeforeTheNextPhase()
+    {
+        const QString game = dir(QStringLiteral("pausewait/game"));
+        const QString out = m_root.filePath(QStringLiteral("pausewait/out"));
+        makeSimpleDump(game);
+        auto job = buildJob(game, out);
+        CancellationSource source;
+        source.pause();
+        bool ranWhilePaused = true;
+        std::thread resumer([&] {
+            QThread::msleep(700);
+            ranWhilePaused = !invocations().isEmpty();
+            source.resume();
+        });
+        auto rr = run(job, {}, source.token());
+        resumer.join();
+        QVERIFY(rr.result.ok());
+        QVERIFY2(!ranWhilePaused, "img_create started while the job was paused");
+    }
+
     void updateBuildWithBaseFolder()
     {
         const QString base = dir(QStringLiteral("upd/base-game"));

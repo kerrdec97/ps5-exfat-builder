@@ -999,7 +999,7 @@ Status writeZeroFile(const QString& path, qint64 size, const CancellationToken& 
     static const QByteArray zeros(256 * 1024, '\0');
     qint64 left = size;
     while (left > 0) {
-        if (token.isCancelled())
+        if (!token.checkpoint())
             return Error::cancelled();
         const qint64 n = std::min<qint64>(left, zeros.size());
         if (f.write(zeros.constData(), n) != n)
@@ -1020,7 +1020,7 @@ Status prescanFiles(const QStringList& files, int threads, const CancellationTok
     for (int t = 0; t < n; ++t) {
         pool.emplace_back([&] {
             for (qsizetype i = next++; i < files.size(); i = next++) {
-                if (token.isCancelled())
+                if (!token.checkpoint())
                     return;
                 QFile f(toLongPath(files[i]));
                 char b = 0;
@@ -1050,6 +1050,37 @@ void logToolLine(const Log& log, const ToolLine& l)
     case LineKind::Info: log.info(QStringLiteral("SDK: %1").arg(l.text.isEmpty() ? l.raw.trimmed() : l.text)); break;
     case LineKind::Dropped: break;
     }
+}
+
+// What every publisher run of a job shares: the performance mode's priority
+// and the CPU-core limit, which the user can change while the job runs.
+void applyJobLimits(ToolRunOptions& o, const FpkgSettings& s, const JobContext& ctx)
+{
+    o.cpuCoreLimit = s.cpuCoreLimit;
+    o.priorityMode = s.priorityMode;
+    o.liveLimitKey = ctx.jobId;
+    o.log = ctx.log;
+}
+
+// TEMP/TMP for a publisher run: a private folder under the job's temporary folder.
+QProcessEnvironment publisherEnv(const QString& tempDir, AsciiAliases& aliases, const Log& log)
+{
+    QDir().mkpath(tempDir);
+    // An ASCII path for the SDK (the user folder may not be), then its 8.3 alias when shorter.
+    auto mapped = aliases.map(tempDir, QStringLiteral("tmp"));
+    bool aliased = false;
+    const QString t = publisherTempPath(mapped.ok() ? mapped.value() : tempDir, &aliased);
+    if (aliased)
+        log.debug(QStringLiteral("Using a short path alias for the same private publisher temporary folder (SDK "
+                                 "path-length limit)."));
+    if (t.size() > kPublisherTempMaxChars)
+        log.warn(QStringLiteral("The publisher's temporary path is %1 characters long (the SDK may fail above %2). Choose a "
+                                "shorter temporary folder in Settings > Storage if this step fails.")
+                     .arg(t.size()).arg(kPublisherTempMaxChars));
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("TEMP"), t);
+    env.insert(QStringLiteral("TMP"), t);
+    return env;
 }
 
 Status writeImgCreateLog(const QString& logsDir, const ToolRunResult& r)
@@ -1158,9 +1189,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     env.insert(QStringLiteral("TMP"), sdkTmpTool);
     ro.environment = env;
     ro.watchFile = partial;
-    ro.cpuCoreLimit = s.cpuCoreLimit;
-    ro.priorityMode = s.priorityMode;
-    ro.liveLimitKey = ctx.jobId;
+    applyJobLimits(ro, s, ctx);
     // Monotonic: a second ruler line from the tool must not send the bar backwards.
     ro.onBar = [pr, best = std::make_shared<int>(0)](int steps) {
         *best = std::max(*best, steps);
@@ -1190,7 +1219,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         log.warn(st.error().message);
     for (const QString& w : r.warnings)
         j.outcome.warnings << QStringLiteral("Publishing Tools: %1").arg(w);
-    if (r.cancelled || ctx.token.isCancelled())
+    if (r.cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (!r.ok())
         return packFailure(r, j.what);
@@ -1267,8 +1296,11 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         vo.program = native(j.tc->exe);
         vo.arguments = imgVerifyArgs(s.passcode, s.postVerify == PostVerify::ToolFull, j.aliases->toToolPath(fullPackage));
         vo.workingDirectory = ro.workingDirectory;
+        vo.environment = ro.environment;
         vo.withBar = false;
         vo.onLine = ro.onLine;
+        applyJobLimits(vo, s, ctx);
+        (void)ctx.token.checkpoint(); // a paused job waits here; a cancelled one is reported by the run below
         auto vr = runPubTool(vo, ctx.token);
         if (vr.ok() && (vr->cancelled || ctx.token.isCancelled())) {
             log.warn(QStringLiteral("img_verify was cancelled; the package was kept: %1").arg(native(placed.value(0))));
@@ -1375,7 +1407,9 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolcha
     o.program = native(tc.exe);
     o.arguments = imgExtractArgs(s.passcode, aliases.toToolPath(basePackage), native(destTool.value()));
     o.workingDirectory = chooseWorkingDir(tc, dest);
+    o.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     o.withBar = false;
+    applyJobLimits(o, s, ctx);
     const qint64 free0 = diskSpace(dest).ok() ? diskSpace(dest)->available : 0;
     ProgressReporter* pr = ctx.progress;
     o.pollBytes = [dest, free0] {
@@ -1387,7 +1421,7 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const PubToolcha
     auto r = runPubTool(o, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (!r->ok())
         return packFailure(r.value(), QStringLiteral("Extracting the base package"));
@@ -1407,7 +1441,6 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     const Log& log = ctx.log;
     pr->setPhases(buildPhases(), kBuildWeights);
     FW_TRY(validateBuildRequest(req, s));
-    ScopeExit clearLive([&] { clearLiveCpuLimit(ctx.jobId); });
 
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
@@ -1466,7 +1499,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
                                 : note);
         pr->beginPhase(PhPrepare, est);
         FW_TRY(stager->stage(req.source, stage, ctx.token, pr));
-        if (ctx.token.isCancelled())
+        if (!ctx.token.checkpoint())
             return Error::cancelled();
         sourceRoot = findAppRoot(stage, 3);
         if (sourceRoot.isEmpty())
@@ -1609,7 +1642,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             }
         }
     }
-    if (ctx.token.isCancelled())
+    if (!ctx.token.checkpoint())
         return Error::cancelled();
 
     // ---- plan ---------------------------------------------------------------------------
@@ -1689,7 +1722,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         for (int t = 0; t < std::min<int>(threads, int(conv.size())); ++t) {
             pool.emplace_back([&] {
                 for (size_t i = next++; i < conv.size(); i = next++) {
-                    if (ctx.token.isCancelled())
+                    if (!ctx.token.checkpoint())
                         return;
                     const ImageConversion& c = conv[i];
                     const QString out = QDir(plan.assetsDir).filePath(QStringLiteral("sce_sys/") + c.dst.section(u'/', -1));
@@ -1735,7 +1768,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         FW_TRY(finalizeParam(plan, po, s));
     }
     for (const PlannedEntry& e : plan.entries) {
-        if (ctx.token.isCancelled())
+        if (!ctx.token.checkpoint())
             return Error::cancelled();
         switch (e.kind) {
         case EntryKind::Payload:
@@ -1785,7 +1818,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         createLog << QStringLiteral("warning: %1").arg(w);
     FW_TRY(writeFileAtomic(QDir(plan.logsDir).filePath(QStringLiteral("01-create-gp5.log")), logBytes(createLog)));
     log.info(QStringLiteral("Project written: %1").arg(native(plan.gp5Path)));
-    if (ctx.token.isCancelled())
+    if (!ctx.token.checkpoint())
         return Error::cancelled();
 
     // ---- pre-scan ------------------------------------------------------------------------------
@@ -1842,7 +1875,6 @@ Result<JobOutcome> runAddon(const AddonRequest& req, const FpkgSettings& s, JobC
     const Log& log = ctx.log;
     pr->setPhases(addonPhases(), kBuildWeights);
     FW_TRY(validateAddonRequest(req, s));
-    ScopeExit clearLive([&] { clearLiveCpuLimit(ctx.jobId); });
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
         return Error(ErrorCode::DependencyMissing, tc.problems.join(u' '));
@@ -1990,12 +2022,14 @@ Result<JobOutcome> runVerify(const VerifyRequest& req, const FpkgSettings& s, Jo
     ro.program = native(tc.exe);
     ro.arguments = imgVerifyArgs(passcode, req.integrity, aliases.toToolPath(target));
     ro.workingDirectory = chooseWorkingDir(tc, target);
+    ro.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("verify-tmp")), aliases, ctx.log);
     ro.withBar = false;
     ro.onLine = [&ctx](const ToolLine& l) { logToolLine(ctx.log, l); };
+    applyJobLimits(ro, s, ctx);
     auto r = runPubTool(ro, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     o.outputs << QFileInfo(target).absoluteFilePath();
     if (r->ok()) {
@@ -2059,7 +2093,9 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     ro.program = native(tc.exe);
     ro.arguments = imgExtractArgs(passcode, aliases.toToolPath(target), native(destTool.value()));
     ro.workingDirectory = chooseWorkingDir(tc, target);
+    ro.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     ro.withBar = false;
+    applyJobLimits(ro, s, ctx);
     const qint64 free0 = diskSpace(dest).ok() ? diskSpace(dest)->available : 0;
     ro.pollBytes = [dest, free0] {
         auto d = diskSpace(dest);
@@ -2070,7 +2106,7 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     auto r = runPubTool(ro, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (!r->ok())
         return packFailure(r.value(), QStringLiteral("img_extract"));
@@ -2148,26 +2184,6 @@ QString redactedCommand(const QStringList& args)
     return QStringLiteral("prospero-pub-cmd ") + shown.join(u' ');
 }
 
-QProcessEnvironment publisherEnv(const QString& tempDir, AsciiAliases& aliases, const Log& log)
-{
-    QDir().mkpath(tempDir);
-    // An ASCII path for the SDK (the user folder may not be), then its 8.3 alias when shorter.
-    auto mapped = aliases.map(tempDir, QStringLiteral("tmp"));
-    bool aliased = false;
-    const QString t = publisherTempPath(mapped.ok() ? mapped.value() : tempDir, &aliased);
-    if (aliased)
-        log.debug(QStringLiteral("Using a short path alias for the same private publisher temporary folder (SDK "
-                                 "path-length limit)."));
-    if (t.size() > kPublisherTempMaxChars)
-        log.warn(QStringLiteral("The publisher's temporary path is %1 characters long (the SDK may fail above %2). Choose a "
-                                "shorter temporary folder in Settings > Storage if this step fails.")
-                     .arg(t.size()).arg(kPublisherTempMaxChars));
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("TEMP"), t);
-    env.insert(QStringLiteral("TMP"), t);
-    return env;
-}
-
 } // namespace
 
 Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, const PubToolchain& tc, const FpkgSettings& s,
@@ -2192,8 +2208,7 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
         o.workingDirectory = chooseWorkingDir(tc, tool);
         o.environment = env;
         o.withBar = false;
-        o.cpuCoreLimit = s.cpuCoreLimit;
-        o.priorityMode = s.priorityMode;
+        applyJobLimits(o, s, ctx);
         o.onLine = [&log](const ToolLine& l) { logToolLine(log, l); };
         log.info(redactedCommand(o.arguments));
         return runPubTool(o, ctx.token);
@@ -2201,7 +2216,7 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
     auto r1 = pass(false, true);
     if (!r1.ok())
         return r1.takeError();
-    if (r1->cancelled || ctx.token.isCancelled())
+    if (r1->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     if (r1->exitCode != 0 || r1->crashed)
         return Error(ErrorCode::VerificationFailed,
@@ -2213,7 +2228,7 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
     auto r2 = pass(true, false);
     if (!r2.ok())
         return r2.takeError();
-    if (r2->cancelled || ctx.token.isCancelled())
+    if (r2->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     rep.formatExitCode = r2->exitCode;
     rep.formatPassed = r2->exitCode == 0 && !r2->crashed;
@@ -2247,8 +2262,7 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
     o.workingDirectory = chooseWorkingDir(tc, destination);
     o.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     o.withBar = false;
-    o.cpuCoreLimit = s.cpuCoreLimit;
-    o.priorityMode = s.priorityMode;
+    applyJobLimits(o, s, ctx);
     const qint64 free0 = diskSpace(destination).ok() ? diskSpace(destination)->available : 0;
     ProgressReporter* pr = ctx.progress;
     o.pollBytes = [destination, free0] {
@@ -2261,7 +2275,7 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
     auto r = runPubTool(o, ctx.token);
     if (!r.ok())
         return r.takeError();
-    if (r->cancelled || ctx.token.isCancelled())
+    if (r->cancelled || !ctx.token.checkpoint())
         return Error::cancelled();
     // Exit code 0 with an [Error] line is a failure too (§4.4): a partly
     // extracted base must never become the tree an update delta is planned on.

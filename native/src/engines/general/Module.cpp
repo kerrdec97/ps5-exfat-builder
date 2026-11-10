@@ -479,7 +479,8 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("output_dir"), keys::kDefaultOutputDir);
     s.addLegacyKey(QStringLiteral("temp_dir"), keys::kTempFolder);
     s.addLegacyKey(QStringLiteral("logs_dir"), keys::kLogFolder);
-    s.addLegacyKey(QStringLiteral("adv_threads"), keys::kWorkerThreads);
+    // adv_threads is not mapped: it was the robocopy copy-thread count (1 by
+    // default), not the CPU threads of performance.workerThreads.
     s.addLegacyKey(QStringLiteral("shutdown_action"), keys::kAfterQueueAction);
     s.addLegacyKey(QStringLiteral("shutdown_delay"), keys::kAfterQueueDelay, [](const QVariant& v) -> std::optional<QVariant> {
         return QVariant(std::clamp<qint64>(v.toLongLong(), 10, 3600));

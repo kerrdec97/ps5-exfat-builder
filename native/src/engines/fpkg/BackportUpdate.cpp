@@ -11,6 +11,7 @@
 #include "engines/fpkg/PackageInspect.h"
 #include "engines/fpkg/PlayGo.h"
 #include "engines/fpkg/ParamJson.h"
+#include "engines/fpkg/PubCmd.h"
 #include "engines/fpkg/SourceScanner.h"
 #include "engines/fpkg/Toolchain.h"
 
@@ -81,7 +82,7 @@ Result<QStringList> treeFiles(const QString& root, const CancellationToken& toke
     QStringList files;
     QStringList stack{full(root)};
     while (!stack.isEmpty()) {
-        if (token.isCancelled())
+        if (!token.checkpoint())
             return Error::cancelled();
         const QString dir = stack.takeLast();
         const QFileInfoList entries =
@@ -782,6 +783,8 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
     }
 
     pr->beginPhase(++phase, 0);
+    if (!ctx.token.checkpoint())
+        return Error::cancelled();
     log.info(QStringLiteral("==> Inspecting the base package"));
     auto inspected = inspectPackage(basePath, ctx.token);
     if (!inspected.ok())
@@ -889,6 +892,10 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
     const QString titleId = base.titleId.isEmpty() ? QFileInfo(basePath).completeBaseName() : base.titleId;
     for (const Selected& b : sel) {
         pr->beginPhase(++phase, 1000, 0, false);
+        if (!ctx.token.checkpoint()) {
+            logRetained();
+            return Error::cancelled();
+        }
         log.info(QStringLiteral("==> Building independent %1 backport against %2").arg(b.label, native(basePath)));
         // Overlay statistics (the Companion's log lines).
         auto files = treeFiles(b.folder, ctx.token);
@@ -1119,6 +1126,7 @@ Status FpkgBackportJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgBackportJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runBackportUpdates(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 

@@ -3,6 +3,7 @@
 #include "engines/fpkg/BackportUpdate.h"
 
 #include "core/FileUtil.h"
+#include "engines/fpkg/PubCmd.h"
 #include "engines/fpkg/SourceScanner.h"
 #include "engines/fpkg/Toolchain.h"
 
@@ -51,6 +52,7 @@ Status FpkgBuildJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgBuildJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runBuild(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 
@@ -68,6 +70,7 @@ Status FpkgAddonJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgAddonJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runAddon(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 
@@ -94,6 +97,7 @@ Status FpkgVerifyJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgVerifyJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runVerify(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 
@@ -125,6 +129,7 @@ Status FpkgExtractJob::validate(const SettingsValues& settings) const
 
 Result<JobOutcome> FpkgExtractJob::run(JobContext& ctx)
 {
+    const LiveCpuLimitScope live(ctx.jobId);
     return runExtract(m_request, FpkgSettings::from(ctx.settings), ctx);
 }
 

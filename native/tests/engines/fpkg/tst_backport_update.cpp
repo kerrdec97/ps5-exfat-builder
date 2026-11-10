@@ -22,6 +22,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <thread>
+
 using namespace fw;
 using namespace fw::fpkg;
 using namespace fpkgtest;
@@ -184,6 +186,52 @@ private slots:
         auto id = inspectPackage(QDir(d).filePath(QStringLiteral("r.pkg")), cs.token());
         QVERIFY(id.ok());
         QCOMPARE(id->version, QStringLiteral("01.005.001"));
+    }
+
+    // A crafted tail: runs of '{' before every "contentId" and no closing
+    // brace anywhere. The search has a work limit and gives up quickly.
+    void hostileTailIsGivenUpQuickly()
+    {
+        const QString d = dir(QStringLiteral("hostile"));
+        QByteArray pkg("\x7F" "FIH", 4);
+        pkg += QByteArray(4096, '\0');
+        const QByteArray unit("{{{{{{{{{{{{\"contentId\"");
+        pkg.reserve(pkg.size() + 4 * 1024 * 1024 + unit.size());
+        for (int n = 0; n < 4 * 1024 * 1024; n += int(unit.size()))
+            pkg += unit;
+        put(d, QStringLiteral("hostile.pkg"), pkg);
+        const QString path = QDir(d).filePath(QStringLiteral("hostile.pkg"));
+
+        QElapsedTimer t;
+        t.start();
+        auto id = inspectPackage(path, CancellationToken());
+        QVERIFY(id.ok());
+        QCOMPARE(id->kind, PackageKind::Ps5);
+        QVERIFY(!id->hasParam);
+        QVERIFY2(t.elapsed() < 30000, qPrintable(QStringLiteral("%1 ms").arg(t.elapsed())));
+
+        // Cancel is seen between candidates, not only between 8 MiB blocks.
+        CancellationSource cs;
+        std::thread canceller([&] {
+            QThread::msleep(5);
+            cs.cancel(QStringLiteral("test"));
+        });
+        auto cancelled = findParamJsonInPackage(path, cs.token());
+        canceller.join();
+        QVERIFY(!cancelled.ok());
+        QVERIFY(cancelled.error().isCancelled());
+
+        // A real param.json behind a short run of the pattern is still found.
+        QByteArray mixed("\x7F" "FIH", 4);
+        mixed += QByteArray(4096, '\0');
+        mixed += QByteArray("{\"contentId\":\"UP0000-PPSA01234_00-GOLDENTEST000000\",\"contentVersion\":\"01.000.000\"}");
+        mixed += QByteArray(512, '\0');
+        for (int n = 0; n < 40; ++n)
+            mixed += unit;
+        put(d, QStringLiteral("mixed.pkg"), mixed);
+        auto found = inspectPackage(QDir(d).filePath(QStringLiteral("mixed.pkg")), CancellationToken());
+        QVERIFY(found.ok());
+        QCOMPARE(found->version, QStringLiteral("01.000.000"));
     }
 
     void countAcrossBlocks()

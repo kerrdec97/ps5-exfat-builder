@@ -1194,6 +1194,9 @@ private slots:
         QCOMPARE(legacy.at(QStringLiteral("fpkg_pubtools_path")).key, keys::kPubToolsPath);
         QCOMPARE(legacy.at(QStringLiteral("fpkg_chunk_count")).key, keys::kPlayGoChunkCount);
         QCOMPARE(legacy.at(QStringLiteral("fpkg_keep_project")).key, keys::kKeepIntermediate);
+        // The old robocopy thread count (1 by default) is not a CPU thread count: importing it
+        // would pin every build to one core.
+        QVERIFY(legacy.count(QStringLiteral("adv_threads")) == 0);
 
         const FpkgSettings def = FpkgSettings::from(env.values());
         QVERIFY(!def.compressionLevel);
