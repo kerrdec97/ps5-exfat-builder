@@ -42,7 +42,6 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
         return out;
     QTextLayout layout(text, font);
     layout.beginLayout();
-    int consumed = 0;
     while (out.size() < maxLines) {
         QTextLine line = layout.createLine();
         if (!line.isValid())
@@ -52,14 +51,11 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
         const int len = line.textLength();
         if (out.size() == maxLines - 1 && start + len < text.size()) {
             out << QFontMetrics(font).elidedText(text.mid(start), Qt::ElideRight, width);
-            consumed = text.size();
             break;
         }
         out << text.mid(start, len).trimmed();
-        consumed = start + len;
     }
     layout.endLayout();
-    Q_UNUSED(consumed);
     return out;
 }
 
@@ -250,7 +246,7 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
             p.setFont(font::caption());
             p.drawText(tagR, Qt::AlignCenter, it.tag);
         }
-        // Description: two lines under the title, aligned with it, continuing below the icon.
+        // Description: up to three lines under the title, aligned with it.
         p.setFont(font::caption());
         p.setPen(fgText);
         const qreal dw = r.right() - 14 - tx;

@@ -20,6 +20,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QContextMenuEvent>
+#include <QHBoxLayout>
 #include <QHelpEvent>
 #include <QImage>
 #include <QLineEdit>
@@ -709,6 +710,41 @@ private slots:
         s->addButton(QStringLiteral("Open folder"), Sheet::Role::Primary);
         QTimer::singleShot(0, [host2] { delete host2; });
         QCOMPARE(s->exec(), -1);
+    }
+
+    void sheetHiddenFromOutsideIsNotCountedAsOpen()
+    {
+        auto* s = new Sheet(m_window.get(), QStringLiteral("Countdown"), Sheet::Icon::Info);
+        s->addButton(QStringLiteral("OK"), Sheet::Role::Primary);
+        s->open();
+        QCOMPARE(Sheet::openCount(), 1);
+        s->hide(); // not through close()
+        QCOMPARE(Sheet::openCount(), 0);
+        delete s;
+
+        // An elided label tells assistive tools its whole text and elides again for a new font.
+        auto* l = add<ElideLabel>(QStringLiteral("A rather long title that will not fit"), Qt::ElideRight);
+        l->setFixedWidth(120);
+        QCoreApplication::processEvents();
+        QCOMPARE(l->accessibleName(), l->fullText());
+        const QString before = l->text();
+        QFont big = l->font();
+        big.setPixelSize(28);
+        l->setFont(big);
+        QCoreApplication::processEvents();
+        QVERIFY(l->text() != before);
+        l->setFullText(QStringLiteral("Another title"));
+        QCOMPARE(l->accessibleName(), QStringLiteral("Another title"));
+
+        // A card has one title row however often its title is set.
+        Card card;
+        QHBoxLayout* row = card.setTitle(QStringLiteral("One"));
+        QCOMPARE(card.setTitle(QStringLiteral("Two")), row);
+        int titles = 0;
+        for (const QLabel* t : card.findChildren<QLabel*>())
+            if (t->text() == QStringLiteral("One") || t->text() == QStringLiteral("Two"))
+                ++titles;
+        QCOMPARE(titles, 1);
     }
 
     void sheetPanelIsAsTallAsItsWrappedText()

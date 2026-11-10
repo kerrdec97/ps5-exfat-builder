@@ -17,8 +17,8 @@ namespace fw::theme {
 // ---- colour ------------------------------------------------------------------
 // v5 "Nebula" palette: blue-black surfaces with a cool tint, an electric
 // blue -> violet signature gradient (accent -> accent_2) for primary actions,
-// selection and brand moments. Text contrast on bg_2: fg_1 13.9:1, fg_3 6.6:1,
-// fg_4 4.9:1 (WCAG AA for body text down to fg_4).
+// selection and brand moments. Text contrast on bg_2: fg_1 14.3:1, fg_3 6.5:1,
+// fg_4 5.0:1 (WCAG AA for body text down to fg_4).
 namespace color {
 inline const QColor bg_0{QStringLiteral("#07090f")}; // chrome: sidebar, header, status bar
 inline const QColor bg_1{QStringLiteral("#0b0e17")}; // page
@@ -112,9 +112,9 @@ inline constexpr int sidebarBreakpoint = 1000; // below: sidebar auto-compacts
 
 // ---- typography --------------------------------------------------------------
 namespace font {
-QFont display();    // 26/32 600
-QFont title();      // 20/26 600
-QFont stat();       // 22/28 600
+QFont display();    // 30 px 700, tabular
+QFont title();      // 24 px 700
+QFont stat();       // 26 px 700, tabular
 QFont subtitle();   // 15/20 600
 QFont bodyStrong(); // 13/18 600
 QFont body();       // 13/18 400
@@ -122,7 +122,8 @@ QFont caption();    // 12/16 400
 QFont overline();   // 11/14 600 +6 % uppercase
 QFont mono();       // 12/18 400 tabular
 QFont monoSmall();  // 11/16 400
-// Line heights that go with the styles above (for fixed-height rows).
+// Line heights for fixed-height rows. lineDisplay, lineTitle and lineStat
+// still hold the heights of the earlier, smaller display styles.
 inline constexpr int lineBody = 18, lineCaption = 16, lineTitle = 26, lineSubtitle = 20, lineMono = 18,
                      lineMonoSmall = 16, lineOverline = 14, lineDisplay = 32, lineStat = 28;
 } // namespace font

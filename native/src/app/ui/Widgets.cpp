@@ -131,6 +131,13 @@ void ElideLabel::resizeEvent(QResizeEvent* e)
     relayout();
 }
 
+void ElideLabel::changeEvent(QEvent* e)
+{
+    QLabel::changeEvent(e);
+    if (e->type() == QEvent::FontChange)
+        relayout(); // the text was cut for the old font
+}
+
 void ElideLabel::relayout()
 {
     const QFontMetrics fm(font());
@@ -138,6 +145,12 @@ void ElideLabel::relayout()
     const QString shown = fm.elidedText(m_text, m_mode, w);
     QLabel::setText(shown);
     setToolTip(shown != m_text ? plainTip(m_text) : QString());
+    // Assistive tools read the whole text, not the cut one (unless the owner
+    // gave the label a name of its own).
+    if (accessibleName() == m_autoName && m_autoName != m_text) {
+        m_autoName = m_text;
+        setAccessibleName(m_text);
+    }
 }
 
 Link::Link(const QString& text, QWidget* parent) : QLabel(parent)
@@ -372,7 +385,14 @@ Card::Card(QWidget* parent, Variant variant) : QFrame(parent), m_variant(variant
 
 QHBoxLayout* Card::setTitle(const QString& title, QWidget* rightSlot)
 {
+    if (m_titleRow) { // called again: the same row, not a second title
+        m_title->setText(title);
+        if (rightSlot)
+            m_titleRow->addWidget(rightSlot);
+        return m_titleRow;
+    }
     auto* row = new QHBoxLayout;
+    m_titleRow = row;
     row->setSpacing(space::sm);
     row->setContentsMargins(0, 0, 0, 0);
     m_title = heading(title, TextStyle::Subtitle, this);

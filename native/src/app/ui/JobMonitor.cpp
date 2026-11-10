@@ -460,8 +460,7 @@ void JobMonitor::build()
     m_verbose->setToolTip(verboseLabel->toolTip());
     lh->addWidget(verboseLabel);
     lh->addWidget(m_verbose);
-    m_copy = new IconButton(QStringLiteral("copy"), QStringLiteral("Copy the log"), IconButton::Size::Small, logHead);
-    m_copy->setToolTip(QStringLiteral("Copy these lines"));
+    m_copy = new IconButton(QStringLiteral("copy"), QStringLiteral("Copy these lines"), IconButton::Size::Small, logHead);
     lh->addWidget(m_copy);
     m_openLogs = new Link(QStringLiteral("Open in Logs"), logHead);
     lh->addWidget(m_openLogs);
@@ -486,6 +485,7 @@ void JobMonitor::build()
     connect(m_copy, &QToolButton::clicked, this, [this] {
         QApplication::clipboard()->setText(m_console->plainLines());
         m_copy->setToolTip(QStringLiteral("Copied"));
+        QTimer::singleShot(2000, m_copy, [this] { m_copy->setToolTip(QStringLiteral("Copy these lines")); });
     });
     connect(m_openLogs, &Link::activated, this, [this] { emit openLogsRequested(m_id); });
 
@@ -517,8 +517,7 @@ void JobMonitor::build()
     m_folder = button(QStringLiteral("Show in folder"), ButtonVariant::Primary, QStringLiteral("folder_open"), foot);
     m_retry = button(QStringLiteral("Retry"), ButtonVariant::Primary, QStringLiteral("undo"), foot);
     m_newJob = button(QStringLiteral("Start another"), ButtonVariant::Secondary, QStringLiteral("plus"), foot);
-    m_remove = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove from the queue"), IconButton::Size::Regular, foot);
-    m_remove->setToolTip(QStringLiteral("Remove from the queue"));
+    m_remove = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove from queue"), IconButton::Size::Regular, foot);
     m_openQueue = new Link(QStringLiteral("Open queue"), foot);
     for (QPushButton* b : {m_pause, m_cancel, m_folder, m_retry, m_newJob})
         setButtonSmall(b, !wide);
@@ -1074,7 +1073,7 @@ void JobMonitor::rebuildResult(const JobRecord& r)
         auto* bar = new InfoBar(Tone::Err, m_result);
         bar->setTitle(r.state == JobState::Interrupted ? QStringLiteral("Interrupted") : QStringLiteral("Failed"));
         bar->setMessage(r.error->message);
-        auto* link = bar->addLink(QStringLiteral("Show in log"));
+        auto* link = bar->addLink(QStringLiteral("Open in Logs"));
         connect(link, &Link::activated, this, [this] { emit openLogsRequested(m_id); });
         m_resultLayout->addWidget(bar);
     }

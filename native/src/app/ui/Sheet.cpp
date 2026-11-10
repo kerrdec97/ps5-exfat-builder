@@ -7,6 +7,7 @@
 #include <QEvent>
 #include <QAbstractSpinBox>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QPainter>
@@ -276,6 +277,21 @@ void Sheet::keyPressEvent(QKeyEvent* e)
 void Sheet::mousePressEvent(QMouseEvent* e)
 {
     e->accept(); // the scrim swallows clicks
+}
+
+void Sheet::hideEvent(QHideEvent* e)
+{
+    QWidget::hideEvent(e);
+    // Hidden itself (hide(), setVisible(false)), not with its window: it no
+    // longer counts as open and a waiting exec() returns (the safe answer).
+    if (!isHidden())
+        return;
+    if (m_counted) {
+        m_counted = false;
+        --g_openSheets;
+    }
+    if (m_loop && !m_answered)
+        m_loop->exit(-1);
 }
 
 bool Sheet::eventFilter(QObject* watched, QEvent* event)

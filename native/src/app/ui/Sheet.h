@@ -71,6 +71,7 @@ protected:
     void resizeEvent(QResizeEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
+    void hideEvent(QHideEvent* e) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     bool focusNextPrevChild(bool next) override;
 

@@ -325,10 +325,6 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
         const int n = queuePosition;
         const int s = (n % 100 >= 11 && n % 100 <= 13) ? 0 : (n % 10 <= 3 ? n % 10 : 0);
         badgeText = QStringLiteral("Queued · %1%2").arg(n).arg(QLatin1String(suffix[s]));
-    } else if (r.state == JobState::Failed && r.error && m_variant == Variant::Queue) {
-        badgeText = QStringLiteral("Failed");
-    } else if (r.state == JobState::Succeeded && r.outcome && r.outcome->verification == Verification::Passed) {
-        badgeText = QStringLiteral("Done");
     }
     m_badge->set(badgeText, tone);
     m_badge->setIconName(r.state == JobState::Queued || r.state == JobState::Cancelled || r.state == JobState::Paused || r.state == JobState::Cancelling

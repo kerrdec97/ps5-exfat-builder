@@ -2,9 +2,9 @@
 
 // v5 page-level components, built on the design tokens (Theme.h):
 //
-//  * ChoiceTiles  — large selectable tiles (icon, title, one-line description,
-//                   optional tag) for the one decision a page is about
-//                   (image format, target firmware...). Keyboard: arrows.
+//  * ChoiceTiles  — large selectable tiles (icon, title, a description of up
+//                   to three lines, optional tag) for the one decision a page
+//                   is about (image format, target firmware...). Keyboard: arrows.
 //  * DropZone     — the empty state of a "pick a folder" step: dashed area,
 //                   click or Enter to browse, accepts a dropped folder/file.
 //  * Disclosure   — a card whose body folds away ("Advanced options"), with a

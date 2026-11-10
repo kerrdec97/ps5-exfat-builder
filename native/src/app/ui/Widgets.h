@@ -54,10 +54,12 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
+    void changeEvent(QEvent* e) override;
 
 private:
     void relayout();
     QString m_text;
+    QString m_autoName; // the accessible name this label gave itself
     Qt::TextElideMode m_mode;
 };
 
@@ -140,6 +142,7 @@ private:
     QWidget* m_headerWidget = nullptr;
     QWidget* m_footerWidget = nullptr;
     QLabel* m_title = nullptr;
+    QHBoxLayout* m_titleRow = nullptr;
     bool m_drop = false;
     bool m_selected = false;
 };

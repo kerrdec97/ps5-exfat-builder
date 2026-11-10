@@ -57,7 +57,8 @@ QFont headerFont()
 QString initials(const QString& title)
 {
     QString out;
-    for (const QString& w : title.split(QRegularExpression(QStringLiteral("[\\s:\\-_]+")), Qt::SkipEmptyParts)) {
+    static const QRegularExpression separators(QStringLiteral("[\\s:\\-_]+")); // once, not per tile per paint
+    for (const QString& w : title.split(separators, Qt::SkipEmptyParts)) {
         for (const QChar c : w)
             if (c.isLetterOrNumber()) {
                 out += c.toUpper();

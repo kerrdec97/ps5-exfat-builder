@@ -136,8 +136,6 @@ QString hex(const QColor& c)
 QString stylesheet()
 {
     using namespace color;
-    const QString sans = sansFamily();
-    const QString mono = monoFamily();
     // Placeholders are substituted once; the template never contains a hex.
     // No `color` in the universal rule: a rule's colour is written into the
     // palette of every widget it matches when the widget is polished, and
@@ -238,7 +236,6 @@ QMenu { background: {bg_3}; border: 1px solid {border_3}; border-radius: 12px; p
 QMenu::item { min-height: 32px; padding: 0 14px 0 10px; border-radius: 7px; color: {fg_1}; }
 QMenu::item:selected { background: {bg_4}; color: {fg_0}; }
 QMenu::item:disabled { color: {fg_5}; }
-QMenu::item[destructive="true"] { color: {danger_hi}; }
 QMenu::separator { height: 1px; background: {border_3}; margin: 6px 4px; }
 QMenu::icon { padding-left: 8px; }
 QToolTip { background: {bg_4}; border: 1px solid {border_4}; border-radius: 8px; padding: 6px 10px; color: {fg_1}; }
@@ -315,8 +312,6 @@ QFrame[role="hairline2"] { background: {border_2}; max-height: 1px; min-height: 
     };
     for (const auto& [name, c] : colors)
         qss.replace(QStringLiteral("{") + name + QStringLiteral("}"), hex(c));
-    Q_UNUSED(sans);
-    Q_UNUSED(mono);
     return qss;
 }
 
