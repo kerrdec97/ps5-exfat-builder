@@ -136,6 +136,12 @@ private slots:
         QCOMPARE(json::write(v, {-1, false, false}),
                  QByteArray(R"({"a": {"y": "changed", "b": 3}, "n": 12345678901234567890, "f": 1.50, "new": true})"));
         QCOMPARE(json::write(json::Value(2.0), {-1}), QByteArray("2.0"));
+        // A double is written as Python writes a float, whatever its size.
+        QCOMPARE(json::write(json::Value(-0.0), {-1}), QByteArray("-0.0"));
+        QCOMPARE(json::write(json::Value(1e16), {-1}), QByteArray("1e+16"));
+        QCOMPARE(json::write(json::Value(123456789012345680.0), {-1}), QByteArray("1.2345678901234568e+17"));
+        QCOMPARE(json::write(json::Value(-1234.5), {-1}), QByteArray("-1234.5"));
+        QCOMPARE(json::write(json::Value(9007199254740992.0), {-1}), QByteArray("9007199254740992.0"));
     }
 
     void jsonPythonFloatRepr()

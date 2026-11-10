@@ -21,6 +21,7 @@ constexpr quint32 kEocdSig = 0x06054b50;
 constexpr quint32 kZip64EocdSig = 0x06064b50;
 constexpr quint32 kZip64LocatorSig = 0x07064b50;
 constexpr quint16 kFlagUtf8 = 0x0800;
+constexpr quint16 kFlagEncrypted = 0x0001;
 constexpr quint16 kZip64ExtraId = 0x0001;
 constexpr int kChunk = 1 << 20;
 
@@ -77,11 +78,42 @@ Error ioError(const QString& what, const QFile& f)
     return Error(ErrorCode::IoError, what, f.errorString());
 }
 
+// A name stored without the UTF-8 flag. Many writers (Info-ZIP on Linux and
+// macOS) store UTF-8 there all the same; anything else is in the format's own
+// code page, 437 (not Latin-1, which turns every accented letter into another).
+QString decodeName(const QByteArray& raw, bool utf8Flag)
+{
+    if (utf8Flag || raw.isValidUtf8())
+        return QString::fromUtf8(raw);
+    static const char16_t kCp437High[128] = {
+        0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7, 0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+        0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9, 0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+        0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA, 0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+        0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556, 0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+        0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F, 0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+        0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B, 0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+        0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4, 0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+        0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248, 0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0};
+    QString name;
+    name.reserve(raw.size());
+    for (const char c : raw) {
+        const auto u = static_cast<unsigned char>(c);
+        name += QChar(u < 0x80 ? char16_t(u) : kCp437High[u - 0x80]);
+    }
+    return name;
+}
+
 } // namespace
 
 quint32 crc32(const QByteArray& data, quint32 seed)
 {
-    return quint32(::crc32(seed, reinterpret_cast<const Bytef*>(data.constData()), uInt(data.size())));
+    // zlib takes a 32-bit length; a QByteArray can be larger.
+    uLong crc = seed;
+    constexpr qsizetype kStep = qsizetype(1) << 30;
+    for (qsizetype offset = 0; offset < data.size(); offset += kStep)
+        crc = ::crc32(crc, reinterpret_cast<const Bytef*>(data.constData() + offset),
+                      uInt(std::min(kStep, data.size() - offset)));
+    return quint32(crc);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +227,7 @@ Status Writer::writeEntry(const QString& rawName, Method method, const QDateTime
         }
         if (!deflating) {
             if (!eof) {
-                FW_TRY(writeRaw(QByteArray::fromRawData(in.constData(), int(n.value()))));
+                FW_TRY(writeRaw(QByteArray::fromRawData(in.constData(), qsizetype(n.value()))));
                 outBytes += quint64(n.value());
             }
             continue;
@@ -212,7 +244,7 @@ Status Writer::writeEntry(const QString& rawName, Method method, const QDateTime
                 return Error(ErrorCode::Internal, QStringLiteral("Compression failed."));
             const qint64 produced = qint64(out.size()) - qint64(zs.avail_out);
             if (produced > 0) {
-                FW_TRY(writeRaw(QByteArray::fromRawData(out.constData(), int(produced))));
+                FW_TRY(writeRaw(QByteArray::fromRawData(out.constData(), qsizetype(produced))));
                 outBytes += quint64(produced);
             }
         } while (zs.avail_out == 0 || (eof && rc != Z_STREAM_END));
@@ -269,14 +301,14 @@ Status Writer::addFile(const QString& archiveName, const QString& sourcePath, Me
 
 Status Writer::addData(const QString& archiveName, const QByteArray& data, Method method, const QDateTime& modified)
 {
-    bool done = false;
+    // In pieces like a file: the CRC and deflate calls take 32-bit lengths,
+    // and a buffer may be larger than that.
+    qsizetype offset = 0;
     return writeEntry(archiveName, method, modified, quint64(data.size()),
                       [&](QByteArray& chunk) -> Result<qint64> {
-                          if (done)
-                              return qint64(0);
-                          done = true;
-                          chunk = data;
-                          return qint64(data.size());
+                          chunk = data.mid(offset, kChunk);
+                          offset += chunk.size();
+                          return qint64(chunk.size());
                       },
                       CancellationToken(), nullptr);
 }
@@ -472,9 +504,12 @@ Status Reader::open(const QString& path)
     quint64 count = get16(p + 10);
     quint64 cdSize = get32(p + 12);
     quint64 cdOffset = get32(p + 16);
-    if (count == 0xFFFF || cdSize == 0xFFFFFFFFu || cdOffset == 0xFFFFFFFFu) {
-        if (eocd < 20 || get32(tail.constData() + eocd - 20) != kZip64LocatorSig)
-            return corrupt(QStringLiteral("missing ZIP64 locator"));
+    const bool hasZip64Locator = eocd >= 20 && get32(tail.constData() + eocd - 20) == kZip64LocatorSig;
+    // An archive with exactly 65,535 entries needs no ZIP64 records (Python's
+    // zipfile writes it that way): without a locator the count is the count.
+    if (!hasZip64Locator && (cdSize == 0xFFFFFFFFu || cdOffset == 0xFFFFFFFFu))
+        return corrupt(QStringLiteral("missing ZIP64 locator"));
+    if (hasZip64Locator && (count == 0xFFFF || cdSize == 0xFFFFFFFFu || cdOffset == 0xFFFFFFFFu)) {
         const quint64 z64 = get64(tail.constData() + eocd - 20 + 8);
         if (!f.seek(qint64(z64)))
             return corrupt(QStringLiteral("bad ZIP64 offset"));
@@ -485,9 +520,11 @@ Status Reader::open(const QString& path)
         cdSize = get64(r.constData() + 40);
         cdOffset = get64(r.constData() + 48);
     }
-    if (cdOffset + cdSize > quint64(size) || cdSize > 512ull * 1024 * 1024)
+    // Written so that crafted 64-bit values cannot wrap round.
+    if (cdOffset > quint64(size) || cdSize > quint64(size) - cdOffset || cdSize > 512ull * 1024 * 1024)
         return corrupt(QStringLiteral("central directory out of range"));
-    f.seek(qint64(cdOffset));
+    if (!f.seek(qint64(cdOffset)))
+        return corrupt(QStringLiteral("central directory out of range"));
     const QByteArray cd = f.read(qint64(cdSize));
     if (quint64(cd.size()) != cdSize)
         return corrupt(QStringLiteral("short central directory"));
@@ -508,7 +545,8 @@ Status Reader::open(const QString& path)
         if (pos + 46 + nameLen + extraLen + commentLen > cd.size())
             return corrupt(QStringLiteral("truncated central directory entry"));
         const QByteArray rawName = cd.mid(pos + 46, nameLen);
-        e.name = (flags & kFlagUtf8) ? QString::fromUtf8(rawName) : QString::fromLatin1(rawName);
+        e.name = decodeName(rawName, flags & kFlagUtf8);
+        e.encrypted = flags & kFlagEncrypted;
         // Some writers (Compress-Archive of Windows PowerShell 5, old .NET)
         // store '\' as the separator; everything here expects '/'.
         e.name.replace(u'\\', u'/');
@@ -546,6 +584,10 @@ const Entry* Reader::find(const QString& name) const
 Status Reader::read(const Entry& entry, const std::function<Status(const QByteArray&)>& sink,
                     const CancellationToken& token, ProgressReporter* progress)
 {
+    if (entry.encrypted)
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 is password-protected in %2. Unpack the archive with its password first.")
+                         .arg(entry.name, QFileInfo(m_path).fileName()));
     if (entry.method != Method::Store && entry.method != Method::Deflate)
         return Error(ErrorCode::Unsupported, QStringLiteral("%1 uses an unsupported compression method.").arg(entry.name));
     QFile f(toLongPath(m_path));
@@ -609,10 +651,10 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
                 // otherwise inflate far past it and past readAll's limit).
                 if (produced + quint64(n) > entry.uncompressedSize)
                     return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(entry.name));
-                const QByteArray chunk = QByteArray::fromRawData(out.constData(), int(n));
+                const QByteArray chunk = QByteArray::fromRawData(out.constData(), qsizetype(n));
                 crc = quint32(::crc32(crc, reinterpret_cast<const Bytef*>(chunk.constData()), uInt(n)));
                 produced += quint64(n);
-                FW_TRY(sink(QByteArray(chunk.constData(), int(n))));
+                FW_TRY(sink(QByteArray(chunk.constData(), qsizetype(n))));
                 if (progress)
                     progress->advance(n);
             }

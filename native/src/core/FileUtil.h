@@ -30,7 +30,9 @@ QString formatCount(qint64 n); // "18,442"
 QString toLongPath(const QString& path);
 // True if `child` is `parent` or inside it (case-insensitive on Windows).
 bool isSameOrInside(const QString& child, const QString& parent);
-// Removes characters Windows forbids in file names.
+// Replaces the characters Windows forbids in file names by '_' and drops
+// trailing dots and spaces. Reserved device names (CON, NUL...) are left to
+// hostFileName() in PathSafety.
 QString sanitizeFileName(const QString& name);
 // `path` if nothing exists there (nor its .part), else "name (2).ext", "name (3).ext"...
 QString uniquePath(const QString& path);
@@ -154,15 +156,23 @@ struct FileTree {
 struct ScanOptions {
     bool includeHidden = true;
     bool followSymlinks = false;
-    // Relative paths (or simple `*` globs on the file name) to skip.
+    // Relative paths (or simple `*` globs on the file name) to skip. A folder
+    // that matches is skipped with everything in it.
     QStringList excludes;
 };
 
 Result<FileTree> scanTree(const QString& root, const CancellationToken& token, const ScanOptions& options = {});
 
-// Removes a directory tree. Refuses to touch drive roots, the user's home
-// folder and anything outside `mustBeInside` when it is given.
+// Removes a directory tree. Refuses a protected location (see below) and
+// anything outside `mustBeInside` when it is given.
 Status removeTreeSafely(const QString& path, const QString& mustBeInside = {});
+
+// True for a folder that is never deleted as a whole, whatever a job was told
+// its source is: a drive root, the user's home folder and the folders it lies
+// in, the Desktop, Documents, Downloads, Pictures, Music and Videos folders,
+// and on Windows the Windows, Program Files and ProgramData folders. Folders
+// inside them are not protected.
+bool isProtectedLocation(const QString& path);
 
 // Deletes a folder and everything in it like QDir::removeRecursively(), but
 // never descends into a junction or symbolic link: the link itself is removed

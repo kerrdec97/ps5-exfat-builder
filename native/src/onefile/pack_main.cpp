@@ -400,10 +400,11 @@ int cmdPack(const std::map<std::wstring, std::wstring>& opt)
     t.crc32 = trailerCrc(t);
     ok = ok && writeAll(oh, &t, sizeof(t));
     ok = FlushFileBuffers(oh) && ok;
+    const DWORD writeError = GetLastError(); // before CloseHandle and DeleteFileW replace it
     CloseHandle(oh);
     if (!ok) {
         DeleteFileW(extendedPath(partial).c_str());
-        return fail(L"writing " + partial + L" failed: " + errorText(GetLastError()));
+        return fail(L"writing " + partial + L" failed: " + errorText(writeError));
     }
     if (!MoveFileExW(extendedPath(partial).c_str(), extendedPath(outPath).c_str(), MOVEFILE_REPLACE_EXISTING)) {
         const DWORD e = GetLastError();
@@ -523,8 +524,11 @@ int wmain(int argc, wchar_t** argv)
     if (argc < 2)
         return fail(L"usage: fw_onefile_pack pack|list|verify ... (see pack_main.cpp)");
     const std::wstring cmd = argv[1];
-    if ((cmd == L"list" || cmd == L"verify") && argc == 3)
+    if (cmd == L"list" || cmd == L"verify") {
+        if (argc != 3)
+            return fail(L"usage: fw_onefile_pack " + cmd + L" <packed exe>");
         return cmd == L"list" ? cmdList(argv[2]) : cmdVerify(argv[2]);
+    }
     if (cmd != L"pack")
         return fail(L"unknown command " + cmd);
     std::map<std::wstring, std::wstring> opt;

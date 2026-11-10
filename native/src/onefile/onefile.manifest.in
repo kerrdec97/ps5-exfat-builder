@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
   <assemblyIdentity type="win32" name="kerrdec97.exFATImageBuilder.Farewell.Launcher" version="@PROJECT_VERSION@.0" processorArchitecture="amd64"/>
-  <description>PS5 exFAT Image Builder - Farewell Edition (single-file launcher)</description>
+  <description>exFAT Image Builder (single-file launcher)</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

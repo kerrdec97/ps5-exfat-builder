@@ -6,6 +6,7 @@
 #include "jobs/JobHistory.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -44,7 +45,20 @@ JobQueue::JobQueue(SettingsStore& settings, const JobFactory& factory, QObject* 
 
 JobQueue::~JobQueue()
 {
-    shutdown(15000);
+    if (!shutdown(15000)) {
+        // A worker that does not reach a checkpoint keeps the closed app in
+        // memory: the log says which jobs were still running.
+        QStringList titles;
+        {
+            std::lock_guard lock(m_mutex);
+            for (const auto& e : m_entries)
+                if (e->rec.isActive())
+                    titles << e->rec.title;
+        }
+        Log(QStringLiteral("queue")).warn(QStringLiteral("Still waiting for a job to stop after 15 s. Running when the app closed: %1")
+                                              .arg(titles.join(QStringLiteral("; "))));
+        Logger::instance().flush();
+    }
     // Workers hold raw pointers into m_entries (their progress reporters), so
     // they must all be gone before the members are destroyed. Cancellation has
     // been requested and tool processes killed; this returns promptly.
@@ -134,6 +148,8 @@ void JobQueue::pauseJob(const QString& id)
             return;
         e->rec.state = JobState::Paused;
     }
+    if (e->reporter) // created and reset on this thread only
+        e->reporter->setPaused(true); // the clocks and the rate stand still too
     e->cancel.pause();
     emit jobChanged(id);
 }
@@ -149,6 +165,8 @@ void JobQueue::resumeJob(const QString& id)
             return;
         e->rec.state = JobState::Running;
     }
+    if (e->reporter)
+        e->reporter->setPaused(false);
     e->cancel.resume();
     emit jobChanged(id);
 }
@@ -426,8 +444,8 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
         Result<JobOutcome> result = Error(ErrorCode::Internal, QStringLiteral("The job did not run."));
         {
             const QString tempParent = settings.string(QStringLiteral("storage.tempFolder")).trimmed();
-            TempDir temp(QStringLiteral("job-") + id,
-                         (!tempParent.isEmpty() && QFileInfo(tempParent).isDir()) ? tempParent : QString());
+            const bool useTempParent = !tempParent.isEmpty() && QFileInfo(tempParent).isDir();
+            TempDir temp(QStringLiteral("job-") + id, useTempParent ? tempParent : QString());
             JobContext ctx;
             ctx.jobId = id;
             ctx.token = token;
@@ -435,6 +453,9 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
             ctx.log = Log(job->kind(), id);
             ctx.settings = settings;
             ctx.tempDir = temp.path();
+            if (!tempParent.isEmpty() && !useTempParent) // explains a later "Not enough space" on the system drive
+                ctx.log.warn(QStringLiteral("The temporary folder %1 is not available; using %2 for this job.")
+                                 .arg(QDir::toNativeSeparators(tempParent), QDir::toNativeSeparators(temp.path())));
             try {
                 if (!temp.isValid())
                     result = Error(ErrorCode::IoError, QStringLiteral("Could not create a temporary folder for this job."));
@@ -451,6 +472,9 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
             if (settings.boolean(QStringLiteral("advanced.keepJobTempFolders")))
                 temp.keep();
         }
+        // The job ends here, on its own thread, before the queue hears of the
+        // result and lets go of the reporter the job was given.
+        job.reset();
         if (self)
             QMetaObject::invokeMethod(self.data(), [self, id, result = std::move(result)]() mutable {
                 if (self)
@@ -505,7 +529,7 @@ bool JobQueue::tryAutoRetry(const std::shared_ptr<Entry>& e, const Error& error)
     }
     Log(QStringLiteral("queue"), e->rec.id)
         .warn(QStringLiteral("Failed (%1); retrying in %2 s, attempt %3 of %4")
-                  .arg(error.message).arg(delay).arg(e->rec.attempt).arg(maxRetries + 1));
+                  .arg(error.message, QString::number(delay), QString::number(e->rec.attempt), QString::number(maxRetries + 1)));
     return true;
 }
 
@@ -559,7 +583,9 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
     }
     Log log(QStringLiteral("queue"), id);
     if (snapshot.state == JobState::Succeeded)
-        log.info(QStringLiteral("Finished: %1 — %2").arg(snapshot.title, snapshot.outcome ? snapshot.outcome->summary : QString()));
+        log.info(snapshot.outcome && !snapshot.outcome->summary.isEmpty()
+                     ? QStringLiteral("Finished: %1 — %2").arg(snapshot.title, snapshot.outcome->summary)
+                     : QStringLiteral("Finished: %1").arg(snapshot.title));
     else if (snapshot.state == JobState::Cancelled)
         log.warn(QStringLiteral("Cancelled: %1").arg(snapshot.title));
     else

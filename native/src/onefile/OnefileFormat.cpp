@@ -231,6 +231,22 @@ int compareVersions(std::string_view a, std::string_view b)
     return 0;
 }
 
+namespace {
+// CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or without an extension. The
+// launcher could create such a file through a \\?\ path, but Explorer and most
+// tools could then neither open nor delete it.
+bool isReservedDeviceName(std::string_view part)
+{
+    std::string stem(part.substr(0, part.find('.')));
+    for (char& c : stem)
+        c = (c >= 'a' && c <= 'z') ? char(c - 'a' + 'A') : c;
+    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL")
+        return true;
+    return stem.size() == 4 && (stem.compare(0, 3, "COM") == 0 || stem.compare(0, 3, "LPT") == 0) && stem[3] >= '1'
+        && stem[3] <= '9';
+}
+} // namespace
+
 bool isValidRelativePath(std::string_view p)
 {
     if (p.empty() || p.size() > 4096 || p.front() == '/' || p.back() == '/')
@@ -243,6 +259,8 @@ bool isValidRelativePath(std::string_view p)
             return false;
         if (part.back() == ' ' || part.back() == '.')
             return false; // Windows would silently drop it
+        if (isReservedDeviceName(part))
+            return false;
         for (const char c : part) {
             const auto u = static_cast<unsigned char>(c);
             if (u < 0x20 || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')

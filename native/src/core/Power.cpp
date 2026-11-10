@@ -109,7 +109,9 @@ Status perform(Action action)
     case Action::Shutdown:
     case Action::Restart: {
         if (!enableShutdownPrivilege())
-            return Error(ErrorCode::PermissionDenied, QStringLiteral("Windows did not allow this app to shut down the computer."));
+            return Error(ErrorCode::PermissionDenied,
+                         QStringLiteral("Windows did not allow this app to %1 the computer.")
+                             .arg(action == Action::Restart ? QStringLiteral("restart") : QStringLiteral("shut down")));
         const UINT flags = action == Action::Restart ? EWX_REBOOT : (EWX_SHUTDOWN | EWX_POWEROFF);
         if (!ExitWindowsEx(flags, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED))
             return Error(ErrorCode::PermissionDenied, QStringLiteral("Windows did not allow the computer to %1.")

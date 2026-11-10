@@ -76,6 +76,11 @@ public:
     void setCurrentItem(const QString& item);
     void setTotal(qint64 total);
 
+    // The job was paused / resumed (the queue says so). While paused the
+    // clocks stand still, and the pause counts neither as elapsed time nor
+    // into the rate, so the time left does not jump after Resume.
+    void setPaused(bool paused);
+
     // Push a snapshot now, ignoring the throttle (phase change, completion).
     void flush();
 
@@ -89,6 +94,7 @@ private:
     void maybeEmit(bool force);
     ProgressSnapshot snapshotLocked() const; // m_mutex held
     void enterPhaseLocked(int index, qint64 total, qint64 filesTotal, bool unitIsBytes); // m_mutex held
+    std::chrono::steady_clock::time_point clockNowLocked() const;                        // m_mutex held
 
     Sink m_sink;
     std::chrono::milliseconds m_throttle;
@@ -108,6 +114,8 @@ private:
     qint64 m_totalMs = 0;         // valid once finished
     bool m_started = false;
     bool m_finished = false;
+    bool m_paused = false;
+    std::chrono::steady_clock::time_point m_pausedAt{}; // while paused, this is "now" for the clocks
     qint64 m_total = 0;
     qint64 m_filesTotal = 0;
     bool m_unitIsBytes = true;

@@ -23,14 +23,8 @@ Value::Value(double d) : m_type(Type::Number)
         m_type = Type::Null;
         return;
     }
-    if (std::floor(d) == d && std::fabs(d) < 1e16) {
-        // Python writes floats with a ".0"; keep that so round trips match.
-        m_text = QString::number(qint64(d)) + QStringLiteral(".0");
-        return;
-    }
-    char buf[64];
-    auto r = std::to_chars(buf, buf + sizeof(buf), d);
-    m_text = QString::fromLatin1(buf, int(r.ptr - buf));
+    // As Python writes a float ("2.0", "-0.0", "1e+16"), so round trips match.
+    m_text = pythonFloatRepr(d);
 }
 
 Value Value::numberLiteral(const QString& literal)

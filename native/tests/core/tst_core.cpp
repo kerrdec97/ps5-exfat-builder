@@ -13,6 +13,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSignalSpy>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -248,6 +249,47 @@ private slots:
         QCOMPARE(formatTimeLeft(30 * 1000), QStringLiteral("Less than a minute left"));
         QCOMPARE(formatTimeLeft(125 * 60 * 1000), QStringLiteral("About 2 h 5 min left"));
         QCOMPARE(formatRate(418.0 * 1024 * 1024), QStringLiteral("418 MB/s"));
+        // At a unit boundary the rounded value decides the unit.
+        QCOMPARE(formatBytes(1023), QStringLiteral("1023 B"));
+        QCOMPARE(formatBytes(1024), QStringLiteral("1.0 KB"));
+        QCOMPARE(formatBytes(1024 * 1024 - 1), QStringLiteral("1.0 MB")); // not "1024.0 KB"
+        QCOMPARE(formatBytes(qint64(1024) * 1024 * 1024 - 1), QStringLiteral("1.0 GB"));
+        QCOMPARE(formatBytes(qint64(1023.9 * 1024)), QStringLiteral("1023.9 KB"));
+        QCOMPARE(formatRate(0), QStringLiteral("—"));
+        QCOMPARE(formatRate(100), QStringLiteral("<1 KB/s")); // not "0 KB/s"
+        QCOMPARE(formatRate(600), QStringLiteral("1 KB/s"));
+        QCOMPARE(formatRate(1024.0 * 1024 - 1), QStringLiteral("1 MB/s")); // not "1024 KB/s"
+        QCOMPARE(formatRate(1024.0 * 1024 * 1024 - 1), QStringLiteral("1.0 GB/s"));
+        QCOMPARE(formatRate(2.5 * 1024 * 1024 * 1024), QStringLiteral("2.5 GB/s"));
+    }
+
+    // The job monitor's clocks and the rate stand still while a job is
+    // paused, and the pause is not part of the elapsed time afterwards.
+    void pauseStopsTheClocks()
+    {
+        ProgressReporter p({}, 50);
+        p.setPhases({QStringLiteral("Write"), QStringLiteral("Verify")});
+        p.beginPhase(0, 1000);
+        QTest::qWait(40);
+        p.setPaused(true);
+        const auto paused = p.snapshot();
+        QVERIFY(paused.elapsedMs >= 30);
+        QTest::qWait(120);
+        QCOMPARE(p.snapshot().elapsedMs, paused.elapsedMs);
+        QCOMPARE(p.snapshot().phaseMs, paused.phaseMs);
+        p.setPaused(false);
+        QTest::qWait(40);
+        const auto resumed = p.snapshot();
+        QVERIFY2(resumed.elapsedMs >= paused.elapsedMs + 30, qPrintable(QString::number(resumed.elapsedMs)));
+        QVERIFY2(resumed.elapsedMs < paused.elapsedMs + 110, qPrintable(QString::number(resumed.elapsedMs))); // the 120 ms are not in it
+        QCOMPARE(resumed.phaseMs.value(0), resumed.elapsedMs);
+        // A slow phase counted in steps still gets a time left.
+        ProgressReporter slow([](const ProgressSnapshot&) {}, 0);
+        slow.beginPhase(0, 10, 0, /*unitIsBytes=*/false);
+        QTest::qWait(1200);
+        slow.advance(1); // less than one step a second
+        QVERIFY(slow.snapshot().ratePerSec > 0.0 && slow.snapshot().ratePerSec < 1.0);
+        QVERIFY2(slow.snapshot().etaMs > 0, qPrintable(QString::number(slow.snapshot().etaMs)));
     }
 
     void loggerWritesTextAndJsonAndRingBuffer()
@@ -480,6 +522,24 @@ private slots:
         QVERIFY(!removeTreeSafely(inside, m_root.filePath(QStringLiteral("elsewhere"))).ok());
         QVERIFY(removeTreeSafely(m_root.filePath(QStringLiteral("del")), m_root.path()).ok());
         QVERIFY(!QFileInfo::exists(inside));
+        // What is never deleted as a whole (asked, not tried).
+        QVERIFY(isProtectedLocation(QDir::rootPath()));
+        QVERIFY(isProtectedLocation(QDir::homePath()));
+        QVERIFY(isProtectedLocation(QFileInfo(QDir::homePath()).absolutePath())); // "C:/Users"
+        for (const auto location : {QStandardPaths::DesktopLocation, QStandardPaths::DocumentsLocation, QStandardPaths::DownloadLocation}) {
+            const QString folder = QStandardPaths::writableLocation(location);
+            if (folder.isEmpty())
+                continue;
+            QVERIFY2(isProtectedLocation(folder), qPrintable(folder));
+            QVERIFY2(isProtectedLocation(folder + QStringLiteral("/sub/..")), qPrintable(folder));
+            QVERIFY2(!isProtectedLocation(folder + QStringLiteral("/PS5/game-app0")), qPrintable(folder));
+        }
+#ifdef Q_OS_WIN
+        QVERIFY(isProtectedLocation(qEnvironmentVariable("SystemRoot")));
+        QVERIFY(isProtectedLocation(QDir::homePath().toUpper()));
+#endif
+        QVERIFY(!isProtectedLocation(m_root.path()));
+        QVERIFY(!isProtectedLocation(inside));
     }
 
     void isSameOrInsideHandlesPrefixes()
@@ -576,6 +636,10 @@ private slots:
         auto r = runProcess(spec, CancellationToken());
         QVERIFY(!r.ok());
         QCOMPARE(r.error().code, ErrorCode::ExternalToolFailed);
+        // An absolute path is a program only when it is a file.
+        QCOMPARE(findExecutable(fwtest::helperPath()), fwtest::helperPath());
+        QVERIFY(findExecutable(m_root.path()).isEmpty());
+        QVERIFY(findExecutable(spec.program).isEmpty());
     }
 };
 

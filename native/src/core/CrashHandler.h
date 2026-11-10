@@ -1,8 +1,9 @@
 #pragma once
 
 // Last-resort crash reporting. Windows: an unhandled exception writes a
-// minidump and a short text report into the log folder (and flushes the logs)
-// before the process ends. Everywhere: std::terminate is logged and flushed.
+// minidump and a short text report into the log folder before the process
+// ends (the logger is not touched there: the crash may have happened while a
+// log sink held its lock). Everywhere: std::terminate is logged and flushed.
 // The next start can offer to include the dump in a problem report.
 
 #include <QString>

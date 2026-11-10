@@ -33,6 +33,7 @@ struct Entry {
     quint64 uncompressedSize = 0;
     quint64 localHeaderOffset = 0;
     QDateTime modified;
+    bool encrypted = false; // password-protected: listed, but read() refuses it
     bool isDirectory() const { return name.endsWith(u'/'); }
 };
 

@@ -347,6 +347,108 @@ private slots:
         QVERIFY(QFileInfo(all + QStringLiteral("/Game_ Two-app0/sce_sys/param.json")).isFile());
     }
 
+    // Names stored without the UTF-8 flag: UTF-8 all the same (Info-ZIP on
+    // Linux and macOS), or the format's code page 437; never Latin-1.
+    void namesWithoutTheUtf8Flag()
+    {
+        const auto clearUtf8Flag = [](QByteArray& bytes) {
+            // General-purpose flags: offset 6 of a local header, 8 of a central one.
+            for (qsizetype at = bytes.indexOf("PK\x03\x04"); at >= 0; at = bytes.indexOf("PK\x03\x04", at + 4))
+                bytes[at + 7] = char(bytes[at + 7] & ~0x08);
+            for (qsizetype at = bytes.indexOf("PK\x01\x02"); at >= 0; at = bytes.indexOf("PK\x01\x02", at + 4))
+                bytes[at + 9] = char(bytes[at + 9] & ~0x08);
+        };
+        const QString z = m_root.filePath(QStringLiteral("names.zip"));
+        const QByteArray big(3 * 1024 * 1024 + 5, 'q'); // several chunks through addData
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QString::fromUtf8("Pok\xc3\xa9mon/d\xc3\xa9mo.bin"), "utf8").ok());
+            QVERIFY(w.addData(QStringLiteral("XXXXXXX/big.bin"), big).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        clearUtf8Flag(bytes);
+        const QByteArray cp437("M\x81nchen/\x82t\x82.bin"); // "München/été.bin" in code page 437
+        QCOMPARE(cp437.size(), qsizetype(15));
+        QCOMPARE(bytes.count("XXXXXXX/big.bin"), 2);
+        bytes.replace("XXXXXXX/big.bin", cp437);
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QCOMPARE(int(r.entries().size()), 2);
+        QCOMPARE(r.entries()[0].name, QString::fromUtf8("Pok\xc3\xa9mon/d\xc3\xa9mo.bin"));
+        QCOMPARE(r.entries()[1].name, QString::fromUtf8("M\xc3\xbcnchen/\xc3\xa9t\xc3\xa9.bin"));
+        QVERIFY(r.verifyAll(CancellationToken()).ok());
+        auto all = r.readAll(r.entries()[1]);
+        QVERIFY(all.ok());
+        QCOMPARE(all.value(), big);
+        QCOMPARE(zip::crc32(big), r.entries()[1].crc32);
+    }
+
+    // A password-protected entry is named as such, not reported as damaged;
+    // a zipped game with one is refused before the job starts.
+    void passwordProtectedEntriesAreNamed()
+    {
+        const QString z = m_root.filePath(QStringLiteral("locked.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("game/eboot.bin"), QByteArray(1000, 'e')).ok());
+            QVERIFY(w.finish().ok());
+        }
+        QByteArray bytes = readFile(z);
+        bytes[6] = char(bytes[6] | 0x01);
+        const qsizetype cd = bytes.indexOf("PK\x01\x02");
+        QVERIFY(cd > 0);
+        bytes[cd + 8] = char(bytes[cd + 8] | 0x01);
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        QVERIFY(r.entries().front().encrypted);
+        const Status st = r.verifyAll(CancellationToken());
+        QCOMPARE(st.error().code, ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("password-protected")), qPrintable(st.error().message));
+        const Status source = archive::checkZipSource(z);
+        QCOMPARE(source.error().code, ErrorCode::Unsupported);
+        QVERIFY2(source.error().message.contains(QStringLiteral("password-protected")), qPrintable(source.error().message));
+    }
+
+    // Exactly 65,535 entries fit the classic end record: such an archive has
+    // no ZIP64 records (Python's zipfile writes it that way) and is valid.
+    void archiveWith65535EntriesAndNoZip64Records()
+    {
+        const QString z = m_root.filePath(QStringLiteral("many.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (int i = 0; i < 65535; ++i)
+                QVERIFY(w.addData(QStringLiteral("f%1").arg(i), QByteArray(), zip::Method::Store).ok());
+            QVERIFY(w.finish().ok());
+        }
+        // The writer added ZIP64 records (it does from 65,535 entries on):
+        // take them out and write the real values into the classic record.
+        QByteArray bytes = readFile(z);
+        const qsizetype eocd = bytes.size() - 22;
+        const qsizetype record = eocd - 20 - 56;
+        QVERIFY(bytes.mid(eocd, 4) == QByteArray("PK\x05\x06") && bytes.mid(eocd - 20, 4) == QByteArray("PK\x06\x07")
+                && bytes.mid(record, 4) == QByteArray("PK\x06\x06"));
+        QByteArray classic = bytes.mid(eocd);
+        classic.replace(12, 4, bytes.mid(record + 40, 4)); // size of the central directory
+        classic.replace(16, 4, bytes.mid(record + 48, 4)); // its offset
+        bytes = bytes.left(record) + classic;
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        zip::Reader r;
+        const Status st = r.open(z);
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        QCOMPARE(int(r.entries().size()), 65535);
+        QCOMPARE(r.entries().back().name, QStringLiteral("f65534"));
+        // Without a locator, the 32-bit "see ZIP64" marks are still an error.
+        bytes.replace(bytes.size() - 22 + 16, 4, QByteArray("\xFF\xFF\xFF\xFF"));
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        QVERIFY(!r.open(z).ok());
+    }
+
     // readAll's limit also holds for a declared size of 2^63 or more.
     void readAllLimitIsUnsigned()
     {

@@ -110,9 +110,11 @@ std::vector<HistoryEntry> JobHistory::recent(int limit) const
 Status JobHistory::clear()
 {
     std::lock_guard lock(m_mutex);
-    m_cache = std::vector<HistoryEntry>{};
+    // The file first: if it cannot be removed the history is still there, and
+    // the page must not show it as empty until the next start.
     if (QFile::exists(m_path) && !QFile::remove(m_path))
         return Error(ErrorCode::IoError, QStringLiteral("Could not clear the job history."));
+    m_cache = std::vector<HistoryEntry>{};
     return success();
 }
 

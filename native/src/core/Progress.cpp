@@ -42,7 +42,7 @@ void ProgressReporter::setPhases(const QStringList& names, const QList<double>& 
 void ProgressReporter::enterPhaseLocked(int index, qint64 total, qint64 filesTotal, bool unitIsBytes)
 {
     const int next = std::clamp(index, 0, std::max(0, int(m_phaseNames.size()) - 1));
-    const auto now = Clock::now();
+    const auto now = clockNowLocked();
     if (!m_started) {
         m_started = true;
         m_startedAt = now;
@@ -163,10 +163,38 @@ void ProgressReporter::finish()
         m_finished = true;
         if (!m_started)
             return;
-        const auto now = Clock::now();
+        const auto now = clockNowLocked();
         if (m_phaseIndex >= 0 && m_phaseIndex < m_phaseMs.size())
             m_phaseMs[m_phaseIndex] += msBetween(m_phaseStartedAt, now);
         m_totalMs = msBetween(m_startedAt, now);
+    }
+    maybeEmit(true);
+}
+
+Clock::time_point ProgressReporter::clockNowLocked() const
+{
+    return m_paused ? m_pausedAt : Clock::now();
+}
+
+void ProgressReporter::setPaused(bool paused)
+{
+    {
+        std::lock_guard lock(m_mutex);
+        if (paused == m_paused || m_finished)
+            return;
+        const auto now = Clock::now();
+        m_paused = paused;
+        if (paused) {
+            m_pausedAt = now;
+        } else {
+            // Move the start marks by the length of the pause, and measure
+            // the rate afresh from here.
+            const auto pause = now - m_pausedAt;
+            m_startedAt += pause;
+            m_phaseStartedAt += pause;
+            m_rateT0 = now;
+            m_rateDone0 = m_done.load(std::memory_order_relaxed);
+        }
     }
     maybeEmit(true);
 }
@@ -192,8 +220,13 @@ ProgressSnapshot ProgressReporter::snapshotLocked() const
     s.unitIsBytes = m_unitIsBytes;
     s.indeterminate = (m_total == 0);
     s.ratePerSec = m_rate;
-    if (m_rate > 1.0 && s.total > 0)
-        s.etaMs = qint64(double(s.total - s.done) / m_rate * 1000.0);
+    // Bytes below 1 B/s are noise; a phase counted in files or steps can be
+    // far slower than one unit a second and still has a time left.
+    if (m_rate > (m_unitIsBytes ? 1.0 : 0.0) && s.total > 0) {
+        const double eta = double(s.total - s.done) / m_rate * 1000.0;
+        if (eta < 8.64e10) // beyond 1000 days it is no estimate
+            s.etaMs = qint64(eta);
+    }
     s.currentItem = m_currentItem;
 
     double sumW = 0, before = 0;
@@ -220,7 +253,7 @@ ProgressSnapshot ProgressReporter::snapshotLocked() const
             s.elapsedMs = m_totalMs;
             s.phaseElapsedMs = s.phaseMs.value(m_phaseIndex, 0);
         } else {
-            const auto now = Clock::now();
+            const auto now = clockNowLocked();
             s.elapsedMs = msBetween(m_startedAt, now);
             s.phaseElapsedMs = msBetween(m_phaseStartedAt, now);
             if (m_phaseIndex >= 0 && m_phaseIndex < s.phaseMs.size())

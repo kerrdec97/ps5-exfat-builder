@@ -256,7 +256,9 @@ Status SettingsStore::load()
                             .arg(QFileInfo(aside).fileName());
         } else {
             QJsonObject root = doc.object();
-            int version = root.value(QStringLiteral("schemaVersion")).toInt(1);
+            // Never below 0: a hand-edited huge negative number would make the
+            // loop below count for minutes.
+            int version = std::max(0, root.value(QStringLiteral("schemaVersion")).toInt(1));
             QJsonObject values = root.value(QStringLiteral("values")).toObject();
             while (version < kSchemaVersion) {
                 if (auto it = migrations().find(version); it != migrations().end())

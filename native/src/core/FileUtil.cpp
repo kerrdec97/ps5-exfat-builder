@@ -12,6 +12,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QStandardPaths>
 #include <QStorageInfo>
 
 #ifdef Q_OS_WIN
@@ -44,6 +45,12 @@ QString formatBytes(qint64 bytes)
     }
     if (u == 0)
         return QStringLiteral("%1 B").arg(bytes);
+    // The unit is chosen from the rounded value: 1,048,575 bytes is "1.0 MB",
+    // not "1024.0 KB".
+    if (u < 5 && v >= 1023.95) {
+        v /= 1024.0;
+        ++u;
+    }
     return QStringLiteral("%1 %2").arg(QString::number(v, 'f', 1), QLatin1String(units[u]));
 }
 
@@ -51,12 +58,16 @@ QString formatRate(double bytesPerSec)
 {
     if (bytesPerSec <= 0)
         return QStringLiteral("—");
-    const qint64 b = qint64(bytesPerSec);
-    if (b < 1024 * 1024)
-        return QStringLiteral("%1 KB/s").arg(QString::number(bytesPerSec / 1024.0, 'f', 0));
-    if (b < 1024LL * 1024 * 1024)
-        return QStringLiteral("%1 MB/s").arg(QString::number(bytesPerSec / (1024.0 * 1024.0), 'f', 0));
-    return QStringLiteral("%1 GB/s").arg(QString::number(bytesPerSec / (1024.0 * 1024.0 * 1024.0), 'f', 1));
+    // As above: what rounds to 1024 of a unit is 1 of the next one.
+    const double kb = bytesPerSec / 1024.0;
+    if (kb < 0.5)
+        return QStringLiteral("<1 KB/s"); // would print as "0 KB/s"
+    if (kb < 1023.5)
+        return QStringLiteral("%1 KB/s").arg(QString::number(kb, 'f', 0));
+    const double mb = kb / 1024.0;
+    if (mb < 1023.5)
+        return QStringLiteral("%1 MB/s").arg(QString::number(mb, 'f', 0));
+    return QStringLiteral("%1 GB/s").arg(QString::number(mb / 1024.0, 'f', 1));
 }
 
 QString formatTimeLeft(qint64 ms)
@@ -214,7 +225,7 @@ Status PartFile::commit(bool replaceExisting)
     if (QFileInfo::exists(m_final)) {
         if (!replaceExisting)
             return Error(ErrorCode::AlreadyExists,
-                         QStringLiteral("%1 already exists. Choose another name or output folder.")
+                         QStringLiteral("%1 already exists. Choose another name or folder.")
                              .arg(QFileInfo(m_final).fileName()));
         // Set the old file aside first so a failed rename can be undone (audit M2).
         // A name nobody uses, so a user's own "<name>.old" is never touched.
@@ -404,7 +415,8 @@ Result<QStringList> checkOutputVolume(const QString& outputFolder, qint64 larges
     constexpr qint64 k4GiB = 4LL * 1024 * 1024 * 1024;
     if ((fs == u"FAT32" || fs == u"FAT" || fs == u"VFAT" || fs == u"MSDOS") && largestFileBytes >= k4GiB) // FAT32 holds up to 4 GiB - 1
         return Error(ErrorCode::Unsupported,
-                     QStringLiteral("%1 is formatted as FAT32, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.").arg(drive),
+                     QStringLiteral("%1 is formatted as %2, which cannot hold files of 4 GB or more. Choose an NTFS or exFAT drive.")
+                         .arg(drive, fs == u"FAT32" ? QStringLiteral("FAT32") : QStringLiteral("FAT")),
                      QStringLiteral("largest file %1 bytes").arg(largestFileBytes));
     QStringList warnings;
     if (v.isNetwork)
@@ -488,9 +500,11 @@ Result<bool> filesEqual(const QString& a, const QString& b, const CancellationTo
 {
     QFile fa(toLongPath(a)), fb(toLongPath(b));
     if (!fa.open(QIODevice::ReadOnly))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(a), fa.errorString());
+        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(QFileInfo(a).fileName()),
+                     a + QStringLiteral(": ") + fa.errorString());
     if (!fb.open(QIODevice::ReadOnly))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(b), fb.errorString());
+        return Error(ErrorCode::IoError, QStringLiteral("Could not open %1.").arg(QFileInfo(b).fileName()),
+                     b + QStringLiteral(": ") + fb.errorString());
     if (fa.size() != fb.size())
         return false;
     QByteArray ba, bb;
@@ -696,15 +710,35 @@ Status finishWrittenFile(QFile& file, const QString& displayName, const QDateTim
     return success();
 }
 
+bool isProtectedLocation(const QString& path)
+{
+    const QString abs = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (QDir(abs).isRoot() || abs.size() <= 3)
+        return true;
+    // The home folder and everything it lies in ("C:/Users").
+    if (isSameOrInside(QDir::homePath(), abs))
+        return true;
+    QStringList folders;
+    for (const auto location : {QStandardPaths::DesktopLocation, QStandardPaths::DocumentsLocation,
+                                QStandardPaths::DownloadLocation, QStandardPaths::PicturesLocation,
+                                QStandardPaths::MusicLocation, QStandardPaths::MoviesLocation})
+        folders << QStandardPaths::writableLocation(location);
+#ifdef Q_OS_WIN
+    for (const char* variable : {"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"})
+        folders << qEnvironmentVariable(variable);
+#endif
+    return std::any_of(folders.cbegin(), folders.cend(), [&](const QString& folder) {
+        return !folder.isEmpty() && isSameOrInside(abs, folder) && isSameOrInside(folder, abs);
+    });
+}
+
 Status removeTreeSafely(const QString& path, const QString& mustBeInside)
 {
     const QFileInfo fi(path);
     if (!fi.exists())
         return success();
     const QString abs = QDir::cleanPath(fi.absoluteFilePath());
-    const QString home = QDir::cleanPath(QDir::homePath());
-    const bool isRoot = QDir(abs).isRoot() || abs.size() <= 3;
-    if (isRoot || abs.compare(home, Qt::CaseInsensitive) == 0)
+    if (isProtectedLocation(abs))
         return Error(ErrorCode::PermissionDenied, QStringLiteral("Refused to delete %1.").arg(QDir::toNativeSeparators(abs)));
     if (!mustBeInside.isEmpty() && !isSameOrInside(abs, mustBeInside))
         return Error(ErrorCode::PermissionDenied,

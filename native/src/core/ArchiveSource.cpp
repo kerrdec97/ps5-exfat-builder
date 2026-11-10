@@ -89,6 +89,10 @@ Result<ZipGame> inspectZip(const QString& zipPath)
     for (const zip::Entry& e : r.entries()) {
         if (e.isDirectory() || !e.name.startsWith(g.rootPrefix, Qt::CaseInsensitive))
             continue;
+        if (e.encrypted) // said before the job starts, not after half the archive is unpacked
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("%1 is password-protected. Unpack it and choose the game's folder.")
+                             .arg(QFileInfo(zipPath).fileName()));
         bytes = e.uncompressedSize > kMaxBytes - bytes ? kMaxBytes : bytes + e.uncompressedSize;
         ++g.files;
         if (e.name.compare(g.rootPrefix + QStringLiteral("sce_sys/param.json"), Qt::CaseInsensitive) == 0)
@@ -108,12 +112,14 @@ Status checkZipSource(const QString& zipPath)
     auto g = inspectZip(zipPath);
     if (!g.ok())
         return g.error();
-    if (!g->otherGames.isEmpty())
+    if (!g->otherGames.isEmpty()) {
+        // Named like the other games: without the trailing slash.
+        const QString first = g->rootPrefix.isEmpty() ? QStringLiteral("(top level)") : g->rootPrefix.chopped(1);
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("%1 holds more than one game (%2 and %3). Zip one game per archive, or unpack it and "
                                     "choose the game's folder.")
-                         .arg(QFileInfo(zipPath).fileName(), g->rootPrefix.isEmpty() ? QStringLiteral("(top level)") : g->rootPrefix,
-                              g->otherGames.join(QStringLiteral(", "))));
+                         .arg(QFileInfo(zipPath).fileName(), first, g->otherGames.join(QStringLiteral(", "))));
+    }
     return success();
 }
 

@@ -19,6 +19,7 @@
 #include <QMutex>
 #include <QJsonArray>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QTest>
 
@@ -781,6 +782,47 @@ private slots:
         QCOMPARE(finished.count(), 1);
         QCOMPARE(finished.first().at(0).toInt(), 1);
         QCOMPARE(w.lastRunJobIds(), QStringList{a.value()});
+    }
+
+    // "Clear history" that cannot remove the file keeps showing the history:
+    // it is still there and would be back after the next start.
+    void historyThatCannotBeClearedStaysVisible()
+    {
+#ifdef Q_OS_WIN
+        JobHistory history(m_root.filePath(QStringLiteral("hist/history.jsonl")));
+        JobRecord rec;
+        rec.id = QStringLiteral("J1");
+        rec.kind = QStringLiteral("test.fake");
+        rec.title = QStringLiteral("Kept");
+        rec.state = JobState::Succeeded;
+        QVERIFY(history.append(rec).ok());
+        QCOMPARE(int(history.recent(10).size()), 1);
+        {
+            QFile holder(m_root.filePath(QStringLiteral("hist/history.jsonl"))); // open without delete sharing
+            QVERIFY(holder.open(QIODevice::ReadOnly));
+            QVERIFY(!history.clear().ok());
+            QCOMPARE(int(history.recent(10).size()), 1);
+        }
+        QVERIFY(history.clear().ok());
+        QVERIFY(history.recent(10).empty());
+#else
+        QSKIP("Windows file sharing rules");
+#endif
+    }
+
+    // A hand-edited schema version far below zero must not make start-up
+    // count through two thousand million migration steps.
+    void absurdSchemaVersionLoadsAtOnce()
+    {
+        fwtest::Registry reg;
+        const QString path = m_root.filePath(QStringLiteral("s9/settings.json"));
+        QVERIFY(fwtest::writeTextFile(path, R"({"schemaVersion":-2000000000,"values":{"logging.level":"debug"}})"));
+        SettingsStore store(reg.schema, path);
+        QElapsedTimer timer;
+        timer.start();
+        QVERIFY(store.load().ok());
+        QVERIFY2(timer.elapsed() < 2000, qPrintable(QString::number(timer.elapsed())));
+        QCOMPARE(store.value(general::keys::kLogLevel).toString(), QStringLiteral("debug"));
     }
 
     // Range errors name the limits as whole numbers, not "1.04858e+06".

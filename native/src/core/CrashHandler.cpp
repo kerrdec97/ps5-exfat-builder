@@ -21,7 +21,6 @@ namespace fw::crash {
 
 namespace {
 std::wstring g_folder; // pre-computed: no allocation inside the handler
-std::string g_folderUtf8;
 
 #ifdef Q_OS_WIN
 LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
@@ -83,7 +82,6 @@ void install(const QString& crashFolder)
 {
     QDir().mkpath(crashFolder);
     g_folder = QDir::toNativeSeparators(crashFolder).toStdWString();
-    g_folderUtf8 = crashFolder.toStdString();
     std::set_terminate(onTerminate);
 #ifdef Q_OS_WIN
     SetUnhandledExceptionFilter(unhandledFilter);
