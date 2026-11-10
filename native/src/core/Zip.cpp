@@ -366,9 +366,7 @@ Status Writer::finish(bool verifyBeforeCommit, const CancellationToken& token)
     put32(tail, zip64 ? 0xFFFFFFFFu : quint32(cdOffset));
     put16(tail, 0);
     FW_TRY(writeRaw(tail));
-    if (!m_file.flush())
-        return ioError(QStringLiteral("Could not write %1.").arg(QFileInfo(m_path).fileName()), m_file);
-    m_file.close();
+    FW_TRY(finishWrittenFile(m_file, QFileInfo(m_path).fileName()));
     if (verifyBeforeCommit) {
         Reader r;
         Status st = r.open(m_part->partPath());
@@ -543,14 +541,16 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
         if (want > 0 && in.size() != want)
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 is truncated in the archive.").arg(entry.name));
         remaining -= quint64(in.size());
-        if (progress)
-            progress->advance(in.size());
+        // Progress counts the entry's own (uncompressed) bytes, as the writer
+        // does: callers size their totals from Entry::uncompressedSize.
         if (!inflating) {
             if (produced + quint64(in.size()) > entry.uncompressedSize)
                 return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(entry.name));
             crc = quint32(::crc32(crc, reinterpret_cast<const Bytef*>(in.constData()), uInt(in.size())));
             produced += quint64(in.size());
             FW_TRY(sink(in));
+            if (progress)
+                progress->advance(in.size());
             continue;
         }
         zs.next_in = reinterpret_cast<Bytef*>(in.data());
@@ -572,6 +572,8 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
                 crc = quint32(::crc32(crc, reinterpret_cast<const Bytef*>(chunk.constData()), uInt(n)));
                 produced += quint64(n);
                 FW_TRY(sink(QByteArray(chunk.constData(), int(n))));
+                if (progress)
+                    progress->advance(n);
             }
             if (rc == Z_STREAM_END) {
                 streamEnd = true;
@@ -609,16 +611,21 @@ Status Reader::verifyAll(const CancellationToken& token, ProgressReporter* progr
 }
 
 Status Reader::extractAll(const QString& destination, const CancellationToken& token, ProgressReporter* progress,
-                          bool overwrite)
+                          bool overwrite, const QString& onlyUnder)
 {
+    const auto wanted = [&](const Entry& e) {
+        return onlyUnder.isEmpty() || e.name.startsWith(onlyUnder, Qt::CaseInsensitive);
+    };
     // Validate every name before writing anything.
     for (const Entry& e : m_entries)
-        if (safeRelativePath(e.name).isEmpty())
+        if (wanted(e) && safeRelativePath(e.name).isEmpty())
             return Error(ErrorCode::CorruptData,
                          QStringLiteral("The archive contains an unsafe path (%1); nothing was extracted.").arg(e.name));
     QDir().mkpath(destination);
     const QDir dest(destination);
     for (const Entry& e : m_entries) {
+        if (!wanted(e))
+            continue;
         const QString rel = safeRelativePath(e.name);
         const QString target = dest.filePath(rel);
         if (!isSameOrInside(target, destination))
@@ -637,9 +644,9 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
                 return ioError(QStringLiteral("Could not write %1.").arg(rel), out);
             return success();
         }, token, progress));
-        out.flush(); // the time stamp must come after the last write
-        out.setFileTime(e.modified, QFileDevice::FileModificationTime);
-        out.close();
+        // The buffered tail (all of a small file) is written here: a failure
+        // must stop the extraction, and `part` then removes the partial file.
+        FW_TRY(finishWrittenFile(out, rel, e.modified));
         FW_TRY(part.commit(overwrite));
     }
     return success();

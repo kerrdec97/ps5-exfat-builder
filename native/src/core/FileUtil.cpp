@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace fw {
 
@@ -199,6 +200,10 @@ void PartFile::abandon()
     QFile::remove(partPath());
 }
 
+namespace {
+constexpr char kOwnerMarkerMagic[] = "fw-temp 1\n"; // first line of TempDir's marker file
+} // namespace
+
 TempDir::TempDir(const QString& prefix, const QString& parentDir)
 {
     const QString parent = parentDir.isEmpty() ? Paths::tempRoot() : parentDir;
@@ -210,9 +215,34 @@ TempDir::TempDir(const QString& prefix, const QString& parentDir)
         const QString p = QDir(parent).filePath(name);
         if (!QFileInfo::exists(p) && QDir().mkpath(p)) {
             m_path = p;
+            // Without the marker the folder still works; it is then never
+            // swept from a folder the user chose.
+            QFile marker(QDir(p).filePath(ownerMarkerName()));
+            if (marker.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+                marker.write(kOwnerMarkerMagic);
+                marker.write("Temporary folder of exFAT Image Builder. It is removed when its job ends.\n");
+                marker.close();
+            }
             return;
         }
     }
+}
+
+QString TempDir::ownerMarkerName()
+{
+    return QStringLiteral(".fw-temp");
+}
+
+bool TempDir::isOwnedFolder(const QString& dir)
+{
+    const QFileInfo folder(dir);
+    if (!folder.isDir() || isJunctionOrSymlink(dir))
+        return false;
+    const QString markerPath = QDir(dir).filePath(ownerMarkerName());
+    if (!QFileInfo(markerPath).isFile() || isJunctionOrSymlink(markerPath))
+        return false;
+    QFile marker(markerPath);
+    return marker.open(QIODevice::ReadOnly) && marker.read(sizeof(kOwnerMarkerMagic) - 1) == kOwnerMarkerMagic;
 }
 
 TempDir::~TempDir()
@@ -253,7 +283,11 @@ Status ensureFreeSpace(const QString& path, qint64 requiredBytes, qint64 marginB
     auto ds = diskSpace(path);
     if (!ds.ok())
         return ds.takeError();
-    const qint64 need = requiredBytes + marginBytes;
+    // Sizes read from an archive or an image can be absurd: no overflow, and a
+    // negative size never turns the check off.
+    const qint64 required = std::max<qint64>(0, requiredBytes), margin = std::max<qint64>(0, marginBytes);
+    const qint64 need = required > std::numeric_limits<qint64>::max() - margin ? std::numeric_limits<qint64>::max()
+                                                                                : required + margin;
     if (ds->available >= need)
         return success();
     QString drive = QDir::toNativeSeparators(ds->rootPath);
@@ -356,12 +390,8 @@ Status copyFileStreaming(const QString& src, const QString& dst, const Cancellat
     if (durable) {
         if (Status st = flushToDisk(out, QFileInfo(dst).fileName()); !st.ok())
             return st;
-    } else if (!out.flush()) {
-        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QFileInfo(dst).fileName()),
-                     out.errorString());
     }
-    out.setFileTime(QFileInfo(src).lastModified(), QFileDevice::FileModificationTime);
-    out.close();
+    FW_TRY(finishWrittenFile(out, QFileInfo(dst).fileName(), QFileInfo(src).lastModified()));
     return part.commit(replaceExisting);
 }
 
@@ -569,6 +599,23 @@ Status flushToDisk(QFile& file, const QString& displayName)
         return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
                      QStringLiteral("fsync failed"));
 #endif
+    return success();
+}
+
+Status finishWrittenFile(QFile& file, const QString& displayName, const QDateTime& modified)
+{
+    const auto failed = [&] {
+        const QString why = file.errorString();
+        file.close();
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(displayName), why);
+    };
+    if (!file.flush())
+        return failed();
+    if (modified.isValid())
+        file.setFileTime(modified, QFileDevice::FileModificationTime); // must come after the last write
+    file.close(); // keeps the error of a failed close, clears every earlier one
+    if (file.error() != QFileDevice::NoError)
+        return failed();
     return success();
 }
 

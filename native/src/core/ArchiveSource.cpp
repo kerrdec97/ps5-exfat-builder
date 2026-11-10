@@ -8,6 +8,7 @@
 #include <QMap>
 
 #include <algorithm>
+#include <limits>
 
 namespace fw::archive {
 
@@ -81,14 +82,19 @@ Result<ZipGame> inspectZip(const QString& zipPath)
     const QString rootLower = g.rootPrefix.toLower();
     g.hasEboot = roots.value(rootLower) & 1;
     g.hasParam = roots.value(rootLower) & 2;
+    // Exactly the entries unpackZipSource() extracts. The sizes come from the
+    // archive and are not to be trusted: the sum stops at the largest qint64.
+    constexpr quint64 kMaxBytes = quint64(std::numeric_limits<qint64>::max());
+    quint64 bytes = 0;
     for (const zip::Entry& e : r.entries()) {
-        if (e.isDirectory() || !e.name.toLower().startsWith(rootLower))
+        if (e.isDirectory() || !e.name.startsWith(g.rootPrefix, Qt::CaseInsensitive))
             continue;
-        g.bytes += qint64(e.uncompressedSize);
+        bytes = e.uncompressedSize > kMaxBytes - bytes ? kMaxBytes : bytes + e.uncompressedSize;
         ++g.files;
         if (e.name.compare(g.rootPrefix + QStringLiteral("sce_sys/param.json"), Qt::CaseInsensitive) == 0)
             paramEntry = &e;
     }
+    g.bytes = qint64(bytes);
     if (paramEntry && paramEntry->uncompressedSize < 16ull * 1024 * 1024) {
         auto data = r.readAll(*paramEntry);
         if (data.ok())
@@ -112,7 +118,7 @@ Status checkZipSource(const QString& zipPath)
 }
 
 Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, const CancellationToken& token,
-                                ProgressReporter* progress)
+                                ProgressReporter* progress, qint64 freeSpaceMarginBytes)
 {
     FW_TRY(checkZipSource(zipPath));
     FW_TRY_ASSIGN(ZipGame g, inspectZip(zipPath));
@@ -120,14 +126,16 @@ Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, 
         return Error(ErrorCode::InvalidArgument, QStringLiteral("No temporary folder to unpack %1 into.").arg(nativePath(zipPath)));
     const QString dest = QDir(tempDir).filePath(QStringLiteral("zip-source"));
     QDir().mkpath(dest);
-    FW_TRY(ensureFreeSpace(dest, g.bytes));
+    FW_TRY(ensureFreeSpace(dest, g.bytes, freeSpaceMarginBytes));
     zip::Reader r;
     FW_TRY(r.open(zipPath));
     if (progress) {
         progress->begin(QStringLiteral("Unpacking ZIP"), g.bytes, g.files);
         progress->setCurrentItem(QStringLiteral("Unpacking %1").arg(QFileInfo(zipPath).fileName()));
     }
-    FW_TRY(r.extractAll(dest, token, progress, true));
+    // Only the game: what else the archive holds (extras, a second folder) is
+    // neither counted above nor wanted in the temporary folder.
+    FW_TRY(r.extractAll(dest, token, progress, true, g.rootPrefix));
     const QString root = QDir::cleanPath(QDir(dest).filePath(g.rootPrefix));
     if (!QFileInfo(root).isDir())
         return Error(ErrorCode::CorruptData, QStringLiteral("The game folder was not found after unpacking %1.").arg(nativePath(zipPath)));

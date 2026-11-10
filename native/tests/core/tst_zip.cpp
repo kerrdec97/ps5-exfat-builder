@@ -4,6 +4,7 @@
 // Info-ZIP unzip when available.
 
 #include "core/Zip.h"
+#include "core/ArchiveSource.h"
 #include "core/ProcessRunner.h"
 #include "support/TestSupport.h"
 
@@ -229,6 +230,51 @@ private slots:
         QVERIFY(!st.ok());
         QVERIFY(!QFile::exists(out + QStringLiteral("/ok.txt")));
         QVERIFY(!QFile::exists(m_root.filePath(QStringLiteral("escaped.txt"))));
+    }
+
+    // A zipped game as a build source: only the game is unpacked, which is
+    // exactly what the free-space check and the progress total counted.
+    void zipSourceUnpacksOnlyTheGame()
+    {
+        const QString z = m_root.filePath(QStringLiteral("source.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("Extras/video.bin"), QByteArray(300000, 'v'), zip::Method::Store).ok());
+            QVERIFY(w.addData(QStringLiteral("PPSA01234-app0/eboot.bin"), QByteArray(100000, 'e')).ok());
+            QVERIFY(w.addData(QStringLiteral("PPSA01234-app0/sce_sys/param.json"), "{}").ok());
+            QVERIFY(w.addData(QStringLiteral("ppsa01234-APP0/data/a.bin"), QByteArray(2000, 'a'), zip::Method::Store).ok());
+            QVERIFY(w.addDirectory(QStringLiteral("Extras/empty")).ok());
+            QVERIFY(w.addData(QStringLiteral("readme.txt"), "hello").ok());
+            QVERIFY(w.finish().ok());
+        }
+        auto g = archive::inspectZip(z);
+        QVERIFY(g.ok());
+        QCOMPARE(g->rootPrefix, QStringLiteral("PPSA01234-app0/"));
+        QCOMPARE(g->files, qint64(3));
+        QCOMPARE(g->bytes, qint64(100000 + 2 + 2000));
+
+        ProgressReporter progress;
+        const QString temp = m_root.filePath(QStringLiteral("unpack"));
+        auto root = archive::unpackZipSource(z, temp, CancellationToken(), &progress, 0);
+        QVERIFY2(root.ok(), root.ok() ? "" : qPrintable(root.error().toLogString()));
+        QCOMPARE(readFile(root.value() + QStringLiteral("/eboot.bin")), QByteArray(100000, 'e'));
+        QCOMPARE(readFile(root.value() + QStringLiteral("/data/a.bin")), QByteArray(2000, 'a'));
+        QCOMPARE(QDir(temp + QStringLiteral("/zip-source")).entryList(QDir::AllEntries | QDir::NoDotAndDotDot),
+                 QStringList{QStringLiteral("PPSA01234-app0")});
+        // Every byte of the game counted once, compressed or not.
+        const ProgressSnapshot s = progress.snapshot();
+        QCOMPARE(s.total, g->bytes);
+        QCOMPARE(s.done, g->bytes);
+
+        // A name that would leave the folder is only a reason to refuse when
+        // it belongs to what is unpacked.
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        const QString only = m_root.filePath(QStringLiteral("only-extras"));
+        QVERIFY(r.extractAll(only, CancellationToken(), nullptr, false, QStringLiteral("extras/")).ok());
+        QCOMPARE(QDir(only).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("Extras")});
+        QVERIFY(QFileInfo(only + QStringLiteral("/Extras/empty")).isDir());
     }
 
     void interoperatesWithPythonAndUnzip()

@@ -2,6 +2,7 @@
 // import) and the job queue (run, fail, cancel, pause, verification, history,
 // persistence and restart recovery).
 
+#include "core/FileUtil.h"
 #include "core/Paths.h"
 #include "core/Settings.h"
 #include "engines/general/Module.h"
@@ -292,6 +293,31 @@ private slots:
         QCOMPARE(int(recent.size()), 2);
         QCOMPARE(recent.front().title, QStringLiteral("B"));
         QCOMPARE(recent.front().state, QStringLiteral("Done"));
+    }
+
+    // A job's temporary folder in the folder chosen in Settings has the name
+    // and the marker the sweep asks for; the user's own folders there do not.
+    void jobTempFolderInACustomFolderIsRecognisedByTheSweep()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        const QString custom = m_root.filePath(QStringLiteral("q12/user temp"));
+        QVERIFY(fwtest::writeTextFile(custom + QStringLiteral("/fw-11.00/PS5UPDATE.PUP"), "mine"));
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q12/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kTempFolder, custom).ok());
+        QVERIFY(store.setValue(general::keys::kKeepJobTemp, true).ok());
+        JobQueue q(store, reg.jobs);
+        auto id = q.enqueue(QStringLiteral("test.fake"), {});
+        QVERIFY(id.ok());
+        QVERIFY(waitForState(q, id.value(), JobState::Succeeded));
+        const QString kept = q.record(id.value())->outcome->outputs.first(); // the job's temp folder
+        QVERIFY(QFileInfo(kept).isDir());
+        QVERIFY(isSameOrInside(kept, custom));
+        QVERIFY(TempDir::isOwnedFolder(kept));
+        QCOMPARE(Paths::sweepStaleTempIn(custom, 0), 1);
+        QVERIFY(!QFileInfo::exists(kept));
+        QVERIFY(QFileInfo::exists(custom + QStringLiteral("/fw-11.00/PS5UPDATE.PUP")));
     }
 
     void historyExportsCsv()

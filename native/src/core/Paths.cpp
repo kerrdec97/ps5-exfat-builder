@@ -9,7 +9,9 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QThreadPool>
 
 #include <mutex>
 
@@ -134,19 +136,69 @@ QString cacheDir() { return sub(localDir(), QStringLiteral("cache")); }
 QString tempRoot() { return sub(localDir(), QStringLiteral("temp")); }
 QString toolsDir() { return sub(localDir(), QStringLiteral("tools")); }
 
+namespace {
+bool isOwnTempRoot(const QString& folder)
+{
+    const QString root = tempRoot();
+    return isSameOrInside(folder, root) && isSameOrInside(root, folder);
+}
+
+// "fw-job-J<HHmmss>-<nnn>-<yyyyMMddHHmmss>-<6 hex>": the name the job queue
+// gives a job's folder (TempDir with the prefix "job-<job id>").
+bool isJobTempName(const QString& name)
+{
+    static const QRegularExpression shape(QStringLiteral("^fw-job-J[0-9]{6}-[0-9]{3,}-[0-9]{14}-[0-9a-f]{6}$"));
+    return shape.match(name).hasMatch();
+}
+
+// What the sweep may delete in `root`. The app's own temp root holds nothing
+// but its folders, so the "fw-" prefix is enough there. Any other folder is
+// the user's (they may keep a "fw-11.00" of their own in it): only a job
+// folder that also carries the app's marker file is the app's.
+bool isSweepable(const QFileInfo& fi, bool ownRoot)
+{
+    if (ownRoot)
+        return fi.fileName().startsWith(QStringLiteral("fw-"));
+    return isJobTempName(fi.fileName()) && TempDir::isOwnedFolder(fi.absoluteFilePath());
+}
+
+QFileInfoList subfolders(const QString& folder)
+{
+    return QDir(folder).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+}
+
+// Size of the files below `dir`; links and junctions are not followed.
+qint64 treeBytesNoFollow(const QString& dir)
+{
+    qint64 total = 0;
+    QStringList pending{dir};
+    while (!pending.isEmpty()) {
+        QDirIterator it(pending.takeLast(), QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+        while (it.hasNext()) {
+            const QFileInfo fi = it.nextFileInfo();
+            if (fi.isSymbolicLink() || fi.isJunction())
+                continue;
+            if (fi.isDir())
+                pending << fi.absoluteFilePath();
+            else
+                total += fi.size();
+        }
+    }
+    return total;
+}
+} // namespace
+
 int sweepStaleTemp(int maxAgeHours) { return sweepStaleTempIn(tempRoot(), maxAgeHours); }
 
 int sweepStaleTempIn(const QString& folder, int maxAgeHours)
 {
-    QDir root(folder);
-    if (folder.isEmpty() || !root.exists())
+    if (folder.isEmpty() || !QDir(folder).exists())
         return 0;
+    const bool ownRoot = isOwnTempRoot(folder);
     const QDateTime cutoff = QDateTime::currentDateTime().addSecs(-qint64(maxAgeHours) * 3600);
     int removed = 0;
-    const auto entries = root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden);
-    for (const QFileInfo& fi : entries) {
-        // Only folders this app created ("fw-" prefix) are ever swept.
-        if (!fi.fileName().startsWith(QStringLiteral("fw-")))
+    for (const QFileInfo& fi : subfolders(folder)) {
+        if (!isSweepable(fi, ownRoot))
             continue;
         if (fi.lastModified() > cutoff)
             continue;
@@ -155,18 +207,36 @@ int sweepStaleTempIn(const QString& folder, int maxAgeHours)
     }
     if (removed > 0)
         Logger::instance().log(LogLevel::Info, QStringLiteral("paths"),
-                               QStringLiteral("Removed %1 stale temporary folder(s)").arg(removed));
+                               QStringLiteral("Removed %1 stale temporary folder(s) from %2")
+                                   .arg(QString::number(removed), QDir::toNativeSeparators(folder)));
     return removed;
+}
+
+void sweepStaleTempInBackground(const QStringList& otherFolders, int maxAgeHours)
+{
+    QThreadPool::globalInstance()->start([otherFolders, maxAgeHours] {
+        sweepStaleTemp(maxAgeHours);
+        for (const QString& folder : otherFolders)
+            if (!folder.trimmed().isEmpty() && !isOwnTempRoot(folder.trimmed()))
+                sweepStaleTempIn(folder.trimmed(), maxAgeHours);
+    });
 }
 
 qint64 tempUsageBytes()
 {
+    return treeBytesNoFollow(tempRoot());
+}
+
+qint64 tempUsageBytesIn(const QString& folder)
+{
+    if (folder.isEmpty() || !QDir(folder).exists())
+        return 0;
+    if (isOwnTempRoot(folder))
+        return tempUsageBytes();
     qint64 total = 0;
-    QDirIterator it(tempRoot(), QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        it.next();
-        total += it.fileInfo().size();
-    }
+    for (const QFileInfo& fi : subfolders(folder))
+        if (isSweepable(fi, false))
+            total += treeBytesNoFollow(fi.absoluteFilePath());
     return total;
 }
 

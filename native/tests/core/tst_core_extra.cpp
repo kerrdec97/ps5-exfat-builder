@@ -14,6 +14,13 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
+#include <QThreadPool>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
+#include <utime.h>
+#endif
 
 using namespace fw;
 
@@ -22,6 +29,29 @@ QByteArray readAll(const QString& path)
 {
     QFile f(path);
     return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+
+// Makes a folder look as if nothing in it had changed for `days` days.
+bool setFolderAgeDays(const QString& folder, int days)
+{
+    const QDateTime when = QDateTime::currentDateTimeUtc().addDays(-days);
+#ifdef Q_OS_WIN
+    const HANDLE h = CreateFileW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(folder).utf16()), FILE_WRITE_ATTRIBUTES,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    const quint64 ticks = quint64(when.toMSecsSinceEpoch()) * 10000ull + 116444736000000000ull; // 100 ns since 1601
+    FILETIME ft;
+    ft.dwLowDateTime = DWORD(ticks & 0xFFFFFFFFu);
+    ft.dwHighDateTime = DWORD(ticks >> 32);
+    const bool ok = SetFileTime(h, nullptr, nullptr, &ft);
+    CloseHandle(h);
+    return ok;
+#else
+    const struct utimbuf times{time_t(when.toSecsSinceEpoch()), time_t(when.toSecsSinceEpoch())};
+    return ::utime(QFile::encodeName(folder).constData(), &times) == 0;
+#endif
 }
 } // namespace
 
@@ -196,9 +226,153 @@ private slots:
         {
             TempDir t(QStringLiteral("usage"));
             QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("a.bin")), QByteArray(5000, 'x')));
-            QCOMPARE(Paths::tempUsageBytes(), before + 5000);
+            const qint64 marker = QFileInfo(t.filePath(TempDir::ownerMarkerName())).size();
+            QVERIFY(marker > 0);
+            QCOMPARE(Paths::tempUsageBytes(), before + 5000 + marker);
         }
         QCOMPARE(Paths::tempUsageBytes(), before);
+    }
+
+    // QFile keeps small writes in memory: write() succeeds and the bytes only
+    // reach the drive when the file is flushed or closed. A writer that does
+    // not check that step commits an empty or cut-off file as good.
+    void finishWrittenFileReportsTheWriteThatFailsLate()
+    {
+        const QString path = m_root.filePath(QStringLiteral("finish/refused.bin"));
+        QVERIFY(fwtest::writeTextFile(path, "x"));
+        {
+            // A handle that cannot be written to stands in for a full drive.
+            QFile readOnly(path);
+            QVERIFY(readOnly.open(QIODevice::ReadOnly));
+            QFile out;
+            QVERIFY(out.open(readOnly.handle(), QIODevice::WriteOnly));
+            QCOMPARE(out.write(QByteArray(1000, 'y')), qint64(1000)); // buffered: no error yet
+            const Status st = finishWrittenFile(out, QStringLiteral("refused.bin"));
+            QVERIFY(!st.ok());
+            QCOMPARE(st.error().code, ErrorCode::IoError);
+            QVERIFY(st.error().message.contains(QStringLiteral("refused.bin")));
+            QVERIFY(!out.isOpen());
+        }
+        QCOMPARE(readAll(path), QByteArray("x"));
+
+        const QString good = m_root.filePath(QStringLiteral("finish/good.bin"));
+        const QDateTime stamp(QDate(2024, 2, 29), QTime(12, 34, 56));
+        QFile out(good);
+        QVERIFY(out.open(QIODevice::WriteOnly));
+        QCOMPARE(out.write(QByteArray(1000, 'y')), qint64(1000));
+        QVERIFY(finishWrittenFile(out, QStringLiteral("good.bin"), stamp).ok());
+        QVERIFY(!out.isOpen());
+        QCOMPARE(readAll(good), QByteArray(1000, 'y'));
+        QCOMPARE(QFileInfo(good).lastModified(), stamp);
+    }
+
+    // The start-up sweep and "Clear" in a temporary folder the user chose:
+    // that folder is the user's, so only a job folder that carries the app's
+    // marker is removed, whatever else is called "fw-…".
+    void sweepRemovesOnlyFoldersTheAppCreated()
+    {
+        const QString custom = m_root.filePath(QStringLiteral("user temp"));
+        const QString outside = m_root.filePath(QStringLiteral("sweep-outside"));
+        QVERIFY(fwtest::writeTextFile(outside + QStringLiteral("/keep.txt"), "precious"));
+
+        // The user's own folders: a firmware folder, and one that even has the
+        // name of a job folder but not the marker.
+        const QString firmware = custom + QStringLiteral("/fw-11.00");
+        const QString lookalike = custom + QStringLiteral("/fw-job-J101010-001-20260101101010-abcdef");
+        QVERIFY(fwtest::writeTextFile(firmware + QStringLiteral("/PS5UPDATE.PUP"), "mine"));
+        QVERIFY(fwtest::writeTextFile(lookalike + QStringLiteral("/data.bin"), "mine"));
+        // A marker alone is not enough either: the name must be a job folder's.
+        const QString marked = custom + QStringLiteral("/fw-backups");
+        QVERIFY(fwtest::writeTextFile(marked + QStringLiteral("/save.bin"), "mine"));
+
+        QString stale, fresh;
+        {
+            TempDir t(QStringLiteral("job-J101010-002"), custom);
+            QVERIFY(t.isValid());
+            t.keep();
+            stale = t.path();
+            QVERIFY(TempDir::isOwnedFolder(stale));
+            QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("zip-source/eboot.bin")), QByteArray(5000, 'x')));
+            // What a crashed job can leave behind: a junction to a real folder.
+            QVERIFY(createDirectoryJunction(t.filePath(QStringLiteral("alias")), outside).ok());
+            QVERIFY(QFile::copy(t.filePath(TempDir::ownerMarkerName()), marked + u'/' + TempDir::ownerMarkerName()));
+        }
+        {
+            TempDir t(QStringLiteral("job-J101010-003"), custom);
+            QVERIFY(t.isValid());
+            t.keep();
+            fresh = t.path();
+        }
+        QVERIFY(!TempDir::isOwnedFolder(firmware));
+        QVERIFY(!TempDir::isOwnedFolder(lookalike));
+        const qint64 marker = QFileInfo(fresh + u'/' + TempDir::ownerMarkerName()).size();
+        QCOMPARE(Paths::tempUsageBytesIn(custom), 5000 + 2 * marker); // the two job folders, nothing of the user's
+
+        for (const QString& old : {firmware, lookalike, marked, stale})
+            QVERIFY2(setFolderAgeDays(old, 3), qPrintable(old));
+        QCOMPARE(Paths::sweepStaleTempIn(custom, 24), 1);
+        QVERIFY(!QFileInfo::exists(stale));
+        QVERIFY(QFileInfo(fresh).isDir());
+        QCOMPARE(readAll(firmware + QStringLiteral("/PS5UPDATE.PUP")), QByteArray("mine"));
+        QCOMPARE(readAll(lookalike + QStringLiteral("/data.bin")), QByteArray("mine"));
+        QCOMPARE(readAll(marked + QStringLiteral("/save.bin")), QByteArray("mine"));
+        QCOMPARE(readAll(outside + QStringLiteral("/keep.txt")), QByteArray("precious")); // the junction was not followed
+
+        // A link with a job folder's name that points at a folder with a marker
+        // is not a folder the app created.
+        const QString linked = custom + QStringLiteral("/fw-job-J101010-004-20260101101010-abcdef");
+        QVERIFY(QFile::copy(fresh + u'/' + TempDir::ownerMarkerName(), outside + u'/' + TempDir::ownerMarkerName()));
+        QVERIFY(createDirectoryJunction(linked, outside).ok());
+        QVERIFY(!TempDir::isOwnedFolder(linked));
+
+        // "Clear" (no age limit) takes the fresh job folder too, and still
+        // nothing else.
+        QCOMPARE(Paths::sweepStaleTempIn(custom, 0), 1);
+        QVERIFY(!QFileInfo::exists(fresh));
+        QVERIFY(isJunctionOrSymlink(linked));
+        QCOMPARE(readAll(outside + QStringLiteral("/keep.txt")), QByteArray("precious"));
+        QCOMPARE(readAll(firmware + QStringLiteral("/PS5UPDATE.PUP")), QByteArray("mine"));
+        QCOMPARE(readAll(lookalike + QStringLiteral("/data.bin")), QByteArray("mine"));
+        QCOMPARE(Paths::tempUsageBytesIn(custom), qint64(0));
+        QVERIFY(removeDirectoryJunction(linked).ok());
+    }
+
+    // The app's own temp root holds nothing but its folders: there every old
+    // "fw-" folder goes, also one left by a version that wrote no marker. The
+    // background variant does both sweeps off the calling thread.
+    void sweepOfTheOwnTempRootAndInTheBackground()
+    {
+        const QString legacy = Paths::tempRoot() + QStringLiteral("/fw-job-J090909-001-20250101090909-0a0b0c");
+        const QString recent = Paths::tempRoot() + QStringLiteral("/fw-y2jb-20250101090909-0a0b0c");
+        const QString notOurs = Paths::tempRoot() + QStringLiteral("/other");
+        QVERIFY(fwtest::writeTextFile(legacy + QStringLiteral("/left.bin"), "old"));
+        QVERIFY(fwtest::writeTextFile(recent + QStringLiteral("/left.bin"), "new"));
+        QVERIFY(fwtest::writeTextFile(notOurs + QStringLiteral("/left.bin"), "x"));
+        QVERIFY(setFolderAgeDays(legacy, 2));
+        QVERIFY(setFolderAgeDays(notOurs, 2));
+        QCOMPARE(Paths::sweepStaleTemp(24), 1);
+        QVERIFY(!QFileInfo::exists(legacy));
+        QVERIFY(QFileInfo::exists(recent) && QFileInfo::exists(notOurs));
+
+        const QString custom = m_root.filePath(QStringLiteral("user temp 2"));
+        const QString firmware = custom + QStringLiteral("/fw-9.00");
+        QVERIFY(fwtest::writeTextFile(firmware + QStringLiteral("/PS5UPDATE.PUP"), "mine"));
+        QString stale;
+        {
+            TempDir t(QStringLiteral("job-J111111-001"), custom);
+            QVERIFY(t.isValid());
+            t.keep();
+            stale = t.path();
+        }
+        QVERIFY(setFolderAgeDays(firmware, 2));
+        QVERIFY(setFolderAgeDays(stale, 2));
+        QVERIFY(setFolderAgeDays(recent, 2));
+        Paths::sweepStaleTempInBackground({custom}, 24);
+        QVERIFY(QThreadPool::globalInstance()->waitForDone(30000));
+        QVERIFY(!QFileInfo::exists(stale));
+        QVERIFY(!QFileInfo::exists(recent));
+        QCOMPARE(readAll(firmware + QStringLiteral("/PS5UPDATE.PUP")), QByteArray("mine"));
+        QVERIFY(QDir(notOurs).removeRecursively());
     }
 
     void crashFilesAreListedNewestFirst()

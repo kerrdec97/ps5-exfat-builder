@@ -617,5 +617,10 @@ int run(HINSTANCE instance)
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+    // People start this file from Downloads or the Desktop. Every DLL loaded by
+    // name from here on (the delay-loaded cabinet.dll, bcrypt.dll and
+    // comctl32.dll, and whatever the system loads for the window) comes from
+    // System32, never from the folder the launcher happens to lie in.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     return run(instance);
 }

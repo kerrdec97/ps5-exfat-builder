@@ -17,6 +17,7 @@
 #include <QTest>
 
 #include <atomic>
+#include <limits>
 #include <thread>
 
 using namespace fw;
@@ -283,6 +284,10 @@ private slots:
             path = t.path();
             QVERIFY(QFileInfo(path).fileName().startsWith(QStringLiteral("fw-unit-")));
             QVERIFY(fwtest::writeTextFile(t.filePath(QStringLiteral("x/y.txt")), "x"));
+            // The marker that tells the app's folders from the user's.
+            QVERIFY(QFileInfo(t.filePath(TempDir::ownerMarkerName())).isFile());
+            QVERIFY(TempDir::isOwnedFolder(path));
+            QVERIFY(!TempDir::isOwnedFolder(t.filePath(QStringLiteral("x"))));
         }
         QVERIFY(!QFileInfo::exists(path));
     }
@@ -327,6 +332,12 @@ private slots:
         QVERIFY(st.error().message.startsWith(QStringLiteral("Not enough space on ")));
         QVERIFY(st.error().message.contains(QStringLiteral("choose another output folder")));
         QVERIFY(ensureFreeSpace(m_root.path(), 1024, 0).ok());
+        // Sizes taken from an archive can be absurd: the sum must not wrap
+        // round to "nothing needed".
+        const qint64 huge = std::numeric_limits<qint64>::max();
+        QCOMPARE(ensureFreeSpace(m_root.path(), huge).error().code, ErrorCode::InsufficientSpace);
+        QCOMPARE(ensureFreeSpace(m_root.path(), huge - 5, huge).error().code, ErrorCode::InsufficientSpace);
+        QVERIFY(ensureFreeSpace(m_root.path(), -huge, 0).ok());
     }
 
     void scanTreeListsAndExcludes()

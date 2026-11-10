@@ -95,8 +95,10 @@ public:
 
     // Extracts every entry under `destination` (created if needed) through
     // .part files. Refuses absolute names, drive letters and ".." segments.
+    // With `onlyUnder` ("Folder/"), only the entries whose name starts with it
+    // (compared without regard to case) are checked and extracted.
     Status extractAll(const QString& destination, const CancellationToken& token, ProgressReporter* progress = nullptr,
-                      bool overwrite = false);
+                      bool overwrite = false, const QString& onlyUnder = {});
 
     // The safe relative path for an entry name, or empty if it would escape.
     static QString safeRelativePath(const QString& entryName);

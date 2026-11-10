@@ -74,6 +74,13 @@ public:
     QString filePath(const QString& name) const;
     void keep() { m_keep = true; }
 
+    // Every TempDir holds a small marker file with this name. A folder left
+    // behind in a place the user chose (Settings > Storage > Temporary folder)
+    // is only ever deleted when the marker proves the app created it.
+    static QString ownerMarkerName();
+    // True when `dir` is a real folder (not a link) that holds the marker.
+    static bool isOwnedFolder(const QString& dir);
+
 private:
     QString m_path;
     bool m_keep = false;
@@ -166,5 +173,11 @@ bool isJunctionOrSymlink(const QString& path);
 // drive (FlushFileBuffers / fsync), so a verified image survives a power cut
 // before it replaces anything.
 Status flushToDisk(QFile& file, const QString& displayName);
+
+// Ends writing to `file`: flushes Qt's buffer, sets the modification time
+// when one is given and closes the file. QFile keeps small writes in memory,
+// so a full or vanished drive often shows up only here and not in write():
+// every writer must check this result before it commits its .part file.
+Status finishWrittenFile(QFile& file, const QString& displayName, const QDateTime& modified = {});
 
 } // namespace fw

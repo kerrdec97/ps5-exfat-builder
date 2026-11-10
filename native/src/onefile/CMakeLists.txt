@@ -29,6 +29,10 @@ if(MSVC)
     target_link_libraries(fw_onefile PRIVATE delayimp)
     target_link_options(fw_onefile PRIVATE /MANIFEST:NO
         /DELAYLOAD:cabinet.dll /DELAYLOAD:comctl32.dll /DELAYLOAD:bcrypt.dll)
+    # The DLLs the launcher imports directly are looked up in System32 only
+    # (LOAD_LIBRARY_SEARCH_SYSTEM32), not beside the downloaded exe; the stub
+    # sets the same rule for everything loaded later.
+    target_link_options(fw_onefile PRIVATE /DEPENDENTLOADFLAG:0x800)
 endif()
 fw_configure_target(fw_onefile)
 

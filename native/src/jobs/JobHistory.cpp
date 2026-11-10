@@ -68,7 +68,8 @@ Status JobHistory::append(const JobRecord& r)
         return Error(ErrorCode::IoError, QStringLiteral("Could not write the job history."), f.errorString());
     f.write(QJsonDocument(h.toJson()).toJson(QJsonDocument::Compact));
     f.write("\n");
-    f.close();
+    if (Status st = finishWrittenFile(f, QStringLiteral("the job history")); !st.ok())
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write the job history."), st.error().detail);
     if (m_cache) {
         m_cache->insert(m_cache->begin(), h);
         if (int(m_cache->size()) > kCached)
