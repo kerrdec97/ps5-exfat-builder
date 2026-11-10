@@ -859,7 +859,6 @@ void BuildImagePage::buildPackageCard()
     m_contentId = textInput(QStringLiteral("UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx"), true, details);
     m_contentId->setMaxLength(36);
     m_contentId->setAccessibleName(QStringLiteral("Content ID"));
-    m_contentId->setToolTip(QStringLiteral("36 characters, read from sce_sys/param.json. It must match the source; for an add-on, enter the add-on's own ID."));
     auto* grid = new QWidget(details);
     auto* gh = hbox(grid, space::md);
     gh->setAlignment(Qt::AlignTop);
@@ -1755,6 +1754,13 @@ void BuildImagePage::onPackageTypeChanged()
     m_backportField->setVisible(t == QLatin1String("app") || backport);
     // A backport update takes its identity from the base package.
     m_contentId->parentWidget()->setVisible(!backport);
+    // An app or update package carries the game's own content ID (the engine
+    // refuses any other), so the field only shows it; an add-on has its own.
+    const bool ownId = t == QLatin1String("addon");
+    m_contentId->setReadOnly(!ownId);
+    m_contentId->setToolTip(ownId ? QStringLiteral("36 characters: the add-on's own content ID.")
+                                  : QStringLiteral("Read from the game's sce_sys/param.json. A package must carry the game's own content ID, so it "
+                                                   "cannot be changed here."));
     m_titleRow->setVisible(!backport);
     if (backport) {
         m_backportNote->setText(QStringLiteral(
@@ -2270,7 +2276,10 @@ QString BuildImagePage::validateForm()
         const bool badId = ptype != PackageType::Backport && !c.isEmpty() && !fpkg::isValidContentId(c);
         setInputError(m_contentId, badId);
         if (badId)
-            return QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
+            return m_contentId->isReadOnly()
+                       ? QStringLiteral("The Content ID in the game's sce_sys/param.json must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 "
+                                        "(36 characters). Correct it there.")
+                       : QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
         static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
         const QString v = m_version->text().trimmed();
         setInputError(m_version, !v.isEmpty() && !ver.match(v).hasMatch());

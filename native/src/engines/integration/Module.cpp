@@ -11,7 +11,9 @@
 #include "engines/general/Module.h"
 #include "engines/integration/ImageCompare.h"
 #include "engines/integration/ImageFiles.h"
+#include "engines/pfs/Module.h"
 #include "engines/pfs/PfsVerify.h"
+#include "engines/ufs2/Module.h"
 #include "engines/ufs2/Ufs2Reader.h"
 #include "engines/ufs2/Ufs2Verify.h"
 
@@ -193,11 +195,26 @@ private:
     // The build that writes output(): it may replace an existing file exactly
     // when this job may (the FFPKG and PFS builds take that as a parameter,
     // the exFAT build from its setting).
-    Result<JobOutcome> runBuild(JobContext& ctx, const QString& kind, QJsonObject params)
+    // `asItIs`: the source is the tree of the image being converted, and the
+    // new image must hold exactly that. The user's build settings that leave
+    // files out, move the root or add files do not apply then: no search for
+    // the game folder, no exclusions, no ampr_emu.index rebuilt, nothing deleted.
+    Result<JobOutcome> runBuild(JobContext& ctx, const QString& kind, QJsonObject params, bool asItIs = false)
     {
         params.insert(QStringLiteral("replaceExisting"), replaceExisting());
+        QVariantMap overrides{{exfat::keys::kOverwriteExisting, replaceExisting()}};
+        if (asItIs) {
+            params.insert(QStringLiteral("findGameRoot"), false);
+            overrides.insert(pfs::keys::kAmprIndex, QStringLiteral("off"));
+            overrides.insert(pfs::keys::kExcludes, QStringList());
+            overrides.insert(pfs::keys::kDeleteSourceAfterConvert, false);
+            overrides.insert(exfat::keys::kExcludePatterns, QStringList());
+            overrides.insert(exfat::keys::kExcludeHidden, false);
+            overrides.insert(exfat::keys::kDeleteSourceAfterVerify, false);
+            overrides.insert(ufs2::keys::kDeleteSourceAfterBuild, false);
+        }
         JobContext sub = ctx;
-        sub.settings = ctx.settings.withOverrides({{exfat::keys::kOverwriteExisting, replaceExisting()}});
+        sub.settings = ctx.settings.withOverrides(overrides);
         return runChild(sub, kind, params);
     }
 
@@ -244,7 +261,7 @@ private:
         QJsonObject build{{QStringLiteral("source"), stage}, {QStringLiteral("output"), output()}};
         if (isPfsFormat(target()))
             build.insert(QStringLiteral("format"), target());
-        FW_TRY_ASSIGN(JobOutcome built, runBuild(ctx, engineOf(target()) + QStringLiteral(".build"), build));
+        FW_TRY_ASSIGN(JobOutcome built, runBuild(ctx, engineOf(target()) + QStringLiteral(".build"), build, true));
         built.warnings = extracted.warnings + built.warnings;
         built.details.insert(QStringLiteral("convertedFrom"), image());
         if (built.verification != Verification::Failed)

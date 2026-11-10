@@ -107,7 +107,6 @@ inline constexpr int cover = 40, coverRow = 28;
 inline constexpr int focusRing = 2, focusOffset = 1;
 inline constexpr int windowMinW = 1100, windowMinH = 700;
 inline constexpr int dockBreakpoint = 1180;  // below: dock wraps under the form
-inline constexpr int sidebarBreakpoint = 1000; // below: sidebar auto-compacts
 } // namespace size
 
 // ---- typography --------------------------------------------------------------

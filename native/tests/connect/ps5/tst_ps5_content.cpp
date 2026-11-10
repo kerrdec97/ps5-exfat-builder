@@ -236,6 +236,30 @@ private slots:
         QVERIFY(again->existed);
         QCOMPARE(again->text, QStringLiteral("b.elf\n"));
 
+        // The newest three backups stay; older ones the saves made are removed,
+        // a file of the user's own next to them is not.
+        const QString own = QDir(dir).filePath(QStringLiteral("autoload.txt.bak.old"));
+        QFile ownFile(own);
+        QVERIFY(ownFile.open(QIODevice::WriteOnly) && ownFile.write("mine") == 4);
+        ownFile.close();
+        auto s4 = save(dir, QStringLiteral("c.elf\n"));
+        QCOMPARE(QFileInfo(s4->backupPath).fileName(), QStringLiteral("autoload.txt.bak.3"));
+        QVERIFY(QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
+        auto s5 = save(dir, QStringLiteral("d.elf\n"));
+        QCOMPARE(QFileInfo(s5->backupPath).fileName(), QStringLiteral("autoload.txt.bak.4"));
+        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
+        auto s6 = save(dir, QStringLiteral("e.elf\n"));
+        // The number goes on from the newest backup, not back to a freed one.
+        QCOMPARE(QFileInfo(s6->backupPath).fileName(), QStringLiteral("autoload.txt.bak.5"));
+        QCOMPARE(readAll(s6->backupPath), QByteArray("d.elf\n"));
+        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak.2"))));
+        QCOMPARE(QDir(dir).entryList({QStringLiteral("autoload.txt.bak*")}, QDir::Files, QDir::Name),
+                 (QStringList{QStringLiteral("autoload.txt.bak.3"), QStringLiteral("autoload.txt.bak.4"), QStringLiteral("autoload.txt.bak.5"),
+                              QStringLiteral("autoload.txt.bak.old")}));
+        QCOMPARE(readAll(own), QByteArray("mine"));
+        QVERIFY(QFile::remove(own));
+        QCOMPARE(load(dir)->text, QStringLiteral("e.elf\n"));
+
         // Payload files: copied in, listed, refused when not a payload, deleted.
         const QString src = fresh(QStringLiteral("al-src"));
         QVERIFY(writeBytes(QDir(src).filePath(QStringLiteral("kstuff.elf")), kElf));

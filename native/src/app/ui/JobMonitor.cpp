@@ -835,7 +835,7 @@ void JobMonitor::apply(const JobRecord& r)
     else if (r.state == JobState::Cancelling)
         badge = QStringLiteral("Cancelling…");
     else if (r.state == JobState::Succeeded)
-        badge = r.outcome && r.outcome->verification == Verification::Passed ? QStringLiteral("Done · Verified") : QStringLiteral("Done");
+        badge = QStringLiteral("Done"); // what the verification found is in the result below
     const Tone tone = toneForState(r.state);
     m_badge->set(badge, tone);
     m_badge->setIconName(r.state == JobState::Queued || r.state == JobState::Paused || r.state == JobState::Cancelled || r.state == JobState::Cancelling
@@ -1044,7 +1044,8 @@ void JobMonitor::rebuildResult(const JobRecord& r)
         if (r.outcome->verification != Verification::NotRun) {
             auto* row = new MessageRow(m_result);
             const Verification v = r.outcome->verification;
-            row->set(QStringLiteral("%1%2").arg(verificationName(v), r.outcome->verificationDetail.isEmpty() ? QString() : QStringLiteral(" · %1").arg(r.outcome->verificationDetail)),
+            // The row's word for it ("Not verified"), not the engine's ("Skipped").
+            row->set(QStringLiteral("%1%2").arg(v == Verification::Skipped ? QStringLiteral("Not verified") : verificationName(v), r.outcome->verificationDetail.isEmpty() ? QString() : QStringLiteral(" · %1").arg(r.outcome->verificationDetail)),
                      v == Verification::Passed ? Tone::Ok : v == Verification::Failed ? Tone::Err : Tone::Warn);
             m_resultLayout->addWidget(row);
         }

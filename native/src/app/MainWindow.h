@@ -69,7 +69,6 @@ protected:
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
-    void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
@@ -137,8 +136,7 @@ private:
     QPointer<ui::InfoBar> m_updateBanner;
     QPointer<ui::Sheet> m_countdown;
     QTimer m_freeSpaceTimer;
-    bool m_autoCompact = false;
-    bool m_userCompact = false;
+    bool m_userCompact = false; // the sidebar is collapsed (the header's menu button; remembered)
     bool m_closeInProgress = false; // closeEvent() is waiting for the backport engine to stop
 };
 

@@ -1274,7 +1274,7 @@ void BackportPage::onShown()
     if (m_shownOnce || testMode())
         return;
     m_shownOnce = true;
-    log(QStringLiteral("INFO"), QStringLiteral("PS5 Backport GUI by Deckerr97 %1 started").arg(QLatin1String(bp::kEngineVersion)));
+    log(QStringLiteral("INFO"), QStringLiteral("PS5 Backport engine %1 by Deckerr97 started").arg(QLatin1String(bp::kEngineVersion)));
     log(QStringLiteral("INFO"), QStringLiteral("Builds are verified offline; test them on a console and report problems with Report a problem"));
     if (!m_settings.scanRoots.isEmpty() && m_model->rowCount() == 0 && !isScanning())
         rescan();
@@ -1344,7 +1344,7 @@ void BackportPage::engineReady()
     m_engine = Engine::Ready;
     m_engineBar->hide();
     setState(QStringLiteral("Ready"), Tone::Ok);
-    m_engineLine->setText(QStringLiteral("PS5 Backport GUI %1 by Deckerr97  \u00b7  backend %2")
+    m_engineLine->setText(QStringLiteral("PS5 Backport engine %1 by Deckerr97  \u00b7  backend %2")
                               .arg(QLatin1String(bp::kEngineVersion), m_engineRevision));
     log(QStringLiteral("INFO"), QStringLiteral("Backport engine ready (backend %1)").arg(m_engineRevision));
     // The question belongs to this page: it waits until the page is in front.
@@ -3041,7 +3041,7 @@ void BackportPage::applyDemoState(const QString& name)
     m_bakField->setPath(QStringLiteral("D:\\Backports Backups"));
     setState(QStringLiteral("Ready"), Tone::Ok);
     m_engineBar->hide();
-    m_engineLine->setText(QStringLiteral("PS5 Backport GUI 0.3.4 by Deckerr97  \u00b7  backend 3e08eda5-914d90065d"));
+    m_engineLine->setText(QStringLiteral("PS5 Backport engine 0.3.4 by Deckerr97  \u00b7  backend 3e08eda5-914d90065d"));
     if (name == QLatin1String("running")) {
         m_bar->setFraction(0.42);
         m_percent->setText(QStringLiteral("42%"));

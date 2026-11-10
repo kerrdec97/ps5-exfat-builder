@@ -1191,6 +1191,16 @@ private slots:
         QCOMPARE(contentId->text(), QStringLiteral("UP0000-PPSA01234_00-GOLDENTEST000000"));
         QCOMPARE(version->text(), QStringLiteral("01.000.000"));
         QCOMPARE(title->text(), QStringLiteral("Test Game"));
+        // The content ID of an app or update is the game's own: shown, not
+        // edited. An add-on has an ID of its own to enter.
+        QVERIFY(contentId->isReadOnly());
+        QVERIFY2(contentId->toolTip().contains(QStringLiteral("param.json")), qPrintable(contentId->toolTip()));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("update")}});
+        QVERIFY(contentId->isReadOnly());
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("addon")}});
+        QVERIFY(!contentId->isReadOnly());
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("app")}});
+        QVERIFY(contentId->isReadOnly());
         // An image has no param.json the page reads: nothing of the game before it may stay.
         const QString image = path(QStringLiteral("PPSA05555 Other Game.exfat"));
         QVERIFY(fwtest::writeTextFile(image, QByteArray(4096, '\0')));

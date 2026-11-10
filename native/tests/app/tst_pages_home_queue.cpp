@@ -148,6 +148,10 @@ private slots:
         QVERIFY(waitTerminal(q, r.value()));
         QCOMPARE(q.record(r.value())->state, JobState::Cancelled);
         QVERIFY2(queue->statusContext().contains(QStringLiteral("0 failed · 1 cancelled")), qPrintable(queue->statusContext()));
+        // The tab that lists it is named for what it holds (failed and cancelled jobs), with its count.
+        auto* tabs = queue->findChild<ui::Segmented*>();
+        QVERIFY(tabs);
+        QTRY_COMPARE(tabs->segmentText(4), QStringLiteral("Not finished 1"));
         q.holdQueue(false);
         q.clearFinished();
     }

@@ -486,6 +486,7 @@ private slots:
 
         QVERIFY(waitForState(q, a.value(), JobState::Succeeded));
         QTRY_VERIFY2(m->stateText().startsWith(QStringLiteral("Done")), qPrintable(m->stateText()));
+        QCOMPARE(m->stateText(), QStringLiteral("Done")); // what the verification found is in the result, not in the badge
         QCOMPARE(m->percentText(), ui::thinPercent(1.0));
         QVERIFY2(m->stageTexts().at(0).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(0)));
         QVERIFY2(m->stageTexts().at(1).endsWith(QStringLiteral("done")), qPrintable(m->stageTexts().at(1)));

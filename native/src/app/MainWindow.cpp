@@ -867,16 +867,6 @@ void MainWindow::saveWindowState()
     qs.setValue(QStringLiteral("window/lastPage"), currentPage());
 }
 
-void MainWindow::resizeEvent(QResizeEvent* event)
-{
-    QMainWindow::resizeEvent(event);
-    const bool narrow = width() < size::sidebarBreakpoint;
-    if (narrow != m_autoCompact) {
-        m_autoCompact = narrow;
-        setSidebarCompact(m_userCompact || m_autoCompact);
-    }
-}
-
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape && Sheet::openCount() == 0) {
@@ -1045,7 +1035,7 @@ int MainWindow::screenshotAllPages(const QString& dir)
     m_toasts->clear();
     setSidebarCompact(true);
     snap(QStringLiteral("sidebar-compact"));
-    setSidebarCompact(m_userCompact || m_autoCompact);
+    setSidebarCompact(m_userCompact);
     // Keyboard focus ring: Tab into the page.
     navigate(QStringLiteral("settings"));
     m_sidebar->focusCurrent();

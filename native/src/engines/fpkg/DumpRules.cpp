@@ -147,7 +147,7 @@ QString leftoverReason(const QStringList& parts, const QString& name, bool isDir
     if (o.removeAmprLeftovers && !isDir && depth == 1 && eqi(parts[0], QStringLiteral("fakelib")) && low == u"ampr_emu.index")
         return QStringLiteral("AMPR emulator leftover");
     if (o.removeDumpLeftovers && isDir) {
-        if (depth == 0 && name == u"_DUBLEX_")
+        if (depth == 0 && low == u"_dublex_")
             return QStringLiteral("dump leftover (_DUBLEX_)");
         if (depth == 0 && low == u"engine" && ctx.childNames.size() == 1 && eqi(ctx.childNames[0], QStringLiteral("Saved")))
             return QStringLiteral("dump leftover (Unreal Engine\\Saved is its only content)");

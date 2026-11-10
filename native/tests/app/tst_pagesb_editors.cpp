@@ -346,6 +346,30 @@ private slots:
         QCOMPARE(page.attentionCount(), before);
         QCOMPARE(ctx.settings().value(key).toInt(), 5);
 
+        // A stored value that would change is asked about first.
+        QVERIFY(ctx.settings().setValue(key, 7).ok());
+        const auto answer = [&](const QString& button) {
+            auto* poll = new QTimer(&page);
+            connect(poll, &QTimer::timeout, &page, [&page, poll, button] {
+                for (auto* s : page.findChildren<ui::Sheet*>()) {
+                    QPushButton* b = s->isVisible() ? buttonByText(s, button) : nullptr;
+                    if (!b)
+                        continue;
+                    poll->stop();
+                    poll->deleteLater();
+                    b->click();
+                    return;
+                }
+            });
+            poll->start(20);
+        };
+        answer(QStringLiteral("Keep settings"));
+        reset->click(); // blocks in the question
+        QCOMPARE(ctx.settings().value(key).toInt(), 7);
+        answer(QStringLiteral("Reset section"));
+        reset->click();
+        QCOMPARE(ctx.settings().value(key).toInt(), 5);
+
         emit page.row(key)->editor()->edited(QVariant(1000000));
         QCOMPARE(page.attentionCount(), before + 1);
         QString other;

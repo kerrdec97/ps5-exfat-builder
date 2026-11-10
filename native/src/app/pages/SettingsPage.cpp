@@ -252,6 +252,22 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     connect(m_resetSection, &QPushButton::clicked, this, [this] {
         if (m_section == QLatin1String("Tools") && m_ctx.schema().inSection(m_section).empty())
             return;
+        // Stored values that would change: asked about first, as Reset all is.
+        // With none there is only a refused entry to take back: no question.
+        int changed = 0;
+        bool paths = false;
+        for (const SettingDef* d : m_ctx.schema().inSection(m_section)) {
+            if (m_ctx.settings().isDefault(d->key))
+                continue;
+            ++changed;
+            paths = paths || d->type == SettingType::DirPath || d->type == SettingType::FilePath;
+        }
+        if (changed > 0
+            && !Sheet::confirm(window(), changed == 1 ? QStringLiteral("Reset 1 setting?") : QStringLiteral("Reset %1 settings?").arg(changed),
+                               QStringLiteral("The settings you changed in %1 go back to their defaults.%2 Jobs already in the queue keep their settings.")
+                                   .arg(m_section, paths ? QStringLiteral(" Paths you entered there are cleared too.") : QString()),
+                               QStringLiteral("Keep settings"), QStringLiteral("Reset section"), true, Sheet::Icon::Warning))
+            return;
         m_ctx.settings().resetSection(m_section);
         (void)m_ctx.settings().save();
         rebuild(); // also forgets the refused values of the rows it replaces

@@ -26,7 +26,9 @@ public:
 
 signals:
     // The queue finished; `action` should run after `delaySeconds` unless the
-    // user cancels.
+    // user cancels. Not emitted for a run in which every job was cancelled,
+    // nor, with "Only if every job succeeded" on, when a job failed or was
+    // cancelled after it had started.
     void actionDue(fw::power::Action action, int delaySeconds, int succeeded, int failed);
     // The queue finished (always emitted, for toasts/notifications).
     void queueFinished(int succeeded, int failed, int cancelled);
@@ -38,6 +40,7 @@ private:
     int m_succeeded = 0;
     int m_failed = 0;
     int m_cancelled = 0;
+    int m_cancelledAfterStart = 0; // of m_cancelled: the jobs that had started
     QStringList m_runIds;  // jobs finished since the queue was last idle
     QStringList m_lastRun;
 };
