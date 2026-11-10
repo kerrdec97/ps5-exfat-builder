@@ -18,7 +18,7 @@ reference until the migration matrix says otherwise.
 | Outputs | Always `<final>.part` then rename (`PartFile`); an existing output is set aside and restored on failure | Audit H6, M2. |
 | Settings | Schema declared by the consuming module; Settings page generated from the schema; immutable per-job snapshots with validated per-job overrides | "Every setting must be functional": no control without a consumer. |
 | Tests | Qt Test executables, one per `tests/**/tst_*.cpp`, registered with CTest | Ships with Qt, no extra dependency. |
-| Licence | Proprietary from 5.0.1 (Copyright © 2026 Deckerr97, all rights reserved; `packaging/LICENCE.txt`) | Third-party components keep their own licences (`packaging/THIRD_PARTY_NOTICES-native.md`). Owner's note: the PFS engine (Lazy_MkPFS / MkPFS), the fake-SELF writer (make_fself) and the AMPR index (ampr_emu) are ports of GPL-3.0 code, and the zstd pack writer follows ps5-dump-forge (GPL-3.0); their authors' terms still apply to those parts. Code with no licence (the PSVIETHOA FPKG Builder, the Backport GUI checkout) is never copied — behaviour is reimplemented. Sony tools are never bundled. |
+| Licence | Proprietary from 5.0.1 (Copyright © 2026 Deckerr97, all rights reserved; `packaging/LICENCE.txt`) | Third-party components keep their own licences (`packaging/THIRD_PARTY_NOTICES-native.md`). Owner's note: the PFS engine and the AMPR index (Lazy_MkPFS / MkPFS) and the fake-SELF reader (make_fself) are ports of GPL-3.0 code, and the zstd pack writer follows ps5-dump-forge (GPL-3.0-or-later); their authors' terms still apply to those parts. Other programs' behaviour is reimplemented, not copied. The published build bundles no Sony tools. |
 
 ## Layout
 

@@ -6,19 +6,27 @@
 
 .DESCRIPTION
   1. Uses the MSVC x64 developer environment (imported through vswhere and
-     VsDevCmd unless cl.exe is already on PATH) and Qt from -QtDir.
+     VsDevCmd unless cl.exe is already on PATH) and Qt from -QtDir (default:
+     the QT_ROOT_DIR or Qt6_DIR environment variable, else windeployqt on
+     PATH).
   2. Configures and builds native/ (Release, Ninja) unless -SkipBuild.
   3. Runs CTest unless -SkipTests.
   4. Deploys the Qt runtime to dist\exFAT Image Builder\ (windeployqt, README,
-     LICENSES, third-party notices), as CI does.
+     LICENCE, LICENSES, third-party notices, engines), as CI does, and checks
+     the two bundled engines against their pinned SHA-256.
   5. Packs that folder into dist\exFAT Image Builder.exe (make-onefile.ps1).
-     Extra payload files: -Extra '<source>=<path inside>' (repeatable), or
+     Extra payload files: -Extra '<source>=<path inside>' (one item with
+     -File; several as 'a=b','c=d' when called from a PowerShell prompt), or
      copy them under dist\exFAT Image Builder\ and run make-onefile.ps1 again.
   6. Smoke test from a fresh folder with private data and cache folders:
      --self-test twice (first start unpacks, the second uses the cache).
-  7. -Zip: the portable zip of the deploy folder. Then SHA256SUMS.txt.
+  7. -Zip: the portable zip of the deploy folder (a build artefact: a release
+     is the one exe). Then SHA256SUMS.txt, which names the exe as GitHub
+     serves it (exFAT.Image.Builder.exe).
 
   Nothing is installed and the user's own settings and caches are not used.
+  The Qt bin folder stays on PATH of the calling session; the other
+  environment variables the script sets are put back.
   Windows PowerShell 5.1 compatible.
 
 .EXAMPLE
@@ -26,7 +34,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$QtDir = 'D:\LAPTOP_C_COPY_20261029\Qt\6.10.3\msvc2022_64',
+    [string]$QtDir = '',
     [string]$BuildDir = '',
     [string]$OutDir = '',
     [string[]]$Extra = @(),
@@ -64,6 +72,12 @@ $native = Join-Path $repo 'native'
 if (-not $BuildDir) { $BuildDir = Join-Path $native 'build-release' }
 if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($PrivateToolkit -or $PrivateDlcEngine -or $PrivateYoutube) { 'dist-private' } else { 'dist' }) }
 $version = (Select-String -Path (Join-Path $native 'CMakeLists.txt') -Pattern 'VERSION (\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
+$dist = Join-Path $OutDir 'exFAT Image Builder'
+$onefile = Join-Path $OutDir 'exFAT Image Builder.exe'
+if (-not $QtDir) {
+    if ($env:QT_ROOT_DIR) { $QtDir = $env:QT_ROOT_DIR }
+    elseif ($env:Qt6_DIR -and (Test-Path (Join-Path $env:Qt6_DIR '..\..\..\bin'))) { $QtDir = (Resolve-Path (Join-Path $env:Qt6_DIR '..\..\..')).Path }
+}
 
 function Write-Step([string]$text) { Write-Host "== $text" }
 
@@ -82,20 +96,28 @@ if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
     if (-not (Test-Path $vswhere)) { throw 'No Visual Studio / Build Tools (vswhere.exe missing). See pc-acceptance.ps1 for the install command.' }
     $vsPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
     if (-not $vsPath) { throw 'Visual Studio has no C++ x64 tools.' }
-    $envDump = & cmd.exe /s /c "`"$(Join-Path $vsPath 'Common7\Tools\VsDevCmd.bat')`" -no_logo -arch=amd64 -host_arch=amd64 2>nul && set"
+    $envDump = @(& cmd.exe /s /c "`"$(Join-Path $vsPath 'Common7\Tools\VsDevCmd.bat')`" -no_logo -arch=amd64 -host_arch=amd64 2>nul && set")
+    if ($envDump.Count -eq 0) { throw "VsDevCmd.bat failed under $vsPath (no developer environment)." }
     foreach ($line in $envDump) {
         $i = $line.IndexOf('=')
         if ($i -gt 0) { [Environment]::SetEnvironmentVariable($line.Substring(0, $i), $line.Substring($i + 1), 'Process') }
     }
 }
-$windeployqt = Join-Path $QtDir 'bin\windeployqt.exe'
-if (Test-Path $windeployqt) {
+$windeployqt = if ($QtDir) { Join-Path $QtDir 'bin\windeployqt.exe' } else { '' }
+if ($windeployqt -and (Test-Path $windeployqt)) {
     $env:PATH = (Join-Path $QtDir 'bin') + ';' + $env:PATH
 } else {
     $found = Get-Command windeployqt -ErrorAction SilentlyContinue
-    if (-not $found) { throw "Qt is not at $QtDir and windeployqt is not on PATH" }
+    if (-not $found) { throw 'Qt was not found: pass -QtDir <...\msvc2022_64>, set QT_ROOT_DIR, or put windeployqt on PATH.' }
     $windeployqt = $found.Source
     $QtDir = Split-Path (Split-Path $windeployqt -Parent) -Parent
+}
+
+# A running copy keeps its exe open: say so now, not after the whole build.
+foreach ($inUse in $onefile, (Join-Path $dist 'exFAT Image Builder.exe')) {
+    if (-not (Test-Path -LiteralPath $inUse)) { continue }
+    try { ([IO.File]::Open($inUse, 'Open', 'ReadWrite', 'None')).Close() }
+    catch { throw "Close the running app first: $inUse is in use." }
 }
 
 # ---- 2./3. Build and test -------------------------------------------------------
@@ -112,17 +134,19 @@ if (-not $SkipBuild) {
 }
 if (-not $SkipTests) {
     Write-Step 'CTest'
+    $savedTestEnv = @{ QT_QPA_PLATFORM = $env:QT_QPA_PLATFORM; FW_OFFLINE = $env:FW_OFFLINE }
     $env:QT_QPA_PLATFORM = 'offscreen'
     $env:FW_OFFLINE = '1'
-    $code = Invoke-Native { ctest --test-dir $BuildDir --timeout 900 --output-on-failure }
-    Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+    try {
+        $code = Invoke-Native { ctest --test-dir $BuildDir --timeout 900 --output-on-failure }
+    } finally {
+        foreach ($k in $savedTestEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $savedTestEnv[$k], 'Process') }
+    }
     if ($code -ne 0) { throw "CTest failed ($code)" }
 }
 
 # ---- 4. Deploy -----------------------------------------------------------------------
 Write-Step 'Deploy'
-$dist = Join-Path $OutDir 'exFAT Image Builder'
-$onefile = Join-Path $OutDir 'exFAT Image Builder.exe'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $BuildDir 'bin\exFAT Image Builder.exe') $dist
@@ -138,6 +162,22 @@ Copy-Item (Join-Path $native 'packaging\LICENCE.txt') (Join-Path $dist 'LICENCE.
 $engines = Join-Path $BuildDir 'bin\engines'
 if (-not (Test-Path (Join-Path $engines 'backport\PS5BackportGUI.exe'))) {
     throw "The PS5 Backport engine is missing from $engines (configure with -BackportEngine <exe> or let CMake fetch it)"
+}
+# A build tree keeps what an earlier configure put there, so both bundled
+# files are compared with the hashes pinned in native\cmake.
+function Get-PinnedHash([string]$cmakeFile, [string]$variable) {
+    $m = Select-String -Path (Join-Path $native "cmake\$cmakeFile") -Pattern ('set\(' + $variable + ' "([0-9a-f]{64})"\)') | Select-Object -First 1
+    if (-not $m) { throw "$variable was not found in native\cmake\$cmakeFile" }
+    return $m.Matches[0].Groups[1].Value
+}
+$pinned = @(
+    @{ File = 'backport\PS5BackportGUI.exe'; Hash = (Get-PinnedHash 'BackportEngine.cmake' 'FW_BACKPORT_ENGINE_SHA256') },
+    @{ File = 'ampr-emu-ng\libSceAmpr.sprx'; Hash = (Get-PinnedHash 'AmprRuntime.cmake' 'FW_AMPR_RUNTIME_SHA256') })
+foreach ($pin in $pinned) {
+    $bundled = Join-Path $engines $pin.File
+    if (-not (Test-Path -LiteralPath $bundled)) { throw "Missing from the build: $bundled. Configure and build again (without -SkipBuild)." }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundled).Hash.ToLower()
+    if ($actual -ne $pin.Hash) { throw "$bundled is not the pinned release (SHA-256 $actual, pinned $($pin.Hash)). Configure and build again (without -SkipBuild)." }
 }
 Copy-Item $engines -Recurse (Join-Path $dist 'engines')
 if ($PrivateToolkit) {
@@ -235,12 +275,14 @@ try {
 $assets = @($onefile)
 if ($Zip) {
     Write-Step 'Portable zip'
-    $zipPath = Join-Path $OutDir "exFAT-Image-Builder-Farewell-$version-win64-portable.zip"
+    $zipPath = Join-Path $OutDir "exFAT-Image-Builder-$version-win64-portable.zip"
     if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
     Compress-Archive -Path $dist -DestinationPath $zipPath
     $assets += $zipPath
 }
-$sums = foreach ($f in $assets) { (Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() + '  ' + (Split-Path $f -Leaf) }
+# GitHub serves an uploaded "exFAT Image Builder.exe" as "exFAT.Image.Builder.exe":
+# the list names the file a user will have.
+$sums = foreach ($f in $assets) { (Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() + '  ' + ((Split-Path $f -Leaf) -replace ' ', '.') }
 [IO.File]::WriteAllText((Join-Path $OutDir 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
 Write-Step 'Done'
 foreach ($f in $assets + (Join-Path $OutDir 'SHA256SUMS.txt')) { Write-Host ("   {0}  ({1:N1} MiB)" -f $f, ((Get-Item -LiteralPath $f).Length / 1MB)) }

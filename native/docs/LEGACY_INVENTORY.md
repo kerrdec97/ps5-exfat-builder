@@ -1,5 +1,7 @@
 # Legacy inventory — engines and settings (exFAT Image Builder 4.1.0, Farewell Edition)
 
+> **Status:** a record from the v5 rewrite, not kept current. It describes the Python app (versions 1 to 4), which is no longer in this repository; every `file:line` reference points at that removed code.
+
 | | |
 |---|---|
 | Snapshot | branch checked out from `farewell-edition-dev`, HEAD `b298c2d` (2026-11-04). All `file:line` references are to this commit. Function names are the stable reference if lines drift. |

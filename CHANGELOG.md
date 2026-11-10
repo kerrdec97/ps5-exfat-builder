@@ -270,9 +270,7 @@ consistent look. Every existing feature, setting and language is kept.
   recovery yet. Update builds exist in the engine but not in the Build tab.
 - The PS5 Backport GUI's engine (import-table audit, confirmed-fix
   families, audio gate, AMPR/PlayGo variants, `right.sprx` replacement) is
-  not merged. Its checkout has no project licence and ships Sony-, game- and
-  firmware-derived data of unknown origin, so none of it is copied; the
-  checks above are independent equivalents. See `docs/farewell/STATUS.md`.
+  not merged; the checks above are independent equivalents.
 - Not tested on real hardware for this release: image builds with OSFMount,
   robocopy on a real game, Windows 10/11 locales, and a PS5. The Windows CI
   runner has no OSFMount and no console. See the README.

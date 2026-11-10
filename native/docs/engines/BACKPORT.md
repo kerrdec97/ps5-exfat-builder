@@ -88,8 +88,8 @@ Limits that protect the list from hostile files (a dump from someone else is unt
 GNU GPL version 3), as modified by Nazky, and carry an attribution header; the reader is
 reimplemented from the format description rather than translated from `decrypt_fself.py`. make_fself
 is listed in `THIRD_PARTY_NOTICES-native.md`. `SceParam.*` is clean-room from the documented facts
-(offsets, magics); no code from the unlicensed SDK patcher was used. No Sony library, firmware table
-or fakelib binary is bundled or downloaded; the trio pins are hashes only.
+(offsets, magics); no code from the old Python app's SDK patcher was used. The native code bundles
+and downloads no library, firmware table or fakelib binary; the trio pins are hashes only.
 
 ## Tests
 
@@ -99,7 +99,6 @@ or fakelib binary is bundled or downloaded; the trio pins are hashes only.
 | `tests/app/tst_backport_engine.cpp` | The engine host. Always: scanner rules, preflight refusals, AMPR / PlayGo user-file checks, the settings round trip, worker failure paths. With `FW_BACKPORT_ENGINE` set: the engine's selftest and the protocol (progress, result, cancel and tree kill). With `FW_BACKPORT_E2E_GAME` as well: a full backport with Apply off, a switch and an SDK rebuild, into temporary folders. |
 | `tests/app/tst_backport_page.cpp` | The page. |
 
-Run them with `ctest -R backport`.
 
 Not tested here: anything on a PS5. Whether a console loads a backport is a property of the bundled
 engine, not of this repository's code.

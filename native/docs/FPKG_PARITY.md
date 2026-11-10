@@ -1,5 +1,7 @@
 # FPKG parity: reference inventory and the native C++ plan
 
+> **Status:** a record from the v5 rewrite, not kept current. It was the input for writing the native FPKG engine; the proposed file names, setting keys, defaults and the "owner decisions" below are the plan of that time. `engines/FPKG.md` and `docs/FPKG.md` describe the engine as built.
+
 This document is the input for writing the native FPKG engine (`native/src/engines/fpkg/`). It lists everything the
 third-party reference app does for PS5 packages, every setting it exposes, the exact way it drives Sony's Publishing
 Tools, how our Python engine (`core/fpkg/`) compares, and a proposed C++ design with a test plan.
@@ -24,12 +26,12 @@ Conventions:
 
 | Item | Value | How it was checked |
 |---|---|---|
-| Reference repository | `github.com/thanhsondev/PSVIETHOA-FPKG-Builder` | shallow clone in the session scratchpad |
+| Reference repository | `github.com/thanhsondev/PSVIETHOA-FPKG-Builder` | shallow clone |
 | Commit inspected | `6e43d85b84a34b282378763690bd130e7917da9b` (2026-11-02, author Nguyễn Thanh Sơn) | `git log` |
 | Newest upstream ref | `HEAD` = `refs/heads/main` = `refs/tags/v3.0.0` = `6e43d85` | `git ls-remote` (2026-11-04). No newer commit or tag exists. Open PR heads: `refs/pull/2/head` `a87f928`, `refs/pull/3/head` `4832a68` (= tag v2.2.5); not inspected. |
 | App version | 3.0.0 (`Directory.Build.props` `<Version>3.0.0</Version>`) | matches the owner's screenshots (title bar "PSVIETHOA FPKG Builder 3.0.0") |
 | Built-in engine | `libs/LibProsperoPkg.dll`, assembly version `1.2.0+a3ee4c1a6c37c6689717416c4962fa544e063e2c`, copyright attribute "SvenGDK 2026", taken from Drakmor's fpkg-gui 0.6.12 | strings of the DLL; PDB Source Link maps to `raw.githubusercontent.com/drakmor/LibProsperoPKG/a3ee4c1…` |
-| Sony toolkit profile | `sdk279-plaintext-direct-v3`, toolkit "sdk-fpkg279-fix12" (Publishing Tools 2.79, patched) | `C:Services/SonySdkToolchain.cs:48`, `K:README.md`, CHANGELOG 2.2.5 |
+| Sony toolkit profile | `sdk279-plaintext-direct-v3` (Publishing Tools 2.79) | `C:Services/SonySdkToolchain.cs:48`, `K:README.md`, CHANGELOG 2.2.5 |
 | Screenshots | `images/1.webp`–`4.webp`: Build PKG page of v3.0.0 on Windows (Sony SDK on, 16 cores, LibProsperoPkg 1.2.0). `images/5.webp` shows a different program (PS5 Backport GUI beta 0.3.4 by Deckerr97) and is out of scope for this document. | converted to PNG and viewed |
 
 Our previous research (`docs/farewell/FPKG_RESEARCH.md`) names the same commit. It was re-verified against the files;
@@ -39,11 +41,11 @@ the corrections are listed in §7.3.
 
 | Part | Where | Licence / origin | We may | We may not |
 |---|---|---|---|---|
-| App, Core, CLI, tests, scripts, docs, CHANGELOG, `vi.json`/`en.json`, design system | `src/`, `tests/`, `scripts/`, `docs/`, `design-system/` | **None.** No LICENSE/COPYING file in the tree; the README "Credits & license" section grants nothing for the app code. (GitHub API licence field not checked: API access is not enabled in this session.) All rights reserved by default. | Read for behaviour; quote facts (flags, file names, format constants) | Copy code, UI strings, localisation text, data tables, test fixtures, icons, screenshots |
-| Toolkit launchers and GP5 script | `K:build.bat`, `K:build-from-folder.ps1`, `K:build-gui.ps1`, `K:scripts/create-gp5-from-folder.py` | None (part of the "sdk-fpkg279-fix12" toolkit of unknown origin) | Read for the tool's argument conventions | Copy, vendor, or depend on them |
-| Patched Sony Publishing Tools 2.79 | `K:toolchain/prospero-pub-cmd.exe`, `libScePubTools.dll`, `ext/{da,fa,p2d,ric,sc2}.exe`, `ext/ispc_texcomp.dll`, `ext/libatrac9.dll`; also `libs/libScePubTools.dll` | Sony proprietary SDK, modified by unknown parties | Drive the **user's own copy** through its command line | Bundle, redistribute, download, link to, or ship any part of it |
-| `prospero-dds2png.exe` | `K:prospero-dds2png.exe` | Unknown origin, no licence (UNVERIFIED whether it is a Sony or a third-party tool) | Run the user's copy if they have it | Bundle it |
-| LibProsperoPkg ("built-in engine", credited to Drakmor) | `libs/LibProsperoPkg.dll/.pdb/.xml` | Upstream `drakmor/LibProsperoPKG` is **GPL-3.0-or-later** (LICENSE + NOTICE "Copyright (C) 2026 SvenGDK", `<PackageLicenseExpression>GPL-3.0-or-later`), verified on `main` `be79990` and `feature/full-ppr-pkg-roundtrip` `5e26c8a` (version 1.2.0, author Roman Tarasov). The exact shipped commit `a3ee4c1` is **not fetchable** ("not our ref"), so the corresponding source of the shipped DLL is not public. | Study the public GPL source for format facts; port code only if `native/` ships under GPL-3.0-or-later with source and credits to SvenGDK and drakmor | Redistribute the reference's DLL; port anything if `native/` is not GPL-compatible |
+| App, Core, CLI, tests, scripts, docs, CHANGELOG, `vi.json`/`en.json`, design system | `src/`, `tests/`, `scripts/`, `docs/`, `design-system/` | **None.** No LICENSE/COPYING file in the tree; the README "Credits & license" section grants nothing for the app code. All rights reserved by default. | Read for behaviour; quote facts (flags, file names, format constants) | Copy code, UI strings, localisation text, data tables, test fixtures, icons, screenshots |
+| Toolkit launchers and GP5 script | `K:build.bat`, `K:build-from-folder.ps1`, `K:build-gui.ps1`, `K:scripts/create-gp5-from-folder.py` | Not ours (part of the reference's toolkit folder) | Read for the tool's argument conventions | Copy, vendor, or depend on them |
+| Sony Publishing Tools 2.79, as the reference expects them | `K:toolchain/prospero-pub-cmd.exe`, `libScePubTools.dll`, `ext/{da,fa,p2d,ric,sc2}.exe`, `ext/ispc_texcomp.dll`, `ext/libatrac9.dll`; also `libs/libScePubTools.dll` | Sony proprietary SDK | Drive the **user's own copy** through its command line | Bundle, redistribute, download, link to, or ship any part of it |
+| `prospero-dds2png.exe` | `K:prospero-dds2png.exe` | Not ours (UNVERIFIED whether it is a Sony or a third-party tool) | Run the user's copy if they have it | Bundle it |
+| LibProsperoPkg ("built-in engine", credited to Drakmor) | `libs/LibProsperoPkg.dll/.pdb/.xml` | Upstream `drakmor/LibProsperoPKG` is **GPL-3.0-or-later** (LICENSE + NOTICE "Copyright (C) 2026 SvenGDK", `<PackageLicenseExpression>GPL-3.0-or-later`), verified on `main` `be79990` and `feature/full-ppr-pkg-roundtrip` `5e26c8a` (version 1.2.0, author Roman Tarasov). The exact shipped commit `a3ee4c1` is **not fetchable** ("not our ref"), so the corresponding source of the shipped DLL is not public. | Study the public GPL source for format facts, credited in the third-party notices | Redistribute the reference's DLL |
 | LibOrbisPkg (PS4) | `libs/LibOrbisPkg/` | LGPL-3.0 (Maxton), source zip included | Not needed for PS5 FPKG | — |
 | PS4 Fake PKG Tools 3.87 (CyB1K patch) + "fast engine" byte patch | `libs/orbis-pub/` | Sony PS4 SDK binaries, patched; no licence | Nothing | Bundle or patch |
 | garlic-savemgr | `libs/garlic-savemgr/` | earthonion; source included, **no licence file found** (UNVERIFIED) | Nothing for FPKG | — |
@@ -831,8 +833,8 @@ languages, DLC mount, update install, and the logs.
 
 ### 7.1 Owner decisions
 
-1. Licence of `native/`. Only a GPL-3.0-or-later release may port code from the public LibProsperoPkg source (UCP digest,
-   flat-path hash, PlayGo tables, package reading). Otherwise derive formats from samples and Sony's own tool output.
+1. Licence of `native/`: decided. Version 5 is proprietary from 5.0.1 (`packaging/LICENCE.txt`); what the FPKG engine
+   took from the public LibProsperoPkg source is credited in `packaging/THIRD_PARTY_NOTICES-native.md`.
 2. Whether the native app may bundle Microsoft's `vc_redist.x64.exe` (Microsoft redistributable licence) or only link to it.
 3. Default for `postVerify` (full integrity check can take as long as reading the package; speed UNVERIFIED).
 4. Whether to accept `.gp5` sources through the Sony tool (the reference never does).
@@ -851,8 +853,7 @@ languages, DLC mount, update install, and the logs.
 8. A key-free way to tell a tool-built base package from a LibProsperoPkg-built one.
 9. The package-name version component for unusual versions (e.g. minor ≥ 100 handled as "no truncation" only from two
    examples).
-10. Origin and licence of the "sdk-fpkg279-fix12" toolkit and `prospero-dds2png.exe`; whether real toolkits ship a
-    `patch-manifest.json`.
+10. Whether real toolkits ship a `patch-manifest.json`.
 11. Licence of garlic-savemgr; GitHub's licence field for the reference repository.
 12. The screenshot state of the compression preset (Standard highlighted, SDK level box blank).
 13. Python-compatible float formatting edge cases in `param.json` (exponents, `-0.0`, very large integers).

@@ -16,6 +16,14 @@ You may not, without the author's written permission,
     software, including copies you have renamed or repackaged;
   * sell, rent, lease or lend the program, or offer it as a service.
 
+Nothing in this licence limits any right you have under the licences of the
+third-party components listed in THIRD_PARTY_NOTICES.md. For example, the
+LGPL lets you modify the Qt libraries shipped with the program, use the
+program with your modified copies and reverse engineer it to the extent
+needed to debug such modifications; and the GPL-licensed components that are
+bundled as separate files remain under the GPL, with their source offered as
+stated in the notices.
+
 THE PROGRAM IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE

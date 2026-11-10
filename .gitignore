@@ -111,3 +111,9 @@ native/CMakeUserPresets.json
 
 # Private builds that carry the owner's own Sony toolkit: never commit or publish.
 dist-private/
+# The same payloads and the acceptance evidence, wherever a script was told to
+# write them (make-release.ps1 -OutDir, pc-acceptance.ps1 -OutRoot).
+tools/fpkg-toolkit/
+tools/fpkg-cli/
+tools/youtube/
+_PC_TEST_EVIDENCE/

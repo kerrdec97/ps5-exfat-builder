@@ -2,14 +2,15 @@ name: Native (C++) Windows build and test
 
 # Builds exFAT Image Builder v5 (native/) with MSVC 2022 + Qt 6.8 on
 # Windows, runs the automated tests, deploys the Qt runtime, packs the
-# single-file exe (the main download), packages a portable zip and an
-# installer, launches the real .exe and the single-file exe (self-test, page
+# single-file exe (the download), packages a portable zip and an installer,
+# launches the real .exe and the single-file exe (self-test, page
 # screenshots, alive checks) and uploads everything as evidence. Nothing is
-# published.
+# published. The zip and the installer are build artefacts only: a release is
+# the single-file exe and SHA256SUMS.txt.
 
 on:
   push:
-    branches: [farewell-edition-dev, 'claude/wizardly-sagan-mahxhj', 'claude/backport-parity-v5']
+    branches: [main, 'claude/**']
     paths:
       - 'native/**'
       - '!native/docs/**'
@@ -118,7 +119,7 @@ jobs:
           Copy-Item build\bin\engines -Recurse "$dist\engines"
           Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
 
-      - name: Single-file exe (the main download)
+      - name: Single-file exe (the download)
         shell: pwsh
         run: |
           # Packs everything under dist\exFAT Image Builder (plus app-local VC++ runtime DLLs) into one exe.
@@ -209,9 +210,11 @@ jobs:
             $env:PATH = "$inno;$env:PATH"
           }
           iscc /DAppVersion=$ver /DSourceDir="$PWD\dist\exFAT Image Builder" /O"$PWD\dist" native\packaging\installer.iss
-          Get-ChildItem dist -File | ForEach-Object {
-            (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLower() + "  " + $_.Name
-          } | Tee-Object dist\SHA256SUMS.txt
+          # SHA256SUMS.txt lists the release download under the name GitHub serves it
+          # ("exFAT.Image.Builder.exe"), with LF line ends, as make-release.ps1 writes it.
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\exFAT Image Builder.exe").Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", "$hash  exFAT.Image.Builder.exe`n", (New-Object Text.UTF8Encoding($false)))
+          Get-Content dist\SHA256SUMS.txt
 
       - name: Upload packages
         if: always()

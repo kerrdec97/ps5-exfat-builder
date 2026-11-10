@@ -30,8 +30,7 @@ if(MSVC)
     target_link_options(fw_app PRIVATE /MANIFEST:NO)
 endif()
 fw_configure_target(fw_app)
-
-install(TARGETS fw_app RUNTIME DESTINATION .)
+fw_strip_pdb_path(fw_app)
 
 # The bundled PS5 Backport engine (engines/backport/PS5BackportGUI.exe).
 include(${PROJECT_SOURCE_DIR}/cmake/BackportEngine.cmake)

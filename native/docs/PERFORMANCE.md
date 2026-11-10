@@ -54,7 +54,7 @@ otherwise a copy), the live CPU limit, and a read-back verification.
 
 | Benchmark | Command (Release build) |
 |---|---|
-| exFAT | `FW_EXFAT_BENCH_MIB=1024 ctest -R tst_exfat_bench -V` |
+| exFAT | `FW_EXFAT_BENCH_MIB=1024 tst_exfat_bench` |
 | UFS2 | `tst_ufs2_roundtrip benchmark` (+ `FW_UFS2TOOL_DLL` for the comparison) |
 | PFS | `QTEST_FUNCTION_TIMEOUT=3600000 FW_PFS_BENCH_MIB=320 FW_PFS_BENCH_LEVEL=9 FW_PFS_BENCH_REPEAT=3 tst_pfs_benchmark` |
 

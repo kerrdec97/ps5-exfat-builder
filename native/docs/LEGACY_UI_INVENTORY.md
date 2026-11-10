@@ -1,5 +1,7 @@
 # Legacy UI and PS5-connectivity inventory
 
+> **Status:** a record from the v5 rewrite, not kept current. It describes the Python app (versions 1 to 4), which is no longer in this repository; every `file:line` reference points at that removed code.
+
 Source: `PS5 exFAT Image Builder - Farewell Edition`, `APP_VERSION = '4.1.0'` (`exfat_builder.py:71`), Python/Tkinter, Windows only.
 Checked-out branch at time of writing: `claude/wizardly-sagan-mahxhj` (based on `farewell-edition-dev`, HEAD `b298c2d`).
 Method: static reading and grep/AST counting only. **The app was never executed** (Windows-only, Tk, admin elevation), so every runtime claim is "as coded". Anything not read directly or not provable from code is marked **UNVERIFIED**.

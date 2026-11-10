@@ -38,7 +38,7 @@ game built with zstd packs; it runs on the console, not on the PC.
 SHA-256 `cf8eaa884f087a78f57ba1ae32cb28231393e622a0626a42ef4f1bd00804cf42`).
 It is a separate program by the same author, distributed under its own terms
 (see that repository's LICENSE.txt, NOTICE.md and THIRD_PARTY_NOTICES.txt),
-and is not covered by this application's GPL licence. The Backport tab
+and is not covered by the licence of this application. The Backport tab
 starts it as a child process (`--worker job.json`) and exchanges JSON over
 its standard streams; no code is linked. The libraries it carries and their
 provenance are listed in its own notices (for example drakmor's ampr_emu,
