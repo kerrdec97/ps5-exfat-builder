@@ -103,7 +103,25 @@ stay valid.
   characters of the lines it does not change. "Safe to unplug" asks before it
   stops ShadowMount+. "Find my PS5" only searches private home networks.
 
-### Interface
+### Interface: a design refresh
+* **Depth and contrast**: cards lift off the page, fields read as wells, lines
+  and secondary text are easier to see, and buttons no longer look like fields.
+  White text on the blue-violet gradient and on red buttons now passes the
+  4.5:1 contrast mark.
+* **The page title and its main button stay in view** while a long form
+  scrolls, so "Build image" or "Start Backport" is always one click away. The
+  button's tooltip names the first thing that is still missing.
+* **Motion**: switches, segmented controls, hover states, progress bars, toasts
+  and dialogs now move, briefly and quietly. Windows' "show animations" setting
+  turns it all off.
+* **Games without cover art** get one of six colours from their title ID
+  instead of identical blocks; dropdowns show their arrow; empty lists are
+  compact and say what to do next.
+* **Job monitor**: larger percentage, clearer status line, a tinted result
+  block for success and failure.
+* Backport: status chips never cut their text, the selection links sit in one
+  group, shorter folder placeholders. Build: the two backport folders each get
+  the full width.
 * Text colours match the design again: links are blue, captions are dimmer than
   body text, errors red, confirmations green, and the separator lines are back.
 * Scrolling a page no longer changes a dropdown or number field under the

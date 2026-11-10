@@ -237,6 +237,8 @@ void SettingEditor::setValue(const QVariant& v)
                 s = QDir::toNativeSeparators(s);
         auto* e = static_cast<QLineEdit*>(m_control);
         e->setText(listText(items));
+        if (!e->hasFocus())
+            e->setCursorPosition(0); // a long list shows its start, not its tail
         e->setProperty("fwLast", listText(value().toStringList()));
         break;
     }
