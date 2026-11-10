@@ -94,6 +94,9 @@ public:
     QString host() const;
     int ftpPort() const;
     bool isReachable() const { return m_session->isConnected(); }
+    // What would be lost by closing now ("" when nothing): unsaved edits in the Autoloader editor
+    // and the ShadowMount+ settings form.
+    QString unsavedChanges() const;
     bool acceptsDrop(const QList<QUrl>& urls) const override;
     void dropUrls(const QList<QUrl>& urls) override;
     void setDragHighlight(bool on) override;
@@ -145,6 +148,14 @@ private:
     // FTP
     QWidget* buildFilesBrowser(QWidget* parent);
     void onListed(const ui::RemoteListing& listing);
+    // Delete / rename / new folder: `count` requests were sent; their answers are summed up in one toast.
+    void beginOperations(int count, const QString& footer);
+    void onOperationDone(const QString& what, bool ok, const QString& message);
+    // The console the browser is connected to (the address fields when it is not connected).
+    QString browserHost() const;
+    int browserPort() const;
+    // Names in the open folder that an upload of `localPaths` into `remoteDir` would replace.
+    QStringList uploadCollisions(const QStringList& localPaths, const QString& remoteDir) const;
     void showListing(const ui::RemoteListing& listing);
     void rebuildBreadcrumb();
     void rebuildPlaces();
@@ -208,6 +219,11 @@ private:
     ui::RemoteListing m_listing;
     QStringList m_history;
     int m_historyIndex = -1;
+    int m_opsPending = 0, m_opsTotal = 0, m_opsOk = 0; // the batch of delete / rename / mkdir requests under way
+    QString m_opsError;                                // the last failure of that batch
+    bool m_firstListing = false;                       // the listing right after connecting
+    int m_firstListingStep = 0;                        // its fallbacks: 1 = games folder, 2 = root
+    QPushButton* m_emptyConnect = nullptr;
     bool m_specimenListing = false;
     ui::Card* m_filesCard = nullptr;
     QWidget* m_crumbs;

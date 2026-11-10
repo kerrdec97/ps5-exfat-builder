@@ -33,7 +33,10 @@ int main(int argc, char* argv[])
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("PS5 exFAT Image Builder v5"));
     parser.addHelpOption();
-    parser.addVersionOption();
+    // Answered here, not by the parser: its text is the application name, which
+    // names the data folder ("… Farewell") and is not the product's name.
+    QCommandLineOption versionOpt(QStringList{QStringLiteral("v"), QStringLiteral("version")}, QStringLiteral("Displays version information."));
+    parser.addOption(versionOpt);
     QCommandLineOption screenshotOpt(QStringLiteral("screenshot-pages"),
                                      QStringLiteral("Render every page to PNG files in <dir> and exit."),
                                      QStringLiteral("dir"));
@@ -46,26 +49,51 @@ int main(int argc, char* argv[])
     parser.addOption(quitAfterOpt);
     parser.addOption(selfTestOpt);
     parser.process(app);
+    if (parser.isSet(versionOpt)) {
+        const QString text = QStringLiteral("exFAT Image Builder %1").arg(QLatin1String(fw::build::kVersion));
+        std::fprintf(stdout, "%s\n", qPrintable(text));
+        QMessageBox::information(nullptr, QStringLiteral("exFAT Image Builder"), text);
+        return 0;
+    }
+    int quitAfterMs = -1;
+    if (parser.isSet(quitAfterOpt)) {
+        bool isNumber = false;
+        quitAfterMs = parser.value(quitAfterOpt).toInt(&isNumber);
+        if (!isNumber || quitAfterMs < 0) {
+            std::fputs("--quit-after needs a number of milliseconds.\n", stderr);
+            return 2;
+        }
+    }
 
     fw::Paths::initialize();
+    fw::AppContext::usePortableWindowState();
 
     // One copy at a time: two would share one queue, one history and the same
     // .part files. A lock left by a crashed copy is detected and taken over.
     QLockFile instanceLock(QDir(fw::Paths::dataDir()).filePath(QStringLiteral("app.lock")));
     instanceLock.setStaleLockTime(0);
     if (!parser.isSet(selfTestOpt) && !instanceLock.tryLock(0)) {
-        QMessageBox::information(nullptr, QStringLiteral("exFAT Image Builder"),
-                                 QStringLiteral("exFAT Image Builder is already running. Switch to its window "
-                                                "(two copies would share the same queue and output files)."));
-        return 0;
+        // Only a lock another copy holds means "already running"; anything else is a data folder that cannot be used.
+        if (instanceLock.error() == QLockFile::LockFailedError) {
+            QMessageBox::information(nullptr, QStringLiteral("exFAT Image Builder"),
+                                     QStringLiteral("exFAT Image Builder is already running. Switch to its window "
+                                                    "(two copies would share the same queue and output files)."));
+            return 0;
+        }
+        QMessageBox::critical(nullptr, QStringLiteral("exFAT Image Builder"),
+                              QStringLiteral("The data folder cannot be written:\n%1\n\nCheck that the folder exists and that you may write to it "
+                                             "(a portable copy needs a writable drive).")
+                                  .arg(QDir::toNativeSeparators(fw::Paths::dataDir())));
+        return 1;
     }
 
     fw::crash::install(QDir(fw::Paths::logsDir()).filePath(QStringLiteral("crashes")));
     fw::Logger::installQtMessageHandler();
     fw::theme::apply(&app);
 
+    // The self-test may run next to the open app: it reads, and leaves the queue and history alone.
     fw::AppContext context;
-    if (auto st = context.initialize(); !st.ok()) {
+    if (auto st = context.initialize(parser.isSet(selfTestOpt) ? fw::AppContext::Mode::ReadOnly : fw::AppContext::Mode::Normal); !st.ok()) {
         QMessageBox::critical(nullptr, QStringLiteral("exFAT Image Builder"), st.error().message);
         return 1;
     }
@@ -96,8 +124,8 @@ int main(int argc, char* argv[])
             std::fprintf(stdout, "wrote %d page screenshots to %s\n", written, qPrintable(QDir::toNativeSeparators(dir)));
             QApplication::exit(written > 0 ? 0 : 2);
         });
-    } else if (parser.isSet(quitAfterOpt)) {
-        QTimer::singleShot(parser.value(quitAfterOpt).toInt(), &app, &QApplication::quit);
+    } else if (quitAfterMs >= 0) {
+        QTimer::singleShot(quitAfterMs, &app, &QApplication::quit);
     }
     return app.exec();
 }

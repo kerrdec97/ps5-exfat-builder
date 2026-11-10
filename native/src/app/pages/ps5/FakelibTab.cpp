@@ -232,9 +232,26 @@ void FakelibTab::askAdd()
     bool confirmed = false;
     if (!checkWithUser(path, &confirmed))
         return;
-    const QString name = QFileInfo(path).fileName();
-    // A copy: a listing that arrives while a question is open replaces m_listing.
-    const std::vector<fl::Overlay> overlays = m_listing.overlays;
+    // What is on the console now decides the question, not the list on screen:
+    // that one is empty until Refresh and may be old.
+    const bool started = runOnConsole<fl::Listing>([](ps5::FtpClient& c, const CancellationToken& t) { return fl::list(c, t); },
+                                                   [this, path, confirmed](const Result<fl::Listing>& r) {
+                                                       if (!r.ok()) {
+                                                           m_status->setText(QStringLiteral("Could not list the fakelib folder: %1").arg(r.error().message));
+                                                           setTextColor(m_status, color::danger_hi);
+                                                           emit toastRequested(Tone::Err, QStringLiteral("Overlay not added"), r.error().message);
+                                                           return;
+                                                       }
+                                                       showListing(r.value());
+                                                       if (confirmSameName(r->overlays, QFileInfo(path).fileName()))
+                                                           addFile(path, confirmed);
+                                                   });
+    if (!started && lastNotStarted() == NotStarted::Busy)
+        emit toastRequested(Tone::Info, QStringLiteral("Overlay not added"), whyNotStarted());
+}
+
+bool FakelibTab::confirmSameName(const std::vector<fl::Overlay>& overlays, const QString& name)
+{
     for (const fl::Overlay& o : overlays) {
         if (o.name != name)
             continue;
@@ -242,9 +259,9 @@ void FakelibTab::askAdd()
                                        : QStringLiteral("A disabled %1 is on the console. The new one is added as enabled and the disabled copy stays.").arg(Sheet::monoSpan(name));
         if (!Sheet::confirm(window(), o.enabled ? QStringLiteral("Replace %1?").arg(name) : QStringLiteral("Add %1?").arg(name), text,
                             QStringLiteral("Cancel"), o.enabled ? QStringLiteral("Replace") : QStringLiteral("Add"), o.enabled, Sheet::Icon::Warning))
-            return;
+            return false;
     }
-    addFile(path, confirmed);
+    return true;
 }
 
 void FakelibTab::addFile(const QString& localPath, bool confirmed)

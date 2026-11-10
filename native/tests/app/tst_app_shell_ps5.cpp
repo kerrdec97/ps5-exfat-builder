@@ -9,7 +9,10 @@
 #include "app/models/JobQueueModel.h"
 #include "app/models/LogModel.h"
 #include "app/pages/Ps5ConnectPage.h"
+#include "app/pages/ps5/AutoloaderTab.h"
 #include "app/pages/ps5/ConsoleExtras.h"
+#include "app/pages/ps5/ConsoleFolderPicker.h"
+#include "app/pages/ps5/ConsoleHero.h"
 #include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/pages/ps5/DiagnosticsTab.h"
 #include "app/pages/ps5/TransferPanel.h"
@@ -32,7 +35,11 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
+#include <QMimeData>
+#include <QDropEvent>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QTableWidget>
@@ -41,6 +48,7 @@
 #include <QTest>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 
 #include <functional>
 #include <memory>
@@ -643,6 +651,215 @@ private slots:
         QVERIFY(!html.contains(QStringLiteral("&lt;br&gt;")));
     }
 
+    // A drop on the page (not on the file list) says where it goes and asks; transfers go to the
+    // console the browser is connected to; an upload over a listed file asks; a selection is
+    // deleted with one message.
+    void dropsAskAndTransfersGoToTheConnectedConsole()
+    {
+        const QString root = fresh(QStringLiteral("drop"));
+        for (const char* name : {"one.bin", "two.bin", "three.bin", "taken.bin"})
+            QVERIFY(writeBytes(root + QStringLiteral("/data/etaHEN/games/") + QLatin1String(name), QByteArray(8, 'o')));
+        FakeFtpServer::Options o;
+        o.root = root;
+        FakeFtpServer srv(o);
+        pointSettingsAt(srv.port(), QStringLiteral("/data/etaHEN/games"));
+        ui::PayloadStore store;
+        JobQueueModel model(m_ctx->queue());
+        pages::Ps5ConnectPage page(*m_ctx, model, store);
+        const QString local = fresh(QStringLiteral("drop-up"));
+        QVERIFY(writeBytes(local + QStringLiteral("/new.bin"), QByteArray(3000, 'n')));
+        QVERIFY(writeBytes(local + QStringLiteral("/taken.bin"), QByteArray(5000, 't')));
+        const QList<QUrl> dropped{QUrl::fromLocalFile(local + QStringLiteral("/new.bin"))};
+        QStringList toasts;
+        connect(&page, &pages::Page::toastRequested, this, [&](ui::Tone, const QString& title, const QString& body) { toasts << title + u'|' + body; });
+        const auto uploads = [&] {
+            int n = 0;
+            for (const JobRecord& r : m_ctx->queue().records())
+                n += r.kind == ps5::jobkinds::kUpload;
+            return n;
+        };
+
+        // Not connected: the browser answers the drop itself.
+        page.resize(1300, 900);
+        page.show();
+        QVERIFY(page.acceptsDrop(dropped));
+        page.dropUrls(dropped);
+        QVERIFY2(toasts.join(u'\n').contains(QStringLiteral("Connect first")), qPrintable(toasts.join(u'\n')));
+        QCOMPARE(uploads(), 0);
+
+        QVERIFY(connectPage(page, srv, QStringLiteral("/data/etaHEN/games"), 4));
+        // The address fields now name another console; the browser stays with the one it is connected to.
+        (void)m_ctx->settings().setValue(ps5::keys::kConsoleIp, QStringLiteral("127.0.0.9"));
+        (void)m_ctx->settings().setValue(ps5::keys::kFtpPort, int(closedPort()));
+        QCOMPARE(page.host(), QStringLiteral("127.0.0.9"));
+
+        page.navigateWith({{QStringLiteral("tab"), QStringLiteral("payloads")}});
+        QString asked;
+        onSheet(&page, [&](ui::Sheet* s) {
+            asked = labelsOf(s);
+            if (QPushButton* no = buttonIn(s, QStringLiteral("Cancel")))
+                no->click();
+        });
+        page.dropUrls(dropped); // blocks in the sheet
+        QVERIFY2(asked.contains(QStringLiteral("/data/etaHEN/games")) && asked.contains(QStringLiteral("127.0.0.1")) && asked.contains(QStringLiteral("new.bin")),
+                 qPrintable(asked));
+        QCOMPARE(uploads(), 0);
+        onSheet(&page, [&](ui::Sheet* s) {
+            if (QPushButton* yes = buttonIn(s, QStringLiteral("Upload")))
+                yes->click();
+        });
+        page.dropUrls(dropped);
+        QCOMPARE(uploads(), 1);
+        QCOMPARE(page.currentTool(), QStringLiteral("ftp"));
+        for (const JobRecord& r : m_ctx->queue().records())
+            if (r.kind == ps5::jobkinds::kUpload) {
+                QCOMPARE(r.parameters.value(QStringLiteral("host")).toString(), QStringLiteral("127.0.0.1"));
+                QCOMPARE(r.parameters.value(QStringLiteral("port")).toInt(), int(srv.port()));
+            }
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(root + QStringLiteral("/data/etaHEN/games/new.bin")).size() == 3000, 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_ctx->queue().isBusy(), 30000);
+
+        // An upload that would replace a listed file asks first.
+        asked.clear();
+        onSheet(&page, [&](ui::Sheet* s) {
+            asked = labelsOf(s);
+            if (QPushButton* no = buttonIn(s, QStringLiteral("Cancel")))
+                no->click();
+        });
+        page.uploadFiles({local + QStringLiteral("/taken.bin")});
+        QVERIFY2(asked.contains(QStringLiteral("Replace the file on the console?")) && asked.contains(QStringLiteral("taken.bin")), qPrintable(asked));
+        QCOMPARE(uploads(), 1);
+        QCOMPARE(QFileInfo(root + QStringLiteral("/data/etaHEN/games/taken.bin")).size(), qint64(8));
+
+        // Three items deleted: one message.
+        toasts.clear();
+        QTableWidget* t = page.remoteTable();
+        t->clearSelection();
+        t->setSelectionMode(QAbstractItemView::MultiSelection);
+        for (const char* name : {"one.bin", "two.bin", "three.bin"})
+            t->selectRow(rowOf(t, QLatin1String(name)));
+        onSheet(&page, [&](ui::Sheet* s) {
+            if (QPushButton* del = buttonIn(s, QStringLiteral("Delete")))
+                del->click();
+        });
+        QTest::keyClick(t, Qt::Key_Delete);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(root + QStringLiteral("/data/etaHEN/games/three.bin")), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(toasts.join(u'\n').contains(QStringLiteral("Deleted 3 items")), 10000);
+        QCOMPARE(toasts.size(), 1);
+        page.session()->disconnect();
+        QTRY_VERIFY_WITH_TIMEOUT(!page.isReachable(), 10000);
+    }
+
+    // While a connection attempt runs, the card's button and the empty state's button cancel it.
+    void connectingCanBeCancelledFromTheCard()
+    {
+        FakeFtpServer::Options o;
+        o.root = fresh(QStringLiteral("silent-card"));
+        o.silentGreeting = true;
+        FakeFtpServer srv(o);
+        pointSettingsAt(srv.port(), QStringLiteral("/data/etaHEN/games"));
+        (void)m_ctx->settings().setValue(ps5::keys::kConnectTimeout, 30);
+        ui::PayloadStore store;
+        JobQueueModel model(m_ctx->queue());
+        pages::Ps5ConnectPage page(*m_ctx, model, store);
+        page.resize(1300, 900);
+        page.show();
+        QPushButton* card = page.hero()->connectButton();
+        QCOMPARE(card->text(), QStringLiteral("Connect"));
+        card->click();
+        QTRY_VERIFY_WITH_TIMEOUT(page.session()->isConnecting(), 5000);
+        QCOMPARE(card->text(), QStringLiteral("Cancel"));
+        QVERIFY(card->isEnabled());
+        // The card and the browser's empty state (each next to a "Find my PS5" button) both offer Cancel now.
+        int places = 0;
+        for (auto* find : page.findChildren<QPushButton*>())
+            if (find->text() == QStringLiteral("Find my PS5")) {
+                ++places;
+                QVERIFY(buttonIn(find->parentWidget(), QStringLiteral("Cancel")));
+                QVERIFY(!buttonIn(find->parentWidget(), QStringLiteral("Connect")));
+            }
+        QCOMPARE(places, 2);
+        card->click();
+        QTRY_COMPARE_WITH_TIMEOUT(page.session()->state(), ui::ConsoleSession::ConnectionState::Offline, 10000);
+        QCOMPARE(card->text(), QStringLiteral("Connect"));
+        QCOMPARE(page.hero()->state(), pages::ConsoleHero::State::Offline);
+        (void)m_ctx->settings().setValue(ps5::keys::kConnectTimeout, 3);
+    }
+
+    // A console that does not have the folder of the last connection opens at the games folder, then the root.
+    void firstListingFallsBackToAFolderThatExists()
+    {
+        const QString root = fresh(QStringLiteral("fallback"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/data")));
+        FakeFtpServer::Options o;
+        o.root = root;
+        FakeFtpServer srv(o);
+        pointSettingsAt(srv.port(), QStringLiteral("/data/not/there"));
+        ui::PayloadStore store;
+        JobQueueModel model(m_ctx->queue());
+        pages::Ps5ConnectPage page(*m_ctx, model, store);
+        QStringList toasts;
+        connect(&page, &pages::Page::toastRequested, this, [&](ui::Tone, const QString& title, const QString&) { toasts << title; });
+        QVERIFY(connectPage(page, srv, QStringLiteral("/"), 1));
+        QVERIFY2(toasts.filter(QStringLiteral("Could not list")).isEmpty(), qPrintable(toasts.join(u'\n')));
+        page.session()->disconnect();
+        QTRY_VERIFY_WITH_TIMEOUT(!page.isReachable(), 10000);
+    }
+
+    // The folder picker returns the folder its path line shows.
+    void folderPickerShowsWhatItReturns()
+    {
+        const QString root = fresh(QStringLiteral("picker"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/data/games/PPSA01234-app0/sce_sys")));
+        FakeFtpServer::Options o;
+        o.root = root;
+        FakeFtpServer srv(o);
+        QWidget host;
+        host.resize(1100, 800);
+        host.show();
+        QString shownOpen, shownSelected;
+        onSheet(&host, [&](ui::Sheet* s) {
+            auto* list = s->findChild<QListWidget*>();
+            auto* path = s->findChild<ui::ElideLabel*>();
+            QPushButton* use = buttonIn(s, QStringLiteral("Use this folder"));
+            if (!list || !path || !use || !QTest::qWaitFor([&] { return list->count() == 1 && use->isEnabled(); }, 10000))
+                return;
+            shownOpen = path->fullText();
+            list->setCurrentRow(0);
+            shownSelected = path->fullText();
+            use->click();
+        });
+        const QString chosen = pages::pickConsoleFolder(&host, fakeConsole(srv.port())(), QStringLiteral("/data/games"), QStringLiteral("Choose a folder"),
+                                                        QStringLiteral("Use this folder"));
+        QCOMPARE(shownOpen, QStringLiteral("/data/games"));
+        QCOMPARE(shownSelected, QStringLiteral("/data/games/PPSA01234-app0"));
+        QCOMPARE(chosen, shownSelected);
+    }
+
+    // Replacing a payload does not add a second line for it; unsaved edits are known.
+    void autoloaderKeepsOneLinePerPayload()
+    {
+        const QString dir = fresh(QStringLiteral("ps5_autoloader"));
+        const QString src = fresh(QStringLiteral("al-src")) + QStringLiteral("/kstuff.elf");
+        QVERIFY(writeBytes(src, QByteArray("\x7f" "ELF", 4) + QByteArray(40, '\1')));
+        QVERIFY(writeBytes(dir + QStringLiteral("/autoload.txt"), "elfldr.elf\n"));
+        pages::AutoloaderTab tab(*m_ctx, fakeConsole(1));
+        tab.setUseRecycleBin(false);
+        tab.resize(1100, 900);
+        tab.openFolder(dir);
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && !tab.editor()->toPlainText().isEmpty(), 10000);
+        QVERIFY(!tab.hasUnsavedEdits());
+        tab.addPayloadFile(src, false);
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && tab.editor()->toPlainText().contains(QStringLiteral("kstuff.elf")), 10000);
+        QVERIFY(tab.hasUnsavedEdits());
+        tab.addPayloadFile(src, true); // "Replace?" was answered with yes
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy(), 10000);
+        QTest::qWait(100);
+        QCOMPARE(tab.editor()->toPlainText().count(QStringLiteral("kstuff.elf")), 1);
+        tab.saveNow();
+        QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && !tab.hasUnsavedEdits(), 10000);
+    }
+
     // The window opens with its page selected in the sidebar (Home on a first start).
     void firstPageIsSelectedInTheSidebar()
     {
@@ -651,6 +868,53 @@ private slots:
         QCOMPARE(window.sidebar()->current(), QStringLiteral("home"));
         window.navigate(QStringLiteral("queue"));
         QCOMPARE(window.sidebar()->current(), QStringLiteral("queue"));
+    }
+
+    // Closing asks about edits that exist only in the window; a zipped dump dropped on the window goes to Build.
+    void closingAsksAboutUnsavedEdits()
+    {
+        const QString dir = fresh(QStringLiteral("close-autoloader"));
+        QVERIFY(writeBytes(dir + QStringLiteral("/autoload.txt"), "elfldr.elf\n"));
+        (void)m_ctx->settings().setValue(ps5::keys::kAutoloaderFolder, dir);
+        MainWindow window(*m_ctx);
+        window.resize(1300, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto* page = qobject_cast<pages::Ps5ConnectPage*>(window.page(QStringLiteral("ps5")));
+        auto* tab = page ? page->findChild<pages::AutoloaderTab*>() : nullptr;
+        QVERIFY(tab);
+        QTRY_VERIFY_WITH_TIMEOUT(!tab->isBusy() && !tab->editor()->toPlainText().isEmpty(), 10000);
+        QVERIFY(page->unsavedChanges().isEmpty());
+
+        const QString zip = fresh(QStringLiteral("zipdrop")) + QStringLiteral("/dump.zip");
+        QVERIFY(writeBytes(zip, "PK\x05\x06" + QByteArray(18, '\0')));
+        QMimeData mime;
+        mime.setUrls({QUrl::fromLocalFile(zip)});
+        window.navigate(QStringLiteral("queue"));
+        QDragEnterEvent enter(QPoint(200, 200), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&window, &enter); // makes the window the drop target
+        QDropEvent drop(QPointF(200, 200), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&window, &drop);
+        QCOMPARE(window.currentPage(), QStringLiteral("build"));
+
+        tab->editor()->appendPlainText(QStringLiteral("kstuff.elf"));
+        QVERIFY(page->unsavedChanges().contains(QStringLiteral("autoload.txt")));
+        QString asked;
+        onSheet(&window, [&](ui::Sheet* s) {
+            asked = labelsOf(s);
+            if (QPushButton* keep = buttonIn(s, QStringLiteral("Keep editing")))
+                keep->click();
+        });
+        QVERIFY(!window.close()); // blocks in the sheet; "Keep editing" keeps the window
+        QVERIFY2(asked.contains(QStringLiteral("Close without saving?")) && asked.contains(QStringLiteral("autoload.txt")), qPrintable(asked));
+        QVERIFY(window.isVisible());
+        QCOMPARE(window.currentPage(), QStringLiteral("ps5"));
+        onSheet(&window, [&](ui::Sheet* s) {
+            if (QPushButton* go = buttonIn(s, QStringLiteral("Close anyway")))
+                go->click();
+        });
+        QVERIFY(window.close());
+        (void)m_ctx->settings().setValue(ps5::keys::kAutoloaderFolder, QString());
     }
 };
 

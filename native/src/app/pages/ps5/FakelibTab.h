@@ -36,6 +36,8 @@ private:
     void askAdd();
     void askReplace();
     void askRemove();
+    // Asks about each overlay of that name (Replace? / Add next to the disabled copy?). False when the user stops.
+    bool confirmSameName(const std::vector<ps5::fakelib::Overlay>& overlays, const QString& name);
     void replaceOverlay(const ps5::fakelib::Overlay& target, const QString& localPath, bool confirmed);
     void removeOverlay(const ps5::fakelib::Overlay& target);
     // Reject → message; Confirm → question. Returns false when the user stops.

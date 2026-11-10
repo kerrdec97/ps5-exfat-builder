@@ -48,7 +48,9 @@ public:
     ConnectionState state() const { return m_state; }
     bool isConnected() const { return m_state == ConnectionState::Connected; }
     bool isConnecting() const { return m_state == ConnectionState::Connecting; }
+    // The console of the current (or last) connection: what the listing on screen belongs to.
     QString host() const { return m_host; }
+    quint16 port() const { return m_port; }
 
     // All asynchronous; each answers with the matching signal. connectTo()
     // while connecting or connected is ignored (one connection at a time).
@@ -81,6 +83,7 @@ private:
     ConsoleWorker* m_worker = nullptr;
     ConnectionState m_state = ConnectionState::Offline;
     QString m_host;
+    quint16 m_port = 0;
 };
 
 } // namespace fw::ui

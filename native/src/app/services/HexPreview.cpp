@@ -2,6 +2,7 @@
 
 #include "engines/integration/ImageFiles.h"
 
+#include <QCoreApplication>
 #include <QPointer>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -82,7 +83,7 @@ void HexSliceReader::read(const QString& image, const QString& path, qint64 offs
         const HexSlice s = readHexSlice(image, path, offset, length);
         if (!self)
             return;
-        QMetaObject::invokeMethod(self.data(), [self, s, gen] {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, s, gen] {
             if (!self || gen != self->m_generation)
                 return;
             self->m_busy = false;

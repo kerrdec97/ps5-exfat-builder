@@ -110,14 +110,25 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
         load();
     });
     connect(m_editor, &QPlainTextEdit::textChanged, this, [this] {
-        if (!m_demo)
+        if (!m_demo) {
             m_dirty = true;
+            if (m_editor->document()->isModified())
+                m_badge->set(QStringLiteral("Unsaved changes"), Tone::Warn); // not "Saved" any more
+        }
         revalidate();
     });
     connect(m_sleep, &QPushButton::clicked, this, &AutoloaderTab::askInsertSleep);
     connect(m_save, &QPushButton::clicked, this, &AutoloaderTab::save);
     connect(m_add, &QPushButton::clicked, this, &AutoloaderTab::addPayload);
-    connect(this, &ConsoleToolTab::busyChanged, this, [this](bool) { revalidate(); });
+    connect(this, &ConsoleToolTab::busyChanged, this, [this](bool busy) {
+        // A folder that was opened while a save or copy ran is read now.
+        if (!busy && m_loadPending) {
+            m_loadPending = false;
+            load();
+            return;
+        }
+        revalidate();
+    });
 
     const QString saved = al::folderFromSettings(m_ctx.settings().snapshot());
     m_current = saved;
@@ -149,10 +160,13 @@ void AutoloaderTab::openFolder(const QString& path)
 void AutoloaderTab::load()
 {
     const QString dir = folder();
-    if (dir.isEmpty() || !QFileInfo(dir).isDir()) {
+    // Asked here, once per load: not on every keystroke (the folder can be on a drive that has to wake up).
+    m_hasFolder = !dir.isEmpty() && QFileInfo(dir).isDir();
+    if (!m_hasFolder) {
         // Nothing from another folder stays in the editor.
         m_editor->blockSignals(true);
         m_editor->clear();
+        m_editor->document()->setModified(false);
         m_editor->blockSignals(false);
         m_dirty = false;
         setFiles({});
@@ -162,7 +176,7 @@ void AutoloaderTab::load()
         return;
     }
     m_folder->setError({});
-    runLocal<Loaded>(
+    const bool started = runLocal<Loaded>(
         [dir](const CancellationToken&) -> Result<Loaded> {
             FW_TRY_ASSIGN(al::Loaded file, al::load(dir));
             return Loaded{file, al::payloadFiles(dir)};
@@ -177,12 +191,25 @@ void AutoloaderTab::load()
             }
             setFiles(r->payloads);
             m_editor->setPlainText(r->file.text);
+            m_editor->document()->setModified(false);
             m_dirty = !r->file.existed; // the header is new: saving creates the file
             m_badge->set(r->file.existed ? QStringLiteral("autoload.txt loaded") : QStringLiteral("New autoload.txt"),
                          r->file.existed ? Tone::Ok : Tone::Info);
             m_saved->setText(r->file.existed ? QString() : QStringLiteral("Not saved yet: the default header was created."));
             revalidate();
         });
+    if (!started) {
+        // Another step is running: the editor still holds the previous folder's text. Nothing of it
+        // may be saved into this one; the load runs as soon as that step ends.
+        m_loadPending = true;
+        m_editor->blockSignals(true);
+        m_editor->clear();
+        m_editor->document()->setModified(false);
+        m_editor->blockSignals(false);
+        m_dirty = false;
+        m_badge->set(QStringLiteral("Loading…"), Tone::Info);
+        revalidate();
+    }
 }
 
 void AutoloaderTab::setFiles(const QStringList& files)
@@ -257,7 +284,7 @@ void AutoloaderTab::askInsertSleep()
 
 void AutoloaderTab::revalidate()
 {
-    const bool hasFolder = m_demo || (!folder().isEmpty() && QFileInfo(folder()).isDir());
+    const bool hasFolder = m_demo || m_hasFolder;
     const QString text = m_editor->toPlainText();
     const al::Validation v = al::validate(text, m_files, hasFolder);
     if (!hasFolder && text.isEmpty())
@@ -270,7 +297,7 @@ void AutoloaderTab::revalidate()
         m_validation->set(m_dirty ? QStringLiteral("Looks good · unsaved changes") : QStringLiteral("Looks good"), Tone::Ok);
     m_validation->setToolTip((v.errors + v.warnings).join(u'\n'));
     m_counts->setText(QStringLiteral("%1 payload%2 · %3 sleep%4").arg(v.payloads).arg(v.payloads == 1 ? QString() : QStringLiteral("s")).arg(v.sleeps).arg(v.sleeps == 1 ? QString() : QStringLiteral("s")));
-    const bool ready = hasFolder && !isBusy();
+    const bool ready = hasFolder && !isBusy() && !m_loadPending;
     m_save->setEnabled(ready);
     m_sleep->setEnabled(hasFolder && !isBusy());
     m_add->setEnabled(ready);
@@ -315,6 +342,7 @@ void AutoloaderTab::saveNow()
                                      m_editor->setTextCursor(c);
                                      m_dirty = false;
                                  }
+                                 m_editor->document()->setModified(false);
                                  m_badge->set(QStringLiteral("Saved"), Tone::Ok);
                                  m_saved->setText(!r->changed ? QStringLiteral("Already up to date.")
                                                   : r->backupPath.isEmpty() ? QStringLiteral("Saved.")
@@ -365,8 +393,15 @@ void AutoloaderTab::addPayloadFile(const QString& source, bool overwrite)
             }
             const QString name = r->first();
             setFiles(r->mid(1));
-            insertPayloadLine(name);
-            emit toastRequested(Tone::Ok, QStringLiteral("%1 added").arg(name), QStringLiteral("Copied into the folder and added to autoload.txt; save to keep the line."));
+            // A payload that was replaced is in the list already: a second line would load it twice.
+            bool listed = false;
+            for (const al::Line& line : al::parse(m_editor->toPlainText()))
+                listed = listed || line.payload.compare(name, Qt::CaseInsensitive) == 0;
+            if (!listed)
+                insertPayloadLine(name);
+            emit toastRequested(Tone::Ok, QStringLiteral("%1 added").arg(name),
+                                listed ? QStringLiteral("Copied into the folder; autoload.txt lists it already.")
+                                       : QStringLiteral("Copied into the folder and added to autoload.txt; save to keep the line."));
         });
 }
 

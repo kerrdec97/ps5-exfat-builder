@@ -40,6 +40,8 @@ private:
     QLabel* m_source;
     ui::Badge* m_badge;
     QPushButton* m_refresh;
+    bool m_fetchPending = false; // "This run / Previous run" changed while a load ran
+    quint64 m_fetchGen = 0;      // the newest load; an older one's answer is not shown
 };
 
 class CrashDumpsTab : public ConsoleToolTab {

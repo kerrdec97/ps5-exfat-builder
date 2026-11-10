@@ -4,6 +4,7 @@
 #include "engines/exfat/ExfatReader.h"
 #include "engines/ufs2/Ufs2Reader.h"
 
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QPointer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -117,7 +118,7 @@ void ImageTreeReader::read(const QString& image)
         const ImageTreeResult r = readImageTree(image);
         if (!self)
             return;
-        QMetaObject::invokeMethod(self.data(), [self, r, gen] {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, r, gen] {
             if (!self || gen != self->m_generation)
                 return;
             self->m_busy = false;

@@ -5,7 +5,9 @@
 #include "app/ui/Sheet.h"
 #include "connect/ps5/Module.h"
 
+#include <QCoreApplication>
 #include <QHeaderView>
+#include <QPointer>
 #include <QtConcurrent/QtConcurrentRun>
 
 namespace fw::pages {
@@ -30,7 +32,11 @@ QString portsText(const ps5::DiscoveryOptions& o)
     QStringList p;
     for (const quint16 port : o.ports)
         p << QString::number(port);
-    return p.size() <= 1 ? QStringLiteral("port %1").arg(p.join(QString())) : QStringLiteral("ports %1").arg(p.join(QStringLiteral(" and ")));
+    if (p.size() <= 1)
+        return QStringLiteral("port %1").arg(p.join(QString()));
+    // "ports 2121, 1337, 2120 and 2122"
+    const QString last = p.takeLast();
+    return QStringLiteral("ports %1 and %2").arg(p.join(QStringLiteral(", ")), last);
 }
 
 QTableWidgetItem* cell(const QString& text, const QColor& c, bool mono)
@@ -116,11 +122,21 @@ void FindConsolePanel::start(const ps5::DiscoveryOptions& options)
     setTextColor(m_status, color::fg_3);
     emit selectionChanged(false);
     const CancellationToken token = m_cancel.token();
-    m_future = QtConcurrent::run([this, options, token, gen] {
-        auto r = ps5::discoverConsoles(options, token, [this, gen](int done, int total, int found) {
-            QMetaObject::invokeMethod(this, [this, gen, done, total, found] { onProgress(gen, done, total, found); }, Qt::QueuedConnection);
+    // A search that was superseded may still be winding down when the panel goes (the destructor
+    // waits for the newest one only): its calls are posted to the application object and the
+    // panel is looked at on the UI thread.
+    QPointer<FindConsolePanel> self(this);
+    m_future = QtConcurrent::run([self, options, token, gen] {
+        auto r = ps5::discoverConsoles(options, token, [self, gen](int done, int total, int found) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, done, total, found] {
+                if (self)
+                    self->onProgress(gen, done, total, found);
+            }, Qt::QueuedConnection);
         });
-        QMetaObject::invokeMethod(this, [this, gen, r] { onFinished(gen, r); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, r] {
+            if (self)
+                self->onFinished(gen, r);
+        }, Qt::QueuedConnection);
     });
 }
 

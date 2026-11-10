@@ -31,7 +31,12 @@ public:
     ~AppContext() override;
 
     // Loads settings, sets up logging and restores the queue.
-    Status initialize();
+    //
+    // ReadOnly is for a second process next to the running app (--self-test):
+    // the queue is neither restored nor written back, and nothing is swept, so
+    // the app's own queue file, history and temporary folders stay as they are.
+    enum class Mode { Normal, ReadOnly };
+    Status initialize(Mode mode = Mode::Normal);
 
     SettingsStore& settings() { return *m_settings; }
     const SettingsSchema& schema() const { return *m_schema; }
@@ -53,6 +58,14 @@ public:
     void checkDependenciesAsync();
 
     static AppContext* instance();
+
+    // Where QSettings keeps the window state, the acknowledged crash and the
+    // Games tab's folders. A portable copy (and a run with FW_DATA_DIR) keeps
+    // them as an INI file in its data folder, so it carries them along and
+    // leaves nothing in the registry; an installed copy keeps the place it
+    // always had. Call after Paths::initialize(), before the first QSettings.
+    // Returns true when the data folder is used.
+    static bool usePortableWindowState();
 
 signals:
     void dependenciesChecked();
@@ -77,6 +90,7 @@ private:
     QList<QFuture<void>> m_depChecks;
     QMutex m_depMutex;
     LogModel* m_logModel = nullptr; // owned (QObject child)
+    bool m_saveFailureLogged = false; // a settings file that cannot be written is reported once
 };
 
 } // namespace fw

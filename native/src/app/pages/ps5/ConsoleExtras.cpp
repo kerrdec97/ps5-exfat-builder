@@ -59,8 +59,16 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     l->addWidget(card);
     connect(m_refresh, &QPushButton::clicked, this, &SmpLogTab::fetch);
     connect(m_which, &Segmented::currentChanged, this, [this](int) {
-        if (!m_view->toPlainText().isEmpty())
+        if (!m_view->toPlainText().isEmpty() || isBusy())
             fetch();
+    });
+    // One load at a time; a choice made while one runs is loaded right after it.
+    connect(this, &ConsoleToolTab::busyChanged, this, [this](bool busy) {
+        m_refresh->setEnabled(!busy);
+        if (!busy && m_fetchPending) {
+            m_fetchPending = false;
+            fetch();
+        }
     });
     connect(save, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Save debug.log"),
@@ -101,6 +109,10 @@ void SmpLogTab::fetch()
         m_source->setText(QStringLiteral("Enter the console's IP address at the top of the page first."));
         return;
     }
+    if (isBusy()) {
+        m_fetchPending = true; // the running load is for the other choice: this one follows it
+        return;
+    }
     m_badge->set(QStringLiteral("Loading…"), Tone::Info);
     struct Got {
         QString text, source;
@@ -134,7 +146,9 @@ void SmpLogTab::fetch()
                 b = b.right(kTail);
             return Got{QString::fromUtf8(b), QStringLiteral("%1 over FTP%2.").arg(path, cut ? QStringLiteral(", last %1").arg(formatBytes(kTail)) : QString())};
         },
-        [this](const Result<Got>& r) {
+        [this, gen = ++m_fetchGen](const Result<Got>& r) {
+            if (gen != m_fetchGen)
+                return; // superseded: the load for the current choice has started
             if (!r.ok()) {
                 m_badge->set(QStringLiteral("Not loaded"), Tone::Err);
                 m_source->setText(r.error().message);

@@ -79,7 +79,7 @@ private:
     void refreshMarks();
     void setStatus(const QString& text, ui::Tone tone);
     void updateHeader();
-    void finishLoad(const ps5::SmpRemoteState& state);
+    void finishLoad(const ps5::SmpRemoteState& state, const QString& consoleHost);
     QWidget* buildMicroMount(QWidget* parent);
 
     QHash<QString, Row> m_rows;

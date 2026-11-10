@@ -7,9 +7,11 @@
 #include "engines/integration/Module.h"
 #include "registration/Registration.h"
 
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QMutexLocker>
 #include <QPointer>
+#include <QSettings>
 #include <QThreadPool>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -20,6 +22,15 @@ static AppContext* g_instance = nullptr;
 AppContext* AppContext::instance()
 {
     return g_instance;
+}
+
+bool AppContext::usePortableWindowState()
+{
+    if (!Paths::isPortable() && qEnvironmentVariable("FW_DATA_DIR").isEmpty())
+        return false;
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, Paths::dataDir());
+    return true;
 }
 
 AppContext::AppContext(QObject* parent) : QObject(parent), m_schema(std::make_shared<SettingsSchema>())
@@ -44,9 +55,12 @@ AppContext::~AppContext()
         f.waitForFinished();
     if (m_queue)
         m_queue->shutdown(15000);
-    if (m_uiSink)
-        Logger::instance().removeSink(m_uiSink);
+    // The logger is process-wide and outlives this object: none of its sinks
+    // stays registered (the file sink would keep the log file open).
     Logger::instance().flush();
+    for (const std::shared_ptr<LogSink>& sink : {std::shared_ptr<LogSink>(m_uiSink), std::shared_ptr<LogSink>(m_file), std::shared_ptr<LogSink>(m_ring)})
+        if (sink)
+            Logger::instance().removeSink(sink);
     if (g_instance == this)
         g_instance = nullptr;
 }
@@ -58,8 +72,10 @@ LogModel& AppContext::logModel()
     return *m_logModel;
 }
 
-Status AppContext::initialize()
+Status AppContext::initialize(Mode mode)
 {
+    if (mode == Mode::ReadOnly)
+        m_queue->setPersistencePath({}); // never written, also not at shutdown
     m_ring = std::make_shared<RingBufferSink>(20000);
     Logger::instance().addSink(m_ring);
 
@@ -75,16 +91,23 @@ Status AppContext::initialize()
     connect(m_settings.get(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
         if (key == general::keys::kLogLevel)
             applyLogLevel();
-        (void)m_settings->save();
+        const Status saved = m_settings->save();
+        if (!saved.ok() && !m_saveFailureLogged) {
+            m_saveFailureLogged = true; // once: every further change would say the same
+            Log(QStringLiteral("app")).warn(QStringLiteral("Settings could not be saved: %1").arg(saved.error().toLogString()));
+        } else if (saved.ok()) {
+            m_saveFailureLogged = false;
+        }
     });
 
+    // Called on whichever thread logs: the record is posted to the application
+    // object and this context is looked at on the UI thread only.
     QPointer<AppContext> self(this);
     m_uiSink = std::make_shared<CallbackSink>([self](const LogRecord& r) {
-        if (self)
-            QMetaObject::invokeMethod(self.data(), [self, r] {
-                if (self)
-                    emit self->logRecordAdded(r);
-            }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, r] {
+            if (self)
+                emit self->logRecordAdded(r);
+        }, Qt::QueuedConnection);
     });
     Logger::instance().addSink(m_uiSink);
 
@@ -93,6 +116,8 @@ Status AppContext::initialize()
              QJsonObject{{QStringLiteral("edition"), QLatin1String(build::kEditionName)},
                          {QStringLiteral("dataDir"), Paths::dataDir()},
                          {QStringLiteral("portable"), Paths::isPortable()}});
+    if (mode == Mode::ReadOnly)
+        return success();
     Paths::sweepStaleTemp(24);
     // Jobs run in the temporary folder chosen in Settings when there is one:
     // a crash leaves their folders there, not under the app's own temp root.
@@ -130,11 +155,10 @@ void AppContext::checkDependenciesAsync()
     m_depChecks << QtConcurrent::run([self, snap, deps, mutex] {
         const QMutexLocker lock(mutex); // one probe run at a time
         deps->probeAll(snap);
-        if (self)
-            QMetaObject::invokeMethod(self.data(), [self] {
-                if (self)
-                    emit self->dependenciesChecked();
-            }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self] {
+            if (self)
+                emit self->dependenciesChecked();
+        }, Qt::QueuedConnection);
     });
 }
 

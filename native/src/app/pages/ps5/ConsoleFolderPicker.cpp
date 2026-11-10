@@ -87,6 +87,7 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
         pathLabel->setFullText(path);
         list->clear();
         list->setEnabled(false);
+        choose->setEnabled(false); // nothing to choose until the folder is listed
         status->set(QStringLiteral("Listing…"), Tone::Info);
         up->setEnabled(path != u"/");
         (void)QtConcurrent::run([=]() {
@@ -96,9 +97,10 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
                     return;
                 list->setEnabled(true);
                 if (!l.error.isEmpty()) {
-                    status->set(l.error, Tone::Err);
+                    status->set(l.error, Tone::Err); // a folder that cannot be listed is not offered
                     return;
                 }
+                choose->setEnabled(true);
                 for (const QString& f : l.folders) {
                     auto* it = new QListWidgetItem(icon(QStringLiteral("folder"), color::fg_3), f, list);
                     it->setFont(font::mono());
@@ -112,21 +114,27 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
             }, Qt::QueuedConnection);
         });
     };
+    // A selected (not opened) sub-folder is the choice; otherwise the open folder.
+    const auto chosen = [=]() -> QString {
+        if (list->currentItem() && list->currentItem()->isSelected())
+            if (const auto child = ps5::remoteChild(*current, list->currentItem()->text()))
+                return *child;
+        return *current;
+    };
     QObject::connect(up, &QToolButton::clicked, sheet, [=] { open(ps5::remoteParent(*current)); });
-    QObject::connect(list, &QListWidget::itemDoubleClicked, sheet, [=](QListWidgetItem* it) {
+    // Double-click or Enter opens a folder (one signal for both: the list is rebuilt in the slot).
+    QObject::connect(list, &QListWidget::itemActivated, sheet, [=](QListWidgetItem* it) {
         if (const auto child = ps5::remoteChild(*current, it->text()))
             open(*child);
     });
+    // The path shown is the folder the button returns.
+    QObject::connect(list, &QListWidget::itemSelectionChanged, sheet, [=] { pathLabel->setFullText(chosen()); });
     open(*current);
     choose->setDefault(true);
     const int r = sheet->exec();
-    if (r != 1)
+    if (r != 1 || !guard)
         return {};
-    // A selected (not opened) sub-folder is the choice; otherwise the open folder.
-    if (guard && list->currentItem() && list->currentItem()->isSelected())
-        if (const auto child = ps5::remoteChild(*current, list->currentItem()->text()))
-            return *child;
-    return *current;
+    return chosen();
 }
 
 } // namespace fw::pages

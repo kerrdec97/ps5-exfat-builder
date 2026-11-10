@@ -238,6 +238,7 @@ void ConsoleSession::connectTo(const QString& host, quint16 port, int connectTim
     if (m_state == ConnectionState::Connecting || m_state == ConnectionState::Connected)
         return; // one connection at a time (Return in the host field while connecting)
     m_host = host;
+    m_port = port;
     setState(ConnectionState::Connecting, {});
     post([w = m_worker, host, port, connectTimeoutMs, passive] { w->doConnect(host, port, connectTimeoutMs, passive); });
 }

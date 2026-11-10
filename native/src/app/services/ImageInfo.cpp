@@ -6,6 +6,7 @@
 #include "engines/gameinfo/Sfo.h"
 #include "engines/integration/ImageFiles.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -260,7 +261,8 @@ ImageSummary readImageSummary(const QString& path, bool readInside, const Cancel
         }
     }
     guessFromFileName(s);
-    if (readInside && !token.isCancelled()) {
+    // A read that failed is not remembered: the file may only have been locked by a job.
+    if (readInside && !token.isCancelled() && s.error.isEmpty()) {
         std::lock_guard lock(g_cacheMutex);
         cache().insert(key, s);
     }
@@ -314,7 +316,7 @@ void ImageSummaryReader::read(const QString& path)
     QPointer<ImageSummaryReader> self(this);
     (void)QtConcurrent::run([self, path, gen] {
         ImageSummary s = readImageSummary(path, true);
-        QMetaObject::invokeMethod(self.data(), [self, s, gen] {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, s, gen] {
             if (!self || gen != self->m_generation)
                 return;
             self->m_busy = false;
@@ -350,7 +352,7 @@ void ImageScanner::scan(const QStringList& folders)
                 return;
             out << readImageSummary(f, true, token);
         }
-        QMetaObject::invokeMethod(self.data(), [self, out, gen] {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, out, gen] {
             if (!self || gen != self->m_generation)
                 return;
             self->m_busy = false;

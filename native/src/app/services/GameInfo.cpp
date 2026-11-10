@@ -6,6 +6,7 @@
 #include "engines/gameinfo/GameInfo.h"
 #include "engines/gameinfo/Version.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -211,7 +212,7 @@ void GameInfoReader::summarize(const QString& folder, bool countFiles)
         const auto progress = [self, gen](qint64 files, qint64 bytes) {
             if (!self)
                 return;
-            QMetaObject::invokeMethod(self.data(), [self, gen, files, bytes] {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, files, bytes] {
                 if (self && gen == self->m_generation)
                     emit self->progress(files, bytes);
             }, Qt::QueuedConnection);
@@ -219,7 +220,7 @@ void GameInfoReader::summarize(const QString& folder, bool countFiles)
         const GameSummary s = readGameSummary(folder, countFiles, token, progress, findRoots);
         if (!self || token.isCancelled())
             return;
-        QMetaObject::invokeMethod(self.data(), [self, s, gen] {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, s, gen] {
             if (!self || gen != self->m_generation)
                 return;
             self->m_busy = false;

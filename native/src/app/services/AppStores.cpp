@@ -1,14 +1,60 @@
 #include "app/services/AppStores.h"
 
 #include "core/FileUtil.h"
+#include "core/Log.h"
 #include "core/Paths.h"
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonParseError>
+
+#include <algorithm>
+#include <optional>
 
 namespace fw::ui {
+
+namespace {
+
+// A store file as JSON. One that cannot be parsed is not lost to the next
+// save: it is kept next to the store as <name>.bad, and the log says so.
+std::optional<QJsonObject> readStoreFile(const QString& path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return std::nullopt; // no store yet
+    const QByteArray bytes = f.readAll();
+    f.close();
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &err);
+    if (err.error == QJsonParseError::NoError && doc.isObject())
+        return doc.object();
+    const QString bad = path + QStringLiteral(".bad");
+    QFile::remove(bad);
+    const bool kept = QFile::copy(path, bad);
+    Log(QStringLiteral("app")).warn(QStringLiteral("%1 could not be read (%2); %3")
+                                        .arg(QDir::toNativeSeparators(path), err.error == QJsonParseError::NoError ? QStringLiteral("not a JSON object") : err.errorString(),
+                                             kept ? QStringLiteral("a copy was kept as %1").arg(QFileInfo(bad).fileName()) : QStringLiteral("no copy could be kept")));
+    return std::nullopt;
+}
+
+bool writeStoreFile(const QString& path, const QJsonObject& root)
+{
+    const Status st = writeFileAtomic(path, QJsonDocument(root).toJson());
+    if (!st.ok())
+        Log(QStringLiteral("app")).warn(QStringLiteral("%1 could not be saved: %2").arg(QDir::toNativeSeparators(path), st.error().toLogString()));
+    return st.ok();
+}
+
+// Folder paths are compared as the file system does on Windows.
+bool sameFolder(const QString& a, const QString& b)
+{
+    return QDir::cleanPath(a).compare(QDir::cleanPath(b), Qt::CaseInsensitive) == 0;
+}
+
+} // namespace
 
 LibraryStore::LibraryStore(QObject* parent) : QObject(parent), m_path(QDir(Paths::dataDir()).filePath(QStringLiteral("library.json")))
 {
@@ -17,8 +63,13 @@ LibraryStore::LibraryStore(QObject* parent) : QObject(parent), m_path(QDir(Paths
 
 void LibraryStore::setScanFolders(const QStringList& folders)
 {
-    m_folders = folders;
-    m_folders.removeDuplicates();
+    m_folders.clear();
+    for (const QString& folder : folders) {
+        const QString f = QDir::cleanPath(folder);
+        const bool known = std::any_of(m_folders.cbegin(), m_folders.cend(), [&f](const QString& have) { return sameFolder(have, f); });
+        if (!folder.trimmed().isEmpty() && !known)
+            m_folders << f;
+    }
     save();
     emit changed();
 }
@@ -26,7 +77,7 @@ void LibraryStore::setScanFolders(const QStringList& folders)
 void LibraryStore::addScanFolder(const QString& folder)
 {
     const QString f = QDir::cleanPath(folder);
-    if (f.isEmpty() || m_folders.contains(f))
+    if (folder.trimmed().isEmpty() || std::any_of(m_folders.cbegin(), m_folders.cend(), [&f](const QString& have) { return sameFolder(have, f); }))
         return;
     m_folders << f;
     save();
@@ -35,7 +86,7 @@ void LibraryStore::addScanFolder(const QString& folder)
 
 void LibraryStore::removeScanFolder(const QString& folder)
 {
-    if (m_folders.removeAll(folder) > 0) {
+    if (m_folders.removeIf([&folder](const QString& have) { return sameFolder(have, folder); }) > 0) {
         save();
         emit changed();
     }
@@ -108,10 +159,10 @@ void LibraryStore::setLastScan(const QDateTime& t)
 
 bool LibraryStore::load()
 {
-    QFile f(m_path);
-    if (!f.open(QIODevice::ReadOnly))
+    const std::optional<QJsonObject> stored = readStoreFile(m_path);
+    if (!stored)
         return false;
-    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    const QJsonObject o = *stored;
     m_folders.clear();
     for (const auto& v : o.value(QStringLiteral("folders")).toArray())
         m_folders << v.toString();
@@ -142,7 +193,7 @@ bool LibraryStore::save() const
                                  {QStringLiteral("plan"), g.plan}});
     const QJsonObject o{{QStringLiteral("folders"), QJsonArray::fromStringList(m_folders)}, {QStringLiteral("games"), games},
                         {QStringLiteral("lastScan"), m_lastScan.toString(Qt::ISODate)}};
-    return writeFileAtomic(m_path, QJsonDocument(o).toJson()).ok();
+    return writeStoreFile(m_path, o);
 }
 
 // ---------------------------------------------------------------------------
@@ -179,20 +230,25 @@ void PayloadStore::remove(int index)
 
 void PayloadStore::markSent(const QString& path)
 {
+    bool any = false;
     for (auto& e : m_entries)
-        if (e.path == path)
+        if (e.path == path) {
             e.lastSent = QDateTime::currentDateTime();
+            any = true;
+        }
+    if (!any)
+        return; // removed from the list meanwhile: nothing changed
     save();
     emit changed();
 }
 
 bool PayloadStore::load()
 {
-    QFile f(m_path);
-    if (!f.open(QIODevice::ReadOnly))
+    const std::optional<QJsonObject> stored = readStoreFile(m_path);
+    if (!stored)
         return false;
     m_entries.clear();
-    for (const auto& v : QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("payloads")).toArray()) {
+    for (const auto& v : stored->value(QStringLiteral("payloads")).toArray()) {
         const QJsonObject o = v.toObject();
         PayloadEntry e;
         e.name = o.value(QStringLiteral("name")).toString();
@@ -210,7 +266,7 @@ bool PayloadStore::save() const
     for (const auto& e : m_entries)
         arr.append(QJsonObject{{QStringLiteral("name"), e.name}, {QStringLiteral("path"), e.path}, {QStringLiteral("notes"), e.notes},
                                {QStringLiteral("lastSent"), e.lastSent.toString(Qt::ISODate)}});
-    return writeFileAtomic(m_path, QJsonDocument(QJsonObject{{QStringLiteral("payloads"), arr}}).toJson()).ok();
+    return writeStoreFile(m_path, QJsonObject{{QStringLiteral("payloads"), arr}});
 }
 
 } // namespace fw::ui

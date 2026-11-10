@@ -2,7 +2,7 @@
 
 // "Find my PS5" (legacy Auto-detect IP, LEGACY_UI_INVENTORY §3): a button in
 // the PS5 connect header. It sweeps this PC's /24 networks for an FTP server
-// on ports 2121/2122 (ps5::discoverConsoles on a worker thread, cancellable)
+// on the known ports (ps5::discoverConsoles on a worker thread, cancellable)
 // and lists what answered in a sheet; the console the user picks is saved as
 // ps5.consoleIp and ps5.ftpPort, which the page's address fields follow.
 

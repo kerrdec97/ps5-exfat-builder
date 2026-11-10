@@ -2,7 +2,7 @@
 
 // List model over fw::JobQueue for the Queue page, the build panel and Home.
 // One row per job, in queue order; updates are incremental (dataChanged for
-// progress, insert/remove for membership).
+// progress, row insert/remove for membership; a changed order resets once).
 
 #include "jobs/JobQueue.h"
 
@@ -64,6 +64,9 @@ signals:
 
 private:
     void reload();
+    void insertJob(const QString& id);
+    void removeJob(const QString& id);
+    void syncOrder(); // after "run next" or a move: one reset, and only when the order differs
     void refresh(const QString& id);
 
     JobQueue& m_queue;
