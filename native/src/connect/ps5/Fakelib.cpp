@@ -4,6 +4,7 @@
 #include "connect/ps5/Fakelib.h"
 
 #include "connect/ps5/RemotePath.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QFile>
@@ -135,34 +136,34 @@ LocalCheck checkLocalFile(const QString& localPath)
     QString norm = localPath;
     norm.replace(u'\\', u'/');
     if (fi.isDir())
-        return {Verdict::Reject, QStringLiteral("Folders cannot be deployed as overlays. Select a single .prx or .sprx library file.")};
+        return {Verdict::Reject, FW_TR("Folders cannot be deployed as overlays. Select a single .prx or .sprx library file.")};
     if (low == u"libkernel.sprx" || low == u"libkernel.prx")
-        return {Verdict::Reject, QStringLiteral("ShadowMount+ deletes libkernel.sprx from fakelib folders, so it cannot be used as an overlay.")};
+        return {Verdict::Reject, FW_TR("ShadowMount+ deletes libkernel.sprx from fakelib folders, so it cannot be used as an overlay.")};
     if (low == u"eboot.bin")
-        return {Verdict::Reject, QStringLiteral("eboot.bin cannot be replaced via fakelib overlays — it lives inside the image. Use the normal rebuild workflow.")};
+        return {Verdict::Reject, FW_TR("eboot.bin cannot be replaced via fakelib overlays — it lives inside the image. Use the normal rebuild workflow.")};
     for (const QString& part : norm.split(u'/', Qt::SkipEmptyParts))
         if (part.compare(QLatin1String("sce_sys"), Qt::CaseInsensitive) == 0)
-            return {Verdict::Reject, QStringLiteral("sce_sys files cannot be deployed as overlays.")};
+            return {Verdict::Reject, FW_TR("sce_sys files cannot be deployed as overlays.")};
     for (const QString& s : rejectedImageSuffixes())
         if (low.endsWith(s))
-            return {Verdict::Reject, QStringLiteral("Image files (.exfat / .ffpkg / .ffpfs / .ffpfsc) cannot be deployed as overlays. Fakelib Manager only handles library files.")};
+            return {Verdict::Reject, FW_TR("Image files (.exfat / .ffpkg / .ffpfs / .ffpfsc) cannot be deployed as overlays. Fakelib Manager only handles library files.")};
     if (!hasLibrarySuffix(low))
-        return {Verdict::Reject, QStringLiteral("Only .prx / .sprx library overlays are accepted. \"%1\" is not a supported file.").arg(base)};
+        return {Verdict::Reject, FW_TR("Only .prx / .sprx library overlays are accepted. \"%1\" is not a supported file.").arg(base)};
     if (!remoteNameProblem(base).isEmpty())
-        return {Verdict::Reject, QStringLiteral("\"%1\" cannot be used as a file name on the console.").arg(base)};
+        return {Verdict::Reject, FW_TR("\"%1\" cannot be used as a file name on the console.").arg(base)};
     if (!fi.exists())
-        return {Verdict::Reject, QStringLiteral("The file %1 does not exist.").arg(QDir::toNativeSeparators(localPath))};
+        return {Verdict::Reject, FW_TR("The file %1 does not exist.").arg(QDir::toNativeSeparators(localPath))};
     QFile f(localPath);
     QByteArray magic;
     const bool readable = f.open(QIODevice::ReadOnly);
     if (readable)
         magic = f.read(4);
     if (!readable)
-        return {Verdict::Confirm, QStringLiteral("Could not read \"%1\" to confirm it is an ELF/SELF library. Upload it as an overlay anyway?").arg(base)};
+        return {Verdict::Confirm, FW_TR("Could not read \"%1\" to confirm it is an ELF/SELF library. Upload it as an overlay anyway?").arg(base)};
     const bool elfOrSelf = magic == QByteArray("\x7f" "ELF", 4) || magic == QByteArray("\x4f\x15\x3d\x1d", 4)
                         || magic == QByteArray("\x54\x14\xf5\xee", 4);
     if (!elfOrSelf)
-        return {Verdict::Confirm, QStringLiteral("\"%1\" does not have an ELF/SELF header, so it may not be a valid library. Upload it as an overlay anyway?").arg(base)};
+        return {Verdict::Confirm, FW_TR("\"%1\" does not have an ELF/SELF header, so it may not be a valid library. Upload it as an overlay anyway?").arg(base)};
     return {};
 }
 

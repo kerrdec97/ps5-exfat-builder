@@ -4,6 +4,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <QFileDialog>
 #include <QFileInfo>
@@ -19,7 +20,10 @@ namespace fl = ps5::fakelib;
 
 namespace {
 enum Col { StatusCol = 0, NameCol, SizeCol, ModifiedCol, FolderCol, ColumnCount };
-const QString kFilter = QStringLiteral("PS5 libraries (*.prx *.sprx);;All files (*)");
+QString libraryFilter()
+{
+    return FW_TR("PS5 libraries") + QStringLiteral(" (*.prx *.sprx);;") + FW_TR("All files") + QStringLiteral(" (*)");
+}
 } // namespace
 
 FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
@@ -27,17 +31,17 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
 {
     auto* l = vbox(this, space::lg);
     auto* warn = new InfoBar(Tone::Info, this);
-    warn->setMessage(QStringLiteral("Library overlays (.prx / .sprx) that ShadowMount+ lays over every game; restart a game to pick up a change. "
+    warn->setMessage(FW_TR("Library overlays (.prx / .sprx) that ShadowMount+ lays over every game; restart a game to pick up a change. "
                                     "Do not run BackPork as well: ShadowMount+ 1.7 stops it at startup."));
-    warn->setToolTip(QStringLiteral("Overlays cannot replace eboot.bin, game content or files inside images; rebuild those. "
+    warn->setToolTip(FW_TR("Overlays cannot replace eboot.bin, game content or files inside images; rebuild those. "
                                     "libkernel.sprx is refused: ShadowMount+ deletes it from fakelib folders."));
     l->addWidget(warn);
     m_legacy = new InfoBar(Tone::Warn, this);
-    m_legacy->setTitle(QStringLiteral("Disabled overlays inside the overlay folder"));
-    m_legacy->setMessage(QStringLiteral("fakelib/disabled is copied into every game by ShadowMount+ 1.7. Move them to fakelib.disabled."));
-    auto* move = m_legacy->addLink(QStringLiteral("Move them"));
+    m_legacy->setTitle(FW_TR("Disabled overlays inside the overlay folder"));
+    m_legacy->setMessage(FW_TR("fakelib/disabled is copied into every game by ShadowMount+ 1.7. Move them to fakelib.disabled."));
+    auto* move = m_legacy->addLink(FW_TR("Move them"));
     connect(move, &Link::activated, this, [this] {
-        runAndRefresh(QStringLiteral("Disabled overlays moved"), QStringLiteral("Disabled overlays not moved"), [](ps5::FtpClient& c, const CancellationToken& t) -> Status {
+        runAndRefresh(FW_TR("Disabled overlays moved"), FW_TR("Disabled overlays not moved"), [](ps5::FtpClient& c, const CancellationToken& t) -> Status {
             auto r = fl::moveLegacyDisabled(c, t);
             if (!r.ok())
                 return r.takeError();
@@ -49,21 +53,21 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
 
     auto* card = new Card(this, Card::Variant::Table);
     auto* h = card->header();
-    h->addWidget(heading(QStringLiteral("Global overlays"), TextStyle::Subtitle, card));
+    h->addWidget(heading(FW_TR("Global overlays"), TextStyle::Subtitle, card));
     h->addWidget(monoLabel(fl::kFolder, card, color::fg_3));
     h->addStretch(1);
-    m_add = button(QStringLiteral("Add…"), ButtonVariant::Primary, QStringLiteral("plus"), card);
-    m_replace = button(QStringLiteral("Replace…"), ButtonVariant::Secondary, QStringLiteral("replace"), card);
-    m_toggle = button(QStringLiteral("Disable"), ButtonVariant::Secondary, QStringLiteral("toggle"), card);
-    m_remove = button(QStringLiteral("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
-    m_refresh = new IconButton(QStringLiteral("refresh"), QStringLiteral("Refresh"), IconButton::Size::Regular, card);
-    m_refresh->setToolTip(QStringLiteral("List the overlays again"));
+    m_add = button(FW_TR("Add…"), ButtonVariant::Primary, QStringLiteral("plus"), card);
+    m_replace = button(FW_TR("Replace…"), ButtonVariant::Secondary, QStringLiteral("replace"), card);
+    m_toggle = button(FW_TR("Disable"), ButtonVariant::Secondary, QStringLiteral("toggle"), card);
+    m_remove = button(FW_TR("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
+    m_refresh = new IconButton(QStringLiteral("refresh"), FW_TR("Refresh"), IconButton::Size::Regular, card);
+    m_refresh->setToolTip(FW_TR("List the overlays again"));
     for (auto* b : {m_add, m_replace, m_toggle, m_remove})
         h->addWidget(b);
     h->addWidget(m_refresh);
 
     m_table = new QTableWidget(0, ColumnCount, card);
-    m_table->setHorizontalHeaderLabels({QStringLiteral("State"), QStringLiteral("Library"), QStringLiteral("Size"), QStringLiteral("Modified"), QStringLiteral("Folder on the PS5")});
+    m_table->setHorizontalHeaderLabels({FW_TR("State"), FW_TR("Library"), FW_TR("Size"), FW_TR("Modified"), FW_TR("Folder on the PS5")});
     styleToolTable(m_table, 6);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->horizontalHeader()->setSectionResizeMode(NameCol, QHeaderView::Stretch);
@@ -71,17 +75,17 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     m_table->setColumnWidth(SizeCol, 100);
     m_table->setColumnWidth(ModifiedCol, 150);
     m_table->setColumnWidth(FolderCol, 300);
-    m_table->setAccessibleName(QStringLiteral("Fakelib overlays"));
+    m_table->setAccessibleName(FW_TR("Fakelib overlays"));
     card->body()->addWidget(m_table);
-    m_empty = new EmptyState(QStringLiteral("layers"), QStringLiteral("Overlays not listed yet"),
-                             QStringLiteral("Refresh lists the .prx and .sprx files in /data/shadowmount/fakelib and fakelib.disabled."), card);
-    auto* listBtn = m_empty->addAction(QStringLiteral("Refresh"), ButtonVariant::Primary);
+    m_empty = new EmptyState(QStringLiteral("layers"), FW_TR("Overlays not listed yet"),
+                             FW_TR("Refresh lists the .prx and .sprx files in /data/shadowmount/fakelib and fakelib.disabled."), card);
+    auto* listBtn = m_empty->addAction(FW_TR("Refresh"), ButtonVariant::Primary);
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
     m_status = caption({}, card);
     f->addWidget(m_status, 1);
     l->addWidget(card);
-    l->addWidget(caption(QStringLiteral("Add and Replace upload under a temporary name and swap it in only when complete, so a dropped "
+    l->addWidget(caption(FW_TR("Add and Replace upload under a temporary name and swap it in only when complete, so a dropped "
                                         "connection never leaves a half-written library."), this));
     l->addStretch(1);
 
@@ -94,7 +98,7 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &FakelibTab::updateActions);
     connect(this, &ConsoleToolTab::busyChanged, this, [this](bool busy) {
         if (busy)
-            m_status->setText(QStringLiteral("Talking to the console…"));
+            m_status->setText(FW_TR("Talking to the console…"));
         updateActions();
     });
     m_table->hide();
@@ -106,9 +110,9 @@ void FakelibTab::refresh()
     runOnConsole<fl::Listing>([](ps5::FtpClient& c, const CancellationToken& t) { return fl::list(c, t); },
                               [this](const Result<fl::Listing>& r) {
                                   if (!r.ok()) {
-                                      m_status->setText(QStringLiteral("Could not list the fakelib folder: %1").arg(r.error().message));
+                                      m_status->setText(FW_TR("Could not list the fakelib folder: %1").arg(r.error().message));
                                       setTextColor(m_status, color::danger_hi);
-                                      emit toastRequested(Tone::Err, QStringLiteral("Fakelib folder not listed"), r.error().message);
+                                      emit toastRequested(Tone::Err, FW_TR("Fakelib folder not listed"), r.error().message);
                                       return;
                                   }
                                   showListing(r.value());
@@ -146,7 +150,7 @@ void FakelibTab::runAndRefresh(const QString& done, const QString& failed, std::
                 setTextColor(m_status, color::danger_hi);
                 emit toastRequested(Tone::Err, failed, r->status.error().message);
             } else {
-                emit toastRequested(Tone::Ok, done, QStringLiteral("Remount the game or restart it for the change to apply."));
+                emit toastRequested(Tone::Ok, done, FW_TR("Remount the game or restart it for the change to apply."));
             }
         });
 }
@@ -158,7 +162,7 @@ void FakelibTab::showListing(const fl::Listing& listing)
     for (const fl::Overlay& o : m_listing.overlays) {
         const int r = m_table->rowCount();
         m_table->insertRow(r);
-        setBadgeCell(m_table, r, StatusCol, o.enabled ? QStringLiteral("Enabled") : QStringLiteral("Disabled"), o.enabled ? Tone::Ok : Tone::Neutral,
+        setBadgeCell(m_table, r, StatusCol, o.enabled ? FW_TR("Enabled") : FW_TR("Disabled"), o.enabled ? Tone::Ok : Tone::Neutral,
                      o.enabled ? QStringLiteral("check") : QStringLiteral("pause"));
         auto* name = toolItem(o.name, true, o.enabled ? color::fg_0 : color::fg_3);
         name->setIcon(icon(QStringLiteral("file"), o.enabled ? color::fg_2 : color::fg_4));
@@ -173,11 +177,13 @@ void FakelibTab::showListing(const fl::Listing& listing)
     m_empty->setVisible(n == 0);
     if (n == 0)
         m_empty->setToolTip({});
-    QString text = !m_listing.folderExists ? QStringLiteral("/data/shadowmount/fakelib does not exist yet; Add creates it.")
-                 : n == 0                  ? QStringLiteral("No .prx / .sprx overlays yet. Add deploys one.")
-                                           : QStringLiteral("%1 overlay%2 · %3 enabled · %4 disabled").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(on).arg(n - on);
-    if (!m_listing.skipped.isEmpty())
-        text += QStringLiteral(" · %1 name%2 skipped (not usable safely)").arg(m_listing.skipped.size()).arg(m_listing.skipped.size() == 1 ? QString() : QStringLiteral("s"));
+    QString text = !m_listing.folderExists ? FW_TR("/data/shadowmount/fakelib does not exist yet; Add creates it.")
+                 : n == 0                  ? FW_TR("No .prx / .sprx overlays yet. Add deploys one.")
+                 : n == 1                  ? FW_TR("%1 overlay · %2 enabled · %3 disabled").arg(n).arg(on).arg(n - on)
+                                           : FW_TR("%1 overlays · %2 enabled · %3 disabled").arg(n).arg(on).arg(n - on);
+    if (const auto skipped = m_listing.skipped.size(); skipped > 0)
+        text = (skipped == 1 ? FW_TR("%1 · %2 name skipped (not usable safely)") : FW_TR("%1 · %2 names skipped (not usable safely)"))
+                   .arg(text, QString::number(skipped));
     m_status->setText(text);
     m_legacy->setVisible(m_listing.legacyCount() > 0);
     setTextColor(m_status, color::fg_3);
@@ -203,7 +209,7 @@ void FakelibTab::updateActions()
     m_remove->setEnabled(idle && r >= 0);
     m_toggle->setEnabled(idle && r >= 0);
     const bool enabled = r >= 0 ? m_listing.overlays[size_t(r)].enabled : true;
-    m_toggle->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+    m_toggle->setText(enabled ? FW_TR("Disable") : FW_TR("Enable"));
 }
 
 bool FakelibTab::checkWithUser(const QString& localPath, bool* confirmed)
@@ -212,12 +218,12 @@ bool FakelibTab::checkWithUser(const QString& localPath, bool* confirmed)
     *confirmed = false;
     // The message is plain text and the sheet shows it as such.
     if (check.verdict == fl::Verdict::Reject) {
-        Sheet::message(window(), QStringLiteral("Unsupported file"), check.message, Sheet::Icon::Warning);
+        Sheet::message(window(), FW_TR("Unsupported file"), check.message, Sheet::Icon::Warning);
         return false;
     }
     if (check.verdict == fl::Verdict::Confirm) {
-        if (!Sheet::confirm(window(), QStringLiteral("Upload anyway?"), check.message, QStringLiteral("Cancel"),
-                            QStringLiteral("Upload"), false, Sheet::Icon::Warning))
+        if (!Sheet::confirm(window(), FW_TR("Upload anyway?"), check.message, FW_TR("Cancel"),
+                            FW_TR("Upload"), false, Sheet::Icon::Warning))
             return false;
         *confirmed = true;
     }
@@ -226,7 +232,7 @@ bool FakelibTab::checkWithUser(const QString& localPath, bool* confirmed)
 
 void FakelibTab::askAdd()
 {
-    const QString path = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose a .prx / .sprx library overlay"), QString(), kFilter);
+    const QString path = QFileDialog::getOpenFileName(window(), FW_TR("Choose a .prx / .sprx library overlay"), QString(), libraryFilter());
     if (path.isEmpty())
         return;
     bool confirmed = false;
@@ -237,9 +243,9 @@ void FakelibTab::askAdd()
     const bool started = runOnConsole<fl::Listing>([](ps5::FtpClient& c, const CancellationToken& t) { return fl::list(c, t); },
                                                    [this, path, confirmed](const Result<fl::Listing>& r) {
                                                        if (!r.ok()) {
-                                                           m_status->setText(QStringLiteral("Could not list the fakelib folder: %1").arg(r.error().message));
+                                                           m_status->setText(FW_TR("Could not list the fakelib folder: %1").arg(r.error().message));
                                                            setTextColor(m_status, color::danger_hi);
-                                                           emit toastRequested(Tone::Err, QStringLiteral("Overlay not added"), r.error().message);
+                                                           emit toastRequested(Tone::Err, FW_TR("Overlay not added"), r.error().message);
                                                            return;
                                                        }
                                                        showListing(r.value());
@@ -247,7 +253,7 @@ void FakelibTab::askAdd()
                                                            addFile(path, confirmed);
                                                    });
     if (!started && lastNotStarted() == NotStarted::Busy)
-        emit toastRequested(Tone::Info, QStringLiteral("Overlay not added"), whyNotStarted());
+        emit toastRequested(Tone::Info, FW_TR("Overlay not added"), whyNotStarted());
 }
 
 bool FakelibTab::confirmSameName(const std::vector<fl::Overlay>& overlays, const QString& name)
@@ -255,10 +261,10 @@ bool FakelibTab::confirmSameName(const std::vector<fl::Overlay>& overlays, const
     for (const fl::Overlay& o : overlays) {
         if (o.name != name)
             continue;
-        const QString text = o.enabled ? QStringLiteral("%1 is already enabled on the console. Replace it with the chosen file?").arg(Sheet::monoSpan(name))
-                                       : QStringLiteral("A disabled %1 is on the console. The new one is added as enabled and the disabled copy stays.").arg(Sheet::monoSpan(name));
-        if (!Sheet::confirm(window(), o.enabled ? QStringLiteral("Replace %1?").arg(name) : QStringLiteral("Add %1?").arg(name), text,
-                            QStringLiteral("Cancel"), o.enabled ? QStringLiteral("Replace") : QStringLiteral("Add"), o.enabled, Sheet::Icon::Warning))
+        const QString text = o.enabled ? FW_TR("%1 is already enabled on the console. Replace it with the chosen file?").arg(Sheet::monoSpan(name))
+                                       : FW_TR("A disabled %1 is on the console. The new one is added as enabled and the disabled copy stays.").arg(Sheet::monoSpan(name));
+        if (!Sheet::confirm(window(), o.enabled ? FW_TR("Replace %1?").arg(name) : FW_TR("Add %1?").arg(name), text,
+                            FW_TR("Cancel"), o.enabled ? FW_TR("Replace") : FW_TR("Add"), o.enabled, Sheet::Icon::Warning))
             return false;
     }
     return true;
@@ -267,7 +273,7 @@ bool FakelibTab::confirmSameName(const std::vector<fl::Overlay>& overlays, const
 void FakelibTab::addFile(const QString& localPath, bool confirmed)
 {
     const QString name = QFileInfo(localPath).fileName();
-    runAndRefresh(QStringLiteral("%1 added").arg(name), QStringLiteral("%1 not added").arg(name), [localPath, confirmed](ps5::FtpClient& c, const CancellationToken& t) {
+    runAndRefresh(FW_TR("%1 added").arg(name), FW_TR("%1 not added").arg(name), [localPath, confirmed](ps5::FtpClient& c, const CancellationToken& t) {
         return fl::add(c, localPath, confirmed, t);
     });
 }
@@ -278,7 +284,7 @@ void FakelibTab::askReplace()
     if (r < 0)
         return;
     const fl::Overlay target = m_listing.overlays[size_t(r)];
-    const QString path = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the replacement for %1").arg(target.name), QString(), kFilter);
+    const QString path = QFileDialog::getOpenFileName(window(), FW_TR("Choose the replacement for %1").arg(target.name), QString(), libraryFilter());
     if (path.isEmpty())
         return;
     bool confirmed = false;
@@ -296,7 +302,7 @@ void FakelibTab::replaceSelected(const QString& localPath, bool confirmed)
 
 void FakelibTab::replaceOverlay(const fl::Overlay& target, const QString& localPath, bool confirmed)
 {
-    runAndRefresh(QStringLiteral("%1 replaced").arg(target.name), QStringLiteral("%1 not replaced").arg(target.name), [target, localPath, confirmed](ps5::FtpClient& c, const CancellationToken& t) {
+    runAndRefresh(FW_TR("%1 replaced").arg(target.name), FW_TR("%1 not replaced").arg(target.name), [target, localPath, confirmed](ps5::FtpClient& c, const CancellationToken& t) {
         return fl::replace(c, target, localPath, confirmed, t);
     });
 }
@@ -307,10 +313,10 @@ void FakelibTab::askRemove()
     if (r < 0)
         return;
     const fl::Overlay target = m_listing.overlays[size_t(r)];
-    if (!Sheet::confirm(window(), QStringLiteral("Remove %1 from the PS5?").arg(target.name),
-                        QStringLiteral("Deletes %1. There is no recycle bin on the console; this cannot be undone. Disable keeps the file instead.")
+    if (!Sheet::confirm(window(), FW_TR("Remove %1 from the PS5?").arg(target.name),
+                        FW_TR("Deletes %1. There is no recycle bin on the console; this cannot be undone. Disable keeps the file instead.")
                             .arg(Sheet::monoSpan(target.path())),
-                        QStringLiteral("Keep"), QStringLiteral("Remove")))
+                        FW_TR("Keep"), FW_TR("Remove")))
         return;
     removeOverlay(target); // the overlay the question named, whatever is selected now
 }
@@ -324,7 +330,7 @@ void FakelibTab::removeSelected()
 
 void FakelibTab::removeOverlay(const fl::Overlay& target)
 {
-    runAndRefresh(QStringLiteral("%1 removed").arg(target.name), QStringLiteral("%1 not removed").arg(target.name), [target](ps5::FtpClient& c, const CancellationToken&) { return fl::remove(c, target); });
+    runAndRefresh(FW_TR("%1 removed").arg(target.name), FW_TR("%1 not removed").arg(target.name), [target](ps5::FtpClient& c, const CancellationToken&) { return fl::remove(c, target); });
 }
 
 void FakelibTab::toggleSelected()
@@ -334,8 +340,8 @@ void FakelibTab::toggleSelected()
         return;
     const fl::Overlay target = m_listing.overlays[size_t(r)];
     const bool enable = !target.enabled;
-    runAndRefresh(QStringLiteral("%1 %2").arg(target.name, enable ? QStringLiteral("enabled") : QStringLiteral("disabled")),
-                  QStringLiteral("%1 not %2").arg(target.name, enable ? QStringLiteral("enabled") : QStringLiteral("disabled")),
+    runAndRefresh((enable ? FW_TR("%1 enabled") : FW_TR("%1 disabled")).arg(target.name),
+                  (enable ? FW_TR("%1 not enabled") : FW_TR("%1 not disabled")).arg(target.name),
                   [target, enable](ps5::FtpClient& c, const CancellationToken&) { return fl::setEnabled(c, target, enable); });
 }
 
