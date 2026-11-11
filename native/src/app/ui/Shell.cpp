@@ -165,7 +165,8 @@ void NavItem::paintEvent(QPaintEvent*)
             p.setFont(sel ? font::bodyStrong() : font::body());
         }
         const QRect tr(14 + size::icon + 12, 0, right - (14 + size::icon + 12), height());
-        p.drawText(mirrored(this, tr), Qt::AlignVCenter | Qt::AlignLeft, QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width()));
+        p.drawText(mirrored(this, tr), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, text()),
+                   QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width()));
     } else if (m_count > 0) {
         p.setPen(Qt::NoPen);
         p.setBrush(color::accent_hi);

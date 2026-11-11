@@ -275,6 +275,19 @@ void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, cons
             const int h = int(QStyle::visualAlignment(Qt::RightToLeft, l->alignment()) & Qt::AlignHorizontal_Mask);
             flags = (flags & ~int(Qt::AlignHorizontal_Mask)) | h;
         }
+    } else if (const QWidget* w = dynamic_cast<QWidget*>(painter->device());
+               painter->layoutDirection() == Qt::RightToLeft || (w && w->isRightToLeft())) {
+        // Right to left (a painter takes the application's direction, not the
+        // widget's): the text is placed as the widget's direction says, so a
+        // header of a log kept left to right is not pushed to the right. A
+        // button's or a header's text that is not right-to-left text (a name
+        // such as "ShadowMount+", a number) is read left to right, as a label
+        // reads it.
+        const Qt::LayoutDirection dir = w ? w->layoutDirection() : painter->layoutDirection();
+        const int h = int(QStyle::visualAlignment(dir, Qt::Alignment(flags & Qt::AlignHorizontal_Mask)));
+        flags = (flags & ~int(Qt::AlignHorizontal_Mask)) | (h & Qt::AlignHorizontal_Mask);
+        if (!(flags & (Qt::TextForceLeftToRight | Qt::TextForceRightToLeft)) && (dir == Qt::LeftToRight || !text.isRightToLeft()))
+            flags |= Qt::TextForceLeftToRight;
     }
     QProxyStyle::drawItemText(painter, rect, flags, pal, enabled, text, textRole);
 }

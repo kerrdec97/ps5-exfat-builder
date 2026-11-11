@@ -1163,7 +1163,7 @@ void Segmented::paintEvent(QPaintEvent*)
                          iconPixmap(s.icon, size::icon, fg, devicePixelRatioF()));
             tx += size::icon + 6;
         }
-        p.drawText(mirrored(this, QRect(tx, r.y(), w - (tx - x), r.height())), Qt::AlignVCenter | Qt::AlignLeft, s.text);
+        p.drawText(mirrored(this, QRect(tx, r.y(), w - (tx - x), r.height())), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, s.text), s.text);
         x += w + 2;
     }
 }

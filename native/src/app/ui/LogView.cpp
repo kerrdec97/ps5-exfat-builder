@@ -60,6 +60,7 @@ void LogDelegate::paint(QPainter* p, const QStyleOptionViewItem& option, const Q
 {
     p->save();
     p->setRenderHint(QPainter::Antialiasing);
+    p->setLayoutDirection(option.direction); // the view's (kept left to right), not the application's
     // The selected row itself (accent_lo and the accent bar) is painted by
     // FwStyle before this; only the hover is the delegate's.
     if (!(option.state & QStyle::State_Selected) && (option.state & QStyle::State_MouseOver))

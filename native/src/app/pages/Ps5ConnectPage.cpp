@@ -170,6 +170,7 @@ public:
     void paint(QPainter* p, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         p->save();
+        p->setLayoutDirection(option.direction); // the view's (kept left to right), not the application's
         // The selected row (with its accent bar) is the style's, painted before this.
         p->fillRect(QRect(option.rect.left(), option.rect.bottom(), option.rect.width(), 1), color::border_1);
         const auto tag = ps5::KlogTag(index.data(KlogModel::TagRole).toInt());
