@@ -25,6 +25,21 @@ class AppContext;
 
 namespace fw::ui {
 
+// The schema's texts as the interface shows them: translated, while the
+// definition keeps its English (setting keys, search, logs, the settings
+// file). The Language row's choices are language names and stay as they are.
+QString shownLabel(const SettingDef& def);
+QString shownDescription(const SettingDef& def);
+QString shownChoiceLabel(const SettingDef& def, const SettingChoice& choice);
+QString shownChoiceDescription(const SettingDef& def, const SettingChoice& choice);
+QString shownSection(const QString& sectionOrGroup);
+// A validation message of SettingsSchema::normalize() without its "Label: "
+// prefix, translated where the reason is a fixed sentence.
+QString shownValidationReason(const QString& message);
+// A choice label inside a sentence ("is on"): lower case in English; other
+// languages keep the label as it is (a German noun keeps its capital).
+QString inSentence(const QString& shownValue);
+
 class SettingEditor : public QObject {
     Q_OBJECT
 public:

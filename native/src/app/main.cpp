@@ -1,5 +1,6 @@
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/services/Language.h"
 #include "app/services/LauncherIdentity.h"
 #include "app/ui/Theme.h"
 
@@ -101,17 +102,20 @@ int main(int argc, char* argv[])
     // .part files. A lock left by a crashed copy is detected and taken over.
     QLockFile instanceLock(QDir(fw::Paths::dataDir()).filePath(QStringLiteral("app.lock")));
     instanceLock.setStaleLockTime(0);
-    if (!parser.isSet(selfTestOpt) && !instanceLock.tryLock(0)) {
+    // Started by "Restart now": the copy that started this one is still closing.
+    const int lockWaitMs = qEnvironmentVariableIsSet(fw::language::kRestartEnv) ? 30000 : 0;
+    qunsetenv(fw::language::kRestartEnv);
+    if (!parser.isSet(selfTestOpt) && !instanceLock.tryLock(lockWaitMs)) {
         // Only a lock another copy holds means "already running"; anything else is a data folder that cannot be used.
         if (instanceLock.error() == QLockFile::LockFailedError) {
             QMessageBox::information(nullptr, QStringLiteral("exFAT Image Builder"),
-                                     QStringLiteral("exFAT Image Builder is already running. Switch to its window "
-                                                    "(two copies would share the same queue and output files)."));
+                                     FW_TR("exFAT Image Builder is already running. Switch to its window "
+                                           "(two copies would share the same queue and output files)."));
             return 0;
         }
         QMessageBox::critical(nullptr, QStringLiteral("exFAT Image Builder"),
-                              QStringLiteral("The data folder cannot be written:\n%1\n\nCheck that the folder exists and that you may write to it "
-                                             "(a portable copy needs a writable drive).")
+                              FW_TR("The data folder cannot be written:\n%1\n\nCheck that the folder exists and that you may write to it "
+                                    "(a portable copy needs a writable drive).")
                                   .arg(QDir::toNativeSeparators(fw::Paths::dataDir())));
         return 1;
     }
