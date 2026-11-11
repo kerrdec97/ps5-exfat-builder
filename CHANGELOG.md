@@ -2,14 +2,20 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
-## [5.0.2] - 2026-11-10
+## [5.0.2] - 2026-11-11
 
-A maintenance release after a line-by-line audit of the whole app: path
-traversal on unpack closed, crafted images and packages can no longer hang the
-app, verified work is never thrown away, the update check finds version 5
-releases, the Backport tab no longer overwrites the settings it shares with the
-standalone PS5 Backport GUI, pause works for FPKG builds, and several hundred
-smaller fixes. The full notes are in `native/RELEASE_NOTES.md`.
+A line-by-line audit of the whole app: path traversal on unpack closed,
+crafted images and packages can no longer hang the app, verified work is never
+thrown away, the update check finds version 5 releases, the Backport tab no
+longer overwrites the settings it shares with the standalone PS5 Backport GUI,
+pause works for FPKG builds, and several hundred smaller fixes. A design
+refresh of the interface. From the GitHub issues: `ampr_emu.index` for exFAT
+and FFPKG builds again (#93), Add to queue makes a list (#87), 7z and RAR
+build sources (#37), Check dump (#26), Settings › Storage shows every folder
+and makes the app portable (#91, #90), easy image renaming (#88), a folder
+edition for PCs whose antivirus removes the exe (#78), and German and
+Simplified Chinese interface languages (#35, #89). The full notes are in
+`native/RELEASE_NOTES.md`.
 
 ## [5.0.1] - 2026-11-08 — version 5
 
