@@ -6,6 +6,7 @@
 #include "app/ui/HomeKit.h"
 #include "core/BuildInfo.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QDesktopServices>
@@ -59,20 +60,20 @@ protected:
 
 QList<ShortcutInfo> shortcutTable()
 {
-    return {{QStringLiteral("Ctrl+B"), QStringLiteral("Run the current page's primary action (Build now, Build package, Backport…)")},
-            {QStringLiteral("Esc"), QStringLiteral("Cancel the running job (after confirming)")},
-            {QStringLiteral("Ctrl+L"), QStringLiteral("Open Logs")},
-            {QStringLiteral("Ctrl+,"), QStringLiteral("Open Settings")},
-            {QStringLiteral("Ctrl+F"), QStringLiteral("Search settings (on Settings)")},
-            {QStringLiteral("Ctrl+1 … Ctrl+9"), QStringLiteral("Jump to the nth page in the sidebar")},
-            {QStringLiteral("F5"), QStringLiteral("Rescan on Library and Backport; refresh elsewhere")},
-            {QStringLiteral("Ctrl+Q"), QStringLiteral("Quit")},
-            {QStringLiteral("Tab / Shift+Tab, arrows"), QStringLiteral("Move the keyboard focus; the blue ring shows where it is")},
-            {QStringLiteral("Drop a folder or image"), QStringLiteral("Use it as the source on the current page")}};
+    return {{QStringLiteral("Ctrl+B"), FW_TR("Run the current page's primary action (Build now, Build package, Backport…)")},
+            {QStringLiteral("Esc"), FW_TR("Cancel the running job (after confirming)")},
+            {QStringLiteral("Ctrl+L"), FW_TR("Open Logs")},
+            {QStringLiteral("Ctrl+,"), FW_TR("Open Settings")},
+            {QStringLiteral("Ctrl+F"), FW_TR("Search settings (on Settings)")},
+            {QStringLiteral("Ctrl+1 … Ctrl+9"), FW_TR("Jump to the nth page in the sidebar")},
+            {QStringLiteral("F5"), FW_TR("Rescan on Library and Backport; refresh elsewhere")},
+            {QStringLiteral("Ctrl+Q"), FW_TR("Quit")},
+            {FW_TR("Tab / Shift+Tab, arrows"), FW_TR("Move the keyboard focus; the blue ring shows where it is")},
+            {FW_TR("Drop a folder or image"), FW_TR("Use it as the source on the current page")}};
 }
 
 AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
-    : Page(ctx, QStringLiteral("about"), QStringLiteral("About"), QStringLiteral("Version, licence and the people behind this tool."), parent)
+    : Page(ctx, QStringLiteral("about"), FW_TR("About"), FW_TR("Version, licence and the people behind this tool."), parent)
 {
     // ---- Product
     auto* product = new ProductCard(this);
@@ -84,21 +85,21 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* nameRow = new QHBoxLayout;
     nameRow->setSpacing(space::md);
     nameRow->addWidget(label(QLatin1String(build::kProductName), TextStyle::Display, color::fg_0, product));
-    auto* version = new Badge(QStringLiteral("Version %1").arg(QLatin1String(build::kVersion)), Tone::Info, product);
+    auto* version = new Badge(FW_TR("Version %1").arg(QLatin1String(build::kVersion)), Tone::Info, product);
     version->setIconName({});
     nameRow->addWidget(version, 0, Qt::AlignVCenter);
     nameRow->addStretch(1);
     pcol->addLayout(nameRow);
-    auto* tagline = label(QStringLiteral("Build, backport and send PS5 game images. Native C++ and Qt."), TextStyle::Body, color::fg_2, product);
+    auto* tagline = label(FW_TR("Build, backport and send PS5 game images. Native C++ and Qt."), TextStyle::Body, color::fg_2, product);
     tagline->setWordWrap(true);
     pcol->addWidget(tagline);
     auto* statusRow = new QHBoxLayout;
     statusRow->setSpacing(space::sm);
-    m_updateBadge = new Badge(QStringLiteral("Updates not checked"), Tone::Neutral, product);
+    m_updateBadge = new Badge(FW_TR("Updates not checked"), Tone::Neutral, product);
     m_updateBadge->setIconName({});
     m_updateBadge->setObjectName(QStringLiteral("about-update-status"));
     statusRow->addWidget(m_updateBadge);
-    auto* licence = new Badge(QStringLiteral("All rights reserved"), Tone::Neutral, product);
+    auto* licence = new Badge(FW_TR("All rights reserved"), Tone::Neutral, product);
     licence->setIconName(QStringLiteral("shield"));
     statusRow->addWidget(licence);
     statusRow->addStretch(1);
@@ -107,9 +108,9 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     ph->addLayout(pcol, 1);
     auto* pactions = new QVBoxLayout;
     pactions->setSpacing(space::sm);
-    m_checkUpdates = button(QStringLiteral("Check for updates"), ButtonVariant::Primary, QStringLiteral("refresh"), product);
+    m_checkUpdates = button(FW_TR("Check for updates"), ButtonVariant::Primary, QStringLiteral("refresh"), product);
     m_checkUpdates->setEnabled(jobs::isAvailable(ctx, QStringLiteral("update.check")));
-    m_checkUpdates->setToolTip(m_checkUpdates->isEnabled() ? QStringLiteral("Asks GitHub for the latest release") : QStringLiteral("Not available in this build"));
+    m_checkUpdates->setToolTip(m_checkUpdates->isEnabled() ? FW_TR("Asks GitHub for the latest release") : FW_TR("Not available in this build"));
     connect(m_checkUpdates, &QPushButton::clicked, this, &AboutPage::checkForUpdatesRequested);
     pactions->addWidget(m_checkUpdates);
     m_updateAction = button(QString(), ButtonVariant::Secondary, QString(), product);
@@ -117,7 +118,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     m_updateAction->hide();
     connect(m_updateAction, &QPushButton::clicked, this, &AboutPage::updateActionRequested);
     pactions->addWidget(m_updateAction);
-    auto* logs = button(QStringLiteral("Open logs folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), product);
+    auto* logs = button(FW_TR("Open logs folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), product);
     connect(logs, &QPushButton::clicked, this, [] { openInFileManager(Paths::logsDir()); });
     pactions->addWidget(logs);
     ph->addLayout(pactions, 0);
@@ -127,16 +128,16 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* links = new QWidget(this);
     auto* lg = new TileGrid(links, 230, 4);
     lg->setBalanced(true);
-    auto* repo = new ActionCard(QStringLiteral("github"), QStringLiteral("GitHub repository"), QStringLiteral("Releases, issues and discussions."), links);
+    auto* repo = new ActionCard(QStringLiteral("github"), FW_TR("GitHub repository"), FW_TR("Releases, issues and discussions."), links);
     repo->setToolTip(QString::fromLatin1(kRepoUrl));
     connect(repo, &QAbstractButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kRepoUrl))); });
-    auto* report = new ActionCard(QStringLiteral("bug"), QStringLiteral("Report a problem"), QStringLiteral("Bundle the logs into a report you can share."), links);
+    auto* report = new ActionCard(QStringLiteral("bug"), FW_TR("Report a problem"), FW_TR("Bundle the logs into a report you can share."), links);
     connect(report, &QAbstractButton::clicked, this, &AboutPage::reportProblemRequested);
-    auto* changes = new ActionCard(QStringLiteral("sparkles"), QStringLiteral("What's new"), QStringLiteral("The changelog of every release."), links);
+    auto* changes = new ActionCard(QStringLiteral("sparkles"), FW_TR("What's new"), FW_TR("The changelog of every release."), links);
     connect(changes, &QAbstractButton::clicked, this, [] {
         QDesktopServices::openUrl(QUrl(QString::fromLatin1(kRepoUrl) + QStringLiteral("/blob/main/CHANGELOG.md")));
     });
-    auto* keys = new ActionCard(QStringLiteral("keyboard"), QStringLiteral("Keyboard shortcuts"), QStringLiteral("Every shortcut on one sheet."), links);
+    auto* keys = new ActionCard(QStringLiteral("keyboard"), FW_TR("Keyboard shortcuts"), FW_TR("Every shortcut on one sheet."), links);
     connect(keys, &QAbstractButton::clicked, this, &AboutPage::shortcutsRequested);
     for (QWidget* w : {static_cast<QWidget*>(repo), static_cast<QWidget*>(report), static_cast<QWidget*>(changes), static_cast<QWidget*>(keys)})
         lg->addWidget(w);
@@ -146,27 +147,27 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* columns = new QWidget(this);
     auto* cl = new TwoColumnLayout(columns, 380, 100000);
     auto* credits = new Card(columns);
-    credits->setTitle(QStringLiteral("Credits"));
-    auto* lead = label(QStringLiteral("Created and maintained by Deckerr97 (kerrdec97). Inspired by NookieAI and stonemodder (Porkfolio)."), TextStyle::Body, color::fg_1, credits);
+    credits->setTitle(FW_TR("Credits"));
+    auto* lead = label(FW_TR("Created and maintained by Deckerr97 (kerrdec97). Inspired by NookieAI and stonemodder (Porkfolio)."), TextStyle::Body, color::fg_1, credits);
     lead->setWordWrap(true);
     credits->body()->addWidget(lead);
     auto* people = new QWidget(credits);
     auto* pg = new TileGrid(people, 220, 2, space::lg, space::md);
     // Name, what they made, their GitHub (README "Credits" has the same list).
     const QList<QStringList> list = {
-        {QStringLiteral("quer3q"), QStringLiteral("ampr-emu-ng (bundled zstd runtime) and ps5-dump-forge"), QStringLiteral("github.com/quer3q")},
-        {QStringLiteral("Lapy"), QStringLiteral("DLC package builder"), QString()},
+        {QStringLiteral("quer3q"), FW_TR("ampr-emu-ng (bundled zstd runtime) and ps5-dump-forge"), QStringLiteral("github.com/quer3q")},
+        {QStringLiteral("Lapy"), FW_TR("DLC package builder"), QString()},
         {QStringLiteral("PSVIETHOA (Nguyễn Thanh Sơn, Ngô Phi Phương)"), QStringLiteral("fpkg-cli · PSVIETHOA FPKG Builder"), QStringLiteral("github.com/thanhsondev")},
         {QStringLiteral("drakmor"), QStringLiteral("LibProsperoPkg, ShadowMount+, ampr_emu, dlc_emu"), QStringLiteral("github.com/drakmor")},
-        {QStringLiteral("Nazky"), QStringLiteral("Lazy_MkPFS, Lazy_AMPR and the Auto-Backport pipeline"), QStringLiteral("github.com/Nazky")},
-        {QStringLiteral("PSBrew"), QStringLiteral("MkPFS and PFS research"), QStringLiteral("github.com/PSBrew")},
-        {QStringLiteral("SvenGDK"), QStringLiteral("UFS2Tool and LibProsperoPKG"), QStringLiteral("github.com/SvenGDK")},
+        {QStringLiteral("Nazky"), FW_TR("Lazy_MkPFS, Lazy_AMPR and the Auto-Backport pipeline"), QStringLiteral("github.com/Nazky")},
+        {QStringLiteral("PSBrew"), FW_TR("MkPFS and PFS research"), QStringLiteral("github.com/PSBrew")},
+        {QStringLiteral("SvenGDK"), FW_TR("UFS2Tool and LibProsperoPKG"), QStringLiteral("github.com/SvenGDK")},
         {QStringLiteral("john-tornblom · ps5-payload-dev"), QStringLiteral("PS5 payload SDK, ftpsrv, elfldr, klogsrv"), QStringLiteral("github.com/ps5-payload-dev")},
-        {QStringLiteral("BestPig"), QStringLiteral("Backport research and the BackPork payload"), QStringLiteral("github.com/BestPig")},
-        {QStringLiteral("Gezine · notmaj0r · itsPLK"), QStringLiteral("Y2JB, Relapse and the Y2JB autoloader"), QStringLiteral("github.com/Gezine")},
-        {QStringLiteral("etaHEN team · EchoStretch"), QStringLiteral("etaHEN and kstuff-lite"), QStringLiteral("github.com/etaHEN")},
-        {QStringLiteral("idlesauce, NookieAI, stonemodder"), QStringLiteral("Research and inspiration"), QString()},
-        {QStringLiteral("alik70952"), QStringLiteral("UI modernisation proposal (pull request #57)"), QStringLiteral("github.com/alik70952")},
+        {QStringLiteral("BestPig"), FW_TR("Backport research and the BackPork payload"), QStringLiteral("github.com/BestPig")},
+        {QStringLiteral("Gezine · notmaj0r · itsPLK"), FW_TR("Y2JB, Relapse and the Y2JB autoloader"), QStringLiteral("github.com/Gezine")},
+        {QStringLiteral("etaHEN team · EchoStretch"), FW_TR("etaHEN and kstuff-lite"), QStringLiteral("github.com/etaHEN")},
+        {QStringLiteral("idlesauce, NookieAI, stonemodder"), FW_TR("Research and inspiration"), QString()},
+        {QStringLiteral("alik70952"), FW_TR("UI modernisation proposal (pull request #57)"), QStringLiteral("github.com/alik70952")},
     };
     for (const QStringList& who : list) {
         auto* cell = new QWidget(people);
@@ -192,42 +193,42 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     credits->body()->addSpacing(space::xs);
     credits->body()->addWidget(people);
     credits->body()->addSpacing(space::xs);
-    credits->body()->addWidget(meta(QStringLiteral("…and every translator, tester, issue reporter and supporter of the Python edition."), credits));
+    credits->body()->addWidget(meta(FW_TR("…and every translator, tester, issue reporter and supporter of the Python edition."), credits));
     cl->setLeft(credits);
 
     auto* legal = new Card(columns);
-    legal->setTitle(QStringLiteral("Licence"));
-    auto* terms = label(QStringLiteral("Copyright \u00a9 2026 Deckerr97 (kerrdec97). All rights reserved. Proprietary software for personal, "
+    legal->setTitle(FW_TR("Licence"));
+    auto* terms = label(FW_TR("Copyright \u00a9 2026 Deckerr97 (kerrdec97). All rights reserved. Proprietary software for personal, "
                                        "non-commercial use: no modification, redistribution or reverse engineering without permission."),
                         TextStyle::Body, color::fg_1, legal);
     terms->setWordWrap(true);
     legal->body()->addWidget(terms);
-    auto* thirdParty = caption(QStringLiteral("Third-party components keep their own licences (below and in THIRD_PARTY_NOTICES.md)."), legal);
+    auto* thirdParty = caption(FW_TR("Third-party components keep their own licences (below and in THIRD_PARTY_NOTICES.md)."), legal);
     thirdParty->setWordWrap(true);
     legal->body()->addWidget(thirdParty);
-    auto* own = caption(QStringLiteral("Use it only with games and content you own and dumped yourself."), legal);
+    auto* own = caption(FW_TR("Use it only with games and content you own and dumped yourself."), legal);
     own->setWordWrap(true);
     legal->body()->addWidget(own);
     auto* sony = caption(affiliationNote(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools"))), legal);
     sony->setWordWrap(true);
-    sony->setToolTip(QStringLiteral("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
+    sony->setToolTip(FW_TR("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
     legal->body()->addWidget(sony);
     legal->body()->addStretch(1);
     cl->setRight(legal);
     content()->addWidget(columns);
 
     // ---- Third-party notices (folded)
-    auto* third = new Disclosure(QStringLiteral("Third-party notices"), QStringLiteral("The full licence texts are in the app's LICENSES folder."), this);
+    auto* third = new Disclosure(FW_TR("Third-party notices"), FW_TR("The full licence texts are in the app's LICENSES folder."), this);
     third->setObjectName(QStringLiteral("about-notices"));
     const QList<QStringList> rows = thirdPartyComponents();
-    third->setSummary(QStringLiteral("%1 components").arg(rows.size()));
+    third->setSummary((rows.size() == 1 ? FW_TR("%1 component") : FW_TR("%1 components")).arg(rows.size()));
     auto* tgrid = new QGridLayout;
     tgrid->setHorizontalSpacing(space::lg);
     tgrid->setVerticalSpacing(space::sm);
     int row = 0;
-    tgrid->addWidget(label(QStringLiteral("Component"), TextStyle::Overline, color::fg_4, third), row, 0);
-    tgrid->addWidget(label(QStringLiteral("Use"), TextStyle::Overline, color::fg_4, third), row, 1);
-    tgrid->addWidget(label(QStringLiteral("Licence"), TextStyle::Overline, color::fg_4, third), row, 2);
+    tgrid->addWidget(label(FW_TR("Component"), TextStyle::Overline, color::fg_4, third), row, 0);
+    tgrid->addWidget(label(FW_TR("Use"), TextStyle::Overline, color::fg_4, third), row, 1);
+    tgrid->addWidget(label(FW_TR("Licence"), TextStyle::Overline, color::fg_4, third), row, 2);
     ++row;
     for (const auto& r : rows) {
         auto* name = label(r[0], TextStyle::BodyStrong, color::fg_0, third);
@@ -245,7 +246,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     // The release is one exe that unpacks itself: show where the texts are.
     const QString licences = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("LICENSES"));
     if (QFileInfo(licences).isDir()) {
-        auto* open = button(QStringLiteral("Open the LICENSES folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), third);
+        auto* open = button(FW_TR("Open the LICENSES folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), third);
         connect(open, &QPushButton::clicked, this, [licences] { openInFileManager(licences); });
         third->body()->addWidget(open, 0, Qt::AlignLeft);
     }
@@ -255,19 +256,21 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
 QList<QStringList> AboutPage::thirdPartyComponents()
 {
     return {
-        {QStringLiteral("Qt 6 (Core, Gui, Widgets, Svg, Network, Concurrent, Sql)"), QStringLiteral("Application framework, dynamically linked"), QStringLiteral("LGPL-3.0")},
-        {QStringLiteral("zlib"), QStringLiteral("Compression and ZIP archives"), QStringLiteral("zlib licence")},
-        {QStringLiteral("Lazy_MkPFS / PSBrew MkPFS"), QStringLiteral("The PFS/FFPFSC engine is a C++ port of this code"), QStringLiteral("GPL-3.0")},
-        {QStringLiteral("UFS2Tool (SvenGDK)"), QStringLiteral("The UFS2/FFPKG engine follows its image layout"), QStringLiteral("BSD-2-Clause")},
-        {QStringLiteral("make_fself (john-tornblom, modified by Nazky)"), QStringLiteral("The fake-SELF reader behind the Backport tab's game list is a port of this code"), QStringLiteral("GPL-3.0")},
-        {QStringLiteral("LibProsperoPKG (SvenGDK)"), QStringLiteral("Facts used by the FPKG engine: PS5 flat-path hash, UCP layout"), QStringLiteral("GPL-3.0-or-later")},
-        {QStringLiteral("zstd 1.5.7 (Meta Platforms)"), QStringLiteral("zstd packs"), QStringLiteral("BSD-3-Clause")},
-        {QStringLiteral("LZ4 1.10.0 (Yann Collet)"), QStringLiteral("Reading LZ4 packs"), QStringLiteral("BSD-2-Clause")},
-        {QStringLiteral("ps5-dump-forge (quer3q)"), QStringLiteral("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0-or-later")},
-        {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), QStringLiteral("Format of the zstd packs; its PS5 runtime is bundled unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0-or-later")},
-        {QStringLiteral("Lucide icons"), QStringLiteral("Interface icons"), QStringLiteral("ISC")},
-        {QStringLiteral("Microsoft Visual C++ runtime"), QStringLiteral("Runtime libraries shipped with the program"), QStringLiteral("Microsoft redistributable")},
-        {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), QStringLiteral("Bundled separate program run by the Backport tab"), QStringLiteral("Its own terms")},
+        {QStringLiteral("Qt 6 (Core, Gui, Widgets, Svg, Network, Concurrent, Sql)"), FW_TR("Application framework, dynamically linked"), QStringLiteral("LGPL-3.0")},
+        {QStringLiteral("zlib"), FW_TR("Compression and ZIP archives"), FW_TR("zlib licence")},
+        {QStringLiteral("Lazy_MkPFS / PSBrew MkPFS"), FW_TR("The PFS/FFPFSC engine is a C++ port of this code"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("UFS2Tool (SvenGDK)"), FW_TR("The UFS2/FFPKG engine follows its image layout"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("make_fself (john-tornblom, modified by Nazky)"), FW_TR("The fake-SELF reader behind the Backport tab's game list is a port of this code"), QStringLiteral("GPL-3.0")},
+        {QStringLiteral("LibProsperoPKG (SvenGDK)"), FW_TR("Facts used by the FPKG engine: PS5 flat-path hash, UCP layout"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("zstd 1.5.7 (Meta Platforms)"), FW_TR("zstd packs"), QStringLiteral("BSD-3-Clause")},
+        {QStringLiteral("LZ4 1.10.0 (Yann Collet)"), FW_TR("Reading LZ4 packs"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("libarchive 3.8.11 (Tim Kientzle and contributors)"), FW_TR("Reading 7z and RAR build sources"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("liblzma from XZ Utils 5.8.4 (Lasse Collin and contributors)"), FW_TR("LZMA decompression for 7z"), QStringLiteral("0BSD")},
+        {QStringLiteral("ps5-dump-forge (quer3q)"), FW_TR("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), FW_TR("Format of the zstd packs; its PS5 runtime is bundled unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("Lucide icons"), FW_TR("Interface icons"), QStringLiteral("ISC")},
+        {QStringLiteral("Microsoft Visual C++ runtime"), FW_TR("Runtime libraries shipped with the program"), FW_TR("Microsoft redistributable")},
+        {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), FW_TR("Bundled separate program run by the Backport tab"), FW_TR("Its own terms")},
     };
 }
 
@@ -278,18 +281,18 @@ QString AboutPage::affiliationNote(const QString& toolsDir)
     const QDir tools(toolsDir);
     QStringList carried;
     if (QFileInfo(tools.filePath(QStringLiteral("fpkg-toolkit"))).isDir())
-        carried << QStringLiteral("Sony's Publishing Tools");
+        carried << FW_TR("Sony's Publishing Tools");
     if (QFileInfo(tools.filePath(QStringLiteral("fpkg-cli"))).isDir())
         carried << QStringLiteral("fpkg-cli");
     if (QFileInfo(tools.filePath(QStringLiteral("youtube"))).isDir())
-        carried << QStringLiteral("the YouTube app packages");
+        carried << FW_TR("the YouTube app packages");
     if (carried.isEmpty())
-        return QStringLiteral("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony "
+        return FW_TR("Not affiliated with or endorsed by Sony Interactive Entertainment. The app includes no Sony "
                               "software; the bundled PS5 Backport engine is a separate program with its own notices.");
     QString list = carried.last();
     if (carried.size() > 1)
-        list = carried.mid(0, carried.size() - 1).join(QStringLiteral(", ")) + QStringLiteral(" and ") + carried.last();
-    return QStringLiteral("Private build: it carries your own copy of %1 for personal use. Do not share this exe. Not affiliated "
+        list = FW_TR("%1 and %2").arg(carried.mid(0, carried.size() - 1).join(QStringLiteral(", ")), carried.last());
+    return FW_TR("Private build: it carries your own copy of %1 for personal use. Do not share this exe. Not affiliated "
                           "with or endorsed by Sony Interactive Entertainment.")
         .arg(list);
 }
@@ -309,7 +312,7 @@ void AboutPage::setUpdateAction(const QString& text, const QString& toolTip)
 
 QString AboutPage::statusContext() const
 {
-    return QStringLiteral("Version %1 · All rights reserved").arg(QLatin1String(build::kVersion));
+    return FW_TR("Version %1 · All rights reserved").arg(QLatin1String(build::kVersion));
 }
 
 } // namespace fw::pages

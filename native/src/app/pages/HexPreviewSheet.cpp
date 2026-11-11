@@ -2,6 +2,7 @@
 
 #include "app/pages/Page.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -22,8 +23,8 @@ namespace {
 // of the title (the line under it shows the whole path literally).
 QString previewTitle(const QString& path)
 {
-    const QString title = QStringLiteral("Preview · %1").arg(path.section(u'/', -1));
-    return Qt::mightBeRichText(title) ? QStringLiteral("Preview") : title;
+    const QString title = FW_TR("Preview · %1").arg(path.section(u'/', -1));
+    return Qt::mightBeRichText(title) ? FW_TR("Preview") : title;
 }
 
 } // namespace
@@ -35,7 +36,7 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     m_reader = new HexSliceReader(this);
     connect(m_reader, &HexSliceReader::ready, this, &HexPreviewSheet::showSlice);
 
-    auto* where = new ElideLabel(QStringLiteral("/%1 in %2").arg(path, QFileInfo(image).fileName()), Qt::ElideMiddle, this);
+    auto* where = new ElideLabel(FW_TR("/%1 in %2").arg(path, QFileInfo(image).fileName()), Qt::ElideMiddle, this);
     where->setFont(font::mono());
     setTextColor(where, color::fg_1);
     where->setToolTip(QStringLiteral("/%1\n%2").arg(path, nativePath(image)));
@@ -51,7 +52,7 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     m_view->setReadOnly(true);
     m_view->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_view->setUndoRedoEnabled(false);
-    m_view->setAccessibleName(QStringLiteral("Hex preview"));
+    m_view->setAccessibleName(FW_TR("Hex preview"));
     // 16 bytes per line must fit the sheet without a horizontal scroll bar.
     // Panel margins, the QSS padding (10 px a side) and border, the document
     // margin and the vertical scroll bar.
@@ -63,22 +64,22 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     // override setFixedHeight() when the widget is polished.
     const int hostH = host ? host->height() : 900;
     m_view->setStyleSheet(QStringLiteral("QPlainTextEdit { min-height: %1px; max-height: %1px; }").arg(std::clamp(hostH - 340, 160, 440)));
-    m_view->setPlaceholderText(QStringLiteral("Reading…"));
+    m_view->setPlaceholderText(FW_TR("Reading…"));
     body()->addWidget(m_view);
 
     auto* row = new QWidget(this);
     auto* h = hbox(row, space::sm);
     m_status = caption({}, row);
     h->addWidget(m_status, 1);
-    m_more = button(QStringLiteral("Load more"), ButtonVariant::Secondary, QStringLiteral("arrow_down"), row);
+    m_more = button(FW_TR("Load more"), ButtonVariant::Secondary, QStringLiteral("arrow_down"), row);
     setButtonSmall(m_more, true);
-    m_more->setToolTip(QStringLiteral("Show the next %1").arg(formatBytes(kHexPreviewChunk)));
+    m_more->setToolTip(FW_TR("Show the next %1").arg(formatBytes(kHexPreviewChunk)));
     m_more->setEnabled(false);
     h->addWidget(m_more);
     body()->addWidget(row);
     connect(m_more, &QPushButton::clicked, this, &HexPreviewSheet::loadMore);
 
-    addButton(QStringLiteral("Close"), Role::Safe);
+    addButton(FW_TR("Close"), Role::Safe);
     updateStatus();
 }
 
@@ -104,7 +105,7 @@ void HexPreviewSheet::showSlice(const HexSlice& s)
 {
     if (!s.ok()) {
         m_error = s.error;
-        m_errorBar->setTitle(QStringLiteral("Could not read this file"));
+        m_errorBar->setTitle(FW_TR("Could not read this file"));
         m_errorBar->setMessage(s.error);
         m_errorBar->show();
         updateStatus();
@@ -133,25 +134,26 @@ void HexPreviewSheet::updateStatus()
 {
     QStringList meta;
     if (m_size >= 0)
-        meta << QStringLiteral("%1 bytes").arg(formatCount(m_size)) << formatBytes(m_size);
-    meta << QStringLiteral("read-only");
+        meta << FW_TR("%1 bytes").arg(formatCount(m_size)) << formatBytes(m_size);
+    meta << FW_TR("read-only");
     m_meta->setText(meta.join(QStringLiteral(" · ")));
     const bool busy = m_reader->isBusy();
     QString status;
     if (!m_error.isEmpty())
-        status = QStringLiteral("Nothing more can be shown.");
+        status = FW_TR("Nothing more can be shown.");
     else if (busy && m_loaded == 0)
-        status = QStringLiteral("Reading…");
+        status = FW_TR("Reading…");
     else if (m_size == 0)
-        status = QStringLiteral("The file is empty.");
+        status = FW_TR("The file is empty.");
     else if (m_ended)
-        status = QStringLiteral("Nothing more can be read.");
+        status = FW_TR("Nothing more can be read.");
     else if (m_loaded == 0)
         status = QString(); // nothing read yet: no "bytes 0–0"
     else if (m_size > 0)
-        status = QStringLiteral("Showing bytes 0–%1 of %2%3")
-                     .arg(formatCount(std::max<qint64>(0, m_loaded - 1)), formatCount(m_size),
-                          busy ? QStringLiteral(" · reading…") : m_loaded >= m_size ? QStringLiteral(" · end of file") : QString());
+        status = (busy ? FW_TR("Showing bytes 0–%1 of %2 · reading…")
+                  : m_loaded >= m_size ? FW_TR("Showing bytes 0–%1 of %2 · end of file")
+                                       : FW_TR("Showing bytes 0–%1 of %2"))
+                     .arg(formatCount(std::max<qint64>(0, m_loaded - 1)), formatCount(m_size));
     m_status->setText(status);
     m_more->setEnabled(!busy && m_error.isEmpty() && !m_ended && m_size > 0 && m_loaded < m_size);
 }

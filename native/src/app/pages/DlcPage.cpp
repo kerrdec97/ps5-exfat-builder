@@ -7,6 +7,7 @@
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
 #include "engines/dlc/DlcIdentity.h"
 #include "engines/dlc/DlcSettings.h"
 #include "engines/dlc/FpkgCli.h"
@@ -64,7 +65,7 @@ QByteArray resize512Png(const QString& path, QString* error)
     QImage img(path);
     if (img.isNull()) {
         if (error)
-            *error = QStringLiteral("The image could not be read.");
+            *error = FW_TR("The image could not be read.");
         return {};
     }
     QImage out = img.convertToFormat(QImage::Format_RGB888)
@@ -79,11 +80,11 @@ QByteArray resize512Png(const QString& path, QString* error)
 QString regionLabel(const QString& code)
 {
     // The same names as the Region column.
-    if (code == u"UP") return QStringLiteral("Americas");
-    if (code == u"EP") return QStringLiteral("Europe");
-    if (code == u"JP") return QStringLiteral("Japan");
-    if (code == u"HP") return QStringLiteral("Asia");
-    if (code == u"KP") return QStringLiteral("Korea");
+    if (code == u"UP") return FW_TR("Americas");
+    if (code == u"EP") return FW_TR("Europe");
+    if (code == u"JP") return FW_TR("Japan");
+    if (code == u"HP") return FW_TR("Asia");
+    if (code == u"KP") return FW_TR("Korea");
     return code;
 }
 
@@ -93,19 +94,19 @@ QString regionLabel(const QString& code)
 
 DlcPage::DlcPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     : JobFormPage(ctx, queueModel, QStringLiteral("dlc"), QStringLiteral("DLC"),
-                  QStringLiteral("Turn DLC lists (.ini) and DLC packages into installable PS5 DLC packages."),
-                  QStringLiteral("Convert DLC"), QStringLiteral("DLC conversion"), parent)
+                  FW_TR("Turn DLC lists (.ini) and DLC packages into installable PS5 DLC packages."),
+                  FW_TR("Convert DLC"), FW_TR("DLC conversion"), parent)
 {
-    setNewJobText(QStringLiteral("Back to the list"));
+    setNewJobText(FW_TR("Back to the list"));
     setRequiredKinds({dlc::kJobConvert});
     m_cacheDir = QDir(Paths::cacheDir()).filePath(QStringLiteral("dlc-lookup"));
     m_iconDir = QDir(Paths::tempRoot()).filePath(QStringLiteral("dlc-icons"));
     buildListCard();
     buildSaveCard();
     buildOptionsCard();
-    addJobOptionsCard(QStringLiteral("Engine and verification"), {QStringLiteral("DLC")},
+    addJobOptionsCard(FW_TR("Engine and verification"), {QStringLiteral("DLC")},
                       {dlc::keys::kOutputFolder, dlc::keys::kEntitlementKey, dlc::keys::kSourcePasscode},
-                      QStringLiteral("All DLC settings"));
+                      FW_TR("All DLC settings"));
     connect(&ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
         if (key == dlc::keys::kFpkgCliPath)
             m_ctx.checkDependenciesAsync();
@@ -126,24 +127,24 @@ void DlcPage::buildListCard()
     auto* card = new Card(this);
     m_listTools = new QWidget(card);
     auto* th = hbox(m_listTools, space::sm);
-    auto* add = button(QStringLiteral("Add files\u2026"), ButtonVariant::Secondary, QStringLiteral("file_plus"), m_listTools);
-    add->setToolTip(QStringLiteral("Add DLC INIs (.ini) or DLC packages (.pkg). You can also drop them onto this page."));
+    auto* add = button(FW_TR("Add files\u2026"), ButtonVariant::Secondary, QStringLiteral("file_plus"), m_listTools);
+    add->setToolTip(FW_TR("Add DLC INIs (.ini) or DLC packages (.pkg). You can also drop them onto this page."));
     connect(add, &QPushButton::clicked, this, &DlcPage::browseInputs);
     th->addWidget(add);
-    auto* titleRow = card->setTitle(QStringLiteral("DLC to convert"), m_listTools);
-    m_countBadge = new Badge(QStringLiteral("Nothing added"), Tone::Neutral, card);
+    auto* titleRow = card->setTitle(FW_TR("DLC to convert"), m_listTools);
+    m_countBadge = new Badge(FW_TR("Nothing added"), Tone::Neutral, card);
     m_countBadge->setIconName(QString());
     titleRow->insertWidget(1, m_countBadge);
 
-    m_drop = new DropZone(QStringLiteral("package_plus"), QStringLiteral("Drop DLC INIs or DLC packages here"),
-                          QStringLiteral("dlc_emu.ini and other DLC lists (.ini), or PS5 DLC .pkg files. Click to browse."), card);
+    m_drop = new DropZone(QStringLiteral("package_plus"), FW_TR("Drop DLC INIs or DLC packages here"),
+                          FW_TR("dlc_emu.ini and other DLC lists (.ini), or PS5 DLC .pkg files. Click to browse."), card);
     connect(m_drop, &QAbstractButton::clicked, this, &DlcPage::browseInputs);
     card->body()->addWidget(m_drop);
 
     m_table = new QTableWidget(0, ColCount, card);
-    m_table->setHorizontalHeaderLabels({QStringLiteral("Icon"), QStringLiteral("Title"), QStringLiteral("Content ID"),
-                                        QStringLiteral("Title ID"), QStringLiteral("Region"),
-                                        QStringLiteral("Version"), QStringLiteral("Source file"), QStringLiteral("Result")});
+    m_table->setHorizontalHeaderLabels({FW_TR("Icon"), FW_TR("Title"), FW_TR("Content ID"),
+                                        FW_TR("Title ID"), FW_TR("Region"),
+                                        FW_TR("Version"), FW_TR("Source file"), FW_TR("Result")});
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setShowGrid(false);
@@ -152,7 +153,7 @@ void DlcPage::buildListCard()
     m_table->verticalHeader()->setDefaultSectionSize(52);
     m_table->setIconSize(QSize(40, 40));
     m_table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
-    m_table->setAccessibleName(QStringLiteral("DLC entries"));
+    m_table->setAccessibleName(FW_TR("DLC entries"));
     m_table->setMinimumHeight(300);
     auto* hh = m_table->horizontalHeader();
     hh->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -177,7 +178,7 @@ void DlcPage::buildListCard()
         updateState();
     });
     m_table->setContextMenuPolicy(Qt::ActionsContextMenu);
-    auto* removeAct = new QAction(QStringLiteral("Remove from the list"), m_table);
+    auto* removeAct = new QAction(FW_TR("Remove from the list"), m_table);
     removeAct->setShortcut(QKeySequence::Delete);
     removeAct->setShortcutContext(Qt::WidgetShortcut);
     connect(removeAct, &QAction::triggered, this, [this] {
@@ -198,7 +199,7 @@ void DlcPage::buildListCard()
         updateState();
     });
     m_table->addAction(removeAct);
-    auto* iconAct = new QAction(QStringLiteral("Choose icon0.png…"), m_table);
+    auto* iconAct = new QAction(FW_TR("Choose icon0.png…"), m_table);
     connect(iconAct, &QAction::triggered, this, [this] {
         const QList<int> rows = selectedRows();
         if (!rows.isEmpty())
@@ -209,21 +210,21 @@ void DlcPage::buildListCard()
 
     auto* actions = new QWidget(card);
     auto* ah = hbox(actions, space::sm);
-    m_regionBtn = button(QStringLiteral("Change region\u2026"), ButtonVariant::Secondary, QStringLiteral("globe"), actions);
-    m_regionBtn->setToolTip(QStringLiteral("Retarget the selected DLC to another region's game: the publisher prefix and title "
+    m_regionBtn = button(FW_TR("Change region\u2026"), ButtonVariant::Secondary, QStringLiteral("globe"), actions);
+    m_regionBtn->setToolTip(FW_TR("Retarget the selected DLC to another region's game: the publisher prefix and title "
                                            "ID change, each DLC keeps its own suffix."));
     connect(m_regionBtn, &QPushButton::clicked, this, &DlcPage::changeRegion);
-    m_previewBtn = button(QStringLiteral("Preview changes"), ButtonVariant::Secondary, QStringLiteral("eye"), actions);
+    m_previewBtn = button(FW_TR("Preview changes"), ButtonVariant::Secondary, QStringLiteral("eye"), actions);
     connect(m_previewBtn, &QPushButton::clicked, this, &DlcPage::showPreview);
-    m_saveIniBtn = button(QStringLiteral("Save updated INIs"), ButtonVariant::Secondary, QStringLiteral("save"), actions);
-    m_saveIniBtn->setToolTip(QStringLiteral("Write \"<input>-<TitleId>-updated.ini\" files with the edited identifiers; "
+    m_saveIniBtn = button(FW_TR("Save updated INIs"), ButtonVariant::Secondary, QStringLiteral("save"), actions);
+    m_saveIniBtn->setToolTip(FW_TR("Write \"<input>-<TitleId>-updated.ini\" files with the edited identifiers; "
                                             "comments, unknown keys and the encoding are kept."));
     connect(m_saveIniBtn, &QPushButton::clicked, this, &DlcPage::saveInisInteractive);
     ah->addWidget(m_regionBtn);
     ah->addWidget(m_previewBtn);
     ah->addWidget(m_saveIniBtn);
     ah->addStretch(1);
-    m_clearLink = new Link(QStringLiteral("Clear list"), actions);
+    m_clearLink = new Link(FW_TR("Clear list"), actions);
     connect(m_clearLink, &Link::activated, this, &DlcPage::clearList);
     ah->addWidget(m_clearLink);
     card->body()->addWidget(actions);
@@ -236,7 +237,7 @@ void DlcPage::buildListCard()
     m_loadRow = new MessageRow(card);
     card->body()->addWidget(m_loadRow);
 
-    auto* logTitle = new Disclosure(QStringLiteral("Conversion log"), QString(), card);
+    auto* logTitle = new Disclosure(FW_TR("Conversion log"), QString(), card);
     logTitle->setPlain(true); // a row of this card, not a plate in it
     m_log = new QPlainTextEdit(logTitle);
     m_log->setReadOnly(true);
@@ -252,18 +253,18 @@ void DlcPage::buildListCard()
 void DlcPage::buildSaveCard()
 {
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Save to"));
+    card->setTitle(FW_TR("Save to"));
     m_output = new PathField(PathField::Mode::Directory, card);
-    m_output->setDialogTitle(QStringLiteral("Choose the output folder"));
-    m_output->edit()->setAccessibleName(QStringLiteral("Output folder"));
+    m_output->setDialogTitle(FW_TR("Choose the output folder"));
+    m_output->edit()->setAccessibleName(FW_TR("Output folder"));
     m_output->setPath(m_ctx.settings().value(dlc::keys::kOutputFolder).toString());
     connect(m_output, &PathField::pathChanged, this, [this](const QString& p) {
         if (!m_demo && !qApp->property("fwScreenshotMode").toBool())
             (void)m_ctx.settings().setValue(dlc::keys::kOutputFolder, p.trimmed());
         updateState();
     });
-    card->body()->addWidget(field(QStringLiteral("Folder"), m_output,
-                                  QStringLiteral("Packages are named <ContentId>.pkg; an existing file is never replaced (-2, "
+    card->body()->addWidget(field(FW_TR("Folder"), m_output,
+                                  FW_TR("Packages are named <ContentId>.pkg; an existing file is never replaced (-2, "
                                                  "-3 \u2026)."),
                                   card));
     form()->addWidget(card);
@@ -272,23 +273,23 @@ void DlcPage::buildSaveCard()
 void DlcPage::buildOptionsCard()
 {
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Options"));
+    card->setTitle(FW_TR("Options"));
     auto* row = new QWidget(card);
     auto* h = hbox(row, space::md);
     h->setAlignment(Qt::AlignTop);
-    m_key = textInput(QStringLiteral("32 hexadecimal characters"), true, row);
+    m_key = textInput(FW_TR("32 hexadecimal characters"), true, row);
     m_key->setMaxLength(32);
     m_key->setText(m_ctx.settings().value(dlc::keys::kEntitlementKey).toString());
-    m_key->setAccessibleName(QStringLiteral("Entitlement key"));
-    m_key->setToolTip(QStringLiteral("Development entitlement records are generated for the target Content ID with this key. "
+    m_key->setAccessibleName(FW_TR("Entitlement key"));
+    m_key->setToolTip(FW_TR("Development entitlement records are generated for the target Content ID with this key. "
                                      "Default: 32 zeroes. The DLC engine builds additional content (entitlement DRM)."));
-    h->addWidget(field(QStringLiteral("Entitlement key"), m_key, {}, row), 1);
-    m_passcode = textInput(QStringLiteral("32 hexadecimal characters"), true, row);
+    h->addWidget(field(FW_TR("Entitlement key"), m_key, {}, row), 1);
+    m_passcode = textInput(FW_TR("32 hexadecimal characters"), true, row);
     m_passcode->setMaxLength(32);
     m_passcode->setText(m_ctx.settings().value(dlc::keys::kSourcePasscode).toString());
-    m_passcode->setAccessibleName(QStringLiteral("PKG source passcode"));
-    m_passcode->setToolTip(QStringLiteral("Used to extract imported DLC packages and for the rebuilt package. Default: 32 zeroes."));
-    h->addWidget(field(QStringLiteral("PKG source passcode"), m_passcode, {}, row), 1);
+    m_passcode->setAccessibleName(FW_TR("PKG source passcode"));
+    m_passcode->setToolTip(FW_TR("Used to extract imported DLC packages and for the rebuilt package. Default: 32 zeroes."));
+    h->addWidget(field(FW_TR("PKG source passcode"), m_passcode, {}, row), 1);
     card->body()->addWidget(row);
     for (QLineEdit* e : {m_key, m_passcode})
         connect(e, &QLineEdit::editingFinished, this, [this, e] {
@@ -300,13 +301,13 @@ void DlcPage::buildOptionsCard()
 
     auto* eng = new QWidget(card);
     auto* eh = hbox(eng, space::sm);
-    eh->addWidget(label(QStringLiteral("DLC engine"), TextStyle::Body, color::fg_1, eng));
-    m_engineBadge = new Badge(QStringLiteral("Checking\u2026"), Tone::Neutral, eng);
+    eh->addWidget(label(FW_TR("DLC engine"), TextStyle::Body, color::fg_1, eng));
+    m_engineBadge = new Badge(FW_TR("Checking\u2026"), Tone::Neutral, eng);
     eh->addWidget(m_engineBadge);
     m_engineDetail = caption(QString(), eng);
     m_engineDetail->setWordWrap(true);
     eh->addWidget(m_engineDetail, 1);
-    auto* setup = new Link(QStringLiteral("Settings\u2026"), eng);
+    auto* setup = new Link(FW_TR("Settings\u2026"), eng);
     connect(setup, &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("settings"), {{QStringLiteral("section"), QStringLiteral("Tools")},
                                                              {QStringLiteral("key"), dlc::keys::kFpkgCliPath}}});
@@ -349,8 +350,8 @@ void DlcPage::navigateWith(const QVariantMap& args)
 
 void DlcPage::browseInputs()
 {
-    const QStringList files = QFileDialog::getOpenFileNames(window(), QStringLiteral("Add DLC INIs or PKGs"), QString(),
-                                                            QStringLiteral("DLC inputs (*.ini *.pkg);;INI (*.ini);;PKG (*.pkg)"));
+    const QStringList files = QFileDialog::getOpenFileNames(window(), FW_TR("Add DLC INIs or PKGs"), QString(),
+                                                            FW_TR("DLC inputs") + QStringLiteral(" (*.ini *.pkg);;INI (*.ini);;PKG (*.pkg)"));
     addInputs(files);
 }
 
@@ -394,7 +395,7 @@ void DlcPage::addInputs(const QStringList& paths)
                 r.item.sourceSize = fi.size();
                 r.item.sourceModifiedMs = fi.lastModified().toMSecsSinceEpoch();
                 r.warnings = e.warnings;
-                r.result = QStringLiteral("Compatibility unverified");
+                r.result = FW_TR("Compatibility unverified");
                 appendLog(QStringLiteral("Loaded %1: %2 / %3").arg(nativePath(path), e.titleId, e.contentId));
                 for (const QString& w : e.warnings)
                     appendLog(QStringLiteral("  %1").arg(w));
@@ -430,17 +431,17 @@ void DlcPage::addInputs(const QStringList& paths)
                 const auto loaded = watcher->result();
                 if (!loaded->info.ok()) {
                     appendLog(QStringLiteral("LOAD FAILED: %1 \u2014 %2").arg(nativePath(path), loaded->info.error().message));
-                    m_loadRow->set(QStringLiteral("%1 could not be read: %2").arg(QFileInfo(path).fileName(), loaded->info.error().message),
+                    m_loadRow->set(FW_TR("%1 could not be read: %2").arg(QFileInfo(path).fileName(), loaded->info.error().message),
                                    Tone::Err);
                     updateState();
                     return;
                 }
                 const dlc::DlcPackageInfo& info = loaded->info.value();
                 if (!info.isDlc) {
-                    const QString why = QStringLiteral("This PKG is a game or patch, not DLC. Use Build image \u203a FPKG for games and "
-                                                       "updates; the DLC page accepts additional-content PKGs only.");
+                    const QString why = FW_TR_NOOP("This PKG is a game or patch, not DLC. Use Build image \u203a FPKG for games and "
+                                                   "updates; the DLC page accepts additional-content PKGs only.");
                     appendLog(QStringLiteral("LOAD FAILED: %1 \u2014 %2").arg(nativePath(path), why));
-                    m_loadRow->set(why, Tone::Err);
+                    m_loadRow->set(i18n::translate(why), Tone::Err);
                     updateState();
                     return;
                 }
@@ -461,7 +462,7 @@ void DlcPage::addInputs(const QStringList& paths)
                                           .arg(info.type, info.version.isEmpty() ? QStringLiteral("-") : info.version,
                                                info.firmware.isEmpty() ? QStringLiteral("-") : info.firmware, info.drm);
                 r.warnings = info.warnings;
-                r.result = info.canRebuild ? QStringLiteral("Compatibility unverified") : info.rebuildLimitation;
+                r.result = info.canRebuild ? FW_TR("Compatibility unverified") : info.rebuildLimitation;
                 if (!loaded->icon.isEmpty())
                     r.icon.loadFromData(loaded->icon);
                 appendLog(QStringLiteral("Loaded %1: %2 / %3").arg(nativePath(path), info.titleId, info.contentId));
@@ -491,9 +492,9 @@ void DlcPage::addInputs(const QStringList& paths)
         }
     }
     if (added > 0 || failed > 0)
-        m_loadRow->set(QStringLiteral("%1 added; %2 failed")
-                           .arg(added == 1 ? QStringLiteral("1 entry") : QStringLiteral("%1 entries").arg(added),
-                                failed == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(failed)),
+        m_loadRow->set(added == 1 ? (failed == 1 ? FW_TR("1 entry added; 1 file failed") : FW_TR("1 entry added; %1 files failed").arg(failed))
+                                  : (failed == 1 ? FW_TR("%1 entries added; 1 file failed").arg(added)
+                                                 : FW_TR("%1 entries added; %2 files failed").arg(added).arg(failed)),
                        failed ? Tone::Warn : Tone::Ok);
     updateState();
 }
@@ -522,13 +523,13 @@ void DlcPage::refreshRow(int r)
     const Row& row = m_rows[size_t(r)];
     m_syncing = true;
     m_table->item(r, IconCol)->setIcon(QIcon(row.icon.isNull() ? placeholderIcon(row.item.title, row.item.titleId) : row.icon));
-    m_table->item(r, IconCol)->setToolTip(QStringLiteral("Double-click to choose icon0.png"));
+    m_table->item(r, IconCol)->setToolTip(FW_TR("Double-click to choose icon0.png"));
     m_table->item(r, TitleCol)->setText(row.item.title);
-    m_table->item(r, TitleCol)->setToolTip(plainTip(QStringLiteral("%1\nTitle ID: %2\nVersion: %3\nSource: %4%5")
-                                                        .arg(row.item.title, row.item.titleId,
-                                                             row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version,
-                                                             nativePath(row.item.source),
-                                                             row.isPackage ? QString() : QStringLiteral(" [entry %1]").arg(row.item.entry + 1))));
+    const QString version = row.item.version.isEmpty() ? QStringLiteral("-") : row.item.version;
+    m_table->item(r, TitleCol)->setToolTip(plainTip(row.isPackage
+        ? FW_TR("%1\nTitle ID: %2\nVersion: %3\nSource: %4").arg(row.item.title, row.item.titleId, version, nativePath(row.item.source))
+        : FW_TR("%1\nTitle ID: %2\nVersion: %3\nSource: %4 [entry %5]")
+              .arg(row.item.title, row.item.titleId, version, nativePath(row.item.source), QString::number(row.item.entry + 1))));
     m_table->item(r, ContentIdCol)->setText(row.item.contentId);
     m_table->item(r, ContentIdCol)->setFont(font::mono());
     m_table->item(r, TitleIdCol)->setText(row.item.titleId);
@@ -536,13 +537,13 @@ void DlcPage::refreshRow(int r)
     {
         // Short label in the cell; the Companion's full text in the tooltip.
         const QString code = dlc::regionCode(row.item.contentId);
-        const QString shortName = code == u"UP" ? QStringLiteral("Americas") : code == u"EP" ? QStringLiteral("Europe")
-                                : code == u"JP" ? QStringLiteral("Japan") : code == u"HP" ? QStringLiteral("Asia")
-                                : code == u"KP" ? QStringLiteral("Korea") : QStringLiteral("Unknown");
+        const QString shortName = code == u"UP" ? FW_TR("Americas") : code == u"EP" ? FW_TR("Europe")
+                                : code == u"JP" ? FW_TR("Japan") : code == u"HP" ? FW_TR("Asia")
+                                : code == u"KP" ? FW_TR("Korea") : FW_TR("Unknown");
         m_table->item(r, RegionCol)->setText(row.item.targetMarket.isEmpty() ? QStringLiteral("%1 · %2").arg(shortName, code)
-                                                                              : QStringLiteral("%1 Store").arg(row.item.targetMarket.section(u'(', 1).remove(u')')));
+                                                                              : FW_TR("%1 Store").arg(row.item.targetMarket.section(u'(', 1).remove(u')')));
         m_table->item(r, RegionCol)->setToolTip(plainTip(row.item.targetMarket.isEmpty() ? dlc::regionText(row.item.contentId)
-                                                                                          : QStringLiteral("%1 (Store)").arg(row.item.targetMarket)));
+                                                                                          : FW_TR("%1 (Store)").arg(row.item.targetMarket)));
     }
     m_table->item(r, VersionCol)->setText(row.item.version);
     m_table->item(r, SourceCol)->setText(QFileInfo(row.item.source).fileName()
@@ -576,7 +577,7 @@ void DlcPage::syncFromTable(int r, int c)
     }
     if (c == ContentIdCol || c == TitleIdCol) {
         const Status st = dlc::validateIdentity(row.item.titleId, row.item.contentId);
-        row.result = st.ok() ? QStringLiteral("Manual target; compatibility unverified") : st.error().message;
+        row.result = st.ok() ? FW_TR("Manual target; compatibility unverified") : st.error().message;
     }
     refreshRow(r);
     updateState();
@@ -586,7 +587,7 @@ void DlcPage::chooseIcon(int r)
 {
     if (r < 0 || r >= int(m_rows.size()))
         return;
-    const QString file = QFileDialog::getOpenFileName(window(), QStringLiteral("Select the icon0.png"), QString(),
+    const QString file = QFileDialog::getOpenFileName(window(), FW_TR("Select the icon0.png"), QString(),
                                                       QStringLiteral("PNG (*.png)"));
     if (file.isEmpty())
         return;
@@ -602,7 +603,7 @@ void DlcPage::chooseIcon(int r)
     Row& row = m_rows[size_t(r)];
     row.iconFile = QDir(m_iconDir).filePath(QStringLiteral("icon0-%1-%2.png").arg(QDateTime::currentMSecsSinceEpoch()).arg(r));
     if (!writeFileAtomic(row.iconFile, png).ok()) {
-        m_loadRow->set(QStringLiteral("The icon could not be prepared."), Tone::Err);
+        m_loadRow->set(FW_TR("The icon could not be prepared."), Tone::Err);
         return;
     }
     row.icon.loadFromData(png);
@@ -667,27 +668,27 @@ void DlcPage::updateState()
     m_saveIniBtn->setEnabled(any);
     m_clearLink->setVisible(any);
     if (m_loading > 0)
-        m_countBadge->set(QStringLiteral("Reading %1 package%2\u2026").arg(m_loading).arg(m_loading == 1 ? QString() : QStringLiteral("s")),
+        m_countBadge->set((m_loading == 1 ? FW_TR("Reading %1 package\u2026") : FW_TR("Reading %1 packages\u2026")).arg(m_loading),
                           Tone::Info);
     else if (any)
-        m_countBadge->set(QStringLiteral("%1 entr%2").arg(m_rows.size()).arg(m_rows.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")),
+        m_countBadge->set((m_rows.size() == 1 ? FW_TR("%1 entry") : FW_TR("%1 entries")).arg(m_rows.size()),
                           Tone::Info);
     else
-        m_countBadge->set(QStringLiteral("Nothing added"), Tone::Neutral);
-    m_output->setPlaceholder(m_rows.empty() ? QStringLiteral("A \"DLC packages\" folder next to the first input")
+        m_countBadge->set(FW_TR("Nothing added"), Tone::Neutral);
+    m_output->setPlaceholder(m_rows.empty() ? FW_TR("A \"DLC packages\" folder next to the first input")
                                             : nativePath(outputFolder()));
     // What is known to be missing, in validateForm()'s words.
-    setStartHint(!any ? QStringLiteral("Add DLC INIs or DLC packages first.")
-                      : m_loading > 0 ? QStringLiteral("Packages are still being read. Try again in a moment.") : QString());
+    setStartHint(!any ? FW_TR("Add DLC INIs or DLC packages first.")
+                      : m_loading > 0 ? FW_TR("Packages are still being read. Try again in a moment.") : QString());
     const DependencyInfo info = m_ctx.dependencies().last(QStringLiteral("dlc.fpkgcli"));
     if (info.id.isEmpty()) {
-        m_engineBadge->set(QStringLiteral("Checking\u2026"), Tone::Neutral);
-        m_engineDetail->setText(QStringLiteral("fpkg-cli (LibProsperoPkg) builds the DLC packages."));
+        m_engineBadge->set(FW_TR("Checking\u2026"), Tone::Neutral);
+        m_engineDetail->setText(FW_TR("fpkg-cli (LibProsperoPkg) builds the DLC packages."));
     } else if (info.status == DependencyStatus::Ready) {
-        m_engineBadge->set(info.version.isEmpty() ? QStringLiteral("Ready") : info.version, Tone::Ok);
+        m_engineBadge->set(info.version.isEmpty() ? FW_TR("Ready") : info.version, Tone::Ok);
         m_engineDetail->setText(nativePath(info.path));
     } else {
-        m_engineBadge->set(info.status == DependencyStatus::Missing ? QStringLiteral("Not set") : dependencyStatusName(info.status),
+        m_engineBadge->set(info.status == DependencyStatus::Missing ? FW_TR("Not set") : i18n::translate(dependencyStatusName(info.status)),
                            Tone::Warn);
         m_engineDetail->setText(info.detail.isEmpty() ? info.howToFix : info.detail);
     }
@@ -696,7 +697,7 @@ void DlcPage::updateState()
 
 QString DlcPage::statusContext() const
 {
-    return m_rows.empty() ? QString() : QStringLiteral("%1 DLC entr%2").arg(m_rows.size()).arg(m_rows.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies"));
+    return m_rows.empty() ? QString() : (m_rows.size() == 1 ? FW_TR("%1 DLC entry") : FW_TR("%1 DLC entries")).arg(m_rows.size());
 }
 
 // ---- region lookup ----------------------------------------------------------------------------------
@@ -789,27 +790,27 @@ void DlcPage::updateRegionLine()
     const QList<int> rows = selectedRows();
     const int r = rows.isEmpty() ? (m_rows.empty() ? -1 : 0) : rows.first();
     if (r < 0 || r >= int(m_rows.size())) {
-        m_regionLine->setText(QStringLiteral("Import DLC to find the game's regional releases. Change region\u2026 applies a reviewed target."));
+        m_regionLine->setText(FW_TR("Import DLC to find the game's regional releases. Change region\u2026 applies a reviewed target."));
         return;
     }
     const QString key = lookupKey(m_rows[size_t(r)]);
     if (key.isEmpty() || !onlineLookupAllowed()) {
-        m_regionLine->setText(QStringLiteral("Regional lookup: use Change region\u2026 to find the game or enter manual identifiers."));
+        m_regionLine->setText(FW_TR("Regional lookup: use Change region\u2026 to find the game or enter manual identifiers."));
         return;
     }
     if (m_lookupRunning.contains(key) || m_lookupQueue.contains(key)) {
-        m_regionLine->setText(QStringLiteral("Finding regional releases for %1\u2026 Local work remains available.").arg(key.section(u'|', 0, 0)));
+        m_regionLine->setText(FW_TR("Finding regional releases for %1\u2026 Local work remains available.").arg(key.section(u'|', 0, 0)));
         return;
     }
     const auto res = m_lookups.value(key);
     if (!res) {
-        m_regionLine->setText(QStringLiteral("Regional lookup stopped. Use Change region\u2026 to retry or enter manual identifiers."));
+        m_regionLine->setText(FW_TR("Regional lookup stopped. Use Change region\u2026 to retry or enter manual identifiers."));
         return;
     }
     const QString cid = m_rows[size_t(r)].item.detectedContentId;
     const auto maps = dlc::gameMappings(res->candidates, QString(), cid);
     if (maps.empty()) {
-        m_regionLine->setText(QStringLiteral("No regional mapping found for %1. Change region\u2026 lets you enter the game name or "
+        m_regionLine->setText(FW_TR("No regional mapping found for %1. Change region\u2026 lets you enter the game name or "
                                              "manual identifiers.")
                                   .arg(res->resolvedName.isEmpty() ? key.section(u'|', 0, 0) : res->resolvedName));
         return;
@@ -832,11 +833,11 @@ void DlcPage::updateRegionLine()
     QString name = res->resolvedName;
     if (name.size() > 120)
         name = name.left(117) + QStringLiteral("\u2026");
-    m_regionLine->setText(QStringLiteral("%1 \u2014 Regional game IDs: %2%3. Observed DLC products: %4. DLC compatibility unverified.")
-                              .arg(name, parts.join(QStringLiteral("; ")),
-                                   res->isStale ? QStringLiteral(" (stale cache)") : res->fromCache ? QStringLiteral(" (cached)") : QString())
-                              .arg(observed));
-    m_regionLine->setToolTip(QStringLiteral("Regional game IDs identify releases; observed DLC products are listed separately. "
+    m_regionLine->setText((res->isStale ? FW_TR("%1 \u2014 Regional game IDs: %2 (stale cache). Observed DLC products: %3. DLC compatibility unverified.")
+                           : res->fromCache ? FW_TR("%1 \u2014 Regional game IDs: %2 (cached). Observed DLC products: %3. DLC compatibility unverified.")
+                                            : FW_TR("%1 \u2014 Regional game IDs: %2. Observed DLC products: %3. DLC compatibility unverified."))
+                              .arg(name, parts.join(QStringLiteral("; ")), QString::number(observed)));
+    m_regionLine->setToolTip(FW_TR("Regional game IDs identify releases; observed DLC products are listed separately. "
                                             "Identifier mappings do not confirm in-game DLC compatibility."));
 }
 
@@ -844,7 +845,7 @@ QString DlcPage::applyTarget(const QList<int>& rows, const QString& titleId, con
                              const QString& market, bool addCopies)
 {
     if (rows.isEmpty())
-        return QStringLiteral("Select the DLC entries to retarget.");
+        return FW_TR("Select the DLC entries to retarget.");
     const QString tid = titleId.trimmed().toUpper();
     const QString cid = contentId.trimmed().toUpper();
     // One row: the dialog's Content ID; several: each keeps its own _NN and suffix.
@@ -863,7 +864,7 @@ QString DlcPage::applyTarget(const QList<int>& rows, const QString& titleId, con
             return st.error().message;
         if (dlc::isContentId(m_rows[size_t(r)].item.detectedContentId)
             && m_rows[size_t(r)].item.detectedContentId.mid(7, 4) != tid.left(4))
-            return QStringLiteral("A PS4 DLC cannot be converted into PS5 DLC, or vice versa.");
+            return FW_TR("A PS4 DLC cannot be converted into PS5 DLC, or vice versa.");
         targets.emplace_back(r, rowCid);
     }
     for (const auto& [r, rowCid] : targets) {
@@ -896,20 +897,24 @@ void DlcPage::changeRegion()
     const QString sourceCid = first.item.contentId;
     const QString sourceTid = first.item.titleId;
 
-    auto* s = new Sheet(window(), QStringLiteral("DLC regions / targets"), Sheet::Icon::None, 1000);
-    s->addText(QStringLiteral("Selected: %1. Original: %2 / %3<br>Find the game, choose a region, then apply. Each DLC "
-                              "item keeps its own suffix; an exact observed DLC SKU is used when available. Game identifiers can "
-                              "be shared across regions.")
-                   .arg(rows.size() == 1 ? QStringLiteral("1 DLC entry") : QStringLiteral("%1 DLC entries").arg(rows.size()))
-                   .arg(Sheet::monoSpan(sourceTid), Sheet::monoSpan(sourceCid)));
+    auto* s = new Sheet(window(), FW_TR("DLC regions / targets"), Sheet::Icon::None, 1000);
+    s->addText(rows.size() == 1
+                   ? FW_TR("Selected: 1 DLC entry. Original: %1 / %2<br>Find the game, choose a region, then apply. Each DLC "
+                           "item keeps its own suffix; an exact observed DLC SKU is used when available. Game identifiers can "
+                           "be shared across regions.")
+                         .arg(Sheet::monoSpan(sourceTid), Sheet::monoSpan(sourceCid))
+                   : FW_TR("Selected: %1 DLC entries. Original: %2 / %3<br>Find the game, choose a region, then apply. Each DLC "
+                           "item keeps its own suffix; an exact observed DLC SKU is used when available. Game identifiers can "
+                           "be shared across regions.")
+                         .arg(QString::number(rows.size()), Sheet::monoSpan(sourceTid), Sheet::monoSpan(sourceCid)));
     // Query row
     auto* qrow = new QWidget(s);
     auto* qh = hbox(qrow, space::sm);
-    auto* query = textInput(QStringLiteral("Title ID, Content ID, game name or Store product URL"), false, qrow);
+    auto* query = textInput(FW_TR("Title ID, Content ID, game name or Store product URL"), false, qrow);
     query->setText(sourceTid);
-    auto* find = button(QStringLiteral("Find regions"), ButtonVariant::Secondary, QStringLiteral("search"), qrow);
-    auto* manual = new QCheckBox(QStringLiteral("Manual identifiers"), qrow);
-    qh->addWidget(field(QStringLiteral("Game name / ID"), query, {}, qrow), 1);
+    auto* find = button(FW_TR("Find regions"), ButtonVariant::Secondary, QStringLiteral("search"), qrow);
+    auto* manual = new QCheckBox(FW_TR("Manual identifiers"), qrow);
+    qh->addWidget(field(FW_TR("Game name / ID"), query, {}, qrow), 1);
     qh->addWidget(find, 0, Qt::AlignBottom);
     qh->addWidget(manual, 0, Qt::AlignBottom);
     s->body()->addWidget(qrow);
@@ -917,28 +922,28 @@ void DlcPage::changeRegion()
     auto* rrow = new QWidget(s);
     auto* rh = hbox(rrow, space::md);
     auto* region = dropdown(rrow);
-    region->addItem(QStringLiteral("Choose target region\u2026"), QString());
-    region->addItem(QStringLiteral("Americas / US"), QStringLiteral("UP"));
-    region->addItem(QStringLiteral("Europe / UK"), QStringLiteral("EP"));
-    region->addItem(QStringLiteral("Japan"), QStringLiteral("JP"));
-    region->addItem(QStringLiteral("Asia / Hong Kong"), QStringLiteral("HP"));
-    region->addItem(QStringLiteral("Korea"), QStringLiteral("KP"));
-    rh->addWidget(field(QStringLiteral("Target region"), region, {}, rrow), 0);
+    region->addItem(FW_TR("Choose target region\u2026"), QString());
+    region->addItem(FW_TR("Americas / US"), QStringLiteral("UP"));
+    region->addItem(FW_TR("Europe / UK"), QStringLiteral("EP"));
+    region->addItem(FW_TR("Japan"), QStringLiteral("JP"));
+    region->addItem(FW_TR("Asia / Hong Kong"), QStringLiteral("HP"));
+    region->addItem(FW_TR("Korea"), QStringLiteral("KP"));
+    rh->addWidget(field(FW_TR("Target region"), region, {}, rrow), 0);
     auto* mapping = dropdown(rrow);
-    mapping->setToolTip(QStringLiteral("Base-game releases supply regional PPSA and publisher identifiers. These are identifier "
+    mapping->setToolTip(FW_TR("Base-game releases supply regional PPSA and publisher identifiers. These are identifier "
                                        "mappings, not observed DLC products or verified DLC compatibility."));
-    rh->addWidget(field(QStringLiteral("Game identifier mapping"), mapping, {}, rrow), 1);
+    rh->addWidget(field(FW_TR("Game identifier mapping"), mapping, {}, rrow), 1);
     s->body()->addWidget(rrow);
-    auto* status = caption(onlineLookupAllowed() ? QStringLiteral("Finding game and regional releases\u2026")
-                                                 : QStringLiteral("Online lookup is off (Settings \u203a DLC). Use Manual identifiers."),
+    auto* status = caption(onlineLookupAllowed() ? FW_TR("Finding game and regional releases\u2026")
+                                                 : FW_TR("Online lookup is off (Settings \u203a DLC). Use Manual identifiers."),
                            s);
     status->setWordWrap(true);
     s->body()->addWidget(status);
     // Releases
     auto* grid = new QTableWidget(0, 7, s);
-    grid->setHorizontalHeaderLabels({QStringLiteral("Title ID"), QStringLiteral("DLC / add-on"), QStringLiteral("Edition"),
-                                     QStringLiteral("Store region"), QStringLiteral("Product / _NN"),
-                                     QStringLiteral("Identifier evidence"), QStringLiteral("Observed release content ID")});
+    grid->setHorizontalHeaderLabels({FW_TR("Title ID"), FW_TR("DLC / add-on"), FW_TR("Edition"),
+                                     FW_TR("Store region"), FW_TR("Product / _NN"),
+                                     FW_TR("Identifier evidence"), FW_TR("Observed release content ID")});
     grid->setSelectionBehavior(QAbstractItemView::SelectRows);
     grid->setSelectionMode(QAbstractItemView::SingleSelection);
     grid->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -955,10 +960,10 @@ void DlcPage::changeRegion()
     auto* targetCid = textInput({}, true, trow);
     targetCid->setText(sourceCid);
     targetCid->setReadOnly(true);
-    th->addWidget(field(QStringLiteral("Target title ID"), targetTid, {}, trow), 1);
-    th->addWidget(field(QStringLiteral("DLC content ID"), targetCid, {}, trow), 3);
+    th->addWidget(field(FW_TR("Target title ID"), targetTid, {}, trow), 1);
+    th->addWidget(field(FW_TR("DLC content ID"), targetCid, {}, trow), 3);
     s->body()->addWidget(trow);
-    auto* proposal = caption(QStringLiteral("Choose a release to propose a region swap. DLC compatibility remains unverified."), s);
+    auto* proposal = caption(FW_TR("Choose a release to propose a region swap. DLC compatibility remains unverified."), s);
     proposal->setWordWrap(true);
     s->body()->addWidget(proposal);
 
@@ -967,7 +972,7 @@ void DlcPage::changeRegion()
         std::vector<dlc::DlcCandidate> shown;   // grid rows
         std::vector<dlc::DlcCandidate> maps;    // mapping combo rows (index - 1)
         std::optional<dlc::DlcCandidate> selected;
-        QString evidence = QStringLiteral("Manual target; compatibility unverified");
+        QString evidence = FW_TR("Manual target; compatibility unverified");
         QString market;
         bool selectedOk = false;
     };
@@ -977,7 +982,7 @@ void DlcPage::changeRegion()
         auto p = dlc::propose(c, sourceCid, first.item.title);
         if (!p.ok()) {
             status->setText(p.error().message);
-            proposal->setText(QStringLiteral("No valid release was selected. Choose another release or enter manual identifiers."));
+            proposal->setText(FW_TR("No valid release was selected. Choose another release or enter manual identifiers."));
             st->selectedOk = false;
             return;
         }
@@ -992,15 +997,15 @@ void DlcPage::changeRegion()
             for (const auto& d : st->result->candidates)
                 if (d.productKind == u"DLC" && d.contentId == p->contentId)
                     exact = true;
-        st->evidence = QStringLiteral("%1: %2 / %3; DLC compatibility unverified")
-                           .arg(exact ? QStringLiteral("Exact DLC SKU observed") : QStringLiteral("DLC SKU not observed; proposed from regional identifier mapping"),
-                                c.region, c.titleId);
+        st->evidence = (exact ? FW_TR("Exact DLC SKU observed: %1 / %2; DLC compatibility unverified")
+                              : FW_TR("DLC SKU not observed; proposed from regional identifier mapping: %1 / %2; DLC compatibility unverified"))
+                           .arg(c.region, c.titleId);
         proposal->setText((p->contentId == sourceCid
-                               ? QStringLiteral("This regional release shares the original PPSA/content identity; no identifier change is needed.")
-                               : QStringLiteral("Proposed: %1 \u2192 %2. Publisher prefix and game ID updated; DLC suffix retained.").arg(sourceCid, p->contentId))
-                          + QStringLiteral("\n%1. Identifier source: %2 \u2014 %3. In-game DLC compatibility remains unverified.")
+                               ? FW_TR("This regional release shares the original PPSA/content identity; no identifier change is needed.")
+                               : FW_TR("Proposed: %1 \u2192 %2. Publisher prefix and game ID updated; DLC suffix retained.").arg(sourceCid, p->contentId))
+                          + QStringLiteral("\n") + FW_TR("%1. Identifier source: %2 \u2014 %3. In-game DLC compatibility remains unverified.")
                                 .arg(st->evidence, c.name, c.region));
-        status->setText(QStringLiteral("Release selected. Review the target identifiers, then apply."));
+        status->setText(FW_TR("Release selected. Review the target identifiers, then apply."));
     };
     const auto filter = [=, this] {
         grid->setRowCount(0);
@@ -1015,8 +1020,8 @@ void DlcPage::changeRegion()
         const QString code = region->currentData().toString();
         st->shown = dlc::dlcForRegion(st->result->candidates, code, sourceCid);
         st->maps = dlc::gameMappings(st->result->candidates, code, sourceCid);
-        mapping->addItem(st->maps.empty() ? QStringLiteral("No observed base-game identifier mapping")
-                                          : QStringLiteral("Choose a regional game identifier mapping\u2026"));
+        mapping->addItem(st->maps.empty() ? FW_TR("No observed base-game identifier mapping")
+                                          : FW_TR("Choose a regional game identifier mapping\u2026"));
         for (const auto& c : st->maps)
             mapping->addItem(QStringLiteral("%1 / %2 \u2014 %3%4 \u2014 %5")
                                  .arg(c.titleId, c.contentId.left(6), c.name,
@@ -1033,8 +1038,8 @@ void DlcPage::changeRegion()
         }
         if (code.isEmpty()) {
             proposal->setText(st->shown.empty()
-                                  ? QStringLiteral("No DLC products observed. Regional game identifiers are available separately; a proposed DLC SKU remains unverified.")
-                                  : QStringLiteral("The table shows observed DLC products only. Choose a target region; base-game identifiers are listed separately."));
+                                  ? FW_TR("No DLC products observed. Regional game identifiers are available separately; a proposed DLC SKU remains unverified.")
+                                  : FW_TR("The table shows observed DLC products only. Choose a target region; base-game identifiers are listed separately."));
             return;
         }
         if (manual->isChecked())
@@ -1049,19 +1054,19 @@ void DlcPage::changeRegion()
                 }
             select(all.front());
         } else if (!all.empty()) {
-            status->setText(QStringLiteral("Several identifiers or DLC SKUs match. Choose the game mapping or an exact DLC product."));
-            proposal->setText(QStringLiteral("Ambiguous results: no region swap has been selected. The table contains DLC only; game "
+            status->setText(FW_TR("Several identifiers or DLC SKUs match. Choose the game mapping or an exact DLC product."));
+            proposal->setText(FW_TR("Ambiguous results: no region swap has been selected. The table contains DLC only; game "
                                              "identifiers are in the selector above."));
         } else {
-            status->setText(QStringLiteral("No observed release for this region. Retry by game name or use Manual identifiers."));
-            proposal->setText(QStringLiteral("No automatic identifiers are available for the selected region."));
+            status->setText(FW_TR("No observed release for this region. Retry by game name or use Manual identifiers."));
+            proposal->setText(FW_TR("No automatic identifiers are available for the selected region."));
         }
     };
     const auto runLookup = [=, this](bool edited) {
         if (!onlineLookupAllowed())
             return;
         find->setEnabled(false);
-        status->setText(QStringLiteral("Finding game and regional releases\u2026"));
+        status->setText(FW_TR("Finding game and regional releases\u2026"));
         const QString key = lookupKey(first);
         if (!edited && m_lookups.contains(key)) {
             st->result = m_lookups.value(key);
@@ -1084,10 +1089,11 @@ void DlcPage::changeRegion()
                 if (c.productKind == u"DLC")
                     ++observed;
             status->setText(st->result->candidates.empty()
-                                ? QStringLiteral("No regional mapping found. Enter a game name and retry, or use Manual identifiers.")
-                                : QStringLiteral("%1 observed DLC products; game identifier mappings are separate%2. Choose a target region.")
-                                      .arg(observed)
-                                      .arg(st->result->isStale ? QStringLiteral(" (stale cache)") : st->result->fromCache ? QStringLiteral(" (cached)") : QString()));
+                                ? FW_TR("No regional mapping found. Enter a game name and retry, or use Manual identifiers.")
+                                : (st->result->isStale ? FW_TR("%1 observed DLC products; game identifier mappings are separate (stale cache). Choose a target region.")
+                                   : st->result->fromCache ? FW_TR("%1 observed DLC products; game identifier mappings are separate (cached). Choose a target region.")
+                                                           : FW_TR("%1 observed DLC products; game identifier mappings are separate. Choose a target region."))
+                                      .arg(observed));
             status->setToolTip(st->result->warnings.join(u'\n'));
             filter();
         });
@@ -1104,7 +1110,7 @@ void DlcPage::changeRegion()
         if (i > 0 && size_t(i - 1) < st->maps.size())
             select(st->maps[size_t(i - 1)]);
         else
-            proposal->setText(QStringLiteral("Choose a game identifier mapping or an observed DLC product before applying."));
+            proposal->setText(FW_TR("Choose a game identifier mapping or an observed DLC product before applying."));
     });
     connect(grid, &QTableWidget::cellDoubleClicked, s, [=, this](int r, int) {
         if (size_t(r) < st->shown.size())
@@ -1122,8 +1128,8 @@ void DlcPage::changeRegion()
             st->selected.reset();
             st->selectedOk = false;
             st->market.clear();
-            st->evidence = QStringLiteral("Manual target; compatibility unverified");
-            proposal->setText(QStringLiteral("Enter the complete target identifiers. Manual entries are syntax-checked; mapping and "
+            st->evidence = FW_TR("Manual target; compatibility unverified");
+            proposal->setText(FW_TR("Enter the complete target identifiers. Manual entries are syntax-checked; mapping and "
                                              "DLC compatibility remain unverified."));
         }
     });
@@ -1137,15 +1143,15 @@ void DlcPage::changeRegion()
             status->setText(re.error().message);
     });
 
-    s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
-    auto* addBtn = s->addButton(QStringLiteral("Add another target"), Sheet::Role::Safe);
-    auto* setBtn = s->addButton(QStringLiteral("Set selected targets"), Sheet::Role::Primary);
+    s->addButton(FW_TR("Close"), Sheet::Role::Safe);
+    auto* addBtn = s->addButton(FW_TR("Add another target"), Sheet::Role::Safe);
+    auto* setBtn = s->addButton(FW_TR("Set selected targets"), Sheet::Role::Primary);
     for (QPushButton* b : {addBtn, setBtn}) {
         QObject::disconnect(b, &QPushButton::clicked, s, nullptr);
         const bool add = b == addBtn;
         connect(b, &QPushButton::clicked, s, [=, this] {
             if (!manual->isChecked() && !st->selectedOk) {
-                status->setText(QStringLiteral("Choose an observed regional release, or enable Manual identifiers."));
+                status->setText(FW_TR("Choose an observed regional release, or enable Manual identifiers."));
                 return;
             }
             const QString err = applyTarget(rows, targetTid->text(), targetCid->text(), st->evidence,
@@ -1172,14 +1178,14 @@ void DlcPage::showPreview()
 {
     if (m_rows.empty())
         return;
-    auto* s = new Sheet(window(), QStringLiteral("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
+    auto* s = new Sheet(window(), FW_TR("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
     auto* box = new QPlainTextEdit(s);
     box->setReadOnly(true);
     box->setFont(font::mono());
     box->setPlainText(previewText(false));
     box->setMinimumHeight(420);
     s->body()->addWidget(box);
-    s->addButton(QStringLiteral("Close"), Sheet::Role::Safe);
+    s->addButton(FW_TR("Close"), Sheet::Role::Safe);
     s->exec();
 }
 
@@ -1195,13 +1201,13 @@ std::vector<dlc::IniExportResult> DlcPage::saveUpdatedInis(QStringList* log)
         for (int idx : r.items) {
             if (idx < 0 || idx >= int(m_rows.size()))
                 continue;
-            m_rows[size_t(idx)].result = r.error.isEmpty() ? QStringLiteral("INI validated: %1").arg(nativePath(r.path))
-                                                           : QStringLiteral("Failed: %1").arg(r.error);
+            m_rows[size_t(idx)].result = r.error.isEmpty() ? FW_TR("INI validated: %1").arg(nativePath(r.path))
+                                                           : FW_TR("Failed: %1").arg(r.error);
             refreshRow(idx);
         }
         (r.error.isEmpty() ? saved : failed)++;
     }
-    m_loadRow->set(QStringLiteral("INI export: %1 saved, %2 failed").arg(saved).arg(failed), failed ? Tone::Warn : Tone::Ok);
+    m_loadRow->set(FW_TR("INI export: %1 saved, %2 failed").arg(saved).arg(failed), failed ? Tone::Warn : Tone::Ok);
     if (m_ctx.settings().value(dlc::keys::kSaveReport).toBool()) {
         QStringList outs, errs;
         for (size_t n = 0; n < m_rows.size(); ++n) {
@@ -1228,18 +1234,18 @@ void DlcPage::saveInisInteractive()
     if (m_rows.empty())
         return;
     if (outputFolder().isEmpty()) {
-        m_loadRow->set(QStringLiteral("Select the output folder."), Tone::Err);
+        m_loadRow->set(FW_TR("Select the output folder."), Tone::Err);
         return;
     }
-    auto* s = new Sheet(window(), QStringLiteral("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
+    auto* s = new Sheet(window(), FW_TR("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
     auto* box = new QPlainTextEdit(s);
     box->setReadOnly(true);
     box->setFont(font::mono());
     box->setPlainText(previewText(true));
     box->setMinimumHeight(420);
     s->body()->addWidget(box);
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Save updated INIs"), Sheet::Role::Primary);
+    s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+    s->addButton(FW_TR("Save updated INIs"), Sheet::Role::Primary);
     if (s->exec() != 1)
         return;
     saveUpdatedInis();
@@ -1250,25 +1256,25 @@ void DlcPage::saveInisInteractive()
 QString DlcPage::validateForm()
 {
     if (m_rows.empty())
-        return QStringLiteral("Add DLC INIs or DLC packages first.");
+        return FW_TR("Add DLC INIs or DLC packages first.");
     if (m_loading > 0)
-        return QStringLiteral("Packages are still being read. Try again in a moment.");
+        return FW_TR("Packages are still being read. Try again in a moment.");
     if (const QString k = dlc::hex32Problem(m_key->text().trimmed()); !k.isEmpty()) {
         setInputError(m_key, true);
-        return QStringLiteral("The entitlement key %1").arg(k); // the engine's wording, with the length
+        return FW_TR("The entitlement key %1").arg(k); // the engine's wording, with the length
     }
     if (const QString p = dlc::hex32Problem(m_passcode->text().trimmed()); !p.isEmpty()) {
         setInputError(m_passcode, true);
-        return QStringLiteral("The PKG source passcode %1").arg(p);
+        return FW_TR("The PKG source passcode %1").arg(p);
     }
     if (outputFolder().isEmpty())
-        return QStringLiteral("Select the output folder.");
+        return FW_TR("Select the output folder.");
     int buildable = 0;
     for (const Row& r : m_rows)
         if (dlc::itemProblem(r.item, false).isEmpty() && (!r.package || r.package->canRebuild))
             ++buildable;
     if (buildable == 0)
-        return QStringLiteral("None of the entries can be built. Check the Result column (Preview changes shows why).");
+        return FW_TR("None of the entries can be built. Check the Result column (Preview changes shows why).");
     if (options() && options()->hasErrors())
         return options()->errorMessages().join(u' ');
     return {};
@@ -1277,15 +1283,15 @@ QString DlcPage::validateForm()
 Result<QString> DlcPage::submit(bool)
 {
     // The review step of the Companion.
-    auto* s = new Sheet(window(), QStringLiteral("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
+    auto* s = new Sheet(window(), FW_TR("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
     auto* box = new QPlainTextEdit(s);
     box->setReadOnly(true);
     box->setFont(font::mono());
     box->setPlainText(previewText(false));
     box->setMinimumHeight(380);
     s->body()->addWidget(box);
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Build PKG outputs"), Sheet::Role::Primary);
+    s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+    s->addButton(FW_TR("Build PKG outputs"), Sheet::Role::Primary);
     if (!m_demo && !qApp->property("fwScreenshotMode").toBool() && !qEnvironmentVariableIsSet("FW_TEST_AUTO_ACCEPT")) {
         if (s->exec() != 1)
             return Error(ErrorCode::Cancelled, QStringLiteral("Not started."));
