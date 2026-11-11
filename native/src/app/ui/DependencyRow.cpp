@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QHBoxLayout>
@@ -36,9 +37,9 @@ DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* pa
     textCol->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     textCol->setMinimumWidth(120);
     h->addWidget(textCol, 1);
-    m_badge = new Badge(QStringLiteral("Checking…"), Tone::Neutral, this);
+    m_badge = new Badge(FW_TR("Checking…"), Tone::Neutral, this);
     h->addWidget(m_badge);
-    m_fix = new Link(QStringLiteral("How to fix…"), this);
+    m_fix = new Link(FW_TR("How to fix…"), this);
     m_fix->hide();
     connect(m_fix, &Link::activated, this, [this] { emit fixRequested(m_id, m_info.howToFix, m_info.settingKey); });
     h->addWidget(m_fix);
@@ -48,24 +49,26 @@ DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* pa
 void DependencyRow::setChecking()
 {
     m_icon->setPixmap(iconPixmap(QStringLiteral("loader"), size::icon, color::fg_3, devicePixelRatioF()));
-    m_badge->set(QStringLiteral("Checking…"), Tone::Neutral);
+    m_badge->set(FW_TR("Checking…"), Tone::Neutral);
     m_badge->setIconName(QStringLiteral("clock"));
 }
 
 void DependencyRow::setInfo(const DependencyInfo& info)
 {
     m_info = info;
-    m_name->setFullText(info.version.isEmpty() ? info.name : QStringLiteral("%1 %2").arg(info.name, info.version));
+    // The tool's name and purpose are in the source list; detail and how-to-fix are composed by the probes (English).
+    const QString name = i18n::translate(info.name), purpose = i18n::translate(info.purpose);
+    m_name->setFullText(info.version.isEmpty() ? name : QStringLiteral("%1 %2").arg(name, info.version));
     QString detail = info.detail;
     if (!info.path.isEmpty())
         detail = detail.isEmpty() ? QDir::toNativeSeparators(info.path) : QStringLiteral("%1 · %2").arg(detail, QDir::toNativeSeparators(info.path));
     if (detail.isEmpty())
-        detail = info.purpose;
+        detail = purpose;
     // The font first: the text is elided with it.
     m_detail->setFont(info.path.isEmpty() ? font::caption() : font::mono());
     m_detail->setFullText(detail);
     QStringList tip;
-    for (const QString& part : {info.purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix})
+    for (const QString& part : {purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix})
         if (!part.trimmed().isEmpty())
             tip << part.trimmed();
     m_detail->setToolTip(plainTip(tip.join(u'\n')));
@@ -74,18 +77,18 @@ void DependencyRow::setInfo(const DependencyInfo& info)
     Tone tone = Tone::Neutral;
     QString word;
     switch (info.status) {
-    case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = QStringLiteral("Ready"); break;
-    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = QStringLiteral("Outdated"); break;
-    case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Not found"); break;
-    case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = QStringLiteral("Error"); break;
-    case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = QStringLiteral("Not needed"); break;
+    case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = FW_TR("Ready"); break;
+    case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = FW_TR("Outdated"); break;
+    case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = FW_TR("Not found"); break;
+    case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = FW_TR("Error"); break;
+    case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = FW_TR("Not needed"); break;
     }
     m_icon->setPixmap(iconPixmap(iconName, size::icon, c, devicePixelRatioF()));
     m_badge->set(word, tone);
     m_badge->setIconName(tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone));
     const bool fixable = !info.howToFix.isEmpty() && info.status != DependencyStatus::Ready;
     m_fix->setVisible(fixable);
-    m_fix->setText(!info.settingKey.isEmpty() ? QStringLiteral("Set path…") : QStringLiteral("How to fix…"));
+    m_fix->setText(!info.settingKey.isEmpty() ? FW_TR("Set path…") : FW_TR("How to fix…"));
 }
 
 void DependencyRow::setDivider(bool on)

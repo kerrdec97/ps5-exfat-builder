@@ -6,6 +6,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/general/Module.h"
 
 #include <QDir>
@@ -77,35 +78,35 @@ private:
 QString parameterLabel(const QString& key)
 {
     static const QHash<QString, QString> known = {
-        {QStringLiteral("source"), QStringLiteral("Source")},
-        {QStringLiteral("output"), QStringLiteral("Output")},
-        {QStringLiteral("outputDir"), QStringLiteral("Output folder")},
-        {QStringLiteral("destination"), QStringLiteral("Destination")},
-        {QStringLiteral("image"), QStringLiteral("Image")},
-        {QStringLiteral("package"), QStringLiteral("Package")},
-        {QStringLiteral("basePackage"), QStringLiteral("Base package")},
-        {QStringLiteral("game"), QStringLiteral("Game folder")},
-        {QStringLiteral("fileName"), QStringLiteral("File name")},
-        {QStringLiteral("format"), QStringLiteral("Format")},
-        {QStringLiteral("title"), QStringLiteral("Title")},
-        {QStringLiteral("titleId"), QStringLiteral("Title ID")},
-        {QStringLiteral("contentId"), QStringLiteral("Content ID")},
-        {QStringLiteral("contentVersion"), QStringLiteral("Version")},
-        {QStringLiteral("version"), QStringLiteral("Version")},
-        {QStringLiteral("packageType"), QStringLiteral("Package type")},
-        {QStringLiteral("backport4xx"), QStringLiteral("Backport 4.xx")},
-        {QStringLiteral("backport5xx"), QStringLiteral("Backport 5.xx+")},
-        {QStringLiteral("entitlementKey"), QStringLiteral("Entitlement key")},
-        {QStringLiteral("volumeType"), QStringLiteral("Volume type")},
-        {QStringLiteral("remoteDir"), QStringLiteral("Folder on the console")},
-        {QStringLiteral("host"), QStringLiteral("Console")},
+        {QStringLiteral("source"), FW_TR_NOOP("Source")},
+        {QStringLiteral("output"), FW_TR_NOOP("Output")},
+        {QStringLiteral("outputDir"), FW_TR_NOOP("Output folder")},
+        {QStringLiteral("destination"), FW_TR_NOOP("Destination")},
+        {QStringLiteral("image"), FW_TR_NOOP("Image")},
+        {QStringLiteral("package"), FW_TR_NOOP("Package")},
+        {QStringLiteral("basePackage"), FW_TR_NOOP("Base package")},
+        {QStringLiteral("game"), FW_TR_NOOP("Game folder")},
+        {QStringLiteral("fileName"), FW_TR_NOOP("File name")},
+        {QStringLiteral("format"), FW_TR_NOOP("Format")},
+        {QStringLiteral("title"), FW_TR_NOOP("Title")},
+        {QStringLiteral("titleId"), FW_TR_NOOP("Title ID")},
+        {QStringLiteral("contentId"), FW_TR_NOOP("Content ID")},
+        {QStringLiteral("contentVersion"), FW_TR_NOOP("Version")},
+        {QStringLiteral("version"), FW_TR_NOOP("Version")},
+        {QStringLiteral("packageType"), FW_TR_NOOP("Package type")},
+        {QStringLiteral("backport4xx"), FW_TR_NOOP("Backport 4.xx")},
+        {QStringLiteral("backport5xx"), FW_TR_NOOP("Backport 5.xx+")},
+        {QStringLiteral("entitlementKey"), FW_TR_NOOP("Entitlement key")},
+        {QStringLiteral("volumeType"), FW_TR_NOOP("Volume type")},
+        {QStringLiteral("remoteDir"), FW_TR_NOOP("Folder on the console")},
+        {QStringLiteral("host"), FW_TR_NOOP("Console")},
         {QStringLiteral("a"), QStringLiteral("A")},
         {QStringLiteral("b"), QStringLiteral("B")},
-        {QStringLiteral("depth"), QStringLiteral("Depth")},
-        {QStringLiteral("method"), QStringLiteral("Method")},
+        {QStringLiteral("depth"), FW_TR_NOOP("Depth")},
+        {QStringLiteral("method"), FW_TR_NOOP("Method")},
     };
     if (const auto it = known.constFind(key); it != known.constEnd())
-        return it.value();
+        return i18n::translate(it.value());
     QString out;
     for (const QChar c : key) {
         if (c.isUpper() && !out.isEmpty() && !out.back().isSpace())
@@ -124,7 +125,7 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     // Names and values come from the stored job (paths, IDs): shown literally.
     lh->addWidget(label(name, TextStyle::Body, color::fg_2, left));
     if (overridden) {
-        auto* b = new Badge(QStringLiteral("Overridden"), Tone::Neutral, left);
+        auto* b = new Badge(FW_TR("Overridden"), Tone::Neutral, left);
         b->setIconName(QStringLiteral("advanced"));
         lh->addWidget(b);
     }
@@ -143,14 +144,14 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
 } // namespace
 
 QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logModel, QWidget* parent)
-    : Page(ctx, QStringLiteral("queue"), QStringLiteral("Queue"), QStringLiteral("Jobs run in this order."), parent),
+    : Page(ctx, QStringLiteral("queue"), FW_TR("Queue"), FW_TR("Jobs run in this order."), parent),
       m_model(queueModel), m_logModel(logModel)
 {
-    m_clearFinished = button(QStringLiteral("Clear finished"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
-    m_clearFinished->setToolTip(QStringLiteral("Remove done, failed and cancelled jobs from the list. History keeps them."));
-    m_pauseQueue = button(QStringLiteral("Pause queue"), ButtonVariant::Secondary, QStringLiteral("pause"), this);
-    auto* more = new IconButton(QStringLiteral("more"), QStringLiteral("More queue actions"), IconButton::Size::Regular, this);
-    more->setToolTip(QStringLiteral("More queue actions"));
+    m_clearFinished = button(FW_TR("Clear finished"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
+    m_clearFinished->setToolTip(FW_TR("Remove done, failed and cancelled jobs from the list. History keeps them."));
+    m_pauseQueue = button(FW_TR("Pause queue"), ButtonVariant::Secondary, QStringLiteral("pause"), this);
+    auto* more = new IconButton(QStringLiteral("more"), FW_TR("More queue actions"), IconButton::Size::Regular, this);
+    more->setToolTip(FW_TR("More queue actions"));
     // One right-aligned bar: buttons keep their size when one of them hides.
     auto* bar = new QWidget(this);
     auto* bl = hbox(bar, space::sm);
@@ -161,17 +162,17 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     }
     header()->addAction(bar);
     auto* menu = new QMenu(this);
-    auto* exportCsv = menu->addAction(icon(QStringLiteral("download"), color::fg_2), QStringLiteral("Export job history…"));
+    auto* exportCsv = menu->addAction(icon(QStringLiteral("download"), color::fg_2), FW_TR("Export job history…"));
     connect(more, &QToolButton::clicked, this, [more, menu] { menu->popup(more->mapToGlobal(QPoint(0, more->height() + 4))); });
     connect(exportCsv, &QAction::triggered, this, [this] {
-        const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Export job history"), QDir::homePath() + QStringLiteral("/job-history.csv"), QStringLiteral("CSV files (*.csv)"));
+        const QString path = QFileDialog::getSaveFileName(window(), FW_TR("Export job history"), QDir::homePath() + QStringLiteral("/job-history.csv"), FW_TR("CSV files") + QStringLiteral(" (*.csv)"));
         if (path.isEmpty())
             return;
         auto st = m_ctx.history().exportCsv(path);
         if (st.ok())
-            emit toastRequested(Tone::Ok, QStringLiteral("History exported"), nativePath(path));
+            emit toastRequested(Tone::Ok, FW_TR("History exported"), nativePath(path));
         else
-            emit toastRequested(Tone::Err, QStringLiteral("Export failed"), st.error().message);
+            emit toastRequested(Tone::Err, FW_TR("Export failed"), st.error().message);
     });
     connect(m_clearFinished, &QPushButton::clicked, this, [this] { m_ctx.queue().clearFinished(); });
     connect(m_pauseQueue, &QPushButton::clicked, this, [this] { m_ctx.queue().holdQueue(!m_ctx.queue().isHeld()); });
@@ -179,10 +180,10 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     // ---- Nothing queued: one inviting state instead of two empty panels.
     m_emptyCard = new Card(this);
     m_emptyCard->setObjectName(QStringLiteral("queue-empty"));
-    auto* hero = new EmptyState(QStringLiteral("queue"), QStringLiteral("Nothing in the queue"),
-                                QStringLiteral("Jobs you start wait here and run in order while you keep working."), m_emptyCard);
-    auto* b1 = hero->addAction(QStringLiteral("Build an image"), ButtonVariant::Primary);
-    auto* b2 = hero->addAction(QStringLiteral("Backport a game"));
+    auto* hero = new EmptyState(QStringLiteral("queue"), FW_TR("Nothing in the queue"),
+                                FW_TR("Jobs you start wait here and run in order while you keep working."), m_emptyCard);
+    auto* b1 = hero->addAction(FW_TR("Build an image"), ButtonVariant::Primary);
+    auto* b2 = hero->addAction(FW_TR("Backport a game"));
     connect(b1, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
     connect(b2, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("backport"), {}}); });
     m_emptyCard->body()->addWidget(hero);
@@ -195,7 +196,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     auto* card = new Card(m_columns, Card::Variant::Table);
     auto* h = card->header();
     m_filter = new Segmented(card);
-    for (const auto& s : {QStringLiteral("All"), QStringLiteral("Running"), QStringLiteral("Queued"), QStringLiteral("Done"), QStringLiteral("Not finished")})
+    for (const auto& s : {FW_TR("All"), FW_TR("Running"), FW_TR("Queued"), FW_TR("Done"), FW_TR("Not finished")})
         m_filter->addSegment(s);
     m_filter->setAccessibleName(QStringLiteral("Filter jobs"));
     h->addWidget(m_filter);
@@ -205,10 +206,10 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     connect(m_filter, &Segmented::currentChanged, this, &QueuePage::applyFilter);
     m_list = new JobList(ctx, queueModel, JobRow::Variant::Queue, card);
     m_list->setFilter(visibleJob);
-    m_list->setToolTip(QStringLiteral("Drag a waiting job to change the order."));
-    m_empty = new EmptyState(QStringLiteral("filter"), QStringLiteral("No jobs here"), QStringLiteral("Nothing matches this filter."), card);
+    m_list->setToolTip(FW_TR("Drag a waiting job to change the order."));
+    m_empty = new EmptyState(QStringLiteral("filter"), FW_TR("No jobs here"), FW_TR("Nothing matches this filter."), card);
     m_empty->setCompact(true);
-    auto* showAll = m_empty->addAction(QStringLiteral("Show all jobs"));
+    auto* showAll = m_empty->addAction(FW_TR("Show all jobs"));
     connect(showAll, &QPushButton::clicked, this, [this] { m_filter->setCurrentIndex(0); });
     m_list->setEmptyWidget(m_empty);
     card->body()->addWidget(m_list);
@@ -235,7 +236,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
 
     m_settingsCard = new Card(m_detail);
     m_settingsCard->body()->setSpacing(0);
-    auto* fold = new FoldHeader(QStringLiteral("Job settings"), m_settingsCard);
+    auto* fold = new FoldHeader(FW_TR("Job settings"), m_settingsCard);
     m_dSettingsToggle = fold;
     m_settingsCard->body()->addWidget(fold);
     m_dSettings = new QWidget(m_settingsCard);
@@ -277,12 +278,12 @@ void QueuePage::updateEta()
         }
     }
     if (m_ctx.queue().isHeld())
-        m_eta->setText(running == 0 && queued > 0 ? QStringLiteral("Waiting · press Start queue")
-                                                  : QStringLiteral("Queue paused · running jobs continue"));
+        m_eta->setText(running == 0 && queued > 0 ? FW_TR("Waiting · press Start queue")
+                                                  : FW_TR("Queue paused · running jobs continue"));
     else if (eta >= 0)
-        m_eta->setText((running > 1 ? QStringLiteral("Running jobs: %1") : QStringLiteral("Running job: %1")).arg(formatTimeLeft(eta).toLower()));
+        m_eta->setText((running > 1 ? FW_TR("Running jobs: %1") : FW_TR("Running job: %1")).arg(formatTimeLeft(eta).toLower()));
     else if (queued > 0 && running == 0)
-        m_eta->setText(QStringLiteral("Waiting to start"));
+        m_eta->setText(FW_TR("Waiting to start"));
     else
         m_eta->setText({});
 }
@@ -344,23 +345,23 @@ void QueuePage::updateCounts()
         }
     }
     auto seg = [](const QString& name, int n) { return n > 0 ? QStringLiteral("%1 %2").arg(name).arg(n) : name; };
-    m_filter->setSegmentText(0, seg(QStringLiteral("All"), all));
-    m_filter->setSegmentText(1, seg(QStringLiteral("Running"), running));
-    m_filter->setSegmentText(2, seg(QStringLiteral("Queued"), queued));
-    m_filter->setSegmentText(3, seg(QStringLiteral("Done"), done));
-    m_filter->setSegmentText(4, seg(QStringLiteral("Not finished"), failed + cancelled));
+    m_filter->setSegmentText(0, seg(FW_TR("All"), all));
+    m_filter->setSegmentText(1, seg(FW_TR("Running"), running));
+    m_filter->setSegmentText(2, seg(FW_TR("Queued"), queued));
+    m_filter->setSegmentText(3, seg(FW_TR("Done"), done));
+    m_filter->setSegmentText(4, seg(FW_TR("Not finished"), failed + cancelled));
     // One button: it starts a list that waits (made with "Add to queue", or
     // restored when the app started), resumes a queue paused while it ran,
     // and pauses a queue that runs.
     const bool held = m_ctx.queue().isHeld();
     const QueueSwitch next = queueSwitch(held, running, queued);
     m_pauseQueue->setText(next == QueueSwitch::Start ? startQueueText(queued)
-                          : next == QueueSwitch::Resume ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
+                          : next == QueueSwitch::Resume ? FW_TR("Resume queue") : FW_TR("Pause queue"));
     setButtonIcon(m_pauseQueue, held ? QStringLiteral("play") : QStringLiteral("pause"));
     setButtonVariant(m_pauseQueue, held ? ButtonVariant::Primary : ButtonVariant::Secondary);
-    m_pauseQueue->setToolTip(next == QueueSwitch::Start ? QStringLiteral("Run the waiting jobs, one after another.")
-                             : next == QueueSwitch::Resume ? QStringLiteral("Start the next waiting job when the current one ends.")
-                                                           : QStringLiteral("Finish the running job, then wait. Nothing is cancelled."));
+    m_pauseQueue->setToolTip(next == QueueSwitch::Start ? FW_TR("Run the waiting jobs, one after another.")
+                             : next == QueueSwitch::Resume ? FW_TR("Start the next waiting job when the current one ends.")
+                                                           : FW_TR("Finish the running job, then wait. Nothing is cancelled."));
     m_clearFinished->setEnabled(done + failed + cancelled > 0);
     m_clearFinished->setVisible(all > 0);
     updateEta();
@@ -409,12 +410,12 @@ void QueuePage::updateDetail()
     }
     for (auto it = r.overrides.cbegin(); it != r.overrides.cend(); ++it) {
         const SettingDef* def = m_ctx.schema().find(it.key());
-        m_dSettingsLayout->addWidget(detailRow(def ? def->label : it.key(), def ? SettingRow::displayValue(*def, it.value()) : it.value().toString(), true, true, m_dSettings));
+        m_dSettingsLayout->addWidget(detailRow(def ? shownLabel(*def) : it.key(), def ? SettingRow::displayValue(*def, it.value()) : it.value().toString(), true, true, m_dSettings));
         ++overrides;
     }
     if (m_dSettingsLayout->count() == 0)
-        m_dSettingsLayout->addWidget(caption(QStringLiteral("Default settings"), m_dSettings));
-    static_cast<FoldHeader*>(m_dSettingsToggle)->setCount(overrides > 0 ? QStringLiteral("%1 overridden").arg(overrides) : QString());
+        m_dSettingsLayout->addWidget(caption(FW_TR("Default settings"), m_dSettings));
+    static_cast<FoldHeader*>(m_dSettingsToggle)->setCount(overrides > 0 ? FW_TR("%1 overridden").arg(overrides) : QString());
 }
 
 void QueuePage::selectJob(const QString& id)
@@ -460,10 +461,9 @@ QString QueuePage::statusContext() const
         default: ++failed; break;
         }
     }
-    QString text = QStringLiteral("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running).arg(queued).arg(done).arg(failed);
     if (cancelled > 0)
-        text += QStringLiteral(" · %1 cancelled").arg(cancelled);
-    return text;
+        return FW_TR("Queue: %1 running · %2 queued · %3 done · %4 failed · %5 cancelled").arg(running).arg(queued).arg(done).arg(failed).arg(cancelled);
+    return FW_TR("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running).arg(queued).arg(done).arg(failed);
 }
 
 void QueuePage::applyDemoState(const QString& name)
@@ -484,7 +484,7 @@ void QueuePage::applyDemoState(const QString& name)
     auto* s = new Sheet(window(), QStringLiteral("Cancel the running build?"), Sheet::Icon::Warning);
     s->addText(QStringLiteral("Ghost of Yotei is 63 % copied. Cancelling deletes the partial image %1 and leaves the dump untouched.")
                    .arg(Sheet::monoSpan(QStringLiteral("PPSA01325_Ghost_of_Yotei_v01.000.000.exfat"))));
-    s->addCheckbox(QStringLiteral("Also remove the job from the queue"));
+    s->addCheckbox(FW_TR("Also remove the job from the queue"));
     s->addButton(QStringLiteral("Keep building"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Cancel build"), Sheet::Role::Destructive);
     s->open();

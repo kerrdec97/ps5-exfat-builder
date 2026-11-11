@@ -2,6 +2,8 @@
 
 #include "app/AppContext.h"
 #include "app/ui/Icons.h"
+#include "core/Tr.h"
+#include "engines/general/Module.h"
 
 #include <QResizeEvent>
 #include <QComboBox>
@@ -16,6 +18,32 @@ namespace fw::ui {
 
 using namespace theme;
 
+// ---- schema texts as shown ----------------------------------------------------
+
+QString shownLabel(const SettingDef& def) { return i18n::translate(def.label); }
+QString shownDescription(const SettingDef& def) { return i18n::translate(def.description); }
+QString shownChoiceLabel(const SettingDef& def, const SettingChoice& choice)
+{
+    if (def.key == general::keys::kLanguage)
+        return choice.label; // "Deutsch (German)": a language's own name
+    return i18n::translate(choice.label);
+}
+QString shownChoiceDescription(const SettingDef& def, const SettingChoice& choice)
+{
+    if (def.key == general::keys::kLanguage)
+        return choice.description;
+    return i18n::translate(choice.description);
+}
+QString shownSection(const QString& sectionOrGroup) { return i18n::translate(sectionOrGroup); }
+QString shownValidationReason(const QString& message)
+{
+    return i18n::translate(message.section(QStringLiteral(": "), 1));
+}
+QString inSentence(const QString& shownValue)
+{
+    return i18n::currentCode() == u"en" ? shownValue.toLower() : shownValue;
+}
+
 // ---- editor -----------------------------------------------------------------
 
 SettingEditor::SettingEditor(const SettingDef& def, QWidget* parent) : QObject(parent), m_def(def)
@@ -28,7 +56,7 @@ static bool useSegmented(const SettingDef& def)
     if (def.type != SettingType::Enum || def.choices.size() < 2 || def.choices.size() > 3)
         return false;
     for (const auto& c : def.choices)
-        if (c.label.size() > 12)
+        if (shownChoiceLabel(def, c).size() > 12) // per language: a long translation gets the drop-down
             return false;
     return true;
 }
@@ -59,7 +87,7 @@ void SettingEditor::build(QWidget* parent)
     switch (m_def.type) {
     case SettingType::Bool: {
         auto* sw = new Switch(parent);
-        sw->setAccessibleName(m_def.label);
+        sw->setAccessibleName(shownLabel(m_def));
         connect(sw, &QAbstractButton::toggled, this, [this](bool on) {
             if (!m_updating)
                 emit edited(on);
@@ -71,8 +99,8 @@ void SettingEditor::build(QWidget* parent)
         if (useSegmented(m_def)) {
             auto* seg = new Segmented(parent);
             for (const auto& c : m_def.choices)
-                seg->addSegment(c.label, {}, c.value);
-            seg->setAccessibleName(m_def.label);
+                seg->addSegment(shownChoiceLabel(m_def, c), {}, c.value);
+            seg->setAccessibleName(shownLabel(m_def));
             connect(seg, &Segmented::currentChanged, this, [this, seg](int) {
                 if (!m_updating)
                     emit edited(seg->currentValue());
@@ -81,11 +109,13 @@ void SettingEditor::build(QWidget* parent)
         } else {
             auto* combo = dropdown(parent);
             for (const auto& c : m_def.choices) {
-                combo->addItem(c.description.isEmpty() ? c.label : QStringLiteral("%1 · %2").arg(c.label, c.description), c.value);
+                combo->addItem(c.description.isEmpty() ? shownChoiceLabel(m_def, c)
+                                                       : QStringLiteral("%1 · %2").arg(shownChoiceLabel(m_def, c), shownChoiceDescription(m_def, c)),
+                               c.value);
             }
             combo->setMinimumWidth(160);
             combo->setMaximumWidth(260);
-            combo->setAccessibleName(m_def.label);
+            combo->setAccessibleName(shownLabel(m_def));
             connect(combo, &QComboBox::currentIndexChanged, this, [this, combo](int) {
                 if (!m_updating)
                     emit edited(combo->currentData());
@@ -100,14 +130,14 @@ void SettingEditor::build(QWidget* parent)
         auto* wrap = new QWidget(parent);
         auto* h = hbox(wrap, space::sm);
         auto* edit = textInput({}, false, wrap);
-        edit->setAccessibleName(m_def.label);
+        edit->setAccessibleName(shownLabel(m_def));
         const bool numeric = m_def.type != SettingType::String;
         edit->setFixedWidth(numeric ? 160 : 260);
         if (numeric)
             edit->setAlignment(Qt::AlignRight);
         h->addWidget(edit);
         if (!m_def.unit.isEmpty())
-            h->addWidget(caption(m_def.unit, wrap));
+            h->addWidget(caption(i18n::translate(m_def.unit), wrap));
         connect(edit, &QLineEdit::editingFinished, this, [this, edit, numeric] {
             if (m_updating)
                 return;
@@ -125,11 +155,11 @@ void SettingEditor::build(QWidget* parent)
     case SettingType::DirPath:
     case SettingType::FilePath: {
         auto* pf = new PathField(m_def.type == SettingType::DirPath ? PathField::Mode::Directory : PathField::Mode::OpenFile, parent);
-        pf->setFilter(m_def.fileFilter);
-        pf->setDialogTitle(m_def.label);
+        pf->setFilter(i18n::translate(m_def.fileFilter));
+        pf->setDialogTitle(shownLabel(m_def));
         pf->setFixedWidth(360);
-        pf->setPlaceholder(m_def.type == SettingType::DirPath ? QStringLiteral("Default") : QStringLiteral("Not set"));
-        pf->edit()->setAccessibleName(m_def.label);
+        pf->setPlaceholder(m_def.type == SettingType::DirPath ? FW_TR("Default") : FW_TR("Not set"));
+        pf->edit()->setAccessibleName(shownLabel(m_def));
         connect(pf, &PathField::pathChanged, this, [this](const QString& p) {
             if (!m_updating)
                 emit edited(p);
@@ -141,9 +171,9 @@ void SettingEditor::build(QWidget* parent)
     case SettingType::StringList: {
         auto* wrap = new QWidget(parent);
         auto* h = hbox(wrap, space::sm);
-        auto* edit = textInput(QStringLiteral("None"), true, wrap);
-        edit->setAccessibleName(m_def.label);
-        edit->setToolTip(QStringLiteral("Separate entries with ;"));
+        auto* edit = textInput(FW_TR("None"), true, wrap);
+        edit->setAccessibleName(shownLabel(m_def));
+        edit->setToolTip(FW_TR("Separate entries with ;"));
         h->addWidget(edit, 1);
         wrap->setFixedWidth(360);
         connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
@@ -157,11 +187,11 @@ void SettingEditor::build(QWidget* parent)
             emit edited(value());
         });
         if (isFolderList(m_def)) {
-            auto* add = button(QStringLiteral("Add…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), wrap);
+            auto* add = button(FW_TR("Add…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), wrap);
             h->addWidget(add);
             connect(add, &QPushButton::clicked, this, [this, edit, wrap] {
                 QPointer<SettingEditor> self(this);
-                const QString dir = QFileDialog::getExistingDirectory(wrap->window(), m_def.label);
+                const QString dir = QFileDialog::getExistingDirectory(wrap->window(), shownLabel(m_def));
                 if (!self || dir.isEmpty()) // the row can be rebuilt while the dialog is open
                     return;
                 QStringList items = value().toStringList();
@@ -259,35 +289,40 @@ void SettingEditor::setError(bool error)
 QString SettingRow::displayValue(const SettingDef& def, const QVariant& value)
 {
     switch (def.type) {
-    case SettingType::Bool: return value.toBool() ? QStringLiteral("On") : QStringLiteral("Off");
+    case SettingType::Bool: return value.toBool() ? FW_TR("On") : FW_TR("Off");
     case SettingType::Enum:
         for (const auto& c : def.choices)
             if (c.value == value.toString())
-                return c.label;
+                return shownChoiceLabel(def, c);
         return value.toString();
     case SettingType::Int:
     case SettingType::Double:
-        return def.unit.isEmpty() ? value.toString() : QStringLiteral("%1 %2").arg(value.toString(), def.unit);
+        return def.unit.isEmpty() ? value.toString() : QStringLiteral("%1 %2").arg(value.toString(), i18n::translate(def.unit));
     case SettingType::DirPath:
     case SettingType::FilePath:
-        return value.toString().isEmpty() ? QStringLiteral("Default") : QDir::toNativeSeparators(value.toString());
+        return value.toString().isEmpty() ? FW_TR("Default") : QDir::toNativeSeparators(value.toString());
     case SettingType::StringList: {
         const auto l = value.toStringList();
-        return l.isEmpty() ? QStringLiteral("None") : l.join(QStringLiteral("; "));
+        return l.isEmpty() ? FW_TR("None") : l.join(QStringLiteral("; "));
     }
-    case SettingType::String: return value.toString().isEmpty() ? QStringLiteral("(empty)") : value.toString();
+    case SettingType::String: return value.toString().isEmpty() ? FW_TR("(empty)") : value.toString();
     }
     return value.toString();
 }
 
 // The first sentence of a description (at most ~130 characters), so rows stay
-// one or two lines; the rest is in the tooltip.
+// one or two lines; the rest is in the tooltip. Runs on the shown (translated)
+// text; the full stops of Chinese and Japanese end a sentence without a space.
 QString SettingRow::conciseHelp(const QString& text)
 {
     const QString t = text.simplified();
     int end = -1;
     for (int i = 0; i < t.size(); ++i) {
         const QChar c = t.at(i);
+        if (c == QChar(0x3002) || c == QChar(0xFF01) || c == QChar(0xFF1F)) { // 。！？
+            end = i + 1;
+            break;
+        }
         if (c != u'.' && c != u'!' && c != u'?')
             continue;
         if (i + 1 < t.size() && t.at(i + 1) != u' ')
@@ -319,7 +354,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     auto* col = vbox(left, 2);
     auto* labelRow = new QHBoxLayout;
     labelRow->setSpacing(space::sm);
-    m_label = label(def.label, TextStyle::Body, color::fg_1, left);
+    m_label = label(shownLabel(def), TextStyle::Body, color::fg_1, left);
     // One line: a wrapping label gets a narrow width hint in a row and folds
     // even short labels; labels are short by design.
     m_label->setWordWrap(false);
@@ -331,7 +366,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     m_info->setCursor(Qt::WhatsThisCursor);
     m_info->hide();
     labelRow->addWidget(m_info, 0, Qt::AlignVCenter);
-    m_badge = new Badge(QStringLiteral("Overridden for this job"), Tone::Neutral, left);
+    m_badge = new Badge(FW_TR("Overridden for this job"), Tone::Neutral, left);
     m_badge->setIconName(QStringLiteral("advanced"));
     m_badge->hide();
     labelRow->addWidget(m_badge);
@@ -341,7 +376,7 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     helpRow->setSpacing(4);
     m_help = caption({}, left);
     m_help->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_useDefault = new Link(QStringLiteral("Use default"), left);
+    m_useDefault = new Link(FW_TR("Use default"), left);
     m_useDefault->setFont(font::caption());
     m_useDefault->hide();
     connect(m_useDefault, &Link::activated, this, &SettingRow::useDefaultRequested);
@@ -360,29 +395,30 @@ SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent)
     m_message = new MessageRow(right);
     rcol->addWidget(m_message);
     h->addWidget(right, 0, Qt::AlignRight | Qt::AlignVCenter);
-    m_editor->widget()->setAccessibleName(def.label);
+    m_editor->widget()->setAccessibleName(shownLabel(def));
     // The full description is otherwise only in a mouse tooltip.
-    m_editor->widget()->setAccessibleDescription(def.description);
+    m_editor->widget()->setAccessibleDescription(shownDescription(def));
     updateHelp();
 }
 
 void SettingRow::updateHelp()
 {
+    const QString description = shownDescription(m_def);
     QStringList parts;
     if (!m_disabledReason.isEmpty())
         parts << m_disabledReason;
     else if (m_overridden && !m_defaultText.isEmpty())
-        parts << QStringLiteral("Default is %1.").arg(m_defaultText);
-    else if (!m_def.description.isEmpty())
-        parts << conciseHelp(m_def.description);
+        parts << FW_TR("Default is %1.").arg(m_defaultText);
+    else if (!description.isEmpty())
+        parts << conciseHelp(description);
     if (m_restart)
-        parts << QStringLiteral("Takes effect after a restart.");
+        parts << FW_TR("Takes effect after a restart.");
     m_help->setText(parts.join(u' '));
     m_help->setVisible(!parts.isEmpty());
     // The full description is one hover away; the row itself stays short.
-    const bool shortened = !m_def.description.isEmpty() && conciseHelp(m_def.description) != m_def.description;
-    const QString tip = m_def.description.isEmpty() ? QString()
-                                                    : QStringLiteral("<p style='white-space:normal'>%1</p>").arg(m_def.description.toHtmlEscaped());
+    const bool shortened = !description.isEmpty() && conciseHelp(description) != description;
+    const QString tip = description.isEmpty() ? QString()
+                                              : QStringLiteral("<p style='white-space:normal'>%1</p>").arg(description.toHtmlEscaped());
     m_info->setVisible(shortened);
     m_info->setToolTip(tip);
     m_label->setToolTip(tip);
@@ -490,7 +526,8 @@ void JobOptionsPanel::build()
     const auto& schema = m_ctx.schema();
     // Group by (section, group) in schema order.
     struct Group {
-        QString title;
+        QString title; // English: the key
+        QString shown;
         std::vector<const SettingDef*> defs;
     };
     std::vector<Group> groups;
@@ -505,16 +542,19 @@ void JobOptionsPanel::build()
             const QString title = m_sections.size() > 1 && !d->group.isEmpty() && d->group != section
                                       ? QStringLiteral("%1 · %2").arg(section, d->group)
                                       : (d->group.isEmpty() ? section : d->group);
+            const QString shown = m_sections.size() > 1 && !d->group.isEmpty() && d->group != section
+                                      ? QStringLiteral("%1 · %2").arg(shownSection(section), shownSection(d->group))
+                                      : shownSection(d->group.isEmpty() ? section : d->group);
             auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g) { return g.title == title; });
             if (it == groups.end()) {
-                groups.push_back({title, {}});
+                groups.push_back({title, shown, {}});
                 it = groups.end() - 1;
             }
             it->defs.push_back(d);
         }
     }
     if (groups.empty()) {
-        auto* c = caption(QStringLiteral("No per-job options are registered for this workflow in this build."), this);
+        auto* c = caption(FW_TR("No per-job options are registered for this workflow in this build."), this);
         l->addWidget(c);
         return;
     }
@@ -524,7 +564,7 @@ void JobOptionsPanel::build()
         if (m_cards) {
             card = new Card(this);
             card->body()->setSpacing(0);
-            card->setTitle(g.title);
+            card->setTitle(g.shown);
             target = card->body();
             l->addWidget(card);
         }
@@ -576,7 +616,7 @@ void JobOptionsPanel::onEdited(const QString& key, const QVariant& value)
     auto norm = m_ctx.schema().normalize(key, value);
     if (!norm.ok()) {
         m_errors.insert(key, norm.error().message);
-        row->setMessage(norm.error().message.section(QStringLiteral(": "), 1), Tone::Err);
+        row->setMessage(shownValidationReason(norm.error().message), Tone::Err);
         emit overridesChanged();
         return;
     }
@@ -668,9 +708,9 @@ void JobOptionsPanel::refreshDependencies()
                 refreshRow(key);
             }
             const SettingDef* other = m_ctx.schema().find(d->enabledWhenKey);
-            const QString otherLabel = other ? other->label : d->enabledWhenKey;
-            const QString want = other ? SettingRow::displayValue(*other, d->enabledWhenValue).toLower() : d->enabledWhenValue.toString();
-            row->setDisabledReason(QStringLiteral("Only available when \"%1\" is %2.").arg(otherLabel, want));
+            const QString otherLabel = other ? shownLabel(*other) : d->enabledWhenKey;
+            const QString want = other ? inSentence(SettingRow::displayValue(*other, d->enabledWhenValue)) : d->enabledWhenValue.toString();
+            row->setDisabledReason(FW_TR("Only available when \"%1\" is %2.").arg(otherLabel, want));
         }
     }
 }

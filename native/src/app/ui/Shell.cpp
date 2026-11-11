@@ -2,6 +2,7 @@
 
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
+#include "core/Tr.h"
 
 #include <QEvent>
 #include <QHBoxLayout>
@@ -351,7 +352,7 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     setFixedHeight(size::header);
     setProperty("fwNoRing", true);
     auto* h = hbox(this, space::sm, QMargins(space::sm, 0, space::md, 0));
-    m_menu = new IconButton(QStringLiteral("sidebar"), QStringLiteral("Toggle sidebar"), IconButton::Size::Regular, this);
+    m_menu = new IconButton(QStringLiteral("sidebar"), FW_TR("Toggle sidebar"), IconButton::Size::Regular, this);
     h->addWidget(m_menu);
     auto* brand = new QWidget(this);
     auto* bl = hbox(brand, 10, QMargins(4, 0, 0, 0));
@@ -366,21 +367,21 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     h->addStretch(1);
     m_consoleChipWrap = new QWidget(this);
     auto* cw = hbox(m_consoleChipWrap, 0);
-    m_consoleChip = new Badge(QStringLiteral("PS5 not connected"), Tone::Neutral, m_consoleChipWrap);
+    m_consoleChip = new Badge(FW_TR("PS5 not connected"), Tone::Neutral, m_consoleChipWrap);
     m_consoleChip->setIconName(QStringLiteral("plug"));
     cw->addWidget(m_consoleChip);
     m_consoleChipWrap->setCursor(Qt::PointingHandCursor);
     m_consoleChipWrap->installEventFilter(this);
-    m_consoleChipWrap->setToolTip(QStringLiteral("Open PS5 connect"));
+    m_consoleChipWrap->setToolTip(FW_TR("Open PS5 connect"));
     h->addWidget(m_consoleChipWrap);
     m_queueChipWrap = new QWidget(this);
     auto* qw = hbox(m_queueChipWrap, 0);
-    m_queueChip = new Badge(QStringLiteral("Queue idle"), Tone::Neutral, m_queueChipWrap);
+    m_queueChip = new Badge(FW_TR("Queue idle"), Tone::Neutral, m_queueChipWrap);
     m_queueChip->setIconName(QStringLiteral("queue"));
     qw->addWidget(m_queueChip);
     m_queueChipWrap->setCursor(Qt::PointingHandCursor);
     m_queueChipWrap->installEventFilter(this);
-    m_queueChipWrap->setToolTip(QStringLiteral("Open queue"));
+    m_queueChipWrap->setToolTip(FW_TR("Open queue"));
     // Both chips are buttons: Tab reaches them, Space and Enter press them.
     for (QWidget* chip : {m_consoleChipWrap, m_queueChipWrap}) {
         chip->setFocusPolicy(Qt::TabFocus);
@@ -389,7 +390,7 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
         chip->setAccessibleName(chip->toolTip());
     }
     h->addWidget(m_queueChipWrap);
-    m_help = new IconButton(QStringLiteral("help"), QStringLiteral("Help"), IconButton::Size::Regular, this);
+    m_help = new IconButton(QStringLiteral("help"), FW_TR("Help"), IconButton::Size::Regular, this);
     h->addWidget(m_help);
 }
 
@@ -483,7 +484,7 @@ StatusBar::StatusBar(QWidget* parent) : QWidget(parent)
     m_context->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_context->setMaximumWidth(720);
     h->addWidget(m_context, 1);
-    setStatus(QStringLiteral("Ready"), Tone::Ok);
+    setStatus(FW_TR("Ready"), Tone::Ok);
 }
 
 void StatusBar::setStatus(const QString& text, Tone tone)

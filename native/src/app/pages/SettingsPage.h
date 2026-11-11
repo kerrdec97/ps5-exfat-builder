@@ -76,6 +76,11 @@ private:
     QString tempLocation() const; // the temporary folder in use (the chosen one, else the app's own)
     void makePortable();
     ui::Sheet* buildPortableSheet(const portable::Plan& plan, QCheckBox*& copy);
+    // General › Language: the folder of the user's catalogues, and the bar
+    // that asks for a restart once another language is chosen.
+    void addLanguageExtras(QWidget* card, QVBoxLayout* layout);
+    void updateLanguageBar();
+    void restartForLanguage();
 
     QStringList m_sections;
     QString m_section;
@@ -111,6 +116,8 @@ private:
     QPushButton* m_tempClear = nullptr;
     QPointer<QWidget> m_locationsCard;
     QPointer<ui::ElideLabel> m_tempLocation;
+    QPointer<ui::InfoBar> m_langBar;
+    QString m_startLanguage; // general.language when the page was made
     bool m_restartNeeded = false;
     QPointer<QWidget> m_demoSheet;
 };

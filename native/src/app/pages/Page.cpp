@@ -4,6 +4,7 @@
 #include "app/models/JobQueueModel.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -151,12 +152,12 @@ JobFormPage::JobFormPage(AppContext& ctx, JobQueueModel& queueModel, const QStri
 {
     m_submitBar = new QWidget(this);
     auto* sb = hbox(m_submitBar, space::sm);
-    m_queue = button(QStringLiteral("Add to queue"), ButtonVariant::Secondary, QStringLiteral("plus"), m_submitBar);
+    m_queue = button(FW_TR("Add to queue"), ButtonVariant::Secondary, QStringLiteral("plus"), m_submitBar);
     m_primary = button(primaryText, ButtonVariant::Primary, QStringLiteral("play"), m_submitBar);
     sb->addWidget(m_queue);
     sb->addWidget(m_primary);
-    m_newJob = button(QStringLiteral("Start another"), ButtonVariant::Secondary, QStringLiteral("plus"), this);
-    m_newJob->setToolTip(QStringLiteral("Back to the form. The job keeps running in the queue."));
+    m_newJob = button(FW_TR("Start another"), ButtonVariant::Secondary, QStringLiteral("plus"), this);
+    m_newJob->setToolTip(FW_TR("Back to the form. The job keeps running in the queue."));
     m_newJob->hide();
     header()->addAction(m_newJob);
     header()->addAction(m_submitBar);
@@ -316,7 +317,7 @@ void JobFormPage::setStartHint(const QString& hint)
 // still explains it in the form (the buttons stay enabled for that).
 void JobFormPage::applyStartTip()
 {
-    m_primary->setToolTip(m_available ? m_startHint : QStringLiteral("Not available in this build"));
+    m_primary->setToolTip(m_available ? m_startHint : FW_TR("Not available in this build"));
     m_queue->setToolTip(m_primary->toolTip());
 }
 
@@ -341,7 +342,7 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
     // v5: the per-job settings live in a folded "Advanced options" section so a
     // page shows only the decisions most people make; the header says how many
     // settings differ from the defaults for this job.
-    auto* card = new Disclosure(QStringLiteral("Advanced options"), title, this);
+    auto* card = new Disclosure(FW_TR("Advanced options"), title, this);
     card->body()->setSpacing(0);
     m_options = new JobOptionsPanel(m_ctx, sections, excludeKeys, card);
     m_options->setGroupCards(false);
@@ -354,7 +355,7 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
         for (auto it = changed.cbegin(); it != changed.cend(); ++it)
             if (SettingRow* row = m_options->row(it.key()); row && !row->isHidden())
                 ++n;
-        card->setSummary(n > 0 ? QStringLiteral("%1 changed for this job").arg(n) : QStringLiteral("Defaults"),
+        card->setSummary(n > 0 ? FW_TR("%1 changed for this job").arg(n) : FW_TR("Defaults"),
                          n > 0 ? Tone::Info : Tone::Neutral);
     };
     m_refreshOptionsSummary = updateSummary;
@@ -363,7 +364,7 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
     if (withOpenFolderRow) {
         auto* row = new QWidget(card);
         auto* h = hbox(row, space::lg, QMargins(0, 6, 0, 6));
-        auto* lab = label(QStringLiteral("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
+        auto* lab = label(FW_TR("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
         h->addWidget(lab, 1);
         m_openFolder = new Switch(row);
         m_openFolder->setAccessibleName(lab->text());
@@ -407,8 +408,8 @@ void JobFormPage::submitClicked(bool buildNow)
 {
     clearFormError();
     if (!m_available) {
-        showFormError(QStringLiteral("%1 is not available in this build").arg(m_feature),
-                      QStringLiteral("The engine for this workflow is not part of this build, so nothing was queued."));
+        showFormError(FW_TR("%1 is not available in this build").arg(m_feature),
+                      FW_TR("The engine for this workflow is not part of this build, so nothing was queued."));
         return;
     }
     if (m_options) {
@@ -416,16 +417,20 @@ void JobFormPage::submitClicked(bool buildNow)
         // it: its error cannot be corrected here and must not block the job.
         QStringList problems;
         for (const QString& key : m_options->errorKeys())
-            if (const SettingRow* row = m_options->row(key); !row || !row->isHidden())
-                problems << m_options->errorMessage(key);
+            if (const SettingRow* row = m_options->row(key); !row || !row->isHidden()) {
+                // "Label: reason", as shown: the schema's English is translated here.
+                const SettingDef* def = m_ctx.schema().find(key);
+                const QString reason = i18n::translate(m_options->errorMessage(key).section(QStringLiteral(": "), 1, -1));
+                problems << (def && !reason.isEmpty() ? QStringLiteral("%1: %2").arg(shownLabel(*def), reason) : m_options->errorMessage(key));
+            }
         if (!problems.isEmpty()) {
-            showFormError(QStringLiteral("Check the job settings"), problems.join(u' '));
+            showFormError(FW_TR("Check the job settings"), problems.join(u' '));
             return;
         }
     }
     const QString problem = validateForm();
     if (!problem.isEmpty()) {
-        showFormError(QStringLiteral("Not ready to start"), problem);
+        showFormError(FW_TR("Not ready to start"), problem);
         return;
     }
     auto& q = m_ctx.queue();
@@ -443,8 +448,8 @@ void JobFormPage::submitClicked(bool buildNow)
         // The user's own "Cancel" in a confirmation is not a failure to report.
         if (r.error().isCancelled())
             return;
-        showFormError(r.error().code == ErrorCode::Unsupported ? QStringLiteral("Not available in this build")
-                                                              : QStringLiteral("The job was not added"),
+        showFormError(r.error().code == ErrorCode::Unsupported ? FW_TR("Not available in this build")
+                                                              : FW_TR("The job was not added"),
                       r.error().message);
         return;
     }
@@ -459,12 +464,12 @@ void JobFormPage::submitClicked(bool buildNow)
     }
     if (!buildNow && q.isHeld()) {
         // The job waits: say how the list is started, and offer it.
-        emit toastActionRequested(Tone::Info, QStringLiteral("Added to the queue"),
-                                  QStringLiteral("The queue is waiting. Add more, then press Start queue."),
-                                  QStringLiteral("Start queue"), [ctx = &m_ctx] { ctx->queue().holdQueue(false); });
+        emit toastActionRequested(Tone::Info, FW_TR("Added to the queue"),
+                                  FW_TR("The queue is waiting. Add more, then press Start queue."),
+                                  FW_TR("Start queue"), [ctx = &m_ctx] { ctx->queue().holdQueue(false); });
         return;
     }
-    emit toastRequested(Tone::Info, buildNow ? QStringLiteral("Started") : QStringLiteral("Added to the queue"),
+    emit toastRequested(Tone::Info, buildNow ? FW_TR("Started") : FW_TR("Added to the queue"),
                         q.record(id) ? q.record(id)->title : QString());
 }
 
@@ -500,12 +505,12 @@ QString relativeTime(const QDateTime& t)
         return {};
     const qint64 s = t.secsTo(QDateTime::currentDateTime());
     if (s < 60)
-        return QStringLiteral("just now");
+        return FW_TR("just now");
     if (s < 3600)
-        return QStringLiteral("%1 min ago").arg(s / 60);
+        return FW_TR("%1 min ago").arg(s / 60);
     if (s < 86400)
-        return QStringLiteral("%1 h ago").arg(s / 3600);
-    return s < 2 * 86400 ? QStringLiteral("1 day ago") : QStringLiteral("%1 days ago").arg(s / 86400);
+        return FW_TR("%1 h ago").arg(s / 3600);
+    return s < 2 * 86400 ? FW_TR("1 day ago") : FW_TR("%1 days ago").arg(s / 86400);
 }
 
 QString driveLabel(const QString& path)
@@ -514,7 +519,7 @@ QString driveLabel(const QString& path)
     QString root = si.rootPath();
     if (root.size() >= 2 && root[1] == u':')
         return root.left(2);
-    return root.isEmpty() ? QStringLiteral("this drive") : root;
+    return root.isEmpty() ? FW_TR("this drive") : root;
 }
 
 DriveSpace driveSpaceOf(const QString& folder)
@@ -535,7 +540,7 @@ DriveSpace driveSpaceOf(const QString& folder)
     if (d.label.size() >= 2 && d.label[1] == u':')
         d.label = d.label.left(2);
     else if (d.label.isEmpty())
-        d.label = QStringLiteral("this drive");
+        d.label = FW_TR("this drive");
     return d;
 }
 

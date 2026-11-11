@@ -3,6 +3,7 @@
 #include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/gameinfo/GameInfo.h"
 #include "engines/gameinfo/Version.h"
 
@@ -29,7 +30,7 @@ QString GameSummary::metaLine() const
     if (bytes > 0)
         parts << formatBytes(bytes);
     if (files > 0)
-        parts << (files == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(formatCount(files)));
+        parts << (files == 1 ? FW_TR("1 file") : FW_TR("%1 files").arg(formatCount(files)));
     if (!sdk.isEmpty())
         parts << QStringLiteral("SDK %1").arg(sdk);
     return parts.join(QStringLiteral(" · "));
@@ -100,12 +101,12 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
     s.folder = folder;
     const QFileInfo fi(folder);
     if (folder.isEmpty() || !fi.exists()) {
-        s.error = QStringLiteral("The folder does not exist.");
+        s.error = FW_TR("The folder does not exist.");
         return s;
     }
     s.exists = true;
     if (archive::isZipSource(folder)) {
-        // A zipped dump (#67): read it without unpacking.
+        // An archived dump (#67): read it without unpacking.
         auto g = archive::inspectZip(folder);
         if (!g.ok()) {
             s.error = g.error().message;
@@ -117,18 +118,18 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
         if (!g->paramJson.isEmpty())
             fillFromParamJson(s, g->paramJson);
         if (!g->otherGames.isEmpty())
-            s.error = QStringLiteral("This ZIP holds more than one game.");
+            s.error = FW_TR("This archive holds more than one game.");
         if (s.titleId.isEmpty()) {
             static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);
             if (const auto m = re.match(fi.fileName()); m.hasMatch())
                 s.titleId = (m.captured(1) + m.captured(2)).toUpper();
         }
         if (s.title.isEmpty())
-            s.title = fi.completeBaseName();
+            s.title = archive::sourceName(folder); // no archive suffix, no ".part1" of a multi-part RAR
         return s;
     }
     if (!fi.isDir()) {
-        s.error = QStringLiteral("This is a file, not a game folder.");
+        s.error = FW_TR("This is a file, not a game folder.");
         return s;
     }
     const QString param = QDir(folder).filePath(QStringLiteral("sce_sys/param.json"));

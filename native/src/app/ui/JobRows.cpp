@@ -8,6 +8,7 @@
 #include "app/ui/Sheet.h"
 #include "app/services/JobSubmit.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/general/Module.h"
 
 #include <QApplication>
@@ -82,7 +83,7 @@ QString waitingText(const JobRecord& r, int maxAttempts)
     const qint64 s = QDateTime::currentDateTime().secsTo(r.notBefore);
     if (s <= 0)
         return {};
-    return QStringLiteral("Retrying in %1 s · attempt %2 of %3").arg(s).arg(r.attempt).arg(std::max(maxAttempts, r.attempt));
+    return FW_TR("Retrying in %1 s · attempt %2 of %3").arg(s).arg(r.attempt).arg(std::max(maxAttempts, r.attempt));
 }
 
 // The same wording as the monitor's stage times ("2 min", "1 h 05 min").
@@ -99,17 +100,17 @@ QString finishedNote(const JobRecord& r)
     QStringList parts;
     if (r.outcome) {
         if (r.outcome->verification == Verification::Passed)
-            parts << QStringLiteral("Verified");
+            parts << FW_TR("Verified");
         else if (r.outcome->verification == Verification::Skipped)
-            parts << QStringLiteral("Not verified");
-        if (!r.outcome->warnings.isEmpty())
-            parts << QStringLiteral("%1 warning%2").arg(r.outcome->warnings.size()).arg(r.outcome->warnings.size() == 1 ? QString() : QStringLiteral("s"));
+            parts << FW_TR("Not verified");
+        if (const qsizetype n = r.outcome->warnings.size(); n > 0)
+            parts << (n == 1 ? FW_TR("%1 warning").arg(n) : FW_TR("%1 warnings").arg(n));
     }
     const QString d = durationText(r);
     if (!d.isEmpty())
         parts << d;
     if (parts.isEmpty() && r.outcome)
-        parts << r.outcome->summary;
+        parts << i18n::translate(r.outcome->summary);
     return parts.join(QStringLiteral(" · "));
 }
 
@@ -185,7 +186,7 @@ JobRow::JobRow(Variant variant, QWidget* parent) : QWidget(parent), m_variant(va
         auto* cl = hbox(cell, 0);
         cl->addWidget(m_badge);
         cl->addStretch(1);
-        static const int widest = Badge(QStringLiteral("Running · %1").arg(thinPercent(1.0)), Tone::Info).sizeHint().width();
+        static const int widest = Badge(FW_TR("Running · %1").arg(thinPercent(1.0)), Tone::Info).sizeHint().width();
         cell->setFixedWidth(widest);
         h->addWidget(cell);
     } else {
@@ -236,16 +237,16 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
     if (m_reorderable) {
         grip->setPixmap(iconPixmap(QStringLiteral("grip"), size::icon, color::fg_5, devicePixelRatioF()));
         grip->setCursor(Qt::SizeAllCursor);
-        grip->setToolTip(QStringLiteral("Drag to reorder"));
+        grip->setToolTip(FW_TR("Drag to reorder"));
     } else {
         grip->setPixmap(m_variant == Variant::Queue ? QPixmap() : iconPixmap(stateIcon(r.state), size::icon, stateColor(r.state), devicePixelRatioF()));
         grip->setCursor(Qt::ArrowCursor);
-        grip->setToolTip(m_variant == Variant::Queue ? QString() : jobStateName(r.state));
+        grip->setToolTip(m_variant == Variant::Queue ? QString() : i18n::translate(jobStateName(r.state)));
     }
     m_stateIcon->setPixmap(iconPixmap(stateIcon(r.state), size::icon, stateColor(r.state), devicePixelRatioF()));
-    setAccessibleName(QStringLiteral("%1, %2").arg(r.title, jobStateName(r.state)));
+    setAccessibleName(QStringLiteral("%1, %2").arg(r.title, i18n::translate(jobStateName(r.state))));
 
-    const QString kindName = AppContext::instance() ? AppContext::instance()->jobFactory().displayName(r.kind) : r.kind;
+    const QString kindName = AppContext::instance() ? i18n::translate(AppContext::instance()->jobFactory().displayName(r.kind)) : r.kind;
     if (m_variant == Variant::Queue) {
         m_title->setFullText(r.title);
         QString meta = r.subtitle.isEmpty() ? kindName : QStringLiteral("%1 · %2").arg(kindName, r.subtitle);
@@ -256,6 +257,7 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
 
     // Middle column
     const QString waiting = waitingText(r, maxAttempts);
+    const QString phase = i18n::translate(r.progress.phase);
     QString note;
     QColor noteColor = color::fg_3;
     bool showBar = false;
@@ -268,13 +270,13 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
         m_bar->setState(r.state != JobState::Running ? ProgressBar::State::Paused
                         : r.progress.indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
         if (r.state == JobState::Cancelling) {
-            note = QStringLiteral("Stopping at the next safe point…");
+            note = FW_TR("Stopping at the next safe point…");
         } else if (r.state == JobState::Paused) {
-            note = r.progress.phase.isEmpty() ? QStringLiteral("Paused") : QStringLiteral("Paused in %1").arg(r.progress.phase);
+            note = phase.isEmpty() ? FW_TR("Paused") : FW_TR("Paused in %1").arg(phase);
         } else {
             QStringList parts;
-            if (!r.progress.phase.isEmpty())
-                parts << r.progress.phase;
+            if (!phase.isEmpty())
+                parts << phase;
             if (r.progress.unitIsBytes && r.progress.ratePerSec > 0)
                 parts << formatRate(r.progress.ratePerSec);
             const QString eta = formatTimeLeft(jobTimeLeftMs(r));
@@ -287,26 +289,28 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
         if (!waiting.isEmpty())
             note = waiting;
         else if (!r.overrides.isEmpty())
-            note = QStringLiteral("%1 setting%2 overridden").arg(r.overrides.size()).arg(r.overrides.size() == 1 ? QString() : QStringLiteral("s"));
+            note = r.overrides.size() == 1 ? FW_TR("%1 setting overridden").arg(r.overrides.size())
+                                           : FW_TR("%1 settings overridden").arg(r.overrides.size());
         else if (AppContext::instance() && AppContext::instance()->queue().isHeld())
             // Nothing runs: the list waits for "Start queue".
-            note = AppContext::instance()->queue().isBusy() ? QStringLiteral("Waits for the queue to resume")
-                                                            : QStringLiteral("Waits for Start queue");
+            note = AppContext::instance()->queue().isBusy() ? FW_TR("Waits for the queue to resume")
+                                                            : FW_TR("Waits for Start queue");
         else if (queuePosition <= 1)
-            note = QStringLiteral("Starts next");
+            note = FW_TR("Starts next");
         else
-            note = QStringLiteral("Waits for %1 job%2 ahead").arg(queuePosition - 1).arg(queuePosition == 2 ? QString() : QStringLiteral("s"));
+            note = queuePosition == 2 ? FW_TR("Waits for %1 job ahead").arg(queuePosition - 1)
+                                      : FW_TR("Waits for %1 jobs ahead").arg(queuePosition - 1);
         break;
     case JobState::Failed:
-        note = r.error ? r.error->message : QStringLiteral("Failed");
+        note = r.error ? r.error->message : FW_TR("Failed");
         noteColor = color::danger_hi;
         break;
     case JobState::Interrupted:
-        note = QStringLiteral("Interrupted when the app closed. Retry to run it again.");
+        note = FW_TR("Interrupted when the app closed. Retry to run it again.");
         noteColor = color::warn_hi;
         break;
     case JobState::Cancelled:
-        note = QStringLiteral("Cancelled");
+        note = FW_TR("Cancelled");
         break;
     case JobState::Succeeded:
         note = finishedNote(r);
@@ -318,17 +322,21 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
     setTextColor(m_note, noteColor);
 
     // Badge
-    QString badgeText = jobStateName(r.state);
+    QString badgeText = i18n::translate(jobStateName(r.state));
     Tone tone = toneForState(r.state);
     if (r.state == JobState::Running)
-        badgeText = r.progress.indeterminate ? QStringLiteral("Running") : QStringLiteral("Running · %1").arg(thinPercent(r.progress.overallFraction));
+        badgeText = r.progress.indeterminate ? FW_TR("Running") : FW_TR("Running · %1").arg(thinPercent(r.progress.overallFraction));
     else if (r.state == JobState::Cancelling)
-        badgeText = QStringLiteral("Cancelling…");
+        badgeText = FW_TR("Cancelling…");
     else if (r.state == JobState::Queued && queuePosition > 0 && m_variant == Variant::Queue) {
-        static const char* suffix[] = {"th", "st", "nd", "rd"};
+        // One sentence per English ordinal ending; other languages write their own.
         const int n = queuePosition;
         const int s = (n % 100 >= 11 && n % 100 <= 13) ? 0 : (n % 10 <= 3 ? n % 10 : 0);
-        badgeText = QStringLiteral("Queued · %1%2").arg(n).arg(QLatin1String(suffix[s]));
+        badgeText = (s == 1   ? FW_TR("Queued · %1st")
+                     : s == 2 ? FW_TR("Queued · %1nd")
+                     : s == 3 ? FW_TR("Queued · %1rd")
+                              : FW_TR("Queued · %1th"))
+                        .arg(n);
     }
     m_badge->set(badgeText, tone);
     m_badge->setIconName(r.state == JobState::Queued || r.state == JobState::Cancelled || r.state == JobState::Paused || r.state == JobState::Cancelling
@@ -359,42 +367,42 @@ void JobRow::rebuildActions()
         return b;
     };
     if (m_variant == Variant::Dock) {
-        auto* more = new IconButton(QStringLiteral("more"), QStringLiteral("More"), IconButton::Size::Small, m_actions);
+        auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Small, m_actions);
         connect(more, &QToolButton::clicked, this, [this, more] { showMenu(more->mapToGlobal(QPoint(0, more->height()))); });
         m_actionsLayout->addWidget(more);
         return;
     }
     switch (m_state) {
     case JobState::Running:
-        add(QStringLiteral("pause"), QStringLiteral("Pause"), &JobRow::pauseRequested);
-        add(QStringLiteral("close"), QStringLiteral("Cancel"), &JobRow::cancelRequested);
+        add(QStringLiteral("pause"), FW_TR("Pause"), &JobRow::pauseRequested);
+        add(QStringLiteral("close"), FW_TR("Cancel"), &JobRow::cancelRequested);
         break;
     case JobState::Paused:
-        add(QStringLiteral("play"), QStringLiteral("Resume"), &JobRow::resumeRequested);
-        add(QStringLiteral("close"), QStringLiteral("Cancel"), &JobRow::cancelRequested);
+        add(QStringLiteral("play"), FW_TR("Resume"), &JobRow::resumeRequested);
+        add(QStringLiteral("close"), FW_TR("Cancel"), &JobRow::cancelRequested);
         break;
     case JobState::Cancelling:
         break; // on its way out: nothing to do but wait
     case JobState::Queued:
-        m_upButton = add(QStringLiteral("arrow_up"), QStringLiteral("Move up"), &JobRow::moveUpRequested, m_canUp);
-        m_downButton = add(QStringLiteral("arrow_down"), QStringLiteral("Move down"), &JobRow::moveDownRequested, m_canDown);
-        add(QStringLiteral("trash"), QStringLiteral("Remove"), &JobRow::removeRequested);
+        m_upButton = add(QStringLiteral("arrow_up"), FW_TR("Move up"), &JobRow::moveUpRequested, m_canUp);
+        m_downButton = add(QStringLiteral("arrow_down"), FW_TR("Move down"), &JobRow::moveDownRequested, m_canDown);
+        add(QStringLiteral("trash"), FW_TR("Remove"), &JobRow::removeRequested);
         break;
     case JobState::Failed:
     case JobState::Interrupted:
     case JobState::Cancelled: {
-        auto* b = button(QStringLiteral("Retry"), ButtonVariant::Secondary, QStringLiteral("undo"), m_actions);
+        auto* b = button(FW_TR("Retry"), ButtonVariant::Secondary, QStringLiteral("undo"), m_actions);
         setButtonSmall(b, true);
         connect(b, &QPushButton::clicked, this, [this] { emit retryRequested(m_id); });
         m_actionsLayout->addWidget(b);
         break;
     }
     case JobState::Succeeded:
-        add(QStringLiteral("folder_open"), QStringLiteral("Show in folder"), &JobRow::showInFolderRequested,
+        add(QStringLiteral("folder_open"), FW_TR("Show in folder"), &JobRow::showInFolderRequested,
             m_record.outcome && !m_record.outcome->outputs.isEmpty());
         break;
     }
-    auto* more = new IconButton(QStringLiteral("more"), QStringLiteral("More"), IconButton::Size::Small, m_actions);
+    auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Small, m_actions);
     connect(more, &QToolButton::clicked, this, [this, more] { showMenu(more->mapToGlobal(QPoint(0, more->height()))); });
     m_actionsLayout->addWidget(more);
 }
@@ -414,35 +422,35 @@ void JobRow::showMenu(const QPoint& globalPos)
                 emit(self.data()->*signal)(id);
         });
     };
-    act(QStringLiteral("Open details"), &JobRow::activated);
+    act(FW_TR("Open details"), &JobRow::activated);
     switch (m_state) {
     case JobState::Running:
-        act(QStringLiteral("Pause"), &JobRow::pauseRequested);
-        act(QStringLiteral("Cancel job…"), &JobRow::cancelRequested);
+        act(FW_TR("Pause"), &JobRow::pauseRequested);
+        act(FW_TR("Cancel job…"), &JobRow::cancelRequested);
         break;
     case JobState::Paused:
-        act(QStringLiteral("Resume"), &JobRow::resumeRequested);
-        act(QStringLiteral("Cancel job…"), &JobRow::cancelRequested);
+        act(FW_TR("Resume"), &JobRow::resumeRequested);
+        act(FW_TR("Cancel job…"), &JobRow::cancelRequested);
         break;
     case JobState::Cancelling:
         break;
     case JobState::Queued:
-        act(QStringLiteral("Move up"), &JobRow::moveUpRequested)->setEnabled(m_canUp);
-        act(QStringLiteral("Move down"), &JobRow::moveDownRequested)->setEnabled(m_canDown);
+        act(FW_TR("Move up"), &JobRow::moveUpRequested)->setEnabled(m_canUp);
+        act(FW_TR("Move down"), &JobRow::moveDownRequested)->setEnabled(m_canDown);
         menu->addSeparator();
-        act(QStringLiteral("Remove from queue"), &JobRow::removeRequested);
+        act(FW_TR("Remove from queue"), &JobRow::removeRequested);
         break;
     case JobState::Succeeded:
         if (m_record.outcome && !m_record.outcome->outputs.isEmpty())
-            act(QStringLiteral("Show in folder"), &JobRow::showInFolderRequested);
-        act(QStringLiteral("Run again"), &JobRow::retryRequested);
+            act(FW_TR("Show in folder"), &JobRow::showInFolderRequested);
+        act(FW_TR("Run again"), &JobRow::retryRequested);
         menu->addSeparator();
-        act(QStringLiteral("Remove"), &JobRow::removeRequested);
+        act(FW_TR("Remove"), &JobRow::removeRequested);
         break;
     default:
-        act(QStringLiteral("Retry"), &JobRow::retryRequested);
+        act(FW_TR("Retry"), &JobRow::retryRequested);
         menu->addSeparator();
-        act(QStringLiteral("Remove"), &JobRow::removeRequested);
+        act(FW_TR("Remove"), &JobRow::removeRequested);
         break;
     }
     menu->popup(globalPos);
@@ -637,14 +645,14 @@ void JobList::wire(JobRow* row)
         if (isSignalConnected(QMetaMethod::fromSignal(&JobList::retryFailed)))
             emit retryFailed(id, r.error().message);
         else
-            Sheet::notify(window(), QStringLiteral("This job cannot run again"), r.error().message, Sheet::Icon::Error);
+            Sheet::notify(window(), FW_TR("This job cannot run again"), r.error().message, Sheet::Icon::Error);
     });
     connect(row, &JobRow::showInFolderRequested, this, [this](const QString& id) {
         if (auto rec = m_ctx.queue().record(id); rec && rec->outcome && !rec->outcome->outputs.isEmpty()) {
             const QString path = rec->outcome->outputs.first();
             if (!openInFileManager(path))
-                Sheet::notify(window(), QStringLiteral("The output is not there any more"),
-                              QStringLiteral("%1 was moved or deleted, and so was its folder.").arg(nativePath(path)), Sheet::Icon::Warning);
+                Sheet::notify(window(), FW_TR("The output is not there any more"),
+                              FW_TR("%1 was moved or deleted, and so was its folder.").arg(nativePath(path)), Sheet::Icon::Warning);
         }
     });
     // The confirm dialog is the page's job (it knows the window). Queued: the
@@ -873,7 +881,7 @@ QueueSwitch queueSwitch(bool held, int running, int waiting)
 
 QString startQueueText(int waiting)
 {
-    return waiting > 1 ? QStringLiteral("Start queue (%1)").arg(waiting) : QStringLiteral("Start queue");
+    return waiting > 1 ? FW_TR("Start queue (%1)").arg(waiting) : FW_TR("Start queue");
 }
 
 // ---- dock -----------------------------------------------------------------------------
@@ -883,19 +891,19 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
 {
     setMinimumWidth(size::dock);
     auto* h = header();
-    h->addWidget(heading(QStringLiteral("Jobs"), TextStyle::Subtitle, this));
+    h->addWidget(heading(FW_TR("Jobs"), TextStyle::Subtitle, this));
     m_count = new Badge(QStringLiteral("0"), Tone::Neutral, this);
     m_count->setCount(true);
     h->addWidget(m_count);
     h->addStretch(1);
-    m_pause = new IconButton(QStringLiteral("pause"), QStringLiteral("Pause queue"), IconButton::Size::Small, this);
+    m_pause = new IconButton(QStringLiteral("pause"), FW_TR("Pause queue"), IconButton::Size::Small, this);
     connect(m_pause, &QToolButton::clicked, this, [this] { m_ctx.queue().holdQueue(!m_ctx.queue().isHeld()); });
     h->addWidget(m_pause);
-    auto* more = new IconButton(QStringLiteral("more"), QStringLiteral("More"), IconButton::Size::Small, this);
+    auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Small, this);
     connect(more, &QToolButton::clicked, this, [this, more] {
         QMenu menu(this);
-        menu.addAction(QStringLiteral("Open queue"), this, [this] { emit openQueueRequested(); });
-        menu.addAction(QStringLiteral("Clear finished"), this, [this] { m_ctx.queue().clearFinished(); });
+        menu.addAction(FW_TR("Open queue"), this, [this] { emit openQueueRequested(); });
+        menu.addAction(FW_TR("Clear finished"), this, [this] { m_ctx.queue().clearFinished(); });
         menu.exec(more->mapToGlobal(QPoint(0, more->height())));
     });
     h->addWidget(more);
@@ -919,10 +927,10 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     tcol->addWidget(m_runTitle);
     tcol->addWidget(m_runMeta);
     top->addLayout(tcol, 1);
-    m_runWatch = new IconButton(QStringLiteral("maximize"), QStringLiteral("Watch this job"), IconButton::Size::Small, m_running);
-    m_runWatch->setToolTip(QStringLiteral("Watch this job: stages, clocks and the live log"));
-    m_runPause = new IconButton(QStringLiteral("pause"), QStringLiteral("Pause job"), IconButton::Size::Small, m_running);
-    m_runCancel = new IconButton(QStringLiteral("close"), QStringLiteral("Cancel job"), IconButton::Size::Small, m_running);
+    m_runWatch = new IconButton(QStringLiteral("maximize"), FW_TR("Watch this job"), IconButton::Size::Small, m_running);
+    m_runWatch->setToolTip(FW_TR("Watch this job: stages, clocks and the live log"));
+    m_runPause = new IconButton(QStringLiteral("pause"), FW_TR("Pause job"), IconButton::Size::Small, m_running);
+    m_runCancel = new IconButton(QStringLiteral("close"), FW_TR("Cancel job"), IconButton::Size::Small, m_running);
     connect(m_runWatch, &QToolButton::clicked, this, [this] { emit watchRequested(m_runningId); });
     connect(m_runPause, &QToolButton::clicked, this, [this] {
         auto rec = m_ctx.queue().record(m_runningId);
@@ -960,8 +968,8 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     connect(m_list, &JobList::cancelRequested, this, &JobsDock::cancelRequested);
     body()->addWidget(m_list);
 
-    m_empty = new EmptyState(QStringLiteral("queue"), QStringLiteral("No jobs yet"),
-                             QStringLiteral("Jobs you add appear here and run one after another while you keep working."), this);
+    m_empty = new EmptyState(QStringLiteral("queue"), FW_TR("No jobs yet"),
+                             FW_TR("Jobs you add appear here and run one after another while you keep working."), this);
     m_empty->setCompact(true);
     body()->addWidget(m_empty);
 
@@ -969,13 +977,13 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     m_footer = caption({}, this);
     f->addWidget(m_footer, 1);
     // A list made with "Add to queue" (or restored at start) waits for this.
-    m_start = button(QStringLiteral("Start queue"), ButtonVariant::Primary, QStringLiteral("play"), this);
+    m_start = button(FW_TR("Start queue"), ButtonVariant::Primary, QStringLiteral("play"), this);
     setButtonSmall(m_start, true);
-    m_start->setToolTip(QStringLiteral("Run the waiting jobs, one after another."));
+    m_start->setToolTip(FW_TR("Run the waiting jobs, one after another."));
     m_start->hide();
     connect(m_start, &QPushButton::clicked, this, [this] { m_ctx.queue().holdQueue(false); });
     f->addWidget(m_start);
-    auto* open = new Link(QStringLiteral("Open queue"), this);
+    auto* open = new Link(FW_TR("Open queue"), this);
     connect(open, &Link::activated, this, &JobsDock::openQueueRequested);
     f->addWidget(open);
 
@@ -1025,8 +1033,8 @@ void JobsDock::refresh()
     // started also gets the button in the footer, with the number of jobs.
     const QueueSwitch next = queueSwitch(held, activeCount, queued);
     m_pause->setIconName(held ? QStringLiteral("play") : QStringLiteral("pause"));
-    m_pause->setToolTip(next == QueueSwitch::Start ? QStringLiteral("Start queue")
-                        : next == QueueSwitch::Resume ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
+    m_pause->setToolTip(next == QueueSwitch::Start ? FW_TR("Start queue")
+                        : next == QueueSwitch::Resume ? FW_TR("Resume queue") : FW_TR("Pause queue"));
     m_pause->setAccessibleName(m_pause->toolTip());
     m_start->setText(startQueueText(queued));
     m_start->setVisible(next == QueueSwitch::Start);
@@ -1039,8 +1047,8 @@ void JobsDock::refresh()
         m_runMeta->setFullText(running->subtitle);
         const auto& p = running->progress;
         QString detail = progressDetailText(p);
-        if (!p.phase.isEmpty())
-            detail = detail.isEmpty() ? p.phase : QStringLiteral("%1 · %2").arg(p.phase, detail);
+        if (const QString phase = i18n::translate(p.phase); !phase.isEmpty())
+            detail = detail.isEmpty() ? phase : QStringLiteral("%1 · %2").arg(phase, detail);
         m_progress->setProgress(p.overallFraction, p.indeterminate, detail);
         m_progress->setState(running->state != JobState::Running ? ProgressBar::State::Paused
                              : p.indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
@@ -1049,7 +1057,7 @@ void JobsDock::refresh()
         m_runPause->setVisible(!cancelling);
         m_runCancel->setVisible(!cancelling);
         m_runPause->setIconName(running->state == JobState::Paused ? QStringLiteral("play") : QStringLiteral("pause"));
-        m_runPause->setToolTip(running->state == JobState::Paused ? QStringLiteral("Resume job") : QStringLiteral("Pause job"));
+        m_runPause->setToolTip(running->state == JobState::Paused ? FW_TR("Resume job") : FW_TR("Pause job"));
         m_runPause->setAccessibleName(m_runPause->toolTip());
         if (m_tail->jobId() != running->id)
             m_tail->setJobId(running->id);
@@ -1064,23 +1072,23 @@ void JobsDock::refresh()
     m_empty->setVisible(total == 0);
     QString foot;
     if (next == QueueSwitch::Start)
-        foot = QStringLiteral("%1 waiting").arg(queued);
+        foot = FW_TR("%1 waiting").arg(queued);
     else if (held)
-        foot = QStringLiteral("Queue paused · %1 waiting").arg(queued);
+        foot = FW_TR("Queue paused · %1 waiting").arg(queued);
     else if (etaMs >= 0 && queued > 0)
-        foot = QStringLiteral("%1 · %2 more queued").arg(formatTimeLeft(etaMs), QString::number(queued));
+        foot = FW_TR("%1 · %2 more queued").arg(formatTimeLeft(etaMs), QString::number(queued));
     else if (etaMs >= 0)
         foot = formatTimeLeft(etaMs);
     else if (runningCount > 0 && queued > 0)
-        foot = QStringLiteral("Running · %1 more queued").arg(queued);
+        foot = FW_TR("Running · %1 more queued").arg(queued);
     else if (runningCount > 0)
-        foot = QStringLiteral("Running");
+        foot = FW_TR("Running");
     else if (queued > 0)
-        foot = QStringLiteral("%1 queued").arg(queued);
+        foot = FW_TR("%1 queued").arg(queued);
     else if (total > 0)
-        foot = QStringLiteral("Nothing running");
+        foot = FW_TR("Nothing running");
     else
-        foot = QStringLiteral("Nothing in the queue");
+        foot = FW_TR("Nothing in the queue");
     m_footer->setText(foot);
 }
 

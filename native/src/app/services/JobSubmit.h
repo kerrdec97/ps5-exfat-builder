@@ -104,7 +104,7 @@ Error unavailable(const QString& kind);
 
 Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const QString& source, const QString& outputDir,
                                  const QString& label, const QVariantMap& overrides, const QJsonObject& extra = {});
-// ampr.pack: the game (a folder or a zipped dump) as a new folder whose files
+// ampr.pack: the game (a folder or an archived dump) as a new folder whose files
 // are in zstd packs next to the bundled runtime; no image. `output` is the new
 // folder itself (it must not exist, or be empty).
 Result<QString> submitPackFolder(AppContext& ctx, const QString& source, const QString& output, const QVariantMap& overrides,

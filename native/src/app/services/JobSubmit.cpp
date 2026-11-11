@@ -5,6 +5,7 @@
 #include "app/ui/Widgets.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
 #include "engines/ampr/Module.h"
 
 #include <QDir>
@@ -84,13 +85,14 @@ bool cancelWithConfirm(AppContext& ctx, QWidget* host, const QString& id)
     }
     if (rec->state != JobState::Running && rec->state != JobState::Paused)
         return false; // finished, or already cancelling
-    const QString pct = rec->progress.indeterminate ? QString() : QStringLiteral(" is %1 done").arg(ui::thinPercent(rec->progress.overallFraction));
+    const QString text = rec->progress.indeterminate
+                             ? FW_TR("%1. The job stops at its next safe point.").arg(rec->title)
+                             : FW_TR("%1 is %2 done. The job stops at its next safe point.").arg(rec->title, ui::thinPercent(rec->progress.overallFraction));
     bool remove = false;
-    const bool ok = ui::Sheet::confirm(host ? host->window() : nullptr, QStringLiteral("Cancel the running job?"),
-                                       QStringLiteral("%1%2. The job stops at its next safe point.")
-                                           .arg(rec->title, pct), // plain text: shown as it is
-                                       QStringLiteral("Keep running"), QStringLiteral("Cancel job"), true, ui::Sheet::Icon::Warning,
-                                       QStringLiteral("Also remove the job from the queue"), &remove);
+    const bool ok = ui::Sheet::confirm(host ? host->window() : nullptr, FW_TR("Cancel the running job?"),
+                                       text, // plain text: shown as it is
+                                       FW_TR("Keep running"), FW_TR("Cancel job"), true, ui::Sheet::Icon::Warning,
+                                       FW_TR("Also remove the job from the queue"), &remove);
     if (!ok)
         return false;
     // The sheet ran a nested event loop: the job may have finished meanwhile.

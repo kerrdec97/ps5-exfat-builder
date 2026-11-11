@@ -3,6 +3,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
 #include "app/ui/Style.h"
+#include "core/Tr.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -528,7 +529,7 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
         col->addLayout(links);
     }
     h->addLayout(col, 1);
-    auto* close = new IconButton(QStringLiteral("close"), QStringLiteral("Dismiss"), IconButton::Size::Tiny, t);
+    auto* close = new IconButton(QStringLiteral("close"), FW_TR("Dismiss"), IconButton::Size::Tiny, t);
     connect(close, &QToolButton::clicked, this, [this, t] { remove(t); });
     h->addWidget(close, 0, Qt::AlignTop);
     t->setAttribute(Qt::WA_Hover);

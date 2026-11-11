@@ -2,6 +2,7 @@
 
 #include "app/ui/Components.h"
 #include "app/ui/Widgets.h"
+#include "core/Tr.h"
 
 #include <QAccessible>
 #include <QAccessibleWidget>
@@ -45,7 +46,7 @@ public:
         if (t == QAccessible::Value)
             return bar()->state() == ProgressBar::State::Indeterminate ? QString() : thinPercent(shownFraction());
         if (t == QAccessible::Name)
-            return nameOr(widget(), QStringLiteral("Progress"));
+            return nameOr(widget(), FW_TR("Progress"));
         return QAccessibleWidget::text(t);
     }
     QAccessible::State state() const override

@@ -10,6 +10,7 @@
 #include "connect/ps5/Module.h"
 #include "core/BuildInfo.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/general/Module.h"
 
 #include <QDir>
@@ -116,20 +117,20 @@ public:
         setTextColor(metaLabel, color::fg_3);
         col->addWidget(metaLabel);
         h->addLayout(col, 1);
-        QString result = e.state;
+        QString result = i18n::translate(e.state); // the history keeps the English state name
         if (done && e.verification == QLatin1String("Verified"))
-            result = QStringLiteral("Verified");
+            result = FW_TR("Verified");
         auto* badge = new Badge(result, done ? Tone::Ok : failed ? Tone::Err : Tone::Neutral, this);
         if (!done && !failed)
             badge->setIconName({});
         h->addWidget(badge, 0, Qt::AlignVCenter);
-        auto* folder = new IconButton(QStringLiteral("folder_open"), QStringLiteral("Show output in folder"), IconButton::Size::Small, this);
-        folder->setToolTip(m_output.isEmpty() ? QStringLiteral("No output") : plainTip(nativePath(m_output)));
+        auto* folder = new IconButton(QStringLiteral("folder_open"), FW_TR("Show output in folder"), IconButton::Size::Small, this);
+        folder->setToolTip(m_output.isEmpty() ? FW_TR("No output") : plainTip(nativePath(m_output)));
         folder->setEnabled(!m_output.isEmpty());
         QObject::connect(folder, &QToolButton::clicked, this, [this] { openInFileManager(m_output); });
         h->addWidget(folder, 0, Qt::AlignVCenter);
-        setToolTip(e.started.isValid() ? QStringLiteral("Started %1 · finished %2").arg(humanTime(e.started), humanTime(e.finished))
-                                       : QStringLiteral("Finished %1").arg(humanTime(e.finished)));
+        setToolTip(e.started.isValid() ? FW_TR("Started %1 · finished %2").arg(humanTime(e.started), humanTime(e.finished))
+                                       : FW_TR("Finished %1").arg(humanTime(e.finished)));
     }
 
 protected:
@@ -160,7 +161,7 @@ private:
 } // namespace
 
 HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
-    : Page(ctx, QStringLiteral("home"), QStringLiteral("Home"), QStringLiteral("Start a task or see what the app is doing."), parent),
+    : Page(ctx, QStringLiteral("home"), FW_TR("Home"), FW_TR("Start a task or see what the app is doing."), parent),
       m_model(queueModel)
 {
     // The hero is this page's header.
@@ -170,14 +171,14 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     // ---- Hero: what this app is for and the three things people come to do.
     const QString major = QString::fromLatin1(build::kVersion).section(u'.', 0, 0);
     m_hero = new HeroBanner(QStringLiteral("exFAT Image Builder %1").arg(major),
-                            QStringLiteral("Turn PS5 game dumps into images that mount"),
-                            QStringLiteral("Drop a game dump folder anywhere on this window to start, or pick a task."), this);
+                            FW_TR("Turn PS5 game dumps into images that mount"),
+                            FW_TR("Drop a game dump folder anywhere on this window to start, or pick a task."), this);
     m_hero->setObjectName(QStringLiteral("home-hero"));
-    auto* buildBtn = button(QStringLiteral("Build an image"), ButtonVariant::Primary, QStringLiteral("build"), m_hero);
+    auto* buildBtn = button(FW_TR("Build an image"), ButtonVariant::Primary, QStringLiteral("build"), m_hero);
     buildBtn->setObjectName(QStringLiteral("home-build"));
-    auto* backportBtn = button(QStringLiteral("Backport a game"), ButtonVariant::Secondary, QStringLiteral("backports"), m_hero);
+    auto* backportBtn = button(FW_TR("Backport a game"), ButtonVariant::Secondary, QStringLiteral("backports"), m_hero);
     backportBtn->setObjectName(QStringLiteral("home-backport"));
-    auto* connectBtn = button(QStringLiteral("Connect to PS5"), ButtonVariant::Secondary, QStringLiteral("plug"), m_hero);
+    auto* connectBtn = button(FW_TR("Connect to PS5"), ButtonVariant::Secondary, QStringLiteral("plug"), m_hero);
     connectBtn->setObjectName(QStringLiteral("home-connect"));
     m_hero->actions()->addWidget(buildBtn);
     m_hero->actions()->addWidget(backportBtn);
@@ -190,26 +191,26 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     // ---- Status tiles
     auto* stats = new QWidget(this);
     auto* sg = new TileGrid(stats, 220, 3);
-    m_consoleTile = new StatTile(QStringLiteral("ps5"), QStringLiteral("PS5 console"), stats);
+    m_consoleTile = new StatTile(QStringLiteral("ps5"), FW_TR("PS5 console"), stats);
     m_consoleTile->setObjectName(QStringLiteral("home-console"));
-    m_consoleBadge = new Badge(QStringLiteral("Setup complete"), Tone::Ok, m_consoleTile);
+    m_consoleBadge = new Badge(FW_TR("Setup complete"), Tone::Ok, m_consoleTile);
     m_consoleBadge->hide();
     m_consoleTile->footer()->addWidget(m_consoleBadge);
     m_consoleTile->footer()->addStretch(1);
-    m_queueTile = new StatTile(QStringLiteral("queue"), QStringLiteral("Queue"), stats);
+    m_queueTile = new StatTile(QStringLiteral("queue"), FW_TR("Queue"), stats);
     m_queueTile->setObjectName(QStringLiteral("home-queue"));
     m_queueBar = new ProgressBar(m_queueTile);
     m_queueBar->hide();
     m_queueTile->footer()->addWidget(m_queueBar, 1);
-    m_spaceTile = new StatTile(QStringLiteral("hard_drive"), QStringLiteral("Free space"), stats);
+    m_spaceTile = new StatTile(QStringLiteral("hard_drive"), FW_TR("Free space"), stats);
     m_spaceTile->setObjectName(QStringLiteral("home-space"));
     for (StatTile* t : {m_consoleTile, m_queueTile, m_spaceTile}) {
         t->setCursor(Qt::PointingHandCursor);
         sg->addWidget(t);
     }
-    m_consoleTile->setToolTip(QStringLiteral("Open PS5 connect"));
-    m_queueTile->setToolTip(QStringLiteral("Open the queue"));
-    m_spaceTile->setToolTip(QStringLiteral("Change the output folder"));
+    m_consoleTile->setToolTip(FW_TR("Open PS5 connect"));
+    m_queueTile->setToolTip(FW_TR("Open the queue"));
+    m_spaceTile->setToolTip(FW_TR("Change the output folder"));
     connect(m_consoleTile, &StatTile::clicked, this, [this] { emit navigateRequested({QStringLiteral("ps5"), {}}); });
     connect(m_queueTile, &StatTile::clicked, this, [this] { emit navigateRequested({QStringLiteral("queue"), {}}); });
     connect(m_spaceTile, &StatTile::clicked, this, [this] {
@@ -221,8 +222,8 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     m_continue = new InfoBar(Tone::Warn, this);
     m_continue->setObjectName(QStringLiteral("home-continue"));
     m_continue->setDismissable(true);
-    auto* retry = m_continue->addLink(QStringLiteral("Retry"));
-    auto* openJob = m_continue->addLink(QStringLiteral("Open in queue"));
+    auto* retry = m_continue->addLink(FW_TR("Retry"));
+    auto* openJob = m_continue->addLink(FW_TR("Open in queue"));
     m_continue->hide();
     content()->addWidget(m_continue);
     connect(retry, &Link::activated, this, [this] {
@@ -230,7 +231,7 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
             return;
         auto r = m_ctx.queue().retry(m_continueId);
         if (!r.ok()) {
-            emit toastRequested(Tone::Err, QStringLiteral("Could not retry"), r.error().message);
+            emit toastRequested(Tone::Err, FW_TR("Could not retry"), r.error().message);
             return;
         }
         // The failed job has been dealt with: the retry is a new job, and the
@@ -249,24 +250,24 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     });
 
     // ---- More tools
-    auto* toolsHead = label(QStringLiteral("More tools"), TextStyle::Overline, color::fg_4, this);
+    auto* toolsHead = label(FW_TR("More tools"), TextStyle::Overline, color::fg_4, this);
     toolsHead->setContentsMargins(2, space::xs, 0, 0);
     content()->addWidget(toolsHead);
     auto* tools = new QWidget(this);
     auto* tg = new TileGrid(tools, 220, 3);
     struct Tool {
         const char* icon;
-        const char* title;
-        const char* text;
+        QString title;
+        QString text;
         const char* page;
     };
     const Tool toolList[] = {
-        {"extract", "Extract & verify", "Check an image or copy its files back out.", "extract"},
-        {"file_edit", "Edit an image", "Add, replace or delete files without a rebuild.", "edit"},
-        {"library", "Game library", "Your dumps, images and DLC in one place.", "library"},
+        {"extract", FW_TR("Extract & verify"), FW_TR("Check an image or copy its files back out."), "extract"},
+        {"file_edit", FW_TR("Edit an image"), FW_TR("Add, replace or delete files without a rebuild."), "edit"},
+        {"library", FW_TR("Game library"), FW_TR("Your dumps, images and DLC in one place."), "library"},
     };
     for (const Tool& t : toolList) {
-        auto* card = new ActionCard(QString::fromLatin1(t.icon), QString::fromLatin1(t.title), QString::fromLatin1(t.text), tools);
+        auto* card = new ActionCard(QString::fromLatin1(t.icon), t.title, t.text, tools);
         const QString page = QString::fromLatin1(t.page);
         connect(card, &QAbstractButton::clicked, this, [this, page] { emit navigateRequested({page, {}}); });
         tg->addWidget(card);
@@ -279,22 +280,22 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
 
     m_recentCard = new Card(columns);
     m_recentCard->setObjectName(QStringLiteral("home-recent"));
-    auto* openQueue = new Link(QStringLiteral("Open queue"), m_recentCard);
-    m_recentCard->setTitle(QStringLiteral("Recent jobs"), openQueue);
+    auto* openQueue = new Link(FW_TR("Open queue"), m_recentCard);
+    m_recentCard->setTitle(FW_TR("Recent jobs"), openQueue);
     connect(openQueue, &Link::activated, this, [this] { emit navigateRequested({QStringLiteral("queue"), {}}); });
     m_recentCard->body()->setSpacing(0);
     m_recentRows = new QWidget(m_recentCard);
     vbox(m_recentRows, 0);
     m_recentCard->body()->addWidget(m_recentRows);
-    m_recentEmpty = new EmptyState(QStringLiteral("history"), QStringLiteral("No jobs yet"),
-                                   QStringLiteral("Finished jobs show up here."), m_recentCard);
+    m_recentEmpty = new EmptyState(QStringLiteral("history"), FW_TR("No jobs yet"),
+                                   FW_TR("Finished jobs show up here."), m_recentCard);
     m_recentEmpty->setCompact(true);
-    auto* first = m_recentEmpty->addAction(QStringLiteral("Build your first image"), ButtonVariant::Secondary);
+    auto* first = m_recentEmpty->addAction(FW_TR("Build your first image"), ButtonVariant::Secondary);
     connect(first, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
     m_recentCard->body()->addWidget(m_recentEmpty);
     m_columns->setLeft(m_recentCard);
 
-    m_setup = new Disclosure(QStringLiteral("Set up your PS5"), QStringLiteral("Optional, for network transfers"), columns);
+    m_setup = new Disclosure(FW_TR("Set up your PS5"), FW_TR("Optional, for network transfers"), columns);
     m_setup->setObjectName(QStringLiteral("home-setup"));
     auto* meter = new StepMeter(m_setup);
     meter->setObjectName(QStringLiteral("home-setup-meter"));
@@ -352,16 +353,16 @@ void HomePage::refreshConsoleTile()
     const QString ip = m_ctx.settings().value(ps5::keys::kConsoleIp).toString().trimmed();
     if (m_consoleTone == Tone::Ok) {
         m_consoleTile->setValue(m_consoleText, Tone::Ok);
-        m_consoleTile->setCaption(QStringLiteral("Connected"));
+        m_consoleTile->setCaption(FW_TR("Connected"));
     } else if (!m_consoleText.isEmpty()) {
         m_consoleTile->setValue(m_consoleText);
-        m_consoleTile->setCaption(ip.isEmpty() ? QStringLiteral("Find it on PS5 connect") : QStringLiteral("Address %1").arg(ip));
+        m_consoleTile->setCaption(ip.isEmpty() ? FW_TR("Find it on PS5 connect") : FW_TR("Address %1").arg(ip));
     } else if (ip.isEmpty()) {
-        m_consoleTile->setValue(QStringLiteral("Not set up"));
-        m_consoleTile->setCaption(QStringLiteral("Find it on PS5 connect"));
+        m_consoleTile->setValue(FW_TR("Not set up"));
+        m_consoleTile->setCaption(FW_TR("Find it on PS5 connect"));
     } else {
-        m_consoleTile->setValue(QStringLiteral("Not connected"));
-        m_consoleTile->setCaption(QStringLiteral("Address %1").arg(ip));
+        m_consoleTile->setValue(FW_TR("Not connected"));
+        m_consoleTile->setCaption(FW_TR("Address %1").arg(ip));
     }
     // The tile's mark says the state at a glance: green only while connected.
     m_consoleTile->setIconTone(m_consoleTone == Tone::Ok ? Tone::Ok : Tone::Neutral);
@@ -398,7 +399,7 @@ void HomePage::refreshChecklist()
     m_checklist = setupChecklist(in);
     const int done = completedCount(m_checklist);
     const bool all = done == m_checklist.size();
-    m_checklistProgress = QStringLiteral("%1 / %2 complete").arg(done).arg(m_checklist.size());
+    m_checklistProgress = FW_TR("%1 / %2 complete").arg(done).arg(m_checklist.size());
     m_setup->setSummary(m_checklistProgress, all ? Tone::Ok : Tone::Neutral);
     if (auto* meter = m_setup->findChild<QWidget*>(QStringLiteral("home-setup-meter")))
         static_cast<StepMeter*>(meter)->set(done, int(m_checklist.size()));
@@ -460,8 +461,8 @@ void HomePage::refreshQueueTile()
             if (fraction < 0) {
                 fraction = rec->progress.overallFraction;
                 indeterminate = rec->progress.indeterminate && rec->state == JobState::Running;
-                stage = rec->state == JobState::Paused ? QStringLiteral("Paused")
-                        : rec->state == JobState::Cancelling ? QStringLiteral("Cancelling") : rec->progress.phase;
+                stage = rec->state == JobState::Paused ? FW_TR("Paused")
+                        : rec->state == JobState::Cancelling ? FW_TR("Cancelling") : i18n::translate(rec->progress.phase);
                 if (rec->state == JobState::Running && rec->progress.etaMs >= 0)
                     stage += QStringLiteral(" · ") + formatTimeLeft(rec->progress.etaMs).toLower();
             }
@@ -473,24 +474,24 @@ void HomePage::refreshQueueTile()
         }
     }
     if (running > 0)
-        m_queueTile->setValue(QStringLiteral("%1 running").arg(running), Tone::Info);
+        m_queueTile->setValue(FW_TR("%1 running").arg(running), Tone::Info);
     else if (queued > 0)
-        m_queueTile->setValue(QStringLiteral("%1 waiting").arg(queued));
+        m_queueTile->setValue(FW_TR("%1 waiting").arg(queued));
     else
-        m_queueTile->setValue(QStringLiteral("Idle"));
+        m_queueTile->setValue(FW_TR("Idle"));
     // Working: accent. Nothing running but something failed: danger. Otherwise quiet.
     m_queueTile->setIconTone(running > 0 ? Tone::Info : failed > 0 ? Tone::Err : Tone::Neutral);
     QStringList qc;
     if (running > 0 && !stage.isEmpty())
         qc << stage;
     if (queued > 0 && running > 0)
-        qc << QStringLiteral("%1 waiting").arg(queued);
+        qc << FW_TR("%1 waiting").arg(queued);
     if (failed > 0)
-        qc << QStringLiteral("%1 failed").arg(failed);
+        qc << FW_TR("%1 failed").arg(failed);
     // A list that waits to be started says how; a queue paused while it runs says so.
     if (m_ctx.queue().isHeld())
-        qc << (running == 0 && queued > 0 ? QStringLiteral("press Start queue") : QStringLiteral("queue paused"));
-    m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : QStringLiteral("Jobs run in queue order")) : qc.join(QStringLiteral(" · ")));
+        qc << (running == 0 && queued > 0 ? FW_TR("press Start queue") : FW_TR("queue paused"));
+    m_queueTile->setCaption(qc.isEmpty() ? (running > 0 ? QString() : FW_TR("Jobs run in queue order")) : qc.join(QStringLiteral(" · ")));
     m_queueBar->setVisible(running > 0);
     if (running > 0) {
         m_queueBar->setState(indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
@@ -515,10 +516,10 @@ void HomePage::refreshRecent()
         delete it;
     }
     for (size_t i = 0; i < recent.size(); ++i)
-        rows->addWidget(new RecentRow(recent[i], m_ctx.jobFactory().displayName(recent[i].kind), i + 1 < recent.size(), m_recentRows));
+        rows->addWidget(new RecentRow(recent[i], i18n::translate(m_ctx.jobFactory().displayName(recent[i].kind)), i + 1 < recent.size(), m_recentRows));
     m_recentRows->setVisible(!recent.empty());
     m_recentEmpty->setVisible(recent.empty());
-    m_recentCard->setToolTip(QStringLiteral("History is kept in %1").arg(nativePath(m_ctx.history().path())));
+    m_recentCard->setToolTip(FW_TR("History is kept in %1").arg(nativePath(m_ctx.history().path())));
 }
 
 void HomePage::refresh()
@@ -540,10 +541,10 @@ void HomePage::refresh()
         m_spaceKnown = true;
         if (ready) {
             m_spaceTile->setValue(formatBytes(available));
-            m_spaceTile->setCaption(QStringLiteral("on %1 · %2").arg(label, nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder")));
+            m_spaceTile->setCaption((nextToSource ? FW_TR("on %1 · home drive") : FW_TR("on %1 · output folder")).arg(label));
         } else {
             m_spaceTile->setValue(QStringLiteral("—"));
-            m_spaceTile->setCaption(QStringLiteral("Output drive not available"));
+            m_spaceTile->setCaption(FW_TR("Output drive not available"));
         }
         // Too little for almost any game image, or no drive at all: a warning mark.
         m_spaceTile->setIconTone(!ready || available < kLowSpaceBytes ? Tone::Warn : Tone::Neutral);
@@ -555,9 +556,9 @@ void HomePage::refresh()
         show(d.ready, d.available, d.label);
     } else {
         if (!m_spaceKnown) { // the tile is never empty while the first answer is on its way
-            m_spaceTile->setValue(QStringLiteral("Checking…"));
+            m_spaceTile->setValue(FW_TR("Checking…"));
             m_spaceTile->setIconTone(Tone::Neutral);
-            m_spaceTile->setCaption(nextToSource ? QStringLiteral("home drive") : QStringLiteral("output folder"));
+            m_spaceTile->setCaption(nextToSource ? FW_TR("home drive") : FW_TR("output folder"));
         }
         probeFreeSpace(isVisible() ? this : nullptr, folder, show);
     }
@@ -570,10 +571,10 @@ void HomePage::refresh()
             && (rec->state == JobState::Failed || rec->state == JobState::Interrupted || rec->state == JobState::Cancelled)) {
             m_continueId = rec->id;
             const QString why = rec->error && !rec->error->isCancelled() ? rec->error->message
-                              : rec->state == JobState::Interrupted      ? QStringLiteral("Interrupted when the app closed.")
-                                                                         : QStringLiteral("Cancelled.");
+                              : rec->state == JobState::Interrupted      ? FW_TR("Interrupted when the app closed.")
+                                                                         : FW_TR("Cancelled.");
             m_continue->setTone(rec->state == JobState::Failed ? Tone::Err : Tone::Warn);
-            m_continue->setTitle(QStringLiteral("%1 · %2").arg(rec->title, m_ctx.jobFactory().displayName(rec->kind)));
+            m_continue->setTitle(QStringLiteral("%1 · %2").arg(rec->title, i18n::translate(m_ctx.jobFactory().displayName(rec->kind))));
             // One calm line here; the queue shows the whole message.
             m_continue->setMessage(elideMiddle(why, 110));
             m_continue->setToolTip(why.size() > 110 ? plainTip(why) : QString());

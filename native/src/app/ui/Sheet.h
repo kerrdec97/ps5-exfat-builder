@@ -8,6 +8,7 @@
 // capture it and the Windows title bar never appears on it.
 
 #include "app/ui/Widgets.h"
+#include "core/Tr.h"
 
 #include <QCheckBox>
 #include <QEventLoop>
@@ -59,11 +60,11 @@ public:
                         const QString& checkboxText = {}, bool* checkboxValue = nullptr,
                         Qt::TextFormat format = Qt::AutoText);
     static void message(QWidget* host, const QString& title, const QString& text, Icon icon = Icon::Info,
-                        const QString& buttonText = QStringLiteral("OK"), Qt::TextFormat format = Qt::AutoText);
+                        const QString& buttonText = FW_TR("OK"), Qt::TextFormat format = Qt::AutoText);
     // A message that does not block (no nested event loop): for handlers that
     // must return at once. `text` is shown literally. The sheet deletes itself.
     static Sheet* notify(QWidget* host, const QString& title, const QString& text, Icon icon = Icon::Info,
-                         const QString& buttonText = QStringLiteral("OK"));
+                         const QString& buttonText = FW_TR("OK"));
     // Markup for a value in the mono font; `text` is plain and is escaped here.
     static QString monoSpan(const QString& text);
     // The same for several plain lines: each is escaped, one line per row.

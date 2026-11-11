@@ -2,6 +2,7 @@
 
 #include "engines/exfat/ExfatReader.h"
 #include "engines/ufs2/Ufs2Reader.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -80,7 +81,7 @@ static ImageTreeResult readFfpkg(const QString& image, const CancellationToken& 
     out.fileCount = t.fileCount;
     out.dirCount = t.dirCount;
     for (const QString& s : skipped)
-        out.warnings << QStringLiteral("Skipped (link or special file): %1").arg(s);
+        out.warnings << FW_TR("Skipped (link or special file): %1").arg(s);
     return out;
 }
 
