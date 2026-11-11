@@ -4,6 +4,10 @@
 #include "connect/ps5/RemotePath.h"
 #include "connect/ps5/SocketWait.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
+
+// The texts of a diagnosis stay English (it is logged and kept in the job's details); the
+// Diagnostics tab translates the fixed ones (FW_TR_NOOP) where it shows them.
 
 #include <QBuffer>
 #include <QDateTime>
@@ -26,43 +30,43 @@ ServerGuess classifyFtpServer(const FtpFeatures& f, const QString& banner)
     if (ftpsrvBanner || f.ftpsrv) {
         const FtpServerIdentity id = identifyFtpServer(banner, &f);
         g.label = id.version.isEmpty() ? QStringLiteral("ftpsrv") : QStringLiteral("ftpsrv %1").arg(id.version);
-        g.confidence = ftpsrvBanner && f.ftpsrv ? QStringLiteral("very likely") : QStringLiteral("likely");
+        g.confidence = ftpsrvBanner && f.ftpsrv ? FW_TR_NOOP("very likely") : FW_TR_NOOP("likely");
         if (ftpsrvBanner)
-            g.evidence << QStringLiteral("Welcome banner names ftpsrv");
+            g.evidence << FW_TR_NOOP("Welcome banner names ftpsrv");
         if (f.ftpsrv)
-            g.evidence << QStringLiteral("FEAT lists ftpsrv's own commands (KILL/MTRW/SELF)");
+            g.evidence << FW_TR_NOOP("FEAT lists ftpsrv's own commands (KILL/MTRW/SELF)");
         return g;
     }
     if (banner.contains(QLatin1String("Service ready for new user"), Qt::CaseInsensitive)) {
         g.label = QStringLiteral("etaHEN FTP");
-        g.confidence = QStringLiteral("likely");
-        g.evidence << QStringLiteral("Welcome banner matches etaHEN's FTP server (port 1337)");
+        g.confidence = FW_TR_NOOP("likely");
+        g.evidence << FW_TR_NOOP("Welcome banner matches etaHEN's FTP server (port 1337)");
         return g;
     }
     int score = 0;
     if (f.xcrypt) {
         score += 2;
-        g.evidence << QStringLiteral("FEAT advertises XCRYPT (zftpd extension)");
+        g.evidence << FW_TR_NOOP("FEAT advertises XCRYPT (zftpd extension)");
     }
     if (f.copy) {
         score += 2;
-        g.evidence << QStringLiteral("Server-side copy (CPFR/CPTO/COPY) advertised");
+        g.evidence << FW_TR_NOOP("Server-side copy (CPFR/CPTO/COPY) advertised");
     }
     if (f.mlsd && f.utf8 && f.rest) {
         score += 1;
-        g.evidence << QStringLiteral("MLSD + UTF8 + REST all present (consistent with zftpd)");
+        g.evidence << FW_TR_NOOP("MLSD + UTF8 + REST all present (consistent with zftpd)");
     }
     if (banner.contains(QLatin1String("zftpd"), Qt::CaseInsensitive)) {
         score += 3;
-        g.evidence << QStringLiteral("Welcome banner names zftpd");
+        g.evidence << FW_TR_NOOP("Welcome banner names zftpd");
     }
     if (score >= 2) {
         g.label = QStringLiteral("zftpd");
-        g.confidence = score >= 4 ? QStringLiteral("very likely") : QStringLiteral("likely");
+        g.confidence = score >= 4 ? FW_TR_NOOP("very likely") : FW_TR_NOOP("likely");
         return g;
     }
     if (g.evidence.isEmpty())
-        g.evidence << QStringLiteral("No zftpd-specific markers (no XCRYPT, no server-side copy)");
+        g.evidence << FW_TR_NOOP("No zftpd-specific markers (no XCRYPT, no server-side copy)");
     return g;
 }
 
@@ -289,7 +293,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
 
     // 2. Greeting and login.
     FtpClient c(ftpOptionsFor(ep));
-    say(DiagnoseStage::Connecting, QStringLiteral("Reading the server greeting"));
+    say(DiagnoseStage::Connecting, FW_TR_NOOP("Reading the server greeting"));
     if (const Status st = c.connectToHost(d.host, d.port, token); !st.ok()) {
         if (st.error().isCancelled())
             return Error::cancelled();
@@ -298,7 +302,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
     }
     d.greeted = true;
     d.banner = c.welcome().trimmed();
-    say(DiagnoseStage::Connecting, QStringLiteral("Logging in"));
+    say(DiagnoseStage::Connecting, FW_TR_NOOP("Logging in"));
     if (const Status st = c.login(); !st.ok()) {
         d.error = st.error().message;
         d.server = classifyFtpServer(d.features, d.banner);
@@ -308,12 +312,12 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
     auto lost = [&]() -> bool {
         if (c.isConnected())
             return false;
-        d.error = QStringLiteral("The PS5 closed the FTP connection during the checks.");
+        d.error = FW_TR_NOOP("The PS5 closed the FTP connection during the checks.");
         return true;
     };
 
     // 3. FEAT.
-    say(DiagnoseStage::Checking, QStringLiteral("Reading the server features (FEAT)"));
+    say(DiagnoseStage::Checking, FW_TR_NOOP("Reading the server features (FEAT)"));
     if (auto f = c.features(); f.ok()) {
         d.features = f.value();
         d.featOk = !d.features.raw.isEmpty();
@@ -325,7 +329,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
         return Error::cancelled();
 
     // 4. Passive mode: PASV, then EPSV (legacy _ftp_test_passive).
-    say(DiagnoseStage::Checking, QStringLiteral("Checking passive mode"));
+    say(DiagnoseStage::Checking, FW_TR_NOOP("Checking passive mode"));
     if (auto p = c.command(QStringLiteral("PASV")); p.ok() && p->code == 227) {
         d.passive = true;
         d.passiveMode = QStringLiteral("PASV");
@@ -338,12 +342,12 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
     if (lost())
         return d;
     if (!ep.passive)
-        d.notes << QStringLiteral("Passive mode is off in Settings › PS5 connection: the probes used active mode (PORT).");
+        d.notes << FW_TR_NOOP("Passive mode is off in Settings › PS5 connection: the probes used active mode (PORT).");
     else if (d.passive == false)
-        d.notes << QStringLiteral("The server refused PASV and EPSV. Transfers need active mode; a PC firewall usually blocks it.");
+        d.notes << FW_TR_NOOP("The server refused PASV and EPSV. Transfers need active mode; a PC firewall usually blocks it.");
 
     // 5. Binary mode.
-    say(DiagnoseStage::Checking, QStringLiteral("Checking binary mode (TYPE I)"));
+    say(DiagnoseStage::Checking, FW_TR_NOOP("Checking binary mode (TYPE I)"));
     if (auto t = c.command(QStringLiteral("TYPE I")); t.ok())
         d.binary = t->code >= 200 && t->code < 300;
     if (lost())
@@ -379,7 +383,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
         if (auto st = c.open(d.host, d.port, token); !st.ok()) {
             if (st.error().isCancelled())
                 return Error::cancelled();
-            d.error = QStringLiteral("The PS5 closed the FTP connection during the checks.");
+            d.error = FW_TR_NOOP("The PS5 closed the FTP connection during the checks.");
             return d;
         }
     }
@@ -393,7 +397,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
         if (d.writable != true) {
             r.ran = false;
             r.path.clear();
-            r.error = QStringLiteral("Not run: the folder is not writable.");
+            r.error = FW_TR_NOOP("Not run: the folder is not writable.");
         } else {
             const QByteArray payload = randomPayload(r.bytes);
             say(DiagnoseStage::SpeedTest, QStringLiteral("Uploading %1").arg(formatBytes(r.bytes)));
@@ -421,7 +425,7 @@ Result<FtpDiagnosis> diagnoseFtp(const ConsoleEndpoint& endpoint, const Diagnose
             if (!st.ok())
                 r.error = st.error().message;
             if (wrote) {
-                say(DiagnoseStage::SpeedTest, QStringLiteral("Removing the test file"));
+                say(DiagnoseStage::SpeedTest, FW_TR_NOOP("Removing the test file"));
                 QString why;
                 r.cleaned = removeProbe(c, ep, r.path, &why);
             }
