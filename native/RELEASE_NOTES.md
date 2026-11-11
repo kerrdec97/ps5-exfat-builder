@@ -7,12 +7,50 @@ Redistributable. The first start unpacks the program once to
 `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime` (with `portable.txt`
 next to the exe: beside the exe instead). Check it against `SHA256SUMS.txt`.
 
+Antivirus removes the exe? Download the **folder edition**
+(`exFAT-Image-Builder-5.0.2-win64-folder.zip`) instead: the same program,
+already unpacked. Extract it anywhere and run the exe inside.
+
 ## What's new in 5.0.2
 
-A maintenance release. Every part of the app was read line by line (engines,
-queue, launcher, console code, every page, the build scripts and the tests);
-this version carries the fixes. No new features, and images built with 5.0.1
-stay valid.
+Every part of the app was read line by line (engines, queue, launcher,
+console code, every page, the build scripts and the tests); this version
+carries the fixes, a design refresh and answers to the open GitHub issues.
+Images built with 5.0.1 stay valid.
+
+### From your reports (GitHub issues)
+* **`ampr_emu.index` is back for exFAT and FFPKG builds** (#93). A game that
+  uses the AMPR emulator (`fakelib/libSceAmpr.sprx`) gets the index when the
+  dump has none, and a fresh one when it no longer matches the game's files,
+  as version 4 did. The index goes into the image only; the dump folder is
+  never changed. New setting **AMPR file index** (Settings › Build, and under
+  Advanced on the Build page): when the game uses the AMPR emulator
+  (default), add when the dump has none, always rebuild, never add or change.
+  PFS builds have the same new choice. The build log says what was done.
+* **Add to queue makes a list** (#87). It puts the job on the list instead of
+  starting it: add as many games as you like, then press **Start queue** (on
+  the message, in the Jobs panel or on the Queue page). The main button
+  ("Build image", "Pack game", …) still starts that one job at once. A waiting
+  list is kept when the app is closed.
+* **7z and RAR archives as build sources** (#37), as ZIPs already were:
+  choose or drop `game.7z` or `game.rar`. For a multi-part RAR, choose the
+  first part. Every file's checksum is checked while it is unpacked.
+  Password-protected archives, solid RAR 4 archives and 7z archives using
+  BZip2 are refused with a plain explanation.
+* **Check dump** (#26): Library › Games › "Check dump…" reads a dump without
+  changing it and lists missing or empty files, encrypted or cut-short
+  executables, signs of a backport, junk files, links and names exFAT cannot
+  store, with a report you can copy.
+* **Where the app keeps its files** (#91, #90): Settings › Storage lists the
+  unpacked program, settings, queue, logs and temporary files, each with
+  "Show in folder". "Make this copy portable…" moves them next to the exe,
+  for example on an external drive, copying your settings and queue; the
+  switch happens at the next start.
+* **Renaming images is easy to find** (#88): Library › Images has a "Rename
+  images…" button, and a "Rename…" button when images are selected. Names can
+  be "PPSA01234 - Title" or follow your own template, with a live preview.
+* **Folder edition** (#78): each release also offers the program as a zip,
+  already unpacked, for PCs whose antivirus removes the single exe.
 
 ### Safety of your files
 * **Unpacking a crafted packed game or image can no longer write outside the
