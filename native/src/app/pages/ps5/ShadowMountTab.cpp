@@ -8,6 +8,7 @@
 #include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/Module.h"
 #include "connect/ps5/SmpApi.h"
+#include "core/Tr.h"
 #include "jobs/JobQueue.h"
 
 #include <QComboBox>
@@ -34,8 +35,9 @@ namespace {
 
 const QStringList& groupOrder()
 {
-    static const QStringList g = {QStringLiteral("General"), QStringLiteral("Scanning"), QStringLiteral("Mounting"),
-                                  QStringLiteral("Library"), QStringLiteral("Fakelib"), QStringLiteral("Emulators"),
+    // The group identifiers of the key table (English); groupTitle() gives the text that is shown.
+    static const QStringList g = {FW_TR_NOOP("General"), FW_TR_NOOP("Scanning"), FW_TR_NOOP("Mounting"),
+                                  FW_TR_NOOP("Library"), QStringLiteral("Fakelib"), FW_TR_NOOP("Emulators"),
                                   QStringLiteral("Fan"), QStringLiteral("API"), QStringLiteral("Sectors"), QStringLiteral("Rules")};
     return g;
 }
@@ -43,34 +45,36 @@ const QStringList& groupOrder()
 QString groupTitle(const QString& g)
 {
     if (g == u"Rules")
-        return QStringLiteral("Per-game and per-image rules");
+        return FW_TR("Per-game and per-image rules");
     if (g == u"Sectors")
-        return QStringLiteral("Sector sizes");
+        return FW_TR("Sector sizes");
     if (g == u"API")
-        return QStringLiteral("HTTP API and web UI");
+        return FW_TR("HTTP API and web UI");
     if (g == u"Fan")
-        return QStringLiteral("Fan");
-    return g;
+        return FW_TR("Fan");
+    if (g == u"Fakelib")
+        return g; // a name
+    return i18n::translate(g);
 }
 
 QString groupCaption(const QString& g)
 {
     if (g == u"General")
-        return QStringLiteral("Logging, notifications, language");
+        return FW_TR("Logging, notifications, language");
     if (g == u"Scanning")
-        return QStringLiteral("Where and how often games are found");
+        return FW_TR("Where and how often games are found");
     if (g == u"Mounting")
-        return QStringLiteral("How images are mounted");
+        return FW_TR("How images are mounted");
     if (g == u"Library")
-        return QStringLiteral("Registering and removing games");
+        return FW_TR("Registering and removing games");
     if (g == u"Fakelib")
-        return QStringLiteral("Library overlays for backported games");
+        return FW_TR("Library overlays for backported games");
     if (g == u"Emulators")
-        return QStringLiteral("Emulator and AMPR updates");
+        return FW_TR("Emulator and AMPR updates");
     if (g == u"Rules")
-        return QStringLiteral("profiles.ini in the v2 format");
+        return FW_TR("profiles.ini in the v2 format");
     if (g == u"Sectors")
-        return QStringLiteral("Only change these when a guide says so");
+        return FW_TR("Only change these when a guide says so");
     return {};
 }
 
@@ -84,7 +88,7 @@ QString rowDefault(const SmpKey& k)
 QString shortValue(const QString& v)
 {
     const QString one = QString(v).replace(u'\n', QStringLiteral(", "));
-    return one.isEmpty() ? QStringLiteral("(default)") : elideMiddle(one, 48);
+    return one.isEmpty() ? FW_TR("(default)") : elideMiddle(one, 48);
 }
 
 } // namespace
@@ -105,17 +109,17 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     auto* tr = new QHBoxLayout;
     tr->setSpacing(space::sm);
     tr->addWidget(label(QStringLiteral("ShadowMount+"), TextStyle::Subtitle, color::fg_0, head));
-    m_formatBadge = new Badge(QStringLiteral("Not loaded"), Tone::Neutral, head);
+    m_formatBadge = new Badge(FW_TR("Not loaded"), Tone::Neutral, head);
     m_formatBadge->setIconName({});
     tr->addWidget(m_formatBadge);
     tr->addStretch(1);
     names->addLayout(tr);
-    m_meta = caption(QStringLiteral("Load the config to see what the console has."), head);
+    m_meta = caption(FW_TR("Load the config to see what the console has."), head);
     m_meta->setWordWrap(true);
     names->addWidget(m_meta);
     hh->addLayout(names, 1);
-    m_load = button(QStringLiteral("Load from console"), ButtonVariant::Secondary, QStringLiteral("download"), head);
-    m_push = button(QStringLiteral("Push changes"), ButtonVariant::Primary, QStringLiteral("upload"), head);
+    m_load = button(FW_TR("Load from console"), ButtonVariant::Secondary, QStringLiteral("download"), head);
+    m_push = button(FW_TR("Push changes"), ButtonVariant::Primary, QStringLiteral("upload"), head);
     m_push->setEnabled(false);
     hh->addWidget(m_load, 0, Qt::AlignTop);
     hh->addWidget(m_push, 0, Qt::AlignTop);
@@ -129,14 +133,14 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     auto* ag = new QGridLayout(actions);
     ag->setContentsMargins(0, 0, 0, 0);
     ag->setSpacing(space::md);
-    m_stop = new ActionCard(QStringLiteral("eject"), QStringLiteral("Safe to unplug"),
-                            QStringLiteral("Stops ShadowMount+ and waits until it has released every image."), actions);
-    m_eject = new ActionCard(QStringLiteral("usb"), QStringLiteral("Eject USB drive"),
-                             QStringLiteral("Unmounts one USB drive and keeps ShadowMount+ running (1.7)."), actions);
-    m_loader = new ActionCard(QStringLiteral("rocket"), QStringLiteral("Send the loader"),
-                              QStringLiteral("Sends shadowmountplus.elf to the console's ELF loader."), actions);
-    m_stop->setAccessibleName(QStringLiteral("Safe to unplug"));
-    m_eject->setAccessibleName(QStringLiteral("Eject USB drive"));
+    m_stop = new ActionCard(QStringLiteral("eject"), FW_TR("Safe to unplug"),
+                            FW_TR("Stops ShadowMount+ and waits until it has released every image."), actions);
+    m_eject = new ActionCard(QStringLiteral("usb"), FW_TR("Eject USB drive"),
+                             FW_TR("Unmounts one USB drive and keeps ShadowMount+ running (1.7)."), actions);
+    m_loader = new ActionCard(QStringLiteral("rocket"), FW_TR("Send the loader"),
+                              FW_TR("Sends shadowmountplus.elf to the console's ELF loader."), actions);
+    m_stop->setAccessibleName(FW_TR("Safe to unplug"));
+    m_eject->setAccessibleName(FW_TR("Eject USB drive"));
     ag->addWidget(m_stop, 0, 0);
     ag->addWidget(m_eject, 0, 1);
     ag->addWidget(m_loader, 0, 2);
@@ -177,7 +181,7 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
         m_groups << d;
         l->addWidget(d);
     }
-    m_unknown = new Disclosure(QStringLiteral("Other lines in config.ini"), QStringLiteral("Kept exactly as they are when you push"), this);
+    m_unknown = new Disclosure(FW_TR("Other lines in config.ini"), FW_TR("Kept exactly as they are when you push"), this);
     m_unknownText = label({}, TextStyle::Mono, color::fg_2, m_unknown);
     m_unknownText->setWordWrap(true);
     m_unknownText->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -186,19 +190,19 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     l->addWidget(m_unknown);
 
     // ---- MicroMount (archived upstream).
-    auto* mm = new Disclosure(QStringLiteral("MicroMount (archived)"),
-                              QStringLiteral("Legacy: ShadowMount+ 1.6test15-fix2 and later mount .ffpfsc too"), this);
+    auto* mm = new Disclosure(FW_TR("MicroMount (archived)"),
+                              FW_TR("Legacy: ShadowMount+ 1.6test15-fix2 and later mount .ffpfsc too"), this);
     mm->body()->addWidget(buildMicroMount(mm));
-    mm->setSummary(QStringLiteral("Legacy"), Tone::Neutral);
+    mm->setSummary(FW_TR("Legacy"), Tone::Neutral);
     l->addWidget(mm);
     l->addStretch(1);
 
     connect(m_load, &QPushButton::clicked, this, [this] {
         // Loading replaces the form: ask when it holds changes that were not pushed.
         if (m_hasLoaded && !changes().isEmpty()
-            && !Sheet::confirm(window(), QStringLiteral("Discard the changes?"),
-                               QStringLiteral("The form has changes that were not pushed to the console. Loading replaces them with what the console has."),
-                               QStringLiteral("Keep editing"), QStringLiteral("Load"), true, Sheet::Icon::Warning))
+            && !Sheet::confirm(window(), FW_TR("Discard the changes?"),
+                               FW_TR("The form has changes that were not pushed to the console. Loading replaces them with what the console has."),
+                               FW_TR("Keep editing"), FW_TR("Load"), true, Sheet::Icon::Warning))
             return;
         load();
     });
@@ -224,10 +228,14 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
     h->setContentsMargins(0, space::sm, 0, space::sm);
     h->setHorizontalSpacing(space::md);
     h->setVerticalSpacing(space::xs);
-    r.label = label(k.label, TextStyle::Body, color::fg_1, box);
-    const QString tip = QStringLiteral("%1\n\nconfig.ini: %2%3%4")
-                            .arg(k.help, k.key, k.section.isEmpty() ? QStringLiteral(" (profiles.ini in v2)") : QStringLiteral(" · v2 [%1] %2").arg(k.section, k.v2Key),
-                                 k.defaultValue.isEmpty() ? QString() : QStringLiteral("\nDefault: %1").arg(k.defaultValue));
+    const QString shownLabel = i18n::translate(k.label);
+    const QString shownHelp = i18n::translate(k.help);
+    r.label = label(shownLabel, TextStyle::Body, color::fg_1, box);
+    const QString where = k.section.isEmpty() ? FW_TR("config.ini: %1 (profiles.ini in v2)").arg(k.key)
+                                              : FW_TR("config.ini: %1 · v2 [%2] %3").arg(k.key, k.section, k.v2Key);
+    const QString tip = QStringLiteral("%1\n\n%2%3")
+                            .arg(shownHelp, where,
+                                 k.defaultValue.isEmpty() ? QString() : QStringLiteral("\n") + FW_TR("Default: %1").arg(k.defaultValue));
     r.label->setToolTip(tip);
     QWidget* control = nullptr;
     switch (k.type) {
@@ -267,7 +275,7 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
             for (qint64 n = 512; n <= 1048576; n *= 2)
                 r.combo->addItem(QString::number(n), QString::number(n));
         else {
-            r.combo->addItem(QStringLiteral("System"), QStringLiteral("system"));
+            r.combo->addItem(FW_TR("System"), QStringLiteral("system"));
             for (int t = 50; t <= 91; ++t)
                 r.combo->addItem(QStringLiteral("%1 °C").arg(t), QString::number(t));
         }
@@ -288,8 +296,8 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
         r.text = new QPlainTextEdit(box);
         r.text->setFont(font::mono());
         r.text->setFixedHeight(76);
-        r.text->setPlaceholderText(k.help);
-        r.text->setAccessibleName(k.label);
+        r.text->setPlaceholderText(shownHelp);
+        r.text->setAccessibleName(shownLabel);
         control = r.text;
         connect(r.text, &QPlainTextEdit::textChanged, this, [this, key = k.key] {
             if (!m_populating) {
@@ -308,9 +316,9 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
         });
         break;
     }
-    control->setAccessibleName(k.label);
+    control->setAccessibleName(shownLabel);
     control->setToolTip(tip);
-    r.reset = new IconButton(QStringLiteral("undo"), QStringLiteral("Back to the default (removes the line)"), IconButton::Size::Tiny, box);
+    r.reset = new IconButton(QStringLiteral("undo"), FW_TR("Back to the default (removes the line)"), IconButton::Size::Tiny, box);
     connect(r.reset, &QToolButton::clicked, this, [this, key = k.key] { resetToDefault(key); });
     if (tall) {
         h->addWidget(r.label, 0, 0);
@@ -382,7 +390,7 @@ void ShadowMountTab::populate(const MountConfigValues& values)
             other << QStringLiteral("%1 = %2").arg(it.key(), QString(it.value()).replace(u'\n', QStringLiteral(" · ")));
     m_unknownText->setText(other.join(u'\n'));
     m_unknown->setVisible(!other.isEmpty());
-    m_unknown->setSummary(QStringLiteral("%1 kept").arg(other.size()), Tone::Neutral);
+    m_unknown->setSummary(FW_TR("%1 kept").arg(other.size()), Tone::Neutral);
     refreshMarks();
 }
 
@@ -415,7 +423,8 @@ void ShadowMountTab::refreshMarks()
         const bool changed = ch.contains(it.key());
         const QString current = rowValue(*it);
         const bool atDefault = !m_loaded.contains(it.key()) && !changed;
-        it->label->setText(changed ? QStringLiteral("● %1").arg(it->def->label) : it->def->label);
+        const QString shownLabel = i18n::translate(it->def->label);
+        it->label->setText(changed ? QStringLiteral("● %1").arg(shownLabel) : shownLabel);
         setTextColor(it->label, changed ? color::accent_hi : color::fg_1);
         it->reset->setVisible(!atDefault || (changed && current != rowDefault(*it->def)));
     }
@@ -424,7 +433,7 @@ void ShadowMountTab::refreshMarks()
     const QStringList warnings = ps5::mountConfigWarnings(ps5::MountTool::ShadowMountPlus, edited);
     if (!problems.isEmpty()) {
         m_problems->setTone(Tone::Err);
-        m_problems->setTitle(QStringLiteral("Fix before pushing"));
+        m_problems->setTitle(FW_TR("Fix before pushing"));
         m_problems->setMessage(problems.join(u'\n'));
         m_problems->show();
     } else if (!warnings.isEmpty()) {
@@ -436,7 +445,9 @@ void ShadowMountTab::refreshMarks()
         m_problems->hide();
     }
     m_push->setEnabled(m_hasLoaded && !ch.isEmpty() && problems.isEmpty() && !isBusy());
-    m_push->setText(ch.isEmpty() ? QStringLiteral("Push changes") : QStringLiteral("Push %1 change%2").arg(ch.size()).arg(ch.size() == 1 ? QString() : QStringLiteral("s")));
+    m_push->setText(ch.isEmpty() ? FW_TR("Push changes")
+                    : ch.size() == 1 ? FW_TR("Push %1 change").arg(ch.size())
+                                     : FW_TR("Push %1 changes").arg(ch.size()));
 }
 
 void ShadowMountTab::setValue(const QString& key, const QString& value)
@@ -490,20 +501,20 @@ void ShadowMountTab::updateHeader()
         it->box->setVisible(!it->def->v2Only || (m_hasLoaded && m_format == ps5::SmpConfigFormat::V2));
     const QString version = !m_apiVersion.isEmpty() ? m_apiVersion : m_logVersion;
     QStringList meta;
-    meta << (version.isEmpty() ? QStringLiteral("Version unknown") : QStringLiteral("Version %1").arg(version));
+    meta << (version.isEmpty() ? FW_TR("Version unknown") : FW_TR("Version %1").arg(version));
     if (!m_apiVersion.isEmpty())
-        meta << QStringLiteral("HTTP API on port %1").arg(endpoint().smpApiPort);
+        meta << FW_TR("HTTP API on port %1").arg(endpoint().smpApiPort);
     if (m_hasLoaded)
         meta << (m_configExists ? ps5::mountConfigRemotePath(ps5::MountTool::ShadowMountPlus)
-                                : QStringLiteral("no config.ini yet: defaults shown"));
+                                : FW_TR("no config.ini yet: defaults shown"));
     else
-        meta << QStringLiteral("load the config to edit it");
+        meta << FW_TR("load the config to edit it");
     m_meta->setText(meta.join(QStringLiteral(" · ")));
     m_tile->setTone(version.isEmpty() ? Tone::Info : Tone::Ok);
     if (m_hasLoaded) {
-        m_formatBadge->set(QStringLiteral("Config %1").arg(ps5::smpConfigFormatName(m_format)), m_format == ps5::SmpConfigFormat::Flat16 ? Tone::Warn : Tone::Info);
-        m_formatBadge->setToolTip(m_format == ps5::SmpConfigFormat::Flat16 ? QStringLiteral("1.6 or unknown version: kstuff_* lines are kept")
-                                                                           : QStringLiteral("Obsolete kstuff_* lines are removed on push"));
+        m_formatBadge->set(FW_TR("Config %1").arg(ps5::smpConfigFormatName(m_format)), m_format == ps5::SmpConfigFormat::Flat16 ? Tone::Warn : Tone::Info);
+        m_formatBadge->setToolTip(m_format == ps5::SmpConfigFormat::Flat16 ? FW_TR("1.6 or unknown version: kstuff_* lines are kept")
+                                                                           : FW_TR("Obsolete kstuff_* lines are removed on push"));
     }
     m_eject->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kShadowMountEject) && (m_apiVersion.isEmpty() || ps5::smpVersionAtLeast(m_apiVersion, QStringLiteral("1.7"))));
 }
@@ -513,7 +524,7 @@ void ShadowMountTab::load()
     const QString apiVersion = m_apiVersion;
     const quint16 apiPort = endpoint().smpApiPort;
     const QString consoleHost = endpoint().host; // the console this load asks, whatever the address field says when it answers
-    setStatus(QStringLiteral("Loading config.ini, profiles.ini and the version…"), Tone::Info);
+    setStatus(FW_TR("Loading config.ini, profiles.ini and the version…"), Tone::Info);
     struct Loaded {
         ps5::SmpRemoteState state;
         QString apiVersion;
@@ -559,8 +570,8 @@ void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s, const QString& con
     m_loadedHost = consoleHost; // Push is for this console only
     populate(m_loaded);
     updateHeader();
-    setStatus(s.configExists ? QStringLiteral("Loaded. Only the settings you change are written back.")
-                             : QStringLiteral("No config.ini on the console yet; the defaults are shown."),
+    setStatus(s.configExists ? FW_TR("Loaded. Only the settings you change are written back.")
+                             : FW_TR("No config.ini on the console yet; the defaults are shown."),
               Tone::Ok);
     emit loaded();
 }
@@ -568,11 +579,11 @@ void ShadowMountTab::finishLoad(const ps5::SmpRemoteState& s, const QString& con
 void ShadowMountTab::push(bool confirmed)
 {
     if (!m_hasLoaded) {
-        setStatus(QStringLiteral("Load the config from the console first."), Tone::Warn);
+        setStatus(FW_TR("Load the config from the console first."), Tone::Warn);
         return;
     }
     if (!m_loadedHost.isEmpty() && m_loadedHost != endpoint().host) {
-        setStatus(QStringLiteral("This config was loaded from %1. Load it from this console first.").arg(m_loadedHost), Tone::Warn);
+        setStatus(FW_TR("This config was loaded from %1. Load it from this console first.").arg(m_loadedHost), Tone::Warn);
         return;
     }
     const MountConfigValues edited = editedValues();
@@ -583,7 +594,7 @@ void ShadowMountTab::push(bool confirmed)
     }
     const MountConfigValues ch = ps5::changedMountValues(m_loaded, edited);
     if (ch.isEmpty()) {
-        setStatus(QStringLiteral("Nothing changed."), Tone::Neutral);
+        setStatus(FW_TR("Nothing changed."), Tone::Neutral);
         return;
     }
     const ps5::MountConfigFiles files = ps5::applyMountConfigChanges(ps5::MountTool::ShadowMountPlus, m_config, m_profiles, ch, m_format);
@@ -597,20 +608,21 @@ void ShadowMountTab::push(bool confirmed)
             lines << QStringLiteral("%1: %2 → %3").arg(it.key(), shortValue(m_loaded.value(it.key())), shortValue(it.value()));
         QString where = ps5::mountConfigRemotePath(ps5::MountTool::ShadowMountPlus);
         if (files.profilesChanged)
-            where += QStringLiteral(" and ") + ps5::smpProfilesRemotePath();
+            where = FW_TR("%1 and %2").arg(where, ps5::smpProfilesRemotePath());
         const QString debugOff = edited.value(QStringLiteral("debug"), QStringLiteral("1")) == u"0"
-                                     ? QStringLiteral("<br><br>debug is off: Safe to unplug cannot confirm the cleanup then.")
+                                     ? FW_TR("<br><br>debug is off: Safe to unplug cannot confirm the cleanup then.")
                                      : QString();
-        if (!Sheet::confirm(window(), QStringLiteral("Write %1 change%2 to the console?").arg(ch.size()).arg(ch.size() == 1 ? QString() : QStringLiteral("s")),
-                            QStringLiteral("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
+        if (!Sheet::confirm(window(), ch.size() == 1 ? FW_TR("Write %1 change to the console?").arg(ch.size())
+                                                     : FW_TR("Write %1 changes to the console?").arg(ch.size()),
+                            FW_TR("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
                                 .arg(Sheet::monoLines(lines), Sheet::monoSpan(where), debugOff),
-                            QStringLiteral("Cancel"), QStringLiteral("Push"), false, Sheet::Icon::Info))
+                            FW_TR("Cancel"), FW_TR("Push"), false, Sheet::Icon::Info))
             return;
     }
     const QString backupDir = ps5::newConsoleBackupDir();
     const QString apiVersion = m_apiVersion;
     const QString consoleHost = endpoint().host;
-    setStatus(QStringLiteral("Pushing…"), Tone::Info);
+    setStatus(FW_TR("Pushing…"), Tone::Info);
     m_push->setEnabled(false);
     const bool started = runOnConsole<ps5::SmpRemoteState>(
         [files, backupDir, expectConfig, expectProfiles, apiVersion](ps5::FtpClient& c, const CancellationToken& t) -> Result<ps5::SmpRemoteState> {
@@ -623,13 +635,15 @@ void ShadowMountTab::push(bool confirmed)
         [this, n = ch.size(), consoleHost](const Result<ps5::SmpRemoteState>& r) {
             if (!r.ok()) {
                 setStatus(r.error().message, Tone::Err);
-                emit toastRequested(Tone::Err, QStringLiteral("Not pushed"), r.error().message);
+                emit toastRequested(Tone::Err, FW_TR("Not pushed"), r.error().message);
                 refreshMarks();
                 return;
             }
             finishLoad(r.value(), consoleHost);
-            setStatus(QStringLiteral("%1 change%2 written; ShadowMount+ reloads its config by itself.").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")), Tone::Ok);
-            emit toastRequested(Tone::Ok, QStringLiteral("Config pushed"), QStringLiteral("%1 setting%2 changed").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")));
+            setStatus(n == 1 ? FW_TR("%1 change written; ShadowMount+ reloads its config by itself.").arg(n)
+                             : FW_TR("%1 changes written; ShadowMount+ reloads its config by itself.").arg(n),
+                      Tone::Ok);
+            emit toastRequested(Tone::Ok, FW_TR("Config pushed"), n == 1 ? FW_TR("%1 setting changed").arg(n) : FW_TR("%1 settings changed").arg(n));
         });
     if (!started) {
         setStatus(whyNotStarted(), Tone::Warn); // nothing runs: not "Pushing…"
@@ -641,24 +655,24 @@ void ShadowMountTab::safeToUnplug()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("No console address"), QStringLiteral("Enter the console's IP address at the top of the page first."));
+        emit toastRequested(Tone::Warn, FW_TR("No console address"), FW_TR("Enter the console's IP address at the top of the page first."));
         return;
     }
     // One question, naming the console: stopping takes the images away from
     // whatever runs from them.
     const bool debugOff = m_hasLoaded && m_loaded.value(QStringLiteral("debug"), QStringLiteral("1")) == u"0";
-    if (!Sheet::confirm(window(), QStringLiteral("Stop ShadowMount+?"),
-                        QStringLiteral("ShadowMount+ on %1 is stopped and releases every image. A game that runs from an image loses its "
+    if (!Sheet::confirm(window(), FW_TR("Stop ShadowMount+?"),
+                        FW_TR("ShadowMount+ on %1 is stopped and releases every image. A game that runs from an image loses its "
                                        "files: close it first.%2")
                             .arg(Sheet::monoSpan(ep.host),
-                                 debugOff ? QStringLiteral("<br><br>debug is off: ShadowMount+ logs nothing then, so the cleanup cannot be "
+                                 debugOff ? FW_TR("<br><br>debug is off: ShadowMount+ logs nothing then, so the cleanup cannot be "
                                                            "confirmed and the result stays amber.")
                                           : QString()),
-                        QStringLiteral("Cancel"), QStringLiteral("Stop ShadowMount+"), true, Sheet::Icon::Warning))
+                        FW_TR("Cancel"), FW_TR("Stop ShadowMount+"), true, Sheet::Icon::Warning))
         return;
     auto r = jobs::submitShadowMountStop(m_ctx, ep.host, ep.ftpPort);
     if (!r.ok()) {
-        emit toastRequested(Tone::Err, QStringLiteral("Not started"), r.error().message);
+        emit toastRequested(Tone::Err, FW_TR("Not started"), r.error().message);
         return;
     }
     m_stopJobId = r.value();
@@ -676,12 +690,12 @@ void ShadowMountTab::onStopJob(const QString& id)
         return;
     switch (rec->state) {
     case JobState::Queued:
-        setStatus(QStringLiteral("Waiting for the job that is running. STOP is sent after it; do not unplug yet."), Tone::Info);
+        setStatus(FW_TR("Waiting for the job that is running. STOP is sent after it; do not unplug yet."), Tone::Info);
         return;
     case JobState::Running:
     case JobState::Paused:
     case JobState::Cancelling:
-        setStatus(rec->progress.currentItem.isEmpty() ? QStringLiteral("Stopping ShadowMount+ and waiting for it to release the images. Do not unplug yet.")
+        setStatus(rec->progress.currentItem.isEmpty() ? FW_TR("Stopping ShadowMount+ and waiting for it to release the images. Do not unplug yet.")
                                                       : rec->progress.currentItem,
                   Tone::Info);
         return;
@@ -691,10 +705,10 @@ void ShadowMountTab::onStopJob(const QString& id)
             setStatus(rec->outcome->summary, rec->outcome->verification == Verification::Passed ? Tone::Ok : Tone::Warn);
         break;
     case JobState::Cancelled:
-        setStatus(QStringLiteral("Cancelled. ShadowMount+ may still be running: do not unplug."), Tone::Warn);
+        setStatus(FW_TR("Cancelled. ShadowMount+ may still be running: do not unplug."), Tone::Warn);
         break;
     default:
-        setStatus(rec->error ? rec->error->message : QStringLiteral("ShadowMount+ was not stopped. See the log."), Tone::Err);
+        setStatus(rec->error ? rec->error->message : FW_TR("ShadowMount+ was not stopped. See the log."), Tone::Err);
         break;
     }
     m_stopJobId.clear();
@@ -704,15 +718,15 @@ void ShadowMountTab::ejectUsb()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("No console address"), QStringLiteral("Enter the console's IP address at the top of the page first."));
+        emit toastRequested(Tone::Warn, FW_TR("No console address"), FW_TR("Enter the console's IP address at the top of the page first."));
         return;
     }
-    setStatus(QStringLiteral("Asking ShadowMount+ which drives can be ejected…"), Tone::Info);
+    setStatus(FW_TR("Asking ShadowMount+ which drives can be ejected…"), Tone::Info);
     const bool started = runLocal<std::vector<ps5::smp::StorageItem>>(
         [ep](const CancellationToken& t) { return ps5::smp::storage(ep.host, ep.smpApiPort, {}, t); },
         [this, ep](const Result<std::vector<ps5::smp::StorageItem>>& r) {
             if (!r.ok()) {
-                setStatus(QStringLiteral("%1 Eject needs ShadowMount+ 1.7 with its API on; use Safe to unplug instead.").arg(r.error().message), Tone::Warn);
+                setStatus(FW_TR("%1 Eject needs ShadowMount+ 1.7 with its API on; use Safe to unplug instead.").arg(r.error().message), Tone::Warn);
                 return;
             }
             QStringList drives;
@@ -720,23 +734,23 @@ void ShadowMountTab::ejectUsb()
                 if (i.ejectable)
                     drives << i.mountPoint;
             if (drives.isEmpty()) {
-                setStatus(QStringLiteral("ShadowMount+ reports no USB drive that can be ejected."), Tone::Neutral);
+                setStatus(FW_TR("ShadowMount+ reports no USB drive that can be ejected."), Tone::Neutral);
                 return;
             }
             QString path = drives.front();
             if (drives.size() > 1) {
-                auto* s = new Sheet(window(), QStringLiteral("Eject which drive?"), Sheet::Icon::None);
+                auto* s = new Sheet(window(), FW_TR("Eject which drive?"), Sheet::Icon::None);
                 auto* pick = dropdown(s);
                 pick->addItems(drives);
-                s->body()->addWidget(field(QStringLiteral("Drive"), pick, {}, s));
-                s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-                s->addButton(QStringLiteral("Eject"), Sheet::Role::Primary);
+                s->body()->addWidget(field(FW_TR("Drive"), pick, {}, s));
+                s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+                s->addButton(FW_TR("Eject"), Sheet::Role::Primary);
                 if (s->exec() != 1)
                     return;
                 path = pick->currentText();
-            } else if (!Sheet::confirm(window(), QStringLiteral("Eject %1?").arg(path),
-                                       QStringLiteral("ShadowMount+ unmounts the drive and keeps running. Close games that run from it first."),
-                                       QStringLiteral("Cancel"), QStringLiteral("Eject"), false, Sheet::Icon::Info)) {
+            } else if (!Sheet::confirm(window(), FW_TR("Eject %1?").arg(path),
+                                       FW_TR("ShadowMount+ unmounts the drive and keeps running. Close games that run from it first."),
+                                       FW_TR("Cancel"), FW_TR("Eject"), false, Sheet::Icon::Info)) {
                 return;
             }
             auto id = jobs::submitShadowMountEject(m_ctx, ep.host, int(ep.smpApiPort), path);
@@ -745,8 +759,8 @@ void ShadowMountTab::ejectUsb()
                 return;
             }
             m_ctx.queue().startNow(id.value()); // this job only; a paused queue stays paused
-            setStatus(QStringLiteral("Ejecting %1. Unplug it when the Queue says it was ejected.").arg(path), Tone::Info);
-            emit toastRequested(Tone::Info, QStringLiteral("Ejecting %1").arg(path), QStringLiteral("Unplug it when the queue says it was ejected."));
+            setStatus(FW_TR("Ejecting %1. Unplug it when the Queue says it was ejected.").arg(path), Tone::Info);
+            emit toastRequested(Tone::Info, FW_TR("Ejecting %1").arg(path), FW_TR("Unplug it when the queue says it was ejected."));
         });
     if (!started)
         setStatus(whyNotStarted(), Tone::Neutral);
@@ -756,20 +770,20 @@ void ShadowMountTab::sendLoader()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("No console address"), QStringLiteral("Enter the console's IP address at the top of the page first."));
+        emit toastRequested(Tone::Warn, FW_TR("No console address"), FW_TR("Enter the console's IP address at the top of the page first."));
         return;
     }
-    const QString file = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose shadowmountplus.elf"), {},
-                                                      QStringLiteral("ELF payloads (*.elf *.bin);;All files (*)"));
+    const QString file = QFileDialog::getOpenFileName(window(), FW_TR("Choose shadowmountplus.elf"), {},
+                                                      FW_TR("ELF payloads") + QStringLiteral(" (*.elf *.bin);;") + FW_TR("All files") + QStringLiteral(" (*)"));
     if (file.isEmpty())
         return;
     auto r = jobs::submitPayload(m_ctx, ep.host, ep.shadowMountPort, file);
     if (!r.ok()) {
-        emit toastRequested(Tone::Err, QStringLiteral("Payload not sent"), r.error().message);
+        emit toastRequested(Tone::Err, FW_TR("Payload not sent"), r.error().message);
         return;
     }
     m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
-    setStatus(QStringLiteral("Sending %1 to %2:%3.").arg(QFileInfo(file).fileName(), ep.host).arg(ep.shadowMountPort), Tone::Info);
+    setStatus(FW_TR("Sending %1 to %2:%3.").arg(QFileInfo(file).fileName(), ep.host).arg(ep.shadowMountPort), Tone::Info);
 }
 
 // ---- MicroMount (archived) --------------------------------------------------------------------
@@ -779,23 +793,23 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
     auto* box = new QWidget(parent);
     auto* l = vbox(box, space::md);
     auto* note = new InfoBar(Tone::Info, box);
-    note->setMessage(QStringLiteral("MicroMount is archived upstream. Do not run it together with ShadowMount+: both would mount the same images."));
+    note->setMessage(FW_TR("MicroMount is archived upstream. Do not run it together with ShadowMount+: both would mount the same images."));
     l->addWidget(note);
     m_mmTable = new QTableWidget(0, 2, box);
     styleToolTable(m_mmTable, 8);
-    m_mmTable->setHorizontalHeaderLabels({QStringLiteral("Key"), QStringLiteral("Value")});
+    m_mmTable->setHorizontalHeaderLabels({FW_TR("Key"), FW_TR("Value")});
     m_mmTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_mmTable->setColumnWidth(0, 220);
     m_mmTable->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     l->addWidget(m_mmTable);
     auto* row = new QWidget(box);
     auto* rh = hbox(row, space::sm);
-    m_mmStatus = caption(QStringLiteral("Defaults shown. List values are one per line in config.ini; separate them with ; here."), row);
+    m_mmStatus = caption(FW_TR("Defaults shown. List values are one per line in config.ini; separate them with ; here."), row);
     m_mmStatus->setWordWrap(true);
     rh->addWidget(m_mmStatus, 1);
-    auto* load = button(QStringLiteral("Load"), ButtonVariant::Secondary, QStringLiteral("download"), row);
-    auto* defaults = button(QStringLiteral("Defaults"), ButtonVariant::Subtle, QStringLiteral("undo"), row);
-    m_mmPush = button(QStringLiteral("Push"), ButtonVariant::Secondary, QStringLiteral("upload"), row);
+    auto* load = button(FW_TR("Load"), ButtonVariant::Secondary, QStringLiteral("download"), row);
+    auto* defaults = button(FW_TR("Defaults"), ButtonVariant::Subtle, QStringLiteral("undo"), row);
+    m_mmPush = button(FW_TR("Push"), ButtonVariant::Secondary, QStringLiteral("upload"), row);
     rh->addWidget(defaults);
     rh->addWidget(load);
     rh->addWidget(m_mmPush);
@@ -828,12 +842,12 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
     show(ps5::mountConfigDefaults(ps5::MountTool::MicroMount));
     connect(defaults, &QPushButton::clicked, this, [show] { show(ps5::mountConfigDefaults(ps5::MountTool::MicroMount)); });
     connect(load, &QPushButton::clicked, this, [this, show] {
-        m_mmStatus->setText(QStringLiteral("Loading %1…").arg(ps5::mountConfigRemotePath(ps5::MountTool::MicroMount)));
+        m_mmStatus->setText(FW_TR("Loading %1…").arg(ps5::mountConfigRemotePath(ps5::MountTool::MicroMount)));
         const bool started = runOnConsole<QString>([](ps5::FtpClient& c, const CancellationToken& t) { return ps5::loadMountConfig(c, ps5::MountTool::MicroMount, t); },
                               [this, show](const Result<QString>& r) {
                                   if (r.ok()) {
                                       show(ps5::parseMountConfig(ps5::MountTool::MicroMount, r.value()));
-                                      m_mmStatus->setText(QStringLiteral("Loaded from the console."));
+                                      m_mmStatus->setText(FW_TR("Loaded from the console."));
                                   } else {
                                       m_mmStatus->setText(r.error().message);
                                   }
@@ -848,9 +862,9 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
             m_mmStatus->setText(problems.join(u' '));
             return;
         }
-        if (!Sheet::confirm(window(), QStringLiteral("Write %1 to the console?").arg(ps5::mountConfigRemotePath(ps5::MountTool::MicroMount)),
-                            QStringLiteral("The current file on the PS5 is saved to this PC first, then the new one is swapped in."),
-                            QStringLiteral("Cancel"), QStringLiteral("Push"), false, Sheet::Icon::Info))
+        if (!Sheet::confirm(window(), FW_TR("Write %1 to the console?").arg(ps5::mountConfigRemotePath(ps5::MountTool::MicroMount)),
+                            FW_TR("The current file on the PS5 is saved to this PC first, then the new one is swapped in."),
+                            FW_TR("Cancel"), FW_TR("Push"), false, Sheet::Icon::Info))
             return;
         const QString text = ps5::renderMountConfig(ps5::MountTool::MicroMount, v);
         const QString backupDir = ps5::newConsoleBackupDir();
@@ -859,7 +873,7 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
                 return ps5::pushMountConfig(c, ps5::MountTool::MicroMount, text, backupDir, t);
             },
             [this](const Result<ps5::MountPushResult>& r) {
-                m_mmStatus->setText(r.ok() ? QStringLiteral("Written to the console.") : r.error().message);
+                m_mmStatus->setText(r.ok() ? FW_TR("Written to the console.") : r.error().message);
             });
     });
     return box;
@@ -894,7 +908,7 @@ void ShadowMountTab::clearDemo()
     m_hasLoaded = false;
     m_apiVersion.clear();
     m_logVersion.clear();
-    m_formatBadge->set(QStringLiteral("Not loaded"), Tone::Neutral);
+    m_formatBadge->set(FW_TR("Not loaded"), Tone::Neutral);
     populate({});
     updateHeader();
     m_status->clear();
