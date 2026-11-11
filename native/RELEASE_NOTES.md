@@ -195,9 +195,9 @@ Images built with 5.0.1 stay valid.
 ### Under the hood
 * The program file no longer contains the folder path of the PC it was built
   on. The launcher loads Windows libraries only from the Windows folder.
-* 73 automated test programs (53 in 5.0.1), among them crafted-image, 7z and RAR,
-  path-traversal and shared-settings tests. Not tested: a PS5 console, real
-  Sony tools, a real GitHub release.
+* 74 automated test programs (53 in 5.0.1), among them crafted-image, 7z and RAR,
+  right-to-left, path-traversal and shared-settings tests. Not tested: a PS5
+  console, real Sony tools, a real GitHub release.
 
 ## What version 5 brought (5.0.0 and 5.0.1)
 
