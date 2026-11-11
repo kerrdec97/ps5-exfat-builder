@@ -8,6 +8,7 @@
 #include "connect/ps5/PayloadSender.h"
 #include "connect/ps5/SmpApi.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "jobs/JobQueue.h"
 
 #include <QDir>
@@ -33,17 +34,17 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     auto* h = card->header();
     h->setSpacing(space::md);
     m_which = new Segmented(card);
-    m_which->addSegment(QStringLiteral("This run"), QStringLiteral("play"), QStringLiteral("current"));
-    m_which->addSegment(QStringLiteral("Previous run"), QStringLiteral("history"), QStringLiteral("previous"));
+    m_which->addSegment(FW_TR("This run"), QStringLiteral("play"), QStringLiteral("current"));
+    m_which->addSegment(FW_TR("Previous run"), QStringLiteral("history"), QStringLiteral("previous"));
     m_which->setCurrentIndex(0);
-    m_which->setAccessibleName(QStringLiteral("Which debug.log"));
+    m_which->setAccessibleName(FW_TR("Which debug.log"));
     h->addWidget(m_which);
-    m_badge = new Badge(QStringLiteral("Not loaded"), Tone::Neutral, card);
+    m_badge = new Badge(FW_TR("Not loaded"), Tone::Neutral, card);
     m_badge->setIconName({});
     h->addWidget(m_badge);
     h->addStretch(1);
-    m_refresh = button(QStringLiteral("Load"), ButtonVariant::Primary, QStringLiteral("refresh"), card);
-    auto* save = button(QStringLiteral("Save…"), ButtonVariant::Secondary, QStringLiteral("save"), card);
+    m_refresh = button(FW_TR("Load"), ButtonVariant::Primary, QStringLiteral("refresh"), card);
+    auto* save = button(FW_TR("Save…"), ButtonVariant::Secondary, QStringLiteral("save"), card);
     h->addWidget(save);
     h->addWidget(m_refresh);
     m_view = new QPlainTextEdit(card);
@@ -51,10 +52,10 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     m_view->setFont(font::mono());
     m_view->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_view->setMinimumHeight(420);
-    m_view->setPlaceholderText(QStringLiteral("ShadowMount+ writes /data/shadowmount/debug.log while debug=1. Load shows its last part."));
+    m_view->setPlaceholderText(FW_TR("ShadowMount+ writes /data/shadowmount/debug.log while debug=1. Load shows its last part."));
     m_view->setFrameShape(QFrame::NoFrame);
     card->body()->addWidget(m_view);
-    m_source = caption(QStringLiteral("Through the ShadowMount+ 1.7 API when it answers, else over FTP."), card);
+    m_source = caption(FW_TR("Through the ShadowMount+ 1.7 API when it answers, else over FTP."), card);
     card->footer()->addWidget(m_source, 1);
     l->addWidget(card);
     connect(m_refresh, &QPushButton::clicked, this, &SmpLogTab::fetch);
@@ -71,13 +72,13 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
         }
     });
     connect(save, &QPushButton::clicked, this, [this] {
-        const QString path = QFileDialog::getSaveFileName(window(), QStringLiteral("Save debug.log"),
+        const QString path = QFileDialog::getSaveFileName(window(), FW_TR("Save debug.log"),
                                                           QDir::homePath() + QStringLiteral("/shadowmount_debug_%1.log").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"))),
-                                                          QStringLiteral("Logs (*.log *.txt)"));
+                                                          FW_TR("Logs") + QStringLiteral(" (*.log *.txt)"));
         if (path.isEmpty())
             return;
         auto st = writeFileAtomic(path, m_view->toPlainText().toUtf8());
-        emit toastRequested(st.ok() ? Tone::Ok : Tone::Err, st.ok() ? QStringLiteral("Log saved") : QStringLiteral("Not saved"),
+        emit toastRequested(st.ok() ? Tone::Ok : Tone::Err, st.ok() ? FW_TR("Log saved") : FW_TR("Not saved"),
                             st.ok() ? nativePath(path) : st.error().message);
     });
 }
@@ -98,7 +99,7 @@ void SmpLogTab::showText(const QString& text, const QString& source)
     m_view->moveCursor(QTextCursor::End);
     m_source->setText(source);
     const int lines = int(text.count(u'\n'));
-    m_badge->set(QStringLiteral("%1 lines").arg(formatCount(lines)), Tone::Info);
+    m_badge->set(FW_TR("%1 lines").arg(formatCount(lines)), Tone::Info);
 }
 
 void SmpLogTab::fetch()
@@ -106,14 +107,14 @@ void SmpLogTab::fetch()
     const bool previous = m_which->currentValue().toString() == u"previous";
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        m_source->setText(QStringLiteral("Enter the console's IP address at the top of the page first."));
+        m_source->setText(FW_TR("Enter the console's IP address at the top of the page first."));
         return;
     }
     if (isBusy()) {
         m_fetchPending = true; // the running load is for the other choice: this one follows it
         return;
     }
-    m_badge->set(QStringLiteral("Loading…"), Tone::Info);
+    m_badge->set(FW_TR("Loading…"), Tone::Info);
     struct Got {
         QString text, source;
     };
@@ -125,7 +126,7 @@ void SmpLogTab::fetch()
                 ps5::smp::ApiOptions api;
                 api.connectTimeoutMs = 1500;
                 if (auto r = ps5::smp::debugLog(ep.host, ep.smpApiPort, int(kTail), api, t); r.ok())
-                    return Got{r.value(), QStringLiteral("Last %1 of debug.log through the ShadowMount+ API (port %2).").arg(formatBytes(kTail)).arg(ep.smpApiPort)};
+                    return Got{r.value(), FW_TR("Last %1 of debug.log through the ShadowMount+ API (port %2).").arg(formatBytes(kTail)).arg(ep.smpApiPort)};
                 else if (r.error().isCancelled())
                     return r.takeError();
             }
@@ -144,13 +145,13 @@ void SmpLogTab::fetch()
             const bool cut = b.size() > kTail;
             if (cut)
                 b = b.right(kTail);
-            return Got{QString::fromUtf8(b), QStringLiteral("%1 over FTP%2.").arg(path, cut ? QStringLiteral(", last %1").arg(formatBytes(kTail)) : QString())};
+            return Got{QString::fromUtf8(b), cut ? FW_TR("%1 over FTP, last %2.").arg(path, formatBytes(kTail)) : FW_TR("%1 over FTP.").arg(path)};
         },
         [this, gen = ++m_fetchGen](const Result<Got>& r) {
             if (gen != m_fetchGen)
                 return; // superseded: the load for the current choice has started
             if (!r.ok()) {
-                m_badge->set(QStringLiteral("Not loaded"), Tone::Err);
+                m_badge->set(FW_TR("Not loaded"), Tone::Err);
                 m_source->setText(r.error().message);
                 return;
             }
@@ -173,8 +174,8 @@ void SmpLogTab::applyDemo()
 void SmpLogTab::clearDemo()
 {
     m_view->clear();
-    m_badge->set(QStringLiteral("Not loaded"), Tone::Neutral);
-    m_source->setText(QStringLiteral("Through the ShadowMount+ 1.7 API when it answers, else over FTP."));
+    m_badge->set(FW_TR("Not loaded"), Tone::Neutral);
+    m_source->setText(FW_TR("Through the ShadowMount+ 1.7 API when it answers, else over FTP."));
 }
 
 // ---- crash dumps --------------------------------------------------------------------------
@@ -184,36 +185,36 @@ CrashDumpsTab::CrashDumpsTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
 {
     auto* l = vbox(this, space::lg);
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Capture crash dumps"));
-    card->body()->addWidget(caption(QStringLiteral("Watches the console's crash folder while you reproduce a crash, then saves each new dump here as a zip."), card));
+    card->setTitle(FW_TR("Capture crash dumps"));
+    card->body()->addWidget(caption(FW_TR("Watches the console's crash folder while you reproduce a crash, then saves each new dump here as a zip."), card));
     auto* grid = new QWidget(card);
     auto* gh = hbox(grid, space::md);
     m_folder = new PathField(PathField::Mode::Directory, grid);
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
     m_folder->setPlaceholder(QDir::toNativeSeparators(QDir(desktop.isEmpty() ? QDir::homePath() : desktop).filePath(QStringLiteral("PS5 Logs"))));
-    m_folder->setDialogTitle(QStringLiteral("Save crash dumps to"));
-    gh->addWidget(field(QStringLiteral("Save to"), m_folder, {}, grid), 1);
+    m_folder->setDialogTitle(FW_TR("Save crash dumps to"));
+    gh->addWidget(field(FW_TR("Save to"), m_folder, {}, grid), 1);
     m_minutes = new QSpinBox(grid);
     m_minutes->setRange(0, 24 * 60);
-    m_minutes->setSpecialValueText(QStringLiteral("Until stopped"));
+    m_minutes->setSpecialValueText(FW_TR("Until stopped"));
     m_minutes->setSuffix(QStringLiteral(" min"));
     m_minutes->setFixedWidth(150);
-    gh->addWidget(field(QStringLiteral("Watch for"), m_minutes, {}, grid));
+    gh->addWidget(field(FW_TR("Watch for"), m_minutes, {}, grid));
     card->body()->addWidget(grid);
     auto* row = new QWidget(card);
     auto* rh = hbox(row, space::sm);
     m_status = new MessageRow(row);
     rh->addWidget(m_status, 1);
-    m_stop = button(QStringLiteral("Stop"), ButtonVariant::Secondary, QStringLiteral("stop"), row);
+    m_stop = button(FW_TR("Stop"), ButtonVariant::Secondary, QStringLiteral("stop"), row);
     m_stop->hide();
-    m_start = button(QStringLiteral("Start watching"), ButtonVariant::Primary, QStringLiteral("play"), row);
+    m_start = button(FW_TR("Start watching"), ButtonVariant::Primary, QStringLiteral("play"), row);
     m_start->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kCrashDumps));
     rh->addWidget(m_stop);
     rh->addWidget(m_start);
     card->body()->addWidget(row);
     l->addWidget(card);
     auto* tip = new InfoBar(Tone::Info, this);
-    tip->setMessage(QStringLiteral("ShadowMount+ 1.7 also watches games for 60 s after launch and logs fatal signals and module errors to debug.log."));
+    tip->setMessage(FW_TR("ShadowMount+ 1.7 also watches games for 60 s after launch and logs fatal signals and module errors to debug.log."));
     l->addWidget(tip);
     l->addStretch(1);
     connect(m_start, &QPushButton::clicked, this, &CrashDumpsTab::start);
@@ -228,7 +229,7 @@ CrashDumpsTab::CrashDumpsTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
         if (id != m_jobId || !m_watching)
             return;
         setWatching(false);
-        m_status->set(QStringLiteral("Removed from the queue before it started watching."), Tone::Neutral);
+        m_status->set(FW_TR("Removed from the queue before it started watching."), Tone::Neutral);
     });
 }
 
@@ -243,7 +244,7 @@ void CrashDumpsTab::start()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        m_status->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Warn);
+        m_status->set(FW_TR("Enter the console's IP address at the top of the page first."), Tone::Warn);
         return;
     }
     auto id = jobs::submitCrashDumpCapture(m_ctx, ep.host, int(ep.ftpPort), m_minutes->value(), m_folder->path().trimmed());
@@ -266,18 +267,18 @@ void CrashDumpsTab::onJob(const QString& id)
         return;
     if (!isTerminal(r->state)) {
         if (r->state == JobState::Queued)
-            m_status->set(QStringLiteral("Waiting for the job that is running. Watching starts after it."), Tone::Info);
+            m_status->set(FW_TR("Waiting for the job that is running. Watching starts after it."), Tone::Info);
         else if (!r->progress.currentItem.isEmpty())
             m_status->set(r->progress.currentItem, Tone::Info);
         else
-            m_status->set(QStringLiteral("Watching. Reproduce the crash on the console now."), Tone::Info);
+            m_status->set(FW_TR("Watching. Reproduce the crash on the console now."), Tone::Info);
         return;
     }
     setWatching(false);
     if (r->state == JobState::Succeeded && r->outcome)
         m_status->set(r->outcome->summary, Tone::Ok);
     else
-        m_status->set(r->error ? r->error->message : jobStateName(r->state), r->state == JobState::Cancelled ? Tone::Neutral : Tone::Err);
+        m_status->set(r->error ? r->error->message : fw::i18n::translate(jobStateName(r->state)), r->state == JobState::Cancelled ? Tone::Neutral : Tone::Err);
 }
 
 void CrashDumpsTab::applyDemo()
@@ -299,9 +300,9 @@ InstallTab::InstallTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     auto* card = new Card(this);
     auto* badge = new Badge(QStringLiteral("etaHEN DPI v2"), Tone::Neutral, card);
     badge->setIconName({});
-    card->setTitle(QStringLiteral("Install a package"), badge);
-    m_drop = new DropZone(QStringLiteral("package_plus"), QStringLiteral("Drop a .pkg here"),
-                          QStringLiteral("or click to browse — it is sent to the console's package installer"), card);
+    card->setTitle(FW_TR("Install a package"), badge);
+    m_drop = new DropZone(QStringLiteral("package_plus"), FW_TR("Drop a .pkg here"),
+                          FW_TR("or click to browse — it is sent to the console's package installer"), card);
     card->body()->addWidget(m_drop);
     m_strip = new Card(card, Card::Variant::Inset);
     auto* strip = static_cast<Card*>(m_strip);
@@ -315,7 +316,7 @@ InstallTab::InstallTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     col->addWidget(m_name);
     col->addWidget(m_meta);
     sh->addLayout(col, 1);
-    auto* change = button(QStringLiteral("Change…"), ButtonVariant::Secondary, QStringLiteral("folder"), strip);
+    auto* change = button(FW_TR("Change…"), ButtonVariant::Secondary, QStringLiteral("folder"), strip);
     sh->addWidget(change);
     strip->body()->addLayout(sh);
     m_strip->hide();
@@ -324,20 +325,20 @@ InstallTab::InstallTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     auto* rh = hbox(row, space::sm);
     m_status = new MessageRow(row);
     rh->addWidget(m_status, 1);
-    auto* test = button(QStringLiteral("Test installer"), ButtonVariant::Secondary, QStringLiteral("plug"), row);
-    m_install = button(QStringLiteral("Install on PS5"), ButtonVariant::Primary, QStringLiteral("upload"), row);
+    auto* test = button(FW_TR("Test installer"), ButtonVariant::Secondary, QStringLiteral("plug"), row);
+    m_install = button(FW_TR("Install on PS5"), ButtonVariant::Primary, QStringLiteral("upload"), row);
     m_install->setEnabled(false);
     rh->addWidget(test);
     rh->addWidget(m_install);
     card->body()->addWidget(row);
     l->addWidget(card);
     auto* how = new InfoBar(Tone::Info, this);
-    how->setMessage(QStringLiteral("Needs etaHEN's Direct Package Installer V2: set DPI_v2=1 in /data/etaHEN/config.ini (or in the etaHEN toolbox). "
+    how->setMessage(FW_TR("Needs etaHEN's Direct Package Installer V2: set DPI_v2=1 in /data/etaHEN/config.ini (or in the etaHEN toolbox). "
                                    "The package is staged in /user/data/tmp first, so internal storage needs room for it."));
     l->addWidget(how);
     l->addStretch(1);
     auto pick = [this] {
-        const QString f = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose a package"), {}, QStringLiteral("Packages (*.pkg)"));
+        const QString f = QFileDialog::getOpenFileName(window(), FW_TR("Choose a package"), {}, FW_TR("Packages") + QStringLiteral(" (*.pkg)"));
         if (!f.isEmpty())
             setPackage(f);
     };
@@ -362,7 +363,7 @@ void InstallTab::install()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        m_status->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Warn);
+        m_status->set(FW_TR("Enter the console's IP address at the top of the page first."), Tone::Warn);
         return;
     }
     auto r = jobs::submitDpiInstall(m_ctx, ep.host, ep.dpiPort, m_package);
@@ -371,26 +372,26 @@ void InstallTab::install()
         return;
     }
     m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
-    m_status->set(QStringLiteral("Queued: %1 → %2:%3").arg(QFileInfo(m_package).fileName(), ep.host).arg(ep.dpiPort), Tone::Info);
-    emit toastRequested(Tone::Info, QStringLiteral("Install queued"), QFileInfo(m_package).fileName());
+    m_status->set(FW_TR("Queued: %1 → %2:%3").arg(QFileInfo(m_package).fileName(), ep.host).arg(ep.dpiPort), Tone::Info);
+    emit toastRequested(Tone::Info, FW_TR("Install queued"), QFileInfo(m_package).fileName());
 }
 
 void InstallTab::testInstaller()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        m_status->set(QStringLiteral("Enter the console's IP address at the top of the page first."), Tone::Warn);
+        m_status->set(FW_TR("Enter the console's IP address at the top of the page first."), Tone::Warn);
         return;
     }
-    m_status->set(QStringLiteral("Testing port %1…").arg(ep.dpiPort), Tone::Info);
+    m_status->set(FW_TR("Testing port %1…").arg(ep.dpiPort), Tone::Info);
     runLocal<bool>(
         [ep](const CancellationToken& t) -> Result<bool> {
             FW_TRY(ps5::probeTcpPort(ep.host, ep.dpiPort, ep.connectTimeoutMs, QStringLiteral("Direct Package Installer"), t));
             return true;
         },
         [this, ep](const Result<bool>& r) {
-            m_status->set(r.ok() ? QStringLiteral("The installer answers on port %1.").arg(ep.dpiPort)
-                                 : QStringLiteral("%1 Turn on DPI_v2 in etaHEN.").arg(r.error().message),
+            m_status->set(r.ok() ? FW_TR("The installer answers on port %1.").arg(ep.dpiPort)
+                                 : FW_TR("%1 Turn on DPI_v2 in etaHEN.").arg(r.error().message),
                           r.ok() ? Tone::Ok : Tone::Err);
         });
 }
