@@ -54,11 +54,12 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         const QColor c = underMouse() ? color::fg_2 : color::fg_4;
-        p.drawPixmap(QRect(0, (height() - 14) / 2, 14, 14),
-                     iconPixmap(isChecked() ? QStringLiteral("chevron_down") : QStringLiteral("chevron_right"), 14, c, devicePixelRatioF()));
+        const QString closed = isRightToLeft() ? QStringLiteral("chevron_left") : QStringLiteral("chevron_right");
+        p.drawPixmap(mirrored(this, QRect(0, (height() - 14) / 2, 14, 14)),
+                     iconPixmap(isChecked() ? QStringLiteral("chevron_down") : closed, 14, c, devicePixelRatioF()));
         p.setFont(font::overline());
         p.setPen(c);
-        p.drawText(rect().adjusted(20, 0, -40, 0), Qt::AlignVCenter | Qt::AlignLeft, text());
+        p.drawText(mirrored(this, rect().adjusted(20, 0, -40, 0)), Qt::AlignVCenter | Qt::AlignLeft, text());
         p.setFont(font::caption());
         p.setPen(color::fg_4);
         p.drawText(rect(), Qt::AlignVCenter | Qt::AlignRight, m_count);
@@ -133,6 +134,8 @@ QWidget* detailRow(const QString& name, const QString& value, bool mono, bool ov
     h->addWidget(left, 1);
     auto* v = new ElideLabel(value, mono ? Qt::ElideMiddle : Qt::ElideRight, row);
     v->setFont(mono ? font::monoSmall() : font::body());
+    if (mono)
+        keepLeftToRight(v);
     setTextColor(v, color::fg_1);
     v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     v->setMaximumWidth(240);

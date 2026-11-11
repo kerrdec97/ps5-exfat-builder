@@ -437,6 +437,13 @@ Sheet* Sheet::notify(QWidget* host, const QString& title, const QString& text, I
 namespace {
 constexpr int kToastShadow = 16; // how far a toast's painted shadow reaches
 constexpr int kToastShadowDrop = 4;
+
+// Where a toast stands in the window, `slide` px short of its place: at the
+// right edge, or the left one right to left (it slides in from that edge).
+int toastX(const QWidget* host, int slide)
+{
+    return host->isRightToLeft() ? space::lg - slide : host->width() - space::lg - size::toast + slide;
+}
 } // namespace
 
 ToastHost::ToastHost(QWidget* host) : QWidget(host)
@@ -539,7 +546,7 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
         remove(m_toasts.front());
     t->show();
     relayout();
-    // It slides in 12 px from the right while it fades in. The fade is an
+    // It slides in 12 px from the right (the left right to left) while it fades in. The fade is an
     // opacity effect on the toast alone, taken off again when it has arrived.
     if (motion::enabled() && t->isVisible()) {
         auto* fade = new QGraphicsOpacityEffect(t);
@@ -557,10 +564,10 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
             }
             t->setProperty(kSlide, qRound((1.0 - v) * 12));
             if (parentWidget())
-                t->move(parentWidget()->width() - space::lg - size::toast + t->property(kSlide).toInt(), t->y());
+                t->move(toastX(parentWidget(), t->property(kSlide).toInt()), t->y());
             update(); // its shadow follows
         });
-        t->move(t->x() + 12, t->y());
+        t->move(toastX(parentWidget(), 12), t->y());
         in->animateTo(1.0);
     }
 
@@ -643,12 +650,12 @@ void ToastHost::relayout()
         const int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(size::toast) : t->sizeHint().height();
         y -= h;
         // kSlide: how far a toast that is still sliding in is from its place.
-        t->setGeometry(parentWidget()->width() - space::lg - size::toast + t->property(kSlide).toInt(), y, size::toast, h);
+        t->setGeometry(toastX(parentWidget(), t->property(kSlide).toInt()), y, size::toast, h);
         if (sheet)
             t->stackUnder(sheet);
         else
             t->raise();
-        all |= QRect(parentWidget()->width() - space::lg - size::toast, y, size::toast, h);
+        all |= QRect(toastX(parentWidget(), 0), y, size::toast, h);
         y -= space::sm;
     }
     // The shadows: this widget, just large enough for them (and for a toast

@@ -84,10 +84,11 @@ public:
         if (!m_badge)
             return;
         m_badge->adjustSize();
+        // At the end of the row: its left end right to left.
         if (m_compact)
-            m_badge->move(width() - m_badge->width(), 0); // corner of the icon-only row
+            m_badge->move(mirrored(this, QRect(QPoint(width() - m_badge->width(), 0), m_badge->size())).topLeft()); // corner of the icon-only row
         else
-            m_badge->move(width() - m_badge->width() - 8, (height() - m_badge->height()) / 2);
+            m_badge->move(mirrored(this, QRect(QPoint(width() - m_badge->width() - 8, (height() - m_badge->height()) / 2), m_badge->size())).topLeft());
     }
     // Icon only (narrow windows); the name moves to the tooltip.
     void setCompact(bool on)
@@ -99,7 +100,7 @@ public:
     }
     // The selection bar, as the sidebar's items have it. The list draws one
     // bar for all its rows (it slides between them) and tells them so.
-    QRect barRect() const { return QRect(1, (height() - 18) / 2, 3, 18); }
+    QRect barRect() const { return mirrored(this, QRect(1, (height() - 18) / 2, 3, 18)); } // the start edge
     void setExternalBar(bool external)
     {
         m_externalBar = external;
@@ -123,14 +124,14 @@ protected:
             p.setBrush(color::bg_3);
             p.drawRoundedRect(r, radius::control, radius::control);
         }
-        p.drawPixmap(QRect(m_compact ? (width() - 16) / 2 : 12, (height() - 16) / 2, 16, 16),
+        p.drawPixmap(mirrored(this, QRect(m_compact ? (width() - 16) / 2 : 12, (height() - 16) / 2, 16, 16)),
                      iconPixmap(m_icon, 16, isChecked() ? color::accent_hi : color::fg_4, devicePixelRatioF()));
         if (m_compact)
             return;
         p.setPen(isChecked() ? color::fg_0 : color::fg_2);
         p.setFont(isChecked() ? font::bodyStrong() : font::body());
         const int right = m_badge && m_badge->isVisible() ? m_badge->width() + 16 : 8;
-        p.drawText(rect().adjusted(38, 0, -right, 0), Qt::AlignVCenter | Qt::AlignLeft, text());
+        p.drawText(mirrored(this, rect().adjusted(38, 0, -right, 0)), Qt::AlignVCenter | Qt::AlignLeft, text());
     }
     void resizeEvent(QResizeEvent* e) override
     {
@@ -840,6 +841,7 @@ void SettingsPage::addLocationsCard()
         auto* p = new ElideLabel(nativePath(path), Qt::ElideMiddle, card);
         p->setObjectName(QStringLiteral("locationPath"));
         p->setFont(font::mono());
+        keepLeftToRight(p);
         setTextColor(p, color::fg_3);
         p->setToolTip(plainTip(nativePath(path)));
         return p;
@@ -991,6 +993,7 @@ void SettingsPage::addLanguageExtras(QWidget* card, QVBoxLayout* layout)
     col->addWidget(label(FW_TR("Your translation files"), TextStyle::Body, color::fg_1, row));
     auto* path = new ElideLabel(nativePath(i18n::userDir()), Qt::ElideMiddle, row);
     path->setFont(font::mono());
+    keepLeftToRight(path);
     setTextColor(path, color::fg_3);
     path->setToolTip(plainTip(nativePath(i18n::userDir())));
     col->addWidget(path);

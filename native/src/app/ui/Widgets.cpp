@@ -4,6 +4,7 @@
 #include "app/ui/Motion.h"
 #include "core/Tr.h"
 
+#include <QAbstractItemView>
 #include <QAccessible>
 #include <QApplication>
 #include <QDateTime>
@@ -25,6 +26,7 @@
 #include <QRegularExpression>
 #include <QStyle>
 #include <QStyleOption>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -103,7 +105,9 @@ QLabel* meta(const QString& text, QWidget* parent)
 
 QLabel* monoLabel(const QString& text, QWidget* parent, const QColor& color)
 {
-    return label(text, TextStyle::Mono, color, parent);
+    QLabel* l = label(text, TextStyle::Mono, color, parent);
+    keepLeftToRight(l);
+    return l;
 }
 
 QLabel* heading(const QString& text, TextStyle style, QWidget* parent)
@@ -503,6 +507,89 @@ QColor blend(const QColor& a, const QColor& b, qreal t)
                             a.blueF() + (b.blueF() - a.blueF()) * t, a.alphaF() + (b.alphaF() - a.alphaF()) * t);
 }
 
+QRect mirrored(const QWidget* w, const QRect& r)
+{
+    if (!w || !w->isRightToLeft())
+        return r;
+    return QRect(w->width() - r.x() - r.width(), r.y(), r.width(), r.height());
+}
+
+QRectF mirrored(const QWidget* w, const QRectF& r)
+{
+    if (!w || !w->isRightToLeft())
+        return r;
+    return QRectF(w->width() - r.x() - r.width(), r.y(), r.width(), r.height());
+}
+
+QPoint mirrored(const QWidget* w, const QPoint& pt)
+{
+    if (!w || !w->isRightToLeft())
+        return pt;
+    return QPoint(w->width() - 1 - pt.x(), pt.y());
+}
+
+QRect mirrored(const QLayout* layout, const QRect& area, const QRect& r)
+{
+    const QWidget* w = layout ? layout->parentWidget() : nullptr;
+    return QStyle::visualRect(w ? w->layoutDirection() : QGuiApplication::layoutDirection(), area, r);
+}
+
+int leftToRightText(const QWidget* w, Qt::Alignment align)
+{
+    const Qt::LayoutDirection dir = w ? w->layoutDirection() : QGuiApplication::layoutDirection();
+    return int(QStyle::visualAlignment(dir, align)) | Qt::TextForceLeftToRight;
+}
+
+namespace {
+class LeftToRightCellDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+    void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        // Placed as the view's direction says, read left to right.
+        option->displayAlignment = QStyle::visualAlignment(option->direction, option->displayAlignment);
+        option->direction = Qt::LeftToRight;
+    }
+};
+} // namespace
+
+void keepColumnLeftToRight(QAbstractItemView* view, int column)
+{
+    if (view)
+        view->setItemDelegateForColumn(column, new LeftToRightCellDelegate(view));
+}
+
+int naturalText(const QWidget* w, Qt::Alignment align, const QString& text)
+{
+    if (!w || !w->isRightToLeft())
+        return int(align);
+    return int(QStyle::visualAlignment(Qt::RightToLeft, align))
+         | (text.isRightToLeft() ? Qt::TextForceRightToLeft : Qt::TextForceLeftToRight);
+}
+
+void mirrorPainter(QPainter& p, const QWidget* w)
+{
+    if (!w || !w->isRightToLeft())
+        return;
+    p.translate(w->width(), 0);
+    p.scale(-1, 1);
+}
+
+void keepLeftToRight(QWidget* w)
+{
+    if (!w)
+        return;
+    // A label keeps its place in the row (right to left it starts at the
+    // right); only its text is read left to right (FwStyle::drawItemText).
+    if (qobject_cast<QLabel*>(w))
+        w->setProperty("fwLtrText", true);
+    else
+        w->setLayoutDirection(Qt::LeftToRight);
+}
+
 void paintPlate(QPainter& p, const QRectF& r, qreal rad, qreal hover)
 {
     p.save();
@@ -753,14 +840,28 @@ void paintBadge(QPainter& p, const QRectF& rect, const QString& text, Tone tone,
     p.setFont(font::chip());
     if (!iconName.isEmpty()) {
         const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
-        const QRect ir(int(rect.left() + pad), int(rect.top() + (rect.height() - size::iconSm) / 2.0), size::iconSm, size::iconSm);
+        // Right to left (a widget's painter) the glyph is at the right end.
+        const bool rtl = p.layoutDirection() == Qt::RightToLeft;
+        const int iy = int(rect.top() + (rect.height() - size::iconSm) / 2.0);
+        const QRect ir(rtl ? int(rect.right() - pad) - size::iconSm : int(rect.left() + pad), iy, size::iconSm, size::iconSm);
         p.drawPixmap(ir, iconPixmap(iconName, size::iconSm, tone == Tone::Neutral && !onAccent ? color::fg_3 : fg, dpr));
         p.setPen(fg);
-        const qreal x = ir.right() + 1 + kBadgeIconGap;
-        p.drawText(QRectF(x, rect.top(), rect.right() - x, rect.height()), Qt::AlignVCenter | Qt::AlignLeft, text);
+        if (rtl) {
+            const qreal x = ir.left() - kBadgeIconGap;
+            p.drawText(QRectF(rect.left(), rect.top(), x - rect.left(), rect.height()),
+                       Qt::AlignVCenter | Qt::AlignRight | Qt::AlignAbsolute
+                           | (text.isRightToLeft() ? Qt::TextForceRightToLeft : Qt::TextForceLeftToRight), // a name, "+2": its own direction
+                       text);
+        } else {
+            const qreal x = ir.right() + 1 + kBadgeIconGap;
+            p.drawText(QRectF(x, rect.top(), rect.right() - x, rect.height()), Qt::AlignVCenter | Qt::AlignLeft, text);
+        }
     } else {
         p.setPen(fg);
-        p.drawText(rect, Qt::AlignCenter, text);
+        int flags = Qt::AlignCenter;
+        if (p.layoutDirection() == Qt::RightToLeft) // "+2", "PPSA…": read in their own direction
+            flags |= text.isRightToLeft() ? Qt::TextForceRightToLeft : Qt::TextForceLeftToRight;
+        p.drawText(rect, flags, text);
     }
     p.restore();
 }
@@ -859,6 +960,7 @@ void Switch::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    mirrorPainter(p, this); // right to left, as Windows does it: on is the knob at the left
     const qreal t = m_position->value(); // 0 = off .. 1 = on
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     const qreal rad = r.height() / 2;
@@ -1006,11 +1108,12 @@ QRectF Segmented::segmentRect(int index) const
     int x = 3;
     for (int i = 0; i < index; ++i)
         x += segmentWidth(i) + 2;
-    return QRectF(x, 3, segmentWidth(index), height() - 6);
+    return mirrored(this, QRectF(x, 3, segmentWidth(index), height() - 6)); // right to left the first is at the right
 }
 
-int Segmented::segmentAt(const QPoint& pt) const
+int Segmented::segmentAt(const QPoint& shown) const
 {
+    const QPoint pt = mirrored(this, shown);
     int x = 3;
     for (int i = 0; i < count(); ++i) {
         const int w = segmentWidth(i);
@@ -1043,7 +1146,7 @@ void Segmented::paintEvent(QPaintEvent*)
     for (int i = 0; i < count(); ++i) {
         const auto& s = m_segments[size_t(i)];
         const int w = segmentWidth(i);
-        const QRect r(x, 3, w, height() - 6);
+        const QRect r = mirrored(this, QRect(x, 3, w, height() - 6));
         const bool sel = i == m_current;
         const qreal hov = s.enabled && !sel ? m_hover->amount(i) : 0.0;
         if (hov > 0.0) {
@@ -1056,11 +1159,11 @@ void Segmented::paintEvent(QPaintEvent*)
         p.setFont(sel ? font::bodyStrong() : font::body());
         int tx = x + 10;
         if (!s.icon.isEmpty()) {
-            p.drawPixmap(QRect(tx, r.center().y() - size::icon / 2, size::icon, size::icon),
+            p.drawPixmap(mirrored(this, QRect(tx, r.center().y() - size::icon / 2, size::icon, size::icon)),
                          iconPixmap(s.icon, size::icon, fg, devicePixelRatioF()));
             tx += size::icon + 6;
         }
-        p.drawText(QRect(tx, r.y(), w - (tx - x), r.height()), Qt::AlignVCenter | Qt::AlignLeft, s.text);
+        p.drawText(mirrored(this, QRect(tx, r.y(), w - (tx - x), r.height())), Qt::AlignVCenter | Qt::AlignLeft, s.text);
         x += w + 2;
     }
 }
@@ -1084,7 +1187,7 @@ void Segmented::keyPressEvent(QKeyEvent* e)
 {
     if (e->key() == Qt::Key_Left || e->key() == Qt::Key_Right) {
         int i = m_current;
-        const int step = e->key() == Qt::Key_Left ? -1 : 1;
+        const int step = (e->key() == Qt::Key_Left) != isRightToLeft() ? -1 : 1; // the arrow's way on screen
         for (int n = 0; n < count(); ++n) {
             i = (i + step + count()) % count();
             if (m_segments[size_t(i)].enabled) {
@@ -1183,6 +1286,7 @@ void ProgressBar::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    mirrorPainter(p, this); // right to left the fill grows from the right, band and sweep travel leftwards
     p.setPen(Qt::NoPen);
     p.setBrush(color::bg_5);
     const qreal rad = height() / 2.0;
@@ -1629,8 +1733,10 @@ QLineEdit* textInput(const QString& placeholder, bool mono, QWidget* parent)
     auto* e = new QLineEdit(parent);
     e->setPlaceholderText(placeholder);
     e->setProperty("mono", mono);
-    if (mono)
+    if (mono) {
         e->setFont(font::mono());
+        keepLeftToRight(e); // paths, IDs, keys, addresses
+    }
     e->setFixedHeight(size::control);
     return e;
 }
@@ -1659,7 +1765,7 @@ PathField::PathField(Mode mode, QWidget* parent) : QWidget(parent), m_mode(mode)
     auto* l = vbox(this, space::xs);
     auto* row = new QHBoxLayout;
     row->setSpacing(space::sm);
-    m_edit = textInput({}, true, this);
+    m_edit = textInput({}, true, this); // left to right (a mono input); the row around it follows the layout
     m_browse = button(FW_TR("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder"), this);
     row->addWidget(m_edit, 1);
     row->addWidget(m_browse);
@@ -1978,27 +2084,28 @@ void TwoColumnLayout::setGeometry(const QRect& rect)
         int y = rect.y();
         if (m_left) {
             const int h = m_left->hasHeightForWidth() ? m_left->heightForWidth(rect.width()) : m_left->sizeHint().height();
-            m_left->setGeometry(QRect(rect.x(), y, rect.width(), h));
+            m_left->setGeometry(mirrored(this, rect, QRect(rect.x(), y, rect.width(), h)));
             y += h + m_gap;
         }
         if (m_right) {
             const int w = rect.width();
             const int h = m_right->hasHeightForWidth() ? m_right->heightForWidth(w) : m_right->sizeHint().height();
-            m_right->setGeometry(QRect(rect.x(), y, w, h));
+            m_right->setGeometry(mirrored(this, rect, QRect(rect.x(), y, w, h)));
         }
         return;
     }
     if (m_left) {
         const int lw = std::min(m_leftMax, rect.width() - (m_right ? m_rightWidth + m_gap : 0));
         const int h = m_left->hasHeightForWidth() ? m_left->heightForWidth(lw) : m_left->sizeHint().height();
-        m_left->setGeometry(QRect(rect.x(), rect.y(), lw, std::max(h, m_left->minimumSize().height())));
+        // Right to left the main column is at the right, the side column at the left.
+        m_left->setGeometry(mirrored(this, rect, QRect(rect.x(), rect.y(), lw, std::max(h, m_left->minimumSize().height()))));
         if (m_right) {
             const int rx = rect.x() + lw + m_gap;
             const int rh = m_right->hasHeightForWidth() ? m_right->heightForWidth(m_rightWidth) : m_right->sizeHint().height();
-            m_right->setGeometry(QRect(rx, rect.y(), m_rightWidth, std::max(rh, m_right->minimumSize().height())));
+            m_right->setGeometry(mirrored(this, rect, QRect(rx, rect.y(), m_rightWidth, std::max(rh, m_right->minimumSize().height()))));
         }
     } else if (m_right) {
-        m_right->setGeometry(QRect(rect.x(), rect.y(), m_rightWidth, m_right->sizeHint().height()));
+        m_right->setGeometry(mirrored(this, rect, QRect(rect.x(), rect.y(), m_rightWidth, m_right->sizeHint().height())));
     }
 }
 
@@ -2051,7 +2158,7 @@ int FlowLayout::doLayout(const QRect& rect, bool testOnly) const
             lineH = 0;
         }
         if (!testOnly)
-            it->setGeometry(QRect(QPoint(x, y), s));
+            it->setGeometry(mirrored(this, r, QRect(QPoint(x, y), s))); // right to left a line fills from the right
         x = nextX;
         lineH = std::max(lineH, s.height());
     }

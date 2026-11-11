@@ -259,7 +259,7 @@ QRect ChoiceTiles::tileRect(int i) const
     const int cols = columns(width());
     const int w = (width() - (cols - 1) * kTileGap) / cols;
     const int row = i / cols, col = i % cols;
-    return QRect(col * (w + kTileGap), row * (kTileH + kTileGap), w, kTileH);
+    return mirrored(this, QRect(col * (w + kTileGap), row * (kTileH + kTileGap), w, kTileH)); // RTL: the first at the right
 }
 
 int ChoiceTiles::at(const QPoint& p) const
@@ -275,25 +275,28 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const qreal dpr = devicePixelRatioF();
+    // The tile's inside is worked out left to right and mirrored as it is drawn.
+    const auto vis = [this](const QRectF& x) { return mirrored(this, x); };
     for (int i = 0; i < count(); ++i) {
         const Item& it = m_items[size_t(i)];
-        const QRectF r = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+        const QRectF tile = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+        const QRectF r = vis(tile);
         const bool sel = i == m_current;
         const qreal hov = it.enabled && !sel ? m_hover->amount(i) : 0.0;
         if (sel) {
             p.setPen(Qt::NoPen);
             p.setBrush(color::bg_2);
-            p.drawRoundedRect(r, radius::md, radius::md);
-            p.setBrush(accentGradient(r, 34));
-            p.drawRoundedRect(r, radius::md, radius::md);
-            QPen pen(QBrush(accentGradient(r, 230)), 1.5);
+            p.drawRoundedRect(tile, radius::md, radius::md);
+            p.setBrush(accentGradient(tile, 34));
+            p.drawRoundedRect(tile, radius::md, radius::md);
+            QPen pen(QBrush(accentGradient(tile, 230)), 1.5);
             p.setPen(pen);
             p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
+            p.drawRoundedRect(tile.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
         } else {
             p.setPen(QPen(blend(color::border_3, color::border_4, hov), 1));
             p.setBrush(blend(color::field_bg, color::bg_3, hov));
-            p.drawRoundedRect(r, radius::md, radius::md);
+            p.drawRoundedRect(tile, radius::md, radius::md);
         }
         const QColor fgTitle = !it.enabled ? color::fg_5 : color::fg_0;
         const QColor fgText = !it.enabled ? color::fg_6 : color::fg_3;
@@ -301,13 +304,13 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         const QRectF ir(r.left() + 14, r.top() + 14, 34, 34);
         p.setPen(Qt::NoPen);
         if (sel) {
-            p.setBrush(accentFillGradient(ir));
+            p.setBrush(accentFillGradient(vis(ir)));
         } else {
             p.setBrush(color::bg_4);
         }
-        p.drawRoundedRect(ir, 9, 9);
+        p.drawRoundedRect(vis(ir), 9, 9);
         if (!it.icon.isEmpty())
-            p.drawPixmap(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18).toRect(),
+            p.drawPixmap(vis(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18)).toRect(),
                          iconPixmap(it.icon, 18, sel ? color::on_accent : (it.enabled ? color::fg_2 : color::fg_5), dpr));
         // Title (+ tag).
         const qreal tx = ir.right() + 12;
@@ -321,9 +324,9 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         title = tfm.elidedText(title, Qt::ElideRight, int(right - tx - (tagW ? tagW + 8 : 0)));
         p.setPen(fgTitle);
         const QRectF titleR(tx, ir.top(), right - tx, 20);
-        p.drawText(titleR, Qt::AlignLeft | Qt::AlignVCenter, title);
+        p.drawText(vis(titleR), Qt::AlignLeft | Qt::AlignVCenter, title);
         if (tagW)
-            paintBadge(p, QRectF(tx + tfm.horizontalAdvance(title) + 8, ir.top() - 1, tagW, size::badge), it.tag,
+            paintBadge(p, vis(QRectF(tx + tfm.horizontalAdvance(title) + 8, ir.top() - 1, tagW, size::badge)), it.tag,
                        it.enabled ? Tone::Info : Tone::Neutral);
         // Description: up to three lines under the title, aligned with it.
         p.setFont(font::caption());
@@ -331,17 +334,17 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         const qreal dw = r.right() - 14 - tx;
         qreal y = ir.top() + 23;
         for (const QString& l : wrapLines(it.description, font::caption(), int(dw), 3)) {
-            p.drawText(QRectF(tx, y, dw, 16), Qt::AlignLeft | Qt::AlignVCenter, l);
+            p.drawText(vis(QRectF(tx, y, dw, 16)), Qt::AlignLeft | Qt::AlignVCenter, l);
             y += 16;
         }
         if (sel)
-            paintCheckBubble(p, QRectF(r.right() - 32, r.top() + 12, 20, 20), dpr);
+            paintCheckBubble(p, vis(QRectF(r.right() - 32, r.top() + 12, 20, 20)), dpr);
         // Keyboard focus only, and inside the tile: outside it the widget's
         // own edge would cut the ring.
         if (sel && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
             p.setPen(QPen(color::focus, 2));
             p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
+            p.drawRoundedRect(tile.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
         }
     }
     // The selected tile's soft glow lies outside the tile: its own widget
@@ -378,7 +381,8 @@ void ChoiceTiles::keyPressEvent(QKeyEvent* e)
 {
     const int k = e->key();
     if (k == Qt::Key_Left || k == Qt::Key_Right || k == Qt::Key_Up || k == Qt::Key_Down) {
-        const int step = (k == Qt::Key_Left || k == Qt::Key_Up) ? -1 : 1;
+        const bool back = k == Qt::Key_Up || (k == Qt::Key_Left && !isRightToLeft()) || (k == Qt::Key_Right && isRightToLeft());
+        const int step = back ? -1 : 1; // left and right as they are on screen
         int i = m_current;
         m_keyNav = true;
         update();
@@ -489,14 +493,14 @@ void DropZone::paintEvent(QPaintEvent*)
     };
     if (m_compact) {
         const QRectF ir(r.left() + 22, r.center().y() - 20, 40, 40);
-        iconSquare(ir, 11, 20);
+        iconSquare(mirrored(this, ir), 11, 20);
         const qreal tx = ir.right() + 16;
         p.setFont(font::bodyStrong());
         p.setPen(color::fg_0);
-        p.drawText(QRectF(tx, r.center().y() - 19, r.right() - tx - 16, 20), Qt::AlignLeft | Qt::AlignVCenter, m_title);
+        p.drawText(mirrored(this, QRectF(tx, r.center().y() - 19, r.right() - tx - 16, 20)), Qt::AlignLeft | Qt::AlignVCenter, m_title);
         p.setFont(font::caption());
         p.setPen(color::fg_3);
-        p.drawText(QRectF(tx, r.center().y() + 1, r.right() - tx - 16, 18), Qt::AlignLeft | Qt::AlignVCenter,
+        p.drawText(mirrored(this, QRectF(tx, r.center().y() + 1, r.right() - tx - 16, 18)), Qt::AlignLeft | Qt::AlignVCenter,
                    QFontMetrics(font::caption()).elidedText(m_text, Qt::ElideRight, int(r.right() - tx - 16)));
     } else {
         const QRectF ir(r.center().x() - 24, r.top() + 24, 48, 48);
@@ -515,7 +519,8 @@ void DropZone::paintEvent(QPaintEvent*)
 
 namespace {
 
-// The disclosure's chevron: right when closed, down when open, turning in between.
+// The disclosure's chevron: right when closed (left right to left), down when
+// open, turning in between.
 class Chevron : public QWidget {
 public:
     explicit Chevron(QWidget* parent) : QWidget(parent)
@@ -531,16 +536,17 @@ protected:
         QPainter p(this);
         const qreal t = turn ? turn->value() : 0.0;
         const qreal dpr = devicePixelRatioF();
+        const bool rtl = isRightToLeft();
+        const QString closed = rtl ? QStringLiteral("chevron_left") : QStringLiteral("chevron_right");
         if (t <= 0.0 || t >= 1.0) { // at rest: the icon itself, not a rotated one
-            p.drawPixmap(rect(), iconPixmap(t >= 1.0 ? QStringLiteral("chevron_down") : QStringLiteral("chevron_right"),
-                                            size::icon, color::fg_3, dpr));
+            p.drawPixmap(rect(), iconPixmap(t >= 1.0 ? QStringLiteral("chevron_down") : closed, size::icon, color::fg_3, dpr));
             return;
         }
         p.setRenderHint(QPainter::SmoothPixmapTransform);
         p.translate(width() / 2.0, height() / 2.0);
-        p.rotate(90.0 * t);
+        p.rotate((rtl ? -90.0 : 90.0) * t);
         p.translate(-width() / 2.0, -height() / 2.0);
-        p.drawPixmap(rect(), iconPixmap(QStringLiteral("chevron_right"), size::icon, color::fg_3, dpr));
+        p.drawPixmap(rect(), iconPixmap(closed, size::icon, color::fg_3, dpr));
     }
 };
 
@@ -703,6 +709,7 @@ void HeroBanner::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    mirrorPainter(p, this); // light and glyph only, no text: right to left they face the other way
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     QPainterPath clip;
     clip.addRoundedRect(r, radius::lg, radius::lg);
@@ -882,7 +889,8 @@ void ActionCard::paintEvent(QPaintEvent*)
         p.drawRoundedRect(r, radius::md, radius::md);
     }
     const qreal dpr = devicePixelRatioF();
-    const QRectF ir(r.left() + 16, r.center().y() - 21, 42, 42);
+    // Worked out left to right, mirrored for a right-to-left card.
+    const QRectF ir = mirrored(this, QRectF(r.left() + 16, r.center().y() - 21, 42, 42));
     // The icon square: the gradient as a tint, the fill gradient fading in over it.
     p.setPen(Qt::NoPen);
     if (active < 1.0) {
@@ -897,21 +905,22 @@ void ActionCard::paintEvent(QPaintEvent*)
     }
     drawIconFade(p, QRectF(ir.center().x() - 10, ir.center().y() - 10, 20, 20).toRect(), m_icon, 20, color::accent_hi,
                  color::on_accent, active, dpr);
-    const qreal tx = ir.right() + 14;
+    const qreal tx = r.left() + 16 + 42 + 14;
     const qreal tw = r.right() - 36 - tx;
     p.setFont(font::bodyStrong());
     p.setPen(color::fg_0);
-    p.drawText(QRectF(tx, r.top() + 16, tw, 20), Qt::AlignLeft | Qt::AlignVCenter,
+    p.drawText(mirrored(this, QRectF(tx, r.top() + 16, tw, 20)), Qt::AlignLeft | Qt::AlignVCenter,
                QFontMetrics(font::bodyStrong()).elidedText(text(), Qt::ElideRight, int(tw)));
     p.setFont(font::caption());
     p.setPen(color::fg_3);
     const QStringList lines = wrapLines(m_text, font::caption(), int(tw), 2);
     qreal y = r.top() + 38;
     for (const QString& l : lines) {
-        p.drawText(QRectF(tx, y, tw, 16), Qt::AlignLeft | Qt::AlignVCenter, l);
+        p.drawText(mirrored(this, QRectF(tx, y, tw, 16)), Qt::AlignLeft | Qt::AlignVCenter, l);
         y += 16;
     }
-    drawIconFade(p, QRectF(r.right() - 30, r.center().y() - 8, 16, 16).toRect(), QStringLiteral("chevron_right"), 16, color::fg_5,
+    drawIconFade(p, mirrored(this, QRectF(r.right() - 30, r.center().y() - 8, 16, 16)).toRect(),
+                 isRightToLeft() ? QStringLiteral("chevron_left") : QStringLiteral("chevron_right"), 16, color::fg_5,
                  color::accent_hi, active, dpr);
 }
 

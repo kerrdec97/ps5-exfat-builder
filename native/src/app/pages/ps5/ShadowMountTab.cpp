@@ -294,6 +294,7 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
     case SmpKeyType::ImageNames:
     case SmpKeyType::ImageSectors:
         r.text = new QPlainTextEdit(box);
+        keepLeftToRight(r.text); // log, code or hex: left to right in any language
         r.text->setFont(font::mono());
         r.text->setFixedHeight(76);
         r.text->setPlaceholderText(shownHelp);

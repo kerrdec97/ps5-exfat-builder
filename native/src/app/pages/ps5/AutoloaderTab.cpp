@@ -62,6 +62,7 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     h->addWidget(m_sleep);
     h->addWidget(m_save);
     m_editor = new QPlainTextEdit(edit);
+    keepLeftToRight(m_editor); // log, code or hex: left to right in any language
     m_editor->setFont(font::mono());
     m_editor->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_editor->setTabChangesFocus(true);

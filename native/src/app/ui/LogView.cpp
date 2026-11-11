@@ -96,6 +96,7 @@ void LogDelegate::paint(QPainter* p, const QStyleOptionViewItem& option, const Q
 
 LogTable::LogTable(QWidget* parent) : QTableView(parent)
 {
+    keepLeftToRight(this); // the log is English and reads left to right in any language
     setItemDelegate(new LogDelegate(this));
     setShowGrid(false);
     setAlternatingRowColors(false);
@@ -222,6 +223,7 @@ void ActivityWell::refresh()
     for (auto it = picked.rbegin(); it != picked.rend(); ++it) {
         const LogRecord* rec = *it;
         auto* row = new QWidget(this);
+        keepLeftToRight(row); // a log line: time first, at the left, in any language
         auto* h = hbox(row, space::sm);
         auto* t = label(rec->time.toString(QStringLiteral("HH:mm:ss")), m_small ? TextStyle::MonoSmall : TextStyle::Mono,
                         rec->level >= LogLevel::Warning ? levelColor(rec->level) : color::fg_4, row);
@@ -239,6 +241,7 @@ void ActivityWell::refresh()
 LogConsole::LogConsole(LogModel& model, QWidget* parent) : QPlainTextEdit(parent), m_model(model)
 {
     setObjectName(QStringLiteral("fwConsole"));
+    keepLeftToRight(this); // the log is English and reads left to right in any language
     setReadOnly(true);
     setUndoRedoEnabled(false);
     setLineWrapMode(QPlainTextEdit::WidgetWidth);

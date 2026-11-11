@@ -156,6 +156,8 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_games = new QTableWidget(0, GColumnCount, list);
     m_games->setHorizontalHeaderLabels({FW_TR("Game"), FW_TR("Status"), FW_TR("Local"), QStringLiteral("PS5"), FW_TR("Path on the PS5")});
     styleToolTable(m_games, 8);
+    for (const int c : {int(GLocalCol), int(GRemoteCol), int(GPathCol)})
+        keepColumnLeftToRight(m_games, c); // sizes, dates, paths, IDs: left to right in any language
     m_games->setSelectionMode(QAbstractItemView::SingleSelection);
     m_games->horizontalHeader()->setSectionResizeMode(GNameCol, QHeaderView::Stretch);
     m_games->setColumnWidth(GStatusCol, 150);
@@ -210,6 +212,8 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_diffs = new QTableWidget(0, DColumnCount, cmp);
     m_diffs->setHorizontalHeaderLabels({FW_TR("Difference"), FW_TR("File"), FW_TR("Local"), QStringLiteral("PS5")});
     styleToolTable(m_diffs, 6);
+    for (const int c : {int(DPathCol), int(DLocalCol), int(DRemoteCol)})
+        keepColumnLeftToRight(m_diffs, c); // sizes, dates, paths, IDs: left to right in any language
     m_diffs->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_diffs->horizontalHeader()->setSectionResizeMode(DPathCol, QHeaderView::Stretch);
     m_diffs->setColumnWidth(DStatusCol, 190);

@@ -97,6 +97,9 @@ int main(int argc, char* argv[])
     if (language.isEmpty())
         language = storedLanguage();
     fw::i18n::load(language);
+    // Arabic, Persian, Hebrew, Urdu (and "qps-rtl"): the whole window mirrored.
+    if (fw::i18n::isRightToLeft())
+        QGuiApplication::setLayoutDirection(Qt::RightToLeft);
 
     // One copy at a time: two would share one queue, one history and the same
     // .part files. A lock left by a crashed copy is detected and taken over.

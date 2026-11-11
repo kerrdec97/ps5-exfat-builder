@@ -16,6 +16,9 @@ class QPainter;
 namespace fw::ui {
 
 // A pixmap of `name` at `size` logical pixels, tinted `color`, for `dpr`.
+// While the application is laid out right to left, the icons that point the
+// way one reads (isMirroredRightToLeft()) are drawn mirrored. Chevrons are
+// not: Qt and the widgets choose chevron_left or chevron_right themselves.
 QPixmap iconPixmap(const QString& name, int size, const QColor& color, qreal dpr = 1.0);
 
 // A QIcon with Normal/Active/Selected/Disabled variants coloured for the
@@ -32,6 +35,8 @@ void drawIconFade(QPainter& p, const QRect& target, const QString& name, int siz
 // Registers the icon resources (static library); safe to call repeatedly.
 void initIcons();
 bool hasIcon(const QString& name);
+// Back, forward, undo, the sidebar: the icons that are mirrored right to left.
+bool isMirroredRightToLeft(const QString& name);
 QStringList iconNames();
 
 } // namespace fw::ui

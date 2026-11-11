@@ -145,6 +145,8 @@ void DlcPage::buildListCard()
     m_table->setHorizontalHeaderLabels({FW_TR("Icon"), FW_TR("Title"), FW_TR("Content ID"),
                                         FW_TR("Title ID"), FW_TR("Region"),
                                         FW_TR("Version"), FW_TR("Source file"), FW_TR("Result")});
+    for (const int c : {int(ContentIdCol), int(TitleIdCol), int(VersionCol), int(SourceCol)})
+        keepColumnLeftToRight(m_table, c); // sizes, dates, paths, IDs: left to right in any language
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setShowGrid(false);
@@ -240,6 +242,7 @@ void DlcPage::buildListCard()
     auto* logTitle = new Disclosure(FW_TR("Conversion log"), QString(), card);
     logTitle->setPlain(true); // a row of this card, not a plate in it
     m_log = new QPlainTextEdit(logTitle);
+    keepLeftToRight(m_log); // log, code or hex: left to right in any language
     m_log->setReadOnly(true);
     m_log->setMinimumHeight(140);
     m_log->setFont(font::mono());
@@ -1180,6 +1183,7 @@ void DlcPage::showPreview()
         return;
     auto* s = new Sheet(window(), FW_TR("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
     auto* box = new QPlainTextEdit(s);
+    keepLeftToRight(box); // log, code or hex: left to right in any language
     box->setReadOnly(true);
     box->setFont(font::mono());
     box->setPlainText(previewText(false));
@@ -1239,6 +1243,7 @@ void DlcPage::saveInisInteractive()
     }
     auto* s = new Sheet(window(), FW_TR("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
     auto* box = new QPlainTextEdit(s);
+    keepLeftToRight(box); // log, code or hex: left to right in any language
     box->setReadOnly(true);
     box->setFont(font::mono());
     box->setPlainText(previewText(true));
@@ -1285,6 +1290,7 @@ Result<QString> DlcPage::submit(bool)
     // The review step of the Companion.
     auto* s = new Sheet(window(), FW_TR("DLC changes \u2014 review outputs"), Sheet::Icon::None, 900);
     auto* box = new QPlainTextEdit(s);
+    keepLeftToRight(box); // log, code or hex: left to right in any language
     box->setReadOnly(true);
     box->setFont(font::mono());
     box->setPlainText(previewText(false));

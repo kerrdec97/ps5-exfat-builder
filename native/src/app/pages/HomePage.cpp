@@ -71,6 +71,7 @@ protected:
     {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        mirrorPainter(p, this); // the steps done fill from the start: the right right to left
         p.setPen(Qt::NoPen);
         const qreal gap = 4;
         const qreal w = (width() - gap * (m_total - 1)) / m_total;

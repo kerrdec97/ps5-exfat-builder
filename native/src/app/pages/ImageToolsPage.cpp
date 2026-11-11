@@ -146,7 +146,7 @@ protected:
     {
         const int cols = columns(width());
         const int w = (width() - (cols - 1) * kGap) / cols;
-        return QRect((i % cols) * (w + kGap), (i / cols) * (kH + kGap), w, kH);
+        return mirrored(this, QRect((i % cols) * (w + kGap), (i / cols) * (kH + kGap), w, kH)); // RTL: first at the right
     }
     int at(const QPoint& p) const
     {
@@ -162,42 +162,45 @@ protected:
         const qreal dpr = devicePixelRatioF();
         for (int i = 0; i < int(m_items.size()); ++i) {
             const Item& it = m_items[size_t(i)];
-            const QRectF r = QRectF(tile(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+            const QRectF tileR = QRectF(tile(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+            // The inside is worked out left to right and mirrored as it is drawn.
+            const QRectF r = mirrored(this, tileR);
+            const auto vis = [this](const QRectF& x) { return mirrored(this, x); };
             const bool sel = i == m_current;
             const qreal hov = it.enabled && !sel ? m_hover->amount(i) : 0.0; // the hover tint fades
             if (sel) {
                 p.setPen(Qt::NoPen);
                 p.setBrush(color::bg_2);
-                p.drawRoundedRect(r, radius::md, radius::md);
-                p.setBrush(accentGradient(r, 40));
-                p.drawRoundedRect(r, radius::md, radius::md);
-                p.setPen(QPen(QBrush(accentGradient(r, 230)), 1.5));
+                p.drawRoundedRect(tileR, radius::md, radius::md);
+                p.setBrush(accentGradient(tileR, 40));
+                p.drawRoundedRect(tileR, radius::md, radius::md);
+                p.setPen(QPen(QBrush(accentGradient(tileR, 230)), 1.5));
                 p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
+                p.drawRoundedRect(tileR.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
             } else {
                 // The tiles sit on the page, between two cards: plates like them.
-                paintPlate(p, r, radius::md, hov);
+                paintPlate(p, tileR, radius::md, hov);
             }
-            const QRectF ir(r.left() + kPad, r.center().y() - 17, 34, 34);
+            const QRectF ir = vis(QRectF(r.left() + kPad, r.center().y() - 17, 34, 34));
             p.setPen(Qt::NoPen);
             p.setBrush(sel ? QBrush(accentFillGradient(ir)) : QBrush(color::bg_4)); // white only on the fill gradient
             p.drawRoundedRect(ir, 10, 10);
             const QColor glyph = sel ? color::on_accent : it.enabled ? color::fg_2 : color::fg_5;
             p.drawPixmap(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18).toRect(), iconPixmap(it.icon, 18, glyph, dpr));
-            const qreal tx = ir.right() + kPad;
+            const qreal tx = r.left() + kPad + 34 + kPad;
             const qreal tw = r.right() - kPad - tx;
             p.setFont(font::bodyStrong());
             p.setPen(it.enabled ? color::fg_0 : color::fg_5);
-            p.drawText(QRectF(tx, r.center().y() - 19, tw, 20), Qt::AlignLeft | Qt::AlignVCenter,
+            p.drawText(vis(QRectF(tx, r.center().y() - 19, tw, 20)), Qt::AlignLeft | Qt::AlignVCenter,
                        QFontMetrics(font::bodyStrong()).elidedText(it.title, Qt::ElideRight, int(tw)));
             p.setFont(font::caption());
             p.setPen(it.enabled ? (sel ? color::fg_2 : color::fg_3) : color::fg_6);
-            p.drawText(QRectF(tx, r.center().y() + 1, tw, 18), Qt::AlignLeft | Qt::AlignVCenter,
+            p.drawText(vis(QRectF(tx, r.center().y() + 1, tw, 18)), Qt::AlignLeft | Qt::AlignVCenter,
                        QFontMetrics(font::caption()).elidedText(it.text, Qt::ElideRight, int(tw)));
             if (hasFocus() && sel) {
                 p.setPen(QPen(color::focus, 2));
                 p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(r.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
+                p.drawRoundedRect(tileR.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
             }
         }
     }
@@ -233,7 +236,11 @@ protected:
     }
     void keyPressEvent(QKeyEvent* e) override
     {
-        const int step = e->key() == Qt::Key_Right || e->key() == Qt::Key_Down ? 1 : e->key() == Qt::Key_Left || e->key() == Qt::Key_Up ? -1 : 0;
+        // Left and right as they are on screen.
+        const bool rtl = isRightToLeft();
+        const int k = e->key();
+        const int step = k == Qt::Key_Down || k == (rtl ? Qt::Key_Left : Qt::Key_Right) ? 1
+                       : k == Qt::Key_Up || k == (rtl ? Qt::Key_Right : Qt::Key_Left) ? -1 : 0;
         if (!step) {
             QWidget::keyPressEvent(e);
             return;
@@ -404,6 +411,7 @@ void ImageToolsPage::buildImageCard()
     setTextColor(m_stripMeta, color::fg_3);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, m_strip);
     m_stripPath->setFont(font::monoSmall());
+    keepLeftToRight(m_stripPath);
     setTextColor(m_stripPath, color::fg_4);
     col->addWidget(m_stripTitle);
     col->addWidget(m_stripMeta);
@@ -598,6 +606,8 @@ void ImageToolsPage::buildEditPanel()
     m_treeView->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_treeView->setColumnWidth(1, 110);
     m_treeView->setColumnWidth(2, 150);
+    keepColumnLeftToRight(m_treeView, 1); // sizes, dates, paths, IDs: left to right in any language
+    keepColumnLeftToRight(m_treeView, 2);
     m_treeView->setUniformRowHeights(true);
     m_treeView->setMinimumHeight(11 * size::rowCompact + 40);
     m_treeView->setSelectionMode(QAbstractItemView::SingleSelection);

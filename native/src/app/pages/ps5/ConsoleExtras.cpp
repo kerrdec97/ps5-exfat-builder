@@ -48,6 +48,7 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     h->addWidget(save);
     h->addWidget(m_refresh);
     m_view = new QPlainTextEdit(card);
+    keepLeftToRight(m_view); // log, code or hex: left to right in any language
     m_view->setReadOnly(true);
     m_view->setFont(font::mono());
     m_view->setLineWrapMode(QPlainTextEdit::NoWrap);
