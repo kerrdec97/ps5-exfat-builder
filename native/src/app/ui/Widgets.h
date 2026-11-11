@@ -54,6 +54,9 @@ QString plainTip(const QString& text);
 // wraps to more lines). This keeps the label's minimum height at what its
 // current width needs.
 void keepWrappedHeight(QLabel* label);
+// Where a drop-down menu opens under `button`: its left corner, or its
+// right corner in a right-to-left window (a menu then opens towards the left).
+QPoint menuAnchor(const QWidget* button, int gap = 0);
 // A label that elides long text (middle for paths, right for titles).
 class ElideLabel : public QLabel {
     Q_OBJECT

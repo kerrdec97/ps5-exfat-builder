@@ -368,7 +368,7 @@ void JobRow::rebuildActions()
     };
     if (m_variant == Variant::Dock) {
         auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Small, m_actions);
-        connect(more, &QToolButton::clicked, this, [this, more] { showMenu(more->mapToGlobal(QPoint(0, more->height()))); });
+        connect(more, &QToolButton::clicked, this, [this, more] { showMenu(menuAnchor(more)); });
         m_actionsLayout->addWidget(more);
         return;
     }
@@ -403,7 +403,7 @@ void JobRow::rebuildActions()
         break;
     }
     auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Small, m_actions);
-    connect(more, &QToolButton::clicked, this, [this, more] { showMenu(more->mapToGlobal(QPoint(0, more->height()))); });
+    connect(more, &QToolButton::clicked, this, [this, more] { showMenu(menuAnchor(more)); });
     m_actionsLayout->addWidget(more);
 }
 
@@ -904,7 +904,7 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
         QMenu menu(this);
         menu.addAction(FW_TR("Open queue"), this, [this] { emit openQueueRequested(); });
         menu.addAction(FW_TR("Clear finished"), this, [this] { m_ctx.queue().clearFinished(); });
-        menu.exec(more->mapToGlobal(QPoint(0, more->height())));
+        menu.exec(menuAnchor(more));
     });
     h->addWidget(more);
 

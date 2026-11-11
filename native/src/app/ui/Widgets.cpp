@@ -142,6 +142,11 @@ public:
 };
 } // namespace
 
+QPoint menuAnchor(const QWidget* button, int gap)
+{
+    return button->mapToGlobal(QPoint(button->isRightToLeft() ? button->width() : 0, button->height() + gap));
+}
+
 void keepWrappedHeight(QLabel* label)
 {
     if (!label)

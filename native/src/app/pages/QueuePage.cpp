@@ -166,7 +166,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     header()->addAction(bar);
     auto* menu = new QMenu(this);
     auto* exportCsv = menu->addAction(icon(QStringLiteral("download"), color::fg_2), FW_TR("Export job history…"));
-    connect(more, &QToolButton::clicked, this, [more, menu] { menu->popup(more->mapToGlobal(QPoint(0, more->height() + 4))); });
+    connect(more, &QToolButton::clicked, this, [more, menu] { menu->popup(menuAnchor(more, 4)); });
     connect(exportCsv, &QAction::triggered, this, [this] {
         const QString path = QFileDialog::getSaveFileName(window(), FW_TR("Export job history"), QDir::homePath() + QStringLiteral("/job-history.csv"), FW_TR("CSV files") + QStringLiteral(" (*.csv)"));
         if (path.isEmpty())

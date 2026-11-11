@@ -718,7 +718,7 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
             a->setToolTip(path);
             a->setEnabled(m_session->isConnected());
         }
-        menu.exec(m_btnPlaces->mapToGlobal(QPoint(0, m_btnPlaces->height())));
+        menu.exec(menuAnchor(m_btnPlaces));
     });
     h->addSpacing(space::sm);
     m_crumbs = new QWidget(card);

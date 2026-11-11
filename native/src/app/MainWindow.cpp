@@ -177,7 +177,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
         upd->setEnabled(jobs::isAvailable(m_ctx, QStringLiteral("update.check")));
         menu.addSeparator();
         menu.addAction(FW_TR("About"), this, [this] { navigate(QStringLiteral("about")); });
-        menu.exec(m_header->helpButton()->mapToGlobal(QPoint(0, m_header->helpButton()->height())));
+        menu.exec(ui::menuAnchor(m_header->helpButton()));
     });
 
     connect(&ctx.queue(), &JobQueue::jobFinished, this, &MainWindow::onJobFinished);

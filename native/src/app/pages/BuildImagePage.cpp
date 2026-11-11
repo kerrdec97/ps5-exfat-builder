@@ -1075,7 +1075,7 @@ void BuildImagePage::buildSaveCard()
             emit navigateRequested({QStringLiteral("settings"), {{QStringLiteral("section"), QStringLiteral("Build")},
                                                                  {QStringLiteral("key"), gameinfo::keys::kNameTemplate}}});
         });
-        menu.exec(m_nameMenuButton->mapToGlobal(QPoint(0, m_nameMenuButton->height())));
+        menu.exec(menuAnchor(m_nameMenuButton));
     });
 }
 
@@ -1848,7 +1848,7 @@ void BuildImagePage::browseBackport(PathField* f, const QString& label)
         if (!z.isEmpty())
             f->setPath(QDir::toNativeSeparators(z));
     });
-    menu.exec(f->browseButton()->mapToGlobal(QPoint(0, f->browseButton()->height())));
+    menu.exec(menuAnchor(f->browseButton()));
 }
 
 void BuildImagePage::inspectBase()

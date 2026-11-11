@@ -281,7 +281,7 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
             if (!all.isEmpty())
                 renameImagesSheet(all);
         })->setEnabled(!m_images.isEmpty());
-        menu.exec(more->mapToGlobal(QPoint(0, more->height())));
+        menu.exec(menuAnchor(more));
     });
     header()->addAction(more);
     header()->addAction(rescan);
