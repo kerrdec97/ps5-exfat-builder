@@ -51,6 +51,13 @@ Images built with 5.0.1 stay valid.
   be "PPSA01234 - Title" or follow your own template, with a live preview.
 * **Folder edition** (#78): each release also offers the program as a zip,
   already unpacked, for PCs whose antivirus removes the single exe.
+* **Languages are back** (#35, #89): Settings › General › Language offers
+  **Deutsch** and **简体中文** (Simplified Chinese) next to English, and
+  applies after a restart ("Restart now"). Log files and error details from
+  the engines stay in English. The translations are machine-made; "Show in
+  folder" next to the setting opens a folder where you can correct a
+  translation or add a language yourself (README.txt there says how). More
+  languages follow.
 
 ### Safety of your files
 * **Unpacking a crafted packed game or image can no longer write outside the
@@ -176,7 +183,7 @@ Images built with 5.0.1 stay valid.
 ### Under the hood
 * The program file no longer contains the folder path of the PC it was built
   on. The launcher loads Windows libraries only from the Windows folder.
-* 63 automated test programs (53 in 5.0.1) with about 250 new test cases, among them crafted-image,
+* 73 automated test programs (53 in 5.0.1), among them crafted-image, 7z and RAR,
   path-traversal and shared-settings tests. Not tested: a PS5 console, real
   Sony tools, a real GitHub release.
 
@@ -487,8 +494,9 @@ interface before this release. What changed:
 
 ## Known limitations
 * Not code-signed; some antivirus engines flag unsigned self-extracting
-  programs by heuristics. Check the SHA-256.
-* English only for now.
+  programs by heuristics. Check the SHA-256, or use the folder edition.
+* Interface languages: English, German and Simplified Chinese. Log files and
+  engine error details are in English.
 * Images from untrusted sources are checked as they are read, but the app is
   not a sandbox: open only images you trust.
 

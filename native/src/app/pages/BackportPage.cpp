@@ -472,7 +472,7 @@ bool BackportFilterModel::lessThan(const QModelIndex& a, const QModelIndex& b) c
 // ---- page ----------------------------------------------------------------------------------
 
 BackportPage::BackportPage(AppContext& ctx, JobQueueModel&, LogModel&, LibraryStore& library, QWidget* parent)
-    : Page(ctx, QStringLiteral("backport"), QStringLiteral("Backport"),
+    : Page(ctx, QStringLiteral("backport"), FW_TR("Backport"),
            FW_TR("Make games run on older PS5 firmware. The originals are always backed up first."),
            parent),
       m_library(library)

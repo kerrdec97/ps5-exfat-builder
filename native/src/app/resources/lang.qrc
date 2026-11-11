@@ -2,5 +2,6 @@
 <qresource prefix="/lang">
     <file alias="_source.json">lang/_source.json</file>
     <file alias="de.json">lang/de.json</file>
+    <file alias="zh-CN.json">lang/zh-CN.json</file>
 </qresource>
 </RCC>

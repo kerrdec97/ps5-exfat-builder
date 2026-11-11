@@ -173,6 +173,18 @@ protected:
 
 } // namespace
 
+namespace {
+// The two buttons under the section list: a long translation is shortened
+// with "…" (a push button only cuts it off) and the whole text is the tooltip.
+void setListButtonText(QPushButton* b, const QString& text, const QString& tip)
+{
+    const int avail = size::settingsList - b->iconSize().width() - 28; // icon, its gap and the button's padding
+    const QString shown = b->fontMetrics().elidedText(text, Qt::ElideRight, avail);
+    b->setText(shown);
+    b->setToolTip(shown == text ? tip : text + QStringLiteral("\n") + tip);
+}
+} // namespace
+
 SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     : Page(ctx, QStringLiteral("settings"), FW_TR("Settings"),
            FW_TR("Defaults for new jobs; a job page can override any of them."), parent)
@@ -249,6 +261,8 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     auto* resetAllBtn = m_resetAllBtn = button(FW_TR("Reset all settings…"), ButtonVariant::Subtle, QStringLiteral("undo"), m_sectionList);
     resetAllBtn->setStyleSheet(QStringLiteral("text-align:left;"));
     resetAllBtn->setToolTip(FW_TR("Put every setting back to its default"));
+    setListButtonText(import, FW_TR("Import legacy settings…"), import->toolTip());
+    setListButtonText(resetAllBtn, FW_TR("Reset all settings…"), resetAllBtn->toolTip());
     m_sectionLayout->addWidget(import);
     m_sectionLayout->addWidget(resetAllBtn);
     m_sectionLayout->addStretch(1);
@@ -451,10 +465,15 @@ void SettingsPage::setCompactList(bool compact)
     m_sectionList->setFixedWidth(compact ? 44 : size::settingsList + 16);
     for (QAbstractButton* b : std::as_const(m_sectionButtons))
         static_cast<SectionButton*>(b)->setCompact(compact);
-    m_importBtn->setText(compact ? QString() : FW_TR("Import legacy settings…"));
-    m_resetAllBtn->setText(compact ? QString() : FW_TR("Reset all settings…"));
-    m_importBtn->setToolTip(compact ? FW_TR("Import legacy settings…") : FW_TR("Take over the values of the Python edition's settings.json"));
-    m_resetAllBtn->setToolTip(compact ? FW_TR("Reset all settings…") : FW_TR("Put every setting back to its default"));
+    if (compact) {
+        m_importBtn->setText(QString());
+        m_resetAllBtn->setText(QString());
+        m_importBtn->setToolTip(FW_TR("Import legacy settings…"));
+        m_resetAllBtn->setToolTip(FW_TR("Reset all settings…"));
+    } else {
+        setListButtonText(m_importBtn, FW_TR("Import legacy settings…"), FW_TR("Take over the values of the Python edition's settings.json"));
+        setListButtonText(m_resetAllBtn, FW_TR("Reset all settings…"), FW_TR("Put every setting back to its default"));
+    }
     updateSectionBadges();
 }
 

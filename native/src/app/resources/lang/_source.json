@@ -515,7 +515,7 @@
 {"text": "Back to the list", "where": ["app/pages/DlcPage.cpp"]},
 {"text": "Backend for .ffpkg images.", "where": ["connect/ps5/MountConfig.cpp"]},
 {"text": "Backing up", "where": ["engines/tools/LanguageStripper.cpp (stage)", "engines/tools/Module.cpp (stage)"]},
-{"text": "Backport", "where": ["app/MainWindow.cpp", "app/pages/BuildImagePage.cpp", "app/pages/LibraryPage.cpp"]},
+{"text": "Backport", "where": ["app/MainWindow.cpp", "app/pages/BackportPage.cpp", "app/pages/BuildImagePage.cpp", "app/pages/LibraryPage.cpp"]},
 {"text": "Backport %1 games…", "where": ["app/pages/LibraryPage.cpp"]},
 {"text": "Backport 4.xx", "where": ["app/pages/BuildImagePage.cpp", "app/pages/QueuePage.cpp"]},
 {"text": "Backport 4.xx files", "where": ["app/pages/BuildImagePage.cpp"]},
