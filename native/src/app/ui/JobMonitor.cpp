@@ -142,6 +142,7 @@ void RateSparkline::paintEvent(QPaintEvent*)
         return;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    mirrorPainter(p, this); // right to left the newest sample is at the left end
     const double peak = std::max(1.0, *std::max_element(m_samples.begin(), m_samples.end()));
     const QRectF r = QRectF(rect()).adjusted(1, 2, -1, -1);
     const double step = r.width() / double(m_capacity - 1);
@@ -504,6 +505,7 @@ void JobMonitor::build()
     pl->addWidget(m_detail);
     m_item = new ElideLabel({}, Qt::ElideMiddle, prog);
     m_item->setFont(font::monoSmall());
+    keepLeftToRight(m_item);
     setTextColor(m_item, color::fg_3);
     pl->addWidget(m_item);
     l->addWidget(prog);
@@ -1175,6 +1177,7 @@ void JobMonitor::rebuildResult(const JobRecord& r)
             h->addWidget(ic);
             auto* path = new ElideLabel(nativePath(o), Qt::ElideMiddle, row);
             path->setFont(font::mono());
+            keepLeftToRight(path);
             setTextColor(path, color::fg_1);
             path->setToolTip(plainTip(nativePath(o)));
             path->setTextInteractionFlags(Qt::TextSelectableByMouse);

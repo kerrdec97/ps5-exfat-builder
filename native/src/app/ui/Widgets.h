@@ -19,6 +19,7 @@
 
 #include <functional>
 
+class QAbstractItemView;
 class QBoxLayout;
 class QVBoxLayout;
 class QHBoxLayout;
@@ -139,6 +140,39 @@ void paintPopup(QPainter& p, const QRectF& r, qreal radius);
 // for what floats in a translucent window that leaves the room.
 void paintShadow(QPainter& p, const QRectF& r, qreal radius, int spread);
 QColor blend(const QColor& a, const QColor& b, qreal t); // a at 0, b at 1
+
+// ---- right to left ----------------------------------------------------------------
+// Qt mirrors layouts, style-sheet widgets and the alignment of drawn text for a
+// right-to-left widget (an Arabic, Persian, Hebrew or Urdu interface); custom
+// painting and hand-placed geometry use these. Geometry is worked out left to
+// right as before and mirrored where it is used.
+// `r` in `w`'s left-to-right coordinates, as it is shown: mirrored for RTL.
+QRect mirrored(const QWidget* w, const QRect& r);
+QRectF mirrored(const QWidget* w, const QRectF& r);
+// A point as it is shown in `w` back to left-to-right coordinates (or the other way: it is its own inverse).
+QPoint mirrored(const QWidget* w, const QPoint& pt);
+// For a hand-written QLayout: `r`, placed left to right inside `area`, as it
+// is shown in the layout's widget (mirrored inside `area` for RTL).
+QRect mirrored(const QLayout* layout, const QRect& area, const QRect& r);
+// Flips the painter for a right-to-left widget, so that what follows is drawn
+// mirrored: for shapes only (bars, tracks, knobs), never for text or icons.
+void mirrorPainter(QPainter& p, const QWidget* w);
+// Paths, URLs, addresses, IDs, hashes, versions, code and logs read left to
+// right in every language. A label's text is read LTR (the label stays aligned
+// with the layout); any other widget and its children are laid out LTR.
+void keepLeftToRight(QWidget* w);
+// drawText() flags for a path, an ID or a size painted in `w`: read left to
+// right, and placed as `align` is in `w`'s direction (AlignLeft: at the right
+// edge right to left).
+int leftToRightText(const QWidget* w, Qt::Alignment align);
+// drawText() flags for data painted in a right-to-left `w` (a game title, a
+// file name, "+2"): read in the text's own direction, as a label reads it,
+// and placed as `align` is right to left. Left to right: `align` unchanged.
+int naturalText(const QWidget* w, Qt::Alignment align, const QString& text);
+// The cells of `column` (sizes, dates, IDs, paths) read left to right; the
+// column itself stays where the view's direction puts it, and its alignment
+// is mirrored with the view.
+void keepColumnLeftToRight(QAbstractItemView* view, int column);
 
 // ---- cover placeholder ----------------------------------------------------------
 // The cover of a game that has no cover art, the same wherever it is listed:

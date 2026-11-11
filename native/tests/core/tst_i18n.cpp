@@ -347,6 +347,68 @@ private slots:
         QVERIFY(i18n::available().isEmpty()); // never in the picker
     }
 
+    // Arabic, Persian, Hebrew and Urdu are written right to left (with a
+    // region too); a catalogue may say so for a language the app does not know.
+    void rightToLeftLanguages()
+    {
+        for (const char* code : {"ar", "fa", "he", "ur", "ar-EG", "fa-IR", "qps-rtl"})
+            QVERIFY2(i18n::isRightToLeftCode(QString::fromLatin1(code)), code);
+        for (const char* code : {"en", "de", "pt-BR", "zh-CN", "qps", "ara", "her", ""})
+            QVERIFY2(!i18n::isRightToLeftCode(QString::fromLatin1(code)), code);
+        QVERIFY(!i18n::isRightToLeft()); // English
+
+        const auto [res, user] = folders();
+        QVERIFY(writeCatalogue(res + QStringLiteral("/ar.json"), QStringLiteral("ar"), QStringLiteral("Arabic"), QStringLiteral("Arabic"),
+                               {{QStringLiteral("Open"), QStringLiteral("فتح")}}));
+        QVERIFY(writeCatalogue(res + QStringLiteral("/ar-EG.json"), QStringLiteral("ar-EG"), QStringLiteral("Arabic (Egypt)"),
+                               QStringLiteral("Arabic (Egypt)"), {{QStringLiteral("Open"), QStringLiteral("فتح")}}));
+        QVERIFY(writeCatalogue(res + QStringLiteral("/de.json"), QStringLiteral("de"), QStringLiteral("Deutsch"), QStringLiteral("German"),
+                               {{QStringLiteral("Open"), QStringLiteral("Öffnen")}}));
+        // A language the app does not know: its catalogue says the direction ("rtl" only; anything else is LTR).
+        const auto withDirection = [](const QString& path, const QString& code, const QString& direction) {
+            const QJsonObject root{{QStringLiteral("code"), code}, {QStringLiteral("name"), code}, {QStringLiteral("direction"), direction},
+                                   {QStringLiteral("strings"), QJsonObject{{QStringLiteral("Open"), QStringLiteral("x")}}}};
+            return fwtest::writeTextFile(path, QJsonDocument(root).toJson());
+        };
+        QVERIFY(withDirection(res + QStringLiteral("/sd.json"), QStringLiteral("sd"), QStringLiteral("rtl")));
+        QVERIFY(withDirection(res + QStringLiteral("/sw.json"), QStringLiteral("sw"), QStringLiteral("RTL")));
+        QVERIFY(withDirection(user + QStringLiteral("/de.json"), QStringLiteral("de"), QStringLiteral("ltr")));
+        i18n::configure(res, user);
+
+        const QStringList rtl{QStringLiteral("ar"), QStringLiteral("ar-EG"), QStringLiteral("sd")};
+        const QStringList ltr{QStringLiteral("de"), QStringLiteral("sw")};
+        for (const QString& code : rtl) {
+            QVERIFY2(i18n::load(code), qPrintable(code));
+            QVERIFY2(i18n::isRightToLeft(), qPrintable(code));
+        }
+        for (const QString& code : ltr) {
+            QVERIFY2(i18n::load(code), qPrintable(code));
+            QVERIFY2(!i18n::isRightToLeft(), qPrintable(code));
+        }
+        for (const i18n::Language& l : i18n::available())
+            QCOMPARE(l.rightToLeft, rtl.contains(l.code));
+        QVERIFY(i18n::load(QStringLiteral("en")));
+        QVERIFY(!i18n::isRightToLeft());
+    }
+
+    // "qps-rtl": the pseudo-language's brackets swapped, a right-to-left mark first, and the direction.
+    void rightToLeftPseudoLanguage()
+    {
+        const auto [res, user] = folders();
+        QVERIFY(writeCatalogue(user + QStringLiteral("/qps-rtl.json"), QStringLiteral("qps-rtl"), QStringLiteral("Pseudo"), {},
+                               {{QStringLiteral("Open"), QStringLiteral("x")}}));
+        i18n::configure(res, user);
+        QVERIFY(i18n::load(i18n::pseudoRtlCode()));
+        QCOMPARE(i18n::currentCode(), QStringLiteral("qps-rtl"));
+        QVERIFY(i18n::isRightToLeft());
+        QCOMPARE(FW_TR("Open"), QString(QChar(0x200F)) + QChar(0x27E7) + QStringLiteral("Open") + QChar(0x27E6));
+        QCOMPARE(i18n::translate(QString()), QString());
+        QVERIFY(i18n::available().isEmpty()); // never in the picker; a file of that name is not a catalogue
+        QVERIFY(anyNoteHas(QStringLiteral("qps-rtl.json is ignored")));
+        QVERIFY(i18n::load(i18n::pseudoCode()));
+        QVERIFY(!i18n::isRightToLeft());
+    }
+
     void availableWithCoverage()
     {
         const auto [res, user] = folders();

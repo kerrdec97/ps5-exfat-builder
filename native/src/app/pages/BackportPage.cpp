@@ -770,6 +770,7 @@ void BackportPage::buildProgressCard()
     m_modeLine = label({}, TextStyle::Caption, color::fg_4, act);
     act->body()->addWidget(m_modeLine);
     m_logBox = new QTextEdit(act);
+    keepLeftToRight(m_logBox); // log, code or hex: left to right in any language
     m_logBox->setAccessibleName(FW_TR("Activity"));
     m_logBox->setReadOnly(true);
     m_logBox->setMinimumHeight(190);

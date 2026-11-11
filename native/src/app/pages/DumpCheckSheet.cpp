@@ -199,6 +199,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     // What was checked. Paths, names and messages come from the dump: shown literally.
     auto* path = new ElideLabel(nativePath(m_folder), Qt::ElideMiddle, this);
     path->setFont(font::mono());
+    keepLeftToRight(path);
     setTextColor(path, color::fg_1);
     path->setToolTip(plainTip(nativePath(m_folder)));
     body()->addWidget(path);

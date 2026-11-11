@@ -170,6 +170,7 @@ public:
     void paint(QPainter* p, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         p->save();
+        p->setLayoutDirection(option.direction); // the view's (kept left to right), not the application's
         // The selected row (with its accent bar) is the style's, painted before this.
         p->fillRect(QRect(option.rect.left(), option.rect.bottom(), option.rect.width(), 1), color::border_1);
         const auto tag = ps5::KlogTag(index.data(KlogModel::TagRole).toInt());
@@ -721,6 +722,7 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     });
     h->addSpacing(space::sm);
     m_crumbs = new QWidget(card);
+    keepLeftToRight(m_crumbs); // a path: "/ data / etaHEN" in any language
     m_crumbLayout = hbox(m_crumbs, 2);
     h->addWidget(m_crumbs, 1);
     m_filter = textInput(FW_TR("Filter this folder"), false, card);
@@ -800,6 +802,8 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     m_remote->horizontalHeader()->setSectionsClickable(true);
     m_remote->setColumnWidth(1, 104);
     m_remote->setColumnWidth(2, 150);
+    keepColumnLeftToRight(m_remote, 1); // "41.0 GB" and "2026-11-08 05:29" in any language
+    keepColumnLeftToRight(m_remote, 2);
     m_remote->verticalHeader()->hide();
     m_remote->verticalHeader()->setDefaultSectionSize(size::row);
     m_remote->setShowGrid(false);
@@ -1120,6 +1124,9 @@ void Ps5ConnectPage::rebuildBreadcrumb()
         delete it->widget();
         delete it;
     }
+    // The path reads left to right; right to left it stands at the row's start, its right end.
+    if (isRightToLeft())
+        m_crumbLayout->addStretch(1);
     QString acc;
     auto* root = new Link(QStringLiteral("/"), m_crumbs);
     root->setFont(font::mono());
@@ -1139,7 +1146,8 @@ void Ps5ConnectPage::rebuildBreadcrumb()
             m_crumbLayout->addWidget(label(QStringLiteral("/"), TextStyle::Mono, color::fg_5, m_crumbs));
         }
     }
-    m_crumbLayout->addStretch(1);
+    if (!isRightToLeft())
+        m_crumbLayout->addStretch(1);
 }
 
 QStringList Ps5ConnectPage::selectedRemotePaths() const
@@ -1811,6 +1819,7 @@ QWidget* Ps5ConnectPage::buildKlog(QWidget* parent)
     m_klogProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
     m_klogProxy->setFilterKeyColumn(KlogModel::TextColumn);
     m_klogView = new QTableView(card);
+    keepLeftToRight(m_klogView); // log, code or hex: left to right in any language
     m_klogView->setModel(m_klogProxy);
     m_klogView->setItemDelegate(new KlogDelegate(m_klogView));
     m_klogView->setShowGrid(false);

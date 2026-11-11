@@ -49,6 +49,7 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     body()->addWidget(m_errorBar);
 
     m_view = new QPlainTextEdit(this);
+    keepLeftToRight(m_view); // log, code or hex: left to right in any language
     m_view->setReadOnly(true);
     m_view->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_view->setUndoRedoEnabled(false);

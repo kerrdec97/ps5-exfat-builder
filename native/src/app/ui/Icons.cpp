@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QGuiApplication>
 #include <QHash>
 #include <QIconEngine>
 #include <QMutex>
@@ -44,7 +45,7 @@ QByteArray svgSource(const QString& name)
     return data;
 }
 
-QPixmap render(const QString& name, int size, const QColor& color, qreal dpr)
+QPixmap render(const QString& name, int size, const QColor& color, qreal dpr, bool mirror)
 {
     QByteArray svg = svgSource(name);
     if (svg.isEmpty())
@@ -59,6 +60,10 @@ QPixmap render(const QString& name, int size, const QColor& color, qreal dpr)
         p.setRenderHint(QPainter::Antialiasing);
         if (color.alpha() < 255)
             p.setOpacity(color.alphaF());
+        if (mirror) {
+            p.translate(px, 0);
+            p.scale(-1, 1);
+        }
         renderer.render(&p, QRectF(0, 0, px, px));
     }
     pm.setDevicePixelRatio(dpr);
@@ -120,14 +125,16 @@ QPixmap iconPixmap(const QString& name, int size, const QColor& color, qreal dpr
 {
     static QHash<QString, QPixmap> cache;
     static QMutex mutex;
-    const QString key = QStringLiteral("%1|%2|%3|%4").arg(name).arg(size).arg(color.name(QColor::HexArgb)).arg(dpr);
+    const bool mirror = QGuiApplication::isRightToLeft() && isMirroredRightToLeft(name);
+    const QString key = QStringLiteral("%1|%2|%3|%4%5").arg(name).arg(size).arg(color.name(QColor::HexArgb)).arg(dpr)
+                            .arg(mirror ? QStringLiteral("|m") : QString());
     {
         QMutexLocker lock(&mutex);
         auto it = cache.find(key);
         if (it != cache.end())
             return *it;
     }
-    QPixmap pm = render(name, size, color, dpr);
+    QPixmap pm = render(name, size, color, dpr, mirror);
     QMutexLocker lock(&mutex);
     if (cache.size() > 4000)
         cache.clear();
@@ -144,6 +151,14 @@ bool hasIcon(const QString& name)
 {
     ensureIconResources();
     return QFile::exists(QStringLiteral(":/icons/%1.svg").arg(name));
+}
+
+bool isMirroredRightToLeft(const QString& name)
+{
+    static const QStringList names{QStringLiteral("arrow_left"),   QStringLiteral("arrow_right"),   QStringLiteral("undo"),
+                                   QStringLiteral("sidebar"),      QStringLiteral("sidebar_close"), QStringLiteral("sidebar_open"),
+                                   QStringLiteral("login"),        QStringLiteral("logout"),        QStringLiteral("send")};
+    return names.contains(name);
 }
 
 QStringList iconNames()

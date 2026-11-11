@@ -134,6 +134,7 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         // Paths, names and notes below come from the job's result (the images' own file names): shown literally.
         auto* path = new ElideLabel(nativePath(side.value(QStringLiteral("path")).toString()), Qt::ElideMiddle, row);
         path->setFont(font::mono());
+        keepLeftToRight(path);
         setTextColor(path, color::fg_1);
         path->setToolTip(nativePath(side.value(QStringLiteral("path")).toString()));
         col->addWidget(path);

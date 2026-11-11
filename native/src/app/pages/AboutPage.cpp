@@ -36,6 +36,7 @@ protected:
     {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        mirrorPainter(p, this); // the glow is at the logo's end of the band
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         QPainterPath clip;
         clip.addRoundedRect(r, radius::lg, radius::lg);

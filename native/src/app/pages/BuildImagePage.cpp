@@ -306,41 +306,44 @@ protected:
         const qreal dpr = devicePixelRatioF();
         for (int i = 0; i < count(); ++i) {
             const Item& it = m_items[size_t(i)];
-            const QRectF r = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+            const QRectF tileR = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+            // The inside is worked out left to right and mirrored as it is drawn.
+            const QRectF r = mirrored(this, tileR);
+            const auto vis = [this](const QRectF& x) { return mirrored(this, x); };
             const bool sel = i == m_current;
             const qreal hov = sel ? 0.0 : m_hover->amount(i); // the hover tint fades
             if (sel) {
                 p.setPen(Qt::NoPen);
                 p.setBrush(color::bg_2);
-                p.drawRoundedRect(r, radius::md, radius::md);
-                p.setBrush(accentGradient(r, 34));
-                p.drawRoundedRect(r, radius::md, radius::md);
-                p.setPen(QPen(QBrush(accentGradient(r, 230)), 1.5));
+                p.drawRoundedRect(tileR, radius::md, radius::md);
+                p.setBrush(accentGradient(tileR, 34));
+                p.drawRoundedRect(tileR, radius::md, radius::md);
+                p.setPen(QPen(QBrush(accentGradient(tileR, 230)), 1.5));
                 p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
+                p.drawRoundedRect(tileR.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
             } else {
                 // As the library's choice tiles: a well in the card that lifts on hover.
                 p.setPen(QPen(blend(color::border_3, color::border_4, hov), 1));
                 p.setBrush(blend(color::field_bg, color::bg_3, hov));
-                p.drawRoundedRect(r, radius::md, radius::md);
+                p.drawRoundedRect(tileR, radius::md, radius::md);
             }
             // Icon square, top left (white only on the fill gradient).
             const QRectF ir(r.left() + 14, r.top() + 14, 32, 32);
             p.setPen(Qt::NoPen);
-            p.setBrush(sel ? QBrush(accentFillGradient(ir)) : QBrush(color::bg_4));
-            p.drawRoundedRect(ir, 9, 9);
-            p.drawPixmap(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18).toRect(),
+            p.setBrush(sel ? QBrush(accentFillGradient(vis(ir))) : QBrush(color::bg_4));
+            p.drawRoundedRect(vis(ir), 9, 9);
+            p.drawPixmap(vis(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18)).toRect(),
                          iconPixmap(it.icon, 18, sel ? color::on_accent : color::fg_2, dpr));
             // Check bubble and tag, top right.
             qreal right = r.right() - 14;
             if (sel) {
-                paintCheckBubble(p, QRectF(right - 20, r.top() + 20, 20, 20), dpr);
+                paintCheckBubble(p, vis(QRectF(right - 20, r.top() + 20, 20, 20)), dpr);
                 right -= 28;
             }
             if (!it.tag.isEmpty()) {
                 const qreal tw = badgeWidth(it.tag);
                 if (right - tw > ir.right() + 8)
-                    paintBadge(p, QRectF(right - tw, ir.center().y() - size::badge / 2.0, tw, size::badge), it.tag, Tone::Info);
+                    paintBadge(p, vis(QRectF(right - tw, ir.center().y() - size::badge / 2.0, tw, size::badge)), it.tag, Tone::Info);
             }
             // Title and up to three lines of description.
             const qreal tx = r.left() + 14;
@@ -348,19 +351,19 @@ protected:
             p.setFont(font::bodyStrong());
             p.setPen(color::fg_0);
             const QRectF titleR(tx, ir.bottom() + 10, tw, 20);
-            p.drawText(titleR, Qt::AlignLeft | Qt::AlignVCenter,
+            p.drawText(vis(titleR), Qt::AlignLeft | Qt::AlignVCenter,
                        QFontMetrics(font::bodyStrong()).elidedText(it.title, Qt::ElideRight, int(tw)));
             p.setFont(font::caption());
             p.setPen(color::fg_3);
             qreal y = titleR.bottom() + 2;
             for (const QString& l : wrapText(it.description, font::caption(), int(tw), 3)) {
-                p.drawText(QRectF(tx, y, tw, 16), Qt::AlignLeft | Qt::AlignVCenter, l);
+                p.drawText(vis(QRectF(tx, y, tw, 16)), Qt::AlignLeft | Qt::AlignVCenter, l);
                 y += 16;
             }
             if (hasFocus() && sel) {
                 p.setPen(QPen(color::focus, 2));
                 p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(r.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
+                p.drawRoundedRect(tileR.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
             }
         }
     }
@@ -394,8 +397,8 @@ protected:
         const int cols = columns(width());
         int next = m_current;
         switch (e->key()) {
-        case Qt::Key_Left: next = m_current - 1; break;
-        case Qt::Key_Right: next = m_current + 1; break;
+        case Qt::Key_Left: next = isRightToLeft() ? m_current + 1 : m_current - 1; break; // as on screen
+        case Qt::Key_Right: next = isRightToLeft() ? m_current - 1 : m_current + 1; break;
         case Qt::Key_Up: next = m_current - cols; break;
         case Qt::Key_Down: next = m_current + cols; break;
         default: QWidget::keyPressEvent(e); return;
@@ -433,7 +436,7 @@ private:
         const int cols = columns(width());
         const int w = (width() - (cols - 1) * kTileGap) / cols;
         const int row = i / cols, col = i % cols;
-        return QRect(col * (w + kTileGap), row * (kTileH + kTileGap), w, kTileH);
+        return mirrored(this, QRect(col * (w + kTileGap), row * (kTileH + kTileGap), w, kTileH)); // RTL: first at the right
     }
     int at(const QPoint& pt) const
     {
@@ -631,6 +634,7 @@ void BuildImagePage::buildSourceCard()
     setTextColor(m_stripMeta, color::fg_3);
     m_stripPath = new ElideLabel({}, Qt::ElideMiddle, strip);
     m_stripPath->setFont(font::monoSmall());
+    keepLeftToRight(m_stripPath);
     setTextColor(m_stripPath, color::fg_4);
     scol->addWidget(m_stripTitle);
     scol->addWidget(m_stripMeta);

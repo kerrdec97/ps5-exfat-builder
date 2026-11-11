@@ -68,6 +68,8 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
 
     m_table = new QTableWidget(0, ColumnCount, card);
     m_table->setHorizontalHeaderLabels({FW_TR("State"), FW_TR("Library"), FW_TR("Size"), FW_TR("Modified"), FW_TR("Folder on the PS5")});
+    for (const int c : {int(SizeCol), int(ModifiedCol), int(FolderCol)})
+        keepColumnLeftToRight(m_table, c); // sizes, dates, paths, IDs: left to right in any language
     styleToolTable(m_table, 6);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->horizontalHeader()->setSectionResizeMode(NameCol, QHeaderView::Stretch);

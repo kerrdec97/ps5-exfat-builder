@@ -462,9 +462,9 @@ void JobRow::paintEvent(QPaintEvent*)
     if (!underMouse() && m_hover->target() > 0.0)
         m_hover->animateTo(0.0); // the pointer left without a leave event (the list was rebuilt under it)
     if (m_selected) {
-        // Like a selected table row: accent_lo and the accent bar at its left edge.
+        // Like a selected table row: accent_lo and the accent bar at its start edge.
         p.fillRect(rect(), color::accent_lo);
-        p.fillRect(QRect(0, 0, 2, height()), color::accent);
+        p.fillRect(mirrored(this, QRect(0, 0, 2, height())), color::accent);
     } else if (m_hover->value() > 0.0) {
         p.fillRect(rect(), withAlpha(color::bg_3, int(255 * m_hover->value())));
     }
@@ -549,7 +549,7 @@ void JobRow::keyPressEvent(QKeyEvent* e)
             emit removeRequested(m_id);
         return;
     case Qt::Key_Menu:
-        showMenu(mapToGlobal(QPoint(width() - 40, height())));
+        showMenu(mapToGlobal(mirrored(this, QPoint(width() - 40, height()))));
         return;
     default: break;
     }

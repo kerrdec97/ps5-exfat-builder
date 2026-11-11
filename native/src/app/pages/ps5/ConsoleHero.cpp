@@ -55,7 +55,8 @@ void ServiceChip::paintEvent(QPaintEvent*)
     p.drawRoundedRect(r, r.height() / 2, r.height() / 2);
     // State dot (with a soft halo when running).
     const QColor dot = m_tone == Tone::Neutral ? color::fg_5 : toneMark(m_tone);
-    const QPointF c(r.left() + 14, r.center().y());
+    // Dot, icon, name and detail from the start edge: mirrored right to left.
+    const QPointF c(isRightToLeft() ? r.right() - 14 : r.left() + 14, r.center().y());
     if (m_tone == Tone::Ok) {
         QColor halo = dot;
         halo.setAlpha(60);
@@ -67,18 +68,18 @@ void ServiceChip::paintEvent(QPaintEvent*)
     p.setBrush(dot);
     p.drawEllipse(c, 3.5, 3.5);
     int x = int(r.left()) + 26;
-    p.drawPixmap(QRect(x, int(r.center().y()) - size::icon / 2, size::icon, size::icon),
+    p.drawPixmap(mirrored(this, QRect(x, int(r.center().y()) - size::icon / 2, size::icon, size::icon)),
                  iconPixmap(m_icon, size::icon, m_tone == Tone::Neutral ? color::fg_4 : color::fg_2, devicePixelRatioF()));
     x += size::icon + 8;
     p.setFont(font::bodyStrong());
     p.setPen(m_tone == Tone::Neutral ? color::fg_3 : color::fg_1);
     const QFontMetrics fn(font::bodyStrong());
-    p.drawText(QRect(x, 0, fn.horizontalAdvance(m_name) + 2, height()), Qt::AlignVCenter | Qt::AlignLeft, m_name);
+    p.drawText(mirrored(this, QRect(x, 0, fn.horizontalAdvance(m_name) + 2, height())), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, m_name), m_name);
     x += fn.horizontalAdvance(m_name) + 8;
     if (!m_detail.isEmpty()) {
         p.setFont(font::caption());
         p.setPen(m_tone == Tone::Warn ? color::warn_hi : m_tone == Tone::Err ? color::danger_hi : color::fg_3);
-        p.drawText(QRect(x, 0, width() - x - 10, height()), Qt::AlignVCenter | Qt::AlignLeft,
+        p.drawText(mirrored(this, QRect(x, 0, width() - x - 10, height())), Qt::AlignVCenter | Qt::AlignLeft,
                    QFontMetrics(font::caption()).elidedText(m_detail, Qt::ElideRight, width() - x - 10));
     }
     if (hasFocus()) {
@@ -285,6 +286,7 @@ void ConsoleHero::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    mirrorPainter(p, this); // the light behind the console tile: at the right right to left
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     QPainterPath clip;
     clip.addRoundedRect(r, radius::lg, radius::lg);

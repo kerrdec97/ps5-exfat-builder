@@ -1,5 +1,7 @@
 #include "app/ui/HomeKit.h"
 
+#include "app/ui/Widgets.h"
+
 #include <QWidget>
 
 #include <algorithm>
@@ -102,7 +104,7 @@ int TileGrid::doLayout(const QRect& rect, bool apply) const
         if (apply)
             for (int i = start; i < std::min<int>(start + cols, items.size()); ++i) {
                 const int c = i - start;
-                items[i]->setGeometry(QRect(rect.x() + c * (colW + m_h), y, colW, rowH));
+                items[i]->setGeometry(mirrored(this, rect, QRect(rect.x() + c * (colW + m_h), y, colW, rowH))); // RTL: first at the right
             }
         y += rowH + m_v;
     }

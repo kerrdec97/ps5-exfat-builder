@@ -138,7 +138,10 @@ void FwStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option
     case PE_IndicatorBranch: {
         if (!(option->state & State_Children))
             return;
-        const QString name = (option->state & State_Open) ? QStringLiteral("chevron_down") : QStringLiteral("chevron_right");
+        // Closed it points the way the tree reads: left in a right-to-left one.
+        const QString name = (option->state & State_Open)          ? QStringLiteral("chevron_down")
+                           : option->direction == Qt::RightToLeft ? QStringLiteral("chevron_left")
+                                                                   : QStringLiteral("chevron_right");
         paintChevron(painter, option->rect, name, option);
         return;
     }
@@ -261,6 +264,31 @@ void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, cons
             return;
         }
     }
+    // A plain-text label aligns its text by the text's own direction: right to
+    // left a number, a name or a path would stand at the left edge, away from
+    // the rest of the row. The label's direction decides instead (the text is
+    // still read its own way); a label of keepLeftToRight() is read LTR.
+    if (auto* l = qobject_cast<QLabel*>(dynamic_cast<QWidget*>(painter->device()))) {
+        if (l->property("fwLtrText").toBool())
+            flags = (flags & ~int(Qt::TextForceRightToLeft)) | Qt::TextForceLeftToRight;
+        if (l->isRightToLeft()) {
+            const int h = int(QStyle::visualAlignment(Qt::RightToLeft, l->alignment()) & Qt::AlignHorizontal_Mask);
+            flags = (flags & ~int(Qt::AlignHorizontal_Mask)) | h;
+        }
+    } else if (const QWidget* w = dynamic_cast<QWidget*>(painter->device());
+               painter->layoutDirection() == Qt::RightToLeft || (w && w->isRightToLeft())) {
+        // Right to left (a painter takes the application's direction, not the
+        // widget's): the text is placed as the widget's direction says, so a
+        // header of a log kept left to right is not pushed to the right. A
+        // button's or a header's text that is not right-to-left text (a name
+        // such as "ShadowMount+", a number) is read left to right, as a label
+        // reads it.
+        const Qt::LayoutDirection dir = w ? w->layoutDirection() : painter->layoutDirection();
+        const int h = int(QStyle::visualAlignment(dir, Qt::Alignment(flags & Qt::AlignHorizontal_Mask)));
+        flags = (flags & ~int(Qt::AlignHorizontal_Mask)) | (h & Qt::AlignHorizontal_Mask);
+        if (!(flags & (Qt::TextForceLeftToRight | Qt::TextForceRightToLeft)) && (dir == Qt::LeftToRight || !text.isRightToLeft()))
+            flags |= Qt::TextForceLeftToRight;
+    }
     QProxyStyle::drawItemText(painter, rect, flags, pal, enabled, text, textRole);
 }
 
@@ -353,7 +381,9 @@ void paintDropdownChevron(QComboBox* combo)
 {
     const QColor c = !combo->isEnabled() ? color::fg_5
                    : combo->underMouse() || (combo->view() && combo->view()->isVisible()) ? color::fg_1 : color::fg_3;
-    const QRect r(combo->width() - 1 - 26 + (26 - size::icon) / 2, (combo->height() - size::icon) / 2, size::icon, size::icon);
+    // The stylesheet's drop-down area is mirrored with the field: at the left right to left.
+    const QRect r = mirrored(combo, QRect(combo->width() - 1 - 26 + (26 - size::icon) / 2, (combo->height() - size::icon) / 2,
+                                          size::icon, size::icon));
     QPainter p(combo);
     p.drawPixmap(r, iconPixmap(QStringLiteral("chevron_down"), size::icon, c, combo->devicePixelRatioF()));
 }

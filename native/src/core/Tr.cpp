@@ -31,6 +31,7 @@ constexpr int kMaxNotes = 200;
 struct Catalogue {
     QString code;
     bool pseudo = false;
+    bool rightToLeft = false;
     QHash<QString, QString> strings;
 };
 
@@ -64,6 +65,7 @@ struct FileData {
     QString code;
     QString name;
     QString englishName;
+    bool rightToLeft = false; // "direction": "rtl"
     QHash<QString, QString> strings;
 };
 
@@ -141,7 +143,7 @@ QMap<QString, QString> catalogueFiles(const QString& dir, QStringList& notes)
                          .arg(fi.fileName());
             continue;
         }
-        if (base == u"en" || base == pseudoCode()) {
+        if (base == u"en" || base == pseudoCode() || base.compare(pseudoRtlCode(), Qt::CaseInsensitive) == 0) {
             notes << QStringLiteral("Language file %1 is ignored: \"%2\" is reserved.").arg(fi.fileName(), base);
             continue;
         }
@@ -184,6 +186,7 @@ std::optional<FileData> readCatalogueFile(const QString& path, QStringList& note
     }
     data.name = cleanName(root.value(QStringLiteral("name")).toString());
     data.englishName = cleanName(root.value(QStringLiteral("englishName")).toString());
+    data.rightToLeft = root.value(QStringLiteral("direction")).toString() == u"rtl";
 
     const QJsonObject strings = root.value(QStringLiteral("strings")).toObject();
     data.strings.reserve(strings.size());
@@ -246,6 +249,8 @@ std::optional<Merged> readLanguage(const QString& builtInPath, const QString& us
         m.language.nativeName = m.language.englishName.isEmpty() ? m.language.code : m.language.englishName;
     if (m.language.englishName.isEmpty())
         m.language.englishName = m.language.nativeName;
+    // The direction is the language's: either file may say "rtl", a known code is it anyway.
+    m.language.rightToLeft = isRightToLeftCode(m.language.code) || (builtIn && builtIn->rightToLeft) || (user && user->rightToLeft);
     return m;
 }
 
@@ -339,6 +344,20 @@ QString pseudoCode()
     return QStringLiteral("qps");
 }
 
+QString pseudoRtlCode()
+{
+    return QStringLiteral("qps-rtl");
+}
+
+bool isRightToLeftCode(const QString& code)
+{
+    const QString c = code.trimmed().toLower();
+    if (c == pseudoRtlCode())
+        return true;
+    const QString base = c.section(u'-', 0, 0);
+    return base == u"ar" || base == u"fa" || base == u"he" || base == u"ur";
+}
+
 bool isValidCode(const QString& code)
 {
     static const QRegularExpression re(QStringLiteral("\\A[a-z]{2,3}(?:-[A-Za-z]{2,4})?\\z"));
@@ -375,10 +394,15 @@ QString translate(const QString& english)
         if (english.isEmpty())
             return english;
         QString wrapped;
-        wrapped.reserve(english.size() + 2);
-        wrapped += QChar(0x27E6);
+        // Right to left the brackets are swapped, and a right-to-left mark
+        // first makes a label take the text for right-to-left text, as it
+        // does a real translation.
+        wrapped.reserve(english.size() + 3);
+        if (c->rightToLeft)
+            wrapped += QChar(0x200F);
+        wrapped += QChar(c->rightToLeft ? 0x27E7 : 0x27E6);
         wrapped += english;
-        wrapped += QChar(0x27E7);
+        wrapped += QChar(c->rightToLeft ? 0x27E6 : 0x27E7);
         return wrapped;
     }
     const auto it = c->strings.constFind(english);
@@ -393,10 +417,11 @@ bool load(const QString& requested, QString* problem)
     bool ok = true;
     if (code.isEmpty() || code.compare(QLatin1String("en"), Qt::CaseInsensitive) == 0) {
         // English: no catalogue.
-    } else if (code == pseudoCode()) {
+    } else if (code == pseudoCode() || code == pseudoRtlCode()) {
         next = std::make_unique<Catalogue>();
         next->code = code;
         next->pseudo = true;
+        next->rightToLeft = code == pseudoRtlCode();
     } else if (!isValidCode(code)) {
         notes << QStringLiteral("\"%1\" is not a language code; the interface stays English.").arg(shortened(code));
         ok = false;
@@ -415,6 +440,7 @@ bool load(const QString& requested, QString* problem)
         if (merged) {
             next = std::make_unique<Catalogue>();
             next->code = merged->language.code;
+            next->rightToLeft = merged->language.rightToLeft;
             next->strings = merged->strings;
         } else {
             notes << QStringLiteral("There is no usable language file for \"%1\"; the interface stays English.").arg(code);
@@ -432,6 +458,12 @@ QString currentCode()
 {
     const Catalogue* const c = g_active.load(std::memory_order_acquire);
     return c ? c->code : QStringLiteral("en");
+}
+
+bool isRightToLeft()
+{
+    const Catalogue* const c = g_active.load(std::memory_order_acquire);
+    return c && c->rightToLeft;
 }
 
 QList<Language> available()

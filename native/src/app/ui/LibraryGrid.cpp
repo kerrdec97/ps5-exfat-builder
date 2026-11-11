@@ -233,15 +233,18 @@ QRect LibraryGrid::itemRect(int i) const
         return QRect(0, kHeader + i * kRow, width(), kRow);
     const int cols = columns(width());
     const int tw = tileWidth(width());
-    return QRect((i % cols) * (tw + kGap), (i / cols) * (tw + kText + kGap), tw, tw + kText);
+    return mirrored(this, QRect((i % cols) * (tw + kGap), (i / cols) * (tw + kText + kGap), tw, tw + kText)); // RTL: first at the right
 }
 
+// Inside an item everything is worked out left to right in the item's mirror
+// image (itemRect() as it would be left to right) and mirrored where it is
+// drawn: right to left the check box, the cover and the columns start at the right.
 QRect LibraryGrid::checkRect(int i) const
 {
-    const QRect r = itemRect(i);
+    const QRect r = mirrored(this, itemRect(i));
     if (m_mode == Mode::List)
-        return QRect(r.left() + 10, r.center().y() - 9, 18, 18);
-    return QRect(r.left() + 10, r.top() + 10, 24, 24);
+        return mirrored(this, QRect(r.left() + 10, r.center().y() - 9, 18, 18));
+    return mirrored(this, QRect(r.left() + 10, r.top() + 10, 24, 24));
 }
 
 int LibraryGrid::itemAt(const QPoint& p) const
@@ -322,7 +325,8 @@ void LibraryGrid::paintCover(QPainter& p, const GridItem& it, const QRectF& r, q
         if (!roundBottom && r.width() > 100) {
             QColor faint = color::on_accent;
             faint.setAlpha(150);
-            p.drawPixmap(QRectF(r.left() + 12, r.bottom() - 30, 18, 18).toRect(), iconPixmap(it.icon, 18, faint, dpr));
+            p.drawPixmap(QRectF(isRightToLeft() ? r.right() - 30 : r.left() + 12, r.bottom() - 30, 18, 18).toRect(),
+                         iconPixmap(it.icon, 18, faint, dpr));
         }
     }
     p.restore();
@@ -350,7 +354,7 @@ qreal LibraryGrid::paintChips(QPainter& p, const GridItem& it, qreal x, qreal y,
     // `y` is the top of the 22 px chips.
     const auto chip = [&](const QString& t, bool neutral) {
         const qreal w = badgeWidth(t);
-        paintBadge(p, QRectF(x, y, w, size::badge), t, neutral ? Tone::Neutral : Tone::Info);
+        paintBadge(p, mirrored(this, QRectF(x, y, w, size::badge)), t, neutral ? Tone::Neutral : Tone::Info);
         x += w + kChipGap;
     };
     for (int c = 0; c < it.chips.size(); ++c) {
@@ -372,39 +376,43 @@ qreal LibraryGrid::paintChips(QPainter& p, const GridItem& it, qreal x, qreal y,
 void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
 {
     const GridItem& it = m_items[size_t(i)];
-    const QRectF r = QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5);
+    const QRectF tile = QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5);
+    const QRectF r = mirrored(this, tile); // left to right, mirrored as it is drawn
+    const auto vis = [this](const QRectF& x) { return mirrored(this, x); };
     const bool sel = m_selected.contains(it.key);
     const qreal hov = m_hover->amount(i); // 0..1: the hover tint fades
     // Card.
-    paintPlate(p, r, radius::md, hov);
+    paintPlate(p, tile, radius::md, hov);
     // Cover.
     const QRectF cover(r.left() + 1, r.top() + 1, r.width() - 2, r.width() - 2);
-    paintCover(p, it, cover, radius::md - 1, false);
+    paintCover(p, it, vis(cover), radius::md - 1, false);
     // Text.
     const qreal x = r.left() + 12;
     const qreal w = r.width() - 24;
     qreal y = cover.bottom() + 10;
     p.setFont(font::bodyStrong());
     p.setPen(color::fg_0);
-    p.drawText(QRectF(x, y, w, 18), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(font::bodyStrong()).elidedText(it.title, Qt::ElideRight, int(w)));
+    p.drawText(vis(QRectF(x, y, w, 18)), naturalText(this, Qt::AlignLeft | Qt::AlignVCenter, it.title),
+               QFontMetrics(font::bodyStrong()).elidedText(it.title, Qt::ElideRight, int(w)));
     y += 20;
     p.setFont(font::caption());
     p.setPen(color::fg_3);
-    p.drawText(QRectF(x, y, w, 16), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(font::caption()).elidedText(it.subtitle, Qt::ElideRight, int(w)));
+    p.drawText(vis(QRectF(x, y, w, 16)), naturalText(this, Qt::AlignLeft | Qt::AlignVCenter, it.subtitle),
+               QFontMetrics(font::caption()).elidedText(it.subtitle, Qt::ElideRight, int(w)));
     y += 20;
     qreal sizeW = 0;
     if (!it.size.isEmpty()) {
         p.setFont(font::caption());
         sizeW = QFontMetrics(font::caption()).horizontalAdvance(it.size);
         p.setPen(color::fg_4);
-        p.drawText(QRectF(r.right() - 12 - sizeW, y, sizeW, size::badge), Qt::AlignRight | Qt::AlignVCenter, it.size);
+        p.drawText(vis(QRectF(r.right() - 12 - sizeW, y, sizeW, size::badge)), leftToRightText(this, Qt::AlignRight | Qt::AlignVCenter), it.size);
     }
     paintChips(p, it, x, y, r.right() - 12 - sizeW - 6);
     // Selection.
     if (sel) {
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(QBrush(accentGradient(r, 240)), 2));
-        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
+        p.setPen(QPen(QBrush(accentGradient(tile, 240)), 2));
+        p.drawRoundedRect(tile.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
     }
     if (sel || i == m_hover->hovered() || !m_selected.isEmpty())
         paintCheck(p, checkRect(i), sel, true);
@@ -413,7 +421,7 @@ void LibraryGrid::paintTile(QPainter& p, int i, const QRect& rect)
     if (i == m_current && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(color::focus, 2));
-        p.drawRoundedRect(r.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
+        p.drawRoundedRect(tile.adjusted(2.5, 2.5, -2.5, -2.5), radius::md - 3, radius::md - 3);
     }
 }
 
@@ -428,7 +436,7 @@ void LibraryGrid::paintHeader(QPainter& p)
     qreal right = width() - 12;
     const auto col = [&](const QString& t, qreal w) {
         right -= w;
-        p.drawText(QRectF(right, y, w, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, t);
+        p.drawText(mirrored(this, QRectF(right, y, w, kHeader - 1)), Qt::AlignLeft | Qt::AlignVCenter, t);
         right -= 12;
     };
     if (badges && wide && m_headers.size() > 4)
@@ -440,7 +448,7 @@ void LibraryGrid::paintHeader(QPainter& p)
     if (wide && m_headers.size() > 1)
         col(m_headers[1], 170);
     if (!m_headers.isEmpty())
-        p.drawText(QRectF(titleX, y, right - titleX, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, m_headers[0]);
+        p.drawText(mirrored(this, QRectF(titleX, y, right - titleX, kHeader - 1)), Qt::AlignLeft | Qt::AlignVCenter, m_headers[0]);
     p.setPen(QPen(color::border_2, 1));
     p.drawLine(QPointF(0, kHeader - 0.5), QPointF(width(), kHeader - 0.5));
 }
@@ -448,7 +456,8 @@ void LibraryGrid::paintHeader(QPainter& p)
 void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
 {
     const GridItem& it = m_items[size_t(i)];
-    const QRectF r = QRectF(rect);
+    const QRectF r = mirrored(this, QRectF(rect)); // left to right, mirrored as it is drawn (a row is the full width)
+    const auto vis = [this](const QRectF& x) { return mirrored(this, x); };
     const bool sel = m_selected.contains(it.key);
     const qreal hov = m_hover->amount(i);
     if (sel || hov > 0.0) {
@@ -458,7 +467,7 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
     }
     paintCheck(p, checkRect(i), sel, false);
     const QRectF cover(r.left() + 10 + 18 + 14, r.center().y() - kListCover / 2.0, kListCover, kListCover);
-    paintCover(p, it, cover, radius::sm, true);
+    paintCover(p, it, vis(cover), radius::sm, true);
     const bool wide = listWide();
     const bool badges = std::any_of(m_items.begin(), m_items.end(), [](const GridItem& g) { return !g.badge.isEmpty(); });
     qreal right = r.right() - 12;
@@ -474,7 +483,7 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
             const int full = badgeWidth(it.badge);
             const qreal bw = std::min(c.width(), qreal(full));
             const QString shown = bw < full ? QFontMetrics(font::chip()).elidedText(it.badge, Qt::ElideRight, int(bw - 16)) : it.badge;
-            paintBadge(p, QRectF(c.left(), c.center().y() - size::badge / 2.0, bw, size::badge), shown, it.badgeTone);
+            paintBadge(p, vis(QRectF(c.left(), c.center().y() - size::badge / 2.0, bw, size::badge)), shown, it.badgeTone);
         }
     }
     {
@@ -485,24 +494,25 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
         const QRectF c = colRect(80);
         p.setFont(font::mono());
         p.setPen(color::fg_3);
-        p.drawText(c, Qt::AlignLeft | Qt::AlignVCenter, it.size);
+        p.drawText(vis(c), leftToRightText(this, Qt::AlignLeft | Qt::AlignVCenter), it.size);
     }
     if (wide) {
         const QRectF c = colRect(170);
         p.setFont(font::mono());
         p.setPen(color::fg_1);
-        p.drawText(c, Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(font::mono()).elidedText(it.subtitle, Qt::ElideRight, int(c.width())));
+        p.drawText(vis(c), leftToRightText(this, Qt::AlignLeft | Qt::AlignVCenter),
+                   QFontMetrics(font::mono()).elidedText(it.subtitle, Qt::ElideRight, int(c.width())));
     }
     const qreal tx = cover.right() + 12;
     const qreal tw = right - tx;
     p.setFont(font::bodyStrong());
     p.setPen(color::fg_0);
-    p.drawText(QRectF(tx, r.center().y() - 18, tw, 18), Qt::AlignLeft | Qt::AlignVCenter,
+    p.drawText(vis(QRectF(tx, r.center().y() - 18, tw, 18)), naturalText(this, Qt::AlignLeft | Qt::AlignVCenter, it.title),
                QFontMetrics(font::bodyStrong()).elidedText(it.title, Qt::ElideRight, int(tw)));
     const QString second = wide ? it.path : it.subtitle;
     p.setFont(wide ? font::monoSmall() : font::caption());
     p.setPen(color::fg_4);
-    p.drawText(QRectF(tx, r.center().y() + 1, tw, 16), Qt::AlignLeft | Qt::AlignVCenter,
+    p.drawText(vis(QRectF(tx, r.center().y() + 1, tw, 16)), wide ? leftToRightText(this, Qt::AlignLeft | Qt::AlignVCenter) : int(Qt::AlignLeft | Qt::AlignVCenter),
                QFontMetrics(p.font()).elidedText(second, wide ? Qt::ElideMiddle : Qt::ElideRight, int(tw)));
     if (i == m_current && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {
         p.setBrush(Qt::NoBrush);
@@ -600,8 +610,13 @@ void LibraryGrid::keyPressEvent(QKeyEvent* e)
     int next = m_current < 0 ? 0 : m_current;
     m_keyNav = true;
     switch (e->key()) {
-    case Qt::Key_Right: next = m_current < 0 ? 0 : m_current + 1; break;
-    case Qt::Key_Left: next = m_current - 1; break;
+    case Qt::Key_Right: // left and right as they are on screen
+    case Qt::Key_Left:
+        if ((e->key() == Qt::Key_Right) != isRightToLeft())
+            next = m_current < 0 ? 0 : m_current + 1;
+        else
+            next = m_current - 1;
+        break;
     case Qt::Key_Down: next = m_current < 0 ? 0 : m_current + cols; break;
     case Qt::Key_Up: next = m_current - cols; break;
     case Qt::Key_Home: next = 0; break;

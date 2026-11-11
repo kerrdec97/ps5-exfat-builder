@@ -85,7 +85,7 @@ QSize NavItem::sizeHint() const
     return {m_compact ? 44 : 224, size::navItem};
 }
 
-QRect NavItem::barRect() const { return QRect(1, (height() - 18) / 2, 3, 18); }
+QRect NavItem::barRect() const { return mirrored(this, QRect(1, (height() - 18) / 2, 3, 18)); } // the start edge
 
 void NavItem::paintSelectionBar(QPainter& p, const QRectF& r)
 {
@@ -146,7 +146,7 @@ void NavItem::paintEvent(QPaintEvent*)
     }
     const QColor textColor = sel || m_dropTarget ? color::fg_0 : blend(color::fg_2, color::fg_0, hover);
     const int ix = m_compact ? (width() - size::icon) / 2 : 14;
-    const QRect iconRect(ix, (height() - size::icon) / 2, size::icon, size::icon);
+    const QRect iconRect = mirrored(this, QRect(ix, (height() - size::icon) / 2, size::icon, size::icon));
     if (sel)
         p.drawPixmap(iconRect, iconPixmap(m_icon, size::icon, color::accent_hi, devicePixelRatioF()));
     else
@@ -159,17 +159,18 @@ void NavItem::paintEvent(QPaintEvent*)
             const QString n = QString::number(m_count);
             const int bw = std::max(20, badgeWidth(n, false, true));
             const QRect br(width() - 10 - bw, (height() - size::badgeCount) / 2, bw, size::badgeCount);
-            paintBadge(p, br, n, Tone::Info, {}, true);
+            paintBadge(p, mirrored(this, br), n, Tone::Info, {}, true);
             right = br.left() - 6;
             p.setPen(textColor);
             p.setFont(sel ? font::bodyStrong() : font::body());
         }
         const QRect tr(14 + size::icon + 12, 0, right - (14 + size::icon + 12), height());
-        p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width()));
+        p.drawText(mirrored(this, tr), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, text()),
+                   QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width()));
     } else if (m_count > 0) {
         p.setPen(Qt::NoPen);
         p.setBrush(color::accent_hi);
-        p.drawEllipse(QRect(width() - 13, 8, 7, 7));
+        p.drawEllipse(mirrored(this, QRect(width() - 13, 8, 7, 7)));
     }
 }
 
@@ -241,6 +242,7 @@ bool Sidebar::eventFilter(QObject* watched, QEvent* event)
 void Sidebar::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
+    mirrorPainter(p, this); // the border on the page's side
     p.fillRect(rect(), color::bg_0);
     QLinearGradient glow(QPointF(0, 0), QPointF(0, 260));
     QColor a = color::accent;
@@ -444,6 +446,7 @@ void AppHeader::setVersion(const QString& version)
 void AppHeader::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
+    mirrorPainter(p, this); // right to left the logo and the glow are at the right
     p.fillRect(rect(), color::bg_0);
     // A faint brand glow under the logo; the edge to the page is border_2,
     // tinted by the gradient where the glow meets it.

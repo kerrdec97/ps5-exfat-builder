@@ -30,6 +30,7 @@ struct Language {
     QString englishName; // "German"
     bool builtIn = false; // shipped with the app (a user file may still correct it)
     int coverage = 0;    // per cent of the app's source strings that have a usable entry
+    bool rightToLeft = false; // written right to left: a known code (ar, fa, he, ur) or "direction": "rtl"
 };
 
 // Where catalogues are read from: the folder of the built-in ones (a resource
@@ -46,7 +47,8 @@ QString translate(const QString& english);
 
 // Loads the catalogue of `code` (built-in, then the user's file merged over
 // it). "en" or an empty code unloads; "qps" is the pseudo-language that shows
-// every translated text as ⟦text⟧ (for checking what is marked). Returns false
+// every translated text as ⟦text⟧ (for checking what is marked), "qps-rtl" its
+// right-to-left twin (see pseudoRtlCode()). Returns false
 // and stays English when the code is not valid or has no usable file.
 // `problem` receives what was ignored or dropped, one note per line (it can be
 // set although the call succeeded). Meant to be called once, at start; texts
@@ -56,13 +58,23 @@ bool load(const QString& code, QString* problem = nullptr);
 // "en" when nothing is loaded.
 QString currentCode();
 
+// True when the loaded language is written right to left (the window is then
+// laid out mirrored). False for English and when nothing is loaded.
+bool isRightToLeft();
+// True for the code of a language written right to left: ar, fa, he, ur, also
+// with a region ("ar-EG"), and the pseudo-language "qps-rtl".
+bool isRightToLeftCode(const QString& code);
+
 // Every language that has a usable catalogue, built-in or the user's, sorted
-// by English name. English itself and "qps" are not in the list. Read from
+// by English name. English itself, "qps" and "qps-rtl" are not in the list. Read from
 // disk once and remembered until configure() is called again.
 QList<Language> available();
 
 // The fixed code of the pseudo-language.
 QString pseudoCode();
+// The right-to-left pseudo-language "qps-rtl": every text as ⟧text⟦ and the
+// window mirrored, for checking the layout of RTL languages without one.
+QString pseudoRtlCode();
 // True for a well-formed language code: [a-z]{2,3}(-[A-Za-z]{2,4})?
 bool isValidCode(const QString& code);
 

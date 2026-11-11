@@ -1518,6 +1518,8 @@ QWidget* LibraryPage::buildLanguagesTab()
     m_langTable = new QTableWidget(0, 5, m_langCard);
     m_langTable->setAccessibleName(FW_TR("Languages"));
     m_langTable->setHorizontalHeaderLabels({FW_TR("Keep"), FW_TR("Language"), FW_TR("Code"), FW_TR("Folder or file"), FW_TR("Size")});
+    for (const int c : {2, 3, 4})
+        keepColumnLeftToRight(m_langTable, c); // sizes, dates, paths, IDs: left to right in any language
     m_langTable->horizontalHeader()->setFixedHeight(32);
     m_langTable->horizontalHeader()->setHighlightSections(false);
     m_langTable->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);

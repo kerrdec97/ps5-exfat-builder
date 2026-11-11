@@ -66,6 +66,7 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
     auto* up = new IconButton(QStringLiteral("arrow_up"), FW_TR("Up one level"), IconButton::Size::Small, top);
     auto* pathLabel = new ElideLabel(QString(), Qt::ElideMiddle, top);
     pathLabel->setFont(font::mono());
+    keepLeftToRight(pathLabel);
     setTextColor(pathLabel, color::fg_0);
     th->addWidget(up);
     th->addWidget(pathLabel, 1);

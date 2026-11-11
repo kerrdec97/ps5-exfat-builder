@@ -37,6 +37,7 @@ TransferRow::TransferRow(QWidget* parent) : QWidget(parent)
     ml->addWidget(top);
     m_item = new ElideLabel({}, Qt::ElideMiddle, mid);
     m_item->setFont(font::monoSmall());
+    keepLeftToRight(m_item);
     setTextColor(m_item, color::fg_3);
     ml->addWidget(m_item);
     m_bar = new ProgressBar(mid);
