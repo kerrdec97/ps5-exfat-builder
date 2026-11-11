@@ -124,6 +124,23 @@ Each module exposes `void fw::<name>::registerModule(fw::ModuleContext&)` in
 Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
 `QThread`, `QtConcurrent`); never use them from `std::thread`.
 
+## Archives as build sources
+
+`core/ArchiveSource.h`: a build job's `source` may be a `.zip`, `.7z` or `.rar` of a dump (the first bytes decide
+the reader, not the name). `validate()` lists the archive (nothing is unpacked) and checks it holds exactly one
+game; `run()` unpacks only the game into `<tempDir>/zip-source` in one pass, after a free-space check from the listed
+sizes, with every checksum verified and file times kept, then builds from that folder. ZIP uses the app's own reader
+(`core/Zip.*`); 7z and RAR use libarchive 3.8.11 with liblzma 5.8.4 (`core/ArchiveReader.*`,
+`cmake/ArchiveLibs.cmake`: only the 7z, RAR and RAR5 readers are compiled, with the hand-written configuration in
+`cmake/libarchive/`, so the app's configure runs no libarchive platform checks). A 7z or RAR list is kept while the
+file is unchanged; `param.json` is read from it only within a budget (256 MiB, 5 s), else the game is shown without
+it. Refused, each with one sentence: password-protected archives, solid RAR 4, RAR 5 dictionaries over 64 MiB,
+unsupported methods (named), a later part of a multi-part RAR (the first part is named) or a missing part, damaged or
+cut-short archives (the entry is named), unsafe or Windows-unstorable names, names that differ only in case, more than
+2,000,000 entries, a 7z list of files over 64 MiB, a file larger than listed. Links are counted and never created.
+Tests: `tests/core/tst_archive_source.cpp` (7z made with libarchive's writer, linked into that test only; fixtures in
+`tests/data/archives` made by hand with 7-Zip, see `make_archive_fixtures.py`; RAR from libarchive's own samples).
+
 ## Testing switches
 
 `FW_DATA_DIR` isolates the app's own data (tests, CI). The Backport page also
