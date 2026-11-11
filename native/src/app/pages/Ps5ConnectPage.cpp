@@ -1031,7 +1031,7 @@ void Ps5ConnectPage::showListing(const RemoteListing& listing)
     if (!m_filter->text().isEmpty())
         emit m_filter->textChanged(m_filter->text());
     const ps5::DestinationInfo d = ps5::classifyDestination(m_remoteDir);
-    m_destClass->setText(d.label);
+    m_destClass->setText(fw::i18n::translate(d.label)); // English in connect: also logged
     // The place that holds this folder.
     int best = -1, bestLen = -1;
     for (int r = 0; r < m_places->count(); ++r) {
@@ -1159,8 +1159,29 @@ bool Ps5ConnectPage::confirmProtected(const QString& path, const QString& action
 {
     if (!ps5::isProtectedRemotePath(path))
         return true;
+    // ps5::protectedPathWarning() as whole sentences, one per action: that
+    // function's text is also an error message and stays English.
+    const auto warning = [&]() -> QString {
+        if (action == QLatin1String("upload"))
+            return FW_TR("The target is a protected PS5 folder:\n\n    %1\n\nIt holds system files, installed apps or "
+                                 "saves (/system, /system_ex, /preinst, /user/app, /user/home…). Changing it can brick your "
+                                 "console or lose data. This is almost never what you want.\n\nContinue with \"upload\" anyway?").arg(path);
+        if (action == QLatin1String("delete"))
+            return FW_TR("The target is a protected PS5 folder:\n\n    %1\n\nIt holds system files, installed apps or "
+                                 "saves (/system, /system_ex, /preinst, /user/app, /user/home…). Changing it can brick your "
+                                 "console or lose data. This is almost never what you want.\n\nContinue with \"delete\" anyway?").arg(path);
+        if (action == QLatin1String("rename"))
+            return FW_TR("The target is a protected PS5 folder:\n\n    %1\n\nIt holds system files, installed apps or "
+                                 "saves (/system, /system_ex, /preinst, /user/app, /user/home…). Changing it can brick your "
+                                 "console or lose data. This is almost never what you want.\n\nContinue with \"rename\" anyway?").arg(path);
+        if (action == QLatin1String("create a folder"))
+            return FW_TR("The target is a protected PS5 folder:\n\n    %1\n\nIt holds system files, installed apps or "
+                                 "saves (/system, /system_ex, /preinst, /user/app, /user/home…). Changing it can brick your "
+                                 "console or lose data. This is almost never what you want.\n\nContinue with \"create a folder\" anyway?").arg(path);
+        return ps5::protectedPathWarning(path, action);
+    };
     // Plain text: the sheet shows the warning as it is written.
-    return Sheet::confirm(window(), FW_TR("Change a system folder?"), ps5::protectedPathWarning(path, action),
+    return Sheet::confirm(window(), FW_TR("Change a system folder?"), warning(),
                           FW_TR("Cancel"), FW_TR("Continue anyway"), true, Sheet::Icon::Warning);
 }
 
@@ -2165,7 +2186,7 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
     for (const ps5::Y2jbYoutubeVersion& v : ps5::y2jbYoutubeVersions()) {
         tg->addWidget(label(QStringLiteral("%1 – %2").arg(v.firmwareFrom, v.firmwareTo), TextStyle::Mono, color::fg_2, table), row, 0);
         tg->addWidget(label(v.youtube, TextStyle::Mono, color::fg_1, table), row, 1);
-        auto* ex = label(v.exploit, TextStyle::Caption, color::fg_3, table);
+        auto* ex = label(fw::i18n::translate(v.exploit), TextStyle::Caption, color::fg_3, table);
         ex->setToolTip(FW_TR("From %1").arg(v.source));
         tg->addWidget(ex, row, 2);
         ++row;
