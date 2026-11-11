@@ -6,6 +6,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
+#include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
 #include "engines/ampr/Lz4Pack.h"
 #include "engines/ampr/Module.h"
@@ -129,9 +130,21 @@ QString sourceKindOf(const QString& path)
         return QStringLiteral("ffpkg");
     if (ext == QLatin1String("gp5"))
         return QStringLiteral("gp5");
-    if (ext == QLatin1String("zip"))
-        return QStringLiteral("zip"); // a zipped dump (#67): exFAT, FFPKG and PFS unpack it first
+    if (archive::archiveSourceSuffixes().contains(ext, Qt::CaseInsensitive))
+        return QStringLiteral("zip"); // an archived dump (#67, #37): exFAT, FFPKG and PFS unpack it first
     return fi.exists() ? QStringLiteral("file") : QStringLiteral("folder");
+}
+
+// The name of an archived dump without its extension, and without the
+// ".part1" of a multi-part RAR ("Game.part1.rar" -> "Game").
+QString sourceStem(const QFileInfo& fi)
+{
+    QString stem = fi.completeBaseName();
+    if (archive::isArchiveSource(fi.absoluteFilePath())) {
+        static const QRegularExpression part(QStringLiteral("\\.part\\d+$"), QRegularExpression::CaseInsensitiveOption);
+        stem.remove(part);
+    }
+    return stem;
 }
 
 // " · zstd-packed" for a game folder whose files are in zstd or LZ4 packs.
@@ -593,7 +606,7 @@ void BuildImagePage::buildSourceCard()
     m_sourceBadge = new Badge(QStringLiteral("Step 1"), Tone::Neutral, source);
     m_sourceBadge->setIconName(QString());
     source->setTitle(QStringLiteral("Game dump"), m_sourceBadge);
-    m_drop = new DropZone(QStringLiteral("folder_open"), QStringLiteral("Drop a game dump folder or a zipped dump here"),
+    m_drop = new DropZone(QStringLiteral("folder_open"), QStringLiteral("Drop a game dump folder or an archive (.zip, .7z, .rar) here"),
                           QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"), source);
     m_drop->setAccessibleName(QStringLiteral("Choose the source"));
     connect(m_drop, &DropZone::clicked, this, &BuildImagePage::browseSource);
@@ -1224,7 +1237,7 @@ void BuildImagePage::onFormatChanged()
     setFeatureName(pkg ? QStringLiteral("Package building") : folder ? QStringLiteral("Packing a game folder") : QStringLiteral("Image building"));
     sourceCard()->setTitleText(pkg ? QStringLiteral("Source") : QStringLiteral("Game dump"));
     m_drop->setTitle(pkg ? QStringLiteral("Drop a game folder, an image or a .gp5 project here")
-                         : QStringLiteral("Drop a game dump folder or a zipped dump here"));
+                         : QStringLiteral("Drop a game dump folder or an archive (.zip, .7z, .rar) here"));
     m_drop->setText(pkg ? QStringLiteral("or click to browse \u2014 a folder, an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
                         : QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"));
     if (t == jobs::kFormatExfat)
@@ -1408,8 +1421,8 @@ bool BuildImagePage::acceptsDrop(const QList<QUrl>& urls) const
         return true;
     static const QStringList exts = {QStringLiteral("exfat"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs"),
                                      QStringLiteral("ffpkg"), QStringLiteral("gp5")};
-    if (tile() != kFormatFpkg && fi.isFile() && fi.suffix().compare(QLatin1String("zip"), Qt::CaseInsensitive) == 0)
-        return true; // a zipped dump
+    if (tile() != kFormatFpkg && fi.isFile() && archive::isArchiveSource(fi.absoluteFilePath()))
+        return true; // an archived dump
     return tile() == kFormatFpkg && fi.isFile() && exts.contains(fi.suffix().toLower());
 }
 
@@ -1471,13 +1484,13 @@ void BuildImagePage::browseSource()
     if (!isFpkg()) {
         QMenu menu(this);
         auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
-        auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Zipped dump (.zip)\u2026"));
+        auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Archived dump (.zip, .7z, .rar)\u2026"));
         QAction* chosen = menu.exec(at);
         if (chosen == folder)
             picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game dump folder"), start);
         else if (chosen == zip)
-            picked = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the zipped dump"), start,
-                                                  QStringLiteral("ZIP archives (*.zip)"));
+            picked = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the archived dump"), start,
+                                                  archive::archiveSourceFilter());
     } else {
         QMenu menu(this);
         auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
@@ -1553,7 +1566,7 @@ void BuildImagePage::setSource(const QString& path)
     s.exists = fi.exists();
     s.isGame = fi.exists();
     s.bytes = fi.size();
-    s.title = fi.completeBaseName();
+    s.title = sourceStem(fi);
     static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);
     if (const auto m = re.match(fi.fileName()); m.hasMatch())
         s.titleId = (m.captured(1) + m.captured(2)).toUpper();
@@ -1657,7 +1670,7 @@ void BuildImagePage::refreshSourceState()
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
             m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(s.error.isEmpty() ? QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
+            m_sourceMsg->set(s.error.isEmpty() ? QStringLiteral("This archive holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
             m_sourceBadge->set(QStringLiteral("Not a game"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip")) {
@@ -2032,7 +2045,7 @@ void BuildImagePage::renderFileName()
     f.firmware = fwOverride.isEmpty() || fwOverride == QLatin1String("auto") ? gameinfo::firmwareMajor(m_summary.requiredFw) : fwOverride;
     f.sdk = m_summary.sdk;
     f.type = typeLabel(tile());
-    f.folderName = sourceKind() == QLatin1String("zip") ? QFileInfo(m_summary.folder).completeBaseName() : QFileInfo(m_summary.folder).fileName();
+    f.folderName = sourceKind() == QLatin1String("zip") ? sourceStem(QFileInfo(m_summary.folder)) : QFileInfo(m_summary.folder).fileName();
     QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), f);
     // A packed folder next to the dump under the dump's own name would be the dump itself.
     if (isZstdFolder() && sourceKind() == QLatin1String("folder") && !name.isEmpty()
@@ -2257,10 +2270,10 @@ QString BuildImagePage::validateForm()
             if (!m_summary.error.isEmpty())
                 return m_summary.error;
             if (!m_summary.isGame)
-                return QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).");
+                return QStringLiteral("This archive holds no game (no eboot.bin or sce_sys/param.json).");
         } else if (kind != QLatin1String("folder"))
-            return isZstdFolder() ? QStringLiteral("A packed folder is made from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.")
-                                  : QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.");
+            return isZstdFolder() ? QStringLiteral("A packed folder is made from a game folder or an archived dump. Choose the dump, or choose FPKG to package this file.")
+                                  : QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or an archived dump. Choose the dump, or choose FPKG to package this file.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
                                                   : QStringLiteral("The source folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");

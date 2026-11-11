@@ -264,6 +264,8 @@ QList<QStringList> AboutPage::thirdPartyComponents()
         {QStringLiteral("LibProsperoPKG (SvenGDK)"), FW_TR("Facts used by the FPKG engine: PS5 flat-path hash, UCP layout"), QStringLiteral("GPL-3.0-or-later")},
         {QStringLiteral("zstd 1.5.7 (Meta Platforms)"), FW_TR("zstd packs"), QStringLiteral("BSD-3-Clause")},
         {QStringLiteral("LZ4 1.10.0 (Yann Collet)"), FW_TR("Reading LZ4 packs"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("libarchive 3.8.11 (Tim Kientzle and contributors)"), FW_TR("Reading 7z and RAR build sources"), QStringLiteral("BSD-2-Clause")},
+        {QStringLiteral("liblzma from XZ Utils 5.8.4 (Lasse Collin and contributors)"), FW_TR("LZMA decompression for 7z"), QStringLiteral("0BSD")},
         {QStringLiteral("ps5-dump-forge (quer3q)"), FW_TR("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0-or-later")},
         {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), FW_TR("Format of the zstd packs; its PS5 runtime is bundled unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0-or-later")},
         {QStringLiteral("Lucide icons"), FW_TR("Interface icons"), QStringLiteral("ISC")},
