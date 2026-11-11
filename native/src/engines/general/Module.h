@@ -10,6 +10,10 @@ void registerModule(ModuleContext& ctx);
 
 // Keys declared here (consumers: JobQueue, main.cpp, FileUtil callers).
 namespace keys {
+// The interface language: "en" or the code of a catalogue (core/Tr.h). Its
+// choices are the catalogues fw::i18n::available() finds when the module is
+// registered, so fw::i18n::configure() comes first (main.cpp).
+inline const QString kLanguage = QStringLiteral("general.language");
 inline const QString kConfirmOnClose = QStringLiteral("general.confirmCloseWhileBusy");
 inline const QString kNotifyOnFinish = QStringLiteral("general.notifyOnFinish");
 inline const QString kRestoreQueue = QStringLiteral("general.restoreQueueOnStart");

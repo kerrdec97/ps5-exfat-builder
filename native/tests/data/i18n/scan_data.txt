@@ -1,0 +1,40 @@
+// Sample C++ for tst_i18n_source (scannerFindsStagesAndTools): stage names
+// and tool texts as the modules write them. Not compiled.
+class BuildJob : public Job {
+    QStringList phases() const override { return {QStringLiteral("Scanning"), QStringLiteral("Writing image")}; }
+    QString subtitle() const override { return QStringLiteral("not a stage"); }
+};
+QStringList CheckJob::phases() const
+{
+    QStringList p{QStringLiteral("Connecting")};
+    if (m_mode == u"speed")
+        p << QStringLiteral("Speed test");
+    return p;
+}
+QStringList buildPhases()
+{
+    return {QStringLiteral("Planning"),
+            QStringLiteral("Packing")}; // QStringLiteral("In a comment")
+}
+QStringList phases() const;
+void run(ProgressReporter* pr)
+{
+    pr->setPhases({QStringLiteral("Checking the header"), QStringLiteral("Verifying")}, {1, 99});
+    pr->setPhases(phases(), weights);
+    pr->begin(QStringLiteral("Saving"), size, 1);
+    ctx.progress->beginStep(QStringLiteral("Unpacking ZIP"), bytes, files);
+    list.begin();
+    ctx.log.info(QStringLiteral("not a stage either"));
+}
+void ProgressReporter::setPhases(const QStringList& names, const QList<double>& weights)
+{
+    log(QStringLiteral("nor this"));
+}
+void registerModule(ModuleContext& ctx)
+{
+    ctx.dependencies.add(QStringLiteral("sony.pubcmd"), QStringLiteral("Publishing Tools (pub-cmd)"),
+                         QStringLiteral("Builds packages. "
+                                        "You supply your own copy."),
+                         probePubCmd);
+    ctx.jobs.add(kJob, QStringLiteral("a job kind is read from the registry"), make);
+}
