@@ -1,0 +1,6 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/lang">
+    <file alias="_source.json">lang/_source.json</file>
+    <file alias="de.json">lang/de.json</file>
+</qresource>
+</RCC>

@@ -1,0 +1,25 @@
+// Sample C++ for tst_i18n_source (scannerReadsMarkedTexts): what the scanner
+// must find as marked texts, and what it must leave alone. Not compiled.
+#define FW_TR(s) ::fw::i18n::translate(QStringLiteral(s))
+#  define FW_TR_NOOP(s) QStringLiteral(s)
+// FW_TR("In a line comment")
+/* FW_TR("In a block comment")
+   FW_TR_NOOP("and its second line") */
+void f()
+{
+    auto a = FW_TR("Plain");
+    auto b = FW_TR("Two "
+                   "parts, a \"quote\", a back\\slash,\na line and a\ttab");
+    auto c = FW_TR ( "Spaced" ) ;
+    auto d = FW_TR("Größe: %1 …");
+    auto e = FW_TR("Escapes: \u2026 \xE9 \101");
+    auto f = FW_TR(R"(Raw "text" \n)");
+    auto g = FW_TR_NOOP("Table entry");
+    auto h = QStringLiteral("FW_TR(\"inside a text\")");
+    auto i = XFW_TR("Not the macro");
+    auto j = FW_TRANSLATE("Not the macro either");
+    auto k = FW_TR("With a // slash and /* stars */");
+    char q = '"'; auto l = FW_TR("After a quote character");
+    auto m = FW_TR("Split" /* a note */ " by a comment");
+    auto n = 1'000; auto o = FW_TR("After a digit separator");
+}

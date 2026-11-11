@@ -5,6 +5,7 @@
 #include <QThread>
 
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <algorithm>
 
@@ -95,6 +96,32 @@ void registerModule(ModuleContext& ctx)
     int order = 0;
 
     // ---- General --------------------------------------------------------------
+    // The languages are those that have a catalogue now (built into the app or
+    // in the user's lang folder); a language name is shown as it is, never
+    // translated. A stored code whose catalogue is gone falls back to English
+    // when the settings are loaded.
+    QStringList languageCodes;
+    {
+        SettingDef d;
+        d.key = keys::kLanguage;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("Interface");
+        d.label = QStringLiteral("Language");
+        d.description = QStringLiteral("The interface language. Log files and some technical messages stay in English. "
+                                       "Translations are machine-made; you can correct them: see the lang folder.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("en");
+        d.choices = {{QStringLiteral("en"), QStringLiteral("English"), {}}};
+        for (const i18n::Language& l : i18n::available()) {
+            const QString name = l.nativeName == l.englishName ? l.nativeName
+                                                                : QStringLiteral("%1 (%2)").arg(l.nativeName, l.englishName);
+            d.choices.append({l.code, name, {}});
+            languageCodes << l.code;
+        }
+        d.restartRequired = true;
+        d.order = -1; // first in the section: it must be found without reading the rest
+        s.add(d);
+    }
     {
         SettingDef d;
         d.key = keys::kConfirmOnClose;
@@ -500,6 +527,19 @@ void registerModule(ModuleContext& ctx)
         if (v.toBool())
             return QVariant(QStringLiteral("full"));
         return std::nullopt;
+    });
+    // The old app had one Chinese and one Portuguese; a language that has no
+    // catalogue here (Arabic) becomes English.
+    s.addLegacyKey(QStringLiteral("language"), keys::kLanguage, [languageCodes](const QVariant& v) -> std::optional<QVariant> {
+        QString code = v.toString().trimmed().toLower();
+        if (code == u"zh")
+            code = QStringLiteral("zh-CN");
+        else if (code == u"pt")
+            code = QStringLiteral("pt-BR");
+        for (const QString& known : languageCodes)
+            if (known.compare(code, Qt::CaseInsensitive) == 0)
+                return QVariant(known);
+        return QVariant(QStringLiteral("en"));
     });
 }
 

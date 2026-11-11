@@ -7,10 +7,13 @@
 #include "core/CrashHandler.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
+#include "engines/general/Module.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,6 +22,22 @@
 #include <QTimer>
 
 #include <cstdio>
+
+namespace {
+
+// The language is needed before the settings store exists (the store's schema
+// lists the languages found at start, and the messages below are already
+// shown in it), so this one value is read from the settings file as it is.
+QString storedLanguage()
+{
+    QFile f(fw::Paths::settingsFile());
+    if (!f.open(QIODevice::ReadOnly) || f.size() > 16 * 1024 * 1024)
+        return {};
+    const QJsonObject values = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("values")).toObject();
+    return values.value(fw::general::keys::kLanguage).toString();
+}
+
+} // namespace
 
 int main(int argc, char* argv[])
 {
@@ -68,6 +87,16 @@ int main(int argc, char* argv[])
     fw::Paths::initialize();
     fw::AppContext::usePortableWindowState();
 
+    // The interface language, once and before anything is shown: FW_LANG
+    // (tests, screenshots, "qps" to see what is translated at all), else the
+    // setting. A code that cannot be loaded leaves the interface English.
+    Q_INIT_RESOURCE(lang);
+    fw::i18n::configure(QStringLiteral(":/lang"), QDir(fw::Paths::dataDir()).filePath(QStringLiteral("lang")));
+    QString language = qEnvironmentVariable("FW_LANG").trimmed();
+    if (language.isEmpty())
+        language = storedLanguage();
+    fw::i18n::load(language);
+
     // One copy at a time: two would share one queue, one history and the same
     // .part files. A lock left by a crashed copy is detected and taken over.
     QLockFile instanceLock(QDir(fw::Paths::dataDir()).filePath(QStringLiteral("app.lock")));
@@ -96,6 +125,13 @@ int main(int argc, char* argv[])
     if (auto st = context.initialize(parser.isSet(selfTestOpt) ? fw::AppContext::Mode::ReadOnly : fw::AppContext::Mode::Normal); !st.ok()) {
         QMessageBox::critical(nullptr, QStringLiteral("exFAT Image Builder"), st.error().message);
         return 1;
+    }
+    {
+        // The log has its file only now: what was wrong with a language file is said again.
+        const fw::Log log(QStringLiteral("i18n"));
+        for (const QString& note : fw::i18n::notes())
+            log.warn(note);
+        log.info(QStringLiteral("Interface language: %1").arg(fw::i18n::currentCode()));
     }
 
     if (parser.isSet(selfTestOpt)) {
