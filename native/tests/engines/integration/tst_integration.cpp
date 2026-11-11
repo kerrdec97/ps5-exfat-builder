@@ -325,6 +325,46 @@ private slots:
         }
     }
 
+    void fpkgStagingKeepsDdsAndDropsAuthInfo()
+    {
+        // A package from an image: the .dds copies in sce_sys are what a missing
+        // pic1.png/pic2.png is rebuilt from, so the staged copy keeps them; a
+        // dumper's eboot.bin.auth_info is refused by img_verify, so it goes.
+        Env env(m_root.filePath(QStringLiteral("e3b")));
+        const QString game = m_root.filePath(QStringLiteral("dumps/PPSA05678"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray(70000, 'E')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin.auth_info"), QByteArray(64, 'A')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_module/libc.prx.auth_info"), QByteArray(64, 'A')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_module/libc.prx"), QByteArray(4096, 'L')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"),
+                                      R"({"titleId":"PPSA05678","contentId":"UP0000-PPSA05678_00-0000000000000000","contentVersion":"01.000.000"})"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/pic1.dds"), QByteArray(2048, 'D')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/pic2.dds"), QByteArray(2048, 'D')));
+        const QString out = m_root.filePath(QStringLiteral("stagers-dds"));
+        QDir().mkpath(out);
+        QVERIFY(succeeded(env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), game}, {QStringLiteral("output"), out + QStringLiteral("/g.exfat")}})));
+        auto stager = fpkg::sourceStagerFor(out + QStringLiteral("/g.exfat"));
+        QVERIFY(stager);
+        const QString dest = m_root.filePath(QStringLiteral("staged-dds"));
+        QDir().mkpath(dest);
+        ProgressReporter pr;
+        pr.begin(QStringLiteral("Prepare"), 0);
+        auto st = stager->stage(out + QStringLiteral("/g.exfat"), dest, CancellationToken(), &pr);
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        QString root = dest; // the game goes into a folder of its own
+        if (!QFile::exists(root + QStringLiteral("/eboot.bin")))
+            for (const QFileInfo& fi : QDir(dest).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
+                if (QFile::exists(fi.filePath() + QStringLiteral("/eboot.bin")))
+                    root = fi.filePath();
+        const auto got = snapshot(root);
+        QVERIFY2(got.contains(QStringLiteral("eboot.bin")), qPrintable(QStringList(got.keys()).join(u',')));
+        QVERIFY(got.contains(QStringLiteral("sce_sys/pic1.dds")));
+        QVERIFY(got.contains(QStringLiteral("sce_sys/pic2.dds")));
+        QVERIFY(got.contains(QStringLiteral("sce_module/libc.prx")));
+        QVERIFY(!got.contains(QStringLiteral("eboot.bin.auth_info")));
+        QVERIFY(!got.contains(QStringLiteral("sce_module/libc.prx.auth_info")));
+    }
+
     void verifiedBuildsAreQueuedForPs5UploadWhenAsked()
     {
         Env env(m_root.filePath(QStringLiteral("e4")));

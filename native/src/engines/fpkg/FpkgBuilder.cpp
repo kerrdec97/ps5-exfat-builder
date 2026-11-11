@@ -1413,12 +1413,39 @@ Result<JobOutcome> packAndFinish(PackJob& j)
                 : QStringLiteral("Header checked; img_verify passed (format).");
             log.info(QStringLiteral("img_verify passed."));
         } else {
-            const QString why = vr.ok() ? vr->failureText() : vr.error().message;
-            j.outcome.verification = Verification::Inconclusive;
-            j.outcome.verificationDetail = QStringLiteral("The header check passed, but img_verify reported a problem: %1").arg(why);
-            j.outcome.warnings << QStringLiteral("img_verify reported a problem (%1). The package was kept; check it before "
-                                                 "use.").arg(why);
-            log.warn(j.outcome.verificationDetail);
+            // A package built from a dump never passes img_verify cleanly: its
+            // fake-signed executables and zero SDK version fields are always
+            // reported. Only what is left after those is worth a warning.
+            const ImgVerifyFindings found = vr.ok() && !vr->crashed && !vr->errors.isEmpty() ? sortImgVerifyErrors(vr->errors)
+                                                                                         : ImgVerifyFindings{};
+            const QString usual = found.expected == 1
+                ? QStringLiteral("1 message every package built from a dump gets (fake-signed executables, SDK version fields)")
+                : QStringLiteral("%1 messages every package built from a dump gets (fake-signed executables, SDK version fields)")
+                      .arg(found.expected);
+            if (vr.ok() && !vr->crashed && !vr->errors.isEmpty() && found.problems.isEmpty()) {
+                j.outcome.verificationDetail = s.postVerify == PostVerify::ToolFull
+                    ? QStringLiteral("Header checked; img_verify (format and integrity) found nothing beyond the %1.").arg(usual)
+                    : QStringLiteral("Header checked; img_verify (format) found nothing beyond the %1.").arg(usual);
+                log.info(QStringLiteral("img_verify: only the %1.").arg(usual));
+            } else {
+                QString why;
+                if (!found.problems.isEmpty()) {
+                    why = found.problems.mid(0, 3).join(QStringLiteral(" "));
+                    if (found.problems.size() > 3)
+                        why += QStringLiteral(" (and %1 more in the log)").arg(found.problems.size() - 3);
+                    for (const QString& problem : found.problems)
+                        log.warn(QStringLiteral("img_verify: %1").arg(problem));
+                } else {
+                    why = vr.ok() ? vr->failureText() : vr.error().message;
+                }
+                j.outcome.verification = Verification::Inconclusive;
+                j.outcome.verificationDetail = QStringLiteral("The header check passed, but img_verify reported a problem: %1").arg(why);
+                if (found.expected > 0)
+                    j.outcome.verificationDetail += QStringLiteral(" It also reported the %1.").arg(usual);
+                j.outcome.warnings << QStringLiteral("img_verify reported a problem (%1). The package was kept; check it before "
+                                                     "use.").arg(why);
+                log.warn(j.outcome.verificationDetail);
+            }
         }
     }
     settleReplaced(j.outcome.verification == Verification::Passed);

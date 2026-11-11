@@ -51,6 +51,19 @@ bool isRoutineWarning(const QString& text);
 // Plain-language explanations for known Publishing Tools errors (deduplicated).
 QStringList explainToolErrors(const QStringList& errors);
 
+// img_verify on a package built from a dump always reports some errors: the
+// executables are fake-signed or plain ELF ("Format of the SELF file is not
+// valid"), and the SDK version fields the toolkit leaves at 0 ("SDK version
+// must be …", "Required System Software version < Required SDK version").
+// Those are counted in `expected`; everything else (a mandatory file missing,
+// a file that must not exist, a CRC error …) is a real problem. The tool's
+// own summary lines ("Number of Error(s)", "Result : ERROR") are dropped.
+struct ImgVerifyFindings {
+    QStringList problems;
+    int expected = 0;
+};
+ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors);
+
 class PubCmdOutputParser {
 public:
     using LineSink = std::function<void(const ToolLine&)>;

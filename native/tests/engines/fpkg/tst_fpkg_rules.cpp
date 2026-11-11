@@ -309,6 +309,41 @@ private slots:
         }
     }
 
+    // ---- img_verify on a package built from a dump -----------------------------------------
+    void imgVerifyErrorsAreSorted()
+    {
+        // The lines of two real 5.0.1 logs (a folder source and an image source).
+        const QStringList onlyUsual = {
+            QStringLiteral("Format of the SELF file is not valid. (libc.prx, sceversion format)"),
+            QStringLiteral("Format of the SELF file is not valid. (libc.prx)"),
+            QStringLiteral("Format of the SELF file is not valid. (eboot.bin, sceversion format)"),
+            QStringLiteral("SDK version must be 6.00.00.00-00.00.00.0.0."),
+            QStringLiteral("Required System Software version < Required SDK version."),
+            QStringLiteral("Number of Error(s) : 46"),
+            QStringLiteral("Result : ERROR"),
+            QStringLiteral("2026-11-10 09:50:35 Verify Process finished with error(s)."),
+        };
+        const ImgVerifyFindings a = sortImgVerifyErrors(onlyUsual);
+        QVERIFY(a.problems.isEmpty());
+        QCOMPARE(a.expected, 5);
+
+        const QStringList withProblems = {
+            QStringLiteral("The following file is mandatory, but not found. (pic1.png)"),
+            QStringLiteral("The following file is mandatory, but not found. (pic2.png)"),
+            QStringLiteral("Format of the SELF file is not valid. (libc.prx, invalid header)"),
+            QStringLiteral("Format of the SELF file is not valid. (libSceAppContent.sprx, SDK version is not consistent (expected:1.00.00.00-00.00.00.0.0, actual:2.00.00.00-00.00.00.0.0))"),
+            QStringLiteral("The file/directory must not exist. (eboot.bin.auth_info)"),
+            QStringLiteral("SDK version must be 1.00.00.00-00.00.00.0.0."),
+            QStringLiteral("Number of Error(s) : 14"),
+        };
+        const ImgVerifyFindings b = sortImgVerifyErrors(withProblems);
+        QCOMPARE(b.problems, (QStringList{QStringLiteral("The following file is mandatory, but not found. (pic1.png)"),
+                                          QStringLiteral("The following file is mandatory, but not found. (pic2.png)"),
+                                          QStringLiteral("The file/directory must not exist. (eboot.bin.auth_info)")}));
+        QCOMPARE(b.expected, 3);
+        QVERIFY(sortImgVerifyErrors({}).problems.isEmpty());
+    }
+
     // ---- dump rules and scanner -----------------------------------------------------------
     void exclusionRules()
     {
@@ -321,6 +356,10 @@ private slots:
         QVERIFY(baseExclusionReason({QStringLiteral("sce_sys"), QStringLiteral("trophy2")}, QStringLiteral("x.dds"), false).size());
         QVERIFY(baseExclusionReason({QStringLiteral("SCE_SYS"), QStringLiteral("a"), QStringLiteral("b")}, QStringLiteral("x.auth_info"), false).size());
         QVERIFY(!baseExclusionReason({QStringLiteral("Data")}, QStringLiteral("x.dds"), false).size());
+        // Dumper leftovers next to executables, wherever they are (img_verify: "must not exist").
+        QVERIFY(baseExclusionReason(root, QStringLiteral("eboot.bin.auth_info"), false).size());
+        QVERIFY(baseExclusionReason({QStringLiteral("sce_module")}, QStringLiteral("libc.prx.AUTH_INFO"), false).size());
+        QVERIFY(!baseExclusionReason(root, QStringLiteral("eboot.bin"), false).size());
         QVERIFY(baseExclusionReason({QStringLiteral("Data")}, QStringLiteral("a.GP5"), false).size());
         QVERIFY(baseExclusionReason({QStringLiteral("Data")}, QStringLiteral("x.playgo-scenario.json"), false).size());
         QVERIFY(baseExclusionReason(root, QStringLiteral("sce_suppl"), true).size());

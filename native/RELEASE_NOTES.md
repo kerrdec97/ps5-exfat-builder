@@ -110,6 +110,16 @@ Images built with 5.0.1 stay valid.
   crashes when both lists are left on "Keep".
 
 ### Build image and FPKG
+* **An FPKG built from an image has its pictures again**: a package made from
+  an `.exfat`, `.ffpkg` or PFS image lacked `pic1.png` and `pic2.png` when the
+  game only had them as `.dds` (the copy left the `.dds` files out, so they
+  could not be rebuilt). Packages from a game folder were not affected.
+* **`.auth_info` files are left out of every package**, also
+  `eboot.bin.auth_info` at the game's root (Sony's checker refuses them).
+* **A clearer verdict from Sony's checker**: every package built from a dump
+  gets the same errors (fake-signed executables, SDK version fields). These
+  no longer make a build look doubtful; the app now names only the problems
+  that need attention, such as a missing picture, and counts the usual ones.
 * **Pause really pauses an FPKG build**: Sony's publisher is suspended until
   you resume. Performance mode and the CPU limit also apply to package
   verification, extraction and backport builds.

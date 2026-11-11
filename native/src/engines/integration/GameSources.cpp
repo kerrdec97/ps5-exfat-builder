@@ -537,8 +537,14 @@ Result<StagePlan> planStage(const QString& source, const CancellationToken& toke
         QStringList parts = rel.split(u'/');
         const QString name = parts.takeLast();
         // Only what the package builder would leave out anyway (its own rules
-        // still decide), plus the AMPR emulator's journal and logs.
-        if (!fpkg::baseExclusionReason(parts, name, it.isDir).isEmpty() || (!it.isDir && parts.isEmpty() && isAmprJournalOrLog(name))) {
+        // still decide), plus the AMPR emulator's journal and logs. The .dds
+        // copies in sce_sys stay: the builder leaves them out of the package
+        // itself but rebuilds a missing or broken pic0/pic1/pic2/icon0.png
+        // from them (without them such a package lacks pic1.png and pic2.png).
+        const bool sceSysDds = !it.isDir && !parts.isEmpty() && parts.first().compare(QLatin1String("sce_sys"), Qt::CaseInsensitive) == 0
+                               && name.endsWith(QLatin1String(".dds"), Qt::CaseInsensitive);
+        if ((!sceSysDds && !fpkg::baseExclusionReason(parts, name, it.isDir).isEmpty())
+            || (!it.isDir && parts.isEmpty() && isAmprJournalOrLog(name))) {
             ++p.excluded;
             if (it.isDir)
                 excludedDirs << rel;

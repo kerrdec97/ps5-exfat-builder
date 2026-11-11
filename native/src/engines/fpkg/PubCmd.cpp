@@ -111,6 +111,35 @@ ToolLine classifyToolLine(const QString& line)
     return l;
 }
 
+ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors)
+{
+    static const char* const expected[] = {
+        "Format of the SELF file is not valid",
+        "SDK version must be",
+        "Required System Software version < Required SDK version",
+    };
+    static const char* const summary[] = {"Number of Error(s)", "Number of Warning(s)", "Result :"};
+    ImgVerifyFindings f;
+    for (const QString& raw : errors) {
+        const QString e = raw.trimmed();
+        if (e.isEmpty())
+            continue;
+        bool skip = e.contains(QLatin1String("Process finished with error"), Qt::CaseInsensitive);
+        for (const char* s : summary)
+            skip = skip || e.startsWith(QLatin1String(s), Qt::CaseInsensitive);
+        if (skip)
+            continue;
+        bool known = false;
+        for (const char* s : expected)
+            known = known || e.contains(QLatin1String(s), Qt::CaseInsensitive);
+        if (known)
+            ++f.expected;
+        else
+            f.problems << e;
+    }
+    return f;
+}
+
 QStringList explainToolErrors(const QStringList& errors)
 {
     struct Known {
