@@ -117,6 +117,7 @@ private:
     QPointer<QWidget> m_locationsCard;
     QPointer<ui::ElideLabel> m_tempLocation;
     QPointer<ui::InfoBar> m_langBar;
+    QString m_startLanguage; // general.language when the page was made
     bool m_restartNeeded = false;
     QPointer<QWidget> m_demoSheet;
 };

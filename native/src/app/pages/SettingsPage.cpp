@@ -177,6 +177,7 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     : Page(ctx, QStringLiteral("settings"), FW_TR("Settings"),
            FW_TR("Defaults for new jobs; a job page can override any of them."), parent)
 {
+    m_startLanguage = m_ctx.settings().value(general::keys::kLanguage).toString();
     m_search = textInput(FW_TR("Search all settings"), false, this);
     m_search->setFixedWidth(340);
     m_search->setClearButtonEnabled(true);
@@ -1002,8 +1003,11 @@ void SettingsPage::updateLanguageBar()
 {
     if (!m_langBar)
         return;
+    // FW_LANG (tests, screenshots) wins over the setting: the setting as it
+    // was when the page was made is then what this run would have used.
+    const QString running = qEnvironmentVariableIsSet("FW_LANG") ? m_startLanguage : i18n::currentCode();
     const QString chosen = m_ctx.settings().value(general::keys::kLanguage).toString();
-    if (chosen.compare(i18n::currentCode(), Qt::CaseInsensitive) == 0) {
+    if (chosen.compare(running, Qt::CaseInsensitive) == 0) {
         m_langBar->hide();
         return;
     }
