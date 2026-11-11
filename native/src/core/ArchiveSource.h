@@ -41,6 +41,11 @@ QStringList archiveSourceSuffixes();
 // For file dialogs: "Archives (*.zip *.7z *.rar)".
 QString archiveSourceFilter();
 
+// The name a build takes from its source: a folder's whole name
+// ("Astro Bot v1.020"), an archive's name without its suffix, and without the
+// part number of a multi-part RAR ("Game.part1.rar" -> "Game").
+QString sourceName(const QString& path);
+
 struct ZipGame {
     QString rootPrefix;      // "" or "Folder/" (with the trailing slash)
     qint64 bytes = 0;        // uncompressed size of the game's files

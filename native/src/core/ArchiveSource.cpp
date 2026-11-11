@@ -12,6 +12,7 @@
 #include <QMap>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <limits>
@@ -277,6 +278,21 @@ QStringList archiveSourceSuffixes()
 QString archiveSourceFilter()
 {
     return QStringLiteral("Archives (*.zip *.7z *.rar)");
+}
+
+QString sourceName(const QString& path)
+{
+    const QFileInfo fi(QDir::cleanPath(path));
+    if (!isArchiveSource(path))
+        return fi.fileName();
+    QString base = fi.completeBaseName();
+    static const QRegularExpression part(QStringLiteral("\\.part\\d+$"), QRegularExpression::CaseInsensitiveOption);
+    if (fi.suffix().compare(QLatin1String("rar"), Qt::CaseInsensitive) == 0) {
+        const QString chopped = QString(base).remove(part);
+        if (!chopped.isEmpty())
+            base = chopped;
+    }
+    return base;
 }
 
 bool isArchiveSource(const QString& path)

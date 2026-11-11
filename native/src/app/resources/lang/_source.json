@@ -477,6 +477,7 @@
 {"text": "Unpack a packed game", "where": ["job ampr.unpack"]},
 {"text": "Unpacking", "where": ["engines/ampr/Module.cpp (stage)"]},
 {"text": "Unpacking ZIP", "where": ["core/ArchiveSource.cpp (stage)"]},
+{"text": "Unpacking archive", "where": ["core/ArchiveSource.cpp (stage)"]},
 {"text": "Up to 11 characters.", "where": ["setting exfat.label"]},
 {"text": "Updates", "where": ["settings group in General"]},
 {"text": "Upload new images to the PS5", "where": ["setting ps5.autoUploadAfterBuild"]},

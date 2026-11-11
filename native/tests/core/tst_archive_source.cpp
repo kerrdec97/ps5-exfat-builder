@@ -287,6 +287,29 @@ class TstArchiveSource : public QObject {
     }
 
 private slots:
+    void sourceNameDropsTheArchiveSuffix()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("names"));
+        QVERIFY(QDir().mkpath(dir + QStringLiteral("/Astro Bot v1.020")));
+        const auto file = [&](const QString& name) {
+            const QString p = dir + u'/' + name;
+            QFile f(p);
+            if (!f.open(QIODevice::WriteOnly))
+                return QString();
+            f.write("x");
+            return p;
+        };
+        QCOMPARE(fw::archive::sourceName(dir + QStringLiteral("/Astro Bot v1.020")), QStringLiteral("Astro Bot v1.020"));
+        QCOMPARE(fw::archive::sourceName(dir + QStringLiteral("/Astro Bot v1.020/")), QStringLiteral("Astro Bot v1.020"));
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral("Game v1.00.zip"))), QStringLiteral("Game v1.00"));
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral("Game.7z"))), QStringLiteral("Game"));
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral("Game.part1.rar"))), QStringLiteral("Game"));
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral("Game.PART01.RAR"))), QStringLiteral("Game"));
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral("Game.rar"))), QStringLiteral("Game"));
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral(".part1.rar"))), QStringLiteral(".part1")); // never an empty name
+        QCOMPARE(fw::archive::sourceName(file(QStringLiteral("Game.part1.zip"))), QStringLiteral("Game.part1")); // only RAR numbers its parts
+    }
+
     void initTestCase()
     {
         QVERIFY(m_root.isValid());
