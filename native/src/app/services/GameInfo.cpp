@@ -125,7 +125,7 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
                 s.titleId = (m.captured(1) + m.captured(2)).toUpper();
         }
         if (s.title.isEmpty())
-            s.title = fi.completeBaseName();
+            s.title = archive::sourceName(folder); // no archive suffix, no ".part1" of a multi-part RAR
         return s;
     }
     if (!fi.isDir()) {
