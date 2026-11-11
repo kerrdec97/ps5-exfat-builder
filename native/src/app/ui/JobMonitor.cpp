@@ -1011,7 +1011,7 @@ void JobMonitor::apply(const JobRecord& r)
     case JobState::Queued: {
         const int maxAttempts = m_ctx.settings().value(general::keys::kAutoRetryCount).toInt() + 1;
         const QString w = waitingText(r, maxAttempts);
-        detail = !w.isEmpty() ? w : m_ctx.queue().isHeld() ? QStringLiteral("Waiting · the queue is paused") : QStringLiteral("Waiting for its turn");
+        detail = !w.isEmpty() ? w : m_ctx.queue().isHeld() ? (m_ctx.queue().isBusy() ? QStringLiteral("Waiting · the queue is paused") : QStringLiteral("Waiting · press Start queue")) : QStringLiteral("Waiting for its turn");
         detailColor = color::fg_2;
         break;
     }
