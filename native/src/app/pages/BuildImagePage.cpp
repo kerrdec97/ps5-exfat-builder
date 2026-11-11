@@ -173,7 +173,7 @@ QString sourceKindLabel(const QString& kind)
     if (kind == QLatin1String("gp5"))
         return FW_TR(".gp5 project");
     if (kind == QLatin1String("zip"))
-        return FW_TR("ZIP archive");
+        return FW_TR("Archive (.zip, .7z, .rar)");
     return FW_TR("Game folder");
 }
 
@@ -608,7 +608,7 @@ void BuildImagePage::buildSourceCard()
     m_sourceBadge->setIconName(QString());
     source->setTitle(FW_TR("Game dump"), m_sourceBadge);
     m_drop = new DropZone(QStringLiteral("folder_open"), FW_TR("Drop a game dump folder or an archive (.zip, .7z, .rar) here"),
-                          FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"), source);
+                          FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or an archive of it"), source);
     m_drop->setAccessibleName(FW_TR("Choose the source"));
     connect(m_drop, &DropZone::clicked, this, &BuildImagePage::browseSource);
     source->body()->addWidget(m_drop);
@@ -1240,7 +1240,7 @@ void BuildImagePage::onFormatChanged()
     m_drop->setTitle(pkg ? FW_TR("Drop a game folder, an image or a .gp5 project here")
                          : FW_TR("Drop a game dump folder or an archive (.zip, .7z, .rar) here"));
     m_drop->setText(pkg ? FW_TR("or click to browse \u2014 a folder, an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
-                        : FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"));
+                        : FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or an archive of it"));
     if (t == jobs::kFormatExfat)
         m_advanced->setCaption(FW_TR("Free space, volume label, contents, verification"));
     else if (t == jobs::kFormatFfpkg)
@@ -1666,7 +1666,7 @@ void BuildImagePage::refreshSourceState()
         }
         if (kind == QLatin1String("zip") && isFpkg()) {
             m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP, or pick exFAT, FFPKG, PFS or Packed folder."), Tone::Warn);
+            m_sourceMsg->set(FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the archive, or pick exFAT, FFPKG, PFS or Packed folder."), Tone::Warn);
             m_sourceBadge->set(FW_TR("Needs a folder"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
@@ -1676,7 +1676,7 @@ void BuildImagePage::refreshSourceState()
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip")) {
             m_stripTile->setTone(Tone::Ok);
-            m_sourceMsg->set(FW_TR("The ZIP is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
+            m_sourceMsg->set(FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
                                  .arg(formatBytes(s.bytes)),
                              Tone::Neutral);
             m_sourceBadge->set(FW_TR("Ready"), Tone::Ok);
@@ -2301,7 +2301,7 @@ QString BuildImagePage::validateForm()
         }
     } else {
         if (kind == QLatin1String("zip"))
-            return FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP first.");
+            return FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the archive first.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? FW_TR("This folder holds several games. Choose one of them.")
                                                   : FW_TR("The folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
