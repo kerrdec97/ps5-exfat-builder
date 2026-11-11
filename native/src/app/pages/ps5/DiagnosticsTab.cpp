@@ -425,7 +425,9 @@ void DiagnosticsTab::showResult(const ps5::FtpDiagnosis& d, const QString& verdi
     else
         setCell(QStringLiteral("writable"), FW_TR("No"), Tone::Err, d.writableDetail);
     if (d.greeted) {
-        const QString label = d.server.label == QLatin1String("zftpd") ? QStringLiteral("zftpd (%1)").arg(i18n::translate(d.server.confidence)) : d.server.label;
+        const QString label = d.server.label == QLatin1String("zftpd") ? QStringLiteral("zftpd (%1)").arg(i18n::translate(d.server.confidence))
+                            : d.server.label == QLatin1String("Unknown / generic FTP") ? FW_TR("Unknown / generic FTP") // the English default of ServerGuess
+                                                                                         : d.server.label;
         setCell(QStringLiteral("server"), label, Tone::Neutral, FW_TR("Evidence: %1").arg(evidenceTags(d.server.evidence)));
     } else {
         setCell(QStringLiteral("server"), QStringLiteral("—"));
