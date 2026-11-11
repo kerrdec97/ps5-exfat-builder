@@ -3,6 +3,7 @@
 #include "app/AppContext.h"
 #include "app/pages/ps5/FindConsole.h"
 #include "app/ui/Icons.h"
+#include "core/Tr.h"
 
 #include <QGridLayout>
 #include <QIntValidator>
@@ -29,8 +30,8 @@ void ServiceChip::setState(Tone tone, const QString& detail, const QString& tool
 {
     m_tone = tone;
     m_detail = detail;
-    const QString word = tone == Tone::Ok ? QStringLiteral("Running") : tone == Tone::Warn ? QStringLiteral("Not answering")
-                       : tone == Tone::Err ? QStringLiteral("Problem") : tone == Tone::Info ? QStringLiteral("Checking") : QStringLiteral("Not checked");
+    const QString word = tone == Tone::Ok ? FW_TR("Running") : tone == Tone::Warn ? FW_TR("Not answering")
+                       : tone == Tone::Err ? FW_TR("Problem") : tone == Tone::Info ? FW_TR("Checking") : FW_TR("Not checked");
     setToolTip(tooltip.isEmpty() ? QStringLiteral("%1: %2").arg(m_name, word) : QStringLiteral("%1: %2\n%3").arg(m_name, word, tooltip));
     setAccessibleDescription(word + QStringLiteral(" · ") + detail);
     updateGeometry();
@@ -125,7 +126,7 @@ ConsoleHero::ConsoleHero(AppContext& ctx, QWidget* parent) : QWidget(parent), m_
     auto* th = hbox(titleRow, space::md);
     m_title = label(QStringLiteral("PlayStation 5"), TextStyle::Title, color::fg_0, titleRow);
     th->addWidget(m_title);
-    m_badge = new Badge(QStringLiteral("Not connected"), Tone::Neutral, titleRow);
+    m_badge = new Badge(FW_TR("Not connected"), Tone::Neutral, titleRow);
     m_badge->setIconName(QStringLiteral("plug"));
     th->addWidget(m_badge, 0, Qt::AlignVCenter);
     th->addStretch(1);
@@ -142,15 +143,15 @@ ConsoleHero::ConsoleHero(AppContext& ctx, QWidget* parent) : QWidget(parent), m_
     m_host = textInput(QStringLiteral("192.168.1.40"), true, m_controls);
     m_host->setMinimumWidth(150);
     m_host->setMaximumWidth(200);
-    m_host->setAccessibleName(QStringLiteral("Console IP"));
-    m_host->setToolTip(QStringLiteral("The console's address (PS5 Settings › Network › View connection status)"));
+    m_host->setAccessibleName(FW_TR("Console IP"));
+    m_host->setToolTip(FW_TR("The console's address (PS5 Settings › Network › View connection status)"));
     m_port = textInput(QStringLiteral("2121"), true, m_controls);
     m_port->setFixedWidth(72);
     m_port->setValidator(new QIntValidator(1, 65535, m_port));
-    m_port->setAccessibleName(QStringLiteral("FTP port"));
-    m_port->setToolTip(QStringLiteral("FTP port: ftpsrv 2121, etaHEN 1337, zftpd 2120"));
+    m_port->setAccessibleName(FW_TR("FTP port"));
+    m_port->setToolTip(FW_TR("FTP port: ftpsrv 2121, etaHEN 1337, zftpd 2120"));
     m_find = new FindConsoleButton(ctx, m_controls);
-    m_connect = button(QStringLiteral("Connect"), ButtonVariant::Primary, QStringLiteral("plug"), m_controls);
+    m_connect = button(FW_TR("Connect"), ButtonVariant::Primary, QStringLiteral("plug"), m_controls);
     m_connect->setMinimumWidth(124);
     ch->addWidget(m_host, 1);
     ch->addWidget(m_port);
@@ -162,28 +163,28 @@ ConsoleHero::ConsoleHero(AppContext& ctx, QWidget* parent) : QWidget(parent), m_
     outer->addWidget(rule);
     auto* services = new QWidget(this);
     auto* sh = hbox(services, space::md);
-    auto* overline = label(QStringLiteral("SERVICES"), TextStyle::Overline, color::fg_4, services);
+    auto* overline = label(FW_TR("SERVICES"), TextStyle::Overline, color::fg_4, services);
     overline->setContentsMargins(0, 10, 0, 0);
     sh->addWidget(overline, 0, Qt::AlignTop);
     m_chipRow = new QWidget(services);
     auto* flow = new FlowLayout(m_chipRow, space::sm, space::sm);
-    const std::tuple<const char*, const char*, const char*> chips[] = {
-        {"ftp", "server", "FTP"},
-        {"klog", "klog", "Kernel log"},
-        {"payload", "rocket", "Payload loader"},
-        {"shadowmount", "layers", "ShadowMount+"},
-        {"installer", "package", "Installer"},
+    const std::tuple<const char*, const char*, QString> chips[] = {
+        {"ftp", "server", QStringLiteral("FTP")},
+        {"klog", "klog", FW_TR("Kernel log")},
+        {"payload", "rocket", FW_TR("Payload loader")},
+        {"shadowmount", "layers", QStringLiteral("ShadowMount+")},
+        {"installer", "package", FW_TR("Installer")},
     };
     for (const auto& [key, icon, name] : chips) {
-        auto* c = new ServiceChip(QLatin1String(key), QLatin1String(icon), QString::fromUtf8(name), m_chipRow);
+        auto* c = new ServiceChip(QLatin1String(key), QLatin1String(icon), name, m_chipRow);
         c->setState(Tone::Neutral, QStringLiteral("—"));
         flow->addWidget(c);
         m_chips.insert(QLatin1String(key), c);
         connect(c, &QAbstractButton::clicked, this, [this, k = QString::fromLatin1(key)] { emit chipClicked(k); });
     }
     sh->addWidget(m_chipRow, 1);
-    m_check = new IconButton(QStringLiteral("refresh"), QStringLiteral("Check the services again"), IconButton::Size::Small, services);
-    m_check->setToolTip(QStringLiteral("Check the kernel log, installer and ShadowMount+ ports again"));
+    m_check = new IconButton(QStringLiteral("refresh"), FW_TR("Check the services again"), IconButton::Size::Small, services);
+    m_check->setToolTip(FW_TR("Check the kernel log, installer and ShadowMount+ ports again"));
     connect(m_check, &QToolButton::clicked, this, &ConsoleHero::checkServicesRequested);
     sh->addWidget(m_check, 0, Qt::AlignTop);
     outer->addWidget(services);
@@ -225,23 +226,23 @@ void ConsoleHero::setState(State state, const QString& detail)
     m_state = state;
     switch (state) {
     case State::Offline:
-        m_badge->set(QStringLiteral("Not connected"), Tone::Neutral);
+        m_badge->set(FW_TR("Not connected"), Tone::Neutral);
         m_badge->setIconName(QStringLiteral("plug"));
         m_tile->setTone(Tone::Info);
         break;
     case State::Connecting:
-        m_badge->set(QStringLiteral("Connecting…"), Tone::Info);
+        m_badge->set(FW_TR("Connecting…"), Tone::Info);
         m_badge->setIconName(QStringLiteral("loader"));
         m_tile->setTone(Tone::Info);
         break;
     // Every state sets its own glyph: the badge keeps the last one it was given.
     case State::Connected:
-        m_badge->set(QStringLiteral("Connected"), Tone::Ok);
+        m_badge->set(FW_TR("Connected"), Tone::Ok);
         m_badge->setIconName(defaultBadgeIcon(Tone::Ok));
         m_tile->setTone(Tone::Ok);
         break;
     case State::Failed:
-        m_badge->set(QStringLiteral("Not reachable"), Tone::Err);
+        m_badge->set(FW_TR("Not reachable"), Tone::Err);
         m_badge->setIconName(defaultBadgeIcon(Tone::Err));
         m_tile->setTone(Tone::Err);
         break;
@@ -250,7 +251,7 @@ void ConsoleHero::setState(State state, const QString& detail)
     // The one button: Connect, Cancel (an attempt can take the whole connect timeout) or Disconnect.
     const bool busy = state == State::Connecting;
     const bool on = state == State::Connected;
-    m_connect->setText(on ? QStringLiteral("Disconnect") : busy ? QStringLiteral("Cancel") : QStringLiteral("Connect"));
+    m_connect->setText(on ? FW_TR("Disconnect") : busy ? FW_TR("Cancel") : FW_TR("Connect"));
     setButtonVariant(m_connect, on || busy ? ButtonVariant::Secondary : ButtonVariant::Primary);
     setButtonIcon(m_connect, on ? QStringLiteral("unplug") : busy ? QStringLiteral("close") : QStringLiteral("plug"));
     m_connect->setEnabled(true);
