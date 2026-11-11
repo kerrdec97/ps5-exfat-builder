@@ -544,7 +544,7 @@ void MainWindow::onJobFinished(const QString& id)
                                  : verified ? FW_TR("%1 done and verified").arg(kindName) : FW_TR("%1 done").arg(kindName);
         QString body = rec->title;
         if (rec->outcome && !rec->outcome->summary.isEmpty())
-            body += QStringLiteral(" · ") + rec->outcome->summary;
+            body += QStringLiteral(" · ") + i18n::translate(rec->outcome->summary);
         if (warnings)
             actions.prepend(ToastHost::Action{FW_TR("Show warnings"), [this, id] { navigate(QStringLiteral("logs"), {{QStringLiteral("jobId"), id}, {QStringLiteral("level"), QStringLiteral("warning")}}); }});
         toast(warnings ? Tone::Warn : Tone::Ok, title, body, actions);
@@ -727,7 +727,8 @@ void MainWindow::showUpdateAvailable()
         m_aboutPage->setUpdateAction(FW_TR("Download"), FW_TR("Downloads version %1 and checks it against its SHA-256").arg(version));
     } else {
         const QString note = m_release.value(QStringLiteral("note")).toString();
-        bar->setMessage(note.isEmpty() ? FW_TR("This release has no download the app can check itself. Get it from the release page.") : note);
+        // The note is English data from connect/update: translated where shown.
+        bar->setMessage(note.isEmpty() ? FW_TR("This release has no download the app can check itself. Get it from the release page.") : i18n::translate(note));
         if (page.isValid()) {
             auto* open = bar->addLink(FW_TR("Open the release page"));
             connect(open, &Link::activated, this, &MainWindow::runUpdateAction);

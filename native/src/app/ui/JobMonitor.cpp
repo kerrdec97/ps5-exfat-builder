@@ -1020,7 +1020,7 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     }
     case JobState::Succeeded:
-        detail = r.outcome && !r.outcome->summary.isEmpty() ? r.outcome->summary : FW_TR("Finished");
+        detail = r.outcome && !r.outcome->summary.isEmpty() ? i18n::translate(r.outcome->summary) : FW_TR("Finished");
         break;
     case JobState::Failed:
         if (!errorShownBelow)
@@ -1043,8 +1043,10 @@ void JobMonitor::apply(const JobRecord& r)
     setTextColor(m_detail, detailColor);
     m_detail->setVisible(!detail.isEmpty());
     const bool showItem = r.state == JobState::Running && !p.currentItem.isEmpty();
-    m_item->setFullText(showItem ? p.currentItem : QString());
-    m_item->setToolTip(showItem ? plainTip(p.currentItem) : QString());
+    // A file name, or a step text some engines give as data (FTP diagnostics): shown translated.
+    const QString item = showItem ? i18n::translate(p.currentItem) : QString();
+    m_item->setFullText(item);
+    m_item->setToolTip(showItem ? plainTip(item) : QString());
     m_item->setVisible(showItem);
 
     // Metrics

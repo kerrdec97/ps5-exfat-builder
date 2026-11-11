@@ -183,11 +183,11 @@ QVariant JobQueueModel::data(const QModelIndex& index, int role) const
         if (r.isActive())
             return progressDetailText(p);
         if (r.state == JobState::Succeeded && r.outcome)
-            return r.outcome->summary;
+            return i18n::translate(r.outcome->summary);
         if (r.error)
             return r.error->message;
         return {};
-    case CurrentItemRole: return p.currentItem;
+    case CurrentItemRole: return i18n::translate(p.currentItem);
     case VerificationRole: return r.outcome ? int(r.outcome->verification) : int(Verification::NotRun);
     case VerificationTextRole:
         return r.outcome ? i18n::translate(verificationName(r.outcome->verification)) : QString();

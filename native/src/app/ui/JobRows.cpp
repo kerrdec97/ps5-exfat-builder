@@ -110,7 +110,7 @@ QString finishedNote(const JobRecord& r)
     if (!d.isEmpty())
         parts << d;
     if (parts.isEmpty() && r.outcome)
-        parts << r.outcome->summary;
+        parts << i18n::translate(r.outcome->summary);
     return parts.join(QStringLiteral(" · "));
 }
 
