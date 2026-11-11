@@ -57,7 +57,8 @@ What was different, and is now the same:
 **The Sony toolkit matters too.** Toolkits older than `sdk-fpkg279-fix15`
 write SDK version 0 into the package whatever `param.json` says. The app now
 warns after the build when the finished package carries SDK version 0. Use the
-fix15 toolkit (Settings › Tools).
+fix15 toolkit (Settings › Tools). Backport updates accept fix15 as the
+recommended release; fix13 and fix12 still work, with a note.
 
 Not tested: a PS5 console and real Sony tools. The project the app writes was
 compared entry by entry with the reference toolkit's own script on a test
