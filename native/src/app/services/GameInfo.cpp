@@ -3,6 +3,7 @@
 #include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/gameinfo/GameInfo.h"
 #include "engines/gameinfo/Version.h"
 
@@ -105,7 +106,7 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
     }
     s.exists = true;
     if (archive::isZipSource(folder)) {
-        // A zipped dump (#67): read it without unpacking.
+        // An archived dump (#67): read it without unpacking.
         auto g = archive::inspectZip(folder);
         if (!g.ok()) {
             s.error = g.error().message;
@@ -117,7 +118,7 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
         if (!g->paramJson.isEmpty())
             fillFromParamJson(s, g->paramJson);
         if (!g->otherGames.isEmpty())
-            s.error = QStringLiteral("This ZIP holds more than one game.");
+            s.error = FW_TR("This archive holds more than one game.");
         if (s.titleId.isEmpty()) {
             static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);
             if (const auto m = re.match(fi.fileName()); m.hasMatch())

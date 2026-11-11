@@ -971,7 +971,7 @@ QString dropPageFor(const QList<QUrl>& urls)
     if (urls.isEmpty())
         return {};
     const QFileInfo fi(urls.first().toLocalFile());
-    if (fi.isDir() || archive::isZipSource(fi.absoluteFilePath())) // a game folder, or a zipped dump: Build takes both
+    if (fi.isDir() || archive::isArchiveSource(fi.absoluteFilePath())) // a game folder, or an archived dump: Build takes both
         return QStringLiteral("build");
     if (!jobs::imageKindForFile(fi.absoluteFilePath(), QStringLiteral("verify")).isEmpty())
         return QStringLiteral("extract");
