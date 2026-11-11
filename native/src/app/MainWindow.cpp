@@ -145,6 +145,10 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
         updateStatus();
     });
     connect(m_queueModel, &QAbstractItemModel::dataChanged, this, [this] { updateStatus(); });
+    connect(&ctx.queue(), &JobQueue::heldChanged, this, [this] { // "Queue waiting · 2", "2 waiting · press Start queue"
+        updateChips();
+        updateStatus();
+    });
     connect(m_watcher, &QueueCompletionWatcher::queueFinished, this, &MainWindow::onQueueFinished);
     connect(m_watcher, &QueueCompletionWatcher::actionDue, this, &MainWindow::onActionDue);
     connect(&ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
@@ -199,6 +203,10 @@ void MainWindow::addPage(pages::Page* page, const QString& iconName, const QStri
         m_sidebar->addItem(page->key(), iconName, text);
     connect(page, &pages::Page::navigateRequested, this, [this](const pages::NavRequest& r) { navigate(r.page, r.args); });
     connect(page, &pages::Page::toastRequested, this, [this](Tone tone, const QString& title, const QString& body) { toast(tone, title, body); });
+    connect(page, &pages::Page::toastActionRequested, this,
+            [this](Tone tone, const QString& title, const QString& body, const QString& actionText, const std::function<void()>& action) {
+                toast(tone, title, body, {{actionText, action}});
+            });
     connect(page, &pages::Page::statusContextChanged, this, &MainWindow::updateStatus);
     if (auto* form = qobject_cast<pages::JobFormPage*>(page))
         connect(form, &pages::JobFormPage::jobSubmitted, this, [this](const QString& id, bool openFolder) {
@@ -390,6 +398,8 @@ void MainWindow::updateChips()
     m_sidebar->setCount(QStringLiteral("queue"), running + queued);
     if (running == 0 && queued == 0)
         m_header->setQueueChip(QStringLiteral("Queue idle"), Tone::Neutral, true);
+    else if (running == 0 && m_ctx.queue().isHeld()) // a list that waits for "Start queue"
+        m_header->setQueueChip(QStringLiteral("Queue waiting · %1").arg(queued), Tone::Info, true);
     else
         m_header->setQueueChip(QStringLiteral("%1 running · %2 queued").arg(running).arg(queued), Tone::Info, true);
 }
@@ -415,7 +425,8 @@ void MainWindow::updateStatus()
     } else if (const int n = m_settingsPage ? m_settingsPage->attentionCount() : 0; n > 0) {
         m_status->setStatus(QStringLiteral("%1 setting%2 need%3 attention").arg(n).arg(n == 1 ? QString() : QStringLiteral("s")).arg(n == 1 ? QStringLiteral("s") : QString()), Tone::Warn);
     } else if (m_ctx.queue().isHeld() && queuedUser > 0) {
-        m_status->setStatus(QStringLiteral("Queue paused"), Tone::Neutral);
+        // Nothing runs here: the waiting jobs start with "Start queue".
+        m_status->setStatus(QStringLiteral("%1 waiting · press Start queue").arg(queuedUser), Tone::Neutral);
     } else {
         m_status->setStatus(QStringLiteral("Ready"), Tone::Ok);
     }

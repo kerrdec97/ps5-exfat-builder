@@ -198,6 +198,10 @@ private slots:
         QVERIFY(off.ok());
         QVERIFY(!verifyDepthFrom(store.snapshot(*off)));
         QCOMPARE(planOptionsFrom(store.snapshot(*off), 0).ampr, AmprMode::Off);
+        auto automatic = store.normalizeOverrides({{keys::kAmprIndex, QStringLiteral("auto")}});
+        QVERIFY2(automatic.ok(), automatic.ok() ? "" : qPrintable(automatic.error().message));
+        QCOMPARE(planOptionsFrom(store.snapshot(*automatic), 0).ampr, AmprMode::Auto);
+        QVERIFY(!store.normalizeOverrides({{keys::kAmprIndex, QStringLiteral("sometimes")}}).ok());
     }
 
     void legacySettingsImport()

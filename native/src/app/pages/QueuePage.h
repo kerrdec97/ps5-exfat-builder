@@ -26,6 +26,7 @@ public:
     void selectJob(const QString& id);
     ui::JobList* list() { return m_list; }
     ui::JobMonitor* monitor() { return m_monitor; }
+    QPushButton* queueSwitchButton() { return m_pauseQueue; } // "Start queue" / "Resume queue" / "Pause queue"
 
 private:
     void updateCounts();

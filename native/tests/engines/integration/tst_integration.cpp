@@ -125,13 +125,20 @@ private slots:
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/notes.bak"), QByteArray(700, 'n')));
         // A second game folder below the first: a game-root search would build from here only.
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/inner/eboot.bin"), QByteArray(300, 'i')));
+        // An AMPR game whose index is not the one a build would make.
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray(400, 'a')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/ampr_emu.index"), QByteArray("the image's own index")));
         const QString out = m_root.filePath(QStringLiteral("neutral-out"));
         QDir().mkpath(out);
         // Built before the user's exclusions exist: the image holds every file.
-        auto built = env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), game}, {QStringLiteral("output"), out + QStringLiteral("/game.exfat")}});
+        auto built = env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), game}, {QStringLiteral("output"), out + QStringLiteral("/game.exfat")}},
+                             {{exfat::keys::kAmprIndex, QStringLiteral("off")}});
         QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
 
         QVERIFY(env.store->setValue(pfs::keys::kExcludes, QStringList{QStringLiteral("*.bak")}).ok());
+        QVERIFY(env.store->setValue(pfs::keys::kAmprIndex, QStringLiteral("refresh")).ok());
+        QVERIFY(env.store->setValue(exfat::keys::kAmprIndex, QStringLiteral("refresh")).ok());
+        QVERIFY(env.store->setValue(ufs2::keys::kAmprIndex, QStringLiteral("refresh")).ok());
         QVERIFY(env.store->setValue(exfat::keys::kExcludePatterns, QStringList{QStringLiteral("*.bak"), QStringLiteral("keep.bin")}).ok());
         QVERIFY(env.store->setValue(exfat::keys::kExcludeHidden, true).ok());
 

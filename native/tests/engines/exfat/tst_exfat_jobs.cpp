@@ -71,7 +71,7 @@ private slots:
             QVERIFY2(!d->label.isEmpty() && !d->section.isEmpty(), qPrintable(d->key));
             QVERIFY2(m_env.schema->normalize(d->key, d->defaultValue).ok(), qPrintable(d->key));
         }
-        QCOMPARE(count, 18);
+        QCOMPARE(count, 19);
 
         // Every option changes what the jobs read.
         QVariantMap o;

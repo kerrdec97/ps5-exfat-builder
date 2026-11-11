@@ -392,6 +392,17 @@ JobOptionsPanel* JobFormPage::addJobOptionsCard(const QString& title, const QStr
 
 bool JobFormPage::openOutputWhenDone() const { return m_openFolder && m_openFolder->isChecked(); }
 
+namespace {
+// None of the user's jobs runs or waits (update checks do not count).
+bool queueHasNothingToDo(const JobQueue& q)
+{
+    for (const JobRecord& r : q.records())
+        if (!jobs::isSystemKind(r.kind) && (r.isActive() || r.state == JobState::Queued))
+            return false;
+    return true;
+}
+} // namespace
+
 void JobFormPage::submitClicked(bool buildNow)
 {
     clearFormError();
@@ -417,8 +428,18 @@ void JobFormPage::submitClicked(bool buildNow)
         showFormError(QStringLiteral("Not ready to start"), problem);
         return;
     }
+    auto& q = m_ctx.queue();
+    // "Add to queue" puts the job on a list: a queue with nothing to do is
+    // paused first (the queue starts whatever waits the moment it is added),
+    // so the job waits for "Start queue". A queue that is working is left
+    // alone and the job joins the line.
+    const bool startsList = !buildNow && !q.isHeld() && queueHasNothingToDo(q);
+    if (startsList)
+        q.holdQueue(true);
     auto r = submit(buildNow);
     if (!r.ok()) {
+        if (startsList && queueHasNothingToDo(q))
+            q.holdQueue(false); // nothing was added: as it was
         // The user's own "Cancel" in a confirmation is not a failure to report.
         if (r.error().isCancelled())
             return;
@@ -428,13 +449,19 @@ void JobFormPage::submitClicked(bool buildNow)
         return;
     }
     const QString id = r.value();
-    auto& q = m_ctx.queue();
     if (buildNow)
         q.startNow(id); // ahead of the other waiting jobs; a paused queue stays paused for them
     emit jobSubmitted(id, openOutputWhenDone());
     if (buildNow && m_monitorOnStart) {
         // The monitor is the feedback: stages, clocks and the live log.
         showMonitor(id);
+        return;
+    }
+    if (!buildNow && q.isHeld()) {
+        // The job waits: say how the list is started, and offer it.
+        emit toastActionRequested(Tone::Info, QStringLiteral("Added to the queue"),
+                                  QStringLiteral("The queue is waiting. Add more, then press Start queue."),
+                                  QStringLiteral("Start queue"), [ctx = &m_ctx] { ctx->queue().holdQueue(false); });
         return;
     }
     emit toastRequested(Tone::Info, buildNow ? QStringLiteral("Started") : QStringLiteral("Added to the queue"),

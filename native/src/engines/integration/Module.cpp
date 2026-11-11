@@ -206,6 +206,8 @@ private:
         if (asItIs) {
             params.insert(QStringLiteral("findGameRoot"), false);
             overrides.insert(pfs::keys::kAmprIndex, QStringLiteral("off"));
+            overrides.insert(exfat::keys::kAmprIndex, QStringLiteral("off"));
+            overrides.insert(ufs2::keys::kAmprIndex, QStringLiteral("off"));
             overrides.insert(pfs::keys::kExcludes, QStringList());
             overrides.insert(pfs::keys::kDeleteSourceAfterConvert, false);
             overrides.insert(exfat::keys::kExcludePatterns, QStringList());

@@ -564,6 +564,61 @@ private slots:
                  std::ptrdiff_t(1));
         pa.ampr = AmprMode::Off;
         QVERIFY(!plan(ampr, pa).amprGenerated);
+        QCOMPARE(generated.amprAction, AmprIndexAction::Added);
+        QCOMPARE(kept.amprAction, AmprIndexAction::KeptExisting);
+        QCOMPARE(refreshed.amprAction, AmprIndexAction::RebuiltAlways);
+        QCOMPARE(plan(ampr, pa).amprAction, AmprIndexAction::Off);
+
+        // Auto: an index that does not match the game's files is rebuilt, one
+        // that matches (also with other file times) is kept as the dump has it.
+        pa.ampr = AmprMode::Auto;
+        const SourcePlan outdated = plan(ampr, pa);
+        QVERIFY(outdated.amprGenerated);
+        QCOMPARE(outdated.amprAction, AmprIndexAction::Rebuilt);
+        const auto indexOf = [](const SourcePlan& p) {
+            auto it = std::find_if(p.files.begin(), p.files.end(), [](const SourceFile& f) { return f.relPath == "ampr_emu.index"; });
+            return it == p.files.end() ? SourceFile() : *it;
+        };
+        QCOMPARE(indexOf(outdated).content, idx->content);
+        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/ampr_emu.index"), idx->content, 1600000000));
+        const SourcePlan current = plan(ampr, pa);
+        QVERIFY(!current.amprGenerated);
+        QCOMPARE(current.amprAction, AmprIndexAction::KeptUpToDate);
+        QVERIFY(!indexOf(current).generated);
+        QCOMPARE(indexOf(current).absPath, QFileInfo(ampr + QStringLiteral("/ampr_emu.index")).absoluteFilePath());
+        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/eboot.bin"), "x", 1700000000)); // touched, same size
+        const SourcePlan touched = plan(ampr, pa);
+        QCOMPARE(touched.amprAction, AmprIndexAction::KeptUpToDate);
+        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/eboot.bin"), "xx", 1700000000)); // another size
+        QCOMPARE(plan(ampr, pa).amprAction, AmprIndexAction::Rebuilt);
+        // A packed game's index lists the files inside its packs and stays.
+        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/ampr_zstd.index"), "packs", 1600000000));
+        const SourcePlan packed = plan(ampr, pa);
+        QVERIFY(!packed.amprGenerated);
+        QCOMPARE(packed.amprAction, AmprIndexAction::KeptForPacks);
+        // Without the library nothing is added in any mode.
+        QVERIFY(QFile::remove(ampr + QStringLiteral("/fakelib/libSceAmpr.sprx")));
+        QVERIFY(QFile::remove(ampr + QStringLiteral("/ampr_emu.index")));
+        for (const AmprMode mode : {AmprMode::Auto, AmprMode::Missing, AmprMode::Refresh}) {
+            pa.ampr = mode;
+            const SourcePlan none = plan(ampr, pa);
+            QVERIFY(!none.amprGenerated);
+            QCOMPARE(none.amprAction, AmprIndexAction::NotNeeded);
+        }
+
+        // The log line of every outcome, and the setting's values.
+        QCOMPARE(amprActionLogLine(AmprIndexAction::Off), QString());
+        QCOMPARE(amprActionLogLine(AmprIndexAction::Added), QStringLiteral("ampr_emu.index: added (the dump has none)"));
+        QCOMPARE(amprActionLogLine(AmprIndexAction::Rebuilt), QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)"));
+        QCOMPARE(amprActionLogLine(AmprIndexAction::KeptUpToDate), QStringLiteral("ampr_emu.index: kept (up to date)"));
+        QCOMPARE(amprActionLogLine(AmprIndexAction::NotNeeded), QStringLiteral("ampr_emu.index: not needed (no fakelib/libSceAmpr.sprx)"));
+        QCOMPARE(amprModeFromSetting(QStringLiteral("auto"), AmprMode::Off), AmprMode::Auto);
+        QCOMPARE(amprModeFromSetting(QStringLiteral("missing"), AmprMode::Off), AmprMode::Missing);
+        QCOMPARE(amprModeFromSetting(QStringLiteral("refresh"), AmprMode::Off), AmprMode::Refresh);
+        QCOMPARE(amprModeFromSetting(QStringLiteral("off"), AmprMode::Auto), AmprMode::Off);
+        QCOMPARE(amprModeFromSetting(QStringLiteral("?"), AmprMode::Missing), AmprMode::Missing);
+        QVERIFY(isAmprPackIndexName(QStringLiteral("AMPR_ASSETS.index.runtime")));
+        QVERIFY(!isAmprPackIndexName(QStringLiteral("ampr_emu.index")));
     }
 
 private:

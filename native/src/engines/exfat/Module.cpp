@@ -209,6 +209,28 @@ void registerModule(ModuleContext& ctx)
     }
     {
         SettingDef d;
+        d.key = keys::kAmprIndex;
+        d.section = build;
+        d.group = gContents;
+        d.label = QStringLiteral("AMPR file index");
+        d.description = QStringLiteral(
+            "A game with fakelib/libSceAmpr.sprx needs ampr_emu.index, the list of its files, at its top folder. "
+            "A new or rebuilt index goes into the image only; the dump folder is never changed.");
+        d.type = SettingType::Enum;
+        d.defaultValue = QStringLiteral("auto");
+        d.choices = {{QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
+                      QStringLiteral("Adds the index when the dump has none and rebuilds one that no longer matches the "
+                                     "game's files, as version 4 did. A game with asset packs keeps its own index.")},
+                     {QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
+                      QStringLiteral("An index the dump already has is copied as it is.")},
+                     {QStringLiteral("refresh"), QStringLiteral("Always rebuild it"), {}},
+                     {QStringLiteral("off"), QStringLiteral("Never add or change it"), {}}};
+        d.perJob = true;
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        SettingDef d;
         d.key = keys::kOverwriteExisting;
         d.section = build;
         d.group = gImage;

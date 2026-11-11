@@ -289,7 +289,9 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
         else if (!r.overrides.isEmpty())
             note = QStringLiteral("%1 setting%2 overridden").arg(r.overrides.size()).arg(r.overrides.size() == 1 ? QString() : QStringLiteral("s"));
         else if (AppContext::instance() && AppContext::instance()->queue().isHeld())
-            note = QStringLiteral("Waits for the queue to resume");
+            // Nothing runs: the list waits for "Start queue".
+            note = AppContext::instance()->queue().isBusy() ? QStringLiteral("Waits for the queue to resume")
+                                                            : QStringLiteral("Waits for Start queue");
         else if (queuePosition <= 1)
             note = QStringLiteral("Starts next");
         else
@@ -860,6 +862,20 @@ void JobList::paintEvent(QPaintEvent*)
     p.fillRect(QRect(0, std::max(0, y - 1), width(), 2), color::accent);
 }
 
+// ---- the queue's switch ------------------------------------------------------------------
+
+QueueSwitch queueSwitch(bool held, int running, int waiting)
+{
+    if (!held)
+        return QueueSwitch::Pause;
+    return running == 0 && waiting > 0 ? QueueSwitch::Start : QueueSwitch::Resume;
+}
+
+QString startQueueText(int waiting)
+{
+    return waiting > 1 ? QStringLiteral("Start queue (%1)").arg(waiting) : QStringLiteral("Start queue");
+}
+
 // ---- dock -----------------------------------------------------------------------------
 
 JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
@@ -952,6 +968,13 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     auto* f = footer();
     m_footer = caption({}, this);
     f->addWidget(m_footer, 1);
+    // A list made with "Add to queue" (or restored at start) waits for this.
+    m_start = button(QStringLiteral("Start queue"), ButtonVariant::Primary, QStringLiteral("play"), this);
+    setButtonSmall(m_start, true);
+    m_start->setToolTip(QStringLiteral("Run the waiting jobs, one after another."));
+    m_start->hide();
+    connect(m_start, &QPushButton::clicked, this, [this] { m_ctx.queue().holdQueue(false); });
+    f->addWidget(m_start);
     auto* open = new Link(QStringLiteral("Open queue"), this);
     connect(open, &Link::activated, this, &JobsDock::openQueueRequested);
     f->addWidget(open);
@@ -975,14 +998,12 @@ void JobsDock::refresh()
 {
     const int rows = m_model.rowCount();
     const bool held = m_ctx.queue().isHeld();
-    m_pause->setIconName(held ? QStringLiteral("play") : QStringLiteral("pause"));
-    m_pause->setToolTip(held ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
-    m_pause->setAccessibleName(m_pause->toolTip());
 
     const JobRecord* running = nullptr;
     int total = 0; // user jobs only; system jobs (update.*) are hidden everywhere in the UI
     int queued = 0;
     int runningCount = 0;
+    int activeCount = 0; // running, paused or being cancelled
     qint64 etaMs = -1;
     for (int r = 0; r < rows; ++r) {
         const JobRecord* rec = m_model.recordAt(r);
@@ -991,6 +1012,8 @@ void JobsDock::refresh()
         ++total;
         if (rec->isActive() && !running)
             running = rec;
+        if (rec->isActive())
+            ++activeCount;
         if (rec->state == JobState::Queued)
             ++queued;
         if (rec->state == JobState::Running) {
@@ -998,6 +1021,15 @@ void JobsDock::refresh()
             etaMs = std::max(etaMs, jobTimeLeftMs(*rec)); // jobs run side by side: the longest one
         }
     }
+    // The header glyph pauses and resumes as before; a list that waits to be
+    // started also gets the button in the footer, with the number of jobs.
+    const QueueSwitch next = queueSwitch(held, activeCount, queued);
+    m_pause->setIconName(held ? QStringLiteral("play") : QStringLiteral("pause"));
+    m_pause->setToolTip(next == QueueSwitch::Start ? QStringLiteral("Start queue")
+                        : next == QueueSwitch::Resume ? QStringLiteral("Resume queue") : QStringLiteral("Pause queue"));
+    m_pause->setAccessibleName(m_pause->toolTip());
+    m_start->setText(startQueueText(queued));
+    m_start->setVisible(next == QueueSwitch::Start);
     m_count->setText(QString::number(total));
     m_count->setVisible(total > 0);
     const QString shownBefore = m_runningId;
@@ -1031,7 +1063,9 @@ void JobsDock::refresh()
         applyListFilter();
     m_empty->setVisible(total == 0);
     QString foot;
-    if (held)
+    if (next == QueueSwitch::Start)
+        foot = QStringLiteral("%1 waiting").arg(queued);
+    else if (held)
         foot = QStringLiteral("Queue paused · %1 waiting").arg(queued);
     else if (etaMs >= 0 && queued > 0)
         foot = QStringLiteral("%1 · %2 more queued").arg(formatTimeLeft(etaMs), QString::number(queued));

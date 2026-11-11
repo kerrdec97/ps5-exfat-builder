@@ -179,6 +179,31 @@ private slots:
         }
     }
 
+    // The packer writes ampr_emu.index for the game as the game sees it (the
+    // files inside the packs included). The image build that follows must not
+    // replace it, whatever the user's "AMPR file index" settings say.
+    void packedBuildKeepsThePackersIndex()
+    {
+        Env env(m_root.filePath(QStringLiteral("e-index")));
+        QVERIFY(env.store->setValue(pfs::keys::kAmprIndex, QStringLiteral("refresh")).ok());
+        QVERIFY(env.store->setValue(exfat::keys::kAmprIndex, QStringLiteral("refresh")).ok());
+        QVERIFY(env.store->setValue(ufs2::keys::kAmprIndex, QStringLiteral("refresh")).ok());
+        const QString out = m_root.filePath(QStringLiteral("zstd-index"));
+        QDir().mkpath(out);
+        for (const QString& fmt : {QStringLiteral("exfat"), QStringLiteral("ffpkg"), QStringLiteral("ffpfs")}) {
+            const QString image = out + QStringLiteral("/game.") + fmt;
+            auto r = env.run(integration::kZstdBuildJob, {{QStringLiteral("format"), fmt}, {QStringLiteral("source"), m_game},
+                                                          {QStringLiteral("output"), image}});
+            QVERIFY2(r && r->state == JobState::Succeeded, qPrintable(fmt + u' ' + describe(r)));
+            auto files = integration::openGameFiles(image, {});
+            QVERIFY2(files.ok(), files.ok() ? "" : qPrintable(files.error().toLogString()));
+            const QByteArray index = readAll(**files).value(QStringLiteral("ampr_emu.index"));
+            QVERIFY2(index.startsWith("AMPRIDX3"), qPrintable(fmt));
+            QVERIFY2(index.contains("/app0/data/level1.bin"), qPrintable(fmt)); // a packed file
+            QVERIFY2(!index.contains("ampr_zstd"), qPrintable(fmt));             // not the folder's pack files
+        }
+    }
+
     void zstdBuildSafety()
     {
         Env env(m_root.filePath(QStringLiteral("e4")));

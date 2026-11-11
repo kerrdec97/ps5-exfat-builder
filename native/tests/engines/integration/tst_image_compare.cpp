@@ -327,6 +327,37 @@ private slots:
         QCOMPARE(rep.value().contentDifferent.front().offset, 0);
     }
 
+    // A build gives an AMPR game its ampr_emu.index in the image only: against
+    // the dump folder that is one difference, and the report says what it is.
+    void builtAmprIndexIsExplained()
+    {
+        const QString game = m_root.filePath(QStringLiteral("dumps/PPSA09393"));
+        QVERIFY(copyTree(m_game, game));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray(500, 'a')));
+        for (const QString& fmt : {QStringLiteral("exfat"), QStringLiteral("ffpkg")}) {
+            const QString img = image(QStringLiteral("ampr.") + fmt);
+            auto built = m_env->run(QStringLiteral("image.%1.build").arg(fmt), {{QStringLiteral("source"), game}, {QStringLiteral("output"), img}});
+            QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
+            auto rep = compare(game, img, CompareDepth::Full);
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep.value().extra, QStringList{QStringLiteral("ampr_emu.index")});
+            QCOMPARE(rep.value().differenceCount(), qint64(1));
+            QCOMPARE(rep.value().warnings.size(), 1);
+            QVERIFY2(rep.value().warnings.first().contains(QStringLiteral("AMPR file index")), qPrintable(rep.value().warnings.first()));
+            // Two images of the same build have nothing to explain.
+            auto same = compare(img, img, CompareDepth::Structure);
+            QVERIFY(same.ok());
+            QVERIFY(same.value().identical() && same.value().warnings.isEmpty());
+        }
+        // The folder's own, older index against the rebuilt one in the image.
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/ampr_emu.index"), QByteArray("an old index")));
+        auto rep = compare(image(QStringLiteral("ampr.exfat")), game, CompareDepth::Full);
+        QVERIFY(rep.ok());
+        QCOMPARE(rep.value().sizeCount, qint64(1));
+        QCOMPARE(rep.value().warnings.size(), 1);
+        QVERIFY(rep.value().warnings.first().contains(QStringLiteral("AMPR file index")));
+    }
+
     void pfsBlockPaddingIsTolerated()
     {
         // A real .ffpfs with per-file compression: the compressible file is

@@ -12,6 +12,7 @@
 
 #include "core/Cancellation.h"
 #include "core/Result.h"
+#include "engines/pfs/AmprIndex.h"
 
 #include <QByteArray>
 #include <QString>
@@ -32,8 +33,6 @@ struct SourceFile {
     QByteArray name() const;
 };
 
-enum class AmprMode { Missing, Refresh, Off };
-
 struct PlanOptions {
     // File-name or relative-path patterns (`*`/`?` wildcards, case-insensitive);
     // a matching folder is skipped with everything inside it.
@@ -52,7 +51,8 @@ struct SourcePlan {
     int excludedFiles = 0;
     int excludedFolders = 0;
     int emptyFolderMarkers = 0;
-    bool amprGenerated = false;
+    bool amprGenerated = false; // the plan's ampr_emu.index was built here (added, or put in place of the dump's)
+    AmprIndexAction amprAction = AmprIndexAction::Off; // what was decided about it, for the log
     QStringList excludedSamples; // first few excluded paths, for the log
 };
 

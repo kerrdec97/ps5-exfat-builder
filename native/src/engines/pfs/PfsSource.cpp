@@ -13,6 +13,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 
@@ -252,15 +253,18 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
               [](const SourceFile& a, const SourceFile& b) { return lessCaseInsensitive(a.relPath, b.relPath); });
 
     if (options.ampr != AmprMode::Off) {
-        const bool hasSprx = std::any_of(plan.files.begin(), plan.files.end(), [](const SourceFile& f) {
-            return samePath(f.relPath, "fakelib/libSceAmpr.sprx");
-        });
         auto existing = std::find_if(plan.files.begin(), plan.files.end(),
                                      [](const SourceFile& f) { return samePath(f.relPath, "ampr_emu.index"); });
-        const bool generate = hasSprx && (options.ampr == AmprMode::Refresh || existing == plan.files.end());
-        if (generate) {
-            if (existing != plan.files.end())
-                plan.files.erase(existing);
+        AmprIndexState state;
+        state.hasLibrary = std::any_of(plan.files.begin(), plan.files.end(), [](const SourceFile& f) {
+            return samePath(f.relPath, "fakelib/libSceAmpr.sprx");
+        });
+        state.hasIndex = existing != plan.files.end();
+        state.indexSize = state.hasIndex ? existing->size : 0;
+        state.hasAssetPacks = std::any_of(plan.files.begin(), plan.files.end(), [](const SourceFile& f) {
+            return !f.relPath.contains('/') && isAmprPackIndexName(QString::fromLatin1(f.relPath));
+        });
+        const auto fresh = [&plan] {
             std::vector<AmprRow> rows;
             rows.reserve(plan.files.size());
             for (const SourceFile& f : plan.files) {
@@ -270,19 +274,31 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
                     continue;
                 rows.push_back({f.size, f.mtime, indexed});
             }
+            return buildAmprIndex(rows);
+        };
+        const auto dumpIndex = [&]() -> Result<QByteArray> {
+            QFile f(existing->absPath);
+            if (!f.open(QIODevice::ReadOnly))
+                return Error(ErrorCode::IoError, QStringLiteral("Could not read %1.").arg(QDir::toNativeSeparators(existing->absPath)),
+                             f.errorString());
+            return f.read(existing->size + 1);
+        };
+        AmprIndexDecision decision = decideAmprIndex(options.ampr, state, fresh, dumpIndex);
+        plan.amprAction = decision.action;
+        if (amprActionChangesImage(decision.action)) {
+            if (existing != plan.files.end())
+                plan.files.erase(existing);
             SourceFile idx;
             idx.relPath = QByteArrayLiteral("ampr_emu.index");
             idx.generated = true;
-            idx.content = buildAmprIndex(rows);
+            idx.content = std::move(decision.index);
             idx.size = idx.content.size();
             idx.mtime = options.time;
-            if (!idx.content.isEmpty()) {
-                plan.files.push_back(std::move(idx));
-                plan.amprGenerated = true;
-                std::sort(plan.files.begin(), plan.files.end(), [](const SourceFile& a, const SourceFile& b) {
-                    return lessCaseInsensitive(a.relPath, b.relPath);
-                });
-            }
+            plan.files.push_back(std::move(idx));
+            plan.amprGenerated = true;
+            std::sort(plan.files.begin(), plan.files.end(), [](const SourceFile& a, const SourceFile& b) {
+                return lessCaseInsensitive(a.relPath, b.relPath);
+            });
         }
     }
 

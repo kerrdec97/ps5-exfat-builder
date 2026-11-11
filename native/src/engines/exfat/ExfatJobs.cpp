@@ -2,6 +2,7 @@
 #include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
+#include "engines/exfat/ExfatAmpr.h"
 #include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatFormat.h"
 #include "engines/exfat/ExfatReader.h"
@@ -40,6 +41,7 @@ ExfatSettings readSettings(const SettingsValues& s)
     x.writer.retryWaitMs = int(s.integer(keys::kRetryWaitSeconds) * 1000);
     x.rules.excludePatterns = s.stringList(keys::kExcludePatterns);
     x.rules.excludeHidden = s.boolean(keys::kExcludeHidden);
+    x.ampr = pfs::amprModeFromSetting(s.string(keys::kAmprIndex), pfs::AmprMode::Auto);
     x.requireEboot = s.boolean(keys::kRequireEboot);
     x.overwrite = s.boolean(keys::kOverwriteExisting);
     x.labelPolicy = s.string(keys::kLabelPolicy);
@@ -238,6 +240,12 @@ public:
         JobOutcome o;
         o.warnings = tree.warnings;
 
+        // ampr_emu.index: a new one is a file in the job's temporary folder
+        // that takes the root entry's place in the tree; the dump is not written.
+        FW_TRY_ASSIGN(const AmprPlacement ampr, applyAmprIndex(tree, x.ampr, ctx.tempDir));
+        if (const QString line = pfs::amprActionLogLine(ampr.action); !line.isEmpty())
+            ctx.log.info(line);
+
         // Plan.
         WriterOptions w = x.writer;
         w.label = volumeLabel(x);
@@ -272,8 +280,13 @@ public:
         // Verify the finished image before it gets its final name (audit M1).
         if (x.verify) {
             ctx.progress->beginPhase(2, 0);
-            FW_TRY_ASSIGN(VerifyReport rep, verifyImageAgainstFolder(part.partPath(), m_source, rules,
-                                                                      verifyOptions(x, ctx, 2), ctx.token, ctx.progress));
+            // The folder is scanned again and compared with the image; the
+            // index the build made is expected in place of the folder's.
+            FW_TRY_ASSIGN(SourceTree expected, scanSource(m_source, rules, ctx.token, ctx.progress));
+            if (!ampr.indexFile.isEmpty())
+                placeAmprIndex(expected, ampr.indexFile);
+            FW_TRY_ASSIGN(VerifyReport rep, verifyImage(part.partPath(), expectedFromFolder(expected), verifyOptions(x, ctx, 2),
+                                                         ctx.token, ctx.progress));
             applyVerification(o, rep);
             ctx.log.info(QStringLiteral("Verification (%1): %2").arg(x.fullVerify ? QStringLiteral("full") : QStringLiteral("structure"), rep.summary()));
             if (!rep.passed()) {
@@ -328,6 +341,9 @@ public:
         o.details.insert(QStringLiteral("folders"), double(tree.dirCount));
         o.details.insert(QStringLiteral("dataBytes"), double(tree.totalBytes));
         o.details.insert(QStringLiteral("excluded"), double(tree.excludedCount));
+        if (pfs::amprActionChangesImage(ampr.action))
+            o.details.insert(QStringLiteral("amprIndex"),
+                             ampr.action == pfs::AmprIndexAction::Added ? QStringLiteral("added") : QStringLiteral("rebuilt"));
         o.details.insert(QStringLiteral("writeMs"), double(ws.elapsedMs));
         o.details.insert(QStringLiteral("totalMs"), double(timer.elapsed()));
         return o;
@@ -378,11 +394,17 @@ public:
             return runStandalone(ctx, recovered, x.fullVerify);
         ScanRules rules = x.rules;
         rules.excludePatterns += m_excludes;
-        FW_TRY_ASSIGN(VerifyReport rep, verifyImageAgainstFolder(m_image, m_source, rules, verifyOptions(x, ctx, 1),
-                                                                  ctx.token, ctx.progress));
+        FW_TRY_ASSIGN(SourceTree expected, scanSource(m_source, rules, ctx.token, ctx.progress));
+        // A build may have put a new ampr_emu.index into the image (exfat.amprIndex).
+        const bool builtIndex = acceptBuiltAmprIndex(expected, m_image, ctx.tempDir, ctx.token);
+        FW_TRY_ASSIGN(VerifyReport rep, verifyImage(m_image, expectedFromFolder(expected), verifyOptions(x, ctx, 1), ctx.token,
+                                                     ctx.progress));
         JobOutcome o;
         if (recovered)
             o.warnings << QStringLiteral("An interrupted edit of this image was undone before verifying it.");
+        if (builtIndex)
+            ctx.log.info(QStringLiteral("ampr_emu.index: the image has the index built for these files; the folder has none or "
+                                        "another one."));
         applyVerification(o, rep);
         o.summary = rep.passed() ? QStringLiteral("The image matches the folder.") : QStringLiteral("The image does not match the folder.");
         ctx.log.info(rep.summary());

@@ -205,7 +205,29 @@ destination drive is FAT32.
 | `ufs2.fragmentSize` | enum 32768 / **65536** | `adv_ffpkg_frag` | writer (`-f`); reduced to the block size if larger |
 | `ufs2.minFreePercent` | int 0–99, **0** | `adv_ffpkg_minfree` | writer (`-m`: `fs_minfree`, `fs_metaspace`) |
 | `ufs2.bytesPerInode` | enum 131072 / **262144** / 524288 | `adv_ffpkg_inode` | writer (`-i`) |
+| `ufs2.amprIndex` | enum **auto** / missing / refresh / off | none (the legacy app always rebuilt the index, in the dump) | build job (`Ufs2Ampr.*`): `ampr_emu.index` for a game with `fakelib/libSceAmpr.sprx`, see below |
 | `ufs2.deleteSourceAfterBuild` | bool, **false** | `adv_delete_source_ffpkg` | build job: deletes only after a *full* verification passed and when `eboot.bin` is present (the legacy rule) |
+
+`ufs2.amprIndex` ("AMPR file index"): a game with `fakelib/libSceAmpr.sprx`
+needs `ampr_emu.index`, the AMPR emulator's list of its files, at its top
+folder. `auto` (the default, "When the game uses the AMPR emulator") adds the
+index when the dump has none and rebuilds it when the dump's differs from a
+freshly built one in more than file times (what the legacy app did before
+every build); a game with asset packs (`ampr_zstd.index`,
+`ampr_assets.index[.runtime]`) keeps its own. `missing` only adds one,
+`refresh` always rebuilds it, `off` never adds or changes it. The dump folder
+is never written: a new index is a file in the job's temporary folder that
+becomes the content of the root's `ampr_emu.index` in the tree (a new entry
+goes where an NTFS listing of the folder would have it, so the image is the
+one built from a folder that holds the file). A build that adds or changes
+nothing leaves the tree alone and writes the bytes it wrote before. The job
+log says what was done (`ampr_emu.index: added (the dump has none)`, `rebuilt
+(it did not match the game's files)`, `kept (up to date)`, `not needed (no
+fakelib/libSceAmpr.sprx)`), the build compares the image with the tree that
+was written, and `image.ffpkg.verify` against a folder accepts an image whose
+`ampr_emu.index` is the index of the folder's files when the folder has none
+or another one. `image.convert` and the zstd build turn the setting off for
+their own builds.
 
 All of these are `perJob`. The legacy UI also offered a 128 KiB block size,
 but UFS2Tool 4.0.0 rejects it ("Block size must be between 4096 and
@@ -254,6 +276,11 @@ because nothing needs one.
     out-of-range pointer and a link count
   - cancellation, and a source shrinking during the build
   - extraction with verification, and edits
+- `ufs2.amprIndex` is covered by `tst_ufs2_ampr`: a missing index added and an
+  outdated one rebuilt in the image only (the dump compared before and after),
+  an up-to-date one kept byte for byte, a packed game's index kept, a game
+  without the AMPR library and an image with an added index byte-identical to
+  the ones built without the setting
 - Jobs are covered by `tst_ufs2_jobs`:
   - settings reach the superblock
   - verification gates the final name (the source is tampered with

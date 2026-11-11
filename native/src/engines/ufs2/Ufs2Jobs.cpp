@@ -4,6 +4,7 @@
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
 #include "engines/ufs2/Module.h"
+#include "engines/ufs2/Ufs2Ampr.h"
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Edit.h"
 #include "engines/ufs2/Ufs2Reader.h"
@@ -179,6 +180,17 @@ public:
                                                         counted(tree.dirCount, "folder", "folders"),
                                                         formatBytes(tree.totalBytes)));
 
+        // ampr_emu.index: a new one is a file in the job's temporary folder
+        // that becomes the root entry's content in the tree; the dump is not
+        // written. The folder's own listing is kept for the check before the
+        // folder is deleted.
+        const QStringList folderListing = listingOf(tree);
+        FW_TRY_ASSIGN(const AmprPlacement ampr,
+                      applyAmprIndex(tree, pfs::amprModeFromSetting(ctx.settings.string(keys::kAmprIndex), pfs::AmprMode::Auto),
+                                     ctx.tempDir));
+        if (const QString line = pfs::amprActionLogLine(ampr.action); !line.isEmpty())
+            ctx.log.info(line);
+
         QStringList notes;
         WriterOptions opt;
         opt.params = formatParams(ctx.settings, &notes);
@@ -229,6 +241,9 @@ public:
         outcome.details.insert(QStringLiteral("dataBytes"), double(ws.dataBytes));
         outcome.details.insert(QStringLiteral("writeMs"), double(ws.elapsedMs));
         outcome.details.insert(QStringLiteral("writeBytesPerSec"), ws.bytesPerSec);
+        if (pfs::amprActionChangesImage(ampr.action))
+            outcome.details.insert(QStringLiteral("amprIndex"),
+                                   ampr.action == pfs::AmprIndexAction::Added ? QStringLiteral("added") : QStringLiteral("rebuilt"));
         if (v.verification == Verification::Failed) {
             ctx.log.error(QStringLiteral("Verification failed: %1 The image was not saved.").arg(v.detail));
             outcome.summary = QStringLiteral("Not saved: the new image failed verification.");
@@ -248,7 +263,7 @@ public:
                 why = QStringLiteral("the image was not verified byte for byte");
             else if (!QFileInfo(QDir(src).filePath(QStringLiteral("eboot.bin"))).isFile())
                 why = QStringLiteral("the folder has no eboot.bin");
-            else if (auto again = scanLocalFolder(src, ctx.token); !again.ok() || listingOf(again.value()) != listingOf(tree))
+            else if (auto again = scanLocalFolder(src, ctx.token); !again.ok() || listingOf(again.value()) != folderListing)
                 why = QStringLiteral("files in it changed while the image was being built");
             if (!m_unpacked.isEmpty()) {
                 // `src` is the unpacked copy in the job's temporary folder.
@@ -315,6 +330,10 @@ public:
         if (!source().isEmpty()) {
             ctx.progress->beginPhase(0, 0, 0, false);
             FW_TRY_ASSIGN(SourceTree tree, scanLocalFolder(source(), ctx.token));
+            // A build may have put a new ampr_emu.index into the image (ufs2.amprIndex).
+            if (acceptBuiltAmprIndex(tree, image(), ctx.tempDir))
+                ctx.log.info(QStringLiteral("ampr_emu.index: the image has the index built for these files; the folder has none "
+                                            "or another one."));
             FW_TRY_ASSIGN(VerifyResult v, verifyImage(image(), tree, true, depth, ctx, 0, 1));
             outcome.verification = v.verification;
             outcome.verificationDetail = v.detail;

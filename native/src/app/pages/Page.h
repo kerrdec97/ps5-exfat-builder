@@ -78,6 +78,9 @@ public:
 signals:
     void navigateRequested(const fw::pages::NavRequest& request);
     void toastRequested(fw::ui::Tone tone, const QString& title, const QString& body);
+    // A toast with one button ("Start queue").
+    void toastActionRequested(fw::ui::Tone tone, const QString& title, const QString& body, const QString& actionText,
+                              const std::function<void()>& action);
     void statusContextChanged();
 
 protected:

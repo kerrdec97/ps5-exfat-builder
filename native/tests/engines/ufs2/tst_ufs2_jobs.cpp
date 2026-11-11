@@ -94,7 +94,7 @@ private slots:
     void registersSettingsAndJobKinds()
     {
         for (const QString& k : {ufs2::keys::kBlockSize, ufs2::keys::kFragmentSize, ufs2::keys::kMinFreePercent,
-                                 ufs2::keys::kBytesPerInode, ufs2::keys::kDeleteSourceAfterBuild})
+                                 ufs2::keys::kBytesPerInode, ufs2::keys::kAmprIndex, ufs2::keys::kDeleteSourceAfterBuild})
             QVERIFY2(m_schema->contains(k), qPrintable(k));
         QCOMPARE(m_store->value(ufs2::keys::kBlockSize).toString(), QStringLiteral("65536"));
         QCOMPARE(m_store->value(ufs2::keys::kFragmentSize).toString(), QStringLiteral("65536"));

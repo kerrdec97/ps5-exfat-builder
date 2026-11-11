@@ -23,6 +23,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <vector>
 
 namespace fw::pfs {
@@ -85,5 +86,61 @@ struct AmprLocalScan {
 Result<AmprLocalScan> scanAmprFolder(const QString& folder, const CancellationToken& token = {});
 // fakelib/libSceAmpr.sprx among the relative paths (case-insensitive).
 bool hasAmprLibrary(const std::vector<AmprFile>& files);
+
+// ---- the index a folder build puts into its image ----------------------------------------
+//
+// pfs.amprIndex, exfat.amprIndex and ufs2.amprIndex: what a build does about
+// ampr_emu.index when the game has fakelib/libSceAmpr.sprx. The dump folder
+// is never written; a new or rebuilt index exists in the image only.
+
+enum class AmprMode {
+    Missing, // add one when the dump has none
+    Refresh, // always rebuild it
+    Off,     // never add or change it
+    Auto,    // add one when the dump has none, rebuild one that no longer matches the game's files
+};
+// "auto", "missing", "refresh", "off"; anything else gives `fallback`.
+AmprMode amprModeFromSetting(const QString& value, AmprMode fallback);
+
+enum class AmprIndexAction {
+    Off,           // the setting is off: nothing looked at
+    NotNeeded,     // no fakelib/libSceAmpr.sprx
+    Added,         // the dump has none
+    Rebuilt,       // Auto: the dump's index did not match the game's files
+    RebuiltAlways, // Refresh
+    KeptUpToDate,  // Auto: the dump's index matches
+    KeptExisting,  // Missing: the dump has one
+    KeptForPacks,  // Auto: the game has asset packs, which need the index they were made with
+};
+// Added and the two Rebuilt: the image gets AmprIndexDecision::index.
+bool amprActionChangesImage(AmprIndexAction action);
+// The job-log line, e.g. "ampr_emu.index: added (the dump has none)". Empty for Off.
+QString amprActionLogLine(AmprIndexAction action);
+
+// What the scan of the game found.
+struct AmprIndexState {
+    bool hasLibrary = false;    // fakelib/libSceAmpr.sprx is among the image's files
+    bool hasIndex = false;      // ampr_emu.index is at the top of the dump
+    qint64 indexSize = 0;       // its size
+    bool hasAssetPacks = false; // an asset-pack index is at the top (isAmprPackIndexName)
+};
+
+struct AmprIndexDecision {
+    AmprIndexAction action = AmprIndexAction::Off;
+    QByteArray index; // amprActionChangesImage(action): the bytes of the image's ampr_emu.index
+};
+
+// `fresh` builds the index for the files the image will hold; `existing`
+// reads the dump's own index (asked for only when it could match: Auto, same
+// size as the fresh one). An index that differs from the fresh one only in
+// file times is up to date (amprIndexesDifferOnlyInTimes), so a dump that
+// was copied or saved again is not "outdated".
+AmprIndexDecision decideAmprIndex(AmprMode mode, const AmprIndexState& state, const std::function<QByteArray()>& fresh,
+                                  const std::function<Result<QByteArray>()>& existing);
+
+// The index of a game's asset packs at its top folder: ampr_zstd.index (zstd)
+// or ampr_assets.index[.runtime] (LZ4). Such a game's ampr_emu.index lists the
+// files inside the packs, which an index rebuilt from the folder would drop.
+bool isAmprPackIndexName(const QString& fileName);
 
 } // namespace fw::pfs
